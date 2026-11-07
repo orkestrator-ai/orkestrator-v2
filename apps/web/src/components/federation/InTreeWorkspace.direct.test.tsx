@@ -6,7 +6,7 @@
  * still crosses it.
  */
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import type { BackendId } from "@orkestrator/protocol/federation";
+import { environmentKey, environmentRef, type BackendId } from "@orkestrator/protocol/federation";
 import type { NodeInvokeOptions } from "@orkestrator/protocol/node-client";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import {
@@ -30,6 +30,7 @@ import { createDefaultAppConfig } from "@orkestrator/protocol/app-config-default
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { useAppDialogStore } from "@/stores/appDialogStore";
 import { configStore } from "@/stores/configStore";
+import { environmentStore } from "@/stores/environmentStore";
 import { projectStore } from "@/stores/projectStore";
 import { useInTreeNodesStore } from "@/stores/inTreeNodesStore";
 import { useMachineViewStore } from "@/stores/machineViewStore";
@@ -369,4 +370,34 @@ test("select: Add Project and New Environment open in the node's workspace once 
   loadConfig(scope);
   expect(await screen.findByText(/Configure a new Ork environment/u)).toBeTruthy();
   expect(exchanged("select")).toEqual([]);
+});
+
+test("selection: navigating inside the in-tree workspace is the window's one selection, with its recents", async () => {
+  const scope = await openLeaf({ projectId: project.id });
+  const ui = scope.store(uiStore);
+  await waitFor(() => expect(ui.getState().selectedProjectId).toBe(project.id));
+  await waitFor(() =>
+    expect(
+      scope
+        .store(environmentStore)
+        .getState()
+        .environments.map((item) => item.id),
+    ).toContain(environment.id),
+  );
+  // An environment chosen inside the node's own workspace (its project home's list).
+  act(() => ui.getState().selectProjectAndEnvironment(project.id, environment.id));
+  expect(getWindowScope().selection.get()).toEqual({
+    nodeId: LEAF,
+    projectId: project.id,
+    environmentId: environment.id,
+  });
+  expect(useRemoteWorkspaceStore.getState().active).toMatchObject({
+    nodeId: LEAF,
+    environmentId: environment.id,
+  });
+  expect(useMachineViewStore.getState().recentKeys[0]).toBe(
+    environmentKey(environmentRef(LEAF, environment.id)),
+  );
+  await settle();
+  expect(exchanged("selection")).toEqual([]);
 });

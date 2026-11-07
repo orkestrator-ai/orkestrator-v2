@@ -27,6 +27,8 @@ import { environmentStore } from "@/stores/environmentStore";
 import { useProjectStore } from "@/stores/projectStore";
 import { useRealmShellStore } from "@/stores/realmShellStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
+import { noteNodeSelectionRecents, selectionOnScope } from "@/stores/windowSelectionStore";
+import { windowScopeOf } from "@/lib/node-scope/window-scope";
 import { uiStore } from "@/stores/uiStore";
 import { useUIChromeStore } from "@/stores/uiChromeStore";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
@@ -40,6 +42,22 @@ const log = createLogger("web.federation");
  * realm document opened after `ready` does not. A new scope starts afresh.
  */
 const appliedInTree = new WeakMap<NodeScope, number>();
+
+/**
+ * What a realm's `selection` report does in its window, for a node in the
+ * window's tree, whose `uiStore` already moved the window's selection: mark
+ * a project home (the sidebar highlights its project row) and record the
+ * window's recents. Nothing while the window's selection is elsewhere.
+ */
+function noteInTreeSelection(scope: NodeScope, projectHome: boolean): void {
+  const windowScope = windowScopeOf(scope);
+  const selection = windowScope ? selectionOnScope(scope) : null;
+  if (!windowScope || !selection) return;
+  const { projectHome: _previous, ...rest } = selection;
+  const next = projectHome ? { ...rest, projectHome: true } : rest;
+  windowScope.select(next);
+  noteNodeSelectionRecents(next);
+}
 
 /** What the node's own stores have loaded: the facts its dialogs read. */
 export interface NodeDialogHydration {
@@ -260,24 +278,30 @@ export function WorkspaceRealmHost() {
         ) {
           return;
         }
+        const projectHome = scope
+          .store(environmentStore)
+          .getState()
+          .environments.some(
+            (environment) =>
+              environment.id === state.selectedEnvironmentId &&
+              environment.projectId === state.selectedProjectId &&
+              environment.projectHome,
+          );
+        if (inTree) {
+          // In the window's tree the store has already moved the window's one
+          // selection (plan item 3006); what a realm's report adds, the Home
+          // flag and the window's recents, is applied to it directly (4005).
+          noteInTreeSelection(scope, projectHome);
+          return;
+        }
         channel.post({
           type: "selection",
           projectId: state.selectedProjectId,
           environmentId: state.selectedEnvironmentId,
-          ...(scope
-            .store(environmentStore)
-            .getState()
-            .environments.some(
-              (environment) =>
-                environment.id === state.selectedEnvironmentId &&
-                environment.projectId === state.selectedProjectId &&
-                environment.projectHome,
-            )
-            ? { projectHome: true }
-            : {}),
+          ...(projectHome ? { projectHome: true } : {}),
         });
       }),
-    [channel, scope],
+    [channel, inTree, scope],
   );
 
   // The New Environment dialog reads its defaults (environment type, ports)

@@ -287,7 +287,9 @@ describe("backfill", () => {
       path.join(root, "packages/protocol/contracts/manifest.json"),
       JSON.stringify({ commands: { converted_command: { domain: "nodes", since: 1 } } }),
     );
-    const domains = currentDomainOf(root);
+    // The real map is empty since 7009 defined its last commands: a map entry
+    // the manifest lacks still answers.
+    const domains = currentDomainOf(root, { nodes: ["list_nodes"] });
     expect(domains.get("converted_command")).toBe("nodes");
     expect(domains.get("list_nodes")).toBe("nodes");
   });
@@ -303,6 +305,10 @@ describe("backfill", () => {
 });
 
 describe("registry listing in a worktree", () => {
+  // Each test runs real Git (init, commit, worktree add and remove) and the
+  // release's registry in a Bun subprocess: heavier than Bun's 5 s default
+  // under aggregate load, with nothing to await but the processes.
+  const REAL_PROCESS_BUDGET_MS = 30_000;
   function git(cwd: string, ...args: string[]): string {
     const result = spawnSync(
       "git",
@@ -372,18 +378,23 @@ describe("registry listing in a worktree", () => {
       expect(git(repo, "worktree", "list", "--porcelain")).not.toContain(BACKFILL_WORK_DIRECTORY);
       expect(existsSync(workDirectory)).toBe(false);
     },
+    REAL_PROCESS_BUDGET_MS,
   );
-  test("removes its worktree when the checkout is not the release", async () => {
-    const { repo, commit } = releaseRepository({ classifier: false });
-    await expect(
-      listRegistryInWorktree(published("2.21.1", 16), commit, {
-        repoRoot: repo,
-        workDirectory: path.join(repo, BACKFILL_WORK_DIRECTORY),
-        resolveBun: () => process.execPath,
-        install: () => undefined,
-      }),
-    ).rejects.toThrow("is version 2.21.0");
-    expect(git(repo, "worktree", "list", "--porcelain")).not.toContain(BACKFILL_WORK_DIRECTORY);
-    expect(existsSync(path.join(repo, BACKFILL_WORK_DIRECTORY))).toBe(false);
-  });
+  test(
+    "removes its worktree when the checkout is not the release",
+    async () => {
+      const { repo, commit } = releaseRepository({ classifier: false });
+      await expect(
+        listRegistryInWorktree(published("2.21.1", 16), commit, {
+          repoRoot: repo,
+          workDirectory: path.join(repo, BACKFILL_WORK_DIRECTORY),
+          resolveBun: () => process.execPath,
+          install: () => undefined,
+        }),
+      ).rejects.toThrow("is version 2.21.0");
+      expect(git(repo, "worktree", "list", "--porcelain")).not.toContain(BACKFILL_WORK_DIRECTORY);
+      expect(existsSync(path.join(repo, BACKFILL_WORK_DIRECTORY))).toBe(false);
+    },
+    REAL_PROCESS_BUDGET_MS,
+  );
 });

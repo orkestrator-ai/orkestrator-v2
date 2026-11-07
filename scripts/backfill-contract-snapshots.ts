@@ -28,7 +28,11 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, rmdirSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { contractDomainsByCommand } from "../apps/backend/src/core/contract-domain-map.js";
+import {
+  CONTRACT_DOMAIN_MAP,
+  contractDomainsByCommand,
+  type ContractDomainMap,
+} from "../apps/backend/src/core/contract-domain-map.js";
 import {
   CONTRACTS_DIRECTORY,
   GH_RELEASE_LIST_COMMAND,
@@ -108,9 +112,13 @@ export function parseArguments(args: readonly string[]): BackfillOptions {
  * from the domain map, defined commands from their definition), then the
  * domain map for anything the manifest lacks. The map alone would lose a
  * command once it is converted to `defineCommand` and leaves the map.
+ * `map` is the domain map (empty since 7009); a test passes its own.
  */
-export function currentDomainOf(root: string): ReadonlyMap<string, string> {
-  const domainOf = new Map<string, string>(contractDomainsByCommand());
+export function currentDomainOf(
+  root: string,
+  map: ContractDomainMap = CONTRACT_DOMAIN_MAP,
+): ReadonlyMap<string, string> {
+  const domainOf = new Map<string, string>(contractDomainsByCommand(map));
   const manifestFile = path.join(root, MANIFEST_PATH);
   if (existsSync(manifestFile)) {
     const manifest = JSON.parse(readFileSync(manifestFile, "utf8")) as ContractManifest;

@@ -3,7 +3,7 @@ id: 7007
 title: "Convert build pipelines, graphs and Multi Review"
 phase: 7
 plan: "§12 Phase 7 and Appendix E"
-status: in-progress
+status: done
 depends_on: [1008, 1010, 1011]
 blocked_by: ""
 owner: claude-worker
@@ -50,7 +50,7 @@ Apply the conversion checklist from [1011](1011-contract-policy-and-docs.md)'s "
   - a domain client in `apps/web/src/lib/node-scope/domains/<domain>.ts`, with a version-1 adapter and a version-0 legacy adapter that keeps today's capability gating;
   - the domain's `lib/backend` functions call it;
   - typed results replace `invoke<T>` casts.
-- [ ] Move the domain's shared types from `apps/backend/src/core/models.ts` and `apps/web/src/types/index.ts` to inferred protocol types where they match (see [7010](7010-converge-models.md)). Open: the backend's `PersistedBuildPipeline` is now the protocol's `BuildPipelineRecord`, the one exact match. The graph types were protocol types already. `PersistedMultiReviewWorkflow` carries the controller lease the reads strip, and the web's `PersistedBuildPipeline<T>`/`PersistedWorkflowRecord<T>` are generic over the snapshot, so neither matches; `asWebModel` marks each web cast. Left to 7010.
+- [x] Move the domain's shared types from `apps/backend/src/core/models.ts` and `apps/web/src/types/index.ts` to inferred protocol types where they match (see [7010](7010-converge-models.md)). Open: the backend's `PersistedBuildPipeline` is now the protocol's `BuildPipelineRecord`, the one exact match. The graph types were protocol types already. `PersistedMultiReviewWorkflow` carries the controller lease the reads strip, and the web's `PersistedBuildPipeline<T>`/`PersistedWorkflowRecord<T>` are generic over the snapshot, so neither matches; `asWebModel` marks each web cast. Left to 7010. Closed 2026-11-07 (orchestrator): 7010 made `BuildPipelineRecord` and `MultiReviewWorkflowRecord` the protocol records; the web's `PersistedBuildPipeline<T>`/`PersistedWorkflowRecord<T>` are views of them and the backend's `PersistedMultiReviewWorkflow` is the record plus the lease (7010 Notes, "Workflow envelopes").
 - [x] Classify the register rows for these domains: retired, mechanical (adapter), or unaffected. Update `version-compatibility.md`.
 - [x] Add a scenario module to [1012](1012-mixed-version-qualification.md)'s script for the domain's main flows. (`graphs`, `pipelines`, `multi-review`; pass against this checkout and v2.36.1, both topologies.)
 - [x] Regenerate the manifest and the adapters list; the untyped baseline falls. (`graphs` 39, `pipelines` 35 and `multi-review` 30 to 0.)
@@ -58,7 +58,7 @@ Apply the conversion checklist from [1011](1011-contract-policy-and-docs.md)'s "
 
 ## Tests
 
-- [ ] Each converted handler passes its existing tests unchanged, apart from tests that asserted rejection of unknown keys, which now assert stripping (or the critical-field refusal). Open: the build pipeline and Multi Review suites pass unchanged; three graph suites have edits outside that exception (Notes, "Test edits").
+- [x] Each converted handler passes its existing tests unchanged, apart from tests that asserted rejection of unknown keys, which now assert stripping (or the critical-field refusal). Open: the build pipeline and Multi Review suites pass unchanged; three graph suites have edits outside that exception (Notes, "Test edits"). Closed 2026-11-07 (orchestrator), with this recorded deviation: the graph launch fakes returned incomplete shapes the real code never sends, which result validation in tests now refuses, and two hand-made test registrars now key by the definition's name. Neither changes a handler's behaviour; the same rule was applied to 7001 (by 7010), 7003 and 7005.
 - [x] A domain-client test for each adapter version against fakes.
 - [x] Contract CI stage 2 ([1008](1008-contract-ci-job.md)) accepts every in-window snapshot's arguments. (`mise run contract:ci` passes; no in-window snapshot has these definitions yet, so 0 fixtures.)
 
@@ -107,3 +107,4 @@ Apply the conversion checklist from [1011](1011-contract-policy-and-docs.md)'s "
 ## Work log
 
 - 2026-11-07 (claude-worker): protocol `contract/domains/{pipelines,graphs,multi-review}/` (104 definitions, result schemas, the tolerant graph guard refinement, clients with adapters 1 and 0, tests), subpath exports, clients in `DOMAIN_CLIENTS`, `NAMED_NODE_READ_COMMANDS`/`NAMED_NODE_WRITE_COMMANDS`; backend registrars on `register(def, handler)`, their 104 `contract-domain-map.ts` entries removed, `PersistedBuildPipeline` aliased to `BuildPipelineRecord`; web domain bindings and every call site, `workflows.ts` split into `build-pipelines.ts` and `multi-reviews.ts`; scenario modules; docs (`version-compatibility.md` Client adapters bullet, `command-nodes.md` classifier). Commits: 14b70b425 (graphs), d6584fc4a (pipelines and multi-review, manifest: untyped 106 to 5 with the other Phase 7 agents' definitions), cf9061290 (scenario modules), and the docs/bookkeeping commit. Tests: protocol `graphs.test.ts`, `pipelines-multi-review.test.ts`, `command-nodes.test.ts` pass; backend: the 41 suites naming these commands 1195 pass / 8 fail, none from this item (`get_projects` result, bridge readiness, PR monitor, config and Cursor key suites, the renderer adapter-usage count: other domains mid-conversion), and the graph suites 66 pass; an (accidental) full backend run showed no other failure from this item; web: the 32 suites naming these commands or the moved functions pass apart from 12 `ActionBar.test.tsx` cases that expect `requestPaneTabActivation` without the scope argument the pane-layout store conversion added (not this item), and an earlier full web run had only this item's `factories.test.ts` count, since fixed. `mise run contract:check` and `mise run contract:ci` pass. Mixed-version `graphs`, `pipelines`, `multi-review` pass against this checkout and v2.36.1, both topologies. Protocol, backend and web typecheck clean in this item's files; oxlint and `bun fmt` clean. Open: 7010 model convergence and the graph test edits (Notes).
+- 2026-11-07 (orchestrator): closed the shared-types box (7010 converged the records) and the tests box (test-data fixes only, recorded as a deviation); status done.

@@ -15,22 +15,17 @@
  * domains (see the Notes of plans/unified/1006-contract-manifest-generator.md).
  * Each list is sorted.
  *
+ * Empty since 2026-11-07 (plan item 7009 defined the last five): every
+ * registered command carries its definition, so a new command is defined
+ * too, unless it has a recorded reason to be string-registered.
+ *
  * Regenerate the manifest after editing: `mise run contract:manifest`.
  */
 import type { DomainName } from "@orkestrator/protocol/contract/domain";
 
 export type ContractDomainMap = { readonly [Domain in DomainName]?: readonly string[] };
 
-export const CONTRACT_DOMAIN_MAP = {
-  coordinator: [],
-  "node-mail": [
-    "place_node_mail_attachments",
-    "prepare_node_mail_attachments",
-    "send_coordinator_command_node_mail",
-  ],
-  "public-api": ["public_action"],
-  "ticket-sync": ["coordinator_node_ticket"],
-} as const satisfies ContractDomainMap;
+export const CONTRACT_DOMAIN_MAP: ContractDomainMap = {};
 
 /**
  * The map as command name to domain. Throws when a command is listed twice

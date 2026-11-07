@@ -1,7 +1,8 @@
 /**
  * The pilot domains (plan item 1010): `node-mail`, `node-files` and
  * `ticket-sync`. Their definitions keep the argument keys the strict handlers
- * accepted, classify reads as the routing classifier does, and decode
+ * accepted (and, for the lenient neighbours defined on 2026-11-07, the keys
+ * their handlers read), classify reads as the routing classifier does, and decode
  * tolerantly; their clients send the envelope to a node with the domain and
  * keep today's capability gating for a pre-contract node.
  */
@@ -16,7 +17,10 @@ import { NODE_FILES_COMMANDS, nodeFilesClient } from "./node-files/index.js";
 import { NODE_MAIL_COMMANDS, NODE_MAIL_FEATURES, nodeMailClient } from "./node-mail/index.js";
 import { TICKET_SYNC_COMMANDS, ticketSyncClient } from "./ticket-sync/index.js";
 
-/** The `assertOnlyKeys` sets of the handlers before they were defined (2026-11-07). */
+/**
+ * The `assertOnlyKeys` sets of the handlers before they were defined
+ * (2026-11-07), and for the four lenient ones the keys their handlers read.
+ */
 const FORMER_KEYS: Record<string, readonly string[]> = {
   deliver_node_mail: [
     "controllerId",
@@ -93,7 +97,26 @@ const FORMER_KEYS: Record<string, readonly string[]> = {
   ack_ticket_sync_outbox: ["controllerId", "epoch", "upTo"],
   get_ticket_sync_status: ["projectId"],
   sync_node_tickets: ["nodeId"],
+  // The lenient neighbours (plan item 7009): every key is `optionalKey(Unknown)`.
+  prepare_node_mail_attachments: ["to", "attachments"],
+  place_node_mail_attachments: ["to", "attachments"],
+  send_coordinator_command_node_mail: [
+    "scope",
+    "requestId",
+    "subject",
+    "body",
+    "replyToMessageId",
+    "attachments",
+  ],
+  coordinator_node_ticket: ["scope", "nodeId", "action", "input"],
 };
+
+const LENIENT = [
+  "prepare_node_mail_attachments",
+  "place_node_mail_attachments",
+  "send_coordinator_command_node_mail",
+  "coordinator_node_ticket",
+];
 
 const ALL: readonly AnyCommandDef[] = [
   ...NODE_MAIL_COMMANDS,
@@ -102,7 +125,7 @@ const ALL: readonly AnyCommandDef[] = [
 ];
 
 describe("pilot definitions", () => {
-  it("cover the 24 pilot commands, each in version 1 of its domain", () => {
+  it("cover the 24 pilot commands and the 4 lenient neighbours, each in version 1 of its domain", () => {
     expect(ALL.map((def) => def.name).sort()).toEqual(Object.keys(FORMER_KEYS).sort());
     for (const def of ALL) {
       expect(def.since).toBe(1);
@@ -131,7 +154,19 @@ describe("pilot definitions", () => {
       create_node_action_request: ["requestId"],
       begin_node_file_write: ["sha256"],
       apply_ticket_sync: ["reset", "liveIds"],
+      send_coordinator_command_node_mail: ["requestId", "attachments", "replyToMessageId"],
     });
+  });
+
+  it("keep the lenient neighbours lenient: every key optional and of any type", () => {
+    for (const def of ALL.filter((entry) => LENIENT.includes(entry.name))) {
+      const odd = Object.fromEntries(Object.keys(def.args.fields).map((key) => [key, 42]));
+      const decoded = decodeCommandArgs(def, odd);
+      expect(decoded._tag).toBe("Success");
+      if (decoded._tag === "Success") expect(decoded.success).toEqual(odd);
+      expect(decodeCommandArgs(def, {})._tag).toBe("Success");
+      expect(def.access).toBe("internal");
+    }
   });
 
   it("decode tolerantly: an unknown key is dropped, never refused (§11.4)", () => {

@@ -317,6 +317,10 @@ Schema (`effect/Schema`, `effect` 4.1.2,
 **Every new command uses `defineCommand`.** The number of string-registered
 (untyped) commands per domain may only fall; `mise run contract:check` fails
 when it rises (see [The manifest, the ratchet and CI](#the-manifest-the-ratchet-and-ci)).
+Since 2026-11-07 that number is zero in every domain (`untyped-baseline.json`
+total 0, `contract-domain-map.ts` empty;
+[7009](../../plans/unified/7009-domain-coordinator-servers-system.md) defined
+the last five).
 
 ### Domains and versions
 
@@ -639,6 +643,28 @@ export const nodeMailClient = domainClient(nodeMail, {
   pre-contract leaves and refuses a field such a leaf would drop with the
   same typed error a contract node answers. The register rows these served
   are marked mechanical; their counters stay until their conditions are met.
+  The four lenient neighbours 1010 left as string commands
+  (`prepare_node_mail_attachments`, `place_node_mail_attachments` and
+  `send_coordinator_command_node_mail` in `node-mail`, `coordinator_node_ticket`
+  in `ticket-sync`) were defined on 2026-11-07
+  ([7009](../../plans/unified/7009-domain-coordinator-servers-system.md)):
+  every key their handlers read is `optionalKey(Unknown)`, so their own
+  checks still give the error text; `requestId`, `attachments` and
+  `replyToMessageId` on `send_coordinator_command_node_mail` are critical. A
+  command node asks a leaf which images it still needs through the client's
+  `prepareAttachments` (version 0: `unknown-command` without
+  `node-mail-attachments`); the other three are called in process by name.
+- **`public-api`**
+  ([7009](../../plans/unified/7009-domain-coordinator-servers-system.md)):
+  `public_action` is defined at version 1 (min 1), `admin`, with every
+  wrapper key `optionalKey(Unknown)`, so a malformed wrapper is still
+  answered with the dispatcher's own envelope; `node` and `relayedAuthority`
+  are critical. The two in-process symbol keys (the Control MCP or schedule
+  authority, the node link's controller) are carried past decoding on the
+  invocation (`beforeDecode`). The public actions keep their own versioning
+  (schema version, `actionVersion`, `capabilities`; [public-cli.md](public-cli.md)),
+  so the domain has no client: the CLI, Control MCP, scheduled jobs and a
+  command node routing to a leaf call it by name.
 - **`native-sessions`** ([7001](../../plans/unified/7001-domain-native-sessions.md)):
   all 87 commands (native agent sessions, terminal sessions and buffers, pane
   layouts, prompt queues, drafts, handoffs and the tab's host actions) are

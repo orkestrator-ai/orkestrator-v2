@@ -16,7 +16,9 @@
  *   advertise and `turnOrigin` (an older leaf frames mail as it always did,
  *   so nothing is weakened), and refuses `steer`, `attachments` or a
  *   `return_node_outbox_mail` without their capability with the same typed
- *   errors a contract node would answer, rather than dropping them.
+ *   errors a contract node would answer, rather than dropping them;
+ *   `prepare_node_mail_attachments` without `node-mail-attachments` is
+ *   `unknown-command`, which is what such a leaf would answer.
  *
  * Retirement: adapter 0 goes when the support floor passes the first Stable
  * release that advertises `node-mail` (version-compatibility.md, Register).
@@ -32,6 +34,7 @@ import {
   collectNodeOutboxCommand,
   deliverNodeMailCommand,
   getNodeProjectCoordinatorCommand,
+  prepareNodeMailAttachmentsCommand,
   returnNodeOutboxMailCommand,
 } from "./commands.js";
 import { nodeMailDomain } from "./domain.js";
@@ -61,6 +64,8 @@ export interface NodeMailApi {
   collectOutbox: Call<typeof collectNodeOutboxCommand>;
   ackOutbox: Call<typeof ackNodeOutboxCommand>;
   returnOutboxMail: Call<typeof returnNodeOutboxMailCommand>;
+  /** Which of a batch's images the node still needs (`node-mail-attachments` before the contract). */
+  prepareAttachments: Call<typeof prepareNodeMailAttachmentsCommand>;
 }
 
 function currentApi(call: CommandCall): NodeMailApi {
@@ -71,6 +76,7 @@ function currentApi(call: CommandCall): NodeMailApi {
     collectOutbox: (args) => call(collectNodeOutboxCommand, args),
     ackOutbox: (args) => call(ackNodeOutboxCommand, args),
     returnOutboxMail: (args) => call(returnNodeOutboxMailCommand, args),
+    prepareAttachments: (args) => call(prepareNodeMailAttachmentsCommand, args),
   };
 }
 
@@ -130,6 +136,13 @@ function legacyApi(call: CommandCall, context: DomainAdapterContext): NodeMailAp
         throw unknownCommand(returnNodeOutboxMailCommand.name, nodeMailDomain.name);
       }
       return call(returnNodeOutboxMailCommand, args);
+    },
+    prepareAttachments: async (args) => {
+      // A leaf without the capability has no such command.
+      if (!supports(BACKEND_CAPABILITIES.nodeMailAttachments)) {
+        throw unknownCommand(prepareNodeMailAttachmentsCommand.name, nodeMailDomain.name);
+      }
+      return call(prepareNodeMailAttachmentsCommand, args);
     },
   };
 }

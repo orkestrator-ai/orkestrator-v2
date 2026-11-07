@@ -7,7 +7,11 @@ import {
   type AgentMailAttachment,
 } from "@orkestrator/protocol/agent-mail";
 import { BACKEND_CAPABILITIES } from "@orkestrator/protocol/backend-profile";
-import type { NodeMailApi } from "@orkestrator/protocol/contract/domains/node-mail";
+import {
+  placeNodeMailAttachmentsCommand,
+  prepareNodeMailAttachmentsCommand,
+  type NodeMailApi,
+} from "@orkestrator/protocol/contract/domains/node-mail";
 import {
   COORDINATOR_MAIL_ADDRESS,
   coordinatorConversationIdFromRuntimeId,
@@ -16,6 +20,7 @@ import {
 
 import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import type { CommandContext } from "./commands-context.js";
+import { ASYNC_HANDLER } from "./commands-registry-async-decode.js";
 import { CONTAINER_PINNED_ATTACHMENT_WRITE, writeConfinedLocalArtifact } from "./commands-files.js";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import {
@@ -318,38 +323,48 @@ export function registerMailAttachmentCommands(
   register: CommandRegistrar,
   dependencies: MailAttachmentDependencies,
 ): void {
-  register("prepare_node_mail_attachments", async (args, context) => {
-    const { batch, files } = parseMailAttachmentBatch(args.attachments);
-    const sink = await sinkFor(context, parseRecipient(args.to), batch, dependencies);
-    try {
-      const missing: string[] = [];
-      for (const file of files) if (!(await sink.has(file))) missing.push(file.name);
-      return { missing };
-    } finally {
-      sink.release();
-    }
-  });
-
-  register("place_node_mail_attachments", async (args, context) => {
-    const { batch, files } = parseMailAttachmentBatch(args.attachments);
-    const dataDir = context.storage.getDataDir();
-    let sink: AttachmentSink | undefined;
-    try {
-      sink = await sinkFor(context, parseRecipient(args.to), batch, dependencies);
-      await sink.ready();
-      const attachments: AgentMailAttachment[] = [];
-      for (const file of files) {
-        if (!(await sink.has(file))) {
-          await sink.write(file, await readSpooledAttachment(dataDir, batch, file));
-        }
-        attachments.push({ ...file, path: sink.pathOf(file.name) });
+  // Lenient keys (`node-mail` domain): `parseMailAttachmentBatch` and
+  // `parseRecipient` check them with their own messages.
+  register(
+    prepareNodeMailAttachmentsCommand,
+    async (args, context) => {
+      const { batch, files } = parseMailAttachmentBatch(args.attachments);
+      const sink = await sinkFor(context, parseRecipient(args.to), batch, dependencies);
+      try {
+        const missing: string[] = [];
+        for (const file of files) if (!(await sink.has(file))) missing.push(file.name);
+        return { missing };
+      } finally {
+        sink.release();
       }
-      return { attachments };
-    } finally {
-      sink?.release();
-      await removeMailAttachmentBatch(dataDir, batch).catch(() => undefined);
-    }
-  });
+    },
+    ASYNC_HANDLER,
+  );
+
+  register(
+    placeNodeMailAttachmentsCommand,
+    async (args, context) => {
+      const { batch, files } = parseMailAttachmentBatch(args.attachments);
+      const dataDir = context.storage.getDataDir();
+      let sink: AttachmentSink | undefined;
+      try {
+        sink = await sinkFor(context, parseRecipient(args.to), batch, dependencies);
+        await sink.ready();
+        const attachments: AgentMailAttachment[] = [];
+        for (const file of files) {
+          if (!(await sink.has(file))) {
+            await sink.write(file, await readSpooledAttachment(dataDir, batch, file));
+          }
+          attachments.push({ ...file, path: sink.pathOf(file.name) });
+        }
+        return { attachments };
+      } finally {
+        sink?.release();
+        await removeMailAttachmentBatch(dataDir, batch).catch(() => undefined);
+      }
+    },
+    ASYNC_HANDLER,
+  );
 }
 
 /** The attachment references in a command's arguments; absent means none. */
@@ -419,9 +434,8 @@ export interface MailAttachmentNode {
   selfId: string;
   nodeId: string;
   nodeName: string;
-  call<T>(command: string, args?: JsonRecord, requestKey?: string): Promise<T>;
   /** That node's `node-mail` domain client: version 1 takes images, a pre-contract node by capability. */
-  nodeMail(): Pick<NodeMailApi, "supports">;
+  nodeMail(): Pick<NodeMailApi, "supports" | "prepareAttachments">;
 }
 
 /** Refuse a node that would drop or reject the images, and say what to do. */
@@ -449,10 +463,7 @@ export async function pushCallerAttachmentsToNode(
 ): Promise<MailAttachmentBatch> {
   assertNodeTakesMailAttachments(node);
   const attachments = batchFor(caller, requestId, own);
-  const { missing } = await node.call<{ missing: string[] }>("prepare_node_mail_attachments", {
-    to,
-    attachments,
-  });
+  const { missing } = await node.nodeMail().prepareAttachments({ to, attachments });
   if (missing.length === 0) return attachments;
   const dataDir = context.storage.getDataDir();
   await stageMailAttachments(

@@ -13,10 +13,19 @@
  * fields are optional: a pre-contract leaf, or a fake in a test, may answer
  * less, and a caller decides what a missing field means (it did before).
  *
+ * The lenient neighbours 1010 left as string commands (the mailed images'
+ * receiving end and a leaf coordinator's mail up to its command node) were
+ * defined on 2026-11-07 (plan item 7009): every key their handlers read is
+ * `optionalKey(Unknown)`, so the handlers' own checks (`parseRecipient`,
+ * `parseMailAttachmentBatch`, `coordinatorCaller`, `nonBlank`) still give the
+ * error text, and nothing accepted before is refused.
+ *
  * Browser-safe.
  */
 import * as Schema from "effect/Schema";
+import type { AgentMailAttachment } from "../../../agent-mail.js";
 import { defineCommand } from "../../command.js";
+import { modelRecord, mutableArray, openRecord } from "../../model-schema.js";
 import { nodeMailDomain } from "./domain.js";
 
 const optionalString = Schema.optionalKey(Schema.String);
@@ -244,6 +253,84 @@ export const resolveNodeActionRequestCommand = defineCommand({
   critical: [],
 });
 
+/**
+ * The two receiving-end commands of a coordinator's mailed images: the
+ * recipient (`{ environmentId }` or `{ projectId }`, checked by
+ * `parseRecipient`) and the batch (`{ batch, files }`, checked by
+ * `parseMailAttachmentBatch`), each with its own message.
+ */
+const mailAttachmentArgs = Schema.Struct({ to: optionalUnknown, attachments: optionalUnknown });
+
+/** One placed image, as the recipient's mail records it. */
+export const AgentMailAttachmentSchema = modelRecord<AgentMailAttachment>()({
+  name: Schema.String,
+  path: Schema.String,
+});
+
+/**
+ * Which of a batch's images are not at the recipient yet; refuses a recipient
+ * that cannot take them before any bytes move. Called here and, over the node
+ * link, by a command node pushing images to a leaf.
+ */
+export const prepareNodeMailAttachmentsCommand = defineCommand({
+  domain: nodeMailDomain,
+  name: "prepare_node_mail_attachments",
+  since: 1,
+  access: "internal",
+  read: false,
+  args: mailAttachmentArgs,
+  result: Schema.Struct({ missing: mutableArray(Schema.String) }),
+  critical: [],
+});
+
+/** Puts a spooled batch where the recipient reads it; answers what the mail records. */
+export const placeNodeMailAttachmentsCommand = defineCommand({
+  domain: nodeMailDomain,
+  name: "place_node_mail_attachments",
+  since: 1,
+  access: "internal",
+  read: false,
+  args: mailAttachmentArgs,
+  result: Schema.Struct({ attachments: mutableArray(AgentMailAttachmentSchema) }),
+  critical: [],
+});
+
+/**
+ * A leaf's main coordinator writes to its command node's coordinator: queued
+ * in the leaf's outbox until the command node collects it. Called in process
+ * by the leaf's Control MCP mail tools.
+ */
+export const sendCoordinatorCommandNodeMailCommand = defineCommand({
+  domain: nodeMailDomain,
+  name: "send_coordinator_command_node_mail",
+  since: 1,
+  access: "internal",
+  read: false,
+  args: Schema.Struct({
+    scope: optionalUnknown,
+    requestId: optionalUnknown,
+    subject: optionalUnknown,
+    body: optionalUnknown,
+    replyToMessageId: optionalUnknown,
+    attachments: optionalUnknown,
+  }),
+  result: openRecord({
+    outboxSeq: Schema.Finite,
+    toEnvironmentId: Schema.String,
+    placement: Schema.String,
+    coordinatorDelegationOpened: Schema.Boolean,
+    replyToMessageId: Schema.optional(Schema.String),
+    /** The names of the images queued with it. */
+    attachments: Schema.optional(mutableArray(Schema.String)),
+    coordinator: Schema.optional(Schema.String),
+    deliveryHint: Schema.optional(Schema.String),
+  }),
+  // requestId: the outbox's idempotency key; ignored, a retry queues the mail twice.
+  // attachments: ignored, the mail goes up without its images.
+  // replyToMessageId: ignored, the reply loses its thread and the request stays in the inbox.
+  critical: ["requestId", "attachments", "replyToMessageId"],
+});
+
 /** Every `node-mail` command definition, in registration order. */
 export const NODE_MAIL_COMMANDS = [
   deliverNodeMailCommand,
@@ -256,4 +343,7 @@ export const NODE_MAIL_COMMANDS = [
   createNodeActionRequestCommand,
   listNodeActionRequestsCommand,
   resolveNodeActionRequestCommand,
+  prepareNodeMailAttachmentsCommand,
+  placeNodeMailAttachmentsCommand,
+  sendCoordinatorCommandNodeMailCommand,
 ] as const;

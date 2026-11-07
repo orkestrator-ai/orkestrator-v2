@@ -13,10 +13,18 @@
  * sequence bounds), so those arguments stay `Unknown` and their error text is
  * unchanged. Results crossing the node link have optional fields.
  *
+ * `coordinator_node_ticket` (a command node coordinator's ticket tools with a
+ * `nodeId`), the lenient neighbour 1010 left as a string command, was defined
+ * on 2026-11-07 (plan item 7009): its four keys are `optionalKey(Unknown)`, so
+ * the handler's own checks give the error text and nothing accepted before is
+ * refused.
+ *
  * Browser-safe.
  */
 import * as Schema from "effect/Schema";
 import { defineCommand } from "../../command.js";
+import { openRecord } from "../../model-schema.js";
+import { KanbanTaskListSchema, KanbanTaskSchema } from "../kanban/schemas.js";
 import { ticketSyncDomain } from "./domain.js";
 
 const optionalUnknown = Schema.optionalKey(Schema.Unknown);
@@ -123,6 +131,42 @@ export const syncNodeTicketsCommand = defineCommand({
   critical: [],
 });
 
+/**
+ * A coordinator's ticket action on another node's copy of its project
+ * (command node; called in process by the Control MCP ticket tools). `scope`
+ * is the coordinator's, `action` one of create, list, get, update, comment,
+ * and `input` the action's fields (the handler reads and checks each).
+ */
+export const coordinatorNodeTicketCommand = defineCommand({
+  domain: ticketSyncDomain,
+  name: "coordinator_node_ticket",
+  since: 1,
+  access: "internal",
+  read: false,
+  args: Schema.Struct({
+    scope: optionalUnknown,
+    nodeId: optionalUnknown,
+    action: optionalUnknown,
+    input: optionalUnknown,
+  }),
+  // `{ self: true }` for this node; otherwise the ticket or tickets, where
+  // they are, and whether (and how far) the leaf has this board's copy.
+  result: openRecord({
+    self: Schema.optional(Schema.Boolean),
+    ticket: Schema.optional(KanbanTaskSchema),
+    tickets: Schema.optional(KanbanTaskListSchema),
+    nodeId: Schema.optional(Schema.String),
+    node: Schema.optional(Schema.String),
+    synced: Schema.optional(Schema.Boolean),
+    // `TicketSyncNodeState`'s `state` and `message`.
+    sync: Schema.optional(
+      openRecord({ state: Schema.String, message: Schema.optional(Schema.String) }),
+    ),
+    note: Schema.optional(Schema.String),
+  }),
+  critical: [],
+});
+
 /** Every `ticket-sync` command definition, in registration order. */
 export const TICKET_SYNC_COMMANDS = [
   applyTicketSyncCommand,
@@ -131,4 +175,5 @@ export const TICKET_SYNC_COMMANDS = [
   ackTicketSyncOutboxCommand,
   getTicketSyncStatusCommand,
   syncNodeTicketsCommand,
+  coordinatorNodeTicketCommand,
 ] as const;

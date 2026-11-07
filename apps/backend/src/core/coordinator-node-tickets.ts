@@ -10,9 +10,11 @@ import {
   type TicketSyncNodeState,
 } from "@orkestrator/protocol/ticket-sync";
 import { incompatibility } from "@orkestrator/protocol/contract/errors";
+import { coordinatorNodeTicketCommand } from "@orkestrator/protocol/contract/domains/ticket-sync";
 
 import type { CommandContext } from "./commands-context.js";
 import { asNonBlankString } from "./commands-helpers.js";
+import { ASYNC_HANDLER } from "./commands-registry-async-decode.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
 import { requireCoordinatorConversation } from "./coordinator-action-scope.js";
 import { compatibilityPathUsage } from "./compatibility-path-usage.js";
@@ -187,145 +189,150 @@ function contentInput(input: JsonRecord): JsonRecord {
 }
 
 export function registerCoordinatorNodeTicketCommands(register: CommandRegistrar): void {
-  register("coordinator_node_ticket", async ({ scope, nodeId, action, input }, context) => {
-    if (!record(scope)) throw new Error("Coordinator scope is required");
-    const projectId = asNonBlankString(scope.projectId, "projectId");
-    await requireCoordinatorConversation(
-      context,
-      projectId,
-      asNonBlankString(scope.coordinatorId, "coordinatorId"),
-      asNonBlankString(scope.conversationId, "conversationId"),
-    );
-    const args = record(input) ? input : {};
-    const node = await ticketNode(context, projectId, asNonBlankString(nodeId, "nodeId"));
-    const kanban = context.storage.kanban;
-    if (!node) return { self: true };
+  // Lenient keys (`ticket-sync` domain): the handler checks each with its own message.
+  register(
+    coordinatorNodeTicketCommand,
+    async ({ scope, nodeId, action, input }, context) => {
+      if (!record(scope)) throw new Error("Coordinator scope is required");
+      const projectId = asNonBlankString(scope.projectId, "projectId");
+      await requireCoordinatorConversation(
+        context,
+        projectId,
+        asNonBlankString(scope.coordinatorId, "coordinatorId"),
+        asNonBlankString(scope.conversationId, "conversationId"),
+      );
+      const args = record(input) ? input : {};
+      const node = await ticketNode(context, projectId, asNonBlankString(nodeId, "nodeId"));
+      const kanban = context.storage.kanban;
+      if (!node) return { self: true };
 
-    switch (action) {
-      case "create": {
-        const requestId = asNonBlankString(args.requestId, "requestId");
-        const title = asNonBlankString(args.title, "title");
-        if (node.syncs) {
-          const ticket = await kanban.addKanbanTask(
-            projectId,
-            title,
-            typeof args.description === "string" ? args.description : "",
-            {
-              requestId,
-              ...(typeof args.acceptanceCriteria === "string"
-                ? { acceptanceCriteria: args.acceptanceCriteria }
-                : {}),
-              ...(typeof args.status === "string" ? { status: args.status as never } : {}),
-              ...(typeof args.kind === "string" ? { kind: args.kind as never } : {}),
-              ...(record(args.sections) ? { sections: args.sections as never } : {}),
-              ...(Array.isArray(args.labels) ? { labels: args.labels as string[] } : {}),
-            },
+      switch (action) {
+        case "create": {
+          const requestId = asNonBlankString(args.requestId, "requestId");
+          const title = asNonBlankString(args.title, "title");
+          if (node.syncs) {
+            const ticket = await kanban.addKanbanTask(
+              projectId,
+              title,
+              typeof args.description === "string" ? args.description : "",
+              {
+                requestId,
+                ...(typeof args.acceptanceCriteria === "string"
+                  ? { acceptanceCriteria: args.acceptanceCriteria }
+                  : {}),
+                ...(typeof args.status === "string" ? { status: args.status as never } : {}),
+                ...(typeof args.kind === "string" ? { kind: args.kind as never } : {}),
+                ...(record(args.sections) ? { sections: args.sections as never } : {}),
+                ...(Array.isArray(args.labels) ? { labels: args.labels as string[] } : {}),
+              },
+            );
+            return {
+              ticket,
+              ...where(node),
+              synced: true,
+              sync: await syncState(context, node, projectId),
+            };
+          }
+          if (!node.online) offline(node);
+          const ticket = await node.call<KanbanTask>(
+            "add_kanban_task",
+            // Every backend's add_kanban_task takes a description, even an empty one.
+            { projectId: node.projectId, requestId, description: "", ...contentInput(args) },
+            `ticket:${requestId}`,
           );
           return {
             ticket,
             ...where(node),
-            synced: true,
-            sync: await syncState(context, node, projectId),
+            ...olderLeaf(node),
+            ...labelUpdateWarning(node, args, ticket),
           };
         }
-        if (!node.online) offline(node);
-        const ticket = await node.call<KanbanTask>(
-          "add_kanban_task",
-          // Every backend's add_kanban_task takes a description, even an empty one.
-          { projectId: node.projectId, requestId, description: "", ...contentInput(args) },
-          `ticket:${requestId}`,
-        );
-        return {
-          ticket,
-          ...where(node),
-          ...olderLeaf(node),
-          ...labelUpdateWarning(node, args, ticket),
-        };
-      }
-      case "list":
-      case "get": {
-        if (!node.online) {
-          if (!node.syncs) offline(node);
-          const tickets = (await kanban.getKanbanTasks(projectId)).filter(
-            (task) => !task.sync?.replica,
-          );
-          const note = `${node.nodeName} is not connected. This is the command node's board, which it catches up with when it reconnects; tickets made only on ${node.nodeName} are not listed.`;
-          return { tickets, ...where(node), synced: true, note };
+        case "list":
+        case "get": {
+          if (!node.online) {
+            if (!node.syncs) offline(node);
+            const tickets = (await kanban.getKanbanTasks(projectId)).filter(
+              (task) => !task.sync?.replica,
+            );
+            const note = `${node.nodeName} is not connected. This is the command node's board, which it catches up with when it reconnects; tickets made only on ${node.nodeName} are not listed.`;
+            return { tickets, ...where(node), synced: true, note };
+          }
+          const tickets = await node.call<KanbanTask[]>("get_kanban_tasks", {
+            projectId: node.projectId,
+          });
+          return {
+            tickets: Array.isArray(tickets) ? tickets : [],
+            ...where(node),
+            ...(node.syncs ? { synced: true } : olderLeaf(node)),
+          };
         }
-        const tickets = await node.call<KanbanTask[]>("get_kanban_tasks", {
-          projectId: node.projectId,
-        });
-        return {
-          tickets: Array.isArray(tickets) ? tickets : [],
-          ...where(node),
-          ...(node.syncs ? { synced: true } : olderLeaf(node)),
-        };
-      }
-      case "update":
-      case "comment": {
-        const ticketId = asNonBlankString(args.ticketId, "ticketId");
-        const own = await kanban.getKanbanTask(ticketId);
-        if (belongs(own, projectId) && node.syncs) {
+        case "update":
+        case "comment": {
+          const ticketId = asNonBlankString(args.ticketId, "ticketId");
+          const own = await kanban.getKanbanTask(ticketId);
+          if (belongs(own, projectId) && node.syncs) {
+            const ticket =
+              action === "update"
+                ? await kanban.updateKanbanTask(ticketId, contentInput(args) as never, projectId)
+                : await kanban.addKanbanComment(
+                    ticketId,
+                    asNonBlankString(args.text, "text"),
+                    projectId,
+                    typeof args.requestId === "string" ? args.requestId : undefined,
+                  );
+            return {
+              ticket,
+              ...where(node),
+              synced: true,
+              sync: await syncState(context, node, projectId),
+            };
+          }
+          if (!node.online) offline(node);
+          const theirs = await node.call<KanbanTask[]>("get_kanban_tasks", {
+            projectId: node.projectId,
+          });
+          if (!Array.isArray(theirs) || !theirs.some((task) => task.id === ticketId)) {
+            throw new Error(
+              `Kanban ticket not found in this project on ${node.nodeName} or on this board: ${ticketId}`,
+            );
+          }
+          const requestKey =
+            typeof args.requestId === "string" ? `ticket:${action}:${args.requestId}` : undefined;
           const ticket =
             action === "update"
-              ? await kanban.updateKanbanTask(ticketId, contentInput(args) as never, projectId)
-              : await kanban.addKanbanComment(
-                  ticketId,
-                  asNonBlankString(args.text, "text"),
-                  projectId,
-                  typeof args.requestId === "string" ? args.requestId : undefined,
+              ? await node.call<KanbanTask>(
+                  "update_kanban_task",
+                  { taskId: ticketId, ...contentInput(args) },
+                  requestKey,
+                )
+              : await node.call<KanbanTask>(
+                  "add_kanban_comment",
+                  {
+                    taskId: ticketId,
+                    text: asNonBlankString(args.text, "text"),
+                    projectId: node.projectId,
+                    ...(typeof args.requestId === "string" ? { requestId: args.requestId } : {}),
+                  },
+                  requestKey,
                 );
           return {
             ticket,
             ...where(node),
-            synced: true,
-            sync: await syncState(context, node, projectId),
+            ...(node.syncs
+              ? {
+                  synced: false,
+                  note: `This ticket exists only on ${node.nodeName}; it is not on this board.`,
+                }
+              : olderLeaf(node)),
+            ...(action === "update" ? labelUpdateWarning(node, args, ticket) : {}),
           };
         }
-        if (!node.online) offline(node);
-        const theirs = await node.call<KanbanTask[]>("get_kanban_tasks", {
-          projectId: node.projectId,
-        });
-        if (!Array.isArray(theirs) || !theirs.some((task) => task.id === ticketId)) {
-          throw new Error(
-            `Kanban ticket not found in this project on ${node.nodeName} or on this board: ${ticketId}`,
-          );
-        }
-        const requestKey =
-          typeof args.requestId === "string" ? `ticket:${action}:${args.requestId}` : undefined;
-        const ticket =
-          action === "update"
-            ? await node.call<KanbanTask>(
-                "update_kanban_task",
-                { taskId: ticketId, ...contentInput(args) },
-                requestKey,
-              )
-            : await node.call<KanbanTask>(
-                "add_kanban_comment",
-                {
-                  taskId: ticketId,
-                  text: asNonBlankString(args.text, "text"),
-                  projectId: node.projectId,
-                  ...(typeof args.requestId === "string" ? { requestId: args.requestId } : {}),
-                },
-                requestKey,
-              );
-        return {
-          ticket,
-          ...where(node),
-          ...(node.syncs
-            ? {
-                synced: false,
-                note: `This ticket exists only on ${node.nodeName}; it is not on this board.`,
-              }
-            : olderLeaf(node)),
-          ...(action === "update" ? labelUpdateWarning(node, args, ticket) : {}),
-        };
+        default:
+          throw new Error("Unknown ticket action.");
       }
-      default:
-        throw new Error("Unknown ticket action.");
-    }
-  });
+    },
+    ASYNC_HANDLER,
+  );
 }
 
 /**

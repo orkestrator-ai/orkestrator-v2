@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 import { createPortal } from "react-dom";
 import { onGlobalSettingsRequest } from "@/lib/settings-navigation";
+import { noteDrawerNavigation } from "@/lib/mobile-shell";
 import { SidebarBottomBar } from "../sidebar/SidebarBottomBar";
 import { openMachineWorkspace } from "@/lib/federation/open-workspace";
 import { portalStore } from "@/lib/portal/portal-store";
@@ -752,6 +753,19 @@ describe("MobileAppShellLayout", () => {
     fireEvent.click(screen.getByRole("button", { name: "Open projects and environments" }));
     rerender(<MobileAppShellLayout {...props} selectedProjectId="project-2" />);
     expect(screen.queryByRole("dialog", { name: "Projects and environments" }) === null).toBe(true);
+  });
+
+  test("closes the drawer when the environment already shown is chosen again (restored after a reload)", () => {
+    // A reload restores the selection (plan item 3006) and the drawer opens on
+    // first load; choosing that row changes no selection (4006 smoke regression).
+    renderLayout({}, { keepInitialDrawerOpen: true });
+    expect(screen.getByRole("dialog", { name: "Projects and environments" })).toBeTruthy();
+    act(() => noteDrawerNavigation());
+    expect(screen.queryByRole("dialog", { name: "Projects and environments" }) === null).toBe(true);
+    // Focus stays with the workspace rather than going back to the trigger.
+    expect(document.activeElement).not.toBe(
+      screen.getByRole("button", { name: "Open projects and environments" }),
+    );
   });
 
   test("closes the tools popover when the active selection changes", () => {

@@ -24,6 +24,7 @@ import { useMergePrRequestStore } from "@/stores/mergePrRequestStore";
 import { useAppDialogStore } from "@/stores/appDialogStore";
 import { useBugReportStore } from "@/stores/bugReportStore";
 import { useGlobalSettingsStore } from "@/stores/globalSettingsStore";
+import { onDrawerNavigation } from "@/lib/mobile-shell";
 
 /**
  * Accessible name of the collapsed tools trigger.
@@ -134,6 +135,17 @@ export function MobileAppShellLayout({
     titlePointerTypeRef.current = null;
     titleTooltipWasOpenOnPointerDownRef.current = false;
   }, [selectedEnvironmentId, selectedProjectId]);
+
+  // Choosing the environment already shown changes no selection; the drawer
+  // still gives way to it (a reload restores the selection, plan item 3006).
+  useEffect(
+    () =>
+      onDrawerNavigation(() => {
+        restoreSidebarFocusRef.current = false;
+        setSidebarOpen(false);
+      }),
+    [],
+  );
 
   const toolsOpenRef = useRef(toolsOpen);
   useEffect(() => {

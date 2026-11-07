@@ -1,4 +1,4 @@
-import { MOBILE_SHELL_MEDIA_QUERY } from "@/lib/mobile-shell";
+import { MOBILE_SHELL_MEDIA_QUERY, noteDrawerNavigation } from "@/lib/mobile-shell";
 import { useSidebarHydration } from "./useSidebarHydration";
 import { useSelectedEnvironmentActions } from "./useSelectedEnvironmentActions";
 import { onCreateEnvironmentRequest, openMachineWorkspace } from "@/lib/federation/open-workspace";
@@ -737,6 +737,8 @@ export function HierarchicalSidebar() {
       const environment = allEnvironments.find((e) => e.id === environmentId);
       if (environment) {
         selectProjectAndEnvironment(environment.projectId, environmentId);
+        // The phone drawer closes even when this is the environment already shown.
+        noteDrawerNavigation();
         // Auto-start local environments on selection so a terminal can open
         if (startsOnSelection(environment)) {
           log.info("auto-start.started", {

@@ -18,6 +18,7 @@ import {
 import { OutcomeUnknownError } from "@/lib/portal/portal-store";
 import { incompatibilityNotice, updatableMachine } from "@/lib/federation/fleet-currency";
 import { useUIStore } from "@/stores";
+import { noteDrawerNavigation } from "@/lib/mobile-shell";
 import { useFederation } from "./FederationProvider";
 
 export interface FederatedEnvironmentActions {
@@ -78,6 +79,8 @@ export function useFederatedEnvironmentActions(
   const busy = useSidebarActionStore((state) => state.pending.has(environment.key));
 
   const open = () => {
+    // The phone drawer closes even when this is the environment already shown.
+    noteDrawerNavigation();
     if (machine.bound) {
       selectProjectAndEnvironment(environment.projectId, environment.ref.environmentId);
       return;

@@ -119,6 +119,13 @@ export async function startTopology(label: string): Promise<Topology> {
   const leafGateway = gateway(leafProfile);
   await setDisplayName(commandGateway, "Cmd4006");
   await setDisplayName(leafGateway, "Leaf4006");
+  // Attached afresh: the leaf learns the command node's current origins only
+  // on attach (`update_node` keeps the old ones), and a stale list refuses the
+  // browser's direct requests, which then fall back to the relay unseen.
+  const { nodeId: existingLeafId } = await leafGateway.invoke<{ nodeId: string }>(
+    "get_node_status",
+  );
+  await commandGateway.invoke("forget_node", { nodeId: existingLeafId }).catch(() => undefined);
   const { nodeId: leafNodeId } = await attachLeaf(commandGateway, leafGateway);
   const { nodeId: commandNodeId } = await commandGateway.invoke<{ nodeId: string }>(
     "get_node_status",

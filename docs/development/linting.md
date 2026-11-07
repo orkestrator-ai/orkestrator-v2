@@ -102,8 +102,8 @@ Some guards read production sources instead of tests (`SourceGuard.productionRoo
 the walk is `listProductionSources`, which skips test files and test-support
 modules). They hold the node-scope boundaries of the unified federation work and
 are described in [Transports only through a scope](#transports-only-through-a-scope):
-`window-orkestrator-direct`, `direct-transport-import`, `scoped-store-shim` and
-`lib-backend-command-default`.
+`window-orkestrator-direct`, `direct-transport-import`, `scoped-store-shim`,
+`lib-backend-command-default` and `workspace-command-bound-call`.
 
 Existing offenders are tolerated by a ratchet, not fixed in bulk:
 `tests/source-guards/baseline.json` holds a count per guard and file. The test
@@ -314,6 +314,23 @@ baseline:
   `lib/backend` file and per module (`[file] module`), reads the shim names
   from the `lib/backend` sources, and follows imports through `@/lib/backend`
   and other re-exports. Regenerate with `--guard lib-backend-command-default`.
+
+- **`workspace-command-bound-call`** (source guard, plan item 4007). Uses of
+  a command-bound export in a module of a node's workspace: the value-import
+  graph from `WorkspaceContent`, `NodeWorkspaceLayout`, `OpenFileDialog` and
+  `AgentMailPanel` (static imports, re-exports and `import()`; type-only
+  imports are not followed). An in-tree leaf renders these modules under its
+  own node scope, so a `lib/backend` named export there, or another module's
+  export bound to `commandBackendClient`/`portalBackendClient` (the Claude
+  tmux client's shim), sends the leaf's command to the command node. Counted
+  per subject and module (`[subject] file`). Not followed: `lib/backend/**`,
+  `lib/node-scope/**`, `src/test/**`, test sources and the window-level
+  modules in `WORKSPACE_EXEMPT_MODULES`; `WORKSPACE_WINDOW_LEVEL_EXPORTS`
+  lists the exports that are the window's wherever they are called
+  (`openInBrowser`), each with its reason. The baseline is zero. Fix a
+  finding with `useScopeBackend()` or the node's backend passed in
+  ([node-scopes.md](node-scopes.md#a-nodes-workspace-in-the-windows-tree));
+  regenerate with `--guard workspace-command-bound-call`.
 
 To retire an importer, route it through a scope, then regenerate only this
 guard's entries with

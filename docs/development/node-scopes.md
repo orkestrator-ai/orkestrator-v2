@@ -317,11 +317,26 @@ keeps its realm. The pieces:
 | Window features for the shown node (plan items 5002, 5003) | `lib/node-scope/shown-scope.ts`, `components/layout/ShownNodeTitleBar.tsx`, `components/bug-report/BugReportSheet.tsx`, `lib/app-shortcuts.ts` | `shownNodeScope()` is the scope of the node the window selection shows (`null` for a realm's node): `openPullRequestInApp` opens there by default. For an in-tree node `AppShell` draws the ordinary `SystemUsageIndicator` and `AgentInfoButton` inside its `NodeScopeProvider` (`useShownInTreeNode`, `NodeTitleBarUsage`, `NodeTitleBarAgentInfo`), so no `panel`, `panelDismissed` or `titleBar` crosses its loopback (`RealmTitleBarPanels` draws nothing there). `openBugReport` opens the window's sheet on the node (`bugReportStore.sheetNodeId`, `BugReportSheetHost`, `BugReportSheet scope`). Settings and app shortcuts run in the window's document; a workspace-owned shortcut runs only for the workspace on show (`onAppShortcut(id, handler, { workspace: scope })`, `setShownAppShortcutWorkspace`). `AppDialogHost` project dialogs wait for the node's first project list. |
 | `backendForScope(scope)` | `lib/backend/scope-backend.ts` | Every `@/lib/backend` command function for one scope. On the app's command scope it is the module itself, so suites that mock it still see the call. Workspace components call it instead of a named export (see below). |
 
-Components in the workspace subtree call their node, not the command node.
-Do this through `backendForScope(useScopesWithCommandFallback().scope)` or
-`backendApiForScope`, never a bare `@/lib/backend` named export. No guard
-counts component-level named exports yet. Plan item 4001's Notes list what
-still reaches the command node.
+Components in the workspace subtree call their node, not the command node
+(plan item 4007):
+
+| In | Write |
+| --- | --- |
+| A component or hook | `const nodeBackend = useScopeBackend()` (`hooks/useScopeBackend.ts`, `backendForScope` of the nearest scope), then `nodeBackend.getX(...)` at call time; add it to the hook's dependencies. A file outside the `@/lib/backend` barrel: `useScopeApi(createXApi, x)` with `import * as x from "@/lib/backend/x"`. |
+| Plain code a component calls | Take the node: a `NodeScope` parameter (`backendForScope(scope)` inside), or the narrow `Pick<ScopeBackend, "getX">` the code needs, passed from the caller's `useScopeBackend()`. 3003's optional trailing `scope` (command scope when omitted) is fine for helpers that also serve window code. |
+| A `{ load = getX }` default parameter | `{ load: loadOverride }` and `const load = loadOverride === undefined ? nodeBackend.getX : loadOverride;` |
+| Claude tmux | `useClaudeTmuxClient()` / `claudeTmuxClientFor(scope)` (`lib/claude-tmux-scope.ts`): the node's commands and its `claude-tmux:event` stream. |
+| The design canvas | `useDesignScope()` / `useDesignApi()` (`components/design/design-scope.ts`), `designApiFor(scope)`. The design client has no command-bound default. |
+| Graph-run view requests | `requestGraphRunView(request, scope)`, `onGraphRunViewRequested(listener, scope)`, `takePendingGraphRunView(environmentId, scope)`: per scope. |
+
+The `workspace-command-bound-call` source guard holds this (see below). A
+call that is the window's wherever it is made (`openInBrowser`) is listed in
+`WORKSPACE_WINDOW_LEVEL_EXPORTS`, and a window-level module the workspace
+imports in `WORKSPACE_EXEMPT_MODULES`, each with its reason. Prompt queues
+and boot hydration are per node too: `createPromptQueueSources(scope)`, the
+prompt-queue mutations' trailing `scope`, `environmentHydrationFor(scope)`,
+and the `prompt-queues` change handler runs on every scope, so a leaf's tmux
+tabs restore and follow the leaf's queues.
 
 ## Rules the guards hold
 
@@ -345,6 +360,17 @@ still reaches the command node.
   it either moves its calls onto `createXApi(...)` or regenerates with
   `bun tests/source-guards/update-baseline.ts --guard lib-backend-command-default`
   and says why in its Notes.
+- The `workspace-command-bound-call` source guard (plan item 4007,
+  `tests/source-guards/workspace-command-bound-call.ts`) follows the value
+  imports (static, re-exports, `import()`) from the workspace roots
+  (`WorkspaceContent`, `NodeWorkspaceLayout`, `OpenFileDialog`,
+  `AgentMailPanel`) and counts, in every module it reaches, each use of a
+  command-bound export: a `lib/backend` named export, or any renderer
+  module's export bound to `commandBackendClient`/`portalBackendClient`
+  (`lib/claude-tmux-client`'s shim). Keys are `[subject] file`. It does not
+  follow `lib/backend/**`, `lib/node-scope/**`, `src/test/**` or the
+  modules in `WORKSPACE_EXEMPT_MODULES`. The baseline is zero (2026-11-07)
+  and only falls; regenerate with `--guard workspace-command-bound-call`.
 - At runtime, the shim guard (plan item 4004,
   `lib/node-scope/shim-under-leaf-guard.ts`) is `noteShimUse`'s default
   observer. While any in-tree leaf workspace is mounted, a shim use of a store

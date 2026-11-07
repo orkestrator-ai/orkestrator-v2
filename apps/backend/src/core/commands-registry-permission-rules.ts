@@ -2,6 +2,13 @@ import {
   isPermissionRuleScope,
   type PermissionRulesSnapshot,
 } from "@orkestrator/protocol/permission-rules";
+import {
+  approveNativeAgentInteractionAndRememberCommand,
+  deletePermissionRuleCommand,
+  deleteProjectPermissionRulesCommand,
+  listExternalPermissionRulesCommand,
+  listPermissionRulesCommand,
+} from "@orkestrator/protocol/contract/domains/config";
 import type { CommandContext } from "./commands-context.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
 import {
@@ -9,7 +16,6 @@ import {
   asOptionalString,
   asRequiredBoolean,
   asString,
-  assertOnlyKeys,
 } from "./commands-validation.js";
 import { listExternalPermissionRules } from "./permission-rules/external-rules.js";
 import type { PermissionRuleStore } from "./permission-rules/store.js";
@@ -32,8 +38,7 @@ function store(context: CommandContext): PermissionRuleStore {
 }
 
 export function registerPermissionRuleCommands(register: CommandRegistrar): void {
-  register("list_permission_rules", async (args, context): Promise<PermissionRulesSnapshot> => {
-    assertOnlyKeys(args, ["projectId", "environmentId", "agent", "logicalSessionKey"], "arguments");
+  register(listPermissionRulesCommand, async (args, context): Promise<PermissionRulesSnapshot> => {
     const projectId = asOptionalString(args.projectId);
     const environmentId = asOptionalString(args.environmentId);
     const agent = asOptionalString(args.agent);
@@ -51,32 +56,16 @@ export function registerPermissionRuleCommands(register: CommandRegistrar): void
     };
   });
 
-  register("delete_permission_rule", async (args, context) => {
-    assertOnlyKeys(args, ["id"], "arguments");
+  register(deletePermissionRuleCommand, async (args, context) => {
     return { deleted: store(context).delete(asNonBlankString(args.id, "id")) };
   });
 
-  register("delete_project_permission_rules", async (args, context) => {
-    assertOnlyKeys(args, ["projectId"], "arguments");
+  register(deleteProjectPermissionRulesCommand, async (args, context) => {
     const ids = store(context).deleteForProject(asNonBlankString(args.projectId, "projectId"));
     return { deleted: ids.length };
   });
 
-  register("approve_native_agent_interaction_and_remember", async (args, context) => {
-    assertOnlyKeys(
-      args,
-      [
-        "environmentId",
-        "agent",
-        "logicalSessionKey",
-        "interactionId",
-        "pattern",
-        "scope",
-        "anyProvider",
-        "expiresInMs",
-      ],
-      "arguments",
-    );
+  register(approveNativeAgentInteractionAndRememberCommand, async (args, context) => {
     if (!context.nativeAgents) throw new Error("Native agent service is unavailable");
     const scope = asString(args.scope, "scope");
     if (!isPermissionRuleScope(scope)) throw new Error("scope must be project or environment");
@@ -98,8 +87,7 @@ export function registerPermissionRuleCommands(register: CommandRegistrar): void
     });
   });
 
-  register("list_external_permission_rules", async (args, context) => {
-    assertOnlyKeys(args, ["projectId"], "arguments");
+  register(listExternalPermissionRulesCommand, async (args, context) => {
     const projectId = asOptionalString(args.projectId);
     return listExternalPermissionRules(context, projectId);
   });

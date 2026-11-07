@@ -45,6 +45,8 @@
     "./contract/command": "./src/contract/command.ts",
     "./contract/domain": "./src/contract/domain.ts",
     "./contract/domains/environments": "./src/contract/domains/environments/index.ts",
+    "./contract/domains/projects": "./src/contract/domains/projects/index.ts",
+    "./contract/domains/config": "./src/contract/domains/config/index.ts",
     "./contract/domains/node-files": "./src/contract/domains/node-files/index.ts",
     "./contract/domains/node-mail": "./src/contract/domains/node-mail/index.ts",
     "./contract/domains/ticket-sync": "./src/contract/domains/ticket-sync/index.ts",

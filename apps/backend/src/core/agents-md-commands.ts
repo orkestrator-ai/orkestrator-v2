@@ -10,6 +10,11 @@ import {
   openAgentsMdPullRequest,
   readAgentsMdSectionFromBase,
 } from "./agents-md-pr.js";
+import {
+  openProjectAgentsMdPrCommand,
+  readProjectAgentsMdSectionCommand,
+  requestCoordinatorAgentsMdUpdateCommand,
+} from "@orkestrator/protocol/contract/domains/projects";
 import { asNonBlankString } from "./commands-helpers.js";
 import type { CommandContext } from "./commands-context.js";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
@@ -59,7 +64,7 @@ export function registerAgentsMdCommands(
     return (await handler(args, context)) as T;
   };
 
-  register("request_coordinator_agents_md_update", async (args, context) => {
+  register(requestCoordinatorAgentsMdUpdateCommand, async (args, context) => {
     const caller = await coordinatorCaller(args.scope, context);
     const input = args.input;
     if (!input || typeof input !== "object" || Array.isArray(input))
@@ -145,7 +150,7 @@ export function registerAgentsMdCommands(
   });
 
   /** The section on the freshly fetched base branch, for the user's review. Read-only. */
-  register("read_project_agents_md_section", async (args, context) => {
+  register(readProjectAgentsMdSectionCommand, async (args, context) => {
     const projectId = asNonBlankString(args.projectId, "projectId");
     const root = await resolveProjectGitRoot(context.storage, projectId);
     return readAgentsMdSectionFromBase({
@@ -160,7 +165,7 @@ export function registerAgentsMdCommands(
    * Runs only from an approved `update-agents-md` request (the coordinator's
    * command invoker refuses it by name). Idempotent per request key.
    */
-  register("open_project_agents_md_pr", async (args, context) => {
+  register(openProjectAgentsMdPrCommand, async (args, context) => {
     const projectId = asNonBlankString(args.projectId, "projectId");
     const key = asNonBlankString(args.requestKey, "requestKey");
     const changes = parseAgentsMdChanges(args.changes);

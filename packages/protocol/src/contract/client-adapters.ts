@@ -27,6 +27,7 @@ import { MAX_DOMAIN_VERSION, isDomainName, type DomainName } from "./domain.js";
 import { dockerClient } from "./domains/docker/client.js";
 import { environmentsClient } from "./domains/environments/client.js";
 import { claudeTmuxClient } from "./domains/claude-tmux/client.js";
+import { configClient } from "./domains/config/client.js";
 import { agentServersClient } from "./domains/agent-servers/client.js";
 import { coordinatorClient } from "./domains/coordinator/client.js";
 import { designClient } from "./domains/design/client.js";
@@ -37,6 +38,7 @@ import { nodeFilesClient } from "./domains/node-files/client.js";
 import { nodesClient } from "./domains/nodes/client.js";
 import { nodeMailClient } from "./domains/node-mail/client.js";
 import { previewsClient } from "./domains/previews/client.js";
+import { projectsClient } from "./domains/projects/client.js";
 import { terminalsClient } from "./domains/terminals/client.js";
 import { systemClient } from "./domains/system/client.js";
 import { ticketSyncClient } from "./domains/ticket-sync/client.js";
@@ -51,6 +53,7 @@ export const DOMAIN_CLIENTS: readonly DomainClientDef[] = Object.freeze([
   dockerClient,
   environmentsClient,
   claudeTmuxClient,
+  configClient,
   agentServersClient,
   coordinatorClient,
   designClient,
@@ -61,6 +64,7 @@ export const DOMAIN_CLIENTS: readonly DomainClientDef[] = Object.freeze([
   nodesClient,
   nodeMailClient,
   previewsClient,
+  projectsClient,
   terminalsClient,
   systemClient,
   ticketSyncClient,

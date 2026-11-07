@@ -21,7 +21,6 @@ test("remember command validates arguments before resolving a session", async ()
     anyProvider: false,
   };
   for (const change of [
-    { injected: true },
     { environmentId: " " },
     { logicalSessionKey: "" },
     { interactionId: "" },
@@ -33,7 +32,11 @@ test("remember command validates arguments before resolving a session", async ()
     await expect(run({ ...args, ...change }, context)).rejects.toThrow();
   }
   expect(approve).not.toHaveBeenCalled();
-  await expect(run(args, context)).resolves.toEqual({ outcome: { result: "applied" } });
+  // An unknown key is dropped, not refused (plan item 7005, §11.4): the call below
+  // carries it and the service sees exactly the declared arguments.
+  await expect(run({ ...args, injected: true }, context)).resolves.toEqual({
+    outcome: { result: "applied" },
+  });
   expect(approve).toHaveBeenCalledWith({
     environmentId: "env",
     agent: "claude",

@@ -112,9 +112,18 @@ describe("list_host_directory", () => {
     >;
     expect(names(listing)).toEqual(["Alpha", "beta", "notes.txt"]);
 
-    await expect(Promise.resolve().then(() => run({ extra: true }, {} as never))).rejects.toThrow(
-      "Unexpected arguments field: extra",
+    // Defined commands drop unknown keys (plan item 7005, §11.4) rather than refuse them.
+    const stripped = (await run(
+      { path: root, includeFiles: true, extra: true },
+      {} as never,
+    )) as Awaited<ReturnType<typeof listHostDirectory>>;
+    expect(names(stripped)).toEqual(["Alpha", "beta", "notes.txt"]);
+    await expect(Promise.resolve().then(() => run({ path: 42 }, {} as never))).rejects.toThrow(
+      "Expected path to be a string",
     );
+    await expect(
+      Promise.resolve().then(() => run({ path: root, showHidden: "yes" }, {} as never)),
+    ).rejects.toThrow("Expected showHidden to be a boolean");
   });
   test("rejects over-length paths before filesystem access", async () => {
     await expect(
@@ -335,8 +344,11 @@ describe("create_host_directory", () => {
     expect(await run({ parent: root, name: "made" }, {} as never)).toEqual({
       path: path.join(root, "made"),
     });
+    // An unknown key is dropped (plan item 7005, §11.4).
+    expect(await run({ parent: root, name: "x", extra: true }, {} as never)).toEqual({
+      path: path.join(root, "x"),
+    });
     for (const [args, message] of [
-      [{ parent: root, name: "x", extra: true }, "Unexpected arguments field: extra"],
       [{ parent: 42, name: "x" }, "Expected parent to be a string"],
       [{ parent: root }, "Expected name to be a string"],
     ] as const) {
@@ -432,7 +444,6 @@ describe("read_host_image_file", () => {
     const commands = new Map<string, CommandHandler>();
     registerHostFileCommands(registrarFrom((name, handler) => commands.set(name, handler)));
     for (const [name, args, message] of [
-      ["read_host_image_file", { path: root, extra: 1 }, "Unexpected arguments field: extra"],
       ["read_host_image_file", { path: 42 }, "Expected path to be a string"],
       ["find_project_icons", {}, "Expected root to be a string"],
     ] as const) {
@@ -440,5 +451,7 @@ describe("read_host_image_file", () => {
       await expect(Promise.resolve().then(() => run(args, {} as never))).rejects.toThrow(message);
     }
     expect(await commands.get("find_project_icons")!({ root }, {} as never)).toEqual([]);
+    // An unknown key is dropped (plan item 7005, §11.4).
+    expect(await commands.get("find_project_icons")!({ root, extra: 1 }, {} as never)).toEqual([]);
   });
 });

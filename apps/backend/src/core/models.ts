@@ -61,25 +61,8 @@ export type {
   FrontendAgentActivityObserverSnapshot,
 };
 
-export interface Project {
-  id: string;
-  name: string;
-  gitUrl: string;
-  localPath: string | null;
-  addedAt: string;
-  order: number;
-  /**
-   * Sidebar folder this project is grouped under, or null/absent for the root
-   * level. The name is the folder's whole identity — see
-   * `@orkestrator/protocol/project-folders`.
-   */
-  folder?: string | null;
-  /**
-   * Sidebar icon: a small raster image as a base64 data URL, or absent for
-   * the default. See `@orkestrator/protocol/project-icon`.
-   */
-  icon?: string | null;
-}
+/** One registered project: the protocol schema's type (plan item 7005). */
+export type { Project } from "@orkestrator/protocol/contract/domains/projects";
 
 /**
  * Durable progress of an environment move. `moving`: the worktree may still

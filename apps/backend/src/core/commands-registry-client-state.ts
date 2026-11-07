@@ -1,7 +1,16 @@
 import {
-  CLIENT_STATE_CAPABILITIES_COMMAND,
-  type ClientStateCapabilities,
-} from "@orkestrator/protocol/client-state";
+  checkCoordinatorUpstreamMergeCommand,
+  CONFIG_CLIENT_STATE_CAPABILITIES,
+  declineCoordinatorUpstreamMergeCommand,
+  dismissNoticesCommand,
+  getClientStateCapabilitiesCommand,
+  getCoordinatorPaneLayoutCommand,
+  getCoordinatorUpstreamAutoMergeCommand,
+  listNoticeDismissalsCommand,
+  reconcileNoticeDismissalsCommand,
+  saveCoordinatorPaneLayoutCommand,
+  setCoordinatorUpstreamAutoMergeCommand,
+} from "@orkestrator/protocol/contract/domains/config";
 import type {
   CoordinatorUpstreamAutoMerge,
   CoordinatorUpstreamMergeCheck,
@@ -43,14 +52,12 @@ import type { CommandRegistrar } from "./commands-registry-types.js";
  *   the dismissal snapshot.
  */
 
-const CAPABILITIES: ClientStateCapabilities = {
-  coordinatorPaneLayouts: true,
-  coordinatorUpstreamMerge: true,
-  // Retired: every mergeable checkout is merged, so there is no setting to show.
-  coordinatorUpstreamAutoMerge: false,
-  noticeDismissals: true,
-  environmentAttention: true,
-};
+/**
+ * What `get_client_state_capabilities` answers: the set `config` version 1
+ * includes, so the domain client answers it without asking. The "always
+ * merge" setting is retired: every mergeable checkout is merged.
+ */
+const CAPABILITIES = CONFIG_CLIENT_STATE_CAPABILITIES;
 
 async function existingProjectId(value: unknown, context: CommandContext): Promise<string> {
   const projectId = asNonBlankString(value, "projectId");
@@ -60,15 +67,15 @@ async function existingProjectId(value: unknown, context: CommandContext): Promi
 }
 
 export function registerClientStateCommands(register: CommandRegistrar): void {
-  register(CLIENT_STATE_CAPABILITIES_COMMAND, () => CAPABILITIES);
+  register(getClientStateCapabilitiesCommand, () => ({ ...CAPABILITIES }));
 
-  register("get_coordinator_pane_layout", async ({ projectId }, context) =>
+  register(getCoordinatorPaneLayoutCommand, async ({ projectId }, context) =>
     context.storage.clientState.getCoordinatorPaneLayout(
       await existingProjectId(projectId, context),
     ),
   );
   register(
-    "save_coordinator_pane_layout",
+    saveCoordinatorPaneLayoutCommand,
     async ({ projectId, layout, expectedRevision }, context) => {
       if (
         typeof expectedRevision !== "number" ||
@@ -79,14 +86,14 @@ export function registerClientStateCommands(register: CommandRegistrar): void {
       }
       return context.storage.clientState.saveCoordinatorPaneLayout(
         await existingProjectId(projectId, context),
-        layout,
+        layout as never,
         expectedRevision,
       );
     },
   );
 
   register(
-    "check_coordinator_upstream_merge",
+    checkCoordinatorUpstreamMergeCommand,
     async ({ projectId }, context): Promise<CoordinatorUpstreamMergeCheck> => {
       const projectGit = context.projectGit;
       if (!projectGit) throw new Error("Project Git service is unavailable");
@@ -94,7 +101,7 @@ export function registerClientStateCommands(register: CommandRegistrar): void {
     },
   );
   register(
-    "decline_coordinator_upstream_merge",
+    declineCoordinatorUpstreamMergeCommand,
     async ({ projectId, upstream, upstreamCommit, onlyIfAbsent }, context) =>
       context.storage.clientState.recordCoordinatorUpstreamDecline(
         await existingProjectId(projectId, context),
@@ -107,7 +114,7 @@ export function registerClientStateCommands(register: CommandRegistrar): void {
   );
 
   register(
-    "get_coordinator_upstream_auto_merge",
+    getCoordinatorUpstreamAutoMergeCommand,
     async ({ projectId }, context): Promise<CoordinatorUpstreamAutoMerge> => ({
       enabled: context.storage.clientState.getCoordinatorUpstreamAutoMerge(
         await existingProjectId(projectId, context),
@@ -115,7 +122,7 @@ export function registerClientStateCommands(register: CommandRegistrar): void {
     }),
   );
   register(
-    "set_coordinator_upstream_auto_merge",
+    setCoordinatorUpstreamAutoMergeCommand,
     async ({ projectId, enabled }, context): Promise<CoordinatorUpstreamAutoMerge> => {
       if (typeof enabled !== "boolean") throw new Error("enabled must be a boolean");
       return {
@@ -127,23 +134,26 @@ export function registerClientStateCommands(register: CommandRegistrar): void {
     },
   );
 
-  register("list_notice_dismissals", (_args, context) =>
+  register(listNoticeDismissalsCommand, (_args, context) =>
     context.storage.clientState.listNoticeDismissals(),
   );
-  register("dismiss_notices", ({ sessions }, context) => {
+  register(dismissNoticesCommand, ({ sessions }, context) => {
     if (!Array.isArray(sessions) || sessions.length > NOTICE_DISMISSAL_LIMITS.sessionsPerRequest) {
       throw new Error("sessions must be a bounded array");
     }
     return context.storage.clientState.dismissNotices(normalizeNoticeDismissalSessions(sessions));
   });
-  register("reconcile_notice_dismissals", ({ sessionIdentity, activeOccurrenceIds }, context) => {
-    if (!isNoticeSessionIdentity(sessionIdentity)) throw new Error("Invalid sessionIdentity");
-    if (!Array.isArray(activeOccurrenceIds) || activeOccurrenceIds.length > 256) {
-      throw new Error("activeOccurrenceIds must be a bounded array");
-    }
-    return context.storage.clientState.reconcileNoticeDismissals(
-      sessionIdentity,
-      activeOccurrenceIds.filter(isNoticeOccurrenceId),
-    );
-  });
+  register(
+    reconcileNoticeDismissalsCommand,
+    ({ sessionIdentity, activeOccurrenceIds }, context) => {
+      if (!isNoticeSessionIdentity(sessionIdentity)) throw new Error("Invalid sessionIdentity");
+      if (!Array.isArray(activeOccurrenceIds) || activeOccurrenceIds.length > 256) {
+        throw new Error("activeOccurrenceIds must be a bounded array");
+      }
+      return context.storage.clientState.reconcileNoticeDismissals(
+        sessionIdentity,
+        activeOccurrenceIds.filter(isNoticeOccurrenceId),
+      );
+    },
+  );
 }

@@ -4,7 +4,13 @@ import path from "node:path";
 
 import { addExistingProject } from "./commands-projects.js";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
-import { assertOnlyKeys } from "./commands-validation.js";
+import {
+  getDefaultProjectLocationCommand,
+  getProjectCloneCommand,
+  listProjectCopyCandidatesCommand,
+  listProjectCopyFilesCommand,
+  startProjectCloneCommand,
+} from "@orkestrator/protocol/contract/domains/projects";
 import { sanitizeCoordinatorError } from "./coordinator-service.js";
 import { listProjectCopyCandidates, listProjectCopyFiles } from "./nodes/index.js";
 import type { StorageService } from "./storage.js";
@@ -126,14 +132,12 @@ export function registerProjectCopyCommands(
     }
   };
 
-  register("get_default_project_location", async (args, { storage }) => {
-    assertOnlyKeys(args, ["name"], "arguments");
+  register(getDefaultProjectLocationCommand, async (args, { storage }) => {
     if (typeof args.name !== "string") throw new Error("Expected name.");
     return defaultProjectLocation(storage, args.name);
   });
 
-  register("list_project_copy_candidates", async (args, { storage }) => {
-    assertOnlyKeys(args, ["projectId"], "arguments");
+  register(listProjectCopyCandidatesCommand, async (args, { storage }) => {
     if (typeof args.projectId !== "string") throw new Error("Expected projectId.");
     const project = await storage.getProject(args.projectId);
     if (!project?.localPath) throw new Error("That project has no local checkout on this machine.");
@@ -141,8 +145,7 @@ export function registerProjectCopyCommands(
     return listProjectCopyCandidates(project.localPath, config.filesToCopy);
   });
 
-  register("list_project_copy_files", async (args, { storage }) => {
-    assertOnlyKeys(args, ["projectId", "paths"], "arguments");
+  register(listProjectCopyFilesCommand, async (args, { storage }) => {
     if (typeof args.projectId !== "string") throw new Error("Expected projectId.");
     if (
       !Array.isArray(args.paths) ||
@@ -156,8 +159,7 @@ export function registerProjectCopyCommands(
     return listProjectCopyFiles(project.localPath, args.paths as string[]);
   });
 
-  register("start_project_clone", async (args, { storage }) => {
-    assertOnlyKeys(args, ["requestKey", "gitUrl", "localPath"], "arguments");
+  register(startProjectCloneCommand, async (args, { storage }) => {
     const { requestKey, gitUrl, localPath } = args;
     if (typeof requestKey !== "string" || !requestKey || requestKey.length > 200) {
       throw new Error("Expected requestKey.");
@@ -212,8 +214,7 @@ export function registerProjectCopyCommands(
     return view(job);
   });
 
-  register("get_project_clone", async (args) => {
-    assertOnlyKeys(args, ["requestKey"], "arguments");
+  register(getProjectCloneCommand, async (args) => {
     if (typeof args.requestKey !== "string") throw new Error("Expected requestKey.");
     const job = jobs.get(args.requestKey);
     return job ? view(job) : { requestKey: args.requestKey, state: "unknown" as const };

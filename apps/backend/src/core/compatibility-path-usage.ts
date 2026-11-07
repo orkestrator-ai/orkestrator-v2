@@ -138,6 +138,13 @@ export const COMPATIBILITY_PATH_IDS = [
   "retired-command.associate-coordinator-workflow",
   "retired-command.start-coordinator-multi-review",
   /**
+   * The retired `start_coordinator_node_multi_review` was called (plan item
+   * 7009): its only caller, Control MCP's `launch_multi_review` on the same
+   * command node, moved to `launch_coordinator_node_multi_review` in
+   * v2.36.4-beta.
+   */
+  "retired-command.start-coordinator-node-multi-review",
+  /**
    * A stream that did not say how it wants relayed node events got one under the
    * old shared name: a renderer or desktop from before per-node names.
    */

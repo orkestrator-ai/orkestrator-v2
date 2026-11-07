@@ -141,7 +141,7 @@ describe("system definitions", () => {
     };
     const decoded = decodeCommandResult(listScheduledJobsCommand, listed);
     expect(decoded._tag).toBe("Success");
-    if (decoded._tag === "Success") expect(decoded.success).toEqual(listed);
+    if (decoded._tag === "Success") expect<unknown>(decoded.success).toEqual(listed);
     const wrong = decodeCommandResult(listScheduledJobsCommand, {
       schedules: [{ ...listed.schedules[0], revision: "1" }],
     });
@@ -203,7 +203,7 @@ describe("system client", () => {
     const node = fakeNode(SYSTEM_V1, () => created);
     const client = createDomainClient(systemClient, node.options);
     expect(client.version()).toBe(1);
-    await expect(client.api().create_scheduled_job(createArgs)).resolves.toEqual(created);
+    await expect<unknown>(client.api().create_scheduled_job(createArgs)).resolves.toEqual(created);
     expect(node.sent).toEqual([
       {
         command: createScheduledJobCommand.name,
@@ -227,7 +227,7 @@ describe("system client", () => {
     const node = fakeNode(undefined, () => legacy);
     const client = createDomainClient(systemClient, node.options);
     expect(client.version()).toBe(0);
-    await expect(client.api().create_scheduled_job(createArgs)).resolves.toBe(legacy);
+    await expect<unknown>(client.api().create_scheduled_job(createArgs)).resolves.toBe(legacy);
     expect(node.invoked).toEqual([{ command: "create_scheduled_job", args: createArgs }]);
     expect(node.sent).toEqual([]);
     expect(node.usage).toEqual([["system", 0]]);

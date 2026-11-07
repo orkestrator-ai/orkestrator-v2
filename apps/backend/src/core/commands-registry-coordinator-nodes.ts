@@ -1417,7 +1417,11 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
 
   register(
     startCoordinatorNodeMultiReviewCommand,
+    // Retired (plan item 7009): Control MCP's `launch_multi_review` moved to
+    // `launch_coordinator_node_multi_review` in v2.36.4-beta. Kept, counted,
+    // until its register row retires.
     async ({ scope, requestId, nodeId, buildPipelineId, input }, context) => {
+      compatibilityPathUsage.record("retired-command.start-coordinator-node-multi-review");
       const caller = await identity(scope, context);
       const stableRequestId = asNonBlankString(requestId, "requestId");
       const pipelineId = asNonBlankString(buildPipelineId, "buildPipelineId");

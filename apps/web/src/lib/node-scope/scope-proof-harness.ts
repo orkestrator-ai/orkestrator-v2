@@ -33,6 +33,7 @@ import type { NodeConnectionState, Unlisten } from "@orkestrator/protocol/node-c
 import { decodeTerminalOutputPayload, type TerminalOutputPayload } from "@/hooks/useTerminal";
 import { getWindowScope } from "./app-window-scope";
 import { createDesktopNodeClient } from "./desktop-node-client";
+import { NO_ARGS, nodesApi } from "./domains/nodes";
 import { createNodeClientRegistry, type NodeClientRegistry } from "./node-clients";
 import type { NodeScope } from "./node-scope";
 import type { WindowScope } from "./window-scope";
@@ -230,7 +231,7 @@ async function waitFor(check: () => boolean, ms: number): Promise<boolean> {
 async function readScope(scope: NodeScope, timeoutMs: number) {
   const started = performance.now();
   const status = await within(
-    scope.client.invokeRaw<{ nodeId?: string }>("get_node_status"),
+    nodesApi(scope.client).get_node_status(NO_ARGS),
     timeoutMs,
     "get_node_status",
   );

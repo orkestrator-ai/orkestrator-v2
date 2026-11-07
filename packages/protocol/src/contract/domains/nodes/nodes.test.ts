@@ -122,9 +122,9 @@ describe("nodes definitions", () => {
     const decoded = decodeCommandArgs(invokeOnNodeCommand, routed);
     expect(decoded._tag === "Success" && decoded.success).toEqual(routed);
     const ok = { outcome: "ok", result: [{ id: "p1", extra: true }] };
-    expect(Schema.decodeUnknownSync(RoutedResultSchema)(ok)).toEqual(ok);
+    expect<unknown>(Schema.decodeUnknownSync(RoutedResultSchema)(ok)).toEqual(ok);
     const unknown = { outcome: "unknown", requestKey: "k", outcomeId: "o" };
-    expect(Schema.decodeUnknownSync(RoutedResultSchema)(unknown)).toEqual(unknown);
+    expect<unknown>(Schema.decodeUnknownSync(RoutedResultSchema)(unknown)).toEqual(unknown);
   });
 
   it("keeps every key of an open record through a tolerant decode", () => {
@@ -152,7 +152,7 @@ describe("nodes definitions", () => {
     };
     const decoded = decodeCommandResult(listNodesCommand, list);
     expect(decoded._tag).toBe("Success");
-    if (decoded._tag === "Success") expect(decoded.success).toEqual(list);
+    if (decoded._tag === "Success") expect<unknown>(decoded.success).toEqual(list);
     expect(decodeCommandResult(listNodesCommand, { ...list, revision: "3" })._tag).toBe("Failure");
   });
 
@@ -215,7 +215,7 @@ describe("nodes client", () => {
     const node = fakeNode(undefined, () => older);
     const client = createDomainClient(nodesClient, node.options);
     expect(client.version()).toBe(0);
-    await expect(client.api().list_nodes(undefined as never)).resolves.toBe(older);
+    await expect<unknown>(client.api().list_nodes(undefined as never)).resolves.toBe(older);
     expect(node.invoked).toEqual([{ command: "list_nodes", args: undefined }]);
     expect(node.sent).toEqual([]);
     expect(node.usage).toEqual([["nodes", 0]]);

@@ -150,7 +150,7 @@ const CRITICAL: Record<string, readonly string[]> = {
 describe("coordinator project definitions", () => {
   it("defines each command of the project part once, at version 1, in the domain list", () => {
     const names = COORDINATOR_PROJECT_COMMANDS.map((def) => def.name);
-    expect([...names].sort()).toEqual(NAMES);
+    expect<unknown>([...names].sort()).toEqual(NAMES);
     expect(new Set(names).size).toBe(NAMES.length);
     expect(coordinatorDomain).toMatchObject({ name: "coordinator", version: 1, min: 1 });
     const domainNames = new Set(COORDINATOR_COMMANDS.map((def) => def.name));
@@ -222,7 +222,7 @@ describe("coordinator project definitions", () => {
     };
     const decoded = decodeCommandResult(getProjectCoordinatorCommand, snapshot);
     expect(decoded._tag).toBe("Success");
-    if (decoded._tag === "Success") expect(decoded.success).toEqual(snapshot);
+    if (decoded._tag === "Success") expect<unknown>(decoded.success).toEqual(snapshot);
     expect(validateCommandResult(getProjectCoordinatorCommand, null)._tag).toBe("Success");
     expect(Schema.decodeUnknownResult(CoordinatorSnapshotSchema)({ workspace: {} })._tag).toBe(
       "Failure",
@@ -284,7 +284,7 @@ describe("coordinator client", () => {
     const client = createDomainClient(coordinatorClient, node.options);
     expect(client.version()).toBe(1);
     const api = client.api();
-    await expect(api.send_coordinator_agent_mail(mail)).resolves.toEqual({
+    await expect<unknown>(api.send_coordinator_agent_mail(mail)).resolves.toEqual({
       id: "m1",
       placement: "inbox",
       extra: "kept",
@@ -312,7 +312,7 @@ describe("coordinator client", () => {
     const node = fakeNode(undefined, () => legacyAnswer);
     const client = createDomainClient(coordinatorClient, node.options);
     expect(client.version()).toBe(0);
-    await expect(client.api().get_project_coordinator({ projectId: "p1" })).resolves.toBe(
+    await expect<unknown>(client.api().get_project_coordinator({ projectId: "p1" })).resolves.toBe(
       legacyAnswer,
     );
     expect(node.invoked).toEqual([

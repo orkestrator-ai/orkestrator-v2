@@ -44,6 +44,7 @@ import type { CommandRegistrar, RegistryDependencies } from "./commands-registry
 import type { CommandContext } from "./commands-context.js";
 import type { Environment } from "./models.js";
 import { compatibilityPathUsage } from "./compatibility-path-usage.js";
+import { ASYNC_HANDLER } from "./commands-registry-async-decode.js";
 import { asNonBlankString } from "./commands-helpers.js";
 import { isGitHubPullRequestRef } from "@orkestrator/protocol/github-pull-requests";
 import { nativeAgentSessionStorageKey } from "./native-agent-service.js";
@@ -275,6 +276,8 @@ export function registerCoordinatorCommands(
         confirmWithProjections: false,
       });
     },
+    // A missing project id is still a rejection, as before the definition.
+    ASYNC_HANDLER,
   );
   register(
     createCoordinatorConversationCommand,

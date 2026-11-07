@@ -219,6 +219,12 @@ Not governed by the window (listed so nobody waits on it):
 | Backends that do not report `egressFilter`: the Network section says nothing about the gateway's name checks either way, rather than reading the missing field as an older image | `NameChecks` (`EnvironmentNetworkPolicyStatus.tsx`) | None (renderer side) | Backends before the gateway's name checks (S-0100, 2026-11-05) | The floor is at or above the first Stable release that reports `egressFilter` | Containers |
 | Backends without `list_environment_hydration`: after one "unknown command" the boot batcher reads each environment's prompt queues and Multi Review workflows separately, as before, still within the hydration bound | `EnvironmentHydrationBatcher.sendChunk` (`boot-hydration.ts`) | None (renderer side) | Backends before cold realm boot batching (2026-11-06) | The floor is at or above the first Stable release with `list_environment_hydration` | Federation |
 | Backends that do not know `seed: false` on `get_agent_model_catalog_cache`: they treat it as an omitted `seed`, so startup's pre-render read may still run the Pi first-use probe (bounded by the 2 s render wait) | `startApp` (`app-startup.ts`) | None (no code path; the older backend's behaviour) | Backends before cold realm boot batching (2026-11-06) | Nothing to remove; the row records the behaviour until the floor passes that release | Federation |
+| Renderers before #1889 (v2.36.5-beta) send `hide_coordinator_work` from the Work panel's "Clear finished"; it stays registered, as a defined command | `commands-registry-coordinator.ts` | `retired-command.hide-coordinator-work` | Renderers before v2.36.5-beta | The floor is at or above the first Stable release without the Work panel's "Clear finished" and the counter is quiet; then remove the command | Coordinator ([7009](../../plans/unified/7009-domain-coordinator-servers-system.md)) |
+| `associate_coordinator_workflow` stays registered, as a defined command, although nothing has called it since #592 (launches record their own associations) | `commands-registry-coordinator.ts` | `retired-command.associate-coordinator-workflow` | No known caller; external scripts only | The counter is quiet for one Stable release; then remove the command | Coordinator ([7009](../../plans/unified/7009-domain-coordinator-servers-system.md)) |
+| `start_coordinator_multi_review` stays registered, as a defined command, although its last caller (Control MCP's `launch_multi_review`, in process) moved off it in #1809 (v2.36.4-beta) | `commands-registry-coordinator.ts` | `retired-command.start-coordinator-multi-review` | No cross-process caller | The counter is quiet for one Stable release; then remove the command | Coordinator ([7009](../../plans/unified/7009-domain-coordinator-servers-system.md)) |
+| `start_coordinator_node_multi_review` stays registered, as a defined command, although its only caller (Control MCP's `launch_multi_review` on the same command node) moved to `launch_coordinator_node_multi_review` in #1809 (v2.36.4-beta) | `commands-registry-coordinator-nodes.ts` | `retired-command.start-coordinator-node-multi-review` | No cross-process caller | The counter is quiet for one Stable release; then remove the command | Coordinator ([7009](../../plans/unified/7009-domain-coordinator-servers-system.md)) |
+| `check_opencode_cli`, `check_codex_cli`, `check_cursor_cli`, `check_grok_cli` and `check_pi_cli` stay registered, as defined commands, although the web stopped calling them in 6a3912cf4 (v2.21.0 calls only `check_claude_cli`, `check_github_cli` and `check_any_ai_cli`) | `commands-registry-tools.ts` | `retired-command.provider-cli-check` | No renderer in the window; external callers only | The counter is quiet for one Stable release; then remove the five commands | Agent servers ([7009](../../plans/unified/7009-domain-coordinator-servers-system.md)) |
+| `cleanup_stale_local_servers_cmd` stays registered, as a defined command that does nothing, since the Electron migration | `commands-registry-pr.ts` | `retired-command.cleanup-stale-local-servers` | Nothing since the Electron migration | The counter is quiet for one Stable release; then remove the command | Agent servers ([7009](../../plans/unified/7009-domain-coordinator-servers-system.md)) |
 
 ### Downgrade fences
 
@@ -700,6 +706,37 @@ export const nodeMailClient = domainClient(nodeMail, {
   gate, its payload ceilings and outcome metrics) passes its own
   `beforeDecode(run)` wrapper: it sees the raw arguments, and the version
   check still runs first.
+- **Coordinator, agent servers, system and nodes**
+  ([7009](../../plans/unified/7009-domain-coordinator-servers-system.md)):
+  `coordinator` (102 commands: project coordinators, their conversations and
+  worker surfaces, delegation and the controller-facing commands a command
+  node's coordinator runs on its nodes, Control MCP settings and credentials,
+  native agent jobs), `agent-servers` (77: container and local bridges,
+  readiness waits and peeks, host CLI and credential checks, the GitHub CLI
+  sign-in, model catalogues, skills and plugins), `system` (50: host
+  maintenance, usage, load and diagnostics, scheduled jobs, bug reports, disk
+  usage, worktree locations, the resource manifests) and `nodes` (51: the
+  registry, controller attachment, client grants, command handover, leaf
+  workspaces, portal summaries, layout and event relay, `invoke_on_node`,
+  project comparisons and copies, the machine profile), all at version 1
+  (min 1). None has a capability command to fold. `access` is `admin` for
+  the node's own user's commands that grants and the relay refuse (the node
+  registry and handover, Control MCP credentials, host updates, diagnostics
+  bundles) and for machine-wide diagnostics no workspace calls, `internal`
+  for node-link and coordinator-tool plumbing (`*_controller_*`,
+  `*_coordinator_node_*`, the leaf side of grants, env keys and project
+  seeds), `workspace` otherwise. Every `assertOnlyKeys` handler is tolerant.
+  The per-agent server commands are built by factories because callers
+  build their names at runtime (`start_${agent}_server`). Two trusted
+  in-process values that travel as symbol keys on the arguments (the
+  scheduled-job actor, a coordinator's delegation presentation) are carried
+  across decoding on the invocation by a `beforeDecode` wrapper, so only
+  in-process callers can still set them. Each client's API is one function
+  per command, keyed by name; version 0 is today's call by name. The web
+  calls them through `lib/node-scope/domains/{coordinator,agent-servers,
+  system,nodes}.ts`; the portal's un-negotiated channel uses
+  `nodesApiOver(invoke)` and always takes version 0. Ten commands are
+  retired with counters (see the register).
 - **Previews, web annotations, transcript artifacts and design**
   ([7004](../../plans/unified/7004-domain-previews-annotations-artifacts-design.md)):
   `previews` (17 commands), `web-annotations` (37), `design` (35) and the

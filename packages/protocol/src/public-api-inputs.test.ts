@@ -174,6 +174,9 @@ describe("public action input contract", () => {
       "ticket.create",
       "ticket.update",
       "ticket.comment",
+      "ticket.labels",
+      "ticket.label",
+      "ticket.label.create",
     ]);
     expect(publicActionsForCapability("mail")).toEqual(["mail.mailboxes", "mail.send"]);
     // Destructive and exec capabilities grant no reads a read-only credential needs.

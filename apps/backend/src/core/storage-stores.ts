@@ -81,6 +81,7 @@ const STORE_LAYOUTS: Record<string, StoreLayout> = {
   coordinators: { kind: "envelope", collections: ["workspaces"] },
   kanban: { kind: "array", owner: ownerField("projectId") },
   "kanban-sync": { kind: "document" },
+  "kanban-labels": { kind: "array", key: "projectId" },
   "project-notes": { kind: "array", key: "projectId" },
   "feature-plans": { kind: "array", owner: ownerField("projectId") },
   "linear-auth": { kind: "document" },

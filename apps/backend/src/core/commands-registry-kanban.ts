@@ -7,7 +7,9 @@ import {
   TICKET_KINDS,
   TICKET_SECTION_LIMITS,
 } from "@orkestrator/protocol/ticket-sections";
+import { normalizeTicketLabels } from "@orkestrator/protocol/ticket-labels";
 import type { KanbanTaskContentInput } from "./storage-kanban.js";
+import { parseKanbanLabelInput } from "./storage-kanban-labels.js";
 import {
   asString,
   asFeaturePlanUpdates,
@@ -45,6 +47,12 @@ function asTicketContentInput(args: Record<string, unknown>): KanbanTaskContentI
   };
 }
 
+/** `labels` of a ticket command: absent, or a list of label names (empty clears them). */
+function asTicketLabelsInput(args: Record<string, unknown>): { labels?: string[] } {
+  if (args.labels === undefined || args.labels === null) return {};
+  return { labels: normalizeTicketLabels(args.labels) };
+}
+
 export function registerKanbanCommands(
   register: CommandRegistrar,
   dependencies: RegistryDependencies,
@@ -60,6 +68,7 @@ export function registerKanbanCommands(
     const parsedRequestId = asOptionalMutationRequestId(requestId);
     const initial = {
       ...asTicketContentInput(args),
+      ...asTicketLabelsInput(args),
       ...(typeof acceptanceCriteria === "string" ? { acceptanceCriteria } : {}),
       ...(typeof status === "string" ? { status: status as never } : {}),
       ...(parsedRequestId ? { requestId: parsedRequestId } : {}),
@@ -93,6 +102,7 @@ export function registerKanbanCommands(
       asString(taskId, "taskId"),
       {
         ...asTicketContentInput(args),
+        ...asTicketLabelsInput(args),
         ...(typeof title === "string" ? { title } : {}),
         ...(typeof description === "string" ? { description } : {}),
         ...(typeof acceptanceCriteria === "string" ? { acceptanceCriteria } : {}),
@@ -153,6 +163,33 @@ export function registerKanbanCommands(
     return storage.kanban.recordKanbanCriteriaChecks(
       asNonBlankString(args.taskId, "taskId"),
       checks,
+    );
+  });
+  register("get_kanban_labels", (args, { storage }) => {
+    assertOnlyKeys(args, ["projectId"], "arguments");
+    return storage.kanban.getKanbanLabels(asNonBlankString(args.projectId, "projectId"));
+  });
+  register("create_kanban_label", (args, { storage }) => {
+    assertOnlyKeys(args, ["projectId", "name", "color", "description"], "arguments");
+    return storage.kanban.createKanbanLabel(
+      asNonBlankString(args.projectId, "projectId"),
+      parseKanbanLabelInput({
+        name: args.name,
+        ...(args.color !== undefined ? { color: args.color } : {}),
+        ...(args.description !== undefined ? { description: args.description } : {}),
+      }),
+    );
+  });
+  register("set_kanban_task_label", (args, { storage }) => {
+    assertOnlyKeys(args, ["taskId", "name", "present", "projectId"], "arguments");
+    if (args.present !== undefined && typeof args.present !== "boolean") {
+      throw new Error("present must be a boolean");
+    }
+    return storage.kanban.setKanbanTaskLabel(
+      asNonBlankString(args.taskId, "taskId"),
+      asNonBlankString(args.name, "name"),
+      args.present !== false,
+      args.projectId === undefined ? undefined : asNonBlankString(args.projectId, "projectId"),
     );
   });
   register("delete_kanban_task", ({ taskId }, { storage }) =>

@@ -147,7 +147,29 @@ export function ticketContentValue(task: KanbanTask): TicketContentValue {
     ...(task.kind !== undefined ? { kind: task.kind } : {}),
     ...(task.sections !== undefined ? { sections: task.sections } : {}),
     ...(task.sectionsBasis !== undefined ? { sectionsBasis: task.sectionsBasis } : {}),
+    labels: task.labels ?? [],
   };
+}
+
+/** Synced content as a new row stores it: labels only when it has some. */
+export function storedTicketContent(content: TicketContentValue): TicketContentValue {
+  const { labels, ...rest } = content;
+  return { ...rest, ...(labels?.length ? { labels: [...labels] } : {}) };
+}
+
+/**
+ * Writes synced content onto a stored row. Content from a node that predates
+ * labels carries none, and the row keeps its own; an empty list clears them.
+ */
+export function assignTicketContent(row: KanbanTask, content: TicketContentValue): void {
+  delete row.kind;
+  delete row.sections;
+  delete row.sectionsBasis;
+  const { labels, ...rest } = content;
+  Object.assign(row, rest);
+  if (labels === undefined) return;
+  if (labels.length) row.labels = [...labels];
+  else delete row.labels;
 }
 
 /** Content without criteria results, which merge on their own and never conflict. */
@@ -165,7 +187,13 @@ function contentKey(task: KanbanTask): string {
           : {}),
       }
     : undefined;
-  return JSON.stringify([task.description, task.acceptanceCriteria, task.kind ?? null, sections]);
+  return JSON.stringify([
+    task.description,
+    task.acceptanceCriteria,
+    task.kind ?? null,
+    sections,
+    task.labels ?? [],
+  ]);
 }
 
 function criteriaChecks(task: KanbanTask) {

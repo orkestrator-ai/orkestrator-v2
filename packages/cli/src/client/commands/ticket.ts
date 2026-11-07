@@ -1,6 +1,7 @@
 import type {
   PublicPage,
   PublicTicketDetail,
+  PublicTicketLabel,
   PublicTicketSummary,
 } from "@orkestrator/protocol/public-api-resources";
 import { CliError } from "../errors.js";
@@ -24,6 +25,17 @@ const STATUS_OPTION: OptionSpec = {
   kind: "string",
   valueName: "COLUMN",
   description: `Column: ${STATUSES.join(", ")}.`,
+};
+const LABEL_OPTION: OptionSpec = {
+  name: "label",
+  kind: "list",
+  valueName: "NAME",
+  description: "A label (ticket labels lists them); replaces the ticket's labels.",
+};
+const CLEAR_LABELS_OPTION: OptionSpec = {
+  name: "clear-labels",
+  kind: "boolean",
+  description: "Remove every label.",
 };
 const TEXT_FIELD_OPTIONS: OptionSpec[] = [
   { name: "title", kind: "string", valueName: "TEXT", description: "Ticket title." },
@@ -103,13 +115,43 @@ async function ticketFields(
     ...(options.status !== undefined
       ? { status: oneOf(options.status, STATUSES, "--status") }
       : {}),
+    ...ticketLabelsField(options),
   };
+}
+
+function ticketLabelsField(options: Record<string, unknown>): { labels?: string[] } {
+  const labels = Array.isArray(options.label) ? (options.label as string[]) : undefined;
+  if (options["clear-labels"] === true) {
+    if (labels?.length) {
+      throw new CliError("invalid-input", "Pass --label or --clear-labels, not both");
+    }
+    return { labels: [] };
+  }
+  return labels?.length ? { labels } : {};
 }
 
 function ticketRows(tickets: PublicTicketSummary[]): string[] {
   return table(
-    ["ID", "STATUS", "TITLE", "COMMENTS"],
-    tickets.map((ticket) => [ticket.id, ticket.status, ticket.title, String(ticket.commentCount)]),
+    ["ID", "STATUS", "TITLE", "COMMENTS", "LABELS"],
+    tickets.map((ticket) => [
+      ticket.id,
+      ticket.status,
+      ticket.title,
+      String(ticket.commentCount),
+      (ticket.labels ?? []).join(", "),
+    ]),
+  );
+}
+
+function labelRows(labels: PublicTicketLabel[]): string[] {
+  return table(
+    ["NAME", "TICKETS", "COLOR", "DESCRIPTION"],
+    labels.map((label) => [
+      label.name,
+      String(label.ticketCount),
+      label.color ?? "",
+      label.description ?? "",
+    ]),
   );
 }
 
@@ -130,6 +172,7 @@ function ticketLines(ticket: PublicTicketDetail): string[] {
       ["kind", ticket.kind ?? "feature"],
       ["environment", ticket.environmentId],
       ["pr", ticket.pr.url],
+      ...(ticket.labels?.length ? [["labels", ticket.labels.join(", ")] as [string, unknown]] : []),
       ...(ticket.deliveryPolicy ? [["delivery", ticket.deliveryPolicy] as [string, unknown]] : []),
     ]),
     ...(ticket.description ? ["", ticket.description] : []),
@@ -158,6 +201,12 @@ export const ticketCommands: CommandSpec[] = [
     options: [
       PROJECT_OPTION,
       STATUS_OPTION,
+      {
+        name: "label",
+        kind: "string",
+        valueName: "NAME",
+        description: "Only tickets with this label.",
+      },
       { name: "limit", kind: "integer", valueName: "N", description: "Items per page (max 200)." },
       {
         name: "cursor",
@@ -174,6 +223,7 @@ export const ticketCommands: CommandSpec[] = [
         ...(parsed.options.status !== undefined
           ? { status: oneOf(parsed.options.status, STATUSES, "--status") }
           : {}),
+        ...(parsed.options.label !== undefined ? { label: parsed.options.label } : {}),
         ...(parsed.options.limit !== undefined ? { limit: parsed.options.limit } : {}),
         ...(parsed.options.cursor !== undefined ? { cursor: parsed.options.cursor } : {}),
       });
@@ -217,8 +267,15 @@ export const ticketCommands: CommandSpec[] = [
     action: "ticket.create",
     summary: "Create a Kanban ticket.",
     positionals: [],
-    options: [PROJECT_OPTION, ...TEXT_FIELD_OPTIONS, STATUS_OPTION, REQUEST_ID_OPTION],
+    options: [
+      PROJECT_OPTION,
+      ...TEXT_FIELD_OPTIONS,
+      STATUS_OPTION,
+      { ...LABEL_OPTION, description: "A label for the new ticket (ticket labels lists them)." },
+      REQUEST_ID_OPTION,
+    ],
     inputFields: {
+      label: "labels",
       "description-file": "description",
       criteria: "acceptanceCriteria",
       "sections-file": "sections",
@@ -248,11 +305,20 @@ export const ticketCommands: CommandSpec[] = [
   {
     path: ["ticket", "update"],
     action: "ticket.update",
-    summary: "Change a ticket's title, kind, sections, description, criteria or column.",
+    summary: "Change a ticket's title, kind, sections, description, criteria, labels or column.",
     positionals: [{ name: "ticket", required: true }],
-    options: [PROJECT_OPTION, ...TEXT_FIELD_OPTIONS, STATUS_OPTION, REQUEST_ID_OPTION],
+    options: [
+      PROJECT_OPTION,
+      ...TEXT_FIELD_OPTIONS,
+      STATUS_OPTION,
+      LABEL_OPTION,
+      CLEAR_LABELS_OPTION,
+      REQUEST_ID_OPTION,
+    ],
     inputFields: {
       ticket: "ticketId",
+      label: "labels",
+      "clear-labels": "labels",
       "description-file": "description",
       criteria: "acceptanceCriteria",
       "sections-file": "sections",
@@ -325,6 +391,117 @@ export const ticketCommands: CommandSpec[] = [
         connection: session.identity,
         ids: [result.ticketId],
         human: [`commented on ticket ${result.ticketId}`],
+      };
+    },
+  },
+  {
+    path: ["ticket", "labels"],
+    action: "ticket.labels",
+    summary: "List the labels a project's tickets can carry, with how many tickets carry each.",
+    positionals: [],
+    options: [PROJECT_OPTION],
+    idOutput: "label names, one per line",
+    async run(context, parsed) {
+      const session = await context.session();
+      const result = await session.read<{ labels: PublicTicketLabel[]; total: number }>(
+        "ticket.labels",
+        { projectId: requireProject(parsed.options) },
+      );
+      return {
+        action: "ticket.labels",
+        result,
+        connection: session.identity,
+        ids: result.labels.map((label) => label.name),
+        human: labelRows(result.labels),
+      };
+    },
+  },
+  {
+    path: ["ticket", "label"],
+    action: "ticket.label",
+    summary: "Add or remove one label on a ticket.",
+    positionals: [{ name: "ticket", required: true }],
+    options: [
+      PROJECT_OPTION,
+      { name: "name", kind: "string", valueName: "LABEL", description: "Label name." },
+      { name: "remove", kind: "boolean", description: "Remove it instead." },
+      REQUEST_ID_OPTION,
+    ],
+    inputFields: { ticket: "ticketId", remove: "present" },
+    idOutput: "ticket ID",
+    async run(context, parsed) {
+      const name = stringOption(parsed.options, "name");
+      if (!name) throw new CliError("invalid-input", "--name is required");
+      const { session, result, receipt, warnings } = await submit<{
+        ticketId: string;
+        labels: string[];
+      }>(
+        context,
+        "ticket.label",
+        {
+          projectId: requireProject(parsed.options),
+          ticketId: parsed.positionals.ticket,
+          name,
+          ...(parsed.options.remove === true ? { present: false } : {}),
+        },
+        parsed.options,
+      );
+      return {
+        action: "ticket.label",
+        result,
+        receipt,
+        warnings,
+        connection: session.identity,
+        ids: [result.ticketId],
+        human: [`ticket ${result.ticketId} labels: ${result.labels.join(", ") || "(none)"}`],
+      };
+    },
+  },
+  {
+    path: ["ticket", "label-create"],
+    action: "ticket.label.create",
+    summary: "Create a ticket label in a project's catalogue.",
+    positionals: [],
+    options: [
+      PROJECT_OPTION,
+      { name: "name", kind: "string", valueName: "LABEL", description: "Label name." },
+      { name: "color", kind: "string", valueName: "#RRGGBB", description: "Label colour." },
+      {
+        name: "description",
+        kind: "string",
+        valueName: "TEXT",
+        description: "What the label means.",
+      },
+      REQUEST_ID_OPTION,
+    ],
+    idOutput: "label name",
+    async run(context, parsed) {
+      const name = stringOption(parsed.options, "name");
+      if (!name) throw new CliError("invalid-input", "--name is required");
+      const { session, result, receipt, warnings } = await submit<{
+        name: string;
+        created: boolean;
+      }>(
+        context,
+        "ticket.label.create",
+        {
+          projectId: requireProject(parsed.options),
+          name,
+          ...(parsed.options.color !== undefined ? { color: parsed.options.color } : {}),
+          ...(parsed.options.description !== undefined
+            ? { description: parsed.options.description }
+            : {}),
+        },
+        parsed.options,
+      );
+      return {
+        action: "ticket.label.create",
+        result,
+        receipt,
+        warnings,
+        connection: session.identity,
+        ids: [result.name],
+        human: [result.created ? `created label ${result.name}` : `label ${result.name} exists`],
       };
     },
   },

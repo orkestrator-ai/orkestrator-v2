@@ -13,7 +13,7 @@
  *   outbox for that command node. The command node collects it (it dials
  *   out; a leaf never reaches it), applies it in order and exactly once (the
  *   outbox `epoch` and `seq`), acknowledges it, and fans the result out.
- * - Conflicts are per field: `title`, `content` (text and sections) and
+ * - Conflicts are per field: `title`, `content` (text, sections and labels) and
  *   `status` carry the revision of their last change. A leaf change made
  *   against an older revision than the board's is not applied; the board's
  *   value is kept and the conflict is recorded on the board and as a comment
@@ -24,6 +24,7 @@
  * Images are not synced: each machine keeps its own (see the design record).
  */
 
+import { isTicketLabelList } from "./ticket-labels.js";
 import {
   isAcceptanceCriterionCheck,
   isTicketKind,
@@ -115,6 +116,11 @@ export interface TicketContentValue {
   kind?: TicketKind;
   sections?: TicketSections;
   sectionsBasis?: string;
+  /**
+   * The ticket's labels; empty when it has none. Absent only from nodes that
+   * predate labels, and then a receiver keeps the labels it has.
+   */
+  labels?: string[];
 }
 
 /** One ticket as the command node's board holds it. */
@@ -298,12 +304,16 @@ function parseContent(value: Record<string, unknown>): TicketContentValue {
   if (value.sectionsBasis !== undefined && !isBoundedString(value.sectionsBasis, 200)) {
     throw new Error("Invalid ticket sections basis.");
   }
+  if (value.labels !== undefined && !isTicketLabelList(value.labels)) {
+    throw new Error("Invalid ticket labels.");
+  }
   return {
     description: value.description,
     acceptanceCriteria: value.acceptanceCriteria,
     ...(value.kind !== undefined ? { kind: value.kind as TicketKind } : {}),
     ...(value.sections !== undefined ? { sections: value.sections as TicketSections } : {}),
     ...(value.sectionsBasis !== undefined ? { sectionsBasis: value.sectionsBasis as string } : {}),
+    ...(Array.isArray(value.labels) ? { labels: [...(value.labels as string[])] } : {}),
   };
 }
 

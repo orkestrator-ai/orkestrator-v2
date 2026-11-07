@@ -4,6 +4,12 @@ import type {
   PublicTicketSummary,
 } from "@orkestrator/protocol/public-api-resources";
 import {
+  normalizeTicketLabelName,
+  normalizeTicketLabels,
+  ticketLabelKey,
+  TICKET_LABEL_LIMITS,
+} from "@orkestrator/protocol/ticket-labels";
+import {
   isTicketKind,
   parseTicketSectionsPatch,
   ticketCriteriaSummary,
@@ -12,12 +18,14 @@ import {
   type TicketSectionsPatch,
 } from "@orkestrator/protocol/ticket-sections";
 import type { KanbanTask } from "../storage-shared-core.js";
+import { parseKanbanLabelInput } from "../storage-kanban-labels.js";
 import { paginate, requireProject } from "./actions-discovery.js";
 import { PublicActionError } from "./errors.js";
 import {
   invalid,
   oneOf,
   onlyActionKeys,
+  optionalBoolean,
   optionalInteger,
   optionalString,
   requiredId,
@@ -35,6 +43,11 @@ import type {
  * mutation passes its operation ID as the store's own request key, so a
  * retried admission can never create a second ticket or comment. Receipts
  * carry the ticket ID only; content is returned by `ticket.get`.
+ *
+ * Labels (`ticket.labels`, `ticket.label`, `ticket.label.create`, and the
+ * `labels` field of create and update) follow
+ * `@orkestrator/protocol/ticket-labels`: names match ignoring case and keep
+ * the spelling the project already uses.
  */
 
 const TICKET_STATUSES = ["backlog", "in-progress", "review", "done"] as const;
@@ -52,6 +65,7 @@ export function publicTicketSummary(task: KanbanTask): PublicTicketSummary {
     imageCount: task.images.length,
     environmentId: task.environmentId ?? null,
     pr: { url: task.prUrl ?? null, state: task.prState ?? null },
+    labels: task.labels ?? [],
   };
 }
 
@@ -94,6 +108,25 @@ function ticketText(input: Record<string, unknown>, key: string): string | undef
   return value;
 }
 
+/** A label name from `key`, or an invalid-input error saying why not. */
+function labelName(input: Record<string, unknown>, key: string): string {
+  try {
+    return normalizeTicketLabelName(input[key]);
+  } catch (error) {
+    throw invalid(error instanceof Error ? error.message : `${key} is invalid`);
+  }
+}
+
+/** `labels` of `ticket.create` and `ticket.update`, when given. */
+function ticketLabels(input: Record<string, unknown>): { labels?: string[] } {
+  if (input.labels === undefined) return {};
+  try {
+    return { labels: normalizeTicketLabels(input.labels) };
+  } catch (error) {
+    throw invalid(error instanceof Error ? error.message : "labels is invalid");
+  }
+}
+
 /** The structured content fields shared by `ticket.create` and `ticket.update`. */
 function ticketStructure(input: Record<string, unknown>): {
   kind?: TicketKind;
@@ -120,6 +153,7 @@ function ticketStructure(input: Record<string, unknown>): {
 const ticketList: ReadActionHandler<{
   projectId: string;
   status?: TicketStatus;
+  label?: string;
   limit?: number;
   cursor?: string;
 }> = {
@@ -130,6 +164,7 @@ const ticketList: ReadActionHandler<{
     return {
       projectId: requiredId(input, "projectId"),
       status: oneOf(input, "status", TICKET_STATUSES),
+      ...(input.label !== undefined ? { label: labelName(input, "label") } : {}),
       limit: optionalInteger(input, "limit", 1, PUBLIC_API_LIMITS.pageMaxItems),
       cursor: optionalString(input, "cursor", 512),
     };
@@ -138,6 +173,11 @@ const ticketList: ReadActionHandler<{
     await requireProject(context, input.projectId);
     const tickets = (await context.command.storage.kanban.getKanbanTasks(input.projectId))
       .filter((task) => !input.status || task.status === input.status)
+      .filter(
+        (task) =>
+          input.label === undefined ||
+          (task.labels ?? []).some((name) => ticketLabelKey(name) === ticketLabelKey(input.label!)),
+      )
       .map(publicTicketSummary);
     return { result: paginate(tickets, input) };
   },
@@ -165,6 +205,7 @@ interface CreateInput {
   status: TicketStatus;
   kind?: TicketKind;
   sections?: TicketSectionsPatch;
+  labels?: string[];
 }
 
 const ticketCreate: MutationActionHandler<CreateInput> = {
@@ -179,6 +220,7 @@ const ticketCreate: MutationActionHandler<CreateInput> = {
       acceptanceCriteria: ticketText(input, "acceptanceCriteria") ?? "",
       status: oneOf(input, "status", TICKET_STATUSES) ?? "backlog",
       ...ticketStructure(input),
+      ...ticketLabels(input),
     };
     return { value, scope: `project:${value.projectId}`, intent: value };
   },
@@ -197,6 +239,7 @@ const ticketCreate: MutationActionHandler<CreateInput> = {
             requestId: operation.operationId,
             ...(input.kind ? { kind: input.kind } : {}),
             ...(input.sections ? { sections: input.sections } : {}),
+            ...(input.labels ? { labels: input.labels } : {}),
           },
         );
         return {
@@ -218,6 +261,7 @@ interface UpdateInput {
     status?: TicketStatus;
     kind?: TicketKind;
     sections?: TicketSectionsPatch;
+    labels?: string[];
   };
 }
 
@@ -238,6 +282,7 @@ const ticketUpdate: MutationActionHandler<UpdateInput> = {
       ...(acceptanceCriteria !== undefined ? { acceptanceCriteria } : {}),
       ...(status !== undefined ? { status } : {}),
       ...ticketStructure(input),
+      ...ticketLabels(input),
     };
     if (Object.keys(set).length === 0) throw invalid("Nothing to change");
     return {
@@ -309,10 +354,133 @@ const ticketComment: MutationActionHandler<{
   },
 };
 
+const ticketLabelsList: ReadActionHandler<{ projectId: string }> = {
+  kind: "read",
+  action: "ticket.labels",
+  parse(input) {
+    onlyActionKeys(input, "ticket.labels");
+    return { projectId: requiredId(input, "projectId") };
+  },
+  async run(input, context) {
+    await requireProject(context, input.projectId);
+    const labels = await context.command.storage.kanban.getKanbanLabels(input.projectId);
+    return { result: { labels, total: labels.length } };
+  },
+};
+
+const ticketLabel: MutationActionHandler<{
+  projectId: string;
+  ticketId: string;
+  name: string;
+  present: boolean;
+}> = {
+  kind: "mutation",
+  action: "ticket.label",
+  parse(input) {
+    onlyActionKeys(input, "ticket.label");
+    const value = {
+      projectId: requiredId(input, "projectId"),
+      ticketId: requiredId(input, "ticketId"),
+      name: labelName(input, "name"),
+      present: optionalBoolean(input, "present") ?? true,
+    };
+    return {
+      value,
+      scope: `ticket:${value.projectId}:${value.ticketId}`,
+      intent: { name: value.name, present: value.present },
+    };
+  },
+  async prepare(input, context) {
+    const task = await requireTicket(context, input.projectId, input.ticketId);
+    const labels = task.labels ?? [];
+    const has = labels.some((name) => ticketLabelKey(name) === ticketLabelKey(input.name));
+    if (input.present && !has && labels.length >= TICKET_LABEL_LIMITS.maxPerTicket) {
+      throw invalid(`A ticket can have at most ${TICKET_LABEL_LIMITS.maxPerTicket} labels`);
+    }
+    return {
+      resources: { projectId: input.projectId },
+      async execute() {
+        const updated = await context.command.storage.kanban.setKanbanTaskLabel(
+          input.ticketId,
+          input.name,
+          input.present,
+          input.projectId,
+        );
+        return {
+          state: "succeeded",
+          result: {
+            ticketId: updated.id,
+            projectId: updated.projectId,
+            labels: updated.labels ?? [],
+          },
+        };
+      },
+    };
+  },
+};
+
+const ticketLabelCreate: MutationActionHandler<{
+  projectId: string;
+  name: string;
+  color?: string;
+  description?: string;
+}> = {
+  kind: "mutation",
+  action: "ticket.label.create",
+  parse(input) {
+    onlyActionKeys(input, "ticket.label.create");
+    const projectId = requiredId(input, "projectId");
+    let label: ReturnType<typeof parseKanbanLabelInput>;
+    try {
+      label = parseKanbanLabelInput({
+        name: input.name,
+        ...(input.color !== undefined ? { color: input.color } : {}),
+        ...(input.description !== undefined ? { description: input.description } : {}),
+      });
+    } catch (error) {
+      throw invalid(error instanceof Error ? error.message : "The label is invalid");
+    }
+    const value = { projectId, ...label };
+    return { value, scope: `project:${projectId}`, intent: label };
+  },
+  async prepare(input, context) {
+    await requireProject(context, input.projectId);
+    const catalogue = (await context.command.storage.kanban.getKanbanLabels(input.projectId))
+      .filter((label) => label.createdAt !== undefined)
+      .map((label) => ticketLabelKey(label.name));
+    if (
+      !catalogue.includes(ticketLabelKey(input.name)) &&
+      catalogue.length >= TICKET_LABEL_LIMITS.maxCatalogue
+    ) {
+      throw new PublicActionError(
+        "store-capacity",
+        `A project can have at most ${TICKET_LABEL_LIMITS.maxCatalogue} labels in its catalogue`,
+      );
+    }
+    return {
+      resources: { projectId: input.projectId },
+      async execute() {
+        const { projectId, ...label } = input;
+        const { label: stored, created } = await context.command.storage.kanban.createKanbanLabel(
+          projectId,
+          label,
+        );
+        return {
+          state: "succeeded",
+          result: { projectId, name: stored.name, created },
+        };
+      },
+    };
+  },
+};
+
 export const TICKET_HANDLERS: PublicActionHandler[] = [
   ticketList,
   ticketGet,
   ticketCreate,
   ticketUpdate,
   ticketComment,
+  ticketLabelsList,
+  ticketLabel,
+  ticketLabelCreate,
 ];

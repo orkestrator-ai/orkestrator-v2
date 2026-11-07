@@ -99,3 +99,69 @@ test("terminal status updates preserve done under storage's lease, while users c
     });
   });
 });
+
+describe("Kanban label command validation", () => {
+  test.each([
+    ["get_kanban_labels", {}, "projectId"],
+    ["get_kanban_labels", { projectId: "p", extra: true }, "extra"],
+    ["get_kanban_labels", { projectId: " " }, "projectId"],
+    ["create_kanban_label", { projectId: "p", name: "bug", extra: true }, "extra"],
+    ["create_kanban_label", { name: "bug" }, "projectId"],
+    ["create_kanban_label", { projectId: "p", name: " " }, "empty"],
+    ["create_kanban_label", { projectId: "p", name: "bug", color: "red" }, "#rrggbb"],
+    ["create_kanban_label", { projectId: "p", name: "bug", description: 1 }, "description"],
+    ["set_kanban_task_label", { taskId: "t", name: "bug", extra: true }, "extra"],
+    ["set_kanban_task_label", { taskId: "t", name: "bug", present: "false" }, "boolean"],
+    ["set_kanban_task_label", { taskId: "t", name: "bug", present: null }, "boolean"],
+    ["set_kanban_task_label", { name: "bug" }, "taskId"],
+    ["set_kanban_task_label", { taskId: "t", name: "" }, "name"],
+    ["set_kanban_task_label", { taskId: "t", name: "bug", projectId: "" }, "projectId"],
+  ] as const)("refuses invalid %s input before storage: %j", async (name, input, message) => {
+    await expect(
+      Promise.resolve().then(() =>
+        commands.get(name)!(input, { storage: { kanban: {} } } as never),
+      ),
+    ).rejects.toThrow(message);
+  });
+
+  test("label commands persist metadata and default present to true, while false removes", async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), "kanban-label-command-"));
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    const context = { storage } as never;
+    try {
+      const task = await storage.kanban.addKanbanTask("p", "Ticket", "");
+      expect(
+        await commands.get("create_kanban_label")!(
+          { projectId: "p", name: " Needs  design ", color: "#AABBCC", description: "Details" },
+          context,
+        ),
+      ).toMatchObject({ created: true, label: { name: "Needs design", color: "#aabbcc" } });
+      expect(
+        await commands.get("set_kanban_task_label")!(
+          { taskId: task.id, name: "needs design", projectId: "p" },
+          context,
+        ),
+      ).toMatchObject({ labels: ["Needs design"] });
+      expect(await commands.get("get_kanban_labels")!({ projectId: "p" }, context)).toMatchObject([
+        { name: "Needs design", description: "Details", ticketCount: 1 },
+      ]);
+      await commands.get("set_kanban_task_label")!(
+        { taskId: task.id, name: "NEEDS DESIGN", present: false, projectId: "p" },
+        context,
+      );
+      expect((await storage.kanban.getKanbanTask(task.id))?.labels).toBeUndefined();
+      await expect(
+        Promise.resolve().then(() =>
+          commands.get("set_kanban_task_label")!(
+            { taskId: task.id, name: "bug", projectId: "other" },
+            context,
+          ),
+        ),
+      ).rejects.toThrow("not found");
+    } finally {
+      storage.close();
+      await rm(dataDir, { recursive: true, force: true });
+    }
+  });
+});

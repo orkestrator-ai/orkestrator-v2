@@ -1,6 +1,6 @@
 # MCP aggregate pagination fixture timeout
 
-- **ID:** 9899
+- **ID:** 9900
 - **Status:** resolved
 - **Date observed:** 2026-11-07
 - **Base commit:** `148e9ad0aac93b0f363af93e33543b73be36ee40`

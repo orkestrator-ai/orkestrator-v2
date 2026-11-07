@@ -180,6 +180,88 @@ describe("orkestrator ticket and mail", () => {
     expect(badStatus.code).toBe(2);
   });
 
+  test("ticket labels: --label on create and update, label, label-create and labels", async () => {
+    const { box, gateway } = await fixture((request) => {
+      const action = request.body.args.action as string;
+      if (action === "ticket.labels") {
+        return envelope(
+          publicSuccessEnvelope("ticket.labels", {
+            labels: [{ name: "bug", color: "#ff0000", ticketCount: 2 }],
+            total: 1,
+          }),
+        );
+      }
+      const results: Record<string, Record<string, unknown>> = {
+        "ticket.create": { ticketId: "ticket-9", projectId: "p", status: "backlog" },
+        "ticket.update": { ticketId: "ticket-9", projectId: "p", status: "backlog" },
+        "ticket.label": { ticketId: "ticket-9", projectId: "p", labels: ["bug"] },
+        "ticket.label.create": { projectId: "p", name: "bug", created: true },
+      };
+      const result = results[action];
+      return result
+        ? envelope(publicSuccessEnvelope(action as never, result, receipt(action as never)))
+        : undefined;
+    });
+    const create = ["ticket", "create", "--project", "p", "--title", "T"];
+    expect((await box.run([...create, "--label", "bug", "--label", "ui"])).code).toBe(0);
+    expect(requestsFor(gateway, "ticket.create")[0]!.body.args.input).toMatchObject({
+      labels: ["bug", "ui"],
+    });
+    expect(
+      (await box.run(["ticket", "update", "ticket-9", "--project", "p", "--clear-labels"])).code,
+    ).toBe(0);
+    expect(requestsFor(gateway, "ticket.update")[0]!.body.args.input).toMatchObject({ labels: [] });
+    const both = await box.run([
+      "ticket",
+      "update",
+      "ticket-9",
+      "--project",
+      "p",
+      "--label",
+      "x",
+      "--clear-labels",
+    ]);
+    expect(both.code).toBe(2);
+
+    const label = await box.run([
+      "ticket",
+      "label",
+      "ticket-9",
+      "--project",
+      "p",
+      "--name",
+      "bug",
+      "--remove",
+    ]);
+    expect(label.code).toBe(0);
+    expect(requestsFor(gateway, "ticket.label")[0]!.body.args.input).toEqual({
+      projectId: "p",
+      ticketId: "ticket-9",
+      name: "bug",
+      present: false,
+    });
+    const created = await box.run([
+      "ticket",
+      "label-create",
+      "--project",
+      "p",
+      "--name",
+      "bug",
+      "--color",
+      "#ff0000",
+    ]);
+    expect(created.code).toBe(0);
+    expect(created.out).toContain("created label bug");
+    expect(requestsFor(gateway, "ticket.label.create")[0]!.body.args.input).toEqual({
+      projectId: "p",
+      name: "bug",
+      color: "#ff0000",
+    });
+    const listed = await box.run(["ticket", "labels", "--project", "p", "--output", "id"]);
+    expect(listed.code).toBe(0);
+    expect(listed.out.trim()).toBe("bug");
+  });
+
   test("mail send reads the body from a file and never prints it", async () => {
     const { box, gateway } = await fixture((request) =>
       request.body.args.action === "mail.send"

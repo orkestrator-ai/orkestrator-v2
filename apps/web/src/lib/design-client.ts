@@ -1,44 +1,56 @@
-import type {
-  DesignCanvas,
-  DesignHierarchyPage,
-  DesignElement,
-} from "@orkestrator/protocol/design-canvas";
+import type { DesignCanvas, DesignElement } from "@orkestrator/protocol/design-canvas";
 import type {
   DesignCapabilities,
-  DesignCheckpointPreview,
   DesignCommandResult,
-  DesignExportPreview,
-  DesignExportReceipt,
   DesignFailure,
-  DesignFrameValidation,
-  DesignHistoryPage,
-  DesignIntentDiscardResult,
   DesignIntentDraft,
-  DesignIntentList,
-  DesignIntentResumeResult,
-  DesignIntentRunResult,
-  DesignLibraryPage,
   DesignLibraryQuery,
   DesignOperationDescriptor,
-  DesignOperationStatus,
   DesignPreconditions,
-  DesignPrepareResult,
-  DesignReadiness,
   DesignSessionLink,
-  DesignSessionLinkStates,
-  DesignSessionResumeResult,
-  DesignSnapshotResult,
-  DesignSyncResult,
 } from "@orkestrator/protocol/design-operations";
 import { incompatibilityOfAnyCommand } from "@orkestrator/protocol/contract/errors";
-import { invoke } from "@/lib/native/backend";
-import type { NodeScope } from "@/lib/node-scope/node-scope";
 import {
-  appCommandScope,
-  defineScopedSlot,
-  scopeInvoker,
-  type ScopeInvoke,
-} from "@/lib/node-scope-slots";
+  designActionCommand,
+  designClient,
+  designImportCommand,
+  designImportHostFileCommand,
+  designCancelCommand,
+  designCaptureCommand,
+  designCheckpointCommand,
+  designExecuteCommand,
+  designExportPreviewCommand,
+  designExportReconcileCommand,
+  designExportSaveCommand,
+  designHierarchyCommand,
+  designHistoryCommand,
+  designIntentDiscardCommand,
+  designIntentImportCommand,
+  designIntentResumeCommand,
+  designIntentRunCommand,
+  designIntentSaveCommand,
+  designIntentsCommand,
+  designLibraryCommand,
+  designOpenFileCommand,
+  designOperationStatusCommand,
+  designPrepareCommand,
+  designPurgeCommand,
+  designReadinessCommand,
+  designSessionLinkCommand,
+  designSessionLinkStatesCommand,
+  designSessionResumeCommand,
+  designSessionUnlinkCommand,
+  designSnapshotCommand,
+  designSyncCommand,
+  designValidateCommand,
+  type DesignApi,
+  type DesignCommandDef,
+} from "@orkestrator/protocol/contract/domains/design";
+import type { ArgsOf, ResultOf } from "@orkestrator/protocol/contract/command";
+import { scopeBackendClient } from "@/lib/backend/client";
+import { backendDomainApi } from "@/lib/backend/domain-client";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { appCommandScope, defineScopedSlot } from "@/lib/node-scope-slots";
 import { getGatewayBaseUrl } from "@/lib/gateway-url";
 
 /** A typed design failure; UI branches on `failure.code`, never message text. */
@@ -93,23 +105,53 @@ export function failureOf(error: unknown): DesignFailure {
   };
 }
 
-/** Invokes a typed v2 command and unwraps its envelope. */
-export async function designCommand<T>(
-  command: string,
-  args: Record<string, unknown> = {},
-  /** Another node's invoker (`scopeInvoker`); default the command node's. */
-  call: ScopeInvoke = invoke,
-): Promise<T> {
-  const result = await call<DesignCommandResult<T>>(command, args);
+/**
+ * Unwraps a v2 envelope: the value, or the typed failure thrown as a
+ * `DesignClientError`. A legacy node's answer is not decoded (the domain
+ * client's adapter 0), so its shape is checked here as before.
+ */
+function unwrap<T>(result: DesignCommandResult<T> | unknown): T {
   if (!result || typeof result !== "object" || !("ok" in result))
     throw new DesignClientError({
       code: "unsupported",
       message: "Unexpected design response",
       retry: "never",
     });
-  if (!result.ok) throw new DesignClientError(result.failure);
-  return result.value;
+  const envelope = result as DesignCommandResult<T>;
+  if (!envelope.ok) throw new DesignClientError(envelope.failure);
+  return envelope.value;
 }
+
+/**
+ * The design domain client of one node scope (plan item 7004): the adapter
+ * its negotiated `design` version picks, over the scope's factory client
+ * (`@/lib/backend/client`), whose app-command-scope form is
+ * `@/lib/native/backend` `invoke`.
+ */
+const scopeDesign = defineScopedSlot("design-domain", (scope) =>
+  backendDomainApi(scopeBackendClient(scope), designClient),
+);
+
+function design(scope?: NodeScope): DesignApi {
+  return scopeDesign(scope)();
+}
+
+/** Runs a v2 design command on `scope`'s node (default: the command node's) and unwraps it. */
+async function v2<C extends DesignCommandDef>(
+  def: C,
+  args: ArgsOf<C>,
+  scope?: NodeScope,
+): Promise<V2Value<C>> {
+  return unwrap(await design(scope).command(def, args)) as V2Value<C>;
+}
+
+/** The value of a v2 command's envelope. */
+type V2Value<C extends DesignCommandDef> =
+  Extract<ResultOf<C>, { ok: true }> extends {
+    value: infer V;
+  }
+    ? V
+    : never;
 
 /** Identity of the connected backend; equal canvas ids on two backends never share state. */
 export function designBackendKey(): string {
@@ -139,20 +181,19 @@ export function getCapabilities(
   const capabilities = scopeCapabilities(target);
   let cached = capabilities.get(backend);
   if (!cached) {
-    cached = designCommand<DesignCapabilities>(
-      "design_capabilities",
-      {},
-      scopeInvoker(target),
-    ).catch((error: unknown) => {
-      capabilities.delete(backend);
-      if (classifyTransportError(error) === "unsupported")
-        throw new DesignClientError({
-          code: "unsupported",
-          message: "This backend is too old for the design canvas. Update it to continue.",
-          retry: "never",
-        });
-      throw error;
-    });
+    cached = design(target)
+      .capabilities()
+      .then((result) => unwrap<DesignCapabilities>(result))
+      .catch((error: unknown) => {
+        capabilities.delete(backend);
+        if (classifyTransportError(error) === "unsupported")
+          throw new DesignClientError({
+            code: "unsupported",
+            message: "This backend is too old for the design canvas. Update it to continue.",
+            retry: "never",
+          });
+        throw error;
+      });
     capabilities.set(backend, cached);
   }
   return cached;
@@ -163,27 +204,31 @@ export function resetCapabilities(scope?: NodeScope) {
 }
 
 // The `design_action` surface, still used for canvas lifecycle and listing.
-export function designAction<T>(
+// Each action answers its own record, so the caller names the type.
+export async function designAction<T>(
   environmentId: string,
   action: string,
   input: Record<string, unknown> = {},
 ): Promise<T> {
-  return invoke<T>("design_action", { environmentId, action, input });
+  return (await design().command(designActionCommand, { environmentId, action, input })) as T;
 }
 /** Imports a serialized `.orkdes` document as a new canvas. */
-export function importDesignDocument(environmentId: string, document: string) {
-  return invoke<DesignCanvas>("design_import", { environmentId, document });
+export function importDesignDocument(
+  environmentId: string,
+  document: string,
+): Promise<DesignCanvas> {
+  return design().command(designImportCommand, { environmentId, document });
 }
 /** Imports an `.orkdes` file the backend reads from the host. */
-export function importDesignHostFile(environmentId: string, path: string) {
-  return invoke<DesignCanvas>("design_import_host_file", { environmentId, path });
+export function importDesignHostFile(environmentId: string, path: string): Promise<DesignCanvas> {
+  return design().command(designImportHostFileCommand, { environmentId, path });
 }
 
 // Protocol v2.
 export const designApi = {
-  readiness: (probe = false) => designCommand<DesignReadiness>("design_readiness", { probe }),
+  readiness: (probe = false) => v2(designReadinessCommand, { probe }),
   snapshot: (environmentId: string, canvasId: string) =>
-    designCommand<DesignSnapshotResult>("design_snapshot", { environmentId, canvasId }),
+    v2(designSnapshotCommand, { environmentId, canvasId }),
   sync: (
     environmentId: string,
     canvasId: string,
@@ -191,7 +236,7 @@ export const designApi = {
     after: number,
     statusVersion: number | undefined,
   ) =>
-    designCommand<DesignSyncResult>("design_sync", {
+    v2(designSyncCommand, {
       environmentId,
       canvasId,
       generation,
@@ -199,32 +244,32 @@ export const designApi = {
       statusVersion,
     }),
   prepare: (environmentId: string, descriptor: DesignOperationDescriptor) =>
-    designCommand<DesignPrepareResult>("design_prepare", { environmentId, descriptor }),
+    v2(designPrepareCommand, { environmentId, descriptor }),
   execute: (environmentId: string, canvasId: string, token: string, waitMs?: number) =>
-    designCommand<DesignOperationStatus>("design_execute", {
+    v2(designExecuteCommand, {
       environmentId,
       canvasId,
       token,
       waitMs,
     }),
   status: (environmentId: string, canvasId: string, token: string) =>
-    designCommand<DesignOperationStatus>("design_operation_status", {
+    v2(designOperationStatusCommand, {
       environmentId,
       canvasId,
       token,
     }),
   cancel: (environmentId: string, canvasId: string, token: string) =>
-    designCommand<DesignOperationStatus>("design_cancel", { environmentId, canvasId, token }),
+    v2(designCancelCommand, { environmentId, canvasId, token }),
   /** The document's backend-owned intent queue, reconciled from backend state. */
   intents: (environmentId: string, canvasId: string) =>
-    designCommand<DesignIntentList>("design_intents", { environmentId, canvasId }),
+    v2(designIntentsCommand, { environmentId, canvasId }),
   saveIntents: (
     environmentId: string,
     canvasId: string,
     clientId: string,
     drafts: DesignIntentDraft[],
   ) =>
-    designCommand<{ saved: string[] }>("design_intent_save", {
+    v2(designIntentSaveCommand, {
       environmentId,
       canvasId,
       clientId,
@@ -232,22 +277,19 @@ export const designApi = {
     }),
   /** One-time import of this browser's legacy localStorage intents. */
   importIntents: (environmentId: string, canvasId: string, clientId: string, intents: unknown[]) =>
-    designCommand<{ imported: number; skipped: number; retained?: number[] }>(
-      "design_intent_import",
-      {
-        environmentId,
-        canvasId,
-        clientId,
-        intents,
-      },
-    ),
+    v2(designIntentImportCommand, {
+      environmentId,
+      canvasId,
+      clientId,
+      intents,
+    }),
   runIntent: (
     environmentId: string,
     canvasId: string,
     intent: DesignIntentDraft,
     waitMs?: number,
   ) =>
-    designCommand<DesignIntentRunResult>("design_intent_run", {
+    v2(designIntentRunCommand, {
       environmentId,
       canvasId,
       intent,
@@ -260,7 +302,7 @@ export const designApi = {
     clientId: string,
     rebaseTo?: DesignPreconditions,
   ) =>
-    designCommand<DesignIntentResumeResult>("design_intent_resume", {
+    v2(designIntentResumeCommand, {
       environmentId,
       canvasId,
       intentId,
@@ -268,31 +310,31 @@ export const designApi = {
       rebaseTo,
     }),
   discardIntent: (environmentId: string, canvasId: string, intentId: string) =>
-    designCommand<DesignIntentDiscardResult>("design_intent_discard", {
+    v2(designIntentDiscardCommand, {
       environmentId,
       canvasId,
       intentId,
     }),
   library: (environmentId: string, query: DesignLibraryQuery) =>
-    designCommand<DesignLibraryPage>("design_library", { environmentId, query }),
+    v2(designLibraryCommand, { environmentId, query }),
   purge: (environmentId: string, canvasId: string) =>
-    designCommand<{ purged: true }>("design_purge", { environmentId, canvasId }),
+    v2(designPurgeCommand, { environmentId, canvasId }),
   history: (environmentId: string, canvasId: string, offset?: number, limit?: number) =>
-    designCommand<DesignHistoryPage>("design_history", { environmentId, canvasId, offset, limit }),
+    v2(designHistoryCommand, { environmentId, canvasId, offset, limit }),
   checkpoint: (
     environmentId: string,
     canvasId: string,
     entryId: string,
     side: "before" | "after",
   ) =>
-    designCommand<DesignCheckpointPreview>("design_checkpoint", {
+    v2(designCheckpointCommand, {
       environmentId,
       canvasId,
       entryId,
       side,
     }),
   exportPreview: (environmentId: string, canvasId: string, relativePath?: string) =>
-    designCommand<DesignExportPreview>("design_export_preview", {
+    v2(designExportPreviewCommand, {
       environmentId,
       canvasId,
       relativePath,
@@ -304,7 +346,7 @@ export const designApi = {
     revision: number,
     replaceFingerprint?: string,
   ) =>
-    designCommand<DesignExportReceipt>("design_export_save", {
+    v2(designExportSaveCommand, {
       environmentId,
       canvasId,
       relativePath,
@@ -313,17 +355,17 @@ export const designApi = {
     }),
   /** Opens a repository `.orkdes` file as a canvas (reusing one already made from it). */
   openFile: (environmentId: string, relativePath: string) =>
-    designCommand<{ canvasId: string; imported: boolean }>("design_open_file", {
+    v2(designOpenFileCommand, {
       environmentId,
       relativePath,
     }),
   exportReconcile: (environmentId: string, canvasId: string) =>
-    designCommand<{ state: string; receipt?: DesignExportReceipt }>("design_export_reconcile", {
+    v2(designExportReconcileCommand, {
       environmentId,
       canvasId,
     }),
   validate: (environmentId: string, canvasId: string, frameId: string) =>
-    designCommand<DesignFrameValidation | null>("design_validate", {
+    v2(designValidateCommand, {
       environmentId,
       canvasId,
       frameId,
@@ -334,15 +376,12 @@ export const designApi = {
     frameId: string,
     query: { rootSelector?: string; cursor?: string; maxNodes?: number; maxDepth?: number },
   ) =>
-    designCommand<{ revision: number; structureId: string; page: DesignHierarchyPage }>(
-      "design_hierarchy",
-      {
-        environmentId,
-        canvasId,
-        frameId,
-        ...query,
-      },
-    ),
+    v2(designHierarchyCommand, {
+      environmentId,
+      canvasId,
+      frameId,
+      ...query,
+    }),
   inspect: (environmentId: string, canvasId: string, frameId: string, selector: string) =>
     designAction<{ revision: number; structureId: string; element: DesignElement }>(
       environmentId,
@@ -358,21 +397,14 @@ export const designApi = {
     canvasId: string,
     frameId: string,
     priority?: "interactive" | "background",
-  ) =>
-    designCommand<{
-      revision: number;
-      contentId: string;
-      viewportId: string;
-      data: string;
-      mimeType: string;
-    }>("design_capture", { environmentId, canvasId, frameId, priority }),
+  ) => v2(designCaptureCommand, { environmentId, canvasId, frameId, priority }),
   linkSession: (
     environmentId: string,
     canvasId: string,
     link: Omit<DesignSessionLink, "id" | "createdAt">,
     replaceId?: string,
   ) =>
-    designCommand<DesignSessionLink>("design_session_link", {
+    v2(designSessionLinkCommand, {
       environmentId,
       canvasId,
       link,
@@ -380,7 +412,7 @@ export const designApi = {
     }),
   /** One storage read per link on the backend; call on demand, never on a timer. */
   sessionLinkStates: (environmentId: string, canvasId: string) =>
-    designCommand<DesignSessionLinkStates>("design_session_link_states", {
+    v2(designSessionLinkStatesCommand, {
       environmentId,
       canvasId,
     }),
@@ -389,11 +421,11 @@ export const designApi = {
     canvasId: string,
     input: { linkId: string; expectedTabId: string; tabId: string },
   ) =>
-    designCommand<DesignSessionResumeResult>("design_session_resume", {
+    v2(designSessionResumeCommand, {
       environmentId,
       canvasId,
       ...input,
     }),
   unlinkSession: (environmentId: string, canvasId: string, linkId: string) =>
-    designCommand<{ unlinked: true }>("design_session_unlink", { environmentId, canvasId, linkId }),
+    v2(designSessionUnlinkCommand, { environmentId, canvasId, linkId }),
 };

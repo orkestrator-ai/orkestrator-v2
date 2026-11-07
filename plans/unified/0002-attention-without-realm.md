@@ -38,7 +38,7 @@ A machine the window is not showing still makes its attention sound and desktop 
 
 ## Work
 
-- [ ] Reproduce the gap first: two `dev:test` profiles, one attached to the other, with no realm open for the leaf. Trigger attention on the leaf and confirm the window is silent. Record the result in Notes.
+- [x] Reproduce the gap first: two `dev:test` profiles, one attached to the other, with no realm open for the leaf. Trigger attention on the leaf and confirm the window is silent. Record the result in Notes.
 - [x] In the shell renderer only (not inside a realm), subscribe to `ENVIRONMENT_ATTENTION_EVENT` per non-command node through `subscribeNodeEvents`. Skip nodes that are in `useRemoteWorkspaceStore.getState().realms`, because the realm already sounds for them.
 - [x] Feed the payloads into the same sound and notification path, keyed by `(nodeId, attentionId)`.
 - [x] Respect the per-node notification settings that already apply to the command node's own environments.
@@ -50,13 +50,18 @@ A machine the window is not showing still makes its attention sound and desktop 
 
 ## Done when
 
-- [ ] A live two-profile check shows a sound and notification from a leaf with no realm open, and only one when a realm is open.
+- [x] A live two-profile check shows a sound from a leaf with no realm open, and only one when a realm is open.
+- [ ] The same check for the question desktop notification (needs an `agent_question`/`agent_waiting` attention, which needs a provider turn; see Notes).
 
 ## Notes
 
 - [5001](5001-attention-per-scope.md) later replaces this with one window service fed by node scopes. Keep this hook small so it can be lifted unchanged.
 - A notification click from a summary-tier node cannot open it in-tree until Phase 4. Until then it opens the realm through `openMachineWorkspace`.
-- Live reproduction deferred to the wave-0 live-evidence pass. Both live boxes (the reproduction under Work and the two-profile check under Done when) stay open, so the status stays `in-progress`.
+- Live check (2026-11-07), two `dev:test` profiles (`uf-live-cmd` command node, `uf-live-leaf` attached with `add_node`), headless Chromium on `uf-live-cmd`'s `browserUrl`. Attention was raised on the leaf without a provider turn: clear the environment's unread badge (`set_environment_unread`), then run `echo` in an activity-tracked local terminal (`create_local_terminal_session` with `trackEnvironmentActivity: true`), which lights the badge with `terminal_finished` and emits one `environment-attention`. Cues were counted by wrapping `AudioContext.prototype.createOscillator` per frame (shell vs realm). Results (`output/agent-testing/uf-live/0002-*.json`):
+  - Before the fix (`useNotificationSoundService.ts` and `question-desktop-notification.ts` reverted to `acc1e4d81~1` in the live worktree, hot-reloaded): no realm for the leaf, the leaf's badge lit (`terminal_finished`), the window played **0** cues. The gap is reproduced.
+  - After the fix: no realm, **1** cue from the shell. With the leaf's realm open but hidden (another environment shown) and attention on a second leaf environment: **1** cue from the realm, **0** from the shell.
+- Not done: the question desktop notification. Only `agent_question`/`agent_waiting` raise it, and both need an agent session that asks or waits, i.e. a provider turn (or a scripted loopback model, which this pass did not set up). The Done-when box is split; the notification half stays open, so the status stays `in-progress`.
+- A second leaf environment was used for the realm-open case, because the realm's selected environment (on screen in the realm) clears its own badge, so attention on it does not light.
 - Implemented in `apps/web/src/hooks/useRemoteNodeAttention.ts`, called from `useNotificationSoundService`. It subscribes every node in the portal summaries except the command node itself and the nodes in `realms`, diffing per node so one realm opening or closing does not churn the other nodes' leases. It is off in a realm renderer (`isWorkspaceRealm()`). `onResync` reads nothing. Dedupe is a `BoundedKeySet` (256) of `nodeId + attentionId` that lives as long as the hook, so a realm that opens and closes does not replay old attention.
 - Settings: the shell applies its own `config.global.notificationSounds` (`agentStopped`, `agentQuestion`, `questionDesktopNotification`), the same settings that apply to the command node's own environments. Cues coalesce with the command node's own cues (`claimCue`). A remote environment is never "on screen" in the shell, so the visible-environment check does not apply.
 - Notification click: `showQuestionDesktopNotification` takes an optional `remote` `{ nodeId, label, open }`. The label (machine · project · environment) comes from the node summary. The click opens the realm through `openMachineWorkspace`. The tag includes the node id.
@@ -67,3 +72,4 @@ A machine the window is not showing still makes its attention sound and desktop 
 ## Work log
 
 - 2026-11-07 (claude-worker): added `useRemoteNodeAttention` (per-node `subscribeNodeEvents` for nodes without an open realm, shell only, `(nodeId, attentionId)` dedupe, no replay on resync) and wired it into `useNotificationSoundService`. The agent-stopped cue, the agent-question cue and the question desktop notification use the existing settings. `question-desktop-notification.ts` gained an optional `remote` target, so a remote question is named from the node summary and its click opens the realm. Tests: `apps/web/src/hooks/useRemoteNodeAttention.test.tsx` (15 pass), `useNotificationSoundService.test.tsx` (28 pass, unchanged), `question-desktop-notification.test.ts` pass, `src/App.test.tsx` + `src/hooks` pass. Web typecheck clean, oxlint clean. Live reproduction deferred to the wave-0 live-evidence pass.
+- 2026-11-07 (claude-worker, live evidence): reproduced the gap live with the fix reverted (0 cues), then confirmed the fix live (1 cue from the shell with no realm; 1 from the realm and 0 from the shell with the realm open). Question notification not exercised (needs a provider turn); that half of Done-when left open.

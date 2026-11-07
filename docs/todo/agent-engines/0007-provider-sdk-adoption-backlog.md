@@ -1,6 +1,6 @@
 # Provider SDK adoption backlog
 
-Checked against `main` at `cd7bbe3e5` (2026-10-30); pins and candidates rechecked at `6ce02251b` for the 2026-10-30 upgrade ([1020](1020-provider-upgrade-2026-10-30.md)).
+Checked against `main` at `cd7bbe3e5` (2026-10-30); pins and candidates rechecked at `6ce02251b` for the 2026-10-30 upgrade ([1020](1020-provider-upgrade-2026-10-30.md)) and at `ee2cc8423` for the 2026-11-06 upgrade ([1031](1031-provider-upgrade-2026-11-06.md)).
 
 ## Task analysis
 
@@ -589,10 +589,10 @@ rediscovers the same gaps. It is low priority: nothing here is a defect.
 
 ## Current state
 
-- Pins (upgraded 2026-10-30, [1020](1020-provider-upgrade-2026-10-30.md)):
-  Claude Agent SDK `0.3.314` / CLI `2.1.314`, Codex `0.166.0`, OpenCode SDK and
-  CLI `1.19.5`, `@cursor/sdk` `1.2.0`, Pi `1.4.0`, Grok `1.0.70`,
-  `@agentclientprotocol/sdk` `2.1.0`. `tests/unit/version-drift.test.ts` keeps
+- Pins (upgraded 2026-11-06, [1031](1031-provider-upgrade-2026-11-06.md)):
+  Claude Agent SDK `0.3.319` / CLI `2.1.319`, Codex `0.167.0`, OpenCode SDK and
+  CLI `1.19.5`, `@cursor/sdk` `1.3.1`, Pi `1.5.0`, Grok `1.0.77`,
+  `@agentclientprotocol/sdk` `2.4.0`. `tests/unit/version-drift.test.ts` keeps
   every mirror of each pin in step.
 - Drift detection:
   - Each bridge dispatches over its vendor's typed union and turns an unknown
@@ -677,7 +677,20 @@ Unadopted today. Each line says what blocks it or what decision it needs.
     bridge wires them.
   - `permissions.blockWritesOutsideWorkingDirectories` (Agent SDK 0.3.314).
     A possible worktree-confinement policy; needs a product decision, and it
-    also removes EnterWorktree/ExitWorktree.
+    also removes EnterWorktree/ExitWorktree. 0.3.319 adds
+    `permissions.blockReadsExemptPaths` and `workingDirectoriesAsGiven` (only
+    from `--settings` or flag settings), which could let the CLI hold the
+    coordinator read boundary beside the hook; same decision.
+  - `pending_elicitation_requests` on the initialize answer (0.3.319) belongs
+    with the re-arm item below; `mcp_call.check_permissions` (0.3.319) with MCP
+    Apps widgets.
+  - `CLAUDE_CODE_SUBAGENT_EFFORT` (2.1.316): since 2.1.317 a subagent on
+    another model uses that model's saved effort, not the composer's. It is
+    launch-only, which conflicts with restating effort on every join; revisit
+    on a user report.
+  - `onFailure: 'block'` on hook matchers (2.1.317). The bridge fails its
+    boundary hooks closed itself instead (1031 task 3); adopt once the bridge
+    knows the CLI version before building the query.
   - `initializationResult()` is adopted: a running CLI's held answer serves the
     model catalogue and the account (`live-claude-control.ts`). `startup()` /
     `WarmQuery` and `prewarm()` / `claim()` were measured and not adopted at
@@ -700,12 +713,23 @@ Unadopted today. Each line says what blocks it or what decision it needs.
   - Managed application and network requirements (`ConfigRequirementsReadResponse`
     and friends in `src/app-server/generated/`). They are in the generated
     protocol but not projected, pending a provider-neutral requirements surface.
+    0.167.0 adds a managed `[permissions.network]` table to them.
+  - Declaring `InitializeCapabilities.requiredHumanApproval` (0.167.0,
+    experimental only). Without it a host's managed `prompt-user` rule rejects
+    matching commands instead of prompting. The bridge already maps a
+    `humanCommand` approval onto the shared `humanRequired` marker (1031 task
+    11); declaring the capability waits for the API to leave experimental.
+  - `features.respect_system_proxy` (0.167.0, experimental, off): only on a
+    corporate-proxy report, as a provider-neutral environment setting.
 - Cursor (`bridges/cursor-bridge`):
   - `askQuestion` is in the SDK's `ToolName`, but the SDK has no typed tool-call
     variant and no answer path, so it cannot become a `question` interaction.
   - Root-session `resourceProviderOptions` and `overrideDeleteExecutor`
     (1.2.0) as a coordinator write guard. `LocalToolExecutor` is opaque, so
     the shape of a guard is unclear.
+  - `local.hostMcpBridgeUrls` (1.3.0, `@internal`): exempts loopback MCP URLs
+    from a team admin allowlist. Only if a team-admin user reports
+    Orkestrator's loopback MCP tools blocked.
   - `SendOptions.local.force` and `SDKAgentInfo.archived` are tracked in
     [0005-mid-turn-steer-and-interrupt.md](0005-mid-turn-steer-and-interrupt.md) and
     [0006-session-titles-and-history.md](0006-session-titles-and-history.md).
@@ -724,9 +748,20 @@ Unadopted today. Each line says what blocks it or what decision it needs.
   - Grok `GROK_DISABLE_EXPERIMENTS=1` (1.0.70) for bridge children. It would
     stop config-file experiments changing the default model or update channel,
     but also overrides experiments a user joined. Decide with a user report.
+  - Grok background-task status `failed` (1.0.77) and
+    `PromptResponse._meta.cancelTrigger` (binary strings; capture signed in).
+  - ACP unstable `session/archive` (onto `actions.archive`) and `auth/status`
+    (onto `NativeAgentAuthStatus`), generically, when an agent advertises
+    them; Grok 1.0.77 does not (ACP SDK 2.4.0).
   - Grok `retry_state` session updates (`attempt`, `max_retries`,
     `error_type`, `exhausted`, `is_rate_limited`) for retry UI. Whether they
     reach ACP clients is unverified; belongs with the retry-with-backoff work.
+- Pi (`bridges/pi-bridge`, 1.5.0):
+  - `responseModel` (now also from pi-messages providers) into the existing
+    `NativeAgentTurnUsage.modelId`.
+  - `ctx.ui.custom({ blocked })` when extension dialogs are routed;
+    `PI_SELF_UPDATE_COMMAND` so `pi update` in a terminal tab defers to the
+    managed pin.
 - OpenCode: `reference.list` and the other Session V2 features wait for
   [0008-opencode-v2.md](0008-opencode-v2.md).
 

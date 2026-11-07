@@ -642,3 +642,59 @@ describe("provider evidence walk boundaries", () => {
     expect(evidenceCount(h, "fresh-600")).toBe(1);
   });
 });
+
+describe("retention scale regressions", () => {
+  test("100k measurements are discovered in owner pages and pruned within one owner", () => {
+    const h = setup();
+    const ledger = h.service.ledger;
+    ledger.db.exec(`
+      WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 100000)
+      INSERT INTO change_measurements
+        (id, scope, owner_kind, owner_id, worktree_id, algorithm_id, representation_id, measurement_json, created_seq)
+      SELECT 'm-' || i, 'net', 'environment', printf('%05d', (i - 1) / 100), 'w', 'a', 'r', '{}', i FROM n;
+    `);
+    let after = null;
+    let owners = 0;
+    do {
+      const page = ledger.supersededOwnersPage(after, 2, 64);
+      expect(page.owners.length).toBeLessThanOrEqual(64);
+      owners += page.owners.length;
+      after = page.next;
+    } while (after);
+    expect(owners).toBe(1000);
+    expect(
+      ledger.pruneSupersededMeasurements({
+        owner: { kind: "environment", id: "00000", scope: "net" },
+        keepLatest: 2,
+        nowIso: new Date().toISOString(),
+        maxMeasurements: 64,
+      }),
+    ).toEqual({ measurements: 64, files: 0 });
+    expect(ledger.supersededOwnersPage(null, 2, 1).owners).toHaveLength(1);
+  });
+
+  test("130k evidence rows retain a quiet frontier and bound a backlog page", () => {
+    const h = setup();
+    const ledger = h.service.ledger;
+    ledger.db.exec(`
+      WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 130000)
+      INSERT INTO change_evidence
+        (evidence_id, revision, owner_kind, owner_id, evidence_key, revision_key, kind, claim, evidence_json, frame_key, ingested_seq)
+      SELECT 'e-' || i, 1, 'provider-turn', 'owner-' || i, 'k', 'r', 'patch', 'provider-reported', '{}', 'f-' || i, i FROM n;
+    `);
+    const retirement = h.service.retention.purges;
+    const at = new Date().toISOString();
+    expect(retirement.retireExpiredProviderTurns(at, 0, 256)).toEqual({
+      rows: 0,
+      done: true,
+      next: 0,
+    });
+    expire(h, 130000);
+    const batch = retirement.retireExpiredProviderTurns(at, 0, 256);
+    expect(batch.done).toBe(false);
+    expect(batch.rows).toBe(256);
+    expect(batch.next).toBeGreaterThan(0);
+    expect(batch.next).toBeLessThanOrEqual(256);
+    expect(evidenceCount(h, "owner-130000")).toBe(1);
+  });
+});

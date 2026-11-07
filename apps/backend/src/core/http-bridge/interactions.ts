@@ -5,6 +5,7 @@ import {
   isAgentInteractionHold,
   isAgentInteractionResolution,
   mcpServerInteractionSource,
+  parseAgentInteractionToolHints,
   type AgentInteractionApplyOutcome,
   type AgentInteractionHold,
   type AgentInteractionQuestion,
@@ -95,6 +96,21 @@ function claudeCreatedAt(
     ? requestCreatedAt(expiresAt as number, Date.now())
     : firstSeen();
 }
+/**
+ * The provider-neutral markers a bridge forwards beside a request, in the
+ * shared shape: `humanRequired` only as `true`, and `toolHints` only as the
+ * booleans that survive parsing. Anything else is absent, never an error.
+ */
+function forwardedMarkers(
+  request: Record<string, unknown>,
+): Pick<AgentInteractionRequest, "humanRequired" | "toolHints"> {
+  const toolHints = parseAgentInteractionToolHints(request.toolHints);
+  return {
+    ...(request.humanRequired === true ? { humanRequired: true as const } : {}),
+    ...(toolHints ? { toolHints } : {}),
+  };
+}
+
 const MAX_RENDERED_FILE_CHANGES = 48;
 const MAX_RENDERED_FILE_CHANGE_TEXT_LENGTH = 256;
 
@@ -430,6 +446,7 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
         declineLabel: "Deny",
       },
       ...(source ? { source } : {}),
+      ...forwardedMarkers(request),
       ...timing,
     });
     this.recordRuleDetail(mapped.id, claudeRuleDetail(request, kind));
@@ -494,6 +511,9 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
           ? rawChanges.length > 0
           : requestedPermissions.length > 0;
     const actionable = inferredActionable && request.actionable !== false;
+    // A person must answer it (Codex `humanCommand`): one-time answers only,
+    // so no session-wide approval either, whatever the bridge advertised.
+    const markers = forwardedMarkers(request);
     // `request.amendments` (bridges before todo 0160, such as an older
     // container image) is ignored on purpose. Accepting one saves a rule in the
     // user's Codex home that Orkestrator can list read-only but cannot revoke, so the
@@ -527,10 +547,11 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
         confirmLabel: "Approve",
         declineLabel: "Deny",
         confirmDisabled: !actionable,
-        ...(request.supportsApproveForSession === true
+        ...(request.supportsApproveForSession === true && !markers.humanRequired
           ? { approveForSessionLabel: "Approve for session" }
           : {}),
       },
+      ...markers,
       createdAt: requestedAt as number,
       updatedAt: requestedAt as number,
       expiresAt: expiresAt as number,
@@ -788,6 +809,8 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
     if (kind === "mcp-url" && !url) {
       throw new ProviderUnavailableError("Codex returned a malformed URL elicitation");
     }
+    // An MCP tool approval carries the tool's annotations (Codex 0.167.0).
+    const toolHints = parseAgentInteractionToolHints(request.toolHints);
     return this.interactionRequest(sessionId, providerRequestId, "interaction", request, {
       kind,
       presentation: {
@@ -804,6 +827,7 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
         confirmLabel: "Continue",
         declineLabel: "Decline",
       },
+      ...(toolHints ? { toolHints } : {}),
       createdAt: requestedAt as number,
       updatedAt: requestedAt as number,
       blocking: isBlocking as boolean,

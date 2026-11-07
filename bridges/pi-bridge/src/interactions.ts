@@ -35,6 +35,7 @@ import {
   isOrkestratorMcpTool,
   isResearchMcpTool,
   isOwnWorkflowResultCall,
+  piMcpToolHints,
 } from "./mcp.js";
 import { schedulePersist } from "./persistence.js";
 import {
@@ -126,6 +127,9 @@ export async function requestToolApproval(
   }
 
   const id = randomBytes(12).toString("hex");
+  // Read now, from the connection this call will run on: a rebuild between
+  // turns must not change what a parked card says about its tool.
+  const toolHints = piMcpToolHints(state, toolName);
   return new Promise<ToolCallDecision>((resolve) => {
     let settled = false;
     const settle = (decision: "allow" | "deny", reason?: string) => {
@@ -162,6 +166,7 @@ export async function requestToolApproval(
       toolName,
       input: isObject(input) ? input : {},
       createdAt: deadline.requestedAt,
+      ...(toolHints ? { toolHints } : {}),
       deadline,
       settle,
     });
@@ -299,6 +304,8 @@ export function publicApprovals(state: SessionState): JsonObject {
       kind: "command",
       command: `${pending.toolName} ${boundedArguments(pending.input)}`,
       cwd: workingDirectory,
+      // An MCP tool's own annotations, for the card's tag only.
+      ...(pending.toolHints ? { toolHints: pending.toolHints } : {}),
     };
   });
   return { approvals, revision: state.revision };

@@ -15,6 +15,7 @@ import {
   NATIVE_AGENT_NOTICE_SEVERITIES,
   NATIVE_AGENT_NOTICE_SOURCES,
   isNativeAgentContextCategoryId,
+  isNativeAgentCostSource,
   isNativeAgentPricingTier,
   normalizeNativeAgentRuntimeSteerJournal,
   type NativeAgentContextUsage,
@@ -160,6 +161,10 @@ export function normalizeProviderContextUsage(value: unknown): NativeAgentContex
       usage[key] = candidate;
     }
   }
+  // A source describes an amount, so it is kept only beside one that survived.
+  if (usage.costUsd !== undefined && isNativeAgentCostSource(raw.costSource)) {
+    usage.costSource = raw.costSource;
+  }
   if (typeof raw.modelId === "string") usage.modelId = raw.modelId.slice(0, 256);
   if (typeof raw.updatedAt === "string" && Number.isFinite(Date.parse(raw.updatedAt))) {
     usage.updatedAt = raw.updatedAt;
@@ -234,6 +239,9 @@ export function normalizeProviderContextUsage(value: unknown): NativeAgentContex
         const value = turn[key];
         if (typeof value === "number" && Number.isFinite(value) && value >= 0)
           normalized[key] = value;
+      }
+      if (normalized.costUsd !== undefined && isNativeAgentCostSource(turn.costSource)) {
+        normalized.costSource = turn.costSource;
       }
       if (typeof turn.requestId === "string") normalized.requestId = turn.requestId.slice(0, 256);
       if (typeof turn.modelId === "string") normalized.modelId = turn.modelId.slice(0, 256);

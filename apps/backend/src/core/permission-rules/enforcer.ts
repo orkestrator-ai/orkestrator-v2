@@ -143,6 +143,10 @@ export class PermissionRuleEnforcer {
   ): Promise<PermissionRuleRequestDetail | null> {
     if (!AUTHORIZATION_KINDS.has(request.kind)) return null;
     if (request.state !== "pending") return null;
+    // A person must answer it: no rule answers it and none is offered, even
+    // if a provider's rule detail says otherwise. Tool hints, which the MCP
+    // server declares itself, are deliberately not read anywhere here.
+    if (request.humanRequired === true) return null;
     if (request.presentation.confirmDisabled === true) return null;
     if (request.expiresAt !== undefined && request.expiresAt <= this.options.now()) return null;
     // A rule only answers what this session's policy leaves to the user.

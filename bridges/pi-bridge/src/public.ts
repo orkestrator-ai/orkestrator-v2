@@ -318,6 +318,7 @@ export function publicContextUsage(state: SessionState): NativeAgentContextUsage
     ...(usage.durationMs !== undefined ? { durationMs: usage.durationMs } : {}),
     ...(usage.apiDurationMs !== undefined ? { apiDurationMs: usage.apiDurationMs } : {}),
     ...(usage.costUsd !== undefined ? { costUsd: usage.costUsd } : {}),
+    ...(usage.costUsd !== undefined && usage.costSource ? { costSource: usage.costSource } : {}),
     ...(usage.sessionTokens !== undefined ? { sessionTokens: usage.sessionTokens } : {}),
     ...(usage.turns?.length ? { turns: usage.turns } : {}),
     source: "pi",

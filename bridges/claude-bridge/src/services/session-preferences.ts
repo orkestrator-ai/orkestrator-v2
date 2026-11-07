@@ -72,6 +72,12 @@ export interface SessionPreferences {
   /** Shell-hook enrichment by launching call (one run); updates upsert the newest 256 calls. */
   shellTaskDetails?: ClaudeShellTaskDetails[];
   /**
+   * When the CLI reported that this session's transcript lost lines
+   * (`session_writes_lost`). The rollout cannot record its own loss, so this is
+   * what puts the lost-write advisory back after a reload or a restart.
+   */
+  writesLostAt?: string;
+  /**
    * Present while a turn is in flight, so a later bridge process can tell that
    * a restart cut it short. Content-free. Cleared by writing `undefined` (the
    * merge keeps the key and JSON drops it); a malformed value reads as absent.
@@ -543,6 +549,13 @@ function parsePreferences(raw: string): SessionPreferences | undefined {
   }
   const turnInFlight = parseTurnInFlightMark(record.turnInFlight);
   if (turnInFlight) preferences.turnInFlight = turnInFlight;
+  if (
+    typeof record.writesLostAt === "string" &&
+    record.writesLostAt.length <= 64 &&
+    Number.isFinite(Date.parse(record.writesLostAt))
+  ) {
+    preferences.writesLostAt = record.writesLostAt;
+  }
   return preferences;
 }
 

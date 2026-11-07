@@ -32,7 +32,17 @@ describe("BlockingPromptCard", () => {
 
     const card = screen.getByText("Approve command?");
     expect(card.className).toContain("custom-card");
-    expect(card.className).toContain("border-amber-500/40");
+    // The floating-notice surface, not an amber-tinted frame.
+    expect(card.className).toContain("bg-panel-surface/95");
+    expect(card.className).not.toContain("amber");
+  });
+
+  test("marks a waiting prompt with the warning dot, not an amber icon", () => {
+    render(<BlockingPromptCard title="Approval required">Approve command?</BlockingPromptCard>);
+
+    const dot = screen.getByTestId("blocking-prompt-dot");
+    expect(dot.className).toContain("bg-yellow-300");
+    expect(dot.getAttribute("aria-hidden")).toBe("true");
   });
 
   test("presents pending and submitting states without announcing countdown ticks", () => {

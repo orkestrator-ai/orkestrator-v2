@@ -509,6 +509,113 @@ describe("NativeAgentInteractionCard", () => {
     expect(screen.getByText("Tool: mcp__linear__create_issue")).toBeTruthy();
   });
 
+  test("a request a person must answer says so and offers nothing that remembers it", async () => {
+    const command: AgentInteractionRequest = {
+      ...interaction(false),
+      provider: "codex",
+      kind: "command-approval",
+      presentation: {
+        title: "Approve command",
+        body: "Command: git push --force",
+        questions: [],
+        confirmLabel: "Approve",
+        declineLabel: "Deny",
+        // Withheld by the backend for such a request; the card refuses them
+        // too, so neither can reappear through a stale or foreign snapshot.
+        approveForSessionLabel: "Approve for session",
+        ruleOffer: { kind: "command-prefix", patterns: ["git push --force"], suggested: 0 },
+      },
+    };
+    const onResolve = mock(async (resolution: AgentInteractionResolution) => ({
+      result: "applied" as const,
+      interactionId: resolution.interactionId,
+      sessionId: resolution.sessionId,
+      revision: 2,
+    }));
+    const onApproveAndRemember = mock(async () => ({
+      result: "applied" as const,
+      interactionId: "interaction-1",
+      sessionId: "session-1",
+      revision: 2,
+    }));
+    const view = render(
+      <NativeAgentInteractionCard
+        interaction={command}
+        onResolve={onResolve}
+        onApproveAndRemember={onApproveAndRemember}
+      />,
+    );
+    // Without the marker both affordances are there.
+    expect(screen.queryByTestId("interaction-human-required") === null).toBe(true);
+    expect(screen.getByRole("button", { name: "Approve for session" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Approve and remember…" })).toBeTruthy();
+    view.unmount();
+
+    render(
+      <NativeAgentInteractionCard
+        interaction={{ ...command, humanRequired: true }}
+        onResolve={onResolve}
+        onApproveAndRemember={onApproveAndRemember}
+      />,
+    );
+    expect(screen.getByTestId("interaction-human-required").textContent).toBe(
+      "You need to answer this yourself: a saved rule can't approve it.",
+    );
+    expect(screen.queryByRole("button", { name: "Approve for session" }) === null).toBe(true);
+    expect(screen.queryByRole("button", { name: "Approve and remember…" }) === null).toBe(true);
+    // One-time answers stay.
+    expect(screen.getByRole("button", { name: "Deny" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Cancel turn" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+    await waitFor(() => expect(onResolve).toHaveBeenCalledTimes(1));
+    expect(onResolve.mock.calls[0]?.[0]).toMatchObject({ action: "answer" });
+    expect(onApproveAndRemember).not.toHaveBeenCalled();
+  });
+
+  test("tags a tool its MCP server calls destructive or read-only, and nothing else", () => {
+    const permission = (extra: Partial<AgentInteractionRequest>): AgentInteractionRequest => ({
+      ...interaction(false),
+      provider: "claude",
+      kind: "permission",
+      presentation: {
+        title: "Allow mcp__linear__delete_issue",
+        body: "Tool: mcp__linear__delete_issue",
+        questions: [],
+        confirmLabel: "Approve",
+      },
+      ...extra,
+    });
+    const onResolve = async () => ({
+      result: "applied" as const,
+      interactionId: "interaction-1",
+      sessionId: "session-1",
+      revision: 2,
+    });
+    const tag = (extra: Partial<AgentInteractionRequest>) => {
+      const view = render(
+        <NativeAgentInteractionCard interaction={permission(extra)} onResolve={onResolve} />,
+      );
+      const element = screen.queryByTestId("interaction-tool-hint");
+      const result = element
+        ? { text: element.textContent, title: element.getAttribute("title") }
+        : null;
+      view.unmount();
+      return result;
+    };
+    const destructive = tag({
+      source: { kind: "mcp-server", name: "linear" },
+      toolHints: { readOnly: false, destructive: true },
+    });
+    expect(destructive?.text).toBe("Destructive");
+    // Self-declared, and the card says so.
+    expect(destructive?.title).toContain("not verified");
+    // Shown on its own when the provider names no server.
+    expect(tag({ toolHints: { readOnly: true } })?.text).toBe("Read-only");
+    expect(tag({ toolHints: { readOnly: true, destructive: true } })).toBeNull();
+    expect(tag({ toolHints: { idempotent: true, openWorld: true } })).toBeNull();
+    expect(tag({})).toBeNull();
+  });
+
   test("keeps Claude plan feedback and submits it with a revision request", async () => {
     const request: AgentInteractionRequest = {
       ...interaction(false),

@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { Api, Model } from "@earendil-works/pi-ai";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   chatGptLoginModelIds,
   composeModelId,
@@ -15,6 +16,7 @@ import {
   modelLocalId,
   modelProviderId,
   normalizeAgentModel,
+  PI_CHATGPT_DEFAULT_MODEL,
   reconcileComposerSelection,
   refreshModels,
   resolveModel,
@@ -460,6 +462,24 @@ describe("ChatGPT login fallback", () => {
       "openai-codex/gpt-6-sol",
     ]);
   });
+
+  test("puts Pi's own default ahead of a newer backend model, and falls back to newest first", () => {
+    const withTerra = [...backend, model({ provider: "openai-codex", id: "gpt-6.1-terra" })];
+    const runtime = { getModels: () => withTerra, isUsingSubscription: () => true };
+    expect(chatGptLoginModelIds(runtime, "openai")).toEqual([
+      "openai/gpt-6.1-sol",
+      "openai/gpt-6.1-terra",
+      "openai/gpt-6-sol",
+    ]);
+    const withoutDefault = {
+      getModels: () => withTerra.filter((m) => m.id !== "gpt-6.1-sol"),
+      isUsingSubscription: () => true,
+    };
+    expect(chatGptLoginModelIds(withoutDefault, "openai")).toEqual([
+      "openai/gpt-6.1-terra",
+      "openai/gpt-6-sol",
+    ]);
+  });
 });
 
 describe("ChatGPT login fallback against the pinned SDK", () => {
@@ -491,8 +511,9 @@ describe("ChatGPT login fallback against the pinned SDK", () => {
     try {
       const composer = await hydrateComposer(emptyComposer());
       // The premise this fix rests on: the catalogue still starts on a model
-      // the login refuses. If a Pi bump changes that, revisit the fallback.
-      expect(composer.models[0]?.id).toBe("openai/gpt-4");
+      // the backend's list does not name (`gpt-4` before Pi 1.5.0). If a Pi
+      // bump changes that, revisit the fallback.
+      expect(composer.models[0]?.id).toBe("openai/chat-latest");
       expect(composer.selectedModelId).toBe("openai/gpt-6.1-sol");
       const resolved = await resolveModel(undefined);
       expect(resolved && composeModelId(resolved.provider, resolved.id)).toBe("openai/gpt-6.1-sol");
@@ -529,7 +550,22 @@ describe("ChatGPT login fallback against the pinned SDK", () => {
   test("an openai API key keeps the catalogue's first model", async () => {
     const cleanup = await sdkCatalogue({ openai: { type: "api_key", key: "sk-fixture" } });
     try {
-      expect((await hydrateComposer(emptyComposer())).selectedModelId).toBe("openai/gpt-4");
+      expect((await hydrateComposer(emptyComposer())).selectedModelId).toBe("openai/chat-latest");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("the preferred ChatGPT model is still Pi's own default for both login providers", async () => {
+    // Pi does not export `defaultModelPerProvider`, so read the shipped table.
+    const entry = fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"));
+    const resolver = await readFile(join(dirname(entry), "core", "model-resolver.js"), "utf8");
+    expect(resolver).toContain(`openai: "${PI_CHATGPT_DEFAULT_MODEL}"`);
+    expect(resolver).toContain(`"openai-codex": "${PI_CHATGPT_DEFAULT_MODEL}"`);
+    const cleanup = await sdkCatalogue({ openai: oauth });
+    try {
+      const backend = (await modelRuntime()).getModels("openai-codex").map((entry) => entry.id);
+      expect(backend).toContain(PI_CHATGPT_DEFAULT_MODEL);
     } finally {
       await cleanup();
     }

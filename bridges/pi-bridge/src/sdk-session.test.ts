@@ -7,12 +7,13 @@
  * cannot observe from a fake `AgentSession`.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AssistantMessage, ToolCall } from "@earendil-works/pi-ai";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
+import { NATIVE_AGENT_LOST_WRITE_ADVISORY } from "@orkestrator/protocol/native-agent-lost-writes";
 
 // `config.ts` reads its environment once, at import; see `http.test.ts`.
 process.env.PORT = "0";
@@ -31,7 +32,7 @@ const { sessions, clientSessionKeys } = await import("./state.js");
 const { setPiMcpTransportForTests } = await import("./mcp.js");
 const { resolveApproval } = await import("./interactions.js");
 const { nativeFetch } = await import("./testing/native-fetch.js");
-const { ModelRuntime } = await import("./pi-sdk.js");
+const { ModelRuntime, SessionManager } = await import("./pi-sdk.js");
 const { createAssistantMessageEventStream } = await import("@earendil-works/pi-ai");
 
 type SessionState = NonNullable<ReturnType<typeof sessions.get>>;
@@ -315,5 +316,71 @@ describe("GitHub credential withholding (item 209)", () => {
       if (previous === undefined) delete process.env.GH_TOKEN;
       else process.env.GH_TOKEN = previous;
     }
+  });
+});
+
+describe("a session-file write Pi could not make (Pi 1.5)", () => {
+  test("Pi's append goes through the `_persist` the bridge watches", () => {
+    // `watchSessionFileWrites` wraps it; a release that renamed it would leave
+    // lost writes silent again.
+    expect(typeof SessionManager.prototype._persist).toBe("function");
+  });
+
+  test("raises the shared advisory once, after the entry Pi rolled back", async () => {
+    await withSdkSession({ clientSessionKey: "sdk-lost-write" }, async ({ state, prompt }) => {
+      await prompt("Hello.");
+      await state.session!.agent.waitForIdle();
+      await waitFor(() => state.status === "idle");
+      // A real file-system failure on Pi's next append, whoever runs the test
+      // (a read-only mode would not stop root): the file's path is now a
+      // directory, so `appendFileSync` throws EISDIR.
+      const sessionFile = state.sessionFile!;
+      await rm(sessionFile);
+      await mkdir(sessionFile);
+      try {
+        await prompt("Second.");
+        await waitFor(() => state.status !== "running" && !state.dispatching);
+        // Pi took the prompt back out of the session it would resume.
+        const saved = state.session!.sessionManager.getEntries();
+        expect(
+          saved.some(
+            (entry) =>
+              entry.type === "message" &&
+              entry.message.role === "user" &&
+              JSON.stringify(entry.message.content).includes("Second."),
+          ),
+        ).toBe(false);
+
+        const advisories = () =>
+          state.messages.filter((message) =>
+            message.parts.some(
+              (part) => part.type === "status" && part.content === NATIVE_AGENT_LOST_WRITE_ADVISORY,
+            ),
+          );
+        expect(advisories()).toHaveLength(1);
+        // The shared shape: an assistant row whose status line is all of it.
+        expect(advisories()[0]).toMatchObject({ role: "assistant", content: "" });
+        expect(advisories()[0]!.parts).toEqual([
+          expect.objectContaining({
+            type: "status",
+            severity: "warning",
+            content: NATIVE_AGENT_LOST_WRITE_ADVISORY,
+          }),
+        ]);
+        // Its own row, right after the prompt whose entry was lost.
+        const index = state.messages.indexOf(advisories()[0]!);
+        expect(state.messages[index - 1]?.content).toBe("Second.");
+        expect(state.lostWriteNoticed).toBe(true);
+        // The run still fails as Pi reports it; the advisory adds, never replaces.
+        expect(state.status).toBe("error");
+
+        // A later failed write in the same session adds nothing.
+        await prompt("Third.");
+        await waitFor(() => state.status !== "running" && !state.dispatching);
+        expect(advisories()).toHaveLength(1);
+      } finally {
+        await rm(sessionFile, { recursive: true, force: true });
+      }
+    });
   });
 });

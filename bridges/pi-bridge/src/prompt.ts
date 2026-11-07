@@ -25,6 +25,13 @@ import { isSessionClosed, runDeferredCommandReload } from "./agent-session.js";
 import { beginCommandRun, settleCommandRun } from "./commands.js";
 import { denyAllApprovals } from "./interactions.js";
 import { getLastAssistantUsage } from "./pi-sdk.js";
+import {
+  countPiCostParts,
+  piSessionCostSource,
+  piTurnCostSource,
+  piUsageCostSource,
+  type PiCostParts,
+} from "./cost-source.js";
 import { schedulePersist } from "./persistence.js";
 import { boundTranscript } from "./transcript.js";
 import { appendTurnFailure } from "./translate.js";
@@ -758,6 +765,7 @@ function recordUsage(state: SessionState, input: DispatchInput): void {
   const apiDurationMs = state.currentTurnApiDurationMs;
   const context = readContextUsage(state);
   const stats = readSessionStats(state);
+  const costParts = readCostParts(state);
   const sessionTokens =
     stats && typeof stats.tokens?.total === "number" && Number.isFinite(stats.tokens.total)
       ? stats.tokens.total
@@ -780,6 +788,16 @@ function recordUsage(state: SessionState, input: DispatchInput): void {
       sessionCost === undefined
         ? assistantUsage?.cost.total
         : Math.max(0, sessionCost - (previous?.costUsd ?? 0));
+    // Pi says per response whether its cost is billed; see `cost-source.ts`.
+    // A delta of the session sum is billed only if every part it added is, so
+    // without the entries to count it stays unknown rather than borrowing the
+    // last response's flag.
+    const turnCostSource =
+      sessionCost === undefined
+        ? piUsageCostSource(assistantUsage)
+        : costParts
+          ? piTurnCostSource(costParts, previous ? previousCostParts(previous) : NO_COST_PARTS)
+          : undefined;
     const toolCalls =
       stats === undefined
         ? undefined
@@ -796,6 +814,9 @@ function recordUsage(state: SessionState, input: DispatchInput): void {
       // of this turn id is what dates it.
       at: previous?.turns?.find((entry) => entry.turnId === turnId)?.at ?? new Date().toISOString(),
       ...(turnCost === undefined ? {} : { costUsd: turnCost }),
+      ...(turnCost === undefined || turnCostSource === undefined
+        ? {}
+        : { costSource: turnCostSource }),
       ...(turn.inputTokens === undefined ? {} : { inputTokens: turn.inputTokens }),
       ...(turn.outputTokens === undefined ? {} : { outputTokens: turn.outputTokens }),
       ...(turn.cacheReadTokens === undefined ? {} : { cacheReadTokens: turn.cacheReadTokens }),
@@ -808,6 +829,11 @@ function recordUsage(state: SessionState, input: DispatchInput): void {
       ...(input.requestId ? { requestId: input.requestId } : {}),
       ...(state.composer.selectedModelId ? { modelId: state.composer.selectedModelId } : {}),
     };
+    const sessionCostField = sessionCost === undefined ? readCost(state) : { costUsd: sessionCost };
+    const sessionCostSource =
+      sessionCostField.costUsd !== undefined && costParts
+        ? piSessionCostSource(costParts)
+        : undefined;
     state.usage = {
       turn,
       turns: [
@@ -822,7 +848,14 @@ function recordUsage(state: SessionState, input: DispatchInput): void {
       ...(elapsed !== undefined ? { durationMs: elapsed } : {}),
       ...(apiDurationMs !== undefined ? { apiDurationMs } : {}),
       ...context,
-      ...(sessionCost === undefined ? readCost(state) : { costUsd: sessionCost }),
+      ...sessionCostField,
+      ...(sessionCostSource ? { costSource: sessionCostSource } : {}),
+      ...(costParts
+        ? {
+            sessionCostParts: costParts.parts,
+            sessionProviderCostParts: costParts.providerParts,
+          }
+        : {}),
       updatedAt: new Date().toISOString(),
     };
   }
@@ -880,6 +913,25 @@ function readContextUsage(state: SessionState): {
     // Context accounting is a display nicety. A session that cannot report it
     // must not fail the turn that just succeeded.
     return {};
+  }
+}
+
+const NO_COST_PARTS: PiCostParts = { parts: 0, providerParts: 0 };
+
+/** The counts the previous turn left, when it was recorded by a bridge that kept them. */
+function previousCostParts(previous: NonNullable<SessionState["usage"]>): PiCostParts | undefined {
+  return previous.sessionCostParts === undefined || previous.sessionProviderCostParts === undefined
+    ? undefined
+    : { parts: previous.sessionCostParts, providerParts: previous.sessionProviderCostParts };
+}
+
+/** The same entries `getSessionStats` sums, counted; undefined when Pi cannot list them. */
+function readCostParts(state: SessionState): PiCostParts | undefined {
+  try {
+    const entries = state.session?.sessionManager?.getEntries?.();
+    return Array.isArray(entries) ? countPiCostParts(entries) : undefined;
+  } catch {
+    return undefined;
   }
 }
 

@@ -22,7 +22,10 @@ const log = createLogger("bridge.claude");
 export { memoryRecallPart } from "./session-manager-messages.js";
 export { THINKING_TOKENS_EMIT_INTERVAL_MS } from "./session-manager-prompt-handlers/system.js";
 export { applyClaudeUsageReport } from "./session-manager-prompt-handlers/assistant.js";
-export { claudeStartupFailureMessage } from "./session-manager-prompt-handlers/result.js";
+export {
+  claudeStartupFailureMessage,
+  withStartupFailureDetail,
+} from "./session-manager-prompt-handlers/result.js";
 export {
   MAX_STREAM_CONTENT_BLOCK_INDEX,
   STREAM_EVENT_COALESCE_MS,

@@ -11,7 +11,10 @@
  */
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import { isNativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
+import {
+  isNativeAgentCostSource,
+  isNativeAgentExecutionPolicy,
+} from "@orkestrator/protocol/native-agent";
 import { MAX_STATE_FILE_BYTES, stateFilePath } from "./config.js";
 import { captureHistoryEntries, MAX_HISTORY_TARGETS } from "./history-target.js";
 import { emptyComposer } from "./models.js";
@@ -223,6 +226,7 @@ function toPersisted(state: SessionState): PersistedSession {
     ...(state.clientSessionKey ? { clientSessionKey: state.clientSessionKey } : {}),
     ...(state.sessionFile ? { sessionFile: state.sessionFile } : {}),
     ...(state.resumeFallbackFile ? { resumeFallbackFile: state.resumeFallbackFile } : {}),
+    ...(state.lostWriteNoticed ? { lostWriteNoticed: true as const } : {}),
     ...(state.piSessionId ? { piSessionId: state.piSessionId } : {}),
     ...(state.historyLeaf ? { historyLeaf: state.historyLeaf } : {}),
     // A session that was mid-turn when the process died is not running now.
@@ -326,6 +330,7 @@ function restoreSession(entry: unknown): SessionState | undefined {
   state.policyPending = true;
   if (nonBlank(entry.sessionFile)) state.sessionFile = entry.sessionFile;
   if (nonBlank(entry.resumeFallbackFile)) state.resumeFallbackFile = entry.resumeFallbackFile;
+  if (entry.lostWriteNoticed === true) state.lostWriteNoticed = true;
   if (nonBlank(entry.piSessionId)) state.piSessionId = entry.piSessionId;
   const leaf = entry.historyLeaf;
   if (
@@ -480,6 +485,9 @@ function restoreUsage(value: unknown): SessionState["usage"] {
                 entry[key] = number;
               }
             }
+            if (entry.costUsd !== undefined && isNativeAgentCostSource(candidate.costSource)) {
+              entry.costSource = candidate.costSource;
+            }
             if (nonBlank(candidate.requestId)) entry.requestId = candidate.requestId;
             if (nonBlank(candidate.modelId)) entry.modelId = candidate.modelId;
             // Restored so a turn kept across a restart is still dated by when
@@ -495,6 +503,11 @@ function restoreUsage(value: unknown): SessionState["usage"] {
     ...readNumber(value, "durationMs"),
     ...readNumber(value, "apiDurationMs"),
     ...readNumber(value, "costUsd"),
+    ...(typeof value.costUsd === "number" && isNativeAgentCostSource(value.costSource)
+      ? { costSource: value.costSource }
+      : {}),
+    ...readNumber(value, "sessionCostParts"),
+    ...readNumber(value, "sessionProviderCostParts"),
     ...readNumber(value, "contextTokens"),
     ...readNumber(value, "contextWindow"),
     ...readNumber(value, "contextPercent"),

@@ -2251,6 +2251,37 @@ describe("AgentInfoButton usage panel", () => {
     expect(metricValue("Cost")).toBe(expected);
   });
 
+  // The source comes from the snapshot, never from the platform: the same
+  // provider-neutral field marks an estimate on any of them.
+  test.each([
+    ["claude", "estimate", "~$1.25, estimated", "Estimated from token counts"],
+    ["cursor", "provider", "$1.25", null],
+    ["pi", "provider", "$1.25", null],
+    ["opencode", undefined, "$1.25", null],
+  ] as const)(
+    "marks a %s session cost from its %s source",
+    (platform, costSource, expected, title) => {
+      seedUsage(
+        usage({ costUsd: 1.25, ...(costSource ? { costSource } : {}), source: platform }),
+        platform,
+      );
+      const tab = claudeTab({
+        nativeAgentData: {
+          platform,
+          environmentId: ENVIRONMENT_ID,
+          sessionId: `${platform}-session-1`,
+        },
+      } as Partial<TabInfo>);
+      render(<AgentInfoButton activeTab={tab} />);
+      open();
+      expect(metricValue("Cost")).toBe(expected);
+      const amount = screen
+        .getByText("Cost")
+        .parentElement?.querySelector("[data-cost-source], div.font-mono > span");
+      expect(amount?.getAttribute("title") ?? null).toBe(title);
+    },
+  );
+
   test.each([
     [420, "420ms"],
     [999.4, "999ms"],
@@ -4827,8 +4858,38 @@ describe("AgentInfoButton ACP agents", () => {
       expect(screen.queryByText("Open a terminal and run grok login.") !== null).toBe(
         state !== "signed-in",
       );
+      // No reported end, no line.
+      expect(document.querySelector("[data-sign-in-expiry]") === null).toBe(true);
     },
   );
+
+  test.each([
+    [{ expiresAt: "2099-12-03T10:00:00.000Z" }, "upcoming", /^Sign-in ends (?!about)/],
+    [
+      { expiresAt: "2099-12-03T10:00:00.000Z", expiresAtEstimated: true },
+      "upcoming",
+      /^Sign-in ends about /,
+    ],
+    [{ expiresAt: "2001-01-01T00:00:00.000Z" }, "ended", /^Sign-in may have ended on /],
+  ] as const)("shows the account's login end %o", async (expiry, tone, text) => {
+    nativeInvokeMock.mockImplementation(async (command: string) => {
+      if (command === "get_native_agent_auth_status") {
+        return {
+          state: "signed-in",
+          account: { label: "fixture@example.test", plan: "pro", ...expiry },
+          signOut: false,
+        };
+      }
+      return command === "get_cursor_account_usage" ? new Promise(() => undefined) : {};
+    });
+    useNativeAgentProjectionStore.getState().setProjection(ACP_KEY, acpProjection("cursor"));
+    render(<AgentInfoButton activeTab={acpTab("cursor")} />);
+    open();
+    expect(await screen.findByText("fixture@example.test")).toBeTruthy();
+    const line = document.querySelector("[data-sign-in-expiry]");
+    expect(line?.getAttribute("data-sign-in-expiry")).toBe(tone);
+    expect(line?.textContent).toMatch(text);
+  });
 
   test("reads the account when the panel opens and again after signing out", async () => {
     const accountReads = () =>

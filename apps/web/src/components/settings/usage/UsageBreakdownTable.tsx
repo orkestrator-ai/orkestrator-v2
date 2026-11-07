@@ -3,6 +3,7 @@ import { UNKNOWN_USAGE_MODEL_ID } from "@orkestrator/protocol/usage-history";
 import type { UsageDayPoint, UsageModelSummary } from "@/lib/backend";
 import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
 import { SegmentedSelector } from "@/components/ui/segmented-selector";
+import { CostAmount } from "@/components/usage/CostAmount";
 import { cn } from "@/lib/utils";
 import {
   PLATFORM_BAR_CLASS,
@@ -132,7 +133,10 @@ export function UsageBreakdownTable({ models, days, metric }: UsageBreakdownTabl
                 </td>
                 <td className="py-2 text-right tabular-nums text-foreground">
                   {row.totals.costUsd > 0 ? (
-                    formatCost(row.totals.costUsd)
+                    <CostAmount
+                      amount={formatCost(row.totals.costUsd)}
+                      source={row.totals.costSource}
+                    />
                   ) : (
                     <span className="text-muted-foreground">Unpriced</span>
                   )}

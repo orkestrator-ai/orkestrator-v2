@@ -4,6 +4,7 @@ import type {
   HookInput,
   HookJSONOutput,
 } from "@anthropic-ai/claude-agent-sdk";
+import { createLogger } from "@orkestrator/protocol/logger";
 import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
 import type { SessionState } from "../types/index.js";
 import { recordClaudeToolDenied } from "./change-evidence.js";
@@ -27,6 +28,8 @@ import {
 } from "./session-manager-prompt-turn-lifecycle.js";
 import type { TurnState } from "./session-manager-prompt-turn.js";
 import type { ClaudeRuntimeTurn } from "./session-manager-runtime.js";
+
+const log = createLogger("bridge.claude");
 
 // Hook callbacks run on the SDK's hook path, not on the JSONL message
 // consumer. Keep them synchronous apart from the required Promise return:
@@ -234,14 +237,39 @@ export function commandChangeHookFor(
   );
 }
 
+/** What a boundary hook that threw tells the model. Fixed text: no input echoed. */
+export const BOUNDARY_HOOK_FAILURE_REASON =
+  "Orkestrator could not check this tool call against the session's policy, so it was not run.";
+
 /**
  * A PreToolUse hook whose denials are recorded as change evidence. The CLI
  * reports no `permission_denied` frame for a hook's refusal, and the error
  * `tool_result` that follows does not say the call never ran.
+ *
+ * It also fails closed. Every hook it wraps holds a boundary (the coordinator
+ * read-only policy, stale MCP servers, the workflow-result key), and the CLI's
+ * default for a hook that throws is to run the tool anyway. Claude Code 2.1.317
+ * added `onFailure: 'block'` on the matcher for this, but the SDK then refuses
+ * to start a query on any older CLI, and outside agent-test profiles the CLI
+ * may be whatever `claude` is on PATH. Denying here holds on every version.
  */
 export function recordingHookDenials(hook: HookCallback, conversationId: string): HookCallback {
   return async (input, toolUseId, options) => {
-    const output = await hook(input, toolUseId, options);
+    let output: HookJSONOutput;
+    try {
+      output = await hook(input, toolUseId, options);
+    } catch (error) {
+      if (input.hook_event_name !== "PreToolUse") throw error;
+      // Content-free: the tool name only, never its input or the error text.
+      log.warn("hook.boundary-failed-closed", { tool: input.tool_name });
+      output = {
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "deny",
+          permissionDecisionReason: BOUNDARY_HOOK_FAILURE_REASON,
+        },
+      };
+    }
     const decision = (output as { hookSpecificOutput?: { permissionDecision?: unknown } })
       .hookSpecificOutput?.permissionDecision;
     if (input.hook_event_name === "PreToolUse" && input.tool_use_id && decision === "deny") {

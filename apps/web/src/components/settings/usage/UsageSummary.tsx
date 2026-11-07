@@ -1,11 +1,13 @@
 import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
 import type { UsageEnvironmentSummary, UsagePlatformSummary, UsageTotals } from "@/lib/backend";
+import type { ReactNode } from "react";
 import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
+import { CostAmount } from "@/components/usage/CostAmount";
 import { cn } from "@/lib/utils";
+import { UsageMetricAmount } from "./UsageMetricAmount";
 import {
   formatCost,
   formatCount,
-  formatMetric,
   formatShare,
   formatTokens,
   metricValue,
@@ -15,7 +17,15 @@ import {
 
 /** The numbers that sit under the chart: headline tiles, the token mix, and the two rankings. */
 
-export function UsageStat({ label, value, hint }: { label: string; value: string; hint?: string }) {
+export function UsageStat({
+  label,
+  value,
+  hint,
+}: {
+  label: string;
+  value: ReactNode;
+  hint?: string;
+}) {
   return (
     <div className="min-w-0 rounded-lg border border-border/60 bg-card/40 px-3 py-2.5">
       <p className="truncate text-[11px] uppercase tracking-wide text-muted-foreground/80">
@@ -54,7 +64,7 @@ export function UsageStatStrip({ totals, sessions }: { totals: UsageTotals; sess
       />
       <UsageStat
         label="Spend"
-        value={formatCost(totals.costUsd)}
+        value={<CostAmount amount={formatCost(totals.costUsd)} source={totals.costSource} />}
         hint={
           totals.unpricedTokens > 0
             ? `${formatTokens(totals.unpricedTokens)} tokens unpriced`
@@ -175,7 +185,11 @@ export function UsagePlatformList({
                       unpriced(entry.totals, metric) ? "text-muted-foreground" : "text-foreground",
                     )}
                   >
-                    {unpriced(entry.totals, metric) ? "Unpriced" : formatMetric(value, metric)}
+                    {unpriced(entry.totals, metric) ? (
+                      "Unpriced"
+                    ) : (
+                      <UsageMetricAmount totals={entry.totals} metric={metric} value={value} />
+                    )}
                   </span>
                 </button>
               </li>
@@ -234,7 +248,7 @@ export function UsageEnvironmentList({
                 {formatShare(metricValue(entry.totals, metric), whole)}
               </span>
               <span className="w-16 shrink-0 text-right text-xs tabular-nums text-foreground">
-                {formatMetric(metricValue(entry.totals, metric), metric)}
+                <UsageMetricAmount totals={entry.totals} metric={metric} />
               </span>
             </li>
           ))}

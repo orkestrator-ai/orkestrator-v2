@@ -149,6 +149,15 @@ export interface ApprovalRequest {
    */
   ruleEligible?: boolean;
   /**
+   * A command app-server marked `humanCommand`: a managed rule says a person
+   * must answer it, with a one-time decision only (Codex 0.167.0, behind
+   * `experimentalApi` and the `requiredHumanApproval` client capability,
+   * neither of which this bridge declares yet). Never rule-eligible, never
+   * approvable for the session; the backend publishes it as the shared
+   * request's `humanRequired`.
+   */
+  humanRequired?: true;
+  /**
    * app-server's `proposedExecpolicyAmendment`, an argv prefix, forwarded only
    * so the card can preselect the same prefix for an Orkestrator rule. It is
    * never sent back: no answer carries an amendment ("No answer saves a
@@ -215,6 +224,14 @@ function commandActionsText(value: unknown): string | undefined {
 }
 
 /**
+ * A v2 command approval app-server says only a person may answer, with a
+ * one-time decision (`CommandExecutionApprovalKind` `humanCommand`).
+ */
+function isHumanCommand(method: InteractiveApprovalMethod, params: Record<string, unknown>) {
+  return method === "item/commandExecution/requestApproval" && params.kind === "humanCommand";
+}
+
+/**
  * Builds the renderer-facing descriptor from raw request params.
  *
  * Every field is optional in the protocol and treated as untrusted: a missing
@@ -272,14 +289,16 @@ export function describeApproval(options: {
     options.method === "item/commandExecution/requestApproval" &&
     (params.kind === undefined || params.kind === null || params.kind === "command");
   const exactCommand = v2Command && typeof params.command === "string" && params.command.length > 0;
+  const humanRequired = isHumanCommand(options.method, params);
   const ruleEligible =
-    networkContext !== undefined
+    !humanRequired &&
+    (networkContext !== undefined
       ? v2Command && (exactCommand || command === undefined)
       : kind === "command"
         ? exactCommand
         : kind === "file-change"
           ? str(params.grantRoot) === undefined
-          : false;
+          : false);
   const proposal = exactCommand ? proposedPrefix(params.proposedExecpolicyAmendment) : undefined;
   const actionable =
     kind === "command"
@@ -311,15 +330,18 @@ export function describeApproval(options: {
      * Every interactive method can express "yes, and stop asking": the v2 methods
      * as `acceptForSession`, the legacy ones as `approved_for_session`, and
      * permissions as `scope: "session"`. Kept as a field rather than hardcoded in
-     * the UI so a future method without it can say so.
+     * the UI so a future method without it can say so. A `humanCommand` is
+     * that method: app-server takes only a one-time decision for it.
      */
-    supportsApproveForSession: true,
+    supportsApproveForSession: !humanRequired,
     // app-server's proposed policy amendments are deliberately not described:
     // see "No answer saves a durable rule" above. The command prefix is
-    // forwarded as a hint only (`proposedCommandPrefix`).
+    // forwarded as a hint only (`proposedCommandPrefix`), and not at all for a
+    // command a person must answer, where no rule may be offered.
     actionable,
     ...(ruleEligible ? { ruleEligible: true } : {}),
-    ...(proposal ? { proposedCommandPrefix: proposal } : {}),
+    ...(humanRequired ? { humanRequired: true } : {}),
+    ...(proposal && !humanRequired ? { proposedCommandPrefix: proposal } : {}),
   };
 }
 
@@ -347,11 +369,16 @@ export function buildApprovalResponse(
   switch (method) {
     case "item/commandExecution/requestApproval":
     case "item/fileChange/requestApproval": {
+      // A `humanCommand` takes a one-time decision only, so "and stop asking"
+      // degrades to a plain accept rather than a grant app-server must refuse.
+      const oneTimeOnly = isHumanCommand(method, isRecord(rawParams) ? rawParams : {});
       const wire =
         decision === "approve"
           ? "accept"
           : decision === "approve-for-session"
-            ? "acceptForSession"
+            ? oneTimeOnly
+              ? "accept"
+              : "acceptForSession"
             : decision === "cancel"
               ? "cancel"
               : "decline";

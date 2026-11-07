@@ -54,6 +54,30 @@ test("totals add field by field", () => {
   expect(target).toMatchObject({ totalTokens: 15, costUsd: 1, unpricedTokens: 5, turns: 2 });
 });
 
+test("adding totals combines where their spend came from", () => {
+  const provider = { ...emptyUsageTotals(), costUsd: 1, costSource: "provider" as const };
+  const estimate = { ...emptyUsageTotals(), costUsd: 0.5, costSource: "estimate" as const };
+  const unknown = { ...emptyUsageTotals(), costUsd: 0.25 };
+  const unpriced = { ...emptyUsageTotals(), totalTokens: 9, unpricedTokens: 9 };
+
+  // Unpriced buckets say nothing about the source of the spend beside them.
+  const billed = addUsageTotals(addUsageTotals(emptyUsageTotals(), provider), unpriced);
+  expect(billed.costSource).toBe("provider");
+  expect(addUsageTotals({ ...billed }, provider).costSource).toBe("provider");
+
+  // Any estimate makes the whole total an estimate, whatever else is in it.
+  expect(addUsageTotals({ ...billed }, estimate).costSource).toBe("estimate");
+  expect(addUsageTotals({ ...unknown }, estimate).costSource).toBe("estimate");
+
+  // Billed spend beside spend of unknown origin is unknown, not billed.
+  const mixed = addUsageTotals({ ...billed }, unknown);
+  expect(mixed.costUsd).toBe(1.25);
+  expect(mixed).not.toHaveProperty("costSource");
+
+  // An empty pair has no source at all.
+  expect(addUsageTotals(emptyUsageTotals(), unpriced)).not.toHaveProperty("costSource");
+});
+
 test("a query is clamped and keeps only the filters it understands", () => {
   expect(normalizeUsageHistoryQuery({})).toEqual({ days: 30 });
   expect(normalizeUsageHistoryQuery({ days: 0 })).toEqual({ days: 1 });

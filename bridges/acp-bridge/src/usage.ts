@@ -1,4 +1,7 @@
-import type { NativeAgentContextUsage } from "@orkestrator/protocol/native-agent";
+import type {
+  NativeAgentContextUsage,
+  NativeAgentCostSource,
+} from "@orkestrator/protocol/native-agent";
 
 /**
  * Token accounting for one completed ACP turn.
@@ -77,6 +80,19 @@ function money(value: unknown): number | undefined {
     ? value
     : undefined;
 }
+
+/**
+ * What an ACP dollar amount is: the agent's own figure, never one this bridge
+ * computed. The only amounts `parseUsdCost` accepts are ones the agent states
+ * in dollars (ACP `usage_update.cost` with `currency: "USD"`, which ACP 2.4.0
+ * defines as the session's "Total cumulative cost", or an explicit
+ * `costUsd`/`cost_usd`), so the bridge passes them on as the provider's
+ * amount. ACP does not say how an agent arrived at its figure; an agent that
+ * reports a computed estimate in this field is indistinguishable here. Other
+ * units (`"credits"`, a missing currency) and Grok's `costUsdTicks` are not
+ * dollars and are not shown (docs/todo/agent-engines/0007, task 11).
+ */
+export const ACP_COST_SOURCE: NativeAgentCostSource = "provider";
 
 function parseUsdCost(value: Record<string, unknown>): number | undefined {
   const direct = money(value.costUsd) ?? money(value.cost_usd);
@@ -202,7 +218,7 @@ export function acpContextUsage(
     ...(details.sessionTokens === undefined ? {} : { sessionTokens: details.sessionTokens }),
     ...(details.turns?.length ? { turns: details.turns.slice(-20) } : {}),
     ...(usage.apiDurationMs === undefined ? {} : { apiDurationMs: usage.apiDurationMs }),
-    ...(usage.costUsd === undefined ? {} : { costUsd: usage.costUsd }),
+    ...(usage.costUsd === undefined ? {} : { costUsd: usage.costUsd, costSource: ACP_COST_SOURCE }),
     ...(durationMs === undefined ? {} : { durationMs }),
     ...(details.modelId ? { modelId: details.modelId } : {}),
     source: details.source ?? "provider",

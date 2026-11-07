@@ -120,6 +120,10 @@ async function boot(
   if (attachmentRoot) await mkdir(attachmentRoot, { recursive: true, mode: 0o700 });
   const configOverrides = options.coordinator
     ? codexAppServerConfigOverrides({
+        // The child's own TMPDIR, as the bridge reads it from the environment
+        // app-server inherits: the profile's temporary-directory denials
+        // depend on it.
+        TMPDIR: process.env.TMPDIR,
         ...options.extraEnv,
         ORKESTRATOR_BRIDGE_EXECUTION_POLICY: "coordinator-read-only",
         CODEX_BRIDGE_PERMISSION_PROFILE: "coordinator-live-attachment",

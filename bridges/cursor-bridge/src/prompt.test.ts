@@ -1393,13 +1393,15 @@ describe("cumulative agent usage", () => {
       usedTokens: 100,
       lastTurnTokens: 100,
       sessionTokens: 3_000,
-      // `chargedCents`, not the undiscounted raw cost.
+      // `chargedCents`, not the undiscounted raw cost, and so a bill.
       costUsd: 1.25,
+      costSource: "provider",
       account: [{ window: "agent", tokens: 3_000, spendUsd: 1.25 }],
       turns: [
         {
           turnId: "run-1",
           costUsd: 0.12,
+          costSource: "provider",
           rawCostUsd: 0.2,
           requestId: "request-1",
           modelId: "cursor/model",
@@ -1409,6 +1411,17 @@ describe("cumulative agent usage", () => {
         },
       ],
     });
+  });
+
+  test("a session Cursor has not charged yet carries no cost and no source", () => {
+    const state = runningSession();
+    state.usage = {
+      turn: { inputTokens: 80, outputTokens: 20, totalTokens: 100 },
+      updatedAt: new Date(1).toISOString(),
+    };
+    const usage = publicContextUsage(state);
+    expect(usage).not.toHaveProperty("costUsd");
+    expect(usage).not.toHaveProperty("costSource");
   });
 
   test("keeps a republished run's original time instead of re-dating it", async () => {

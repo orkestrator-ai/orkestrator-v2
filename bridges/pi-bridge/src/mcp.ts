@@ -14,6 +14,10 @@ import { AGENT_SUBORK_TOOL_NAMES } from "@orkestrator/protocol/suborks";
 import { redactSecrets } from "@orkestrator/protocol/secret-redaction";
 import { ARTIFACT_TOOL_NAMES } from "@orkestrator/protocol/transcript-artifacts";
 import {
+  agentInteractionToolHintsFromMcpAnnotations,
+  type AgentInteractionToolHints,
+} from "@orkestrator/protocol/agent-interactions";
+import {
   workflowResultTurnAllows,
   workflowResultTurnToolNames,
 } from "@orkestrator/protocol/workflow-results";
@@ -107,6 +111,8 @@ export interface PiMcpListedTool {
   description?: string;
   title?: string;
   inputSchema?: unknown;
+  /** The tool's MCP `annotations` as the server listed them; untrusted. */
+  annotations?: unknown;
 }
 
 export interface PiMcpConnection {
@@ -133,6 +139,8 @@ interface RegisteredMcpTool {
   description: string;
   parameters: JsonObject;
   scope: ResolvedMcpServer["scope"];
+  /** What the server's `tools/list` declared about the tool, for approval cards. */
+  hints?: AgentInteractionToolHints;
   call(args: JsonObject): Promise<{ content?: unknown; isError?: boolean }>;
 }
 
@@ -250,6 +258,19 @@ export function isResearchMcpTool(state: SessionState, toolName: string): boolea
  */
 export function isGrantedUserMcpTool(state: SessionState, toolName: string): boolean {
   return runtimes.get(state)?.grantedToolNames.has(toolName) === true;
+}
+
+/**
+ * What the MCP server serving `toolName` (its registered name) declared about
+ * it in `tools/list`, or `undefined` for a built-in, an extension tool or a
+ * tool that declares nothing. Self-declared by the server: display only, never
+ * a reason to approve, refuse or skip asking.
+ */
+export function piMcpToolHints(
+  state: SessionState,
+  toolName: string,
+): AgentInteractionToolHints | undefined {
+  return runtimes.get(state)?.tools.find((tool) => tool.name === toolName)?.hints;
 }
 
 export function isOrkestratorMcpTool(state: SessionState, toolName: string): boolean {
@@ -700,12 +721,14 @@ function registerListedTool(
       ? sanitizeMcpName(remoteName)
       : prefixedToolName(server.id, remoteName);
   if (!name) return undefined;
+  const hints = agentInteractionToolHintsFromMcpAnnotations(listed.annotations);
   return {
     name,
     label: listed.title?.trim() || remoteName,
     description: boundedDescription(listed.description, `MCP tool ${remoteName} from ${server.id}`),
     parameters: toolParameters(listed.inputSchema),
     scope: server.scope,
+    ...(hints ? { hints } : {}),
     call: (args) => connection.call(remoteName, args),
   };
 }
@@ -767,6 +790,7 @@ const defaultTransport: PiMcpTransport = {
           ...(tool.description ? { description: tool.description } : {}),
           ...(typeof tool.title === "string" ? { title: tool.title } : {}),
           ...(tool.inputSchema ? { inputSchema: tool.inputSchema } : {}),
+          ...(tool.annotations ? { annotations: tool.annotations } : {}),
         })),
         call: async (name, args) => {
           // Abort the wire request if it outlives the tool budget; the extension

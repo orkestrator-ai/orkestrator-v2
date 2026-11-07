@@ -13,8 +13,10 @@ import type {
  */
 import type { AgentSession, AgentSessionRuntime } from "@earendil-works/pi-coding-agent";
 import type { InteractionDeadline } from "@orkestrator/protocol/agent-interaction-deadline";
+import type { AgentInteractionToolHints } from "@orkestrator/protocol/agent-interactions";
 import type {
   NativeAgentComposerState,
+  NativeAgentCostSource,
   NativeAgentSlashCommand,
   NativeAgentTurnUsage,
 } from "@orkestrator/protocol/native-agent";
@@ -258,6 +260,14 @@ export interface PersistedUsage {
   /** Time the last turn spent waiting on model responses; same scope as `durationMs`. */
   apiDurationMs?: number;
   costUsd?: number;
+  /** Whether `costUsd` is billed or a catalogue estimate (`cost-source.ts`). */
+  costSource?: NativeAgentCostSource;
+  /**
+   * Priced session entries and the billed ones among them, when the turn was
+   * recorded: the baseline the next turn's source is derived from.
+   */
+  sessionCostParts?: number;
+  sessionProviderCostParts?: number;
   /** Whole-session context occupancy, which Pi reports directly. */
   contextTokens?: number;
   contextWindow?: number;
@@ -284,6 +294,11 @@ export interface PendingApproval {
   toolName: string;
   input: JsonObject;
   createdAt: number;
+  /**
+   * For a tool from an MCP server, what that server's `tools/list` declared
+   * about it (MCP annotations), read when the call was parked. Display only.
+   */
+  toolHints?: AgentInteractionToolHints;
   /**
    * The countdown that denies this call unless it is answered, which the user
    * may pause. Its `expiresAt` is the one published. Never persisted: a timer
@@ -328,6 +343,11 @@ export interface SessionState {
   sessionFile?: string;
   /** Empty file whose context-loss warning has already been published. */
   resumeFallbackFile?: string;
+  /**
+   * A write to Pi's session file failed and the advisory saying so is in the
+   * transcript (`appendLostWriteNotice`); once per session, persisted.
+   */
+  lostWriteNoticed?: boolean;
   /** Pi's own session id, reported by the SDK once a session exists. */
   piSessionId?: string;
   status: SessionStatus;
@@ -594,6 +614,8 @@ export interface PersistedSession {
   sessionFile?: string;
   /** Empty file whose context-loss warning has already been published. */
   resumeFallbackFile?: string;
+  /** The lost-write advisory has been published for this session. */
+  lostWriteNoticed?: true;
   piSessionId?: string;
   status: SessionStatus;
   error?: string;

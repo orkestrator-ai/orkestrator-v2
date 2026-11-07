@@ -26,6 +26,7 @@ import {
   codexCoordinatorPolicy,
   codexCoordinatorSkillExtraRoots,
   codexCoordinatorSkillReadRoots,
+  codexCoordinatorTmpDenials,
   codexLoadsProjectSkills,
   codexHostedNetworkLockGaps,
   codexToolHistoryGaps,
@@ -306,6 +307,69 @@ describe("Codex app-server configuration", () => {
     expect(JSON.parse(overrides["shell_environment_policy.exclude"]!)).toEqual(
       expect.arrayContaining(["*_KEY", "*_SECRET", "*_TOKEN", ORKESTRATOR_AGENT_MCP_TOKEN_ENV]),
     );
+  });
+
+  // Codex's bubblewrap cannot mask a denied directory inside another, and
+  // mounts a denial over any grant inside it (`codexCoordinatorTmpDenials`).
+  test("leaves out only the temporary-directory denials Linux cannot apply", () => {
+    const filesystem = (env: Record<string, string>, platform: NodeJS.Platform) =>
+      codexAppServerConfigOverrides({ ...COORDINATOR_ENV, ...env }, platform)[
+        "permissions.coordinator-conversation-1.filesystem"
+      ]!;
+    const both = filesystem({ TMPDIR: "/tmp/user/1000" }, "darwin");
+    expect(both).toContain('":tmpdir" = "deny"');
+    expect(both).toContain('":slash_tmp" = "deny"');
+    expect(filesystem({ TMPDIR: "/var/tmp/user" }, "linux")).toBe(
+      filesystem({ TMPDIR: "/var/tmp/user" }, "darwin"),
+    );
+
+    const nested = filesystem({ TMPDIR: "/tmp/user/1000" }, "linux");
+    expect(nested).not.toContain('":tmpdir"');
+    expect(nested).toContain('":slash_tmp" = "deny"');
+    expect(nested).toContain('":root" = "deny"');
+
+    const checkout = filesystem({ CWD: "/tmp/checkout" }, "linux");
+    expect(checkout).not.toContain('":slash_tmp"');
+    expect(checkout).toContain('":tmpdir" = "deny"');
+    expect(checkout).toContain('":root" = "deny"');
+    expect(checkout).not.toContain('"write"');
+  });
+
+  test("keeps every temporary-directory denial Codex can apply", () => {
+    const denials = (tmpdir: string | undefined, readRoots: string[], platform = "linux") =>
+      codexCoordinatorTmpDenials({
+        tmpdir,
+        readRoots,
+        platform: platform as NodeJS.Platform,
+      });
+    const project = ["/home/user/project", "/opt/codex"];
+
+    expect(denials(undefined, project)).toEqual({ tmpdir: true, slashTmp: true });
+    expect(denials("relative/tmp", project)).toEqual({ tmpdir: true, slashTmp: true });
+    // One path, one mask.
+    expect(denials("/tmp", project)).toEqual({ tmpdir: true, slashTmp: true });
+    expect(denials("/tmp/", project)).toEqual({ tmpdir: true, slashTmp: true });
+    // A sibling of `/tmp` is not inside it.
+    expect(denials("/tmpfs/user", ["/tmpx/project"])).toEqual({ tmpdir: true, slashTmp: true });
+
+    expect(denials("/tmp/user/1000", project)).toEqual({ tmpdir: false, slashTmp: true });
+    expect(denials("/tmp/./user", project)).toEqual({ tmpdir: false, slashTmp: true });
+    expect(denials("/var/tmp/user", ["/var/tmp/user/project"])).toEqual({
+      tmpdir: false,
+      slashTmp: true,
+    });
+    expect(denials(undefined, ["/tmp/project"])).toEqual({ tmpdir: true, slashTmp: false });
+    // Without the `/tmp` mask a `TMPDIR` inside it masks cleanly, unless a
+    // grant sits inside it too.
+    expect(denials("/tmp/user", ["/tmp/project"])).toEqual({ tmpdir: true, slashTmp: false });
+    expect(denials("/tmp/user", ["/tmp/user/project"])).toEqual({
+      tmpdir: false,
+      slashTmp: false,
+    });
+    expect(denials("/tmp/user/1000", ["/tmp/project"], "darwin")).toEqual({
+      tmpdir: true,
+      slashTmp: true,
+    });
   });
 
   // `code_mode_host` was removed from this list on purpose. Removing any other

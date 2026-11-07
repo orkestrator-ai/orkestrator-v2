@@ -7,15 +7,15 @@ used by Orkestrator. These integrations do not share one upgrade mechanism:
 
 | Agent | SDK integration | CLI integration | Current pins |
 | --- | --- | --- | --- |
-| Claude | `@anthropic-ai/claude-agent-sdk` drives native sessions; `@anthropic-ai/sdk` supplies message content types | The Agent SDK is pointed at Orkestrator's separately managed `claude` executable | Agent SDK `0.3.314`, Anthropic SDK `1.3.0`, CLI `2.1.314` (npm `latest`, verified 2026-10-30) |
-| Codex | No runtime `@openai/codex-sdk` dependency. The bridge speaks JSON-RPC to `codex app-server` using generated types | The pinned `codex` executable is the app-server and is also used by isolated `codex exec` helpers | CLI and generated protocol `0.166.0` |
+| Claude | `@anthropic-ai/claude-agent-sdk` drives native sessions; `@anthropic-ai/sdk` supplies message content types | The Agent SDK is pointed at Orkestrator's separately managed `claude` executable | Agent SDK `0.3.319`, Anthropic SDK `1.6.0`, CLI `2.1.319` (npm `latest`, verified 2026-11-06) |
+| Codex | No runtime `@openai/codex-sdk` dependency. The bridge speaks JSON-RPC to `codex app-server` using generated types | The pinned `codex` executable is the app-server and is also used by isolated `codex exec` helpers | CLI and generated protocol `0.167.0` |
 | OpenCode | `@opencode-ai/sdk/v2/client` is used only by the backend (native chat and build pipelines) | The pinned `opencode` executable runs `opencode serve` | SDK and CLI `1.19.5` |
-| Cursor | `cursor-bridge` drives `@cursor/sdk` in process | No CLI; Cursor is SDK-only | SDK `1.2.0` (npm `latest`, verified 2026-10-31) |
-| Grok | The ACP bridge spawns the CLI and speaks ACP over its stdio; `@agentclientprotocol/sdk` supplies the protocol types | The pinned `grok` executable runs `grok … agent stdio` | CLI `1.0.70` (stable channel; verified 2026-10-30), ACP SDK `2.1.0` |
-| Pi | `@earendil-works/pi-coding-agent` drives sessions in process; `@earendil-works/pi-ai` and `@earendil-works/pi-agent-core` supply types (upstream removed `@earendil-works/pi-server` in 1.2.0) | The pinned `pi` bundle is the same program published a second way, and is what a Pi terminal tab runs | SDK and CLI `1.4.0` |
+| Cursor | `cursor-bridge` drives `@cursor/sdk` in process | No CLI; Cursor is SDK-only | SDK `1.3.1` (npm `latest`, verified 2026-11-06) |
+| Grok | The ACP bridge spawns the CLI and speaks ACP over its stdio; `@agentclientprotocol/sdk` supplies the protocol types | The pinned `grok` executable runs `grok … agent stdio` | CLI `1.0.77` (stable channel; verified 2026-11-06), ACP SDK `2.4.0` |
+| Pi | `@earendil-works/pi-coding-agent` drives sessions in process; `@earendil-works/pi-ai` and `@earendil-works/pi-agent-core` supply types (upstream removed `@earendil-works/pi-server` in 1.2.0) | The pinned `pi` bundle is the same program published a second way, and is what a Pi terminal tab runs | SDK and CLI `1.5.0` |
 
 All versions are exact pins. Do not change them to ranges or `latest`.
-Verified against upstream stable releases on 2026-10-13.
+Verified against upstream stable releases on 2026-11-06.
 
 ## What is enforced, and what is not
 
@@ -65,7 +65,7 @@ Still not enforced anywhere, by nature:
 Cursor's only agent pin is `@cursor/sdk`; see
 [Cursor (SDK bridge)](#cursor-sdk-bridge).
 
-Cursor 1.2.0 also has a Bun-export diagnostic seam patch registered in root
+Cursor 1.3.1 also has a Bun-export diagnostic seam patch registered in root
 `patchedDependencies`. Keep the pin, patch filename, registration, and lockfile
 aligned. The appended export references the SDK's minified stall-detector and
 execution-controller bindings: simply renaming the patch on upgrade is not
@@ -75,9 +75,10 @@ are found by their field lists: the stall detector opens with
 `timer;advisoryTimer;heartbeatOnlyTimer` and is assigned inside the lazy
 initializer that names `@anysphere/agent-client:stall-detector` (which the
 export must call first); the controller is the class opening with
-`serverStream;clientStream;controlledExecManager`. In 1.2.0 those are `Vm0`,
-`N71` and `Qm0` (1.0.40: `W_0`, `x01`, `Z_0`; 1.0.37: `eR0`, `Er0`, `aR0`;
-1.0.36: `aE0`, `Xn0`, `dE0`). All three live in `dist/bundled/index.js`, and
+`serverStream;clientStream;controlledExecManager`. In 1.3.1 those are `rg0`,
+`HZ1` and `cg0` (1.3.0: `Pg0`, `m91`, `Dg0`; 1.2.0: `Vm0`, `N71`, `Qm0`;
+1.0.40: `W_0`, `x01`, `Z_0`; 1.0.37: `eR0`, `Er0`, `aR0`; 1.0.36: `aE0`,
+`Xn0`, `dE0`). All three live in `dist/bundled/index.js`, and
 the controller loop is still
 `for await (let D of N) await this.clientStream.write(D)`. Run the Cursor
 SDK diagnostics tests and version-drift test, then build/vendor the bridge and
@@ -452,7 +453,7 @@ window (Pi refreshes five minutes early, OpenCode's xAI two) still fits inside
 On every Codex bump, run `bun scripts/codex-access-only-auth-probe.ts --codex
 <pinned binary>`. It hands the pinned Codex the access-only `auth.json` a
 coordinator home or container receives, built from a synthetic login against
-a local server, and reports every refresh attempt. On 0.164.0 and 0.166.0
+a local server, and reports every refresh attempt. On 0.164.0, 0.166.0 and 0.167.0
 alike: no refresh for an access token more than five minutes from its `exp`,
 whatever `last_refresh` says; inside those five minutes a few attempts (four
 in the probe's run) and after a 401 one, each with the blank refresh token,
@@ -740,6 +741,23 @@ typecheck and the full bridge suite. The only SDK union change was a new
 a container on 2.1.314 on 2026-11-06 (0018 task 5): still refreshes in the
 last five minutes, still exits 1 on the API's error, but the CLI now sends
 the unknown model to the API instead of refusing it itself.
+
+Last verified 2026-11-06 at Agent SDK 0.3.319 (`claudeCodeVersion` 2.1.319)
+with CLI 2.1.319 on Linux: the compatibility test including the `canUseTool`
+proof, `verify:claude:mcp-live` against both the SDK's CLI and the managed
+binary, `verify:claude:plugin-mcp-live`, `verify:claude:first-turn-live`,
+`verify:accounts:resend-live`, the vendored build, the typecheck and the full
+bridge suite. The union changes were a new `system` subtype,
+`session_writes_lost` (a health notice, and since task 14 of
+[1031](../todo/agent-engines/1031-provider-upgrade-2026-11-06.md) also the
+shared lost-write advisory in the transcript when `transcript_session_ids`
+names the session), and two `SDKStartupFailureReason`
+members, `initialize_not_first` and `config_file_invalid`, now mapped in
+`claudeStartupFailureMessage`. A startup failure now also carries the CLI's own
+`errors` text after the guidance (`withStartupFailureDetail`), because
+`config_file_invalid` and `worktree_resume_refused` put the specifics there.
+Not rerun at 2.1.319: the macOS sandbox live test, the Linux sandbox probe,
+the billed coordinator-skills probe and `claude-host-login-refresh.ts`.
 
 The compatibility test's deterministic CLI fixture does not authenticate or
 spend credits, but it is not a full real-CLI smoke test. Before release, start a
@@ -1122,6 +1140,40 @@ the pinned binary's parser over the production argument shape.
    Every `features.*` the bridge depends on kept its 0.164.0 stage and
    default (`codex features list` in a temporary `CODEX_HOME`).
 
+   Codex 0.167.0 changed nothing the bridge relies on. The stable protocol
+   gained one notification, `thread/section/changed` (ignored: thread sections
+   are decided out), the `humanCommand` command-approval kind and
+   `InitializeCapabilities.requiredHumanApproval` (both need `experimentalApi`,
+   which the bridge does not send), and audio `fileId` inputs the bridge never
+   sends. `features.deferred_tool_world_state` became stable and on: deferred
+   MCP namespaces are now described in the world-state developer context
+   checkpointed into history, much as `incremental_tools` did. The
+   project-trust (including after a reload), network-lock and resume-context
+   loopback tests pass with it on, so the bridge does not turn it off. Every
+   other `features.*` the bridge depends on kept its 0.166.0 stage and default.
+
+   On Linux, Codex's bubblewrap sandbox (0.166.0 and 0.167.0) masks each
+   denied directory with a read-only tmpfs, shallowest first and after the
+   read grants. So a coordinator's `":tmpdir" = "deny"` inside its
+   `":slash_tmp" = "deny"` (any `TMPDIR` under `/tmp`, such as
+   `/tmp/user/<uid>` or a test process's `/tmp/ork-test-tmp-*`) fails every
+   sandboxed call with `bwrap: Can't create file <TMPDIR>: Read-only file
+   system`, AGENTS.md loading at `thread/start` included. A checkout under a
+   denied directory is also unreadable (`Permission denied`). The bridge
+   leaves out exactly the Linux denials that would do either
+   (`codexCoordinatorTmpDenials`); `":root" = "deny"` still hides both
+   directories, because Linux's `:minimal` binds only system directories.
+   After a Codex bump, re-check that `:minimal` list
+   (`LINUX_PLATFORM_DEFAULT_READ_ROOTS` in `linux-sandbox/src/bwrap.rs`) and
+   run `live-contract.test.ts`, `live-refused-calls.test.ts` and
+   `live-coordinator-skills.test.ts` on Linux (no credits); the last also
+   proves a file beside the grants stays unreadable. Their coordinator
+   fixtures launch Codex as the backend does, with the canonical executable's
+   directory as the readable runtime root: on Linux, Codex re-executes
+   itself inside bubblewrap for every command. The refused-write assertions
+   expect each platform's own errno text: `Read-only file system` (EROFS)
+   on Linux, `Operation not permitted` (EPERM) on macOS.
+
    Codex 0.153.3 defaults new durable threads to paginated history and eagerly
    writes their rollout header, but `thread/read(includeTurns=true)` returns
    `list_turns is not supported yet` until the first user message indexes the
@@ -1304,8 +1356,10 @@ published two ways:
   vendored: no published SDK file had imported it since `0.85.1`, and Pi
   `1.2.0` removed the experimental server stack and stopped publishing it.
   Check on each bump that every `@earendil-works/*` package an SDK file
-  imports (`pi-tui`, `pi-mcp`, `pi-codemode` as of `1.4.0`, and
-  `pi-telemetry` through `pi-ai`) is a declared dependency of the package that
+  imports (`pi-tui`, `pi-mcp`, `pi-codemode` as of `1.4.0`,
+  `pi-telemetry` through `pi-ai`, and `pi-schema` through `pi-ai` and
+  `pi-agent-core` since `1.5.0`, which replaced their TypeBox dependency) is a
+  declared dependency of the package that
   imports it, which is what the vendor step follows — the `0.85.0` failure
   mode was an undeclared import.
 - `packages/toolchain/src/manifest.ts` — `PINNED_TOOLCHAIN_VERSIONS.pi`
@@ -1384,6 +1438,19 @@ Dockerfile pins the same archive digests the manifest does.
    catalogue stops starting on `openai/gpt-4`, stops covering the backend's
    ids, or the pick moves off `gpt-6.1-sol`; a moved pick is fine only if
    Pi's own `defaultModelPerProvider["openai-codex"]` moved with it.
+   At 1.5.0 the newest backend model became `gpt-6.1-terra` while Pi's own
+   default for both ChatGPT providers stayed `gpt-6.1-sol`, so
+   `chatGptLoginModelIds` now puts `PI_CHATGPT_DEFAULT_MODEL` first, and
+   `models.test.ts` reads Pi's (unexported) `defaultModelPerProvider` table
+   from `dist/core/model-resolver.js` and fails when a bump moves it. The
+   `openai` catalogue now starts on `chat-latest` rather than `gpt-4`.
+
+   1.5.0 also stopped a package that fails to install from failing the
+   session: it is reported in `LoadExtensionsResult.warnings` instead, which
+   `recordExtensionLoadDiagnostics` turns into a warning notice. A resumed
+   session now runs in the working directory it recorded, not the caller's;
+   the bridge's worktree and container paths are stable, so nothing moved.
+
 7. Re-verify the three SDK behaviours the bridge depends on, in
    `dist/core/agent-session.js`, rather than trusting the version in a comment:
 
@@ -1555,9 +1622,13 @@ trusting a green result.
    ```bash
    bun run --cwd bridges/cursor-bridge typecheck
    mise run build:cursor-bridge
-   bun test bridges/cursor-bridge/src --parallel
+   bun run --cwd bridges/cursor-bridge test:bridge
    ```
 
+   Run the suite through `test:bridge`, which preloads `tests/setup-node.ts`.
+   A bare `bun test bridges/cursor-bridge/src` from the root picks up the root
+   DOM preload, whose `Response` is not the one Hono returns, so the HTTP route
+   tests fail there (seen 2026-11-06 at 1.3.1).
    Run the build *before* the test. `build-output.test.ts` skips its bundle
    assertions when `dist/` is absent, so the reverse order reports success
    without checking anything.
@@ -1624,7 +1695,7 @@ nothing in CI can check. See
 `docs/architecture/agent-engines.md` for the bridge architecture.
 
 The bridge does pin the protocol's own package,
-`@agentclientprotocol/sdk` in `bridges/acp-bridge/package.json` (`2.1.0`). It
+`@agentclientprotocol/sdk` in `bridges/acp-bridge/package.json` (`2.4.0`). It
 supplies the wire types and `PROTOCOL_VERSION`, not a client: every request is
 still hand-written over the bridge's own JSON-RPC loop.
 `tests/unit/version-drift.test.ts` lists it as Grok's SDK pin with
@@ -1656,6 +1727,14 @@ and `promptCapabilities` are unchanged). It added `RequestError.sessionNotFound`
 `./experimental/mcp-http` and `./experimental/mcp-server`, and an optional peer
 `@modelcontextprotocol/server` that only those entries import.
 
+2.1.0 → 2.4.0 (schema 1.28 → 1.29.1) changed only doc comments in the stable
+v1 types; all fourteen types the bridge imports are identical and
+`PROTOCOL_VERSION` is still `1`. `Cost.currency` may now be a non-money unit
+such as `"credits"`, which `parseUsdCost` already ignores. The unstable surface
+gained `session/archive`, `auth/status`, `session/set_title` and
+`session/status`, none of which Grok 1.0.77 advertises, and dropped JSON-RPC
+batch types the bridge never used.
+
 The bridge launches Grok with `--always-approve agent stdio`. Grok 1.0.52 still
 asks over ACP for every edit, command, fetch and MCP call (MCP calls arrive as
 its `use_tool` wrapper), and the bridge answers them itself under the
@@ -1676,11 +1755,14 @@ still accepts the flags:
 grok --help | rg -- '--always-approve'
 
 # It must start and wait for JSON-RPC rather than exiting on an argv error.
-# Hold stdin open: at EOF it exits 0 at once, which proves nothing. Exit 124
-# (killed by the timeout, still alive) is the passing result.
+# Hold stdin open for longer than the timeout: at EOF it exits 0 at once, which
+# proves nothing (1.0.77 exits about 0.1 s after EOF, 1.0.70 took about 2 s, so
+# a `sleep 4` feeding a `timeout 6` now reports exit 0 on a healthy binary).
+# Exit 124 (killed by the timeout, still alive) is the passing result; a bogus
+# flag exits 2.
 # macOS has no `timeout`. Without one, hold stdin open on a FIFO, start grok
 # in the background, and check its own pid is still alive after a few seconds.
-(sleep 4 | timeout 6 grok --always-approve agent stdio; echo "exit $?")
+(sleep 10 | timeout 6 grok --always-approve agent stdio; echo "exit $?")
 
 # Then prove the handshake and a real `session/new` with the bridge's own params
 # (typed `headers` array, `additionalDirectories: []`). 1.0.44, 1.0.46 and
@@ -1701,7 +1783,7 @@ confirm the flag is still a global option and still covers both tools:
 
 ```bash
 grok --help | rg -- '--disable-web-search'
-(sleep 4 | timeout 6 grok --disable-web-search agent --no-leader stdio; echo "exit $?")
+(sleep 10 | timeout 6 grok --disable-web-search agent --no-leader stdio; echo "exit $?")
 ```
 
 Run these against the pinned version, not whatever is on `PATH` — compare
@@ -1813,6 +1895,37 @@ experiments and the updater.
   (`-32602 session not found`) instead of accepting it, but it still answers
   `queued` on an idle session. It cannot be pinned to a run, so a steer racing
   the end of a turn would land in the next one; `actions.steer` stays off.
+
+At 1.0.77 the signed-out checks (2026-11-06) found the same: the
+`initialize` answer is byte-identical to 1.0.70 apart from the agent's id,
+instance, version and working directory, every flag and `x.ai/*` name the
+bridge uses is still present, and `--disable-web-search` is still the only
+switch for search and fetch. `PromptResponse._meta` also carries a
+`cancelTrigger` beside `cancellationCategory` (binary strings; unverified
+signed in).
+
+**Session writeback.** 1.0.77 can sync session history to code.grok.com
+("writeback"). Checked signed out on 2026-11-06 with throwaway `HOME` and
+`GROK_HOME`: `--storage-mode` is a hidden global option ("Session storage
+mode: local or writeback"; any string parses, and `agent --storage-mode` is
+an argv error), and the bundled config reference names `GROK_STORAGE_MODE`
+beside it under the requirements-only `features.writeback` pin. `agent stdio`
+reads the variable, not the flag: with `GROK_STORAGE_MODE=writeback` it logs
+"Writeback is disabled: requires auth with grok.com" at startup, with
+`--storage-mode writeback` it logs nothing. `local` behaves exactly as unset:
+`session/new` logs "Creating new session in JSONL" and writes
+`$GROK_HOME/sessions/<encoded-cwd>/<id>/` before refusing for authentication,
+the layout `session/load` reads. Every Grok child therefore gets
+`GROK_STORAGE_MODE=local` (`POLICY_ENV` in `acp-provider-config.ts`), and
+with it set `--always-approve agent stdio` and `--disable-web-search agent
+--no-leader stdio` still stay up (exit 124 under the `sleep 10 | timeout 6`
+probe; a bogus flag exits 2). Not verified, because it needs a signed-in
+account: the default for a signed-in child, and whether `local` outranks
+remote settings, which can switch writeback on ("storage mode upgraded from
+remote settings"; the remote field is `writeback_enabled`). Only a
+`requirements.toml` `features.writeback = false` is documented to override
+the flag, the variable and remote settings alike. On a bump, re-run the
+`strings` and `--debug-file` checks above for those messages.
 
 ### How to upgrade Grok
 

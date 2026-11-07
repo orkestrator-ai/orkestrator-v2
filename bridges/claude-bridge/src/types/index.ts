@@ -7,7 +7,10 @@ import type { TranscriptWindowMetadata } from "@orkestrator/protocol/node/transc
 import type { TaskListSnapshot, TaskRegistry } from "@orkestrator/protocol/task-list";
 import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
 import type { AgentInteractionHold } from "@orkestrator/protocol/agent-interactions";
-import type { NativeAgentContextCategory } from "@orkestrator/protocol/native-agent";
+import type {
+  NativeAgentContextCategory,
+  NativeAgentCostSource,
+} from "@orkestrator/protocol/native-agent";
 
 export type {
   JsonSchema,
@@ -151,6 +154,13 @@ export const SYSTEM_SUBTYPE_DISPOSITIONS: Record<SdkSystemSubtype, SystemSubtype
   notification: "notice",
   files_persisted: "notice",
   elicitation_complete: "notice",
+  // Disk full or quota used up as the CLI exits: results already received
+  // stand, but a resume may miss transcript lines. A loss naming this
+  // session's transcript adds the shared lost-write advisory to the transcript,
+  // because the user who resumes reads the transcript, not the health panel;
+  // the notice stays as the host-level storage record, and is all a
+  // `global_config`-only loss gets.
+  session_writes_lost: "handled+notice",
 };
 
 /** `system` subtypes the CLI emits on the SDK stream that the public union does not name. */
@@ -240,6 +250,12 @@ export interface SdkResultMessage extends SdkMessageBase {
   errors?: string[];
   startup_failure_reason?: import("@anthropic-ai/claude-agent-sdk").SDKStartupFailureReason;
   terminal_reason?: import("@anthropic-ai/claude-agent-sdk").TerminalReason;
+  /**
+   * When the claude.ai login this process sends ends, as an ISO instant: the
+   * server's date or a 30-day estimate, so the real end can be days earlier.
+   * Absent for any other credential and on results the process did not number.
+   */
+  credential_expires_at?: string;
   usage?: Record<string, unknown>;
   modelUsage?: Record<
     string,
@@ -749,6 +765,12 @@ export interface SessionState {
    */
   localTranscript?: NormalizedMessage[];
   /**
+   * When the CLI reported that this session's transcript lost lines
+   * (`session_writes_lost`); set once, kept in the session preferences, and
+   * the source of the lost-write advisory row (`session-manager-lost-writes.ts`).
+   */
+  writesLostAt?: string;
+  /**
    * The durable request-id journal existed but could not be trusted.
    *
    * Stable-id prompts must remain blocked in this state: treating an unknown
@@ -907,6 +929,18 @@ export interface ClaudeCumulativeUsage {
   cost: number;
 }
 
+/**
+ * Every Claude dollar figure is the CLI's own estimate, never a bill. The Agent
+ * SDK says so of each carrier the bridge reads (sdk.d.ts, 0.3.319):
+ * `total_cost_usd` on a result is "Cumulative estimated cost in USD … An
+ * estimate, not a billing statement", `modelUsage` (whose `costUSD` it sums)
+ * is to be treated "as an estimate, not a billing statement", and the managed
+ * `modelPricing` setting notes that the SDK `total_cost_usd` and `/cost`
+ * "remain USD estimates, not an invoice". The `/usage` report's
+ * `session.total_cost_usd` is that same running total.
+ */
+export const CLAUDE_COST_SOURCE: NativeAgentCostSource = "estimate";
+
 export interface SessionUsageSnapshot {
   usedTokens: number;
   /** Context-window capacity, when Claude reports it. */
@@ -922,6 +956,8 @@ export interface SessionUsageSnapshot {
   lastTurnTokens?: number;
   sessionTokens?: number;
   costUsd?: number;
+  /** Always `estimate` when set; see {@link CLAUDE_COST_SOURCE}. */
+  costSource?: NativeAgentCostSource;
   durationMs?: number;
   apiDurationMs?: number;
   linesAdded?: number;
@@ -944,6 +980,7 @@ export interface SessionUsageSnapshot {
     /** When this turn was finalized, ISO-8601; what dates recorded usage. */
     at?: string;
     costUsd?: number;
+    costSource?: NativeAgentCostSource;
     inputTokens?: number;
     outputTokens?: number;
     cacheReadTokens?: number;
@@ -1158,6 +1195,12 @@ export interface ClaudeToolApprovalRequest extends ClaudeInteractionRequestBase 
    * may answer it. The backend auto-answers nothing without it.
    */
   ruleEligible?: boolean;
+  /**
+   * The CLI said a person must answer this ask (`suppressAlwaysAllowRule` or
+   * `matchedAskRule`). Never set together with `ruleEligible`; the backend
+   * publishes it as the shared request's `humanRequired`.
+   */
+  humanRequired?: true;
   /** `WebFetch` only: the host of the URL it fetches. */
   networkHost?: string;
   /**

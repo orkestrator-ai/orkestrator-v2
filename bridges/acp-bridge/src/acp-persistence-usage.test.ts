@@ -38,4 +38,20 @@ describe("restorePersistedUsage turn rows", () => {
       "wrong-type",
     ]);
   });
+
+  test("keeps a valid cost source beside the amount it describes", () => {
+    const restored = restorePersistedUsage({
+      ...base,
+      turns: [
+        { turnId: "billed", costUsd: 0.04, costSource: "provider" },
+        { turnId: "unknown-source", costUsd: 0.04, costSource: "invoice" },
+        { turnId: "no-amount", costSource: "provider" },
+      ],
+    });
+    expect(restored?.turns).toEqual([
+      { turnId: "billed", costUsd: 0.04, costSource: "provider" },
+      { turnId: "unknown-source", costUsd: 0.04 },
+      { turnId: "no-amount" },
+    ]);
+  });
 });

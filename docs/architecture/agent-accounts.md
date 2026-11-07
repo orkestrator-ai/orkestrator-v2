@@ -318,6 +318,24 @@ the tab without a send.
   missing login answers 401 with `kind: "authentication-required"`, and the
   backend passes that message through unwrapped on every platform.
 
+### Sign-in end
+
+`NativeAgentAuthStatus.account.expiresAt` is when a login ends for good (a
+refresh chain's end or a key's expiry, never an access token the provider
+renews itself), and `expiresAtEstimated: true` says the provider only
+estimates it. Agent Info's account card and Settings' sign-in card show it on
+one line under the account label (`SignInExpiry`): "Sign-in ends 3 Dec 2026",
+"about" for an estimate, an amber reminder within three days (six for an
+estimate) and an emphasised "Sign-in may have ended" once the date has
+passed. No date, no line. The backend keeps the field only when it parses as
+a date (`normalizeAccountExpiry`).
+
+| Platform | Source |
+| --- | --- |
+| Cursor | the stored API key's `apiKeyExpiresAtMs`, on the tab and in Settings |
+| Claude | `credential_expires_at` on each numbered SDK result, tab only: the refresh chain's end as stored at sign-in, the server's date or a 30-day estimate, so always marked estimated. The bridge keeps it in memory for the account key of the CLI that wrote the result (its initialize answer) and serves it only beside that account; a numbered result without one drops it. Settings reads the host login, which has no date |
+| Codex, Grok, OpenCode, Pi | none: their accounts report no login end. Pi's and Grok's OAuth `expires` is an access token they refresh |
+
 ### Turn-time auth notice
 
 A login that stops working during a turn is shown as the tab's `auth` notice

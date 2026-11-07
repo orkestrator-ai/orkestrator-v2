@@ -205,12 +205,25 @@ export function sessionInstructionsMeta(
  * `GROK_WORKTREE_INHERITS_MAIN_APPROVALS=false` turns the inheritance off for
  * this process only; the main checkout's "never allow" answers still apply.
  *
+ * `GROK_STORAGE_MODE=local` keeps a session out of Grok's writeback, which
+ * syncs session history to code.grok.com once signed in. Grok 1.0.77 documents
+ * the variable beside its hidden `--storage-mode` ("Session storage mode: local
+ * or writeback"; `features.writeback` in the bundled config reference), and
+ * `agent stdio` reads the variable, not the flag: signed out, `writeback` logs
+ * "Writeback is disabled: requires auth with grok.com", while `local` behaves
+ * exactly as unset (the session is created in JSONL under
+ * `$GROK_HOME/sessions/<cwd>/<id>/`, which `session/load` reads). Remote
+ * settings can also turn writeback on ("storage mode upgraded from remote
+ * settings"); whether this value outranks them is unverified signed in, and
+ * only a `requirements.toml` `features.writeback = false` is documented to.
+ * See the Grok section of `docs/development/upgrade-agents.md`.
+ *
  * Applied after the launcher record's own `env`, and keyed by provider id for
  * the same reason as `NETWORK_DENIED_ARGUMENTS`: the backend's serialized
  * record carries `env: {}`, and the policy must not depend on it.
  */
 const POLICY_ENV: Readonly<Record<string, Readonly<Record<string, string>>>> = {
-  grok: { GROK_WORKTREE_INHERITS_MAIN_APPROVALS: "false" },
+  grok: { GROK_WORKTREE_INHERITS_MAIN_APPROVALS: "false", GROK_STORAGE_MODE: "local" },
 };
 
 function projectTrust(config: AcpProviderConfig, trustProject: boolean | undefined) {

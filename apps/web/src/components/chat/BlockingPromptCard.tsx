@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { AlertTriangle, HelpCircle, Loader2, RotateCcw } from "lucide-react";
+import { AlertTriangle, Loader2, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { usePromptDeadline } from "@/hooks/usePromptDeadline";
 import { cn } from "@/lib/utils";
@@ -39,11 +39,12 @@ interface BlockingPromptCardProps {
  * Container for any prompt the turn is blocked on — approvals, permission
  * requests and questions.
  *
- * One treatment across all three agents. Claude and OpenCode used a neutral
- * `bg-card` panel while Codex used an amber-accented one; amber wins because it
- * is the only one that reads as "this is waiting for you" rather than as
- * another message. The cards are pinned above the composer, so they carry no
- * outer margin of their own — the dock supplies the spacing.
+ * One treatment across every agent, on the same neutral surface as the
+ * floating pane notices (`components/ui/floating-notice.tsx`): an amber-tinted
+ * frame read as an alarm, so "this is waiting for you" is carried by a small
+ * warning dot beside the title instead. The cards are pinned above the
+ * composer, so they carry no outer margin of their own — the dock supplies the
+ * spacing.
  */
 export function BlockingPromptCard({
   children,
@@ -82,7 +83,7 @@ export function BlockingPromptCard({
       aria-label={label}
       aria-busy={effectiveState === "submitting" || retrying || undefined}
       className={cn(
-        "overflow-hidden rounded-lg border border-amber-500/40 bg-amber-500/5 shadow-sm",
+        "overflow-hidden rounded-xl border border-border bg-panel-surface/95 text-foreground shadow-xl shadow-black/40 backdrop-blur-sm",
         className,
       )}
     >
@@ -93,10 +94,18 @@ export function BlockingPromptCard({
       )}
 
       {title && (
-        <div className="flex min-w-0 items-start gap-2 border-b border-border bg-muted/50 px-4 py-2.5">
-          <span className="mt-0.5 shrink-0 text-amber-500" aria-hidden>
-            {icon ?? <HelpCircle className="h-4 w-4" />}
-          </span>
+        <div className="flex min-w-0 items-start gap-2 px-4 pt-3">
+          {icon ? (
+            <span className="mt-0.5 shrink-0 text-muted-foreground" aria-hidden>
+              {icon}
+            </span>
+          ) : (
+            <span
+              aria-hidden
+              data-testid="blocking-prompt-dot"
+              className="mt-1.5 inline-block size-2 shrink-0 rounded-full bg-yellow-300"
+            />
+          )}
           <div className="min-w-0 flex-1">
             <div className="flex min-w-0 items-baseline gap-2">
               <span className="min-w-0 text-sm font-medium text-foreground">{title}</span>
@@ -133,7 +142,7 @@ export function BlockingPromptCard({
             "flex items-center gap-1.5 border-t px-4 py-2.5 text-xs",
             error
               ? "border-destructive/30 bg-destructive/10 text-destructive-foreground"
-              : "border-border bg-muted/30 text-muted-foreground",
+              : "border-border text-muted-foreground",
           )}
         >
           <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden />
@@ -159,7 +168,7 @@ export function BlockingPromptCard({
       )}
 
       {actions && !statusMessage && (
-        <div className="flex flex-wrap items-center justify-end gap-2 border-t border-border bg-muted/30 px-4 py-3">
+        <div className="flex flex-wrap items-center justify-end gap-2 border-t border-border/60 px-4 py-3">
           {actions}
         </div>
       )}

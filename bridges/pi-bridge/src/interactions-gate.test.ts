@@ -857,3 +857,71 @@ test("a read-only workflow turn may use its own artifact-only server's tools", a
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("an MCP tool's parked call carries its server's annotations as hints, and nothing else does", async () => {
+  const { preparePiMcp, setPiMcpTransportForTests } = await import("./mcp.js");
+  const { denyAllApprovals } = await import("./interactions.js");
+  const { mkdir, mkdtemp, rm, writeFile } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const root = await mkdtemp(join(tmpdir(), "pi-mcp-hints-"));
+  const agentDir = join(root, "agent");
+  await mkdir(agentDir, { recursive: true });
+  await writeFile(
+    join(agentDir, "mcp.json"),
+    JSON.stringify({ mcpServers: { linear: { command: "linear-mcp" } } }),
+  );
+  setPiMcpTransportForTests({
+    async connect() {
+      return {
+        // `tools/list` as an MCP server answers it: annotations are optional
+        // and untrusted, so a malformed member is dropped, never guessed.
+        tools: [
+          {
+            name: "delete_issue",
+            annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+          },
+          { name: "list_issues", annotations: { title: "List", readOnlyHint: true } },
+          { name: "plain" },
+          { name: "odd", annotations: { readOnlyHint: "yes" } },
+        ],
+        async call() {
+          return { content: [{ type: "text", text: "ok" }] };
+        },
+        async close() {},
+      };
+    },
+  });
+  const state = newSessionState();
+  try {
+    await preparePiMcp(state, { agentDir, cwd: root, env: {} });
+    const decisions = [
+      requestToolApproval(state, "c1", "mcp_linear_delete_issue", { id: "1" }),
+      requestToolApproval(state, "c2", "mcp_linear_list_issues", {}),
+      requestToolApproval(state, "c3", "mcp_linear_plain", {}),
+      requestToolApproval(state, "c4", "mcp_linear_odd", {}),
+      requestToolApproval(state, "c5", "bash", { command: "ls" }),
+    ];
+    // The hints are display only: every call still parks for a person.
+    expect(state.approvals.size).toBe(5);
+    const { approvals } = publicApprovals(state) as { approvals: Array<Record<string, unknown>> };
+    const byCommand = (prefix: string) =>
+      approvals.find((entry) => String(entry.command).startsWith(prefix));
+    expect(byCommand("mcp_linear_delete_issue")?.toolHints).toEqual({
+      readOnly: false,
+      destructive: true,
+      idempotent: true,
+    });
+    expect(byCommand("mcp_linear_list_issues")?.toolHints).toEqual({ readOnly: true });
+    expect(byCommand("mcp_linear_plain")).not.toHaveProperty("toolHints");
+    expect(byCommand("mcp_linear_odd")).not.toHaveProperty("toolHints");
+    expect(byCommand("ls")).not.toHaveProperty("toolHints");
+    // An MCP tool is never rule-eligible, hints or not.
+    expect(byCommand("mcp_linear_list_issues")).not.toHaveProperty("ruleEligible");
+    denyAllApprovals(state, "test over");
+    expect((await Promise.all(decisions)).every((decision) => decision.block)).toBe(true);
+  } finally {
+    setPiMcpTransportForTests();
+    await rm(root, { recursive: true, force: true });
+  }
+});

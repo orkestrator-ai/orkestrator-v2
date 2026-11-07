@@ -20,6 +20,7 @@ import { cursorAppliedPolicy } from "./execution-policy.js";
 import { contextWindowForModelId, publishedComposer } from "./models.js";
 import { mergeAccountWindows, peekPlanAccountWindows } from "./plan-usage.js";
 import {
+  CURSOR_COST_SOURCE,
   ownedWork,
   sessionIsWorking,
   turnTokenTotal,
@@ -275,7 +276,9 @@ export function publicContextUsage(state: SessionState): NativeAgentContextUsage
     // breakdown above is cumulative for the same reason.
     lastTurnTokens: spent,
     ...(sessionTokens !== undefined ? { sessionTokens } : {}),
-    ...(usage?.costUsd !== undefined ? { costUsd: usage.costUsd } : {}),
+    ...(usage?.costUsd !== undefined
+      ? { costUsd: usage.costUsd, costSource: CURSOR_COST_SOURCE }
+      : {}),
     ...(usage?.durationMs !== undefined ? { durationMs: usage.durationMs } : {}),
     ...(usage?.turns ? { turns: usage.turns } : {}),
     ...(account ? { account } : {}),

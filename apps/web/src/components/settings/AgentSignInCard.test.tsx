@@ -162,6 +162,31 @@ describe("AgentSignInCard", () => {
     expect(calls).toEqual([]);
   });
 
+  test("shows no login end when the account reports none", async () => {
+    statuses.cursor = fixture("cursor", "signed-in");
+    const { container } = render(<AgentSignInCard platform="cursor" />);
+    expect(await screen.findByText("cursor@example.test · pro")).toBeTruthy();
+    expect(container.querySelector("[data-sign-in-expiry]") === null).toBe(true);
+  });
+
+  test.each([
+    [{ expiresAt: "2099-12-03T10:00:00.000Z" }, "upcoming", /^Sign-in ends (?!about)/],
+    [
+      { expiresAt: "2099-12-03T10:00:00.000Z", expiresAtEstimated: true as const },
+      "upcoming",
+      /^Sign-in ends about /,
+    ],
+    [{ expiresAt: "2001-01-01T00:00:00.000Z" }, "ended", /^Sign-in may have ended on /],
+  ])("shows the account's login end %o under its label", async (expiry, tone, text) => {
+    const signedIn = fixture("cursor", "signed-in");
+    statuses.cursor = { ...signedIn, account: { ...signedIn.account!, ...expiry } };
+    const { container } = render(<AgentSignInCard platform="cursor" />);
+    expect(await screen.findByText("cursor@example.test · pro")).toBeTruthy();
+    const line = container.querySelector("[data-sign-in-expiry]");
+    expect(line?.getAttribute("data-sign-in-expiry")).toBe(tone);
+    expect(line?.textContent).toMatch(text);
+  });
+
   test("names the terminal command for Grok and Pi", async () => {
     statuses.grok = fixture("grok", "signed-out");
     render(<AgentSignInCard platform="grok" />);

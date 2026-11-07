@@ -71,6 +71,8 @@ describe("openCodeContextUsage", () => {
       reasoningTokens: 22,
       sessionTokens: 418,
       durationMs: 110,
+      // OpenCode prices each response from its models.dev catalogue.
+      costSource: "estimate",
       source: "opencode",
     });
     expect(usage?.costUsd).toBeCloseTo(0.22);
@@ -79,6 +81,7 @@ describe("openCodeContextUsage", () => {
     expect(usage?.turns?.at(-1)).toEqual({
       turnId: "step-21",
       costUsd: 0.005,
+      costSource: "estimate",
       inputTokens: 5,
       outputTokens: 1,
       reasoningTokens: 1,
@@ -87,6 +90,43 @@ describe("openCodeContextUsage", () => {
       totalTokens: 11,
       modelId: "openai/gpt-5",
     });
+  });
+
+  test("leaves a GitHub Copilot cost's source unknown", () => {
+    // OpenCode reports Copilot's own `totalNanoAiu` when the response carries
+    // it and a catalogue estimate otherwise; a message cannot say which.
+    const copilot = (id: string, providerID: string) => ({
+      info: {
+        id,
+        role: "assistant",
+        providerID,
+        modelID: "gpt-5",
+        tokens: { input: 10, output: 2, reasoning: 0, cache: { read: 0, write: 0 } },
+        cost: 0.01,
+        time: { created: 1, completed: 2 },
+      },
+      parts: [
+        {
+          id: `step-${id}`,
+          messageID: id,
+          type: "step-finish",
+          cost: 0.01,
+          tokens: { input: 10, output: 2, reasoning: 0, cache: { read: 0, write: 0 } },
+        },
+      ],
+    });
+    const onlyCopilot = openCodeContextUsage([copilot("c1", "github-copilot")]);
+    expect(onlyCopilot?.costUsd).toBe(0.01);
+    expect(onlyCopilot).not.toHaveProperty("costSource");
+    expect(onlyCopilot?.turns?.[0]).not.toHaveProperty("costSource");
+
+    // Any estimated part still makes the session's total an estimate.
+    const mixed = openCodeContextUsage([
+      copilot("c1", "github-copilot-enterprise"),
+      copilot("o1", "openai"),
+    ]);
+    expect(mixed?.costSource).toBe("estimate");
+    expect(mixed?.turns?.map((turn) => turn.costSource)).toEqual([undefined, "estimate"]);
   });
 
   test("derives updatedAt from the transcript so unchanged reads are byte-stable", () => {
@@ -144,6 +184,9 @@ describe("openCodeContextUsage", () => {
       inputTokens: 160,
       cacheReadTokens: 3_500,
       sessionTokens: 3_660,
+      // The lifetime total remembers it is made of estimates once they have
+      // left the window too.
+      costSource: "estimate",
       source: "opencode",
     });
     expect(usage?.costUsd).toBeCloseTo(0.35);

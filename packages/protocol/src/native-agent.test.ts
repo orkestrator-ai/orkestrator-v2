@@ -43,6 +43,8 @@ import {
   isNativeAgentProjectionUpdate,
   dispatchOutcomeLostMessage,
   dispatchOutcomeLostOccurrenceId,
+  normalizeAccountExpiresAt,
+  normalizeAccountExpiry,
   isNativeAgentSessionStateUpdate,
   isNativeAgentTranscriptUpdate,
   nativeAsyncQuestionItemId,
@@ -1517,5 +1519,32 @@ describe("parseCompactInstructionsBody", () => {
       ok: false,
       error: "instructions must be at most 16000 characters",
     });
+  });
+});
+
+describe("account expiry normalisation", () => {
+  test("keeps a provider's ISO instant in canonical form", () => {
+    expect(normalizeAccountExpiresAt("2026-12-03T10:00:00Z")).toBe("2026-12-03T10:00:00.000Z");
+    expect(normalizeAccountExpiresAt(" 2026-12-03T10:00:00.000+01:00 ")).toBe(
+      "2026-12-03T09:00:00.000Z",
+    );
+  });
+
+  test.each([undefined, null, 0, 1_764_756_000_000, "", "   ", "soon", "x".repeat(65), {}])(
+    "reads %p as no expiry",
+    (value) => {
+      expect(normalizeAccountExpiresAt(value)).toBeUndefined();
+    },
+  );
+
+  test("keeps the estimate marker only beside a valid date", () => {
+    expect(
+      normalizeAccountExpiry({ expiresAt: "2026-12-03T10:00:00Z", expiresAtEstimated: true }),
+    ).toEqual({ expiresAt: "2026-12-03T10:00:00.000Z", expiresAtEstimated: true });
+    expect(
+      normalizeAccountExpiry({ expiresAt: "2026-12-03T10:00:00Z", expiresAtEstimated: "yes" }),
+    ).toEqual({ expiresAt: "2026-12-03T10:00:00.000Z" });
+    expect(normalizeAccountExpiry({ expiresAt: "never", expiresAtEstimated: true })).toEqual({});
+    expect(normalizeAccountExpiry(undefined)).toEqual({});
   });
 });

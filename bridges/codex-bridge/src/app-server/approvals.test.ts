@@ -189,6 +189,44 @@ describe("describeApproval", () => {
     ).not.toHaveProperty("ruleEligible");
   });
 
+  test("a humanCommand is a person's to answer: never rule-eligible, one-time only", () => {
+    // Synthetic 0.167.0 payload: app-server sends this kind only to a client
+    // that declares `experimentalApi` and `requiredHumanApproval`, which this
+    // bridge does not yet do.
+    const described = describeWith("item/commandExecution/requestApproval", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      itemId: "item-1",
+      kind: "humanCommand",
+      command: "/bin/zsh -lc 'git push --force'",
+      cwd: "/w",
+      reason: "A managed rule requires a person to approve this command.",
+      proposedExecpolicyAmendment: ["git", "push"],
+    });
+    expect(described).toMatchObject({
+      kind: "command",
+      command: "/bin/zsh -lc 'git push --force'",
+      actionable: true,
+      humanRequired: true,
+      supportsApproveForSession: false,
+    });
+    expect(described).not.toHaveProperty("ruleEligible");
+    expect(described).not.toHaveProperty("proposedCommandPrefix");
+    // Every other command kind keeps the session-wide answer and no marker.
+    for (const kind of ["command", "writeStdin", undefined]) {
+      const other = describeWith("item/commandExecution/requestApproval", {
+        kind,
+        command: "npm test",
+      });
+      expect(other).not.toHaveProperty("humanRequired");
+      expect(other.supportsApproveForSession).toBe(true);
+    }
+    // The marker belongs to the v2 command method only.
+    expect(
+      describeWith("execCommandApproval", { kind: "humanCommand", command: ["ls"] }),
+    ).not.toHaveProperty("humanRequired");
+  });
+
   test("drops an oversized or malformed prefix proposal", () => {
     for (const proposal of [
       [],
@@ -320,6 +358,20 @@ describe("buildApprovalResponse", () => {
     });
     expect(buildApprovalResponse(method, "deny", {}).result).toEqual({ decision: "decline" });
     expect(buildApprovalResponse(method, "cancel", {}).result).toEqual({ decision: "cancel" });
+  });
+
+  test("a humanCommand answers with a one-time decision only", () => {
+    const method = "item/commandExecution/requestApproval" as const;
+    const params = { kind: "humanCommand", command: "git push --force" };
+    expect(buildApprovalResponse(method, "approve", params).result).toEqual({
+      decision: "accept",
+    });
+    // A stale client asking to stop being asked still gets only this once.
+    expect(buildApprovalResponse(method, "approve-for-session", params).result).toEqual({
+      decision: "accept",
+    });
+    expect(buildApprovalResponse(method, "deny", params).result).toEqual({ decision: "decline" });
+    expect(buildApprovalResponse(method, "cancel", params).result).toEqual({ decision: "cancel" });
   });
 
   test("maps v2 file-change decisions the same way", () => {

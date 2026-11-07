@@ -9,8 +9,8 @@ import type { PermissionRuleRequestDetail } from "../agent-provider-contract.js"
  * What an Orkestrator permission rule (todo 0723) may match, read from each
  * bridge's own approval payload.
  *
- * Every reader fails closed: a request the bridge did not mark `ruleEligible`,
- * a detail that is missing, oversized or truncated, or a path that cannot be
+ * Every reader fails closed: a request the bridge did not mark `ruleEligible`
+ * or did mark `humanRequired`, a detail that is missing, oversized or truncated, or a path that cannot be
  * placed, yields `null`, and the request is put to the user as before. The
  * presented card text is never parsed: it is bounded for display and may be
  * cut.
@@ -54,6 +54,14 @@ function paths(values: unknown[], cwd: unknown): string[] | null {
   return resolved;
 }
 
+/**
+ * The bridge's own gate: `ruleEligible`, and never a request a person must
+ * answer (`humanRequired`), whatever else the payload says.
+ */
+function ruleEligible(request: Raw): boolean {
+  return request.ruleEligible === true && request.humanRequired !== true;
+}
+
 function detail(
   subject: PermissionRuleSubject | null,
   extra: Partial<PermissionRuleRequestDetail> = {},
@@ -71,7 +79,7 @@ export function codexRuleDetail(
   kind: "command-approval" | "file-approval" | "permission",
   actionable: boolean,
 ): PermissionRuleRequestDetail | null {
-  if (request.ruleEligible !== true || !actionable) return null;
+  if (!ruleEligible(request) || !actionable) return null;
   if (kind === "command-approval") {
     const host = exactString(request.networkHost, 2_048);
     if (host) return detail({ kind: "network-host", host });
@@ -109,7 +117,7 @@ export function acpRuleDetail(
   allowOnceOptionId: string | null,
   questionId: string,
 ): PermissionRuleRequestDetail | null {
-  if (request.ruleEligible !== true || !allowOnceOptionId) return null;
+  if (!ruleEligible(request) || !allowOnceOptionId) return null;
   if (request.commandTruncated === true || (request.pathsOmitted ?? 0) !== 0) return null;
   const allowOnceAnswers: AgentInteractionQuestionAnswer[] = [
     { questionId, optionIds: [allowOnceOptionId] },
@@ -140,7 +148,7 @@ export function claudeRuleDetail(
   request: Raw,
   kind: "command-approval" | "file-approval" | "permission",
 ): PermissionRuleRequestDetail | null {
-  if (request.ruleEligible !== true) return null;
+  if (!ruleEligible(request)) return null;
   if (kind === "command-approval") {
     const command = exactString(request.command, PERMISSION_RULE_LIMITS.maxCommandLength);
     const proposed = proposal(request.proposedCommandPrefix);

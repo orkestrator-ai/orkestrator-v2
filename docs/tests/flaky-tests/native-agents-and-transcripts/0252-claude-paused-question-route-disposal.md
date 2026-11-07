@@ -124,3 +124,26 @@ owner then passed alone with
 (6 tests, 16.2 s). No assertion, timeout or skip changed. Evidence:
 `orkestrator-test-run.Jkk5jl/branch-browser-failed-specs.log.gz` below the
 host temporary directory.
+
+## Approval-card markers validation — 2026-11-06
+
+Branch base `ee2cc8423` (`mise run flaky:recurrence -- 0252` verdict: open).
+A focused run of three interaction owners with the config's default workers
+(Linux, private loopback namespace; 15 passed, 3 failed in 1.3 min) failed the
+mobile case at line 137: after the reload, `Resume countdown` was not visible
+within 5 s and the test hit its 30 s timeout. The change under test touched
+only approval cards (human-required line, tool hint tag), not questions.
+
+```sh
+ORKESTRATOR_E2E_PORT=1497 mise run test:logged -- --name e2e-interaction-card -- bun scripts/loopback-network.ts -- bunx playwright test --config e2e/playwright.config.ts e2e/InteractionSourceLayout.spec.ts e2e/ClaudeInteractions.spec.ts e2e/InteractionPolicyChecks.spec.ts
+```
+
+The complete unchanged owner then passed alone, exit 0, in 28.9 s:
+
+```sh
+ORKESTRATOR_E2E_PORT=1497 mise run test:logged -- --name e2e-claude-interactions-rerun -- bun scripts/loopback-network.ts -- bunx playwright test --config e2e/playwright.config.ts e2e/ClaudeInteractions.spec.ts
+```
+
+No assertion, timeout or skip changed. Evidence:
+`orkestrator-test-run.OyQ3Ys/e2e-interaction-card.log.gz` below the host
+temporary directory.

@@ -81,6 +81,30 @@ describe("normalizeProviderContextUsage", () => {
       { turnId: "c" },
     ]);
   });
+
+  test("keeps a cost source only beside the amount it describes", () => {
+    const usage = normalizeProviderContextUsage({
+      usedTokens: 1,
+      costUsd: 0.5,
+      costSource: "estimate",
+      turns: [
+        { turnId: "billed", costUsd: 0.2, costSource: "provider" },
+        { turnId: "unknown-word", costUsd: 0.2, costSource: "invoice" },
+        { turnId: "no-amount", costSource: "provider" },
+        { turnId: "bad-amount", costUsd: -1, costSource: "estimate" },
+      ],
+    });
+    expect(usage).toMatchObject({ costUsd: 0.5, costSource: "estimate" });
+    expect(usage?.turns).toEqual([
+      { turnId: "billed", costUsd: 0.2, costSource: "provider" },
+      { turnId: "unknown-word", costUsd: 0.2 },
+      { turnId: "no-amount" },
+      { turnId: "bad-amount" },
+    ]);
+    expect(
+      normalizeProviderContextUsage({ usedTokens: 1, costSource: "provider" }),
+    ).not.toHaveProperty("costSource");
+  });
 });
 
 describe("normalizeProviderDrift", () => {

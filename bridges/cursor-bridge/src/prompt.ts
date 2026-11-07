@@ -57,6 +57,7 @@ import {
   type PromptJournalEntry,
   type SessionState,
   type TurnUsage,
+  CURSOR_COST_SOURCE,
   isObject,
   nonBlank,
   turnTokenTotal,
@@ -898,7 +899,9 @@ function normalizeAgentUsageRuns(
           : {}),
         ...(usage.reasoningTokens !== undefined ? { reasoningTokens: usage.reasoningTokens } : {}),
         totalTokens: turnTokenTotal(usage),
-        ...(chargedCents === undefined ? {} : { costUsd: chargedCents / 100 }),
+        ...(chargedCents === undefined
+          ? {}
+          : { costUsd: chargedCents / 100, costSource: CURSOR_COST_SOURCE }),
         ...(rawCostCents === undefined ? {} : { rawCostUsd: rawCostCents / 100 }),
         ...(prior?.durationMs === undefined ? {} : { durationMs: prior.durationMs }),
         ...(prior?.requestId === undefined ? {} : { requestId: prior.requestId }),

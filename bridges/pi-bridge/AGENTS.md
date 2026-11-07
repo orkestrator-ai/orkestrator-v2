@@ -135,6 +135,13 @@ a cut in Pi's tree. Three rules hold it to what the reader picked:
   Losing the bridge's state costs a rendered transcript; it never costs the
   conversation. That is why `detachSession` keeps `sessionFile` and why a
   restart re-attaches to the same session rather than starting a new one.
+- A write to that file can fail (disk full, quota). Pi 1.5 rolls the entry
+  back and rethrows, which fails the run with the file system's error and
+  says nothing about the conversation. `watchSessionFileWrites` wraps the
+  session manager's `_persist` and adds the shared lost-write advisory
+  (`@orkestrator/protocol/native-agent-lost-writes`) once per session.
+  `sdk-session.test.ts` proves it against the real SDK; recheck that `_persist`
+  is still the one write path on every Pi bump.
 - Approvals follow the session's execution policy: `ask` parks a call, `deny`
   refuses it, and a session with no policy runs as the host default,
   `auto-approve`. When the gate asks, every timeout,

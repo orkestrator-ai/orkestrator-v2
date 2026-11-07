@@ -182,6 +182,47 @@ test("a second connection reads what the first recorded", async () => {
   ).toBe(0);
 });
 
+test("a report says where its spend came from, after a reconnect too", async () => {
+  const clock: Clock = { value: new Date(2026, 9, 20, 9, 0, 0) };
+  const { store, directory } = await storeWithClock(clock);
+  store.recordTurns({
+    sessionKey: "env-1:claude:tab-1",
+    environmentId: "env-1",
+    platform: "claude",
+    turns: [turn("t1", { costSource: "estimate" })],
+  });
+  store.recordTurns({
+    sessionKey: "env-2:cursor:tab-1",
+    environmentId: "env-2",
+    platform: "cursor",
+    turns: [
+      turn("t1", { costSource: "provider", modelId: "cursor-1" }),
+      // An unpriced turn says nothing about the bill beside it.
+      turn("t2", { costUsd: undefined, modelId: "cursor-1" }),
+    ],
+  });
+  // Spend recorded before turns said where it came from.
+  store.recordTurns({
+    sessionKey: "env-3:pi:tab-1",
+    environmentId: "env-3",
+    platform: "pi",
+    turns: [turn("t1", { modelId: "openrouter/x" })],
+  });
+
+  const report = (await storeWithClock(clock, directory)).store.report({ days: 7 });
+  const platform = (name: string) =>
+    report.platforms.find((entry) => entry.platform === name)?.totals;
+  expect(platform("claude")?.costSource).toBe("estimate");
+  expect(platform("cursor")?.costSource).toBe("provider");
+  expect(platform("pi")).not.toHaveProperty("costSource");
+  // Any estimate makes the whole range an estimate.
+  expect(report.totals.costSource).toBe("estimate");
+  expect(
+    report.environments.find((entry) => entry.environmentId === "env-2")?.totals,
+  ).toMatchObject({ costSource: "provider" });
+  expect(report.days.at(-1)?.totals.costSource).toBe("estimate");
+});
+
 test("prunes day buckets past retention and drops rows left empty", async () => {
   const clock: Clock = { value: new Date(2026, 0, 1, 9, 0, 0) };
   const directory = await dataDirectory();

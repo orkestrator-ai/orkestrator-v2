@@ -69,10 +69,18 @@ export function expectAuthStatusShape(body: unknown): void {
   expect(AUTH_STATES.has(String(status.state))).toBe(true);
   if (status.account !== undefined) {
     const account = status.account as Record<string, unknown>;
-    keysWithin(account, ["label", "plan", "expiresAt"], "auth status account");
+    keysWithin(
+      account,
+      ["label", "plan", "expiresAt", "expiresAtEstimated"],
+      "auth status account",
+    );
     expect(typeof account.label).toBe("string");
     expectOptionalString(account.plan, "account.plan");
     expectOptionalString(account.expiresAt, "account.expiresAt");
+    if (account.expiresAtEstimated !== undefined) {
+      expect(account.expiresAtEstimated).toBe(true);
+      expect(typeof account.expiresAt).toBe("string");
+    }
   }
   if (status.providers !== undefined) {
     expect(Array.isArray(status.providers)).toBe(true);

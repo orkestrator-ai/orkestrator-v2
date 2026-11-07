@@ -489,8 +489,23 @@ describe("tool approvals under an ask policy", () => {
         { command: "npm test", unknownApprovalFlag: true },
         context("req-r7"),
       ),
+      // A call a plugin started: the CLI saves no rule for it, so neither may we.
+      call.options.canUseTool!(
+        "Bash",
+        { command: "npm test" },
+        context("req-r8", { suppressAlwaysAllowRule: true }),
+      ),
+      // The user's own ask rule forced this prompt: a person answers it.
+      call.options.canUseTool!(
+        "mcp__linear__create_issue",
+        { title: "Bug" },
+        context("req-r9", {
+          mcpServer: { name: "linear", source: "user" },
+          matchedAskRule: { source: "userSettings", toolName: "mcp__claude_ai_Linear" },
+        }),
+      ),
     );
-    await waitFor(() => getPendingInteractions(session.id).length === 7);
+    await waitFor(() => getPendingInteractions(session.id).length === 9);
     const pending = new Map(getPendingInteractions(session.id).map((entry) => [entry.id, entry]));
     expect(pending.get("req-r1")).toMatchObject({
       ruleEligible: true,
@@ -521,7 +536,30 @@ describe("tool approvals under an ask policy", () => {
 
     expect(pending.get("req-r6")).not.toHaveProperty("ruleEligible");
     expect(pending.get("req-r7")).not.toHaveProperty("ruleEligible");
+    expect(pending.get("req-r8")).not.toHaveProperty("ruleEligible");
+    expect(pending.get("req-r9")).not.toHaveProperty("ruleEligible");
+    expect(pending.get("req-r9")).toMatchObject({ mcpServer: "linear" });
+    // A person must answer these: the marker travels so the card can say why,
+    // and the backend's rule reader refuses them on its own as well.
+    expect(pending.get("req-r8")).toMatchObject({ humanRequired: true });
+    expect(pending.get("req-r9")).toMatchObject({ humanRequired: true });
+    expect(
+      claudeRuleDetail({ ...pending.get("req-r8"), ruleEligible: true }, "command-approval"),
+    ).toBeNull();
     for (const id of ["req-r1", "req-r2", "req-r3", "req-r4", "req-r5", "req-r6", "req-r7"]) {
+      expect(pending.get(id)).not.toHaveProperty("humanRequired");
+    }
+    for (const id of [
+      "req-r1",
+      "req-r2",
+      "req-r3",
+      "req-r4",
+      "req-r5",
+      "req-r6",
+      "req-r7",
+      "req-r8",
+      "req-r9",
+    ]) {
       respondToInteraction(id, { action: "accept" });
     }
     // Allow once, even where the SDK suggested a rule.

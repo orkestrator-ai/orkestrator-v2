@@ -163,6 +163,9 @@ const IGNORED_METHODS = new Set([
   "thread/goal/cleared",
   "thread/environment/connected",
   "thread/environment/disconnected",
+  // Thread sections are decided out (0007); 0.167.0 sends this only after a
+  // `thread/section/move`, which the bridge never calls.
+  "thread/section/changed",
   "hook/started",
   "hook/completed",
   "item/autoApprovalReview/started",
@@ -273,6 +276,11 @@ export function reduceNotification(
       if (!isRecord(params) || !threadId || !turnId || !isRecord(params.tokenUsage)) {
         return { events: [] };
       }
+      // Tokens only: `ThreadTokenUsage` carries no price, so this snapshot has
+      // no `costUsd` and therefore no `costSource`. The protocol's only dollar
+      // figures are `ThreadUsage.estimatedUsageUsdMicros` and
+      // `nativeUsageUsdMicros` ("None means unknown, not zero") from a
+      // per-thread `account/usage/read`, which this bridge does not request.
       const total = isRecord(params.tokenUsage.total) ? params.tokenUsage.total : {};
       const last = isRecord(params.tokenUsage.last) ? params.tokenUsage.last : {};
       const contextWindow = num(params.tokenUsage.modelContextWindow) ?? 0;

@@ -81,6 +81,7 @@ import { modelRuntime } from "./runtime.js";
 import { cachedSessionList, rememberSessionList, sessionFilesStamp } from "./session-list-cache.js";
 import { TimeoutError, withTimeout } from "./timeout.js";
 import {
+  appendLostWriteNotice,
   appendResumeFallbackNotice,
   applySessionEvent,
   providerDuration,
@@ -610,6 +611,7 @@ async function createPiAgentSession(state: SessionState): Promise<AgentSession> 
     sessionManager: SessionManager;
     sessionStartEvent?: Parameters<typeof createAgentSessionFromServices>[0]["sessionStartEvent"];
   }) => {
+    watchSessionFileWrites(state, sessionManager);
     const settingsManager = SettingsManager.create(cwd, runtimeAgentDir, {
       projectTrusted: piResourceLoaderPolicy(state, cwd).projectTrusted,
     });
@@ -724,21 +726,41 @@ export async function bindSessionExtensions(
   }
 }
 
-/** Extensions Pi could not load at all, as one notice each. */
+/**
+ * Extensions Pi could not load at all, and packages it could not install, as
+ * one notice each.
+ *
+ * Since Pi 1.5.0 a configured package that fails to install no longer stops
+ * the session starting: it is reported only in `warnings`, so without this its
+ * extensions would vanish without a trace.
+ */
 export function recordExtensionLoadDiagnostics(
   state: SessionState,
   result: LoadExtensionsResult | undefined,
 ): void {
   for (const failure of result?.errors ?? []) {
-    const extension = failure.path.split(/[\\/]/).pop() ?? "extension";
     state.health.recordNotice({
-      message: `Pi extension ${extension} failed to load`,
+      message: `Pi extension ${extensionLabel(failure.path)} failed to load`,
       method: "extension/load",
       severity: "error",
       source: "provider",
       ...(failure.error ? { detail: failure.error } : {}),
     });
   }
+  for (const warning of result?.warnings ?? []) {
+    state.health.recordNotice({
+      message: `Pi package ${extensionLabel(warning.path)} could not be installed; its extensions are unavailable`,
+      method: "extension/install",
+      severity: "warning",
+      source: "provider",
+      ...(warning.warning ? { detail: warning.warning } : {}),
+    });
+  }
+}
+
+/** The last path segment of an extension path or package source. */
+function extensionLabel(pathOrSource: string): string {
+  return pathOrSource.split(/[\\/]/).pop() || "extension";
 }
 
 function publishAttachedSession(state: SessionState, session: AgentSession): AgentSession {
@@ -1163,6 +1185,45 @@ export function sessionManagerFor(state: SessionState): SessionManager {
     }
   }
   return SessionManager.create(workingDirectory, directory);
+}
+
+const watchedSessionManagers = new WeakSet<SessionManager>();
+
+/**
+ * Raise the lost-write advisory when Pi cannot write its session file.
+ *
+ * Pi 1.5 appends every entry through `SessionManager._persist` (declared in
+ * its types; `_appendEntry` calls it). When that throws (disk full, quota, a
+ * read-only or vanished directory) Pi takes the entry back out of memory and
+ * rethrows, so the session it resumes never had it. Mid-run the throw fails
+ * the run: Pi's `handleRunFailure` emits an error response, whose own write
+ * throws again, and the prompt rejects with the file system's error. A model
+ * or name change rejects its route instead. Neither says the conversation is
+ * now incomplete, so the bridge says it here, where the write fails, whichever
+ * path wrote. Synchronous and non-throwing until the rethrow, because it runs
+ * inside Pi's own event listener; the error is rethrown unchanged, so Pi's
+ * rollback and failure handling stay Pi's.
+ */
+export function watchSessionFileWrites(state: SessionState, manager: SessionManager): void {
+  if (watchedSessionManagers.has(manager)) return;
+  const persist = manager._persist;
+  // A release without it degrades to no advisory; `sdk-session.test.ts` pins it.
+  if (typeof persist !== "function") return;
+  watchedSessionManagers.add(manager);
+  manager._persist = (entry) => {
+    try {
+      persist.call(manager, entry);
+    } catch (error) {
+      if (!state.lostWriteNoticed) {
+        log.warn("session.write-lost", {
+          sessionId: state.id,
+          error: formatLogError(error, { message: false }),
+        });
+      }
+      appendLostWriteNotice(state);
+      throw error;
+    }
+  };
 }
 
 /**
@@ -1660,6 +1721,9 @@ export function resetRenderedHistory(state: SessionState): void {
   state.currentAssistantMessageId = undefined;
   state.turnOpenedAssistantRow = undefined;
   state.uncheckedTranscriptBytes = 0;
+  // The advisory was a row of the history just dropped; a write lost from the
+  // rebuilt one is reported again.
+  state.lostWriteNoticed = false;
 }
 
 /**

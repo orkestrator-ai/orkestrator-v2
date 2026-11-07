@@ -1,4 +1,8 @@
 import { AGENT_PLATFORMS, isAgentPlatform, type AgentPlatform } from "./agent-platforms.js";
+import {
+  combineNativeAgentCostSources,
+  type NativeAgentCostSource,
+} from "./native-agent-cost-source.js";
 
 /**
  * Token and spend history across every agent platform.
@@ -22,7 +26,7 @@ import { AGENT_PLATFORMS, isAgentPlatform, type AgentPlatform } from "./agent-pl
  * was first seen, which is all that is known about it.
  */
 
-/** Counts for one bucket. Every field is a sum; nothing is an average. */
+/** Counts for one bucket. Every number is a sum; nothing is an average. */
 export interface UsageTotals {
   /** Uncached input tokens. */
   inputTokens: number;
@@ -35,6 +39,13 @@ export interface UsageTotals {
   totalTokens: number;
   /** Spend the provider itself priced. */
   costUsd: number;
+  /**
+   * Whether `costUsd` is billed or estimated, the one field that is not a sum:
+   * {@link addUsageTotals} combines it with {@link combineNativeAgentCostSources}
+   * over the parts that carry spend. Absent when unknown, including every
+   * bucket recorded before turns said.
+   */
+  costSource?: NativeAgentCostSource;
   /** Processed tokens whose turn carried no price. */
   unpricedTokens: number;
   /** Model responses counted into this bucket. */
@@ -130,8 +141,28 @@ export function emptyUsageTotals(): UsageTotals {
   };
 }
 
+/**
+ * The source of the spend in `target` combined with `addition`'s.
+ *
+ * `costUsd` is always a number here, so zero stands for "unpriced" and a
+ * bucket without spend says nothing about the source of the total.
+ */
+function combinedTotalsCostSource(
+  target: UsageTotals,
+  addition: UsageTotals,
+): NativeAgentCostSource | undefined {
+  return combineNativeAgentCostSources(
+    [target, addition].map((totals) =>
+      totals.costUsd > 0 ? { costUsd: totals.costUsd, costSource: totals.costSource } : {},
+    ),
+  );
+}
+
 /** Adds `addition` into `target` in place and returns it. */
 export function addUsageTotals(target: UsageTotals, addition: UsageTotals): UsageTotals {
+  const costSource = combinedTotalsCostSource(target, addition);
+  if (costSource) target.costSource = costSource;
+  else delete target.costSource;
   target.inputTokens += addition.inputTokens;
   target.outputTokens += addition.outputTokens;
   target.cacheReadTokens += addition.cacheReadTokens;

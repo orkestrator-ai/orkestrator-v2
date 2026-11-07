@@ -388,6 +388,20 @@ describe("writing", () => {
     ]);
   });
 
+  test("keeps the lost-write advisory's once-per-session mark across a restart", async () => {
+    const state = newSessionState("tab-lost-write");
+    state.lostWriteNoticed = true;
+    sessions.set(state.id, state);
+    schedulePersist();
+    await drainPersistence();
+    expect((await readState()).sessions[0]).toMatchObject({ lostWriteNoticed: true });
+
+    sessions.clear();
+    clientSessionKeys.clear();
+    await loadPersistedState();
+    expect(sessions.get(state.id)?.lostWriteNoticed).toBe(true);
+  });
+
   test("never persists a parked approval", async () => {
     const state = newSessionState();
     state.approvals.set("a1", {
@@ -517,7 +531,7 @@ describe("loading", () => {
     expect(restored.composer.models).toEqual([]);
   });
 
-  test("restores the provider-measured durations Pi 1.1 reports", async () => {
+  test("restores the provider-measured durations and cost sources Pi reports", async () => {
     await writeState({
       version: 1,
       provider: "pi",
@@ -551,13 +565,23 @@ describe("loading", () => {
             turn: { inputTokens: 10, outputTokens: 5 },
             durationMs: 3_000,
             apiDurationMs: 2_000,
+            costUsd: 0.04,
+            costSource: "estimate",
+            sessionCostParts: 3,
+            sessionProviderCostParts: 2,
             turns: [
               {
                 turnId: "t1",
                 at: "2026-01-01T00:00:00.000Z",
                 durationMs: 3_000,
                 apiDurationMs: 2_000,
+                costUsd: 0.03,
+                costSource: "provider",
               },
+              // A source that is not one of the two, or one with no amount
+              // beside it, is not restored.
+              { turnId: "t2", costUsd: 0.01, costSource: "billed" },
+              { turnId: "t3", costSource: "provider" },
             ],
             updatedAt: "2026-01-01T00:00:00Z",
           },
@@ -572,6 +596,11 @@ describe("loading", () => {
     expect(restored.usage).toMatchObject({
       durationMs: 3_000,
       apiDurationMs: 2_000,
+      costUsd: 0.04,
+      costSource: "estimate",
+      // The next turn's source is derived from these counts.
+      sessionCostParts: 3,
+      sessionProviderCostParts: 2,
       // `at` dates recorded usage, so a turn kept across a restart must not
       // come back undated: the consumer would fall back to today.
       turns: [
@@ -580,9 +609,15 @@ describe("loading", () => {
           at: "2026-01-01T00:00:00.000Z",
           durationMs: 3_000,
           apiDurationMs: 2_000,
+          costUsd: 0.03,
+          costSource: "provider",
         },
+        { turnId: "t2", costUsd: 0.01 },
+        { turnId: "t3" },
       ],
     });
+    expect(restored.usage?.turns?.[1]).not.toHaveProperty("costSource");
+    expect(restored.usage?.turns?.[2]).not.toHaveProperty("costSource");
   });
 
   test("downgrades a journal state it cannot vouch for", async () => {

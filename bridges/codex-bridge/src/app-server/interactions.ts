@@ -1,4 +1,8 @@
-import type { AgentInteractionHold } from "@orkestrator/protocol/agent-interactions";
+import {
+  agentInteractionToolHintsFromMcpAnnotations,
+  type AgentInteractionHold,
+  type AgentInteractionToolHints,
+} from "@orkestrator/protocol/agent-interactions";
 import type { EngineGeneration } from "../engine/types.js";
 
 export type InteractionMethod = "item/tool/requestUserInput" | "mcpServer/elicitation/request";
@@ -59,6 +63,30 @@ export interface InteractionRequest {
   schema?: unknown;
   url?: string;
   elicitationId?: string;
+  /**
+   * For an MCP tool approval, what the tool's server declares about it, from
+   * the elicitation's `_meta.tool_annotations` (Codex 0.167.0). Display only.
+   */
+  toolHints?: AgentInteractionToolHints;
+}
+
+/** Codex's own discriminator for the approval it raises before an MCP tool call. */
+const CODEX_APPROVAL_KIND_KEY = "codex_approval_kind";
+const CODEX_MCP_TOOL_CALL_APPROVAL = "mcp_tool_call";
+
+/**
+ * The tool hints of an MCP tool approval, or `undefined`.
+ *
+ * Codex 0.167.0 sends the approval as a form elicitation whose `_meta` has
+ * `codex_approval_kind: "mcp_tool_call"`, `tool_name` and, when the server
+ * declared any, `tool_annotations` in MCP's camelCase (`readOnlyHint`, …).
+ * Only that discriminator, which Codex keeps servers from forwarding, opens
+ * the hints: an MCP server's own elicitation cannot describe a tool here.
+ */
+function mcpToolApprovalHints(meta: unknown): AgentInteractionToolHints | undefined {
+  const fields = record(meta);
+  if (fields[CODEX_APPROVAL_KIND_KEY] !== CODEX_MCP_TOOL_CALL_APPROVAL) return undefined;
+  return agentInteractionToolHintsFromMcpAnnotations(fields.tool_annotations);
 }
 
 export type InteractionAnswer =
@@ -217,6 +245,7 @@ export function describeInteraction(options: {
   if (mode !== "form" && mode !== "openai/form" && mode !== "openaiForm" && mode !== "url") {
     return null;
   }
+  const toolHints = mode === "url" ? undefined : mcpToolApprovalHints(params._meta);
   return {
     interactionId: options.interactionId,
     kind: mode === "url" ? "mcp-url" : "mcp-form",
@@ -236,6 +265,7 @@ export function describeInteraction(options: {
           elicitationId: text(params.elicitationId),
         }
       : { schema: params.requestedSchema }),
+    ...(toolHints ? { toolHints } : {}),
   };
 }
 

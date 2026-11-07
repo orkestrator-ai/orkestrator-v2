@@ -325,6 +325,29 @@ describe("acpContextUsage", () => {
     const usage = acpContextUsage({ totalTokens: 15_675 }, { updatedAt: UPDATED_AT });
     expect(usage).not.toBeNull();
     expect(usage).not.toHaveProperty("costUsd");
+    expect(usage).not.toHaveProperty("costSource");
+  });
+
+  test("an explicit USD cost is the provider's own amount; credits are no cost at all", () => {
+    const dollars = parseAcpTurnUsage({
+      sessionUpdate: "usage_update",
+      used: 100,
+      size: 1_000,
+      cost: { amount: 0.042, currency: "USD" },
+    });
+    expect(acpContextUsage(dollars!, { updatedAt: UPDATED_AT })).toMatchObject({
+      costUsd: 0.042,
+      costSource: "provider",
+    });
+    const credits = parseAcpTurnUsage({
+      sessionUpdate: "usage_update",
+      used: 100,
+      size: 1_000,
+      cost: { amount: 12, currency: "credits" },
+    });
+    const usage = acpContextUsage(credits!, { updatedAt: UPDATED_AT });
+    expect(usage).not.toHaveProperty("costUsd");
+    expect(usage).not.toHaveProperty("costSource");
   });
 
   test("uses usage_update occupancy as the context meter, with the window as denominator", () => {
@@ -346,6 +369,7 @@ describe("acpContextUsage", () => {
       inputTokens: 10_000,
       outputTokens: 2_000,
       costUsd: 0.042,
+      costSource: "provider",
       source: "provider",
       updatedAt: UPDATED_AT,
     });

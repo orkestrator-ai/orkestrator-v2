@@ -582,6 +582,7 @@ export type { ThreadSearchResult } from "./ThreadSearchResult.js";
 export type { ThreadSearchSortKey } from "./ThreadSearchSortKey.js";
 export type { ThreadSection } from "./ThreadSection.js";
 export type { ThreadSectionAppearance } from "./ThreadSectionAppearance.js";
+export type { ThreadSectionChangedNotification } from "./ThreadSectionChangedNotification.js";
 export type { ThreadSectionCreateParams } from "./ThreadSectionCreateParams.js";
 export type { ThreadSectionCreateResponse } from "./ThreadSectionCreateResponse.js";
 export type { ThreadSectionDeleteParams } from "./ThreadSectionDeleteParams.js";

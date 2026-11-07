@@ -18,7 +18,6 @@ import {
 } from "@/lib/federation/in-tree-scopes";
 import { getWindowScope, resetWindowScopeForTests } from "@/lib/node-scope/app-window-scope";
 import { WindowScopeProvider } from "@/lib/node-scope/providers";
-import { useInTreeNodesStore } from "@/stores/inTreeNodesStore";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { uiStore } from "@/stores/uiStore";
@@ -57,8 +56,6 @@ function install(nodes = ["a", "b"]) {
     ),
     datasets: Object.fromEntries(nodes.map((id) => [id, sharedIdDataset("working")])),
   });
-  // A browser or iOS client: no desktop realms.
-  delete (window.orkestrator as { workspaceViews?: unknown }).workspaceViews;
   return fake;
 }
 
@@ -91,7 +88,6 @@ beforeEach(() => {
   useRemoteWorkspaceStore.setState(INITIAL_REMOTE, true);
   useUIChromeStore.setState({ environmentSortMode: "project" });
   useMachineViewStore.setState({ grouping: "machine" });
-  useInTreeNodesStore.setState({ useRealmsForRemoteMachines: false });
   sessionStorage.clear();
   leafClients = [];
   restoreScopes = configureInTreeScopes({
@@ -122,7 +118,6 @@ afterEach(() => {
   uninstallDesktopFake();
   useRemoteWorkspaceStore.setState(INITIAL_REMOTE, true);
   useMachineViewStore.setState(INITIAL_MACHINE, true);
-  useInTreeNodesStore.setState({ useRealmsForRemoteMachines: false });
   setFilesPanelTestState({ isOpen: false });
   resetWindowScopeForTests();
   document.body.innerHTML = "";
@@ -135,7 +130,7 @@ function clientFor(nodeId: string): LeafClient {
   return client;
 }
 
-test("every node renders in the window's tree by default, each in its own scope, with no realm", async () => {
+test("every node renders in the window's tree, each in its own scope", async () => {
   install();
   renderRegion();
   act(() => useRemoteWorkspaceStore.getState().open("bk_b", { projectId: "project-1" }));
@@ -145,8 +140,6 @@ test("every node renders in the window's tree by default, each in its own scope,
   expect(
     screen.getAllByTestId("in-tree-workspace").map((element) => element.getAttribute("data-node")),
   ).toEqual(["bk_b", LEAF]);
-  // No setting was turned on: neither node has a realm.
-  expect(screen.queryByTestId("frame-workspace-realm")).toBeNull();
   expect(getWindowScope().get("bk_b" as BackendId)?.role).toBe("leaf");
 
   // The in-tree node's scope is a leaf scope of the window, held by the view.
@@ -154,7 +147,7 @@ test("every node renders in the window's tree by default, each in its own scope,
   expect(scope?.role).toBe("leaf");
   expect(inTreeScopeHolds(LEAF)).toBe(1);
 
-  // The window's request reached the in-tree realm host over the loopback:
+  // The window's request reached the node's host through the window's store:
   // it selected the project on the leaf's own uiStore, and the window's
   // node-qualified selection moved with it.
   await waitFor(() => expect(scope!.store(uiStore).getState().selectedProjectId).toBe(project.id));
@@ -166,47 +159,12 @@ test("every node renders in the window's tree by default, each in its own scope,
   expect(clientFor(LEAF).calls("get_projects").length).toBeGreaterThan(0);
 });
 
-test("the rollback setting gives every node its realm again, and switching only changes this window's view: no work stops", async () => {
-  const fake = install();
-  renderRegion();
-  act(() => useRemoteWorkspaceStore.getState().open("bk_b", { projectId: "project-1" }));
-  act(() => useRemoteWorkspaceStore.getState().open(LEAF, { projectId: project.id }));
-  await waitFor(() => expect(screen.getAllByTestId("in-tree-workspace")).toHaveLength(2));
-  const scope = getWindowScope().get(LEAF)!;
-
-  // In-tree → realm (the rollback): each node gets a frame; its scope stays
-  // for the grace period.
-  act(() => useInTreeNodesStore.getState().setUseRealmsForRemoteMachines(true));
-  await waitFor(() => expect(screen.getAllByTestId("frame-workspace-realm")).toHaveLength(2));
-  expect(screen.queryByTestId("in-tree-workspace")).toBeNull();
-  expect(scope.disposed).toBe(false);
-  expect(inTreeScopeHolds(LEAF)).toBe(0);
-
-  // Realm → in-tree: the frame's grant is closed (only this view of it) and
-  // the held scope comes back without a reopen.
-  act(() => useInTreeNodesStore.getState().setUseRealmsForRemoteMachines(false));
-  await waitFor(() => expect(screen.getAllByTestId("in-tree-workspace")).toHaveLength(2));
-  expect(getWindowScope().get(LEAF)).toBe(scope);
-  expect(leafClients).toHaveLength(2);
-  await waitFor(() =>
-    expect(fake.invoke.mock.calls.some(([command]) => command === "close_node_workspace")).toBe(
-      true,
-    ),
-  );
-
-  // Neither node was asked to stop, cancel or delete anything.
-  expect(workStoppingCalls(fake.calls.map((call) => call.command))).toEqual([]);
-  for (const client of leafClients) {
-    expect(workStoppingCalls(client.invocations.map((call) => call.command))).toEqual([]);
-  }
-});
-
 test("closing an in-tree node's view releases its scope after the grace period, never cancelling work", async () => {
   install();
   renderRegion();
   act(() => useRemoteWorkspaceStore.getState().open(LEAF, { projectId: project.id }));
   await screen.findByTestId("in-tree-workspace");
-  act(() => useRemoteWorkspaceStore.getState().closeRealm(LEAF));
+  act(() => useRemoteWorkspaceStore.getState().closeNode(LEAF));
   await waitFor(() => expect(screen.queryByTestId("in-tree-workspace")).toBeNull());
   // Released, kept for the grace period, then disposed by `closeInTreeScopes`
   // in afterEach (the grace timer itself is covered by in-tree-scopes.test.ts).
@@ -253,7 +211,7 @@ test("a hidden node follows its tier: suspended it unmounts its views, back to s
       .getAllByTestId("in-tree-workspace")
       .find((el) => el.getAttribute("data-node") === nodeId)!;
   const hidden = getWindowScope().get(OTHER)!;
-  // Hidden but warm: mounted, as a hidden realm is.
+  // Hidden but warm: mounted, so switching back is instant.
   await waitFor(() => expect(hidden.tier.get()).toBe("warm"));
   await waitFor(() => expect(region(OTHER).childElementCount).toBeGreaterThan(0));
   expect(getWindowScope().get(LEAF)!.tier.get()).toBe("live");

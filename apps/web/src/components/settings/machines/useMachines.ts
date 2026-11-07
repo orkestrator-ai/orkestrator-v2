@@ -16,7 +16,6 @@ import { subscribeToConnections } from "@/lib/connections";
 import { usePortalLayout } from "@/lib/portal/portal-layout";
 import { NO_ARGS, portalNodesApi } from "@/lib/node-scope/domains/nodes";
 import { commandScopeListen } from "@/lib/portal/command-scope";
-import { workspaceTarget } from "@/lib/portal/page-portal";
 import { buildMachineList, type MachineEntry } from "./machine-list";
 
 export type ConnectionsApi = NonNullable<NonNullable<Window["orkestrator"]>["connections"]>;
@@ -126,7 +125,6 @@ export function useMachines() {
   }, [loadNodes]);
 
   const layout = usePortalLayout();
-  const workspaceNodeId = workspaceTarget()?.nodeId ?? null;
   const entries = useMemo<MachineEntry[]>(
     () =>
       buildMachineList({
@@ -134,11 +132,12 @@ export function useMachines() {
         nodes,
         connections,
         selfProfile,
-        workspaceNodeId,
+        // The window is always on its command node.
+        workspaceNodeId: null,
         selfAddress: api ? null : browserAddress(),
         machineOrder: layout.machineOrder,
       }),
-    [api, connections, layout.machineOrder, nodes, selfProfile, status, workspaceNodeId],
+    [api, connections, layout.machineOrder, nodes, selfProfile, status],
   );
 
   return {

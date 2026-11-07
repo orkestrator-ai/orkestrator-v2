@@ -1980,21 +1980,15 @@ describe("CoordinatorPanel", () => {
     test.each([
       ["local", 1400],
       ["local", 390],
-      ["realm", 1400],
-      ["realm", 390],
     ] as const)(
       "populated %s coordinator DOM at %ipx keeps prompts and controls without Work UI",
-      async (route, width) => {
+      async (_route, width) => {
         const happyDOM = (window as unknown as { happyDOM: { setURL(url: string): void } })
           .happyDOM;
         const previousURL = window.location.href;
         const previousWidth = window.innerWidth;
         try {
-          happyDOM.setURL(
-            route === "realm"
-              ? "http://localhost/?realm=workspace&workspace=fixture"
-              : "http://localhost/",
-          );
+          happyDOM.setURL("http://localhost/");
           Object.defineProperty(window, "innerWidth", { configurable: true, value: width });
           ensuredSnapshot = {
             ...snapshot,

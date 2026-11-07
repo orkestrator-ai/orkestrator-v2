@@ -1,12 +1,11 @@
 import type { BackendId } from "@orkestrator/protocol/federation";
 import { getWindowScope } from "@/lib/node-scope/app-window-scope";
 import { portalStore } from "@/lib/portal/portal-store";
-import {
-  isWorkspaceRealm,
-  postToShell,
-  type RealmBoardTab,
-  type RealmDialog,
-} from "@/lib/federation/workspace-realm";
+import type {
+  WorkspaceBoardTab,
+  WorkspaceDialog,
+  WorkspaceWorkTarget,
+} from "@/lib/federation/workspace-request";
 import { useAppDialogStore } from "@/stores/appDialogStore";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
@@ -18,15 +17,15 @@ export interface MachineWorkspaceSpec {
   /** Empty: the node's project launcher (to add a project there). */
   projectId: string;
   environmentId?: string;
-  boardTab?: RealmBoardTab;
-  workTarget?: import("@/lib/coordinator-work-items").LocalWorkTarget;
+  boardTab?: WorkspaceBoardTab;
+  workTarget?: WorkspaceWorkTarget;
   /** Open the New Environment dialog for `projectId` instead of selecting it. */
   createEnvironment?: boolean;
   /**
    * Open one of the node's own dialogs over the selection: the project's, or
    * with `environmentId`, the environment's settings (or its rebuild).
    */
-  dialog?: RealmDialog;
+  dialog?: WorkspaceDialog;
   /** For messages while it opens. */
   title: string;
 }
@@ -52,30 +51,14 @@ export function onCreateEnvironmentRequest(listener: (projectId: string) => void
 /**
  * Every portal entry point opens a node's environment the same way. The
  * window always stays on its command node: one of its own environments is an
- * ordinary selection, and another node's is shown in the central region by
- * that node's workspace realm, without reloading anything around it.
+ * ordinary selection, and another node's is shown in the central region, in
+ * the window's own tree, without reloading anything around it.
  *
  * Creating an environment on another node goes through that node's own New
  * Environment dialog, so its defaults (the command node's inherited settings
  * laid over the node's own) and start apply as they would there.
  */
 export function openMachineWorkspace(spec: MachineWorkspaceSpec): void {
-  // A realm is one node's workspace; the window decides what it shows. A node
-  // shown in the window's own tree runs in the window's document, so its
-  // opens take the direct path below (plan item 4005).
-  if (isWorkspaceRealm()) {
-    if (spec.projectId)
-      postToShell({
-        type: "open",
-        nodeId: spec.connectionId,
-        projectId: spec.projectId,
-        ...(spec.environmentId ? { environmentId: spec.environmentId } : {}),
-        ...(spec.boardTab ? { boardTab: spec.boardTab } : {}),
-        ...(spec.workTarget ? { workTarget: spec.workTarget } : {}),
-        title: spec.title,
-      });
-    return;
-  }
   const selfId = portalStore.getState().selfId;
   if (!selfId || spec.connectionId === selfId) {
     useRemoteWorkspaceStore.getState().showLocal();
@@ -111,8 +94,8 @@ export function openMachineWorkspace(spec: MachineWorkspaceSpec): void {
 
 /**
  * Opens a repository from its heading: its coordinator, on the command node's
- * copy of the project, else (none here) a leaf's, whose realm then opens its
- * own coordinator directly. A window whose own node is in leaf mode lands on
+ * copy of the project, else (none here) a leaf's, whose workspace then opens
+ * its own coordinator directly. A window whose own node is in leaf mode lands on
  * its home, since its coordinator is gated.
  */
 export function openRepository(spec: {
@@ -142,7 +125,7 @@ export function openRepository(spec: {
  * scope here (one shown in the window's tree, plan item 4001).
  */
 export function openDialog(
-  dialog: RealmDialog,
+  dialog: WorkspaceDialog,
   projectId: string,
   environmentId?: string,
   nodeId: BackendId = getWindowScope().commandScope().nodeId,

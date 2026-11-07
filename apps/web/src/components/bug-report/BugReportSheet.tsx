@@ -46,7 +46,6 @@ import {
 } from "@/lib/node-scope/providers";
 import { createSessionKey } from "@/lib/utils";
 import { useBugReportStore } from "@/stores/bugReportStore";
-import { useNodesInTree } from "@/stores/inTreeNodesStore";
 import { nativeComposeStore } from "@/stores/nativeComposeStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 
@@ -81,13 +80,11 @@ export function BugReportSheetHost() {
   const sheetNodeId = useBugReportStore((state) => state.sheetNodeId);
   const { windowScope } = useScopesWithCommandFallback();
   useSignal(windowScope.nodeScopes);
-  // Opening: the region holds the node (`openBugReport` opens it) and shows
-  // it in this window's tree, so its scope is on the way.
-  const inTree = useNodesInTree();
-  const held = useRemoteWorkspaceStore((state) =>
-    sheetNodeId ? state.realms.includes(sheetNodeId) : false,
+  // Opening: the region holds the node (`openBugReport` opens it) in this
+  // window's tree, so its scope is on the way.
+  const opening = useRemoteWorkspaceStore((state) =>
+    sheetNodeId ? state.openNodes.includes(sheetNodeId) : false,
   );
-  const opening = inTree && held;
   const scope = sheetNodeId ? windowScope.get(sheetNodeId as BackendId) : null;
   const unresolved = sheetNodeId !== null && !scope && !opening;
   useEffect(() => {
@@ -106,12 +103,11 @@ export function BugReportSheetHost() {
 /**
  * The Report a bug sheet.
  *
- * Hosted by every renderer (the window, and each machine's realm) for its own
- * backend, and by the window for another node shown in its own tree, on that
- * node's `scope` (plan item 5003). The report is created, captured, filed and
- * discarded through the scope's node, and its agent session renders inside
- * that scope, so it talks to that node. Another machine's report is shown by
- * that machine's realm (`openBugReport`). The report itself lives in the
+ * Hosted by the window for its own backend, and for another node shown in
+ * its own tree, on that node's `scope` (plan item 5003). The report is
+ * created, captured, filed and discarded through the scope's node, and its
+ * agent session renders inside that scope, so it talks to that node. The
+ * report itself lives in the
  * backend: closing the sheet only hides it.
  */
 export function BugReportSheet({ scope }: { scope?: NodeScope | null } = {}) {

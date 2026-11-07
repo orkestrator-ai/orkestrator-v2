@@ -77,9 +77,8 @@ export function currentFilesPanelTargetId(scope: NodeScope = appCommandScope()):
  *
  * `scope` is the node whose files panel shows it. Without one, the node the
  * window shows (`shownNodeScope`, plan item 5002): the command node, or
- * another node shown in the window's own tree. A node shown by a realm has
- * no scope here, so the caller falls back to the browser (its realm opens
- * pull requests in its own panel).
+ * another node shown in the window's own tree. A node whose scope is not
+ * open (yet) has none here, so the caller falls back to the browser.
  */
 export function openPullRequestInApp(
   ref: GitHubPullRequestRef,

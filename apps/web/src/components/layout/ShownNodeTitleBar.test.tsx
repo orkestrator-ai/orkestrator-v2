@@ -4,11 +4,10 @@
  */
 import { afterEach, expect, test } from "bun:test";
 import type { BackendId } from "@orkestrator/protocol/federation";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { WindowScopeProvider } from "@/lib/node-scope/providers";
 import { WindowScope } from "@/lib/node-scope/window-scope";
 import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
-import { useInTreeNodesStore } from "@/stores/inTreeNodesStore";
 import { FakeNodeClient } from "@/test/render-in-node-scope";
 import { NodeTitleBarUsage, useShownInTreeNode } from "./ShownNodeTitleBar";
 
@@ -59,7 +58,6 @@ function TitleBarMeters({ nodeId }: { nodeId: string | null }) {
 afterEach(() => {
   cleanup();
   for (const windowScope of windows.splice(0)) windowScope.dispose();
-  useInTreeNodesStore.setState({ useRealmsForRemoteMachines: false });
   resetReadCoordinatorForTests();
 });
 
@@ -69,7 +67,6 @@ function cpuReading() {
 
 test("the meters read the shown in-tree node's scope and switch with the shown node", async () => {
   const { windowScope, command, a, b } = windowWithLeaves();
-  useInTreeNodesStore.setState({ useRealmsForRemoteMachines: false });
   const view = render(
     <WindowScopeProvider windowScope={windowScope}>
       <TitleBarMeters nodeId={LEAF_A} />
@@ -88,8 +85,12 @@ test("the meters read the shown in-tree node's scope and switch with the shown n
   // Nothing was read through the command node for either leaf.
   expect(command.calls("get_system_usage")).toEqual([]);
 
-  // A node the window shows by a realm keeps the window's other path.
-  act(() => useInTreeNodesStore.setState({ useRealmsForRemoteMachines: true }));
+  // No node shown: the window's own meters.
+  view.rerender(
+    <WindowScopeProvider windowScope={windowScope}>
+      <TitleBarMeters nodeId={null} />
+    </WindowScopeProvider>,
+  );
   expect(screen.getByTestId("own-meters")).toBeTruthy();
 });
 
@@ -100,7 +101,6 @@ test("while the in-tree node's scope opens the meters read nothing and show dash
     role: "command",
     client: new FakeNodeClient({ nodeId: "bk_command" as BackendId }),
   });
-  useInTreeNodesStore.setState({ useRealmsForRemoteMachines: false });
   render(
     <WindowScopeProvider windowScope={windowScope}>
       <TitleBarMeters nodeId={LEAF_A} />
@@ -112,7 +112,6 @@ test("while the in-tree node's scope opens the meters read nothing and show dash
 
 test("the process popover is the node's, and focus returns to its trigger on dismissal", async () => {
   const { windowScope, a } = windowWithLeaves();
-  useInTreeNodesStore.setState({ useRealmsForRemoteMachines: false });
   render(
     <WindowScopeProvider windowScope={windowScope}>
       <TitleBarMeters nodeId={LEAF_A} />

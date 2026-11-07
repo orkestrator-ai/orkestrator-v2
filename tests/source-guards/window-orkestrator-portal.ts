@@ -2,22 +2,17 @@ import { isMember, propertyKey, unwrap, type AnyNode } from "./ast";
 import type { GuardVisitor, ScannedFile, SourceGuard } from "./guard";
 
 /**
- * Renderer code that reads the realm portal global, `window.orkestratorPortal`
+ * Renderer code that reads the portal global, `window.orkestratorPortal`
  * (plan item 5004, report §5.1): the portal APIs are calls on the command
- * scope (`apps/web/src/lib/portal/command-scope.ts`), so no in-tree code
- * reads the global.
- *
- * The one reader is `lib/portal/page-portal.ts`, which a workspace realm
- * document goes through until realms are deleted (plan items 6002 and 6003),
- * and which reads the global only in a page that names a workspace target.
- * There is no baseline: any other read is a finding.
+ * scope (`apps/web/src/lib/portal/command-scope.ts`), so no renderer code
+ * reads the global. Its last reader, the page adapter of the separate
+ * workspace documents, went with them (plan item 6002); the desktop preload
+ * stops installing it in plan item 6003. There is no baseline: any read is a
+ * finding.
  */
 
 /** The renderer's production sources. */
 export const WINDOW_ORKESTRATOR_PORTAL_ROOTS = ["apps/web/src"] as const;
-
-/** The realm document's page adapter: the one module allowed to read the global. */
-export const PAGE_PORTAL_MODULE = "apps/web/src/lib/portal/page-portal.ts";
 
 const GLOBALS = ["window", "globalThis", "self"] as const;
 const PORTAL = "orkestratorPortal";
@@ -53,19 +48,15 @@ function visitPortalReads(): GuardVisitor {
 }
 
 export function appliesToPortalReader(file: Pick<ScannedFile, "path">): boolean {
-  return (
-    WINDOW_ORKESTRATOR_PORTAL_ROOTS.some((root) => file.path.startsWith(`${root}/`)) &&
-    file.path !== PAGE_PORTAL_MODULE
-  );
+  return WINDOW_ORKESTRATOR_PORTAL_ROOTS.some((root) => file.path.startsWith(`${root}/`));
 }
 
 export const windowOrkestratorPortal: SourceGuard = {
   id: "window-orkestrator-portal",
   advice:
     "The portal APIs are calls on the command scope: commandScopeInvoke, commandScopeListen " +
-    "and commandScopeBackendClient from @/lib/portal/command-scope. Only " +
-    "lib/portal/page-portal.ts (a workspace realm document's page adapter, deleted with " +
-    "realms) reads window.orkestratorPortal.",
+    "and commandScopeBackendClient from @/lib/portal/command-scope. Nothing in the renderer " +
+    "reads window.orkestratorPortal.",
   productionRoots: WINDOW_ORKESTRATOR_PORTAL_ROOTS,
   appliesTo: appliesToPortalReader,
   mayOffend: (source) => source.includes(PORTAL),

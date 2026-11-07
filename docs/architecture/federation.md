@@ -377,15 +377,10 @@ the window's **command scope** (`lib/portal/command-scope.ts`:
 `commandScopeInvoke`, `commandScopeListen`, `commandScopeListenAuthoritative`,
 `commandScopeBackendClient`; plan item 5004). In an app window, and for every
 node shown in its own tree, that is the command scope's ordinary transport.
-Only a workspace realm document, whose `window.orkestrator` is bound to the
-leaf, reaches its command node over the page's portal channel,
-`window.orkestratorPortal`. `lib/portal/page-portal.ts` is the one module that
-reads that global, and only in a page that names a workspace target
-(`workspaceTarget()`: the node a realm document's workspace is on, `null` in
-any other page). The `window-orkestrator-portal` source guard keeps every
-other renderer file off it. `lib/portal/portal-transport.ts` keeps the old
-names (`portalInvoke`, `portalListen`, `portalListenAuthoritative`) as aliases
-until realms are deleted (plan item 6002).
+No renderer file reads the page's portal global, `window.orkestratorPortal`
+(the `window-orkestrator-portal` source guard, no baseline): its last reader,
+the page adapter of the realm documents, and the old `portal-transport.ts`
+aliases went with the web client's realms (plan item 6002).
 
 **One machine by node id.** `machineInvoke` (`lib/backend/client.ts`, used by
 agent accounts, MCP and the other machine-aware `lib/backend` functions) and
@@ -487,26 +482,22 @@ environment, board tab, work target, dialogs) is one shared definition,
 `@orkestrator/protocol/realm-request`, which the web encoder and parsers and
 the desktop main process all use.
 
-- **Which realms are open.** The node shown, and what is selected there, is
+- **Which nodes are held.** The node shown, and what is selected there, is
   the window's one node-qualified selection `{ nodeId, projectId,
   environmentId }` (`WindowScope.selection`, `stores/windowSelectionStore.ts`;
   plan item 3006). Each node scope's `uiStore` projects it: its
   `selectedProjectId` is the selection's project while the selection is on that
   node and `null` otherwise, and selecting there moves the selection to that
   node. `remoteWorkspaceStore` derives `active` from it (the selection while it
-  is on an open realm's node, `null` for the window's own workspace) and keeps
-  `realms`, the nodes with an open realm, least recently shown first. `open()`
-  moves the selection and the node to the end and keeps the last 3 realms
-  (`MAX_OPEN_REALMS`). An evicted realm unmounts and ends this window's view of
-  that node; work on the node continues. Realms that are not shown stay
-  mounted, hidden, so going back is instant. A node shown in the window's own
-  tree (every node by default; realms only under the rollback setting
-  `useRealmsForRemoteMachines`, plan item 6001) is not counted: the window's node-scope lifecycle
-  (`WindowScope.lifecycle`, plan item 4002) moves it between warm, live,
-  suspended and summary by its memory and byte budgets instead, and
+  is on a held node, `null` for the window's own workspace) and keeps
+  `openNodes`, the nodes the central region holds, least recently shown first,
+  with the window's latest request for each (`requests`). No count caps them
+  (`MAX_OPEN_REALMS` went with realms, plan item 6002): the window's node-scope
+  lifecycle (`WindowScope.lifecycle`, plan item 4002) moves each between warm,
+  live, suspended and summary by its memory and byte budgets, and
   `InTreeWorkspace` keeps its views mounted only while it is warm, live or
-  shown. The command node's selection
-  survives a reload of the window (session storage).
+  shown. The command node's selection survives a reload of the window
+  (session storage).
 - **Desktop.** `WorkspaceViews` (`apps/desktop/electron/workspace-views.ts`)
   opens a child `WebContentsView` per realm: the standard preload,
   `contextIsolation`, no node integration, `sandbox`, a deny-all

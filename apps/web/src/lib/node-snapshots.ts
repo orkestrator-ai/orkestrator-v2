@@ -44,7 +44,6 @@ import { isProvisionalBackendId, type BackendId } from "@orkestrator/protocol/fe
 import type { NodeClient, ReadableSignal } from "@orkestrator/protocol/node-client";
 import { createLogger, logErrorKind } from "@orkestrator/protocol/logger";
 import { registerProtectedRichCache } from "@/lib/chat/rich-content-reset";
-import { isWorkspaceRealm } from "@/lib/federation/workspace-realm";
 import { commandNodeIdFromPage } from "@/lib/node-scope/app-window-scope";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { defineScopedService } from "@/lib/node-scope/scoped-service";
@@ -696,11 +695,11 @@ let commandRead: CommandSnapshotRead | null = null;
  * Starts reading the command node's snapshot (the page's proven id, else the
  * one this window remembers), so it has usually answered by the time `App`
  * starts the command scope's services. Called once before the first render
- * (`renderer-entry.tsx`); nothing happens without a snapshot store, in a
- * realm document, or on a first-ever start (no id to read).
+ * (`renderer-entry.tsx`); nothing happens without a snapshot store, or on
+ * a first-ever start (no id to read).
  */
 export function primeCommandScopeSnapshot(pageNodeId: BackendId = commandNodeIdFromPage()): void {
-  if (commandRead || isWorkspaceRealm()) return;
+  if (commandRead) return;
   const store = nodeSnapshotStore();
   if (!store) return;
   const nodeId = isProvisionalBackendId(pageNodeId) ? rememberedCommandNodeId() : pageNodeId;
@@ -795,13 +794,11 @@ export function startCommandScopeSnapshot(
  * Every warm scope's snapshot duty (plan item 4003): a leaf writes its
  * snapshot; the window's command scope writes its own, remembers its id and
  * watches the registry for removed nodes (`startCommandScopeSnapshot`).
- * Nothing runs without a snapshot store, or in a realm document (its command
- * scope is the realm's own node, and realms keep their own storage).
+ * Nothing runs without a snapshot store.
  */
 export const nodeSnapshotService = defineScopedService("node-snapshot", (scope) => {
   const store = nodeSnapshotStore();
   if (!store) return { stop: () => undefined };
   if (scope.role === "leaf") return { stop: startNodeSnapshotWriter(scope, store) };
-  if (isWorkspaceRealm()) return { stop: () => undefined };
   return { stop: startCommandScopeSnapshot(scope, store) };
 });

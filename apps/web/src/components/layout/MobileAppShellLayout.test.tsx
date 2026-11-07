@@ -858,7 +858,6 @@ for (const [label, dialog] of [
         expectDomAbsent(screen.queryByRole("dialog", { name: "Projects and environments" })),
       );
       expect(useRemoteWorkspaceStore.getState().requests.bk_remote?.request).toEqual({
-        type: "select",
         projectId: "p",
         environmentId: "e",
         dialog,
@@ -887,15 +886,11 @@ for (const remoteReport of [false, true]) {
         expectDomAbsent(screen.queryByRole("dialog", { name: "Projects and environments" })),
       );
       if (remoteReport) {
-        // In-tree by default (plan item 6001): the window opens that node's
-        // sheet on its scope; no realm is asked.
+        // The window opens that node's sheet on its scope.
         expect(useBugReportStore.getState()).toMatchObject({
           sheetOpen: true,
           sheetNodeId: "bk_remote",
         });
-        expect(useRemoteWorkspaceStore.getState().requests.bk_remote?.request.bugReport).toBe(
-          undefined,
-        );
       } else expect(useBugReportStore.getState().sheetOpen).toBe(true);
     } finally {
       useRemoteWorkspaceStore.setState(remote, true);

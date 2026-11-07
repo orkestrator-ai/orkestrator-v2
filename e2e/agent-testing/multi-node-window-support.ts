@@ -15,7 +15,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { ChildProcess } from "node:child_process";
-import type { Frame, Locator, Page } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 
 import { startLeaf } from "./electron-leaf-backend";
@@ -30,9 +30,6 @@ import {
 export const commandProfile = process.env.ORKESTRATOR_AGENT_TEST_PROFILE ?? "";
 export const leafProfile = process.env.ORKESTRATOR_AGENT_TEST_LEAF_PROFILE ?? "";
 export const runId = process.env.ORKESTRATOR_AGENT_TEST_RUN_ID ?? (commandProfile || "multi-node");
-/** `realm` runs the realm path's parity flows; anything else the in-tree path. */
-export const pathMode: "in-tree" | "realm" =
-  process.env.ORKESTRATOR_AGENT_TEST_IN_TREE === "0" ? "realm" : "in-tree";
 /** Standalone leaves started beside the leaf profile (default 5: six leaves in all). */
 export const extraLeafCount = Math.max(
   0,
@@ -44,7 +41,6 @@ export const evidenceDir = path.join(
   "agent-testing",
   runId,
   "multi-node",
-  pathMode,
 );
 
 export const SKIP_REASON =
@@ -280,11 +276,10 @@ export async function shimGuard(
 
 /**
  * The terminal tab's rendered text for `environmentId` on `nodeId`, read from
- * the renderer's own terminal (the Vite dev module the app runs). In a realm
- * frame the node is the realm's own command node.
+ * the renderer's own terminal (the Vite dev module the app runs).
  */
 export async function renderedTerminal(
-  target: Page | Frame,
+  target: Page,
   nodeId: string | null,
   environmentId: string,
 ): Promise<string> {

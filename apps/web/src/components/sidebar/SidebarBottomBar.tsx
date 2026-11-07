@@ -41,7 +41,8 @@ function IndicatorDot({ testId }: { testId: string }) {
  * drawer closes for them. Global settings go through `requestGlobalSettings`,
  * so every opener shares one path. Repository and environment settings target
  * the active machine’s selected project and environment. Remote requests go
- * to its workspace realm; local requests go to `AppDialogHost`. Buttons stay
+ * to that node's workspace (its request in `remoteWorkspaceStore`); local
+ * requests go to `AppDialogHost`. Buttons stay
  * in place but disabled while
  * there is none, so the bar does not shift as the selection changes.
  *
@@ -148,7 +149,7 @@ export function SidebarBottomBar({ stacked = false }: { stacked?: boolean }) {
         variant="ghost"
         size="icon"
         className="relative h-7 w-7"
-        // The machine in front: another machine's report opens in its realm.
+        // The machine in front: another machine's report opens on its scope.
         onClick={() => openBugReport()}
         title={BUG_REPORT_LABEL}
         aria-label={BUG_REPORT_LABEL}

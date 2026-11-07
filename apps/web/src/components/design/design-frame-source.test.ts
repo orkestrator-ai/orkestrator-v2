@@ -7,7 +7,7 @@ import { designFrameSource } from "./design-frame-source";
 
 test("production design document resolves beside file index and at the gateway root from SPA routes", () => {
   for (const [page, expected] of [
-    ["file:///app/web/index.html?realm=workspace", "file:///app/web/design-frame.html"],
+    ["file:///app/web/index.html?workspace=w1", "file:///app/web/design-frame.html"],
     [
       "https://gateway.example/projects/123?tab=design",
       "https://gateway.example/design-frame.html",
@@ -36,7 +36,7 @@ test("the static document frame loads the same way, with its nonce in the fragme
     staticHtmlFrameSource(nonce, "static-html-frame.html", "https://gateway.example/projects/1"),
   ).toEqual({ src: `https://gateway.example/static-html-frame.html#${nonce}` });
   expect(
-    staticHtmlFrameSource(nonce, "static-html-frame.html", "file:///app/web/index.html?realm=a"),
+    staticHtmlFrameSource(nonce, "static-html-frame.html", "file:///app/web/index.html?view=a"),
   ).toEqual({ src: `file:///app/web/static-html-frame.html#${nonce}` });
   const dev = staticHtmlFrameSource(nonce, "", "https://gateway.example/");
   if (!("srcDoc" in dev)) throw new Error("Expected srcdoc");

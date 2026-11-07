@@ -28,6 +28,7 @@ import { MergedProjectList, RemoteMachineSection } from "./FederatedSidebarSecti
 import { RemoteProjectGroup } from "./RemoteMachineTree";
 import { FederationProvider } from "./FederationProvider";
 import { useMachineViews } from "./useMachineViews";
+import { selectOnNode } from "@/test/node-selection";
 
 /** A project's header button, found through its "+" button, which names project and machine. */
 function projectHeading(project: string, machine: string): HTMLElement {
@@ -230,7 +231,7 @@ describe("a project's entry opens on the tab its grouping calls for", () => {
       await waitFor(() => expect(project.getAttribute("aria-current")).toBe("page"));
       const report = (environmentId: string | null) =>
         act(() =>
-          useRemoteWorkspaceStore.getState().noteRealmSelection("bk_a", {
+          selectOnNode("bk_a", {
             projectId: "project-1",
             environmentId,
           }),
@@ -287,7 +288,6 @@ describe("a project's entry opens on the tab its grouping calls for", () => {
       fireEvent.click(projectHeading("app", "Machine A"));
       await waitFor(() =>
         expect(request()).toEqual({
-          type: "select",
           projectId: "project-1",
           ...(coordinator ? { boardTab: "coordinator" } : {}),
         }),
@@ -298,7 +298,6 @@ describe("a project's entry opens on the tab its grouping calls for", () => {
       );
       await waitFor(() =>
         expect(request()).toEqual({
-          type: "select",
           projectId: "project-1",
           environmentId: "env-1",
         }),
@@ -319,7 +318,6 @@ describe("a project's entry opens on the tab its grouping calls for", () => {
         fireEvent.click(repository);
         await waitFor(() =>
           expect(request()).toEqual({
-            type: "select",
             projectId: "project-1",
             boardTab: "coordinator",
           }),
@@ -328,9 +326,9 @@ describe("a project's entry opens on the tab its grouping calls for", () => {
         expect(member.getAttribute("aria-current")).toBeNull();
 
         expect(useMachineViewStore.getState().revealedProject).toBeNull();
-        // The realm can ensure Home before the shell's next summary arrives.
+        // The node can ensure Home before the shell's next summary arrives.
         act(() =>
-          useRemoteWorkspaceStore.getState().noteRealmSelection("bk_a", {
+          selectOnNode("bk_a", {
             projectId: "project-1",
             environmentId: "ensured-home",
             projectHome: true,
@@ -347,14 +345,10 @@ describe("a project's entry opens on the tab its grouping calls for", () => {
         await waitFor(() => expect(member.getAttribute("aria-current")).toBe("page"));
         expect(repository.getAttribute("aria-current")).toBeNull();
 
-        // So does anything else the realm selects.
+        // So does anything else the node selects.
         fireEvent.click(repository);
         await waitFor(() => expect(repository.getAttribute("aria-current")).toBe("page"));
-        act(() =>
-          useRemoteWorkspaceStore
-            .getState()
-            .noteRealmSelection("bk_a", { projectId: "project-1", environmentId: "env-1" }),
-        );
+        act(() => selectOnNode("bk_a", { projectId: "project-1", environmentId: "env-1" }));
         expect(repository.getAttribute("aria-current")).toBeNull();
         expect(member.getAttribute("aria-current")).toBeNull();
       }

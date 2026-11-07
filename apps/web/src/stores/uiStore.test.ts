@@ -12,6 +12,7 @@ import { FakeNodeClient } from "@/test/render-in-node-scope";
 import { uiStore, type UIState } from "./uiStore";
 import { useRemoteWorkspaceStore, startRemoteWorkspaceSelectionSync } from "./remoteWorkspaceStore";
 import { useMachineViewStore } from "./machineViewStore";
+import { selectOnNode } from "@/test/node-selection";
 
 const NODE_A = "bk_node-a" as BackendId;
 const NODE_B = "bk_node-b" as BackendId;
@@ -142,7 +143,7 @@ describe("remoteWorkspaceStore derived from the window selection", () => {
     resetWindowScopeForTests();
   });
 
-  test("opening a realm moves the selection to its node; selecting locally brings it back", () => {
+  test("opening another node moves the selection to it; selecting locally brings it back", () => {
     resetWindowScopeForTests();
     const appWindow = getWindowScope();
     const local = appWindow.commandScope().store(uiStore);
@@ -164,27 +165,25 @@ describe("remoteWorkspaceStore derived from the window selection", () => {
       expect(local.getState().selectedProjectId).toBeNull();
       expect(local.getState().selectedEnvironmentId).toBeNull();
 
-      useRemoteWorkspaceStore
-        .getState()
-        .noteRealmSelection("bk_remote", { projectId: "remote-project", environmentId: null });
+      selectOnNode("bk_remote", { projectId: "remote-project", environmentId: null });
       expect(appWindow.selection.get()?.environmentId).toBeNull();
       expect(useRemoteWorkspaceStore.getState().active?.environmentId).toBeNull();
 
       local.getState().selectProject("local-project");
       expect(appWindow.selection.get()?.nodeId).toBe(appWindow.commandScope().nodeId);
       expect(useRemoteWorkspaceStore.getState().active).toBeNull();
-      // The realm stays open, hidden.
-      expect(useRemoteWorkspaceStore.getState().realms).toEqual(["bk_remote"]);
+      // The node stays held, hidden.
+      expect(useRemoteWorkspaceStore.getState().openNodes).toEqual(["bk_remote"]);
     } finally {
       stop();
     }
   });
 
-  test("closing the shown realm clears the selection; showing local keeps a local one", () => {
+  test("closing the shown node clears the selection; showing local keeps a local one", () => {
     resetWindowScopeForTests();
     const appWindow = getWindowScope();
     useRemoteWorkspaceStore.getState().open("bk_remote", { projectId: "remote-project" });
-    useRemoteWorkspaceStore.getState().closeRealm("bk_remote");
+    useRemoteWorkspaceStore.getState().closeNode("bk_remote");
     expect(appWindow.selection.get()).toBeNull();
     expect(useRemoteWorkspaceStore.getState().active).toBeNull();
 

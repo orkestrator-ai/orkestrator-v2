@@ -51,7 +51,7 @@ beforeEach(() => {
   useProjectStore.setState({ projects: [project] });
   setFilesPanelTestState({ pullRequestTabs: {}, isOpen: false, activeTab: "changes" });
   useProjectPullRequestsStore.setState({ projects: {} });
-  useRemoteWorkspaceStore.setState({ active: null, realms: [], requests: {} });
+  useRemoteWorkspaceStore.setState({ active: null, openNodes: [], requests: {} });
 });
 afterEach(() => {
   cleanup();
@@ -158,8 +158,8 @@ test("with a leaf shown in the window's tree, the pull request opens in the leaf
     windowScope.commandScope().store(filesPanelStore).getState().pullRequestTabs.env,
   ).toBeUndefined();
 
-  // A node the window shows by a realm has no scope here: the window falls back.
-  windowScope.select({ nodeId: "bk_realm-only" as BackendId, projectId: "p", environmentId: null });
+  // A node with no open scope here: the window falls back.
+  windowScope.select({ nodeId: "bk_unopened" as BackendId, projectId: "p", environmentId: null });
   expect(openPullRequestInApp(ref)).toBe(false);
 });
 

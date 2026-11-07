@@ -9,7 +9,6 @@ import type { BackendId } from "@orkestrator/protocol/federation";
 import { getWindowScope } from "@/lib/node-scope/app-window-scope";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { useConfigStore } from "@/stores/configStore";
-import { useInTreeNodesStore } from "@/stores/inTreeNodesStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { FakeNodeClient } from "@/test/render-in-node-scope";
 
@@ -105,8 +104,6 @@ async function flush() {
 }
 
 const initialPortal = portalStore.store.getState();
-const initialHref = window.location.href;
-const happyDOM = (window as unknown as { happyDOM: { setURL(url: string): void } }).happyDOM;
 
 beforeEach(() => {
   subscriptions.clear();
@@ -120,7 +117,7 @@ beforeEach(() => {
       return entry.stop;
     },
   );
-  useRemoteWorkspaceStore.setState({ active: null, realms: [] });
+  useRemoteWorkspaceStore.setState({ active: null, openNodes: [] });
   playConfiguredNotificationSound.mockReset();
   playConfiguredNotificationSound.mockResolvedValue(true);
   primeNotificationSounds.mockReset();
@@ -148,8 +145,7 @@ function inTreeLeaf(): FakeNodeClient {
   const client = new FakeNodeClient({ nodeId: "bk_leaf" as BackendId });
   leafScopes.push(getWindowScope().open({ role: "leaf", client, tier: "live" }));
   act(() => {
-    useInTreeNodesStore.setState({ useRealmsForRemoteMachines: false });
-    useRemoteWorkspaceStore.setState({ realms: ["bk_leaf"] });
+    useRemoteWorkspaceStore.setState({ openNodes: ["bk_leaf"] });
   });
   return client;
 }
@@ -157,47 +153,21 @@ function inTreeLeaf(): FakeNodeClient {
 afterEach(() => {
   cleanup();
   for (const scope of leafScopes.splice(0)) scope.dispose();
-  useInTreeNodesStore.setState({ useRealmsForRemoteMachines: false });
   getWindowScope().select(null);
   subscribe.mockRestore();
   portalStore.store.setState(initialPortal, true);
-  useRemoteWorkspaceStore.setState({ active: null, realms: [] });
+  useRemoteWorkspaceStore.setState({ active: null, openNodes: [] });
   if (notificationDescriptor) Object.defineProperty(window, "Notification", notificationDescriptor);
   else delete (window as unknown as { Notification?: unknown }).Notification;
   resetClientStateCapabilitiesForTests();
-  happyDOM.setURL(initialHref);
 });
 
 describe("subscriptions", () => {
-  test("subscribes each other node without a realm, never this node itself", () => {
+  test("subscribes each other node, never this node itself", () => {
     setNodes(node("bk_self", "Self"), node("bk_leaf", "Leaf"), node("bk_other", "Other"));
     renderHook(() => useRemoteNodeAttention(() => undefined));
     expect(Array.from(subscriptions.keys()).sort()).toEqual(["bk_leaf", "bk_other"]);
     expect(live("bk_leaf")?.subscriber.events).toEqual([ENVIRONMENT_ATTENTION_EVENT]);
-  });
-
-  test("under the rollback setting, leaves a node with an open realm to that realm", () => {
-    useInTreeNodesStore.setState({ useRealmsForRemoteMachines: true });
-    useRemoteWorkspaceStore.setState({ realms: ["bk_leaf"] });
-    renderHook(() => useRemoteNodeAttention(() => undefined));
-    expect(subscriptions.has("bk_leaf")).toBe(false);
-  });
-
-  test("under the rollback setting, drops a node when its realm opens and takes it back when it closes", () => {
-    useInTreeNodesStore.setState({ useRealmsForRemoteMachines: true });
-    setNodes(node("bk_leaf", "Leaf"), node("bk_other", "Other"));
-    renderHook(() => useRemoteNodeAttention(() => undefined));
-    const first = live("bk_leaf")!;
-    const other = live("bk_other")!;
-    act(() => useRemoteWorkspaceStore.setState({ realms: ["bk_leaf"] }));
-    expect(first.stop).toHaveBeenCalledTimes(1);
-    expect(live("bk_leaf")).toBeUndefined();
-    act(() => useRemoteWorkspaceStore.setState({ realms: [] }));
-    expect(live("bk_leaf")).toBeDefined();
-    expect(subscriptions.get("bk_leaf")).toHaveLength(2);
-    // The other node's lease is untouched by the leaf's realm.
-    expect(other.stop).not.toHaveBeenCalled();
-    expect(subscriptions.get("bk_other")).toHaveLength(1);
   });
 
   test("drops a node that leaves the summaries", () => {
@@ -213,14 +183,6 @@ describe("subscriptions", () => {
     const entries = [live("bk_leaf")!, live("bk_other")!];
     view.unmount();
     for (const entry of entries) expect(entry.stop).toHaveBeenCalledTimes(1);
-  });
-
-  test("subscribes nothing inside a realm renderer", () => {
-    const url = new URL(initialHref);
-    url.search = "?realm=workspace&workspace=w1";
-    happyDOM.setURL(url.toString());
-    renderHook(() => useRemoteNodeAttention(() => undefined));
-    expect(subscribe).not.toHaveBeenCalled();
   });
 
   test("hands each (node, attention) on once, and ignores other events and malformed payloads", () => {
@@ -248,12 +210,12 @@ describe("subscriptions", () => {
     expect(seen).toEqual(["a1"]);
   });
 
-  test("remembers delivered attention across a realm opening and closing", () => {
+  test("remembers delivered attention across the region holding and releasing a node", () => {
     const seen: string[] = [];
     renderHook(() => useRemoteNodeAttention((_nodeId, event) => seen.push(event.attentionId)));
     deliver("bk_leaf", attention("a1"));
-    act(() => useRemoteWorkspaceStore.setState({ realms: ["bk_leaf"] }));
-    act(() => useRemoteWorkspaceStore.setState({ realms: [] }));
+    act(() => useRemoteWorkspaceStore.setState({ openNodes: ["bk_leaf"] }));
+    act(() => useRemoteWorkspaceStore.setState({ openNodes: [] }));
     deliver("bk_leaf", attention("a1"));
     expect(seen).toEqual(["a1"]);
   });
@@ -266,7 +228,7 @@ describe("through the notification sound service", () => {
     return view;
   }
 
-  test("a leaf without a realm sounds the agent-stopped cue once", async () => {
+  test("a leaf sounds the agent-stopped cue once", async () => {
     await mounted();
     deliver("bk_leaf", attention("a1"));
     deliver("bk_leaf", attention("a1"));
@@ -275,15 +237,7 @@ describe("through the notification sound service", () => {
     expect(playConfiguredNotificationSound).toHaveBeenCalledWith("agent-stopped");
   });
 
-  test("under the rollback setting, a leaf with an open realm makes no sound from the shell", async () => {
-    useInTreeNodesStore.setState({ useRealmsForRemoteMachines: true });
-    useRemoteWorkspaceStore.setState({ realms: ["bk_leaf"] });
-    await mounted();
-    expect(live("bk_leaf")).toBeUndefined();
-    expect(playConfiguredNotificationSound).not.toHaveBeenCalled();
-  });
-
-  test("a question sounds and shows a notification naming the node, which opens its realm", async () => {
+  test("a question sounds and shows a notification naming the node, which opens it in the window", async () => {
     await mounted();
     deliver("bk_leaf", attention("q1", "agent_question"));
     await flush();

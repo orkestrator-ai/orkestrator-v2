@@ -14,7 +14,7 @@ import { commandBackendClient, type BackendClient } from "./client";
 export function createMachineProfileApi(client: BackendClient) {
   const nodes = () => nodesApi(client);
 
-  /** This realm's own machine profile (canonical name + colour). */
+  /** The client's machine profile (canonical name + colour). */
   async function getBackendProfile(): Promise<BackendProfile> {
     return parseBackendProfile(await nodes().get_backend_profile(NO_ARGS));
   }

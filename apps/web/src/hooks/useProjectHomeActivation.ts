@@ -86,7 +86,7 @@ export function useProjectHomeActivation() {
       return;
     }
     if (!checkoutPath) {
-      // A realm selects its requested project before the first snapshot arrives.
+      // Another node's workspace selects its requested project before the first snapshot arrives.
       // Only a known project (or a completed snapshot) can confirm no checkout.
       if (projectPending) return;
       const ui = uiApi.getState();

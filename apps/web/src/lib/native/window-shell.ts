@@ -179,7 +179,7 @@ export function createWindowShell<T extends NodeTransport>(
    * keeps rendering stale state behind an EventSource that retries forever.
    *
    * Scoped to confirmed cookie sessions on purpose. A bearer client (hosted,
-   * Electron, a workspace realm) must never be navigated.
+   * Electron, another node's client) must never be navigated.
    */
   const handleCredentialLapse = () => {
     if (!browserSessionActive || credentialLapseHandled) return;

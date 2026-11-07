@@ -148,10 +148,10 @@ for (const { mode, offline } of [
     expect(request).toBeDefined();
     if (mode === "repository" && !offline) {
       // Repository grouping lands on Home, so it must not send a board tab override.
-      expect(request).toEqual({ type: "select", projectId: "tg" });
+      expect(request).toEqual({ projectId: "tg" });
       expect(request).not.toHaveProperty("boardTab");
     } else {
-      expect(request).toEqual({ type: "select", projectId: "tg", boardTab: "coordinator" });
+      expect(request).toEqual({ projectId: "tg", boardTab: "coordinator" });
     }
   });
 }
@@ -252,7 +252,6 @@ for (const mode of ["machine", "project", "repository", "activity"] as const) {
       environmentId: "run",
     });
     expect(useRemoteWorkspaceStore.getState().requests.bk_mbp3?.request).toEqual({
-      type: "select",
       projectId: "tg",
       environmentId: "run",
     });

@@ -34,7 +34,6 @@ import {
   NODE_SUMMARY_CHANGED_EVENT,
   NODE_OUTCOMES_CHANGED_EVENT,
   type NodeSummary,
-  type SelfNodeSummary,
 } from "@orkestrator/protocol/node-summaries";
 import type { MachineRelease } from "@orkestrator/protocol/fleet-currency";
 import { invoke } from "@/lib/native/backend";
@@ -43,15 +42,12 @@ import { backendClientOver } from "@/lib/node-scope/domains/invoke-over";
 import { NO_ARGS, nodesApiOver, portalNodesApi } from "@/lib/node-scope/domains/nodes";
 import { listen, NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
 import { commandScopeInvoke, commandScopeListen } from "./command-scope";
-import { workspaceTarget } from "./page-portal";
 
 export interface PortalState {
   /** This (command) node's identity, once known. */
   selfId: BackendId | null;
   status: NodeStatus | null;
   nodes: NodeSummary[];
-  /** The command node's own summary, while the workspace is on another node. */
-  self: SelfNodeSummary | null;
   /**
    * The command node's own version and hello domains, which every machine's
    * is compared with (plan item 5006); null until read, or from a command
@@ -86,7 +82,6 @@ export class PortalStore {
     selfId: null,
     status: null,
     nodes: [],
-    self: null,
     commandRelease: null,
     loaded: false,
     unsupported: false,
@@ -163,10 +158,9 @@ export class PortalStore {
   private async read(): Promise<void> {
     // Status and summaries are read independently, so an older or
     // non-command backend still reports its status.
-    const includeSelf = workspaceTarget() !== null;
     const [status, summaries] = await Promise.allSettled([
       portalNodesApi().get_node_status(NO_ARGS),
-      portalNodesApi().get_node_summaries(includeSelf ? { includeSelf: true } : {}),
+      portalNodesApi().get_node_summaries({}),
     ]);
     const statusValue = status.status === "fulfilled" ? status.value : null;
     const summariesValue =
@@ -179,7 +173,6 @@ export class PortalStore {
       selfId: summariesValue?.selfId ?? statusValue?.nodeId ?? state.selfId,
       status: statusValue ?? state.status,
       nodes: summariesValue?.nodes ?? state.nodes,
-      self: summariesValue ? (summariesValue.self ?? null) : state.self,
       commandRelease: summariesValue
         ? summariesValue.selfVersion
           ? { version: summariesValue.selfVersion, domains: summariesValue.selfDomains ?? null }
@@ -203,8 +196,7 @@ export class PortalStore {
     args: Record<string, unknown> = {},
     requestKey: string = crypto.randomUUID(),
   ): Promise<T> {
-    // The command node's own resources (listed from its self summary while
-    // the workspace is elsewhere) are its ordinary commands.
+    // The command node's own resources are its ordinary commands.
     if (nodeId === this.store.getState().selfId) {
       const result = await commandScopeInvoke<T>(command, args);
       if (!isNodeReadCommand(command)) this.scheduleRefresh();

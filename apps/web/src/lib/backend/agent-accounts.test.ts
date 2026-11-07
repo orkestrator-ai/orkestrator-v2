@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { invoke } from "@/lib/native/backend";
 import {
   getAgentSignInStatus,
-  listAgentAccounts,
   setActiveAgentAccount,
   setAgentAccountAutoSwitchEnabled,
   setAgentAccountAutoSwitchIncluded,
@@ -17,38 +16,15 @@ import { cursorSdkLoginStart } from "./config-integrations";
 import { startOpenCodeProviderLogin } from "./opencode-provider-auth";
 import { OutcomeUnknownError, portalStore } from "@/lib/portal/portal-store";
 
+/** The window's command node: its own transport, which suites mock. */
 const workspace = invoke as unknown as ReturnType<typeof mock>;
-const portal = mock(
-  async (_command: string, _args?: Record<string, unknown>): Promise<unknown> => ({
-    outcome: "ok",
-    result: {},
-  }),
-);
+const portal = workspace;
 beforeEach(() => {
   workspace.mockReset();
-  portal.mockReset();
-  portal.mockImplementation(async () => ({ outcome: "ok", result: {} }));
-  window.orkestratorPortal = { invoke: portal } as never;
-  window.orkestratorWorkspaceTarget = { nodeId: "leaf", nodeName: "Leaf", path: "direct" };
+  workspace.mockImplementation(async () => ({ outcome: "ok", result: {} }));
 });
 afterEach(() => {
-  delete window.orkestratorPortal;
-  delete window.orkestratorWorkspaceTarget;
   workspace.mockReset();
-});
-
-test("an omitted machine reads the view backend; explicit command-node reads and writes use the portal", async () => {
-  await listAgentAccounts();
-  expect(workspace).toHaveBeenCalledWith("list_agent_accounts", {});
-  workspace.mockClear();
-  await listAgentAccounts(null);
-  await setActiveAgentAccount("claude", "work", null);
-  expect(portal).toHaveBeenCalledWith("list_agent_accounts", {});
-  expect(portal).toHaveBeenCalledWith("set_active_agent_account", {
-    platform: "claude",
-    accountId: "work",
-  });
-  expect(workspace).not.toHaveBeenCalled();
 });
 
 test("all sign-in clients route the selected machine through invoke_on_node", async () => {
@@ -64,7 +40,6 @@ test("all sign-in clients route the selected machine through invoke_on_node", as
     ["invoke_on_node", "leaf", "cursor_sdk_login_start"],
     ["invoke_on_node", "leaf", "start_opencode_provider_login"],
   ]);
-  expect(workspace).not.toHaveBeenCalled();
 });
 
 test("remote writes propagate unavailable and unknown outcomes without retrying locally", async () => {
@@ -78,31 +53,10 @@ test("remote writes propagate unavailable and unknown outcomes without retrying 
   );
   expect(portalStore.getState().outcomesRevision).toBe(revision + 1);
   expect(portal).toHaveBeenCalledTimes(2);
-  expect(workspace).not.toHaveBeenCalled();
-});
-
-test("overview and preferred identity clients use the command node from a leaf workspace", async () => {
-  const overview = { machines: [], preferred: { claude: "work@example.com" } };
-  portal.mockResolvedValueOnce(overview);
-  expect(await listMachineAgentAccounts()).toBe(overview);
-  portal.mockResolvedValueOnce({ codex: "code@example.com" });
-  expect(await setPreferredAgentIdentity("codex", "code@example.com")).toEqual({
-    codex: "code@example.com",
-  });
-  portal.mockResolvedValueOnce({});
-  expect(await setPreferredAgentIdentity("claude", null)).toEqual({});
-  expect(portal.mock.calls).toEqual([
-    ["list_machine_agent_accounts", undefined],
-    ["set_preferred_agent_identity", { platform: "codex", email: "code@example.com" }],
-    ["set_preferred_agent_identity", { platform: "claude", email: null }],
-  ]);
-  expect(workspace).not.toHaveBeenCalled();
 });
 
 test("overview and preferred identity clients use the local backend on a page with no portal to another command node", async () => {
-  // The window's own command node: no settings parent, so nothing goes through a portal.
-  delete window.orkestratorWorkspaceTarget;
-  delete window.orkestratorPortal;
+  // The window's own command node: no settings parent.
   const overview = { machines: [], preferred: { claude: "work@example.com" } };
   workspace.mockResolvedValueOnce(overview);
   expect(await listMachineAgentAccounts()).toBe(overview);
@@ -117,7 +71,6 @@ test("overview and preferred identity clients use the local backend on a page wi
     ["set_preferred_agent_identity", { platform: "claude", email: "work@example.com" }],
     ["set_preferred_agent_identity", { platform: "claude", email: null }],
   ]);
-  expect(portal).not.toHaveBeenCalled();
 });
 
 test("overview preference requests propagate command-node failures without a local fallback", async () => {
@@ -127,7 +80,6 @@ test("overview preference requests propagate command-node failures without a loc
   portal.mockRejectedValueOnce(failure);
   await expect(setPreferredAgentIdentity("claude", null)).rejects.toBe(failure);
   expect(portal).toHaveBeenCalledTimes(2);
-  expect(workspace).not.toHaveBeenCalled();
 });
 
 describe("automatic switching ticks", () => {
@@ -135,19 +87,6 @@ describe("automatic switching ticks", () => {
     portal.mock.calls
       .filter(([command]) => command === "invoke_on_node")
       .map(([, args]) => (args as { command: string }).command);
-
-  test("in a leaf's window the tick goes to the command node, and the pin ends on the leaf", async () => {
-    workspace.mockImplementation(async () => ({}));
-    await setAgentAccountAutoSwitchEnabled("claude", true, true);
-    expect(portal).toHaveBeenCalledWith("set_agent_account_auto_switch", {
-      platform: "claude",
-      enabled: true,
-    });
-    expect(workspace).toHaveBeenCalledWith("resume_agent_account_auto_switch", {
-      platform: "claude",
-    });
-    expect(workspace).toHaveBeenCalledWith("list_agent_accounts", {});
-  });
 
   test("for the machine shown only that machine's pin ends", async () => {
     portal.mockImplementation(async () => ({ outcome: "ok", result: {} }));
@@ -175,7 +114,9 @@ describe("automatic switching ticks", () => {
     await setAgentAccountAutoSwitchEnabled("claude", true, false);
     await setAgentAccountAutoSwitchEnabled("claude", false, true);
     expect(workspace.mock.calls.map(([command]) => command)).toEqual([
+      "set_agent_account_auto_switch",
       "list_agent_accounts",
+      "set_agent_account_auto_switch",
       "list_agent_accounts",
     ]);
   });
@@ -199,7 +140,6 @@ describe("automatic switching ticks", () => {
       accountId: "account-1",
       included: true,
     });
-    expect(portal).not.toHaveBeenCalled();
     expect(nodeCalls()).toEqual([]);
   });
 });
@@ -219,7 +159,6 @@ test("plugin catalog requests preserve the selected command node or leaf", async
       },
     ],
   ]);
-  expect(workspace).not.toHaveBeenCalled();
 });
 
 test("a machine that predates the account switch grant reads as none, on any path", async () => {
@@ -228,6 +167,7 @@ test("a machine that predates the account switch grant reads as none, on any pat
   );
   workspace.mockRejectedValueOnce(unknown);
   expect(await getCoordinatorAccountSwitchGrant("claude")).toBeNull();
+  workspace.mockClear();
   // A routed answer arrives with the command node's text unchanged.
   portal.mockRejectedValueOnce(unknown);
   expect(await getCoordinatorAccountSwitchGrant("claude", "leaf")).toBeNull();

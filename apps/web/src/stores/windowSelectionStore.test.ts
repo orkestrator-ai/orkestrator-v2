@@ -57,7 +57,7 @@ describe("the window selection", () => {
     expect(reloaded.leaf.store(uiStore).getState().selectedProjectId).toBeNull();
   });
 
-  test("keeps only the command node's selection, which a realm reopens itself for others", () => {
+  test("keeps only the command node's selection; another node keeps its own", () => {
     const first = openWindow();
     stops.push(bindWindowSelectionPersistence(first.windowScope, { restore: true }));
     first.command.store(uiStore).getState().selectProject("p-1");
@@ -113,10 +113,10 @@ describe("the window selection", () => {
     expect(selectionOnScope(command)).toBeNull();
     expect(isCommandNodeSelection(windowScope, selection)).toBe(false);
     expect(isCommandNodeSelection(windowScope, null)).toBe(true);
-    // A realm's node has no scope in this window: not the command node's.
+    // A node with no scope (yet) in this window: not the command node's.
     expect(
       isCommandNodeSelection(windowScope, {
-        nodeId: "bk_realm" as BackendId,
+        nodeId: "bk_unopened" as BackendId,
         projectId: null,
         environmentId: null,
       }),

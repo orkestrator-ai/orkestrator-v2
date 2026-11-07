@@ -2,9 +2,10 @@
  * Per-host defaults of the node-scope lifecycle (report §8.2, plan item 4002).
  *
  * Every number here is a placeholder: wave 0 (plan item 0004,
- * `docs/reports/unified-federation-measurements.md`) measured per-realm cost
- * (a desktop realm 340–410 MB in a development build, a Chromium iframe realm
- * 22–33 MB of JS heap, WebKit 44–171 MB each), not per-scope cost, and has no
+ * `docs/reports/unified-federation-measurements.md`) measured the cost of the
+ * separate per-node workspace documents of earlier releases (a desktop view
+ * 340–410 MB in a development build, a Chromium frame 22–33 MB of JS heap,
+ * WebKit 44–171 MB each), not per-scope cost, and has no
  * iPad numbers. The design keeps §8.2's values until measured ones exist, so
  * each is configurable per window (`WindowScopeOptions.lifecycle`).
  *

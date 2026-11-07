@@ -36,24 +36,6 @@ interface Window {
    * Electron only: the machine this renderer is bound to, for presentation
    * storage namespaces. Never a route, port or credential.
    */
-  /**
-   * The command node this client is connected to, while the window's
-   * workspace (`orkestrator`) is on another node: a workspace realm document
-   * only. Read only by `lib/portal/page-portal.ts` (plan item 5004).
-   */
-  orkestratorPortal?: {
-    invoke<T = unknown>(command: string, args?: Record<string, unknown>): Promise<T>;
-    listen<T = unknown>(event: string, callback: (payload: T) => void): () => void;
-    eventStreamReady?(event: string): Promise<void>;
-  };
-  /** The node the window's workspace is on, when it is not the command node. */
-  orkestratorWorkspaceTarget?: {
-    nodeId: string;
-    nodeName: string;
-    path: "direct" | "relay";
-    routeKind?: "https" | "ssh";
-    via?: string;
-  };
   orkestratorDesktopIdentity?: {
     connectionId: string;
     backendId: string | null;
@@ -64,8 +46,6 @@ interface Window {
      * (`backendOnThisDevice(nodeId)` in `lib/gateway-url.ts`).
      */
     localInstallationId?: string | null;
-    /** The window's own machine, while its workspace is on another node. */
-    portal?: { connectionId: string; backendId: string | null; legacyOrigin: string | null };
   };
   /**
    * Electron only, on a local window using the direct gateway transport: the
@@ -244,45 +224,6 @@ interface Window {
         routeFallback?: boolean;
       }): Promise<import("@orkestrator/protocol/connections").ConnectionList>;
       answerSshPrompt?(promptId: string, answer: string | null): void;
-    };
-    /**
-     * Electron only: workspace realms of other nodes in this window's central
-     * region (see `lib/federation/workspace-realm.ts`). The main process binds
-     * each to its node; the window only places it and passes messages.
-     */
-    workspaceViews?: {
-      open(input: {
-        nodeId: string;
-        request: Omit<import("@/lib/federation/workspace-realm").RealmSelectRequest, "type">;
-      }): Promise<{ viewId: string }>;
-      setBounds(
-        viewId: string,
-        bounds: { x: number; y: number; width: number; height: number },
-      ): Promise<void>;
-      setVisible(viewId: string, visible: boolean): Promise<void>;
-      /** A still of the realm (a data URL), shown while one of the window's overlays covers it. */
-      capture(viewId: string): Promise<string | null>;
-      send(
-        viewId: string,
-        message: import("@/lib/federation/workspace-realm").ShellToRealmMessage,
-      ): Promise<void>;
-      close(viewId: string): Promise<void>;
-      onEvent(
-        callback: (
-          event:
-            | { viewId: string; type: "message"; message: unknown }
-            | { viewId: string; type: "closed" | "crashed" | "load-failed" },
-        ) => void,
-      ): () => void;
-    };
-    /** Electron only, in a workspace realm: messages to and from its window. */
-    workspaceRealm?: {
-      post(
-        message:
-          | import("@/lib/federation/workspace-realm").RealmToShellMessage
-          | import("@orkestrator/protocol/realm-boot-timing").RealmBootTimingMessage,
-      ): void;
-      onMessage(callback: (message: unknown) => void): () => void;
     };
     process: {
       exit(code?: number): Promise<void>;

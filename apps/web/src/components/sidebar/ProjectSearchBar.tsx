@@ -32,7 +32,7 @@ import { onAppShortcut } from "@/lib/app-shortcuts";
 import { formatCompactRelativeTime } from "@/lib/format-relative-time";
 import { ALL_MACHINES, type MachineView } from "@/lib/federation/aggregate";
 import { openMachineWorkspace } from "@/lib/federation/open-workspace";
-import { projectLandingBoardTab, realmGroupingFor } from "@/lib/federation/workspace-realm";
+import { projectLandingBoardTab, windowGroupingFor } from "@/lib/federation/window-grouping";
 import {
   flattenProjectSearchResults,
   localSearchSource,
@@ -377,7 +377,7 @@ export function ProjectSearchBar({
   };
 
   // ⌘K / Ctrl+K toggles the search from anywhere in the window, the
-  // composer, terminals and workspace realms included (see `app-shortcuts.ts`).
+  // composer, terminals and other nodes' workspaces included (see `app-shortcuts.ts`).
   const openRef = useRef(open);
   useEffect(() => {
     openRef.current = open;
@@ -454,7 +454,7 @@ export function ProjectSearchBar({
         // and opened there as its sidebar row opens it.
         onSelectMachineProject?.(other, hit.project.id);
         // Read after the reveal, which can switch the sidebar's grouping.
-        const grouping = realmGroupingFor(
+        const grouping = windowGroupingFor(
           useUIChromeStore.getState().environmentSortMode,
           useMachineViewStore.getState().grouping,
           window.matchMedia(MOBILE_SHELL_MEDIA_QUERY).matches,

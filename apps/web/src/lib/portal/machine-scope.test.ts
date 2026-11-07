@@ -49,8 +49,6 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  delete window.orkestratorWorkspaceTarget;
-  delete window.orkestratorPortal;
   resetWindowScopeForTests();
   invokeMock.mockReset();
   invokeMock.mockResolvedValue(undefined);
@@ -145,17 +143,5 @@ describe("machineInvoke per tier (plan item 5004)", () => {
     // The command node itself is the command scope's own command.
     await machineInvoke({ role: "self", nodeId: null })!("get_backend_profile");
     expect(invokeMock).toHaveBeenCalledWith("get_backend_profile", {});
-  });
-
-  test("a realm document keeps routing every node through its command node", async () => {
-    const portal = mock(async () => ({ outcome: "ok", result: accounts }));
-    const { client } = openLeaf();
-    window.orkestratorWorkspaceTarget = { nodeId: LEAF, nodeName: "Leaf", path: "direct" };
-    window.orkestratorPortal = { invoke: portal, listen: () => () => {} } as never;
-    expect(hydratedMachineScope(LEAF)).toBeNull();
-    await listAgentAccounts(LEAF);
-    expect(client.calls("list_agent_accounts")).toHaveLength(0);
-    expect(portal).toHaveBeenCalledTimes(1);
-    expect(invokeMock).not.toHaveBeenCalled();
   });
 });

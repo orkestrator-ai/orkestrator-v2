@@ -9,7 +9,7 @@ import type { GlobalSettingsSection } from "@/lib/settings-navigation";
  * menu), so the state lives here and `GlobalSettingsHost`, which `AppShell`
  * renders outside both layouts, shows the page. Other trees still ask through
  * `requestGlobalSettings` (`@/lib/settings-navigation`), which the host feeds
- * into this store, so a workspace realm keeps forwarding to its window.
+ * into this store.
  */
 interface GlobalSettingsState {
   open: boolean;

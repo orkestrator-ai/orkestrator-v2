@@ -23,7 +23,7 @@ export interface MachineView {
   name: string;
   /** Canonical backend profile colour token (or a labelled fallback). */
   colorToken: string;
-  /** This renderer's own machine (its full workspace lives in this realm). */
+  /** This window's own machine (its full workspace lives in the window's command scope). */
   bound: boolean;
   freshness: SummaryFreshness;
   transport: ConnectionTransportState;

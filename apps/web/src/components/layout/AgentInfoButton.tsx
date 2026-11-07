@@ -3,7 +3,6 @@ import { useAccountPlanUsage } from "./useAccountPlanUsage";
 import {
   useCallback,
   useEffect,
-  useEffectEvent,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -79,11 +78,6 @@ import { AgentInfoAccountSection } from "./AgentInfoAccountSection";
 interface AgentInfoButtonProps {
   activeTab: TabInfo | null;
   mobile?: boolean;
-  /**
-   * In a realm: the window's title bar shows the trigger and asks for the
-   * popover, which opens here under it (see `RealmTitleBarPanels`).
-   */
-  remote?: RealmPanelControl;
 }
 
 interface SessionActionState {
@@ -214,8 +208,6 @@ import {
   ConnectionPathPanel,
 } from "./AgentInfoButton.panels";
 import { useFederation } from "@/components/federation/FederationProvider";
-import type { RealmPanelControl } from "@/lib/federation/workspace-realm";
-import { workspaceTarget } from "@/lib/portal/portal-transport";
 import type { WorkspaceConnectionPath } from "@/lib/portal/workspaces";
 
 export {
@@ -242,12 +234,11 @@ function routeSignalOf(scope: NodeScope): RouteSignal | null {
 
 /**
  * How this window reaches the popover's node when that is not the command
- * node it connected to: a realm document's page target, or for another node
- * shown in the window's tree (plan item 5002) its client's current route
- * (a browser's; the desktop's goes through main, which reports none).
+ * node it connected to: for another node shown in the window's tree (plan
+ * item 5002) its client's current route (a browser's; the desktop's goes
+ * through main, which reports none).
  */
 function useConnectionPath(scope: NodeScope): WorkspaceConnectionPath | null {
-  const [pageTarget] = useState(workspaceTarget);
   const route = scope.role === "command" ? null : routeSignalOf(scope);
   const subscribe = useCallback(
     (listener: () => void) => (route ? route.subscribe(listener) : () => undefined),
@@ -258,7 +249,7 @@ function useConnectionPath(scope: NodeScope): WorkspaceConnectionPath | null {
     () => route?.get() ?? null,
     () => route?.get() ?? null,
   );
-  if (scope.role === "command") return pageTarget;
+  if (scope.role === "command") return null;
   if (!current) return null;
   const { nodeName, path, routeKind, via } = current;
   return {
@@ -269,7 +260,7 @@ function useConnectionPath(scope: NodeScope): WorkspaceConnectionPath | null {
   };
 }
 
-/** The agent-information trigger, shared with a window's title bar over a realm. */
+/** The agent-information trigger; `remote` is an inert one while another node's scope opens. */
 export function AgentInfoTrigger({
   open,
   mobile = false,
@@ -300,16 +291,8 @@ export function AgentInfoTrigger({
   );
 }
 
-export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfoButtonProps) {
-  const [open, setOpen] = useState(remote?.request?.open ?? false);
-  const remoteRequest = remote?.request ?? null;
-  const [appliedRequest, setAppliedRequest] = useState(remoteRequest);
-  if (appliedRequest !== remoteRequest) {
-    setAppliedRequest(remoteRequest);
-    if (remoteRequest) setOpen(remoteRequest.open);
-  }
-  const reportOpen = useEffectEvent((next: boolean) => remote?.onOpenChange(next));
-  useEffect(() => reportOpen(open), [open, remoteRequest?.seq]);
+export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonProps) {
+  const [open, setOpen] = useState(false);
   const federation = useFederation();
   // The node whose sessions this popover shows: its projections and handoffs.
   const { scope: nodeScope } = useScopesWithCommandFallback();
@@ -339,12 +322,6 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLElement>(null);
   const restoreFocusRef = useRef(false);
-  const reportDismiss = useEffectEvent(() => remote?.onDismiss?.());
-  useEffect(() => {
-    if (open && remoteRequest?.open) {
-      panelRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
-    }
-  }, [open, remoteRequest?.open, remoteRequest?.seq]);
   const actionIdRef = useRef(0);
   const controlUpdateIdRef = useRef(0);
   const controlUpdateInFlightRef = useRef<ControlUpdateState | null>(null);
@@ -965,7 +942,6 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
   useEffect(() => {
     if (!open && restoreFocusRef.current) {
       restoreFocusRef.current = false;
-      reportDismiss();
       triggerRef.current?.focus();
     }
   }, [open]);
@@ -994,19 +970,16 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
 
   return (
     <div
-      className={cn("relative", remote ? "h-0 w-0" : mobile ? "h-9 w-9" : "h-8 w-8")}
-      data-testid={remote ? "realm-agent-info-panel" : undefined}
+      className={cn("relative", mobile ? "h-9 w-9" : "h-8 w-8")}
       style={{ WebkitAppRegion: "no-drag" } as CSSProperties}
       onMouseDown={(event) => event.stopPropagation()}
     >
-      {remote ? null : (
-        <AgentInfoTrigger
-          ref={triggerRef}
-          open={open}
-          mobile={mobile}
-          onClick={() => setOpen((value) => !value)}
-        />
-      )}
+      <AgentInfoTrigger
+        ref={triggerRef}
+        open={open}
+        mobile={mobile}
+        onClick={() => setOpen((value) => !value)}
+      />
 
       {open ? (
         <button

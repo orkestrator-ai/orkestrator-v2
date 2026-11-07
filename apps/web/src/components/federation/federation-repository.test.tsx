@@ -144,7 +144,6 @@ for (const bound of [true, false]) {
             expect(
               useRemoteWorkspaceStore.getState().requests[target.connectionId]?.request,
             ).toEqual({
-              type: "select",
               projectId: project.ref.projectId,
               ...(boardTab ? { boardTab } : { createEnvironmentProjectId: project.ref.projectId }),
             });
@@ -506,7 +505,6 @@ test("a repository heading's menu acts on the project it opens, in that machine'
     );
     await waitFor(() =>
       expect(useRemoteWorkspaceStore.getState().requests.a?.request).toEqual({
-        type: "select",
         projectId: "project-1",
         dialog: "repository-settings",
       }),

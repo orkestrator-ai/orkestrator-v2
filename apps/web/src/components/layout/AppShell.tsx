@@ -30,17 +30,11 @@ import { SystemUsageIndicator } from "./SystemUsageIndicator";
 import { HostPark, HostSlot } from "./HostSlot";
 import { AppDialogHost } from "./AppDialogHost";
 import { GlobalSettingsHost } from "./GlobalSettingsHost";
-import { BugReportSheet, BugReportSheetHost } from "@/components/bug-report/BugReportSheet";
+import { BugReportSheetHost } from "@/components/bug-report/BugReportSheet";
 import { MachineCpuReadings } from "@/components/federation/MachineCpuReadings";
 import { RemoteWorkspaceRegion } from "@/components/federation/RemoteWorkspaceRegion";
-import {
-  RealmAgentInfoTrigger,
-  RealmSystemUsageMeters,
-  useRealmPanelDismiss,
-} from "@/components/federation/RealmTitleBar";
 import { useFederation } from "@/components/federation/FederationProvider";
 import { NodeTitleBarAgentInfo, NodeTitleBarUsage, useShownInTreeNode } from "./ShownNodeTitleBar";
-import { isWorkspaceRealm } from "@/lib/federation/workspace-realm";
 import {
   retainAppShortcutRouter,
   setShownAppShortcutWorkspace,
@@ -54,7 +48,6 @@ import {
 } from "@/stores/remoteWorkspaceStore";
 import {
   FILES_PANEL_MAX_SIZE,
-  NodeWorkspaceLayout,
   useCentralPanelThemeVars,
   useFilesPanelPullRequestWidth,
   useWorkspaceActiveTab,
@@ -90,17 +83,13 @@ function useRemoteWorkspaceNames(active: RemoteWorkspaceSelection | null) {
 
 export function AppShell({ children }: AppShellProps) {
   const isMobile = useMediaQuery(MOBILE_SHELL_MEDIA_QUERY);
-  // Another node's workspace inside a command node's window: only the
-  // central region, without the window's title bar and sidebar.
-  const [workspaceRealm] = useState(isWorkspaceRealm);
-  // In the window: the other node whose workspace the central region shows.
-  // The title bar, toolbar row and sidebar around it stay the command node's.
-  const remoteWorkspace = useRemoteWorkspaceStore((state) =>
-    workspaceRealm ? null : state.active,
-  );
+  // The other node whose workspace the central region shows. The title bar,
+  // toolbar row and sidebar around it stay the command node's.
+  const remoteWorkspace = useRemoteWorkspaceStore((state) => state.active);
   const remoteNames = useRemoteWorkspaceNames(remoteWorkspace);
-  // A node shown in this window's tree has its own ⌘⇧P (`InTreeWorkspace`),
-  // and the title bar's meters and popovers are its scope's (plan item 5002).
+  // Another node shown in this window's tree has its own ⌘⇧P
+  // (`InTreeWorkspace`), and the title bar's meters and popovers are its
+  // scope's (plan item 5002).
   const shownInTree = useShownInTreeNode(remoteWorkspace?.nodeId ?? null);
   const inTreeShown = shownInTree !== null;
   const [centralColumn, setCentralColumn] = useState<HTMLDivElement | null>(null);
@@ -169,14 +158,11 @@ export function AppShell({ children }: AppShellProps) {
   // One key router for every node the window shows in its tree: a workspace's
   // shortcut (⌘T) goes to the workspace on show (plan item 5003).
   const { windowScope } = useScopesWithCommandFallback();
+  useEffect(() => setShownAppShortcutWorkspace(() => shownNodeScope(windowScope)), [windowScope]);
   useEffect(() => {
-    if (workspaceRealm) return;
-    return setShownAppShortcutWorkspace(() => shownNodeScope(windowScope));
-  }, [windowScope, workspaceRealm]);
-  useEffect(() => {
-    // ⌘K with the sidebar hidden shows it, with the search open. A realm
-    // forwards ⌘K to the window; the phone layout's drawer stays closed.
-    if (workspaceRealm || isMobile) return;
+    // ⌘K with the sidebar hidden shows it, with the search open. The phone
+    // layout's drawer stays closed.
+    if (isMobile) return;
     return setUnhandledAppShortcut((id) => {
       const chrome = useUIChromeStore.getState();
       if (chrome.sidebarOpen) return false;
@@ -188,35 +174,11 @@ export function AppShell({ children }: AppShellProps) {
       chrome.toggleSidebar();
       return true;
     });
-  }, [isMobile, workspaceRealm]);
+  }, [isMobile]);
 
   useEffect(() => {
-    // A realm's document title is not shown; the window's is.
-    if (!workspaceRealm) document.title = windowTitle;
-  }, [windowTitle, workspaceRealm]);
-  // A realm's popovers only; an in-tree node's are ordinary popovers.
-  useRealmPanelDismiss(isMobile || inTreeShown ? null : (remoteWorkspace?.nodeId ?? null));
-
-  if (workspaceRealm) {
-    return (
-      <div className="flex h-full w-full flex-col overflow-hidden">
-        <OpenFileDialog />
-        <KeyboardShortcutsDialog />
-        <AppDialogHost />
-        <GlobalSettingsHost />
-        <BugReportSheet />
-        {/* The node's tabs and their mail live here; the messages panel opens over the realm. */}
-        <AgentMailPanel />
-        <HostPark parkRef={contentParkRef} />
-        <NodeWorkspaceLayout
-          main={<HostSlot host={contentHost} parkRef={contentParkRef} />}
-          filesPanelOpen={filesPanelOpen}
-          phone={isMobile}
-        />
-        {createPortal(children, contentHost)}
-      </div>
-    );
-  }
+    document.title = windowTitle;
+  }, [windowTitle]);
 
   const remoteShown = remoteWorkspace !== null;
 
@@ -309,8 +271,6 @@ export function AppShell({ children }: AppShellProps) {
               */}
               {shownInTree ? (
                 <NodeTitleBarUsage scope={shownInTree.scope} />
-              ) : remoteWorkspace ? (
-                <RealmSystemUsageMeters nodeId={remoteWorkspace.nodeId} region={centralColumn} />
               ) : (
                 <SystemUsageIndicator />
               )}
@@ -323,8 +283,6 @@ export function AppShell({ children }: AppShellProps) {
                 <AgentMailButton />
                 {shownInTree ? (
                   <NodeTitleBarAgentInfo scope={shownInTree.scope} />
-                ) : remoteWorkspace ? (
-                  <RealmAgentInfoTrigger nodeId={remoteWorkspace.nodeId} region={centralColumn} />
                 ) : (
                   <AgentInfoButton activeTab={activeTab} />
                 )}
@@ -410,7 +368,7 @@ export function AppShell({ children }: AppShellProps) {
           </ResizablePanelGroup>
         </>
       )}
-      {/* Outside both layouts, so a realm is never moved (a moved frame reloads). */}
+      {/* Outside both layouts, so another node's workspace keeps its state across them. */}
       <RemoteWorkspaceRegion anchor={isMobile ? mobileContent : centralColumn} />
       {/* After the layouts, so a slot holds the host before content effects run. */}
       {createPortal(children, contentHost)}

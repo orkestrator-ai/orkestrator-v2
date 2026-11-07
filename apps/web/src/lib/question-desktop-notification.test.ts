@@ -4,8 +4,6 @@ import { useProjectStore } from "@/stores/projectStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { useUIStore } from "@/stores/uiStore";
 import type { Environment, Project } from "@/types";
-import type { BackendId } from "@orkestrator/protocol/federation";
-import { getWindowScope } from "@/lib/node-scope/app-window-scope";
 import {
   __testing,
   desktopNotificationPermission,
@@ -156,55 +154,5 @@ describe("question desktop notifications", () => {
     expect(await requestDesktopNotificationPermission()).toBe("granted");
     expect(await requestDesktopNotificationPermission()).toBe("granted");
     expect(requested).toBe(1);
-  });
-});
-
-describe("a click inside a realm renderer", () => {
-  const originalOrkestrator = window.orkestrator;
-  const initialHref = window.location.href;
-  const happyDOM = (window as unknown as { happyDOM: { setURL(url: string): void } }).happyDOM;
-  let posted: unknown[] = [];
-
-  beforeEach(() => {
-    posted = [];
-    window.orkestrator = {
-      ...originalOrkestrator,
-      workspaceRealm: {
-        post: (message: unknown) => posted.push(message),
-        onMessage: () => () => undefined,
-      },
-    } as typeof window.orkestrator;
-    const url = new URL(initialHref);
-    url.search = "?realm=workspace&workspace=w1";
-    happyDOM.setURL(url.toString());
-  });
-
-  afterEach(() => {
-    window.orkestrator = originalOrkestrator;
-    happyDOM.setURL(initialHref);
-  });
-
-  test("before the realm knows its node's id, selects in the realm only", () => {
-    showQuestionDesktopNotification(question);
-    shown[0]!.listeners.get("click")!();
-    expect(posted).toEqual([]);
-    expect(useUIStore.getState().selectedEnvironmentId).toBe("env-1");
-  });
-
-  // Last: the file's window scope keeps the proven id from here on.
-  test("asks the window to show this node's environment, so the window's active node follows", () => {
-    expect(getWindowScope().adoptCommandNodeId("bk_realm-node" as BackendId)).toBe(true);
-    showQuestionDesktopNotification(question);
-    shown[0]!.listeners.get("click")!();
-    expect(posted).toEqual([
-      {
-        type: "open",
-        nodeId: "bk_realm-node",
-        projectId: "project-1",
-        environmentId: "env-1",
-        title: "webapp · fix-login",
-      },
-    ]);
-    expect(shown[0]!.closed).toBe(true);
   });
 });

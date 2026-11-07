@@ -448,7 +448,7 @@ test("a remote row disarms when focus leaves the shell for a child frame", () =>
   const row = environment("frame-target");
   render(<RemoteEnvironmentItem machine={machineView([row])} environment={row} />);
   fireEvent.click(screen.getByRole("button", { name: /frame-target/ }));
-  const frameDocument = document.implementation.createHTMLDocument("Child realm");
+  const frameDocument = document.implementation.createHTMLDocument("Child document");
   try {
     // A separate document has its own event path; shell blur revokes the arm.
     fireEvent.blur(window);

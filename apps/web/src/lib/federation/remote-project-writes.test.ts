@@ -55,11 +55,10 @@ function setup() {
   const onError = mock((_error: unknown) => {});
   const snapshot = (projects: FederatedProject[] | null, truncated = false) => {
     portal.store.setState({
-      selfId: nodeId,
-      self:
+      nodes:
         projects === null
-          ? null
-          : { nodeId, displayName: "Owner", loadedAt: 1, truncated, projects, environments: [] },
+          ? []
+          : ([{ nodeId, loadedAt: 1, truncated, projects, environments: [] }] as never),
     });
   };
   return { portal, writes, calls, onError, snapshot };

@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { loadProjectsFromBackend } from "@/hooks/useProjects";
 import { repositoryHint } from "@/lib/federation/summaries";
 import { openMachineWorkspace } from "@/lib/federation/open-workspace";
-import { realmCoordinatorDefers } from "@/lib/federation/workspace-realm";
+import { coordinatorDefersToCommandNode } from "@/lib/federation/window-grouping";
 import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
 import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
@@ -13,21 +13,11 @@ import { useFederation } from "@/components/federation/FederationProvider";
 import { useWindowGrouping } from "@/components/federation/useWindowGrouping";
 import { projectStore } from "@/stores/projectStore";
 import { portalStore } from "@/lib/portal/portal-store";
-import { workspaceTarget } from "@/lib/portal/page-portal";
 import { useProjectStore, useUIStore } from "@/stores";
-import { useRealmShellStore } from "@/stores/realmShellStore";
 
-/**
- * Whether `scope` is another node shown in the window's own tree (plan item
- * 4001): a leaf scope in a window that is not itself on a leaf.
- */
+/** Whether `scope` is another node shown in the window's own tree (plan item 4001). */
 function isInTreeLeaf(scope: NodeScope | null): boolean {
-  return scope?.role === "leaf" && workspaceTarget() === null;
-}
-
-/** Whether this page is a workspace realm document on a leaf. */
-function onLeafPage(): boolean {
-  return workspaceTarget() !== null;
+  return scope?.role === "leaf";
 }
 
 /** The workspace's node and the project: a project id is per node. */
@@ -35,7 +25,7 @@ export function leafCoordinatorGateKey(
   projectId: string | undefined,
   scope: NodeScope | null = null,
 ): string {
-  const node = isInTreeLeaf(scope) ? scope!.nodeId : (workspaceTarget()?.nodeId ?? "local");
+  const node = isInTreeLeaf(scope) ? scope!.nodeId : "local";
   return `${node}:${projectId ?? ""}`;
 }
 
@@ -55,20 +45,6 @@ interface CommandNodeFacts {
   /** The command node, for opening its coordinator; null while unknown. */
   readonly nodeId: string | null;
   readonly retry: () => Promise<void>;
-}
-
-/**
- * A realm document's command node: the portal's self summary, read over the
- * page's portal channel (until realms are deleted, plan item 6002).
- */
-function usePortalCommandNode(): CommandNodeFacts {
-  const self = useStore(portalStore.store, (state) => state.self);
-  const selfId = useStore(portalStore.store, (state) => state.selfId);
-  const loaded = useStore(portalStore.store, (state) => state.loaded);
-  return useMemo(
-    () => ({ loaded, self, nodeId: selfId, retry: () => portalStore.refresh() }),
-    [loaded, self, selfId],
-  );
 }
 
 /**
@@ -143,10 +119,9 @@ function PendingCoordination() {
  * a failed status read counts as loaded, so a broken portal never hides it.
  *
  * A node the user reaches through a command node (a leaf shown in the
- * window's tree, or a realm document on a leaf) follows the window's sidebar
- * grouping: in the tree it reads the window's `machineViewStore` and takes
- * the command node's projects from the window's command scope; a realm is
- * told the grouping and reads the portal's self summary. Grouped by repository,
+ * window's tree) follows the window's sidebar grouping (`machineViewStore`)
+ * and takes the command node's projects from the window's command scope.
+ * Grouped by repository,
  * the notice leads to the command node's coordinator for the same
  * repository when the command node has one, and the leaf's opens directly
  * when it has not. An unavailable or incomplete summary cannot establish
@@ -164,30 +139,26 @@ export function LeafModeCoordinatorGate({
   const status = useStore(portalStore.store, (state) => state.status);
   const portalStatusLoaded = useStore(portalStore.store, (state) => state.loaded);
   const scope = useShimNodeScope("project");
-  // Another node in the window's tree is on a leaf as a realm is; the
-  // command node's projects come from the window's command scope.
-  const inTreeLeaf = isInTreeLeaf(scope);
-  const portalCommandNode = usePortalCommandNode();
-  const commandNode = useCommandScopeNode(inTreeLeaf) ?? portalCommandNode;
-  const { self, nodeId: commandNodeId } = commandNode;
-  const portalLoaded = inTreeLeaf ? commandNode.loaded : portalStatusLoaded;
+  // Another node in the window's tree is on a leaf; the command node's
+  // projects come from the window's command scope.
+  const onLeaf = isInTreeLeaf(scope);
+  const commandNode = useCommandScopeNode(onLeaf);
+  const self = commandNode?.self ?? null;
+  const commandNodeId = commandNode?.nodeId ?? null;
+  const portalLoaded = onLeaf ? (commandNode?.loaded ?? false) : portalStatusLoaded;
   const projectsLoaded = useProjectStore((state) => state.hasLoaded);
   const projectsLoading = useProjectStore((state) => state.isLoading);
   const projectsError = useProjectStore((state) => state.error);
   const gitUrl = useProjectStore(
     (state) => state.projects.find((project) => project.id === projectId)?.gitUrl,
   );
-  // A realm is told the window's grouping; in the window's tree it is read
-  // from the window's own stores (plan item 4005).
-  const realmGrouping = useRealmShellStore((state) => state.grouping);
-  const windowGrouping = useWindowGrouping();
-  const grouping = inTreeLeaf ? windowGrouping : realmGrouping;
+  // The window's grouping, read from the window's own stores (plan item 4005).
+  const grouping = useWindowGrouping();
   const gateKey = leafCoordinatorGateKey(projectId, scope);
   const opened = useUIStore((state) => state.openedLeafCoordinators.includes(gateKey));
   const openLeafCoordinator = useUIStore((state) => state.openLeafCoordinator);
   const openAnyway = () => openLeafCoordinator(gateKey);
   const [retrying, setRetrying] = useState(false);
-  const onLeaf = onLeafPage() || inTreeLeaf;
   useEffect(() => {
     if (!portalStore.getState().loaded) void portalStore.refresh();
   }, []);
@@ -199,7 +170,7 @@ export function LeafModeCoordinatorGate({
   if (!onLeaf && !portalLoaded) return <PendingCoordination />;
   const leafMode = !onLeaf && status?.mode === "leaf";
   if (!onLeaf && !leafMode) return <>{children}</>;
-  if (onLeaf && !realmCoordinatorDefers(grouping)) return <>{children}</>;
+  if (onLeaf && !coordinatorDefersToCommandNode(grouping)) return <>{children}</>;
 
   // No known controller name (an empty list, or blank names) reads as the command node.
   const controllerNames = onLeaf
@@ -215,7 +186,7 @@ export function LeafModeCoordinatorGate({
     const projectReadFailed = !projectsLoaded && !projectsLoading && projectsError;
     const summaryUnavailable = portalLoaded && !self;
     const summaryIncomplete = portalLoaded && self?.truncated && !commandProject;
-    if (grouping !== null && (projectReadFailed || summaryUnavailable || summaryIncomplete)) {
+    if (projectReadFailed || summaryUnavailable || summaryIncomplete) {
       return (
         <div
           id="project-panel-coordinator"
@@ -241,7 +212,7 @@ export function LeafModeCoordinatorGate({
                   setRetrying(true);
                   try {
                     await Promise.all([
-                      commandNode.retry(),
+                      commandNode?.retry(),
                       ...(!projectsLoaded ? [loadProjectsFromBackend(scope)] : []),
                     ]);
                   } finally {
@@ -259,9 +230,9 @@ export function LeafModeCoordinatorGate({
         </div>
       );
     }
-    // Until the window's grouping and the command node's projects are known,
-    // show neither the notice nor the conversations.
-    if (grouping === null || !portalLoaded || !projectsLoaded) return <PendingCoordination />;
+    // Until the command node's projects are known, show neither the notice
+    // nor the conversations.
+    if (!portalLoaded || !projectsLoaded) return <PendingCoordination />;
     // The command node has no copy of this repository to coordinate it.
     if (!commandProject) return <>{children}</>;
   }

@@ -35,7 +35,6 @@ let perNodeEvents: boolean;
 let listenOrder: string[];
 let expiresAt: number;
 let stopped: number;
-let savedWorkspaceTarget: Window["orkestratorWorkspaceTarget"];
 
 async function settle() {
   for (let i = 0; i < 12; i++) await Promise.resolve();
@@ -48,7 +47,6 @@ function emit(event: string, payload?: unknown) {
 }
 
 beforeEach(() => {
-  savedWorkspaceTarget = window.orkestratorWorkspaceTarget;
   resetNodeEventsForTests();
   mockToastInfo.mockClear();
   clock = new FakeIntervals();
@@ -100,7 +98,6 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
-  window.orkestratorWorkspaceTarget = savedWorkspaceTarget;
   resetNodeEventsForTests();
   globalThis.setInterval = originalInterval;
   globalThis.clearInterval = originalClear;
@@ -378,41 +375,33 @@ test("a command reconnect during watch setup cannot confirm the old lease", asyn
   await settle();
 });
 
-test.each([false, true])(
-  "leaf account-switch envelopes reach one toast through the command portal (leaf workspace=%s)",
-  async (leafWorkspace) => {
-    const previousTarget = window.orkestratorWorkspaceTarget;
-    window.orkestratorWorkspaceTarget = leafWorkspace
-      ? { nodeId: LEAF, nodeName: "Leaf", path: "relay" }
-      : undefined;
-    portalStore.store.setState({ nodes: [{ nodeId: LEAF }] as never });
-    const view = render(createElement(CoordinatorAccountSwitchNotices));
-    await settle();
-    expect(calls.find((call) => call.command === "watch_node_events")?.args.prefixes).toEqual([
-      "coordinator-account-switched",
-    ]);
-    emit(RELAYED_NODE_EVENT, {
-      nodeId: LEAF,
-      kind: "event",
-      event: "coordinator-account-switched",
-      payload: {
-        requestId: "leaf-switch",
-        nodeName: "Leaf",
-        coordinatorName: "Leaf coordinator",
-        toAccountLabel: "Spare",
-        state: "executed",
-        platform: "claude",
-      },
-    });
-    expect(mockToastInfo).toHaveBeenCalledTimes(1);
-    expect(mockToastInfo.mock.calls[0]?.[1]).toMatchObject({
-      id: "coordinator-account-switch:bk_leaf:leaf-switch",
-      description: "The Leaf coordinator switched the active Claude account on Leaf to “Spare”.",
-    });
-    view.unmount();
-    await settle();
-    expect(calls.at(-1)?.command).toBe("unwatch_node_events");
-    portalStore.store.setState({ nodes: [] });
-    window.orkestratorWorkspaceTarget = previousTarget;
-  },
-);
+test("leaf account-switch envelopes reach one toast through the command node", async () => {
+  portalStore.store.setState({ nodes: [{ nodeId: LEAF }] as never });
+  const view = render(createElement(CoordinatorAccountSwitchNotices));
+  await settle();
+  expect(calls.find((call) => call.command === "watch_node_events")?.args.prefixes).toEqual([
+    "coordinator-account-switched",
+  ]);
+  emit(RELAYED_NODE_EVENT, {
+    nodeId: LEAF,
+    kind: "event",
+    event: "coordinator-account-switched",
+    payload: {
+      requestId: "leaf-switch",
+      nodeName: "Leaf",
+      coordinatorName: "Leaf coordinator",
+      toAccountLabel: "Spare",
+      state: "executed",
+      platform: "claude",
+    },
+  });
+  expect(mockToastInfo).toHaveBeenCalledTimes(1);
+  expect(mockToastInfo.mock.calls[0]?.[1]).toMatchObject({
+    id: "coordinator-account-switch:bk_leaf:leaf-switch",
+    description: "The Leaf coordinator switched the active Claude account on Leaf to “Spare”.",
+  });
+  view.unmount();
+  await settle();
+  expect(calls.at(-1)?.command).toBe("unwatch_node_events");
+  portalStore.store.setState({ nodes: [] });
+});

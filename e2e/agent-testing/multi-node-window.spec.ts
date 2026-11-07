@@ -24,10 +24,6 @@
  * window (desktop: z-order and focus); a grant lapse reopened without a
  * reload; attention from a hidden node.
  *
- * `ORKESTRATOR_AGENT_TEST_IN_TREE=0` runs the realm path (browser frames) for
- * the flows both paths share, so the two paths are compared by the same
- * assertions; in-tree-only flows skip there.
- *
  * VITE_ORKESTRATOR_SHIM_GUARD=throw mise run dev:test --profile <cmd> --fixture --no-agent-credentials --headless
  * mise run dev:test --profile <leaf> --fixture --no-agent-credentials --headless
  * ORKESTRATOR_AGENT_TEST_PROFILE=<cmd> ORKESTRATOR_AGENT_TEST_LEAF_PROFILE=<leaf> \
@@ -42,7 +38,7 @@ import { createServer, type Server } from "node:http";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { ElectronApplication, Frame, Page } from "playwright";
+import type { ElectronApplication, Page } from "playwright";
 import { _electron as electron } from "playwright";
 import { mergeTests } from "@playwright/test";
 
@@ -68,7 +64,6 @@ import {
   installCueCounters,
   leafProfile,
   lifecycleView,
-  pathMode,
   raiseTerminalAttention,
   renderedTerminal,
   seedLayout,
@@ -88,7 +83,6 @@ test.skip(!commandProfile || !leafProfile, SKIP_REASON);
 const packageRoot = path.join(repositoryRoot, "apps", "desktop");
 const webRoot = path.join(repositoryRoot, "apps", "web");
 const electronExecutable = path.join(packageRoot, "node_modules", ".bin", "electron");
-const inTree = pathMode === "in-tree";
 
 interface Surface {
   kind: "browser" | "desktop";
@@ -125,25 +119,9 @@ async function windowMarker(page: Page): Promise<string | null> {
   return page.evaluate(() => (window as unknown as { __mnMarker?: string }).__mnMarker ?? null);
 }
 
-/** The realm frame for `node` (realm path, browser). */
-async function realmFrame(page: Page, node: TopologyNode): Promise<Frame> {
-  const element = await page.waitForSelector(`iframe[title="Workspace on ${node.name}"]`, {
-    timeout: 60_000,
-    state: "attached",
-  });
-  const frame = await element.contentFrame();
-  if (!frame) throw new Error(`No realm frame for ${node.name}.`);
-  return frame;
-}
-
-/** Where `node`'s terminal renders: the window (in-tree) or its realm frame. */
-async function terminalHost(
-  node: TopologyNode,
-): Promise<{ target: Page | Frame; nodeId: string | null }> {
-  if (inTree || node.nodeId === s().topology.command.nodeId) {
-    return { target: s().page, nodeId: node.nodeId };
-  }
-  return { target: await realmFrame(s().page, node), nodeId: null };
+/** Where `node`'s terminal renders: the window's own tree, on the node's scope. */
+function terminalHost(node: TopologyNode): { target: Page; nodeId: string } {
+  return { target: s().page, nodeId: node.nodeId };
 }
 
 /** The xterm of `node`'s environment, wherever it renders. */
@@ -152,11 +130,7 @@ async function terminalLocator(node: TopologyNode) {
   if (node.nodeId === topology.command.nodeId) {
     return page.locator('[data-testid="workspace-content"] .xterm:visible, .xterm:visible').first();
   }
-  if (inTree) return inTreeRegion(page, node.nodeId).locator(".xterm:visible").first();
-  return page
-    .frameLocator(`iframe[title="Workspace on ${node.name}"]`)
-    .locator(".xterm:visible")
-    .first();
+  return inTreeRegion(page, node.nodeId).locator(".xterm:visible").first();
 }
 
 /** Clicks `node`'s environment in the sidebar and waits until its terminal shows. */
@@ -173,7 +147,7 @@ async function openNode(node: TopologyNode): Promise<number> {
     .catch(() => undefined);
   const started = Date.now();
   await button.click();
-  if (inTree && node.nodeId !== s().topology.command.nodeId) {
+  if (node.nodeId !== s().topology.command.nodeId) {
     await expect(inTreeRegion(page, node.nodeId)).toBeVisible({ timeout: 60_000 });
   }
   await expect(await terminalLocator(node)).toBeVisible({ timeout: 90_000 });
@@ -183,7 +157,7 @@ async function openNode(node: TopologyNode): Promise<number> {
 /** Types a line into `node`'s terminal through the page, as a user does. */
 async function typeInTerminal(node: TopologyNode, line: string): Promise<void> {
   const { page } = s();
-  if (inTree && node.nodeId !== s().topology.command.nodeId) {
+  if (node.nodeId !== s().topology.command.nodeId) {
     // The terminal tab, if another tab (an agent tab, a preview) is in front.
     const tab = inTreeRegion(page, node.nodeId)
       .getByRole("tab", { name: /^Terminal/ })
@@ -205,14 +179,13 @@ async function typeInTerminal(node: TopologyNode, line: string): Promise<void> {
 }
 
 async function terminalText(node: TopologyNode): Promise<string> {
-  const { target, nodeId } = await terminalHost(node);
+  const { target, nodeId } = terminalHost(node);
   return renderedTerminal(target, nodeId, node.environment.id).catch(() => "");
 }
 
 /**
  * After every flow: no command-scope shim use was caught under a mounted
- * leaf, and the in-tree node shown (if any) is mounted. On the realm path no
- * leaf is ever mounted in the window's tree.
+ * leaf, and the node shown (if another node) is mounted.
  */
 async function checkShimGuard(flow: string, shown: TopologyNode | null): Promise<void> {
   const guard = await shimGuard(s().page);
@@ -225,9 +198,7 @@ async function checkShimGuard(flow: string, shown: TopologyNode | null): Promise
   expect(guard, "the renderer runs with VITE_ORKESTRATOR_SHIM_GUARD").not.toBeNull();
   expect(guard!.mode).toBe("throw");
   expect(guard!.uses, `no shim use under a mounted leaf (${flow})`).toEqual([]);
-  if (!inTree) {
-    expect(guard!.mountedLeaves).toEqual([]);
-  } else if (shown && shown.nodeId !== s().topology.command.nodeId) {
+  if (shown && shown.nodeId !== s().topology.command.nodeId) {
     expect(guard!.mountedLeaves).toContain(shown.nodeId);
   }
 }
@@ -247,7 +218,6 @@ function saveEvidence(): void {
   writeEvidence(`${s().kind}-evidence`, {
     ...earlier,
     kind: s().kind,
-    path: pathMode,
     leaves: s().topology.leaves.length,
     ...evidence,
     shimGuard: {
@@ -266,25 +236,6 @@ async function openBrowserSurface(
 ): Promise<Surface> {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   await fetchModulesOutsideChromium(context);
-  // The path, before the app reads its settings: 4001's per-node opt-in
-  // (`in-tree-nodes`) and, from 6001, the window's rollback to realms
-  // (`use-realms-for-remote-machines`); each build reads the one it has.
-  await context.addInitScript(
-    ({ ids, realms }: { ids: string[]; realms: boolean }) => {
-      if (realms) localStorage.removeItem("in-tree-nodes");
-      else {
-        localStorage.setItem(
-          "in-tree-nodes",
-          JSON.stringify({ state: { nodes: ids }, version: 1 }),
-        );
-      }
-      localStorage.setItem(
-        "use-realms-for-remote-machines",
-        JSON.stringify({ state: { useRealmsForRemoteMachines: realms }, version: 1 }),
-      );
-    },
-    { ids: topology.leaves.map((leaf) => leaf.nodeId), realms: !inTree },
-  );
   await context.addInitScript(installCueCounters);
   const page = await context.newPage();
   page.setDefaultTimeout(30_000);
@@ -382,10 +333,6 @@ async function openDesktopSurface(topology: Topology): Promise<Surface> {
         VITE_ORKESTRATOR_PROFILE: profile.id,
         VITE_ORKESTRATOR_PROFILE_FLAVOR: "agent-test",
         VITE_ORKESTRATOR_SHIM_GUARD: "throw",
-        // The desktop's per-window setting is namespaced by its identity; the
-        // development override flags every node in-tree for a 4001-era
-        // renderer (from 6001 every node is in-tree by default).
-        ...(inTree ? { VITE_ORKESTRATOR_IN_TREE_NODES: "*" } : {}),
       },
     });
     ownProcessGroup(vite);
@@ -512,11 +459,7 @@ async function openDesktopSurface(topology: Topology): Promise<Surface> {
 test.beforeAll(async ({ browser }, testInfo) => {
   test.setTimeout(600_000);
   const kind = testInfo.project.name === "electron" ? "desktop" : "browser";
-  test.skip(
-    kind === "desktop" && !inTree,
-    "the desktop realm path is workspace-realm-electron.spec.ts and relayed-events-electron.spec.ts",
-  );
-  const topology = await startTopology(`${kind === "desktop" ? "d" : "b"}${inTree ? "t" : "r"}`);
+  const topology = await startTopology(`${kind === "desktop" ? "d" : "b"}t`);
   try {
     surface =
       kind === "desktop"
@@ -548,7 +491,7 @@ test("opens each node's environment in the window", async () => {
   const opened: Array<{ node: string; ms: number }> = [];
   for (const node of [topology.command, ...topology.leaves]) {
     opened.push({ node: node.name, ms: await openNode(node) });
-    if (inTree && node.nodeId !== topology.command.nodeId) {
+    if (node.nodeId !== topology.command.nodeId) {
       // The shown node is the only visible region; the others stay mounted, hidden.
       await expect(inTreeRegion(page, node.nodeId)).toBeVisible();
       await expect(page.locator('[data-testid="in-tree-workspace"]:visible')).toHaveCount(1);
@@ -569,10 +512,6 @@ test("opens each node's environment in the window", async () => {
 });
 
 test("a leaf's workspace works: terminal, agent tab without a turn, files, preview", async () => {
-  test.skip(
-    !inTree,
-    "in-tree only (the realm path is covered by workspace-realm-electron.spec.ts)",
-  );
   const { page, topology } = s();
   const leaf = topology.leaves[0]!;
   await openNode(leaf);
@@ -781,23 +720,21 @@ test("reload rehydrates the shown leaf, painting its snapshot first", async () =
   const { page, topology } = s();
   const leaf = topology.leaves[0]!;
   await openNode(leaf);
-  if (inTree) {
-    // The leaf scope writes its snapshot 5 s after it turns live, then every 30 s.
-    await expect
-      .poll(
-        () =>
-          page.evaluate(async (nodeId) => {
-            const modulePath = "/src/lib/node-snapshots.ts";
-            const { nodeSnapshotStore } = await import(/* @vite-ignore */ modulePath);
-            const store = nodeSnapshotStore();
-            if (!store) return false;
-            const entries = (await store.entries()) as Array<{ nodeId: string }>;
-            return entries.some((entry) => entry.nodeId === nodeId);
-          }, leaf.nodeId),
-        { timeout: 60_000, intervals: [1_000] },
-      )
-      .toBe(true);
-  }
+  // The leaf scope writes its snapshot 5 s after it turns live, then every 30 s.
+  await expect
+    .poll(
+      () =>
+        page.evaluate(async (nodeId) => {
+          const modulePath = "/src/lib/node-snapshots.ts";
+          const { nodeSnapshotStore } = await import(/* @vite-ignore */ modulePath);
+          const store = nodeSnapshotStore();
+          if (!store) return false;
+          const entries = (await store.entries()) as Array<{ nodeId: string }>;
+          return entries.some((entry) => entry.nodeId === nodeId);
+        }, leaf.nodeId),
+      { timeout: 60_000, intervals: [1_000] },
+    )
+    .toBe(true);
   // Record, from the first script of the reloaded document, when the
   // snapshot preview and the live workspace first appear.
   await page.addInitScript((nodeId: string) => {
@@ -820,22 +757,14 @@ test("reload rehydrates the shown leaf, painting its snapshot first", async () =
   }, leaf.nodeId);
   // Hold the leaf's grant open after the reload, so the scope is visibly
   // still connecting while its snapshot is already painted.
-  await s().delayGrants(inTree ? 3_000 : null);
+  await s().delayGrants(3_000);
   const started = Date.now();
   await page.reload();
   await expect(page.getByTestId("project-search-bar")).toBeVisible({ timeout: 90_000 });
   // The reload keeps the window's selection, or the leaf is opened again.
   const button = environmentButton(page, leaf);
   await expect(button).toBeVisible({ timeout: 60_000 });
-  if (
-    !(await (
-      inTree
-        ? inTreeRegion(page, leaf.nodeId)
-        : page.locator(`iframe[title="Workspace on ${leaf.name}"]`)
-    ).isVisible())
-  ) {
-    await button.click();
-  }
+  if (!(await inTreeRegion(page, leaf.nodeId).isVisible())) await button.click();
   await expect(await terminalLocator(leaf)).toBeVisible({ timeout: 90_000 });
   const liveMs = Date.now() - started;
   await s().delayGrants(null);
@@ -843,23 +772,15 @@ test("reload rehydrates the shown leaf, painting its snapshot first", async () =
     () => (window as unknown as { __mnPaint?: Record<string, number> }).__mnPaint ?? {},
   );
   evidence.reload = { liveAfterReloadMs: liveMs, paint };
-  if (inTree) {
-    expect(paint.snapshot, "the snapshot painted before the live workspace").toBeGreaterThan(0);
-    expect(paint.stale, "the snapshot is marked stale").toBeGreaterThan(0);
-    expect(paint.snapshot!).toBeLessThan(paint.live!);
-    // Read-only until live, then the live workspace replaces it.
-    await expect(inTreeRegion(page, leaf.nodeId).getByTestId("node-snapshot-preview")).toHaveCount(
-      0,
-    );
-  }
+  expect(paint.snapshot, "the snapshot painted before the live workspace").toBeGreaterThan(0);
+  expect(paint.stale, "the snapshot is marked stale").toBeGreaterThan(0);
+  expect(paint.snapshot!).toBeLessThan(paint.live!);
+  // Read-only until live, then the live workspace replaces it.
+  await expect(inTreeRegion(page, leaf.nodeId).getByTestId("node-snapshot-preview")).toHaveCount(0);
   await checkShimGuard("reload", leaf);
 });
 
 test("six-node switching with budget eviction", async () => {
-  test.skip(
-    !inTree,
-    "hydration tiers and budgets are the in-tree path's (realms are capped by count)",
-  );
   const { page, topology } = s();
   const leaves = topology.leaves;
   const switches: Array<{ round: number; node: string; ms: number; tier: string }> = [];
@@ -960,7 +881,6 @@ test("six-node switching with budget eviction", async () => {
 
 test("previews from two nodes in one window keep their z-order and focus", async () => {
   test.skip(s().kind !== "desktop", "native preview views are the desktop's");
-  test.skip(!inTree, "in-tree only");
   const { page, topology, app } = s();
   const servers: Server[] = [];
   const serve = async (marker: string) => {
@@ -1159,7 +1079,6 @@ test("previews from two nodes in one window keep their z-order and focus", async
 });
 
 test("a lapsed grant reopens without a reload", async () => {
-  test.skip(!inTree, "the realm path reloads its frame on a new grant (FrameRealm)");
   const { page, topology } = s();
   const leaf = topology.leaves[0]!;
   await openNode(leaf);
@@ -1267,20 +1186,9 @@ test("attention from a hidden node reaches the window", async () => {
   await openNode(topology.command);
   await page.mouse.click(5, 5); // a user gesture, so Web Audio may play
   await page.waitForTimeout(2_000);
-  const tier = inTree ? ((await lifecycleView(page)).tiers[leaf.nodeId] ?? "summary") : "realm";
+  const tier = (await lifecycleView(page)).tiers[leaf.nodeId] ?? "summary";
   const before = await cues(page);
   const raised = await raiseTerminalAttention(leaf, Math.random().toString(36).slice(2, 8));
-  if (!inTree && !raised.unreadAfter) {
-    // Realm path (2026-11-07): the hidden realm document still selects the
-    // environment, so the leaf counts it as seen and marks nothing unread.
-    // The in-tree path does mark it; recorded as a parity difference.
-    evidence.attention = { leafTier: tier, unreadAfter: false, realmStillSelectsEnvironment: true };
-    test.info().annotations.push({
-      type: "parity",
-      description: "realm path: a hidden realm's selected environment is not marked unread",
-    });
-    return;
-  }
   expect(raised.unreadAfter, "the leaf marked its environment unread").toBe(true);
   // The leaf's row shows the unread work, from the hidden node.
   await expect(

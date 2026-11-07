@@ -1,7 +1,5 @@
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
-import { useRealmFanOutTiming } from "@/components/federation/useRealmBootTiming";
-import { resetRealmBootTimingForTests } from "./realm-boot-timing";
-import { afterEach, expect, mock, spyOn, test } from "bun:test";
+import { act, cleanup } from "@testing-library/react";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import * as native from "@/lib/native/backend";
 import * as backend from "@/lib/backend";
 import { hydrateBootPromptQueues, hydrateBootMultiReviewWorkflows } from "./boot-hydration";
@@ -14,15 +12,9 @@ import { BUILD_PIPELINE_VERSION, useBuildPipelineStore } from "@/stores/buildPip
 import { workflowVocabularyFixtures } from "./workflow-vocabulary.test-support";
 import { environmentRequests, hydrationRequests } from "./hydration-request-limiter";
 
-const originalUrl = window.location.href;
-const originalApi = window.orkestrator;
-const dom = (window as unknown as { happyDOM: { setURL(url: string): void } }).happyDOM;
 const nextTask = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 afterEach(() => {
   cleanup();
-  dom.setURL(originalUrl);
-  window.orkestrator = originalApi;
-  resetRealmBootTimingForTests();
   resetPromptQueueRevisions();
   useClaudeTmuxStore.setState({ messageQueue: new Map() });
   useMultiReviewStore.setState({ workflows: new Map() });
@@ -57,16 +49,6 @@ test("six pending environment loads leave shared slots for snapshots and pipelin
 
 for (const failedPart of ["promptQueues", "multiReviewWorkflows"] as const) {
   test(`cold hydration reports a failed ${failedPart} part and preserves unaffected projections`, async () => {
-    const post = mock((_message: unknown) => {});
-    dom.setURL("https://command.test/?realm=workspace");
-    window.orkestrator = {
-      ...originalApi,
-      workspaceRealm: { post, onMessage: () => () => {} },
-    } as typeof window.orkestrator;
-    const { rerender } = renderHook(
-      ({ settled }) => useRealmFanOutTiming(settled, { current: 0 }),
-      { initialProps: { settled: false } },
-    );
     const ids = Array.from({ length: 120 }, (_, i) => `e${i}`);
     const { review, pipeline } = workflowVocabularyFixtures();
     const timestamp = "2026-11-06T00:00:00.000Z";
@@ -166,14 +148,8 @@ for (const failedPart of ["promptQueues", "multiReviewWorkflows"] as const) {
       await act(async () => {
         await Promise.all(environmentLoads);
       });
-      rerender({ settled: true });
       const results = await completing;
       await hydrationRequests.whenIdle();
-      await waitFor(() => expect(post).toHaveBeenCalledTimes(1));
-      expect(post.mock.calls[0]?.[0]).toMatchObject({
-        step: "fan-out-complete",
-        outcome: "failed",
-      });
       expect(results.filter((r) => r.status === "rejected")).toHaveLength(1);
       expect(peak).toBe(6);
       expect(calls.filter((c) => c === "list_environment_hydration")).toHaveLength(2);
@@ -216,15 +192,9 @@ for (const failedPart of ["promptQueues", "multiReviewWorkflows"] as const) {
   });
 }
 
-test("successful older-backend fallback restores do not mark fan-out failed", async () => {
+test("older-backend fallback restores succeed", async () => {
   const { EnvironmentHydrationBatcher } = await import("./boot-hydration");
   const { unknownBackendCommandMessage } = await import("@orkestrator/protocol/unknown-command");
-  const post = mock((_message: unknown) => {});
-  dom.setURL("https://command.test/?realm=workspace");
-  window.orkestrator = {
-    ...originalApi,
-    workspaceRealm: { post, onMessage: () => () => {} },
-  } as typeof window.orkestrator;
   const batcher = new EnvironmentHydrationBatcher({
     listBatch: async () => {
       throw new Error(unknownBackendCommandMessage("list_environment_hydration"));
@@ -236,8 +206,5 @@ test("successful older-backend fallback restores do not mark fan-out failed", as
     hydrateBootPromptQueues("fallback", createPromptQueueSources(), batcher),
     hydrateBootMultiReviewWorkflows("fallback", batcher),
   ]);
-  renderHook(() => useRealmFanOutTiming(true, { current: 0 }));
-  await restores;
-  await waitFor(() => expect(post).toHaveBeenCalledTimes(1));
-  expect(post.mock.calls[0]?.[0]).toMatchObject({ step: "fan-out-complete", outcome: "ok" });
+  expect(await restores).toHaveLength(2);
 });

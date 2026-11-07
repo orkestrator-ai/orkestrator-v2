@@ -5,15 +5,14 @@
  * command scope's proven id (plan item 2011) carries it along.
  *
  * Its node is the node the window shows: the command node's own workspace,
- * or another node's (a workspace realm until plan item 6002, then an in-tree
- * scope). Each node scope's `uiStore` projects it: `selectedProjectId` there
+ * or another node's, shown in the window's tree on its scope. Each node scope's `uiStore` projects it: `selectedProjectId` there
  * is the selection's project while it is on that node and null otherwise,
  * and selecting in a node's `uiStore` moves the selection to that node.
  * `remoteWorkspaceStore`'s `active` is derived from it.
  *
  * The selection survives a reload of the window (session storage, the
- * command node's selection only: another node's workspace is reopened by its
- * own realm, not by this window).
+ * command node's selection only: another node's selection is that node's
+ * own, kept in its scope's `uiStore`).
  */
 
 import {
@@ -37,7 +36,7 @@ export function windowSelection(windowScope: WindowScope = getWindowScope()): No
   return windowScope.selection.get();
 }
 
-/** The open scope of `selection`'s node in `windowScope`, or `null` (nothing selected, or a realm's node). */
+/** The open scope of `selection`'s node in `windowScope`, or `null` (nothing selected, or a node not open yet). */
 export function selectionScope(
   windowScope: WindowScope,
   selection: NodeSelection | null = windowScope.selection.get(),
@@ -126,7 +125,7 @@ function sessionStore(): Storage | null {
   }
 }
 
-/** The key this window keeps its command node's selection under (per realm document too). */
+/** The key this window keeps its command node's selection under. */
 function selectionStorageKey(): string {
   return desktopConnectionStorageKey(SELECTION_STORAGE_KEY, COMMAND_STORAGE_NODE);
 }

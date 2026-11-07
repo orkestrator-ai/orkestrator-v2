@@ -1666,7 +1666,7 @@ describe("the credential probe and session detection of a relayed node transport
     stop();
   });
 
-  test("an installed realm on a relay base asks /status when its stream ends; a direct construction does not", async () => {
+  test("an installed page on a relay base asks /status when its stream ends; a direct construction does not", async () => {
     const happyWindow = window as unknown as { happyDOM: { setURL(url: string): void } };
     const previousUrl = window.location.href;
     happyWindow.happyDOM.setURL("http://localhost:1420/");
@@ -1685,14 +1685,14 @@ describe("the credential probe and session detection of a relayed node transport
     } as unknown as Pick<Window, "location" | "orkestrator" | "orkestratorGateway">;
     try {
       installBrowserGatewayApi(target, { baseUrl: relayBase, eventReconnectDelayMs: 60_000 });
-      const realm = target.orkestrator!;
-      const stop = realm.listen("changed", () => undefined);
+      const page = target.orkestrator!;
+      const stop = page.listen("changed", () => undefined);
       await waitForReal(
         () => requested.includes("/__orkestrator/nodes/bk_leaf/__orkestrator/status"),
-        "The realm did not ask /status",
+        "The page did not ask /status",
       );
       await waitForReal(
-        () => realm.eventStreamConnection!.state() === "connecting",
+        () => page.eventStreamConnection!.state() === "connecting",
         "The revoked grant was not taken for a refusal",
       );
       stop();

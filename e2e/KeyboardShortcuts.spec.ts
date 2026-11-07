@@ -241,21 +241,6 @@ test.describe("⌘K search works wherever focus is", () => {
       await expect(input).toHaveValue("kept");
     });
   }
-
-  test("from a workspace realm frame's composer, forwarded to its window", async ({ page }) => {
-    await page.goto("/keyboard-shortcuts");
-    const realm = page.frameLocator('iframe[title="Workspace realm"]');
-    const composer = realm.getByRole("textbox", { name: "Realm composer" });
-    await composer.fill("draft");
-    await page.keyboard.press("Meta+K");
-    await expect(requests(page)).toHaveText("1");
-    await expect(composer).toHaveValue("draft");
-    // ⌘⇧/ stays with the realm, which draws its own dialog.
-    await composer.focus();
-    await page.keyboard.press("Meta+Shift+Slash");
-    await expect(realm.getByRole("dialog", { name: "Keyboard shortcuts" })).toBeVisible();
-    await expect(page.getByRole("dialog", { name: "Keyboard shortcuts" })).toHaveCount(0);
-  });
 });
 
 for (const modifier of ["Meta", "Control"]) {
@@ -380,7 +365,7 @@ test.describe("every app shortcut works with a leaf shown in the window's tree",
       const composer = page.getByRole("textbox", { name: "Leaf composer" });
       await composer.fill("draft");
 
-      // ⌘K, ⌘, and ⌘⇧D are the window's; there is no realm to forward them.
+      // ⌘K, ⌘, and ⌘⇧D are the window's, typed in the leaf's workspace in its tree.
       // Ctrl+K in a macOS text field is kill-line, so it stays with the field.
       await page.keyboard.press(`${modifier}+K`);
       await expect(page.getByTestId("search-requests")).toHaveText(

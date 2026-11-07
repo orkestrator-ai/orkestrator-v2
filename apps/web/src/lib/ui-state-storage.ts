@@ -58,13 +58,13 @@ export function createUIWindowStateStorage(): StateStorage {
  * With no record there yet it adopts what an earlier release stored for this
  * node: the command node's fields from the window record (moved out of it on
  * the first write), or a record already under this node's own `ui-storage`
- * namespace (a realm's).
+ * namespace (which earlier releases' per-node workspace frames wrote).
  */
 export function createUIStateStorage(node: StorageNode = COMMAND_STORAGE_NODE): StateStorage {
   const windowKey = windowStorageKey("ui-storage");
   const projectKey = nodeStorageKey("ui-project-storage", node);
   // Adopt only state already stored under this node's namespace: for the
-  // command node outside a realm that is the window record itself.
+  // command node that is the window record itself.
   const legacyKey = nodeStorageKey("ui-storage", node);
   return {
     getItem: () => {

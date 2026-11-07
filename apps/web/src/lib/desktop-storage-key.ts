@@ -1,7 +1,6 @@
 import type { BackendId } from "@orkestrator/protocol/federation";
 import { COMMAND_SCOPE_PROVISIONAL_NODE_ID } from "./node-scope/app-window-scope";
 import type { NodeScopeRole } from "./node-scope/node-scope";
-import { readStoredWorkspace } from "./portal/workspace-target-storage";
 
 /**
  * Keeps persisted presentation state separate per node in one renderer
@@ -9,10 +8,11 @@ import { readStoredWorkspace } from "./portal/workspace-target-storage";
  *
  * Every per-node key names its node (`StorageNode`: a `NodeScope` is one).
  * The command node's key is the key this renderer used before keys took a
- * node, so nothing moves for it. A leaf's key is the `:machine:<hash>` form a
- * browser or iOS realm on that leaf already wrote in shared origin storage,
- * so the leaf reads its existing state. Desktop realm data lived in per-realm
- * partitions and is abandoned (decision 13.7 A).
+ * node, so nothing moves for it. A leaf's key is the `:machine:<hash>` form
+ * the per-node workspace frames of earlier browser and iOS releases wrote in
+ * shared origin storage, so the leaf reads its existing state. Earlier desktop
+ * releases kept that state in per-node partitions, which is abandoned
+ * (decision 13.7 A).
  *
  * The namespace is the machine's identity, never a route: a proved backend
  * identity when there is one, otherwise the saved connection. An SSH
@@ -55,17 +55,6 @@ function namespaceFor(
 }
 
 /**
- * A hosted-browser tab whose workspace is on another node shares the
- * command node page's localStorage. Its presentation state is namespaced by
- * that node, or identical local IDs on two machines would share remembered
- * selections and layouts.
- */
-function browserWorkspaceNode(): string | null {
-  const nodeId = window.orkestratorWorkspaceTarget?.nodeId ?? readStoredWorkspace()?.nodeId;
-  return nodeId && nodeId.length <= 128 ? nodeId : null;
-}
-
-/**
  * The node a persisted key belongs to. Only the role decides the command
  * node's key: the command scope's id is provisional until plan item 2010
  * proves it, and its key must not change when the id does.
@@ -88,24 +77,11 @@ function machineKey(baseKey: string, nodeId: string): string {
   return `${baseKey}:machine:${hashIdentity(`machine:${nodeId}`)}`;
 }
 
-/**
- * True in a hosted-browser realm whose workspace is on a leaf: its command
- * node key is that leaf's, and the page's own (command) state is not its to
- * migrate.
- */
-export function isBrowserLeafRealm(): boolean {
-  if (typeof window === "undefined") return false;
-  return window.orkestrator?.isolatedViewState !== true && browserWorkspaceNode() !== null;
-}
-
 /** Presentation state of `node` in this renderer. */
 export function desktopConnectionStorageKey(baseKey: string, node: StorageNode): string {
   if (typeof window === "undefined") return baseKey;
   if (node.role !== "command") return machineKey(baseKey, node.nodeId);
-  if (window.orkestrator?.isolatedViewState !== true) {
-    const machine = browserWorkspaceNode();
-    return machine ? machineKey(baseKey, machine) : baseKey;
-  }
+  if (window.orkestrator?.isolatedViewState !== true) return baseKey;
   return namespacedKey(baseKey, window.orkestratorDesktopIdentity);
 }
 
@@ -118,8 +94,7 @@ export function desktopConnectionStorageKey(baseKey: string, node: StorageNode):
 export function windowStorageKey(baseKey: string): string {
   if (typeof window === "undefined") return baseKey;
   if (window.orkestrator?.isolatedViewState !== true) return baseKey;
-  const identity = window.orkestratorDesktopIdentity;
-  return namespacedKey(baseKey, identity?.portal ?? identity);
+  return namespacedKey(baseKey, window.orkestratorDesktopIdentity);
 }
 
 function namespacedKey(

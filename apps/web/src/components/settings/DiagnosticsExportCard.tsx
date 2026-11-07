@@ -17,14 +17,12 @@ import { sha256HexOfBytes } from "@/lib/chat/static-html-document";
 import { cn } from "@/lib/utils";
 import { incompatibilityNotice, type IncompatibilityNotice } from "@/lib/federation/fleet-currency";
 import { portalStore } from "@/lib/portal/portal-store";
-import { workspaceTarget } from "@/lib/portal/portal-transport";
 import { useAccountMachine } from "./account-machine";
 import { formatDiagnosticsBytes } from "./DatabaseStorageCard";
 
 /** The node a Settings machine choice names: `null` is the command node, `undefined` this view's. */
 function settingsMachineNodeId(machine: string | null | undefined): string | null {
   if (typeof machine === "string") return machine;
-  if (machine === undefined) return workspaceTarget()?.nodeId ?? portalStore.getState().selfId;
   return portalStore.getState().selfId;
 }
 

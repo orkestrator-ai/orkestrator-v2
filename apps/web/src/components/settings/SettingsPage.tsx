@@ -150,8 +150,7 @@ export function SettingsScopeBanner({
   const commandNode = useCommandNode();
   if (!commandNode || !section || (!enabled && section !== "machines")) return null;
   const shownMachine = machine ?? boundMachine;
-  const workspaceName =
-    shownMachine?.name ?? (commandNode.workspaceHere ? commandNode.name : "this machine");
+  const workspaceName = shownMachine?.name ?? commandNode.name;
   const inherited = section === "review" || section === "messaging";
   const mixed = [
     "general",

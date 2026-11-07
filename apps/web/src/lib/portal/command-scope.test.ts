@@ -9,9 +9,8 @@ import { appCommandScope } from "@/lib/node-scope-slots";
 import { getWindowScope, resetWindowScopeForTests } from "@/lib/node-scope/app-window-scope";
 import { FakeNodeClient } from "@/test/render-in-node-scope";
 import { invokeGlobalConfigCommand, settingsParent } from "./command-node-config";
-import { commandScopeInvoke, commandScopeListen } from "./command-scope";
+import { commandScopeListen } from "./command-scope";
 import { getFleetUpdatePolicy } from "./fleet-update-policy";
-import { pagePortal, workspaceTarget } from "./page-portal";
 import { getPortalLayout, startPortalLayout } from "./portal-layout";
 import {
   dismissNodeOutcome,
@@ -31,9 +30,11 @@ const invokeMock = invoke as unknown as ReturnType<typeof mock>;
 const listenMock = listen as unknown as ReturnType<typeof mock>;
 const initialPortal = portalStore.getState();
 const NODE_ACTION_REQUESTS_CHANGED_EVENT = "node-action-requests-changed";
-const LEAF_TARGET = { nodeId: "bk_leaf", nodeName: "Leaf", path: "direct" } as const;
 
-/** Counts every read of `window.orkestratorPortal` (a presence check is a read too). */
+/**
+ * Counts every read of `window.orkestratorPortal`, the portal global earlier
+ * releases' separate workspace documents had (a presence check is a read too).
+ */
 function watchPortalGlobal(value: unknown = undefined) {
   let reads = 0;
   Object.defineProperty(window, "orkestratorPortal", {
@@ -81,8 +82,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  delete window.orkestratorPortal;
-  delete window.orkestratorWorkspaceTarget;
+  delete (window as { orkestratorPortal?: unknown }).orkestratorPortal;
   resetWindowScopeForTests();
   invokeMock.mockReset();
   invokeMock.mockResolvedValue(undefined);
@@ -114,8 +114,6 @@ async function callEveryPortalApi() {
 describe("portal APIs are command-scope calls (plan item 5004)", () => {
   test("an app window never reads the portal global; every portal API calls its command scope", async () => {
     const portal = watchPortalGlobal({ invoke: mock(), listen: mock() });
-    expect(workspaceTarget()).toBeNull();
-    expect(pagePortal()).toBeNull();
     await callEveryPortalApi();
     expect(settingsParent(appCommandScope())).toBeNull();
     expect(portal.reads()).toBe(0);
@@ -141,10 +139,6 @@ describe("portal APIs are command-scope calls (plan item 5004)", () => {
       expect.arrayContaining([PROJECT_COPY_CHANGED_EVENT, NODE_ACTION_REQUESTS_CHANGED_EVENT]),
     );
     expect(getPortalLayout().machineOrder).toEqual(["bk_leaf"]);
-    // The watch does see a read: a realm document's page adapter reads the global.
-    window.orkestratorWorkspaceTarget = LEAF_TARGET;
-    expect(pagePortal()).not.toBeNull();
-    expect(portal.reads()).toBe(1);
   });
 
   test("a node shown in the window's tree reaches the same command scope, never the portal global", async () => {
@@ -169,33 +163,5 @@ describe("portal APIs are command-scope calls (plan item 5004)", () => {
     const record = await copyProjectToNode(input);
     expect(invokeMock).toHaveBeenCalledWith("copy_project_to_node", input);
     expect(record).toMatchObject({ copyId: "copy-1", source: input.source, target: input.target });
-  });
-
-  test("a realm document reaches its command node only over the page's portal channel", async () => {
-    const portalInvoke = mock(async (command: string, args?: Record<string, unknown>) =>
-      answerAsCommandNode(command, args),
-    );
-    const portalListen = mock(() => () => undefined);
-    window.orkestratorWorkspaceTarget = LEAF_TARGET;
-    window.orkestratorPortal = { invoke: portalInvoke, listen: portalListen } as never;
-    expect(pagePortal()).not.toBeNull();
-    await commandScopeInvoke("list_nodes");
-    await listNodeActionRequests();
-    await copyProjectToNode({
-      requestKey: "copy-key",
-      source: { nodeId: "bk_leaf", projectId: "project-1" },
-      target: { nodeId: "bk_server" },
-      paths: [],
-      rememberFiles: false,
-    });
-    (await listenProjectCopies(() => undefined))();
-    expect(portalInvoke.mock.calls.map(([command]) => command)).toEqual([
-      "list_nodes",
-      "list_node_action_requests",
-      "copy_project_to_node",
-    ]);
-    expect(portalListen).toHaveBeenCalledTimes(1);
-    expect(invokeMock).not.toHaveBeenCalled();
-    expect(settingsParent(appCommandScope())).not.toBeNull();
   });
 });

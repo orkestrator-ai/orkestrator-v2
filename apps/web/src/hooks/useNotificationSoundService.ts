@@ -123,10 +123,10 @@ function alertInputNeeded(
 }
 
 /**
- * Attention from another node with no open realm in this window, under the
- * same settings and coalescing as this window's own node. Only a node shown in
- * the window's own tree can have its environment on screen; that environment
- * stays quiet as the window's own selected one does.
+ * Attention from another node, under the same settings and coalescing as
+ * this window's own node. Only the node the window shows can have its
+ * environment on screen; that environment stays quiet as the window's own
+ * selected one does.
  */
 function alertRemoteAttention(
   windowScope: WindowScope,
@@ -174,11 +174,10 @@ function alertRemoteAttention(
  * approval, a plan) gets the "agent question" cue and a desktop notification
  * instead; see {@link alertInputNeeded}.
  *
- * The window's shell also alerts for every other node it has no open realm
- * for, through the window's attention service ({@link useRemoteNodeAttention},
- * plan item 5001); an open realm alerts for its own node. While another node
- * is shown in the central region, none of this node's environments is on
- * screen.
+ * The window also alerts for every other node, through the window's
+ * attention service ({@link useRemoteNodeAttention}, plan item 5001). While
+ * another node is shown in the central region, none of this node's
+ * environments is on screen.
  */
 export function useNotificationSoundService(): void {
   const environments = useEnvironmentStore((state) => state.environments);

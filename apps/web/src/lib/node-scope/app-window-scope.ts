@@ -5,9 +5,8 @@
  *
  * The command scope's node id is the command node's installation identity
  * when the page already holds a proven one: Electron main proves the
- * window's machine before it loads the page (`orkestratorDesktopIdentity`),
- * and a workspace realm document is opened for a known node
- * (`orkestratorWorkspaceTarget`). A hosted browser page has neither, so its
+ * window's machine before it loads the page (`orkestratorDesktopIdentity`).
+ * A hosted browser page has none, so its
  * command scope opens under the provisional id
  * `COMMAND_SCOPE_PROVISIONAL_NODE_ID` and moves to the installation id the
  * command node's hello proves as soon as it answers (plan item 2011,
@@ -35,12 +34,8 @@ let appWindowScope: WindowScope | null = null;
  */
 export function commandNodeIdFromPage(): BackendId {
   if (typeof window === "undefined") return COMMAND_SCOPE_PROVISIONAL_NODE_ID;
-  const candidates = [
-    window.orkestratorDesktopIdentity?.backendId,
-    window.orkestratorWorkspaceTarget?.nodeId,
-  ];
-  for (const candidate of candidates) if (isBackendId(candidate)) return candidate;
-  return COMMAND_SCOPE_PROVISIONAL_NODE_ID;
+  const candidate = window.orkestratorDesktopIdentity?.backendId;
+  return isBackendId(candidate) ? candidate : COMMAND_SCOPE_PROVISIONAL_NODE_ID;
 }
 
 /** A client that can learn its proven id (the window client), else nothing. */

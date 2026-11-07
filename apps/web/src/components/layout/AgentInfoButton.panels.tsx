@@ -1580,7 +1580,7 @@ export function ConnectionPathPanel({
   path,
   boundMachineName,
 }: {
-  /** Set in a leaf workspace realm; absent for this client's own node. */
+  /** Set for another node shown in the window's tree; absent for this client's own node. */
   path: WorkspaceConnectionPath | null;
   /** Shown for an environment on the node this client is connected to. */
   boundMachineName: string | null;

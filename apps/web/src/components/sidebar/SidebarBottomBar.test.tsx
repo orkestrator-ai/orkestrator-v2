@@ -13,6 +13,7 @@ import { useUIStore } from "@/stores/uiStore";
 import type { Environment, Project } from "@/types";
 import { SidebarBottomBar } from "./SidebarBottomBar";
 import { getWindowScope } from "@/lib/node-scope/app-window-scope";
+import { selectOnNode } from "@/test/node-selection";
 
 /** Outside a node scope provider, components act for the app's command node. */
 const commandNodeId = () => getWindowScope().commandScope().nodeId;
@@ -127,7 +128,7 @@ describe("SidebarBottomBar", () => {
     });
   });
 
-  test("routes remote settings to the active realm with local selection cleared, then returns to the local host", async () => {
+  test("routes remote settings to the shown node with local selection cleared, then returns to the local host", async () => {
     hostUpdate(false);
     selectEnvironment();
     useRemoteWorkspaceStore.getState().open("remote-node", {
@@ -149,7 +150,6 @@ describe("SidebarBottomBar", () => {
       const request = useRemoteWorkspaceStore.getState().requests["remote-node"]!;
       expect(request.seq).toBeGreaterThan(previousSeq);
       expect(request.request).toEqual({
-        type: "select",
         projectId: "remote-project",
         environmentId: "remote-env",
         dialog,
@@ -158,17 +158,13 @@ describe("SidebarBottomBar", () => {
     }
 
     act(() => {
-      useRemoteWorkspaceStore.getState().noteRealmSelection("remote-node", {
-        projectId: "remote-project-2",
-        environmentId: null,
-      });
+      selectOnNode("remote-node", { projectId: "remote-project-2", environmentId: null });
     });
     expect(
       screen.getByRole("button", { name: "Environment settings" }).hasAttribute("disabled"),
     ).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Repository settings" }));
     expect(useRemoteWorkspaceStore.getState().requests["remote-node"]!.request).toEqual({
-      type: "select",
       projectId: "remote-project-2",
       dialog: "repository-settings",
     });

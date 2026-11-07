@@ -20,11 +20,7 @@ import { createAgentMailApi } from "@/lib/backend/agent-mail";
 import { backendApiForScope, scopeBackendClient } from "@/lib/backend/client";
 import { createFilesSessionsApi } from "@/lib/backend/files-sessions";
 import { createWorkflowsApi } from "@/lib/backend/workflows";
-import {
-  configTargetsFor,
-  runConfigCommand,
-  settingsParent,
-} from "@/lib/portal/command-node-config";
+import { runConfigCommand } from "@/lib/portal/command-node-config";
 import { adoptPersistedPaneLayout, onPaneLayoutWriteSettled } from "@/lib/pane-layout-persistence";
 import {
   commitBuildPipelineSetupHandoff,
@@ -207,22 +203,17 @@ interface DeferredPaneLayoutRefresh {
  *
  * Every scope reads its own node's config. Under a parent scope (an in-tree
  * leaf) the store lays the parent's preferences over it itself, and the
- * parent's own sync keeps that layer current. Under a parent with no scope
- * here (a realm document's portal) the read is the effective one, and the
- * parent's config changes are followed too. Turning messaging off clears
+ * parent's own sync keeps that layer current. Turning messaging off clears
  * this node's agent mail (plan item 3010).
  */
 const configHandlers = defineStoreResourceHandlers("config", "every-scope", (context) => {
   const store = context.scope.store(configStore);
-  const parent = settingsParent(context.scope);
   const readConfig = (): Promise<AppConfig> => {
     if (context.options.getConfig) return context.options.getConfig();
     // The app's command scope keeps the `@/lib/backend` read, which suites mock.
     if (isAppCommandScope(context.scope)) return getConfig();
     return runConfigCommand(
-      parent?.scope
-        ? { commandNode: scopeBackendClient(context.scope), node: null }
-        : configTargetsFor(context.scope),
+      { commandNode: scopeBackendClient(context.scope), node: null },
       "get_config",
     );
   };
@@ -247,22 +238,6 @@ const configHandlers = defineStoreResourceHandlers("config", "every-scope", (con
 
   context.onResync("dependents", (pass) => (pass.includes("config") ? refreshConfig() : undefined));
   context.onResourceChanged("config", () => refreshConfig());
-
-  // A parent with no scope here has no sync of its own in this window:
-  // follow its config changes too.
-  if (parent?.onConfigChanged) {
-    let stopParentConfig: (() => void) | null = null;
-    void parent
-      .onConfigChanged(() => {
-        if (!context.disposed()) void refreshConfig().catch(() => undefined);
-      })
-      .then((stop) => {
-        if (context.disposed()) stop();
-        else stopParentConfig = stop;
-      })
-      .catch(() => undefined);
-    context.onStop(() => stopParentConfig?.());
-  }
 });
 
 /** Each node's agent mail follows that node's feed (plan item 3010). */

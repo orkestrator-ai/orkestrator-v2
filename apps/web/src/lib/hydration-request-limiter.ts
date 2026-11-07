@@ -1,8 +1,7 @@
 /**
- * At most this many hydration reads are in flight per renderer document, and
- * so per workspace realm (each realm is a document of its own).
+ * At most this many hydration reads are in flight per renderer document.
  *
- * A cold realm boot used to send every environment's prompt queues and Multi
+ * A cold boot of a node's workspace used to send every environment's prompt queues and Multi
  * Review workflows and every project's environments and build pipelines at
  * once: 184 requests over 73 connections for one omarchy-hp boot, 419–532
  * requests/s for an mbp3 one (2026-11-06). Six matches the per-host connection

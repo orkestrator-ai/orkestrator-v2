@@ -212,8 +212,9 @@ export function MobileAppShellLayout({
     }
   }, [appDialogFocusReturn]);
 
-  // Realm dialogs live in another document and never update the local dialog
-  // store. Yield on each request even when local selection was already empty.
+  // Another node's dialog request is applied once its scope has loaded, not
+  // through the local dialog store first. Yield on each request even when
+  // local selection was already empty.
   useEffect(
     () =>
       useRemoteWorkspaceStore.subscribe((state, previous) => {
@@ -224,8 +225,7 @@ export function MobileAppShellLayout({
         if (
           !next.request.dialog &&
           !next.request.createEnvironmentProjectId &&
-          !next.request.addProject &&
-          !next.request.bugReport
+          !next.request.addProject
         )
           return;
         restoreSidebarFocusRef.current = false;

@@ -31,7 +31,6 @@ function installScope(enabled = true) {
     nodeId: "bk_command" as BackendId,
     name: "Desk",
     colorToken: "teal",
-    workspaceHere: false,
   });
 }
 

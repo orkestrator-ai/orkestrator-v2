@@ -13,7 +13,6 @@ import * as realSidebar from "./Sidebar";
 import * as realOpenFileDialog from "./OpenFileDialog";
 import * as realAgentInfoButton from "./AgentInfoButton";
 import * as realSystemUsageIndicator from "./SystemUsageIndicator";
-import * as realRealmTitleBar from "@/components/federation/RealmTitleBar";
 import * as realAgentMailPanel from "@/components/agent-mail/AgentMailPanel";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
@@ -39,7 +38,6 @@ import type { TabInfo } from "@/types/paneLayout";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
 import { getWindowScope } from "@/lib/node-scope/app-window-scope";
 import { useOptionalNodeScope } from "@/lib/node-scope/providers";
-import { useInTreeNodesStore } from "@/stores/inTreeNodesStore";
 import { FakeNodeClient } from "@/test/render-in-node-scope";
 import type { BackendId } from "@orkestrator/protocol/federation";
 
@@ -53,7 +51,6 @@ const uiStore = realUIStore;
 const INITIAL_PROJECT_BOARD_TAB = uiStore.getState().projectBoardTab;
 const realAgentInfoButtonSnapshot = { ...realAgentInfoButton };
 const realSystemUsageIndicatorSnapshot = { ...realSystemUsageIndicator };
-const realRealmTitleBarSnapshot = { ...realRealmTitleBar };
 const realAgentMailPanelSnapshot = { ...realAgentMailPanel };
 const INITIAL_PORTAL = portalStore.getState();
 const INITIAL_REMOTE = useRemoteWorkspaceStore.getState();
@@ -151,18 +148,6 @@ mock.module("./SystemUsageIndicator", () => ({
   ),
 }));
 
-// Another node's title-bar controls, exercised in their own suite.
-mock.module("@/components/federation/RealmTitleBar", () => ({
-  RealmSystemUsageMeters: ({ nodeId }: { nodeId: string }) => (
-    <div data-testid="realm-system-usage-meters" data-node={nodeId} />
-  ),
-  RealmAgentInfoTrigger: ({ nodeId }: { nodeId: string }) => (
-    <div data-testid="realm-agent-info-trigger" data-node={nodeId} />
-  ),
-  RealmTitleBarPanels: () => <div data-testid="realm-title-bar-panels" />,
-  useRealmPanelDismiss: () => undefined,
-}));
-
 // Observable as a slot: the banner's View opens it in whichever layout is shown.
 mock.module("@/components/agent-mail/AgentMailPanel", () => ({
   AgentMailPanel: () => <div data-testid="agent-mail-panel-host" />,
@@ -227,7 +212,6 @@ afterAll(() => {
   mock.module("./OpenFileDialog", () => realOpenFileDialogSnapshot);
   mock.module("./AgentInfoButton", () => realAgentInfoButtonSnapshot);
   mock.module("./SystemUsageIndicator", () => realSystemUsageIndicatorSnapshot);
-  mock.module("@/components/federation/RealmTitleBar", () => realRealmTitleBarSnapshot);
   mock.module("@/components/agent-mail/AgentMailPanel", () => realAgentMailPanelSnapshot);
 });
 
@@ -705,30 +689,6 @@ describe("AppShell", () => {
     dispose();
   });
 
-  test("a realm skips the shell's hidden-sidebar fallback", () => {
-    isMobile = false;
-    useUIChromeStore.setState({ sidebarOpen: false });
-    const happyDOM = (window as unknown as { happyDOM: { setURL(url: string): void } }).happyDOM;
-    const href = window.location.href;
-    happyDOM.setURL("https://node.test/?realm=workspace&workspace=w1");
-    try {
-      render(<AppShell>Workspace</AppShell>);
-      act(() => {
-        requestAppShortcut("search-projects");
-      });
-      expect(useUIChromeStore.getState().sidebarOpen).toBe(false);
-      expect(screen.queryByText("Sidebar") === null).toBe(true);
-    } finally {
-      cleanup();
-      happyDOM.setURL(href);
-    }
-    // Neither realm routing nor its unmount queues work in this shell.
-    const delivered = mock(() => {});
-    const dispose = onAppShortcut("search-projects", delivered);
-    expect(delivered).not.toHaveBeenCalled();
-    dispose();
-  });
-
   test("mounts the agent-info button in the desktop title bar outside the drag region", () => {
     isMobile = false;
     seedPaneLayout([CLAUDE_TAB], "claude-tab");
@@ -852,35 +812,11 @@ describe("AppShell", () => {
     expect(screen.queryByTestId("title-bar-usage-separator") === null).toBe(true);
   });
 
-  test("under the rollback setting, shows a realm node's meters and agent button in the same title-bar places", () => {
-    isMobile = false;
-    // A realm's title bar (plan item 6001 keeps realms behind this setting).
-    useInTreeNodesStore.setState({ useRealmsForRemoteMachines: true });
-    act(() =>
-      useRemoteWorkspaceStore.setState({
-        active: { nodeId: "bk_a", projectId: "project-9", environmentId: "environment-9" },
-      }),
-    );
-    render(<AppShell>Workspace</AppShell>);
-    const slot = screen.getByTestId("desktop-agent-info-slot");
-    const meters = screen.getByTestId("realm-system-usage-meters");
-    const slotChildren = Array.from(slot.children);
-    expect(slotChildren[0]).toBe(meters);
-    expect(slotChildren[1]).toBe(screen.getByTestId("title-bar-usage-separator"));
-    expect(slotChildren[2]?.contains(screen.getByTestId("realm-agent-info-trigger"))).toBe(true);
-    expect(meters.getAttribute("data-node")).toBe("bk_a");
-    // This window's own node's controls are not shown for another node's workspace.
-    expect(screen.queryByTestId("system-usage-indicator") === null).toBe(true);
-    expect(screen.queryByTestId("agent-info-button") === null).toBe(true);
-    useInTreeNodesStore.setState({ useRealmsForRemoteMachines: false });
-  });
-
   test("an in-tree node's meters and agent button are the window's own, on its scope, and switch with the shown node", async () => {
     isMobile = false;
     const windowScope = getWindowScope();
     const leafA = "bk_in-tree-a" as BackendId;
     const leafB = "bk_in-tree-b" as BackendId;
-    useInTreeNodesStore.setState({ useRealmsForRemoteMachines: false });
     const scopes = [] as Array<{ dispose(): void }>;
     try {
       act(() =>
@@ -889,10 +825,8 @@ describe("AppShell", () => {
         }),
       );
       render(<AppShell>Workspace</AppShell>);
-      // Its scope is still opening: empty meters, no realm triggers.
+      // Its scope is still opening: empty meters.
       expect(screen.getByTestId("node-system-usage-opening")).toBeTruthy();
-      expect(screen.queryByTestId("realm-system-usage-meters") === null).toBe(true);
-      expect(screen.queryByTestId("realm-agent-info-trigger") === null).toBe(true);
 
       act(() => {
         scopes.push(
@@ -920,39 +854,9 @@ describe("AppShell", () => {
       // Back on this window's own node: its own controls, outside any leaf scope.
       act(() => useRemoteWorkspaceStore.setState({ active: null }));
       expect(screen.getByTestId("system-usage-indicator").getAttribute("data-node")).toBe("none");
-      expect(screen.queryByTestId("realm-system-usage-meters") === null).toBe(true);
     } finally {
       cleanup();
       for (const scope of scopes) scope.dispose();
-      useInTreeNodesStore.setState({ useRealmsForRemoteMachines: false });
-    }
-  });
-
-  test("a realm draws the title bar's popovers instead of controls in its toolbar", () => {
-    isMobile = false;
-    const happyDOM = (window as unknown as { happyDOM: { setURL(url: string): void } }).happyDOM;
-    const originalHref = window.location.href;
-    happyDOM.setURL("https://node.test/?realm=workspace&workspace=w1");
-    try {
-      render(<AppShell>Workspace</AppShell>);
-      expect(screen.getByTestId("realm-title-bar-panels")).toBeTruthy();
-      expect(screen.queryByTestId("system-usage-indicator") === null).toBe(true);
-      expect(screen.queryByTestId("agent-info-button") === null).toBe(true);
-    } finally {
-      happyDOM.setURL(originalHref);
-    }
-  });
-
-  test("a realm hosts the messages panel its tabs' mail banners open", () => {
-    isMobile = false;
-    const happyDOM = (window as unknown as { happyDOM: { setURL(url: string): void } }).happyDOM;
-    const originalHref = window.location.href;
-    happyDOM.setURL("https://node.test/?realm=workspace&workspace=w1");
-    try {
-      render(<AppShell>Workspace</AppShell>);
-      expect(screen.getByTestId("agent-mail-panel-host")).toBeTruthy();
-    } finally {
-      happyDOM.setURL(originalHref);
     }
   });
 

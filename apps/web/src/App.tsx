@@ -15,7 +15,6 @@ import { ConnectionStatusBanner } from "@/components/layout/ConnectionStatusBann
 import { noteRichContentConnection } from "@/lib/chat/rich-content-reset";
 import { COMMAND_SCOPE_SERVICES, startScopeServices } from "@/lib/scope-services";
 import { hydrateCommandScopeFromSnapshot } from "@/lib/node-snapshots";
-import { recordRealmFirstRender } from "@/lib/realm-boot-timing";
 import { migrateLegacyBuildPipelines } from "@/lib/build-pipeline-persistence";
 import { Toaster } from "@/components/ui/sonner";
 import { ArtifactLiveHost } from "@/components/chat/rich/ArtifactLiveHost";
@@ -78,9 +77,6 @@ import { CoordinatorAccountSwitchNotices } from "@/components/federation/Coordin
 import { ProjectCopyDialog } from "@/components/federation/ProjectCopyDialog";
 import { CommandHandoverDialog } from "@/components/federation/CommandHandoverDialog";
 import { NodeSshPromptDialog } from "@/components/settings/machines/NodeSshPromptDialog";
-import { WorkspaceRealmHost } from "@/components/federation/WorkspaceRealmHost";
-import { isWorkspaceRealm } from "@/lib/federation/workspace-realm";
-import { readStoredWorkspace } from "@/lib/portal/workspace-target-storage";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import {
   CommandNodeScopeProvider,
@@ -109,14 +105,6 @@ function desktopConnectionScopeSeed(): {
   activeConnectionId: string | null;
   resolved: boolean;
 } {
-  if (window.orkestratorWorkspaceTarget) {
-    return {
-      activeConnectionId:
-        window.orkestratorDesktopIdentity?.connectionId ??
-        `workspace:${window.orkestratorWorkspaceTarget.nodeId}`,
-      resolved: true,
-    };
-  }
   if (!window.orkestrator?.connections) {
     return { activeConnectionId: null, resolved: true };
   }
@@ -232,15 +220,6 @@ const STARTUP_BLOCKER_PANEL_CLASS_NAME = cn(
 );
 
 function App() {
-  // A browser or iOS realm boots on the grant its window keeps for it.
-  if (isWorkspaceRealm() && !window.orkestrator?.isolatedViewState && !readStoredWorkspace()) {
-    return (
-      <div role="alert" className="flex h-screen items-center justify-center p-6 text-center">
-        This workspace connection is unavailable. Open the environment again from the sidebar to
-        reconnect.
-      </div>
-    );
-  }
   // The window scope and its command scope are the root of every per-node
   // store and service. Only the command scope exists yet, and nothing reads
   // it until the stores convert, so this mount changes no behaviour.
@@ -254,11 +233,6 @@ function App() {
 }
 
 function ConnectedApp() {
-  const [workspaceRealm] = useState(isWorkspaceRealm);
-  // A realm reports its first committed render to the desktop's log; a no-op elsewhere.
-  useEffect(() => {
-    recordRealmFirstRender();
-  }, []);
   const zoomLevel = useUIChromeStore((state) => state.zoomLevel);
   const zoomIn = useUIChromeStore((state) => state.zoomIn);
   const zoomOut = useUIChromeStore((state) => state.zoomOut);
@@ -281,9 +255,7 @@ function ConnectedApp() {
   const [activeConnectionId, setActiveConnectionId] = useState<string | null>(
     () => desktopConnectionScopeSeed().activeConnectionId,
   );
-  const [activeConnectionName, setActiveConnectionName] = useState<string | null>(
-    () => window.orkestratorWorkspaceTarget?.nodeName ?? null,
-  );
+  const [activeConnectionName, setActiveConnectionName] = useState<string | null>(null);
   const [connectionScopeResolved, setConnectionScopeResolved] = useState(
     () => desktopConnectionScopeSeed().resolved,
   );
@@ -350,12 +322,6 @@ function ConnectedApp() {
     let active = true;
     const applyConnectionList = (list: ConnectionList) => {
       if (!active) return;
-      // Connection lists administer the command node; the gateway seed owns
-      // workspace identity while this window is on a leaf.
-      if (window.orkestratorWorkspaceTarget) {
-        setConnectionScopeResolved(true);
-        return;
-      }
       setActiveConnectionId(list.activeConnectionId);
       const activeConnection = list.connections.find(
         (connection) => connection.id === list.activeConnectionId,
@@ -385,14 +351,14 @@ function ConnectedApp() {
       .then(applyConnectionList)
       .catch(() => {
         if (!active) return;
-        if (!window.orkestratorWorkspaceTarget) setActiveConnectionId(LOCAL_CONNECTION_ID);
+        setActiveConnectionId(LOCAL_CONNECTION_ID);
         setConnectionScopeResolved(true);
       });
     const unsubscribeConnections = subscribeToConnections(applyConnectionList);
     const unsubscribeUnavailable = commandClient().listenRaw<{ message?: string }>(
       "local-backend-unavailable",
       (payload) => {
-        if (!active || window.orkestratorWorkspaceTarget) return;
+        if (!active) return;
         setLocalBackendUnavailableMessage(
           payload.message
             ? `The Local backend stopped: ${payload.message}`
@@ -437,10 +403,9 @@ function ConnectedApp() {
     }
   }, []);
   const isRemoteBackendWindow =
-    Boolean(window.orkestratorWorkspaceTarget) ||
-    (connectionScopeResolved &&
-      activeConnectionId !== null &&
-      activeConnectionId !== LOCAL_CONNECTION_ID);
+    connectionScopeResolved &&
+    activeConnectionId !== null &&
+    activeConnectionId !== LOCAL_CONNECTION_ID;
   const macOsProbeFailed = Boolean(macOsPermissions?.error);
   const macOsHasBlockingMissing =
     macOsPermissions !== null && hasBlockingMacOsPermissions(macOsPermissions);
@@ -782,8 +747,6 @@ function ConnectedApp() {
   // clients fall back to CSS `zoom`, which sizes correctly as long as the shell
   // measures itself against its container instead of viewport units.
   useEffect(() => {
-    // A workspace realm is shown at its window's zoom.
-    if (workspaceRealm) return;
     let active = true;
     const rootStyle = document.documentElement.style;
     const applyCssFallback = () => {
@@ -808,7 +771,7 @@ function ConnectedApp() {
     return () => {
       active = false;
     };
-  }, [workspaceRealm, zoomLevel]);
+  }, [zoomLevel]);
 
   // Surface Claude credential refresh/push failures as a non-blocking toast.
   // The backend de-dupes (only emits after repeated failures or actual push
@@ -899,13 +862,10 @@ function ConnectedApp() {
   // Derived state for dialog visibility - makes conditions easier to read
   // When Docker is down, let its outage warning lead; host-tool onboarding is
   // shown after the user chooses to continue without containers.
-  // Host tool onboarding (missing CLIs, sign-ins) is about the machine's own
-  // setup; a workspace realm in another machine's window does not nag for it.
   const hostToolWarningsVisible =
-    !workspaceRealm &&
-    ((dockerCheckStatus === "error" && dockerAvailable === null) ||
-      dockerAvailable === true ||
-      (dockerAvailable === false && dockerWarningDismissed));
+    (dockerCheckStatus === "error" && dockerAvailable === null) ||
+    dockerAvailable === true ||
+    (dockerAvailable === false && dockerWarningDismissed);
 
   const isCheckingCliTools = hostToolWarningsVisible && hostToolCheckStatus === "checking";
 
@@ -964,8 +924,6 @@ function ConnectedApp() {
             available={dockerAvailable === true}
             ready={dockerAvailable !== null || dockerCheckStatus === "error"}
           >
-            {/* Another node's workspace in a command node's window. */}
-            {workspaceRealm && <WorkspaceRealmHost />}
             <AppShell>
               {!localBackendUnavailableMessage && <ConnectionStatusBanner />}
               {localBackendUnavailableMessage && (
@@ -1011,9 +969,8 @@ function ConnectedApp() {
           <ErrorDetailsDialog />
           <HostPathPickerDialog />
           <ContainerHostReachabilityNotice />
-          {/* The window around a realm shows its own command node's. */}
-          {!workspaceRealm && <BackendVersionReminder />}
-          {!workspaceRealm && <HostUpdateBanner />}
+          <BackendVersionReminder />
+          <HostUpdateBanner />
 
           {macOsPermissionsReady && dockerCheckStatus === "error" && dockerAvailable === null && (
             <div
@@ -1426,19 +1383,15 @@ function ConnectedApp() {
             </AlertDialogContent>
           </AlertDialog>
         </TerminalProvider>
-        {/* Multi-machine prompts and effects belong to the window, not its realms. */}
-        {!workspaceRealm && (
-          <>
-            <SshPromptDialog />
-            <FederationEffects />
-            <NodeActionRequestsDialog />
-            <CoordinatorAccountSwitchNotices />
-            <ProjectCopyDialog />
-            <CommandHandoverDialog />
-            {/* SSH prompts from this node's own tunnels to the nodes it commands. */}
-            <NodeSshPromptDialog />
-          </>
-        )}
+        {/* Multi-machine prompts and effects belong to the window. */}
+        <SshPromptDialog />
+        <FederationEffects />
+        <NodeActionRequestsDialog />
+        <CoordinatorAccountSwitchNotices />
+        <ProjectCopyDialog />
+        <CommandHandoverDialog />
+        {/* SSH prompts from this node's own tunnels to the nodes it commands. */}
+        <NodeSshPromptDialog />
       </TooltipProvider>
     </FederationProvider>
   );

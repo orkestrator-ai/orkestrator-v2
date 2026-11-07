@@ -53,7 +53,7 @@ beforeEach(() => {
   machineOrder = [];
   usageCalls = [];
   unreachable = new Set();
-  portalStore.store.setState({ selfId: null, status: null, nodes: [], self: null, loaded: false });
+  portalStore.store.setState({ selfId: null, status: null, nodes: [], loaded: false });
   portalLayoutStore.setState({ layout: emptyPortalLayout(), loaded: false, error: null });
   invokeMock.mockReset();
   invokeMock.mockImplementation(async (command: string, args: Record<string, unknown> = {}) => {
@@ -84,7 +84,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   resetReadCoordinatorForTests();
-  portalStore.store.setState({ selfId: null, status: null, nodes: [], self: null, loaded: false });
+  portalStore.store.setState({ selfId: null, status: null, nodes: [], loaded: false });
 });
 
 function labels() {

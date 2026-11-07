@@ -12,7 +12,6 @@ import { getWindowScope, resetWindowScopeForTests } from "@/lib/node-scope/app-w
 import { useOptionalNodeScope, WindowScopeProvider } from "@/lib/node-scope/providers";
 import { openBugReport } from "@/lib/bug-report/open-bug-report";
 import { nativeComposeStore } from "@/stores/nativeComposeStore";
-import { useInTreeNodesStore } from "@/stores/inTreeNodesStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { FakeNodeClient } from "@/test/render-in-node-scope";
 
@@ -331,7 +330,6 @@ describe("a report for a node shown in the window's tree (plan item 5003)", () =
 
   afterEach(() => {
     cleanup();
-    useInTreeNodesStore.setState({ useRealmsForRemoteMachines: false });
     useRemoteWorkspaceStore.setState(INITIAL_REMOTE, true);
     resetWindowScopeForTests();
   });
@@ -358,10 +356,9 @@ describe("a report for a node shown in the window's tree (plan item 5003)", () =
       },
     });
     const scope = getWindowScope().open({ role: "leaf", client: leaf });
-    useInTreeNodesStore.setState({ useRealmsForRemoteMachines: false });
     useRemoteWorkspaceStore.setState({
       active: { nodeId: LEAF, projectId: "p1", environmentId: null },
-      realms: [LEAF],
+      openNodes: [LEAF],
     });
     window.orkestrator = {
       bugReport: { captureWindow: async () => "AAAA" },
@@ -372,10 +369,9 @@ describe("a report for a node shown in the window's tree (plan item 5003)", () =
       </WindowScopeProvider>,
     );
 
-    // The window opens the leaf's sheet itself; no realm is asked.
+    // The window opens the leaf's sheet itself, on its scope.
     act(() => openBugReport(LEAF));
     expect(useBugReportStore.getState()).toMatchObject({ sheetOpen: true, sheetNodeId: LEAF });
-    expect(useRemoteWorkspaceStore.getState().requests[LEAF]?.request.bugReport).toBeUndefined();
 
     const session = await screen.findByTestId("native-agent");
     expect(session.getAttribute("data-node")).toBe(LEAF);

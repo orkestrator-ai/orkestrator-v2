@@ -289,9 +289,9 @@ describe("question alerts", () => {
   });
 });
 
-for (const machine of [null, "other"]) {
+// The command node itself is this window's own machine.
+for (const machine of ["other"]) {
   test(`selected ${machine ?? "command node"} sound saves and recovery do not change leaf notification preferences`, async () => {
-    window.orkestratorWorkspaceTarget = { nodeId: "leaf", nodeName: "Leaf", path: "direct" };
     const leaf = structuredClone(originalConfig);
     leaf.global.notificationSounds = {
       agentStopped: true,
@@ -365,7 +365,6 @@ for (const machine of [null, "other"]) {
       });
     } finally {
       cleanup();
-      delete window.orkestratorWorkspaceTarget;
     }
   });
 }

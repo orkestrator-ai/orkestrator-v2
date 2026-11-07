@@ -4,10 +4,6 @@
  * transport (`createNodeTransport`, `node-transport.ts`) and the window shell
  * (`window-shell.ts`). Module load installs it, as before.
  */
-import {
-  clearLegacyWorkspaceTarget,
-  readStoredWorkspace,
-} from "@/lib/portal/workspace-target-storage";
 import { resolveGatewayApiUrl } from "@/lib/gateway-url";
 import { clearProtectedRichContent } from "@/lib/chat/rich-content-reset";
 import { isPerNodeRelayedEvent } from "@orkestrator/protocol/node-events";
@@ -32,12 +28,7 @@ export const TERMINAL_TRANSPORT_STORAGE_KEY = "orkestrator-terminal-transport";
 
 type GatewayWindow = Pick<
   Window,
-  | "location"
-  | "orkestrator"
-  | "orkestratorDesktopHost"
-  | "orkestratorGateway"
-  | "orkestratorPortal"
-  | "orkestratorWorkspaceTarget"
+  "location" | "orkestrator" | "orkestratorDesktopHost" | "orkestratorGateway"
 >;
 
 const browserGatewayDisposers = new WeakMap<object, (reason?: unknown) => void>();
@@ -66,8 +57,8 @@ export interface BrowserGatewayOptions {
   /**
    * Ask `/status` about the credential when the main fetch stream fails
    * without a 401 (see `NodeTransportOptions`). Off by default here;
-   * `installBrowserGatewayApi` turns it on for a page on another node's base
-   * (a workspace realm, direct or relayed, or a hosted direct client).
+   * `installBrowserGatewayApi` turns it on for a page on another base (a
+   * hosted direct client).
    */
   probeCredentialOnStreamFailure?: boolean;
   reportBootMetrics?: boolean;
@@ -219,9 +210,9 @@ export function installBrowserGatewayApi(
       // Every same-origin cookie client holds an expiring gateway session (login
       // form or agent-test link). A bearer client skips the probe on its own.
       browserSessionActivity: options.browserSessionActivity ?? !options.unavailableReason,
-      // A page on another node's base (a workspace realm, direct or relayed)
-      // is that node's transport: a stream failure that does not say 401 asks
-      // `/status`, so a revoked grant shows as refused, not as an outage.
+      // A page on another base (a hosted direct client) is that node's
+      // transport: a stream failure that does not say 401 asks `/status`, so
+      // a revoked credential shows as refused, not as an outage.
       probeCredentialOnStreamFailure: options.probeCredentialOnStreamFailure ?? Boolean(baseUrl),
     });
   }
@@ -272,38 +263,10 @@ export function installLocalDesktopGateway(
   };
 }
 
-/**
- * Browser and iOS: a workspace realm (a frame showing another node's
- * workspace in the window's central region) is that node's client —
- * directly with the workspace's client grant, or through the command node's
- * relay with this page's own session — while its portal stays the command
- * node that served the page. The window itself is always the command node's.
- */
-export function workspaceTargetGatewayOptions(
-  targetWindow: GatewayWindow = window,
-): BrowserGatewayOptions {
-  if (targetWindow.orkestrator) return {};
-  const workspace = readStoredWorkspace();
-  if (!workspace) {
-    if (targetWindow === window && window.top === window) clearLegacyWorkspaceTarget();
-    return {};
-  }
-  targetWindow.orkestratorWorkspaceTarget = {
-    nodeId: workspace.nodeId,
-    nodeName: workspace.nodeName,
-    path: workspace.path,
-    ...(workspace.routeKind ? { routeKind: workspace.routeKind } : {}),
-    ...(workspace.via ? { via: workspace.via } : {}),
-  };
-  targetWindow.orkestratorPortal = createBrowserGatewayApi({
-    baseUrl: targetWindow.location.origin,
-  });
-  return workspace.token
-    ? { baseUrl: workspace.baseUrl, token: workspace.token }
-    : { baseUrl: workspace.baseUrl };
-}
-
+// Browser and iOS: the window is always its command node's client; another
+// node's workspace runs in the window's tree on that node's own client
+// (`lib/node-scope/node-clients.ts`).
 if (typeof window !== "undefined") {
   installLocalDesktopGateway(window);
-  installBrowserGatewayApi(window, workspaceTargetGatewayOptions());
+  installBrowserGatewayApi(window);
 }

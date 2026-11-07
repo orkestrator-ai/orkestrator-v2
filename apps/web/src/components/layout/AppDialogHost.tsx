@@ -135,7 +135,7 @@ function EnvironmentSettingsHost({
  * A hydration check (plan item 5003): a node opened in the window's tree a
  * moment ago may not have read its projects yet, so the request waits for
  * the node's first project list (and any read in flight) before it decides
- * the project is gone. This replaces a realm's readiness gating.
+ * the project is gone.
  */
 function useRequestedProject(projectId: string) {
   const close = useAppDialogStore((state) => state.close);
@@ -195,7 +195,7 @@ function DeleteProjectHost({ projectId }: { projectId: string }) {
       }
       onConfirm={async () => {
         try {
-          // A cold realm or a missed update can leave the renderer list empty.
+          // A cold node scope or a missed update can leave the renderer list empty.
           // A failed owner read must retain the project and allow a retry.
           await deleteProjectAndEnvironments(
             projectId,

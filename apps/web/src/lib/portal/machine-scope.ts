@@ -15,10 +15,6 @@
  * command node's authority. So an `admin` command (a host update, a profile
  * write, diagnostics) and any command this build has no definition for keep
  * the command-scope route, whatever the tier.
- *
- * A workspace realm document keeps the old route for every node (it is
- * deleted in plan item 6002): its one scope is its own leaf, labelled
- * command, and its routing stays exactly what it was.
  */
 
 import { ACCOUNTS_COMMANDS } from "@orkestrator/protocol/contract/domains/accounts";
@@ -39,7 +35,6 @@ import { getWindowScope } from "@/lib/node-scope/app-window-scope";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import type { WindowScope } from "@/lib/node-scope/window-scope";
 import { scopeInvoker } from "@/lib/node-scope-slots";
-import { workspaceTarget } from "./page-portal";
 import { portalStore } from "./portal-store";
 
 /**
@@ -78,13 +73,12 @@ export function isWorkspaceGrantCommand(command: string): boolean {
 
 /**
  * `nodeId`'s scope in `windowScope` when it is open and warm or live, else
- * `null` (always in a realm document).
+ * `null`.
  */
 export function hydratedMachineScope(
   nodeId: BackendId,
   windowScope: WindowScope = getWindowScope(),
 ): NodeScope | null {
-  if (workspaceTarget() !== null) return null;
   const scope = windowScope.get(nodeId);
   if (!scope || scope.disposed) return null;
   const tier = scope.tier.get();

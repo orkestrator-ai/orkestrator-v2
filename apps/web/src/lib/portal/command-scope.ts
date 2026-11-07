@@ -11,10 +11,6 @@
  * every node shown in the window's tree too (plan item 4001): its scope is a
  * leaf of the same window, whose command scope is this one.
  *
- * The one exception is a workspace realm document (until plan items 6002 and
- * 6003 delete realms): its command scope is the leaf, and its window's
- * command node is the page's portal channel (`./page-portal`).
- *
  * Calls carry no negotiated range, so a domain client over them takes version
  * 0 (today's call); see `@/lib/node-scope/domains/invoke-over`.
  */
@@ -24,23 +20,15 @@ import {
   type AuthoritativeListenOptions,
 } from "@/lib/native/authoritative-events";
 import { invoke } from "@/lib/native/backend";
-import {
-  listen,
-  listenOn,
-  type ListenOptions,
-  type NativeEvent,
-  type UnlistenFn,
-} from "@/lib/native/events";
+import { listen, type ListenOptions, type NativeEvent, type UnlistenFn } from "@/lib/native/events";
 import type { BackendClient } from "@/lib/backend/client";
-import { pagePortal } from "./page-portal";
 
 /** A command on the window's command node. */
 export function commandScopeInvoke<T = unknown>(
   command: string,
   args?: Record<string, unknown>,
 ): Promise<T> {
-  const portal = pagePortal();
-  return portal ? portal.invoke<T>(command, args) : invoke<T>(command, args);
+  return invoke<T>(command, args);
 }
 
 /** Listens for `event` from the window's command node. */
@@ -49,8 +37,7 @@ export function commandScopeListen<T>(
   handler: (event: NativeEvent<T>) => unknown,
   options: ListenOptions = {},
 ): Promise<UnlistenFn> {
-  const portal = pagePortal();
-  return portal ? listenOn(portal, event, handler, options) : listen(event, handler, options);
+  return listen(event, handler, options);
 }
 
 /** `commandScopeListen`, resolving once the command node's stream carries `event`. */

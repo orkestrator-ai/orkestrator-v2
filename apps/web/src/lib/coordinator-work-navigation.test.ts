@@ -225,16 +225,12 @@ describe("openCoordinatorWorkTarget", () => {
 });
 
 test.each(["worker-tab", "build", "review", "graph-run"] as const)(
-  "remote %s retains its surface across workspace transport and reload",
+  "remote %s keeps its surface in the window's request for that node",
   async (type) => {
     const { portalStore } = await import("@/lib/portal/portal-store");
     const { useRemoteWorkspaceStore } = await import("@/stores/remoteWorkspaceStore");
-    const { parseShellMessage, realmSearchParams, realmInitialRequest } =
-      await import("@/lib/federation/workspace-realm");
     const originalPortal = portalStore.getState();
     const originalRemote = useRemoteWorkspaceStore.getState();
-    const happyDOM = (window as unknown as { happyDOM: { setURL(url: string): void } }).happyDOM;
-    const originalHref = window.location.href;
     const base = { projectId: "p", environmentId: "e" };
     const workTarget =
       type === "worker-tab"
@@ -254,18 +250,15 @@ test.each(["worker-tab", "build", "review", "graph-run"] as const)(
         workTarget,
       });
       const request = useRemoteWorkspaceStore.getState().requests.remote!.request;
-      expect(parseShellMessage(request)).toHaveProperty("workTarget", workTarget);
-      happyDOM.setURL(`http://localhost/?${realmSearchParams(request)}`);
-      expect(realmInitialRequest()).toHaveProperty("workTarget", workTarget);
+      expect(request).toHaveProperty("workTarget", workTarget);
     } finally {
-      happyDOM.setURL(originalHref);
       portalStore.store.setState(originalPortal, true);
       useRemoteWorkspaceStore.setState(originalRemote, true);
     }
   },
 );
 
-test("a realm's work selection back to the command node activates its surface locally", async () => {
+test("a work selection back to the command node activates its surface locally", async () => {
   const { portalStore } = await import("@/lib/portal/portal-store");
   const original = portalStore.getState();
   try {

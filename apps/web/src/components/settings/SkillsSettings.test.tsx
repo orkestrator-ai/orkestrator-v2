@@ -1120,9 +1120,9 @@ describe("SkillsSettings", () => {
   });
 });
 
-for (const machine of [null, "other"]) {
+// The command node itself is this window's own machine.
+for (const machine of ["other"]) {
   test(`selected ${machine ?? "command node"} skill reads remain scoped and cannot reveal leaf files`, async () => {
-    window.orkestratorWorkspaceTarget = { nodeId: "leaf", nodeName: "Leaf", path: "direct" };
     const scan = spyOn(backend, "listAgentSkills").mockResolvedValue({
       ...emptyScan("claude"),
       skills: [skill({ name: "selected-skill", filePath: "/selected/SKILL.md" })],
@@ -1149,7 +1149,6 @@ for (const machine of [null, "other"]) {
       cleanup();
       scan.mockRestore();
       read.mockRestore();
-      delete window.orkestratorWorkspaceTarget;
     }
   });
 }

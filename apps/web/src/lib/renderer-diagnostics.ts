@@ -7,10 +7,7 @@ import { startDomainAdapterUsageUpload } from "./domain-adapter-usage-ring";
 
 /** Start after preload readiness, before importing App or composing gateway transports. */
 export function startRendererDiagnostics(
-  scope: Pick<
-    Window,
-    "orkestrator" | "orkestratorDesktopHost" | "orkestratorGateway" | "location"
-  > = window,
+  scope: Pick<Window, "orkestrator" | "orkestratorDesktopHost" | "orkestratorGateway"> = window,
   upload = startRendererErrorUpload,
   adapterUpload = startDomainAdapterUsageUpload,
 ): (() => void) | undefined {

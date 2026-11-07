@@ -217,9 +217,12 @@ test("leaves signing in to account management", async () => {
   expect(screen.queryByText("Host login", { selector: "span" }) === null).toBe(true);
 });
 
-test("names the session's bound machine when multiple machines are shown", async () => {
+test("names the window's machine when multiple machines are shown", async () => {
   const previous = portalStore.getState();
-  window.orkestratorWorkspaceTarget = { nodeId: "leaf", nodeName: "Leaf", path: "direct" };
+  portalStore.store.setState({
+    selfId: "bk_command" as never,
+    nodes: [{ nodeId: "bk_other" }] as never,
+  });
   deferredRead = (command) =>
     command === "get_backend_profile"
       ? Promise.resolve({ revision: 1, displayName: "Leaf", colorToken: "blue", updatedAt: "" })
@@ -236,7 +239,6 @@ test("names the session's bound machine when multiple machines are shown", async
     ).toBeTruthy();
   } finally {
     cleanup();
-    delete window.orkestratorWorkspaceTarget;
     portalStore.store.setState(previous);
   }
 });

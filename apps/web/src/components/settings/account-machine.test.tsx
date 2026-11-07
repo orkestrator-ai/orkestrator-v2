@@ -178,17 +178,9 @@ test("closing Settings resets its selection so the next visit follows the on-scr
   expect(useAccountMachineStore.getState().chosen).toBeUndefined();
 });
 
-test("window ownership follows the bound leaf, while undefined always follows the workspace", () => {
+test("the window's own machine is the command node, by null or its id, and undefined", () => {
+  expect(isWindowMachine(undefined)).toBe(true);
   expect(isWindowMachine(null)).toBe(true);
   expect(isWindowMachine("leaf")).toBe(false);
   expect(isWindowMachine("command")).toBe(true);
-  window.orkestratorWorkspaceTarget = { nodeId: "leaf", nodeName: "Leaf", path: "direct" };
-  try {
-    expect(isWindowMachine(undefined)).toBe(true);
-    expect(isWindowMachine(null)).toBe(false);
-    expect(isWindowMachine("leaf")).toBe(true);
-    expect(isWindowMachine("other")).toBe(false);
-  } finally {
-    delete window.orkestratorWorkspaceTarget;
-  }
 });

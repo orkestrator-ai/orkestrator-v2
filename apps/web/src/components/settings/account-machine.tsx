@@ -12,7 +12,6 @@ import { create } from "zustand";
 import { useFederation } from "@/components/federation/FederationProvider";
 import { useMachineViews } from "@/components/federation/useMachineViews";
 import { portalStore } from "@/lib/portal/portal-store";
-import { workspaceTarget } from "@/lib/portal/portal-transport";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 
 interface AccountMachineState {
@@ -48,10 +47,7 @@ export function useAccountMachine(): AccountMachineValue {
 /** Whether `machine` is this window's own backend rather than another machine. */
 export function isWindowMachine(machine: string | null | undefined): boolean {
   if (machine === undefined) return true;
-  const target = workspaceTarget();
-  return target
-    ? machine === target.nodeId
-    : machine === null || machine === portalStore.getState().selfId;
+  return machine === null || machine === portalStore.getState().selfId;
 }
 
 export interface AccountMachineOption {
@@ -73,9 +69,7 @@ export function useResolvedAccountMachine(): {
   const { enabled, portalState } = useFederation();
   const machines = useMachineViews();
   const chosen = useAccountMachineStore((state) => state.chosen);
-  const onScreen = useRemoteWorkspaceStore(
-    (state) => state.active?.nodeId ?? workspaceTarget()?.nodeId ?? null,
-  );
+  const onScreen = useRemoteWorkspaceStore((state) => state.active?.nodeId ?? null);
   return useMemo(() => {
     const selfId = portalState.selfId;
     const options: AccountMachineOption[] = machines.map((machine) => ({

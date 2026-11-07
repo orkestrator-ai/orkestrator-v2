@@ -9,7 +9,8 @@ import {
 } from "@/test/federation-desktop-fake";
 import { updatePortalLayout } from "@/lib/portal/portal-layout";
 import { openMachineWorkspace } from "@/lib/federation/open-workspace";
-import { WorkspaceRealmHost } from "@/components/federation/WorkspaceRealmHost";
+import { NodeWorkspaceHost } from "@/components/federation/NodeWorkspaceHost";
+import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { portalStore } from "@/lib/portal/portal-store";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
@@ -1815,21 +1816,20 @@ describe("HierarchicalSidebar", () => {
     }
   });
 
-  describe("in a workspace realm: the node's New Environment dialog its window asked for", () => {
-    const happyDOM = (window as unknown as { happyDOM: { setURL(url: string): void } }).happyDOM;
-    const windowHref = window.location.href;
-    const enterRealm = (projectId: string) => {
-      const url = new URL(windowHref);
-      url.search = `?realm=workspace&project=${projectId}&createEnvironment=${projectId}`;
-      happyDOM.setURL(url.toString());
-    };
-    const leaveRealm = () => happyDOM.setURL(windowHref);
+  describe("another node's workspace: the node's New Environment dialog its window asked for", () => {
+    const initialRemote = useRemoteWorkspaceStore.getState();
+    // The window asks through its own store, keyed by the node the host shows.
+    const askForCreate = (projectId: string) =>
+      useRemoteWorkspaceStore
+        .getState()
+        .open(appCommandScope().nodeId, { projectId, createEnvironmentProjectId: projectId });
+    const forgetRequest = () => useRemoteWorkspaceStore.setState(initialRemote, true);
 
     test("opens the create dialog its window asked for once config has loaded", async () => {
       useConfigStore.setState({ hasLoaded: false });
-      enterRealm("project-1");
+      askForCreate("project-1");
       try {
-        render(<WorkspaceRealmHost />);
+        render(<NodeWorkspaceHost />);
         // Its defaults come from config, so the dialog waits for it.
         await new Promise((resolve) => setTimeout(resolve, 0));
         expect(screen.queryByText(/^Create Ork \(Environment\)/) === null).toBe(true);
@@ -1838,7 +1838,7 @@ describe("HierarchicalSidebar", () => {
         await screen.findByText(/^Create Ork \(Environment\)/);
         expect(createEnvironmentMock).not.toHaveBeenCalled();
       } finally {
-        leaveRealm();
+        forgetRequest();
       }
     });
 
@@ -1850,10 +1850,10 @@ describe("HierarchicalSidebar", () => {
         projectsValue = [localProject];
         useProjectStore.setState({ projects: [localProject] });
         useConfigStore.setState({ hasLoaded: false });
-        enterRealm(project.id);
+        askForCreate(project.id);
         const sidebar = (ready: boolean) => (
           <DockerAvailabilityProvider available={ready && available} ready={ready}>
-            <WorkspaceRealmHost />
+            <NodeWorkspaceHost />
           </DockerAvailabilityProvider>
         );
         try {
@@ -1919,7 +1919,7 @@ describe("HierarchicalSidebar", () => {
           expect(screen.queryByText(/^Create Ork \(Environment\)/) === null).toBe(true);
           expect(createEnvironmentMock).toHaveBeenCalledTimes(1);
         } finally {
-          leaveRealm();
+          forgetRequest();
         }
       },
     );
@@ -1928,51 +1928,51 @@ describe("HierarchicalSidebar", () => {
       projectsValue = [];
       projectsLoadingValue = false;
       useProjectStore.setState({ hasLoaded: false });
-      enterRealm(project.id);
+      askForCreate(project.id);
       try {
-        const view = render(<WorkspaceRealmHost />);
+        const view = render(<NodeWorkspaceHost />);
         expect(screen.queryByText(/^Create Ork \(Environment\)/) === null).toBe(true);
         projectsValue = [project];
         projectsLoadingValue = true;
         act(() => useProjectStore.setState({ hasLoaded: true, projects: [project] }));
         expect(screen.queryByText(/^Create Ork \(Environment\)/) === null).toBe(true);
         projectsLoadingValue = false;
-        view.rerender(<WorkspaceRealmHost />);
+        view.rerender(<NodeWorkspaceHost />);
         await screen.findByText(/^Create Ork \(Environment\)/);
         expect(createEnvironmentMock).not.toHaveBeenCalled();
       } finally {
-        leaveRealm();
+        forgetRequest();
       }
     });
 
     test("discards a missing destination project after projects have loaded", () => {
       projectsValue = [];
-      enterRealm(project.id);
+      askForCreate(project.id);
       try {
-        const view = render(<WorkspaceRealmHost />);
+        const view = render(<NodeWorkspaceHost />);
         expect(screen.queryByText(/^Create Ork \(Environment\)/) === null).toBe(true);
         // A later project refresh must not revive an already discarded request.
         projectsValue = [project];
         act(() => useProjectStore.setState({ projects: [project] }));
-        view.rerender(<WorkspaceRealmHost />);
+        view.rerender(<NodeWorkspaceHost />);
         expect(screen.queryByText(/^Create Ork \(Environment\)/) === null).toBe(true);
         expect(createEnvironmentMock).not.toHaveBeenCalled();
       } finally {
-        leaveRealm();
+        forgetRequest();
       }
     });
 
     test("keeps a create request pending when config fails until a retry loads it", async () => {
       useConfigStore.setState({ hasLoaded: false, isLoading: true });
-      enterRealm(project.id);
+      askForCreate(project.id);
       try {
-        const view = render(<WorkspaceRealmHost />);
+        const view = render(<NodeWorkspaceHost />);
         expect(screen.queryByText(/^Create Ork \(Environment\)/) === null).toBe(true);
         act(() => {
           useConfigStore.getState().setError("Config could not be loaded");
           useConfigStore.getState().setLoading(false);
         });
-        view.rerender(<WorkspaceRealmHost />);
+        view.rerender(<NodeWorkspaceHost />);
         expect(screen.queryByText(/^Create Ork \(Environment\)/) === null).toBe(true);
         expect(createEnvironmentMock).not.toHaveBeenCalled();
         act(() => {
@@ -1982,7 +1982,7 @@ describe("HierarchicalSidebar", () => {
         });
         await screen.findByText(/^Create Ork \(Environment\)/);
       } finally {
-        leaveRealm();
+        forgetRequest();
       }
     });
   });

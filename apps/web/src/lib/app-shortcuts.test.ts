@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test, type Mock } from "bun:test";
 import { APP_SHORTCUT_EVENT, type AppShortcutId } from "@orkestrator/protocol/keyboard-shortcuts";
-import { frameEnvelope, realmSearchParams } from "@/lib/federation/workspace-realm";
 import { listen } from "@/lib/native/events";
 import {
   retainAppShortcutRouter,
@@ -62,7 +61,6 @@ afterEach(() => {
   if (originalPlatform) Object.defineProperty(navigator, "platform", originalPlatform);
   else delete (navigator as { platform?: string }).platform;
   happyDOM.setURL(originalHref);
-  delete (window.orkestrator as { workspaceRealm?: unknown } | undefined)?.workspaceRealm;
   document.body.innerHTML = "";
 });
 
@@ -227,53 +225,6 @@ test("router references share one listener and final release removes DOM and nat
 });
 
 describe("delivery to the owner", () => {
-  function enterRealm() {
-    const search = realmSearchParams({ projectId: "p" });
-    search.set("workspace", "w1");
-    happyDOM.setURL(`http://localhost/?${search.toString()}`);
-  }
-
-  test("a desktop realm forwards ⌘K to its window, and keeps ⌘⇧/ for its own dialog", () => {
-    enterRealm();
-    const post = mock(() => {});
-    window.orkestrator = {
-      ...window.orkestrator!,
-      workspaceRealm: { post, onMessage: () => () => {} },
-    } as typeof window.orkestrator;
-    const search = handle("search-projects");
-    const dialog = handle("show-shortcuts");
-    const composer = mount(document.createElement("textarea"));
-    expect(press(composer, { key: "k", metaKey: true }).claimed).toBe(true);
-    expect(post).toHaveBeenCalledWith({ type: "shortcut", shortcut: "search-projects" });
-    expect(search).not.toHaveBeenCalled();
-    press(composer, { key: "/", code: "Slash", metaKey: true, shiftKey: true });
-    expect(dialog).toHaveBeenCalledTimes(1);
-    expect(post).toHaveBeenCalledTimes(1);
-  });
-
-  test("a browser realm frame forwards ⌘K to its parent window over the realm channel", () => {
-    enterRealm();
-    const parentPost = mock(() => {});
-    const descriptor = Object.getOwnPropertyDescriptor(window, "parent");
-    Object.defineProperty(window, "parent", {
-      configurable: true,
-      value: { postMessage: parentPost },
-    });
-    try {
-      handle("show-shortcuts");
-      press(mount(document.createElement("textarea")), { key: "k", ctrlKey: true });
-      // Ctrl+K in a macOS text field is kill-line; ⌘K is forwarded.
-      expect(parentPost).not.toHaveBeenCalled();
-      press(mount(document.createElement("textarea")), { key: "k", metaKey: true });
-      expect(parentPost).toHaveBeenCalledWith(
-        frameEnvelope("w1", { type: "shortcut", shortcut: "search-projects" }),
-        window.location.origin,
-      );
-    } finally {
-      if (descriptor) Object.defineProperty(window, "parent", descriptor);
-    }
-  });
-
   test("a request with its UI hidden waits only if the window is showing it", () => {
     const show = mock(() => true);
     disposers.push(setUnhandledAppShortcut(show));
@@ -326,14 +277,14 @@ describe("one key router for the nodes shown in the window's tree (plan item 500
     expect(commandTab).toHaveBeenCalledTimes(1);
     expect(leafTab).toHaveBeenCalledTimes(1);
 
-    // A node shown by a realm: neither hidden workspace opens a tab.
+    // A node whose scope is still opening: neither hidden workspace opens a tab.
     shown = null;
     requestAppShortcut("new-agent-tab");
     expect(commandTab).toHaveBeenCalledTimes(1);
     expect(leafTab).toHaveBeenCalledTimes(1);
   });
 
-  test("without a shown workspace (a realm document, a fixture) every handler runs", () => {
+  test("without a shown workspace (a fixture) every handler runs", () => {
     const one = mock(() => {});
     const two = mock(() => {});
     disposers.push(onAppShortcut("new-agent-tab", one, { workspace: {} }));

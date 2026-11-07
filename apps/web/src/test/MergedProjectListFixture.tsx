@@ -142,7 +142,7 @@ export function MergedProjectListFixture() {
   const latest = useRemoteWorkspaceStore((value) =>
     value.active ? value.requests[value.active.nodeId]?.request : undefined,
   );
-  const { type: _type, ...request } = latest ?? { type: "select" };
+  const request = latest ?? {};
   const params = new URLSearchParams(location.search);
   const shownIds = new Set(params.has("fallback") ? ["bk_remote"] : ["bk_remote", "bk_self"]);
   // `?empty`: no machine has a project yet. `?icons`: team-b, which only

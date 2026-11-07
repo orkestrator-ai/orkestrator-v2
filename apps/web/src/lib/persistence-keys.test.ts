@@ -23,7 +23,6 @@ afterEach(() => {
   localStorage.clear();
   delete window.orkestrator;
   delete window.orkestratorDesktopIdentity;
-  delete window.orkestratorWorkspaceTarget;
 });
 
 describe("local annotation drafts are kept per node", () => {
@@ -50,18 +49,6 @@ describe("local annotation drafts are kept per node", () => {
     writeLocalDraft("env-1", "editor-1", "leaf text", 1, leafB);
     expect(readLocalDraft("env-1", "editor-1", leafB)?.text).toBe("leaf text");
     expect(readLocalDraft("env-1", "editor-1")?.text).toBe("command text");
-  });
-
-  test("a browser realm on a leaf leaves the page's copy for the page", () => {
-    window.orkestrator = undefined;
-    localStorage.setItem(LEGACY_DRAFTS_KEY, legacyDraft("page text"));
-    window.orkestratorWorkspaceTarget = { nodeId: "bk_leaf-b", nodeName: "B", path: "relay" };
-
-    expect(readLocalDraft("env-1", "editor-1")).toBeNull();
-    expect(localStorage.getItem(LEGACY_DRAFTS_KEY)).toBe(legacyDraft("page text"));
-
-    delete window.orkestratorWorkspaceTarget;
-    expect(readLocalDraft("env-1", "editor-1")?.text).toBe("page text");
   });
 
   test("a desktop window moves the copy into its own command key", () => {

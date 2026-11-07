@@ -6,7 +6,8 @@ import {
   emptyPortalLayout,
   PORTAL_LAYOUT_CHANGED_EVENT,
 } from "@orkestrator/protocol/portal-layout";
-import { NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
+import { invoke as nativeInvoke } from "@/lib/native/backend";
+import { listen, NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
 import {
   getPortalLayout,
   portalLayoutStore,
@@ -34,22 +35,25 @@ const layout = (revision: number, machineOrder = ["bk_a"]) => ({
 beforeEach(() => {
   handlers = new Map();
   portalLayoutStore.setState({ layout: emptyPortalLayout(), loaded: false, error: null });
-  invoke = mock(async () => layout(1));
-  // A realm document: the page names its workspace target and has a portal.
-  window.orkestratorWorkspaceTarget = { nodeId: "bk_leaf", nodeName: "Leaf", path: "direct" };
-  window.orkestratorPortal = {
-    invoke,
-    listen: (event: string, callback: (payload: unknown) => void) => {
-      handlers.set(event, callback);
+  // The window's command scope: its transport is what suites mock.
+  invoke = nativeInvoke as unknown as ReturnType<typeof mock>;
+  invoke.mockReset();
+  invoke.mockImplementation(async () => layout(1));
+  (listen as unknown as ReturnType<typeof mock>).mockImplementation(
+    async (event: string, handler: (event: { payload: unknown }) => unknown) => {
+      handlers.set(event, (payload) => handler({ payload }));
       return () => handlers.delete(event);
     },
-  } as never;
+  );
 });
 afterEach(() => {
   stop?.();
   stop = undefined;
-  delete window.orkestratorPortal;
-  delete window.orkestratorWorkspaceTarget;
+  invoke.mockReset();
+  invoke.mockResolvedValue(undefined);
+  (listen as unknown as ReturnType<typeof mock>).mockImplementation(() =>
+    Promise.resolve(() => {}),
+  );
 });
 async function start() {
   stop = startPortalLayout();

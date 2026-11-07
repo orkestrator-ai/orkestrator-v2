@@ -9,15 +9,10 @@
  * copy-once code.
  *
  * Existing data always belongs to the command node: a migration only moves
- * data into the command node's key, never into a leaf's, and a hosted-browser
- * realm on a leaf leaves it for its window (the page's command node).
+ * data into the command node's key, never into a leaf's.
  */
 
-import {
-  desktopConnectionStorageKey,
-  isBrowserLeafRealm,
-  type StorageNode,
-} from "./desktop-storage-key";
+import { desktopConnectionStorageKey, type StorageNode } from "./desktop-storage-key";
 
 export { COMMAND_STORAGE_NODE, type StorageNode } from "./desktop-storage-key";
 
@@ -92,6 +87,6 @@ export function migratePersistenceKey(
 /** The key `node`'s state for `baseKey` lives under, after any one-time move. */
 export function nodeStorageKey(baseKey: string, node: StorageNode): string {
   const key = desktopConnectionStorageKey(baseKey, node);
-  if (node.role === "command" && !isBrowserLeafRealm()) migratePersistenceKey(baseKey, key);
+  if (node.role === "command") migratePersistenceKey(baseKey, key);
   return key;
 }

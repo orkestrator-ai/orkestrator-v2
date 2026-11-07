@@ -41,7 +41,6 @@ import { configureNodeSnapshots } from "@/lib/node-snapshots";
 import { requestResourceResync, resetResourceSync } from "@/lib/resource-sync";
 import { startStoreResourceSync, STORE_RESOURCE_HANDLERS } from "@/lib/store-resource-sync";
 import { projectStore } from "@/stores/projectStore";
-import { useInTreeNodesStore } from "@/stores/inTreeNodesStore";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { useUIChromeStore } from "@/stores/uiChromeStore";
@@ -167,7 +166,6 @@ function install() {
     list: connectionList([remoteConnection("a", "Studio Mac", "teal")]),
     datasets: { a: sharedIdDataset("working") },
   });
-  delete (window.orkestrator as { workspaceViews?: unknown }).workspaceViews;
 }
 
 function renderRegion() {
@@ -188,7 +186,6 @@ beforeEach(async () => {
   useRemoteWorkspaceStore.setState(INITIAL_REMOTE, true);
   useUIChromeStore.setState({ environmentSortMode: "project" });
   useMachineViewStore.setState({ grouping: "machine" });
-  useInTreeNodesStore.setState({ useRealmsForRemoteMachines: false });
   sessionStorage.clear();
   commands = [];
   store = createNodeSnapshotStore(memorySnapshotBackend());
@@ -233,7 +230,6 @@ afterEach(() => {
   uninstallDesktopFake();
   useRemoteWorkspaceStore.setState(INITIAL_REMOTE, true);
   useMachineViewStore.setState(INITIAL_MACHINE, true);
-  useInTreeNodesStore.setState({ useRealmsForRemoteMachines: false });
   setFilesPanelTestState({ isOpen: false });
   resetWindowScopeForTests();
   document.body.innerHTML = "";

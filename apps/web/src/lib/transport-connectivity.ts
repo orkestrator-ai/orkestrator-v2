@@ -17,8 +17,8 @@ import { readCoordinatorFor } from "@/lib/read-coordinator";
  * Two owners can say so for a node, and each reports only what it observes:
  *
  * - `gateway-event-stream`: the node's authoritative main stream (for the
- *   command scope the browser gateway's, in the browser, on iOS and in a
- *   workspace realm on another node; for any other scope its client's
+ *   command scope the browser gateway's, in the browser and on iOS; for any
+ *   other scope its client's
  *   `connection`);
  * - `desktop-connection`: Electron's connection list, for the window's active
  *   connection (a remote transport `reconnecting` or `unreachable`, or the

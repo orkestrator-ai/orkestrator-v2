@@ -10,28 +10,24 @@ import {
   useSignal,
   WindowScopeProvider,
 } from "@/lib/node-scope/providers";
-import { useNodesInTree } from "@/stores/inTreeNodesStore";
 
 /**
  * The title bar's meters and agent button for another node shown in the
  * window's own tree (plan item 5002, report §9 and Appendix C): the same
  * components the window shows for its own node, inside that node's scope, so
- * their readings and popovers are that node's. No realm reports a title bar
- * and no popover is drawn under a window trigger: the popovers are ordinary,
+ * their readings and popovers are that node's. The popovers are ordinary,
  * opened and dismissed (focus back on their trigger) where they sit.
  */
 
 /**
  * Whether the window shows `nodeId` in its own tree, and that node's scope
- * once it is open there (`InTreeWorkspace` opens it). `null` for no node, or
- * one a realm shows.
+ * once it is open there (`InTreeWorkspace` opens it). `null` for no node.
  */
 export function useShownInTreeNode(nodeId: string | null): { scope: NodeScope | null } | null {
   const { windowScope } = useScopesWithCommandFallback();
   // Re-read when the node's scope opens or closes.
   useSignal(windowScope.nodeScopes);
-  const inTree = useNodesInTree();
-  if (!nodeId || !inTree) return null;
+  if (!nodeId) return null;
   const scope = windowScope.get(nodeId as BackendId);
   return { scope: scope && !scope.disposed ? scope : null };
 }

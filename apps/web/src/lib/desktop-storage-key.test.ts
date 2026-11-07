@@ -4,7 +4,6 @@ import {
   COMMAND_STORAGE_NODE,
   desktopConnectionStorageKey,
   type StorageNode,
-  windowStorageKey,
 } from "./desktop-storage-key";
 
 afterEach(() => {
@@ -96,55 +95,11 @@ describe("machine-identity storage keys", () => {
   });
 });
 
-describe("a workspace on another node", () => {
-  afterEach(() => {
-    delete window.orkestratorDesktopIdentity;
-    delete window.orkestratorWorkspaceTarget;
-  });
-
-  test("ID-01: a browser tab on a leaf namespaces its state by that node; the page keeps its keys", () => {
-    window.orkestrator = undefined;
-    window.orkestratorWorkspaceTarget = { nodeId: "machine-b", nodeName: "B", path: "relay" };
-    const leafKey = desktopConnectionStorageKey("pane-layout", COMMAND_STORAGE_NODE);
-    window.orkestratorWorkspaceTarget = { nodeId: "machine-c", nodeName: "C", path: "relay" };
-    const otherLeafKey = desktopConnectionStorageKey("pane-layout", COMMAND_STORAGE_NODE);
-    delete window.orkestratorWorkspaceTarget;
-    expect(leafKey).toStartWith("pane-layout:machine:");
-    expect(otherLeafKey).not.toBe(leafKey);
-    expect(desktopConnectionStorageKey("pane-layout", COMMAND_STORAGE_NODE)).toBe("pane-layout");
-    // Window-level presentation stays with the page.
-    window.orkestratorWorkspaceTarget = { nodeId: "machine-b", nodeName: "B", path: "relay" };
-    expect(windowStorageKey("ui-storage")).toBe("ui-storage");
-  });
-
-  test("a desktop window keeps its own presentation while its workspace is on a leaf", () => {
-    window.orkestrator = { isolatedViewState: true } as Window["orkestrator"];
-    window.orkestratorDesktopIdentity = {
-      connectionId: "local",
-      backendId: null,
-      legacyOrigin: null,
-    };
-    const deskWindow = windowStorageKey("ui-storage");
-    const deskWorkspace = desktopConnectionStorageKey("pane-layout", COMMAND_STORAGE_NODE);
-    window.orkestratorDesktopIdentity = {
-      connectionId: "workspace:w1",
-      backendId: "bk_leaf",
-      legacyOrigin: null,
-      portal: { connectionId: "local", backendId: null, legacyOrigin: null },
-    };
-    expect(windowStorageKey("ui-storage")).toBe(deskWindow);
-    expect(desktopConnectionStorageKey("pane-layout", COMMAND_STORAGE_NODE)).not.toBe(
-      deskWorkspace,
-    );
-  });
-});
-
 describe("keys take a node (plan item 3015)", () => {
   const leaf = (nodeId: string): StorageNode => ({ nodeId: nodeId as BackendId, role: "leaf" });
 
   afterEach(() => {
     delete window.orkestratorDesktopIdentity;
-    delete window.orkestratorWorkspaceTarget;
   });
 
   test("the command node's key is the key this renderer used before keys took a node", () => {
@@ -165,18 +120,14 @@ describe("keys take a node (plan item 3015)", () => {
     expect(desktopConnectionStorageKey("pane-layout", proven)).toBe(desktop);
   });
 
-  test("a leaf's key is the key a browser realm on that leaf wrote", () => {
+  test("a leaf's key is the per-node form earlier browser releases wrote, on every host", () => {
     window.orkestrator = undefined;
-    window.orkestratorWorkspaceTarget = { nodeId: "bk_leaf-b", nodeName: "B", path: "relay" };
-    const realmKey = desktopConnectionStorageKey("pane-layout", COMMAND_STORAGE_NODE);
-    delete window.orkestratorWorkspaceTarget;
-
-    expect(realmKey).toStartWith("pane-layout:machine:");
-    expect(desktopConnectionStorageKey("pane-layout", leaf("bk_leaf-b"))).toBe(realmKey);
-    expect(desktopConnectionStorageKey("pane-layout", leaf("bk_leaf-c"))).not.toBe(realmKey);
-    // The same form inside a desktop window: realm partitions are abandoned (13.7 A).
+    const leafKey = desktopConnectionStorageKey("pane-layout", leaf("bk_leaf-b"));
+    expect(leafKey).toStartWith("pane-layout:machine:");
+    expect(desktopConnectionStorageKey("pane-layout", leaf("bk_leaf-c"))).not.toBe(leafKey);
+    // The same form inside a desktop window: per-node partitions are abandoned (13.7 A).
     window.orkestrator = { isolatedViewState: true } as Window["orkestrator"];
-    expect(desktopConnectionStorageKey("pane-layout", leaf("bk_leaf-b"))).toBe(realmKey);
+    expect(desktopConnectionStorageKey("pane-layout", leaf("bk_leaf-b"))).toBe(leafKey);
   });
 
   test("a leaf never adopts the command node's legacy un-namespaced value", () => {

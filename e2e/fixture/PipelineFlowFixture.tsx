@@ -821,17 +821,6 @@ function seed(): BuildPipeline {
       ...session,
       sdkSessionId: `remote-${session.sessionKey}-session`,
     }));
-    window.orkestratorWorkspaceTarget = {
-      nodeId: "bk_leaf",
-      nodeName: "Remote build node",
-      path: "direct",
-    };
-    window.orkestratorPortal = {
-      invoke: async () => {
-        throw new Error("Pipeline command reached the command node instead of its workspace");
-      },
-      listen: () => () => undefined,
-    } as unknown as Window["orkestratorPortal"];
   }
   if (params.has("longTranscript")) {
     const session = pipeline.sessions[pipeline.currentSessionIndex]!;

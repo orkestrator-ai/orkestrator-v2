@@ -8,8 +8,8 @@ import type { GuardVisitor, ScannedFile, SourceGuard } from "./guard";
  *
  * Every read is counted, so the baseline lists what is left: window-shell
  * calls (clipboard, window, process, shell, bug report, keyboard shortcuts,
- * presence checks) and desktop-only APIs (connections, web client, realm and
- * workspace views, permissions), which stay until they get a shell or
+ * presence checks) and desktop-only APIs (connections, web client,
+ * permissions), which stay until they get a shell or
  * host-scoped API of their own. Transport calls (`invoke`, `listen`, the
  * stream readiness and connection, `node(nodeId)`) must go through the scope
  * client and have no baseline: `transportAccesses` must find none.

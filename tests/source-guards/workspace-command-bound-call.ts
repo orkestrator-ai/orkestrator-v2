@@ -48,7 +48,7 @@ export const WORKSPACE_GUARD_ROOTS = [WEB_SOURCE_ROOT] as const;
 export const WORKSPACE_ROOT_MODULES: readonly string[] = [
   // The central region: environments (`TerminalContainer`) and projects (`ProjectWorkspace`).
   `${WEB_SOURCE_ROOT}/components/layout/WorkspaceContent`,
-  // Another node's toolbar and files panel (realm documents and in-tree nodes).
+  // Another node's toolbar and files panel, in the window's tree.
   `${WEB_SOURCE_ROOT}/components/layout/NodeWorkspaceLayout`,
   // The panels `InTreeWorkspace` mounts inside the node's scope.
   `${WEB_SOURCE_ROOT}/components/layout/OpenFileDialog`,

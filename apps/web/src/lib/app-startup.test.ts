@@ -222,33 +222,3 @@ describe("startApp", () => {
     }
   });
 });
-
-test("a completed default seed cache RPC with no catalogue never claims provider success", async () => {
-  const backend = await import("@/lib/backend");
-  const { resetRealmBootTimingForTests } = await import("./realm-boot-timing");
-  const originalUrl = window.location.href;
-  const originalApi = window.orkestrator;
-  const dom = (window as unknown as { happyDOM: { setURL(url: string): void } }).happyDOM;
-  const post = mock((_message: unknown) => {});
-  const spy = spyOn(backend, "getAgentModelCatalogCache").mockResolvedValue({ schemaVersion: 1 });
-  try {
-    resetRealmBootTimingForTests();
-    dom.setURL("https://command.test/?realm=workspace");
-    window.orkestrator = {
-      ...originalApi,
-      workspaceRealm: { post, onMessage: () => () => {} },
-    } as typeof window.orkestrator;
-    await startApp({ render: () => {}, timer: controlledTimer().timer });
-    for (let tick = 0; tick < 20; tick++) await Promise.resolve();
-    expect(spy).toHaveBeenCalledWith(undefined, { seed: true });
-    const messages = post.mock.calls.map(([message]) => message as Record<string, unknown>);
-    const seed = messages.find((message) => message.step === "catalogue-seed");
-    expect(seed).toBeDefined();
-    expect(seed).not.toHaveProperty("outcome");
-  } finally {
-    spy.mockRestore();
-    dom.setURL(originalUrl);
-    window.orkestrator = originalApi;
-    resetRealmBootTimingForTests();
-  }
-});

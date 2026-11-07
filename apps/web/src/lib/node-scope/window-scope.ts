@@ -33,7 +33,7 @@ export interface NodeSelection {
   readonly nodeId: BackendId;
   readonly projectId: string | null;
   readonly environmentId: string | null;
-  /** The environment is its project's home (a realm reports it before summaries list it). */
+  /** The environment is its project's home (the node knows it before summaries list it). */
   readonly projectHome?: boolean;
 }
 

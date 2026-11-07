@@ -14,7 +14,6 @@ beforeEach(() => {
   selected = structuredClone(initial);
   selected.global.useHostGitHubCredentials = false;
   selected.global.allowedDomains = ["selected.test"];
-  window.orkestratorWorkspaceTarget = { nodeId: "leaf", nodeName: "Leaf", path: "direct" };
   spyOn(backend, "getConfig").mockImplementation(async (target) =>
     target === undefined ? initial : selected,
   );
@@ -25,7 +24,6 @@ afterEach(() => {
   cleanup();
   mock.restore();
   useConfigStore.setState({ config: initial });
-  delete window.orkestratorWorkspaceTarget;
 });
 function mount(section: GlobalSettingsSection, machine: string | null = "other") {
   return render(
@@ -36,8 +34,9 @@ function mount(section: GlobalSettingsSection, machine: string | null = "other")
     </AccountMachineProvider>,
   );
 }
-for (const machine of [null, "other"]) {
-  test(`${machine ?? "command node"} autosave, credential writes and GitHub propagation carry the selected target`, async () => {
+// The command node itself is this window's own machine (the window's suites).
+for (const machine of ["other"]) {
+  test(`${machine} autosave, credential writes and GitHub propagation carry the selected target`, async () => {
     const save = spyOn(backend, "patchGlobalConfig").mockImplementation(
       async (patch) => (selected = { ...selected, global: { ...selected.global, ...patch } }),
     );
@@ -89,8 +88,8 @@ test("remote DNS tests use the selected machine", async () => {
   await waitFor(() => expect(testDNS).toHaveBeenCalledWith(["selected.test"], "other"));
 });
 
-for (const machine of [null, "other"]) {
-  test(`${machine ?? "command node"} Debug probes its version, statistics and cleanup without revealing leaf files`, async () => {
+for (const machine of ["other"]) {
+  test(`${machine} Debug probes its version, statistics and cleanup without revealing leaf files`, async () => {
     const version = spyOn(backend, "getAppVersion").mockImplementation(async (target) =>
       target === machine ? "2.28.0" : "1.0.0",
     );
@@ -183,7 +182,6 @@ for (const machine of ["leaf", "other", null]) {
 
 for (const inherited of [false, true]) {
   test(`a direct leaf window adopts inherited Auto-steer ${inherited} after one masked save`, async () => {
-    delete window.orkestratorWorkspaceTarget;
     useConfigStore.setState({
       config: { ...initial, global: { ...initial.global, autoSteer: inherited } },
     });
@@ -209,7 +207,6 @@ for (const inherited of [false, true]) {
 }
 
 test("an Auto-steer edit made during a save survives the earlier response", async () => {
-  delete window.orkestratorWorkspaceTarget;
   useConfigStore.setState({
     config: { ...initial, global: { ...initial.global, autoSteer: false } },
   });

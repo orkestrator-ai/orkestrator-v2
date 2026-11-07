@@ -1,9 +1,7 @@
 /**
  * Plan items 5002 and 5003: for a node shown in the window's own tree the
  * title bar's meters and popovers, Settings, Report a bug and the app
- * shortcuts are the window's own direct calls. Its loopback carries none of
- * `panel`, `panelDismissed`, `titleBar`, `settings`, `bugReport` or
- * `shortcut`; `observeRealmLoopbacks` records everything that still crosses.
+ * shortcuts are the window's own direct calls.
  */
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import type { BackendId } from "@orkestrator/protocol/federation";
@@ -20,13 +18,11 @@ import {
 import { FakeNodeClient } from "@/test/render-in-node-scope";
 import { setFilesPanelTestState } from "@/test/files-panel-state";
 import { closeInTreeScopes, configureInTreeScopes } from "@/lib/federation/in-tree-scopes";
-import { observeRealmLoopbacks, type RealmLoopbackTraffic } from "@/lib/federation/realm-channel";
 import { getWindowScope, resetWindowScopeForTests } from "@/lib/node-scope/app-window-scope";
 import { WindowScopeProvider } from "@/lib/node-scope/providers";
 import { portalStore } from "@/lib/portal/portal-store";
 import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
 import { useAppDialogStore } from "@/stores/appDialogStore";
-import { useInTreeNodesStore } from "@/stores/inTreeNodesStore";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { useUIChromeStore } from "@/stores/uiChromeStore";
@@ -51,16 +47,6 @@ const environment = {
   status: "running",
 };
 
-/** The messages plan items 5002 and 5003 replace with direct calls. */
-const CROSS_NODE = new Set([
-  "panel",
-  "panelDismissed",
-  "titleBar",
-  "settings",
-  "bugReport",
-  "shortcut",
-]);
-
 /** A leaf node that answers its workspace's reads; anything else answers nothing. */
 class LeafClient extends FakeNodeClient {
   override async invokeRaw<T = unknown>(
@@ -77,16 +63,7 @@ class LeafClient extends FakeNodeClient {
   }
 }
 
-let traffic: RealmLoopbackTraffic[];
-let stopObserving: () => void;
 let restoreScopes: () => void;
-
-/** The messages of plan items 5002 and 5003 that crossed a loopback. */
-function crossNodeTraffic(): string[] {
-  return traffic
-    .map((entry) => `${entry.direction}:${entry.message.type}`)
-    .filter((entry) => CROSS_NODE.has(entry.split(":")[1]!));
-}
 
 function anchorElement(): HTMLDivElement {
   const anchor = document.createElement("div");
@@ -101,8 +78,6 @@ function renderRegion() {
     list: connectionList([remoteConnection("a", "Machine A", "teal")]),
     datasets: { a: sharedIdDataset("working") },
   });
-  // A browser or iOS client: no desktop realms.
-  delete (window.orkestrator as { workspaceViews?: unknown }).workspaceViews;
   return render(
     <WindowScopeProvider>
       <FederationProvider>
@@ -136,12 +111,9 @@ beforeEach(() => {
   useRemoteWorkspaceStore.setState(INITIAL_REMOTE, true);
   useUIChromeStore.setState({ environmentSortMode: "project", sidebarOpen: true });
   useMachineViewStore.setState({ grouping: "machine" });
-  useInTreeNodesStore.setState({ useRealmsForRemoteMachines: false });
   sessionStorage.clear();
   // The window's own node, so entry points tell it from another node's.
   portalStore.store.setState({ selfId: SELF_NODE_ID });
-  traffic = [];
-  stopObserving = observeRealmLoopbacks((entry) => traffic.push(entry));
   restoreScopes = configureInTreeScopes({
     host: {
       kind: "browser",
@@ -165,29 +137,18 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   useBugReportStore.setState({ sheetOpen: false, sheetNodeId: null });
-  stopObserving();
   closeInTreeScopes();
   restoreScopes();
   uninstallDesktopFake();
   useRemoteWorkspaceStore.setState(INITIAL_REMOTE, true);
   useMachineViewStore.setState(INITIAL_MACHINE, true);
   useUIChromeStore.setState(INITIAL_CHROME, true);
-  useInTreeNodesStore.setState({ useRealmsForRemoteMachines: false });
   setFilesPanelTestState({ isOpen: false });
   useAppDialogStore.setState({ request: null });
   portalStore.store.setState(INITIAL_PORTAL, true);
   resetReadCoordinatorForTests();
   resetWindowScopeForTests();
   document.body.innerHTML = "";
-});
-
-test("the title bar: no meters are reported and no popover is asked for over the loopback", async () => {
-  await openLeaf();
-  await settle();
-  // The realm side's title-bar panels are not drawn in the window's tree.
-  expect(screen.queryByTestId("realm-system-usage-panel")).toBeNull();
-  expect(screen.queryByTestId("realm-agent-info-panel")).toBeNull();
-  expect(crossNodeTraffic()).toEqual([]);
 });
 
 test("Settings, Report a bug and every app shortcut are direct calls from an in-tree node", async () => {
@@ -228,9 +189,6 @@ test("Settings, Report a bug and every app shortcut are direct calls from an in-
     // Report a bug for the node: the window's sheet, on its scope.
     act(() => openBugReport(LEAF));
     expect(useBugReportStore.getState()).toMatchObject({ sheetOpen: true, sheetNodeId: LEAF });
-    expect(useRemoteWorkspaceStore.getState().requests[LEAF]?.request.bugReport).toBeUndefined();
-    await settle();
-    expect(crossNodeTraffic()).toEqual([]);
   } finally {
     stopSettings();
     for (const stop of stops) stop();

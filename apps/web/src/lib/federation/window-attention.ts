@@ -11,9 +11,7 @@
  *   through the command node's relay, `subscribeNodeEvents`.
  * - **Skipped.** The window's own node: the sound service hears it on the
  *   command scope's client (`@/lib/native/events` `listen`), together with its
- *   fallback for backends that predate the event. A node shown by a realm
- *   renderer: that realm alerts for its own node until realms are deleted
- *   (plan item 6002), as plan item 0002 decided.
+ *   fallback for backends that predate the event.
  *
  * **Moving between sources.** When a node's source changes (a tier change, the
  * region taking or releasing it), the new source is subscribed first and the
@@ -50,7 +48,6 @@ import type { NodeScope, NodeScopeTier } from "@/lib/node-scope/node-scope";
 import type { WindowScope } from "@/lib/node-scope/window-scope";
 import { portalStore } from "@/lib/portal/portal-store";
 import { environmentStore } from "@/stores/environmentStore";
-import { nodesInTree, useInTreeNodesStore } from "@/stores/inTreeNodesStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { uiStore } from "@/stores/uiStore";
 
@@ -120,11 +117,6 @@ function commandNodeIdOf(windowScope: WindowScope): string | null {
   }
 }
 
-/** Nodes a realm renderer shows (not in-tree): their realm alerts for them. */
-function realmNodes(): ReadonlySet<string> {
-  return new Set(nodesInTree() ? [] : useRemoteWorkspaceStore.getState().realms);
-}
-
 class WindowAttentionImpl implements WindowAttention {
   private readonly nodes = new Map<string, NodeFeeds>();
   private readonly seen = new BoundedKeySet(WINDOW_ATTENTION_DEDUPE_LIMIT);
@@ -143,7 +135,6 @@ class WindowAttentionImpl implements WindowAttention {
     this.stops.push(
       portalStore.store.subscribe(reconcile),
       useRemoteWorkspaceStore.subscribe(reconcile),
-      useInTreeNodesStore.subscribe(reconcile),
       options.windowScope.nodeScopes.subscribe(reconcile),
     );
     this.reconcile();
@@ -184,8 +175,7 @@ class WindowAttentionImpl implements WindowAttention {
     const own = new Set<string>(
       [portal.selfId, commandNodeIdOf(windowScope)].filter((id): id is BackendId => !!id),
     );
-    const realms = realmNodes();
-    const held = new Set(useRemoteWorkspaceStore.getState().realms);
+    const held = new Set(useRemoteWorkspaceStore.getState().openNodes);
     const candidates = new Set<string>(portal.nodes.map((node) => node.nodeId as string));
     const leafScopes = new Map<string, NodeScope>();
     for (const scope of windowScope.nodeScopes.get()) {
@@ -199,7 +189,7 @@ class WindowAttentionImpl implements WindowAttention {
     }
     const wanted = new Map<string, AttentionSource>();
     for (const nodeId of candidates) {
-      if (own.has(nodeId) || realms.has(nodeId)) continue;
+      if (own.has(nodeId)) continue;
       const scope = leafScopes.get(nodeId);
       const onScope =
         scope !== undefined &&

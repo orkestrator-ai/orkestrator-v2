@@ -191,7 +191,7 @@ function ServicePreview({
   const backendScope = useScopesWithCommandFallback().scope;
   // Another node's tab in the window's tree is shown by that node's preview
   // runtime in main (its partition and service transport); the window's own
-  // node, or a realm's, names none (plan items 2009, 4001).
+  // node names none (plan items 2009, 4001).
   const previewNode = previewNodeFor(backendScope);
   const { capabilities, status, services, snapshotLoaded, refreshEnvironment } =
     useEnvironmentServices(serviceRef.environmentId, isActive);

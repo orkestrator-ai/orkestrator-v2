@@ -138,22 +138,15 @@ export const rendererErrorRing = new RendererErrorRing();
 
 /**
  * Which renderer this is. The app has no URL router, so the surface stands in
- * for a route pattern: a browser tab on the web client, a workspace realm in a
- * desktop window, or the desktop window's own renderer.
+ * for a route pattern: a browser tab on the web client, or the desktop
+ * window's renderer. (The protocol's third route names the separate
+ * workspace documents of earlier releases; this client no longer has any.)
  */
 export function rendererErrorRoute(
   scope: {
-    location?: { search: string };
     orkestratorGateway?: { enabled?: boolean; desktop?: boolean };
   } = globalThis as never,
 ): RendererErrorRoute {
-  try {
-    if (new URLSearchParams(scope.location?.search ?? "").get("realm") === "workspace") {
-      return "realm";
-    }
-  } catch {
-    // An unreadable location is the window's own renderer.
-  }
   if (scope.orkestratorGateway?.enabled && !scope.orkestratorGateway.desktop) return "browser";
   return "window";
 }

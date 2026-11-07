@@ -10,8 +10,7 @@
  *   `openLeafWorkspace`, which probes the leaf's direct origins with the grant
  *   and otherwise answers the command node's relay base.
  * - **In memory only.** The grant lives in this module's closures, never in
- *   `sessionStorage` (`workspace-target-storage.ts` stays for the realms until
- *   plan item 6002 deletes both).
+ *   `sessionStorage`.
  * - **Renewal, lapse and reopen without a reload.** `keepWorkspaceAlive`
  *   renews; a failed renewal, or the leaf refusing the credential, opens a new
  *   grant, clears that node's protected rich content and hands the transport

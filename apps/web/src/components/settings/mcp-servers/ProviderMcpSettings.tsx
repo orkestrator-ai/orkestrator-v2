@@ -74,15 +74,11 @@ export function ProviderMcpSettings() {
   const { machine } = useAccountMachine();
   const { portalState } = useFederation();
   const ownEnvironments = useEnvironmentStore((state) => state.environments);
-  // Only the bound backend uses the window store; other backends, including
-  // the command node in a leaf window, use their portal summaries.
+  // Only the window's own backend uses the window store; other backends use
+  // their portal summaries.
   const environments = useMemo(() => {
     if (!isWindowMachine(machine)) {
-      const nodeId = machine ?? portalState.selfId;
-      const node =
-        nodeId === portalState.selfId
-          ? portalState.self
-          : portalState.nodes.find((candidate) => candidate.nodeId === nodeId);
+      const node = portalState.nodes.find((candidate) => candidate.nodeId === machine);
       return (node?.environments ?? [])
         .filter((environment) => !environment.deleting)
         .map((environment) => ({
@@ -98,7 +94,7 @@ export function ProviderMcpSettings() {
         name: environment.name,
         local: environment.environmentType === "local",
       }));
-  }, [machine, ownEnvironments, portalState.nodes, portalState.self, portalState.selfId]);
+  }, [machine, ownEnvironments, portalState.nodes]);
   // Whether the open editor/dialog holds unsaved input. A draft belongs to
   // one exact target, so switching target must discard it — explicitly.
   const dirtyRef = useRef(false);

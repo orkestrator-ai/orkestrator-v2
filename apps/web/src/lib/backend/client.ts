@@ -61,7 +61,7 @@ export const commandBackendClient: BackendClient = {
 
 /**
  * The window's command node for the portal APIs (`commandScopeBackendClient`,
- * plan item 5004): the command scope, or a realm document's portal channel.
+ * plan item 5004): the command scope.
  * The shim client of `command-nodes.ts`.
  */
 export const portalBackendClient: BackendClient = commandScopeBackendClient;

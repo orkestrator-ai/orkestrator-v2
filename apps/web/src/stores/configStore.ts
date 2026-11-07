@@ -107,9 +107,7 @@ function layeredState(
 export const configStore: ScopedStoreDef<ConfigState> = defineScopedStore<ConfigState>(
   "config",
   (scope) => (set, get) => {
-    // An in-tree leaf follows its parent scope's config. A realm document's
-    // parent is the page's portal (no scope here): the config read through
-    // it arrives already layered.
+    // An in-tree leaf follows its parent scope's config.
     const parent = settingsParent(scope)?.scope ?? null;
     let inherited: AppConfig | null = null;
     if (parent) {

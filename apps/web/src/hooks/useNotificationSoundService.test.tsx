@@ -68,7 +68,7 @@ function environment(id: string, hasUnreadWork: boolean): Environment {
 }
 
 beforeEach(() => {
-  useRemoteWorkspaceStore.setState({ active: null, realms: [], requests: {} });
+  useRemoteWorkspaceStore.setState({ active: null, openNodes: [], requests: {} });
   getWindowScope().select(null);
   playConfiguredNotificationSound.mockReset();
   playConfiguredNotificationSound.mockResolvedValue(true);

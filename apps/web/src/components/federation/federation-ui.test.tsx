@@ -919,7 +919,6 @@ describe("UI-04: creating inside a project instance", () => {
     // until the user submits it.
     await waitFor(() => expect(useRemoteWorkspaceStore.getState().active?.nodeId).toBe("bk_b"));
     expect(useRemoteWorkspaceStore.getState().requests.bk_b?.request).toEqual({
-      type: "select",
       projectId: "project-1",
       createEnvironmentProjectId: "project-1",
     });
@@ -981,7 +980,6 @@ describe("another machine's menus offer what this machine's do", () => {
         fireEvent.click(within(await openProjectMenu()).getByRole("menuitem", { name }));
         await waitFor(() =>
           expect(useRemoteWorkspaceStore.getState().requests.bk_a?.request).toEqual({
-            type: "select",
             projectId: "project-1",
             dialog,
           }),
@@ -1009,7 +1007,6 @@ describe("another machine's menus offer what this machine's do", () => {
     fireEvent.click(within(menu).getByRole("menuitem", { name: "Settings" }));
     await waitFor(() =>
       expect(useRemoteWorkspaceStore.getState().requests.bk_a?.request).toEqual({
-        type: "select",
         projectId: "project-1",
         environmentId: "env-1",
         dialog: "environment-settings",
@@ -1020,7 +1017,6 @@ describe("another machine's menus offer what this machine's do", () => {
     fireEvent.click(within(menu).getByRole("menuitem", { name: "Fork container" }));
     await waitFor(() =>
       expect(useRemoteWorkspaceStore.getState().requests.bk_a?.request).toEqual({
-        type: "select",
         projectId: "project-1",
         environmentId: "env-fork",
       }),
@@ -1133,7 +1129,6 @@ describe("The command node in the machines menu", () => {
     );
     await waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
     expect(fake.connections.use).not.toHaveBeenCalled();
-    expect(fake.workspaceViews.open).not.toHaveBeenCalled();
   });
 });
 
@@ -1221,8 +1216,8 @@ describe("OP-06/CR-03: opening another machine's environment", () => {
       expect(useUIStore.getState().selectedEnvironmentId).toBeNull();
       act(() => useUIStore.getState().selectProjectAndEnvironment("local-project", "local-env"));
       expect(useRemoteWorkspaceStore.getState().active).toBeNull();
-      // Machine A's realm stays open behind it, so going back is instant.
-      expect(useRemoteWorkspaceStore.getState().realms).toEqual(["bk_a"]);
+      // Machine A stays held behind it, so going back is instant.
+      expect(useRemoteWorkspaceStore.getState().openNodes).toEqual(["bk_a"]);
     } finally {
       stop();
     }
@@ -1318,23 +1313,14 @@ describe("the sidebar order the command node keeps", () => {
       datasets: { a: sharedIdDataset("idle"), b: sharedIdDataset("idle") },
       layout: { revision: 1, machineOrder: ["bk_b", "bk_self", "bk_a"] },
     });
-    window.orkestratorWorkspaceTarget = {
-      nodeId: "bk_a",
-      nodeName: "Machine A",
-      path: "direct",
-    };
-    try {
-      renderWithFederation(<MachineOrder />);
-      await waitFor(() =>
-        // The command node's own summary is not part of this fixture.
-        expect(screen.getAllByTestId("machine-order").map((item) => item.textContent)).toEqual([
-          "bk_b",
-          "bk_a",
-        ]),
-      );
-    } finally {
-      delete window.orkestratorWorkspaceTarget;
-    }
+    renderWithFederation(<MachineOrder />);
+    await waitFor(() =>
+      expect(screen.getAllByTestId("machine-order").map((item) => item.textContent)).toEqual([
+        "bk_b",
+        "bk_self",
+        "bk_a",
+      ]),
+    );
   });
 
   test("by project hides a machine that is not connected", async () => {

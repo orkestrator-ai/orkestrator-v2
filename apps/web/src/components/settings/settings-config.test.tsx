@@ -28,7 +28,6 @@ afterEach(() => {
   cleanup();
   mock.restore();
   useConfigStore.setState({ config: initial });
-  delete window.orkestratorWorkspaceTarget;
 });
 
 test("implicit workspace config uses the window store without an independent read", () => {
@@ -43,9 +42,9 @@ test("implicit workspace config uses the window store without an independent rea
   expect(read).not.toHaveBeenCalled();
 });
 
-for (const machine of [null, "other"]) {
+// The command node itself is this window's own machine.
+for (const machine of ["other"]) {
   test(`explicit ${machine ?? "command-node"} config stays isolated and refreshes effective workspace after save`, async () => {
-    window.orkestratorWorkspaceTarget = { nodeId: "leaf", nodeName: "Leaf", path: "direct" };
     useConfigStore.setState({ config: config("leaf") });
     const read = spyOn(backend, "getConfig").mockImplementation(async (target) =>
       config(target === undefined ? "leaf-refreshed" : "selected"),

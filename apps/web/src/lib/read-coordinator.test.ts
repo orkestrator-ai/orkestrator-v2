@@ -403,7 +403,7 @@ describe("read coordinator: visibility, focus and reconnect", () => {
     expect(order).toEqual(["session"]);
     order.length = 0;
 
-    // The realm's own document stays visible; its window hid the frame.
+    // The page's own document stays visible; its embedder hid the frame.
     coordinator.setHostHidden(true);
     expect(coordinator.getDiagnostics()).toMatchObject({
       paused: true,

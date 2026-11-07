@@ -2,12 +2,7 @@ import { lazy, useCallback, useEffect } from "react";
 import { LazyDialogLoadingFallback, LazyLoadBoundary } from "@/components/LazyLoadBoundary";
 import { useAccountMachineStore } from "@/components/settings/account-machine";
 import { onAppShortcut } from "@/lib/app-shortcuts";
-import { isWorkspaceRealm } from "@/lib/federation/workspace-realm";
-import {
-  onGlobalSettingsCloseRequest,
-  onGlobalSettingsRequest,
-  requestGlobalSettings,
-} from "@/lib/settings-navigation";
+import { onGlobalSettingsCloseRequest, onGlobalSettingsRequest } from "@/lib/settings-navigation";
 import { useGlobalSettingsStore } from "@/stores/globalSettingsStore";
 
 const LazySettingsPage = lazy(async () => ({
@@ -40,17 +35,7 @@ export function GlobalSettingsHost() {
     [],
   );
   useEffect(
-    () =>
-      onAppShortcut("open-settings", () => {
-        // Settings belong to the command node: a workspace realm opens its
-        // window's. The shortcut is window-owned, so a realm forwards it
-        // before this runs; this keeps any direct request there consistent.
-        if (isWorkspaceRealm()) {
-          requestGlobalSettings("general");
-          return;
-        }
-        useGlobalSettingsStore.getState().show();
-      }),
+    () => onAppShortcut("open-settings", () => useGlobalSettingsStore.getState().show()),
     [],
   );
   useEffect(() => onGlobalSettingsCloseRequest(closeGlobalSettings), []);

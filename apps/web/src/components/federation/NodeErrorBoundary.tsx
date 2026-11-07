@@ -14,8 +14,7 @@ export interface NodeErrorBoundaryProps {
   children: ReactNode;
   /**
    * Called when the user retries, before the subtree mounts again. The owner
-   * starts a fresh workspace document there (a new realm loopback), as a
-   * realm reload would.
+   * starts a fresh workspace document there, on the same scope.
    */
   onRetry?: () => void;
 }
@@ -26,8 +25,7 @@ interface NodeErrorBoundaryState {
 
 /**
  * One node's workspace in the window's tree (report §5.2, §10.3): a render
- * error inside it shows a per-node error with Try again, as a crashed realm
- * does, and never reaches the window's shell or another node's workspace.
+ * error inside it shows a per-node error with Try again, and never reaches the window's shell or another node's workspace.
  *
  * Unmounting the failed subtree does not cancel the node's work (invariant
  * 2): its scope, services and backend work are not this boundary's. The log

@@ -5,7 +5,6 @@ import * as nodeEvents from "@/lib/federation/node-events";
 import type { NodeScope, NodeScopeTier } from "@/lib/node-scope/node-scope";
 import { WindowScope } from "@/lib/node-scope/window-scope";
 import { portalStore } from "@/lib/portal/portal-store";
-import { useInTreeNodesStore } from "@/stores/inTreeNodesStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { uiStore } from "@/stores/uiStore";
 import { FakeNodeClient } from "@/test/render-in-node-scope";
@@ -21,7 +20,6 @@ import {
 const SELF = "bk_self" as BackendId;
 const LEAF = "bk_leaf" as BackendId;
 const OTHER = "bk_other" as BackendId;
-const REALM = "bk_realm" as BackendId;
 
 interface Subscription {
   subscriber: nodeEvents.NodeEventSubscriber;
@@ -98,8 +96,7 @@ function start(): WindowAttention {
 
 /** Shows `nodeId` in the window's own tree: in-tree, and held by the region. */
 function holdInTree(...nodeIds: string[]) {
-  useInTreeNodesStore.setState({ useRealmsForRemoteMachines: false });
-  useRemoteWorkspaceStore.setState({ realms: nodeIds });
+  useRemoteWorkspaceStore.setState({ openNodes: nodeIds });
 }
 
 function openLeaf(client: FakeNodeClient, tier: NodeScopeTier = "live"): NodeScope {
@@ -125,8 +122,7 @@ beforeEach(() => {
   );
   windowScope = new WindowScope();
   windowScope.open({ role: "command", client: new FakeNodeClient({ nodeId: SELF }) });
-  useInTreeNodesStore.setState({ useRealmsForRemoteMachines: false });
-  useRemoteWorkspaceStore.setState({ active: null, realms: [] });
+  useRemoteWorkspaceStore.setState({ active: null, openNodes: [] });
   setNodes(SELF, LEAF);
 });
 
@@ -135,8 +131,7 @@ afterEach(() => {
   windowScope.dispose();
   subscribe.mockRestore();
   portalStore.store.setState(initialPortal, true);
-  useInTreeNodesStore.setState({ useRealmsForRemoteMachines: false });
-  useRemoteWorkspaceStore.setState({ active: null, realms: [] });
+  useRemoteWorkspaceStore.setState({ active: null, openNodes: [] });
 });
 
 describe("sources", () => {
@@ -156,22 +151,6 @@ describe("sources", () => {
     client.emit(ENVIRONMENT_ATTENTION_EVENT, attention("a1"));
     relay(OTHER)!.subscriber.onEvent(ENVIRONMENT_ATTENTION_EVENT, attention("a1"));
     expect(seen).toEqual(["bk_leaf:a1:scope", "bk_other:a1:relay"]);
-  });
-
-  test("under the rollback setting a realm's node is left to its realm, the others stay on the relay", async () => {
-    setNodes(SELF, OTHER, REALM);
-    useInTreeNodesStore.setState({ useRealmsForRemoteMachines: true });
-    useRemoteWorkspaceStore.setState({ realms: [REALM] });
-    const attention_ = start();
-    await flush();
-    expect(attention_.sourceOf(REALM)).toBeNull();
-    expect(attention_.sourceOf(OTHER)).toBe("relay");
-    expect(Array.from(subscriptions.keys())).toEqual([OTHER]);
-
-    // Turning the rollback off hands the node to this window.
-    useInTreeNodesStore.setState({ useRealmsForRemoteMachines: false });
-    await flush();
-    expect(attention_.sourceOf(REALM)).toBe("relay");
   });
 
   test("a suspended or summary-tier scope is heard on the relay", () => {
@@ -273,7 +252,7 @@ describe("a tier change mid-stream", () => {
     holdInTree(LEAF);
     const attention_ = start();
     await flush();
-    useRemoteWorkspaceStore.setState({ realms: [] });
+    useRemoteWorkspaceStore.setState({ openNodes: [] });
     expect(attention_.feedsOf(LEAF)).toEqual(["relay", "scope"]);
     relay(LEAF)!.subscriber.onResync();
     expect(attention_.feedsOf(LEAF)).toEqual(["relay"]);
@@ -353,7 +332,7 @@ describe("handoff and stop", () => {
     client.emit(ENVIRONMENT_ATTENTION_EVENT, attention("d1"));
     expect(seen).toEqual([]);
     // Later store changes start nothing.
-    useRemoteWorkspaceStore.setState({ realms: [] });
+    useRemoteWorkspaceStore.setState({ openNodes: [] });
     expect(relay(LEAF)).toBeUndefined();
   });
 

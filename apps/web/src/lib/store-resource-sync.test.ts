@@ -4,7 +4,6 @@ import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import * as commandScopeModule from "@/lib/portal/command-scope";
 import type { Environment } from "@/types";
 import type { PersistedPaneLayout } from "@/types/paneLayout";
 
@@ -3585,48 +3584,5 @@ describe("detach", () => {
     await tick();
 
     expect(hydratePromptQueuesForEnvironment).not.toHaveBeenCalled();
-  });
-});
-
-describe("command-node config events in leaf windows", () => {
-  test("refreshes inherited preferences and disposes a listener whose readiness resolves after stop", async () => {
-    let handler: ((payload: unknown) => unknown) | undefined;
-    let ready!: () => void;
-    const unlisten = mock(() => undefined);
-    // A realm document: its command scope's settings parent is the page's portal channel.
-    window.orkestratorWorkspaceTarget = { nodeId: "bk_leaf", nodeName: "Leaf", path: "direct" };
-    window.orkestratorPortal = { invoke: mock(), listen: mock() } as never;
-    const portalListen = spyOn(commandScopeModule, "commandScopeListen").mockImplementation(
-      (_event, callback) => {
-        handler = (payload) => callback({ payload } as never);
-        return new Promise((resolve) => {
-          ready = () => resolve(unlisten);
-        });
-      },
-    );
-    try {
-      const config = structuredClone(useConfigStore.getState().config);
-      config.global.terminalScrollback = 8765;
-      const getConfig = mock(async () => config);
-      const stop = startTestStoreResourceSync({ getConfig });
-      handler?.({ resource: "project" });
-      expect(getConfig).not.toHaveBeenCalled();
-      handler?.({ resource: "config" });
-      await waitForState(
-        () => useConfigStore.getState().config.global.terminalScrollback === 8765,
-        "command-node config refresh",
-      );
-      expect(getConfig).toHaveBeenCalledTimes(1);
-      stop();
-      handler?.({ resource: "config" });
-      expect(getConfig).toHaveBeenCalledTimes(1);
-      ready();
-      await tick(0);
-      expect(unlisten).toHaveBeenCalledTimes(1);
-    } finally {
-      portalListen.mockRestore();
-      delete window.orkestratorPortal;
-      delete window.orkestratorWorkspaceTarget;
-    }
   });
 });

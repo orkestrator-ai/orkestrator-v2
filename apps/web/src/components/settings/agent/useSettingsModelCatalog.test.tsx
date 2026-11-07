@@ -23,12 +23,10 @@ afterEach(() => {
   useProjectStore.setState(initialProjects);
   useUIStore.setState(initialUI);
   portalStore.store.setState(initialPortal);
-  delete window.orkestratorPortal;
-  delete window.orkestratorWorkspaceTarget;
 });
-for (const machine of [null, "other"]) {
-  test(`catalogue reads and refresh use ${machine ?? "command node"} projects and preserve workspace models`, async () => {
-    window.orkestratorWorkspaceTarget = { nodeId: "leaf", nodeName: "Leaf", path: "direct" };
+{
+  const machine = "other";
+  test("another machine's catalogue reads and refresh use its projects and preserve workspace models", async () => {
     portalStore.store.setState({ selfId: "command" as never });
     useAgentModelCatalogStore.setState({
       codexModels: [
@@ -37,7 +35,7 @@ for (const machine of [null, "other"]) {
     });
     useProjectStore.setState({ projects: [{ id: "leaf-project", name: "Leaf project" }] as never });
     useUIStore.setState({ selectedProjectId: "leaf-project" });
-    const owner = machine ?? "command";
+    const owner = machine;
     const project = { ref: { projectId: `${owner}-project` }, name: `${owner} project` };
     spyOn(federation, "useFederation").mockReturnValue({
       portalState: {
@@ -73,27 +71,22 @@ for (const machine of [null, "other"]) {
         revision += 1;
         return { agent: args.agent, modelCount: 1 };
       }
-      if (command === "get_app_version") return target === "leaf" ? "1.0.0" : "2.0.0";
+      if (command === "get_app_version") return target === "other" ? "3.0.0" : "2.0.0";
       throw new Error(`Unexpected command: ${command}`);
     };
+    // The command node's own window: its own answers, another node's through it.
     workspace.mockImplementation(async (command: string, args?: Record<string, unknown>) =>
-      response("leaf", command, args),
+      command === "invoke_on_node"
+        ? {
+            outcome: "ok",
+            result: response(
+              String(args?.nodeId),
+              String(args?.command),
+              args?.args as Record<string, unknown>,
+            ),
+          }
+        : response("command", command, args),
     );
-    window.orkestratorPortal = {
-      invoke: mock(async (command: string, args?: Record<string, unknown>) =>
-        command === "invoke_on_node"
-          ? {
-              outcome: "ok",
-              result: response(
-                String(args?.nodeId),
-                String(args?.command),
-                args?.args as Record<string, unknown>,
-              ),
-            }
-          : response("command", command, args),
-      ),
-      listen: () => () => {},
-    } as never;
     const wrapper = ({ children }: { children: ReactNode }) => (
       <AccountMachineProvider value={{ machine, name: owner }}>{children}</AccountMachineProvider>
     );
@@ -116,8 +109,9 @@ for (const machine of [null, "other"]) {
     });
     expect(result.current.catalog.codex[0]?.id).toBe(`${owner}-model-3`);
     expect(useAgentModelCatalogStore.getState().codexModels[0]?.id).toBe("leaf-model");
-    expect(workspace).not.toHaveBeenCalled();
-    expect(await getAppVersion(machine)).toBe("2.0.0");
-    expect(await getAppVersion()).toBe("1.0.0");
+    // Everything of the other machine went through the command node.
+    expect(workspace.mock.calls.filter(([command]) => command !== "invoke_on_node")).toEqual([]);
+    expect(await getAppVersion(machine)).toBe("3.0.0");
+    expect(await getAppVersion()).toBe("2.0.0");
   });
 }

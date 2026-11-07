@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { MCP_MANAGEMENT_PROTOCOL_VERSION } from "@orkestrator/protocol/mcp-management";
 import type { NegotiatedDomains } from "@orkestrator/protocol/node-client";
 import type { BackendClient } from "@/lib/backend/client";
+import { invoke } from "@/lib/native/backend";
 import { createMcpManagementApi } from "@/lib/backend/mcp-management";
 import { createSignal } from "@/lib/node-scope/signal";
 import { mcpOn } from "./mcp";
@@ -44,19 +45,15 @@ function fakeClient(answer: unknown, domains?: NegotiatedDomains | null) {
   return { client, invokeRaw };
 }
 
-const portal = mock(async (_command: string, _args?: Record<string, unknown>) => ({
-  outcome: "ok",
-  result: operation,
-}));
+/** The window's command node: its own transport, which suites mock. */
+const portal = invoke as unknown as ReturnType<typeof mock>;
 beforeEach(() => {
-  portal.mockClear();
-  // A realm document: the page names its workspace target and has a portal.
-  window.orkestratorWorkspaceTarget = { nodeId: "bk_leaf", nodeName: "Leaf", path: "direct" };
-  window.orkestratorPortal = { invoke: portal } as never;
+  portal.mockReset();
+  portal.mockImplementation(async () => ({ outcome: "ok", result: operation }));
 });
 afterEach(() => {
-  delete window.orkestratorPortal;
-  delete window.orkestratorWorkspaceTarget;
+  portal.mockReset();
+  portal.mockResolvedValue(undefined);
 });
 
 describe("mcp domain client", () => {

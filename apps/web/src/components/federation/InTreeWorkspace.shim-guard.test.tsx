@@ -21,7 +21,6 @@ import {
   shimUnderLeafCounts,
 } from "@/lib/node-scope/shim-under-leaf-guard";
 import { useEnvironmentStore } from "@/stores/environmentStore";
-import { useInTreeNodesStore } from "@/stores/inTreeNodesStore";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { uiStore } from "@/stores/uiStore";
@@ -71,7 +70,6 @@ beforeEach(() => {
   useRemoteWorkspaceStore.setState(INITIAL_REMOTE, true);
   useUIChromeStore.setState({ environmentSortMode: "project" });
   useMachineViewStore.setState({ grouping: "machine" });
-  useInTreeNodesStore.setState({ useRealmsForRemoteMachines: false });
   sessionStorage.clear();
   restoreScopes = configureInTreeScopes({
     host: {
@@ -99,7 +97,6 @@ afterEach(() => {
   uninstallDesktopFake();
   useRemoteWorkspaceStore.setState(INITIAL_REMOTE, true);
   useMachineViewStore.setState(INITIAL_MACHINE, true);
-  useInTreeNodesStore.setState({ useRealmsForRemoteMachines: false });
   setFilesPanelTestState({ isOpen: false });
   resetWindowScopeForTests();
   resetShimUnderLeafGuardForTests();
@@ -111,7 +108,6 @@ test("the guard is on while an in-tree workspace is mounted, and its workspace u
     list: connectionList([remoteConnection("a", "Machine A", "teal")]),
     datasets: { a: sharedIdDataset("working") },
   });
-  delete (window.orkestrator as { workspaceViews?: unknown }).workspaceViews;
   const view = render(
     <WindowScopeProvider>
       <FederationProvider>

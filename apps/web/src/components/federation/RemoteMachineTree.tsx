@@ -1,5 +1,5 @@
 import { openMachineWorkspace } from "@/lib/federation/open-workspace";
-import { projectLandingBoardTab, type RealmGrouping } from "@/lib/federation/workspace-realm";
+import { projectLandingBoardTab, type WindowGrouping } from "@/lib/federation/window-grouping";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
@@ -418,7 +418,7 @@ export function RemoteProjectGroup({
   onToggleCollapse: () => void;
   sortable: boolean;
   /** How the window's sidebar groups the list this row is in; decides where it opens. */
-  grouping: RealmGrouping;
+  grouping: WindowGrouping;
   /** Mark the machine with a home before the name, in lists that name machines. */
   showMachine?: boolean;
   /** Shown instead of the project name (a repository group names the machine). */

@@ -512,12 +512,11 @@ environment, its tabs and panes, and the files panel. Only that region gets
 its data from the other node; it runs this client's own code, served by the
 command node.
 
-By default that workspace renders in the window's own tree, in the node's own
-scope (plan item 6001; [node scopes](../development/node-scopes.md#a-nodes-workspace-in-the-windows-tree)),
-on desktop, browser and iOS. The realms described below remain for one
-release behind **Settings → Machines → a machine → Workspace in this window →
-Use separate workspace windows (realms)** (per window, default off), as a
-rollback; plan items 6002 and 6003 remove them.
+That workspace renders in the window's own tree, in the node's own scope
+(plan item 6001; [node scopes](../development/node-scopes.md#a-nodes-workspace-in-the-windows-tree)),
+on desktop, browser and iOS. The web client's realms are deleted (plan item
+6002); the desktop's realm views and IPC follow in plan item 6003, and the
+realm description below is retired with them.
 
 - **Workspace realms.** The central region of another node is a *realm*: a
   separate renderer of this client bound to that node's workspace and to
@@ -529,9 +528,8 @@ rollback; plan items 6002 and 6003 remove them.
   The realm shows no title bar or sidebar of its own.
 - **Two channels per realm.** The realm's *workspace* transport
   (`window.orkestrator`) is bound to its node. Its *portal* channel
-  (`window.orkestratorPortal`, read only by `lib/portal/page-portal.ts`; the
-  portal APIs call the command scope, `lib/portal/command-scope.ts`, plan item
-  5004) stays on the window's command node, for what a workspace needs from it
+  (`window.orkestratorPortal`; the portal APIs now call the command scope,
+  `lib/portal/command-scope.ts`, plan item 5004) stayed on the window's command node, for what a workspace needs from it
   (the command node's inherited settings, coordinator links). A lint
   boundary keeps multi-machine views off the workspace transport.
 - **Opening** asks the command node for a workspace grant. The desktop binds

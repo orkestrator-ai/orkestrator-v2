@@ -3,8 +3,8 @@
  * renderer window knows regardless of which node a read goes to.
  *
  * - **Visibility.** The document's Page Visibility, plus its host's word that
- *   it is hidden (`setHostHidden`, plan item 0003: a workspace realm whose
- *   window hides its frame, and in-tree a warm but hidden node scope).
+ *   it is hidden (`setHostHidden`, plan item 0003: a page whose embedder
+ *   hides it while its own Page Visibility still reads visible).
  * - **Data saving.** This client's preference (`setDataSaving`).
  * - **Return hints.** `focus` and `pageshow` (resume), and browser `online`
  *   (a network path came back: retry failed reads now).

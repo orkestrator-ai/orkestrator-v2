@@ -19,6 +19,7 @@ import {
 } from "@/test/federation-desktop-fake";
 import type { Environment, Project } from "@/types";
 import { HierarchicalSidebar } from "./HierarchicalSidebar";
+import { selectOnNode } from "@/test/node-selection";
 
 /** A project's header button, found through its "+" button, which names project and machine. */
 async function findProjectHeading(project: string, machine: string): Promise<HTMLElement> {
@@ -132,19 +133,15 @@ test("a project row stays highlighted while its home is shown, on the command no
     act(() => useUIStore.getState().selectEnvironment(localFeature.id));
     expect(highlighted()).toEqual({ local: false, leaf: false });
 
-    // The leaf's project, opened from its row, then its home as the realm reports it.
+    // The leaf's project, opened from its row, then its home as the leaf selects it.
     fireEvent.click(leafRow);
     await waitFor(() => expect(highlighted()).toEqual({ local: false, leaf: true }));
     const report = (projectId: string | null, environmentId: string | null) =>
-      act(() =>
-        useRemoteWorkspaceStore
-          .getState()
-          .noteRealmSelection("bk_leaf", { projectId, environmentId }),
-      );
+      act(() => selectOnNode("bk_leaf", { projectId, environmentId }));
     report("tg", "tg-home");
     expect(highlighted()).toEqual({ local: false, leaf: true });
     expect(leafRow.closest("[data-project]")?.getAttribute("data-selected")).toBe("true");
-    // One of the leaf's environments, chosen in its realm.
+    // One of the leaf's environments, chosen in its workspace.
     report("tg", "tg-feature");
     expect(highlighted()).toEqual({ local: false, leaf: false });
     expect(leafRow.closest("[data-project]")?.getAttribute("data-selected")).toBeNull();

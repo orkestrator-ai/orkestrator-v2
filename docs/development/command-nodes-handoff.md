@@ -68,7 +68,7 @@ matrix with evidence for every row are in
   terminal WebSockets with the leaf's credential.
 - **Renderer** (`lib/portal`, `components/federation`):
   - One `FederationProvider` reads the command node's portal over the
-    portal channel (`lib/portal/portal-transport.ts`).
+    window's command scope (`lib/portal/command-scope.ts`).
   - The window always stays on its command node. Opening another node's
     environment shows that node's workspace realm in the central region
     (`lib/federation/workspace-realm.ts`, `stores/remoteWorkspaceStore.ts`,

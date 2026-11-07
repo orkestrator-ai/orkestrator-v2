@@ -2,7 +2,6 @@ import { useEffect, useMemo, type CSSProperties, type ReactNode } from "react";
 import { usePanelRef } from "react-resizable-panels";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { FilesPanel } from "@/components/files-panel";
-import { RealmTitleBarPanels } from "@/components/federation/RealmTitleBar";
 import { DEFAULT_TERMINAL_APPEARANCE, resolveTerminalBackgroundColor } from "@/constants/terminal";
 import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import {
@@ -123,10 +122,9 @@ export function useCentralPanelThemeVars(): CSSProperties {
 
 /**
  * Another node's workspace in a command node's window, below the window's
- * title bar and beside its sidebar: the node's title-bar popovers (their
- * triggers are the window's), its toolbar, `main`, and its files panel. A
- * workspace realm document draws it (`AppShell`), and so does a node shown in
- * the window's own tree (`InTreeWorkspace`), both inside the node's scope.
+ * title bar and beside its sidebar: its toolbar, `main`, and its files
+ * panel. `InTreeWorkspace` draws it inside the node's scope; the window's
+ * title bar shows the node's meters and agent button (`ShownNodeTitleBar`).
  */
 export function NodeWorkspaceLayout({
   main,
@@ -139,17 +137,10 @@ export function NodeWorkspaceLayout({
   /** The phone layout, where the files panel is the window's own sheet and not drawn here. */
   phone: boolean;
 }) {
-  const activeTab = useWorkspaceActiveTab();
   const centralPanelThemeVars = useCentralPanelThemeVars();
   const filesPanelRef = useFilesPanelPullRequestWidth(filesPanelOpen);
   return (
     <>
-      {/*
-        The window's title bar shows this node's host meters and agent
-        button, as it does for its own node's environments; their popovers
-        open here, under it.
-      */}
-      <RealmTitleBarPanels activeTab={activeTab} />
       <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
         <ResizablePanel defaultSize={filesPanelOpen ? 70 : 100} minSize={30}>
           <div className="flex h-full flex-col" style={centralPanelThemeVars}>

@@ -177,15 +177,8 @@ describe("the app window scope", () => {
 
   test("the command scope takes the page's proven command-node identity", () => {
     const identity = window.orkestratorDesktopIdentity;
-    const target = window.orkestratorWorkspaceTarget;
     try {
       expect(commandNodeIdFromPage()).toBe(COMMAND_SCOPE_PROVISIONAL_NODE_ID);
-      window.orkestratorWorkspaceTarget = {
-        nodeId: NODE_B,
-        nodeName: "Leaf",
-        path: "direct",
-      };
-      expect(commandNodeIdFromPage()).toBe(NODE_B);
       window.orkestratorDesktopIdentity = {
         connectionId: "local",
         backendId: NODE_A,
@@ -199,10 +192,9 @@ describe("the app window scope", () => {
         backendId: "not a backend id!",
         legacyOrigin: null,
       };
-      expect(commandNodeIdFromPage()).toBe(NODE_B);
+      expect(commandNodeIdFromPage()).toBe(COMMAND_SCOPE_PROVISIONAL_NODE_ID);
     } finally {
       window.orkestratorDesktopIdentity = identity;
-      window.orkestratorWorkspaceTarget = target;
     }
   });
 });

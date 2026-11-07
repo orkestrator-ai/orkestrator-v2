@@ -15,7 +15,6 @@ import {
   environmentHasDeletionTombstone,
   NODE_DELETE_FAILURE,
   type NodeSummary,
-  type SelfNodeSummary,
 } from "@orkestrator/protocol/node-summaries";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useEnvironmentStore, useProjectStore } from "@/stores";
@@ -135,36 +134,6 @@ function boundEnvironments(
   return byProject;
 }
 
-/**
- * The command node itself, from its self summary, while the window's
- * workspace (and so its full stores) is on another node.
- */
-export function viewFromSelfSummary(
-  self: SelfNodeSummary,
-  release?: MachineRelease | null,
-): MachineView {
-  const environmentsByProject = new Map<string, FederatedEnvironment[]>();
-  for (const environment of self.environments) {
-    const list = environmentsByProject.get(environment.projectId) ?? [];
-    list.push(environment);
-    environmentsByProject.set(environment.projectId, list);
-  }
-  return {
-    connectionId: self.nodeId,
-    backendId: self.nodeId,
-    name: self.displayName,
-    colorToken: self.colorToken ?? FALLBACK_MACHINE_COLOR,
-    bound: false,
-    freshness: "current",
-    transport: "connected",
-    projects: self.projects,
-    environmentsByProject,
-    truncated: self.truncated,
-    loadedAt: self.loadedAt,
-    ...(release ? { release } : {}),
-  };
-}
-
 const BOUND_MACHINE_LOADED = 1;
 
 /**
@@ -181,7 +150,7 @@ function boundRelease(
   return node ? (viewFromNodeSummary(node).release ?? null) : null;
 }
 
-/** The machine this realm is bound to, projected from its own full stores. */
+/** The machine this window is bound to, projected from its own full stores. */
 export function useBoundMachineView(): MachineView | null {
   const { bound, portalState } = useFederation();
   const boundId = bound?.backendId ?? null;
@@ -212,29 +181,20 @@ export function useBoundMachineView(): MachineView | null {
         activeBuildEnvironmentIds,
       ),
       truncated: false,
-      // This realm's own stores are its machine's live state.
+      // This window's own stores are its machine's live state.
       loadedAt: BOUND_MACHINE_LOADED,
       ...(release ? { release } : {}),
     };
   }, [bound, environments, projects, activeBuildEnvironmentIds, release]);
 }
 
-/**
- * Every machine but the one the window's workspace is on, from the command
- * node's read model: its other nodes, and the command node itself while the
- * workspace is on one of them.
- */
+/** Every machine but the window's own, from the command node's read model: its other nodes. */
 export function useRemoteMachineViews(): MachineView[] {
   const { portalState, bound } = useFederation();
   const boundId = bound?.backendId ?? null;
   return useMemo(() => {
-    const nodes = portalState.nodes
-      .filter((node) => node.nodeId !== boundId)
-      .map(viewFromNodeSummary);
-    return portalState.self && portalState.self.nodeId !== boundId
-      ? [viewFromSelfSummary(portalState.self, portalState.commandRelease), ...nodes]
-      : nodes;
-  }, [boundId, portalState.nodes, portalState.self, portalState.commandRelease]);
+    return portalState.nodes.filter((node) => node.nodeId !== boundId).map(viewFromNodeSummary);
+  }, [boundId, portalState.nodes]);
 }
 
 /**

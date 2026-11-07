@@ -16,8 +16,8 @@
  *   that started after the call; joining an older read alone never satisfies it.
  * - **Visibility and connectivity.** Automatic reads (periodic, invalidation,
  *   mount, retry) pause while the document is hidden, while its host has said
- *   it is hidden (`setHostHidden`: a workspace realm whose window hides its
- *   frame or view, which the realm's own Page Visibility does not report), or
+ *   it is hidden (`setHostHidden`: a page whose embedder hides it, which its
+ *   own Page Visibility does not report), or
  *   while a transport has declared itself disconnected (`setDisconnected`). Browser `offline` is not
  *   treated as disconnected: a desktop Local backend stays reachable without
  *   internet access, so online/offline is only a hint and `online` merely
@@ -320,7 +320,7 @@ export interface ReadCoordinator {
   setDisconnected(disconnected: boolean): void;
   /**
    * The host's word that this document is hidden although its own Page
-   * Visibility says visible: a workspace realm whose window hid its frame.
+   * Visibility says visible: a page whose embedder hid its frame.
    * It defers and resumes reads exactly as a hidden document does.
    * Window-wide, like `setDataSaving`.
    */

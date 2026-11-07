@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { FederationProvider } from "@/components/federation/FederationProvider";
 import { invoke } from "@/lib/native/backend";
 import { portalStore } from "@/lib/portal/portal-store";
@@ -91,14 +91,8 @@ async function commandNodeAnswer(command: string, args?: Record<string, unknown>
 beforeEach(() => {
   writes.length = 0;
   configs = Object.fromEntries(["command", "leaf", "other"].map((owner) => [owner, config(owner)]));
-  workspace.mockImplementation(async (command: string, args?: Record<string, unknown>) =>
-    answer("leaf", command, args),
-  );
-  window.orkestratorWorkspaceTarget = { nodeId: "leaf", nodeName: "Leaf", path: "direct" };
-  window.orkestratorPortal = {
-    invoke: mock(commandNodeAnswer),
-    listen: () => () => {},
-  } as never;
+  // The command node's own window: its command scope is the window's.
+  workspace.mockImplementation(commandNodeAnswer);
   portalStore.store.setState({
     ...initialPortal,
     selfId: "command" as never,
@@ -111,8 +105,6 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
-  delete window.orkestratorPortal;
-  delete window.orkestratorWorkspaceTarget;
   portalStore.store.setState(initialPortal);
   useConfigStore.setState(initialConfig);
   useRemoteWorkspaceStore.setState(initialRemote);
@@ -126,102 +118,8 @@ function mount(section: "general" | "version-control" | "review" | "experimental
     </FederationProvider>,
   );
 }
-async function directory(path: string) {
-  await waitFor(() =>
-    expect((screen.getByLabelText("Default projects folder") as HTMLInputElement).value).toBe(path),
-  );
-}
-
-test("leaf window selects command, bound leaf and another leaf without mixing config or folder pickers", async () => {
-  mount();
-  await directory("/leaf/projects");
-  expect(
-    (screen.getByLabelText("Browse for the default projects folder") as HTMLButtonElement).disabled,
-  ).toBe(false);
-  fireEvent.click(screen.getAllByRole("button", { name: /^Command/ })[0]!);
-  await directory("/command/projects");
-  expect(
-    (screen.getByLabelText("Browse for the default projects folder") as HTMLButtonElement).disabled,
-  ).toBe(true);
-  fireEvent.change(screen.getByLabelText("Default projects folder"), {
-    target: { value: "/command/changed" },
-  });
-  await waitFor(() => expect(writes.some((write) => write.owner === "command")).toBe(true));
-  expect(writes.find((write) => write.owner === "command")?.global).toMatchObject({
-    defaultProjectsDirectory: "/command/changed",
-    allowedDomains: ["command.test"],
-    enabledAgentPlatforms: ["codex"],
-  });
-  await waitFor(() =>
-    expect(useConfigStore.getState().config.repositories).toEqual({
-      leaf: { defaultBranch: "main", prBaseBranch: "main" },
-    }),
-  );
-  expect(useConfigStore.getState().config.global).toMatchObject({
-    defaultProjectsDirectory: "/leaf/projects",
-    allowedDomains: ["leaf.test"],
-    enabledAgentPlatforms: ["claude"],
-  });
-  fireEvent.click(screen.getAllByRole("button", { name: /^Other/ })[0]!);
-  await directory("/other/projects");
-  expect(
-    (screen.getByLabelText("Browse for the default projects folder") as HTMLButtonElement).disabled,
-  ).toBe(true);
-  fireEvent.click(screen.getAllByRole("button", { name: /^Leaf/ })[0]!);
-  await directory("/leaf/projects");
-});
-
-test("version control reveals the SSH agent socket picker only on this window's machine", async () => {
-  mount("version-control");
-  const browse = () => screen.getByLabelText("Browse for SSH agent socket") as HTMLButtonElement;
-  await waitFor(() => expect(browse().disabled).toBe(false));
-  fireEvent.click(screen.getAllByRole("button", { name: /^Command/ })[0]!);
-  await waitFor(() => expect(browse().disabled).toBe(true));
-  fireEvent.click(screen.getAllByRole("button", { name: /^Leaf/ })[0]!);
-  await waitFor(() => expect(browse().disabled).toBe(false));
-});
-
-test("locked command-node section saves independently loaded command config", async () => {
-  mount("review");
-  const field = await screen.findByLabelText("Review instruction");
-  fireEvent.change(field, { target: { value: "Review with care" } });
-  await waitFor(() => expect(writes.some((write) => write.owner === "command")).toBe(true));
-  expect(writes[0]).toMatchObject({
-    owner: "command",
-    global: {
-      allowedDomains: ["command.test"],
-      defaultProjectsDirectory: "/command/projects",
-      reviewInstruction: "Review with care",
-    },
-  });
-  expect(writes.some((write) => write.owner === "leaf")).toBe(false);
-  await act(async () => {});
-});
-
-test("the Schedules section is offered only while experimental scheduling is on", async () => {
-  const view = mount();
-  await directory("/leaf/projects");
-  expect(screen.queryAllByRole("button", { name: "Schedules" })).toHaveLength(0);
-  expect(screen.getAllByRole("button", { name: "Experimental" }).length).toBeGreaterThan(0);
-  view.unmount();
-
-  configs.leaf = {
-    ...configs.leaf!,
-    global: { ...configs.leaf!.global, experimentalScheduling: true },
-  };
-  useConfigStore.setState(initialConfig);
-  mount();
-  await directory("/leaf/projects");
-  await waitFor(() =>
-    expect(screen.getAllByRole("button", { name: "Schedules" }).length).toBeGreaterThan(0),
-  );
-});
 
 test("a command window with a leaf selected only offers scheduling on the window machine", async () => {
-  // The command node's own window: no realm page globals, its command scope is the window's.
-  delete window.orkestratorWorkspaceTarget;
-  delete window.orkestratorPortal;
-  workspace.mockImplementation(commandNodeAnswer);
   mount("experimental");
   await screen.findByText(/Experimental settings belong to the machine this window runs on/);
   expect(screen.queryByRole("switch", { name: "Enable scheduling" }) === null).toBe(true);

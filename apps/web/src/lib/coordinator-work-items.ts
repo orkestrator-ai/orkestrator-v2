@@ -3,17 +3,17 @@
  * Review, a graph run or a pull request, on this machine or on another node.
  *
  * Mail tiles and the workers' prompts banner open these targets through
- * `openCoordinatorWorkTarget`; a realm workspace receives the local part of a
- * remote target as its `workTarget`.
+ * `openCoordinatorWorkTarget`; another node's workspace receives the local
+ * part of a remote target as its request's `workTarget`.
  */
 import type { NodeSummary } from "@orkestrator/protocol/node-summaries";
-import type { RealmWorkTarget } from "@orkestrator/protocol/realm-request";
+import type { WorkspaceWorkTarget } from "@/lib/federation/workspace-request";
 
 /**
  * Work on this machine: a worker's tab, a build, a Multi Review or a graph run.
- * Shared with a realm's open request (`@orkestrator/protocol/realm-request`).
+ * Shared with another node's workspace request (`WorkspaceRequest.workTarget`).
  */
-export type LocalWorkTarget = RealmWorkTarget;
+export type LocalWorkTarget = WorkspaceWorkTarget;
 
 export type CoordinatorWorkTarget =
   | LocalWorkTarget

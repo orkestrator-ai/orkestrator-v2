@@ -10,8 +10,7 @@ const runId =
   process.env.ORKESTRATOR_AGENT_TEST_RUN_ID ??
   process.env.ORKESTRATOR_AGENT_TEST_PROFILE ??
   "multi-node";
-const mode = process.env.ORKESTRATOR_AGENT_TEST_IN_TREE === "0" ? "realm" : "in-tree";
-const outputRoot = path.join(repositoryRoot, "output", "agent-testing", runId, "multi-node", mode);
+const outputRoot = path.join(repositoryRoot, "output", "agent-testing", runId, "multi-node");
 
 /**
  * The multi-node window qualification (plan item 4006) against two running
@@ -21,7 +20,6 @@ const outputRoot = path.join(repositoryRoot, "output", "agent-testing", runId, "
  * to the command profile as a remote command node. Both skip unless
  * ORKESTRATOR_AGENT_TEST_PROFILE and ORKESTRATOR_AGENT_TEST_LEAF_PROFILE name
  * the two profiles. Not part of the smoke suite: it needs a second profile.
- * ORKESTRATOR_AGENT_TEST_IN_TREE=0 runs the realm path's parity flows.
  */
 export default defineConfig({
   testDir: import.meta.dirname,

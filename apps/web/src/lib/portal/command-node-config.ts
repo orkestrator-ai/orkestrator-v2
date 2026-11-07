@@ -5,20 +5,13 @@
  * Every read and save here names its two nodes explicitly, as `ConfigTargets`:
  * the command node, which owns the inherited preferences
  * (`INHERITED_GLOBAL_SETTING_KEYS`), and the machine whose own settings are
- * shown, or `null` when that machine is the command node itself. Nothing here
- * asks whether this renderer is a workspace realm.
+ * shown, or `null` when that machine is the command node itself.
  *
  * Scopes say which two nodes those are. A node scope's settings parent
  * (`settingsParent`) is the scope its inherited preferences come from: a
  * leaf scope's is its window's command scope, and a command scope has none.
  * `configTargetsForScopes(scope, commandScope)` turns two scopes into targets,
  * and `configTargetsFor(scope)` uses the scope's settings parent.
- *
- * One parent is not a scope yet: a workspace realm document (until plan items
- * 6002 and 6003 delete realms) is its own window whose command scope is the
- * leaf, and it reaches its command node only through the page's portal
- * channel (`./page-portal`). That channel is the realm command scope's
- * settings parent (`pagePortalParent`).
  */
 import {
   INHERITED_GLOBAL_SETTING_KEYS,
@@ -33,16 +26,14 @@ import { CONFIG_COMMANDS } from "@orkestrator/protocol/contract/domains/config";
 import { config as configDomain } from "@/lib/node-scope/domains/config";
 import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import type { BackendId } from "@orkestrator/protocol/federation";
-import { RESOURCE_CHANGED_EVENT } from "@orkestrator/protocol/resource-events";
 import { deepEqualJson } from "@/lib/chat/message-identity";
 import { scopeBackendClient, type BackendClient } from "@/lib/backend/client";
 import { getWindowScope } from "@/lib/node-scope/app-window-scope";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
-import { appCommandScope, isAppCommandScope } from "@/lib/node-scope-slots";
+import { appCommandScope } from "@/lib/node-scope-slots";
 import type { AppConfig, GlobalConfig } from "@/types";
 import { portalStore } from "./portal-store";
-import { commandScopeBackendClient, commandScopeListen } from "./command-scope";
-import { pagePortal } from "./page-portal";
+import { commandScopeBackendClient } from "./command-scope";
 
 /** The two nodes one config read or save involves. */
 export interface ConfigTargets {
@@ -67,15 +58,10 @@ export interface ConfigCommandResult {
 
 /** Where a scope's inherited preferences come from. */
 export interface SettingsParent {
-  /** The command node's scope, or `null` when this window has none for it (a realm document's portal). */
-  readonly scope: NodeScope | null;
+  /** The command node's scope; its own sync keeps its config store current. */
+  readonly scope: NodeScope;
   /** The command node's commands. */
   readonly client: BackendClient;
-  /**
-   * Calls `handler` whenever the command node's config changes, for a parent
-   * with no scope here; a parent scope's own sync keeps its store current.
-   */
-  readonly onConfigChanged: ((handler: () => void) => Promise<() => void>) | null;
 }
 
 const PATCH_GLOBAL_CONFIG = "patch_global_config";
@@ -322,24 +308,7 @@ export function bindSettingsParent(scope: NodeScope, parent: NodeScope | null): 
 }
 
 function scopeParent(parent: NodeScope): SettingsParent {
-  return { scope: parent, client: scopeBackendClient(parent), onConfigChanged: null };
-}
-
-/**
- * The page's portal channel to its command node, when the page has one: a
- * workspace realm document (`pagePortal`). The command-scope calls reach it
- * there. Deleted with realms.
- */
-function pagePortalParent(): SettingsParent | null {
-  if (!pagePortal()) return null;
-  return {
-    scope: null,
-    client: commandScopeBackendClient,
-    onConfigChanged: (handler) =>
-      commandScopeListen<{ resource?: unknown }>(RESOURCE_CHANGED_EVENT, (event) => {
-        if (event.payload?.resource === "config") handler();
-      }),
-  };
+  return { scope: parent, client: scopeBackendClient(parent) };
 }
 
 /**
@@ -347,9 +316,8 @@ function pagePortalParent(): SettingsParent | null {
  * the command node and its own settings are the effective ones.
  *
  * A binding (`bindSettingsParent`) wins. Otherwise a leaf scope of the app
- * window inherits from that window's command scope, and the app window's
- * command scope from the page's portal channel when it has one (a realm
- * document). Any other scope has no parent.
+ * window inherits from that window's command scope. Any other scope has no
+ * parent.
  */
 export function settingsParent(scope: NodeScope): SettingsParent | null {
   if (boundParents.has(scope)) {
@@ -360,7 +328,7 @@ export function settingsParent(scope: NodeScope): SettingsParent | null {
     const windowScope = getWindowScope();
     return windowScope.get(scope.nodeId) === scope ? scopeParent(windowScope.commandScope()) : null;
   }
-  return isAppCommandScope(scope) ? pagePortalParent() : null;
+  return null;
 }
 
 /** Targets for `scope`'s settings under `commandScope`'s preferences; no split when they are one scope. */

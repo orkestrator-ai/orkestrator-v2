@@ -6,7 +6,7 @@ import { CoordinatorActivityIcon } from "@/components/projects/CoordinatorActivi
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { MachineView } from "@/lib/federation/aggregate";
 import { openMachineWorkspace, openRepository } from "@/lib/federation/open-workspace";
-import { projectLandingBoardTab } from "@/lib/federation/workspace-realm";
+import { projectLandingBoardTab } from "@/lib/federation/window-grouping";
 import { resolveEnvironmentAgentActivity } from "@/lib/environment-agent-activity";
 import { usePortalLayout } from "@/lib/portal/portal-layout";
 import { cn } from "@/lib/utils";

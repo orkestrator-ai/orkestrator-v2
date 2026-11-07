@@ -19,6 +19,7 @@ import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { useUIStore } from "@/stores/uiStore";
 import type { Environment, Project } from "@/types";
 import { ProjectSearchBar } from "./ProjectSearchBar";
+import { selectOnNode } from "@/test/node-selection";
 
 const INITIAL_MACHINE_VIEW_STATE = useMachineViewStore.getState();
 const INITIAL_REMOTE_WORKSPACE_STATE = useRemoteWorkspaceStore.getState();
@@ -490,16 +491,14 @@ describe("ProjectSearchBar across machines", () => {
     ]);
   });
 
-  test("navigation reported by an active realm leads the empty-query recent results", async () => {
+  test("navigation in another node's workspace leads the empty-query recent results", async () => {
     renderSearch();
     await openAndType("telegram");
     await option("telegram-scraper, project on mbp3");
     fireEvent.keyDown(screen.getByRole("combobox"), { key: "Escape" });
     act(() => {
       useRemoteWorkspaceStore.getState().open("bk_mbp3", { projectId: "tg" });
-      useRemoteWorkspaceStore
-        .getState()
-        .noteRealmSelection("bk_mbp3", { projectId: "ork-3", environmentId: "run" });
+      selectOnNode("bk_mbp3", { projectId: "ork-3", environmentId: "run" });
     });
     await openAndType("");
     const rows = screen.getAllByRole("option");

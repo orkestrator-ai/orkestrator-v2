@@ -1,8 +1,7 @@
 /**
  * Opens a link to a coordinator's work: a worker named by a mail tile or a
- * waiting prompt, or the work target a realm workspace request carries from
- * another node's window (which may run an older release that still sends
- * builds, reviews and graph runs). Every target reuses the path its own
+ * waiting prompt, or the work target another node's workspace request
+ * carries (`WorkspaceRequest.workTarget`). Every target reuses the path its own
  * surface already uses: the build tab activation the create
  * dialog uses, the graph run view request every launch surface uses, the PR
  * opener, and the machine-qualified workspace opener for another node's work.
@@ -163,7 +162,7 @@ function reconcileReviews(state: CoordinatorNavigationState): void {
 
 /**
  * Opens `target` on `scope`'s node (the app's command scope when omitted:
- * the mail tiles, prompts and realm requests that call this name none yet).
+ * the mail tiles and prompts that call this name none yet).
  */
 export function openCoordinatorWorkTarget(
   target: CoordinatorWorkTarget,

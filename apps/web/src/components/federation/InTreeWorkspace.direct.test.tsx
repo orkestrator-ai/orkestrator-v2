@@ -1,9 +1,8 @@
 /**
  * Plan item 4005: an in-tree node's navigation and shared chrome are direct
- * reads and writes of the window's stores. Its loopback carries none of
- * `select`, `sidebar`, `filesPanel`, `grouping`, `visibility`, `ready`,
- * `selection` or `open`; `observeRealmLoopbacks` records everything that
- * still crosses it.
+ * reads and writes of the window's stores: the window's request for the
+ * node, the sidebar, the files panel, the grouping, its visibility, its
+ * selection and cross-node opens.
  */
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { environmentKey, environmentRef, type BackendId } from "@orkestrator/protocol/federation";
@@ -20,7 +19,6 @@ import {
 import { FakeNodeClient } from "@/test/render-in-node-scope";
 import { setFilesPanelTestState } from "@/test/files-panel-state";
 import { closeInTreeScopes, configureInTreeScopes } from "@/lib/federation/in-tree-scopes";
-import { observeRealmLoopbacks, type RealmLoopbackTraffic } from "@/lib/federation/realm-channel";
 import { getWindowScope, resetWindowScopeForTests } from "@/lib/node-scope/app-window-scope";
 import { WindowScopeProvider } from "@/lib/node-scope/providers";
 import { portalStore } from "@/lib/portal/portal-store";
@@ -33,15 +31,14 @@ import { useBugReportStore } from "@/stores/bugReportStore";
 import { configStore } from "@/stores/configStore";
 import { environmentStore } from "@/stores/environmentStore";
 import { projectStore } from "@/stores/projectStore";
-import { useInTreeNodesStore } from "@/stores/inTreeNodesStore";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { uiStore } from "@/stores/uiStore";
 import { useUIChromeStore } from "@/stores/uiChromeStore";
 import { openCoordinatorWorkTarget } from "@/lib/coordinator-work-navigation";
 import { openMachineWorkspace } from "@/lib/federation/open-workspace";
-import { projectLandingBoardTab } from "@/lib/federation/workspace-realm";
-import { REALM_DIALOGS } from "@orkestrator/protocol/realm-request";
+import { projectLandingBoardTab } from "@/lib/federation/window-grouping";
+import { WORKSPACE_DIALOGS } from "@/lib/federation/workspace-request";
 import { FederationProvider } from "./FederationProvider";
 import { RemoteWorkspaceRegion } from "./RemoteWorkspaceRegion";
 
@@ -59,18 +56,6 @@ const environment = {
   status: "running",
 };
 
-/** The messages plan item 4005 replaces with direct calls. */
-const DIRECT = new Set([
-  "select",
-  "sidebar",
-  "filesPanel",
-  "grouping",
-  "visibility",
-  "ready",
-  "selection",
-  "open",
-]);
-
 /** A leaf node that answers its workspace's reads; anything else answers nothing. */
 class LeafClient extends FakeNodeClient {
   override async invokeRaw<T = unknown>(
@@ -87,21 +72,7 @@ class LeafClient extends FakeNodeClient {
   }
 }
 
-let traffic: RealmLoopbackTraffic[];
-let stopObserving: () => void;
 let restoreScopes: () => void;
-
-/** Whether any loopback carried a message of `type`, either way. */
-function exchanged(type: string): string[] {
-  return directTraffic().filter((entry) => entry.endsWith(`:${type}`));
-}
-
-/** The messages of plan item 4005 that crossed a loopback. */
-function directTraffic(): string[] {
-  return traffic
-    .map((entry) => `${entry.direction}:${entry.message.type}`)
-    .filter((entry) => DIRECT.has(entry.split(":")[1]!));
-}
 
 function anchorElement(): HTMLDivElement {
   const anchor = document.createElement("div");
@@ -116,8 +87,6 @@ function renderRegion() {
     list: connectionList([remoteConnection("a", "Machine A", "teal")]),
     datasets: { a: sharedIdDataset("working") },
   });
-  // A browser or iOS client: no desktop realms.
-  delete (window.orkestrator as { workspaceViews?: unknown }).workspaceViews;
   return render(
     <WindowScopeProvider>
       <FederationProvider>
@@ -156,12 +125,9 @@ beforeEach(() => {
   useRemoteWorkspaceStore.setState(INITIAL_REMOTE, true);
   useUIChromeStore.setState({ environmentSortMode: "project", sidebarOpen: true });
   useMachineViewStore.setState({ grouping: "machine" });
-  useInTreeNodesStore.setState({ useRealmsForRemoteMachines: false });
   sessionStorage.clear();
   // The window's own node, so entry points tell it from another node's.
   portalStore.store.setState({ selfId: SELF_NODE_ID });
-  traffic = [];
-  stopObserving = observeRealmLoopbacks((entry) => traffic.push(entry));
   restoreScopes = configureInTreeScopes({
     host: {
       kind: "browser",
@@ -184,14 +150,12 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
-  stopObserving();
   closeInTreeScopes();
   restoreScopes();
   uninstallDesktopFake();
   useRemoteWorkspaceStore.setState(INITIAL_REMOTE, true);
   useMachineViewStore.setState(INITIAL_MACHINE, true);
   useUIChromeStore.setState(INITIAL_CHROME, true);
-  useInTreeNodesStore.setState({ useRealmsForRemoteMachines: false });
   setFilesPanelTestState({ isOpen: false });
   useAppDialogStore.setState({ request: null });
   useBugReportStore.setState({ sheetOpen: false, sheetNodeId: null });
@@ -201,7 +165,7 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-test("sidebar: the in-tree workspace and the window share one store; nothing is exchanged", async () => {
+test("sidebar: the in-tree workspace and the window share one store", async () => {
   await openLeaf();
   await settle();
   // The window hides its sidebar, and the workspace's toolbar shows it again.
@@ -210,7 +174,6 @@ test("sidebar: the in-tree workspace and the window share one store; nothing is 
   act(() => useUIChromeStore.getState().setSidebarOpen(true));
   await settle();
   expect(useUIChromeStore.getState().sidebarOpen).toBe(true);
-  expect(directTraffic().filter((entry) => entry.endsWith(":sidebar"))).toEqual([]);
 });
 
 test("filesPanel: one open state for every machine, read and toggled in place", async () => {
@@ -222,28 +185,16 @@ test("filesPanel: one open state for every machine, read and toggled in place", 
   act(() => useFilesPanelChromeStore.getState().togglePanel());
   await settle();
   expect(useFilesPanelChromeStore.getState().isOpen).toBe(false);
-  expect(directTraffic().filter((entry) => entry.endsWith(":filesPanel"))).toEqual([]);
 });
 
-test("grouping: the in-tree workspace reads machineViewStore; nothing is exchanged", async () => {
-  await openLeaf();
-  await settle();
-  act(() => useMachineViewStore.setState({ grouping: "repository" }));
-  await settle();
-  act(() => useUIChromeStore.setState({ environmentSortMode: "activity" }));
-  await settle();
-  expect(directTraffic().filter((entry) => entry.endsWith(":grouping"))).toEqual([]);
-});
-
-test("visibility: hiding an in-tree node leaves the window's reads alone and sends nothing", async () => {
+test("visibility: hiding an in-tree node leaves the window's reads alone", async () => {
   await openLeaf();
   await settle();
   // Showing the window's own node hides the in-tree one.
   act(() => useRemoteWorkspaceStore.getState().showLocal());
   await settle();
-  expect(screen.getByTestId("in-tree-workspace").className).toContain("hidden");
+  expect(screen.getByTestId("in-tree-workspace").classList.contains("hidden")).toBe(true);
   expect(getReadCoordinator().getDiagnostics().hostHidden).toBe(false);
-  expect(directTraffic().filter((entry) => entry.endsWith(":visibility"))).toEqual([]);
 });
 
 test("select: a sidebar click on the node's environment selects it on the node's scope, read from the window's store", async () => {
@@ -267,7 +218,6 @@ test("select: a sidebar click on the node's environment selects it on the node's
     projectId: project.id,
     environmentId: environment.id,
   });
-  expect(exchanged("select")).toEqual([]);
 });
 
 test("select: ⌘K's project result lands on the asked tab of the node's project", async () => {
@@ -287,7 +237,6 @@ test("select: ⌘K's project result lands on the asked tab of the node's project
   );
   await waitFor(() => expect(ui.getState().projectBoardTab).toBe("coordinator"));
   expect(ui.getState().selectedProjectId).toBe(project.id);
-  expect(exchanged("select")).toEqual([]);
 });
 
 test("select: a coordinator's work target on the node opens there, in its scope", async () => {
@@ -314,10 +263,9 @@ test("select: a coordinator's work target on the node opens there, in its scope"
   expect(getWindowScope().commandScope().store(uiStore).getState().selectedEnvironmentId).toBe(
     null,
   );
-  expect(exchanged("select")).toEqual([]);
 });
 
-for (const dialog of REALM_DIALOGS) {
+for (const dialog of WORKSPACE_DIALOGS) {
   const onEnvironment = dialog.startsWith("environment-");
   test(`select: the ${dialog} dialog opens for the node once its stores have hydrated`, async () => {
     const scope = await openLeaf({
@@ -349,7 +297,6 @@ for (const dialog of REALM_DIALOGS) {
         }
       : { kind: dialog, nodeId: LEAF, projectId: project.id };
     expect(useAppDialogStore.getState().request).toEqual(expected as never);
-    expect(exchanged("select")).toEqual([]);
   });
 }
 
@@ -374,15 +321,6 @@ test("select: Add Project and New Environment open in the node's workspace once 
   expect(screen.queryByText(/Configure a new Ork environment/u)).toBeNull();
   loadConfig(scope);
   expect(await screen.findByText(/Configure a new Ork environment/u)).toBeTruthy();
-  expect(exchanged("select")).toEqual([]);
-});
-
-test("select: a request's bug-report flag opens the window's sheet on the node's scope", async () => {
-  // A request made while the node was still shown by a realm (0001's flag).
-  await openLeaf({ projectId: project.id, bugReport: true });
-  await waitFor(() => expect(useBugReportStore.getState().sheetOpen).toBe(true));
-  expect(useBugReportStore.getState().sheetNodeId).toBe(LEAF);
-  expect(exchanged("select")).toEqual([]);
 });
 
 test("selection: navigating inside the in-tree workspace is the window's one selection, with its recents", async () => {
@@ -412,7 +350,6 @@ test("selection: navigating inside the in-tree workspace is the window's one sel
     environmentKey(environmentRef(LEAF, environment.id)),
   );
   await settle();
-  expect(exchanged("selection")).toEqual([]);
 });
 
 test("open: a cross-node open from inside the in-tree workspace is the window's direct open", async () => {
@@ -432,30 +369,16 @@ test("open: a cross-node open from inside the in-tree workspace is the window's 
   const own = getWindowScope().commandScope().store(uiStore).getState();
   expect(own.selectedProjectId).toBe("own-project");
   expect(own.projectBoardTab).toBe("coordinator");
-  expect(screen.getByTestId("in-tree-workspace").className).toContain("hidden");
+  expect(screen.getByTestId("in-tree-workspace").classList.contains("hidden")).toBe(true);
   // And back to the node, from the window's side.
   act(() =>
     openMachineWorkspace({ connectionId: LEAF, projectId: project.id, title: project.name }),
   );
   expect(useRemoteWorkspaceStore.getState().active?.nodeId).toBe(LEAF);
   await settle();
-  expect(exchanged("open")).toEqual([]);
 });
 
-test("ready: there is no handshake, and the window's title-bar requests still reach the node", async () => {
-  await openLeaf();
-  await settle();
-  expect(exchanged("ready")).toEqual([]);
-  // A title-bar popover request (plan item 5002's message) is delivered
-  // without one: the document listens from its first commit.
-  act(() => useRemoteWorkspaceStore.getState().requestRealmPanel(LEAF, "usage", true, 12));
-  await settle();
-  expect(
-    traffic.some((entry) => entry.direction === "to-realm" && entry.message.type === "panel"),
-  ).toBe(true);
-});
-
-test("done when: an in-tree node exchanges none of the navigation messages", async () => {
+test("open, navigate, open a dialog, toggle chrome, hide and show again", async () => {
   // Open, navigate, open dialogs, toggle chrome, hide and show again.
   const scope = await openLeaf({ projectId: project.id, environmentId: environment.id });
   loadConfig(scope);
@@ -481,5 +404,5 @@ test("done when: an in-tree node exchanges none of the navigation messages", asy
     openMachineWorkspace({ connectionId: LEAF, projectId: project.id, title: project.name }),
   );
   await settle();
-  expect(directTraffic()).toEqual([]);
+  expect(useRemoteWorkspaceStore.getState().active?.nodeId).toBe(LEAF);
 });

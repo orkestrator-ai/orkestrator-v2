@@ -10,6 +10,7 @@ import type {
 } from "@orkestrator/protocol/ticket-sections";
 import type { TicketSyncMeta, TicketSyncStatusResult } from "@orkestrator/protocol/ticket-sync";
 import { files } from "@/lib/node-scope/domains/files";
+import { asKanbanModel, kanban } from "@/lib/node-scope/domains/kanban";
 import { clientInvoke, commandBackendClient, type BackendClient } from "./client";
 /** PR detection result containing URL, state, and merge conflict status */
 
@@ -131,6 +132,9 @@ export function createKanbanApi(client: BackendClient) {
   const invoke = clientInvoke(client);
   // The two file reads are in the `files` domain (plan item 7002).
   const filesDomain = () => files(client);
+  // Tickets, notes, feature plans and planning: the `kanban` domain (plan item
+  // 7008), picked per call so a reconnect to another build picks again.
+  const domain = () => kanban(client);
 
   /** Read a binary file from the local filesystem as base64 */
   async function readFileBase64(path: string): Promise<string> {
@@ -172,28 +176,32 @@ export function createKanbanApi(client: BackendClient) {
     userMessage: string,
     storyId?: string,
   ): Promise<FeaturePlanningRecord> {
-    return invoke<FeaturePlanningRecord>("start_feature_planning", {
-      featureId,
-      kind,
-      userMessage,
-      ...(storyId ? { storyId } : {}),
-    });
+    return asKanbanModel<FeaturePlanningRecord>(
+      domain().start_feature_planning({
+        featureId,
+        kind,
+        userMessage,
+        ...(storyId ? { storyId } : {}),
+      }),
+    );
   }
 
   async function getFeaturePlanningSnapshot(projectId: string): Promise<FeaturePlanningRecord[]> {
-    return invoke<FeaturePlanningRecord[]>("get_feature_planning_snapshot", { projectId });
+    return asKanbanModel<FeaturePlanningRecord[]>(
+      domain().get_feature_planning_snapshot({ projectId }),
+    );
   }
 
   async function retryFeaturePlanning(featureId: string): Promise<FeaturePlanningRecord> {
-    return invoke<FeaturePlanningRecord>("retry_feature_planning", { featureId });
+    return asKanbanModel<FeaturePlanningRecord>(domain().retry_feature_planning({ featureId }));
   }
 
   async function cancelFeaturePlanning(featureId: string): Promise<void> {
-    return invoke<void>("cancel_feature_planning", { featureId });
+    await domain().cancel_feature_planning({ featureId });
   }
 
   async function getKanbanTasks(projectId: string): Promise<KanbanTask[]> {
-    return invoke<KanbanTask[]>("get_kanban_tasks", { projectId });
+    return asKanbanModel<KanbanTask[]>(domain().get_kanban_tasks({ projectId }));
   }
 
   async function addKanbanTask(
@@ -201,7 +209,7 @@ export function createKanbanApi(client: BackendClient) {
     title: string,
     description: string,
   ): Promise<KanbanTask> {
-    return invoke<KanbanTask>("add_kanban_task", { projectId, title, description });
+    return asKanbanModel<KanbanTask>(domain().add_kanban_task({ projectId, title, description }));
   }
 
   async function updateKanbanTask(
@@ -216,18 +224,20 @@ export function createKanbanApi(client: BackendClient) {
     prState?: PrState,
     prMergeCommented?: boolean,
   ): Promise<KanbanTask> {
-    return invoke<KanbanTask>("update_kanban_task", {
-      taskId,
-      title,
-      description,
-      acceptanceCriteria,
-      status,
-      environmentId,
-      buildPipelineId,
-      prUrl,
-      prState,
-      prMergeCommented,
-    });
+    return asKanbanModel<KanbanTask>(
+      domain().update_kanban_task({
+        taskId,
+        title,
+        description,
+        acceptanceCriteria,
+        status,
+        environmentId,
+        buildPipelineId,
+        prUrl,
+        prState,
+        prMergeCommented,
+      }),
+    );
   }
 
   /**
@@ -243,19 +253,19 @@ export function createKanbanApi(client: BackendClient) {
       sections?: TicketSectionsPatch;
     },
   ): Promise<KanbanTask> {
-    return invoke<KanbanTask>("update_kanban_task", { taskId, ...content });
+    return asKanbanModel<KanbanTask>(domain().update_kanban_task({ taskId, ...content }));
   }
 
   async function deleteKanbanTask(taskId: string): Promise<void> {
-    return invoke<void>("delete_kanban_task", { taskId });
+    await domain().delete_kanban_task({ taskId });
   }
 
   async function addKanbanComment(taskId: string, text: string): Promise<KanbanTask> {
-    return invoke<KanbanTask>("add_kanban_comment", { taskId, text });
+    return asKanbanModel<KanbanTask>(domain().add_kanban_comment({ taskId, text }));
   }
 
   async function deleteKanbanComment(taskId: string, commentId: string): Promise<KanbanTask> {
-    return invoke<KanbanTask>("delete_kanban_comment", { taskId, commentId });
+    return asKanbanModel<KanbanTask>(domain().delete_kanban_comment({ taskId, commentId }));
   }
 
   async function addKanbanImage(
@@ -263,32 +273,32 @@ export function createKanbanApi(client: BackendClient) {
     filename: string,
     data: string,
   ): Promise<KanbanTask> {
-    return invoke<KanbanTask>("add_kanban_image", { taskId, filename, data });
+    return asKanbanModel<KanbanTask>(domain().add_kanban_image({ taskId, filename, data }));
   }
 
   async function deleteKanbanImage(taskId: string, imageId: string): Promise<KanbanTask> {
-    return invoke<KanbanTask>("delete_kanban_image", { taskId, imageId });
+    return asKanbanModel<KanbanTask>(domain().delete_kanban_image({ taskId, imageId }));
   }
 
   /** Load kanban image data on demand. Returns base64-encoded WebP data. */
   async function getKanbanImageData(imageId: string): Promise<string> {
-    return invoke<string>("get_kanban_image_data", { imageId });
+    return domain().get_kanban_image_data({ imageId });
   }
 
   async function getProjectNotes(projectId: string): Promise<ProjectNotes> {
-    return invoke<ProjectNotes>("get_project_notes", { projectId });
+    return asKanbanModel<ProjectNotes>(domain().get_project_notes({ projectId }));
   }
 
   async function saveProjectNotes(projectId: string, content: string): Promise<ProjectNotes> {
-    return invoke<ProjectNotes>("save_project_notes", { projectId, content });
+    return asKanbanModel<ProjectNotes>(domain().save_project_notes({ projectId, content }));
   }
 
   async function getFeaturePlans(projectId: string): Promise<FeaturePlan[]> {
-    return invoke<FeaturePlan[]>("get_feature_plans", { projectId });
+    return asKanbanModel<FeaturePlan[]>(domain().get_feature_plans({ projectId }));
   }
 
   async function createFeaturePlan(projectId: string): Promise<FeaturePlan> {
-    return invoke<FeaturePlan>("create_feature_plan", { projectId });
+    return asKanbanModel<FeaturePlan>(domain().create_feature_plan({ projectId }));
   }
 
   async function updateFeaturePlan(
@@ -308,17 +318,19 @@ export function createKanbanApi(client: BackendClient) {
       >
     >,
   ): Promise<FeaturePlan> {
-    return invoke<FeaturePlan>("update_feature_plan", { featureId, updates });
+    return asKanbanModel<FeaturePlan>(domain().update_feature_plan({ featureId, updates }));
   }
 
   async function claimFeaturePlanBuild(
     featureId: string,
     taskId: string,
   ): Promise<{ claimed: boolean; feature: FeaturePlan }> {
-    return invoke<{ claimed: boolean; feature: FeaturePlan }>("claim_feature_plan_build", {
-      featureId,
-      taskId,
-    });
+    return asKanbanModel<{ claimed: boolean; feature: FeaturePlan }>(
+      domain().claim_feature_plan_build({
+        featureId,
+        taskId,
+      }),
+    );
   }
 
   async function appendFeaturePlanMessage(
@@ -328,13 +340,15 @@ export function createKanbanApi(client: BackendClient) {
     stateApplication?: FeaturePlanMessage["stateApplication"],
     modelId?: string,
   ): Promise<FeaturePlan> {
-    return invoke<FeaturePlan>("append_feature_plan_message", {
-      featureId,
-      role,
-      content,
-      stateApplication,
-      modelId,
-    });
+    return asKanbanModel<FeaturePlan>(
+      domain().append_feature_plan_message({
+        featureId,
+        role,
+        content,
+        stateApplication,
+        modelId,
+      }),
+    );
   }
 
   async function appendFeatureStoryMessage(
@@ -345,14 +359,16 @@ export function createKanbanApi(client: BackendClient) {
     stateApplication?: FeaturePlanMessage["stateApplication"],
     modelId?: string,
   ): Promise<FeaturePlan> {
-    return invoke<FeaturePlan>("append_feature_story_message", {
-      featureId,
-      storyId,
-      role,
-      content,
-      stateApplication,
-      modelId,
-    });
+    return asKanbanModel<FeaturePlan>(
+      domain().append_feature_story_message({
+        featureId,
+        storyId,
+        role,
+        content,
+        stateApplication,
+        modelId,
+      }),
+    );
   }
 
   /** Binary read confined to the named local environment's checkout. */

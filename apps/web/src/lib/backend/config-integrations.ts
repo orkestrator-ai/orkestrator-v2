@@ -1,4 +1,5 @@
 import { asWebModel, nativeSessions } from "@/lib/node-scope/domains/native-sessions";
+import { asKanbanModel, kanban, NO_ARGS } from "@/lib/node-scope/domains/kanban";
 import type {
   DatabaseStats,
   DiagnosticsBundleChunk,
@@ -518,30 +519,32 @@ export function createConfigIntegrationsApi(client: BackendClient) {
   }
 
   async function getLinearConnection(): Promise<LinearConnectionStatus> {
-    return invoke<LinearConnectionStatus>("get_linear_connection");
+    return asKanbanModel<LinearConnectionStatus>(kanban(client).get_linear_connection(NO_ARGS));
   }
 
   async function connectLinear(apiKey: string): Promise<LinearConnectionStatus> {
-    return invoke<LinearConnectionStatus>("connect_linear", { apiKey });
+    return asKanbanModel<LinearConnectionStatus>(kanban(client).connect_linear({ apiKey }));
   }
 
   async function disconnectLinear(): Promise<LinearConnectionStatus> {
-    return invoke<LinearConnectionStatus>("disconnect_linear");
+    return asKanbanModel<LinearConnectionStatus>(kanban(client).disconnect_linear(NO_ARGS));
   }
 
   async function getLinearIssues(): Promise<LinearIssueListItem[]> {
-    return invoke<LinearIssueListItem[]>("get_linear_issues");
+    return asKanbanModel<LinearIssueListItem[]>(kanban(client).get_linear_issues(NO_ARGS));
   }
 
   async function getLinearIssue(issueId: string): Promise<LinearIssueDetail> {
-    return invoke<LinearIssueDetail>("get_linear_issue", { issueId });
+    return asKanbanModel<LinearIssueDetail>(kanban(client).get_linear_issue({ issueId }));
   }
 
   async function postLinearIssueComment(
     issueId: string,
     body: string,
   ): Promise<LinearIssueComment> {
-    return invoke<LinearIssueComment>("post_linear_issue_comment", { issueId, body });
+    return asKanbanModel<LinearIssueComment>(
+      kanban(client).post_linear_issue_comment({ issueId, body }),
+    );
   }
 
   async function postLinearCompletionComment(
@@ -549,11 +552,9 @@ export function createConfigIntegrationsApi(client: BackendClient) {
     issueId: string,
     body: string,
   ): Promise<LinearCompletionCommentResult> {
-    return invoke<LinearCompletionCommentResult>("post_linear_completion_comment", {
-      pipelineId,
-      issueId,
-      body,
-    });
+    return asKanbanModel<LinearCompletionCommentResult>(
+      kanban(client).post_linear_completion_comment({ pipelineId, issueId, body }),
+    );
   }
 
   async function getGitHubIssues(projectId: string): Promise<GitHubIssuesSnapshot> {

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { cleanup } from "@testing-library/react";
+import { cleanup, waitFor } from "@testing-library/react";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import { dispatchResourceChange } from "@/lib/resource-sync";
 import { WindowScope } from "@/lib/node-scope/window-scope";
@@ -19,9 +19,6 @@ function Probe({
   return null;
 }
 
-/** Waits past the feed's coalescing window. */
-const settle = () => new Promise((resolve) => setTimeout(resolve, 120));
-
 describe("useEnvironmentListSync", () => {
   afterEach(() => {
     cleanup();
@@ -38,18 +35,18 @@ describe("useEnvironmentListSync", () => {
       { role: "leaf", client: new FakeNodeClient({ nodeId: LEAF }), windowScope },
     );
 
+    // The command node's change is dispatched first, so its coalesced
+    // delivery runs before the leaf's: once the leaf's refresh is seen, the
+    // command node's has had its turn.
     dispatchResourceChange(
       { resource: "environment", id: "env-on-command", projectId: "project-1", revision: 1 },
       command,
     );
-    await settle();
-    expect(refreshEnvironment).not.toHaveBeenCalled();
-
     dispatchResourceChange(
       { resource: "environment", id: "env-on-leaf", projectId: "project-1", revision: 1 },
       leaf,
     );
-    await settle();
+    await waitFor(() => expect(refreshEnvironment).toHaveBeenCalled());
     expect(refreshEnvironment.mock.calls).toEqual([["project-1", "env-on-leaf"]]);
     expect(refreshProject).not.toHaveBeenCalled();
   });

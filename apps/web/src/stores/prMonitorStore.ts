@@ -1,4 +1,5 @@
-import { create } from "zustand";
+import { defineScopedStore } from "@/lib/node-scope/scoped-store";
+import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
 import type { PrMonitorEnvironmentState, PrMonitorEvent } from "@orkestrator/protocol/pr-monitor";
 import type { HydrationStatus } from "@/lib/bounded-hydration";
 
@@ -14,7 +15,7 @@ export type { PrMonitorEnvironmentState };
  * snapshot on mount and reconnect, and patched by `pr-monitor-changed` events
  * in between — the same snapshot+incremental shape as environmentDiffStore.
  */
-interface PrMonitorStoreState {
+export interface PrMonitorStoreState {
   /** Monitor state keyed by environment ID. */
   states: Map<string, PrMonitorEnvironmentState>;
   /**
@@ -55,48 +56,58 @@ function isSameState(a: PrMonitorEnvironmentState, b: PrMonitorEnvironmentState)
   );
 }
 
-export const usePrMonitorStore = create<PrMonitorStoreState>()((set, get) => ({
-  states: new Map(),
-  syncStatus: "idle",
-  setSyncStatus: (syncStatus) =>
-    set((state) => (state.syncStatus === syncStatus ? state : { syncStatus })),
+/** Per node, like the backend monitor it mirrors (plan item 3003). */
+export const prMonitorStore = defineScopedStore<PrMonitorStoreState>(
+  "pr-monitor",
+  () => (set, get) => ({
+    states: new Map(),
+    syncStatus: "idle",
+    setSyncStatus: (syncStatus) =>
+      set((state) => (state.syncStatus === syncStatus ? state : { syncStatus })),
 
-  applySnapshot: (entries) =>
-    set((state) => {
-      const next = new Map<string, PrMonitorEnvironmentState>();
-      for (const entry of entries) next.set(entry.environmentId, entry);
+    applySnapshot: (entries) =>
+      set((state) => {
+        const next = new Map<string, PrMonitorEnvironmentState>();
+        for (const entry of entries) next.set(entry.environmentId, entry);
 
-      // Skip the update when nothing moved, so a rehydrate on every reconnect
-      // does not re-render every subscriber for an identical map.
-      if (next.size === state.states.size) {
-        let identical = true;
-        for (const [environmentId, entry] of next) {
-          const existing = state.states.get(environmentId);
-          if (!existing || !isSameState(existing, entry)) {
-            identical = false;
-            break;
+        // Skip the update when nothing moved, so a rehydrate on every reconnect
+        // does not re-render every subscriber for an identical map.
+        if (next.size === state.states.size) {
+          let identical = true;
+          for (const [environmentId, entry] of next) {
+            const existing = state.states.get(environmentId);
+            if (!existing || !isSameState(existing, entry)) {
+              identical = false;
+              break;
+            }
           }
+          if (identical) return state;
         }
-        if (identical) return state;
-      }
-      return { states: next };
-    }),
-
-  applyEvent: (event) =>
-    set((state) => {
-      if ("removed" in event) {
-        if (!state.states.has(event.environmentId)) return state;
-        const next = new Map(state.states);
-        next.delete(event.environmentId);
         return { states: next };
-      }
+      }),
 
-      const existing = state.states.get(event.environmentId);
-      if (existing && isSameState(existing, event.state)) return state;
-      const next = new Map(state.states);
-      next.set(event.environmentId, event.state);
-      return { states: next };
-    }),
+    applyEvent: (event) =>
+      set((state) => {
+        if ("removed" in event) {
+          if (!state.states.has(event.environmentId)) return state;
+          const next = new Map(state.states);
+          next.delete(event.environmentId);
+          return { states: next };
+        }
 
-  getMonitoringState: (environmentId) => get().states.get(environmentId) ?? null,
-}));
+        const existing = state.states.get(event.environmentId);
+        if (existing && isSameState(existing, event.state)) return state;
+        const next = new Map(state.states);
+        next.set(event.environmentId, event.state);
+        return { states: next };
+      }),
+
+    getMonitoringState: (environmentId) => get().states.get(environmentId) ?? null,
+  }),
+);
+
+/**
+ * Reads the nearest node scope's PR monitor state; other code uses
+ * `scope.store(prMonitorStore)`.
+ */
+export const usePrMonitorStore = scopedStoreHook(prMonitorStore);

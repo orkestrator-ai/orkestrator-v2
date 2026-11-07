@@ -5,9 +5,10 @@ import { GlobalSettings } from "../../apps/web/src/components/settings/GlobalSet
 import { useConfigStore } from "../../apps/web/src/stores/configStore";
 import type { GlobalSettingsSection } from "../../apps/web/src/lib/settings-navigation";
 import type { AppConfig, GlobalConfig } from "../../apps/web/src/types";
+import { appCommandStore } from "../../apps/web/src/test/app-command-store";
 
 function installGlobalSettingsFixture() {
-  const config = useConfigStore.getState().config;
+  const config = appCommandStore(useConfigStore.def).getState().config;
   const cursorDisabled = new URLSearchParams(window.location.search).has("cursor-disabled");
   const initialConfig: AppConfig = cursorDisabled
     ? { ...config, global: { ...config.global, enabledAgentPlatforms: ["claude"] } }
@@ -28,7 +29,7 @@ function installGlobalSettingsFixture() {
       },
     };
     localStorage.setItem("global-settings-config", JSON.stringify(next));
-    useConfigStore.getState().setConfig(next);
+    appCommandStore(useConfigStore.def).getState().setConfig(next);
   }) as EventListener);
   window.orkestrator = {
     ...window.orkestrator!,
@@ -106,7 +107,7 @@ function installGlobalSettingsFixture() {
       }
     },
   };
-  useConfigStore.getState().setConfig(readConfig());
+  appCommandStore(useConfigStore.def).getState().setConfig(readConfig());
   return true;
 }
 

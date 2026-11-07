@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { useEffect, type ReactNode } from "react";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { LineCount } from "@orkestrator/protocol/change-measurements";
 import {
   environmentChangeResourceKey,
@@ -16,11 +17,12 @@ import type { CreateFileTabOptions } from "@/contexts/TerminalContext";
 import type { LegacyPayloadSummary } from "@/lib/backend/changes";
 import type { NativeMessagePart } from "@/lib/chat/native-message-types";
 import { resetChangeSubscriptionsForTests } from "@/lib/changes/subscriptions";
-import { useChangeProjectionStore } from "@/stores/changeProjectionStore";
+import { changeProjectionStore } from "@/stores/changeProjectionStore";
 import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore";
 import { NativeMessage } from "./NativeMessage";
 import { ChangeFileRows, resetChangePartCachesForTests } from "./NativeMessage.change-parts";
 import { NativeChangeScopeContext, type NativeChangeScope } from "./NativeMessage.change-scope";
+import { appCommandStore } from "@/test/app-command-store";
 
 /*
  * Tool rows render backend change projections. The backend is reached only
@@ -243,7 +245,7 @@ function renderPart(part: NativeMessagePart, scope: NativeChangeScope | null = S
       <NativeMessage message={message} />
     </TerminalProvider>
   );
-  return render(
+  return renderInAppCommandScope(
     scope ? (
       <NativeChangeScopeContext.Provider value={scope}>{tree}</NativeChangeScopeContext.Provider>
     ) : (
@@ -266,7 +268,7 @@ afterEach(() => {
   invokeMock.mockImplementation(() => Promise.resolve());
   resetChangeSubscriptionsForTests();
   resetChangePartCachesForTests();
-  useChangeProjectionStore.setState({
+  appCommandStore(changeProjectionStore).setState({
     projections: new Map(),
     deleted: new Set(),
     contentGenerations: new Map(),
@@ -276,7 +278,7 @@ afterEach(() => {
 });
 
 test("a capped file list without a cursor shows the omitted-files note", () => {
-  render(
+  renderInAppCommandScope(
     <ChangeFileRows
       environmentId={undefined}
       projection={projection(EFFECT_KEY, {

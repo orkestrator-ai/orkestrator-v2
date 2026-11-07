@@ -22,6 +22,7 @@
  *   (environment, conversation) change after every committed draft,
  *   operation, publication or deletion change.
  */
+import type { WorkflowLiveSnapshotResponse } from "@orkestrator/protocol/contract/domains/transcripts";
 import { randomUUID } from "node:crypto";
 import type { ArtifactToolName } from "@orkestrator/protocol/transcript-artifacts";
 import type {
@@ -45,7 +46,6 @@ import type { ArtifactOwner } from "@orkestrator/protocol/transcript-artifacts";
 import { deleteConversationRecords } from "./conversation-deletion.js";
 import { ArtifactAssetStaging } from "./service-assets.js";
 import { ArtifactDraftReads } from "./service-drafts.js";
-import type { WorkflowSnapshotV1 } from "@orkestrator/protocol/workflow-snapshot";
 import type { StorageDatabase } from "../storage-database.js";
 import { ArtifactGarbageCollector, type ArtifactCleanupReport } from "./gc.js";
 import {
@@ -130,13 +130,8 @@ export interface TranscriptArtifactServiceOptions {
   announce?: (environmentId: string, conversationKey: string) => void;
 }
 
-export type WorkflowLiveSnapshotResponse =
-  | { status: "available"; snapshot: WorkflowSnapshotV1; terminal: boolean }
-  | {
-      status: "unavailable";
-      reason: "deleted" | "not_found" | "unsupported" | "error";
-      message: string;
-    };
+/** The command's result schema type (`transcript_artifact_workflow_live_snapshot`, plan item 7004). */
+export type { WorkflowLiveSnapshotResponse };
 
 const TOOL_VERBS: Record<ArtifactToolName, ArtifactGrantVerb> = {
   create_artifact: "create",

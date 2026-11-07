@@ -1,3 +1,4 @@
+import { registrarFrom } from "./commands-registry-contracts.js";
 import { describe, expect, mock, spyOn, test } from "bun:test";
 import { registerAgentAccountCommands } from "./commands-registry-accounts.js";
 import type { CommandHandler } from "./commands-context.js";
@@ -8,6 +9,22 @@ import { AgentAccountsRuntime } from "./agent-accounts-runtime.js";
 import { OpenCodeProviderLoginSlot } from "./opencode-provider-login-slot.js";
 
 import * as cursorBridge from "./cursor-sdk-bridge.js";
+import { decodeCommandArgs } from "@orkestrator/protocol/contract/command";
+import { setOpenCodeProviderApiKeyCommand } from "@orkestrator/protocol/contract/domains/accounts";
+
+/**
+ * The message a rejected call carries; `""` when it resolved. The handlers
+ * no longer refuse unknown keys (§11.4, plan item 7008): these calls go past
+ * argument checks and fail later on the bare context instead.
+ */
+async function failureOf(run: () => unknown): Promise<string> {
+  try {
+    await run();
+    return "";
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+}
 
 const command = createCommandRegistry().get("start_agent_account_login")!;
 
@@ -64,13 +81,17 @@ describe("OpenCode provider login argument validation", () => {
     runtime: { localServers: { openCodeProviderLogin: new OpenCodeProviderLoginSlot() } },
   } as unknown as CommandContext;
 
-  test("refuses unexpected fields and non-string sign-in details before any work", async () => {
-    await expect(
-      registry.get("set_opencode_provider_api_key")!(
-        { providerId: "opencode-go", key: "k", extra: true },
-        context,
-      ),
-    ).rejects.toThrow("Unexpected arguments field: extra");
+  test("drops unexpected fields and refuses non-string sign-in details before any work", async () => {
+    // Decoded only: a call that passes validation would reach OpenCode.
+    const decoded = decodeCommandArgs(setOpenCodeProviderApiKeyCommand, {
+      providerId: "opencode-go",
+      key: "k",
+      extra: true,
+    });
+    expect(decoded._tag === "Success" && decoded.success).toEqual({
+      providerId: "opencode-go",
+      key: "k",
+    });
     await expect(
       registry.get("set_opencode_provider_api_key")!(
         { providerId: "opencode-go", key: "k", metadata: { accountId: 1 } },
@@ -100,21 +121,18 @@ describe("OpenCode provider login argument validation", () => {
 
 describe("get_agent_sign_in_status", () => {
   const status = createCommandRegistry().get("get_agent_sign_in_status")!;
-  test.each([
-    {},
-    { platform: "invalid" },
-    { platform: 1 },
-    { platform: " " },
-    { platform: "cursor", extra: true },
-  ])("rejects invalid arguments before accessing dependencies %j", async (args) => {
-    const loadConfig = mock(async () => {
-      throw new Error("unexpected storage access");
-    });
-    await expect(
-      status(args, { storage: { loadConfig } } as unknown as CommandContext),
-    ).rejects.toThrow();
-    expect(loadConfig).not.toHaveBeenCalled();
-  });
+  test.each([{}, { platform: "invalid" }, { platform: 1 }, { platform: " " }])(
+    "rejects invalid arguments before accessing dependencies %j",
+    async (args) => {
+      const loadConfig = mock(async () => {
+        throw new Error("unexpected storage access");
+      });
+      await expect(
+        status(args, { storage: { loadConfig } } as unknown as CommandContext),
+      ).rejects.toThrow();
+      expect(loadConfig).not.toHaveBeenCalled();
+    },
+  );
   test.each([undefined, "stored-test-key"])(
     "composes Cursor status with the optional configured key %s",
     async (key) => {
@@ -140,13 +158,32 @@ describe("get_agent_sign_in_status", () => {
       }
     },
   );
+  test("drops an unknown argument (§11.4)", async () => {
+    const read = spyOn(cursorBridge, "cursorSdkAuthStatus").mockResolvedValue({
+      authenticated: false,
+      source: "none",
+    });
+    try {
+      const context = {
+        storage: { loadConfig: mock(async () => ({ global: {} })) },
+      } as unknown as CommandContext;
+      expect(await status({ platform: "cursor", extra: true }, context)).toMatchObject({
+        state: "signed-out",
+      });
+    } finally {
+      read.mockRestore();
+    }
+  });
 });
 
 function harness() {
   const commands = new Map<string, CommandHandler>();
-  registerAgentAccountCommands((name, handler) => commands.set(name, handler), {
-    commands,
-  } as RegistryDependencies);
+  registerAgentAccountCommands(
+    registrarFrom((name, handler) => commands.set(name, handler)),
+    {
+      commands,
+    } as RegistryDependencies,
+  );
   const context = {
     storage: {
       loadEnvironments: async () => [
@@ -168,14 +205,14 @@ function harness() {
   };
 }
 
-test("terminal sign-in command rejects unsupported platforms, unexpected arguments and invalid environment IDs", async () => {
+// Unexpected arguments (`data`, `activateTab`) are dropped now (§11.4, plan item 7008); the
+// launcher test below shows they never reach the terminal.
+test("terminal sign-in command rejects unsupported platforms and invalid environment IDs", async () => {
   const { invoke } = harness();
   for (const args of [
     { platform: "claude" },
     { platform: "grok; echo x" },
     { platform: "grok", environmentId: 42 },
-    { platform: "pi", data: "anything" },
-    { platform: "pi", activateTab: false },
     {},
   ]) {
     await expect(invoke(args)).rejects.toThrow();
@@ -197,7 +234,9 @@ test("terminal sign-in resolves the registered launcher at execution and fixes s
       received = args;
       return { tabId: "tab" };
     });
-    expect(await invoke({ platform, environmentId: "env" })).toEqual({
+    expect(
+      await invoke({ platform, environmentId: "env", data: "anything", activateTab: false }),
+    ).toEqual({
       environmentId: "env",
       projectId: "project",
       tabId: "tab",
@@ -224,21 +263,58 @@ describe("automatic switching argument validation", () => {
     [{ platform: "claude", enabled: "yes" }, "enabled"],
     [{ platform: "claude", included: true }, "either an email or an accountId"],
     [{ platform: "claude", email: "a@b", accountId: "x", included: true }, "either an email"],
-    [{ platform: "claude", enabled: true, token: "x" }, "token"],
   ])("refuses %j before any work", async (args, message) => {
     await expect(tick(args as Record<string, unknown>, context)).rejects.toThrow(message);
   });
 
-  test("ending a pin names a provider and nothing else", async () => {
+  test("an unknown key is dropped, not refused", async () => {
+    // Past validation, the bare context fails: the key was not the refusal.
+    const failure = await failureOf(() =>
+      tick({ platform: "claude", enabled: true, token: "x" }, context),
+    );
+    expect(failure).not.toContain("token");
+    expect(failure).toContain("context.runtime");
+  });
+
+  test("ending a pin names a provider; other keys are dropped", async () => {
     await expect(resume({ platform: "grok" }, context)).rejects.toThrow("not supported");
-    await expect(resume({ platform: "claude", enabled: true }, context)).rejects.toThrow("enabled");
+    const failure = await failureOf(() => resume({ platform: "claude", enabled: true }, context));
+    expect(failure).not.toContain("enabled");
+    expect(failure).toContain("context.runtime");
+  });
+});
+
+describe("an unsupported platform is reported before the other fields", () => {
+  // Two wrong fields: the handler checked the platform first before the
+  // definitions, so its message wins over the decode failure of the other.
+  const registry = createCommandRegistry();
+  test.each([
+    ["set_active_agent_account", { platform: "grok", accountId: 1 }],
+    ["set_agent_account_auto_switch", { platform: "grok", enabled: "yes" }],
+    ["set_agent_account_auto_switch", { platform: "grok", included: "yes" }],
+    ["set_coordinator_account_switch_grant", { platform: "grok", enabled: "yes" }],
+    ["rename_agent_account", { platform: "grok", accountId: 1, label: 2 }],
+    ["remove_agent_account", { platform: "grok", accountId: 1 }],
+    ["get_agent_account_usage", { platform: "grok", accountId: 1, force: "yes" }],
+    ["start_agent_account_login", { platform: "grok", reauthenticate: "yes" }],
+  ] as const)("%s %j", async (name, args) => {
+    await expect(
+      registry.get(name)!(args as Record<string, unknown>, {} as CommandContext),
+    ).rejects.toThrow("Agent accounts are not supported for grok");
+  });
+  test("a platform that is not a string keeps its wording", async () => {
+    await expect(
+      registry.get("set_active_agent_account")!(
+        { platform: 1, accountId: 1 },
+        {} as CommandContext,
+      ),
+    ).rejects.toThrow("Expected platform to be a string");
   });
 });
 
 describe("preferred identity argument validation", () => {
   const setPreferred = createCommandRegistry().get("set_preferred_agent_identity")!;
   test.each([
-    { platform: "claude", email: "work@example.com", extra: true },
     { platform: "pi", email: "work@example.com" },
     { platform: 42, email: "work@example.com" },
     {},
@@ -264,7 +340,7 @@ describe("preferred identity argument validation", () => {
     expect(mutateAgentAccounts).not.toHaveBeenCalled();
   });
 
-  test.each([{}, { email: null }])(
+  test.each([{}, { email: null }, { extra: true }])(
     "omitted or null email clears only the selected platform %j",
     async (args) => {
       const store = {

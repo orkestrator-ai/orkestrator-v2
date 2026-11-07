@@ -1,0 +1,81 @@
+{
+  "schemaVersion": 1,
+  "domain": "multi-review",
+  "commands": {
+    "address_multi_review": {
+      "untyped": true
+    },
+    "cancel_multi_review": {
+      "untyped": true
+    },
+    "cancel_review_validation": {
+      "untyped": true
+    },
+    "delete_multi_review_workflow": {
+      "untyped": true
+    },
+    "get_multi_review_reviewer_history_page": {
+      "untyped": true
+    },
+    "get_multi_review_reviewer_tool_details": {
+      "untyped": true
+    },
+    "get_multi_review_reviewer_transcript": {
+      "untyped": true
+    },
+    "get_multi_review_step_transcript": {
+      "untyped": true
+    },
+    "get_multi_review_workflow": {
+      "untyped": true
+    },
+    "get_review_validation_output": {
+      "untyped": true
+    },
+    "list_multi_review_workflows": {
+      "untyped": true
+    },
+    "pause_multi_review_step": {
+      "untyped": true
+    },
+    "recover_multi_review_fix_session": {
+      "untyped": true
+    },
+    "restart_multi_review_reviewer": {
+      "untyped": true
+    },
+    "restart_multi_review_step": {
+      "untyped": true
+    },
+    "resume_multi_review_step": {
+      "untyped": true
+    },
+    "retry_multi_review": {
+      "untyped": true
+    },
+    "start_multi_review": {
+      "untyped": true
+    },
+    "start_multi_review_custom_fix": {
+      "untyped": true
+    },
+    "start_review_validation": {
+      "untyped": true
+    },
+    "status_review_validation": {
+      "untyped": true
+    },
+    "stop_multi_review_reviewer": {
+      "untyped": true
+    },
+    "stop_multi_review_validation": {
+      "untyped": true
+    },
+    "stop_review_validation_command": {
+      "untyped": true
+    },
+    "unstick_multi_review_reviewer": {
+      "untyped": true
+    }
+  }
+}

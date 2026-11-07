@@ -48,7 +48,7 @@ import { useComposerMountFocus } from "@/hooks/useComposerMountFocus";
 import { useFocusComposerShortcut } from "@/hooks/useFocusComposerShortcut";
 import { useNativeComposeBarPaste } from "@/hooks/useNativeComposeBarPaste";
 import { useNativeComposeDraftPersistence } from "@/hooks/useNativeComposeDraftPersistence";
-import { getNativeAgentModelCatalog } from "@/lib/backend";
+import { backendForScope } from "@/lib/backend/scope-backend";
 import { hydrateAgentModelCatalogCache } from "@/lib/agent-model-catalog-cache";
 import { MODEL_CATALOG_REFRESHED_EVENT } from "@/components/settings/agent/refresh-model-catalog";
 import { buildInitialPromptWithAttachmentReferences } from "@/lib/initial-prompt-attachments";
@@ -70,9 +70,11 @@ import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useShallow } from "zustand/react/shallow";
 import { syncCachedAcpModels } from "@/stores/agentModelCatalogStore";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import {
   nativeComposeDraft,
-  unassignedNativeComposePersistenceStore,
+  nativeComposeStore,
+  unassignedNativeComposePersistence,
   useNativeComposeStore,
 } from "@/stores/nativeComposeStore";
 import type { FileCandidate, FileMention } from "@/types";
@@ -452,6 +454,9 @@ export function UnassignedNativeAgentComposer({
   const sessionKey = createSessionKey(environmentId, tabId);
   const inputRef = useRef<MentionableInputRef>(null);
   const inputContainerRef = useRef<HTMLDivElement>(null);
+  // The node this tab's drafts live on: the scope `useNativeComposeStore` reads.
+  const composeScope = useNodeScope();
+  const composeDrafts = composeScope.store(nativeComposeStore);
   const draft = useNativeComposeStore((state) => nativeComposeDraft(state, sessionKey));
   const hasDraft = useNativeComposeStore((state) => state.drafts.has(sessionKey));
   const updateStoreDraft = useNativeComposeStore((state) => state.updateDraft);
@@ -527,13 +532,13 @@ export function UnassignedNativeAgentComposer({
   const effectiveFastMode = hasDraft ? draft.fastMode : (configured.fastMode ?? false);
   const updateDraft = useCallback(
     (key: string, update: Partial<typeof draft>) => {
-      const current = useNativeComposeStore.getState().drafts.get(key);
+      const current = composeDrafts.getState().drafts.get(key);
       updateStoreDraft(key, {
         ...(current ? {} : { fastMode: configured.fastMode ?? false }),
         ...update,
       });
     },
-    [configured.fastMode, updateStoreDraft],
+    [composeDrafts, configured.fastMode, updateStoreDraft],
   );
   // One-shot create-dialog choices are tab-owned so they survive the backend
   // consuming `pendingAgentLaunch`. Seed them into the draft without locking
@@ -556,7 +561,7 @@ export function UnassignedNativeAgentComposer({
       initialExecutionProfileId,
     );
     if (!hasInitialPreselect) return;
-    const current = useNativeComposeStore.getState().drafts.get(sessionKey);
+    const current = composeDrafts.getState().drafts.get(sessionKey);
     const seeded: Partial<typeof draft> = {};
     if (initialAgentPlatform && current?.platform === undefined) {
       seeded.platform = initialAgentPlatform;
@@ -583,6 +588,7 @@ export function UnassignedNativeAgentComposer({
       ...seeded,
     });
   }, [
+    composeDrafts,
     initialAgentModel,
     initialAgentPlatform,
     initialConversationMode,
@@ -596,7 +602,9 @@ export function UnassignedNativeAgentComposer({
     "agent-native",
     environmentId,
     sessionKey,
-    unassignedNativeComposePersistenceStore,
+    unassignedNativeComposePersistence(composeDrafts),
+    undefined,
+    composeScope,
   );
   useEffect(() => {
     modelCatalogMountedRef.current = true;
@@ -612,6 +620,8 @@ export function UnassignedNativeAgentComposer({
     modelCatalogRetriedRef.current.clear();
     setModels([]);
   }, [environmentId]);
+  // The catalogue it publishes is this node's (plan item 3003).
+  const modelCatalogScope = useNodeScope();
   // A normal read remains side-effect free. On the first selection of a
   // bridge-backed platform, however, tell the backend which one the user needs:
   // if its durable list is missing, the backend starts that bridge and seeds the
@@ -625,7 +635,10 @@ export function UnassignedNativeAgentComposer({
     const requestKey = `${environmentId}:${ensureAgent}`;
     if (models.some((model) => model.platform === ensureAgent)) return;
     if (modelCatalogRequestsRef.current.has(requestKey)) return;
-    const request = getNativeAgentModelCatalog(environmentId, ensureAgent);
+    const request = backendForScope(modelCatalogScope).getNativeAgentModelCatalog(
+      environmentId,
+      ensureAgent,
+    );
     modelCatalogRequestsRef.current.set(requestKey, request);
     modelCatalogInFlightRef.current.add(requestKey);
     void request
@@ -635,11 +648,11 @@ export function UnassignedNativeAgentComposer({
         // The backend has already normalized and durably cached these models.
         // Mirror its response even if this tab became inactive while first-use
         // discovery ran, so every other mounted launcher sees the new snapshot.
-        syncCachedAcpModels(catalog);
+        syncCachedAcpModels(modelCatalogScope, catalog);
         // A first-run download lands in the backend's durable cache only; pull
         // it into the store the launch dialogs read from.
         if (catalog.some((model) => model.platform === ensureAgent)) {
-          void hydrateAgentModelCatalogCache().catch(() => undefined);
+          void hydrateAgentModelCatalogCache({ scope: modelCatalogScope }).catch(() => undefined);
         }
         if (
           !modelCatalogMountedRef.current ||
@@ -678,7 +691,7 @@ export function UnassignedNativeAgentComposer({
         }
         log.warn("model-catalogue.load-failed", { error: formatLogError(error) });
       });
-  }, [environmentId, modelCatalogRetryRevision, models, platform]);
+  }, [environmentId, modelCatalogRetryRevision, modelCatalogScope, models, platform]);
   // A host that was not signed in when the picker first asked has nothing to
   // list. Focus is a useful retry signal for host probes after an external
   // sign-in, but must not restart environment bridges (Cursor, Grok or Pi).
@@ -815,16 +828,16 @@ export function UnassignedNativeAgentComposer({
   );
   const handlePastedImage = useCallback(
     (attachment: { id: string; type: "image"; path: string; previewUrl: string; name: string }) => {
-      const current = useNativeComposeStore.getState().drafts.get(sessionKey);
+      const current = composeDrafts.getState().drafts.get(sessionKey);
       updateDraft(sessionKey, {
         attachments: [...(current?.attachments ?? []), attachment],
       });
     },
-    [sessionKey, updateDraft],
+    [composeDrafts, sessionKey, updateDraft],
   );
   const handleWorkspaceFileAttach = useCallback(
     (file: FileCandidate) => {
-      const current = useNativeComposeStore.getState().drafts.get(sessionKey);
+      const current = composeDrafts.getState().drafts.get(sessionKey);
       const resolved = resolveWorkspaceAttachment(file, {
         containerId,
         worktreePath,
@@ -843,6 +856,7 @@ export function UnassignedNativeAgentComposer({
       });
     },
     [
+      composeDrafts,
       containerId,
       selectedAdapter,
       selectedModel?.label,
@@ -873,12 +887,12 @@ export function UnassignedNativeAgentComposer({
    */
   const attachmentCapabilities = selectedAdapter?.capabilities.attachments;
   useEffect(() => {
-    const current = useNativeComposeStore.getState().drafts.get(sessionKey);
+    const current = composeDrafts.getState().drafts.get(sessionKey);
     if (!current || current.attachments.length === 0) return;
     const supported = retainSupportedAttachments(current.attachments, attachmentCapabilities);
     if (supported.length === current.attachments.length) return;
     updateDraft(sessionKey, { attachments: supported });
-  }, [attachmentCapabilities, draftRestoreGeneration, sessionKey, updateDraft]);
+  }, [attachmentCapabilities, composeDrafts, draftRestoreGeneration, sessionKey, updateDraft]);
   const handleImageRejected = useCallback(
     () => toast.error("Images are not supported by this agent"),
     [],
@@ -1075,7 +1089,7 @@ export function UnassignedNativeAgentComposer({
                   // The picker announces the platform on every model choice, not
                   // only when it changes. Resetting unconditionally would clear
                   // the model and effort the user just picked on this provider.
-                  const current = useNativeComposeStore.getState().drafts.get(sessionKey);
+                  const current = composeDrafts.getState().drafts.get(sessionKey);
                   if ((current?.platform ?? platform) === next) return;
                   const nextAdapter = findNativeAgentAdapter(next);
                   const nextFastMode = resolvedPlatformSettings(
@@ -1112,7 +1126,7 @@ export function UnassignedNativeAgentComposer({
                   // comes from that same fresh snapshot: a platform switch clears
                   // it, and the render closure still holds the old provider's
                   // value, which would otherwise be carried across the switch.
-                  const currentDraft = useNativeComposeStore.getState().drafts.get(sessionKey);
+                  const currentDraft = composeDrafts.getState().drafts.get(sessionKey);
                   const selectedPlatform = currentDraft?.platform ?? platform;
                   const model = models.find(
                     (candidate) =>

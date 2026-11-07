@@ -1,16 +1,23 @@
+import { useLayoutEffect } from "react";
 import { create } from "zustand";
+import type { BackendId } from "@orkestrator/protocol/federation";
 import type { Terminal } from "@xterm/xterm";
 import type { FitAddon } from "@xterm/addon-fit";
 import type { SerializeAddon } from "@xterm/addon-serialize";
 import type { WebLinksAddon } from "@xterm/addon-web-links";
 import { DEFAULT_TERMINAL_APPEARANCE, DEFAULT_TERMINAL_SCROLLBACK } from "@/constants/terminal";
 import type { CreateXtermTerminal } from "@/lib/terminal-xterm";
+import { getWindowScope } from "@/lib/node-scope/app-window-scope";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 
 /**
  * Data for a persistent terminal instance that survives tab moves.
  * The terminal is created once and rendered via portal to different panes.
  */
 export interface PersistentTerminalData {
+  /** The node whose terminal this is: tab and container ids are only unique per node. */
+  nodeId: BackendId;
   /** Unique tab ID */
   tabId: string;
   /** Container ID for session scoping (null for local environments) */
@@ -35,22 +42,37 @@ export interface PersistentTerminalData {
   isOpened: boolean;
 }
 
-export function createPortalTargetKey(environmentId: string, paneId: string): string {
-  return `${environmentId}::${paneId}`;
+/**
+ * Keys are `{ nodeId, key }` encoded as `${nodeId}\u0000${key}` (report §5.1:
+ * the terminal DOM registry is window-owned, keyed by node-qualified terminal
+ * key). Environment, pane and tab ids are node-local (the default pane is
+ * `"default"` on every node), so the same key on two nodes names two terminals.
+ */
+function nodeQualifiedKey(nodeId: BackendId, key: string): string {
+  return `${nodeId}\u0000${key}`;
+}
+
+export function createPortalTargetKey(
+  nodeId: BackendId,
+  environmentId: string,
+  paneId: string,
+): string {
+  return nodeQualifiedKey(nodeId, `${environmentId}::${paneId}`);
 }
 
 /**
  * Create a unique key for a terminal instance.
- * Includes environmentId to prevent conflicts when switching environments.
+ * Includes the node and environmentId to prevent conflicts across nodes and environments.
  */
-export function createTerminalKey(environmentId: string, tabId: string): string {
-  return `${environmentId}::${tabId}`;
+export function createTerminalKey(nodeId: BackendId, environmentId: string, tabId: string): string {
+  return nodeQualifiedKey(nodeId, `${environmentId}::${tabId}`);
 }
 
 /**
  * Create terminal options
  */
 export interface CreateTerminalOptions {
+  nodeId: BackendId;
   tabId: string;
   containerId: string | null;
   environmentId: string;
@@ -68,22 +90,37 @@ export interface CreateTerminalOptions {
  * This store enables instant tab moves by keeping xterm.js Terminal instances
  * alive and using React portals to render them into different panes without
  * destroying and recreating them.
+ *
+ * It is window-owned (one per renderer, like the DOM it holds), not a
+ * per-node scoped store; every key names its node instead. Producers pass
+ * their node scope's id (`useTerminalPortalNodeId`), and disposing a node
+ * scope releases that node's terminals and pane hosts
+ * (`bindTerminalPortalsToScope`).
  */
-interface TerminalPortalState {
-  /** Map of environment+pane key -> DOM element (pane host) */
+export interface TerminalPortalState {
+  /** Map of node-qualified environment+pane key -> DOM element (pane host) */
   paneHosts: Map<string, HTMLDivElement>;
 
-  /** Map of environmentId::tabId -> persistent terminal data */
+  /** Map of node-qualified environmentId::tabId -> persistent terminal data */
   terminals: Map<string, PersistentTerminalData>;
 
   /** Register a pane host element for terminal targets */
-  registerPaneHost: (environmentId: string, paneId: string, element: HTMLDivElement) => void;
+  registerPaneHost: (
+    nodeId: BackendId,
+    environmentId: string,
+    paneId: string,
+    element: HTMLDivElement,
+  ) => void;
 
   /** Unregister a pane host element */
-  unregisterPaneHost: (environmentId: string, paneId: string) => void;
+  unregisterPaneHost: (nodeId: BackendId, environmentId: string, paneId: string) => void;
 
   /** Get a pane host element */
-  getPaneHost: (environmentId: string, paneId: string) => HTMLDivElement | undefined;
+  getPaneHost: (
+    nodeId: BackendId,
+    environmentId: string,
+    paneId: string,
+  ) => HTMLDivElement | undefined;
 
   /**
    * Create a new persistent terminal instance. The caller passes the xterm
@@ -96,43 +133,68 @@ interface TerminalPortalState {
   ) => PersistentTerminalData;
 
   /** Get a terminal by environment and tab ID */
-  getTerminal: (environmentId: string, tabId: string) => PersistentTerminalData | undefined;
+  getTerminal: (
+    nodeId: BackendId,
+    environmentId: string,
+    tabId: string,
+  ) => PersistentTerminalData | undefined;
 
   /** Check if a terminal exists for an environment and tab */
-  hasTerminal: (environmentId: string, tabId: string) => boolean;
+  hasTerminal: (nodeId: BackendId, environmentId: string, tabId: string) => boolean;
 
   /** Update which pane a terminal is rendered in */
-  setTerminalPane: (environmentId: string, tabId: string, paneId: string) => void;
+  setTerminalPane: (
+    nodeId: BackendId,
+    environmentId: string,
+    tabId: string,
+    paneId: string,
+  ) => void;
 
   /** Dispose a terminal when tab is closed */
-  disposeTerminal: (environmentId: string, tabId: string) => void;
+  disposeTerminal: (nodeId: BackendId, environmentId: string, tabId: string) => void;
 
-  /** Clear all terminals for an environment (e.g., when container stops) */
-  clearTerminalsForEnvironment: (environmentId: string) => void;
+  /** Clear all terminals for an environment of one node (e.g., when container stops) */
+  clearTerminalsForEnvironment: (nodeId: BackendId, environmentId: string) => void;
+
+  /** Dispose every terminal and forget every pane host of one node (its scope was disposed). */
+  clearTerminalsForNode: (nodeId: BackendId) => void;
 
   /** Clear all terminals (e.g., on app shutdown) */
   clearAllTerminals: () => void;
 
   /** Mark a terminal as opened (attached to DOM) */
-  markTerminalOpened: (environmentId: string, tabId: string) => void;
+  markTerminalOpened: (nodeId: BackendId, environmentId: string, tabId: string) => void;
 
   /** Set the container element for a terminal */
-  setTerminalContainer: (environmentId: string, tabId: string, element: HTMLDivElement) => void;
+  setTerminalContainer: (
+    nodeId: BackendId,
+    environmentId: string,
+    tabId: string,
+    element: HTMLDivElement,
+  ) => void;
 
   /** Recreate a terminal when its DOM structure is lost (e.g., after being detached too long) */
   recreateTerminal: (
+    nodeId: BackendId,
     environmentId: string,
     tabId: string,
     createXterm: CreateXtermTerminal,
   ) => PersistentTerminalData | null;
 }
 
+function releaseTerminalDom(terminalData: PersistentTerminalData): void {
+  terminalData.terminal.dispose();
+  if (terminalData.portalElement.parentNode) {
+    terminalData.portalElement.parentNode.removeChild(terminalData.portalElement);
+  }
+}
+
 export const useTerminalPortalStore = create<TerminalPortalState>((set, get) => ({
   paneHosts: new Map(),
   terminals: new Map(),
 
-  registerPaneHost: (environmentId: string, paneId: string, element: HTMLDivElement) => {
-    const key = createPortalTargetKey(environmentId, paneId);
+  registerPaneHost: (nodeId, environmentId, paneId, element) => {
+    const key = createPortalTargetKey(nodeId, environmentId, paneId);
     set((state) => {
       const newHosts = new Map(state.paneHosts);
       newHosts.set(key, element);
@@ -140,8 +202,8 @@ export const useTerminalPortalStore = create<TerminalPortalState>((set, get) => 
     });
   },
 
-  unregisterPaneHost: (environmentId: string, paneId: string) => {
-    const key = createPortalTargetKey(environmentId, paneId);
+  unregisterPaneHost: (nodeId, environmentId, paneId) => {
+    const key = createPortalTargetKey(nodeId, environmentId, paneId);
     set((state) => {
       const newHosts = new Map(state.paneHosts);
       newHosts.delete(key);
@@ -149,13 +211,13 @@ export const useTerminalPortalStore = create<TerminalPortalState>((set, get) => 
     });
   },
 
-  getPaneHost: (environmentId: string, paneId: string) => {
-    return get().paneHosts.get(createPortalTargetKey(environmentId, paneId));
+  getPaneHost: (nodeId, environmentId, paneId) => {
+    return get().paneHosts.get(createPortalTargetKey(nodeId, environmentId, paneId));
   },
 
   createTerminal: (options: CreateTerminalOptions, createXterm: CreateXtermTerminal) => {
-    const { tabId, containerId, environmentId, appearance = {} } = options;
-    const terminalKey = createTerminalKey(environmentId, tabId);
+    const { nodeId, tabId, containerId, environmentId, appearance = {} } = options;
+    const terminalKey = createTerminalKey(nodeId, environmentId, tabId);
 
     // Check if terminal already exists
     const existing = get().terminals.get(terminalKey);
@@ -166,16 +228,14 @@ export const useTerminalPortalStore = create<TerminalPortalState>((set, get) => 
     const { terminal, fitAddon, serializeAddon, webLinksAddon } = createXterm(
       appearance,
       options.scrollback,
-      {
-        environmentId,
-        tabId,
-      },
+      { environmentId, tabId, nodeId },
     );
 
     const portalElement = document.createElement("div");
     portalElement.className = "absolute inset-0 pointer-events-auto";
 
     const terminalData: PersistentTerminalData = {
+      nodeId,
       tabId,
       containerId,
       environmentId,
@@ -198,18 +258,18 @@ export const useTerminalPortalStore = create<TerminalPortalState>((set, get) => 
     return terminalData;
   },
 
-  getTerminal: (environmentId: string, tabId: string) => {
-    const terminalKey = createTerminalKey(environmentId, tabId);
+  getTerminal: (nodeId, environmentId, tabId) => {
+    const terminalKey = createTerminalKey(nodeId, environmentId, tabId);
     return get().terminals.get(terminalKey);
   },
 
-  hasTerminal: (environmentId: string, tabId: string) => {
-    const terminalKey = createTerminalKey(environmentId, tabId);
+  hasTerminal: (nodeId, environmentId, tabId) => {
+    const terminalKey = createTerminalKey(nodeId, environmentId, tabId);
     return get().terminals.has(terminalKey);
   },
 
-  setTerminalPane: (environmentId: string, tabId: string, paneId: string) => {
-    const terminalKey = createTerminalKey(environmentId, tabId);
+  setTerminalPane: (nodeId, environmentId, tabId, paneId) => {
+    const terminalKey = createTerminalKey(nodeId, environmentId, tabId);
     set((state) => {
       const existing = state.terminals.get(terminalKey);
       if (!existing) return state;
@@ -220,16 +280,12 @@ export const useTerminalPortalStore = create<TerminalPortalState>((set, get) => 
     });
   },
 
-  disposeTerminal: (environmentId: string, tabId: string) => {
-    const terminalKey = createTerminalKey(environmentId, tabId);
+  disposeTerminal: (nodeId, environmentId, tabId) => {
+    const terminalKey = createTerminalKey(nodeId, environmentId, tabId);
     const terminalData = get().terminals.get(terminalKey);
     if (!terminalData) return;
 
-    // Dispose the terminal
-    terminalData.terminal.dispose();
-    if (terminalData.portalElement.parentNode) {
-      terminalData.portalElement.parentNode.removeChild(terminalData.portalElement);
-    }
+    releaseTerminalDom(terminalData);
 
     set((state) => {
       const newTerminals = new Map(state.terminals);
@@ -238,16 +294,13 @@ export const useTerminalPortalStore = create<TerminalPortalState>((set, get) => 
     });
   },
 
-  clearTerminalsForEnvironment: (environmentId: string) => {
+  clearTerminalsForEnvironment: (nodeId, environmentId) => {
     const terminals = get().terminals;
     const keysToDelete: string[] = [];
 
     for (const [key, terminalData] of terminals) {
-      if (terminalData.environmentId === environmentId) {
-        terminalData.terminal.dispose();
-        if (terminalData.portalElement.parentNode) {
-          terminalData.portalElement.parentNode.removeChild(terminalData.portalElement);
-        }
+      if (terminalData.nodeId === nodeId && terminalData.environmentId === environmentId) {
+        releaseTerminalDom(terminalData);
         keysToDelete.push(key);
       }
     }
@@ -263,19 +316,36 @@ export const useTerminalPortalStore = create<TerminalPortalState>((set, get) => 
     }
   },
 
+  clearTerminalsForNode: (nodeId) => {
+    const { terminals, paneHosts } = get();
+    const terminalKeys: string[] = [];
+    for (const [key, terminalData] of terminals) {
+      if (terminalData.nodeId !== nodeId) continue;
+      releaseTerminalDom(terminalData);
+      terminalKeys.push(key);
+    }
+    const prefix = nodeQualifiedKey(nodeId, "");
+    const hostKeys = Array.from(paneHosts.keys()).filter((key) => key.startsWith(prefix));
+    if (terminalKeys.length === 0 && hostKeys.length === 0) return;
+    set((state) => {
+      const nextTerminals = new Map(state.terminals);
+      for (const key of terminalKeys) nextTerminals.delete(key);
+      const nextHosts = new Map(state.paneHosts);
+      for (const key of hostKeys) nextHosts.delete(key);
+      return { terminals: nextTerminals, paneHosts: nextHosts };
+    });
+  },
+
   clearAllTerminals: () => {
     const terminals = get().terminals;
     for (const [, terminalData] of terminals) {
-      terminalData.terminal.dispose();
-      if (terminalData.portalElement.parentNode) {
-        terminalData.portalElement.parentNode.removeChild(terminalData.portalElement);
-      }
+      releaseTerminalDom(terminalData);
     }
     set({ terminals: new Map() });
   },
 
-  markTerminalOpened: (environmentId: string, tabId: string) => {
-    const terminalKey = createTerminalKey(environmentId, tabId);
+  markTerminalOpened: (nodeId, environmentId, tabId) => {
+    const terminalKey = createTerminalKey(nodeId, environmentId, tabId);
     set((state) => {
       const existing = state.terminals.get(terminalKey);
       if (!existing) return state;
@@ -286,8 +356,8 @@ export const useTerminalPortalStore = create<TerminalPortalState>((set, get) => 
     });
   },
 
-  setTerminalContainer: (environmentId: string, tabId: string, element: HTMLDivElement) => {
-    const terminalKey = createTerminalKey(environmentId, tabId);
+  setTerminalContainer: (nodeId, environmentId, tabId, element) => {
+    const terminalKey = createTerminalKey(nodeId, environmentId, tabId);
     set((state) => {
       const existing = state.terminals.get(terminalKey);
       if (!existing) return state;
@@ -298,8 +368,8 @@ export const useTerminalPortalStore = create<TerminalPortalState>((set, get) => 
     });
   },
 
-  recreateTerminal: (environmentId: string, tabId: string, createXterm: CreateXtermTerminal) => {
-    const terminalKey = createTerminalKey(environmentId, tabId);
+  recreateTerminal: (nodeId, environmentId, tabId, createXterm) => {
+    const terminalKey = createTerminalKey(nodeId, environmentId, tabId);
     const existing = get().terminals.get(terminalKey);
 
     if (!existing) {
@@ -336,7 +406,7 @@ export const useTerminalPortalStore = create<TerminalPortalState>((set, get) => 
           DEFAULT_TERMINAL_APPEARANCE.backgroundColor,
       },
       existing.terminal.options.scrollback ?? DEFAULT_TERMINAL_SCROLLBACK,
-      { environmentId, tabId },
+      { environmentId, tabId, nodeId },
     );
 
     // Create new portal element
@@ -344,6 +414,7 @@ export const useTerminalPortalStore = create<TerminalPortalState>((set, get) => 
     portalElement.className = "absolute inset-0 pointer-events-auto";
 
     const newTerminalData: PersistentTerminalData = {
+      nodeId,
       tabId,
       containerId: existing.containerId,
       environmentId,
@@ -366,3 +437,44 @@ export const useTerminalPortalStore = create<TerminalPortalState>((set, get) => 
     return newTerminalData;
   },
 }));
+
+const boundScopes = new WeakSet<NodeScope>();
+
+/**
+ * Releases `scope`'s terminals and pane hosts when the scope is disposed.
+ * Idempotent per scope; returns the scope's node id, the id its terminals are
+ * keyed by.
+ */
+export function bindTerminalPortalsToScope(scope: NodeScope): BackendId {
+  if (!scope.disposed && !boundScopes.has(scope)) {
+    boundScopes.add(scope);
+    const nodeId = scope.nodeId;
+    scope.onDispose("terminal-portals", () =>
+      useTerminalPortalStore.getState().clearTerminalsForNode(nodeId),
+    );
+  }
+  return scope.nodeId;
+}
+
+/**
+ * The node id a terminal producer (a pane host, the portal host) keys its
+ * terminals by: the nearest node scope's, else the command scope's. Binds
+ * that scope so disposing it releases what it registered.
+ */
+export function useTerminalPortalNodeId(): BackendId {
+  const { scope } = useScopesWithCommandFallback();
+  // Before the producer's own layout effects, which register into the store.
+  useLayoutEffect(() => {
+    bindTerminalPortalsToScope(scope);
+  }, [scope]);
+  return scope.nodeId;
+}
+
+/**
+ * The node id of terminals owned by this window's command scope. For callers
+ * that act on the command node's pane layout and have no scope of their own
+ * yet (`paneLayoutStore` until plan item 3013).
+ */
+export function commandTerminalPortalNodeId(): BackendId {
+  return getWindowScope().commandScope().nodeId;
+}

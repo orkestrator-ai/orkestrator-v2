@@ -668,9 +668,16 @@ test("supervisor failures are isolated during restore and shutdown", async () =>
     calls.push("native:init");
     throw new Error("restore failed");
   });
+  // A complete session record: the result schema is the model (plan item 7010).
   internals.nativeAgents.ensureSession = mock(async (input) => ({
-    providerSessionId: "provider-1",
     ...input,
+    version: 1,
+    key: "env-1:codex:env-env-1:tab-1",
+    origin: "interactive-native",
+    interactionPolicy: { version: 1, mode: "interactive" },
+    createdAt: "2026-11-07T00:00:00.000Z",
+    updatedAt: "2026-11-07T00:00:00.000Z",
+    providerSessionId: "provider-1",
   }));
   internals.nativeAgents.shutdown = mock(async () => {
     calls.push("native:shutdown");

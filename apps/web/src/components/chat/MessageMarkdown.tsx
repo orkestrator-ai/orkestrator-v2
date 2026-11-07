@@ -1,4 +1,5 @@
 import { armPullRequestFallback } from "@/lib/pull-request-load-fallback";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import {
   Children,
@@ -179,6 +180,8 @@ export function MarkdownLink({
   const createFileTab = useOptionalTerminalContext()?.createFileTab;
   const openPullRequest = usePullRequestOpener();
   const linkSource = useContext(PreviewLinkSourceContext);
+  // The node of the transcript this link is in: its environment and services.
+  const linkScope = useNodeScope();
   // Inside a coordinator, a pull request link on screen is watched for status changes.
   const notePullRequestOpened = useCoordinatorPullRequestLink(href);
   // The explicit gesture opens a preview tab. On remote desktop connections,
@@ -241,13 +244,23 @@ export function MarkdownLink({
               sourceTabId: linkSource.tabId,
               url: href,
               origin: "agent",
+              scope: linkScope,
             })
           : openInBrowser(href);
       void opened.catch((error) => {
         log.error("message.link-open-failed", { error: formatLogError(error) });
       });
     },
-    [createFileTab, href, linkSource, notePullRequestOpened, onClick, openPullRequest, previewable],
+    [
+      createFileTab,
+      href,
+      linkScope,
+      linkSource,
+      notePullRequestOpened,
+      onClick,
+      openPullRequest,
+      previewable,
+    ],
   );
 
   return (

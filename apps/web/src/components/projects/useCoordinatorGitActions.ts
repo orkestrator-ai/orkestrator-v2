@@ -4,15 +4,16 @@ import type {
   ProjectGitStatus,
   ProjectGitSwitchConfirmation,
 } from "@orkestrator/protocol/coordinator";
-import * as backend from "@/lib/backend";
 import {
   activeCoordinatorTurnLabel,
   projectHomeEnvironmentIds,
 } from "@/lib/coordinator-active-turn";
 import { checkUpstreamMergeOffer } from "@/lib/coordinator-upstream-check";
-import { useEnvironmentStore } from "@/stores/environmentStore";
-import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
+import { useNodeScope } from "@/lib/node-scope/providers";
+import { environmentStore } from "@/stores/environmentStore";
+import { nativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import type { RunCoordinatorAction } from "./useCoordinatorActions";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 /** How long a message waits on the pre-send fetch before it is sent without merging. */
 const UPSTREAM_CHECK_TIMEOUT_MS = 5_000;
@@ -33,6 +34,9 @@ export function useCoordinatorGitActions({
   refreshView,
   runAction,
 }: UseCoordinatorGitActionsOptions) {
+  const nodeBackend = useScopeBackend();
+  // The node whose project this is: the one `useEnvironmentStore` reads.
+  const scope = useNodeScope();
   const upstreamCheckLifetimeRef = useRef<AbortController | null>(null);
   useEffect(() => {
     const lifetime = new AbortController();
@@ -46,11 +50,11 @@ export function useCoordinatorGitActions({
   });
   // The refused or failed action may have left the status it read stale.
   const rereadStatus = useCallback(() => {
-    void backend
+    void nodeBackend
       .getProjectGitStatus(projectId)
       .then(setGit)
       .catch(() => undefined);
-  }, [projectId, setGit]);
+  }, [projectId, setGit, nodeBackend]);
   const runGit = useCallback(
     (
       kind: "fetch" | "sync" | "switch",
@@ -62,10 +66,10 @@ export function useCoordinatorGitActions({
         async () => {
           const next =
             kind === "fetch"
-              ? await backend.fetchProjectGit(projectId, true)
+              ? await nodeBackend.fetchProjectGit(projectId, true)
               : kind === "sync"
-                ? await backend.syncProjectGit(projectId)
-                : await backend.switchProjectGitBranch(
+                ? await nodeBackend.syncProjectGit(projectId)
+                : await nodeBackend.switchProjectGitBranch(
                     projectId,
                     ref!,
                     confirmation
@@ -80,17 +84,17 @@ export function useCoordinatorGitActions({
         },
         { failureMessage: `Git ${kind} failed`, onFailure: rereadStatus },
       ),
-    [projectId, refreshView, rereadStatus, runAction, setGit],
+    [projectId, refreshView, rereadStatus, runAction, setGit, nodeBackend],
   );
   /** Asks the backend what switching would discard; `onReady` receives the answer to confirm. */
   const prepareSwitch = useCallback(
     (ref: string, onReady: (confirmation: ProjectGitSwitchConfirmation) => void) =>
       runAction(
         "switch",
-        async () => onReady(await backend.prepareProjectGitBranchSwitch(projectId, ref)),
+        async () => onReady(await nodeBackend.prepareProjectGitBranchSwitch(projectId, ref)),
         { failureMessage: "Could not prepare branch switch", onFailure: rereadStatus },
       ),
-    [projectId, rereadStatus, runAction],
+    [projectId, rereadStatus, runAction, nodeBackend],
   );
   /*
    * The main coordinator reads this checkout, so a message sent while the
@@ -124,10 +128,10 @@ export function useCoordinatorGitActions({
         activeCoordinatorTurnLabel({
           workspace: snapshotRef.current?.workspace,
           homeEnvironmentIds: projectHomeEnvironmentIds(
-            useEnvironmentStore.getState().environments,
+            scope.store(environmentStore).getState().environments,
             projectId,
           ),
-          projections: useNativeAgentProjectionStore.getState().projections,
+          projections: scope.store(nativeAgentProjectionStore).getState().projections,
         }) !== null;
       let cancel!: () => void;
       const cancelled = new Promise<false>((resolve) => {
@@ -141,6 +145,7 @@ export function useCoordinatorGitActions({
         const check = await Promise.race([
           cancelled,
           checkUpstreamMergeOffer(projectId, {
+            scope,
             turnRunning,
             onStatus: (fetched) => {
               if (!lifetime.signal.aborted) setGit(fetched);
@@ -161,7 +166,7 @@ export function useCoordinatorGitActions({
         await runAction(
           "sync",
           async () => {
-            const synced = await backend.syncProjectGit(projectId);
+            const synced = await nodeBackend.syncProjectGit(projectId);
             if (lifetime.signal.aborted) return;
             setGit(synced);
             await refreshView();
@@ -180,7 +185,7 @@ export function useCoordinatorGitActions({
         lifetime.signal.removeEventListener("abort", cancel);
       }
     },
-    [projectId, refreshView, rereadStatus, runAction, setGit],
+    [projectId, refreshView, rereadStatus, runAction, scope, setGit, nodeBackend],
   );
   return { runGit, prepareSwitch, confirmUpstreamMerge };
 }

@@ -5,6 +5,7 @@
  * snapshots). Also: snapshots racing create/edit/delete, and logs that never
  * carry annotation content.
  */
+import { eventSink } from "./backend-emit.js";
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -180,10 +181,10 @@ async function authoritative(service: WebAnnotationService): Promise<Map<string,
 async function setup() {
   const clients: SimulatedClient[] = [];
   harness = await createHarness({
-    emit: (event, payload) => {
+    emit: eventSink((event, payload) => {
       if (event !== WEB_ANNOTATIONS_CHANGED_EVENT) return;
       for (const client of clients) client.deliver(payload as WebAnnotationChangeHint);
-    },
+    }),
   });
   const current = () => harness!.service;
   const a = new SimulatedClient(current);

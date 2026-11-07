@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:bfa1e351835ab24b5f996a8d775897cf855f1cf9fd5809bf0147e0663401ec73",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "environmentId": {
+          "type": "string"
+        },
+        "referencedHandoffIds": {}
+      },
+      "required": ["environmentId"],
+      "type": "object"
+    }
+  }
+}

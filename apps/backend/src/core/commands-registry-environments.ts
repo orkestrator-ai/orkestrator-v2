@@ -1,3 +1,66 @@
+import {
+  acknowledgeStartupAgentSessionCommand,
+  addEnvironmentDomainsCommand,
+  applyEnvironmentAllowedDomainsCommand,
+  approveEnvironmentSetupCommand,
+  approveProjectSetupCommandsCommand,
+  awaitEnvironmentSetupSessionCommand,
+  cancelContainerOperationCommand,
+  cleanupLogsCommand,
+  clearEnvironmentPrCommand,
+  createEnvironmentCommand,
+  deleteEnvironmentCommand,
+  discardRecoveryCopyCommand,
+  ensureEnvironmentSetupCommand,
+  ensureProjectHomeEnvironmentCommand,
+  forkEnvironmentCommand,
+  getClaudeTerminalStateCommand,
+  getContainerLifecycleSnapshotCommand,
+  getEnvironmentCommand,
+  getEnvironmentExtensionsCommand,
+  getEnvironmentInputsCommand,
+  getEnvironmentNetworkPolicyCommand,
+  getEnvironmentPrHealthCommand,
+  getEnvironmentPrUrlCommand,
+  getEnvironmentResourcesCommand,
+  getEnvironmentSetupApprovalCommand,
+  getEnvironmentSnapshotCommand,
+  getEnvironmentSnapshotsCommand,
+  getEnvironmentStatusCommand,
+  getEnvironmentsCommand,
+  getLogDirectoryCommand,
+  getLogStorageStatsCommand,
+  getRebuildPreviewCommand,
+  listRecoveryCopiesCommand,
+  moveEnvironmentCommand,
+  overrideEnvironmentSetupCommand,
+  prepareEnvironmentFirstPromptCommand,
+  reconcilePendingEnvironmentRenamesCommand,
+  recreateEnvironmentCommand,
+  removeEnvironmentDomainsCommand,
+  renameEnvironmentCommand,
+  renameEnvironmentFromPromptCommand,
+  reorderEnvironmentsCommand,
+  resolveContainerOperationCommand,
+  restoreProviderCredentialsCommand,
+  restoreRecoveryCopyCommand,
+  revokeProviderCredentialsCommand,
+  runEnvironmentSetupCommand,
+  setContainerResourceLimitsCommand,
+  setEnvironmentInitialPromptCommand,
+  setEnvironmentPendingAgentLaunchCommand,
+  setEnvironmentPrCommand,
+  startEnvironmentBackgroundCommand,
+  startEnvironmentCommand,
+  stopEnvironmentCommand,
+  syncAllEnvironmentsWithDockerCommand,
+  syncEnvironmentStatusCommand,
+  updateEnvironmentAgentSettingsCommand,
+  updateEnvironmentAllowedDomainsCommand,
+  updateEnvironmentResourcesCommand,
+  updatePortMappingsCommand,
+} from "@orkestrator/protocol/contract/domains/environments";
+import { environmentSetupCompleteEvent } from "@orkestrator/protocol/contract/domains/events";
 import { reconcileProjectHomeEnvironment } from "./project-home-environment.js";
 import {
   containerLifecycleSnapshot,
@@ -32,13 +95,13 @@ import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { normalizeAgentMessagingSettings } from "@orkestrator/protocol/agent-mail";
 import { environmentMailMarkers, isWorkingPipelineRecord } from "./nodes/index.js";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
+import { withAsyncArgumentFailures } from "./commands-registry-async-args.js";
 import { createEnvironment, defaultEnvironmentName, sanitizeEnvironmentName } from "./storage.js";
 import { discoverAgentExtensions } from "./extension-discovery.js";
 import { dockerOwnerNamespace } from "./docker-ownership.js";
 import type { Environment } from "./models.js";
 import {
   asString,
-  assertOnlyKeys,
   asOptionalString,
   asRequiredBoolean,
   asNumber,
@@ -101,9 +164,11 @@ function normalizedTier(value: unknown): AgentSettingsTier | undefined {
 }
 
 export function registerEnvironmentCommands(
-  register: CommandRegistrar,
+  registerCommand: CommandRegistrar,
   dependencies: RegistryDependencies,
 ): void {
+  // `async` handlers keep rejecting on bad arguments (`commands-registry-async-args.ts`).
+  const register = withAsyncArgumentFailures(registerCommand);
   const {
     conditionalManifestSnapshot,
     schedulePendingEnvironmentRename,
@@ -111,17 +176,15 @@ export function registerEnvironmentCommands(
     reconcilePendingEnvironmentRenames,
     extensionDiscoveryCache,
   } = dependencies;
-  register("get_log_directory", (_args, { storage }) => storage.getLogDirectory());
-  register("get_log_storage_stats", (args, { storage }) => {
-    assertOnlyKeys(args, [], "arguments");
+  register(getLogDirectoryCommand, (_args, { storage }) => storage.getLogDirectory());
+  register(getLogStorageStatsCommand, (_args, { storage }) => {
     return getLogStorageStats(storage.getLogDirectory());
   });
-  register("cleanup_logs", (args, { storage }) => {
-    assertOnlyKeys(args, [], "arguments");
+  register(cleanupLogsCommand, (_args, { storage }) => {
     return cleanupLogStorage(storage.getLogDirectory());
   });
 
-  register("get_environments", async ({ projectId }, context) => {
+  register(getEnvironmentsCommand, async ({ projectId }, context) => {
     const { storage } = context;
     const environments = await storage.getEnvironmentsByProject(asString(projectId, "projectId"));
     // One shared `docker ps` snapshot for the whole batch instead of one
@@ -167,7 +230,7 @@ export function registerEnvironmentCommands(
     void context.runtime.prMonitor.sync(context).catch(() => undefined);
     return synced.map(toClientEnvironment);
   });
-  register("get_environment_snapshots", async (args, context) => {
+  register(getEnvironmentSnapshotsCommand, async (args, context) => {
     const { storage, runtime } = context;
     const load = async () =>
       (await storage.getEnvironmentsByProject(asString(args.projectId, "projectId"))).map(
@@ -210,7 +273,7 @@ export function registerEnvironmentCommands(
   });
   // One environment as `get_environment_snapshots` lists it, for a client that
   // was told exactly one changed. Reads only that row.
-  register("get_environment_snapshot", async ({ environmentId }, { storage }) => {
+  register(getEnvironmentSnapshotCommand, async ({ environmentId }, { storage }) => {
     const environment = await storage.getEnvironment(asString(environmentId, "environmentId"));
     return environment ? toClientEnvironment(environment) : null;
   });
@@ -220,7 +283,7 @@ export function registerEnvironmentCommands(
    * monitor state only: no reconciliation and no GitHub call. A coordinator's
    * environment reads add it to decide "ready to merge".
    */
-  register("get_environment_pr_health", async (args, { storage, runtime }) => {
+  register(getEnvironmentPrHealthCommand, async (args, { storage, runtime }) => {
     const projectId = asString(args.projectId, "projectId");
     const wanted = Array.isArray(args.environmentIds)
       ? new Set(
@@ -235,7 +298,7 @@ export function registerEnvironmentCommands(
     }
     return health;
   });
-  register("get_environment", async ({ environmentId, includeFinalPrState }, { storage }) => {
+  register(getEnvironmentCommand, async ({ environmentId, includeFinalPrState }, { storage }) => {
     const environment = await storage.getEnvironment(asString(environmentId, "environmentId"));
     return environment
       ? reconcileProjectHomeEnvironment(environment, storage)
@@ -248,7 +311,7 @@ export function registerEnvironmentCommands(
   // of waiting for the next transition. Only the state and its timestamp leave
   // the backend; the other activity sources stay private. The renderer holds
   // the stored id, so this is an exact match and never asks Docker.
-  register("get_claude_terminal_state", async ({ containerId }, { storage }) => {
+  register(getClaudeTerminalStateCommand, async ({ containerId }, { storage }) => {
     const id = asString(containerId, "containerId");
     const environment = (await storage.loadEnvironments()).find(
       (candidate) => candidate.containerId === id,
@@ -256,13 +319,13 @@ export function registerEnvironmentCommands(
     const source = environment?.agentActivitySources?.["claude-terminal"];
     return source ? { state: source.state, occurredAt: source.updatedAt } : null;
   });
-  register("reorder_environments", ({ projectId, environmentIds }, { storage }) =>
+  register(reorderEnvironmentsCommand, ({ projectId, environmentIds }, { storage }) =>
     storage
       .reorderEnvironments(asString(projectId, "projectId"), asStringArray(environmentIds))
       .then((environments) => environments.map(toClientEnvironment)),
   );
   register(
-    "create_environment",
+    createEnvironmentCommand,
     async (
       {
         projectId,
@@ -409,8 +472,7 @@ export function registerEnvironmentCommands(
       return toClientEnvironment(await storage.addEnvironment(env));
     },
   );
-  register("ensure_project_home_environment", async (args, context) => {
-    assertOnlyKeys(args, ["projectId"], "arguments");
+  register(ensureProjectHomeEnvironmentCommand, async (args, context) => {
     const projectId = asString(args.projectId, "projectId");
     const { storage } = context;
     const { environment } = await ensureProjectHomeEnvironment(
@@ -432,25 +494,24 @@ export function registerEnvironmentCommands(
     await context.runtime.prMonitor.sync(context);
     return toClientEnvironment(environment);
   });
-  register("fork_environment", async ({ environmentId, environmentType }, context) => {
+  register(forkEnvironmentCommand, async ({ environmentId, environmentType }, context) => {
     const source = await context.storage.getEnvironment(asString(environmentId, "environmentId"));
     if (!source) throw new Error(`Environment not found: ${environmentId}`);
     return forkEnvironmentRecord(source, asEnvironmentType(environmentType), context);
   });
-  register("delete_environment", async ({ environmentId }, context) => {
+  register(deleteEnvironmentCommand, async ({ environmentId }, context) => {
     const id = asString(environmentId, "environmentId");
     extensionDiscoveryCache.invalidate(id);
     return deleteEnvironmentTask(id, context);
   });
-  register("move_environment", async (args, context) => {
-    assertOnlyKeys(args, ["environmentId", "destinationDir"], "arguments");
+  register(moveEnvironmentCommand, async (args, context) => {
     const id = asString(args.environmentId, "environmentId");
     const moved = await moveEnvironmentTask(id, args.destinationDir, context, {
       invalidateDiscovery: (environmentId) => extensionDiscoveryCache.invalidate(environmentId),
     });
     return toClientEnvironment(moved);
   });
-  register("rename_environment", async ({ environmentId, name }, context) => {
+  register(renameEnvironmentCommand, async ({ environmentId, name }, context) => {
     const { storage } = context;
     const id = asString(environmentId, "environmentId");
     const newName = sanitizeEnvironmentName(asString(name, "name"));
@@ -460,23 +521,22 @@ export function registerEnvironmentCommands(
     await context.runtime.prMonitor.sync(context);
     return toClientEnvironment(updated);
   });
-  register("rename_environment_from_prompt", async ({ environmentId, prompt }, context) => {
+  register(renameEnvironmentFromPromptCommand, async ({ environmentId, prompt }, context) => {
     const envId = asString(environmentId, "environmentId");
     await renameEnvironmentFromPrompt(envId, asString(prompt, "prompt"), context);
     await context.runtime.prMonitor.sync(context);
   });
-  register("prepare_environment_first_prompt", async ({ environmentId, prompt }, context) => {
+  register(prepareEnvironmentFirstPromptCommand, async ({ environmentId, prompt }, context) => {
     await prepareEnvironmentFirstPrompt(
       asString(environmentId, "environmentId"),
       asString(prompt, "prompt"),
       context,
     );
   });
-  register("reconcile_pending_environment_renames", async (args, context) => {
-    assertOnlyKeys(args, [], "arguments");
+  register(reconcilePendingEnvironmentRenamesCommand, async (_args, context) => {
     return { pending: await reconcilePendingEnvironmentRenames(context) };
   });
-  register("get_environment_status", async ({ environmentId }, context) => {
+  register(getEnvironmentStatusCommand, async ({ environmentId }, context) => {
     const { storage } = context;
     const environment = await storage.getEnvironment(asString(environmentId, "environmentId"));
     if (!environment) throw new Error(`Environment not found: ${environmentId}`);
@@ -493,7 +553,7 @@ export function registerEnvironmentCommands(
       )
     ).status;
   });
-  register("sync_environment_status", async ({ environmentId }, context) => {
+  register(syncEnvironmentStatusCommand, async ({ environmentId }, context) => {
     const { storage } = context;
     const environment = await storage.getEnvironment(asString(environmentId, "environmentId"));
     if (!environment) throw new Error(`Environment not found: ${environmentId}`);
@@ -510,7 +570,7 @@ export function registerEnvironmentCommands(
       ),
     );
   });
-  register("sync_all_environments_with_docker", async (_args, context) => {
+  register(syncAllEnvironmentsWithDockerCommand, async (_args, context) => {
     const { storage } = context;
     const cleared: string[] = [];
     const environments = (await storage.loadEnvironments()).filter(
@@ -548,7 +608,7 @@ export function registerEnvironmentCommands(
   // `admit` refuses synchronously by design, so every lifecycle command is
   // `async`: a caller that reaches the registry directly must see a rejection
   // rather than a throw from the call expression itself.
-  register("start_environment", async (args, context) => {
+  register(startEnvironmentCommand, async (args, context) => {
     const { task } = await admitEnvironmentStartTask(
       asString(args.environmentId, "environmentId"),
       context,
@@ -557,7 +617,7 @@ export function registerEnvironmentCommands(
     );
     return toClientEnvironmentSetupStartResult(await task);
   });
-  register("start_environment_background", async (args, context) => {
+  register(startEnvironmentBackgroundCommand, async (args, context) => {
     const id = asString(args.environmentId, "environmentId");
     // Validate before acknowledging the request. Once accepted, the task is
     // backend-owned: a renderer, browser, or reverse proxy can disconnect
@@ -574,7 +634,7 @@ export function registerEnvironmentCommands(
       logEnvironmentLifecycleFailure("background start", id, error);
     });
   });
-  register("stop_environment", async (args, context) =>
+  register(stopEnvironmentCommand, async (args, context) =>
     stopEnvironmentTask(
       asString(args.environmentId, "environmentId"),
       context,
@@ -582,17 +642,12 @@ export function registerEnvironmentCommands(
       parseContainerMutationIdentity(args),
     ),
   );
-  register("get_container_lifecycle_snapshot", async ({ environmentId }, { storage }) => {
+  register(getContainerLifecycleSnapshotCommand, async ({ environmentId }, { storage }) => {
     const environment = await storage.getEnvironment(asString(environmentId, "environmentId"));
     if (!environment) throw new Error(`Environment not found: ${environmentId}`);
     return containerLifecycleSnapshot(parseContainerLifecycle(environment.containerLifecycle));
   });
-  register("resolve_container_operation", async (args, context) => {
-    assertOnlyKeys(
-      args,
-      ["environmentId", "operationId", "resolution", "containerId"],
-      "arguments",
-    );
+  register(resolveContainerOperationCommand, async (args, context) => {
     const environmentId = asString(args.environmentId, "environmentId");
     const operationId = asString(args.operationId, "operationId");
     const resolution = args.resolution;
@@ -611,22 +666,15 @@ export function registerEnvironmentCommands(
     );
     return updated ? toClientEnvironment(updated) : undefined;
   });
-  register("get_rebuild_preview", async (args, context) => {
-    assertOnlyKeys(args, ["environmentId"], "arguments");
+  register(getRebuildPreviewCommand, async (args, context) => {
     return rebuildPreview(asString(args.environmentId, "environmentId"), context);
   });
-  register("list_recovery_copies", async (args, context) => {
-    assertOnlyKeys(args, ["environmentId", "measureSize"], "arguments");
+  register(listRecoveryCopiesCommand, async (args, context) => {
     return listRecoveryCopies(asString(args.environmentId, "environmentId"), context, {
       measureSize: args.measureSize === true,
     });
   });
-  register("discard_recovery_copy", async (args, context) => {
-    assertOnlyKeys(
-      args,
-      ["environmentId", "copyId", "expectedRevision", "operationId"],
-      "arguments",
-    );
+  register(discardRecoveryCopyCommand, async (args, context) => {
     return discardRecoveryCopyTask(
       {
         environmentId: asString(args.environmentId, "environmentId"),
@@ -636,12 +684,7 @@ export function registerEnvironmentCommands(
       context,
     );
   });
-  register("restore_recovery_copy", async (args, context) => {
-    assertOnlyKeys(
-      args,
-      ["environmentId", "copyId", "expectedContainerId", "expectedRevision", "operationId"],
-      "arguments",
-    );
+  register(restoreRecoveryCopyCommand, async (args, context) => {
     const expected = args.expectedContainerId;
     if (expected !== null && typeof expected !== "string") {
       throw new Error("Expected expectedContainerId to be the reviewed container id or null");
@@ -659,12 +702,10 @@ export function registerEnvironmentCommands(
     );
     return result ? toClientEnvironmentSetupStartResult(result) : undefined;
   });
-  register("get_environment_resources", async (args, context) => {
-    assertOnlyKeys(args, ["environmentId"], "arguments");
+  register(getEnvironmentResourcesCommand, async (args, context) => {
     return environmentResourcePolicy(asString(args.environmentId, "environmentId"), context);
   });
-  register("update_environment_resources", async (args, context) => {
-    assertOnlyKeys(args, ["environmentId", "limits", "applyNow", "allowBelowUsage"], "arguments");
+  register(updateEnvironmentResourcesCommand, async (args, context) => {
     const environmentId = asString(args.environmentId, "environmentId");
     let limits: ContainerResourceLimits | undefined;
     if (args.limits !== null && args.limits !== undefined) {
@@ -684,8 +725,7 @@ export function registerEnvironmentCommands(
       ),
     );
   });
-  register("set_container_resource_limits", async (args, { storage }) => {
-    assertOnlyKeys(args, ["limits"], "arguments");
+  register(setContainerResourceLimitsCommand, async (args, { storage }) => {
     let limits: ContainerResourceLimits | undefined;
     if (args.limits !== null && args.limits !== undefined) {
       const parsed = parseResourceLimits(args.limits);
@@ -705,20 +745,16 @@ export function registerEnvironmentCommands(
         : [];
     return { limits: limits ?? null, ...(unenforceable.length > 0 ? { unenforceable } : {}) };
   });
-  register("get_environment_network_policy", async (args, context) => {
-    assertOnlyKeys(args, ["environmentId"], "arguments");
+  register(getEnvironmentNetworkPolicyCommand, async (args, context) => {
     return environmentNetworkPolicy(asString(args.environmentId, "environmentId"), context);
   });
-  register("apply_environment_allowed_domains", async (args, context) => {
-    assertOnlyKeys(args, ["environmentId"], "arguments");
+  register(applyEnvironmentAllowedDomainsCommand, async (args, context) => {
     return applyEnvironmentAllowedDomains(asString(args.environmentId, "environmentId"), context);
   });
-  register("get_environment_inputs", async (args, context) => {
-    assertOnlyKeys(args, ["environmentId"], "arguments");
+  register(getEnvironmentInputsCommand, async (args, context) => {
     return environmentInputStatus(asString(args.environmentId, "environmentId"), context);
   });
-  register("revoke_provider_credentials", async (args, context) => {
-    assertOnlyKeys(args, ["environmentId", "provider"], "arguments");
+  register(revokeProviderCredentialsCommand, async (args, context) => {
     const provider = args.provider;
     if (!isAgentPlatform(provider)) throw new Error("Expected provider to be an agent platform");
     return revokeProviderCredentials(
@@ -727,8 +763,7 @@ export function registerEnvironmentCommands(
       context,
     );
   });
-  register("restore_provider_credentials", async (args, context) => {
-    assertOnlyKeys(args, ["environmentId", "provider"], "arguments");
+  register(restoreProviderCredentialsCommand, async (args, context) => {
     const provider = args.provider;
     if (!isAgentPlatform(provider)) throw new Error("Expected provider to be an agent platform");
     return restoreProviderCredentials(
@@ -737,8 +772,7 @@ export function registerEnvironmentCommands(
       context,
     );
   });
-  register("cancel_container_operation", async (args, { storage, runtime }) => {
-    assertOnlyKeys(args, ["environmentId", "operationId"], "arguments");
+  register(cancelContainerOperationCommand, async (args, { storage, runtime }) => {
     const environmentId = asString(args.environmentId, "environmentId");
     const operationId = asString(args.operationId, "operationId");
     const environment = await storage.getEnvironment(environmentId);
@@ -759,7 +793,7 @@ export function registerEnvironmentCommands(
     runtime.environments.requestReplacementCancellation(operationId);
     return { cancelled: true, pending: true };
   });
-  register("recreate_environment", async (args, context) => {
+  register(recreateEnvironmentCommand, async (args, context) => {
     const result = await recreateEnvironmentTask(
       parseRecreateEnvironmentRequest(args),
       context,
@@ -768,8 +802,7 @@ export function registerEnvironmentCommands(
     );
     return result ? toClientEnvironmentSetupStartResult(result) : undefined;
   });
-  register("set_environment_pr", async (args, context) => {
-    assertOnlyKeys(args, ["environmentId", "prUrl", "prState", "hasMergeConflicts"], "arguments");
+  register(setEnvironmentPrCommand, async (args, context) => {
     const environmentId = asString(args.environmentId, "environmentId");
     const prUrl = asString(args.prUrl, "prUrl");
     const prState = parsePrState(args.prState);
@@ -791,7 +824,7 @@ export function registerEnvironmentCommands(
     void context.runtime.prMonitor.sync(context).catch(() => undefined);
     return toClientEnvironment(updated);
   });
-  register("clear_environment_pr", async ({ environmentId }, context) => {
+  register(clearEnvironmentPrCommand, async ({ environmentId }, context) => {
     await context.storage.updateEnvironment(asString(environmentId, "environmentId"), {
       prUrl: null,
       prState: null,
@@ -801,11 +834,11 @@ export function registerEnvironmentCommands(
     void context.runtime.prMonitor.sync(context).catch(() => undefined);
   });
   register(
-    "get_environment_pr_url",
+    getEnvironmentPrUrlCommand,
     async ({ environmentId }, { storage }) =>
       (await storage.getEnvironment(asString(environmentId, "environmentId")))?.prUrl ?? null,
   );
-  register("override_environment_setup", async ({ environmentId }, context) => {
+  register(overrideEnvironmentSetupCommand, async ({ environmentId }, context) => {
     const id = asString(environmentId, "environmentId");
     const current = await context.storage.getEnvironment(id);
     if (!current) throw new Error(`Environment not found: ${id}`);
@@ -825,7 +858,7 @@ export function registerEnvironmentCommands(
       });
       environment = (await context.storage.getEnvironment(environment.id)) ?? environment;
     }
-    context.emit("environment-setup-complete", {
+    context.emit(environmentSetupCompleteEvent, {
       environment_id: id,
       success: true,
       overridden: true,
@@ -837,13 +870,13 @@ export function registerEnvironmentCommands(
   // agent: no Control MCP tool or public action names them, coordinators are
   // denied them outright, and the node-link-only and command-node-only ones
   // are classified in `nodes/node-routing.ts`.
-  register("get_environment_setup_approval", async ({ environmentId }, context) => {
+  register(getEnvironmentSetupApprovalCommand, async ({ environmentId }, context) => {
     const id = asString(environmentId, "environmentId");
     const environment = await context.storage.getEnvironment(id);
     if (!environment) throw new Error(`Environment not found: ${id}`);
     return describeEnvironmentSetupApproval(environment, context);
   });
-  register("approve_environment_setup", async ({ environmentId, hash, remember }, context) => {
+  register(approveEnvironmentSetupCommand, async ({ environmentId, hash, remember }, context) => {
     const id = asString(environmentId, "environmentId");
     const approvedHash = asString(hash, "hash");
     const environment = await context.storage.getEnvironment(id);
@@ -864,18 +897,18 @@ export function registerEnvironmentCommands(
   });
   // Node link only: the command node's "approve on every machine" writes each
   // node's own record through this.
-  register("approve_project_setup_commands", async ({ projectId, hash }, context) => {
+  register(approveProjectSetupCommandsCommand, async ({ projectId, hash }, context) => {
     const id = asString(projectId, "projectId");
     if (!(await context.storage.getProject(id))) throw new Error(`Project not found: ${id}`);
     context.storage.setupApprovals.approveSetupCommands(id, asString(hash, "hash"));
     return { approved: true };
   });
-  register("run_environment_setup", async ({ environmentId }, context) => {
+  register(runEnvironmentSetupCommand, async ({ environmentId }, context) => {
     return toClientEnvironment(
       await runEnvironmentSetupNow(asString(environmentId, "environmentId"), context),
     );
   });
-  register("ensure_environment_setup", async ({ environmentId }, context) => {
+  register(ensureEnvironmentSetupCommand, async ({ environmentId }, context) => {
     const environment = await context.storage.getEnvironment(
       asString(environmentId, "environmentId"),
     );
@@ -934,7 +967,7 @@ export function registerEnvironmentCommands(
     });
     return payload;
   };
-  register("await_environment_setup_session", async ({ environmentId, timeoutMs }, context) => {
+  register(awaitEnvironmentSetupSessionCommand, async ({ environmentId, timeoutMs }, context) => {
     const id = asString(environmentId, "environmentId");
     const timeout = timeoutMs === undefined ? 0 : asNumber(timeoutMs, "timeoutMs");
     if (!Number.isSafeInteger(timeout) || timeout < 0 || timeout > 60_000) {
@@ -955,7 +988,7 @@ export function registerEnvironmentCommands(
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
   });
-  register("update_port_mappings", ({ environmentId, portMappings }, { storage }) =>
+  register(updatePortMappingsCommand, ({ environmentId, portMappings }, { storage }) =>
     storage
       .updateEnvironment(asString(environmentId, "environmentId"), {
         portMappings: asPortMappings(portMappings) ?? [],
@@ -963,7 +996,7 @@ export function registerEnvironmentCommands(
       .then(toClientEnvironment),
   );
   register(
-    "update_environment_agent_settings",
+    updateEnvironmentAgentSettingsCommand,
     async (
       {
         environmentId,
@@ -1047,7 +1080,7 @@ export function registerEnvironmentCommands(
       return toClientEnvironment(await storage.updateEnvironment(id, updates));
     },
   );
-  register("set_environment_pending_agent_launch", ({ environmentId, pending }, { storage }) => {
+  register(setEnvironmentPendingAgentLaunchCommand, ({ environmentId, pending }, { storage }) => {
     const nextPending = asRequiredBoolean(pending, "pending");
     return storage
       .updateEnvironment(asString(environmentId, "environmentId"), {
@@ -1056,7 +1089,7 @@ export function registerEnvironmentCommands(
       .then(toClientEnvironment);
   });
   register(
-    "acknowledge_startup_agent_session",
+    acknowledgeStartupAgentSessionCommand,
     ({ environmentId, providerSessionId, startedAt }, { storage }) =>
       storage
         .acknowledgeStartupAgentSession(
@@ -1073,7 +1106,7 @@ export function registerEnvironmentCommands(
   // rewritten text is what lets a post-eviction launch recover a prompt whose
   // attachment references still resolve.
   register(
-    "set_environment_initial_prompt",
+    setEnvironmentInitialPromptCommand,
     ({ environmentId, initialPrompt, initialPromptAttachments }, { storage }) =>
       storage
         .updateEnvironment(asString(environmentId, "environmentId"), {
@@ -1082,7 +1115,7 @@ export function registerEnvironmentCommands(
         })
         .then(toClientEnvironment),
   );
-  register("get_environment_extensions", async ({ environmentId, refresh }, context) => {
+  register(getEnvironmentExtensionsCommand, async ({ environmentId, refresh }, context) => {
     const id = asString(environmentId, "environmentId");
     return extensionDiscoveryCache.get(
       id,
@@ -1099,7 +1132,7 @@ export function registerEnvironmentCommands(
   // reports whether the container enforces it yet.
   const applySaved = (environmentId: string, context: CommandContext) =>
     applyEnvironmentAllowedDomains(environmentId, context).catch(() => undefined);
-  register("update_environment_allowed_domains", async ({ environmentId, domains }, context) => {
+  register(updateEnvironmentAllowedDomainsCommand, async ({ environmentId, domains }, context) => {
     const id = asString(environmentId, "environmentId");
     const environment = await context.storage.updateEnvironment(id, {
       allowedDomains: asStringArray(domains),
@@ -1107,7 +1140,7 @@ export function registerEnvironmentCommands(
     await applySaved(id, context);
     return toClientEnvironment(environment);
   });
-  register("add_environment_domains", async ({ environmentId, domains }, context) => {
+  register(addEnvironmentDomainsCommand, async ({ environmentId, domains }, context) => {
     const environment = await context.storage.getEnvironment(
       asString(environmentId, "environmentId"),
     );
@@ -1119,7 +1152,7 @@ export function registerEnvironmentCommands(
     await applySaved(environment.id, context);
     return updated.join(",");
   });
-  register("remove_environment_domains", async ({ environmentId, domains }, context) => {
+  register(removeEnvironmentDomainsCommand, async ({ environmentId, domains }, context) => {
     const environment = await context.storage.getEnvironment(
       asString(environmentId, "environmentId"),
     );

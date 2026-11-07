@@ -2,10 +2,12 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, render } from "@testing-library/react";
 import { useLayoutEffect } from "react";
 import { SIDEBAR_WIDTH_TRANSITION_MS, type SidebarPanelMode } from "@/lib/sidebar-width";
-import { useUIStore } from "@/stores/uiStore";
+import { uiStore } from "@/stores/uiStore";
+import { useUIChromeStore } from "@/stores/uiChromeStore";
 import { useSidebarPanelMotion } from "./useSidebarPanelMotion";
+import { appCommandStore } from "@/test/app-command-store";
 
-const initialUI = useUIStore.getState();
+const initialUI = appCommandStore(uiStore).getState();
 
 type Motion = ReturnType<typeof useSidebarPanelMotion>;
 
@@ -78,12 +80,12 @@ beforeEach(() => {
   panelSizeError = null;
   resizeError = null;
   resize.mockClear();
-  useUIStore.setState({ sidebarWidth: 280 });
+  useUIChromeStore.setState({ sidebarWidth: 280 });
 });
 
 afterEach(() => {
   cleanup();
-  useUIStore.setState(initialUI, true);
+  appCommandStore(uiStore).setState(initialUI, true);
 });
 
 describe("animating a width change", () => {
@@ -246,18 +248,18 @@ describe("restoring the width", () => {
     const props = { sidebar: element(344), main: element(900) };
     const { rerender } = render(<Harness mode="full" {...props} />);
     rerender(<Harness mode="compact" {...props} />);
-    expect(useUIStore.getState().sidebarWidth).toBe(344);
+    expect(useUIChromeStore.getState().sidebarWidth).toBe(344);
     await settle();
 
     panelWidth = 56;
     rerender(<Harness mode="full" {...props} />);
     await nextFrame();
     expect(resize).toHaveBeenCalledWith("344px");
-    expect(useUIStore.getState().sidebarWidth).toBe(344);
+    expect(useUIChromeStore.getState().sidebarWidth).toBe(344);
   });
 
   test("a sidebar reloaded in compact returns to the stored width", async () => {
-    useUIStore.setState({ sidebarWidth: 312 });
+    useUIChromeStore.setState({ sidebarWidth: 312 });
     panelWidth = 56;
     const props = { sidebar: element(56), main: element(900) };
     const { rerender } = render(<Harness mode="compact" {...props} />);
@@ -277,7 +279,7 @@ describe("restoring the width", () => {
   });
 
   test("a panel not yet registered with its group keeps the remembered width", async () => {
-    useUIStore.setState({ sidebarWidth: 312 });
+    useUIChromeStore.setState({ sidebarWidth: 312 });
     panelWidth = Number.NaN;
     const props = { sidebar: element(344), main: element(900) };
     const { rerender } = render(<Harness mode="full" {...props} />);
@@ -285,19 +287,19 @@ describe("restoring the width", () => {
     panelSizeError = new Error("Group not found");
     resizeError = new Error("Group not found");
     rerender(<Harness mode="compact" {...props} />);
-    expect(useUIStore.getState().sidebarWidth).toBe(312);
+    expect(useUIChromeStore.getState().sidebarWidth).toBe(312);
     rerender(<Harness mode="full" {...props} />);
     await nextFrame();
     expect(motion.contentShown).toBe(true);
   });
 
   test("moving between compact and hidden leaves the remembered width alone", () => {
-    useUIStore.setState({ sidebarWidth: 312 });
+    useUIChromeStore.setState({ sidebarWidth: 312 });
     panelWidth = 56;
     const props = { sidebar: element(56), main: element(900) };
     const { rerender } = render(<Harness mode="compact" {...props} />);
     rerender(<Harness mode="hidden" {...props} />);
-    expect(useUIStore.getState().sidebarWidth).toBe(312);
+    expect(useUIChromeStore.getState().sidebarWidth).toBe(312);
     expect(resize).not.toHaveBeenCalled();
   });
 });
@@ -310,6 +312,6 @@ for (const destination of ["compact", "hidden"] as const) {
     rerender(<Harness mode="full" {...props} />);
     panelWidth = 300;
     rerender(<Harness mode={destination} {...props} />);
-    expect(useUIStore.getState().sidebarWidth).toBe(344);
+    expect(useUIChromeStore.getState().sidebarWidth).toBe(344);
   });
 }

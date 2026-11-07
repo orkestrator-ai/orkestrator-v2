@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { useAnnotationUiTestBudget } from "@/test/web-annotation-harness";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { BROWSER_PREVIEW_CAPTURE_EVENT } from "@orkestrator/protocol/browser-preview";
 import {
   WEB_ANNOTATION_CAPACITY,
@@ -76,7 +77,7 @@ describe("annotation panel flows", () => {
   test("narrow layout: Add note shows the preview, and a capture returns to the notes", async () => {
     useContainerWidth(500);
     seedBrowserLayout({ open: true });
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     const notesTab = await screen.findByRole("tab", { name: "Notes" });
     expect(notesTab.getAttribute("aria-selected")).toBe("true");
     fireEvent.click(await screen.findByRole("button", { name: "Add note" }));
@@ -105,7 +106,7 @@ describe("annotation panel flows", () => {
   test("keyboard only: open a note from the list and return with Escape", async () => {
     backend.seed({ id: "annotation-k", title: "A very long title ".repeat(12).trim() });
     seedBrowserLayout({ open: true, filter: { scope: "all", state: "open" } });
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     const open = await screen.findByRole("button", { name: /Open note: A very long title/ });
     open.focus();
     fireEvent.click(open);
@@ -150,7 +151,7 @@ describe("annotation panel flows", () => {
     });
     backend.overrides.set("web_annotation_archive", archive);
     seedBrowserLayout({ open: true, selectedAnnotationId: "annotation-full" });
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     const reply = await screen.findByRole("textbox", { name: "Reply to Full thread" });
     fireEvent.change(reply, { target: { value: "One more thought" } });
     fireEvent.click(screen.getByRole("button", { name: "Save reply" }));
@@ -175,7 +176,7 @@ describe("annotation panel flows", () => {
     });
     backend.seed({ id: "annotation-new", title: "New thread", continuedFromId: "annotation-old" });
     seedBrowserLayout({ open: true, selectedAnnotationId: "annotation-old" });
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     await screen.findByText(/read-only history/);
     expect(screen.queryByRole("textbox", { name: /Reply to/ }) === null).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Open the continued note" }));
@@ -203,7 +204,7 @@ describe("annotation panel flows", () => {
       resetRequired: false,
     }));
     seedBrowserLayout({ open: true, selectedAnnotationId: "annotation-long" });
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     await screen.findByText("Comment number 11");
     expect(screen.queryByText("Comment number 1") === null).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Show older entries" }));
@@ -239,7 +240,7 @@ describe("annotation panel flows", () => {
     }));
     Object.assign(capture.api, { getPinResults });
     seedBrowserLayout({ open: true });
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     await waitFor(() => expect(capture.mocks.showPins).toHaveBeenCalled());
     const pinsCall = capture.mocks.showPins.mock.calls.at(-1)![0] as {
       pins: Array<{ capture?: { viewport: unknown } }>;
@@ -278,7 +279,7 @@ describe("annotation panel flows", () => {
         },
       }))) as never);
     seedBrowserLayout({ open: true });
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     expect(await screen.findByText(/too large to search in time/)).toBeTruthy();
     // A navigation: main reports document 5, and a reply still resolved
     // against document 4 arrives afterwards. It describes the page that was
@@ -323,7 +324,7 @@ describe("annotation panel flows", () => {
       Object.assign(capture.api, { getPinResults });
       if (reply === "showPins") capture.mocks.showPins.mockImplementationOnce(() => old as never);
       seedBrowserLayout({ open: true });
-      render(<AnnotationHarness />);
+      renderInAppCommandScope(<AnnotationHarness />);
       await waitFor(() => expect(capture.mocks.showPins).toHaveBeenCalled());
       if (reply === "getPinResults") {
         getPinResults.mockImplementationOnce(() => old as never);
@@ -374,7 +375,7 @@ describe("annotation panel flows", () => {
     }));
     Object.assign(capture.api, { showOnPage });
     seedBrowserLayout({ open: true, selectedAnnotationId: "annotation-show" });
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     fireEvent.click(await screen.findByRole("button", { name: "Show “Show me” on the page" }));
     expect((await screen.findAllByText(/did not finish loading in time/)).length).toBeGreaterThan(
       0,
@@ -386,7 +387,7 @@ describe("annotation panel flows", () => {
 
   test("an environment switch while a save is in flight keeps the draft and commits once", async () => {
     seedBrowserLayout({ open: true });
-    const view = render(<AnnotationHarness />);
+    const view = renderInAppCommandScope(<AnnotationHarness />);
     fireEvent.click(await screen.findByRole("button", { name: "Add note" }));
     await waitFor(() => expect(capture.mocks.startCapture).toHaveBeenCalled());
     capture.complete();
@@ -406,7 +407,7 @@ describe("annotation panel flows", () => {
     await flush();
     // Returning finds the committed note and clears the local copy once.
     seedBrowserLayout({ open: true, filter: { scope: "all", state: "open" } });
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     await screen.findByRole("button", { name: /Open note/ });
     await waitFor(() => expect(capture.spool.size).toBe(0));
     expect(backend.callsOf("web_annotation_create")).toHaveLength(1);

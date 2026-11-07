@@ -1,3 +1,4 @@
+import { eventSink } from "../backend-emit.js";
 import { afterEach, describe, expect, jest, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import os from "node:os";
@@ -150,7 +151,7 @@ async function network() {
     summaries,
     invokerFor,
     transfer: new NodeFileTransfer({ invokerFor }),
-    emit: (event, payload) => events.push({ event, payload }),
+    emit: eventSink((event, payload) => events.push({ event, payload })),
     sleep: () => new Promise((resolve) => setTimeout(resolve, 10)),
   });
   // The source project on A, with files Git does not carry.

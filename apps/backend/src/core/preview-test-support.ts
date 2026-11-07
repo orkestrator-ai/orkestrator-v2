@@ -3,6 +3,7 @@
  * directory and a scriptable Docker runner that answers `docker inspect` the
  * way the resolver asks.
  */
+import { eventSink } from "./backend-emit.js";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -96,7 +97,7 @@ export async function createPreviewHarness(
   const newRuntime = (overrides: Partial<ConstructorParameters<typeof PreviewRuntime>[0]> = {}) => {
     const runtime = new PreviewRuntime({
       storage,
-      emit: (event, payload) => events.push({ event, payload }),
+      emit: eventSink((event, payload) => events.push({ event, payload })),
       runDocker: docker.runner,
       env: {},
       probeFamily: async () => false,

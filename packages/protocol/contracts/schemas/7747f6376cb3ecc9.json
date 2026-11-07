@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:7747f6376cb3ecc94f4ff511397dc61b2d9df9b0c52334c6065b91af5456bb50",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "containerIds": {},
+        "networkNames": {},
+        "selectionToken": {
+          "type": "string"
+        },
+        "volumeNames": {}
+      },
+      "required": ["selectionToken"],
+      "type": "object"
+    }
+  }
+}

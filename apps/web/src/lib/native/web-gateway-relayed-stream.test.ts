@@ -2,7 +2,6 @@ import { afterEach, expect, mock, test } from "bun:test";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import { relayedNodeEventName } from "@orkestrator/protocol/node-events";
 import { createBrowserGatewayApi } from "./web-gateway";
-import { clearDirectGatewayTransport } from "./gateway-auth-transport";
 
 const LEAF = relayedNodeEventName("bk_leaf" as BackendId);
 const OTHER = relayedNodeEventName("bk_other" as BackendId);
@@ -12,7 +11,6 @@ const originalEventSource = globalThis.EventSource;
 afterEach(() => {
   globalThis.fetch = originalFetch;
   globalThis.EventSource = originalEventSource;
-  clearDirectGatewayTransport();
 });
 
 async function flush() {

@@ -1666,14 +1666,16 @@ describe("bridge readiness command", () => {
             timeoutMs: 999,
           }),
         ).rejects.toThrow("between 1000 and 120000");
+        // An unknown key is dropped (7009, tolerant arguments): the declared
+        // ones are still checked.
         await expect(
           invoke("await_bridge_ready", {
             environmentId: "e1",
             agent: "codex",
-            timeoutMs: 1_000,
+            timeoutMs: 999,
             extra: true,
           }),
-        ).rejects.toThrow("Unexpected arguments field");
+        ).rejects.toThrow("between 1000 and 120000");
 
         commands.set("start_local_codex_server_cmd", async () => {
           await storage.updateEnvironment("e1", { status: "stopped" });
@@ -3798,14 +3800,17 @@ describe("native agent controller commands", () => {
 
   test("maps native session and dispatch arguments to the backend authority", async () => {
     const ensureSession = mock(async (input: unknown) => ({
+      ...nativeSessionRecord(),
       operation: "ensure",
       input,
     }));
     const dispatchPrompt = mock(async (input: unknown) => ({
+      ...nativeSessionRecord(),
       operation: "dispatch",
       input,
     }));
     const adoptSession = mock(async (input: unknown) => ({
+      ...nativeSessionRecord(),
       operation: "adopt",
       input,
     }));
@@ -4065,7 +4070,7 @@ describe("native agent controller commands", () => {
   });
 
   test("rejects malformed dispatch images, attachments and schema", async () => {
-    const dispatchPrompt = mock(async () => ({ operation: "dispatch" }));
+    const dispatchPrompt = mock(async () => ({ ...nativeSessionRecord(), operation: "dispatch" }));
     const nativeAgents = { dispatchPrompt } as unknown as NonNullable<
       CommandContext["nativeAgents"]
     >;
@@ -4122,7 +4127,7 @@ describe("native agent controller commands", () => {
   });
 
   test("forwards an explicit dispatch mode and its per-prompt options", async () => {
-    const dispatchPrompt = mock(async () => ({ operation: "dispatch" }));
+    const dispatchPrompt = mock(async () => ({ ...nativeSessionRecord(), operation: "dispatch" }));
     const nativeAgents = { dispatchPrompt } as unknown as NonNullable<
       CommandContext["nativeAgents"]
     >;
@@ -6149,22 +6154,23 @@ describe("pr monitor commands", () => {
           },
           "Expected hasMergeConflicts to be a boolean or null",
         ],
-        [
-          {
-            environmentId: "e1",
-            prUrl: "https://github.com/acme/repo/pull/7",
-            prState: "open",
-            hasMergeConflicts: false,
-            extra: true,
-          },
-          "Unexpected arguments field: extra",
-        ],
       ] as const) {
         await expect(invoke("set_environment_pr", args)).rejects.toThrow(message);
         expect((await storage.getEnvironment("e1"))?.prRecheckAfterAgentCompletionArmedAt).toBe(
           armedAt,
         );
       }
+      // A defined command drops an unknown key (plan item 7003, §11.4) instead
+      // of refusing the call; the open, conflict-free PR then clears the arm.
+      await expect(
+        invoke("set_environment_pr", {
+          environmentId: "e1",
+          prUrl: "https://github.com/acme/repo/pull/7",
+          prState: "open",
+          hasMergeConflicts: false,
+          extra: true,
+        }),
+      ).resolves.not.toHaveProperty("extra");
     });
   });
 
@@ -6239,26 +6245,30 @@ describe("pr monitor commands", () => {
           armedAt: 123,
         }),
       ).rejects.toThrow("Expected armedAt to be a string");
-      await expect(
-        invoke("disarm_pr_refresh_after_agent_completion", {
-          environmentId: "e1",
-          armedAt: second,
-          extra: true,
-        }),
-      ).rejects.toThrow("Unexpected arguments field: extra");
-      await expect(
-        invoke("arm_pr_refresh_after_agent_completion", {
-          environmentId: "e1",
-          extra: true,
-        }),
-      ).rejects.toThrow("Unexpected arguments field: extra");
+      // An unknown key is dropped (7006, tolerant arguments): each call is
+      // the same as without it. The arm takes a fresh token, a disarm with the
+      // superseded one leaves it, and a disarm with the current one clears it.
+      const third = (await invoke("arm_pr_refresh_after_agent_completion", {
+        environmentId: "e1",
+        extra: true,
+      })) as string;
+      expect(third).not.toBe(second);
       expect((await storage.getEnvironment("e1"))?.prRecheckAfterAgentCompletionArmedAt).toBe(
-        second,
+        third,
+      );
+      await invoke("disarm_pr_refresh_after_agent_completion", {
+        environmentId: "e1",
+        armedAt: second,
+        extra: true,
+      });
+      expect((await storage.getEnvironment("e1"))?.prRecheckAfterAgentCompletionArmedAt).toBe(
+        third,
       );
 
       await invoke("disarm_pr_refresh_after_agent_completion", {
         environmentId: "e1",
-        armedAt: second,
+        armedAt: third,
+        extra: true,
       });
       expect(
         (await storage.getEnvironment("e1"))?.prRecheckAfterAgentCompletionArmedAt,
@@ -6554,3 +6564,23 @@ describe("pr monitor commands", () => {
     });
   });
 });
+
+/**
+ * A complete native agent session record, as the session service answers:
+ * the `native-sessions` result schema is the model (plan item 7010), so a
+ * fake's answer carries every field the storage always writes.
+ */
+function nativeSessionRecord() {
+  return {
+    version: 1,
+    key: "e1:codex:tab-1",
+    environmentId: "e1",
+    agent: "codex",
+    logicalSessionKey: "tab-1",
+    providerSessionId: "provider-1",
+    origin: "interactive-native",
+    interactionPolicy: { version: 1, mode: "interactive" },
+    createdAt: "2026-11-07T00:00:00.000Z",
+    updatedAt: "2026-11-07T00:00:00.000Z",
+  };
+}

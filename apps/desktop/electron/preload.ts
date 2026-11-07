@@ -2,7 +2,6 @@ import { contextBridge, ipcRenderer } from "electron";
 import {
   exposeActiveConnectionGateway,
   exposeDesktopApi,
-  exposePortal,
   type OrkestratorElectronApi,
 } from "./preload-api.js";
 import { applyDesktopTitleBarInset } from "./title-bar-inset.js";
@@ -10,8 +9,6 @@ import { applyDesktopTitleBarInset } from "./title-bar-inset.js";
 exposeDesktopApi(contextBridge, ipcRenderer);
 
 exposeActiveConnectionGateway(contextBridge, ipcRenderer);
-
-exposePortal(contextBridge, ipcRenderer);
 
 function applyHostTitleBarInset(platform: NodeJS.Platform = process.platform): void {
   const apply = () => applyDesktopTitleBarInset(document.documentElement, platform);

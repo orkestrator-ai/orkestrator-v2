@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { useEnvironmentStore } from "@/stores/environmentStore";
-import { useProjectStore } from "@/stores/projectStore";
+import { environmentStore } from "@/stores/environmentStore";
+import { projectStore } from "@/stores/projectStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
-import { useUIStore } from "@/stores/uiStore";
+import { uiStore } from "@/stores/uiStore";
 import type { Environment, Project } from "@/types";
 import {
   __testing,
@@ -10,6 +10,7 @@ import {
   requestDesktopNotificationPermission,
   showQuestionDesktopNotification,
 } from "./question-desktop-notification";
+import { appCommandStore } from "@/test/app-command-store";
 
 interface Shown {
   title: string;
@@ -58,18 +59,20 @@ beforeEach(() => {
   FakeNotification.permission = "granted";
   __testing.reset();
   Object.defineProperty(window, "Notification", { configurable: true, value: FakeNotification });
-  useEnvironmentStore.setState({
+  appCommandStore(environmentStore).setState({
     environments: [{ id: "env-1", projectId: "project-1", name: "fix-login" } as Environment],
   });
-  useProjectStore.setState({ projects: [{ id: "project-1", name: "webapp" } as Project] });
-  useUIStore.setState({ selectedEnvironmentId: null, selectedProjectId: null });
+  appCommandStore(projectStore).setState({
+    projects: [{ id: "project-1", name: "webapp" } as Project],
+  });
+  appCommandStore(uiStore).setState({ selectedEnvironmentId: null, selectedProjectId: null });
 });
 
 afterEach(() => {
   if (descriptor) Object.defineProperty(window, "Notification", descriptor);
   else delete (window as unknown as { Notification?: unknown }).Notification;
-  useEnvironmentStore.setState({ environments: [] });
-  useProjectStore.setState({ projects: [] });
+  appCommandStore(environmentStore).setState({ environments: [] });
+  appCommandStore(projectStore).setState({ projects: [] });
 });
 
 describe("question desktop notifications", () => {
@@ -117,14 +120,14 @@ describe("question desktop notifications", () => {
     expect(__testing.openNotifications()).toBe(1);
     shown[0]!.listeners.get("click")!();
     expect(useRemoteWorkspaceStore.getState().active).toBeNull();
-    expect(useUIStore.getState().selectedProjectId).toBe("project-1");
-    expect(useUIStore.getState().selectedEnvironmentId).toBe("env-1");
+    expect(appCommandStore(uiStore).getState().selectedProjectId).toBe("project-1");
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("env-1");
     expect(shown[0]!.closed).toBe(true);
     expect(__testing.openNotifications()).toBe(0);
   });
 
   test("opens Project home from a coordinator tab", () => {
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [
         {
           id: "env-1",
@@ -134,11 +137,11 @@ describe("question desktop notifications", () => {
         } as Environment,
       ],
     });
-    useUIStore.setState({ projectBoardTab: "coordinator" });
+    appCommandStore(uiStore).setState({ projectBoardTab: "coordinator" });
     showQuestionDesktopNotification(question);
     shown[0]!.listeners.get("click")!();
-    expect(useUIStore.getState().projectBoardTab).toBe("home");
-    expect(useUIStore.getState().selectedEnvironmentId).toBe("env-1");
+    expect(appCommandStore(uiStore).getState().projectBoardTab).toBe("home");
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("env-1");
   });
 
   test("keeps a bounded number of notifications reachable", () => {

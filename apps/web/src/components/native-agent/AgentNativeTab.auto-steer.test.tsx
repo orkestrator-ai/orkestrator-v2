@@ -6,7 +6,8 @@
  * queued and then steered out of the queue; with it off, it only queues.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type {
   NativeAgentSessionActionOutcome,
   NativeAgentSessionProjection,
@@ -18,17 +19,18 @@ import * as realAgentHandoff from "@/hooks/useAgentHandoff";
 import * as realBackend from "@/lib/backend";
 import * as realPaneLayoutPersistence from "@/lib/pane-layout-persistence";
 import * as realNativeComposeBarPaste from "@/hooks/useNativeComposeBarPaste";
-import { useEnvironmentStore } from "@/stores/environmentStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
-import { useNativeComposeStore } from "@/stores/nativeComposeStore";
-import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
-import { useConfigStore } from "@/stores/configStore";
+import { environmentStore } from "@/stores/environmentStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
+import { nativeComposeStore } from "@/stores/nativeComposeStore";
+import { nativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
+import { configStore } from "@/stores/configStore";
 import { createSessionKey } from "@/lib/utils";
 import {
   mockToastInfo,
   mockToastSuccess,
   resetSonnerMocks,
 } from "../../../../../tests/mocks/sonner";
+import { appCommandStore } from "@/test/app-command-store";
 
 const realHandoffSnapshot = { ...realAgentHandoff };
 const emptyMessages: NativeMessage[] = [];
@@ -91,7 +93,7 @@ function projectionFor(agent: AgentPlatform): NativeAgentSessionProjection<Nativ
   } as NativeAgentSessionProjection<NativeMessage>;
 }
 
-const configSnapshot = useConfigStore.getState().config;
+const configSnapshot = appCommandStore(configStore).getState().config;
 
 const getNativeAgentProjectionMock = mock(async (input: { agent: AgentPlatform }) => {
   if (refreshError && steerNativeAgentQueuedPromptMock.mock.calls.length)
@@ -182,16 +184,19 @@ function identity(platform: NativeAgentTabData["platform"]): NativeAgentTabData 
 }
 
 function draftText(tabId: string) {
-  return useNativeComposeStore.getState().drafts.get(createSessionKey("env-1", tabId))?.text;
+  return appCommandStore(nativeComposeStore).getState().drafts.get(createSessionKey("env-1", tabId))
+    ?.text;
 }
 
 function setAutoSteer(autoSteer: boolean) {
-  useConfigStore.getState().updateGlobalConfig({ autoSteer });
+  appCommandStore(configStore).getState().updateGlobalConfig({ autoSteer });
 }
 
 async function sendWhileRunning(tabId: string, text: string) {
-  useNativeComposeStore.getState().updateDraft(createSessionKey("env-1", tabId), { text });
-  render(<AgentNativeTab tabId={tabId} data={identity("cursor")} isActive />);
+  appCommandStore(nativeComposeStore)
+    .getState()
+    .updateDraft(createSessionKey("env-1", tabId), { text });
+  renderInAppCommandScope(<AgentNativeTab tabId={tabId} data={identity("cursor")} isActive />);
   const input = await screen.findByRole("textbox");
   await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
   await act(async () => {
@@ -218,7 +223,7 @@ function enqueuedText(): string {
 }
 
 beforeEach(() => {
-  useEnvironmentStore.setState({
+  appCommandStore(environmentStore).setState({
     environments: [
       {
         id: "env-1",
@@ -239,20 +244,20 @@ afterEach(() => {
   steerOutcome = { outcome: "applied" };
   providerSteers = true;
   resetSonnerMocks();
-  useConfigStore.getState().setConfig(configSnapshot);
+  appCommandStore(configStore).getState().setConfig(configSnapshot);
   steerNativeAgentQueuedPromptMock.mockClear();
   getNativeAgentProjectionMock.mockClear();
   dispatchNativeAgentIntentMock.mockClear();
   enqueuePromptQueueMessageMock.mockClear();
   performNativeAgentSessionActionMock.mockClear();
-  useEnvironmentStore.setState({ environments: [] });
-  usePaneLayoutStore.setState({
+  appCommandStore(environmentStore).setState({ environments: [] });
+  appCommandStore(paneLayoutStore).setState({
     environments: new Map(),
     hydration: new Map(),
     activeEnvironmentId: null,
   });
-  useNativeComposeStore.setState({ drafts: new Map() });
-  useNativeAgentProjectionStore.getState().reset();
+  appCommandStore(nativeComposeStore).setState({ drafts: new Map() });
+  appCommandStore(nativeAgentProjectionStore).getState().reset();
 });
 
 describe("AgentNativeTab auto-steer", () => {
@@ -345,7 +350,7 @@ for (const outcome of ["thrown", "unknown", "null", "refresh-failed"] as const) 
     refreshError = false;
     const input = screen.getByRole("textbox");
     await act(async () => {
-      useNativeComposeStore
+      appCommandStore(nativeComposeStore)
         .getState()
         .updateDraft(createSessionKey("env-1", tabId), { text: "a separate follow-up" });
     });
@@ -368,10 +373,12 @@ test.each(["$deploy now", "/review changes"])(
   "command %s does not promise auto-steering",
   async (text) => {
     setAutoSteer(true);
-    useNativeComposeStore
+    appCommandStore(nativeComposeStore)
       .getState()
       .updateDraft(createSessionKey("env-1", "tab-command"), { text });
-    render(<AgentNativeTab tabId="tab-command" data={identity("cursor")} isActive />);
+    renderInAppCommandScope(
+      <AgentNativeTab tabId="tab-command" data={identity("cursor")} isActive />,
+    );
     await screen.findByRole("textbox");
     await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
     await act(async () => {
@@ -390,9 +397,13 @@ test.each(["$deploy now", "/review changes"])(
 test("attachments only queue", async () => {
   setAutoSteer(true);
   const tabId = "tab-attachment";
-  useNativeComposeStore.getState().updateDraft(createSessionKey("env-1", tabId), {
-    attachments: [{ id: "file-1", type: "image", path: "/workspace/image.png", name: "image.png" }],
-  });
+  appCommandStore(nativeComposeStore)
+    .getState()
+    .updateDraft(createSessionKey("env-1", tabId), {
+      attachments: [
+        { id: "file-1", type: "image", path: "/workspace/image.png", name: "image.png" },
+      ],
+    });
   await sendWhileRunning(tabId, "read this file");
   await waitFor(() => expect(draftText(tabId) ?? "").toBe(""));
   expect(steerNativeAgentQueuedPromptMock).not.toHaveBeenCalled();
@@ -401,7 +412,7 @@ test("attachments only queue", async () => {
 
 test("a prepared initial prompt waits for idle without auto-steering", async () => {
   setAutoSteer(true);
-  render(
+  renderInAppCommandScope(
     <AgentNativeTab
       tabId="tab-prepared"
       data={identity("cursor")}
@@ -426,17 +437,21 @@ test("an unknown auto-steer rehydrates backend recovery without restoring or res
   await sendWhileRunning(tabId, "also update the docs");
   await waitFor(() => expect(draftText(tabId) ?? "").toBe(""));
   const sessionKey = createSessionKey("env-1", tabId);
-  const current = useNativeAgentProjectionStore.getState().projections.get(sessionKey)!;
+  const current = appCommandStore(nativeAgentProjectionStore)
+    .getState()
+    .projections.get(sessionKey)!;
   await act(async () => {
-    useNativeAgentProjectionStore.getState().setProjection(sessionKey, {
-      ...current,
-      revision: current.revision + 1,
-      recoverableDispatch: {
-        requestId: "steer-1",
-        kind: "steer",
-        createdAt: "2026-11-03T12:00:00Z",
-      },
-    });
+    appCommandStore(nativeAgentProjectionStore)
+      .getState()
+      .setProjection(sessionKey, {
+        ...current,
+        revision: current.revision + 1,
+        recoverableDispatch: {
+          requestId: "steer-1",
+          kind: "steer",
+          createdAt: "2026-11-03T12:00:00Z",
+        },
+      });
   });
   expect(await screen.findByRole("button", { name: "Retry steer" })).toBeTruthy();
   expect(screen.getByRole("button", { name: "Discard" })).toBeTruthy();

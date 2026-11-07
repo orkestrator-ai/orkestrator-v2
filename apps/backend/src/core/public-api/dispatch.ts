@@ -1,4 +1,6 @@
-import { relayController } from "./relay-context.js";
+import { unknownCommand } from "@orkestrator/protocol/contract/errors";
+import { publicActionCommand } from "@orkestrator/protocol/contract/domains/public-api";
+import { relayController, withRelayController } from "./relay-context.js";
 import {
   isPublicActionName,
   isPublicNamespace,
@@ -11,8 +13,12 @@ import {
   type PublicActionResponse,
   type PublicReceipt,
 } from "@orkestrator/protocol/public-api";
-import type { CommandContext } from "../commands-context.js";
-import type { CommandRegistrar, RegistryDependencies } from "../commands-registry-types.js";
+import type { CommandContext, CommandHandler, CommandInvocation } from "../commands-context.js";
+import type {
+  CommandRegistrar,
+  DefinedCommandOptions,
+  RegistryDependencies,
+} from "../commands-registry-types.js";
 import { boundedMessage, isPublicActionError, PublicActionError } from "./errors.js";
 import {
   intentFingerprint,
@@ -128,7 +134,7 @@ export function createPublicActionContext(
     now: () => Date.now(),
     invoke: async <T>(name: string, args: Record<string, unknown> = {}): Promise<T> => {
       const handler = dependencies.commands.get(name);
-      if (!handler) throw new Error(`Unknown backend command: ${name}`);
+      if (!handler) throw unknownCommand(name);
       return (await handler(args, command)) as T;
     },
   };
@@ -422,50 +428,105 @@ async function execute(
   return { ...response, receipt };
 }
 
+/** The in-process keys of one call, carried past argument decoding. */
+const IN_PROCESS_KEYS = Symbol("public-action.in-process-keys");
+
+type InProcessKeys = { readonly authority: unknown; readonly controller: unknown };
+type CarryingInvocation = CommandInvocation & { readonly [IN_PROCESS_KEYS]?: InProcessKeys };
+
+/**
+ * `public_action` is a defined command (`public-api` domain), and decoding
+ * builds a new arguments object, which drops symbol keys. The two the
+ * dispatcher reads (the in-process authority and the node link's
+ * authenticated controller, neither of which JSON can set) are moved onto the
+ * invocation before decoding and put back on the decoded arguments, so only
+ * backend code can still set them. A decode failure (only a critical field
+ * this version does not know) is a rejection, as the `async` handler's own
+ * failures are.
+ */
+const CARRY_IN_PROCESS_KEYS: DefinedCommandOptions = Object.freeze({
+  beforeDecode:
+    (run: CommandHandler): CommandHandler =>
+    (args, context, invocation) => {
+      const keys: InProcessKeys = {
+        authority: (args as { [PUBLIC_ACTION_AUTHORITY]?: unknown })[PUBLIC_ACTION_AUTHORITY],
+        controller: relayController(args),
+      };
+      const carried: CarryingInvocation = { ...invocation, [IN_PROCESS_KEYS]: keys };
+      try {
+        return run(args, context, carried);
+      } catch (error) {
+        return Promise.reject(error);
+      }
+    },
+});
+
+function withInProcessKeys(
+  args: Record<string, unknown>,
+  invocation: CommandInvocation | undefined,
+): Record<string, unknown> {
+  const keys = (invocation as CarryingInvocation | undefined)?.[IN_PROCESS_KEYS];
+  let restored = args;
+  if (keys?.authority !== undefined) {
+    restored = Object.assign({ ...restored }, { [PUBLIC_ACTION_AUTHORITY]: keys.authority });
+  }
+  if (keys?.controller !== undefined) {
+    restored = withRelayController(restored, keys.controller as string);
+  }
+  return restored;
+}
+
 export function registerPublicActionCommand(
   register: CommandRegistrar,
   dependencies: RegistryDependencies,
   table: PublicHandlerTable,
 ): void {
-  register("public_action", async (args, command) => {
-    const identity = await command.storage.previewServices.getPreviewBackendIdentity();
-    const backend = {
-      installationId: identity.instanceId,
-      generation: command.storage.getResourceGeneration(),
-    };
-    let authority = authorityOf(args);
-    // Backend-owned completion and restart recovery of admitted work, which
-    // belongs to no single caller and so always runs as the operator.
-    ensureReconciler(createPublicActionContext(command, dependencies, backend));
-    const actionName = typeof args.action === "string" ? args.action.slice(0, 100) : "unknown";
-    // A command node routing for one of its Control MCP credentials: the
-    // operations are that credential's own here, never the operator's.
-    if (args.relayedAuthority !== undefined) {
-      try {
-        if (authority !== "operator") {
-          throw new PublicActionError("invalid-input", "relayedAuthority is invalid");
+  // Lenient keys (`public-api` domain): the dispatcher answers a malformed
+  // wrapper with its structured envelope, as before.
+  register(
+    publicActionCommand,
+    async (decoded, command, invocation) => {
+      const args = withInProcessKeys(decoded, invocation);
+      const identity = await command.storage.previewServices.getPreviewBackendIdentity();
+      const backend = {
+        installationId: identity.instanceId,
+        generation: command.storage.getResourceGeneration(),
+      };
+      let authority = authorityOf(args);
+      // Backend-owned completion and restart recovery of admitted work, which
+      // belongs to no single caller and so always runs as the operator.
+      ensureReconciler(createPublicActionContext(command, dependencies, backend));
+      const actionName = typeof args.action === "string" ? args.action.slice(0, 100) : "unknown";
+      // A command node routing for one of its Control MCP credentials: the
+      // operations are that credential's own here, never the operator's.
+      if (args.relayedAuthority !== undefined) {
+        try {
+          if (authority !== "operator") {
+            throw new PublicActionError("invalid-input", "relayedAuthority is invalid");
+          }
+          const claim = parseRelayedAuthorityClaim(
+            args.relayedAuthority,
+            command,
+            relayController(args),
+          );
+          if (claim) authority = relayedAuthority(claim.controllerId, claim.authority);
+        } catch (error) {
+          return withBackendIdentity(errorResponse(actionName, error), backend);
         }
-        const claim = parseRelayedAuthorityClaim(
-          args.relayedAuthority,
-          command,
-          relayController(args),
-        );
-        if (claim) authority = relayedAuthority(claim.controllerId, claim.authority);
-      } catch (error) {
-        return withBackendIdentity(errorResponse(actionName, error), backend);
       }
-    }
-    const { relayedAuthority: _relayed, ...request } = args;
-    const local = (raw: Record<string, unknown>) =>
-      dispatchPublicAction(
-        table,
-        raw,
-        createPublicActionContext(command, dependencies, backend, authority),
-      );
-    if (request.node !== undefined) {
-      const response = await dispatchToNode({ raw: request, command, authority, backend, local });
-      return withBackendIdentity(response, backend);
-    }
-    return local(request);
-  });
+      const { relayedAuthority: _relayed, ...request } = args;
+      const local = (raw: Record<string, unknown>) =>
+        dispatchPublicAction(
+          table,
+          raw,
+          createPublicActionContext(command, dependencies, backend, authority),
+        );
+      if (request.node !== undefined) {
+        const response = await dispatchToNode({ raw: request, command, authority, backend, local });
+        return withBackendIdentity(response, backend);
+      }
+      return local(request);
+    },
+    CARRY_IN_PROCESS_KEYS,
+  );
 }

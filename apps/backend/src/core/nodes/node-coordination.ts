@@ -1,3 +1,5 @@
+import { ticketSyncOutboxReadyEvent } from "@orkestrator/protocol/contract/domains/events";
+import type { BackendEmit } from "../backend-emit.js";
 import {
   AGENT_MAIL_MAX_THREAD_HOPS,
   normalizeAgentMessagingSettings,
@@ -14,7 +16,7 @@ import {
 import { parseAgentsMdChanges } from "@orkestrator/protocol/agents-md-orkestrator";
 import { isBackendId, type BackendId } from "@orkestrator/protocol/federation";
 import { repositoryHint } from "@orkestrator/protocol/node-summaries";
-import { isUnknownCommandError } from "@orkestrator/protocol/unknown-command";
+import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import type { CoordinatorNoticeRoute } from "@orkestrator/protocol/coordinator-notices";
 import { parseProjectHomeMessage } from "@orkestrator/protocol/project-home-message";
 import {
@@ -45,7 +47,6 @@ import { executeAgentAccountSwitch } from "./node-account-switch.js";
 import { NodeOutcomeUnknownError, NodeUnavailableError } from "./node-link.js";
 import { NodeMailCollector } from "./node-mail-collector.js";
 import { NodeTicketSync } from "./node-ticket-sync.js";
-import { TICKET_SYNC_OUTBOX_READY_EVENT } from "@orkestrator/protocol/ticket-sync";
 import {
   coordinatorContactKey,
   describeCommandCoordinatorMail,
@@ -326,7 +327,7 @@ export class NodeCoordination {
       portal: NodePortal;
       /** This backend's own commands (local deletions, coordinator lookup). */
       invoke: Invoke;
-      emit: (event: string, payload: unknown) => void;
+      emit: BackendEmit;
     },
   ) {
     const { storage, nodes, portal } = options;
@@ -444,7 +445,7 @@ export class NodeCoordination {
         .ticketSyncOutboxControllers()
         .then((controllers) => {
           for (const controllerId of controllers) {
-            options.emit(TICKET_SYNC_OUTBOX_READY_EVENT, { controllerId });
+            options.emit(ticketSyncOutboxReadyEvent, { controllerId });
           }
         })
         .catch(() => undefined);
@@ -1388,7 +1389,7 @@ export class NodeCoordination {
         if (error instanceof NodeOutcomeUnknownError) return lost;
         if (error instanceof NodeUnavailableError)
           throw new Error(`${target.nodeName} is not connected; nothing was sent.`);
-        if (isUnknownCommandError(error, "answer_controller_worker_question"))
+        if (incompatibility(error, "answer_controller_worker_question")?.code === "unknown-command")
           throw new Error(
             `${target.nodeName} runs an older Orkestrator that cannot relay answers; update it. Nothing was sent.`,
           );

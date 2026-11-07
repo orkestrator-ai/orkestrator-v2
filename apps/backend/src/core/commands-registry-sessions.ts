@@ -1,4 +1,31 @@
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
+import { withAsyncArgumentFailures } from "./commands-registry-async-args.js";
+import {
+  applyPaneLayoutIntentCommand,
+  cleanupOrphanedBuffersCommand,
+  createSessionCommand,
+  deletePaneLayoutCommand,
+  deleteSessionCommand,
+  deleteSessionsByEnvironmentCommand,
+  disconnectEnvironmentSessionsCommand,
+  getPaneLayoutCommand,
+  getSessionCommand,
+  getSessionsByEnvironmentCommand,
+  loadSessionBufferCommand,
+  openInBrowserCommand,
+  openInEditorCommand,
+  openLocalInEditorCommand,
+  renameSessionCommand,
+  reorderSessionsCommand,
+  revealInFileManagerCommand,
+  savePaneLayoutCommand,
+  saveSessionBufferCommand,
+  syncSessionsWithContainerCommand,
+  testDomainResolutionCommand,
+  updateSessionActivityCommand,
+  updateSessionStatusCommand,
+  validateDomainsCommand,
+} from "@orkestrator/protocol/contract/domains/native-sessions";
 import { allowlistEntryDomain, parseAllowlistEntry } from "@orkestrator/protocol/network-allowlist";
 import { paneLayoutUnsupportedVersionMessage } from "@orkestrator/protocol/pane-layout";
 import { PANE_LAYOUT_VERSION } from "./models.js";
@@ -17,17 +44,19 @@ import {
 } from "./commands-helpers.js";
 
 export function registerSessionCommands(
-  register: CommandRegistrar,
+  registerCommand: CommandRegistrar,
   dependencies: RegistryDependencies,
 ): void {
-  const { conditionalManifestSnapshot, commands } = dependencies;
-  register("open_in_browser", ({ url }) => {
+  // `async` handlers keep rejecting on bad arguments (`commands-registry-async-args.ts`).
+  const register = withAsyncArgumentFailures(registerCommand);
+  const { conditionalManifestSnapshot } = dependencies;
+  register(openInBrowserCommand, ({ url }) => {
     const target = asString(url, "url");
     const { command, args } = resolveBrowserOpenCommand(target);
     // A sign-in URL carries its OAuth state; a failed launch must not echo it.
     return runCommand(command, args, { redactValues: [target, ...args] }).then(() => undefined);
   });
-  register("reveal_in_file_manager", async ({ path: filePath }) => {
+  register(revealInFileManagerCommand, async ({ path: filePath }) => {
     const target = asString(filePath, "path");
     const commands = resolveFileManagerRevealCommands(target);
     try {
@@ -38,103 +67,72 @@ export function registerSessionCommands(
       await runCommand(fallback.command, fallback.args);
     }
   });
-  register("open_in_editor", ({ containerId, editor }) =>
+  register(openInEditorCommand, ({ containerId, editor }) =>
     runCommand(asString(editor, "editor") === "cursor" ? "cursor" : "code", [
       "--folder-uri",
       `vscode-remote://attached-container+${Buffer.from(asString(containerId, "containerId")).toString("hex")}/workspace`,
     ]).then(() => undefined),
   );
-  register("open_local_in_editor", ({ path: filePath, editor }) =>
+  register(openLocalInEditorCommand, ({ path: filePath, editor }) =>
     runCommand(asString(editor, "editor") === "cursor" ? "cursor" : "code", [
       asString(filePath, "path"),
     ]).then(() => undefined),
   );
 
-  register("test_domain_resolution", ({ domains }) =>
-    Promise.all(
-      asStringArray(domains).map(async (domain) => {
-        // Keep bare-host DNS diagnostics (including localhost), but never
-        // strip an invalid port and report the resulting host as valid.
-        const entry = parseAllowlistEntry(domain);
-        if (domain.includes(":") && !entry) {
-          return {
-            domain,
-            valid: false,
-            resolvable: false,
-            ips: [],
-            error: "Invalid domain or port",
-          };
-        }
-        try {
-          const dns = await import("node:dns/promises");
-          const ips = (
-            await dns.lookup(entry?.domain ?? allowlistEntryDomain(domain), { all: true })
-          ).map(({ address }) => address);
-          return { domain, valid: true, resolvable: true, ips, error: null };
-        } catch (error) {
-          return {
-            domain,
-            valid: true,
-            resolvable: false,
-            ips: [],
-            error: error instanceof Error ? error.message : String(error),
-          };
-        }
-      }),
-    ),
-  );
-  register("validate_domains", ({ domains }, context) =>
-    commands.get("test_domain_resolution")?.({ domains }, context),
-  );
+  register(testDomainResolutionCommand, ({ domains }) => resolveDomains(domains));
+  // The older name of the same check.
+  register(validateDomainsCommand, ({ domains }) => resolveDomains(domains));
 
-  register("create_session", ({ environmentId, containerId, tabId, sessionType }, { storage }) =>
-    storage.createSession(
-      asString(environmentId, "environmentId"),
-      asString(containerId, "containerId"),
-      asString(tabId, "tabId"),
-      asString(sessionType, "sessionType") as SessionType,
-    ),
+  register(
+    createSessionCommand,
+    ({ environmentId, containerId, tabId, sessionType }, { storage }) =>
+      storage.createSession(
+        asString(environmentId, "environmentId"),
+        asString(containerId, "containerId"),
+        asString(tabId, "tabId"),
+        asString(sessionType, "sessionType") as SessionType,
+      ),
   );
-  register("get_session", ({ sessionId }, { storage }) =>
+  register(getSessionCommand, ({ sessionId }, { storage }) =>
     storage.getSession(asString(sessionId, "sessionId")),
   );
-  register("get_sessions_by_environment", (args, { storage }) =>
+  register(getSessionsByEnvironmentCommand, (args, { storage }) =>
     conditionalManifestSnapshot(args, storage, "session", () =>
       storage.getSessionsByEnvironment(asString(args.environmentId, "environmentId")),
     ),
   );
-  register("update_session_status", ({ sessionId, status }, { storage }) =>
+  register(updateSessionStatusCommand, ({ sessionId, status }, { storage }) =>
     storage.updateSession(asString(sessionId, "sessionId"), {
       status: asString(status, "status") as SessionStatus,
     }),
   );
-  register("update_session_activity", ({ sessionId }, { storage }) =>
+  register(updateSessionActivityCommand, ({ sessionId }, { storage }) =>
     storage.updateSession(asString(sessionId, "sessionId"), {
       lastActivityAt: new Date().toISOString(),
     }),
   );
-  register("delete_session", ({ sessionId }, { storage }) =>
+  register(deleteSessionCommand, ({ sessionId }, { storage }) =>
     storage.removeSession(asString(sessionId, "sessionId")),
   );
-  register("delete_sessions_by_environment", ({ environmentId }, { storage }) =>
+  register(deleteSessionsByEnvironmentCommand, ({ environmentId }, { storage }) =>
     storage.removeSessionsByEnvironment(asString(environmentId, "environmentId")),
   );
-  register("rename_session", ({ sessionId, name }, { storage }) =>
+  register(renameSessionCommand, ({ sessionId, name }, { storage }) =>
     storage.updateSession(asString(sessionId, "sessionId"), {
       name: typeof name === "string" ? name : undefined,
     }),
   );
-  register("disconnect_environment_sessions", ({ environmentId }, { storage }) =>
+  register(disconnectEnvironmentSessionsCommand, ({ environmentId }, { storage }) =>
     storage.disconnectEnvironmentSessions(asString(environmentId, "environmentId")),
   );
-  register("save_session_buffer", ({ sessionId, buffer }, { storage }) =>
+  register(saveSessionBufferCommand, ({ sessionId, buffer }, { storage }) =>
     storage.saveSessionBuffer(asString(sessionId, "sessionId"), asString(buffer, "buffer")),
   );
-  register("load_session_buffer", ({ sessionId }, { storage }) =>
+  register(loadSessionBufferCommand, ({ sessionId }, { storage }) =>
     storage.loadSessionBuffer(asString(sessionId, "sessionId")),
   );
   register(
-    "sync_sessions_with_container",
+    syncSessionsWithContainerCommand,
     async ({ environmentId, containerRunning }, { storage }) => {
       const sessions = await storage.getSessionsByEnvironment(
         asString(environmentId, "environmentId"),
@@ -145,41 +143,44 @@ export function registerSessionCommands(
       return sessions;
     },
   );
-  register("reorder_sessions", ({ environmentId, sessionIds }, { storage }) =>
+  register(reorderSessionsCommand, ({ environmentId, sessionIds }, { storage }) =>
     storage.reorderSessions(asString(environmentId, "environmentId"), asStringArray(sessionIds)),
   );
-  register("cleanup_orphaned_buffers", (_args, { storage }) => storage.cleanupOrphanedBuffers());
+  register(cleanupOrphanedBuffersCommand, (_args, { storage }) => storage.cleanupOrphanedBuffers());
 
-  register("get_pane_layout", (args, { storage }) =>
+  register(getPaneLayoutCommand, (args, { storage }) =>
     conditionalManifestSnapshot(args, storage, "pane-layout", () =>
       storage.getPaneLayout(asString(args.environmentId, "environmentId")),
     ),
   );
-  register("save_pane_layout", async ({ environmentId, layout, expectedRevision }, { storage }) => {
-    const envId = asString(environmentId, "environmentId");
-    const value = asRecord(layout, "layout");
-    const version = asNumber(value.version, "layout.version");
-    if (version !== PANE_LAYOUT_VERSION) {
-      throw new Error(paneLayoutUnsupportedVersionMessage(version));
-    }
-    const activePaneId = asString(value.activePaneId, "layout.activePaneId").trim();
-    if (!activePaneId) throw new Error("Expected layout.activePaneId to be non-empty");
-    const containerId =
-      value.containerId === null ? null : asString(value.containerId, "layout.containerId");
-    const root = asRecord(value.root, "layout.root");
-    return storage.savePaneLayout(
-      envId,
-      {
-        version,
-        containerId,
-        activePaneId,
-        root,
-      },
-      asNumber(expectedRevision, "expectedRevision"),
-    );
-  });
   register(
-    "apply_pane_layout_intent",
+    savePaneLayoutCommand,
+    async ({ environmentId, layout, expectedRevision }, { storage }) => {
+      const envId = asString(environmentId, "environmentId");
+      const value = asRecord(layout, "layout");
+      const version = asNumber(value.version, "layout.version");
+      if (version !== PANE_LAYOUT_VERSION) {
+        throw new Error(paneLayoutUnsupportedVersionMessage(version));
+      }
+      const activePaneId = asString(value.activePaneId, "layout.activePaneId").trim();
+      if (!activePaneId) throw new Error("Expected layout.activePaneId to be non-empty");
+      const containerId =
+        value.containerId === null ? null : asString(value.containerId, "layout.containerId");
+      const root = asRecord(value.root, "layout.root");
+      return storage.savePaneLayout(
+        envId,
+        {
+          version,
+          containerId,
+          activePaneId,
+          root,
+        },
+        asNumber(expectedRevision, "expectedRevision"),
+      );
+    },
+  );
+  register(
+    applyPaneLayoutIntentCommand,
     async ({ environmentId, baseLayout, desiredLayout, selectionIntent }, { storage }) => {
       const parseLayout = (raw: unknown, label: string) => {
         const value = asRecord(raw, label);
@@ -240,10 +241,45 @@ export function registerSessionCommands(
       );
     },
   );
-  register("delete_pane_layout", ({ environmentId, expectedRevision }, { storage }) => {
+  register(deletePaneLayoutCommand, ({ environmentId, expectedRevision }, { storage }) => {
     const envId = asString(environmentId, "environmentId");
     return expectedRevision === undefined
       ? storage.deletePaneLayout(envId)
       : storage.deletePaneLayout(envId, asNumber(expectedRevision, "expectedRevision"));
   });
+}
+
+/** Resolves allow-list domains on the host (`test_domain_resolution`, `validate_domains`). */
+function resolveDomains(domains: unknown) {
+  return Promise.all(
+    asStringArray(domains).map(async (domain) => {
+      // Keep bare-host DNS diagnostics (including localhost), but never
+      // strip an invalid port and report the resulting host as valid.
+      const entry = parseAllowlistEntry(domain);
+      if (domain.includes(":") && !entry) {
+        return {
+          domain,
+          valid: false,
+          resolvable: false,
+          ips: [],
+          error: "Invalid domain or port",
+        };
+      }
+      try {
+        const dns = await import("node:dns/promises");
+        const ips = (
+          await dns.lookup(entry?.domain ?? allowlistEntryDomain(domain), { all: true })
+        ).map(({ address }) => address);
+        return { domain, valid: true, resolvable: true, ips, error: null };
+      } catch (error) {
+        return {
+          domain,
+          valid: true,
+          resolvable: false,
+          ips: [],
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    }),
+  );
 }

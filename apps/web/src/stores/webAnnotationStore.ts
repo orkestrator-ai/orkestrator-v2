@@ -9,8 +9,15 @@
  *
  * Synchronization (subscriptions, reconciliation, stale-response discard)
  * lives in `lib/web-annotations/sync.ts`; this module only stores results.
+ *
+ * Per node (plan item 3012): environment ids are only unique on their node,
+ * so each node scope holds its own caches, and its object URLs are revoked
+ * when the scope is disposed.
  */
-import { create } from "zustand";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { appCommandScope } from "@/lib/node-scope-slots";
+import { defineScopedStore } from "@/lib/node-scope/scoped-store";
+import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
 import type {
   WebAnnotationCapabilities,
   WebAnnotationCapture,
@@ -226,7 +233,7 @@ function summaryFromThread(
   return { ...annotation, activeRequest };
 }
 
-interface WebAnnotationStoreState {
+export interface WebAnnotationStoreState {
   environments: Map<string, WebAnnotationEnvironmentCache>;
   update: (
     environmentId: string,
@@ -251,183 +258,210 @@ interface WebAnnotationStoreState {
   reset: () => void;
 }
 
-export const useWebAnnotationStore = create<WebAnnotationStoreState>()((set) => ({
-  environments: new Map(),
-  update: (environmentId, updater) =>
-    set((state) => {
-      const current = state.environments.get(environmentId) ?? emptyWebAnnotationCache();
-      const environments = new Map(state.environments);
-      environments.set(environmentId, { ...current, ...updater(current), touchedAt: Date.now() });
-      return { environments };
-    }),
-  installList: (environmentId, key, list, items) =>
-    set((state) => {
-      const current = state.environments.get(environmentId) ?? emptyWebAnnotationCache();
-      const summaries = new Map(current.summaries);
-      for (const item of items) {
-        summaries.delete(item.id);
-        summaries.set(item.id, item);
-      }
-      const lists = new Map(current.lists);
-      lists.delete(key);
-      lists.set(key, {
-        ...list,
-        ids: items.map((item) => item.id),
-        status: "ready",
-        error: null,
-      });
-      const boundedLists = boundMap(lists, WEB_ANNOTATION_CACHE_LIMITS.lists, new Set([key]));
-      const referenced = new Set<string>();
-      for (const entry of boundedLists.values()) for (const id of entry.ids) referenced.add(id);
-      for (const id of current.threads.keys()) referenced.add(id);
-      const environments = new Map(state.environments);
-      environments.set(environmentId, {
-        ...current,
-        summaries: boundMap(summaries, WEB_ANNOTATION_CACHE_LIMITS.summaries, referenced),
-        lists: boundedLists,
-        touchedAt: Date.now(),
-      });
-      return { environments };
-    }),
-  installThread: (environmentId, annotationId, thread) =>
-    set((state) => {
-      const current = state.environments.get(environmentId) ?? emptyWebAnnotationCache();
-      const threads = new Map(current.threads);
-      threads.delete(annotationId);
-      threads.set(annotationId, thread);
-      const requests = new Map(current.requests);
-      const results = new Map(current.results);
-      const captures = new Map(current.captures);
-      let summaries = current.summaries;
-      if (thread.data) {
-        for (const request of thread.data.requests) {
-          const existing = requests.get(request.id);
-          if (!existing || existing.revision <= request.revision) {
+export const webAnnotationStore = defineScopedStore<WebAnnotationStoreState>(
+  "web-annotation",
+  (scope) => (set, get) => {
+    scope.onDispose("web-annotation.object-urls", () => {
+      for (const cache of get().environments.values()) revokeAll(cache);
+    });
+    return {
+      environments: new Map(),
+      update: (environmentId, updater) =>
+        set((state) => {
+          const current = state.environments.get(environmentId) ?? emptyWebAnnotationCache();
+          const environments = new Map(state.environments);
+          environments.set(environmentId, {
+            ...current,
+            ...updater(current),
+            touchedAt: Date.now(),
+          });
+          return { environments };
+        }),
+      installList: (environmentId, key, list, items) =>
+        set((state) => {
+          const current = state.environments.get(environmentId) ?? emptyWebAnnotationCache();
+          const summaries = new Map(current.summaries);
+          for (const item of items) {
+            summaries.delete(item.id);
+            summaries.set(item.id, item);
+          }
+          const lists = new Map(current.lists);
+          lists.delete(key);
+          lists.set(key, {
+            ...list,
+            ids: items.map((item) => item.id),
+            status: "ready",
+            error: null,
+          });
+          const boundedLists = boundMap(lists, WEB_ANNOTATION_CACHE_LIMITS.lists, new Set([key]));
+          const referenced = new Set<string>();
+          for (const entry of boundedLists.values()) for (const id of entry.ids) referenced.add(id);
+          for (const id of current.threads.keys()) referenced.add(id);
+          const environments = new Map(state.environments);
+          environments.set(environmentId, {
+            ...current,
+            summaries: boundMap(summaries, WEB_ANNOTATION_CACHE_LIMITS.summaries, referenced),
+            lists: boundedLists,
+            touchedAt: Date.now(),
+          });
+          return { environments };
+        }),
+      installThread: (environmentId, annotationId, thread) =>
+        set((state) => {
+          const current = state.environments.get(environmentId) ?? emptyWebAnnotationCache();
+          const threads = new Map(current.threads);
+          threads.delete(annotationId);
+          threads.set(annotationId, thread);
+          const requests = new Map(current.requests);
+          const results = new Map(current.results);
+          const captures = new Map(current.captures);
+          let summaries = current.summaries;
+          if (thread.data) {
+            for (const request of thread.data.requests) {
+              const existing = requests.get(request.id);
+              if (!existing || existing.revision <= request.revision) {
+                requests.delete(request.id);
+                requests.set(request.id, request);
+              }
+            }
+            for (const result of thread.data.results) {
+              results.delete(result.id);
+              results.set(result.id, result);
+            }
+            if (thread.data.capture) captures.set(thread.data.capture.id, thread.data.capture);
+            const summary = summaryFromThread(thread.data, current.summaries.get(annotationId));
+            if (summary) {
+              summaries = new Map(current.summaries);
+              summaries.set(annotationId, summary);
+            }
+          }
+          const boundedThreads = boundMap(
+            threads,
+            WEB_ANNOTATION_CACHE_LIMITS.threads,
+            new Set([annotationId]),
+          );
+          const execution = boundExecution(
+            requests,
+            results,
+            referencedExecution(boundedThreads, summaries),
+          );
+          const environments = new Map(state.environments);
+          environments.set(environmentId, {
+            ...current,
+            summaries,
+            threads: boundedThreads,
+            requests: execution.requests,
+            results: execution.results,
+            captures: boundMap(captures, WEB_ANNOTATION_CACHE_LIMITS.captures, new Set()),
+            touchedAt: Date.now(),
+          });
+          return { environments };
+        }),
+      installRequests: (environmentId, incoming, incomingResults = []) =>
+        set((state) => {
+          if (incoming.length === 0 && incomingResults.length === 0) return state;
+          const current = state.environments.get(environmentId) ?? emptyWebAnnotationCache();
+          const results = new Map(current.results);
+          for (const result of incomingResults) {
+            const existing = results.get(result.id);
+            if (!existing || existing.revision <= result.revision) {
+              results.delete(result.id);
+              results.set(result.id, result);
+            }
+          }
+          const requests = new Map(current.requests);
+          for (const request of incoming) {
+            const existing = requests.get(request.id);
+            // Out-of-order responses never regress a request's revision.
+            if (existing && existing.revision > request.revision) continue;
             requests.delete(request.id);
             requests.set(request.id, request);
           }
-        }
-        for (const result of thread.data.results) {
-          results.delete(result.id);
-          results.set(result.id, result);
-        }
-        if (thread.data.capture) captures.set(thread.data.capture.id, thread.data.capture);
-        const summary = summaryFromThread(thread.data, current.summaries.get(annotationId));
-        if (summary) {
-          summaries = new Map(current.summaries);
-          summaries.set(annotationId, summary);
-        }
-      }
-      const boundedThreads = boundMap(
-        threads,
-        WEB_ANNOTATION_CACHE_LIMITS.threads,
-        new Set([annotationId]),
-      );
-      const execution = boundExecution(
-        requests,
-        results,
-        referencedExecution(boundedThreads, summaries),
-      );
-      const environments = new Map(state.environments);
-      environments.set(environmentId, {
-        ...current,
-        summaries,
-        threads: boundedThreads,
-        requests: execution.requests,
-        results: execution.results,
-        captures: boundMap(captures, WEB_ANNOTATION_CACHE_LIMITS.captures, new Set()),
-        touchedAt: Date.now(),
-      });
-      return { environments };
-    }),
-  installRequests: (environmentId, incoming, incomingResults = []) =>
-    set((state) => {
-      if (incoming.length === 0 && incomingResults.length === 0) return state;
-      const current = state.environments.get(environmentId) ?? emptyWebAnnotationCache();
-      const results = new Map(current.results);
-      for (const result of incomingResults) {
-        const existing = results.get(result.id);
-        if (!existing || existing.revision <= result.revision) {
-          results.delete(result.id);
-          results.set(result.id, result);
-        }
-      }
-      const requests = new Map(current.requests);
-      for (const request of incoming) {
-        const existing = requests.get(request.id);
-        // Out-of-order responses never regress a request's revision.
-        if (existing && existing.revision > request.revision) continue;
-        requests.delete(request.id);
-        requests.set(request.id, request);
-      }
-      const execution = boundExecution(
-        requests,
-        results,
-        // Incoming entries were just moved to the newest end, so eviction
-        // takes the oldest unreferenced ones first.
-        referencedExecution(current.threads, current.summaries),
-      );
-      const environments = new Map(state.environments);
-      environments.set(environmentId, { ...current, ...execution, touchedAt: Date.now() });
-      return { environments };
-    }),
-  installCapture: (environmentId, capture) =>
-    set((state) => {
-      const current = state.environments.get(environmentId) ?? emptyWebAnnotationCache();
-      const captures = new Map(current.captures);
-      captures.delete(capture.id);
-      captures.set(capture.id, capture);
-      const environments = new Map(state.environments);
-      environments.set(environmentId, {
-        ...current,
-        captures: boundMap(captures, WEB_ANNOTATION_CACHE_LIMITS.captures, new Set([capture.id])),
-      });
-      return { environments };
-    }),
-  setAsset: (environmentId, assetId, asset) =>
-    set((state) => {
-      const current = state.environments.get(environmentId) ?? emptyWebAnnotationCache();
-      const assets = new Map(current.assets);
-      const previous = assets.get(assetId);
-      if (previous && previous.url !== asset.url) revokeUrl(previous.url);
-      assets.delete(assetId);
-      assets.set(assetId, asset);
-      const environments = new Map(state.environments);
-      environments.set(environmentId, {
-        ...current,
-        assets: boundMap(
-          assets,
-          WEB_ANNOTATION_CACHE_LIMITS.assets,
-          new Set([assetId]),
-          (evicted) => revokeUrl(evicted.url),
-        ),
-      });
-      return { environments };
-    }),
-  evictInactive: (active) =>
-    set((state) => {
-      if (state.environments.size <= WEB_ANNOTATION_CACHE_LIMITS.environments) return state;
-      const ordered = Array.from(state.environments.entries()).sort(
-        (a, b) => a[1].touchedAt - b[1].touchedAt,
-      );
-      const environments = new Map(state.environments);
-      for (const [environmentId, cache] of ordered) {
-        if (environments.size <= WEB_ANNOTATION_CACHE_LIMITS.environments) break;
-        if (active.has(environmentId)) continue;
-        revokeAll(cache);
-        environments.delete(environmentId);
-      }
-      return { environments };
-    }),
-  reset: () =>
-    set((state) => {
-      for (const cache of state.environments.values()) revokeAll(cache);
-      return { environments: new Map() };
-    }),
-}));
+          const execution = boundExecution(
+            requests,
+            results,
+            // Incoming entries were just moved to the newest end, so eviction
+            // takes the oldest unreferenced ones first.
+            referencedExecution(current.threads, current.summaries),
+          );
+          const environments = new Map(state.environments);
+          environments.set(environmentId, { ...current, ...execution, touchedAt: Date.now() });
+          return { environments };
+        }),
+      installCapture: (environmentId, capture) =>
+        set((state) => {
+          const current = state.environments.get(environmentId) ?? emptyWebAnnotationCache();
+          const captures = new Map(current.captures);
+          captures.delete(capture.id);
+          captures.set(capture.id, capture);
+          const environments = new Map(state.environments);
+          environments.set(environmentId, {
+            ...current,
+            captures: boundMap(
+              captures,
+              WEB_ANNOTATION_CACHE_LIMITS.captures,
+              new Set([capture.id]),
+            ),
+          });
+          return { environments };
+        }),
+      setAsset: (environmentId, assetId, asset) =>
+        set((state) => {
+          const current = state.environments.get(environmentId) ?? emptyWebAnnotationCache();
+          const assets = new Map(current.assets);
+          const previous = assets.get(assetId);
+          if (previous && previous.url !== asset.url) revokeUrl(previous.url);
+          assets.delete(assetId);
+          assets.set(assetId, asset);
+          const environments = new Map(state.environments);
+          environments.set(environmentId, {
+            ...current,
+            assets: boundMap(
+              assets,
+              WEB_ANNOTATION_CACHE_LIMITS.assets,
+              new Set([assetId]),
+              (evicted) => revokeUrl(evicted.url),
+            ),
+          });
+          return { environments };
+        }),
+      evictInactive: (active) =>
+        set((state) => {
+          if (state.environments.size <= WEB_ANNOTATION_CACHE_LIMITS.environments) return state;
+          const ordered = Array.from(state.environments.entries()).sort(
+            (a, b) => a[1].touchedAt - b[1].touchedAt,
+          );
+          const environments = new Map(state.environments);
+          for (const [environmentId, cache] of ordered) {
+            if (environments.size <= WEB_ANNOTATION_CACHE_LIMITS.environments) break;
+            if (active.has(environmentId)) continue;
+            revokeAll(cache);
+            environments.delete(environmentId);
+          }
+          return { environments };
+        }),
+      reset: () =>
+        set((state) => {
+          for (const cache of state.environments.values()) revokeAll(cache);
+          return { environments: new Map() };
+        }),
+    };
+  },
+);
 
-export function getWebAnnotationCache(environmentId: string): WebAnnotationEnvironmentCache {
+/**
+ * Reads the nearest node scope's annotation caches; other code uses
+ * `scope.store(webAnnotationStore)`.
+ */
+export const useWebAnnotationStore = scopedStoreHook(webAnnotationStore);
+
+/** `scope`'s cache of one environment (the app's command scope when omitted). */
+export function getWebAnnotationCache(
+  environmentId: string,
+  scope: NodeScope = appCommandScope(),
+): WebAnnotationEnvironmentCache {
   return (
-    useWebAnnotationStore.getState().environments.get(environmentId) ?? emptyWebAnnotationCache()
+    scope.store(webAnnotationStore).getState().environments.get(environmentId) ??
+    emptyWebAnnotationCache()
   );
 }

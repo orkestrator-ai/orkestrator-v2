@@ -4,7 +4,9 @@ Checked against `main` at `93018933` (2026-10-26).
 
 ## Task analysis
 
-Analysed 2026-10-27 against `main` at `863b5782`.
+Analysed 2026-11-07 against unified-federation-b4c9ee65814d at `ae492c20c`. Tasks 1 to 3 still apply unchanged: they qualify updates, not the renderer. Only the done item 4's description named a realm: plan items 6002 and 6003 deleted workspace realms, and Rebuild… now opens the node's dialog in the window's own renderer (see item 4 and its decision).
+
+Previously analysed 2026-10-27 against `main` at `863b5782`.
 
 ### Tasks
 
@@ -203,7 +205,12 @@ simulated here.
      `MachineUpdatesDialog` wires it to `openMachineWorkspace`.
    - The realm dialog `environment-rebuild` (`workspace-realm.ts`) becomes
      `openDialog` → `useAppDialogStore` `{ kind: "environment-settings",
-     section: "container" }`.
+     section: "container" }`. Since 6002 and 6003 (2026-11-07) there is no
+     realm: `environment-rebuild` is a `WorkspaceDialog` value
+     (`apps/web/src/lib/federation/workspace-request.ts`) that
+     `openMachineWorkspace` and `openDialog`
+     (`apps/web/src/lib/federation/open-workspace.ts`) apply in the window's
+     own renderer, for the node's in-tree workspace.
    - `AppDialogHost` passes `initialSection` to `EnvironmentSettingsDialog`,
      which passes it on as `defaultSection`.
 
@@ -211,9 +218,11 @@ simulated here.
    - `HostDependencySettings.test.tsx`: buttons, and the fallback text without
      a handler.
    - `MachinesSettings.test.tsx`: a registered node's rebuild closes Settings
-     and opens that node's realm with `environment-rebuild`.
+     and opens that node's workspace with `environment-rebuild` (a realm
+     until 6002).
    - `open-workspace.test.ts`: local and remote.
-   - `workspace-realm.test.ts`: parsing needs an environment.
+   - `workspace-realm.test.ts`: parsing needs an environment (deleted with
+     realms by 6002; `NodeWorkspaceHost.test.tsx` now covers the request).
    - `AppDialogHost.test.tsx` and `EnvironmentSettingsDialog.test.tsx`: the
      section reaches the layout.
 5. ~~The restart impact counts every backend-owned terminal, including
@@ -282,6 +291,9 @@ made on that host.
     selects the environment, and the parser already validates dialog values.
   - Pros: one validated enum, graceful on old nodes. Cons: the dialog name
     encodes a section; another section would need another value.
+  - Update 2026-11-07: realm messages are gone (6002, 6003); the same value
+    survives as a `WorkspaceDialog` the window applies to the node's in-tree
+    workspace, so the choice still holds without the old-node concern.
 - **Live evidence.**
   - Options: (a) manual commands; (b) a repeatable script; (c) leave
     everything open.

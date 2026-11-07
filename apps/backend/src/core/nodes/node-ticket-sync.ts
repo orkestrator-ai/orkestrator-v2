@@ -1,11 +1,15 @@
-import { BACKEND_CAPABILITIES, hasBackendCapability } from "@orkestrator/protocol/backend-profile";
+import { ticketSyncStatusChangedEvent } from "@orkestrator/protocol/contract/domains/events";
+import type { BackendEmit } from "../backend-emit.js";
+import {
+  ticketSyncClient,
+  type TicketSyncApi,
+} from "@orkestrator/protocol/contract/domains/ticket-sync";
 import { repositoryHint } from "@orkestrator/protocol/node-summaries";
 import {
   offlineTicketMessage,
   olderLeafTicketMessage,
   parseTicketSyncOutboxItem,
   TICKET_SYNC_OUTBOX_READY_EVENT,
-  TICKET_SYNC_STATUS_EVENT,
   type TicketSyncItem,
   type TicketSyncNodeState,
   type TicketSyncOutboxItem,
@@ -14,6 +18,7 @@ import {
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 import type { KanbanStorage } from "../storage-kanban.js";
+import { linkDomainApi, type EnvelopeLink } from "./node-domain-clients.js";
 
 const log = createLogger("nodes");
 
@@ -32,12 +37,30 @@ const log = createLogger("nodes");
  * failure leaves everything where it was (the leaf's outbox, the leaf's
  * cursor) for the next run; nothing is dropped. An older leaf is reported as
  * needing an update and left as it is.
+ *
+ * The leaf is called through the `ticket-sync` domain client (plan item
+ * 1010): a leaf that advertises the domain syncs; a pre-contract leaf syncs
+ * when its hello names the `ticket-sync` capability, as before.
  */
 
-export interface TicketSyncLink {
+export interface TicketSyncLink extends EnvelopeLink {
   readonly connected: boolean;
-  readonly hello?: { capabilities?: Record<string, number> } | null;
-  invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
+}
+
+/** The leaf's ticket-sync API, or `null` when it cannot sync with this node. */
+function ticketSyncApi(link: EnvelopeLink): TicketSyncApi | null {
+  try {
+    const api = linkDomainApi(link, ticketSyncClient);
+    return api.syncs ? api : null;
+  } catch {
+    // No version in common (`unsupported-version`): reported like an older leaf.
+    return null;
+  }
+}
+
+/** Whether the leaf behind `link` syncs tickets with this node (connected or not). */
+export function leafSyncsTickets(link: EnvelopeLink): boolean {
+  return ticketSyncApi(link) !== null;
 }
 
 export interface TicketSyncNode {
@@ -61,7 +84,7 @@ export interface NodeTicketSyncDeps {
     | "recordTicketSyncPeer"
     | "getTicketSyncOverview"
   >;
-  emit(event: string, payload: unknown): void;
+  emit: BackendEmit;
   retryDelayMs?: number;
   /** Delay before a board change here is sent out, so a burst of edits goes once. */
   debounceMs?: number;
@@ -191,7 +214,7 @@ export class NodeTicketSync {
       });
       if (total.state === "error") this.retry(nodeId);
       else this.delays.delete(nodeId);
-      this.deps.emit(TICKET_SYNC_STATUS_EVENT, { nodeId });
+      this.deps.emit(ticketSyncStatusChangedEvent, { nodeId });
       return total;
     })().finally(() => {
       this.running.delete(nodeId);
@@ -257,7 +280,8 @@ export class NodeTicketSync {
         message: offlineTicketMessage(node?.displayName ?? nodeId),
       };
     }
-    if (!hasBackendCapability(link.hello as never, BACKEND_CAPABILITIES.ticketSync)) {
+    const sync = ticketSyncApi(link);
+    if (!sync) {
       return {
         ...empty,
         state: "update-required",
@@ -274,11 +298,7 @@ export class NodeTicketSync {
     // Up first, so the leaf's queued changes are decided before it is sent the board.
     let after = 0;
     for (let round = 0; round < MAX_ROUNDS; round += 1) {
-      const batch = await link.invoke<{
-        epoch: string | null;
-        items: unknown[];
-        more: boolean;
-      }>("collect_ticket_sync_outbox", { controllerId, after });
+      const batch = await sync.collectOutbox({ controllerId, after });
       if (!batch?.epoch || !Array.isArray(batch.items) || batch.items.length === 0) break;
       let items: TicketSyncOutboxItem[];
       try {
@@ -307,7 +327,7 @@ export class NodeTicketSync {
       conflicts += result.conflicts.length;
       const upTo = known.at(-1)?.seq;
       if (upTo !== undefined) {
-        await link.invoke("ack_ticket_sync_outbox", { controllerId, epoch: batch.epoch, upTo });
+        await sync.ackOutbox({ controllerId, epoch: batch.epoch, upTo });
         after = upTo;
       }
       if (firstUnknown >= 0)
@@ -323,10 +343,7 @@ export class NodeTicketSync {
     }
 
     for (const pair of pairs) {
-      const position = await link.invoke<{ cursor?: unknown; epoch?: unknown }>(
-        "get_ticket_sync_cursor",
-        { controllerId, projectId: pair.leafProjectId },
-      );
+      const position = await sync.cursor({ controllerId, projectId: pair.leafProjectId });
       let cursor =
         typeof position?.cursor === "number" && Number.isSafeInteger(position.cursor)
           ? position.cursor
@@ -339,7 +356,7 @@ export class NodeTicketSync {
           epoch,
         );
         if (changes.items.length === 0 && !changes.reset) break;
-        const answer = await link.invoke<{ cursor?: unknown }>("apply_ticket_sync", {
+        const answer = await sync.apply({
           controllerId,
           projectId: pair.leafProjectId,
           sourceProjectId: pair.projectId,
@@ -386,7 +403,7 @@ export class NodeTicketSync {
       if (!node.available || !link?.connected) {
         return { ...base, state: "offline", message: offlineTicketMessage(node.displayName) };
       }
-      if (!hasBackendCapability(link.hello as never, BACKEND_CAPABILITIES.ticketSync)) {
+      if (!ticketSyncApi(link)) {
         return {
           ...base,
           state: "update-required",

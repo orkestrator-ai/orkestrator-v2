@@ -140,6 +140,17 @@ churn all four loads can still lose, and its error then says so.
 `playwright.browser.config.ts` uses neither, creates a context it does not
 route, or another case opts out.
 
+With `ORKESTRATOR_AGENT_TEST_OBSERVE_INVOKES=<directory>` set, every context
+`browser-test.ts` routes also records which path each `window.orkestrator`
+`invoke` and `listen` took (`e2e/agent-testing/invoke-observer.ts`): through
+the command scope's client (`lib/node-scope/command-client.ts`), from a spec's
+own `page.evaluate`, or directly from another page module, read from the call
+stack of the Vite dev renderer, plus the `/__orkestrator/invoke` requests that
+left the page. Each context writes one JSON file of names, paths and counts
+(never arguments) when it closes; `summarizeObservations` totals them. Plan item
+2010 used it on a full `test:agent:browser` run to check that every invoke goes
+through the command scope's client. It is off by default.
+
 `mise run test:browser` (the component and public-site suites) needs only
 loopback, so on Linux both suites run through `scripts/loopback-network.ts` in a
 private user and network namespace with only loopback raised, where no host
@@ -1547,6 +1558,35 @@ the two-client and queued cases for a p50/p95. Cases:
 Measurements land in `evidence-multi-client-*.json` beside the run, judged
 against the latency budgets in
 [recurring-work.md](../architecture/recurring-work.md#latency-budgets).
+
+### Live second node scope (two profiles)
+
+`e2e/agent-testing/playwright.scope-proof.config.ts` proves that one renderer
+holds its command scope and a leaf scope at once (plan item 2013): project
+`browser` (`scope-proof.spec.ts`, direct and relay) drives the command
+profile's gateway page; project `electron` (`scope-proof-electron.spec.ts`)
+launches its own Electron and connects its window to the command profile as a
+remote command node. Both drive `window.orkestratorScopeProof`, a harness the
+renderer installs only in a Vite dev renderer of an agent-test profile (the
+launcher passes `VITE_ORKESTRATOR_PROFILE_FLAVOR=agent-test`; a production
+build has no harness). Each run reads, listens to `resource-changed` and opens a
+terminal on each scope, then records routes, `nextHopProtocol` and long-lived
+requests per origin under `output/agent-testing/<run>/scope-proof/`. The relay
+is forced by blocking the leaf's origin (browser) or refusing it in main
+(desktop). The spec attaches the leaf with its token (read in-process, never
+printed). A third profile in `ORKESTRATOR_AGENT_TEST_SECOND_LEAF_PROFILE` adds a
+two-leaf case.
+
+```bash
+mise run dev:test --profile scope-cmd --fixture --no-agent-credentials
+mise run dev:test --profile scope-leaf --fixture --no-agent-credentials
+# In another terminal:
+ORKESTRATOR_AGENT_TEST_PROFILE=scope-cmd ORKESTRATOR_AGENT_TEST_LEAF_PROFILE=scope-leaf \
+  mise run test:logged -- --name scope-proof -- \
+  bunx playwright test --config e2e/agent-testing/playwright.scope-proof.config.ts
+mise run dev:stop --profile scope-cmd && mise run dev:reset --profile scope-cmd
+mise run dev:stop --profile scope-leaf && mise run dev:reset --profile scope-leaf
+```
 
 ### Live requests of a running agent tab
 

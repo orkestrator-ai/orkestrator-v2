@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import {
   MULTI_REVIEW_REPORTS_DISPLAY_CONTRACT,
   MULTI_REVIEW_CUSTOM_FIX_INSTRUCTIONS_PREFIX,
@@ -75,7 +76,7 @@ function renderedSearchText(container: HTMLElement): string {
 
 describe("JsonPayloadPart", () => {
   test("summarizes a structured review report without expanding it", () => {
-    render(
+    renderInAppCommandScope(
       <JsonPayloadPart
         payload={payloadOf(JSON.stringify(TEST_STRUCTURED_REVIEW_REPORT))}
         expansionKey="report"
@@ -89,7 +90,7 @@ describe("JsonPayloadPart", () => {
   });
 
   test("opens the report's sections on demand", () => {
-    render(
+    renderInAppCommandScope(
       <JsonPayloadPart
         payload={payloadOf(JSON.stringify(TEST_STRUCTURED_REVIEW_REPORT))}
         expansionKey="report"
@@ -105,7 +106,7 @@ describe("JsonPayloadPart", () => {
   });
 
   test("states the verification outcome without being opened", () => {
-    render(
+    renderInAppCommandScope(
       <JsonPayloadPart
         payload={payloadOf(
           '{"complete":true,"rationale":"Working tree is clean.\\nThe UI suite passed."}',
@@ -128,7 +129,7 @@ describe("JsonPayloadPart", () => {
   });
 
   test("names a failed verification as failed", () => {
-    render(
+    renderInAppCommandScope(
       <JsonPayloadPart
         payload={payloadOf('{"complete":false,"rationale":"A criterion is unmet."}')}
         expansionKey="verdict"
@@ -140,7 +141,7 @@ describe("JsonPayloadPart", () => {
   });
 
   test("lists each criterion's result under the rationale", () => {
-    render(
+    renderInAppCommandScope(
       <JsonPayloadPart
         payload={payloadOf(
           '{"complete":false,"rationale":"One is unmet.","acceptanceCriteria":[{"id":"ac-1","status":"passed","evidence":"bun test a"},{"id":"ac-2","status":"not-checked","evidence":"needs a phone"}]}',
@@ -159,7 +160,7 @@ describe("JsonPayloadPart", () => {
   });
 
   test("renders an unrecognized payload as labelled fields", () => {
-    render(
+    renderInAppCommandScope(
       <JsonPayloadPart
         payload={payloadOf('{"stageName":"verify","attempts":2,"logs":[]}')}
         expansionKey="payload"
@@ -180,7 +181,7 @@ describe("JsonPayloadPart", () => {
   });
 
   test("folds a nested container behind its own disclosure", () => {
-    render(
+    renderInAppCommandScope(
       <JsonPayloadPart
         payload={payloadOf('{"verdict":{"ready":"no","reasoning":"Pending."}}')}
         expansionKey="payload"
@@ -199,7 +200,7 @@ describe("JsonPayloadPart", () => {
   });
 
   test("names each record in a list of records", () => {
-    render(
+    renderInAppCommandScope(
       <JsonPayloadPart
         payload={payloadOf('{"commandsRun":[{"command":"bun test","result":"passed"}]}')}
         expansionKey="payload"
@@ -217,7 +218,7 @@ describe("JsonPayloadPart", () => {
     // The tree humanizes keys, so it cannot show what the agent actually
     // wrote. Nothing may be unreachable without leaving the transcript.
     const source = '{"stageName":"verify","duplicate":1,"duplicate":2,"exponent":1e3}';
-    render(<JsonPayloadPart payload={payloadOf(source)} expansionKey="payload" />);
+    renderInAppCommandScope(<JsonPayloadPart payload={payloadOf(source)} expansionKey="payload" />);
 
     fireEvent.click(screen.getByText("JSON payload"));
     expect(document.body.textContent).not.toContain('"stageName"');
@@ -233,7 +234,9 @@ describe("JsonPayloadPart", () => {
   test("opens a deeply nested bounded payload without pretty-print amplification", () => {
     const source = `${"[".repeat(5_000)}0${"]".repeat(5_000)}`;
     const payload = payloadOf(source);
-    const view = render(<JsonPayloadPart payload={payload} expansionKey="deep-payload" />);
+    const view = renderInAppCommandScope(
+      <JsonPayloadPart payload={payload} expansionKey="deep-payload" />,
+    );
 
     fireEvent.click(screen.getByText("JSON list"));
     expect(screen.getByText("Raw JSON")).toBeTruthy();
@@ -247,28 +250,32 @@ describe("JsonPayloadPart", () => {
 describe("JsonPayloadPart expansion persistence", () => {
   test("an opened payload survives the list unmounting its row", () => {
     const payload = payloadOf('{"stageName":"verify"}');
-    const view = render(<JsonPayloadPart payload={payload} expansionKey="msg-1/part-0/json" />);
+    const view = renderInAppCommandScope(
+      <JsonPayloadPart payload={payload} expansionKey="msg-1/part-0/json" />,
+    );
 
     fireEvent.click(screen.getByText("JSON payload"));
     expect(screen.getByText("Stage name")).toBeTruthy();
 
     // Virtuoso unmounts a row as soon as it leaves the viewport window.
     view.unmount();
-    render(<JsonPayloadPart payload={payload} expansionKey="msg-1/part-0/json" />);
+    renderInAppCommandScope(<JsonPayloadPart payload={payload} expansionKey="msg-1/part-0/json" />);
 
     expect(screen.getByText("Stage name")).toBeTruthy();
   });
 
   test("an opened nested branch survives the same unmount", () => {
     const payload = payloadOf('{"verdict":{"ready":"no","reasoning":"Pending."}}');
-    const view = render(<JsonPayloadPart payload={payload} expansionKey="msg-1/part-0/json" />);
+    const view = renderInAppCommandScope(
+      <JsonPayloadPart payload={payload} expansionKey="msg-1/part-0/json" />,
+    );
 
     fireEvent.click(screen.getByText("JSON payload"));
     fireEvent.click(screen.getByText("Verdict"));
     expect(screen.getByText("Pending.")).toBeTruthy();
 
     view.unmount();
-    render(<JsonPayloadPart payload={payload} expansionKey="msg-1/part-0/json" />);
+    renderInAppCommandScope(<JsonPayloadPart payload={payload} expansionKey="msg-1/part-0/json" />);
 
     expect(screen.getByText("Pending.")).toBeTruthy();
   });
@@ -276,14 +283,16 @@ describe("JsonPayloadPart expansion persistence", () => {
   test("an opened raw disclosure survives the same unmount", () => {
     const source = '{"stageName":"verify"}';
     const payload = payloadOf(source);
-    const view = render(<JsonPayloadPart payload={payload} expansionKey="msg-1/part-0/json" />);
+    const view = renderInAppCommandScope(
+      <JsonPayloadPart payload={payload} expansionKey="msg-1/part-0/json" />,
+    );
 
     fireEvent.click(screen.getByText("JSON payload"));
     fireEvent.click(screen.getByText("Raw JSON"));
     expect(view.container.querySelector("pre")?.textContent).toBe(source);
 
     view.unmount();
-    const remounted = render(
+    const remounted = renderInAppCommandScope(
       <JsonPayloadPart payload={payload} expansionKey="msg-1/part-0/json" />,
     );
     expect(remounted.container.querySelector("pre")?.textContent).toBe(source);
@@ -291,20 +300,22 @@ describe("JsonPayloadPart expansion persistence", () => {
 
   test("an opened structured-review section survives the same unmount", () => {
     const payload = payloadOf(JSON.stringify(TEST_STRUCTURED_REVIEW_REPORT));
-    const view = render(<JsonPayloadPart payload={payload} expansionKey="msg-1/part-0/json" />);
+    const view = renderInAppCommandScope(
+      <JsonPayloadPart payload={payload} expansionKey="msg-1/part-0/json" />,
+    );
 
     fireEvent.click(screen.getByText("Structured review report"));
     fireEvent.click(screen.getByRole("button", { name: /What Changed/ }));
     expect(screen.getByText(TEST_STRUCTURED_REVIEW_REPORT.whatChanged.overview)).toBeTruthy();
 
     view.unmount();
-    render(<JsonPayloadPart payload={payload} expansionKey="msg-1/part-0/json" />);
+    renderInAppCommandScope(<JsonPayloadPart payload={payload} expansionKey="msg-1/part-0/json" />);
     expect(screen.getByText(TEST_STRUCTURED_REVIEW_REPORT.whatChanged.overview)).toBeTruthy();
   });
 
   test("two payloads with different keys expand independently", () => {
     const payload = payloadOf('{"stageName":"verify"}');
-    render(
+    renderInAppCommandScope(
       <>
         <JsonPayloadPart payload={payload} expansionKey="msg-1/part-0/json" />
         <JsonPayloadPart payload={payload} expansionKey="msg-1/part-1/json" />
@@ -319,7 +330,9 @@ describe("JsonPayloadPart expansion persistence", () => {
 
 describe("NativeMessage JSON payload handling", () => {
   test("folds an assistant message that is nothing but a report", () => {
-    render(<NativeMessage message={makeMessage(JSON.stringify(TEST_STRUCTURED_REVIEW_REPORT))} />);
+    renderInAppCommandScope(
+      <NativeMessage message={makeMessage(JSON.stringify(TEST_STRUCTURED_REVIEW_REPORT))} />,
+    );
 
     expect(screen.getByText("Structured review report")).toBeTruthy();
     expect(document.body.textContent).not.toContain('"reviewScope"');
@@ -327,7 +340,7 @@ describe("NativeMessage JSON payload handling", () => {
 
   test("folds a JSON-only message that arrived without text parts", () => {
     // The legacy shape: content on the message, no parts array entries.
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={{
           id: "assistant-legacy",
@@ -344,7 +357,7 @@ describe("NativeMessage JSON payload handling", () => {
   });
 
   test("leaves prose around a JSON snippet to the markdown renderer", () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage message={makeMessage('Here is the payload:\n\n```json\n{"a":1}\n```')} />,
     );
 
@@ -353,7 +366,7 @@ describe("NativeMessage JSON payload handling", () => {
   });
 
   test("leaves a fenced block of unrecognized JSON as readable source", () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage message={makeMessage('```json\n{"compilerOptions":{"strict":true}}\n```')} />,
     );
 
@@ -362,7 +375,7 @@ describe("NativeMessage JSON payload handling", () => {
   });
 
   test("still folds a fenced verification verdict", () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage('```json\n{"complete":false,"rationale":"Unmet."}\n```')}
       />,
@@ -372,14 +385,14 @@ describe("NativeMessage JSON payload handling", () => {
   });
 
   test("shows the user their own message as written", () => {
-    render(<NativeMessage message={makeMessage('{"a":1}', "user")} />);
+    renderInAppCommandScope(<NativeMessage message={makeMessage('{"a":1}', "user")} />);
 
     expect(screen.queryByText("JSON payload") === null).toBe(true);
     expect(document.body.textContent).toContain('{"a":1}');
   });
 
   test("shows legacy user JSON from message.content as written", () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={{
           id: "user-legacy",
@@ -403,14 +416,14 @@ describe("NativeMessage find-index alignment", () => {
   // the wrong text. These assert they agree exactly.
   test("a folded report indexes exactly what the collapsed row renders", () => {
     const message = makeMessage(JSON.stringify(TEST_STRUCTURED_REVIEW_REPORT));
-    const view = render(<NativeMessage message={message} />);
+    const view = renderInAppCommandScope(<NativeMessage message={message} />);
 
     expect(getNativeMessageSearchText(message)).toBe(renderedSearchText(view.container));
   });
 
   test("a folded verdict indexes exactly what the collapsed row renders", () => {
     const message = makeMessage('{"complete":true,"rationale":"Tree clean.\\nSuite passed."}');
-    const view = render(<NativeMessage message={message} />);
+    const view = renderInAppCommandScope(<NativeMessage message={message} />);
 
     const searchText = getNativeMessageSearchText(message);
     expect(searchText).toBe(renderedSearchText(view.container));
@@ -422,7 +435,7 @@ describe("NativeMessage find-index alignment", () => {
 
   test("a generic payload indexes its title and count, not its keys", () => {
     const message = makeMessage('{"stageName":"verify","attempts":2}');
-    const view = render(<NativeMessage message={message} />);
+    const view = renderInAppCommandScope(<NativeMessage message={message} />);
 
     expect(getNativeMessageSearchText(message)).toBe(renderedSearchText(view.container));
     expect(getNativeMessageSearchText(message)).not.toContain("stageName");
@@ -442,7 +455,7 @@ describe("NativeMessage find-index alignment", () => {
         { type: "text" as const, content: "Then verify the branch." },
       ],
     };
-    const view = render(<NativeMessage message={message} />);
+    const view = renderInAppCommandScope(<NativeMessage message={message} />);
 
     const searchText = getNativeMessageSearchText(message);
     expect(searchText).toBe(renderedSearchText(view.container));
@@ -462,7 +475,7 @@ describe("NativeMessage find-index alignment", () => {
         { type: "text" as const, content: "Then verify the branch." },
       ],
     };
-    const view = render(<NativeMessage message={message} />);
+    const view = renderInAppCommandScope(<NativeMessage message={message} />);
 
     fireEvent.click(screen.getByText("JSON payload"));
 
@@ -489,7 +502,7 @@ describe("NativeMessage find-index alignment", () => {
       ),
       "user",
     );
-    const view = render(<NativeMessage message={message} />);
+    const view = renderInAppCommandScope(<NativeMessage message={message} />);
     const searchText = getNativeMessageSearchText(message);
 
     expect(view.container.textContent).toContain(contract.omissionText);
@@ -507,7 +520,7 @@ describe("NativeMessage find-index alignment", () => {
       customAddressFindingsPrompt(JSON.stringify(TEST_STRUCTURED_REVIEW_REPORT)),
       "user",
     );
-    const view = render(<NativeMessage message={message} />);
+    const view = renderInAppCommandScope(<NativeMessage message={message} />);
     const searchText = getNativeMessageSearchText(message);
 
     expect(view.container.textContent).not.toContain(contract.continuationPrefix);
@@ -540,7 +553,7 @@ describe("NativeMessage find-index alignment", () => {
       `${contract.openMarker}\n${findings}\n${contract.closeMarker}`,
     )}\n\n${contract.continuationPrefix}\n\n${wrapSystemInstructions(MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION)}`;
     const message = makeMessage(source, "user");
-    const view = render(<NativeMessage message={message} />);
+    const view = renderInAppCommandScope(<NativeMessage message={message} />);
     const searchText = getNativeMessageSearchText(message);
     const text = view.container.textContent ?? "";
 
@@ -567,7 +580,7 @@ describe("NativeMessage find-index alignment", () => {
   test("a malformed fix-phase report falls back to the omission in display and find", () => {
     const contract = STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT;
     const message = makeMessage(customAddressFindingsPrompt('{"issues":['), "user");
-    const view = render(<NativeMessage message={message} />);
+    const view = renderInAppCommandScope(<NativeMessage message={message} />);
     const searchText = getNativeMessageSearchText(message);
 
     expect(view.container.textContent).toContain(contract.omissionText);
@@ -583,7 +596,7 @@ describe("NativeMessage find-index alignment", () => {
       ...makeMessage(contract.continuationPrefix, "user"),
       promptEvidence: TEST_STRUCTURED_REVIEW_REPORT,
     };
-    const view = render(<NativeMessage message={message} />);
+    const view = renderInAppCommandScope(<NativeMessage message={message} />);
     const searchText = getNativeMessageSearchText(message);
     const text = view.container.textContent ?? "";
 
@@ -608,7 +621,7 @@ describe("NativeMessage find-index alignment", () => {
       ...makeMessage(source, "user"),
       promptEvidence: TEST_STRUCTURED_REVIEW_REPORT,
     };
-    const view = render(<NativeMessage message={message} />);
+    const view = renderInAppCommandScope(<NativeMessage message={message} />);
     const reports = screen.getAllByText("Structured review report");
     const text = view.container.textContent ?? "";
 
@@ -629,7 +642,7 @@ describe("NativeMessage find-index alignment", () => {
       ),
       "user",
     );
-    const view = render(<NativeMessage message={message} />);
+    const view = renderInAppCommandScope(<NativeMessage message={message} />);
     const searchText = getNativeMessageSearchText(message);
 
     expect(view.container.textContent).toContain("Preserve the public API.");
@@ -650,7 +663,7 @@ describe("NativeMessage find-index alignment", () => {
       createdAt: "2026-07-30T10:00:00.000Z",
       parts: [],
     };
-    const view = render(<NativeMessage message={message} />);
+    const view = renderInAppCommandScope(<NativeMessage message={message} />);
     const searchText = getNativeMessageSearchText(message);
 
     expect(view.container.textContent).toContain(contract.omissionText);
@@ -667,7 +680,7 @@ describe("NativeMessage find-index alignment", () => {
       createdAt: "2026-07-30T10:00:00.000Z",
       parts: [],
     };
-    const view = render(<NativeMessage message={message} />);
+    const view = renderInAppCommandScope(<NativeMessage message={message} />);
     const searchText = getNativeMessageSearchText(message);
 
     expect(searchText).toBe(renderedSearchText(view.container));
@@ -680,7 +693,7 @@ describe("NativeMessage find-index alignment", () => {
     const contract = MULTI_REVIEW_REPORTS_DISPLAY_CONTRACT;
     const source = evidencePrompt(contract, '[{"summary":"Copy-only evidence"}]', '"main".');
 
-    const view = render(
+    const view = renderInAppCommandScope(
       <TextPart content={source} truncateUserPrompt expansionKey="copy-source/json" />,
     );
     expect(view.container.textContent).toContain(contract.omissionText);
@@ -696,7 +709,7 @@ describe("NativeMessage find-index alignment", () => {
     const contract = STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT;
     const source = customAddressFindingsPrompt(JSON.stringify(TEST_STRUCTURED_REVIEW_REPORT));
 
-    const view = render(
+    const view = renderInAppCommandScope(
       <TextPart content={source} truncateUserPrompt expansionKey="copy-source/custom-fix" />,
     );
     expect(view.container.textContent).toContain("Structured review report");
@@ -710,7 +723,9 @@ describe("NativeMessage find-index alignment", () => {
 
   test("the payload search text is the trigger's own text", () => {
     const payload = payloadOf('{"stageName":"verify","attempts":2}');
-    const view = render(<JsonPayloadPart payload={payload} expansionKey="payload" />);
+    const view = renderInAppCommandScope(
+      <JsonPayloadPart payload={payload} expansionKey="payload" />,
+    );
 
     // Locks the concatenation in `jsonPayloadSearchText` to the JSX above it:
     // adding whitespace between the title and summary spans breaks this.

@@ -1,4 +1,8 @@
-import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import type { BackendId } from "@orkestrator/protocol/federation";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { WindowScope } from "@/lib/node-scope/window-scope";
+import { FakeNodeClient } from "@/test/render-in-node-scope";
 import {
   isMultiReviewWorkflow,
   type MultiReviewPhase,
@@ -37,7 +41,8 @@ const {
   isMultiReviewWorkflowKnownUnavailable,
   resetMultiReviewPersistenceForTests,
 } = await import("./multi-review-persistence");
-const { useMultiReviewStore } = await import("@/stores/multiReviewStore");
+const { multiReviewStore } = await import("@/stores/multiReviewStore");
+const { appCommandStore } = await import("@/test/app-command-store");
 
 const ENVIRONMENT_ID = "env-1";
 const TIMESTAMP = "2026-01-01T00:00:00.000Z";
@@ -140,7 +145,7 @@ beforeEach(() => {
   getMultiReviewWorkflowMock.mockImplementation(async () => null);
   getMultiReviewWorkflowConditionalMock.mockReset();
   getMultiReviewWorkflowConditionalMock.mockImplementation(async () => null);
-  useMultiReviewStore.setState({ workflows: new Map() });
+  appCommandStore(multiReviewStore).setState({ workflows: new Map() });
   resetMultiReviewPersistenceForTests();
 });
 
@@ -150,8 +155,8 @@ describe("findActiveMultiReviewWorkflow", () => {
     expect(isMultiReviewWorkflow(review)).toBe(true);
     expect(isMultiReviewWorkflow(futureReview)).toBe(false);
     const incoming = JSON.parse(JSON.stringify(futureReview)) as MultiReviewWorkflow;
-    useMultiReviewStore.getState().replaceWorkflow(incoming);
-    const projected = useMultiReviewStore.getState().workflows.get(review.id);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(incoming);
+    const projected = appCommandStore(multiReviewStore).getState().workflows.get(review.id);
     expect(projected).toEqual(review);
     expect(isMultiReviewWorkflow(projected)).toBe(true);
 
@@ -163,14 +168,16 @@ describe("findActiveMultiReviewWorkflow", () => {
       updatedAt: TIMESTAMP,
       snapshot: incoming,
     };
-    useMultiReviewStore.setState({ workflows: new Map() });
+    appCommandStore(multiReviewStore).setState({ workflows: new Map() });
     getMultiReviewWorkflowMock.mockResolvedValue(persisted);
     const restored = await hydrateMultiReviewWorkflow(review.id);
     expect(restored).toEqual({ ...review, backendRevision: 8 });
     expect(isMultiReviewWorkflow(restored)).toBe(true);
-    expect<unknown>(useMultiReviewStore.getState().workflows.get(review.id)).toEqual(restored);
+    expect<unknown>(appCommandStore(multiReviewStore).getState().workflows.get(review.id)).toEqual(
+      restored,
+    );
 
-    useMultiReviewStore.setState({ workflows: new Map() });
+    appCommandStore(multiReviewStore).setState({ workflows: new Map() });
     listMultiReviewWorkflowsMock.mockResolvedValue([{ ...persisted, revision: 9 }]);
     expect(await hydrateMultiReviewWorkflowsForEnvironment(review.environmentId)).toEqual([
       { ...review, backendRevision: 9 },
@@ -189,7 +196,7 @@ describe("findActiveMultiReviewWorkflow", () => {
       snapshot: { ...futureReview, reviewers: "invalid" },
     });
     expect(await hydrateMultiReviewWorkflow(review.id)).toBeNull();
-    expect(useMultiReviewStore.getState().workflows.has(review.id)).toBe(false);
+    expect(appCommandStore(multiReviewStore).getState().workflows.has(review.id)).toBe(false);
   });
   test("reports no active workflow for an environment that has none", async () => {
     expect(await findActiveMultiReviewWorkflow(ENVIRONMENT_ID)).toBeNull();
@@ -271,7 +278,7 @@ describe("findActiveMultiReviewWorkflow", () => {
       throw new Error("backend unavailable");
     });
     await findActiveMultiReviewWorkflow(ENVIRONMENT_ID).catch(() => undefined);
-    expect(useMultiReviewStore.getState().workflows.get("wf-live")).toMatchObject({
+    expect(appCommandStore(multiReviewStore).getState().workflows.get("wf-live")).toMatchObject({
       id: "wf-live",
       phase: "reviewing",
       backendRevision: 3,
@@ -283,7 +290,7 @@ describe("findActiveMultiReviewWorkflow", () => {
       entry("wf-live", "reviewing", 12),
     ]);
     await findActiveMultiReviewWorkflow(ENVIRONMENT_ID);
-    expect(useMultiReviewStore.getState().workflows.get("wf-live")).toMatchObject({
+    expect(appCommandStore(multiReviewStore).getState().workflows.get("wf-live")).toMatchObject({
       id: "wf-live",
       phase: "reviewing",
       backendRevision: 12,
@@ -339,5 +346,60 @@ describe("hydrateMultiReviewWorkflow", () => {
     ]);
     await hydrateMultiReviewWorkflowsForEnvironment(ENVIRONMENT_ID);
     expect(isMultiReviewWorkflowKnownUnavailable("wf-listed")).toBe(false);
+  });
+});
+
+describe("per node scope (plan item 3003)", () => {
+  let windowScope: WindowScope;
+  let clientA: FakeNodeClient;
+  let clientB: FakeNodeClient;
+  let scopeA: NodeScope;
+  let scopeB: NodeScope;
+
+  beforeEach(() => {
+    windowScope = new WindowScope();
+    clientA = new FakeNodeClient({ nodeId: "bk_multi-review-a" as BackendId });
+    clientB = new FakeNodeClient({ nodeId: "bk_multi-review-b" as BackendId });
+    scopeA = windowScope.open({ role: "command", client: clientA });
+    scopeB = windowScope.open({ role: "leaf", client: clientB });
+  });
+
+  afterEach(() => windowScope.dispose());
+
+  test("a point read goes to the scope's client and fills only that scope's store", async () => {
+    clientA.respond("get_multi_review_workflow", entry("wf-a", "reviewing", 3));
+
+    const workflow = await hydrateMultiReviewWorkflow("wf-a", scopeA);
+
+    expect(workflow).toMatchObject({ id: "wf-a", backendRevision: 3 });
+    expect(clientA.calls("get_multi_review_workflow")).toHaveLength(1);
+    expect(clientB.invocations).toHaveLength(0);
+    expect(getMultiReviewWorkflowMock).not.toHaveBeenCalled();
+    expect(scopeA.store(multiReviewStore).getState().workflows.has("wf-a")).toBe(true);
+    expect(scopeB.store(multiReviewStore).getState().workflows.size).toBe(0);
+    expect(appCommandStore(multiReviewStore).getState().workflows.size).toBe(0);
+  });
+
+  test("an environment listing reads the scope's node and installs into its store", async () => {
+    clientB.respond("list_multi_review_workflows", [entry("wf-b", "reviewing", 1)]);
+
+    await hydrateMultiReviewWorkflowsForEnvironment(ENVIRONMENT_ID, scopeB);
+
+    expect(clientB.calls("list_multi_review_workflows")[0]?.args).toEqual({
+      environmentId: ENVIRONMENT_ID,
+    });
+    expect(listMultiReviewWorkflowsMock).not.toHaveBeenCalled();
+    expect(scopeB.store(multiReviewStore).getState().workflows.has("wf-b")).toBe(true);
+    expect(scopeA.store(multiReviewStore).getState().workflows.size).toBe(0);
+  });
+
+  test("unavailable markers are held per scope", async () => {
+    clientA.respond("get_multi_review_workflow", null);
+
+    expect(await hydrateMultiReviewWorkflow("wf-gone", scopeA)).toBeNull();
+
+    expect(isMultiReviewWorkflowKnownUnavailable("wf-gone", scopeA)).toBe(true);
+    expect(isMultiReviewWorkflowKnownUnavailable("wf-gone", scopeB)).toBe(false);
+    expect(isMultiReviewWorkflowKnownUnavailable("wf-gone")).toBe(false);
   });
 });

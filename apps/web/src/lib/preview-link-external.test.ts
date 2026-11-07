@@ -9,9 +9,10 @@ import {
   listenForTerminalBrowserTabRequests,
   type TerminalBrowserTabRequest,
 } from "@/lib/terminal-links";
-import { useEnvironmentStore } from "@/stores/environmentStore";
-import { usePreviewServiceStore } from "@/stores/previewServiceStore";
+import { environmentStore } from "@/stores/environmentStore";
+import { previewServiceStore } from "@/stores/previewServiceStore";
 import type { Environment } from "@/types";
+import { appCommandStore } from "@/test/app-command-store";
 
 const invokeMock = invoke as unknown as ReturnType<typeof mock>;
 
@@ -62,13 +63,16 @@ describe("openLinkExternally", () => {
       desktop: true,
       baseUrl: "https://workstation.tailnet.ts.net",
     };
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [
         { id: "env-local", environmentType: "local" },
         { id: "env-box", environmentType: "containerized" },
       ] as unknown as Environment[],
     });
-    usePreviewServiceStore.setState({ status: "ready", capabilities: capabilities() });
+    appCommandStore(previewServiceStore).setState({
+      status: "ready",
+      capabilities: capabilities(),
+    });
     resolution = {
       kind: "service",
       service: { definition: { serviceId: SERVICE } },
@@ -86,8 +90,8 @@ describe("openLinkExternally", () => {
     stopListening();
     invokeMock.mockReset();
     invokeMock.mockImplementation(() => Promise.resolve());
-    usePreviewServiceStore.setState({ status: "idle", capabilities: null });
-    useEnvironmentStore.setState({ environments: [] });
+    appCommandStore(previewServiceStore).setState({ status: "idle", capabilities: null });
+    appCommandStore(environmentStore).setState({ environments: [] });
     window.orkestrator = originalOrkestrator;
     window.orkestratorGateway = originalGateway;
   });
@@ -159,7 +163,9 @@ describe("openLinkExternally", () => {
   });
 
   test("publication is available to terminal and agent links without a desktop tunnel", async () => {
-    usePreviewServiceStore.setState({ capabilities: capabilities(true, false, true) });
+    appCommandStore(previewServiceStore).setState({
+      capabilities: capabilities(true, false, true),
+    });
     for (const origin of ["terminal", "agent"] as const) {
       await openLinkExternally({
         environmentId: "env-local",
@@ -175,7 +181,7 @@ describe("openLinkExternally", () => {
 
   for (const failure of ["unsupported", "null", "rejected", "resolution"] as const) {
     test(`${failure} fallback explains gateway proxy routing`, async () => {
-      usePreviewServiceStore.setState({ status: "idle", capabilities: null });
+      appCommandStore(previewServiceStore).setState({ status: "idle", capabilities: null });
       invokeMock.mockImplementation(async (command: string) => {
         if (command === "get_preview_capabilities") {
           if (failure === "rejected") throw new Error("backend disconnected");
@@ -202,7 +208,10 @@ describe("openLinkExternally", () => {
   }
 
   test("with preview access off, the link keeps the gateway proxy", async () => {
-    usePreviewServiceStore.setState({ status: "ready", capabilities: capabilities(false) });
+    appCommandStore(previewServiceStore).setState({
+      status: "ready",
+      capabilities: capabilities(false),
+    });
     await openLinkExternally({
       environmentId: "env-local",
       sourceTabId: "tab-1",

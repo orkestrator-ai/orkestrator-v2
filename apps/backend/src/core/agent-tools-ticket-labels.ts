@@ -1,7 +1,8 @@
 import type { McpServer } from "@modelcontextprotocol/server";
-import { z } from "zod";
+import { Schema } from "effect";
 import type { KanbanTask, StorageService } from "./storage.js";
 import { parseKanbanLabelInput } from "./storage-kanban-labels.js";
+import { describe, str, toolInput, withDefault } from "./tool-schema.js";
 import {
   ticketLabelColorField,
   ticketLabelDescriptionField,
@@ -36,7 +37,7 @@ export function registerAgentTicketLabelTools(
         title: "List Kanban ticket labels",
         description:
           "List the labels tickets in the current project can carry: its label catalogue and every label in use, with ticketCount.",
-        inputSchema: z.object({}),
+        inputSchema: toolInput(Schema.Struct({})),
         annotations: {
           readOnlyHint: true,
           destructiveHint: false,
@@ -57,11 +58,13 @@ export function registerAgentTicketLabelTools(
       title: "Create a Kanban ticket label",
       description:
         "Add a label to the current project's catalogue so tickets can use it. An existing name (any case) is kept, taking a color or description given here.",
-      inputSchema: z.object({
-        name: ticketLabelNameField,
-        color: ticketLabelColorField,
-        description: ticketLabelDescriptionField,
-      }),
+      inputSchema: toolInput(
+        Schema.Struct({
+          name: ticketLabelNameField,
+          color: ticketLabelColorField,
+          description: ticketLabelDescriptionField,
+        }),
+      ),
       annotations: {
         readOnlyHint: false,
         destructiveHint: false,
@@ -88,11 +91,13 @@ export function registerAgentTicketLabelTools(
       title: "Add or remove a ticket label",
       description:
         "Add one label to a Kanban ticket in the current project, or remove it with present false. A name the project already uses keeps its spelling; a new name starts a label.",
-      inputSchema: z.object({
-        ticketId: z.string().trim().min(1).max(200),
-        name: ticketLabelNameField,
-        present: z.boolean().default(true).describe("False removes the label."),
-      }),
+      inputSchema: toolInput(
+        Schema.Struct({
+          ticketId: str({ trim: true, min: 1, max: 200 }),
+          name: ticketLabelNameField,
+          present: describe(withDefault(Schema.Boolean, true), "False removes the label."),
+        }),
+      ),
       annotations: {
         readOnlyHint: false,
         destructiveHint: false,

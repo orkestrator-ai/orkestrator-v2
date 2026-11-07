@@ -2,7 +2,8 @@ import { isDesktopStartupMessage } from "@orkestrator/protocol/debug-logging";
 import { resetLogger } from "@orkestrator/protocol/logger";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { afterAll, afterEach, beforeEach, describe, expect, it, mock, spyOn } from "bun:test";
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, waitFor } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import {
   listen,
   NATIVE_EVENT_STREAM_CONNECTED_EVENT,
@@ -200,7 +201,7 @@ describe("useTerminal reconnect behavior", () => {
   it("reconnects to a running existing local terminal session without restarting it", async () => {
     getTerminalSessionMock.mockResolvedValue({ id: "session-old", running: true });
 
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useTerminal({
         containerId: null,
         environmentId: "env-1",
@@ -232,7 +233,7 @@ describe("useTerminal reconnect behavior", () => {
       bootstrapped: true,
     });
 
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useTerminal({
         containerId: "container-1",
         existingSessionId: "session-old",
@@ -255,7 +256,7 @@ describe("useTerminal reconnect behavior", () => {
       bootstrapped: true,
     }));
 
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useTerminal({
         containerId: "container-1",
         persistSession: true,
@@ -277,7 +278,7 @@ describe("useTerminal reconnect behavior", () => {
       bootstrapped: true,
     }));
 
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useTerminal({
         containerId: "container-1",
         existingSessionId: "session-old",
@@ -299,7 +300,7 @@ describe("useTerminal reconnect behavior", () => {
       created: true,
       bootstrapped: false,
     }));
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useTerminal({
         containerId: "container-1",
         persistSession: true,
@@ -325,7 +326,7 @@ describe("useTerminal reconnect behavior", () => {
   it("keeps bootstrap state false when session creation fails", async () => {
     createTerminalSessionMock.mockRejectedValue(new Error("create failed"));
 
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useTerminal({
         containerId: "container-1",
         persistSession: true,
@@ -348,7 +349,7 @@ describe("useTerminal reconnect behavior", () => {
       bootstrapped: true,
     }));
 
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useTerminal({
         containerId: "container-1",
         persistSession: true,
@@ -382,7 +383,7 @@ describe("useTerminal reconnect behavior", () => {
         ([eventName]) => eventName === NATIVE_EVENT_STREAM_CONNECTED_EVENT,
       );
 
-    const { result, rerender } = renderHook(
+    const { result, rerender } = renderHookInAppCommandScope(
       ({ existingSessionId }: { existingSessionId?: string }) =>
         useTerminal({
           containerId: "container-1",
@@ -470,7 +471,7 @@ describe("useTerminal reconnect behavior", () => {
       created: true,
     });
 
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useTerminal({
         containerId: null,
         environmentId: "env-1",
@@ -496,7 +497,7 @@ describe("useTerminal reconnect behavior", () => {
   });
 
   it("ignores overlapping connect calls before React connection state updates", async () => {
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useTerminal({
         containerId: "container-1",
         isLocal: false,
@@ -520,7 +521,7 @@ describe("useTerminal reconnect behavior", () => {
   });
 
   it("forwards environment activity tracking to local and container session creation", async () => {
-    const local = renderHook(() =>
+    const local = renderHookInAppCommandScope(() =>
       useTerminal({
         containerId: null,
         environmentId: "env-local",
@@ -542,7 +543,7 @@ describe("useTerminal reconnect behavior", () => {
     );
     local.unmount();
 
-    const container = renderHook(() =>
+    const container = renderHookInAppCommandScope(() =>
       useTerminal({
         containerId: "container-1",
         environmentId: "env-container",
@@ -573,7 +574,7 @@ describe("useTerminal reconnect behavior", () => {
       running: false,
     }));
 
-    const local = renderHook(() =>
+    const local = renderHookInAppCommandScope(() =>
       useTerminal({
         containerId: null,
         environmentId: "env-local",
@@ -597,7 +598,7 @@ describe("useTerminal reconnect behavior", () => {
     );
     local.unmount();
 
-    const container = renderHook(() =>
+    const container = renderHookInAppCommandScope(() =>
       useTerminal({
         containerId: "container-1",
         environmentId: "env-container",
@@ -633,7 +634,7 @@ describe("useTerminal reconnect behavior", () => {
         }),
     );
 
-    const { result, unmount } = renderHook(() =>
+    const { result, unmount } = renderHookInAppCommandScope(() =>
       useTerminal({
         containerId: "container-1",
         environmentId: "env-1",
@@ -677,7 +678,7 @@ describe("useTerminal reconnect behavior", () => {
       )
       .mockResolvedValueOnce(undefined);
 
-    const { result, unmount } = renderHook(() =>
+    const { result, unmount } = renderHookInAppCommandScope(() =>
       useTerminal({
         containerId: "container-1",
         environmentId: "env-1",
@@ -700,7 +701,7 @@ describe("useTerminal reconnect behavior", () => {
       );
     });
 
-    const adopter = renderHook(() =>
+    const adopter = renderHookInAppCommandScope(() =>
       useTerminal({
         containerId: "container-1",
         environmentId: "env-1",
@@ -730,7 +731,7 @@ describe("useTerminal reconnect behavior", () => {
   });
 
   it("disconnects the current container terminal and removes its listener", async () => {
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useTerminal({
         containerId: "container-1",
         isLocal: false,
@@ -754,7 +755,7 @@ describe("useTerminal reconnect behavior", () => {
   });
 
   it("resizes and writes through the connected container session", async () => {
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useTerminal({
         containerId: "container-1",
         isLocal: false,
@@ -777,7 +778,7 @@ describe("useTerminal reconnect behavior", () => {
   });
 
   it("uses local terminal operations for local resize, write, and disconnect", async () => {
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useTerminal({
         containerId: null,
         environmentId: "env-1",
@@ -815,7 +816,7 @@ describe("useTerminal reconnect behavior", () => {
     });
     const received: Uint8Array[] = [];
 
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useTerminal({
         containerId: "container-1",
         isLocal: false,
@@ -865,7 +866,7 @@ describe("useTerminal reconnect behavior", () => {
     const replayed: string[] = [];
     const received: string[] = [];
 
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useTerminal({
         containerId: null,
         environmentId: "env-1",
@@ -908,7 +909,7 @@ describe("useTerminal reconnect behavior", () => {
     });
     const received: string[] = [];
 
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useTerminal({
         containerId: "container-1",
         existingSessionId: "session-old",
@@ -964,7 +965,7 @@ describe("useTerminal reconnect behavior", () => {
     const replayed: string[] = [];
     const received: string[] = [];
 
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useTerminal({
         containerId: "container-1",
         existingSessionId: "session-old",
@@ -1011,7 +1012,7 @@ describe("useTerminal reconnect behavior", () => {
     const replayed: string[] = [];
     const received: string[] = [];
 
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useTerminal({
         containerId: "container-1",
         existingSessionId: "session-old",
@@ -1039,7 +1040,7 @@ describe("useTerminal reconnect behavior", () => {
     for (const isLocal of [true, false]) {
       it(`releases a stopped ${isLocal ? "local" : "container"} session on ${recoveryEvent}`, async () => {
         const recover = captureRecovery(recoveryEvent);
-        const { result } = renderHook(() =>
+        const { result } = renderHookInAppCommandScope(() =>
           useTerminal({
             containerId: isLocal ? null : "container-1",
             environmentId: "env-1",
@@ -1089,7 +1090,7 @@ describe("useTerminal reconnect behavior", () => {
     for (const status of ["running", "null", "rejected", "different-session"] as const) {
       it(`retains the attachment for a ${status} liveness response on ${recoveryEvent}`, async () => {
         const recover = captureRecovery(recoveryEvent);
-        const { result } = renderHook(() =>
+        const { result } = renderHookInAppCommandScope(() =>
           useTerminal({
             containerId: null,
             environmentId: "env-1",
@@ -1131,7 +1132,7 @@ describe("useTerminal reconnect behavior", () => {
 
     it(`keeps backend-owned attach-only sessions on ${recoveryEvent}`, async () => {
       const recover = captureRecovery(recoveryEvent);
-      const { result } = renderHook(() =>
+      const { result } = renderHookInAppCommandScope(() =>
         useTerminal({
           containerId: null,
           environmentId: "env-1",
@@ -1165,7 +1166,7 @@ describe("useTerminal reconnect behavior", () => {
       const pendingStatus = new Promise<realBackend.TerminalSessionStatus>((resolve) => {
         resolveStatus = resolve;
       });
-      const { result, rerender, unmount } = renderHook(
+      const { result, rerender, unmount } = renderHookInAppCommandScope(
         ({ environmentId, existingSessionId }) =>
           useTerminal({
             containerId: null,
@@ -1248,7 +1249,7 @@ describe("useTerminal reconnect behavior", () => {
     const replayed: string[] = [];
     const received: string[] = [];
 
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useTerminal({
         containerId: "container-1",
         existingSessionId: "session-old",
@@ -1301,7 +1302,7 @@ describe("useTerminal reconnect behavior", () => {
     }> = [];
     const received: string[] = [];
 
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useTerminal({
         containerId: "container-1",
         existingSessionId: "session-old",
@@ -1374,7 +1375,7 @@ describe("useTerminal reconnect behavior", () => {
       generation: 3,
     });
 
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useTerminal({
         containerId: "container-1",
         existingSessionId: "session-old",
@@ -1400,7 +1401,7 @@ describe("useTerminal reconnect behavior", () => {
       created: false,
     });
 
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useTerminal({
         containerId: "container-1",
         existingSessionId: "stable-session",
@@ -1424,7 +1425,7 @@ describe("useTerminal reconnect behavior", () => {
         }),
     );
 
-    const { result, unmount } = renderHook(() =>
+    const { result, unmount } = renderHookInAppCommandScope(() =>
       useTerminal({
         containerId: "container-1",
         persistSession: false,
@@ -1446,14 +1447,18 @@ describe("useTerminal reconnect behavior", () => {
   });
 
   it("validates terminal targets before creating sessions", async () => {
-    const local = renderHook(() => useTerminal({ containerId: null, isLocal: true }));
+    const local = renderHookInAppCommandScope(() =>
+      useTerminal({ containerId: null, isLocal: true }),
+    );
     await act(async () => {
       await local.result.current.connect();
     });
     expect(local.result.current.error).toBe("No environment ID provided for local environment");
     local.unmount();
 
-    const container = renderHook(() => useTerminal({ containerId: null, isLocal: false }));
+    const container = renderHookInAppCommandScope(() =>
+      useTerminal({ containerId: null, isLocal: false }),
+    );
     await act(async () => {
       await container.result.current.connect();
     });
@@ -1464,7 +1469,7 @@ describe("useTerminal reconnect behavior", () => {
 
   it("cleans up a newly created session when startup fails", async () => {
     startTerminalSessionMock.mockRejectedValue(new Error("start failed"));
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useTerminal({
         containerId: "container-1",
         persistSession: false,
@@ -1481,7 +1486,7 @@ describe("useTerminal reconnect behavior", () => {
 
   it("cleans up a newly created session when listener registration fails", async () => {
     listenMock.mockRejectedValue(new Error("listener failed"));
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useTerminal({
         containerId: "container-1",
         persistSession: false,
@@ -1498,7 +1503,7 @@ describe("useTerminal reconnect behavior", () => {
 
   it("surfaces create failures without trying to clean up an unknown session", async () => {
     createTerminalSessionMock.mockRejectedValue(new Error("create failed"));
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useTerminal({
         containerId: "container-1",
         persistSession: true,
@@ -1536,7 +1541,7 @@ describe("useTerminal reconnect behavior", () => {
       )
       .mockResolvedValueOnce({ output: "latest", revision: 3, generation: 1 });
 
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useTerminal({
         containerId: "container-1",
         existingSessionId: "session-old",
@@ -1569,7 +1574,7 @@ describe("useTerminal reconnect behavior", () => {
       generation: 1,
     });
 
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useTerminal({
         containerId: "container-1",
         isLocal: false,
@@ -1602,7 +1607,7 @@ describe("useTerminal reconnect behavior", () => {
 
   it("does not explicitly detach a dead attach-only session when reconnecting", async () => {
     getTerminalSessionMock.mockResolvedValue({ id: "env-1:setup", running: false });
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useTerminal({
         containerId: "container-1",
         existingSessionId: "env-1:setup",
@@ -1669,7 +1674,7 @@ describe("useTerminal reconnect behavior", () => {
     }> = [];
     const received: string[] = [];
 
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useTerminal({
         containerId: "container-1",
         isLocal: false,
@@ -1750,7 +1755,7 @@ describe("useTerminal reconnect behavior", () => {
       };
     });
     const received: string[] = [];
-    const { result, rerender } = renderHook(
+    const { result, rerender } = renderHookInAppCommandScope(
       ({ existingSessionId }) =>
         useTerminal({
           containerId: "container-1",
@@ -1805,7 +1810,7 @@ describe("useTerminal reconnect behavior", () => {
       }
       return { sessionId: "session-new-env", created: true };
     });
-    const { result, rerender } = renderHook(
+    const { result, rerender } = renderHookInAppCommandScope(
       ({ environmentId }) =>
         useTerminal({
           containerId: null,
@@ -1853,7 +1858,7 @@ describe("useTerminal reconnect behavior", () => {
   it("keeps the connection when its published session feeds back as existingSessionId", async () => {
     const listenerUnlisten = mock(() => undefined);
     listenMock.mockResolvedValue(listenerUnlisten);
-    const { result, rerender } = renderHook(
+    const { result, rerender } = renderHookInAppCommandScope(
       ({ existingSessionId }: { existingSessionId?: string }) =>
         useTerminal({
           containerId: "container-1",
@@ -1896,7 +1901,7 @@ describe("useTerminal reconnect behavior", () => {
           resolveSnapshot = resolve;
         }),
     );
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useTerminal({
         containerId: "container-1",
         environmentId: "env-1",
@@ -1938,7 +1943,7 @@ describe("useTerminal reconnect behavior", () => {
           resolveLifecycleListen = resolve;
         }),
     );
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useTerminal({
         containerId: "container-1",
         environmentId: "env-1",
@@ -1976,7 +1981,7 @@ describe("useTerminal reconnect behavior", () => {
           resolveCreate = resolve;
         }),
     );
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useTerminal({
         containerId: "container-1",
         environmentId: "env-1",
@@ -2008,7 +2013,7 @@ describe("useTerminal reconnect behavior", () => {
     listenMock
       .mockResolvedValueOnce(outputUnlisten)
       .mockRejectedValueOnce(new Error("lifecycle listener failed"));
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useTerminal({
         containerId: "container-1",
         persistSession: false,
@@ -2031,7 +2036,7 @@ describe("useTerminal reconnect behavior", () => {
     });
     const reconnectUnlisten = mock(() => undefined);
     listenMock.mockResolvedValueOnce(outputUnlisten).mockResolvedValueOnce(reconnectUnlisten);
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useTerminal({
         containerId: "container-1",
         environmentId: "env-1",
@@ -2052,7 +2057,7 @@ describe("useTerminal reconnect behavior", () => {
 
   it("does not create a replacement when attach-only listener registration fails", async () => {
     listenMock.mockRejectedValueOnce(new Error("attach unavailable"));
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useTerminal({
         containerId: "container-1",
         existingSessionId: "setup-session",
@@ -2077,7 +2082,7 @@ describe("useTerminal reconnect behavior", () => {
       .mockResolvedValueOnce(existingOutputUnlisten)
       .mockRejectedValueOnce(new Error("existing lifecycle failed"))
       .mockRejectedValueOnce(new Error("replacement output failed"));
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useTerminal({
         containerId: "container-1",
         environmentId: "env-1",
@@ -2110,7 +2115,7 @@ describe("useTerminal reconnect behavior", () => {
       .mockResolvedValueOnce({ output: "still one", revision: 1, generation: 1 })
       .mockResolvedValueOnce({ output: "one-two", revision: 2, generation: 1 });
     const received: string[] = [];
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useTerminal({
         containerId: "container-1",
         existingSessionId: "session-old",
@@ -2150,7 +2155,7 @@ describe("useTerminal reconnect behavior", () => {
       .mockResolvedValueOnce({ output: "still one", revision: 1, generation: 1 })
       .mockResolvedValueOnce({ output: "still one again", revision: 1, generation: 1 })
       .mockResolvedValueOnce({ output: "one through three", revision: 3, generation: 1 });
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useTerminal({
         containerId: "container-1",
         existingSessionId: "session-old",
@@ -2186,7 +2191,7 @@ describe("useTerminal reconnect behavior", () => {
       revision: 1,
       generation: 1,
     });
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useTerminal({
         containerId: "container-1",
         existingSessionId: "session-old",
@@ -2233,7 +2238,7 @@ describe("useTerminal reconnect behavior", () => {
       )
       .mockResolvedValue({ output: "authoritative", revision: 1_025, generation: 1 });
     const received: string[] = [];
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useTerminal({
         containerId: "container-1",
         existingSessionId: "session-old",
@@ -2276,7 +2281,7 @@ describe("useTerminal reconnect behavior", () => {
       return unlistenMock;
     });
     const received: string[] = [];
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useTerminal({
         containerId: "container-1",
         existingSessionId: "session-old",
@@ -2309,7 +2314,7 @@ describe("useTerminal reconnect behavior", () => {
       return unlistenMock;
     });
     const received: string[] = [];
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useTerminal({
         containerId: "container-1",
         existingSessionId: "session-old",
@@ -2353,7 +2358,7 @@ describe("useTerminal reconnect behavior", () => {
         generation: 1,
       });
     const replayed: string[] = [];
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useTerminal({
         containerId: "container-1",
         existingSessionId: "session-old",
@@ -2385,7 +2390,7 @@ describe("useTerminal reconnect behavior", () => {
       output: string;
       degraded?: "snapshot-error" | "truncated";
     }> = [];
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useTerminal({
         containerId: "container-1",
         existingSessionId: "session-old",
@@ -2432,7 +2437,7 @@ describe("useTerminal reconnect behavior", () => {
       completed: true,
     });
     const applied: Array<{ output: string; truncated?: boolean }> = [];
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useTerminal({
         containerId: "container-1",
         existingSessionId: "session-old",
@@ -2473,7 +2478,7 @@ describe("useTerminal reconnect behavior", () => {
   it("contains resize and write failures without dropping the active session", async () => {
     resizeTerminalMock.mockRejectedValueOnce(new Error("resize failed"));
     writeTerminalMock.mockRejectedValueOnce(new Error("write failed"));
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useTerminal({
         containerId: "container-1",
         persistSession: true,
@@ -2498,7 +2503,7 @@ describe("useTerminal reconnect behavior", () => {
 
   it("offers a reconnect button that rebuilds the session a failed write left closed", async () => {
     writeTerminalMock.mockRejectedValueOnce(new Error(TERMINAL_INPUT_CLOSED_MESSAGE));
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useTerminal({
         containerId: "container-1",
         persistSession: true,
@@ -2538,7 +2543,7 @@ describe("useTerminal reconnect behavior", () => {
     it(`resumes ${isLocal ? "local" : "container"} input without restarting the shell`, async () => {
       const writeMock = isLocal ? writeLocalTerminalMock : writeTerminalMock;
       writeMock.mockRejectedValueOnce(new Error("write timed out"));
-      const { result } = renderHook(() =>
+      const { result } = renderHookInAppCommandScope(() =>
         useTerminal({
           containerId: isLocal ? null : "container-1",
           environmentId: "env-1",
@@ -2577,7 +2582,7 @@ describe("useTerminal reconnect behavior", () => {
   it("keeps the toast open when there was nothing to resume", async () => {
     writeTerminalMock.mockRejectedValueOnce(new Error("write failed"));
     resumeTerminalInputMock.mockImplementationOnce(async () => false);
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useTerminal({
         containerId: "container-1",
         persistSession: true,
@@ -2602,7 +2607,7 @@ describe("useTerminal reconnect behavior", () => {
 
   it("reports a failed local terminal write against its own session", async () => {
     writeLocalTerminalMock.mockRejectedValueOnce(new Error("local write failed"));
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useTerminal({
         containerId: null,
         environmentId: "env-1",
@@ -2629,7 +2634,7 @@ describe("useTerminal reconnect behavior", () => {
     // The browser gateway rethrows whatever reason it was disposed with, which
     // is not required to be an Error.
     writeTerminalMock.mockImplementationOnce(() => Promise.reject("gateway replaced"));
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useTerminal({
         containerId: "container-1",
         persistSession: true,
@@ -2650,7 +2655,7 @@ describe("useTerminal reconnect behavior", () => {
   });
 
   it("reports rather than silently drops input issued with no active session", async () => {
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useTerminal({
         containerId: "container-1",
         terminalKey: "tab-1",
@@ -2684,7 +2689,7 @@ describe("useTerminal reconnect behavior", () => {
           resolveCreate = resolve;
         }),
     );
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useTerminal({
         containerId: "container-1",
         terminalKey: "tab-1",
@@ -2719,7 +2724,7 @@ describe("useTerminal reconnect behavior", () => {
     // `terminal_write` answers `{ delivered: false }` when the PTY is gone, so
     // the promise resolves and only the payload says the keystroke was dropped.
     writeTerminalMock.mockResolvedValueOnce(false);
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useTerminal({
         containerId: "container-1",
         persistSession: true,
@@ -2742,7 +2747,7 @@ describe("useTerminal reconnect behavior", () => {
   it("reports a no-session fault once and recovers after a connected write", async () => {
     resetLogger();
     const warn = spyOn(console, "warn").mockImplementation(() => undefined);
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useTerminal({ containerId: "container-1", persistSession: true }),
     );
     try {
@@ -2774,7 +2779,7 @@ describe("useTerminal reconnect behavior", () => {
     resetLogger();
     const warn = spyOn(console, "warn").mockImplementation(() => undefined);
     writeTerminalMock.mockImplementation(async () => false);
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useTerminal({
         containerId: "container-1",
         persistSession: true,
@@ -2819,7 +2824,7 @@ describe("useTerminal reconnect behavior", () => {
         it(`offers only Reconnect for ${isLocal ? "local" : "container"} refusal: ${message}`, async () => {
           const writeMock = isLocal ? writeLocalTerminalMock : writeTerminalMock;
           writeMock.mockRejectedValueOnce(new Error(message));
-          const { result } = renderHook(() =>
+          const { result } = renderHookInAppCommandScope(() =>
             useTerminal({
               containerId: isLocal ? null : "container-1",
               environmentId: "env-1",
@@ -2843,7 +2848,7 @@ describe("useTerminal reconnect behavior", () => {
   }
 
   it("stays quiet when the backend confirms the keystroke reached a shell", async () => {
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useTerminal({
         containerId: "container-1",
         persistSession: true,
@@ -2861,7 +2866,7 @@ describe("useTerminal reconnect behavior", () => {
   it("suppresses the expected session-not-found resize error during teardown", async () => {
     const logs = captureLogs();
     resizeTerminalMock.mockRejectedValueOnce(new Error("Session not found"));
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useTerminal({
         containerId: "container-1",
         persistSession: true,
@@ -2897,7 +2902,7 @@ describe("useTerminal reconnect behavior", () => {
   });
 
   it("does not terminate a backend-owned persistent session when renderer props change", async () => {
-    const { result, rerender } = renderHook(
+    const { result, rerender } = renderHookInAppCommandScope(
       ({ containerId }) =>
         useTerminal({
           containerId,
@@ -2921,7 +2926,7 @@ describe("useTerminal reconnect behavior", () => {
   });
 
   it("releases only renderer consumption when an ephemeral terminal unmounts", async () => {
-    const { result, unmount } = renderHook(() =>
+    const { result, unmount } = renderHookInAppCommandScope(() =>
       useTerminal({ containerId: "container-1", persistSession: false }),
     );
     await act(async () => {
@@ -2937,7 +2942,7 @@ describe("useTerminal reconnect behavior", () => {
   });
 
   it("releases only renderer consumption when a local ephemeral terminal unmounts", async () => {
-    const { result, unmount } = renderHook(() =>
+    const { result, unmount } = renderHookInAppCommandScope(() =>
       useTerminal({
         containerId: null,
         environmentId: "env-1",

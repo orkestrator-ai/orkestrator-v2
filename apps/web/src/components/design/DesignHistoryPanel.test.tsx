@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { DesignCanvas, DesignHistoryStatus } from "@orkestrator/protocol/design-canvas";
 import type {
   DesignCheckpointPreview,
@@ -124,7 +125,7 @@ function renderPanel(current: DesignProjection, focusFrameId: string | null = nu
     onUseAsReference,
     api,
   };
-  const view = render(<DesignHistoryPanel {...props} projection={current} />);
+  const view = renderInAppCommandScope(<DesignHistoryPanel {...props} projection={current} />);
   return {
     ...view,
     update: (next: DesignProjection, extra: Partial<typeof props> = {}) =>

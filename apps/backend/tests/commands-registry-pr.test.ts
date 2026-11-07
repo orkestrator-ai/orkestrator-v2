@@ -1,4 +1,6 @@
 import { describe, expect, mock, spyOn, test } from "bun:test";
+import { decodeCommandArgs } from "@orkestrator/protocol/contract/command";
+import { generateReviewPackageCommand } from "@orkestrator/protocol/contract/domains/pull-requests";
 import { fakePid } from "@orkestrator/protocol/testing/fake-pids";
 
 import { createCommandFixtures } from "./command-fixtures";
@@ -2315,19 +2317,19 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
         ),
       ).rejects.toThrow("additionalLimitations");
     }
-    await expect(
-      command(
-        {
-          environmentId: environment.id,
-          packageId,
-          round: 1,
-          targetBranch: "main",
-          preparation: { validation: [], uncommittedFiles: [], limitations: [] },
-          packageContext: { ticketTitle: "must not enter the workspace" },
-        },
-        context,
-      ),
-    ).rejects.toThrow("Unexpected generate_review_package field: packageContext");
+    // Defined in the `pull-requests` domain (plan item 7006): an unknown
+    // argument key is dropped before the handler runs, so it never reaches
+    // the package (the nested `preparation` record stays strict).
+    const decoded = decodeCommandArgs(generateReviewPackageCommand, {
+      environmentId: environment.id,
+      packageId,
+      round: 1,
+      targetBranch: "main",
+      preparation: { validation: [], uncommittedFiles: [], limitations: [] },
+      packageContext: { ticketTitle: "must not enter the workspace" },
+    });
+    expect(decoded._tag).toBe("Success");
+    if (decoded._tag === "Success") expect(decoded.success).not.toHaveProperty("packageContext");
   });
 
   test("waits for a local bridge server to pass health before persisting pid and port", async () => {
@@ -3017,12 +3019,15 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
     expect(() =>
       commands.get("peek_local_agent_bridge")?.({ environmentId: "  ", agent: "claude" }, context),
     ).toThrow();
+    // A defined command (plan item 7009) drops an unknown key; one the sender
+    // marks critical is refused.
     expect(() =>
       commands.get("peek_container_agent_bridge")?.(
         { containerId: "container-1", agent: "claude", extra: 1 },
         context,
+        { critical: ["extra"] },
       ),
-    ).toThrow();
+    ).toThrow("extra");
   });
 
   test("restarts a healthy local Claude bridge whose auth token this process no longer holds", async () => {

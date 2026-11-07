@@ -2,7 +2,9 @@ import type { GraphTemplateRef } from "@orkestrator/protocol/graphs/library";
 import type { GraphMockPins } from "@orkestrator/protocol/graphs/mock";
 import type { GraphRunBindings, GraphRunTemplateRef } from "@orkestrator/protocol/graphs/run";
 import type { GraphScalarValue } from "@orkestrator/protocol/graphs/template";
-import { machineInvoke, type AccountMachine } from "./agent-accounts";
+import { type AccountMachine } from "./agent-accounts";
+import { graphsOn } from "@/lib/node-scope/domains/graphs";
+import { commandBackendClient, type BackendClient } from "./client";
 
 /**
  * Mock runs (item 213): `graph_run_mock` compiles a stored template and
@@ -54,16 +56,30 @@ export interface GraphRunEffect {
   error?: string;
 }
 
-export function launchGraphMockRun(
-  request: GraphMockLaunchRequest,
-  machine?: AccountMachine,
-): Promise<GraphMockLaunchResponse> {
-  return machineInvoke(machine, "graph_run_mock", { ...request });
+/**
+ * This file's commands on `client`'s node (plan item 3002). A scoped store or
+ * service passes its own node's client; the named exports below are this
+ * over the window's command scope.
+ */
+export function createGraphMockApi(client: BackendClient) {
+  function launchGraphMockRun(
+    request: GraphMockLaunchRequest,
+    machine?: AccountMachine,
+  ): Promise<GraphMockLaunchResponse> {
+    return graphsOn(client, machine).graph_run_mock({ ...request });
+  }
+
+  function listGraphRunEffects(
+    runId: string,
+    machine?: AccountMachine,
+  ): Promise<{ effects: GraphRunEffect[] }> {
+    return graphsOn(client, machine).graph_run_effects({ runId });
+  }
+
+  return { launchGraphMockRun, listGraphRunEffects };
 }
 
-export function listGraphRunEffects(
-  runId: string,
-  machine?: AccountMachine,
-): Promise<{ effects: GraphRunEffect[] }> {
-  return machineInvoke(machine, "graph_run_effects", { runId });
-}
+export type GraphMockApi = ReturnType<typeof createGraphMockApi>;
+
+/** The window's command-scope binding (the counted shim, plan item 3002). */
+export const { launchGraphMockRun, listGraphRunEffects } = createGraphMockApi(commandBackendClient);

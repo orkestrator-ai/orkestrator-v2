@@ -25,7 +25,7 @@ import type {
   ProjectGitMirrorUsage,
   WorktreeLocationsSnapshot,
 } from "@/lib/backend";
-import { pickHostPath } from "@/lib/host-path-picker";
+import { usePickHostPath } from "@/lib/host-path-picker";
 import { isWindowMachine, useAccountMachine } from "./account-machine";
 import { cn } from "@/lib/utils";
 import {
@@ -104,6 +104,8 @@ function LocationRow({
 }
 
 function WorktreeLocations() {
+  // Browses the host of the node this component renders in.
+  const pickHostPath = usePickHostPath();
   const [locations, setLocations] = useState<WorktreeLocationsSnapshot | null>(null);
   const [saving, setSaving] = useState(false);
   const { machine } = useAccountMachine();

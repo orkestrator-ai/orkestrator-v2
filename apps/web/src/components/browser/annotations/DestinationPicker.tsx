@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useNodeScope, useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { Loader2, Plus, RefreshCw } from "lucide-react";
 import { nativeAgentCapabilities } from "@orkestrator/protocol/native-agent";
 import {
@@ -18,7 +19,7 @@ import { refreshWebAnnotations } from "@/lib/web-annotations/sync";
 import { cn } from "@/lib/utils";
 import {
   rememberedDestinationTabId,
-  useWebAnnotationPreferencesStore,
+  webAnnotationPreferencesStore,
 } from "@/stores/webAnnotationPreferencesStore";
 
 /** Last destination chosen per environment (a persisted preference; preselects only). */
@@ -92,10 +93,14 @@ export function DestinationPicker({
    */
   operation?: WebAnnotationRequestOperation | null;
 }) {
+  // This node's annotations (plan item 4001); the command node outside a node scope.
+  const annotationScope = useScopesWithCommandFallback().scope;
   const [options, setOptions] = useState<WebAnnotationDestinationOption[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState<string | null>(null);
+  // The node whose remembered destinations this environment's choice is kept with.
+  const preferenceScope = useNodeScope();
   // Each environment (or excluded session) loads its options afresh.
   const optionsKey = `${environmentId}\0${excludeTabId ?? ""}`;
   const [loadingFor, setLoadingFor] = useState(optionsKey);
@@ -118,7 +123,12 @@ export function DestinationPicker({
    */
   const fetchOptions = useCallback(
     () =>
-      webAnnotationCommand(WEB_ANNOTATION_COMMANDS.destinations, { environmentId })
+      webAnnotationCommand(
+        WEB_ANNOTATION_COMMANDS.destinations,
+        { environmentId },
+        undefined,
+        annotationScope,
+      )
         .then((result) => {
           const usable = excludeTabId
             ? result.options.filter((option) => option.destination.tabId !== excludeTabId)
@@ -137,7 +147,7 @@ export function DestinationPicker({
         .finally(() => {
           setLoading(false);
         }),
-    [environmentId, excludeTabId],
+    [annotationScope, environmentId, excludeTabId],
   );
   const refresh = () => {
     setLoading(true);
@@ -148,7 +158,7 @@ export function DestinationPicker({
     void fetchOptions().then((loaded) => {
       const { onChange: select, fallback: annotationDefault, valueTabId: chosen } = latest.current;
       if (!loaded || chosen) return;
-      const remembered = rememberedDestinationTabId(environmentId);
+      const remembered = rememberedDestinationTabId(environmentId, preferenceScope);
       // The note's own default is the most specific choice; the last
       // destination used in this environment comes next. Both only preselect.
       const preferred =
@@ -160,23 +170,33 @@ export function DestinationPicker({
         null;
       if (preferred) select(preferred);
     });
-  }, [environmentId, fetchOptions]);
+  }, [environmentId, fetchOptions, preferenceScope]);
 
   const choose = (option: WebAnnotationDestinationOption) => {
     onChange(option);
-    useWebAnnotationPreferencesStore
+    preferenceScope
+      .store(webAnnotationPreferencesStore)
       .getState()
       .rememberDestination(environmentId, option.destination.tabId);
     if (defaultFor) {
-      void webAnnotationCommand(WEB_ANNOTATION_COMMANDS.update, {
-        environmentId,
-        operationId: newWebAnnotationOperationId("default-destination"),
-        annotationId: defaultFor.annotationId,
-        expectedMetadataRevision: defaultFor.metadataRevision,
-        defaultDestination: option.destination,
-      })
+      void webAnnotationCommand(
+        WEB_ANNOTATION_COMMANDS.update,
+        {
+          environmentId,
+          operationId: newWebAnnotationOperationId("default-destination"),
+          annotationId: defaultFor.annotationId,
+          expectedMetadataRevision: defaultFor.metadataRevision,
+          defaultDestination: option.destination,
+        },
+        undefined,
+        annotationScope,
+      )
         .then(() =>
-          refreshWebAnnotations(environmentId, { annotationIds: [defaultFor.annotationId] }),
+          refreshWebAnnotations(
+            environmentId,
+            { annotationIds: [defaultFor.annotationId] },
+            annotationScope,
+          ),
         )
         .catch(() => undefined);
     }

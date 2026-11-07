@@ -4,9 +4,9 @@
  * off, it waits in the queue with a Steer button, as on a native agent tab.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
-import { useConfigStore } from "@/stores/configStore";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import type { BuildPipeline } from "@/stores/buildPipelineStore";
+import { configStore } from "@/stores/configStore";
 import { mockToastError, mockToastInfo, mockToastSuccess } from "../../../../../tests/mocks/sonner";
 import {
   BuildChatTab,
@@ -17,11 +17,16 @@ import {
   steerPipelineMock,
   steerQueuedMock,
   tabData,
+  buildChatScope,
+  cleanupBuildChatScope,
+  pipelineStore,
+  renderInBuildChat,
 } from "./build-chat-tab-test-support";
 import { newReviewValidationRun } from "@orkestrator/protocol/review-workflow";
 import { queuedSteerNotice } from "./PipelineMessageComposer";
 
 afterAll(restoreBuildChatTabMocks);
+afterEach(cleanupBuildChatScope);
 
 const buildSession = pipeline.sessions[0]!;
 const running: BuildPipeline = {
@@ -36,20 +41,22 @@ const betweenTurns: BuildPipeline = {
 };
 const queuedMessage = { id: "q1", text: "use the helper", createdAt: "2026-07-29T00:02:00.000Z" };
 
-const originalConfig = useConfigStore.getState().config;
+const originalConfig = buildChatScope().store(configStore).getState().config;
 
 function setAutoSteer(autoSteer: boolean) {
-  useConfigStore.setState({
-    config: { ...originalConfig, global: { ...originalConfig.global, autoSteer } },
-  });
+  buildChatScope()
+    .store(configStore)
+    .setState({
+      config: { ...originalConfig, global: { ...originalConfig.global, autoSteer } },
+    });
 }
 
 function renderComposer(next: BuildPipeline = running) {
-  useBuildPipelineStore.setState({
+  pipelineStore().setState({
     pipelines: new Map([[next.id, next]]),
     buildEnvironmentIds: new Set([next.environmentId]),
   });
-  render(<BuildChatTab data={tabData} />);
+  renderInBuildChat(<BuildChatTab data={tabData} />);
   return screen.getByLabelText("Send a message to the agent") as HTMLTextAreaElement;
 }
 
@@ -60,7 +67,7 @@ function sendText(box: HTMLTextAreaElement, text: string) {
 
 function currentQueue(): string[] {
   return (
-    useBuildPipelineStore
+    pipelineStore()
       .getState()
       .pipelines.get(running.id)
       ?.pendingUserMessages?.map(({ text }) => text) ?? []
@@ -80,7 +87,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  useConfigStore.setState({ config: originalConfig });
+  buildChatScope().store(configStore).setState({ config: originalConfig });
 });
 
 describe("Auto-steer on", () => {
@@ -125,7 +132,7 @@ describe("Auto-steer on", () => {
   test("a refused steer leaves the message queued and says so", async () => {
     steerQueuedMock.mockImplementationOnce(async (pipelineId: string) => ({
       pipeline: {
-        ...useBuildPipelineStore.getState().pipelines.get(pipelineId)!,
+        ...pipelineStore().getState().pipelines.get(pipelineId)!,
         pendingUserMessages: [{ ...queuedMessage, id: "queued-1" }],
         backendRevision: 30,
       },
@@ -149,7 +156,7 @@ describe("Auto-steer on", () => {
   test("a message that lost the race is reported as the next turn", async () => {
     steerQueuedMock.mockImplementationOnce(async (pipelineId: string) => ({
       pipeline: {
-        ...useBuildPipelineStore.getState().pipelines.get(pipelineId)!,
+        ...pipelineStore().getState().pipelines.get(pipelineId)!,
         backendRevision: 31,
       },
       delivery: "gone" as const,
@@ -169,7 +176,7 @@ describe("Auto-steer on", () => {
   test("an unconfirmed steer warns and hands the text back", async () => {
     steerQueuedMock.mockImplementationOnce(async (pipelineId: string) => ({
       pipeline: {
-        ...useBuildPipelineStore.getState().pipelines.get(pipelineId)!,
+        ...pipelineStore().getState().pipelines.get(pipelineId)!,
         backendRevision: 32,
       },
       delivery: "unconfirmed" as const,
@@ -328,7 +335,7 @@ describe("Auto-steer off", () => {
 
   test("a refused Steer click is an error and the message stays queued", async () => {
     steerQueuedMock.mockImplementationOnce(async (pipelineId: string) => ({
-      pipeline: useBuildPipelineStore.getState().pipelines.get(pipelineId)!,
+      pipeline: pipelineStore().getState().pipelines.get(pipelineId)!,
       delivery: "queued" as const,
       notice: "The turn is not accepting steering.",
     }));
@@ -347,7 +354,7 @@ describe("Auto-steer off", () => {
   test("a Steer click that loses the race says the message already left", async () => {
     steerQueuedMock.mockImplementationOnce(async (pipelineId: string) => ({
       pipeline: {
-        ...useBuildPipelineStore.getState().pipelines.get(pipelineId)!,
+        ...pipelineStore().getState().pipelines.get(pipelineId)!,
         pendingUserMessages: undefined,
       },
       delivery: "gone" as const,
@@ -366,7 +373,7 @@ describe("Auto-steer off", () => {
   test("an unconfirmed Steer click hands the text back without overwriting a draft", async () => {
     const unconfirmed = async (pipelineId: string) => ({
       pipeline: {
-        ...useBuildPipelineStore.getState().pipelines.get(pipelineId)!,
+        ...pipelineStore().getState().pipelines.get(pipelineId)!,
         pendingUserMessages: undefined,
       },
       delivery: "unconfirmed" as const,
@@ -487,7 +494,7 @@ describe("Auto-steer off", () => {
 
   test("Edit does not load a message that already left the queue", async () => {
     removeQueuedMock.mockImplementationOnce(async (pipelineId: string) => ({
-      pipeline: useBuildPipelineStore.getState().pipelines.get(pipelineId)!,
+      pipeline: pipelineStore().getState().pipelines.get(pipelineId)!,
       removed: false,
     }));
     const box = renderComposer({ ...running, pendingUserMessages: [queuedMessage] });

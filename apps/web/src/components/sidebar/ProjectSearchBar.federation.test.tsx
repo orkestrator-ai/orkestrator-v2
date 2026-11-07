@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { projectKey, projectRef, type BackendId } from "@orkestrator/protocol/federation";
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 import { FederationProvider } from "@/components/federation/FederationProvider";
@@ -12,12 +13,19 @@ import {
   uninstallDesktopFake,
 } from "@/test/federation-desktop-fake";
 import { portalStore } from "@/lib/portal/portal-store";
-import { useConfigStore } from "@/stores/configStore";
+import { configStore } from "@/stores/configStore";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
-import { useUIStore } from "@/stores/uiStore";
+import { uiStore } from "@/stores/uiStore";
 import type { Environment, Project } from "@/types";
 import { ProjectSearchBar } from "./ProjectSearchBar";
+import { selectOnNode } from "@/test/node-selection";
+import { FakeNodeClient } from "@/test/render-in-node-scope";
+import { getWindowScope } from "@/lib/node-scope/app-window-scope";
+import { noteAuthoritativeRead } from "@/lib/node-scope/snapshot-sync";
+import { environmentStore } from "@/stores/environmentStore";
+import { projectStore } from "@/stores/projectStore";
+import { appCommandStore } from "@/test/app-command-store";
 
 const INITIAL_MACHINE_VIEW_STATE = useMachineViewStore.getState();
 const INITIAL_REMOTE_WORKSPACE_STATE = useRemoteWorkspaceStore.getState();
@@ -103,7 +111,7 @@ function renderSearch(projects = [localProject], environments = [localEnvironmen
   const onSelectProject = mock((_projectId: string) => undefined);
   const onSelectEnvironment = mock((_environmentId: string) => undefined);
   const onSelectMachineProject = mock((_machine: MachineView, _projectId: string) => undefined);
-  render(
+  renderInAppCommandScope(
     <FederationProvider>
       <ProjectSearchBar
         projects={projects}
@@ -134,8 +142,8 @@ describe("ProjectSearchBar across machines", () => {
     localStorage.removeItem("machine-view-storage");
     useMachineViewStore.setState(INITIAL_MACHINE_VIEW_STATE, true);
     useRemoteWorkspaceStore.setState(INITIAL_REMOTE_WORKSPACE_STATE, true);
-    useUIStore.setState({ recentProjectIds: [] });
-    useConfigStore.setState((state) => ({
+    appCommandStore(uiStore).setState({ recentProjectIds: [] });
+    appCommandStore(configStore).setState((state) => ({
       config: { ...state.config, repositories: {} },
     }));
     install();
@@ -151,9 +159,11 @@ describe("ProjectSearchBar across machines", () => {
 
   for (const state of ["current", "stale", "blocked"] as const) {
     test(`remote search hit reacts to the checks setting with an unchanged ${state} PR summary`, async () => {
-      const initialConfig = useConfigStore.getState().config;
+      const initialConfig = appCommandStore(configStore).getState().config;
       try {
-        useConfigStore.getState().updateGlobalConfig({ autoMergeRequireChecks: true });
+        appCommandStore(configStore)
+          .getState()
+          .updateGlobalConfig({ autoMergeRequireChecks: true });
         renderSearch();
         await openAndType("run-desktop");
         await option("run-desktop-app, environment of orkestrator-v2 on mbp3");
@@ -184,7 +194,9 @@ describe("ProjectSearchBar across machines", () => {
         );
         for (const requireChecks of [true, false, true]) {
           act(() =>
-            useConfigStore.getState().updateGlobalConfig({ autoMergeRequireChecks: requireChecks }),
+            appCommandStore(configStore)
+              .getState()
+              .updateGlobalConfig({ autoMergeRequireChecks: requireChecks }),
           );
           expect(row.querySelector("[data-merge-ready]") !== null).toBe(
             state === "current" && !requireChecks,
@@ -193,7 +205,7 @@ describe("ProjectSearchBar across machines", () => {
         }
       } finally {
         cleanup();
-        useConfigStore.setState({ config: initialConfig });
+        appCommandStore(configStore).setState({ config: initialConfig });
       }
     });
   }
@@ -462,7 +474,7 @@ describe("ProjectSearchBar across machines", () => {
     const localProjects = ["unranked", "legacy-second", "tg", "overlap", "modern"].map(
       (id, order) => ({ ...localProject, id, name: id, order }),
     );
-    useUIStore.setState({ recentProjectIds: ["tg", "legacy-second", "overlap"] });
+    appCommandStore(uiStore).setState({ recentProjectIds: ["tg", "legacy-second", "overlap"] });
     useMachineViewStore.setState({
       recentKeys: [
         projectKey(projectRef("bk_mbp3" as BackendId, "tg")),
@@ -489,16 +501,14 @@ describe("ProjectSearchBar across machines", () => {
     ]);
   });
 
-  test("navigation reported by an active realm leads the empty-query recent results", async () => {
+  test("navigation in another node's workspace leads the empty-query recent results", async () => {
     renderSearch();
     await openAndType("telegram");
     await option("telegram-scraper, project on mbp3");
     fireEvent.keyDown(screen.getByRole("combobox"), { key: "Escape" });
     act(() => {
       useRemoteWorkspaceStore.getState().open("bk_mbp3", { projectId: "tg" });
-      useRemoteWorkspaceStore
-        .getState()
-        .noteRealmSelection("bk_mbp3", { projectId: "ork-3", environmentId: "run" });
+      selectOnNode("bk_mbp3", { projectId: "ork-3", environmentId: "run" });
     });
     await openAndType("");
     const rows = screen.getAllByRole("option");
@@ -618,4 +628,62 @@ describe("ProjectSearchBar across machines", () => {
       expect(onSelectEnvironment).not.toHaveBeenCalled();
     });
   }
+  test("a machine whose scope the window holds warm is searched from that scope's stores", async () => {
+    renderSearch();
+    await openAndType("run-desktop");
+    await option("run-desktop-app, environment of orkestrator-v2 on mbp3");
+    const summaries = portalStore.getState().nodes;
+    // mbp3's scope, holding its own records with an environment renamed since the summary.
+    const scope = getWindowScope().open({
+      role: "leaf",
+      client: new FakeNodeClient({ nodeId: "bk_mbp3" as BackendId }),
+      tier: "warm",
+    });
+    try {
+      act(() => {
+        scope
+          .store(projectStore)
+          .getState()
+          .setProjects([
+            {
+              id: "tg",
+              name: "telegram-scraper",
+              gitUrl: "git@github.com:acme/telegram-scraper.git",
+              localPath: null,
+              addedAt: "2026-01-01T00:00:00.000Z",
+              order: 0,
+            },
+            {
+              id: "ork-3",
+              name: "orkestrator-v2",
+              gitUrl: "https://github.com/acme/orkestrator-v2.git",
+              localPath: null,
+              addedAt: "2026-01-01T00:00:00.000Z",
+              order: 1,
+            },
+          ]);
+        scope
+          .store(environmentStore)
+          .getState()
+          .setEnvironments([
+            {
+              ...localEnvironment,
+              id: "run",
+              projectId: "ork-3",
+              name: "ship-desktop-app",
+              branch: "develop",
+              status: "stopped",
+              worktreePath: "/Users/someone/worktrees/run-desktop-wt",
+            } as Environment,
+          ]);
+        noteAuthoritativeRead(scope, "environment");
+      });
+      const input = screen.getByRole("combobox", { name: "Search projects and environments" });
+      fireEvent.change(input, { target: { value: "ship-desktop" } });
+      await option("ship-desktop-app, environment of orkestrator-v2 on mbp3");
+      expect(portalStore.getState().nodes).toBe(summaries);
+    } finally {
+      scope.dispose();
+    }
+  });
 });

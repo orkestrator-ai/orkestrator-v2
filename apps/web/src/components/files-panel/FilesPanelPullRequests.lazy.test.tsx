@@ -1,9 +1,11 @@
 import { afterAll, afterEach, expect, mock, test } from "bun:test";
-import { cleanup, render, screen } from "@testing-library/react";
-import { useFilesPanelStore, useUIStore } from "@/stores";
-const filesState = useFilesPanelStore.getState();
-const uiState = useUIStore.getState();
+import { cleanup, screen } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
+import { filesPanelStore, uiStore } from "@/stores";
+const filesState = appCommandStore(filesPanelStore).getState();
+const uiState = appCommandStore(uiStore).getState();
 import * as realLoaders from "@/lib/lazy-view-loaders";
+import { appCommandStore } from "@/test/app-command-store";
 const snapshot = { ...realLoaders };
 const rejectImport = mock(async () => {
   throw new Error("Failed to fetch dynamically imported module");
@@ -17,18 +19,21 @@ const { FilesPanelPullRequests } = await import("./FilesPanelPullRequests");
 afterAll(() => mock.module("@/lib/lazy-view-loaders", () => snapshot));
 afterEach(() => {
   cleanup();
-  useFilesPanelStore.setState(filesState, true);
-  useUIStore.setState(uiState, true);
+  appCommandStore(filesPanelStore).setState(filesState, true);
+  appCommandStore(uiStore).setState(uiState, true);
 });
 test.each([false, true])(
   "pull request surface loading and import failure stay scoped (view=%s)",
   async (view) => {
-    useUIStore.setState({ selectedProjectId: "project", selectedEnvironmentId: null });
+    appCommandStore(uiStore).setState({
+      selectedProjectId: "project",
+      selectedEnvironmentId: null,
+    });
     if (view)
-      useFilesPanelStore
+      appCommandStore(filesPanelStore)
         .getState()
         .openPullRequest("target", { owner: "owner", repo: "repo", number: 1 });
-    render(
+    renderInAppCommandScope(
       <main>
         <nav>Files shell</nav>
         <FilesPanelPullRequests targetId="target" />

@@ -3,23 +3,20 @@
  * Review, a graph run or a pull request, on this machine or on another node.
  *
  * Mail tiles and the workers' prompts banner open these targets through
- * `openCoordinatorWorkTarget`; a realm workspace receives the local part of a
- * remote target as its `workTarget`.
+ * `openCoordinatorWorkTarget`; another node's workspace receives the local
+ * part of a remote target as its request's `workTarget`.
  */
 import type { NodeSummary } from "@orkestrator/protocol/node-summaries";
+import type { WorkspaceWorkTarget } from "@/lib/federation/workspace-request";
 
-export type LocalWorkTarget = Exclude<
-  CoordinatorWorkTarget,
-  { type: "remote" } | { type: "pull-request" }
->;
+/**
+ * Work on this machine: a worker's tab, a build, a Multi Review or a graph run.
+ * Shared with another node's workspace request (`WorkspaceRequest.workTarget`).
+ */
+export type LocalWorkTarget = WorkspaceWorkTarget;
 
 export type CoordinatorWorkTarget =
-  /** A worker environment on this machine, at the delegated tab when known. */
-  | { type: "worker-tab"; projectId: string; environmentId: string; tabId?: string }
-  /** A build pipeline's tab; the environment may not exist yet. */
-  | { type: "build"; projectId: string; pipelineId: string; environmentId?: string }
-  | { type: "review"; projectId: string; environmentId: string; workflowId: string }
-  | { type: "graph-run"; projectId: string; environmentId: string; runId: string; title?: string }
+  | LocalWorkTarget
   | { type: "pull-request"; url: string }
   /** Work on another node: its environment, through that node's workspace. */
   | {

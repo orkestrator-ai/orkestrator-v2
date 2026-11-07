@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import * as coordinatedPoll from "@/lib/coordinated-poll";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 
 import { invoke as nativeInvoke } from "@/lib/native/backend";
 import type { ContainerInfo, DockerSystemStats } from "@/lib/backend";
@@ -9,6 +10,16 @@ import { AccountMachineProvider } from "@/components/settings/account-machine";
 import { DockerSettings } from "./DockerSettings";
 
 const invokeMock = nativeInvoke as unknown as ReturnType<typeof mock>;
+
+/**
+ * The window's command scope (its `invoke`) answers `invoke_on_node` for the
+ * remote machine with `remote`; the window's own commands answer nothing.
+ */
+function routeRemote(remote: (command: string, args: Record<string, unknown>) => unknown) {
+  invokeMock.mockImplementation(async (command: string, args: Record<string, unknown> = {}) =>
+    command === "invoke_on_node" ? remote(command, args) : undefined,
+  );
+}
 
 const unknownStats: DockerSystemStats = {
   memoryUsed: null,
@@ -59,7 +70,7 @@ function install(stats: DockerSystemStats, containers: ContainerInfo[]) {
 describe("Docker settings section", () => {
   test("an unassigned pre-label container can be reattached", async () => {
     install(unknownStats, [container({ isAssigned: false, cleanupExclusion: "legacy-unadopted" })]);
-    render(<DockerSettings />);
+    renderInAppCommandScope(<DockerSettings />);
     expect(await screen.findByTitle("Reattach to project")).toBeTruthy();
     expect(screen.getByText("Legacy")).toBeTruthy();
     expect(screen.queryByText("Protected") === null).toBe(true);
@@ -71,7 +82,7 @@ describe("Docker settings section", () => {
 
   test("what Docker did not report reads as unknown, never as zero", async () => {
     install(unknownStats, [container({})]);
-    render(<DockerSettings />);
+    renderInAppCommandScope(<DockerSettings />);
     await screen.findByText(/Not measured: Docker did not answer/);
     expect(screen.getAllByText(/unknown/).length).toBeGreaterThanOrEqual(4);
     expect(screen.queryAllByText("0 B")).toHaveLength(0);
@@ -92,7 +103,7 @@ describe("Docker settings section", () => {
       },
       [container({})],
     );
-    render(<DockerSettings />);
+    renderInAppCommandScope(<DockerSettings />);
     await screen.findByText(/CPU: 2.50 cores/);
     expect(screen.getByText("2 out-of-memory kills")).toBeTruthy();
     expect(screen.getByText(/created time unknown/)).toBeTruthy();
@@ -102,7 +113,7 @@ describe("Docker settings section", () => {
 
   test("refresh reloads both the figures and the containers", async () => {
     const calls = install(unknownStats, []);
-    render(<DockerSettings />);
+    renderInAppCommandScope(<DockerSettings />);
     await screen.findByText(/Not measured/);
     const before = calls.filter((command) => command === "get_docker_system_stats").length;
     fireEvent.click(screen.getAllByRole("button", { name: "Refresh" })[0]!);
@@ -115,7 +126,7 @@ describe("Docker settings section", () => {
 
   test("asks for Docker when it is not running, without calling it", async () => {
     const calls = install(unknownStats, []);
-    render(
+    renderInAppCommandScope(
       <DockerAvailabilityProvider available={false}>
         <DockerSettings />
       </DockerAvailabilityProvider>,
@@ -135,7 +146,7 @@ describe("Docker settings section", () => {
     });
     try {
       const calls = install(unknownStats, []);
-      const view = render(
+      const view = renderInAppCommandScope(
         <DockerAvailabilityProvider available>
           <DockerSettings />
         </DockerAvailabilityProvider>,
@@ -183,7 +194,9 @@ describe("Docker settings section", () => {
       calls.push(command);
       const result =
         command === "check_docker"
-          ? { available, reason: null }
+          ? available
+            ? { available, reason: null }
+            : { available, reason: "daemon-unavailable" }
           : command === "get_docker_system_stats"
             ? unknownStats
             : command === "get_orkestrator_containers" || command === "get_projects"
@@ -191,10 +204,10 @@ describe("Docker settings section", () => {
               : undefined;
       return { outcome: "ok", result };
     });
-    window.orkestratorPortal = { invoke: remote } as never;
+    routeRemote(remote);
     invokeMock.mockClear();
     try {
-      const view = render(
+      const view = renderInAppCommandScope(
         <DockerAvailabilityProvider available={false}>
           <AccountMachineProvider value={{ machine: "bk_remote", name: "Build box" }}>
             <DockerSettings />
@@ -214,12 +227,12 @@ describe("Docker settings section", () => {
       expect(calls.filter((command) => command === "get_docker_system_stats")).toHaveLength(
         statsReads,
       );
-      expect(invokeMock).not.toHaveBeenCalled();
+      // Only routed calls: nothing reads the window's own Docker.
+      expect(invokeMock.mock.calls.filter(([command]) => command !== "invoke_on_node")).toEqual([]);
       view.unmount();
       expect(callbacks.size).toBe(0);
     } finally {
       cleanup();
-      delete window.orkestratorPortal;
       mock.restore();
     }
   });
@@ -235,26 +248,25 @@ describe("Docker settings section", () => {
     });
     let probeState: "available" | "error" | "stopped" = "available";
     let statsReads = 0;
-    window.orkestratorPortal = {
-      invoke: async (_command: string, args: Record<string, unknown>) => {
-        const command = args.command;
-        if (command === "check_docker" && probeState === "error")
-          throw new Error("Link interrupted");
-        const result =
-          command === "check_docker"
-            ? { available: probeState === "available", reason: null }
-            : command === "get_docker_system_stats"
-              ? { ...unknownStats, containersRunning: ++statsReads }
-              : command === "get_orkestrator_containers"
-                ? [container({ isAssigned: false, cleanupExclusion: null })]
-                : command === "get_projects"
-                  ? []
-                  : undefined;
-        return { outcome: "ok", result };
-      },
-    } as never;
+    routeRemote(async (_command: string, args: Record<string, unknown>) => {
+      const command = args.command;
+      if (command === "check_docker" && probeState === "error") throw new Error("Link interrupted");
+      const result =
+        command === "check_docker"
+          ? probeState === "available"
+            ? { available: true, reason: null }
+            : { available: false, reason: "daemon-unavailable" }
+          : command === "get_docker_system_stats"
+            ? { ...unknownStats, containersRunning: ++statsReads }
+            : command === "get_orkestrator_containers"
+              ? [container({ isAssigned: false, cleanupExclusion: null })]
+              : command === "get_projects"
+                ? []
+                : undefined;
+      return { outcome: "ok", result };
+    });
     try {
-      const view = render(
+      const view = renderInAppCommandScope(
         <AccountMachineProvider value={{ machine: "bk_remote", name: "Build box" }}>
           <DockerSettings />
         </AccountMachineProvider>,
@@ -294,7 +306,6 @@ describe("Docker settings section", () => {
       expect(callbacks.size).toBe(0);
     } finally {
       cleanup();
-      delete window.orkestratorPortal;
       mock.restore();
     }
   });
@@ -311,26 +322,24 @@ describe("Docker settings section", () => {
     });
     let failing = true;
     const reads: string[] = [];
-    window.orkestratorPortal = {
-      invoke: async (_command: string, args: Record<string, unknown>) => {
-        const command = args.command as string;
-        reads.push(command);
-        if (command === "check_docker" && failing) throw new Error("Node unavailable");
-        return {
-          outcome: "ok",
-          result:
-            command === "check_docker"
-              ? { available: true, reason: null }
-              : command === "get_docker_system_stats"
-                ? unknownStats
-                : command === "get_projects" || command === "get_orkestrator_containers"
-                  ? []
-                  : undefined,
-        };
-      },
-    } as never;
+    routeRemote(async (_command: string, args: Record<string, unknown>) => {
+      const command = args.command as string;
+      reads.push(command);
+      if (command === "check_docker" && failing) throw new Error("Node unavailable");
+      return {
+        outcome: "ok",
+        result:
+          command === "check_docker"
+            ? { available: true, reason: null }
+            : command === "get_docker_system_stats"
+              ? unknownStats
+              : command === "get_projects" || command === "get_orkestrator_containers"
+                ? []
+                : undefined,
+      };
+    });
     try {
-      const view = render(
+      const view = renderInAppCommandScope(
         <AccountMachineProvider value={{ machine: "bk_remote", name: "Build box" }}>
           <DockerSettings />
         </AccountMachineProvider>,
@@ -348,7 +357,6 @@ describe("Docker settings section", () => {
       expect(callbacks.size).toBe(0);
     } finally {
       cleanup();
-      delete window.orkestratorPortal;
       mock.restore();
     }
   });

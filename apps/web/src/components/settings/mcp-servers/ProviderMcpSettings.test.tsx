@@ -1,7 +1,8 @@
 import { toNodeEnvironmentSummary } from "@orkestrator/protocol/node-summaries";
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { StrictMode, Suspense } from "react";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 
 import {
   MCP_MANAGEMENT_CHANGED_EVENT,
@@ -16,8 +17,7 @@ import * as federation from "@/components/federation/FederationProvider";
 import { AccountMachineProvider } from "@/components/settings/account-machine";
 import { resetNodeEventsForTests } from "@/lib/federation/node-events";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
-import { useEnvironmentStore } from "@/stores/environmentStore";
-import { listen as nativeListen, NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
+import { listen as nativeListen } from "@/lib/native/events";
 import { requestMcpServerSettings } from "@/lib/mcp-settings-navigation";
 import { expectDomAbsent } from "../../../../../../tests/bounded-test-diagnostics";
 
@@ -207,7 +207,7 @@ describe("ProviderMcpSettings", () => {
         return baseHandlers.list_mcp_management_targets();
       },
     });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     expect(await screen.findByText("Targets unavailable")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
     expect(await screen.findByText("docs")).toBeTruthy();
@@ -228,14 +228,14 @@ describe("ProviderMcpSettings", () => {
         return snapshot({ target: fresh });
       },
     });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     expect(await screen.findByText("docs")).toBeTruthy();
     expect(lists).toBeGreaterThanOrEqual(2);
   });
 
   test("lists servers by source with status text, and links to Control MCP separately", async () => {
     install(baseHandlers);
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     expect(await screen.findByText("docs")).toBeTruthy();
     expect(screen.getByText("In use")).toBeTruthy();
     expect(screen.getByText("~/.claude.json")).toBeTruthy();
@@ -261,7 +261,7 @@ describe("ProviderMcpSettings", () => {
           freshness: "incomplete",
         }),
     });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     expect(await screen.findByText(/Could not be read/)).toBeTruthy();
     expect(screen.getByText(/cannot be listed until it is repaired/)).toBeTruthy();
     expectDomAbsent(screen.queryByText("No servers."), "empty-source text");
@@ -273,7 +273,7 @@ describe("ProviderMcpSettings", () => {
         throw new Error("Unknown backend command: list_mcp_management_targets");
       },
     });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     expect(await screen.findByText(/does not support managing MCP servers/)).toBeTruthy();
   });
 
@@ -287,7 +287,7 @@ describe("ProviderMcpSettings", () => {
         return { operation: {}, replayed: false, savedRevision: "r1.two", entryId: "x" };
       },
     });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     fireEvent.click(await screen.findByRole("button", { name: /Add server/ }));
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "files" } });
     fireEvent.change(screen.getByLabelText("Executable"), {
@@ -348,7 +348,7 @@ describe("ProviderMcpSettings", () => {
         return { operation: {}, replayed: false, savedRevision: "r1.two", entryId: "x" };
       },
     });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     fireEvent.click(await screen.findByRole("button", { name: "Edit docs" }));
     expect(await screen.findByText("Value saved")).toBeTruthy();
     expect(screen.getByText("(retained value)")).toBeTruthy();
@@ -381,7 +381,7 @@ describe("ProviderMcpSettings", () => {
         return { valid: true, fieldErrors: [], preview };
       },
     });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     fireEvent.click(await screen.findByRole("button", { name: "Edit docs" }));
     await screen.findByText("Value saved");
     fireEvent.click(screen.getByRole("button", { name: "Replace" }));
@@ -437,7 +437,7 @@ describe("ProviderMcpSettings", () => {
       },
     });
     requestMcpServerSettings({ provider: "codex" });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     fireEvent.click(await screen.findByRole("button", { name: "Edit docs" }));
     await screen.findByLabelText("URL");
     fireEvent.click(screen.getByRole("button", { name: "Command (stdio)" }));
@@ -484,7 +484,7 @@ describe("ProviderMcpSettings", () => {
         preview: null,
       }),
     });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     fireEvent.click(await screen.findByRole("button", { name: /Add server/ }));
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "remote" } });
     fireEvent.click(screen.getByRole("button", { name: "HTTP" }));
@@ -508,7 +508,7 @@ describe("ProviderMcpSettings", () => {
         );
       },
     });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     fireEvent.click(await screen.findByRole("button", { name: /Add server/ }));
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "files" } });
     fireEvent.change(screen.getByLabelText("Executable"), { target: { value: "files" } });
@@ -533,7 +533,7 @@ describe("ProviderMcpSettings", () => {
         },
       }),
     });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     fireEvent.click(await screen.findByRole("button", { name: "Remove docs" }));
     expect(
       await screen.findByText(
@@ -563,7 +563,7 @@ describe("ProviderMcpSettings", () => {
       },
     });
     requestMcpServerSettings({ provider: "pi", environmentId: "e1" });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     await waitFor(() => expect(snapshots).toContain("mcp1~pi~env~e1~x"));
   });
 
@@ -593,7 +593,7 @@ describe("ProviderMcpSettings", () => {
       return null;
     }
     requestMcpServerSettings({ provider: "pi", environmentId: "e1" });
-    render(
+    renderInAppCommandScope(
       <StrictMode>
         <Suspense fallback={null}>
           <ProviderMcpSettings />
@@ -608,7 +608,7 @@ describe("ProviderMcpSettings", () => {
     // Taken once mounted: a later plain open starts from the backend user.
     cleanup();
     snapshots.length = 0;
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     await waitFor(() => expect(snapshots).toContain(target.targetId));
   });
 
@@ -630,7 +630,7 @@ describe("ProviderMcpSettings", () => {
       },
     });
     requestMcpServerSettings({ provider: "pi", environmentId: "e1" });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     expect(await screen.findByText("docs-e1")).toBeTruthy();
 
     act(() => requestMcpServerSettings({ provider: "pi", environmentId: "e2" }));
@@ -669,7 +669,7 @@ describe("ProviderMcpSettings", () => {
         return { operation: {}, replayed: true, savedRevision: "r1.two", entryId: "x" };
       },
     });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     await reviewNewServer();
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByText(TRANSPORT_FAILURE)).toBeTruthy();
@@ -703,7 +703,7 @@ describe("ProviderMcpSettings", () => {
         return { operation: {}, replayed: true, savedRevision: "r1.two", entryId: "x" };
       },
     });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     fireEvent.click(await screen.findByRole("button", { name: "Remove docs" }));
     fireEvent.click(await screen.findByRole("button", { name: "Remove" }));
     expect(await screen.findByText(TRANSPORT_FAILURE)).toBeTruthy();
@@ -731,7 +731,7 @@ describe("ProviderMcpSettings", () => {
         return { operation: {}, replayed: false, savedRevision: "r1.two", entryId: "x" };
       },
     });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     await reviewNewServer();
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByText("Another change is in progress.")).toBeTruthy();
@@ -752,7 +752,7 @@ describe("ProviderMcpSettings", () => {
         return { operation: {}, replayed: false, savedRevision: "r1.two", entryId: "x" };
       },
     });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     fireEvent.click(await screen.findByRole("button", { name: "Remove docs" }));
     fireEvent.click(await screen.findByRole("button", { name: "Remove" }));
     expect(await screen.findByText("Another change is in progress.")).toBeTruthy();
@@ -770,7 +770,7 @@ describe("ProviderMcpSettings", () => {
         return snapshot();
       },
     });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     fireEvent.click(await screen.findByRole("button", { name: /Add server/ }));
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "files" } });
 
@@ -793,7 +793,7 @@ describe("ProviderMcpSettings", () => {
         });
       },
     });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     expect(await screen.findByText("docs")).toBeTruthy();
 
     // The change event arrives on a stream that survived; its re-read fails.
@@ -835,7 +835,7 @@ describe("ProviderMcpSettings", () => {
         return { valid: true, fieldErrors: [], preview };
       },
     });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     fireEvent.click(await screen.findByRole("button", { name: /Add server/ }));
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "files" } });
     fireEvent.change(screen.getByLabelText("Executable"), { target: { value: "files" } });
@@ -870,7 +870,7 @@ describe("ProviderMcpSettings", () => {
         return { valid: true, fieldErrors: [], preview };
       },
     });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     fireEvent.click(await screen.findByRole("button", { name: "Edit docs" }));
     await screen.findByText("Value saved");
     fireEvent.click(screen.getByRole("button", { name: "Replace" }));
@@ -956,7 +956,7 @@ describe("ProviderMcpSettings on another machine", () => {
       throw new Error(`Unexpected command ${command}`);
     });
 
-    render(
+    renderInAppCommandScope(
       <AccountMachineProvider value={{ machine: "leaf", name: "Leaf" }}>
         <ProviderMcpSettings />
       </AccountMachineProvider>,
@@ -977,140 +977,4 @@ describe("ProviderMcpSettings on another machine", () => {
     expect(await screen.findByRole("option", { name: "Leaf worktree (worktree)" })).toBeTruthy();
     expect(screen.queryByRole("option", { name: /Failed worktree/ }) === null).toBe(true);
   });
-});
-
-test("command-node environments, changes and reconnection come from the portal in a leaf window", async () => {
-  const originalEnvironments = useEnvironmentStore.getState().environments;
-  const listeners = new Map<string, Set<() => void>>();
-  const stops = mock(() => {});
-  const environmentTarget = {
-    ...target,
-    targetId: "mcp1~claude~env~command-env",
-    context: { ...target.context, kind: "environment" as const, environmentId: "command-env" },
-  };
-  const portal = mock(async (command: string, args?: Record<string, unknown>) => {
-    if (command === "list_mcp_management_targets" && args?.environmentId === "command-env")
-      return { protocolVersion: 1, backendId: "b1", targets: [environmentTarget] };
-    if (command === "get_mcp_management_snapshot" && args?.targetId === environmentTarget.targetId)
-      return snapshot({ target: environmentTarget });
-    const handler = baseHandlers[command as keyof typeof baseHandlers];
-    if (!handler) throw new Error(`Unexpected portal command: ${command}`);
-    return handler();
-  });
-  spyOn(federation, "useFederation").mockReturnValue({
-    portalState: {
-      selfId: "command",
-      nodes: [],
-      self: {
-        environments: [
-          {
-            ref: { environmentId: "command-env" },
-            name: "Command worktree",
-            environmentType: "local",
-            deleting: false,
-          },
-        ],
-      },
-    },
-  } as never);
-  window.orkestratorWorkspaceTarget = { nodeId: "leaf", nodeName: "Leaf", path: "direct" };
-  window.orkestratorPortal = {
-    invoke: portal,
-    listen: (event: string, callback: () => void) => {
-      const handlers = listeners.get(event) ?? new Set();
-      handlers.add(callback);
-      listeners.set(event, handlers);
-      return () => {
-        handlers.delete(callback);
-        stops();
-      };
-    },
-  } as never;
-  useEnvironmentStore.setState({
-    environments: [{ id: "leaf-env", name: "Leaf worktree", environmentType: "local" }] as never,
-  });
-  listenMock.mockClear();
-  try {
-    render(
-      <AccountMachineProvider value={{ machine: null, name: "Command" }}>
-        <ProviderMcpSettings />
-      </AccountMachineProvider>,
-    );
-    await screen.findByText("docs");
-    fireEvent.keyDown(screen.getByLabelText("Configuration for"), { key: "Enter" });
-    const commandEnvironment = await screen.findByRole("option", {
-      name: "Command worktree (worktree)",
-    });
-    expect(screen.queryByRole("option", { name: "Leaf worktree (worktree)" }) === null).toBe(true);
-    fireEvent.click(commandEnvironment);
-    await waitFor(() =>
-      expect(portal).toHaveBeenCalledWith("list_mcp_management_targets", {
-        environmentId: "command-env",
-      }),
-    );
-    for (const event of [MCP_MANAGEMENT_CHANGED_EVENT, NATIVE_EVENT_STREAM_CONNECTED_EVENT]) {
-      const before = portal.mock.calls.filter(
-        ([command]) => command === "get_mcp_management_snapshot",
-      ).length;
-      await act(async () => {
-        for (const callback of listeners.get(event) ?? []) callback();
-      });
-      await waitFor(() =>
-        expect(
-          portal.mock.calls.filter(([command]) => command === "get_mcp_management_snapshot").length,
-        ).toBeGreaterThan(before),
-      );
-      expect(listenMock.mock.calls.some((call: unknown[]) => call[0] === event)).toBe(false);
-    }
-    cleanup();
-    expect(stops.mock.calls.length).toBeGreaterThan(0);
-    expect(listeners.get(MCP_MANAGEMENT_CHANGED_EVENT)?.size).toBe(0);
-  } finally {
-    cleanup();
-    mock.restore();
-    useEnvironmentStore.setState({ environments: originalEnvironments });
-    delete window.orkestratorPortal;
-    delete window.orkestratorWorkspaceTarget;
-  }
-});
-
-test("the bound leaf uses its window environments and event stream", async () => {
-  const originalEnvironments = useEnvironmentStore.getState().environments;
-  window.orkestratorWorkspaceTarget = { nodeId: "leaf", nodeName: "Leaf", path: "direct" };
-  const portal = mock(async (command: string, args?: Record<string, unknown>) => {
-    if (command !== "invoke_on_node") throw new Error(`Unexpected command: ${command}`);
-    const handler = baseHandlers[String(args?.command) as keyof typeof baseHandlers];
-    return { outcome: "ok", result: handler() };
-  });
-  window.orkestratorPortal = { invoke: portal, listen: () => () => {} } as never;
-  useEnvironmentStore.setState({
-    environments: [{ id: "leaf-env", name: "Bound leaf", environmentType: "local" }] as never,
-  });
-  listenMock.mockClear();
-  try {
-    render(
-      <AccountMachineProvider value={{ machine: "leaf", name: "Leaf" }}>
-        <ProviderMcpSettings />
-      </AccountMachineProvider>,
-    );
-    await screen.findByText("docs");
-    fireEvent.keyDown(screen.getByLabelText("Configuration for"), { key: "Enter" });
-    await screen.findByRole("option", { name: "Bound leaf (worktree)" });
-    fireEvent.keyDown(screen.getByRole("listbox"), { key: "Escape" });
-    for (const event of [MCP_MANAGEMENT_CHANGED_EVENT, NATIVE_EVENT_STREAM_CONNECTED_EVENT]) {
-      const registrations = listenMock.mock.calls.filter((call: unknown[]) => call[0] === event);
-      expect(registrations.length).toBeGreaterThan(0);
-      const before = portal.mock.calls.length;
-      await act(async () => {
-        for (const [, callback] of registrations) (callback as () => void)();
-      });
-      await waitFor(() => expect(portal.mock.calls.length).toBeGreaterThan(before));
-    }
-    expect(portal.mock.calls.every(([command]) => command === "invoke_on_node")).toBe(true);
-  } finally {
-    cleanup();
-    useEnvironmentStore.setState({ environments: originalEnvironments });
-    delete window.orkestratorPortal;
-    delete window.orkestratorWorkspaceTarget;
-  }
 });

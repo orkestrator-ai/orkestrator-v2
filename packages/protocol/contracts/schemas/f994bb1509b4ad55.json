@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:f994bb1509b4ad556f555b29f7775b0c54fe749e999dc590740922f53deb8ea1",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "body": {
+          "type": "string"
+        },
+        "commentId": {
+          "type": "number"
+        },
+        "number": {
+          "type": "number"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "repo": {
+          "type": "string"
+        }
+      },
+      "required": ["body", "commentId", "number", "owner", "repo"],
+      "type": "object"
+    }
+  }
+}

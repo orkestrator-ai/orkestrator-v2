@@ -1,3 +1,4 @@
+import { eventSink } from "../src/core/backend-emit.js";
 import { PR_MONITOR_CHANGED_EVENT, type PrState } from "@orkestrator/protocol/pr-monitor";
 import {
   PR_CLOSED_COMMENT,
@@ -140,7 +141,7 @@ export function createLifecycleHarness(options: LifecycleHarnessOptions = {}) {
   const taskFor = (environmentId: string) => tasks.get(environmentId) ?? null;
 
   const service = new PrMonitorService({
-    emit: (event, payload) => emitted.push({ event, payload }),
+    emit: eventSink((event, payload) => emitted.push({ event, payload })),
     onWarning: (warning) => warnings.push(warning.event),
     now: () => new Date(time.now()).toISOString(),
     monotonicNow: time.now,

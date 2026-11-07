@@ -1,3 +1,4 @@
+import { eventSink } from "../src/core/backend-emit.js";
 import { rmSync } from "node:fs";
 import net from "node:net";
 import type { CommandContext } from "../src/core/commands-context.js";
@@ -211,7 +212,7 @@ export function durableLifecycleContext(
 ): CommandContext {
   const context = {
     storage,
-    emit: (event: string, payload: unknown) => emit(event, payload),
+    emit: eventSink((event, payload) => emit(event, payload)),
     appRoot: storage.getDataDir(),
     resourceRoot: storage.getDataDir(),
     environmentLifecycleTasks: new EnvironmentLifecycleTaskTracker(),
@@ -221,7 +222,7 @@ export function durableLifecycleContext(
     credentialSources: new Set(),
   } as unknown as CommandContext;
   Object.assign(context, {
-    runtime: new BackendRuntime({ emit: (event, payload) => context.emit(event, payload) }),
+    runtime: new BackendRuntime({ emit: context.emit }),
   });
   return context;
 }

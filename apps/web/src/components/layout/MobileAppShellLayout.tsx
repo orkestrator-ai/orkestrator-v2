@@ -24,6 +24,7 @@ import { useMergePrRequestStore } from "@/stores/mergePrRequestStore";
 import { useAppDialogStore } from "@/stores/appDialogStore";
 import { useBugReportStore } from "@/stores/bugReportStore";
 import { useGlobalSettingsStore } from "@/stores/globalSettingsStore";
+import { onDrawerNavigation } from "@/lib/mobile-shell";
 
 /**
  * Accessible name of the collapsed tools trigger.
@@ -135,6 +136,17 @@ export function MobileAppShellLayout({
     titleTooltipWasOpenOnPointerDownRef.current = false;
   }, [selectedEnvironmentId, selectedProjectId]);
 
+  // Choosing the environment already shown changes no selection; the drawer
+  // still gives way to it (a reload restores the selection, plan item 3006).
+  useEffect(
+    () =>
+      onDrawerNavigation(() => {
+        restoreSidebarFocusRef.current = false;
+        setSidebarOpen(false);
+      }),
+    [],
+  );
+
   const toolsOpenRef = useRef(toolsOpen);
   useEffect(() => {
     toolsOpenRef.current = toolsOpen;
@@ -200,8 +212,9 @@ export function MobileAppShellLayout({
     }
   }, [appDialogFocusReturn]);
 
-  // Realm dialogs live in another document and never update the local dialog
-  // store. Yield on each request even when local selection was already empty.
+  // Another node's dialog request is applied once its scope has loaded, not
+  // through the local dialog store first. Yield on each request even when
+  // local selection was already empty.
   useEffect(
     () =>
       useRemoteWorkspaceStore.subscribe((state, previous) => {
@@ -212,8 +225,7 @@ export function MobileAppShellLayout({
         if (
           !next.request.dialog &&
           !next.request.createEnvironmentProjectId &&
-          !next.request.addProject &&
-          !next.request.bugReport
+          !next.request.addProject
         )
           return;
         restoreSidebarFocusRef.current = false;

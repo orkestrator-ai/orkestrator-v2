@@ -1,3 +1,4 @@
+import { registrarFrom } from "../commands-registry-contracts.js";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import {
@@ -329,7 +330,9 @@ describe("container media streams", () => {
 describe("media stream commands", () => {
   test("are registered and return typed errors through the command layer", async () => {
     const commands = new Map<string, CommandHandler>();
-    registerTranscriptArtifactCommands((name, handler) => commands.set(name, handler));
+    registerTranscriptArtifactCommands(
+      registrarFrom((name, handler) => commands.set(name, handler)),
+    );
     expect(commands.has(TRANSCRIPT_ARTIFACT_COMMANDS.openMediaStream)).toBe(true);
     expect(commands.has(TRANSCRIPT_ARTIFACT_COMMANDS.closeMediaStream)).toBe(true);
     const service = { runtime: () => ({ contentServer: content }) };

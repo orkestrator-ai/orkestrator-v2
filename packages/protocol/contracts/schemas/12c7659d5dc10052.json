@@ -1,0 +1,115 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:12c7659d5dc100529921767bd5c83b8b19c495fe563247b41c00de591d1f4e71",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "annotations": {
+          "items": {
+            "additionalProperties": true,
+            "properties": {
+              "allowHistoricalEvidence": {
+                "type": "boolean"
+              },
+              "annotationId": {
+                "maxLength": 200,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+                "type": "string"
+              },
+              "desiredOutcome": {
+                "anyOf": [
+                  {
+                    "maxLength": 2000,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "expectedCaptureId": {
+                "maxLength": 200,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+                "type": "string"
+              },
+              "expectedContentRevision": {
+                "maximum": 9007199254740990,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": ["annotationId", "expectedCaptureId", "expectedContentRevision"],
+            "type": "object"
+          },
+          "maxItems": 20,
+          "type": "array"
+        },
+        "destination": {
+          "additionalProperties": true,
+          "properties": {
+            "agent": {
+              "enum": ["claude", "codex", "cursor", "grok", "opencode", "pi"],
+              "type": "string"
+            },
+            "label": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "logicalSessionKey": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            "tabId": {
+              "maxLength": 200,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+              "type": "string"
+            }
+          },
+          "required": ["agent", "logicalSessionKey", "tabId"],
+          "type": "object"
+        },
+        "environmentId": {
+          "maxLength": 200,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "type": "string"
+        },
+        "followUpOf": {
+          "maxLength": 200,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "type": "string"
+        },
+        "instruction": {
+          "maxLength": 8000,
+          "type": "string"
+        },
+        "operation": {
+          "enum": ["discuss", "implement"],
+          "type": "string"
+        },
+        "provenance": {
+          "not": {}
+        },
+        "retargetOf": {
+          "maxLength": 200,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "type": "string"
+        },
+        "textOnly": {
+          "type": "boolean"
+        }
+      },
+      "required": ["annotations", "destination", "environmentId", "instruction", "operation"],
+      "type": "object"
+    }
+  }
+}

@@ -1,4 +1,5 @@
-import { create } from "zustand";
+import { defineScopedStore } from "@/lib/node-scope/scoped-store";
+import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
 import { canonicalBuildPipeline } from "@orkestrator/protocol/workflow-vocabulary";
 import {
   BUILD_PIPELINE_VERSION,
@@ -33,7 +34,7 @@ export type {
   ResumableBuildPhase,
 };
 
-interface BuildPipelineState {
+export interface BuildPipelineState {
   /** Backend snapshots cached for rendering; never authored by this store. */
   pipelines: Map<string, BuildPipeline>;
   buildEnvironmentIds: Set<string>;
@@ -103,120 +104,132 @@ function without(
   return new Map(Array.from(pipelines).filter(([, pipeline]) => !predicate(pipeline)));
 }
 
-export const useBuildPipelineStore = create<BuildPipelineState>()((set, get) => ({
-  pipelines: new Map(),
-  buildEnvironmentIds: new Set(),
-  activeBuildEnvironmentIds: new Set(),
-  viewedSessionIds: new Map(),
+/**
+ * The renderer's projection of backend-owned build pipelines, per node: a
+ * pipeline belongs to the node that runs it (plan item 3011).
+ */
+export const buildPipelineStore = defineScopedStore<BuildPipelineState>(
+  "build-pipeline",
+  () => (set, get) => ({
+    pipelines: new Map(),
+    buildEnvironmentIds: new Set(),
+    activeBuildEnvironmentIds: new Set(),
+    viewedSessionIds: new Map(),
 
-  replacePipeline: (incoming) => {
-    const pipeline = canonicalBuildPipeline(incoming);
-    if (!isBuildPipeline(pipeline)) {
-      throw new Error("Invalid backend build pipeline snapshot");
-    }
-    set((state) => {
-      const current = state.pipelines.get(pipeline.id);
-      if (current && current.backendRevision > pipeline.backendRevision) {
-        return state;
+    replacePipeline: (incoming) => {
+      const pipeline = canonicalBuildPipeline(incoming);
+      if (!isBuildPipeline(pipeline)) {
+        throw new Error("Invalid backend build pipeline snapshot");
       }
-      const pipelines = new Map(state.pipelines);
-      // Control actions and list refreshes carry the authoritative state but
-      // omit transcript bodies. Preserve any locally loaded body by session
-      // key; its loaded revision lets the view detect a newer backend body.
-      const held = new Map(current?.sessions.map((session) => [session.sessionKey, session]) ?? []);
-      let carried = false;
-      const sessions = pipeline.sessions.map((session) => {
-        if (session.messages !== undefined) return session;
-        const previous = held.get(session.sessionKey);
-        if (!previous || previous.messages === undefined) return session;
-        carried = true;
-        const loadedMessageRevision =
-          (previous as typeof previous & { loadedMessageRevision?: number })
-            .loadedMessageRevision ??
-          previous.messageRevision ??
-          0;
-        return { ...session, messages: previous.messages, loadedMessageRevision };
+      set((state) => {
+        const current = state.pipelines.get(pipeline.id);
+        if (current && current.backendRevision > pipeline.backendRevision) {
+          return state;
+        }
+        const pipelines = new Map(state.pipelines);
+        // Control actions and list refreshes carry the authoritative state but
+        // omit transcript bodies. Preserve any locally loaded body by session
+        // key; its loaded revision lets the view detect a newer backend body.
+        const held = new Map(
+          current?.sessions.map((session) => [session.sessionKey, session]) ?? [],
+        );
+        let carried = false;
+        const sessions = pipeline.sessions.map((session) => {
+          if (session.messages !== undefined) return session;
+          const previous = held.get(session.sessionKey);
+          if (!previous || previous.messages === undefined) return session;
+          carried = true;
+          const loadedMessageRevision =
+            (previous as typeof previous & { loadedMessageRevision?: number })
+              .loadedMessageRevision ??
+            previous.messageRevision ??
+            0;
+          return { ...session, messages: previous.messages, loadedMessageRevision };
+        });
+        const merged = carried ? { ...pipeline, sessions } : pipeline;
+        pipelines.set(pipeline.id, merged);
+        return pipelineProjection(pipelines);
       });
-      const merged = carried ? { ...pipeline, sessions } : pipeline;
-      pipelines.set(pipeline.id, merged);
-      return pipelineProjection(pipelines);
-    });
-  },
+    },
 
-  removePipeline: (pipelineId) =>
-    set((state) => {
-      if (!state.pipelines.has(pipelineId)) return state;
-      const pipelines = new Map(state.pipelines);
-      pipelines.delete(pipelineId);
-      const viewedSessionIds = new Map(state.viewedSessionIds);
-      viewedSessionIds.delete(pipelineId);
-      return {
-        ...pipelineProjection(pipelines),
-        viewedSessionIds,
-      };
-    }),
+    removePipeline: (pipelineId) =>
+      set((state) => {
+        if (!state.pipelines.has(pipelineId)) return state;
+        const pipelines = new Map(state.pipelines);
+        pipelines.delete(pipelineId);
+        const viewedSessionIds = new Map(state.viewedSessionIds);
+        viewedSessionIds.delete(pipelineId);
+        return {
+          ...pipelineProjection(pipelines),
+          viewedSessionIds,
+        };
+      }),
 
-  removePipelinesForTask: (taskId) =>
-    set((state) => {
-      const pipelines = without(state.pipelines, (pipeline) => pipeline.taskId === taskId);
-      if (pipelines.size === state.pipelines.size) return state;
-      const viewedSessionIds = new Map(
-        Array.from(state.viewedSessionIds).filter(([pipelineId]) => pipelines.has(pipelineId)),
-      );
-      return {
-        ...pipelineProjection(pipelines),
-        viewedSessionIds,
-      };
-    }),
+    removePipelinesForTask: (taskId) =>
+      set((state) => {
+        const pipelines = without(state.pipelines, (pipeline) => pipeline.taskId === taskId);
+        if (pipelines.size === state.pipelines.size) return state;
+        const viewedSessionIds = new Map(
+          Array.from(state.viewedSessionIds).filter(([pipelineId]) => pipelines.has(pipelineId)),
+        );
+        return {
+          ...pipelineProjection(pipelines),
+          viewedSessionIds,
+        };
+      }),
 
-  removePipelinesForEnvironment: (environmentId) =>
-    set((state) => {
-      const pipelines = without(
-        state.pipelines,
-        (pipeline) => pipeline.environmentId === environmentId,
-      );
-      if (pipelines.size === state.pipelines.size) return state;
-      const viewedSessionIds = new Map(
-        Array.from(state.viewedSessionIds).filter(([pipelineId]) => pipelines.has(pipelineId)),
-      );
-      return {
-        ...pipelineProjection(pipelines),
-        viewedSessionIds,
-      };
-    }),
+    removePipelinesForEnvironment: (environmentId) =>
+      set((state) => {
+        const pipelines = without(
+          state.pipelines,
+          (pipeline) => pipeline.environmentId === environmentId,
+        );
+        if (pipelines.size === state.pipelines.size) return state;
+        const viewedSessionIds = new Map(
+          Array.from(state.viewedSessionIds).filter(([pipelineId]) => pipelines.has(pipelineId)),
+        );
+        return {
+          ...pipelineProjection(pipelines),
+          viewedSessionIds,
+        };
+      }),
 
-  setViewedSessionId: (pipelineId, sessionId) =>
-    set((state) => {
-      if (state.viewedSessionIds.get(pipelineId) === sessionId) return state;
-      const viewedSessionIds = new Map(state.viewedSessionIds);
-      if (sessionId) viewedSessionIds.set(pipelineId, sessionId);
-      else viewedSessionIds.delete(pipelineId);
-      return { viewedSessionIds };
-    }),
+    setViewedSessionId: (pipelineId, sessionId) =>
+      set((state) => {
+        if (state.viewedSessionIds.get(pipelineId) === sessionId) return state;
+        const viewedSessionIds = new Map(state.viewedSessionIds);
+        if (sessionId) viewedSessionIds.set(pipelineId, sessionId);
+        else viewedSessionIds.delete(pipelineId);
+        return { viewedSessionIds };
+      }),
 
-  getPipelineByTaskId: (taskId) =>
-    Array.from(get().pipelines.values()).find((pipeline) => pipeline.taskId === taskId),
+    getPipelineByTaskId: (taskId) =>
+      Array.from(get().pipelines.values()).find((pipeline) => pipeline.taskId === taskId),
 
-  getPipelineForGitHubIssue: (repositoryOwner, repositoryName, issueNumber, activeOnly = false) =>
-    Array.from(get().pipelines.values()).find(
-      (pipeline) =>
-        pipeline.source?.type === "github" &&
-        pipeline.source.repositoryOwner === repositoryOwner &&
-        pipeline.source.repositoryName === repositoryName &&
-        pipeline.source.issueNumber === issueNumber &&
-        (!activeOnly || isActiveBuildPhase(pipeline.phase)),
-    ),
+    getPipelineForGitHubIssue: (repositoryOwner, repositoryName, issueNumber, activeOnly = false) =>
+      Array.from(get().pipelines.values()).find(
+        (pipeline) =>
+          pipeline.source?.type === "github" &&
+          pipeline.source.repositoryOwner === repositoryOwner &&
+          pipeline.source.repositoryName === repositoryName &&
+          pipeline.source.issueNumber === issueNumber &&
+          (!activeOnly || isActiveBuildPhase(pipeline.phase)),
+      ),
 
-  getPipelineById: (id) => get().pipelines.get(id),
+    getPipelineById: (id) => get().pipelines.get(id),
 
-  getActivePipelineForEnvironment: (environmentId) => {
-    for (const pipeline of get().pipelines.values()) {
-      if (pipeline.environmentId === environmentId && isActiveBuildPhase(pipeline.phase)) {
-        return pipeline;
+    getActivePipelineForEnvironment: (environmentId) => {
+      for (const pipeline of get().pipelines.values()) {
+        if (pipeline.environmentId === environmentId && isActiveBuildPhase(pipeline.phase)) {
+          return pipeline;
+        }
       }
-    }
-    return undefined;
-  },
+      return undefined;
+    },
 
-  isBuildEnvironment: (environmentId) => get().buildEnvironmentIds.has(environmentId),
-}));
+    isBuildEnvironment: (environmentId) => get().buildEnvironmentIds.has(environmentId),
+  }),
+);
+
+/** Reads the nearest node scope's pipelines; other code uses `scope.store(buildPipelineStore)`. */
+export const useBuildPipelineStore = scopedStoreHook(buildPipelineStore);

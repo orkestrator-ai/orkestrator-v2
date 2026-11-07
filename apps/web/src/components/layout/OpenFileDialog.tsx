@@ -37,7 +37,11 @@ function isTypingTarget(target: EventTarget | null): boolean {
   return tagName === "input" || tagName === "textarea" || tagName === "select";
 }
 
-export function OpenFileDialog() {
+/**
+ * `enabled` false leaves ⌘⇧P to another instance: the window's own while a
+ * node shown in its tree (`InTreeWorkspace`) has one for that node.
+ */
+export function OpenFileDialog({ enabled = true }: { enabled?: boolean } = {}) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -67,7 +71,7 @@ export function OpenFileDialog() {
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented) {
+      if (event.defaultPrevented || (!enabled && !open)) {
         return;
       }
 
@@ -97,7 +101,7 @@ export function OpenFileDialog() {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [open]);
+  }, [enabled, open]);
 
   // Opening or closing, a new search, or another environment's files put the
   // selection back at the top; closing also clears the query.

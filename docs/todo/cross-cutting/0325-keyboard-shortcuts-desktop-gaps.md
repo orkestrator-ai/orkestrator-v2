@@ -5,6 +5,8 @@ forwarding ([architecture](../../architecture/keyboard-shortcuts.md)).
 
 ## Task analysis
 
+Analysed 2026-11-07 against unified-federation-b4c9ee65814d at `ae492c20c`. Plan items 6002 and 6003 deleted workspace realms: another node's workspace now renders in the window's own renderer through its node scope, so the "workspace realm" surface in tasks 5 and 6's matrix is obsolete and has been dropped from what is owed. Every other row still applies. Dated evidence below that names realms, and `workspace-realm-electron.spec.ts` (deleted by 6003), is kept as history.
+
 Analysed 2026-10-28 against `main` at `79f3bc97`.
 
 Updated 2026-10-30 for the chord change in `f32615aff` (#1449; the earlier
@@ -38,7 +40,7 @@ and with an interactive artifact.
 2. **Super-key behaviour outside macOS**: Super/Windows renderer handlers stay as they are, and Super+Shift+/ stays accepted. Status: done (decided).
 3. **Menu keyboard navigation does not toggle**: choosing View › Keyboard Shortcuts… with Enter opens the dialog; only the chord toggles it. Status: done.
 4. **Native menu workflow passes on CI**: `.github/workflows/native-application-menu.yml` passes on Linux/Xvfb and Windows. Status: done (2026-10-31: [workflow run 41220321295](https://github.com/orkestrator-ai/orkestrator-v2/actions/runs/41220321295) passed five menu and five cleanup iterations on each platform, with native input and no retries).
-5. **Packaged Linux native qualification**: the matrix below, plus the Linux menu-bar row, on a packaged Linux build. Status: partly done (2026-10-31: sidebar, terminal, Monaco and the menu bar pass on packaged X11; composer, previews, artifact, design frame, realm and Wayland not run).
+5. **Packaged Linux native qualification**: the matrix below, plus the Linux menu-bar row, on a packaged Linux build. Status: partly done (2026-10-31: sidebar, terminal, Monaco and the menu bar pass on packaged X11; composer, previews, artifact, design frame and Wayland not run; the realm surface is obsolete since 6002 and 6003, 2026-11-07).
 6. **Packaged macOS native qualification**: the matrix below, including the Cyrillic input source, on a packaged macOS build. Status: open (needs a macOS host).
 7. **Packaged About panel on macOS and Windows**: the panel reads "Orkestrator AI" with the right version and icon. Moved from to-do 1150 (deleted 2026-11-06). Status: open (needs a packaged macOS build; no Windows build is configured).
 
@@ -158,7 +160,7 @@ not a display difference.
 
 **Context.** The rows are under Outstanding work. The 2026-10-28 decision "Native qualification stays open" ruled out packaging and driving the app on this host then. `mise run package:linux` runs `bunx electron-builder --linux --dir` and then `bun scripts/install-packaged-app-linux.ts`, which installs into the desktop (`mise.toml:391-399`). A packaged app's backend defaults to gateway port 34121 (`apps/desktop/electron/backend-process.ts:720`), the live instance's port. `ORKESTRATOR_RUNTIME_PROFILE_FILE` is honoured in packaged builds too (`apps/desktop/electron/main.ts:194`) and moves the data directory and ports, but it also replaces the product name with the profile's title (`:196-198`), which changes what the About panel shows.
 
-**Investigation.** The two full-app Electron scenarios (`electron-main.spec.ts`, `workspace-realm-electron.spec.ts`) timed out at renderer startup on Xvfb on this host on 2026-10-28 (Current state), before any shortcut assertion. A packaged app on the same display may hit the same startup failure.
+**Investigation.** The two full-app Electron scenarios (`electron-main.spec.ts`, `workspace-realm-electron.spec.ts`, the second deleted with realms by 6003) timed out at renderer startup on Xvfb on this host on 2026-10-28 (Current state), before any shortcut assertion. A packaged app on the same display may hit the same startup failure.
 
 Update 2026-10-31: run on a packaged build of `931e5541`; results and setup are under "Packaged Linux qualification (2026-10-31)" in Current state. The packaged app started normally on Xvfb. Its document title is always "Orkestrator AI" because the packaged web bundle has no build-time `VITE_ORKESTRATOR_PROFILE` (`apps/web/src/renderer-entry.tsx:9-13`), so a check that waits for the profile's title, as the development specs do, times out against a packaged build without anything being wrong. The runtime profile did not change the About panel: GTK showed the executable name either way. The Linux menu-bar row is already partly covered by the fixture: Quit/Ctrl+Q, the Help › About role and menu navigation. The fixture's About panel showed "About electron" with no version, because the app sets no `setAboutPanelOptions` (none in `apps/desktop/electron`) and the fixture is not packaged.
 
@@ -430,7 +432,7 @@ locator and a quit timer); those were fixed and are not counted.
 | File › Quit (Ctrl+Q) quits | Window | Pass (process exited) | — |
 | Ctrl+Shift+/ | Composer | Not run (needs an agent tab; no provider turn was allowed) | — |
 | Ctrl+Shift+/, View › Keyboard Shortcuts… and dismissal | Browser/service preview | Not run (no service started) | — |
-| Ctrl+Shift+/ and Ctrl+K | Interactive artifact, design frame, workspace realm | Not run (not set up) | — |
+| Ctrl+Shift+/ and Ctrl+K | Interactive artifact, design frame, workspace realm | Not run (not set up; the workspace realm surface no longer exists since 6002 and 6003) | — |
 | Any row | Wayland | Not run (driving Wayland input here would use the user's live session) | — |
 
 Window › shows the window's own entry. Help holds only About: Check for
@@ -461,15 +463,18 @@ Automated Electron checks use Chromium input, which exercises
 Record these checks on packaged macOS and Linux builds. On Linux (X11), the
 sidebar, terminal and Monaco rows, the Ctrl+K rows for those surfaces and the
 whole menu-bar row passed on 2026-10-31 (Current state). Still open on Linux:
-the composer, browser/service preview, interactive artifact, design frame and
-workspace-realm surfaces, the preview-origin rows, and any Wayland run. macOS
-is open in full.
+the composer, browser/service preview, interactive artifact and design frame
+surfaces, the preview-origin rows, and any Wayland run. macOS is open in full.
+The workspace-realm surface was dropped on 2026-11-07: 6002 and 6003 deleted
+realms, and another node's workspace is now part of the window's own renderer
+(see Assumptions and decisions).
 
 - ⌘⇧/ / Ctrl+Shift+/ with focus in the sidebar, composer, terminal, Monaco,
-  browser/service preview, interactive artifact, design frame and workspace
-  realm: one press opens, an immediate separate press closes.
-- View › Keyboard Shortcuts… opens the owning realm while its preview has
-  focus. Clicking again keeps the dialog and refocuses search.
+  browser/service preview, interactive artifact and design frame: one press
+  opens, an immediate separate press closes.
+- View › Keyboard Shortcuts… opens the dialog in the window's renderer, which
+  owns the preview, while a preview has focus. Clicking again keeps the
+  dialog and refocuses search.
 - Dismiss a preview-originated dialog with Escape, the chord and an outside
   pointer click; typing resumes in that preview. Hidden or disposed previews never regain focus.
 - With a Cyrillic input source on macOS, ⌘⇧ and the physical `Slash` key
@@ -487,9 +492,8 @@ is open in full.
   Super+H does nothing in Orkestrator. File › Quit (Ctrl+Q) quits, and Help ›
   About opens the about panel, which shows the app name, version and icon from
   `about-panel.ts` (task 7).
-- ⌘K with focus in the sidebar, composer, Monaco, an interactive artifact, a
-  design frame and a workspace realm opens the window's search, which takes
-  typing. Ctrl+K does the same on Linux. On macOS, Ctrl+K stays with a focused
+- ⌘K with focus in the sidebar, composer, Monaco, an interactive artifact and
+  a design frame opens the window's search, which takes typing. Ctrl+K does the same on Linux. On macOS, Ctrl+K stays with a focused
   text field (composer, Monaco, a design frame's input) and with an
   interactive artifact (kill-line). In a terminal Ctrl+K still reaches the
   shell (kill-line) and ⌘K opens search. In a browser preview ⌘K stays with
@@ -510,6 +514,20 @@ source-checked bridge; desktop intercepts all these surfaces in native input.
   Ctrl+Shift+/, including typed punctuation and the non-ASCII `Slash` fallback.
 - **Why.** `19e8b4ce2` released Shift+K back to the focused surface. Existing
   dated runs remain historical evidence; packaged qualification stays open.
+
+### Tasks 5–6: workspace-realm rows dropped (2026-11-07)
+
+- **Choice.** Remove the workspace-realm surface from the open matrix instead
+  of replacing it with an "another node's workspace" row.
+- **Why.** Plan items 6002 and 6003 deleted realms (node scopes replaced
+  them). Another node's workspace is now rendered by the window's own
+  renderer, so its keys go through the same `before-input-event` routing and
+  capture-phase router as the sidebar, composer, terminal and Monaco rows; it
+  is not a separate document or WebContents any more. The packaged rows for
+  those surfaces cover it.
+- **Pros.** The matrix lists only surfaces that exist. **Cons.** No row
+  checks a remote node's composer specifically; the composer row is run on a
+  local agent tab.
 
 ### Windows/Linux menu layout
 

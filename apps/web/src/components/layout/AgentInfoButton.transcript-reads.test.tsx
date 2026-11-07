@@ -8,16 +8,18 @@
  * guideline.
  */
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { nativeAgentCapabilities } from "@orkestrator/protocol/native-agent";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 import type { TabInfo } from "@/types/paneLayout";
 import * as adapters from "@/lib/chat/native-message-adapters";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
 import { createSessionKey } from "@/lib/utils";
-import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
+import { nativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { mockToastError, mockToastSuccess } from "../../../../../tests/mocks/sonner";
 import { AgentInfoButton } from "./AgentInfoButton";
+import { appCommandStore } from "@/test/app-command-store";
 
 const ENVIRONMENT_ID = "env-transcript-reads";
 const TAB_ID = "tab-transcript-reads";
@@ -50,19 +52,21 @@ function seed(
   revision: number,
   platform: "opencode" | "claude" = "opencode",
 ) {
-  useNativeAgentProjectionStore.getState().setProjection(SESSION_KEY, {
-    platform,
-    environmentId: ENVIRONMENT_ID,
-    sessionId: "opencode-transcript-reads",
-    connection: "connected",
-    turn: { phase: "running" },
-    messages,
-    interactions: [],
-    composerControls: [],
-    capabilities: nativeAgentCapabilities(platform),
-    revision,
-    generation: "opencode-generation",
-  });
+  appCommandStore(nativeAgentProjectionStore)
+    .getState()
+    .setProjection(SESSION_KEY, {
+      platform,
+      environmentId: ENVIRONMENT_ID,
+      sessionId: "opencode-transcript-reads",
+      connection: "connected",
+      turn: { phase: "running" },
+      messages,
+      interactions: [],
+      composerControls: [],
+      capabilities: nativeAgentCapabilities(platform),
+      revision,
+      generation: "opencode-generation",
+    });
 }
 
 function nativeActions(): Array<{ kind: string; messageId?: string; dryRun?: boolean }> {
@@ -75,7 +79,7 @@ function nativeActions(): Array<{ kind: string; messageId?: string; dryRun?: boo
 }
 
 beforeEach(() => {
-  useNativeAgentProjectionStore.getState().reset();
+  appCommandStore(nativeAgentProjectionStore).getState().reset();
   nativeInvokeMock.mockClear();
   nativeInvokeMock.mockImplementation(() => Promise.resolve());
   mockToastError.mockClear();
@@ -85,7 +89,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   mock.restore();
-  useNativeAgentProjectionStore.getState().reset();
+  appCommandStore(nativeAgentProjectionStore).getState().reset();
 });
 
 describe("AgentInfoButton transcript reads", () => {
@@ -100,7 +104,7 @@ describe("AgentInfoButton transcript reads", () => {
       ...openCodeTab,
       nativeAgentData: { ...openCodeTab.nativeAgentData!, platform: "claude" },
     } as TabInfo;
-    render(<AgentInfoButton activeTab={tab} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={tab} />);
     fireEvent.click(screen.getByRole("button", { name: "Open agent information" }));
     act(() =>
       seed(
@@ -123,7 +127,7 @@ describe("AgentInfoButton transcript reads", () => {
     const normalize = spyOn(adapters, "normalizeNativeMessages");
     const transcript = [message("u1", "user"), message("a1", "assistant")];
     seed(transcript, 1);
-    render(<AgentInfoButton activeTab={openCodeTab} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={openCodeTab} />);
     fireEvent.click(screen.getByRole("button", { name: "Open agent information" }));
 
     for (let revision = 2; revision <= 6; revision += 1) {

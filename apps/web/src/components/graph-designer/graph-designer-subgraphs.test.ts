@@ -3,7 +3,7 @@ import { compile, graphTemplateDigest } from "@orkestrator/protocol/graphs/compi
 import { graphTemplateExample } from "@orkestrator/protocol/graphs/examples";
 import type { GraphSubgraphNode, GraphTemplateV1 } from "@orkestrator/protocol/graphs/template";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
-import { useGraphDesignerStore } from "@/stores/graphDesignerStore";
+import { graphDesignerStore } from "@/stores/graphDesignerStore";
 import { graphDiagnosticTarget } from "./GraphCompilePanel";
 import { addGraphNode, blankGraphTemplate } from "./graph-designer-edits";
 import { indexGraphDiagnostics } from "./graph-designer-model";
@@ -18,6 +18,7 @@ import {
   graphSubgraphRefsToFetch,
 } from "./graph-designer-subgraphs";
 import { fixtureSummary, listResult, userDetail } from "./graph-designer.test-fixtures";
+import { appCommandStore } from "@/test/app-command-store";
 
 const invokeMock = nativeInvoke as unknown as ReturnType<typeof mock>;
 
@@ -218,7 +219,7 @@ describe("sub-graph nodes in the designer (item 402)", () => {
 
 describe("browser compile of a draft with sub-graphs", () => {
   beforeEach(() => {
-    useGraphDesignerStore.setState({
+    appCommandStore(graphDesignerStore).setState({
       libraries: new Map(),
       tabs: new Map(),
       subgraphTemplates: new Map(),
@@ -247,13 +248,15 @@ describe("browser compile of a draft with sub-graphs", () => {
   test("reads a user child once, then compiles the draft with it inlined", async () => {
     const child = childTemplate();
     install(childDetail(child));
-    const store = useGraphDesignerStore.getState();
+    const store = appCommandStore(graphDesignerStore).getState();
     store.openDraft("tab-1", parentWith(child).template, null);
     store.compileDraft("tab-1", {});
     // The first compile has not read the child yet.
-    expect(useGraphDesignerStore.getState().tabs.get("tab-1")!.compile!.ok).toBe(false);
+    expect(appCommandStore(graphDesignerStore).getState().tabs.get("tab-1")!.compile!.ok).toBe(
+      false,
+    );
     await settle();
-    const compiled = useGraphDesignerStore.getState().tabs.get("tab-1")!.compile!;
+    const compiled = appCommandStore(graphDesignerStore).getState().tabs.get("tab-1")!.compile!;
     expect(compiled.ok).toBe(true);
     expect(compiled.plan!.subgraphs![0]!.nodes).toEqual(["child/check"]);
     expect(invokeMock.mock.calls.filter(([name]) => name === "graph_template_get")).toHaveLength(1);
@@ -265,11 +268,11 @@ describe("browser compile of a draft with sub-graphs", () => {
   test("an untrusted child is never inlined", async () => {
     const child = childTemplate();
     install(childDetail(child, "untrusted"));
-    const store = useGraphDesignerStore.getState();
+    const store = appCommandStore(graphDesignerStore).getState();
     store.openDraft("tab-1", parentWith(child).template, null);
     store.compileDraft("tab-1", {});
     await settle();
-    const compiled = useGraphDesignerStore.getState().tabs.get("tab-1")!.compile!;
+    const compiled = appCommandStore(graphDesignerStore).getState().tabs.get("tab-1")!.compile!;
     expect(compiled.diagnostics).toContainEqual(
       expect.objectContaining({ code: "subgraph-unresolved", detail: "untrusted" }),
     );
@@ -278,7 +281,7 @@ describe("browser compile of a draft with sub-graphs", () => {
   test("a library reload drops what was read, so an edited child is read again", async () => {
     const child = childTemplate();
     install(childDetail(child));
-    const store = useGraphDesignerStore.getState();
+    const store = appCommandStore(graphDesignerStore).getState();
     store.openDraft("tab-1", parentWith(child).template, null);
     store.compileDraft("tab-1", {});
     await settle();
@@ -286,7 +289,7 @@ describe("browser compile of a draft with sub-graphs", () => {
     install(childDetail(edited));
     await store.loadLibrary(null);
     await settle();
-    const compiled = useGraphDesignerStore.getState().tabs.get("tab-1")!.compile!;
+    const compiled = appCommandStore(graphDesignerStore).getState().tabs.get("tab-1")!.compile!;
     // The node pinned revision 1; the child is now at 2.
     expect(compiled.diagnostics).toContainEqual(
       expect.objectContaining({ code: "subgraph-digest-mismatch" }),

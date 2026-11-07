@@ -1,9 +1,16 @@
 import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { errorText } from "@/components/settings/machines/machine-ui";
-import { useEnvironmentStore, useProjectStore, useUIStore } from "@/stores";
+import {
+  environmentStore,
+  uiStore,
+  useEnvironmentStore,
+  useProjectStore,
+  useUIStore,
+} from "@/stores";
 import { ensureProjectHomeInStore, isProjectHomeDeletionInProgress } from "@/hooks/useFilesPanel";
-import { projectRootFilesTargetId, useFilesPanelStore } from "@/stores/filesPanelStore";
+import { filesPanelStore, projectRootFilesTargetId } from "@/stores/filesPanelStore";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { findProjectHomeEnvironment } from "@/lib/project-home";
 
 const CLEANUP_IN_PROGRESS_MESSAGE =
@@ -41,6 +48,8 @@ export function useProjectHomeActivation() {
         (environment) => environment.id === selectedEnvironmentId && environment.projectHome,
       )?.id ?? null,
   );
+  // The selected project's node: its home and files panel tabs are that node's.
+  const scope = useNodeScope();
   const [failure, setFailure] = useState<{ key: string; message: string } | null>(null);
   const [attempt, setAttempt] = useState(0);
   const reconciled = useRef<string | null>(null);
@@ -63,6 +72,8 @@ export function useProjectHomeActivation() {
 
   useLayoutEffect(() => {
     if (!selectedProjectId) return;
+    // Held across the ensure below: the scope may be disposed by the time it answers.
+    const uiApi = scope.store(uiStore);
     if (projectDeleting || homeDeleting) {
       suppressedSelection.current = selectionKey;
       return;
@@ -75,43 +86,46 @@ export function useProjectHomeActivation() {
       return;
     }
     if (!checkoutPath) {
-      // A realm selects its requested project before the first snapshot arrives.
+      // Another node's workspace selects its requested project before the first snapshot arrives.
       // Only a known project (or a completed snapshot) can confirm no checkout.
       if (projectPending) return;
-      const ui = useUIStore.getState();
+      const ui = uiApi.getState();
       if (selectedHomeId) ui.selectEnvironment(null);
       if (ui.projectBoardTab === "home") ui.setProjectBoardTab("coordinator");
       reconciled.current = null;
       return;
     }
     const known = findProjectHomeEnvironment(
-      useEnvironmentStore.getState().environments,
+      scope.store(environmentStore).getState().environments,
       selectedProjectId,
     );
     if (!selectedEnvironmentId && known) {
       reconciled.current = null;
-      useFilesPanelStore
+      scope
+        .store(filesPanelStore)
         .getState()
         .movePullRequestTabs(projectRootFilesTargetId(selectedProjectId), known.id);
-      useUIStore.getState().selectEnvironment(known.id);
+      uiApi.getState().selectEnvironment(known.id);
       return;
     }
     if (reconciled.current === key) return;
     let cancelled = false;
-    void ensureProjectHomeInStore(selectedProjectId)
+    void ensureProjectHomeInStore(selectedProjectId, scope)
       .then((home) => {
-        const ui = useUIStore.getState();
+        const ui = uiApi.getState();
         if (
           cancelled ||
+          scope.disposed ||
           ui.selectedProjectId !== selectedProjectId ||
-          isProjectHomeDeletionInProgress(selectedProjectId)
+          isProjectHomeDeletionInProgress(selectedProjectId, scope)
         )
           return;
         reconciled.current = key;
         setFailure(null);
         if (!ui.selectedEnvironmentId || ui.selectedEnvironmentId === selectedHomeId) {
           if (!ui.selectedEnvironmentId) {
-            useFilesPanelStore
+            scope
+              .store(filesPanelStore)
               .getState()
               .movePullRequestTabs(projectRootFilesTargetId(selectedProjectId), home.id);
           }
@@ -119,7 +133,12 @@ export function useProjectHomeActivation() {
         }
       })
       .catch((error: unknown) => {
-        if (cancelled || isProjectHomeDeletionInProgress(selectedProjectId)) return;
+        if (
+          cancelled ||
+          scope.disposed ||
+          isProjectHomeDeletionInProgress(selectedProjectId, scope)
+        )
+          return;
         const message = errorText(error);
         setFailure({ key, message });
         toast.error("Could not open the project home", {
@@ -141,6 +160,7 @@ export function useProjectHomeActivation() {
     homeDeleting,
     key,
     retry,
+    scope,
   ]);
 
   return { error: failure?.key === key ? failure.message : null, retry };

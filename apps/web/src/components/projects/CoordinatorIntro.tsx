@@ -5,7 +5,7 @@ import {
   DropdownMenuContent,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { useUIStore } from "@/stores/uiStore";
+import { useUIChromeStore } from "@/stores/uiChromeStore";
 
 /**
  * How the coordinator differs from every other agent tab, in one place: it is
@@ -35,8 +35,8 @@ function CoordinatorIntroLines() {
  * project; the toolbar's "?" shows the same lines again.
  */
 export function CoordinatorIntroCard() {
-  const dismissed = useUIStore((state) => state.coordinatorIntroDismissed);
-  const dismiss = useUIStore((state) => state.setCoordinatorIntroDismissed);
+  const dismissed = useUIChromeStore((state) => state.coordinatorIntroDismissed);
+  const dismiss = useUIChromeStore((state) => state.setCoordinatorIntroDismissed);
   if (dismissed) return null;
   return (
     <section

@@ -1,3 +1,36 @@
+import {
+  adoptCoordinatorWorkflowCommand,
+  assertCoordinatorDelegationAvailableCommand,
+  assignCoordinatorConversationAgentCommand,
+  associateCoordinatorWorkflowCommand,
+  closeCoordinatorConversationCommand,
+  createCoordinatorConversationCommand,
+  ensureProjectCoordinatorCommand,
+  fetchProjectGitCommand,
+  getCoordinatorCheckoutTurnCommand,
+  getCoordinatorLaunchEnvironmentCommand,
+  getProjectBaseBranchTipCommand,
+  getProjectCoordinatorCommand,
+  getProjectCoordinatorViewCommand,
+  getProjectGitStatusCommand,
+  hideCoordinatorWorkCommand,
+  launchCoordinatorEnvironmentCommand,
+  listCoordinatorActivityCommand,
+  listCoordinatorLaunchOverridesCommand,
+  openCoordinatorDelegationCommand,
+  pauseProjectCoordinatorCommand,
+  prepareProjectGitBranchSwitchCommand,
+  resumeProjectCoordinatorCommand,
+  retryCoordinatorConversationCommand,
+  selectCoordinatorConversationCommand,
+  startCoordinatorBuildPipelineCommand,
+  startCoordinatorMultiReviewCommand,
+  switchProjectGitBranchCommand,
+  syncProjectGitCommand,
+  verifyProjectLaunchBaseCommand,
+  watchCoordinatorPullRequestCommand,
+  writeCoordinatorAttachmentCommand,
+} from "@orkestrator/protocol/contract/domains/coordinator";
 import { STARTUP_AGENT_TAB_ID } from "@orkestrator/protocol/tab-initial-prompt";
 import {
   COORDINATOR_MAIL_ADDRESS,
@@ -9,27 +42,33 @@ import {
 import { launchDelegationRequest } from "./coordinator-delegation-request.js";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import type { CommandContext } from "./commands-context.js";
-import { asNonBlankString, assertOnlyKeys } from "./commands-helpers.js";
+import type { Environment } from "./models.js";
+import { compatibilityPathUsage } from "./compatibility-path-usage.js";
+import { ASYNC_HANDLER } from "./commands-registry-async-decode.js";
+import { asNonBlankString } from "./commands-helpers.js";
 import { isGitHubPullRequestRef } from "@orkestrator/protocol/github-pull-requests";
 import { nativeAgentSessionStorageKey } from "./native-agent-service.js";
 import { localServerStopCommandName } from "./local-server-runtime.js";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { CoordinatorWorkflowAssociation } from "@orkestrator/protocol/coordinator";
 import {
-  COORDINATOR_ACTIVITY_COMMAND,
-  COORDINATOR_CHECKOUT_TURN_COMMAND,
   coordinatorActivityByProject,
   type CoordinatorActivitySnapshot,
   type CoordinatorCheckoutTurn,
 } from "@orkestrator/protocol/coordinator-activity";
 import {
-  COORDINATOR_LAUNCH_OVERRIDES_COMMAND,
   coordinatorLaunchOverrides,
   type CoordinatorLaunchOverridesSnapshot,
 } from "@orkestrator/protocol/coordinator-launch-overrides";
 import { randomUUID } from "node:crypto";
-import { isStartBuildPipelineInput } from "@orkestrator/protocol/build-pipeline";
-import { isStartMultiReviewInput } from "@orkestrator/protocol/multi-review";
+import {
+  isStartBuildPipelineInput,
+  type BuildPipeline,
+} from "@orkestrator/protocol/build-pipeline";
+import {
+  isStartMultiReviewInput,
+  type MultiReviewWorkflow,
+} from "@orkestrator/protocol/multi-review";
 import { findCoordinatorCheckoutTurn } from "./coordinator-checkout-turn.js";
 import { runCommand } from "./shell.js";
 import { registerCoordinatorReviewActions } from "./coordinator-review-actions.js";
@@ -143,29 +182,31 @@ export function registerCoordinatorCommands(
     workflowStarts.set(key, started);
     return started;
   };
-  register("ensure_project_coordinator", async ({ projectId, keepConversationErrors }, context) => {
-    if (!context.coordinators) throw new Error("Coordinator service is unavailable");
-    return context.coordinators.ensure(asNonBlankString(projectId, "projectId"), {
-      clearConversationErrors: keepConversationErrors !== true,
-    });
-  });
-  register("retry_coordinator_conversation", ({ projectId, conversationId }, context) => {
+  register(
+    ensureProjectCoordinatorCommand,
+    async ({ projectId, keepConversationErrors }, context) => {
+      if (!context.coordinators) throw new Error("Coordinator service is unavailable");
+      return context.coordinators.ensure(asNonBlankString(projectId, "projectId"), {
+        clearConversationErrors: keepConversationErrors !== true,
+      });
+    },
+  );
+  register(retryCoordinatorConversationCommand, ({ projectId, conversationId }, context) => {
     if (!context.coordinators) throw new Error("Coordinator service is unavailable");
     return context.coordinators.retryConversation(
       asNonBlankString(projectId, "projectId"),
       asNonBlankString(conversationId, "conversationId"),
     );
   });
-  register("get_project_coordinator", async ({ projectId }, context) => {
+  register(getProjectCoordinatorCommand, async ({ projectId }, context) => {
     if (!context.coordinators) throw new Error("Coordinator service is unavailable");
     return context.coordinators.get(asNonBlankString(projectId, "projectId"));
   });
   // A coordinator conversation rendered or opened a pull request link: watch
   // it for status changes while it is open (`coordinator-pr-watches.ts`).
   // Pull requests of other repositories are answered `watched: false`.
-  register("watch_coordinator_pull_request", async (args, context) => {
+  register(watchCoordinatorPullRequestCommand, async (args, context) => {
     if (!context.coordinators) throw new Error("Coordinator service is unavailable");
-    assertOnlyKeys(args, ["projectId", "owner", "repo", "number", "source"], "arguments");
     const ref = { owner: args.owner, repo: args.repo, number: args.number };
     if (!isGitHubPullRequestRef(ref)) {
       throw new Error("Expected owner, repo and number to identify a GitHub pull request");
@@ -183,7 +224,7 @@ export function registerCoordinatorCommands(
   // knownRevision }` answers `unchanged` without a body while the snapshot the
   // client holds is still current. See `coordinator-view-revisions.ts`.
   const coordinatorViews = new CoordinatorViewRevisions();
-  register("get_project_coordinator_view", async (args, context) => {
+  register(getProjectCoordinatorViewCommand, async (args, context) => {
     const coordinators = context.coordinators;
     if (!coordinators) throw new Error("Coordinator service is unavailable");
     const id = asNonBlankString(args.projectId, "projectId");
@@ -193,7 +234,7 @@ export function registerCoordinatorCommands(
   // only the activity observer's retained answers: no provider read, bridge
   // start, attach or liveness touch, so the sidebar can re-read it freely.
   register(
-    COORDINATOR_ACTIVITY_COMMAND,
+    listCoordinatorActivityCommand,
     async (_args, context): Promise<CoordinatorActivitySnapshot> => {
       const nativeAgents = context.nativeAgents;
       if (!nativeAgents) return { projects: {} };
@@ -214,7 +255,7 @@ export function registerCoordinatorCommands(
   // answers every tab and a project with no coordinator costs nothing and cannot
   // fail. Bounded by the store's own association limit.
   register(
-    COORDINATOR_LAUNCH_OVERRIDES_COMMAND,
+    listCoordinatorLaunchOverridesCommand,
     async (_args, context): Promise<CoordinatorLaunchOverridesSnapshot> => ({
       overrides: coordinatorLaunchOverrides(
         await context.storage.coordinators.listAllCoordinatorWorkflowAssociations(),
@@ -225,7 +266,7 @@ export function registerCoordinatorCommands(
   // The panel's own projections only cover the tabs it has mounted, so it has
   // to ask. No liveness touch or hydration, so it can re-read on activity hints.
   register(
-    COORDINATOR_CHECKOUT_TURN_COMMAND,
+    getCoordinatorCheckoutTurnCommand,
     async ({ projectId }, context): Promise<CoordinatorCheckoutTurn | null> => {
       const nativeAgents = context.nativeAgents;
       if (!nativeAgents) return null;
@@ -235,9 +276,11 @@ export function registerCoordinatorCommands(
         confirmWithProjections: false,
       });
     },
+    // A missing project id is still a rejection, as before the definition.
+    ASYNC_HANDLER,
   );
   register(
-    "create_coordinator_conversation",
+    createCoordinatorConversationCommand,
     async ({ projectId, title, closeUnused }, context) => {
       if (!context.coordinators) throw new Error("Coordinator service is unavailable");
       return context.coordinators.createConversation(
@@ -254,7 +297,7 @@ export function registerCoordinatorCommands(
     },
   );
   register(
-    "assign_coordinator_conversation_agent",
+    assignCoordinatorConversationAgentCommand,
     async ({ projectId, conversationId, agent }, context) => {
       if (!context.coordinators) throw new Error("Coordinator service is unavailable");
       const platform = asNonBlankString(agent, "agent");
@@ -266,14 +309,14 @@ export function registerCoordinatorCommands(
       );
     },
   );
-  register("select_coordinator_conversation", async ({ projectId, conversationId }, context) => {
+  register(selectCoordinatorConversationCommand, async ({ projectId, conversationId }, context) => {
     if (!context.coordinators) throw new Error("Coordinator service is unavailable");
     return context.coordinators.selectConversation(
       asNonBlankString(projectId, "projectId"),
       conversationId === null ? null : asNonBlankString(conversationId, "conversationId"),
     );
   });
-  register("close_coordinator_conversation", async ({ projectId, conversationId }, context) => {
+  register(closeCoordinatorConversationCommand, async ({ projectId, conversationId }, context) => {
     if (!context.coordinators) throw new Error("Coordinator service is unavailable");
     const id = asNonBlankString(projectId, "projectId");
     const conversation = asNonBlankString(conversationId, "conversationId");
@@ -343,9 +386,11 @@ export function registerCoordinatorCommands(
     }
   });
   // The Work panel's "Clear finished": hides rows, never removes the records.
-  register("hide_coordinator_work", async (args, context) => {
+  // Retired (plan item 7009): the panel left in v2.36.5-beta; older renderers
+  // in the window still send it, so it stays until its register row retires.
+  register(hideCoordinatorWorkCommand, async (args, context) => {
+    compatibilityPathUsage.record("retired-command.hide-coordinator-work");
     if (!context.coordinators) throw new Error("Coordinator service is unavailable");
-    assertOnlyKeys(args, ["projectId", "associationIds"], "arguments");
     const id = asNonBlankString(args.projectId, "projectId");
     const ids = args.associationIds;
     if (
@@ -358,23 +403,23 @@ export function registerCoordinatorCommands(
     await context.storage.coordinators.hideCoordinatorWork(id, new Set<string>(ids));
     return context.coordinators.get(id);
   });
-  register("pause_project_coordinator", ({ projectId }, context) => {
+  register(pauseProjectCoordinatorCommand, ({ projectId }, context) => {
     if (!context.coordinators) throw new Error("Coordinator service is unavailable");
     return context.coordinators.setPaused(asNonBlankString(projectId, "projectId"), true);
   });
-  register("resume_project_coordinator", ({ projectId }, context) => {
+  register(resumeProjectCoordinatorCommand, ({ projectId }, context) => {
     if (!context.coordinators) throw new Error("Coordinator service is unavailable");
     return context.coordinators.setPaused(asNonBlankString(projectId, "projectId"), false);
   });
-  register("get_project_git_status", ({ projectId }, context) => {
+  register(getProjectGitStatusCommand, ({ projectId }, context) => {
     if (!context.projectGit) throw new Error("Project Git service is unavailable");
     return context.projectGit.status(asNonBlankString(projectId, "projectId"));
   });
-  register("fetch_project_git", ({ projectId, force }, context) => {
+  register(fetchProjectGitCommand, ({ projectId, force }, context) => {
     if (!context.projectGit) throw new Error("Project Git service is unavailable");
     return context.projectGit.fetch(asNonBlankString(projectId, "projectId"), force === true);
   });
-  register("get_project_base_branch_tip", async ({ projectId, branch }, context) => {
+  register(getProjectBaseBranchTipCommand, async ({ projectId, branch }, context) => {
     if (!context.projectGit) throw new Error("Project Git service is unavailable");
     const project = asNonBlankString(projectId, "projectId");
     // A named branch (a scheduled launch resolving its base at fire time), else
@@ -385,7 +430,7 @@ export function registerCoordinatorCommands(
     const { defaultBranch } = await context.storage.getRepositoryConfig(project);
     return context.projectGit.baseBranchTip(project, defaultBranch?.trim() || "main");
   });
-  register("verify_project_launch_base", ({ projectId, branch, commit }, context) => {
+  register(verifyProjectLaunchBaseCommand, ({ projectId, branch, commit }, context) => {
     if (!context.projectGit) throw new Error("Project Git service is unavailable");
     return context.projectGit.branchContainsCommit(
       asNonBlankString(projectId, "projectId"),
@@ -393,11 +438,11 @@ export function registerCoordinatorCommands(
       asNonBlankString(commit, "commit"),
     );
   });
-  register("sync_project_git", ({ projectId }, context) => {
+  register(syncProjectGitCommand, ({ projectId }, context) => {
     if (!context.projectGit) throw new Error("Project Git service is unavailable");
     return context.projectGit.sync(asNonBlankString(projectId, "projectId"));
   });
-  register("prepare_project_git_branch_switch", ({ projectId, ref }, context) => {
+  register(prepareProjectGitBranchSwitchCommand, ({ projectId, ref }, context) => {
     if (!context.projectGit) throw new Error("Project Git service is unavailable");
     return context.projectGit.prepareSwitchBranch(
       asNonBlankString(projectId, "projectId"),
@@ -405,7 +450,7 @@ export function registerCoordinatorCommands(
     );
   });
   register(
-    "switch_project_git_branch",
+    switchProjectGitBranchCommand,
     ({ projectId, ref, confirmationToken, includeNestedRepositories }, context) => {
       if (!context.projectGit) throw new Error("Project Git service is unavailable");
       return context.projectGit.switchBranch(
@@ -421,7 +466,7 @@ export function registerCoordinatorCommands(
     },
   );
   register(
-    "write_coordinator_attachment",
+    writeCoordinatorAttachmentCommand,
     async ({ environmentId, filename, base64Data }, context) => {
       const runtimeId = asNonBlankString(environmentId, "environmentId");
       const coordinatorId = coordinatorIdFromRuntimeId(runtimeId);
@@ -438,7 +483,9 @@ export function registerCoordinatorCommands(
     },
   );
   register(
-    "associate_coordinator_workflow",
+    associateCoordinatorWorkflowCommand,
+    // Retired (plan item 7009): no release calls it; launches record their own
+    // associations. Kept, counted, until its register row retires.
     async (
       {
         projectId,
@@ -452,6 +499,7 @@ export function registerCoordinatorCommands(
       },
       context,
     ) => {
+      compatibilityPathUsage.record("retired-command.associate-coordinator-workflow");
       const project = asNonBlankString(projectId, "projectId");
       const coordinator = asNonBlankString(coordinatorId, "coordinatorId");
       const workspace = await context.storage.coordinators.getCoordinatorWorkspaceById(coordinator);
@@ -480,7 +528,7 @@ export function registerCoordinatorCommands(
     },
   );
   register(
-    "adopt_coordinator_workflow",
+    adoptCoordinatorWorkflowCommand,
     async ({ projectId, coordinatorId, conversationId, associationId }, context) => {
       const project = asNonBlankString(projectId, "projectId");
       const coordinator = asNonBlankString(coordinatorId, "coordinatorId");
@@ -502,7 +550,7 @@ export function registerCoordinatorCommands(
     },
   );
   register(
-    "launch_coordinator_environment",
+    launchCoordinatorEnvironmentCommand,
     async ({ scope, requestId, input, agentDefaulted }, context) => {
       if (!record(scope) || !record(input)) throw new Error("Coordinator launch input is invalid");
       const projectId = asNonBlankString(scope.projectId, "projectId");
@@ -583,7 +631,7 @@ export function registerCoordinatorCommands(
                 frame: delegation.frame,
               },
             })
-          : createdEnvironment;
+          : (createdEnvironment as unknown as Environment);
         await context.storage.coordinators.completeCoordinatorWorkflowAssociation(
           receipt.association.id,
           environmentId,
@@ -621,7 +669,7 @@ export function registerCoordinatorCommands(
       });
     },
   );
-  register("get_coordinator_launch_environment", async ({ scope, requestId }, context) => {
+  register(getCoordinatorLaunchEnvironmentCommand, async ({ scope, requestId }, context) => {
     if (!record(scope)) throw new Error("Coordinator scope is required");
     const projectId = asNonBlankString(scope.projectId, "projectId");
     const coordinatorId = asNonBlankString(scope.coordinatorId, "coordinatorId");
@@ -642,7 +690,7 @@ export function registerCoordinatorCommands(
     return context.storage.getEnvironment(association.resourceId);
   });
   register(
-    "assert_coordinator_delegation_available",
+    assertCoordinatorDelegationAvailableCommand,
     async ({ scope, environmentId, tabId, requestId }, context) => {
       if (!record(scope)) throw new Error("Coordinator scope is required");
       const projectId = asNonBlankString(scope.projectId, "projectId");
@@ -665,7 +713,7 @@ export function registerCoordinatorCommands(
     },
   );
   register(
-    "open_coordinator_delegation",
+    openCoordinatorDelegationCommand,
     async ({ scope, environmentId, tabId, requestId, request }, context) => {
       if (!record(scope)) throw new Error("Coordinator scope is required");
       const projectId = asNonBlankString(scope.projectId, "projectId");
@@ -688,7 +736,7 @@ export function registerCoordinatorCommands(
       return { opened };
     },
   );
-  register("start_coordinator_build_pipeline", async ({ scope, requestId, input }, context) => {
+  register(startCoordinatorBuildPipelineCommand, async ({ scope, requestId, input }, context) => {
     if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
     const buildPipelines = context.buildPipelines;
     if (!scope || typeof scope !== "object" || Array.isArray(scope)) {
@@ -760,7 +808,7 @@ export function registerCoordinatorCommands(
         if (!receipt.claimed && !receipt.association.pending) {
           const existing = await context.storage.getBuildPipeline(receipt.association.resourceId);
           if (!existing) throw new Error("Associated build pipeline was not found");
-          return { ...(existing.snapshot as Record<string, unknown>), replayed: true };
+          return { ...(existing.snapshot as BuildPipeline), replayed: true };
         }
         if (!receipt.claimed) {
           throw new Error("Build pipeline creation is already in progress; retry this requestId");
@@ -789,8 +837,12 @@ export function registerCoordinatorCommands(
     );
   });
   register(
-    "start_coordinator_multi_review",
+    startCoordinatorMultiReviewCommand,
+    // Retired (plan item 7009): Control MCP's `launch_multi_review` moved to
+    // `launch_coordinator_multi_review_action` in v2.36.4-beta. Kept, counted,
+    // until its register row retires.
     async ({ scope, requestId, input, buildPipelineId }, context) => {
+      compatibilityPathUsage.record("retired-command.start-coordinator-multi-review");
       if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
       const multiReviews = context.multiReviews;
       if (!scope || typeof scope !== "object" || Array.isArray(scope)) {
@@ -842,7 +894,7 @@ export function registerCoordinatorCommands(
             receipt.association.resourceId,
           );
           if (!existing) throw new Error("Associated multi-review was not found");
-          return existing.snapshot;
+          return existing.snapshot as MultiReviewWorkflow;
         }
         if (!receipt.claimed) {
           throw new Error("Multi-review creation is already in progress; retry this requestId");
@@ -862,7 +914,7 @@ export function registerCoordinatorCommands(
             receipt.association.id,
             receipt.association.resourceId,
           );
-          return recovered.snapshot;
+          return recovered.snapshot as MultiReviewWorkflow;
         }
         const environment =
           typeof requestedInput.environmentId === "string"
@@ -893,7 +945,7 @@ export function registerCoordinatorCommands(
           receipt.association.id,
           workflow.id,
         );
-        return workflow;
+        return workflow as MultiReviewWorkflow;
       });
     },
   );

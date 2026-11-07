@@ -4,38 +4,74 @@ import {
   type ClientStateCapabilities,
 } from "@orkestrator/protocol/client-state";
 import { isUnknownViewCommandError } from "@orkestrator/protocol/view-sync";
-import { getClientStateCapabilities } from "@/lib/backend/client-state";
-import { listen, NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
+import { backendApiForScope } from "@/lib/backend/client";
+import { createClientStateApi, getClientStateCapabilities } from "@/lib/backend/client-state";
+import { NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { appCommandScope, defineScopedSlot, listenInScope } from "@/lib/node-scope-slots";
 
 /** How long an "unsupported" answer is trusted before the backend is asked again. */
 const UNSUPPORTED_RECHECK_MS = 30_000;
 
-let cached: { generation: number; value: ClientStateCapabilities; checkedAt: number } | null = null;
-let generation = 0;
-let request: { generation: number; promise: Promise<ClientStateCapabilities> } | null = null;
-let listening = false;
-
-function listenForReconnects(): void {
-  if (listening) return;
-  listening = true;
-  // A reconnect may reach a different (older or newer) backend.
-  void listen(NATIVE_EVENT_STREAM_CONNECTED_EVENT, () => {
-    generation += 1;
-  }).catch(() => {
-    listening = false;
-  });
+/** One node's answer, held on its scope (plan item 3016). */
+interface ClientStateCapabilityCache {
+  cached: { generation: number; value: ClientStateCapabilities; checkedAt: number } | null;
+  generation: number;
+  request: { generation: number; promise: Promise<ClientStateCapabilities> } | null;
+  listening: boolean;
+  /** Bumps `generation` on every reconnect of this node's event stream. */
+  listenForReconnects(): void;
 }
 
+const capabilityCache = defineScopedSlot<ClientStateCapabilityCache>(
+  "client-state-capabilities",
+  (scope) => {
+    let unlisten: (() => void) | null = null;
+    let disposed = false;
+    scope.onDispose("client-state-capabilities", () => {
+      disposed = true;
+      unlisten?.();
+    });
+    const state: ClientStateCapabilityCache = {
+      cached: null,
+      generation: 0,
+      request: null,
+      listening: false,
+      listenForReconnects: () => {
+        if (state.listening || disposed) return;
+        state.listening = true;
+        // A reconnect may reach a different (older or newer) backend.
+        listenInScope(scope, NATIVE_EVENT_STREAM_CONNECTED_EVENT, () => {
+          state.generation += 1;
+        }).then(
+          (stop) => {
+            if (disposed) stop();
+            else unlisten = stop;
+          },
+          () => {
+            state.listening = false;
+          },
+        );
+      },
+    };
+    return state;
+  },
+);
+
 /**
- * Which formerly browser-local state the connected backend owns
- * (`@orkestrator/protocol/client-state`). An older backend answers
- * "unknown command", which turns every capability off. Any other failure
- * rejects: it says nothing about this backend, so callers decide nothing from
- * it and ask again on their next call.
+ * Which formerly browser-local state `scope`'s backend owns (default: the
+ * command node; `@orkestrator/protocol/client-state`). An older backend
+ * answers "unknown command", which turns every capability off. Any other
+ * failure rejects: it says nothing about this backend, so callers decide
+ * nothing from it and ask again on their next call. Each node scope caches
+ * its own answer.
  */
-export async function clientStateCapabilities(): Promise<ClientStateCapabilities> {
-  listenForReconnects();
-  const current = generation;
+export async function clientStateCapabilities(scope?: NodeScope): Promise<ClientStateCapabilities> {
+  const target = scope ?? appCommandScope();
+  const state = capabilityCache(target);
+  state.listenForReconnects();
+  const current = state.generation;
+  const cached = state.cached;
   if (
     cached &&
     cached.generation === current &&
@@ -44,32 +80,41 @@ export async function clientStateCapabilities(): Promise<ClientStateCapabilities
   ) {
     return cached.value;
   }
-  if (request?.generation === current) return request.promise;
-  const promise = getClientStateCapabilities().then(
+  if (state.request?.generation === current) return state.request.promise;
+  const api = backendApiForScope(target, createClientStateApi, { getClientStateCapabilities });
+  const promise = api.getClientStateCapabilities().then(
     (value) => {
-      if (current === generation) cached = { generation: current, value, checkedAt: Date.now() };
+      if (current === state.generation) {
+        state.cached = { generation: current, value, checkedAt: Date.now() };
+      }
       return value;
     },
     (error: unknown) => {
       if (isUnknownViewCommandError(error, CLIENT_STATE_CAPABILITIES_COMMAND)) {
         const value = { ...NO_CLIENT_STATE_CAPABILITIES };
-        if (current === generation) cached = { generation: current, value, checkedAt: Date.now() };
+        if (current === state.generation) {
+          state.cached = { generation: current, value, checkedAt: Date.now() };
+        }
         return value;
       }
       throw error;
     },
   );
   const entry = { generation: current, promise };
-  request = entry;
+  state.request = entry;
   try {
     return await promise;
   } finally {
-    if (request === entry) request = null;
+    if (state.request === entry) state.request = null;
   }
 }
 
-export function resetClientStateCapabilitiesForTests(value?: ClientStateCapabilities): void {
-  generation += 1;
-  request = null;
-  cached = value ? { generation, value, checkedAt: Date.now() } : null;
+export function resetClientStateCapabilitiesForTests(
+  value?: ClientStateCapabilities,
+  scope?: NodeScope,
+): void {
+  const state = capabilityCache(scope);
+  state.generation += 1;
+  state.request = null;
+  state.cached = value ? { generation: state.generation, value, checkedAt: Date.now() } : null;
 }

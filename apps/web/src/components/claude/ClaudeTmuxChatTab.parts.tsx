@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useMediaQuery } from "@/hooks";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { Button } from "@/components/ui/button";
 import { AgentModelPicker } from "@/components/chat/AgentModelPicker";
 import { QueuedPromptsDialog } from "@/components/chat/QueuedPromptsDialog";
@@ -39,7 +40,7 @@ import {
 import { useNativeComposeDraftPersistence } from "@/hooks/useNativeComposeDraftPersistence";
 import { usePromptQueueDispatchRecovery } from "@/hooks/usePromptQueueDispatchRecovery";
 import { createUuid } from "@/lib/uuid";
-import { replyHook, type TmuxPendingHook } from "@/lib/claude-tmux-client";
+import type { ClaudeTmuxClient, TmuxPendingHook } from "@/lib/claude-tmux-client";
 import { escapePathForTerminalInput } from "@orkestrator/protocol/tmux-prompt";
 import {
   type TmuxSelectionOption,
@@ -51,6 +52,7 @@ import {
   payloadToPermission,
   payloadToPlan,
   payloadToQuestion,
+  claudeTmuxStore,
   useClaudeTmuxStore,
   type TmuxPendingApproval,
   type TmuxPendingElicitation,
@@ -599,13 +601,14 @@ export function isQuestionPermissionPayload(payload: unknown): boolean {
 }
 
 export async function autoAllowPermissionHook(
+  tmux: Pick<ClaudeTmuxClient, "replyHook">,
   tabId: string,
   environmentId: string,
   eventId: string,
   payload: unknown,
 ): Promise<void> {
   const permission = payloadToPermission(eventId, payload);
-  await replyHook(
+  await tmux.replyHook(
     tabId,
     "PermissionRequest",
     eventId,
@@ -884,6 +887,10 @@ export function TmuxComposeBar({
   const [queueSubmitting, setQueueSubmitting] = useState(false);
   const queueSubmittingRef = useRef(false);
   const composerLocked = disabled || settingsSwitching || submitting || queueSubmitting;
+  // This node's tmux tabs (plan item 3010).
+  // The tab's node: its store, and the queue mutations (plan item 4007).
+  const tmuxScope = useNodeScope();
+  const tmuxTabs = tmuxScope.store(claudeTmuxStore);
   const value = useClaudeTmuxStore((state) => state.draftText.get(sessionKey) ?? "");
   const fileMentions = useClaudeTmuxStore(
     useCallback(
@@ -906,7 +913,15 @@ export function TmuxComposeBar({
   const addAttachmentToStore = useClaudeTmuxStore((state) => state.addAttachment);
   const removeAttachmentFromStore = useClaudeTmuxStore((state) => state.removeAttachment);
   const clearAttachments = useClaudeTmuxStore((state) => state.clearAttachments);
-  useNativeComposeDraftPersistence("claude-tmux", environmentId, sessionKey, useClaudeTmuxStore);
+  // The tab's own node: its store instance and its draft persistence (plan item 3018).
+  useNativeComposeDraftPersistence(
+    "claude-tmux",
+    environmentId,
+    sessionKey,
+    tmuxTabs,
+    undefined,
+    tmuxScope,
+  );
   const modelObj = useMemo(() => getTmuxModel(selectedModel, models), [selectedModel, models]);
 
   // Slash command menu state. The list is static (claude builtins) — see
@@ -1027,7 +1042,7 @@ export function TmuxComposeBar({
     pendingCursorPositionRef.current = atStart + insertedText.length;
     setValue(sessionKey, nextValue);
     const nextMentions = (() => {
-      const current = useClaudeTmuxStore.getState().getDraftMentions(sessionKey);
+      const current = tmuxTabs.getState().getDraftMentions(sessionKey);
       if (current.some((mention) => mention.relativePath === file.relativePath)) {
         return current;
       }
@@ -1155,6 +1170,7 @@ export function TmuxComposeBar({
           sessionKey,
           message.id,
           toIndex < fromIndex ? "up" : "down",
+          tmuxScope,
         );
       } catch (error) {
         onQueueError?.(
@@ -1164,13 +1180,13 @@ export function TmuxComposeBar({
         );
       }
     },
-    [onQueueError, queuedMessages, sessionKey],
+    [onQueueError, queuedMessages, sessionKey, tmuxScope],
   );
 
   const handleRemoveQueuedMessage = useCallback(
     async (messageId: string) => {
       try {
-        await removeAgentPrompt("claude-tmux", sessionKey, messageId);
+        await removeAgentPrompt("claude-tmux", sessionKey, messageId, tmuxScope);
       } catch (error) {
         onQueueError?.(
           `Failed to remove queued prompt: ${
@@ -1179,7 +1195,7 @@ export function TmuxComposeBar({
         );
       }
     },
-    [onQueueError, sessionKey],
+    [onQueueError, sessionKey, tmuxScope],
   );
 
   return (
@@ -1240,7 +1256,7 @@ export function TmuxComposeBar({
             if (composerLocked || queueSubmittingRef.current) return;
             const nextValue = e.target.value;
             setValue(sessionKey, nextValue);
-            const currentMentions = useClaudeTmuxStore.getState().getDraftMentions(sessionKey);
+            const currentMentions = tmuxTabs.getState().getDraftMentions(sessionKey);
             setFileMentions(
               sessionKey,
               currentMentions.filter((mention) => nextValue.includes(`@${mention.relativePath}`)),

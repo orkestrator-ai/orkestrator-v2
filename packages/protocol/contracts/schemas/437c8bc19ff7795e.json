@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:437c8bc19ff7795e95b719894ae27b5a996d6f607f57082e962c4b44f5007275",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "cursor": {},
+        "diffIdentityId": {
+          "type": "string"
+        },
+        "display": {}
+      },
+      "required": ["diffIdentityId"],
+      "type": "object"
+    }
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:7b14a45fa2a04ea22da05f5d9c29c528fa0082b7db9ac17436821fdd1f55a85f",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "buildPipelineId": {
+          "type": "string"
+        },
+        "input": {},
+        "requestId": {
+          "type": "string"
+        },
+        "scope": {}
+      },
+      "required": ["buildPipelineId", "requestId"],
+      "type": "object"
+    }
+  }
+}

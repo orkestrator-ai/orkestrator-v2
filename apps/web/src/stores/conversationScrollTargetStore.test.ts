@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, test } from "bun:test";
+import type { BackendId } from "@orkestrator/protocol/federation";
 import {
   CONVERSATION_SCROLL_TARGET_TTL_MS,
   MAX_PENDING_CONVERSATION_SCROLL_TARGETS,
@@ -8,58 +9,72 @@ import {
 } from "./conversationScrollTargetStore";
 
 const store = () => useConversationScrollTargetStore.getState();
+const NODE_A = "bk_node-a" as BackendId;
+const NODE_B = "bk_node-b" as BackendId;
+const at = (environmentId: string, tabId: string, nodeId: BackendId = NODE_A) => ({
+  nodeId,
+  environmentId,
+  tabId,
+});
 
 beforeEach(() => resetConversationScrollTargets());
 
 describe("conversation scroll target store", () => {
   test("parks one request per tab and the next attempt replaces it", () => {
-    const first = store().request("env-1", "tab-1", { messageId: "m-1" }, 1_000);
-    const second = store().request("env-1", "tab-1", { turnId: "turn-2" }, 1_001);
+    const first = store().request(at("env-1", "tab-1"), { messageId: "m-1" }, 1_000);
+    const second = store().request(at("env-1", "tab-1"), { turnId: "turn-2" }, 1_001);
 
     expect(first?.messageId).toBe("m-1");
-    expect(store().peek("env-1", "tab-1", 1_002)).toMatchObject({ turnId: "turn-2" });
-    expect(store().peek("env-1", "tab-1", 1_002)?.messageId).toBeUndefined();
+    expect(store().peek(at("env-1", "tab-1"), 1_002)).toMatchObject({ turnId: "turn-2" });
+    expect(store().peek(at("env-1", "tab-1"), 1_002)?.messageId).toBeUndefined();
     expect(second?.nonce).not.toBe(first?.nonce);
-    expect(store().peek("env-1", "tab-2", 1_002)).toBeNull();
-    expect(store().peek("env-2", "tab-1", 1_002)).toBeNull();
+    expect(store().peek(at("env-1", "tab-2"), 1_002)).toBeNull();
+    expect(store().peek(at("env-2", "tab-1"), 1_002)).toBeNull();
+  });
+
+  test("a request for node A is not node B's, even with the same ids", () => {
+    store().request(at("env-1", "tab-1"), { messageId: "m-1" }, 1_000);
+    expect(store().peek(at("env-1", "tab-1", NODE_B), 1_001)).toBeNull();
+    store().clear(at("env-1", "tab-1", NODE_B));
+    expect(store().peek(at("env-1", "tab-1"), 1_001)?.messageId).toBe("m-1");
   });
 
   test("a request with no ids parks nothing and drops an earlier one", () => {
-    store().request("env-1", "tab-1", { messageId: "m-1" }, 1_000);
-    expect(store().request("env-1", "tab-1", { messageId: " " }, 1_001)).toBeNull();
-    expect(store().peek("env-1", "tab-1", 1_002)).toBeNull();
+    store().request(at("env-1", "tab-1"), { messageId: "m-1" }, 1_000);
+    expect(store().request(at("env-1", "tab-1"), { messageId: " " }, 1_001)).toBeNull();
+    expect(store().peek(at("env-1", "tab-1"), 1_002)).toBeNull();
   });
 
   test("clear only removes the request it was given", () => {
-    const first = store().request("env-1", "tab-1", { messageId: "m-1" }, 1_000)!;
-    store().request("env-1", "tab-1", { messageId: "m-2" }, 1_001);
+    const first = store().request(at("env-1", "tab-1"), { messageId: "m-1" }, 1_000)!;
+    store().request(at("env-1", "tab-1"), { messageId: "m-2" }, 1_001);
 
-    store().clear("env-1", "tab-1", first.nonce);
-    expect(store().peek("env-1", "tab-1", 1_002)?.messageId).toBe("m-2");
+    store().clear(at("env-1", "tab-1"), first.nonce);
+    expect(store().peek(at("env-1", "tab-1"), 1_002)?.messageId).toBe("m-2");
 
-    store().clear("env-1", "tab-1");
-    expect(store().peek("env-1", "tab-1", 1_002)).toBeNull();
+    store().clear(at("env-1", "tab-1"));
+    expect(store().peek(at("env-1", "tab-1"), 1_002)).toBeNull();
   });
 
   test("requests expire and are pruned on the next write", () => {
-    store().request("env-1", "tab-1", { messageId: "m-1" }, 1_000);
+    store().request(at("env-1", "tab-1"), { messageId: "m-1" }, 1_000);
     const expiredAt = 1_000 + CONVERSATION_SCROLL_TARGET_TTL_MS;
 
-    expect(store().peek("env-1", "tab-1", expiredAt - 1)).not.toBeNull();
-    expect(store().peek("env-1", "tab-1", expiredAt)).toBeNull();
+    expect(store().peek(at("env-1", "tab-1"), expiredAt - 1)).not.toBeNull();
+    expect(store().peek(at("env-1", "tab-1"), expiredAt)).toBeNull();
 
-    store().request("env-1", "tab-2", { messageId: "m-2" }, expiredAt);
+    store().request(at("env-1", "tab-2"), { messageId: "m-2" }, expiredAt);
     expect(store().targets.size).toBe(1);
   });
 
   test("the number of pending tabs is bounded", () => {
     for (let index = 0; index < MAX_PENDING_CONVERSATION_SCROLL_TARGETS + 5; index += 1) {
-      store().request("env-1", `tab-${index}`, { messageId: `m-${index}` }, 1_000 + index);
+      store().request(at("env-1", `tab-${index}`), { messageId: `m-${index}` }, 1_000 + index);
     }
     expect(store().targets.size).toBe(MAX_PENDING_CONVERSATION_SCROLL_TARGETS);
-    expect(store().peek("env-1", "tab-0", 2_000)).toBeNull();
+    expect(store().peek(at("env-1", "tab-0"), 2_000)).toBeNull();
     expect(
-      store().peek("env-1", `tab-${MAX_PENDING_CONVERSATION_SCROLL_TARGETS + 4}`, 2_000),
+      store().peek(at("env-1", `tab-${MAX_PENDING_CONVERSATION_SCROLL_TARGETS + 4}`), 2_000),
     ).not.toBeNull();
   });
 });

@@ -4,7 +4,7 @@ import { createElement } from "react";
 import type { DesignFrame } from "@orkestrator/protocol/design-canvas";
 import type { DesignFailure } from "@orkestrator/protocol/design-operations";
 import { invoke } from "@/lib/native/backend";
-import { useDesignStore, type DesignIntent } from "@/stores/designStore";
+import { type DesignIntent, designStore } from "@/stores/designStore";
 import { DesignCanvasContext, type DesignCanvasActions } from "./design-canvas-context";
 import { designController, resetDesignControllers } from "./design-controller";
 import { resetCapabilities } from "@/lib/design-client";
@@ -12,6 +12,7 @@ import { DesignFrameView } from "./DesignFrameView";
 import { DesignFrameBridge } from "./frame-bridge";
 
 import { FakeBackend, canvasId, deferred, frameA, frameB, until } from "./design-test-backend";
+import { appCommandStore } from "@/test/app-command-store";
 
 let backend: FakeBackend;
 const invokeMock = invoke as unknown as ReturnType<typeof mock>;
@@ -406,7 +407,7 @@ describe("design canvas controller", () => {
     );
     for (const controller of controllers) controller.acquire()();
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(useDesignStore.getState().projections.size).toBeLessThanOrEqual(16);
+    expect(appCommandStore(designStore).getState().projections.size).toBeLessThanOrEqual(16);
   });
 });
 

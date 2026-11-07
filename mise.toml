@@ -173,6 +173,41 @@ run = "bun scripts/generate-codex-app-server-protocol.ts"
 description = "Check the Codex app-server protocol for drift"
 run = "bun scripts/generate-codex-app-server-protocol.ts --check"
 
+[tasks."contract:manifest"]
+description = "Regenerate the command contract manifest, lower the untyped-command baseline and store argument schemas (packages/protocol/contracts/)"
+run = [
+  "bun scripts/generate-contract-manifest.ts",
+  "bun scripts/contract-check.ts --lower-baseline",
+  "bun scripts/contract-ci-schemas.ts",
+]
+
+[tasks."contract:check"]
+description = "Check the command contract manifest for drift and that untyped commands only shrink"
+run = "bun scripts/contract-check.ts"
+
+[tasks."contract:ci"]
+description = "Check the support window: client adapters, removed commands, the compatibility register and stored argument schemas"
+raw_args = true
+run = "bun scripts/contract-ci.ts"
+
+[tasks."contract:backfill"]
+description = "Snapshot the contract of every published release that has none (packages/protocol/contracts/releases/)"
+raw_args = true
+run = "bun scripts/backfill-contract-snapshots.ts"
+
+[tasks."contract:adapters"]
+description = "Regenerate the domain client adapter list (packages/protocol/contracts/adapters.json)"
+run = "bun scripts/generate-contract-adapters.ts"
+
+[tasks."contract:adapters:check"]
+description = "Check the domain client adapter list for drift from the domain client definitions"
+run = "bun scripts/generate-contract-adapters.ts --check"
+
+[tasks."qualify:mixed-versions"]
+description = "Run this checkout against a published release (default: the support floor) in both node topologies, every domain scenario module (scheduled weekly in CI)"
+raw_args = true
+run = "bun scripts/qualify-contract-mixed-versions.ts"
+
 [tasks.setup]
 description = "Install dependencies and build every native bridge"
 run = [

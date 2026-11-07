@@ -5,7 +5,6 @@ import {
 } from "@orkestrator/protocol/coordinator";
 import type { CoordinatorCheckoutTurn } from "@orkestrator/protocol/coordinator-activity";
 import { useCoordinatedRead } from "@/hooks/useCoordinatedRead";
-import * as backend from "@/lib/backend";
 import {
   activeCoordinatorTurnLabel,
   PROJECT_HOME_TURN_LABEL,
@@ -15,6 +14,7 @@ import { subscribeNativeObservationInvalidations } from "@/lib/native-observatio
 import { onResourceChanged, onResourceResync, onViewSafetyCheck } from "@/lib/resource-sync";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 /** Re-read while a turn holds the checkout, so a hint that never came cannot hold the controls. */
 export const CHECKOUT_TURN_BUSY_POLL_MS = 30_000;
@@ -54,6 +54,7 @@ export function useCoordinatorActiveTurn(
   workspace: CoordinatorWorkspace | undefined,
   mountedConversationIds: ReadonlySet<string>,
 ): string | null {
+  const nodeBackend = useScopeBackend();
   const [answer, setAnswer] = useState<{
     projectId: string;
     turn: CoordinatorCheckoutTurn | null;
@@ -69,7 +70,7 @@ export function useCoordinatorActiveTurn(
       intervalMs: current?.turn ? CHECKOUT_TURN_BUSY_POLL_MS : null,
       priority: "auxiliary",
     },
-    read: () => backend.getCoordinatorCheckoutTurn(projectId),
+    read: () => nodeBackend.getCoordinatorCheckoutTurn(projectId),
     onState: (state) => {
       if (state.status === "unsupported") setAnswer(null);
       if (state.status !== "current") return;

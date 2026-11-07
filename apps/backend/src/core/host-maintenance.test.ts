@@ -1,3 +1,4 @@
+import { eventSink } from "./backend-emit.js";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -39,9 +40,9 @@ function create(
     dataDir,
     updater: options.updater ?? "desktop",
     version: options.version ?? "2.21.1",
-    emit: (event, payload) => {
+    emit: eventSink((event, payload) => {
       if (event === HOST_MAINTENANCE_EVENT) events.push(payload as HostMaintenanceSnapshot);
-    },
+    }),
     now: () => (clock += 1_000),
     newId: () => `id-${(ids += 1)}`,
     rollbackEvidence: () => options.rollback ?? null,

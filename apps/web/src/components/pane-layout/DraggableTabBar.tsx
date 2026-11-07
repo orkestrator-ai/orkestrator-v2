@@ -2,11 +2,11 @@ import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { isMultiReviewTerminalPhase } from "@orkestrator/protocol/multi-review";
 import { toast } from "sonner";
 import { SortableContext, horizontalListSortingStrategy } from "@dnd-kit/sortable";
-import { usePaneLayoutStore, useFileDirtyStore, useMultiReviewStore } from "@/stores";
+import { multiReviewStore, usePaneLayoutStore, useFileDirtyStore } from "@/stores";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import type { PaneLeaf } from "@/types/paneLayout";
 import { createDraggableTabId, getNativeAgentData, parseDraggableTabId } from "@/types/paneLayout";
 import { cn, createSessionKey } from "@/lib/utils";
-import * as backend from "@/lib/backend";
 import {
   discardFileDraft,
   getFileDraftRevisionState,
@@ -33,6 +33,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 const log = createLogger("web.pane-layout");
 
@@ -60,23 +61,27 @@ export function DraggableTabBar({
   dragOverPaneId,
   isPaneFocused = false,
 }: DraggableTabBarProps) {
+  const nodeBackend = useScopeBackend();
   const removeTab = usePaneLayoutStore((state) => state.removeTab);
+  const multiReviews = useNodeScope().store(multiReviewStore);
   const launches = useEnvironmentTabLaunches(environmentId);
   // A launch lands in the focused pane, so its placeholder sits there too.
   const placeholders = isPaneFocused ? launches.filter((launch) => !launch.arrived) : [];
   const placeholderHasFocus = placeholders.some((launch) => launch.focused);
   const isDirty = useFileDirtyStore((state) => state.isDirty);
   const clearDirty = useFileDirtyStore((state) => state.clearDirty);
+  // The node this pane's file drafts are kept on.
+  const draftScope = useNodeScope();
 
   const discardTabDraft = useCallback(
     (tabId: string): Promise<void> => {
       const tab = pane.tabs.find((candidate) => candidate.id === tabId);
       if (tab?.type === "file" && tab.fileData?.filePath) {
         const filePath = tab.fileData.filePath;
-        const revisionState = getFileDraftRevisionState(tabId);
-        return discardFileDraft(environmentId, filePath, revisionState)
+        const revisionState = getFileDraftRevisionState(tabId, draftScope);
+        return discardFileDraft(environmentId, filePath, revisionState, draftScope)
           .then(() => {
-            releaseFileDraftRevisionState(tabId);
+            releaseFileDraftRevisionState(tabId, draftScope);
           })
           .catch((error) => {
             if (error instanceof DraftRevisionConflictError) {
@@ -87,9 +92,14 @@ export function DraggableTabBar({
                 action: {
                   label: "Discard saved draft",
                   onClick: () => {
-                    void resolveFileDraftDiscardConflict(environmentId, filePath, revisionState)
+                    void resolveFileDraftDiscardConflict(
+                      environmentId,
+                      filePath,
+                      revisionState,
+                      draftScope,
+                    )
                       .then(() => {
-                        releaseFileDraftRevisionState(tabId);
+                        releaseFileDraftRevisionState(tabId, draftScope);
                       })
                       .catch((retryError) => {
                         log.warn("draft.file-conflict-resolve-failed", {
@@ -141,7 +151,7 @@ export function DraggableTabBar({
         throw error;
       });
     },
-    [environmentId, pane.tabs],
+    [draftScope, environmentId, pane.tabs],
   );
 
   // State for unsaved changes confirmation dialog
@@ -180,13 +190,13 @@ export function DraggableTabBar({
       });
       const failedTabIds = new Set<string>();
       for (const { tabId, workflowId } of parents) {
-        const phase = useMultiReviewStore.getState().workflows.get(workflowId)?.phase;
+        const phase = multiReviews.getState().workflows.get(workflowId)?.phase;
         // Active, failed, and not-yet-hydrated reviews remain backend-owned when
         // hidden. The launcher can reattach them, preserving background work.
         if (!phase || !isMultiReviewTerminalPhase(phase)) continue;
         try {
-          await backend.deleteMultiReviewWorkflow(workflowId);
-          useMultiReviewStore.getState().removeWorkflow(workflowId);
+          await nodeBackend.deleteMultiReviewWorkflow(workflowId);
+          multiReviews.getState().removeWorkflow(workflowId);
         } catch (error) {
           failedTabIds.add(tabId);
           toast.error("Could not close Multi Review", {
@@ -196,7 +206,7 @@ export function DraggableTabBar({
       }
       return failedTabIds;
     },
-    [pane.tabs],
+    [multiReviews, pane.tabs, nodeBackend],
   );
 
   const isRefreshableAgentTab = useCallback(

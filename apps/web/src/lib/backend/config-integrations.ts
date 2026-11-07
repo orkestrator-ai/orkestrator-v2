@@ -1,9 +1,11 @@
+import { coordinatorApi } from "@/lib/node-scope/domains/coordinator";
+import { asWebModel, nativeSessions } from "@/lib/node-scope/domains/native-sessions";
+import { asKanbanModel, kanban, NO_ARGS } from "@/lib/node-scope/domains/kanban";
 import type {
   DatabaseStats,
   DiagnosticsBundleChunk,
   DiagnosticsBundlePlan,
 } from "@orkestrator/protocol/backend-diagnostics";
-import { invoke } from "@/lib/native/backend";
 import type {
   ControlMcpCredentialSummary,
   ControlMcpProfile,
@@ -12,7 +14,6 @@ import type { PublicCapability } from "@orkestrator/protocol/public-api-inputs";
 import {
   invokeGlobalConfigCommand,
   invokeRepositoryConfigCommand,
-  settingsOnCommandNode,
 } from "@/lib/portal/command-node-config";
 import { getGatewayBaseUrl, resolveGatewayLoopbackBaseUrl } from "@/lib/gateway-url";
 import type {
@@ -43,73 +44,48 @@ import type {
   GitHubIssueStatus,
 } from "@/types/github";
 import type { CodexModel } from "@/lib/codex-models";
-import type { AgentModel } from "@orkestrator/protocol/native-agent";
+import { agentServersApi } from "@/lib/node-scope/domains/agent-servers";
+import type { AgentModelCatalogCache } from "@orkestrator/protocol/contract/domains/agent-servers";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
+import { accountsOn } from "@/lib/node-scope/domains/accounts";
 /** PR detection result containing URL, state, and merge conflict status */
 
 import type { PrDetectionResult } from "./projects-environments";
-import { machineInvoke, type AccountMachine } from "./agent-accounts";
-import { isUnknownBackendCommand } from "@/lib/portal/unknown-command";
+import { pullRequests } from "@/lib/node-scope/domains/pull-requests";
+import { systemApiOn } from "@/lib/node-scope/domains/system";
+import { type AccountMachine } from "./agent-accounts";
+import { incompatibility } from "@orkestrator/protocol/contract/errors";
+import { environmentsClient } from "@orkestrator/protocol/contract/domains/environments";
+import {
+  commandBackendClient,
+  machineInvoker,
+  type BackendClient,
+  machineBackendClient,
+  withArgumentsObject,
+} from "./client";
+import { domainApi } from "@/lib/node-scope/domains/domain-api";
+import { config as configDomain } from "@/lib/node-scope/domains/config";
 
 /**
  * Workspace machine settings with the command node's inherited preferences.
  * `machine` reads another machine's, as Settings does for the one it edits.
  */
+/**
+ * The Cursor SDK login's web types (`types/index.ts`) are the `accounts`
+ * schemas' types made mutable (plan item 7010); the client answers the
+ * schemas' readonly form.
+ */
+function asCursorModel<T>(result: Promise<unknown>): Promise<T> {
+  return result as Promise<T>;
+}
+
 export async function getConfig(machine?: AccountMachine): Promise<AppConfig> {
   return invokeGlobalConfigCommand("get_config", undefined, machine);
 }
 
-export interface AgentModelCatalogCache {
-  schemaVersion: 1;
-  claude?: {
-    updatedAt: string;
-    models: ClaudeModelCatalogSnapshot["models"];
-  };
-  codex?: {
-    updatedAt: string;
-    models: CodexModel[];
-  };
-  cursor?: {
-    updatedAt: string;
-    models: AgentModel[];
-  };
-  grok?: {
-    updatedAt: string;
-    models: AgentModel[];
-  };
-  pi?: {
-    updatedAt: string;
-    models: AgentModel[];
-  };
-}
-
-/**
- * Load the host-wide last-known-good catalogues, seeding Pi on first use. With
- * `seed: true`, the backend also downloads every enabled platform's missing
- * catalogue before answering, so only a caller that can wait in the background
- * asks for it. `seed: false` reads the cache exactly as stored, with no Pi
- * probe, for startup's read before its first render. An older backend treats
- * `false` as omitted. `machine` selects the node whose catalogue is read.
- */
-export async function getAgentModelCatalogCache(
-  machine?: AccountMachine,
-  options: { seed?: boolean } = {},
-): Promise<AgentModelCatalogCache> {
-  const args = options.seed === undefined ? undefined : { seed: options.seed };
-  return machine === undefined
-    ? args
-      ? invoke<AgentModelCatalogCache>("get_agent_model_catalog_cache", args)
-      : invoke<AgentModelCatalogCache>("get_agent_model_catalog_cache")
-    : machineInvoke<AgentModelCatalogCache>(machine, "get_agent_model_catalog_cache", args);
-}
-
-/** Discover Pi models without requiring an environment or persistent bridge. */
-export async function ensureHostPiModelCatalog(): Promise<
-  import("@orkestrator/protocol/native-agent").AgentModel[]
-> {
-  return invoke("ensure_host_pi_model_catalog");
-}
+/** The host-wide model catalogues: the `agent-servers` domain's type (plan item 7010). */
+export type { AgentModelCatalogCache } from "@orkestrator/protocol/contract/domains/agent-servers";
 
 /** Force a provider's host catalogue to refresh without creating an environment. */
 type NonOpenCodeAgent = Exclude<
@@ -120,79 +96,6 @@ type HostModelCatalogRefreshResult = {
   agent: import("@orkestrator/protocol/agent-platforms").AgentPlatform;
   modelCount: number;
 };
-
-export function refreshHostAgentModelCatalog(
-  agent: "opencode",
-  projectId: string,
-  machine?: AccountMachine,
-): Promise<HostModelCatalogRefreshResult>;
-export function refreshHostAgentModelCatalog(
-  agent: NonOpenCodeAgent,
-  projectId?: never,
-  machine?: AccountMachine,
-): Promise<HostModelCatalogRefreshResult>;
-export async function refreshHostAgentModelCatalog(
-  agent: import("@orkestrator/protocol/agent-platforms").AgentPlatform,
-  projectId?: string,
-  machine?: AccountMachine,
-): Promise<HostModelCatalogRefreshResult> {
-  return machineInvoke(machine, "refresh_host_agent_model_catalog", {
-    agent,
-    ...(projectId ? { projectId } : {}),
-  });
-}
-
-/** Backend-normalized model catalogue consumed by the provider-neutral composer. */
-export async function getNativeAgentModelCatalog(
-  environmentId: string,
-  ensureAgent?: AgentPlatform,
-): Promise<import("@orkestrator/protocol/native-agent").AgentModel[]> {
-  if (!ensureAgent) {
-    return invoke("get_native_agent_model_catalog", { environmentId });
-  }
-  const result = await invoke<
-    | import("@orkestrator/protocol/native-agent").AgentModel[]
-    | {
-        models: import("@orkestrator/protocol/native-agent").AgentModel[];
-        status: "ready" | "empty" | "failed";
-      }
-  >("get_native_agent_model_catalog", {
-    environmentId,
-    ensureAgent,
-  });
-  // Older backends return an ensured catalogue directly.
-  if (Array.isArray(result)) return result;
-  if (!result || !Array.isArray(result.models)) {
-    throw new Error("The native model catalogue response was malformed");
-  }
-  if (result.status === "failed") {
-    throw new Error(
-      `The ${ensureAgent ?? "native agent"} model catalogue is temporarily unavailable`,
-    );
-  }
-  return result.models;
-}
-
-/** Persist an authoritative catalogue for the next application launch. */
-export async function cacheAgentModelCatalog(
-  agent: "claude" | "codex",
-  models: ClaudeModelCatalogSnapshot["models"] | CodexModel[],
-): Promise<AgentModelCatalogCache> {
-  return invoke<AgentModelCatalogCache>("cache_agent_model_catalog", {
-    agent,
-    models,
-  });
-}
-
-export async function saveConfig(config: AppConfig): Promise<void> {
-  return invoke("save_config", { config });
-}
-
-export async function getGlobalConfig(): Promise<GlobalConfig> {
-  return settingsOnCommandNode()
-    ? (await getConfig()).global
-    : invoke<GlobalConfig>("get_global_config");
-}
 
 /**
  * Replace the whole stored global. Kept for compatibility; it overwrites
@@ -256,53 +159,11 @@ export async function setAnthropicApiKey(
   return invokeGlobalConfigCommand("set_anthropic_api_key", { apiKey }, machine);
 }
 
-/** Read one platform's plan/quota windows from the backend. */
-export async function getPlanUsage(
-  platform: AgentPlatform,
-  options: { force?: boolean } = {},
-  machine?: AccountMachine,
-): Promise<PlanUsageSnapshot> {
-  return machineInvoke<PlanUsageSnapshot>(machine, "get_plan_usage", {
-    platform,
-    ...(options.force ? { force: true } : {}),
-  });
-}
-
 export async function setOpenCodeZenApiKey(
   apiKey: string | null,
   machine?: AccountMachine,
 ): Promise<AppConfig> {
   return invokeGlobalConfigCommand("set_opencode_zen_api_key", { apiKey }, machine);
-}
-
-/**
- * Experimental Cursor SDK sign-in.
- *
- * Start returns the URL to open; the flow itself runs in the backend, which
- * spawns the bridge, parses its output and stores the credential. Callers open
- * the URL in this client's browser (`openInBrowser`) and poll
- * `cursorSdkLoginStatus` until it leaves `pending`; the backend's login child
- * opens no browser of its own. `machine` names another node to sign in,
- * through the command node.
- */
-export async function cursorSdkLoginStart(machine?: AccountMachine): Promise<{ loginUrl: string }> {
-  return machineInvoke<{ loginUrl: string }>(machine, "cursor_sdk_login_start", {
-    openBrowser: false,
-  });
-}
-
-export async function cursorSdkLoginStatus(
-  machine?: AccountMachine,
-): Promise<CursorSdkLoginProgress> {
-  return machineInvoke<CursorSdkLoginProgress>(machine, "cursor_sdk_login_status");
-}
-
-export async function cursorSdkLoginCancel(machine?: AccountMachine): Promise<void> {
-  await machineInvoke<{ cancelled: boolean }>(machine, "cursor_sdk_login_cancel");
-}
-
-export async function cursorSdkLogout(machine?: AccountMachine): Promise<CursorSdkAuthStatus> {
-  return machineInvoke<CursorSdkAuthStatus>(machine, "cursor_sdk_logout");
 }
 
 export async function getWebClientStatus(): Promise<WebClientStatus> {
@@ -365,36 +226,6 @@ export interface CreateControlMcpCredentialInput {
   capabilities?: PublicCapability[];
 }
 
-export async function getControlMcpSettings(): Promise<ControlMcpSettings> {
-  return invoke<ControlMcpSettings>("get_control_mcp_settings");
-}
-
-export async function rotateControlMcpToken(): Promise<ControlMcpSettings> {
-  return invoke<ControlMcpSettings>("rotate_control_mcp_token");
-}
-
-export async function createControlMcpCredential(
-  input: CreateControlMcpCredentialInput,
-): Promise<ControlMcpSettings> {
-  return invoke<ControlMcpSettings>("create_control_mcp_credential", { ...input });
-}
-
-export async function rotateControlMcpCredential(
-  credentialId: string,
-): Promise<ControlMcpSettings> {
-  return invoke<ControlMcpSettings>("rotate_control_mcp_credential", { credentialId });
-}
-
-export async function revokeControlMcpCredential(
-  credentialId: string,
-): Promise<ControlMcpSettings> {
-  return invoke<ControlMcpSettings>("revoke_control_mcp_credential", { credentialId });
-}
-
-export async function getRepositoryConfig(projectId: string): Promise<RepositoryConfig> {
-  return invoke<RepositoryConfig>("get_repository_config", { projectId });
-}
-
 export async function updateRepositoryConfig(
   projectId: string,
   repoConfig: RepositoryConfig,
@@ -420,13 +251,10 @@ export async function patchRepositorySettings(
       ...(unset.length > 0 ? { unset: [...unset] } : {}),
     });
   } catch (error) {
-    if (!isUnknownBackendCommand(error, "patch_repository_settings")) throw error;
+    if (incompatibility(error, "patch_repository_settings")?.code !== "unknown-command")
+      throw error;
     return updateRepositoryConfig(projectId, fallback);
   }
-}
-
-export async function getLogDirectory(machine?: AccountMachine): Promise<string> {
-  return machineInvoke<string>(machine, "get_log_directory");
 }
 
 export interface LogStorageStats {
@@ -437,226 +265,15 @@ export interface LogStorageStats {
   fileCount: number;
 }
 
-export async function getLogStorageStats(machine?: AccountMachine): Promise<LogStorageStats> {
-  return machineInvoke<LogStorageStats>(machine, "get_log_storage_stats");
-}
-
-export async function cleanupLogs(machine?: AccountMachine): Promise<LogStorageStats> {
-  return machineInvoke<LogStorageStats>(machine, "cleanup_logs");
-}
-
-export async function getDatabaseStats(machine?: AccountMachine): Promise<DatabaseStats> {
-  return machineInvoke<DatabaseStats>(machine, "get_database_stats");
-}
-
-/** Builds the bundle on the backend and answers with the manifest of exactly that bundle. */
-export async function planDiagnosticsBundle(
-  machine?: AccountMachine,
-): Promise<DiagnosticsBundlePlan> {
-  return machineInvoke<DiagnosticsBundlePlan>(machine, "plan_diagnostics_bundle");
-}
-
-export async function readDiagnosticsBundle(
-  planId: string,
-  offset: number,
-  machine?: AccountMachine,
-): Promise<DiagnosticsBundleChunk> {
-  return machineInvoke<DiagnosticsBundleChunk>(machine, "read_diagnostics_bundle", {
-    planId,
-    offset,
-  });
-}
-
 // --- Linear Commands ---
 
-export async function getLinearConnection(): Promise<LinearConnectionStatus> {
-  return invoke<LinearConnectionStatus>("get_linear_connection");
-}
-
-export async function connectLinear(apiKey: string): Promise<LinearConnectionStatus> {
-  return invoke<LinearConnectionStatus>("connect_linear", { apiKey });
-}
-
-export async function disconnectLinear(): Promise<LinearConnectionStatus> {
-  return invoke<LinearConnectionStatus>("disconnect_linear");
-}
-
-export async function getLinearIssues(): Promise<LinearIssueListItem[]> {
-  return invoke<LinearIssueListItem[]>("get_linear_issues");
-}
-
-export async function getLinearIssue(issueId: string): Promise<LinearIssueDetail> {
-  return invoke<LinearIssueDetail>("get_linear_issue", { issueId });
-}
-
-export async function postLinearIssueComment(
-  issueId: string,
-  body: string,
-): Promise<LinearIssueComment> {
-  return invoke<LinearIssueComment>("post_linear_issue_comment", { issueId, body });
-}
-
-export async function postLinearCompletionComment(
-  pipelineId: string,
-  issueId: string,
-  body: string,
-): Promise<LinearCompletionCommentResult> {
-  return invoke<LinearCompletionCommentResult>("post_linear_completion_comment", {
-    pipelineId,
-    issueId,
-    body,
-  });
-}
-
-export async function getGitHubIssues(projectId: string): Promise<GitHubIssuesSnapshot> {
-  return invoke<GitHubIssuesSnapshot>("get_github_issues", { projectId });
-}
-
-export async function getGitHubIssue(
-  projectId: string,
-  issueNumber: number,
-): Promise<GitHubIssueDetail> {
-  return invoke<GitHubIssueDetail>("get_github_issue", { projectId, issueNumber });
-}
-
-export async function updateGitHubIssue(
-  projectId: string,
-  issueNumber: number,
-  updates: { title: string; body: string },
-): Promise<GitHubIssue> {
-  return invoke<GitHubIssue>("update_github_issue", { projectId, issueNumber, ...updates });
-}
-
-export async function updateGitHubIssueStatus(
-  projectId: string,
-  issueNumber: number,
-  status: GitHubIssueStatus,
-): Promise<GitHubIssue> {
-  return invoke<GitHubIssue>("update_github_issue_status", { projectId, issueNumber, status });
-}
-
-export async function closeGitHubIssue(
-  projectId: string,
-  issueNumber: number,
-): Promise<GitHubIssue> {
-  return invoke<GitHubIssue>("close_github_issue", { projectId, issueNumber });
-}
-
-export async function addGitHubIssueComment(
-  projectId: string,
-  issueNumber: number,
-  body: string,
-): Promise<GitHubIssueComment> {
-  return invoke<GitHubIssueComment>("add_github_issue_comment", { projectId, issueNumber, body });
-}
-
-export async function updateGitHubIssueComment(
-  projectId: string,
-  issueNumber: number,
-  commentId: number,
-  body: string,
-): Promise<GitHubIssueComment> {
-  return invoke<GitHubIssueComment>("update_github_issue_comment", {
-    projectId,
-    issueNumber,
-    commentId,
-    body,
-  });
-}
-
-export interface GitHubCompletionCommentResult {
-  status: "posted" | "already-posted";
-  commentId: string;
-  postedAt?: string;
-}
-
-export async function postGitHubCompletionComment(
-  pipelineId: string,
-  projectId: string,
-  repositoryOwner: string,
-  repositoryName: string,
-  issueNumber: number,
-  body: string,
-): Promise<GitHubCompletionCommentResult> {
-  return invoke<GitHubCompletionCommentResult>("post_github_completion_comment", {
-    pipelineId,
-    projectId,
-    repositoryOwner,
-    repositoryName,
-    issueNumber,
-    body,
-  });
-}
+import type { GitHubCompletionCommentResult } from "@orkestrator/protocol/contract/domains/pull-requests";
+export type { GitHubCompletionCommentResult };
 
 // --- GitHub Commands ---
 
-export async function openInBrowser(url: string): Promise<void> {
-  // The Electron main process always runs on the client, even when this
-  // renderer's backend commands are routed to a remote Orkestrator server.
-  if (window.orkestrator?.shell?.openExternal) {
-    return window.orkestrator.shell.openExternal(resolveGatewayLoopbackBaseUrl(url));
-  }
-  // Browser clients open links in their own browser rather than asking the
-  // backend host to launch one.
-  if (window.orkestratorGateway?.enabled && !window.orkestratorGateway.desktop) {
-    window.open(url, "_blank", "noopener,noreferrer");
-    return;
-  }
-  return invoke("open_in_browser", { url });
-}
-
-export async function revealInFileManager(path: string): Promise<void> {
-  return invoke("reveal_in_file_manager", { path });
-}
-
-export async function getEnvironmentPrUrl(environmentId: string): Promise<string | null> {
-  return invoke<string | null>("get_environment_pr_url", { environmentId });
-}
-
-export interface VerifiedEnvironmentPr {
-  url: string;
-  headRefName: string;
-  baseRefName: string;
-  state: "OPEN";
-}
-
-export async function verifyEnvironmentPr(
-  environmentId: string,
-  prUrl: string,
-  targetBranch: string,
-): Promise<VerifiedEnvironmentPr> {
-  return invoke<VerifiedEnvironmentPr>("verify_environment_pr", {
-    environmentId,
-    prUrl,
-    targetBranch,
-  });
-}
-
-export async function clearEnvironmentPr(environmentId: string): Promise<void> {
-  return invoke("clear_environment_pr", { environmentId });
-}
-
-export async function setEnvironmentPr(
-  environmentId: string,
-  prUrl: string,
-  prState: PrState,
-  hasMergeConflicts: boolean | null,
-): Promise<Environment> {
-  return invoke<Environment>("set_environment_pr", {
-    environmentId,
-    prUrl,
-    prState,
-    hasMergeConflicts,
-  });
-}
-
-export async function overrideEnvironmentSetup(environmentId: string): Promise<Environment> {
-  return invoke<Environment>("override_environment_setup", { environmentId });
-}
-
-export async function runEnvironmentSetup(environmentId: string): Promise<Environment> {
-  return invoke<Environment>("run_environment_setup", { environmentId });
-}
+import type { VerifiedEnvironmentPr } from "@orkestrator/protocol/contract/domains/pull-requests";
+export type { VerifiedEnvironmentPr };
 
 /** What a held setup would run, and what the default branch runs instead. */
 export interface EnvironmentSetupApproval {
@@ -671,111 +288,648 @@ export interface EnvironmentSetupApproval {
   approvalRequired: boolean;
 }
 
-export async function getEnvironmentSetupApproval(
-  environmentId: string,
-): Promise<EnvironmentSetupApproval> {
-  return invoke<EnvironmentSetupApproval>("get_environment_setup_approval", { environmentId });
-}
-
-/**
- * Run a held setup's commands. `remember` also approves them for the project
- * on this machine, so later environments with the same commands run them.
- */
-export async function approveEnvironmentSetup(
-  environmentId: string,
-  hash: string,
-  remember: boolean,
-): Promise<Environment> {
-  return invoke<Environment>("approve_environment_setup", { environmentId, hash, remember });
-}
-
-export async function ensureEnvironmentSetup(
-  environmentId: string,
-): Promise<EnsureEnvironmentSetupResult> {
-  return invoke<EnsureEnvironmentSetupResult>("ensure_environment_setup", { environmentId });
-}
-
-/** Detect PR URL and state for the environment's branch (uses --head to check correct branch) */
-export async function detectPr(
-  containerId: string,
-  branch: string,
-): Promise<PrDetectionResult | null> {
-  return invoke<PrDetectionResult | null>("detect_pr", { containerId, branch });
-}
-
-/** Detect PR URL and state for local (worktree-based) environments (uses --head to check correct branch) */
-export async function detectPrLocal(
-  environmentId: string,
-  branch: string,
-): Promise<PrDetectionResult | null> {
-  return invoke<PrDetectionResult | null>("detect_pr_local", { environmentId, branch });
-}
-
 /** Merge method options for PR merging */
 export type MergeMethod = "squash" | "merge" | "rebase";
 
-export interface MergePrResult {
-  outcome: "merged" | "pending" | "unknown";
-}
-
-export interface MergeEnvironmentPrResult extends MergePrResult {
-  cleanupOutcome: "not-requested" | "pending" | "completed" | "failed";
-  cleanupError?: string;
-}
+/** The merge results are the `pull-requests` domain's (plan item 7006). */
+import type {
+  MergeEnvironmentPrResult,
+  MergePrResult,
+} from "@orkestrator/protocol/contract/domains/pull-requests";
+export type { MergeEnvironmentPrResult, MergePrResult };
 
 /**
- * Backend-owned merge workflow. The environment id is authoritative for both
- * local and container execution, and an optional cleanup follow-up is persisted
- * before GitHub is invoked.
+ * This file's commands on `client`'s node (plan item 3002). A scoped store or
+ * service passes its own node's client; the named exports below are this
+ * over the window's command scope.
  */
-export async function mergeEnvironmentPr(
-  environmentId: string,
-  method?: MergeMethod,
-  deleteBranch?: boolean,
-  cleanupAfterMerge?: boolean,
-): Promise<MergeEnvironmentPrResult> {
-  return invoke<MergeEnvironmentPrResult>("merge_environment_pr", {
-    environmentId,
-    method,
-    deleteBranch,
-    cleanupAfterMerge,
-  });
+export function createConfigIntegrationsApi(client: BackendClient) {
+  // GitHub issues and the environment PR commands (`pull-requests`, plan item 7006).
+  const prDomain = () => pullRequests(client);
+  // The machine's own settings commands here (`config` domain, plan item 7005);
+  // the layered reads and saves go through `command-node-config.ts`.
+  const settings = configDomain(client);
+  // The Control MCP settings and credentials (`coordinator` domain, plan item 7009).
+  const coordinator = () => coordinatorApi(client);
+  // The `environments` domain's commands here (plan item 7003).
+  const environments = () => domainApi(client, environmentsClient);
+  // The machine-aware functions sent through `machineInvoke`, which always
+  // passes an arguments object; their calls keep that shape.
+  const ownMachineEnvironments = () => domainApi(withArgumentsObject(client), environmentsClient);
+  const environmentsOn = (machine: AccountMachine) =>
+    machine === undefined
+      ? ownMachineEnvironments()
+      : domainApi(machineBackendClient(client, machine), environmentsClient);
+  const native = () => nativeSessions(client);
+  const machineInvoke = machineInvoker(client);
+  // Plan usage and the Cursor SDK login are in the `accounts` domain (plan item 7008).
+  const accountsOn_ = accountsOn(client);
+
+  // The `agent-servers` domain's catalogue commands (plan item 7009), on this
+  // client's node or, through `machineInvoke`, on another one.
+  const agentServers = () => agentServersApi(client);
+  const agentServersOn = (machine: AccountMachine) =>
+    machine === undefined
+      ? agentServers()
+      : agentServersApi({
+          invokeRaw: <T>(command: string, args?: Readonly<Record<string, unknown>>) =>
+            machineInvoke<T>(machine, command, args as Record<string, unknown> | undefined),
+        });
+
+  /**
+   * Load the host-wide last-known-good catalogues, seeding Pi on first use. With
+   * `seed: true`, the backend also downloads every enabled platform's missing
+   * catalogue before answering, so only a caller that can wait in the background
+   * asks for it. `seed: false` reads the cache exactly as stored, with no Pi
+   * probe, for startup's read before its first render. An older backend treats
+   * `false` as omitted. `machine` selects the node whose catalogue is read.
+   */
+  async function getAgentModelCatalogCache(
+    machine?: AccountMachine,
+    options: { seed?: boolean } = {},
+  ): Promise<AgentModelCatalogCache> {
+    const args = options.seed === undefined ? undefined : { seed: options.seed };
+    // Without `seed`, today's call sends no arguments object to this node.
+    return asWebModel<AgentModelCatalogCache>(
+      agentServersOn(machine).get_agent_model_catalog_cache(
+        (machine === undefined ? args : (args ?? {})) as { seed?: boolean },
+      ),
+    );
+  }
+
+  /** Discover Pi models without requiring an environment or persistent bridge. */
+  async function ensureHostPiModelCatalog(): Promise<
+    import("@orkestrator/protocol/native-agent").AgentModel[]
+  > {
+    return asWebModel<import("@orkestrator/protocol/native-agent").AgentModel[]>(
+      agentServers().ensure_host_pi_model_catalog(undefined as never),
+    );
+  }
+
+  function refreshHostAgentModelCatalog(
+    agent: "opencode",
+    projectId: string,
+    machine?: AccountMachine,
+  ): Promise<HostModelCatalogRefreshResult>;
+
+  function refreshHostAgentModelCatalog(
+    agent: NonOpenCodeAgent,
+    projectId?: never,
+    machine?: AccountMachine,
+  ): Promise<HostModelCatalogRefreshResult>;
+
+  async function refreshHostAgentModelCatalog(
+    agent: import("@orkestrator/protocol/agent-platforms").AgentPlatform,
+    projectId?: string,
+    machine?: AccountMachine,
+  ): Promise<HostModelCatalogRefreshResult> {
+    return asWebModel<HostModelCatalogRefreshResult>(
+      agentServersOn(machine).refresh_host_agent_model_catalog({
+        agent,
+        ...(projectId ? { projectId } : {}),
+      }),
+    );
+  }
+
+  /** Backend-normalized model catalogue consumed by the provider-neutral composer. */
+  async function getNativeAgentModelCatalog(
+    environmentId: string,
+    ensureAgent?: AgentPlatform,
+  ): Promise<import("@orkestrator/protocol/native-agent").AgentModel[]> {
+    if (!ensureAgent) {
+      return asWebModel<import("@orkestrator/protocol/native-agent").AgentModel[]>(
+        agentServers().get_native_agent_model_catalog({ environmentId }),
+      );
+    }
+    const result = await asWebModel<
+      | import("@orkestrator/protocol/native-agent").AgentModel[]
+      | {
+          models: import("@orkestrator/protocol/native-agent").AgentModel[];
+          status: "ready" | "empty" | "failed";
+        }
+    >(agentServers().get_native_agent_model_catalog({ environmentId, ensureAgent }));
+    // Older backends return an ensured catalogue directly.
+    if (Array.isArray(result)) return result;
+    if (!result || !Array.isArray(result.models)) {
+      throw new Error("The native model catalogue response was malformed");
+    }
+    if (result.status === "failed") {
+      throw new Error(
+        `The ${ensureAgent ?? "native agent"} model catalogue is temporarily unavailable`,
+      );
+    }
+    return result.models;
+  }
+
+  /** Persist an authoritative catalogue for the next application launch. */
+  async function cacheAgentModelCatalog(
+    agent: "claude" | "codex",
+    models: ClaudeModelCatalogSnapshot["models"] | CodexModel[],
+  ): Promise<AgentModelCatalogCache> {
+    return asWebModel<AgentModelCatalogCache>(
+      agentServers().cache_agent_model_catalog({ agent, models }),
+    );
+  }
+
+  async function saveConfig(config: AppConfig): Promise<void> {
+    return settings().save_config({ config });
+  }
+
+  /**
+   * The client's node's own global settings, without inherited preferences.
+   * The effective view is `getConfig()` (or `runConfigCommand` for explicit
+   * scopes).
+   */
+  async function getGlobalConfig(): Promise<GlobalConfig> {
+    return (await settings().get_global_config({})) as GlobalConfig;
+  }
+
+  /** Read one platform's plan/quota windows from the backend. */
+  async function getPlanUsage(
+    platform: AgentPlatform,
+    options: { force?: boolean } = {},
+    machine?: AccountMachine,
+  ): Promise<PlanUsageSnapshot> {
+    return accountsOn_(machine).get_plan_usage({
+      platform,
+      ...(options.force ? { force: true } : {}),
+    });
+  }
+
+  /**
+   * Experimental Cursor SDK sign-in.
+   *
+   * Start returns the URL to open; the flow itself runs in the backend, which
+   * spawns the bridge, parses its output and stores the credential. Callers open
+   * the URL in this client's browser (`openInBrowser`) and poll
+   * `cursorSdkLoginStatus` until it leaves `pending`; the backend's login child
+   * opens no browser of its own. `machine` names another node to sign in,
+   * through the command node.
+   */
+  async function cursorSdkLoginStart(machine?: AccountMachine): Promise<{ loginUrl: string }> {
+    return accountsOn_(machine).cursor_sdk_login_start({ openBrowser: false });
+  }
+
+  async function cursorSdkLoginStatus(machine?: AccountMachine): Promise<CursorSdkLoginProgress> {
+    return asCursorModel<CursorSdkLoginProgress>(accountsOn_(machine).cursor_sdk_login_status({}));
+  }
+
+  async function cursorSdkLoginCancel(machine?: AccountMachine): Promise<void> {
+    await accountsOn_(machine).cursor_sdk_login_cancel({});
+  }
+
+  async function cursorSdkLogout(machine?: AccountMachine): Promise<CursorSdkAuthStatus> {
+    return asCursorModel<CursorSdkAuthStatus>(accountsOn_(machine).cursor_sdk_logout({}));
+  }
+
+  async function getControlMcpSettings(): Promise<ControlMcpSettings> {
+    return coordinator().get_control_mcp_settings(
+      undefined as never,
+    ) as Promise<ControlMcpSettings>;
+  }
+
+  async function rotateControlMcpToken(): Promise<ControlMcpSettings> {
+    return coordinator().rotate_control_mcp_token(
+      undefined as never,
+    ) as Promise<ControlMcpSettings>;
+  }
+
+  async function createControlMcpCredential(
+    input: CreateControlMcpCredentialInput,
+  ): Promise<ControlMcpSettings> {
+    return coordinator().create_control_mcp_credential({ ...input }) as Promise<ControlMcpSettings>;
+  }
+
+  async function rotateControlMcpCredential(credentialId: string): Promise<ControlMcpSettings> {
+    return coordinator().rotate_control_mcp_credential({
+      credentialId,
+    }) as Promise<ControlMcpSettings>;
+  }
+
+  async function revokeControlMcpCredential(credentialId: string): Promise<ControlMcpSettings> {
+    return coordinator().revoke_control_mcp_credential({
+      credentialId,
+    }) as Promise<ControlMcpSettings>;
+  }
+
+  async function getRepositoryConfig(projectId: string): Promise<RepositoryConfig> {
+    return (await settings().get_repository_config({ projectId })) as RepositoryConfig;
+  }
+
+  async function getLogDirectory(machine?: AccountMachine): Promise<string> {
+    return environmentsOn(machine).getLogDirectory({});
+  }
+
+  async function getLogStorageStats(machine?: AccountMachine): Promise<LogStorageStats> {
+    return environmentsOn(machine).getLogStorageStats({});
+  }
+
+  async function cleanupLogs(machine?: AccountMachine): Promise<LogStorageStats> {
+    return environmentsOn(machine).cleanupLogs({});
+  }
+
+  async function getDatabaseStats(machine?: AccountMachine): Promise<DatabaseStats> {
+    return systemApiOn(client, machine).get_database_stats({});
+  }
+
+  /** Builds the bundle on the backend and answers with the manifest of exactly that bundle. */
+  async function planDiagnosticsBundle(machine?: AccountMachine): Promise<DiagnosticsBundlePlan> {
+    return systemApiOn(client, machine).plan_diagnostics_bundle({});
+  }
+
+  async function readDiagnosticsBundle(
+    planId: string,
+    offset: number,
+    machine?: AccountMachine,
+  ): Promise<DiagnosticsBundleChunk> {
+    return systemApiOn(client, machine).read_diagnostics_bundle({
+      planId,
+      offset,
+    });
+  }
+
+  async function getLinearConnection(): Promise<LinearConnectionStatus> {
+    return asKanbanModel<LinearConnectionStatus>(kanban(client).get_linear_connection(NO_ARGS));
+  }
+
+  async function connectLinear(apiKey: string): Promise<LinearConnectionStatus> {
+    return asKanbanModel<LinearConnectionStatus>(kanban(client).connect_linear({ apiKey }));
+  }
+
+  async function disconnectLinear(): Promise<LinearConnectionStatus> {
+    return asKanbanModel<LinearConnectionStatus>(kanban(client).disconnect_linear(NO_ARGS));
+  }
+
+  async function getLinearIssues(): Promise<LinearIssueListItem[]> {
+    return asKanbanModel<LinearIssueListItem[]>(kanban(client).get_linear_issues(NO_ARGS));
+  }
+
+  async function getLinearIssue(issueId: string): Promise<LinearIssueDetail> {
+    return asKanbanModel<LinearIssueDetail>(kanban(client).get_linear_issue({ issueId }));
+  }
+
+  async function postLinearIssueComment(
+    issueId: string,
+    body: string,
+  ): Promise<LinearIssueComment> {
+    return asKanbanModel<LinearIssueComment>(
+      kanban(client).post_linear_issue_comment({ issueId, body }),
+    );
+  }
+
+  async function postLinearCompletionComment(
+    pipelineId: string,
+    issueId: string,
+    body: string,
+  ): Promise<LinearCompletionCommentResult> {
+    return asKanbanModel<LinearCompletionCommentResult>(
+      kanban(client).post_linear_completion_comment({ pipelineId, issueId, body }),
+    );
+  }
+
+  async function getGitHubIssues(projectId: string): Promise<GitHubIssuesSnapshot> {
+    return prDomain().get_github_issues({ projectId });
+  }
+
+  async function getGitHubIssue(
+    projectId: string,
+    issueNumber: number,
+  ): Promise<GitHubIssueDetail> {
+    return prDomain().get_github_issue({ projectId, issueNumber });
+  }
+
+  async function updateGitHubIssue(
+    projectId: string,
+    issueNumber: number,
+    updates: { title: string; body: string },
+  ): Promise<GitHubIssue> {
+    return prDomain().update_github_issue({ projectId, issueNumber, ...updates });
+  }
+
+  async function updateGitHubIssueStatus(
+    projectId: string,
+    issueNumber: number,
+    status: GitHubIssueStatus,
+  ): Promise<GitHubIssue> {
+    return prDomain().update_github_issue_status({ projectId, issueNumber, status });
+  }
+
+  async function closeGitHubIssue(projectId: string, issueNumber: number): Promise<GitHubIssue> {
+    return prDomain().close_github_issue({ projectId, issueNumber });
+  }
+
+  async function addGitHubIssueComment(
+    projectId: string,
+    issueNumber: number,
+    body: string,
+  ): Promise<GitHubIssueComment> {
+    return prDomain().add_github_issue_comment({ projectId, issueNumber, body });
+  }
+
+  async function updateGitHubIssueComment(
+    projectId: string,
+    issueNumber: number,
+    commentId: number,
+    body: string,
+  ): Promise<GitHubIssueComment> {
+    return prDomain().update_github_issue_comment({
+      projectId,
+      issueNumber,
+      commentId,
+      body,
+    });
+  }
+
+  async function postGitHubCompletionComment(
+    pipelineId: string,
+    projectId: string,
+    repositoryOwner: string,
+    repositoryName: string,
+    issueNumber: number,
+    body: string,
+  ): Promise<GitHubCompletionCommentResult> {
+    return prDomain().post_github_completion_comment({
+      pipelineId,
+      projectId,
+      repositoryOwner,
+      repositoryName,
+      issueNumber,
+      body,
+    });
+  }
+
+  async function openInBrowser(url: string): Promise<void> {
+    // The Electron main process always runs on the client, even when this
+    // renderer's backend commands are routed to a remote Orkestrator server.
+    if (window.orkestrator?.shell?.openExternal) {
+      return window.orkestrator.shell.openExternal(resolveGatewayLoopbackBaseUrl(url));
+    }
+    // Browser clients open links in their own browser rather than asking the
+    // backend host to launch one.
+    if (window.orkestratorGateway?.enabled && !window.orkestratorGateway.desktop) {
+      window.open(url, "_blank", "noopener,noreferrer");
+      return;
+    }
+    return native().open_in_browser({ url });
+  }
+
+  async function revealInFileManager(path: string): Promise<void> {
+    return native().reveal_in_file_manager({ path });
+  }
+
+  async function getEnvironmentPrUrl(environmentId: string): Promise<string | null> {
+    return environments().getEnvironmentPrUrl({ environmentId });
+  }
+
+  async function verifyEnvironmentPr(
+    environmentId: string,
+    prUrl: string,
+    targetBranch: string,
+  ): Promise<VerifiedEnvironmentPr> {
+    return prDomain().verify_environment_pr({
+      environmentId,
+      prUrl,
+      targetBranch,
+    });
+  }
+
+  async function clearEnvironmentPr(environmentId: string): Promise<void> {
+    return environments().clearEnvironmentPr({ environmentId });
+  }
+
+  async function setEnvironmentPr(
+    environmentId: string,
+    prUrl: string,
+    prState: PrState,
+    hasMergeConflicts: boolean | null,
+  ): Promise<Environment> {
+    return environments().setEnvironmentPr({
+      environmentId,
+      prUrl,
+      prState,
+      hasMergeConflicts,
+    });
+  }
+
+  async function overrideEnvironmentSetup(environmentId: string): Promise<Environment> {
+    return environments().overrideEnvironmentSetup({ environmentId });
+  }
+
+  async function runEnvironmentSetup(environmentId: string): Promise<Environment> {
+    return environments().runEnvironmentSetup({ environmentId });
+  }
+
+  async function getEnvironmentSetupApproval(
+    environmentId: string,
+  ): Promise<EnvironmentSetupApproval> {
+    return environments().getEnvironmentSetupApproval({ environmentId });
+  }
+
+  /**
+   * Run a held setup's commands. `remember` also approves them for the project
+   * on this machine, so later environments with the same commands run them.
+   */
+  async function approveEnvironmentSetup(
+    environmentId: string,
+    hash: string,
+    remember: boolean,
+  ): Promise<Environment> {
+    return environments().approveEnvironmentSetup({ environmentId, hash, remember });
+  }
+
+  async function ensureEnvironmentSetup(
+    environmentId: string,
+  ): Promise<EnsureEnvironmentSetupResult> {
+    return environments().ensureEnvironmentSetup({ environmentId });
+  }
+
+  /** Detect PR URL and state for the environment's branch (uses --head to check correct branch) */
+  async function detectPr(containerId: string, branch: string): Promise<PrDetectionResult | null> {
+    return prDomain().detect_pr({ containerId, branch });
+  }
+
+  /** Detect PR URL and state for local (worktree-based) environments (uses --head to check correct branch) */
+  async function detectPrLocal(
+    environmentId: string,
+    branch: string,
+  ): Promise<PrDetectionResult | null> {
+    return prDomain().detect_pr_local({ environmentId, branch });
+  }
+
+  /**
+   * Backend-owned merge workflow. The environment id is authoritative for both
+   * local and container execution, and an optional cleanup follow-up is persisted
+   * before GitHub is invoked.
+   */
+  async function mergeEnvironmentPr(
+    environmentId: string,
+    method?: MergeMethod,
+    deleteBranch?: boolean,
+    cleanupAfterMerge?: boolean,
+  ): Promise<MergeEnvironmentPrResult> {
+    return prDomain().merge_environment_pr({
+      environmentId,
+      method,
+      deleteBranch,
+      cleanupAfterMerge,
+    });
+  }
+
+  /**
+   * Turns the backend's auto-merge on or off: while on, it merges the open PR
+   * once GitHub reports it ready and launches Resolve when it conflicts.
+   * `cleanupAfterMerge` also deletes the environment once the merge is
+   * confirmed; leaving it out turns any earlier cleanup request off.
+   */
+  async function setEnvironmentAutoMerge(
+    environmentId: string,
+    enabled: boolean,
+    cleanupAfterMerge?: boolean,
+  ): Promise<Environment> {
+    return prDomain().set_environment_auto_merge({
+      environmentId,
+      enabled,
+      ...(cleanupAfterMerge === undefined ? {} : { cleanupAfterMerge }),
+    });
+  }
+
+  /** Submit and verify the current branch's PR merge from its container */
+  async function mergePr(
+    containerId: string,
+    method?: MergeMethod,
+    deleteBranch?: boolean,
+  ): Promise<MergePrResult> {
+    return prDomain().merge_pr({ containerId, method, deleteBranch });
+  }
+
+  /** Merge the local environment's PR through the GitHub API */
+  async function mergePrLocal(
+    environmentId: string,
+    method?: MergeMethod,
+    deleteBranch?: boolean,
+  ): Promise<MergePrResult> {
+    return prDomain().merge_pr_local({ environmentId, method, deleteBranch });
+  }
+
+  return {
+    getAgentModelCatalogCache,
+    ensureHostPiModelCatalog,
+    refreshHostAgentModelCatalog,
+    getNativeAgentModelCatalog,
+    cacheAgentModelCatalog,
+    saveConfig,
+    getGlobalConfig,
+    getPlanUsage,
+    cursorSdkLoginStart,
+    cursorSdkLoginStatus,
+    cursorSdkLoginCancel,
+    cursorSdkLogout,
+    getControlMcpSettings,
+    rotateControlMcpToken,
+    createControlMcpCredential,
+    rotateControlMcpCredential,
+    revokeControlMcpCredential,
+    getRepositoryConfig,
+    getLogDirectory,
+    getLogStorageStats,
+    cleanupLogs,
+    getDatabaseStats,
+    planDiagnosticsBundle,
+    readDiagnosticsBundle,
+    getLinearConnection,
+    connectLinear,
+    disconnectLinear,
+    getLinearIssues,
+    getLinearIssue,
+    postLinearIssueComment,
+    postLinearCompletionComment,
+    getGitHubIssues,
+    getGitHubIssue,
+    updateGitHubIssue,
+    updateGitHubIssueStatus,
+    closeGitHubIssue,
+    addGitHubIssueComment,
+    updateGitHubIssueComment,
+    postGitHubCompletionComment,
+    openInBrowser,
+    revealInFileManager,
+    getEnvironmentPrUrl,
+    verifyEnvironmentPr,
+    clearEnvironmentPr,
+    setEnvironmentPr,
+    overrideEnvironmentSetup,
+    runEnvironmentSetup,
+    getEnvironmentSetupApproval,
+    approveEnvironmentSetup,
+    ensureEnvironmentSetup,
+    detectPr,
+    detectPrLocal,
+    mergeEnvironmentPr,
+    setEnvironmentAutoMerge,
+    mergePr,
+    mergePrLocal,
+  };
 }
 
-/**
- * Turns the backend's auto-merge on or off: while on, it merges the open PR
- * once GitHub reports it ready and launches Resolve when it conflicts.
- * `cleanupAfterMerge` also deletes the environment once the merge is
- * confirmed; leaving it out turns any earlier cleanup request off.
- */
-export async function setEnvironmentAutoMerge(
-  environmentId: string,
-  enabled: boolean,
-  cleanupAfterMerge?: boolean,
-): Promise<Environment> {
-  return invoke<Environment>("set_environment_auto_merge", {
-    environmentId,
-    enabled,
-    ...(cleanupAfterMerge === undefined ? {} : { cleanupAfterMerge }),
-  });
-}
+export type ConfigIntegrationsApi = ReturnType<typeof createConfigIntegrationsApi>;
 
-/** Submit and verify the current branch's PR merge from its container */
-export async function mergePr(
-  containerId: string,
-  method?: MergeMethod,
-  deleteBranch?: boolean,
-): Promise<MergePrResult> {
-  return invoke<MergePrResult>("merge_pr", { containerId, method, deleteBranch });
-}
-
-/** Merge the local environment's PR through the GitHub API */
-export async function mergePrLocal(
-  environmentId: string,
-  method?: MergeMethod,
-  deleteBranch?: boolean,
-): Promise<MergePrResult> {
-  return invoke<MergePrResult>("merge_pr_local", { environmentId, method, deleteBranch });
-}
-
+/** The window's command-scope binding (the counted shim, plan item 3002). */
+export const {
+  getAgentModelCatalogCache,
+  ensureHostPiModelCatalog,
+  refreshHostAgentModelCatalog,
+  getNativeAgentModelCatalog,
+  cacheAgentModelCatalog,
+  saveConfig,
+  getGlobalConfig,
+  getPlanUsage,
+  cursorSdkLoginStart,
+  cursorSdkLoginStatus,
+  cursorSdkLoginCancel,
+  cursorSdkLogout,
+  getControlMcpSettings,
+  rotateControlMcpToken,
+  createControlMcpCredential,
+  rotateControlMcpCredential,
+  revokeControlMcpCredential,
+  getRepositoryConfig,
+  getLogDirectory,
+  getLogStorageStats,
+  cleanupLogs,
+  getDatabaseStats,
+  planDiagnosticsBundle,
+  readDiagnosticsBundle,
+  getLinearConnection,
+  connectLinear,
+  disconnectLinear,
+  getLinearIssues,
+  getLinearIssue,
+  postLinearIssueComment,
+  postLinearCompletionComment,
+  getGitHubIssues,
+  getGitHubIssue,
+  updateGitHubIssue,
+  updateGitHubIssueStatus,
+  closeGitHubIssue,
+  addGitHubIssueComment,
+  updateGitHubIssueComment,
+  postGitHubCompletionComment,
+  openInBrowser,
+  revealInFileManager,
+  getEnvironmentPrUrl,
+  verifyEnvironmentPr,
+  clearEnvironmentPr,
+  setEnvironmentPr,
+  overrideEnvironmentSetup,
+  runEnvironmentSetup,
+  getEnvironmentSetupApproval,
+  approveEnvironmentSetup,
+  ensureEnvironmentSetup,
+  detectPr,
+  detectPrLocal,
+  mergeEnvironmentPr,
+  setEnvironmentAutoMerge,
+  mergePr,
+  mergePrLocal,
+} = createConfigIntegrationsApi(commandBackendClient);
 // --- Docker Commands ---

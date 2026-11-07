@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:d86b077576052d690b97b556e057fc0b4f5fa6f96b1f81c75b816b6af5cb40df",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "knownGeneration": {},
+        "knownRevision": {},
+        "pageSize": {},
+        "resourceKey": {
+          "type": "string"
+        }
+      },
+      "required": ["resourceKey"],
+      "type": "object"
+    }
+  }
+}

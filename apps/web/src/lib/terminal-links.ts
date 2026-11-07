@@ -5,8 +5,10 @@ import {
   type TerminalLinkDefaultTarget,
 } from "@orkestrator/protocol/terminal-link-target";
 import { parseGitHubPullRequestLink } from "@orkestrator/protocol/github-pull-requests";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { appCommandScope } from "@/lib/node-scope-slots";
 import { openPullRequestInApp, type PullRequestOpener } from "@/lib/pull-request-opener";
-import { useConfigStore } from "@/stores/configStore";
+import { configStore } from "@/stores/configStore";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("terminal");
@@ -60,6 +62,12 @@ interface TerminalLinkActivatorOptions {
   openExternal: (url: string) => Promise<void>;
   /** Where a GitHub pull request link opens; defaults to the right-hand PR pane. */
   openPullRequest?: PullRequestOpener;
+  /**
+   * The terminal's node scope, resolved on each click: its settings choose the
+   * default target and its files panel hosts a pull request. The app's command
+   * scope when omitted.
+   */
+  scope?: () => NodeScope;
 }
 
 /**
@@ -77,23 +85,30 @@ export function createTerminalLinkActivator({
   environmentId,
   sourceTabId,
   openExternal,
-  openPullRequest = openPullRequestInApp,
+  openPullRequest,
+  scope: resolveScope = appCommandScope,
 }: TerminalLinkActivatorOptions): (event: MouseEvent, uri: string) => void {
   return (event, uri) => {
     if (event.button !== 0) {
       return;
     }
+    const scope = resolveScope();
     const target = getTerminalLinkTarget(
       event,
       resolveTerminalLinkDefaultTarget(
-        useConfigStore.getState().config.global.terminalLinkDefaultTarget,
+        scope.store(configStore).getState().config.global.terminalLinkDefaultTarget,
       ),
     );
     if (target === "none") {
       return;
     }
     const pullRequest = event.shiftKey ? null : parseGitHubPullRequestLink(uri);
-    if (pullRequest && openPullRequest(pullRequest, pullRequest.view)) {
+    const opened =
+      pullRequest &&
+      (openPullRequest
+        ? openPullRequest(pullRequest, pullRequest.view)
+        : openPullRequestInApp(pullRequest, pullRequest.view, scope));
+    if (pullRequest && opened) {
       armPullRequestFallback(pullRequest, uri);
       return;
     }

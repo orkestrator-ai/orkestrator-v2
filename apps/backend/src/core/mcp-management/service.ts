@@ -8,12 +8,13 @@
  * `snapshot()` / `getOperation()` after a reload or a missed event.
  */
 
+import { mcpManagementChangedEvent } from "@orkestrator/protocol/contract/domains/events";
+import type { BackendEmit } from "../backend-emit.js";
 import * as fs from "node:fs/promises";
 import path from "node:path";
 
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import {
-  MCP_MANAGEMENT_CHANGED_EVENT,
   MCP_MANAGEMENT_LIMITS,
   MCP_MANAGEMENT_PROTOCOL_VERSION,
   aggregateApplyState,
@@ -151,7 +152,7 @@ export type McpServiceStorage = TargetStorage;
 export interface McpManagementServiceOptions {
   dataDir: string;
   storage: McpServiceStorage;
-  emit: (event: string, payload: unknown) => void;
+  emit: BackendEmit;
   probe: RuntimeProbe;
   env?: NodeJS.ProcessEnv;
   home?: string;
@@ -1886,7 +1887,7 @@ export class McpManagementService {
       operationIds,
     };
     try {
-      this.options.emit(MCP_MANAGEMENT_CHANGED_EVENT, event);
+      this.options.emit(mcpManagementChangedEvent, event);
     } catch {
       // Events are hints; snapshots remain authoritative.
     }

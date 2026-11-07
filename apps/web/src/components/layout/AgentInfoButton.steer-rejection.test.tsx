@@ -7,7 +7,8 @@
  * steer history is shown as a content-free runtime card with no control.
  */
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import {
   nativeAgentCapabilities,
   nativeAgentSteerRejectionMessage,
@@ -16,10 +17,11 @@ import {
 import type { TabInfo } from "@/types/paneLayout";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
 import { createSessionKey } from "@/lib/utils";
-import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
+import { nativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { mockToastError, mockToastSuccess } from "../../../../../tests/mocks/sonner";
 import { AgentInfoButton } from "./AgentInfoButton";
 import { AgentRuntimePanel } from "./AgentInfoButton.panels";
+import { appCommandStore } from "@/test/app-command-store";
 
 const ENVIRONMENT_ID = "env-steer";
 const TAB_ID = "tab-steer";
@@ -38,19 +40,21 @@ const codexTab = {
 } as TabInfo;
 
 function seedRunningCodex() {
-  useNativeAgentProjectionStore.getState().setProjection(SESSION_KEY, {
-    platform: "codex",
-    environmentId: ENVIRONMENT_ID,
-    sessionId: "codex-steer",
-    connection: "connected",
-    turn: { phase: "running" },
-    messages: [],
-    interactions: [],
-    composerControls: [],
-    capabilities: nativeAgentCapabilities("codex"),
-    revision: 1,
-    generation: "codex-generation",
-  });
+  appCommandStore(nativeAgentProjectionStore)
+    .getState()
+    .setProjection(SESSION_KEY, {
+      platform: "codex",
+      environmentId: ENVIRONMENT_ID,
+      sessionId: "codex-steer",
+      connection: "connected",
+      turn: { phase: "running" },
+      messages: [],
+      interactions: [],
+      composerControls: [],
+      capabilities: nativeAgentCapabilities("codex"),
+      revision: 1,
+      generation: "codex-generation",
+    });
 }
 
 function steerOutcome(outcome: NativeAgentSessionActionOutcome) {
@@ -62,7 +66,7 @@ function steerOutcome(outcome: NativeAgentSessionActionOutcome) {
 }
 
 async function sendSteer(text: string): Promise<HTMLInputElement> {
-  render(<AgentInfoButton activeTab={codexTab} />);
+  renderInAppCommandScope(<AgentInfoButton activeTab={codexTab} />);
   fireEvent.click(screen.getByRole("button", { name: "Open agent information" }));
   const input = screen.getByPlaceholderText("Correct or redirect Codex") as HTMLInputElement;
   fireEvent.change(input, { target: { value: text } });
@@ -71,7 +75,7 @@ async function sendSteer(text: string): Promise<HTMLInputElement> {
 }
 
 beforeEach(() => {
-  useNativeAgentProjectionStore.getState().reset();
+  appCommandStore(nativeAgentProjectionStore).getState().reset();
   nativeInvokeMock.mockClear();
   mockToastError.mockClear();
   mockToastSuccess.mockClear();
@@ -79,7 +83,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
-  useNativeAgentProjectionStore.getState().reset();
+  appCommandStore(nativeAgentProjectionStore).getState().reset();
   nativeInvokeMock.mockImplementation(() => Promise.resolve());
 });
 
@@ -124,7 +128,7 @@ describe("AgentRuntimePanel steer history", () => {
   };
 
   test("shows a saturated history as counts and limits, with no control", () => {
-    render(<AgentRuntimePanel runtime={{ steer }} providerLabel="Cursor" />);
+    renderInAppCommandScope(<AgentRuntimePanel runtime={{ steer }} providerLabel="Cursor" />);
 
     const card = screen.getByTestId("agent-runtime-steer-saturated");
     expect(card.textContent).toContain("Steering is full for this turn");
@@ -135,7 +139,7 @@ describe("AgentRuntimePanel steer history", () => {
   });
 
   test("an unsaturated history stays out of the panel", () => {
-    render(
+    renderInAppCommandScope(
       <AgentRuntimePanel
         runtime={{ steer: { ...steer, entries: 3, saturated: false } }}
         providerLabel="Cursor"

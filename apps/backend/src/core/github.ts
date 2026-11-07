@@ -14,62 +14,32 @@ export type GitHubIssueStatus = "backlog" | keyof typeof GITHUB_STATUS_LABELS;
 
 export type { GitHubRepositoryRef } from "@orkestrator/protocol/github-repository";
 
-export type GitHubUser = {
-  login: string;
-  avatarUrl?: string;
-  htmlUrl?: string;
-};
+/**
+ * The GitHub issue model is the `pull-requests` domain's (plan item 7006):
+ * the types are inferred from its schemas, which the renderer's
+ * `types/github.ts` uses too.
+ */
+export type {
+  GitHubIssue,
+  GitHubIssueComment,
+  GitHubIssueDetail,
+  GitHubIssuesSnapshot,
+  GitHubLabel,
+  GitHubRepository,
+  GitHubUser,
+  GitHubUser as GitHubViewer,
+} from "@orkestrator/protocol/contract/domains/pull-requests";
+import type {
+  GitHubIssue,
+  GitHubIssueComment,
+  GitHubIssueDetail,
+  GitHubIssuesSnapshot,
+  GitHubLabel,
+  GitHubRepository,
+  GitHubUser,
+} from "@orkestrator/protocol/contract/domains/pull-requests";
 
-export type GitHubLabel = {
-  name: string;
-  color: string;
-  description?: string;
-};
-
-export type GitHubIssue = {
-  id: number;
-  number: number;
-  title: string;
-  body: string;
-  htmlUrl: string;
-  state: "open" | "closed";
-  locked: boolean;
-  author: GitHubUser | null;
-  assignees: GitHubUser[];
-  labels: GitHubLabel[];
-  commentsCount: number;
-  createdAt: string;
-  updatedAt: string;
-  status: GitHubIssueStatus;
-};
-
-export type GitHubIssueComment = {
-  id: number;
-  body: string;
-  htmlUrl: string;
-  author: GitHubUser | null;
-  createdAt: string;
-  updatedAt: string;
-  isEdited: boolean;
-  canEdit: boolean;
-};
-
-export type GitHubRepository = GitHubRepositoryRef & {
-  fullName: string;
-  htmlUrl: string;
-};
-
-export type GitHubViewer = GitHubUser;
-
-export type GitHubIssuesSnapshot = {
-  repository: GitHubRepository;
-  viewer: GitHubViewer;
-  issues: GitHubIssue[];
-};
-
-export type GitHubIssueDetail = GitHubIssue & {
-  comments: GitHubIssueComment[];
-};
+type GitHubViewer = GitHubUser;
 
 export type GitHubFetch = typeof fetch;
 

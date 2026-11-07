@@ -22,8 +22,10 @@ import {
   type ChangeViewResult,
 } from "@orkestrator/protocol/change-resources";
 import type { BackendId, EnvironmentRef } from "@orkestrator/protocol/federation";
+import { git } from "@/lib/node-scope/domains/git";
 import { portalStore } from "@/lib/portal/portal-store";
 import { subscribeNodeEvents } from "./node-events";
+import { routedBackendClient } from "@/lib/portal/routed-backend-client";
 
 const MAX_CONCURRENT_READS = 6;
 
@@ -120,7 +122,11 @@ async function read(
     .getState()
     .projections.get(storeKey(nodeId, resourceKey));
   try {
-    const result = await portalStore.invokeOnNode<ChangeViewResult>(nodeId, "changes_get_view", {
+    // The `git` domain client over the routed call (plan item 7006): a routed
+    // call carries no negotiated range, so this is today's call (version 0).
+    const result: ChangeViewResult = await git(
+      routedBackendClient(portalStore, nodeId),
+    ).changes_get_view({
       resourceKey,
       ...(current
         ? { knownGeneration: current.ownerGeneration, knownRevision: current.revision }

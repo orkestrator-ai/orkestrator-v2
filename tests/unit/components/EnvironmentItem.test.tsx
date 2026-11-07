@@ -1,5 +1,6 @@
 import { afterEach, describe, test, expect, mock, beforeEach } from "bun:test";
-import { act, cleanup, render, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { Profiler } from "react";
 import type { Environment, EnvironmentType } from "../../../apps/web/src/types";
 import {
@@ -114,20 +115,21 @@ import {
   EnvironmentItem,
   resolveEnvironmentAgentActivity,
 } from "../../../apps/web/src/components/environments/EnvironmentItem";
-import { useAgentActivityStore } from "../../../apps/web/src/stores/agentActivityStore";
-import { useBuildPipelineStore } from "../../../apps/web/src/stores/buildPipelineStore";
-import { useEnvironmentDiffStore } from "../../../apps/web/src/stores/environmentDiffStore";
-import { useEnvironmentStore } from "../../../apps/web/src/stores/environmentStore";
-import { useAgentMailStore } from "../../../apps/web/src/stores/agentMailStore";
-import { useConfigStore } from "../../../apps/web/src/stores/configStore";
-import { useUIStore } from "../../../apps/web/src/stores/uiStore";
-import { useProjectStore } from "../../../apps/web/src/stores/projectStore";
+import { agentActivityStore } from "../../../apps/web/src/stores/agentActivityStore";
+import { buildPipelineStore } from "../../../apps/web/src/stores/buildPipelineStore";
+import { environmentDiffStore } from "../../../apps/web/src/stores/environmentDiffStore";
+import { environmentStore } from "../../../apps/web/src/stores/environmentStore";
+import { agentMailStore } from "../../../apps/web/src/stores/agentMailStore";
+import { configStore } from "../../../apps/web/src/stores/configStore";
+import { uiStore } from "../../../apps/web/src/stores/uiStore";
+import { projectStore } from "../../../apps/web/src/stores/projectStore";
 import { useAppDialogStore } from "../../../apps/web/src/stores/appDialogStore";
 import { useMergePrRequestStore } from "../../../apps/web/src/stores/mergePrRequestStore";
 import {
   environmentMarkerState,
   sidebarActivityFromMarkerState,
 } from "../../../e2e/agent-testing/idle-observation-live-support";
+import { appCommandStore } from "../../../apps/web/src/test/app-command-store";
 
 function makeEnvironment(overrides: Partial<Environment> = {}): Environment {
   return {
@@ -181,7 +183,7 @@ function itemElement(env: Environment, options: RenderOptions = {}) {
 }
 
 function renderItem(env: Environment, options: RenderOptions = {}) {
-  return render(itemElement(env, options));
+  return renderInAppCommandScope(itemElement(env, options));
 }
 
 function getRowMarker(container: HTMLElement) {
@@ -223,27 +225,27 @@ beforeEach(() => {
   toastSuccessMock.mockClear();
   toastErrorMock.mockClear();
   useAppDialogStore.setState({ request: null });
-  useAgentActivityStore.setState({
+  appCommandStore(agentActivityStore).setState({
     tabStates: {},
     containerStates: {},
     containerStateUpdatedAt: {},
   });
-  useUIStore.setState({ selectedEnvironmentId: null });
-  useEnvironmentStore.setState({
+  appCommandStore(uiStore).setState({ selectedEnvironmentId: null });
+  appCommandStore(environmentStore).setState({
     deletingEnvironments: new Set<string>(),
     deletingStartedAt: new Map(),
     environments: [],
   });
-  useEnvironmentDiffStore.setState({ stats: new Map() });
-  useBuildPipelineStore.setState({
+  appCommandStore(environmentDiffStore).setState({ stats: new Map() });
+  appCommandStore(buildPipelineStore).setState({
     buildEnvironmentIds: new Set<string>(),
     activeBuildEnvironmentIds: new Set<string>(),
   });
-  useAgentMailStore.setState(useAgentMailStore.getInitialState());
-  const config = structuredClone(useConfigStore.getInitialState().config);
+  appCommandStore(agentMailStore).setState(appCommandStore(agentMailStore).getInitialState());
+  const config = structuredClone(appCommandStore(configStore).getInitialState().config);
   config.global.agentMessaging = { ...config.global.agentMessaging!, enabled: true };
-  useConfigStore.setState({ config });
-  useProjectStore.setState({ projects: [] });
+  appCommandStore(configStore).setState({ config });
+  appCommandStore(projectStore).setState({ projects: [] });
 });
 
 afterEach(() => {
@@ -267,7 +269,7 @@ test("does no hover-card formatting while the card is closed", () => {
 });
 
 test("shows authoritative unseen and failed agent-mail badges", () => {
-  useAgentMailStore.setState({
+  appCommandStore(agentMailStore).setState({
     summary: new Map([
       [
         "env-1\0agent",
@@ -295,14 +297,14 @@ test("shows authoritative unseen and failed agent-mail badges", () => {
 test("only reacts to its own resolved activity state", () => {
   const environment = makeEnvironment();
   const onRender = mock(() => undefined);
-  render(
+  renderInAppCommandScope(
     <Profiler id="environment-row" onRender={onRender}>
       {itemElement(environment)}
     </Profiler>,
   );
   expect(onRender).toHaveBeenCalledTimes(1);
   act(() => {
-    useAgentActivityStore.setState({
+    appCommandStore(agentActivityStore).setState({
       containerStates: { "other-environment": "working" },
       containerStateUpdatedAt: {
         "other-environment": "2026-07-28T10:00:00.000Z",
@@ -312,7 +314,7 @@ test("only reacts to its own resolved activity state", () => {
   expect(onRender).toHaveBeenCalledTimes(1);
 
   act(() => {
-    useAgentActivityStore.setState({
+    appCommandStore(agentActivityStore).setState({
       containerStates: { [environment.id]: "working" },
       containerStateUpdatedAt: {
         [environment.id]: "2026-07-28T10:00:01.000Z",
@@ -427,13 +429,15 @@ function contextMenuLabels(container: HTMLElement) {
 
 describe("EnvironmentItem activity marker", () => {
   test("shows a pulsing blue container ring while tmux activity is working", () => {
-    useAgentActivityStore.getState().replaceActivitySnapshot([
-      {
-        id: "env-1",
-        agentActivityState: "working",
-        agentActivityUpdatedAt: "2026-07-27T12:00:00.000Z",
-      },
-    ]);
+    appCommandStore(agentActivityStore)
+      .getState()
+      .replaceActivitySnapshot([
+        {
+          id: "env-1",
+          agentActivityState: "working",
+          agentActivityUpdatedAt: "2026-07-27T12:00:00.000Z",
+        },
+      ]);
 
     const { container } = renderItem(makeEnvironment());
 
@@ -457,13 +461,15 @@ describe("EnvironmentItem activity marker", () => {
   });
 
   test("keeps a newer runtime observation over an older backend snapshot", () => {
-    useAgentActivityStore.getState().replaceActivitySnapshot([
-      {
-        id: "env-1",
-        agentActivityState: "waiting",
-        agentActivityUpdatedAt: "2026-07-27T12:00:01.000Z",
-      },
-    ]);
+    appCommandStore(agentActivityStore)
+      .getState()
+      .replaceActivitySnapshot([
+        {
+          id: "env-1",
+          agentActivityState: "waiting",
+          agentActivityUpdatedAt: "2026-07-27T12:00:01.000Z",
+        },
+      ]);
     const { container } = renderItem(
       makeEnvironment({
         agentActivityState: "working",
@@ -633,13 +639,15 @@ describe("EnvironmentItem activity marker", () => {
     // This is the case the whole feature exists for: another window finished
     // the turn, so the persisted idle must win over this window's last-seen
     // working and turn the icon green rather than leaving it pulsing blue.
-    useAgentActivityStore.getState().replaceActivitySnapshot([
-      {
-        id: "env-1",
-        agentActivityState: "working",
-        agentActivityUpdatedAt: "2026-07-27T12:00:00.000Z",
-      },
-    ]);
+    appCommandStore(agentActivityStore)
+      .getState()
+      .replaceActivitySnapshot([
+        {
+          id: "env-1",
+          agentActivityState: "working",
+          agentActivityUpdatedAt: "2026-07-27T12:00:00.000Z",
+        },
+      ]);
 
     const { container } = renderItem(
       makeEnvironment({
@@ -720,7 +728,7 @@ describe("EnvironmentItem tooltip port display", () => {
 
 describe("EnvironmentItem diff stats", () => {
   test("marks truncated line counts as approximate in the badge and tooltip", async () => {
-    useEnvironmentDiffStore.setState({
+    appCommandStore(environmentDiffStore).setState({
       stats: new Map([
         [
           "env-1",
@@ -748,7 +756,7 @@ describe("EnvironmentItem diff stats", () => {
   });
 
   test("does not mark exact line counts as approximate", async () => {
-    useEnvironmentDiffStore.setState({
+    appCommandStore(environmentDiffStore).setState({
       stats: new Map([
         [
           "env-1",
@@ -956,7 +964,7 @@ describe("EnvironmentItem menu actions and selection", () => {
   test("disables container lifecycle actions while Docker is unavailable", () => {
     const onStart = mock(() => {});
     const onRestart = mock(() => {});
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <DockerAvailabilityProvider available={false}>
         {itemElement(makeEnvironment({ status: "running" }), { onStart, onRestart })}
       </DockerAvailabilityProvider>,
@@ -981,7 +989,7 @@ describe("EnvironmentItem menu actions and selection", () => {
     expect(settingsItem).not.toBeUndefined();
     fireEvent.click(settingsItem!);
 
-    expect(useAppDialogStore.getState().request).toEqual({
+    expect(useAppDialogStore.getState().request).toMatchObject({
       kind: "environment-settings",
       environmentId: "env-1",
     });
@@ -1091,14 +1099,14 @@ describe("EnvironmentItem menu actions and selection", () => {
       lifecycleOperationStartedAt: "2026-01-02T00:00:00.000Z",
       deletionError: "failed",
     });
-    useEnvironmentStore.getState().setEnvironments([env]);
+    appCommandStore(environmentStore).getState().setEnvironments([env]);
     const view = renderItem(env);
     expect(view.container.textContent).toContain("Delete failed");
-    act(() => useEnvironmentStore.getState().setDeleting(env.id, true));
+    act(() => appCommandStore(environmentStore).getState().setDeleting(env.id, true));
     expect(view.container.textContent).not.toContain("Delete failed");
     expect(view.container.textContent).not.toContain("Still deleting after");
     expect(view.container.querySelector(".animate-spin")).not.toBeNull();
-    act(() => useEnvironmentStore.getState().setDeleting(env.id, false));
+    act(() => appCommandStore(environmentStore).getState().setDeleting(env.id, false));
     expect(view.container.textContent).toContain("Delete failed");
     expect(view.container.querySelector(".animate-spin") === null).toBe(true);
   });
@@ -1212,7 +1220,7 @@ describe("EnvironmentItem mobile actions menu", () => {
     // dnd-kit drag activation and Radix's context-menu long-press both hang off
     // pointerdown on an ancestor; the trigger must not start either.
     const ancestorPointerDown = mock(() => {});
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <div onPointerDown={ancestorPointerDown}>{itemElement(makeEnvironment())}</div>,
     );
 
@@ -1377,7 +1385,7 @@ describe("EnvironmentItem mobile actions menu", () => {
     const menu = await findActionsMenu();
 
     await selectActionsMenuItem(menu, "Settings");
-    expect(useAppDialogStore.getState().request).toEqual({
+    expect(useAppDialogStore.getState().request).toMatchObject({
       kind: "environment-settings",
       environmentId: "env-1",
     });
@@ -1420,7 +1428,7 @@ describe("EnvironmentItem mobile actions menu", () => {
 
   test("disables Fork container when Docker is unavailable", async () => {
     const onFork = mock((_environmentId: string, _environmentType: EnvironmentType) => {});
-    render(
+    renderInAppCommandScope(
       <DockerAvailabilityProvider available={false}>
         {itemElement(makeEnvironment(), { onFork })}
       </DockerAvailabilityProvider>,
@@ -1436,7 +1444,7 @@ describe("EnvironmentItem mobile actions menu", () => {
 
   test("disables Fork local when the project has no checkout", async () => {
     const onFork = mock((_environmentId: string, _environmentType: EnvironmentType) => {});
-    useProjectStore.setState({
+    appCommandStore(projectStore).setState({
       projects: [
         {
           id: "project-1",
@@ -1534,7 +1542,7 @@ describe("EnvironmentItem multi-select", () => {
   });
 
   test("a deleting environment shows the delete spinner instead of the checkbox", () => {
-    useEnvironmentStore.getState().setDeleting("env-1", true);
+    appCommandStore(environmentStore).getState().setDeleting("env-1", true);
 
     const { container } = renderItem(makeEnvironment(), { isMultiSelectMode: true });
 
@@ -1582,7 +1590,7 @@ describe("EnvironmentItem transitioning state", () => {
 
 describe("EnvironmentItem build pipeline naming", () => {
   test("strips the Build: prefix and marks build environments with a pipe icon", () => {
-    useBuildPipelineStore.setState({ buildEnvironmentIds: new Set(["env-1"]) });
+    appCommandStore(buildPipelineStore).setState({ buildEnvironmentIds: new Set(["env-1"]) });
 
     const { container } = renderItem(makeEnvironment({ name: "Build: checkout-flow" }));
 
@@ -1606,19 +1614,21 @@ describe("live-spec sidebar probe", () => {
   const readRow = (name: string) => sidebarActivityFromMarkerState(environmentMarkerState(name));
 
   test("reads each row's marker state, not its colours", () => {
-    useAgentActivityStore.getState().replaceActivitySnapshot([
-      {
-        id: "env-working",
-        agentActivityState: "working",
-        agentActivityUpdatedAt: "2026-07-27T12:00:00.000Z",
-      },
-      {
-        id: "env-waiting",
-        agentActivityState: "waiting",
-        agentActivityUpdatedAt: "2026-07-27T12:00:00.000Z",
-      },
-    ]);
-    render(
+    appCommandStore(agentActivityStore)
+      .getState()
+      .replaceActivitySnapshot([
+        {
+          id: "env-working",
+          agentActivityState: "working",
+          agentActivityUpdatedAt: "2026-07-27T12:00:00.000Z",
+        },
+        {
+          id: "env-waiting",
+          agentActivityState: "waiting",
+          agentActivityUpdatedAt: "2026-07-27T12:00:00.000Z",
+        },
+      ]);
+    renderInAppCommandScope(
       <>
         {itemElement(makeEnvironment({ id: "env-working", name: "probe-working" }))}
         {itemElement(makeEnvironment({ id: "env-waiting", name: "probe-waiting" }))}
@@ -1644,14 +1654,16 @@ describe("live-spec sidebar probe", () => {
   });
 
   test("a row showing a spinner reads unknown instead of a neighbour's state, and other labels are skipped", () => {
-    useAgentActivityStore.getState().replaceActivitySnapshot([
-      {
-        id: "env-working",
-        agentActivityState: "working",
-        agentActivityUpdatedAt: "2026-07-27T12:00:00.000Z",
-      },
-    ]);
-    render(
+    appCommandStore(agentActivityStore)
+      .getState()
+      .replaceActivitySnapshot([
+        {
+          id: "env-working",
+          agentActivityState: "working",
+          agentActivityUpdatedAt: "2026-07-27T12:00:00.000Z",
+        },
+      ]);
+    renderInAppCommandScope(
       <>
         <span id="pane-title">probe-working</span>
         {itemElement(makeEnvironment({ id: "env-working", name: "probe-working" }))}

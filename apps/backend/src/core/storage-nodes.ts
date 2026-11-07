@@ -9,6 +9,11 @@ import {
   type PortalLayoutUpdate,
 } from "@orkestrator/protocol/portal-layout";
 
+import {
+  parseFleetUpdatePolicy,
+  type FleetUpdatePolicy,
+} from "@orkestrator/protocol/fleet-currency";
+
 import { readStoredNodeAttachments, readStoredNodeRegistry } from "./nodes/node-store-format.js";
 import type { StorageContext } from "./storage-context.js";
 import { createLogger } from "@orkestrator/protocol/logger";
@@ -82,6 +87,10 @@ export class NodesRepository {
     return this.context.file("portal-layout.json");
   }
 
+  private fleetUpdatePolicyFile(): string {
+    return this.context.file("fleet-update-policy.json");
+  }
+
   private controllerSettingsFile(): string {
     return this.context.file("controller-settings.json");
   }
@@ -128,6 +137,19 @@ export class NodesRepository {
       await this.context.saveJson(this.portalLayoutFile(), { version: 1, ...next });
       return next;
     });
+  }
+
+  /** The command node's opt-in update policy (`@orkestrator/protocol/fleet-currency`). */
+  async loadFleetUpdatePolicy(): Promise<FleetUpdatePolicy> {
+    return parseFleetUpdatePolicy(
+      await this.context.loadJson<unknown>(this.fleetUpdatePolicyFile(), () => null),
+    );
+  }
+
+  async saveFleetUpdatePolicy(policy: FleetUpdatePolicy): Promise<void> {
+    await this.context.serialize(this.fleetUpdatePolicyFile(), "fleet update policy", () =>
+      this.context.saveJson(this.fleetUpdatePolicyFile(), parseFleetUpdatePolicy(policy)),
+    );
   }
 
   /** Last-known portal summaries of other nodes (names and states only). */
@@ -257,6 +279,8 @@ export type NodesStorage = Pick<
   | "mutateControllerSettings"
   | "getPortalLayout"
   | "updatePortalLayout"
+  | "loadFleetUpdatePolicy"
+  | "saveFleetUpdatePolicy"
   | "loadNodeSummariesCache"
   | "saveNodeSummariesCache"
   | "loadNodeMail"

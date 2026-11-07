@@ -1,0 +1,110 @@
+{
+  "schemaVersion": 1,
+  "domain": "terminals",
+  "commands": {
+    "attach_terminal": {
+      "untyped": true,
+      "read": false
+    },
+    "bootstrap_terminal_session": {
+      "untyped": true,
+      "read": false
+    },
+    "cancel_user_command": {
+      "untyped": true,
+      "read": false
+    },
+    "close_local_terminal_session": {
+      "untyped": true,
+      "read": false
+    },
+    "create_local_terminal_session": {
+      "untyped": true,
+      "read": false
+    },
+    "create_terminal_session": {
+      "untyped": true,
+      "read": false
+    },
+    "detach_terminal": {
+      "untyped": true,
+      "read": false
+    },
+    "get_terminal_history_page": {
+      "untyped": true,
+      "read": true
+    },
+    "get_terminal_output_buffer": {
+      "untyped": true,
+      "read": true
+    },
+    "get_terminal_output_snapshot": {
+      "untyped": true,
+      "read": true
+    },
+    "get_terminal_session": {
+      "untyped": true,
+      "read": true
+    },
+    "get_terminal_state_snapshot": {
+      "untyped": true,
+      "read": true
+    },
+    "launch_terminal_job": {
+      "untyped": true,
+      "read": false
+    },
+    "list_human_prompts": {
+      "untyped": true,
+      "read": true
+    },
+    "list_terminal_sessions": {
+      "untyped": true,
+      "read": true
+    },
+    "list_user_commands": {
+      "untyped": true,
+      "read": true
+    },
+    "local_terminal_resize": {
+      "untyped": true,
+      "read": false
+    },
+    "local_terminal_write": {
+      "untyped": true,
+      "read": false
+    },
+    "run_user_command": {
+      "untyped": true,
+      "read": false
+    },
+    "start_local_terminal_session": {
+      "untyped": true,
+      "read": false
+    },
+    "start_terminal_session": {
+      "untyped": true,
+      "read": false
+    },
+    "terminal_resize": {
+      "untyped": true,
+      "read": false
+    },
+    "terminal_snapshot_applied": {
+      "untyped": true,
+      "read": false
+    },
+    "terminal_snapshot_failed": {
+      "untyped": true,
+      "read": false
+    },
+    "terminal_write": {
+      "untyped": true,
+      "read": false
+    },
+    "write_user_command_input": {
+      "untyped": true,
+      "read": false
+    }
+  }
+}

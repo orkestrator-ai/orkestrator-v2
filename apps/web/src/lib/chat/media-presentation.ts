@@ -13,6 +13,7 @@
  *   reads ranges from the content origin and is bounded by the backend's
  *   `TRANSCRIPT_MEDIA_STREAM_MAX_*_BYTES` instead.
  */
+import { incompatibilityOfAnyCommand } from "@orkestrator/protocol/contract/errors";
 import { FRONTEND_RENDER_POLICY } from "@orkestrator/protocol/rich-content-policy";
 import {
   TRANSCRIPT_MEDIA_STREAM_MAX_CONTAINER_BYTES,
@@ -90,7 +91,7 @@ export function mediaStreamingAvailable(
  * otherwise the shown failure state.
  */
 export function mediaStreamFailure(error: unknown): "fallback" | "unsupported" | MediaLoadFailure {
-  const { code, message } = artifactErrorInfo(error);
+  const { code } = artifactErrorInfo(error);
   if (
     code === "invalid_input" ||
     code === "renderer_unavailable" ||
@@ -99,7 +100,8 @@ export function mediaStreamFailure(error: unknown): "fallback" | "unsupported" |
   ) {
     return "fallback";
   }
-  if (!code && /^Unknown backend command:/i.test(message)) return "fallback";
+  // An older backend without the stream command (coded, or its direct legacy answer).
+  if (incompatibilityOfAnyCommand(error)) return "fallback";
   if (code === "unsupported_kind") return "unsupported";
   if (code === "not_found") return "unavailable";
   return mediaLoadFailure(error);

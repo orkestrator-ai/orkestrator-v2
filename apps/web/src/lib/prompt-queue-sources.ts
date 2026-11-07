@@ -5,10 +5,13 @@ import {
   type PromptQueueSource,
   type QueuedItem,
 } from "@/lib/prompt-queue-persistence";
-import * as backend from "@/lib/backend";
+import { backendForScope } from "@/lib/backend/scope-backend";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { appCommandScope, defineScopedSlot } from "@/lib/node-scope-slots";
 import {
+  claudeTmuxStore,
   getEnvironmentIdFromClaudeTmuxStateKey,
-  useClaudeTmuxStore,
+  type TmuxQueuedMessage,
 } from "@/stores/claudeTmuxStore";
 
 /**
@@ -49,36 +52,50 @@ function createSource(
   };
 }
 
-/** Every agent whose queue is projected into a renderer store. */
-let sharedSources: PromptQueueSource[] | null = null;
-
-function getSharedSources(): PromptQueueSource[] {
-  if (sharedSources) return sharedSources;
-  sharedSources = [
+/**
+ * Every agent whose queue is projected into a renderer store, for one node
+ * (plan item 4007): its own `claudeTmuxStore`, so a leaf's tmux tab sees the
+ * leaf's queues. Made once per scope, dropped with it.
+ */
+const scopeSources = defineScopedSlot("prompt-queue-sources", (scope): PromptQueueSource[] => {
+  const tmux = scope.store(claudeTmuxStore);
+  return [
     createSource(
       "claude-tmux",
-      useClaudeTmuxStore as unknown as AnyQueueStore,
+      {
+        getState: () => tmux.getState(),
+        setState: (partial) =>
+          tmux.setState(partial as { messageQueue: Map<string, TmuxQueuedMessage[]> }),
+      },
       getEnvironmentIdFromClaudeTmuxStateKey,
     ),
   ];
-  return sharedSources;
-}
+});
 
-export function createPromptQueueSources(): PromptQueueSource[] {
-  return [...getSharedSources()];
+/** `scope`'s queue sources; the app's command scope when omitted (3003's convention). */
+export function createPromptQueueSources(
+  scope: NodeScope = appCommandScope(),
+): PromptQueueSource[] {
+  return [...scopeSources(scope)];
 }
 
 export async function retryAgentPromptQueueDispatch(
   agent: string,
   sessionKey: string,
+  scope: NodeScope = appCommandScope(),
 ): Promise<void> {
-  const source = getSharedSources().find((candidate) => candidate.agent === agent);
+  const source = sourceFor(agent, scope);
   if (!source) return;
-  await retryPromptQueueDispatch(source, sessionKey);
+  await retryPromptQueueDispatch(source, sessionKey, (queueKey) =>
+    backendForScope(scope).retryPromptQueueDispatch(queueKey),
+  );
 }
 
-function sourceFor<TItem extends QueuedItem>(agent: string): PromptQueueSource<TItem> | null {
-  return (getSharedSources().find((candidate) => candidate.agent === agent) ??
+function sourceFor<TItem extends QueuedItem>(
+  agent: string,
+  scope: NodeScope,
+): PromptQueueSource<TItem> | null {
+  return (scopeSources(scope).find((candidate) => candidate.agent === agent) ??
     null) as PromptQueueSource<TItem> | null;
 }
 
@@ -100,11 +117,12 @@ export async function enqueueAgentPrompt<TItem extends QueuedItem>(
   agent: string,
   sessionKey: string,
   message: TItem,
+  scope: NodeScope = appCommandScope(),
 ): Promise<void> {
-  const source = sourceFor<TItem>(agent);
+  const source = sourceFor<TItem>(agent, scope);
   if (!source) throw new Error(`Unknown prompt queue agent: ${agent}`);
   const identity = queueIdentity(source, sessionKey);
-  const queue = await backend.enqueuePromptQueueMessage<TItem>(
+  const queue = await backendForScope(scope).enqueuePromptQueueMessage<TItem>(
     identity.queueKey,
     identity.environmentId,
     message,
@@ -116,11 +134,12 @@ export async function removeAgentPrompt<TItem extends QueuedItem>(
   agent: string,
   sessionKey: string,
   messageId: string,
+  scope: NodeScope = appCommandScope(),
 ): Promise<TItem | null> {
-  const source = sourceFor<TItem>(agent);
+  const source = sourceFor<TItem>(agent, scope);
   if (!source) throw new Error(`Unknown prompt queue agent: ${agent}`);
   const identity = queueIdentity(source, sessionKey);
-  const result = await backend.removePromptQueueMessage<TItem>(
+  const result = await backendForScope(scope).removePromptQueueMessage<TItem>(
     identity.queueKey,
     identity.environmentId,
     messageId,
@@ -138,11 +157,12 @@ export async function moveAgentPrompt(
   sessionKey: string,
   messageId: string,
   direction: "up" | "down",
+  scope: NodeScope = appCommandScope(),
 ): Promise<void> {
-  const source = sourceFor(agent);
+  const source = sourceFor(agent, scope);
   if (!source) throw new Error(`Unknown prompt queue agent: ${agent}`);
   const identity = queueIdentity(source, sessionKey);
-  const queue = await backend.movePromptQueueMessage<QueuedItem>(
+  const queue = await backendForScope(scope).movePromptQueueMessage<QueuedItem>(
     identity.queueKey,
     identity.environmentId,
     messageId,

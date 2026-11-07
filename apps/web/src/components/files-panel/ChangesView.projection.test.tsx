@@ -1,12 +1,13 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { useEffect } from "react";
 import type { ChangesGetFilesResult } from "@orkestrator/protocol/change-resources";
 import { TerminalProvider, useTerminalContext } from "@/contexts";
 import { invoke } from "@/lib/native/backend";
 import { resetChangeSubscriptionsForTests } from "@/lib/changes/subscriptions";
-import { useFilesPanelStore } from "@/stores";
-import { useChangeProjectionStore } from "@/stores/changeProjectionStore";
+import { filesPanelStore } from "@/stores";
+import { changeProjectionStore } from "@/stores/changeProjectionStore";
 import type { Environment } from "@/types";
 import { EnvironmentItem } from "@/components/environments/EnvironmentItem";
 import { restoreMatchMedia, setMobileViewport } from "../../../../../tests/mocks/match-media";
@@ -20,6 +21,8 @@ import {
 } from "./change-projection-test-fixture";
 import { ChangesView } from "./ChangesView";
 import { FilesPanelHeader } from "./FilesPanelHeader";
+import { setFilesPanelTestState } from "@/test/files-panel-state";
+import { appCommandStore } from "@/test/app-command-store";
 
 const invokeMock = invoke as unknown as ReturnType<typeof mock>;
 const RESOURCE_KEY = "environment-net/environment/env-1/live";
@@ -35,7 +38,7 @@ function RegisterFileTab() {
 }
 
 function renderChanges(props: Partial<Parameters<typeof ChangesView>[0]> = {}) {
-  return render(
+  return renderInAppCommandScope(
     <TerminalProvider>
       <RegisterFileTab />
       <ChangesView environmentId="env-1" {...props} />
@@ -69,7 +72,7 @@ describe("ChangesView on the environment change projection", () => {
     invokeMock.mockReset();
     installBackend({});
     setMobileViewport(false);
-    useFilesPanelStore.setState({
+    setFilesPanelTestState({
       isOpen: true,
       activeTab: "changes",
       changes: [],
@@ -84,36 +87,38 @@ describe("ChangesView on the environment change projection", () => {
 
   test("renders status, renames, count quality and reasons, and opens a live change diff", () => {
     const onRevert = mock((_path: string) => undefined);
-    useChangeProjectionStore.getState().applyProjection(
-      environmentProjectionFixture("env-1", {
-        revision: 7,
-        filePage: {
-          snapshotToken: "token-1",
-          totalRows: 4,
-          nextCursor: null,
-          rows: [
-            fileRowFixture("src/a.ts", { additions: exactCount(5), deletions: exactCount(2) }),
-            fileRowFixture("src/new-name.ts", {
-              status: "renamed",
-              oldPathDisplay: "src/old-name.ts",
-              additions: exactCount(0),
-              deletions: exactCount(0),
-            }),
-            fileRowFixture("assets/logo.png", {
-              fileKind: "binary",
-              additions: notApplicableCount(),
-              deletions: notApplicableCount(),
-            }),
-            fileRowFixture("big.log", {
-              status: "added",
-              additions: unknownCount(),
-              deletions: exactCount(0),
-              reasonKey: "changes.reason.count-omitted",
-            }),
-          ],
-        },
-      }),
-    );
+    appCommandStore(changeProjectionStore)
+      .getState()
+      .applyProjection(
+        environmentProjectionFixture("env-1", {
+          revision: 7,
+          filePage: {
+            snapshotToken: "token-1",
+            totalRows: 4,
+            nextCursor: null,
+            rows: [
+              fileRowFixture("src/a.ts", { additions: exactCount(5), deletions: exactCount(2) }),
+              fileRowFixture("src/new-name.ts", {
+                status: "renamed",
+                oldPathDisplay: "src/old-name.ts",
+                additions: exactCount(0),
+                deletions: exactCount(0),
+              }),
+              fileRowFixture("assets/logo.png", {
+                fileKind: "binary",
+                additions: notApplicableCount(),
+                deletions: notApplicableCount(),
+              }),
+              fileRowFixture("big.log", {
+                status: "added",
+                additions: unknownCount(),
+                deletions: exactCount(0),
+                reasonKey: "changes.reason.count-omitted",
+              }),
+            ],
+          },
+        }),
+      );
     renderChanges({ onRevert });
 
     const rows = screen.getAllByTestId("change-file-row");
@@ -154,7 +159,7 @@ describe("ChangesView on the environment change projection", () => {
   });
 
   test("the sidebar badge and the Changes rows show one measurement", () => {
-    useChangeProjectionStore
+    appCommandStore(changeProjectionStore)
       .getState()
       .applyProjection(environmentProjectionFixture("env-1", { measurementId: "m-shared" }));
     const environment = {
@@ -173,7 +178,7 @@ describe("ChangesView on the environment change projection", () => {
       environmentType: "local",
     } as Environment;
     const noop = () => undefined;
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <EnvironmentItem
           environment={environment}
@@ -196,16 +201,18 @@ describe("ChangesView on the environment change projection", () => {
   });
 
   test("pages further within one snapshot token", async () => {
-    useChangeProjectionStore.getState().applyProjection(
-      environmentProjectionFixture("env-1", {
-        filePage: {
-          snapshotToken: "token-1",
-          rows: [fileRowFixture("a.ts")],
-          nextCursor: "cursor-1",
-          totalRows: 2,
-        },
-      }),
-    );
+    appCommandStore(changeProjectionStore)
+      .getState()
+      .applyProjection(
+        environmentProjectionFixture("env-1", {
+          filePage: {
+            snapshotToken: "token-1",
+            rows: [fileRowFixture("a.ts")],
+            nextCursor: "cursor-1",
+            totalRows: 2,
+          },
+        }),
+      );
     const requests: Array<Record<string, unknown>> = [];
     installBackend({
       files: (args) => {
@@ -232,20 +239,22 @@ describe("ChangesView on the environment change projection", () => {
   });
 
   test("past the row cap it says how many files are not listed once paging has ended", async () => {
-    useChangeProjectionStore.getState().applyProjection(
-      environmentProjectionFixture("env-1", {
-        state: "partial",
-        coverageState: "partial",
-        reasonKeys: ["changes.reason.file-rows-capped"],
-        filePage: {
-          snapshotToken: "token-1",
-          rows: [fileRowFixture("a.ts")],
-          nextCursor: "cursor-1",
-          totalRows: 2,
-          omittedRows: 1_500,
-        },
-      }),
-    );
+    appCommandStore(changeProjectionStore)
+      .getState()
+      .applyProjection(
+        environmentProjectionFixture("env-1", {
+          state: "partial",
+          coverageState: "partial",
+          reasonKeys: ["changes.reason.file-rows-capped"],
+          filePage: {
+            snapshotToken: "token-1",
+            rows: [fileRowFixture("a.ts")],
+            nextCursor: "cursor-1",
+            totalRows: 2,
+            omittedRows: 1_500,
+          },
+        }),
+      );
     installBackend({
       files: () => ({
         kind: "page",
@@ -272,16 +281,18 @@ describe("ChangesView on the environment change projection", () => {
   });
 
   test("a stale cursor re-reads the projection and restarts paging without stitching", async () => {
-    useChangeProjectionStore.getState().applyProjection(
-      environmentProjectionFixture("env-1", {
-        filePage: {
-          snapshotToken: "token-1",
-          rows: [fileRowFixture("old-1.ts")],
-          nextCursor: "cursor-1",
-          totalRows: 2,
-        },
-      }),
-    );
+    appCommandStore(changeProjectionStore)
+      .getState()
+      .applyProjection(
+        environmentProjectionFixture("env-1", {
+          filePage: {
+            snapshotToken: "token-1",
+            rows: [fileRowFixture("old-1.ts")],
+            nextCursor: "cursor-1",
+            totalRows: 2,
+          },
+        }),
+      );
     let viewReads = 0;
     let measurementMoved = false;
     installBackend({
@@ -331,7 +342,7 @@ describe("ChangesView on the environment change projection", () => {
         projection: environmentProjectionFixture("env-1", { revision: 3 }),
       }),
     });
-    useChangeProjectionStore
+    appCommandStore(changeProjectionStore)
       .getState()
       .applyProjection(environmentProjectionFixture("env-1", { revision: 3, filePage: null }));
     renderChanges();
@@ -339,57 +350,67 @@ describe("ChangesView on the environment change projection", () => {
   });
 
   test("a projection that measured no changes says so", () => {
-    useChangeProjectionStore.getState().applyProjection(
-      environmentProjectionFixture("env-1", {
-        hasFileChanges: false,
-        badge: { visible: false, mode: "none" },
-        counters: { additions: exactCount(0), deletions: exactCount(0), changedFiles: 0 },
-        filePage: { snapshotToken: "token-1", rows: [], nextCursor: null, totalRows: 0 },
-      }),
-    );
+    appCommandStore(changeProjectionStore)
+      .getState()
+      .applyProjection(
+        environmentProjectionFixture("env-1", {
+          hasFileChanges: false,
+          badge: { visible: false, mode: "none" },
+          counters: { additions: exactCount(0), deletions: exactCount(0), changedFiles: 0 },
+          filePage: { snapshotToken: "token-1", rows: [], nextCursor: null, totalRows: 0 },
+        }),
+      );
     renderChanges();
     expect(screen.getByText("No changes")).toBeTruthy();
   });
 
   test("an unavailable projection shows its reason instead of an empty list", () => {
-    useChangeProjectionStore.getState().applyProjection(
-      environmentProjectionFixture("env-1", {
-        measurementId: null,
-        state: "unavailable",
-        availability: "unavailable",
-        hasFileChanges: null,
-        reasonKeys: ["changes.reason.scan-failed"],
-        filePage: null,
-      }),
-    );
+    appCommandStore(changeProjectionStore)
+      .getState()
+      .applyProjection(
+        environmentProjectionFixture("env-1", {
+          measurementId: null,
+          state: "unavailable",
+          availability: "unavailable",
+          hasFileChanges: null,
+          reasonKeys: ["changes.reason.scan-failed"],
+          filePage: null,
+        }),
+      );
     renderChanges();
     expect(screen.getByText("Changes unavailable")).toBeTruthy();
     expect(screen.getByText("Could not read the workspace")).toBeTruthy();
   });
 
   test("the Changes tab counts the projection's files; an unknown count is ?", () => {
-    useChangeProjectionStore.getState().applyProjection(environmentProjectionFixture("env-1"));
-    const view = render(
+    appCommandStore(changeProjectionStore)
+      .getState()
+      .applyProjection(environmentProjectionFixture("env-1"));
+    const view = renderInAppCommandScope(
       <FilesPanelHeader onRefresh={() => undefined} changeEnvironmentId="env-1" />,
     );
     expect(screen.getByRole("tab", { name: /Changes/ }).textContent).toBe("Changes2");
     view.unmount();
 
-    useChangeProjectionStore.getState().applyProjection(
-      environmentProjectionFixture("env-1", {
-        revision: 2,
-        state: "partial",
-        badge: { visible: true, mode: "unknown" },
-        counters: { additions: unknownCount(), deletions: unknownCount(), changedFiles: null },
-      }),
+    appCommandStore(changeProjectionStore)
+      .getState()
+      .applyProjection(
+        environmentProjectionFixture("env-1", {
+          revision: 2,
+          state: "partial",
+          badge: { visible: true, mode: "unknown" },
+          counters: { additions: unknownCount(), deletions: unknownCount(), changedFiles: null },
+        }),
+      );
+    renderInAppCommandScope(
+      <FilesPanelHeader onRefresh={() => undefined} changeEnvironmentId="env-1" />,
     );
-    render(<FilesPanelHeader onRefresh={() => undefined} changeEnvironmentId="env-1" />);
     expect(screen.getByRole("tab", { name: /Changes/ }).textContent).toBe("Changes?");
   });
 
   test("without a projection (older backend) the legacy list is shown", async () => {
     act(() =>
-      useFilesPanelStore.setState({
+      appCommandStore(filesPanelStore).setState({
         changes: [
           {
             path: "src/App.tsx",

@@ -5,12 +5,7 @@ import "@xterm/xterm/css/xterm.css";
 import { designBootstrap } from "@orkestrator/protocol/design-runtime";
 import { DesignFrameBridge } from "@/components/design/frame-bridge";
 import { KeyboardShortcutsDialog } from "@/components/layout/KeyboardShortcutsDialog";
-import { onAppShortcut, requestAppShortcut } from "@/lib/app-shortcuts";
-import {
-  isWorkspaceRealm,
-  parseRealmMessage,
-  readFrameEnvelope,
-} from "@/lib/federation/workspace-realm";
+import { onAppShortcut, setShownAppShortcutWorkspace } from "@/lib/app-shortcuts";
 
 /** Stands in for the sidebar search: counts the ⌘K requests this window handles. */
 function SearchRequests() {
@@ -19,46 +14,64 @@ function SearchRequests() {
   return <output data-testid="search-requests">{count}</output>;
 }
 
-/**
- * A same-origin workspace realm frame, as the browser client embeds another
- * node's workspace; its window side relays app shortcuts as
- * `RemoteWorkspaceRegion` does.
- */
-function RealmFrame() {
-  const frame = useRef<HTMLIFrameElement>(null);
-  useEffect(() => {
-    const listener = (event: MessageEvent) => {
-      if (event.origin !== window.location.origin) return;
-      if (event.source !== frame.current?.contentWindow) return;
-      const envelope = readFrameEnvelope(event.data);
-      const message =
-        envelope?.workspaceId === "fixture" ? parseRealmMessage(envelope.message) : null;
-      if (message?.type === "shortcut") requestAppShortcut(message.shortcut);
-    };
-    window.addEventListener("message", listener);
-    return () => window.removeEventListener("message", listener);
-  }, []);
-  return (
-    <iframe
-      ref={frame}
-      title="Workspace realm"
-      src="/keyboard-shortcuts?realm=workspace&workspace=fixture"
-    />
+export function KeyboardShortcutsFixture() {
+  return new URLSearchParams(window.location.search).has("in-tree") ? (
+    <InTreeFixture />
+  ) : (
+    <WindowFixture />
   );
 }
 
-/** The realm document: its own composer and shortcuts dialog, no search. */
-function RealmFixture() {
+/** Counts one app shortcut's requests in this document, optionally for one workspace. */
+function useShortcutCount(id: Parameters<typeof onAppShortcut>[0], workspace?: object): number {
+  const [count, setCount] = useState(0);
+  useEffect(
+    () => onAppShortcut(id, () => setCount((value) => value + 1), workspace ? { workspace } : {}),
+    [id, workspace],
+  );
+  return count;
+}
+
+const COMMAND_WORKSPACE = { node: "command" };
+const LEAF_WORKSPACE = { node: "leaf" };
+
+/**
+ * A window showing a leaf in its own tree (plan items 4001 and 5003): the
+ * leaf's workspace is in this document beside the window's own (hidden, still
+ * mounted). The window says which
+ * workspace it shows, as `AppShell` does.
+ */
+function InTreeFixture() {
+  const [shown, setShown] = useState<object>(LEAF_WORKSPACE);
+  useEffect(() => setShownAppShortcutWorkspace(() => shown), [shown]);
+  const search = useShortcutCount("search-projects");
+  const settings = useShortcutCount("open-settings");
+  const grouping = useShortcutCount("rotate-sidebar-grouping");
+  const commandTabs = useShortcutCount("new-agent-tab", COMMAND_WORKSPACE);
+  const leafTabs = useShortcutCount("new-agent-tab", LEAF_WORKSPACE);
+  const leafShown = shown === LEAF_WORKSPACE;
   return (
     <main>
-      <textarea aria-label="Realm composer" />
+      <output data-testid="search-requests">{search}</output>
+      <output data-testid="settings-requests">{settings}</output>
+      <output data-testid="grouping-requests">{grouping}</output>
+      <output data-testid="command-new-tabs">{commandTabs}</output>
+      <output data-testid="leaf-new-tabs">{leafTabs}</output>
+      <button
+        type="button"
+        onClick={() => setShown(leafShown ? COMMAND_WORKSPACE : LEAF_WORKSPACE)}
+      >
+        {leafShown ? "Show this machine" : "Show the leaf"}
+      </button>
+      <section data-testid="command-workspace" hidden={leafShown}>
+        <textarea aria-label="Command composer" />
+      </section>
+      <section data-testid="in-tree-workspace" hidden={!leafShown}>
+        <textarea aria-label="Leaf composer" />
+      </section>
       <KeyboardShortcutsDialog platform="mac" />
     </main>
   );
-}
-
-export function KeyboardShortcutsFixture() {
-  return isWorkspaceRealm() ? <RealmFixture /> : <WindowFixture />;
 }
 
 function WindowFixture() {
@@ -97,7 +110,6 @@ function WindowFixture() {
         }}
       />
       <iframe title="Service preview" sandbox="allow-scripts" />
-      <RealmFrame />
       {new URLSearchParams(window.location.search).has("search-ui") ? (
         <ProjectSearchBar
           projects={[]}

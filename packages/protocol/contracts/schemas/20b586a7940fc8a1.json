@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:20b586a7940fc8a1ff56fe55e6c4e7527357a26eb6815b57bae44771705056de",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "controllerId": {},
+        "cursor": {},
+        "epoch": {},
+        "items": {},
+        "liveIds": {},
+        "projectId": {},
+        "reset": {},
+        "sourceProjectId": {}
+      },
+      "type": "object"
+    }
+  }
+}

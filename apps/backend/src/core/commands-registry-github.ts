@@ -1,4 +1,20 @@
-import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
+import type { AnyCommandDef } from "@orkestrator/protocol/contract/command";
+import {
+  addGitHubIssueCommentCommand,
+  closeGitHubIssueCommand,
+  getGitHubIssueCommand,
+  getGitHubIssuesCommand,
+  postGitHubCompletionCommentCommand,
+  updateGitHubIssueCommand,
+  updateGitHubIssueCommentCommand,
+  updateGitHubIssueStatusCommand,
+} from "@orkestrator/protocol/contract/domains/pull-requests";
+import { ASYNC_HANDLER } from "./commands-registry-async-decode.js";
+import type {
+  CommandRegistrar,
+  DefinedCommandHandler,
+  RegistryDependencies,
+} from "./commands-registry-types.js";
 import {
   closeGitHubIssue,
   getGitHubIssue,
@@ -17,12 +33,19 @@ import {
   asNumber,
 } from "./commands-helpers.js";
 
+/**
+ * A project's GitHub issues, registered with their `pull-requests`
+ * definitions (plan item 7006). The handlers are `async`, so a refused
+ * argument is still a rejection.
+ */
 export function registerGitHubCommands(
-  register: CommandRegistrar,
+  registerCommand: CommandRegistrar,
   _dependencies: RegistryDependencies,
 ): void {
+  const register = <C extends AnyCommandDef>(def: C, handler: DefinedCommandHandler<C>) =>
+    registerCommand(def, handler, ASYNC_HANDLER);
   register(
-    "post_github_completion_comment",
+    postGitHubCompletionCommentCommand,
     async (
       { pipelineId, projectId, repositoryOwner, repositoryName, issueNumber, body },
       context,
@@ -118,7 +141,7 @@ export function registerGitHubCommands(
       );
     },
   );
-  register("get_github_issues", async ({ projectId }, context) => {
+  register(getGitHubIssuesCommand, async ({ projectId }, context) => {
     const target = await requireGitHubProject(context, asString(projectId, "projectId"));
     try {
       return await listGitHubIssues(
@@ -130,7 +153,7 @@ export function registerGitHubCommands(
       throw new Error(sanitizeGitHubError(error, target.token));
     }
   });
-  register("get_github_issue", async ({ projectId, issueNumber }, context) => {
+  register(getGitHubIssueCommand, async ({ projectId, issueNumber }, context) => {
     const target = await requireGitHubProject(context, asString(projectId, "projectId"));
     try {
       return await getGitHubIssue(
@@ -142,7 +165,7 @@ export function registerGitHubCommands(
       throw new Error(sanitizeGitHubError(error, target.token));
     }
   });
-  register("update_github_issue", async ({ projectId, issueNumber, title, body }, context) => {
+  register(updateGitHubIssueCommand, async ({ projectId, issueNumber, title, body }, context) => {
     const target = await requireGitHubProject(context, asString(projectId, "projectId"));
     try {
       return await updateGitHubIssue(
@@ -155,7 +178,7 @@ export function registerGitHubCommands(
       throw new Error(sanitizeGitHubError(error, target.token));
     }
   });
-  register("update_github_issue_status", async ({ projectId, issueNumber, status }, context) => {
+  register(updateGitHubIssueStatusCommand, async ({ projectId, issueNumber, status }, context) => {
     const target = await requireGitHubProject(context, asString(projectId, "projectId"));
     try {
       return await updateGitHubIssueStatus(
@@ -169,7 +192,7 @@ export function registerGitHubCommands(
       throw new Error(sanitizeGitHubError(error, target.token));
     }
   });
-  register("close_github_issue", async ({ projectId, issueNumber }, context) => {
+  register(closeGitHubIssueCommand, async ({ projectId, issueNumber }, context) => {
     const target = await requireGitHubProject(context, asString(projectId, "projectId"));
     try {
       return await closeGitHubIssue(
@@ -181,7 +204,7 @@ export function registerGitHubCommands(
       throw new Error(sanitizeGitHubError(error, target.token));
     }
   });
-  register("add_github_issue_comment", async ({ projectId, issueNumber, body }, context) => {
+  register(addGitHubIssueCommentCommand, async ({ projectId, issueNumber, body }, context) => {
     const target = await requireGitHubProject(context, asString(projectId, "projectId"));
     try {
       return await postGitHubIssueComment(
@@ -195,7 +218,7 @@ export function registerGitHubCommands(
     }
   });
   register(
-    "update_github_issue_comment",
+    updateGitHubIssueCommentCommand,
     async ({ projectId, issueNumber, commentId, body }, context) => {
       const target = await requireGitHubProject(context, asString(projectId, "projectId"));
       try {

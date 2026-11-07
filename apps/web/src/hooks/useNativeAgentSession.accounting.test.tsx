@@ -7,7 +7,8 @@
  * totals with a slow full recomputation after every step.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, waitFor } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import type {
   NativeAgentMessagePage,
   NativeAgentProjectionUpdate,
@@ -26,10 +27,17 @@ import {
 } from "@/lib/native-history-accounting";
 import {
   evictNativeAgentHistoryCaches,
+  nativeAgentProjectionStore,
   recomputeNativeAgentProjectionTotals,
-  useNativeAgentProjectionStore,
 } from "@/stores/nativeAgentProjectionStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { appCommandScope } from "@/lib/node-scope-slots";
+
+/** Retained history the window's shared transcripts budget holds. */
+function windowHistoryBytes(): number {
+  return appCommandScope().budgets.transcripts.usedBytes;
+}
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
+import { appCommandStore } from "@/test/app-command-store";
 
 interface TestMessage {
   id: string;
@@ -227,7 +235,7 @@ function historyPage(
 }
 
 function renderSession(isActive = true) {
-  return renderHook(
+  return renderHookInAppCommandScope(
     (props: { isActive: boolean }) =>
       useNativeAgentSession<TestMessage>({
         platform: "codex",
@@ -256,10 +264,10 @@ function ids(messages: readonly TestMessage[] | undefined): string[] {
 
 /** Running totals and per-session sizes against a slow full re-encoding. */
 function expectExactAccounting(): void {
-  const state = useNativeAgentProjectionStore.getState();
+  const state = appCommandStore(nativeAgentProjectionStore).getState();
   const slow = recomputeNativeAgentProjectionTotals(state);
   expect(state.projectionBytesTotal).toBe(slow.projectionBytesTotal);
-  expect(state.historyBytesTotal).toBe(slow.historyBytesTotal);
+  expect(windowHistoryBytes()).toBe(slow.historyBytesTotal);
   expect(state.progressiveCacheBytesTotal).toBe(slow.progressiveCacheBytesTotal);
   for (const [key, bytes] of state.projectionBytes) {
     expect(bytes).toBe(slowEncodedBytes(state.projections.get(key)!.messages));
@@ -283,18 +291,18 @@ beforeEach(() => {
   stateUpdates = [];
   projectionUpdates = [];
   messagePages = [];
-  usePaneLayoutStore.setState({
+  appCommandStore(paneLayoutStore).setState({
     environments: new Map(),
     hydration: new Map(),
     activeEnvironmentId: null,
   });
-  useNativeAgentProjectionStore.getState().reset();
+  appCommandStore(nativeAgentProjectionStore).getState().reset();
 });
 
 afterEach(() => {
   cleanup();
   setEncodedValueMeasureForTests();
-  useNativeAgentProjectionStore.getState().reset();
+  appCommandStore(nativeAgentProjectionStore).getState().reset();
 });
 
 describe("useNativeAgentSession retained-history accounting", () => {
@@ -325,7 +333,8 @@ describe("useNativeAgentSession retained-history accounting", () => {
     await refresh(result);
     expect(result.current.projection?.messages.length).toBe(2_005);
     const retainedBytes =
-      useNativeAgentProjectionStore.getState().syncCaches.get(SESSION_KEY)?.historyBytes ?? 0;
+      appCommandStore(nativeAgentProjectionStore).getState().syncCaches.get(SESSION_KEY)
+        ?.historyBytes ?? 0;
     expect(retainedBytes).toBe(slowEncodedBytes(history));
     expect(retainedBytes).toBeGreaterThan(7.5 * 1024 * 1024);
     expectExactAccounting();
@@ -392,7 +401,9 @@ describe("useNativeAgentSession retained-history accounting", () => {
     transcriptUpdates = [() => tail("t2", [message("m3"), message("m4")])];
     await refresh(view.result);
     expect(ids(view.result.current.projection?.messages)).toEqual(["m1", "m2", "m3", "m4"]);
-    const retained = useNativeAgentProjectionStore.getState().syncCaches.get(SESSION_KEY);
+    const retained = appCommandStore(nativeAgentProjectionStore)
+      .getState()
+      .syncCaches.get(SESSION_KEY);
     expect(retained?.historyBytes).toBeGreaterThan(0);
 
     view.rerender({ isActive: false });
@@ -400,18 +411,20 @@ describe("useNativeAgentSession retained-history accounting", () => {
     const otherLive = projection([message("o1")]);
     const otherHistory = [message("o0", "o".repeat(64))];
     act(() => {
-      useNativeAgentProjectionStore.getState().setProjection("other", otherLive, {
-        liveProjection: otherLive,
-        historyComplete: false,
-        historyMessages: otherHistory,
-        historyBytes: slowEncodedBytes(otherHistory),
-      });
+      appCommandStore(nativeAgentProjectionStore)
+        .getState()
+        .setProjection("other", otherLive, {
+          liveProjection: otherLive,
+          historyComplete: false,
+          historyMessages: otherHistory,
+          historyBytes: slowEncodedBytes(otherHistory),
+        });
       evictNativeAgentHistoryCaches("other", 0, slowEncodedBytes(otherHistory));
     });
-    const evicted = useNativeAgentProjectionStore.getState();
+    const evicted = appCommandStore(nativeAgentProjectionStore).getState();
     expect(evicted.syncCaches.has(SESSION_KEY)).toBe(false);
     expect(evicted.historyEvictions.get(SESSION_KEY)).toBe(1);
-    expect(evicted.historyBytesTotal).toBe(slowEncodedBytes(otherHistory));
+    expect(windowHistoryBytes()).toBe(slowEncodedBytes(otherHistory));
     expect(ids(evicted.projections.get(SESSION_KEY)?.messages as TestMessage[])).toEqual([
       "m3",
       "m4",
@@ -426,9 +439,9 @@ describe("useNativeAgentSession retained-history accounting", () => {
     await waitFor(() =>
       expect(ids(view.result.current.projection?.messages)).toEqual(["m4", "m5"]),
     );
-    const after = useNativeAgentProjectionStore.getState();
+    const after = appCommandStore(nativeAgentProjectionStore).getState();
     expect(after.syncCaches.get(SESSION_KEY)?.historyMessages).toEqual([]);
-    expect(after.historyBytesTotal).toBe(slowEncodedBytes(otherHistory));
+    expect(windowHistoryBytes()).toBe(slowEncodedBytes(otherHistory));
     expectExactAccounting();
   });
 
@@ -519,9 +532,10 @@ describe("useNativeAgentSession retained-history accounting", () => {
     transcriptUpdates = [() => transcriptSnapshot("t5", [message("m1"), message("m3")])];
     await refresh(result);
     expect(ids(result.current.projection?.messages)).toEqual(["m1", "m3"]);
-    expect(useNativeAgentProjectionStore.getState().syncCaches.get(SESSION_KEY)?.historyBytes).toBe(
-      0,
-    );
+    expect(
+      appCommandStore(nativeAgentProjectionStore).getState().syncCaches.get(SESSION_KEY)
+        ?.historyBytes,
+    ).toBe(0);
     expectExactAccounting();
 
     // A different provider session (a new runtime) replaces the transcript.

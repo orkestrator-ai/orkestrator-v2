@@ -1,10 +1,14 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, screen } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { useEffect, type ReactNode } from "react";
 import { TerminalProvider, useTerminalContext, type CreateFileTabOptions } from "@/contexts";
-import { useFilesPanelStore } from "@/stores";
+import { filesPanelStore } from "@/stores";
 import { AllFilesView } from "./AllFilesView";
 import { ChangesView } from "./ChangesView";
+import { setFilesPanelTestState } from "@/test/files-panel-state";
+import { useFilesPanelChromeStore } from "@/stores/filesPanelChromeStore";
+import { appCommandStore } from "@/test/app-command-store";
 
 const originalMatchMedia = window.matchMedia;
 
@@ -40,7 +44,7 @@ function renderWithFileTabs(
   children: ReactNode,
   createFileTab: (path: string, options?: CreateFileTabOptions) => void,
 ) {
-  return render(
+  return renderInAppCommandScope(
     <TerminalProvider>
       <FileTabRegistrar createFileTab={createFileTab} />
       {children}
@@ -49,11 +53,11 @@ function renderWithFileTabs(
 }
 
 function renderWithoutFileTabs(children: ReactNode) {
-  return render(<TerminalProvider>{children}</TerminalProvider>);
+  return renderInAppCommandScope(<TerminalProvider>{children}</TerminalProvider>);
 }
 
 beforeEach(() => {
-  useFilesPanelStore.setState({
+  setFilesPanelTestState({
     isOpen: true,
     fileTree: [{ name: "App.tsx", path: "src/App.tsx", isDirectory: false }],
     isLoadingTree: false,
@@ -85,7 +89,7 @@ describe("mobile files panel", () => {
     fireEvent.click(screen.getByRole("button", { name: "App.tsx" }));
 
     expect(createFileTab).toHaveBeenCalledWith("src/App.tsx");
-    expect(useFilesPanelStore.getState().isOpen).toBe(false);
+    expect(useFilesPanelChromeStore.getState().isOpen).toBe(false);
   });
 
   test("closes after opening a diff from Changes on mobile", () => {
@@ -99,7 +103,7 @@ describe("mobile files panel", () => {
       isDiff: true,
       gitStatus: "M",
     });
-    expect(useFilesPanelStore.getState().isOpen).toBe(false);
+    expect(useFilesPanelChromeStore.getState().isOpen).toBe(false);
   });
 
   test("keeps the files panel open after opening a file on desktop", () => {
@@ -110,7 +114,7 @@ describe("mobile files panel", () => {
     fireEvent.click(screen.getByRole("button", { name: "App.tsx" }));
 
     expect(createFileTab).toHaveBeenCalledWith("src/App.tsx");
-    expect(useFilesPanelStore.getState().isOpen).toBe(true);
+    expect(useFilesPanelChromeStore.getState().isOpen).toBe(true);
   });
 
   test("keeps the files panel open after opening a diff on desktop", () => {
@@ -124,7 +128,7 @@ describe("mobile files panel", () => {
       isDiff: true,
       gitStatus: "M",
     });
-    expect(useFilesPanelStore.getState().isOpen).toBe(true);
+    expect(useFilesPanelChromeStore.getState().isOpen).toBe(true);
   });
 
   test("does not close when no file-tab handler is registered", () => {
@@ -139,11 +143,11 @@ describe("mobile files panel", () => {
     fireEvent.click(screen.getByRole("button", { name: "App.tsx" }));
     fireEvent.click(screen.getByTitle("src/App.tsx"));
 
-    expect(useFilesPanelStore.getState().isOpen).toBe(true);
+    expect(useFilesPanelChromeStore.getState().isOpen).toBe(true);
   });
 
   test("renders loading states for both views", () => {
-    useFilesPanelStore.setState({ isLoadingTree: true, isLoadingChanges: true });
+    appCommandStore(filesPanelStore).setState({ isLoadingTree: true, isLoadingChanges: true });
     renderWithoutFileTabs(
       <>
         <AllFilesView />
@@ -156,7 +160,7 @@ describe("mobile files panel", () => {
   });
 
   test("renders empty states for both views", () => {
-    useFilesPanelStore.setState({
+    appCommandStore(filesPanelStore).setState({
       fileTree: [],
       changes: [],
       isLoadingTree: false,

@@ -1,17 +1,19 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 
 import {
   TERMINAL_BROWSER_TAB_REQUEST_EVENT,
   type TerminalBrowserTabRequest,
 } from "@/lib/terminal-links";
 import { invoke } from "@/lib/native/backend";
-import { useEnvironmentStore } from "@/stores/environmentStore";
-import { usePreviewServiceStore } from "@/stores/previewServiceStore";
+import { environmentStore } from "@/stores/environmentStore";
+import { previewServiceStore } from "@/stores/previewServiceStore";
 import type { Environment } from "@/types";
 import type { PreviewCapabilities } from "@orkestrator/protocol/preview-services";
 import { PreviewLinkSourceContext } from "./link-source-context";
 import { MarkdownLink } from "./MessageMarkdown";
+import { appCommandStore } from "@/test/app-command-store";
 
 describe("agent loopback links", () => {
   const requests: TerminalBrowserTabRequest[] = [];
@@ -35,15 +37,15 @@ describe("agent loopback links", () => {
     window.removeEventListener(TERMINAL_BROWSER_TAB_REQUEST_EVENT, record);
     window.orkestrator = previousOrkestrator;
     window.orkestratorGateway = previousGateway;
-    useEnvironmentStore.setState({ environments: [] });
-    usePreviewServiceStore.setState({ status: "idle", capabilities: null });
+    appCommandStore(environmentStore).setState({ environments: [] });
+    appCommandStore(previewServiceStore).setState({ status: "idle", capabilities: null });
     invokeMock.mockReset();
     invokeMock.mockImplementation(() => Promise.resolve());
   });
 
   function renderLink(href: string, source = true) {
     const link = <MarkdownLink href={href}>dev server</MarkdownLink>;
-    render(
+    renderInAppCommandScope(
       source ? (
         <PreviewLinkSourceContext.Provider value={{ environmentId: "env-a", tabId: "agent-1" }}>
           {link}
@@ -87,10 +89,10 @@ describe("agent loopback links", () => {
         ...window.orkestrator,
         browserPreview: { openServiceExternally: openService },
       } as unknown as typeof window.orkestrator;
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [{ id: "env-a", environmentType: "local" }] as unknown as Environment[],
       });
-      usePreviewServiceStore.setState({
+      appCommandStore(previewServiceStore).setState({
         status: "ready",
         capabilities: {
           backendInstanceId: "backend-instance-1",

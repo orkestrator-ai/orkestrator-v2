@@ -3,7 +3,14 @@ import { useFilesPanelStore } from "@/stores/filesPanelStore";
 import { GitPullRequest, X } from "lucide-react";
 import { PullRequestOpenerProvider, openPullRequestInApp } from "@/lib/pull-request-opener";
 import { cn } from "@/lib/utils";
+import { useCallback } from "react";
+import type {
+  GitHubPullRequestRef,
+  GitHubPullRequestViewTab,
+} from "@orkestrator/protocol/github-pull-requests";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import {
+  projectPullRequestsStore,
   selectProjectPullRequestTabs,
   useProjectPullRequestsStore,
 } from "@/stores/projectPullRequestsStore";
@@ -17,7 +24,9 @@ import { PullRequestView } from "./PullRequestView";
  * requests opened from it, each in its own closable tab.
  */
 export function ProjectPullRequestsView({ projectId }: { projectId: string }) {
-  const targetId = currentFilesPanelTargetId();
+  const scope = useNodeScope();
+  // This node's files panel target (an in-tree node's own, plan item 5002).
+  const targetId = currentFilesPanelTargetId(scope);
   const panePR = useFilesPanelStore((state) =>
     targetId
       ? state.pullRequestTabs[targetId]?.find(
@@ -31,10 +40,16 @@ export function ProjectPullRequestsView({ projectId }: { projectId: string }) {
   const closePullRequest = useProjectPullRequestsStore((state) => state.closePullRequest);
   const setActive = useProjectPullRequestsStore((state) => state.setActive);
   const updateTab = useProjectPullRequestsStore((state) => state.updateTab);
+  const projectPullRequests = scope.store(projectPullRequestsStore);
+  const openInApp = useCallback(
+    (ref: GitHubPullRequestRef, view?: GitHubPullRequestViewTab) =>
+      openPullRequestInApp(ref, view, scope),
+    [scope],
+  );
   const active = activeKey ? tabs.find((tab) => tab.key === activeKey) : undefined;
 
   return (
-    <PullRequestOpenerProvider open={openPullRequestInApp}>
+    <PullRequestOpenerProvider open={openInApp}>
       <div className="flex h-full min-h-0 flex-col">
         <div
           role="tablist"
@@ -59,9 +74,7 @@ export function ProjectPullRequestsView({ projectId }: { projectId: string }) {
               type="button"
               className="px-2 text-xs text-muted-foreground hover:text-foreground"
               onClick={() =>
-                useProjectPullRequestsStore
-                  .getState()
-                  .openPullRequest(projectId, panePR.ref, panePR.view)
+                projectPullRequests.getState().openPullRequest(projectId, panePR.ref, panePR.view)
               }
             >
               Open pane PR in main area
@@ -124,7 +137,7 @@ export function ProjectPullRequestsView({ projectId }: { projectId: string }) {
             className="min-h-0 flex-1"
             projectId={projectId}
             layout="page"
-            onOpenPullRequest={(ref) => openPullRequestInApp(ref)}
+            onOpenPullRequest={(ref) => openInApp(ref)}
           />
         )}
       </div>

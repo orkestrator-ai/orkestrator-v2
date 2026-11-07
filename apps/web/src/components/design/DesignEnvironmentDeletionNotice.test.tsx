@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, screen } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { invoke } from "@/lib/native/backend";
 import { resetCapabilities } from "@/lib/design-client";
 import { DesignEnvironmentDeletionNotice } from "./DesignEnvironmentDeletionNotice";
@@ -42,7 +43,7 @@ describe("DesignEnvironmentDeletionNotice", () => {
         };
       throw new Error(`Unknown backend command: ${command}`);
     });
-    render(<DesignEnvironmentDeletionNotice environmentId="env-1" open />);
+    renderInAppCommandScope(<DesignEnvironmentDeletionNotice environmentId="env-1" open />);
     const notice = await screen.findByTestId("design-deletion-notice");
     expect(notice.getAttribute("role")).toBe("status");
     expect(notice.textContent).toContain("3 designs");
@@ -53,7 +54,9 @@ describe("DesignEnvironmentDeletionNotice", () => {
     invokeMock.mockImplementation(async (command: string) => {
       throw new Error(`Unknown backend command: ${command}`);
     });
-    const { rerender } = render(<DesignEnvironmentDeletionNotice environmentId="env-1" open />);
+    const { rerender } = renderInAppCommandScope(
+      <DesignEnvironmentDeletionNotice environmentId="env-1" open />,
+    );
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(screen.queryAllByTestId("design-deletion-notice")).toHaveLength(0);
     rerender(<DesignEnvironmentDeletionNotice environmentId="env-1" open={false} />);

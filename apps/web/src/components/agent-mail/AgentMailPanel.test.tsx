@@ -1,5 +1,6 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import * as realBackend from "@/lib/backend";
 import type {
   AgentMailConversation,
@@ -8,14 +9,17 @@ import type {
   AgentMailParticipant,
   MailboxDescriptor,
 } from "@orkestrator/protocol/agent-mail";
-import { useAgentMailStore } from "@/stores/agentMailStore";
-import { useConfigStore } from "@/stores/configStore";
-import { useFilesPanelStore } from "@/stores/filesPanelStore";
-import { useUIStore } from "@/stores/uiStore";
+import { agentMailStore } from "@/stores/agentMailStore";
+import { configStore } from "@/stores/configStore";
+import { filesPanelStore } from "@/stores/filesPanelStore";
+import { uiStore } from "@/stores/uiStore";
 import {
   mockToastError as toastError,
   mockToastInfo as toastInfo,
 } from "../../../../../tests/mocks/sonner";
+import { setFilesPanelTestState } from "@/test/files-panel-state";
+import { useFilesPanelChromeStore } from "@/stores/filesPanelChromeStore";
+import { appCommandStore } from "@/test/app-command-store";
 
 const AGENT_1 = "env-1\0tab-1";
 const AGENT_2 = "env-2\0tab-2";
@@ -184,9 +188,9 @@ function conversation(
 }
 
 function setMessagingEnabled(enabled: boolean): void {
-  const config = structuredClone(useConfigStore.getInitialState().config);
+  const config = structuredClone(appCommandStore(configStore).getInitialState().config);
   config.global.agentMessaging = { ...config.global.agentMessaging!, enabled };
-  useConfigStore.setState({ config });
+  appCommandStore(configStore).setState({ config });
 }
 
 function summaryEntry(overrides: { attentionCount?: number; failedInjectCount?: number }) {
@@ -207,8 +211,8 @@ function summaryEntry(overrides: { attentionCount?: number; failedInjectCount?: 
 
 beforeEach(() => {
   cleanup();
-  useAgentMailStore.setState(useAgentMailStore.getInitialState());
-  useAgentMailStore.setState({
+  appCommandStore(agentMailStore).setState(appCommandStore(agentMailStore).getInitialState());
+  appCommandStore(agentMailStore).setState({
     refreshMailbox: mock(async () => undefined),
     refreshSummary: mock(async () => undefined),
   });
@@ -236,35 +240,35 @@ beforeEach(() => {
 });
 
 afterAll(() => {
-  useAgentMailStore.setState(useAgentMailStore.getInitialState());
+  appCommandStore(agentMailStore).setState(appCommandStore(agentMailStore).getInitialState());
   mock.module("@/lib/backend", () => realBackend);
 });
 
 describe("AgentMailButton", () => {
   test("renders nothing when messaging is disabled", () => {
     setMessagingEnabled(false);
-    render(<AgentMailButton />);
+    renderInAppCommandScope(<AgentMailButton />);
     expect(screen.queryByRole("button", { name: /Agent messages/ }) === null).toBe(true);
   });
 
   test("counts only mail that needs the person and opens the panel", () => {
-    useAgentMailStore.setState({
+    appCommandStore(agentMailStore).setState({
       summary: new Map([
         [AGENT_1, summaryEntry({ attentionCount: 2, failedInjectCount: 1 })],
         // A summary without the field counts its failures.
         ["env-2\0tab-2", { ...summaryEntry({ failedInjectCount: 1 }), mailboxId: "env-2\0tab-2" }],
       ]),
     });
-    render(<AgentMailButton />);
+    renderInAppCommandScope(<AgentMailButton />);
     fireEvent.click(screen.getByRole("button", { name: "Agent messages, 3 need you" }));
-    expect(useAgentMailStore.getState().panel).toEqual({});
+    expect(appCommandStore(agentMailStore).getState().panel).toEqual({});
   });
 
   test("shows no badge for the agents' own unseen traffic", () => {
-    useAgentMailStore.setState({
+    appCommandStore(agentMailStore).setState({
       summary: new Map([[AGENT_1, summaryEntry({ attentionCount: 0 })]]),
     });
-    render(<AgentMailButton />);
+    renderInAppCommandScope(<AgentMailButton />);
     expect(screen.getByRole("button", { name: "Agent messages" })).toBeTruthy();
   });
 });
@@ -277,7 +281,7 @@ describe("AgentMailPanel", () => {
       ...conversation([agent1, user], limit === 50 ? [latest] : [older, latest]),
       total: 2,
     }));
-    render(<AgentMailPanel />);
+    renderInAppCommandScope(<AgentMailPanel />);
     act(() => openAgentMailForTab("env-1", "tab-1", "compose"));
     await waitFor(() =>
       expect(markAgentMailConversationSeen).toHaveBeenCalledWith(AGENT_1, "user", ["latest"]),
@@ -292,7 +296,7 @@ describe("AgentMailPanel", () => {
   });
 
   test("retains a pair's subject and body across back navigation and closing", async () => {
-    render(<AgentMailPanel />);
+    renderInAppCommandScope(<AgentMailPanel />);
     act(() => openAgentMailForTab("env-1", "tab-1", "compose"));
     fireEvent.change(await screen.findByPlaceholderText("Message Claude 1"), {
       target: { value: "Draft body" },
@@ -301,7 +305,7 @@ describe("AgentMailPanel", () => {
       target: { value: "Draft subject" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Back to conversations" }));
-    act(() => useAgentMailStore.getState().closePanel());
+    act(() => appCommandStore(agentMailStore).getState().closePanel());
     act(() => openAgentMailForTab("env-1", "tab-1", "compose"));
     expect(
       ((await screen.findByPlaceholderText("Message Claude 1")) as HTMLTextAreaElement).value,
@@ -313,7 +317,7 @@ describe("AgentMailPanel", () => {
 
   test("focused mailbox errors are visible and retry restores compose and settings", async () => {
     const refresh = mock(async () => {
-      useAgentMailStore.getState().setMailbox({
+      appCommandStore(agentMailStore).getState().setMailbox({
         descriptor: descriptor(),
         messages: [],
         total: 0,
@@ -325,8 +329,8 @@ describe("AgentMailPanel", () => {
     refresh.mockImplementationOnce(async () => {
       throw new Error("Mailbox offline");
     });
-    useAgentMailStore.setState({ refreshMailbox: refresh });
-    render(<AgentMailPanel />);
+    appCommandStore(agentMailStore).setState({ refreshMailbox: refresh });
+    renderInAppCommandScope(<AgentMailPanel />);
     act(() => openAgentMailForTab("env-1", "tab-1"));
     expect((await screen.findByRole("alert")).textContent).toContain("Mailbox offline");
     fireEvent.click(screen.getByRole("button", { name: "Retry mailbox" }));
@@ -359,13 +363,16 @@ describe("AgentMailPanel", () => {
         offset: 200,
         limit: 200,
       }));
-      render(<AgentMailPanel />);
-      act(() => useAgentMailStore.getState().openPanel({}));
+      renderInAppCommandScope(<AgentMailPanel />);
+      act(() => appCommandStore(agentMailStore).getState().openPanel({}));
       fireEvent.click(await screen.findByRole("button", { name: "New" }));
       fireEvent.change(screen.getByLabelText("Filter agents"), { target: { value: "Last agent" } });
       fireEvent.click(await screen.findByText("Last agent"));
       expect(listAgentMailboxes).toHaveBeenCalledWith({ offset: 200, limit: 200 });
-      expect(useAgentMailStore.getState().panel?.conversation).toEqual([AGENT_2, "user"]);
+      expect(appCommandStore(agentMailStore).getState().panel?.conversation).toEqual([
+        AGENT_2,
+        "user",
+      ]);
     },
   );
 
@@ -404,8 +411,8 @@ describe("AgentMailPanel", () => {
         ],
       ),
     );
-    render(<AgentMailPanel />);
-    act(() => useAgentMailStore.getState().openPanel({}));
+    renderInAppCommandScope(<AgentMailPanel />);
+    act(() => appCommandStore(agentMailStore).getState().openPanel({}));
 
     const row = await screen.findByTestId("agent-mail-conversation-row");
     expect(row.textContent).toContain("Claude 1");
@@ -421,7 +428,7 @@ describe("AgentMailPanel", () => {
     // The person is not part of this conversation: no composer, but a way to start one.
     expect(screen.queryByPlaceholderText(/^Message /) === null).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Message Codex 2" }));
-    expect(useAgentMailStore.getState().panel).toEqual({
+    expect(appCommandStore(agentMailStore).getState().panel).toEqual({
       focus: AGENT_2,
       conversation: [AGENT_2, "user"],
     });
@@ -456,8 +463,8 @@ describe("AgentMailPanel", () => {
         ],
       }));
       getAgentMailConversation.mockImplementation(async () => thread);
-      render(<AgentMailPanel />);
-      act(() => useAgentMailStore.getState().openPanel({}));
+      renderInAppCommandScope(<AgentMailPanel />);
+      act(() => appCommandStore(agentMailStore).getState().openPanel({}));
       const row = await screen.findByTestId("agent-mail-conversation-row");
       expect(row.textContent).toContain(expected);
       expect(row.textContent).not.toContain("worker · worker");
@@ -470,7 +477,7 @@ describe("AgentMailPanel", () => {
     getAgentMailConversation.mockImplementation(async () =>
       conversation([agent1, user], [mail("stored", { body: "unseen" })]),
     );
-    render(<AgentMailPanel />);
+    renderInAppCommandScope(<AgentMailPanel />);
     act(() => openAgentMailForTab("env-1", "tab-1", "compose"));
     expect(await screen.findByText("unseen")).toBeTruthy();
     await waitFor(() =>
@@ -487,7 +494,7 @@ describe("AgentMailPanel", () => {
         throw new Error("response lost");
       })
       .mockImplementationOnce(async () => mail("stored"));
-    render(<AgentMailPanel />);
+    renderInAppCommandScope(<AgentMailPanel />);
     act(() => openAgentMailForTab("env-1", "tab-1", "compose"));
 
     const body = await screen.findByPlaceholderText("Message Claude 1");
@@ -496,8 +503,12 @@ describe("AgentMailPanel", () => {
     await waitFor(() => expect(sendAgentMail).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(toastError).toHaveBeenCalled());
     expect((body as HTMLTextAreaElement).value).toBe("hello");
-    act(() => useAgentMailStore.getState().closePanel());
-    act(() => useAgentMailStore.getState().openPanel({ conversation: ["user", AGENT_1] }));
+    act(() => appCommandStore(agentMailStore).getState().closePanel());
+    act(() =>
+      appCommandStore(agentMailStore)
+        .getState()
+        .openPanel({ conversation: ["user", AGENT_1] }),
+    );
     const restored = await screen.findByPlaceholderText("Message Claude 1");
     expect((restored as HTMLTextAreaElement).value).toBe("hello");
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
@@ -517,7 +528,7 @@ describe("AgentMailPanel", () => {
     sendAgentMail.mockImplementationOnce(async () =>
       mail("bounced", { placementReason: "recipient-muted" }),
     );
-    render(<AgentMailPanel />);
+    renderInAppCommandScope(<AgentMailPanel />);
     act(() => openAgentMailForTab("env-1", "tab-1", "compose"));
     const body = await screen.findByPlaceholderText("Message Claude 1");
     fireEvent.change(body, { target: { value: "hello" } });
@@ -545,8 +556,12 @@ describe("AgentMailPanel", () => {
         ],
       ),
     );
-    render(<AgentMailPanel />);
-    act(() => useAgentMailStore.getState().openPanel({ conversation: [AGENT_1, AGENT_2] }));
+    renderInAppCommandScope(<AgentMailPanel />);
+    act(() =>
+      appCommandStore(agentMailStore)
+        .getState()
+        .openPanel({ conversation: [AGENT_1, AGENT_2] }),
+    );
     expect(await screen.findByText("delivery failed")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await waitFor(() =>
@@ -555,7 +570,7 @@ describe("AgentMailPanel", () => {
   });
 
   test("shows a focused tab's delivery settings and changes its policy", async () => {
-    useAgentMailStore.setState({
+    appCommandStore(agentMailStore).setState({
       mailboxes: new Map([
         [
           AGENT_1,
@@ -563,7 +578,7 @@ describe("AgentMailPanel", () => {
         ],
       ]),
     });
-    render(<AgentMailPanel />);
+    renderInAppCommandScope(<AgentMailPanel />);
     act(() => openAgentMailForTab("env-1", "tab-1"));
     await waitFor(() => expect(listAgentMailConversations).toHaveBeenCalledWith(AGENT_1));
     fireEvent.change(screen.getByLabelText("Automatic delivery policy"), {
@@ -577,18 +592,20 @@ describe("AgentMailPanel", () => {
       }),
     );
     fireEvent.click(screen.getByRole("button", { name: "Message" }));
-    expect(useAgentMailStore.getState().panel).toEqual({
+    expect(appCommandStore(agentMailStore).getState().panel).toEqual({
       focus: AGENT_1,
       conversation: [AGENT_1, "user"],
     });
   });
 
   test("starts a new conversation from the recipient picker", async () => {
-    render(<AgentMailPanel />);
-    act(() => useAgentMailStore.getState().openPanel({}));
+    renderInAppCommandScope(<AgentMailPanel />);
+    act(() => appCommandStore(agentMailStore).getState().openPanel({}));
     fireEvent.click(await screen.findByRole("button", { name: "New" }));
     fireEvent.click(await screen.findByText("Codex 2"));
-    expect(useAgentMailStore.getState().panel).toEqual({ conversation: [AGENT_2, "user"] });
+    expect(appCommandStore(agentMailStore).getState().panel).toEqual({
+      conversation: [AGENT_2, "user"],
+    });
   });
 
   test.each([true, false])(
@@ -607,8 +624,12 @@ describe("AgentMailPanel", () => {
           ],
         ),
       );
-      render(<AgentMailPanel />);
-      act(() => useAgentMailStore.getState().openPanel({ conversation: [AGENT_1, AGENT_2] }));
+      renderInAppCommandScope(<AgentMailPanel />);
+      act(() =>
+        appCommandStore(agentMailStore)
+          .getState()
+          .openPanel({ conversation: [AGENT_1, AGENT_2] }),
+      );
       expect(await screen.findByText(canReceive ? "in inbox" : "waiting for agent")).toBeTruthy();
       expect(Boolean(screen.queryByRole("button", { name: "Deliver now" }))).toBe(canReceive);
     },
@@ -626,7 +647,7 @@ describe("AgentMailPanel", () => {
         ],
       ),
     );
-    render(<AgentMailPanel />);
+    renderInAppCommandScope(<AgentMailPanel />);
     act(() => openAgentMailForTab("env-1", "tab-1", "compose"));
     expect(await screen.findByText("[Image: tracker]")).toBeTruthy();
     expect(document.body.querySelector("[data-testid=agent-mail-panel] img") === null).toBe(true);
@@ -642,37 +663,42 @@ describe("pull request links in mail", () => {
     getAgentMailConversation.mockImplementation(async () =>
       conversation([agent1, user], [mail("stored", { userSeenAt: "seen", body })]),
     );
-    render(<AgentMailPanel />);
+    renderInAppCommandScope(<AgentMailPanel />);
     act(() => openAgentMailForTab("env-1", "tab-1", "compose"));
     return screen.findByRole("link", { name: "the PR" });
   }
 
   test("open in the right-hand PR pane and close the mail sheet that covers it", async () => {
-    useUIStore.setState({ selectedProjectId: "project-1", selectedEnvironmentId: "env-1" });
-    useFilesPanelStore.setState({ isOpen: false, activeTab: "changes", pullRequestTabs: {} });
+    appCommandStore(uiStore).setState({
+      selectedProjectId: "project-1",
+      selectedEnvironmentId: "env-1",
+    });
+    setFilesPanelTestState({ isOpen: false, activeTab: "changes", pullRequestTabs: {} });
     try {
       fireEvent.click(await openMailWithPullRequestLink());
-      expect(useFilesPanelStore.getState().pullRequestTabs["env-1"]?.[0]?.ref).toEqual({
+      expect(
+        appCommandStore(filesPanelStore).getState().pullRequestTabs["env-1"]?.[0]?.ref,
+      ).toEqual({
         owner: "acme",
         repo: "widget",
         number: 42,
       });
-      expect(useFilesPanelStore.getState().isOpen).toBe(true);
-      expect(useAgentMailStore.getState().panel).toBeNull();
+      expect(useFilesPanelChromeStore.getState().isOpen).toBe(true);
+      expect(appCommandStore(agentMailStore).getState().panel).toBeNull();
       expect(openInBrowser).not.toHaveBeenCalled();
     } finally {
-      useUIStore.setState({ selectedProjectId: null, selectedEnvironmentId: null });
-      useFilesPanelStore.setState({ isOpen: false, pullRequestTabs: {} });
+      appCommandStore(uiStore).setState({ selectedProjectId: null, selectedEnvironmentId: null });
+      setFilesPanelTestState({ isOpen: false, pullRequestTabs: {} });
     }
   });
 
   test("fall back to GitHub and keep the sheet open when nothing can host the pane", async () => {
-    useUIStore.setState({ selectedProjectId: null, selectedEnvironmentId: null });
+    appCommandStore(uiStore).setState({ selectedProjectId: null, selectedEnvironmentId: null });
     fireEvent.click(await openMailWithPullRequestLink());
     await waitFor(() =>
       expect(openInBrowser).toHaveBeenCalledWith("https://github.com/acme/widget/pull/42"),
     );
-    expect(useAgentMailStore.getState().panel).not.toBeNull();
+    expect(appCommandStore(agentMailStore).getState().panel).not.toBeNull();
   });
 });
 
@@ -681,7 +707,7 @@ describe("conversation Deliver now actions", () => {
     getAgentMailConversation.mockImplementation(async () =>
       conversation([agent1, user], [mail("pending-inject", { id: "waiting-message" })]),
     );
-    render(<AgentMailPanel />);
+    renderInAppCommandScope(<AgentMailPanel />);
     act(() => openAgentMailForTab("env-1", "tab-1", "compose"));
     fireEvent.click(await screen.findByRole("button", { name: "Deliver now" }));
   }
@@ -765,7 +791,7 @@ describe("AgentMailBanner actions", () => {
     });
     const pending = placement === "pending-inject" ? 1 : 0;
     const failed = placement === "inject_failed" ? 1 : 0;
-    useAgentMailStore.setState({
+    appCommandStore(agentMailStore).setState({
       revision: 2,
       summary: new Map([
         [AGENT_1, { ...summaryEntry({ failedInjectCount: failed }), pendingInjectCount: pending }],
@@ -798,7 +824,7 @@ describe("AgentMailBanner actions", () => {
     discardAgentMailInject.mockImplementationOnce(async () => {
       throw new Error("discard failed");
     });
-    render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
+    renderInAppCommandScope(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect((await screen.findByRole("alert")).textContent).toContain("retry failed");
     fireEvent.click(screen.getByRole("button", { name: "Discard" }));
@@ -807,7 +833,7 @@ describe("AgentMailBanner actions", () => {
 
   test("Deliver now releases one message without touching the tab's policy", async () => {
     installBanner("pending-inject", { presence: "idle" });
-    render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
+    renderInAppCommandScope(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
     fireEvent.click(screen.getByRole("button", { name: "Deliver now" }));
     await waitFor(() =>
       expect(deliverAgentMailNow).toHaveBeenCalledWith("env-1", "tab-1", "message-1"),
@@ -819,13 +845,13 @@ describe("AgentMailBanner actions", () => {
 
   test("Deliver now releases every deliverable inbox message, and skips untrusted mail", async () => {
     installBanner("stored");
-    const mailbox = useAgentMailStore.getState().mailboxes.get(AGENT_1)!;
+    const mailbox = appCommandStore(agentMailStore).getState().mailboxes.get(AGENT_1)!;
     const { body: _body, ...summary } = mail("stored");
     mailbox.messages.push(
       { ...summary, id: "message-2" },
       { ...summary, id: "external", trust: "external" },
     );
-    render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
+    renderInAppCommandScope(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
     fireEvent.click(screen.getByRole("button", { name: "Deliver now" }));
     await waitFor(() => expect(deliverAgentMailNow).toHaveBeenCalledTimes(2));
     expect(deliverAgentMailNow.mock.calls.map((call) => call[2])).toEqual([
@@ -840,7 +866,7 @@ describe("AgentMailBanner actions", () => {
     deliverAgentMailNow.mockImplementationOnce(async () => {
       throw new Error("This thread has reached its reply limit.");
     });
-    render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
+    renderInAppCommandScope(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
     fireEvent.click(screen.getByRole("button", { name: "Deliver now" }));
     expect((await screen.findByRole("alert")).textContent).toContain("reply limit");
     expect(toastError).toHaveBeenCalled();
@@ -848,7 +874,7 @@ describe("AgentMailBanner actions", () => {
 
   test("Deliver now asks a busy recipient to take the message mid-turn", async () => {
     installBanner("pending-inject", { presence: "working" });
-    render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
+    renderInAppCommandScope(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
     fireEvent.click(screen.getByRole("button", { name: "Deliver now" }));
     await waitFor(() =>
       expect(deliverAgentMailNow).toHaveBeenCalledWith("env-1", "tab-1", "message-1"),
@@ -861,7 +887,7 @@ describe("AgentMailBanner actions", () => {
     deliverAgentMailNow.mockImplementationOnce(async () =>
       mail("pending-inject", { id: "message-1", placementReason: "steer-unsupported" }),
     );
-    render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
+    renderInAppCommandScope(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
     fireEvent.click(screen.getByRole("button", { name: "Deliver now" }));
     await waitFor(() =>
       expect(toastInfo).toHaveBeenCalledWith("This agent can't take messages mid-turn", {
@@ -872,7 +898,7 @@ describe("AgentMailBanner actions", () => {
 
   test("names oversized mail on the banner", () => {
     installBanner("pending-inject", { presence: "working", reason: "steer-too-large" });
-    render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
+    renderInAppCommandScope(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
     expect(
       screen.getByText(
         "Message too large for mid-turn delivery · delivers in full when the turn ends",
@@ -882,7 +908,7 @@ describe("AgentMailBanner actions", () => {
 
   test("names a refused steer on the banner itself", () => {
     installBanner("pending-inject", { presence: "working", reason: "steer-refused" });
-    render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
+    renderInAppCommandScope(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
     expect(
       screen.getByText("Couldn't deliver into the running turn · delivers when the turn ends"),
     ).toBeTruthy();

@@ -20,7 +20,8 @@ import type {
 import type { CoordinatorService } from "./coordinator-service.js";
 import type { ProjectGitService } from "./project-git-service.js";
 
-export type BackendEmit = (event: string, payload: unknown) => void;
+export type { BackendEmit, BackendEventSink } from "./backend-emit.js";
+import type { BackendEmit } from "./backend-emit.js";
 
 export type CommandContext = {
   design?: import("./design/index.js").DesignService;
@@ -137,7 +138,25 @@ export type CommandContext = {
   graphHumanAnswers?: import("./graph-node-human.js").GraphHumanAnswers;
 };
 
+/**
+ * The contract fields of one call's invoke envelope (`{ command, args,
+ * domain?, version?, critical? }`, docs/reports/unified-federation.md §11.2
+ * "Must-understand"), as a transport decoded them. Absent for an older client
+ * that sends only `command` and `args`, and for in-process calls.
+ */
+export type CommandInvocation = {
+  readonly domain?: string;
+  readonly version?: number;
+  readonly critical?: readonly string[];
+};
+
+/**
+ * A registered command's handler. `invocation` reaches only the registry's own
+ * wrapper (which checks the version range and the critical fields); handlers
+ * and wrapping registrars may ignore it.
+ */
 export type CommandHandler = (
   args: JsonRecord,
   context: CommandContext,
+  invocation?: CommandInvocation,
 ) => Promise<unknown> | unknown;

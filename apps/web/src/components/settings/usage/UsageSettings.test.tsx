@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, mock, spyOn, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 
 import * as backend from "@/lib/backend";
 import type { UsageHistoryReport, UsageTotals } from "@/lib/backend";
@@ -100,7 +101,7 @@ async function headline() {
 }
 
 test("shows the recorded range, its headline and the model breakdown", async () => {
-  render(<UsageSettings />);
+  renderInAppCommandScope(<UsageSettings />);
   expect(await screen.findByText(/recorded since/i)).toBeTruthy();
   expect((await screen.findByTestId("usage-total")).textContent).toBe("10.0K");
   expect((await headline()).getByText(/3 sessions/)).toBeTruthy();
@@ -110,14 +111,14 @@ test("shows the recorded range, its headline and the model breakdown", async () 
 });
 
 test("a model the provider never priced reads as unpriced, not free", async () => {
-  render(<UsageSettings />);
+  renderInAppCommandScope(<UsageSettings />);
   const row = (await screen.findByRole("cell", { name: "gpt-6.1" })).closest("tr");
   expect(row).toBeTruthy();
   expect(within(row as HTMLElement).getByText("Unpriced")).toBeTruthy();
 });
 
 test("the cost view reports money without asking the backend again", async () => {
-  render(<UsageSettings />);
+  renderInAppCommandScope(<UsageSettings />);
   await headline();
   fireEvent.click(screen.getByRole("button", { name: "Cost" }));
   await waitFor(() => expect(screen.getByTestId("usage-total").textContent).toBe("$4.00"));
@@ -150,7 +151,7 @@ test("spend that includes an estimate is marked as one everywhere it is shown", 
       ],
     }),
   );
-  render(<UsageSettings />);
+  renderInAppCommandScope(<UsageSettings />);
   await headline();
   fireEvent.click(screen.getByRole("button", { name: "Cost" }));
 
@@ -178,7 +179,7 @@ test("spend that includes an estimate is marked as one everywhere it is shown", 
 });
 
 test("spend with no stated source reads as it always has", async () => {
-  render(<UsageSettings />);
+  renderInAppCommandScope(<UsageSettings />);
   await headline();
   fireEvent.click(screen.getByRole("button", { name: "Cost" }));
   const total = await screen.findByTestId("usage-total");
@@ -187,7 +188,7 @@ test("spend with no stated source reads as it always has", async () => {
 });
 
 test("changing the range re-reads and keeps the last report on screen", async () => {
-  render(<UsageSettings />);
+  renderInAppCommandScope(<UsageSettings />);
   await headline();
   fireEvent.click(screen.getByRole("button", { name: "7 days" }));
   await waitFor(() => expect(history).toHaveBeenCalledTimes(2));
@@ -196,7 +197,7 @@ test("changing the range re-reads and keeps the last report on screen", async ()
 });
 
 test("selecting a platform from the list filters the read", async () => {
-  render(<UsageSettings />);
+  renderInAppCommandScope(<UsageSettings />);
   await headline();
   fireEvent.click(screen.getByRole("button", { name: /Claude Code/ }));
   await waitFor(() => expect(history).toHaveBeenCalledTimes(2));
@@ -204,7 +205,7 @@ test("selecting a platform from the list filters the read", async () => {
 });
 
 test("the arrow keys read one day of the chart", async () => {
-  render(<UsageSettings />);
+  renderInAppCommandScope(<UsageSettings />);
   await headline();
   const plot = screen.getByRole("group", { name: /Daily processed tokens/ });
   fireEvent.keyDown(plot, { key: "ArrowLeft" });
@@ -239,14 +240,14 @@ test("an empty recording says so rather than drawing nothing", async () => {
       recordedPlatforms: [],
     }),
   );
-  render(<UsageSettings />);
+  renderInAppCommandScope(<UsageSettings />);
   expect(await screen.findByText("No usage recorded in this range.")).toBeTruthy();
   expect(screen.getByText("Nothing recorded in this range yet.")).toBeTruthy();
 });
 
 test("a failed read is reported and does not blank the pane", async () => {
   history.mockRejectedValue(new Error("backend unavailable"));
-  render(<UsageSettings />);
+  renderInAppCommandScope(<UsageSettings />);
   expect(await screen.findByText("backend unavailable")).toBeTruthy();
 });
 
@@ -257,7 +258,7 @@ test("the limits view asks each enabled platform for its plan", async () => {
     fetchedAt: "2026-10-20T12:00:00.000Z",
     windows: [],
   });
-  render(<UsageSettings />);
+  renderInAppCommandScope(<UsageSettings />);
   await headline();
   fireEvent.click(screen.getByRole("button", { name: "Limits" }));
   await waitFor(() => expect(plan).toHaveBeenCalled());
@@ -265,7 +266,7 @@ test("the limits view asks each enabled platform for its plan", async () => {
 });
 
 test("a failed refresh keeps the report that was already on screen", async () => {
-  render(<UsageSettings />);
+  renderInAppCommandScope(<UsageSettings />);
   await headline();
   history.mockRejectedValue(new Error("backend unavailable"));
   fireEvent.click(screen.getByRole("button", { name: "7 days" }));
@@ -293,7 +294,7 @@ test("the cost view ranks environments by spend, not by tokens", async () => {
       ],
     }),
   );
-  render(<UsageSettings />);
+  renderInAppCommandScope(<UsageSettings />);
   await headline();
   // Token order puts the only environment that cost anything last, where the
   // six-row limit cuts it off.
@@ -329,7 +330,7 @@ test("the cost view calls unpriced tokens unpriced, not absent", async () => {
       recordedPlatforms: ["codex"],
     }),
   );
-  render(<UsageSettings />);
+  renderInAppCommandScope(<UsageSettings />);
   await headline();
   fireEvent.click(screen.getByRole("button", { name: "Cost" }));
   expect(await screen.findByText("No priced spend in this range.")).toBeTruthy();
@@ -373,7 +374,7 @@ test("busiest environments name the project above the environment, deleted ones 
       ],
     }),
   );
-  render(<UsageSettings />);
+  renderInAppCommandScope(<UsageSettings />);
   const list = within(await screen.findByRole("region", { name: "Environments" }));
   const rows = list.getAllByRole("listitem");
   expect(rows.map((row) => row.textContent?.replace(/[\d.]+[%KM]?/g, "").trim())).toEqual([

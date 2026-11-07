@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { captureLogs, type LogCapture } from "@orkestrator/protocol/testing/log-capture";
-import { createBrowserGatewayApi, installBrowserGatewayApi } from "./web-gateway";
-import { clearDirectGatewayTransport } from "./gateway-auth-transport";
+import {
+  createBrowserGatewayApi,
+  credentialProbeVerdict,
+  detectsBrowserSession,
+  installBrowserGatewayApi,
+} from "./web-gateway";
 import { GATEWAY_KEEPALIVE_EVENT } from "@orkestrator/protocol/gateway-event-stream";
 
 /**
@@ -22,7 +26,6 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  clearDirectGatewayTransport();
   globalThis.fetch = originalFetch;
   globalThis.EventSource = originalEventSource;
   globalThis.setTimeout = originalSetTimeout;
@@ -1576,5 +1579,137 @@ describe("a stream the gateway refuses for its credential", () => {
     status = 503;
     await waitForReal(() => states.includes("disconnected"), "A 503 was not an outage");
     stop();
+  });
+});
+
+describe("the credential probe and session detection of a relayed node transport", () => {
+  test("only a 401 from /status is a refusal; a 404 means the probe is unavailable", () => {
+    expect(credentialProbeVerdict(401)).toBe("refused");
+    expect(credentialProbeVerdict(200)).toBe("accepted");
+    for (const status of [404, 405, 403, 429, 502, 503]) {
+      expect(credentialProbeVerdict(status)).toBe("unavailable");
+    }
+  });
+
+  test("a node transport never probes a cookie session", () => {
+    const origin = "https://command.example";
+    expect(detectsBrowserSession("same-origin", true, undefined)).toBe(true);
+    expect(detectsBrowserSession("same-origin", true, origin)).toBe(true);
+    expect(
+      detectsBrowserSession("same-origin", true, `${origin}/__orkestrator/nodes/bk_leaf`),
+    ).toBe(false);
+    expect(detectsBrowserSession("omit", true, undefined)).toBe(false);
+    expect(detectsBrowserSession("same-origin", false, undefined)).toBe(false);
+  });
+
+  test("a 404 from /status on an older command node does not mark the credential lapsed", async () => {
+    MockEventSource.instances = [];
+    globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+    const lapsed = mock(() => undefined);
+    const requested: string[] = [];
+    globalThis.fetch = mock(async (input: unknown) => {
+      requested.push(String(input));
+      return String(input).endsWith("/session")
+        ? new Response("{}", { status: 200 })
+        : new Response("{}", { status: 404 });
+    }) as unknown as typeof fetch;
+    const api = createBrowserGatewayApi({
+      eventReconnectDelayMs: 60_000,
+      browserSessionActivity: true,
+      onCredentialLapsed: lapsed,
+    });
+    await flushMicrotasks();
+    const stop = api.listen("changed", () => undefined);
+    const main = MockEventSource.instances[0]!;
+    main.open();
+    main.fail();
+    await until(
+      () => requested.at(-1) === "/__orkestrator/status",
+      "The credential was not probed",
+    );
+    await flushMicrotasks();
+    expect(lapsed).not.toHaveBeenCalled();
+    // Still an outage waiting out its backoff, not a refused credential.
+    expect(api.eventStreamConnection.state()).toBe("disconnected");
+    stop();
+  });
+
+  test("a relayed transport notices a revoked credential without asking the leaf for a session", async () => {
+    const requested: string[] = [];
+    globalThis.fetch = mock(async (input: unknown) => {
+      requested.push(new URL(String(input)).pathname);
+      return new Response("{}", { status: 401 });
+    }) as unknown as typeof fetch;
+    // Same origin as the page, as `openLeafWorkspace` builds a relay base.
+    const happyWindow = window as unknown as { happyDOM: { setURL(url: string): void } };
+    const previousUrl = window.location.href;
+    happyWindow.happyDOM.setURL("http://localhost:1420/");
+    const api = createBrowserGatewayApi({
+      baseUrl: "http://localhost:1420/__orkestrator/nodes/bk_leaf",
+      eventReconnectDelayMs: 60_000,
+      browserSessionActivity: true,
+    });
+    happyWindow.happyDOM.setURL(previousUrl);
+    const states: string[] = [];
+    api.eventStreamConnection.subscribe((state) => states.push(state));
+    const stop = api.listen("changed", () => undefined);
+    await waitForReal(
+      () => requested.includes("/__orkestrator/nodes/bk_leaf/__orkestrator/events"),
+      "The stream never opened",
+    );
+    await new Promise((resolve) => originalSetTimeout(resolve, 20));
+    // A refused credential, not an outage: no banner promising a reconnect.
+    expect(states).not.toContain("disconnected");
+    expect(api.eventStreamConnection.state()).toBe("connecting");
+    expect(requested.every((path) => path.startsWith("/__orkestrator/nodes/bk_leaf/"))).toBe(true);
+    expect(requested.some((path) => path.endsWith("/session"))).toBe(false);
+    stop();
+  });
+
+  test("an installed page on a relay base asks /status when its stream ends; a direct construction does not", async () => {
+    const happyWindow = window as unknown as { happyDOM: { setURL(url: string): void } };
+    const previousUrl = window.location.href;
+    happyWindow.happyDOM.setURL("http://localhost:1420/");
+    const requested: string[] = [];
+    globalThis.fetch = mock(async (input: unknown) => {
+      const path = new URL(String(input)).pathname;
+      requested.push(path);
+      // Every stream opens and ends at once; the forwarded grant is revoked.
+      return path.endsWith("/events") ? streamOnce([]) : new Response("{}", { status: 401 });
+    }) as unknown as typeof fetch;
+    const relayBase = "http://localhost:1420/__orkestrator/nodes/bk_leaf";
+    const target = {
+      location: { protocol: "http:" },
+      orkestrator: undefined,
+      orkestratorGateway: undefined,
+    } as unknown as Pick<Window, "location" | "orkestrator" | "orkestratorGateway">;
+    try {
+      installBrowserGatewayApi(target, { baseUrl: relayBase, eventReconnectDelayMs: 60_000 });
+      const page = target.orkestrator!;
+      const stop = page.listen("changed", () => undefined);
+      await waitForReal(
+        () => requested.includes("/__orkestrator/nodes/bk_leaf/__orkestrator/status"),
+        "The page did not ask /status",
+      );
+      await waitForReal(
+        () => page.eventStreamConnection!.state() === "connecting",
+        "The revoked grant was not taken for a refusal",
+      );
+      stop();
+      installBrowserGatewayApi(target, { browserSessionActivity: false, replaceExisting: true });
+
+      requested.length = 0;
+      const direct = createBrowserGatewayApi({ baseUrl: relayBase, eventReconnectDelayMs: 60_000 });
+      const stopDirect = direct.listen("changed", () => undefined);
+      await waitForReal(
+        () => direct.eventStreamConnection.state() === "disconnected",
+        "The stream never ended",
+      );
+      await new Promise((resolve) => originalSetTimeout(resolve, 10));
+      expect(requested.some((path) => path.endsWith("/status"))).toBe(false);
+      stopDirect();
+    } finally {
+      happyWindow.happyDOM.setURL(previousUrl);
+    }
   });
 });

@@ -1,3 +1,7 @@
+import {
+  sendApprovedProjectHomeMessageCommand,
+  sendCoordinatorAgentMailCommand,
+} from "@orkestrator/protocol/contract/domains/coordinator";
 import { createHash, randomUUID } from "node:crypto";
 import {
   COORDINATOR_REQUEST_ID_REUSED_ERROR,
@@ -397,7 +401,7 @@ export function registerCoordinatorWorkerMailCommands(
   };
 
   register(
-    "send_coordinator_agent_mail",
+    sendCoordinatorAgentMailCommand,
     async (
       {
         projectId,
@@ -535,7 +539,7 @@ export function registerCoordinatorWorkerMailCommands(
    * message exactly as the coordinator wrote it, from the conversation that
    * asked, under its own requestId.
    */
-  register("send_approved_project_home_message", async ({ approvalRequestId }, context) => {
+  register(sendApprovedProjectHomeMessageCommand, async ({ approvalRequestId }, context) => {
     const id = asNonBlankString(approvalRequestId, "approvalRequestId");
     const request = await context.nodeCoordination?.actions.get(id);
     const held = request?.projectHomeMessage;

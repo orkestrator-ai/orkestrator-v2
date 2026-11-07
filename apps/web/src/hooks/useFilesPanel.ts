@@ -2,10 +2,18 @@ import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { useEffect, useCallback, useLayoutEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { toast } from "sonner";
-import { useFilesPanelStore, useConfigStore, usePaneLayoutStore } from "@/stores";
-import { useUIStore, useEnvironmentStore, useProjectStore } from "@/stores";
-import { isFilesPanelFileTab, projectRootFilesTargetId } from "@/stores/filesPanelStore";
+import { useFilesPanelStore, useConfigStore, paneLayoutStore } from "@/stores";
+import { projectStore, useUIStore, useEnvironmentStore, useProjectStore } from "@/stores";
+import {
+  filesPanelStore,
+  isFilesPanelFileTab,
+  projectRootFilesTargetId,
+} from "@/stores/filesPanelStore";
+import { useFilesPanelChromeStore } from "@/stores/filesPanelChromeStore";
+import { useNodeScope } from "@/lib/node-scope/providers";
+import { ensureProjectHomeInStore } from "@/lib/project-home-ensures";
 import * as backend from "@/lib/backend";
+import { backendForScope } from "@/lib/backend/scope-backend";
 import {
   expandedDirectories,
   expandedTruncatedDirectories,
@@ -16,11 +24,10 @@ import { environmentBaselineCommit, resolveComparisonRef } from "@/lib/diff-base
 import { useCoordinatedRead } from "@/hooks/useCoordinatedRead";
 import { useWorktreeSnapshotRevisions } from "@/hooks/useWorktreeSnapshotRevisions";
 import { useWorktreeSnapshotStore } from "@/stores/worktreeSnapshotStore";
-import { useChangeProjectionStore } from "@/stores/changeProjectionStore";
+import { changeProjectionStore } from "@/stores/changeProjectionStore";
 import { useEnvironmentChangeProjection } from "@/hooks/useChangeProjection";
 import { isChangeProjection } from "@orkestrator/protocol/change-resources";
 import type { WorktreeReadStamp } from "@orkestrator/protocol/worktree-snapshots";
-import type { Environment } from "@/types";
 import {
   FILES_PANEL_DATA_SAVING_BACKOFF_MS,
   FILES_PANEL_DATA_SAVING_UNWATCHED_BACKOFF_MS,
@@ -149,71 +156,12 @@ export function findWorkspaceMoveConflicts(
 
 export { projectRootFilesTargetId };
 
-/**
- * Returns the project's home environment, creating it on first use, and makes
- * it visible in the environment store. File mutations on the project root go
- * through it, because every backend file mutation is authorised by an
- * environment record.
- */
-const pendingHomeEnsures = new Map<string, Promise<Environment>>();
-export function ensureProjectHomeInStore(projectId: string): Promise<Environment> {
-  if (isProjectHomeDeletionInProgress(projectId)) {
-    return Promise.reject(new Error("The project home is being deleted"));
-  }
-  const key = `${projectId}\0${useProjectStore.getState().projects.find((project) => project.id === projectId)?.localPath ?? ""}`;
-  const pending = pendingHomeEnsures.get(key);
-  if (pending) return pending;
-  const task = reconcileHomeInStore(projectId).finally(() => {
-    if (pendingHomeEnsures.get(key) === task) pendingHomeEnsures.delete(key);
-  });
-  pendingHomeEnsures.set(key, task);
-  return task;
-}
-export function isProjectHomeDeletionInProgress(projectId: string): boolean {
-  const projects = useProjectStore.getState();
-  const environments = useEnvironmentStore.getState();
-  return (
-    projects.deletingProjects.has(projectId) ||
-    environments.environments.some(
-      (environment) =>
-        environment.projectId === projectId &&
-        environment.projectHome &&
-        environments.isDeleting(environment.id),
-    )
-  );
-}
-
-/** Fence new ensures first, then drain previously admitted work before teardown. */
-export async function drainProjectHomeEnsures(projectId: string): Promise<Environment[]> {
-  const tasks = Array.from(pendingHomeEnsures.entries())
-    .filter(([key]) => key.startsWith(`${projectId}\0`))
-    .map(([, task]) => task);
-  const results = await Promise.allSettled(tasks);
-  return results.flatMap((result) => (result.status === "fulfilled" ? [result.value] : []));
-}
-
-async function reconcileHomeInStore(projectId: string): Promise<Environment> {
-  const configuredPath = useProjectStore
-    .getState()
-    .projects.find((project) => project.id === projectId)?.localPath;
-  const environment = await backend.ensureProjectHomeEnvironment(projectId);
-  if (
-    useProjectStore.getState().projects.find((project) => project.id === projectId)?.localPath !==
-    configuredPath
-  ) {
-    throw new Error("The project checkout changed; try the file action again");
-  }
-  // The backend may have finished creation after teardown was fenced. Return
-  // the record to the draining delete path, but never resurrect it in the UI.
-  if (isProjectHomeDeletionInProgress(projectId)) return environment;
-  const store = useEnvironmentStore.getState();
-  if (store.environments.some((candidate) => candidate.id === environment.id)) {
-    store.updateEnvironment(environment.id, environment);
-  } else {
-    store.addEnvironment(environment);
-  }
-  return environment;
-}
+// The project home ensures are per node (`lib/project-home-ensures.ts`).
+export {
+  drainProjectHomeEnsures,
+  ensureProjectHomeInStore,
+  isProjectHomeDeletionInProgress,
+} from "@/lib/project-home-ensures";
 
 function formatBatchFailure(completed: number, total: number, message: string): string {
   if (completed <= 0) return message;
@@ -254,14 +202,21 @@ function formatBatchFailure(completed: number, total: number, message: string): 
 export function useFilesPanel() {
   const selectedEnvironmentId = useUIStore((state) => state.selectedEnvironmentId);
   const selectedProjectId = useUIStore((state) => state.selectedProjectId);
-  const { isOpen, activeTab } = useFilesPanelStore(
+  // The node the panel's target belongs to: its panel state, directory reads
+  // and project home ensures are that node's.
+  const scope = useNodeScope();
+  const filesPanel = scope.store(filesPanelStore);
+  // The panel is open for the whole window; its tab is this node's.
+  const panelOpen = useFilesPanelChromeStore((state) => state.isOpen);
+  const { showsFiles, activeTab } = useFilesPanelStore(
     useShallow((state) => ({
       // Pull request tabs read GitHub, not this target's files: while one is
       // shown the file views are treated as closed and nothing polls.
-      isOpen: state.isOpen && isFilesPanelFileTab(state.activeTab),
+      showsFiles: isFilesPanelFileTab(state.activeTab),
       activeTab: state.activeTab === "all-files" ? ("all-files" as const) : ("changes" as const),
     })),
   );
+  const isOpen = panelOpen && showsFiles;
   // Actions are stable references on the store.
   const { setChanges, setFileTree, setLoadingChanges, setLoadingTree, setTargetBranch } =
     useFilesPanelStore(
@@ -337,14 +292,15 @@ export function useFilesPanel() {
       if (!selectedEnvironmentId) throw new Error("The selected environment is not available");
       return selectedEnvironmentId;
     }
-    const currentPath = useProjectStore
+    const currentPath = scope
+      .store(projectStore)
       .getState()
       .projects.find((project) => project.id === projectId)
       ?.localPath?.trim();
     if (!currentPath || currentPath !== worktreePath)
       throw new Error("The project checkout changed; try the file action again");
-    return (await ensureProjectHomeInStore(projectId!)).id;
-  }, [isProjectScope, selectedEnvironmentId, projectId, worktreePath]);
+    return (await ensureProjectHomeInStore(projectId!, scope)).id;
+  }, [isProjectScope, selectedEnvironmentId, projectId, worktreePath, scope]);
 
   // Prefer the environment's baseline commit: where its branch leaves the branch
   // it targets, else the commit captured when it was created. Older
@@ -414,14 +370,14 @@ export function useFilesPanel() {
       if (
         previous?.key === key &&
         previous.digest === digest &&
-        useFilesPanelStore.getState().changes === previous.written
+        filesPanel.getState().changes === previous.written
       ) {
         return;
       }
       changesDigestRef.current = { key, digest, written: changes };
       setChanges(changes);
     },
-    [setChanges],
+    [filesPanel, setChanges],
   );
 
   const publishFileTree = useCallback(
@@ -431,14 +387,14 @@ export function useFilesPanel() {
       if (
         previous?.key === key &&
         previous.digest === digest &&
-        useFilesPanelStore.getState().fileTree === previous.written
+        filesPanel.getState().fileTree === previous.written
       ) {
         return;
       }
       treeDigestRef.current = { key, digest, written: tree };
       setFileTree(tree);
     },
-    [setFileTree],
+    [filesPanel, setFileTree],
   );
 
   // Store the target branch so other components can access it
@@ -451,10 +407,17 @@ export function useFilesPanel() {
   useEffect(() => {
     publishChanges(environmentSnapshotKey, []);
     publishFileTree(environmentSnapshotKey, []);
-    useFilesPanelStore.getState().resetFileSubtrees(environmentSnapshotKey);
+    filesPanel.getState().resetFileSubtrees(environmentSnapshotKey);
     setLoadingChanges(false);
     setLoadingTree(false);
-  }, [environmentSnapshotKey, publishChanges, publishFileTree, setLoadingChanges, setLoadingTree]);
+  }, [
+    environmentSnapshotKey,
+    filesPanel,
+    publishChanges,
+    publishFileTree,
+    setLoadingChanges,
+    setLoadingTree,
+  ]);
 
   // Load git changes from environment (silent mode for auto-refresh)
   const loadChanges = useCallback(
@@ -487,14 +450,14 @@ export function useFilesPanel() {
               ? changesDigestRef.current.digest
               : undefined;
           if (isLocalEnvironment && worktreePath) {
-            snapshot = await backend.getLocalGitStatusSnapshot(
+            snapshot = await backendForScope(scope).getLocalGitStatusSnapshot(
               worktreePath,
               comparisonRef,
               knownDigest,
               ...readOptionArgs(options),
             );
           } else if (containerId) {
-            snapshot = await backend.getGitStatusSnapshot(
+            snapshot = await backendForScope(scope).getGitStatusSnapshot(
               containerId,
               comparisonRef,
               knownDigest,
@@ -533,6 +496,7 @@ export function useFilesPanel() {
       return request;
     },
     [
+      scope,
       isAvailable,
       isLocalEnvironment,
       worktreePath,
@@ -574,13 +538,13 @@ export function useFilesPanel() {
               ? treeDigestRef.current.digest
               : undefined;
           if (isLocalEnvironment && worktreePath) {
-            snapshot = await backend.getLocalFileTreeSnapshot(
+            snapshot = await backendForScope(scope).getLocalFileTreeSnapshot(
               worktreePath,
               knownDigest,
               ...readOptionArgs(options),
             );
           } else if (containerId) {
-            snapshot = await backend.getFileTreeSnapshot(
+            snapshot = await backendForScope(scope).getFileTreeSnapshot(
               containerId,
               knownDigest,
               ...readOptionArgs(options),
@@ -617,6 +581,7 @@ export function useFilesPanel() {
       return request;
     },
     [
+      scope,
       isAvailable,
       isLocalEnvironment,
       worktreePath,
@@ -630,15 +595,19 @@ export function useFilesPanel() {
 
   const loadFolder = useCallback(
     (directory: string, reload: boolean): Promise<void> =>
-      loadFileSubtree(environmentSnapshotKey, directory, reload, async (knownDigest) => {
+      loadFileSubtree(scope, environmentSnapshotKey, directory, reload, async (knownDigest) => {
         if (isLocalEnvironment && worktreePath) {
-          return backend.getLocalFileSubtreeSnapshot(worktreePath, directory, knownDigest);
+          return backendForScope(scope).getLocalFileSubtreeSnapshot(
+            worktreePath,
+            directory,
+            knownDigest,
+          );
         }
         return containerId
-          ? backend.getFileSubtreeSnapshot(containerId, directory, knownDigest)
+          ? backendForScope(scope).getFileSubtreeSnapshot(containerId, directory, knownDigest)
           : null;
       }),
-    [isLocalEnvironment, worktreePath, containerId, environmentSnapshotKey],
+    [scope, isLocalEnvironment, worktreePath, containerId, environmentSnapshotKey],
   );
 
   // Subtrees are outside the bounded snapshot's digest. Refresh every visible
@@ -646,7 +615,7 @@ export function useFilesPanel() {
   // Each read carries its own directory's digest, so an unchanged one returns
   // no contents and leaves the merged tree alone.
   const reloadFolders = useCallback(async () => {
-    const state = useFilesPanelStore.getState();
+    const state = filesPanel.getState();
     if (state.fileSubtreeKey !== environmentSnapshotKey) return;
     const visible = new Set(
       expandedDirectories(
@@ -662,7 +631,7 @@ export function useFilesPanel() {
     await Promise.all(
       [...directories].filter((path) => visible.has(path)).map((path) => loadFolder(path, true)),
     );
-  }, [environmentSnapshotKey, loadFolder]);
+  }, [environmentSnapshotKey, filesPanel, loadFolder]);
 
   // While the tree is shown, read every expanded directory the bounded tree
   // left truncated, including ones expanded in an earlier session or revealed
@@ -672,7 +641,7 @@ export function useFilesPanel() {
     if (!showsTree) return;
     let seen: FilesPanelTreeInputs | null = null;
     const sync = () => {
-      const state = useFilesPanelStore.getState();
+      const state = filesPanel.getState();
       const inputs: FilesPanelTreeInputs = {
         fileTree: state.fileTree,
         fileSubtrees: state.fileSubtrees,
@@ -689,8 +658,8 @@ export function useFilesPanel() {
       }
     };
     sync();
-    return useFilesPanelStore.subscribe(sync);
-  }, [showsTree, loadFolder, reloadFolders]);
+    return filesPanel.subscribe(sync);
+  }, [showsTree, filesPanel, loadFolder, reloadFolders]);
 
   // Asks the backend for a fenced refresh of the environment projection; the
   // settled projection (or the later event) updates every view of it.
@@ -699,9 +668,10 @@ export function useFilesPanel() {
       if (!changeResourceKey) return;
       if (showLoading) setLoadingChanges(true);
       try {
-        const result = await backend.refreshChanges(changeResourceKey);
+        const projections = scope.store(changeProjectionStore);
+        const result = await backendForScope(scope).refreshChanges(changeResourceKey);
         if (result.kind === "settled" && isChangeProjection(result.projection)) {
-          useChangeProjectionStore.getState().applyProjection(result.projection);
+          projections.getState().applyProjection(result.projection);
         }
       } catch (err) {
         log.error("changes.refresh-failed", { error: formatLogError(err) });
@@ -711,7 +681,7 @@ export function useFilesPanel() {
         }
       }
     },
-    [changeResourceKey, environmentSnapshotKey, setLoadingChanges],
+    [changeResourceKey, environmentSnapshotKey, scope, setLoadingChanges],
   );
 
   // Load data for the active tab, showing the loading indicator. Joins an
@@ -816,9 +786,9 @@ export function useFilesPanel() {
       try {
         const environmentId = await resolveMutationEnvironmentId();
         if (isLocalEnvironment && worktreePath) {
-          await backend.revertLocalFile(environmentId, filePath, comparisonRef);
+          await backendForScope(scope).revertLocalFile(environmentId, filePath, comparisonRef);
         } else if (containerId) {
-          await backend.revertContainerFile(environmentId, filePath, comparisonRef);
+          await backendForScope(scope).revertContainerFile(environmentId, filePath, comparisonRef);
         }
         await refreshAllFilesData();
         toast.success("File reverted", { description: filePath });
@@ -831,6 +801,7 @@ export function useFilesPanel() {
       }
     },
     [
+      scope,
       isAvailable,
       targetId,
       resolveMutationEnvironmentId,
@@ -871,9 +842,9 @@ export function useFilesPanel() {
         for (const path of paths) {
           try {
             if (isLocalEnvironment && worktreePath) {
-              await backend.deleteLocalFile(environmentId, path);
+              await backendForScope(scope).deleteLocalFile(environmentId, path);
             } else if (containerId) {
-              await backend.deleteContainerFile(environmentId, path);
+              await backendForScope(scope).deleteContainerFile(environmentId, path);
             }
             completedPaths.push(path);
           } catch (error) {
@@ -888,11 +859,11 @@ export function useFilesPanel() {
           if (
             options.target === "folder" &&
             activeSnapshotKeyRef.current === environmentSnapshotKey &&
-            useFilesPanelStore.getState().fileSubtreeKey === environmentSnapshotKey
+            filesPanel.getState().fileSubtreeKey === environmentSnapshotKey
           ) {
             // Forget the deleted branch's expanded subtrees so a stale read of
             // it cannot be merged back into the refreshed tree.
-            const { setFolderExpanded } = useFilesPanelStore.getState();
+            const { setFolderExpanded } = filesPanel.getState();
             for (const path of completedPaths) setFolderExpanded(path, false);
           }
           // A rejected recursive operation may already have changed the tree
@@ -928,6 +899,7 @@ export function useFilesPanel() {
       }
     },
     [
+      scope,
       isAvailable,
       targetId,
       resolveMutationEnvironmentId,
@@ -936,6 +908,7 @@ export function useFilesPanel() {
       containerId,
       refreshAllFilesData,
       environmentSnapshotKey,
+      filesPanel,
     ],
   );
 
@@ -949,7 +922,7 @@ export function useFilesPanel() {
       if (sourcePaths.length === 0) return;
 
       const openTabs = snapshotEnvironmentId
-        ? usePaneLayoutStore.getState().getAllTabs(snapshotEnvironmentId)
+        ? scope.store(paneLayoutStore).getState().getAllTabs(snapshotEnvironmentId)
         : [];
       const openPaths = sourcePaths.filter((path) =>
         openTabs.some((tab) => tab.type === "file" && tab.fileData?.filePath === path),
@@ -996,8 +969,16 @@ export function useFilesPanel() {
           try {
             const destination =
               isLocalEnvironment && worktreePath
-                ? await backend.moveLocalFile(environmentId, path, destinationDirectory)
-                : await backend.moveContainerFile(environmentId, path, destinationDirectory);
+                ? await backendForScope(scope).moveLocalFile(
+                    environmentId,
+                    path,
+                    destinationDirectory,
+                  )
+                : await backendForScope(scope).moveContainerFile(
+                    environmentId,
+                    path,
+                    destinationDirectory,
+                  );
             destinations.push(destination);
             completedPaths.push(path);
           } catch (error) {
@@ -1040,6 +1021,7 @@ export function useFilesPanel() {
     [
       isAvailable,
       targetId,
+      scope,
       snapshotEnvironmentId,
       resolveMutationEnvironmentId,
       isLocalEnvironment,
@@ -1057,7 +1039,7 @@ export function useFilesPanel() {
       setFileActionPending(filePath);
       try {
         const openTabs = snapshotEnvironmentId
-          ? usePaneLayoutStore.getState().getAllTabs(snapshotEnvironmentId)
+          ? scope.store(paneLayoutStore).getState().getAllTabs(snapshotEnvironmentId)
           : [];
         if (openTabs.some((tab) => tab.type === "file" && tab.fileData?.filePath === filePath)) {
           throw new Error("Close the file's editor tab before renaming it");
@@ -1067,8 +1049,8 @@ export function useFilesPanel() {
         try {
           renamed =
             isLocalEnvironment && worktreePath
-              ? await backend.renameLocalFile(environmentId, filePath, newName)
-              : await backend.renameContainerFile(environmentId, filePath, newName);
+              ? await backendForScope(scope).renameLocalFile(environmentId, filePath, newName)
+              : await backendForScope(scope).renameContainerFile(environmentId, filePath, newName);
         } catch (error) {
           // A case-only rename may have staged the file before failing. Refresh
           // both snapshots even on failure so any recovery file is visible.
@@ -1090,6 +1072,7 @@ export function useFilesPanel() {
     [
       isAvailable,
       targetId,
+      scope,
       snapshotEnvironmentId,
       resolveMutationEnvironmentId,
       isLocalEnvironment,
@@ -1110,8 +1093,16 @@ export function useFilesPanel() {
         const environmentId = await resolveMutationEnvironmentId();
         const created =
           isLocalEnvironment && worktreePath
-            ? await backend.createLocalFolder(environmentId, parentDirectory, folderName)
-            : await backend.createContainerFolder(environmentId, parentDirectory, folderName);
+            ? await backendForScope(scope).createLocalFolder(
+                environmentId,
+                parentDirectory,
+                folderName,
+              )
+            : await backendForScope(scope).createContainerFolder(
+                environmentId,
+                parentDirectory,
+                folderName,
+              );
         await refreshAllFilesData();
         toast.success("Folder created", { description: created });
         return created;
@@ -1124,6 +1115,7 @@ export function useFilesPanel() {
       }
     },
     [
+      scope,
       isAvailable,
       targetId,
       resolveMutationEnvironmentId,
@@ -1170,7 +1162,7 @@ export function useFilesPanel() {
         for (const file of files) {
           try {
             const contents = new Uint8Array(await file.arrayBuffer());
-            const destination = await backend.copyExternalFile(
+            const destination = await backendForScope(scope).copyExternalFile(
               environmentId,
               destinationDirectory,
               file.name,
@@ -1211,7 +1203,7 @@ export function useFilesPanel() {
         setFileActionPending(null);
       }
     },
-    [isAvailable, targetId, resolveMutationEnvironmentId, refreshAllFilesData],
+    [scope, isAvailable, targetId, resolveMutationEnvironmentId, refreshAllFilesData],
   );
 
   // Announced revisions: subscribe (and hydrate) only while the panel is open.

@@ -1,12 +1,13 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { graphTemplateExample } from "@orkestrator/protocol/graphs/examples";
 import type { GraphTemplateDetail } from "@orkestrator/protocol/graphs/library";
 import type { GraphTemplateV1 } from "@orkestrator/protocol/graphs/template";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
-import { useEnvironmentStore } from "@/stores/environmentStore";
-import { useGraphDesignerStore } from "@/stores/graphDesignerStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { environmentStore } from "@/stores/environmentStore";
+import { graphDesignerStore } from "@/stores/graphDesignerStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import type { Environment } from "@/types";
 import type { GraphDesignerTabData } from "@/types/paneLayout";
 import { GraphDesignerTab } from "./GraphDesignerTab";
@@ -17,6 +18,7 @@ import {
   userDetail,
 } from "./graph-designer.test-fixtures";
 import { installReactFlowDomStubs } from "./react-flow.test-support";
+import { appCommandStore } from "@/test/app-command-store";
 
 /** The designer's "Run" (item 214): launchable stored templates only, drafts saved first. */
 
@@ -69,11 +71,11 @@ function installBackend() {
 }
 
 function renderTab(data: GraphDesignerTabData) {
-  useGraphDesignerStore.setState({ libraries: new Map(), tabs: new Map() });
-  useEnvironmentStore.setState({
+  appCommandStore(graphDesignerStore).setState({ libraries: new Map(), tabs: new Map() });
+  appCommandStore(environmentStore).setState({
     environments: [{ id: ENVIRONMENT_ID, projectId: "project-1" } as Environment],
   });
-  usePaneLayoutStore.setState({
+  appCommandStore(paneLayoutStore).setState({
     environments: new Map([
       [
         ENVIRONMENT_ID,
@@ -90,7 +92,7 @@ function renderTab(data: GraphDesignerTabData) {
       ],
     ]),
   });
-  return render(
+  return renderInAppCommandScope(
     <div style={{ width: 1600, height: 1000, position: "relative" }}>
       <GraphDesignerTab tabId={TAB_ID} environmentId={ENVIRONMENT_ID} data={data} isActive />
     </div>,
@@ -116,7 +118,7 @@ describe("GraphDesignerTab Run", () => {
     renderTab({ selected: pipeline.summary.ref });
     await screen.findByRole("button", { name: /Duplicate/ });
     await waitFor(() =>
-      expect(useGraphDesignerStore.getState().tabs.get(TAB_ID)?.compile).toBeTruthy(),
+      expect(appCommandStore(graphDesignerStore).getState().tabs.get(TAB_ID)?.compile).toBeTruthy(),
     );
     expect(runButton().disabled).toBe(true);
   });
@@ -145,10 +147,10 @@ describe("GraphDesignerTab Run", () => {
     await screen.findByRole("button", { name: "Edit" });
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     await waitFor(() =>
-      expect(useGraphDesignerStore.getState().tabs.get(TAB_ID)?.editor).toBeTruthy(),
+      expect(appCommandStore(graphDesignerStore).getState().tabs.get(TAB_ID)?.editor).toBeTruthy(),
     );
     act(() => {
-      useGraphDesignerStore
+      appCommandStore(graphDesignerStore)
         .getState()
         .edit(TAB_ID, "Rename", (template) => ({ ...template, name: "Panel review, edited" }));
     });

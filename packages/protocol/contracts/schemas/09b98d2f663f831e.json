@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:09b98d2f663f831e2d4716ee2f2733752318c6600593ec2efa521191753f3746",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "associationId": {
+          "type": "string"
+        },
+        "conversationId": {
+          "type": "string"
+        },
+        "coordinatorId": {
+          "type": "string"
+        },
+        "projectId": {
+          "type": "string"
+        }
+      },
+      "required": ["associationId", "conversationId", "coordinatorId", "projectId"],
+      "type": "object"
+    }
+  }
+}

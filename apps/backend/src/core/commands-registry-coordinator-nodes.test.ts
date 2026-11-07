@@ -3,13 +3,16 @@
  * store: receipts, associations and delegations are kept here with the
  * node's ID, and the work is routed to the node (simulated).
  */
+import { registrarFrom } from "./commands-registry-contracts.js";
 import { afterEach, describe, expect, test } from "bun:test";
+import { incompatibility, unsupportedField } from "@orkestrator/protocol/contract/errors";
 
 import { MailWorld } from "./agent-mail-world-test-support.js";
 import type { CommandContext, CommandHandler } from "./commands-context.js";
 import { registerCoordinatorNodeCommands } from "./commands-registry-coordinator-nodes.js";
 import { registerControllerWorkflowCommands } from "./commands-registry-controller-workflows.js";
 import { registerNodeCommands } from "./commands-registry-nodes.js";
+import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import { CoordinatorRequestFlights } from "./coordinator-request-flights.js";
 import { NodeCoordination } from "./nodes/node-coordination.js";
 import { NodeCoordinatorRemote } from "./nodes/node-coordinator-remote.js";
@@ -49,13 +52,20 @@ async function setup(
     answers?: Record<string, unknown>;
     /** The leaf's hello capabilities; the default is a leaf from before node-mail-steer. */
     capabilities?: Record<string, number>;
+    /** The leaf's hello `domains` (plan item 1010); absent is a pre-contract leaf. */
+    domains?: Record<string, { min: number; max: number }>;
   } = {},
 ) {
   const world = await MailWorld.create({ statusWakes: { coalesceMs: 0 } });
   worlds.push(world);
   await world.storage.updateProject(world.projectId, { gitUrl: "git@github.com:acme/site.git" });
   const main = await world.main();
-  const routed: Array<{ command: string; args: Record<string, unknown>; requestKey?: string }> = [];
+  const routed: Array<{
+    command: string;
+    args: Record<string, unknown>;
+    requestKey?: string;
+    envelope?: unknown;
+  }> = [];
   let unknownOnce: string | null = null;
   const answers: Record<string, unknown> = {
     get_environment: { id: "leaf-env", projectId: "p-leaf", name: "leaf-env", status: "running" },
@@ -84,6 +94,7 @@ async function setup(
                   "node-attachment": 1,
                   "node-coordinator-build-origin": 1,
                 },
+                ...(options.domains ? { domains: options.domains } : {}),
               },
             }
           : null,
@@ -108,12 +119,15 @@ async function setup(
           },
         ],
       }),
-      invokeOnNode: async (input: {
-        command: string;
-        args: Record<string, unknown>;
-        requestKey?: string;
-      }) => {
-        routed.push(input);
+      invokeOnNode: async (
+        input: {
+          command: string;
+          args: Record<string, unknown>;
+          requestKey?: string;
+        },
+        options?: { envelope?: unknown },
+      ) => {
+        routed.push(options?.envelope ? { ...input, envelope: options.envelope } : input);
         if (unknownOnce === input.command) {
           unknownOnce = null;
           return { outcome: "unknown" };
@@ -127,7 +141,7 @@ async function setup(
     },
   } as unknown as CommandContext;
   const commands = new Map<string, CommandHandler>();
-  registerCoordinatorNodeCommands((name, handler) => commands.set(name, handler));
+  registerCoordinatorNodeCommands(registrarFrom((name, handler) => commands.set(name, handler)));
   const scope = {
     projectId: world.projectId,
     coordinatorId: world.coordinatorId,
@@ -571,13 +585,103 @@ describe("send_coordinator_node_mail", () => {
   });
 });
 
+describe("node-mail domain client (plan item 1010)", () => {
+  const send = (context: Awaited<ReturnType<typeof setup>>, requestId: string) =>
+    context.run("send_coordinator_node_mail", {
+      scope: context.scope,
+      nodeId: "bk_leaf",
+      requestId,
+      toEnvironmentId: "leaf-env",
+      body: "Stop: the requirement changed.",
+      deliverNow: true,
+    });
+  const delivery = (context: Awaited<ReturnType<typeof setup>>) =>
+    context.routed.find((entry) => entry.command === "deliver_node_mail")!;
+  const legacyCount = () =>
+    compatibilityPathUsage.peek().paths["domain-adapter.backend.node-mail.v0"]?.count ?? 0;
+
+  test("current to current: a leaf with the domain is sent steer as critical, without capabilities", async () => {
+    const before = legacyCount();
+    const context = await setup({
+      capabilities: { "node-attachment": 1 },
+      domains: { "node-mail": { min: 1, max: 1 } },
+      answers: {
+        deliver_node_mail: {
+          messageId: "m1",
+          toTabId: "startup-agent",
+          placement: "injected",
+          injectedVia: "steer",
+          deliverNow: "steered",
+          deliverNowNote: "Steered into the worker's running turn.",
+        },
+      },
+    });
+    const result = await send(context, "contract-1");
+    expect(delivery(context).args).toMatchObject({ steer: true, turnOrigin: "mail" });
+    expect(delivery(context).envelope).toEqual({
+      domain: "node-mail",
+      version: 1,
+      critical: ["steer", "requestId"],
+    });
+    expect(delivery(context).requestKey).toBe(`mail:${context.scope.coordinatorId}:contract-1`);
+    expect(result).toMatchObject({ deliverNow: "steered", coordinatorDelegationOpened: true });
+    // Version 1 is the current version: nothing is counted.
+    expect(legacyCount()).toBe(before);
+  });
+
+  test("current to pre-contract: today's capability gating, no envelope, counted", async () => {
+    const before = legacyCount();
+    const context = await setup({
+      capabilities: { "node-attachment": 1, "node-mail-steer": 1 },
+      answers: { deliver_node_mail: { messageId: "m1", toTabId: "startup-agent" } },
+    });
+    await send(context, "legacy-1");
+    expect(delivery(context).args).toMatchObject({ steer: true });
+    // No `node-mail-turn-origin`: the key such a leaf would refuse is left out.
+    expect(delivery(context).args).not.toHaveProperty("turnOrigin");
+    expect(delivery(context)).not.toHaveProperty("envelope");
+    expect(legacyCount()).toBeGreaterThan(before);
+  });
+
+  test("a leaf that refuses a critical field answers a typed error the coordinator sees", async () => {
+    const context = await setup({
+      domains: { "node-mail": { min: 1, max: 1 } },
+      answers: {
+        deliver_node_mail: () => {
+          throw unsupportedField({
+            field: "steer",
+            domain: "node-mail",
+            command: "deliver_node_mail",
+          });
+        },
+      },
+    });
+    const error = await send(context, "refused-1").then(
+      () => null,
+      (caught: unknown) => caught,
+    );
+    expect(incompatibility(error, "deliver_node_mail")).toMatchObject({
+      code: "unsupported-field",
+      field: "steer",
+      domain: "node-mail",
+    });
+    // Nothing was delivered, so no delegation is open for it.
+    expect(
+      (await context.associations()).filter((entry) => entry.delegation?.state === "running"),
+    ).toHaveLength(0);
+  });
+});
+
 describe("workflows on a node", () => {
   for (const taskId of ["missing", "other-project"]) {
     test(`a ${taskId} ticket refusal releases the reservation for a corrected retry`, async () => {
       const leafCommands = new Map<string, CommandHandler>();
-      registerControllerWorkflowCommands((name, handler) => leafCommands.set(name, handler), {
-        commands: new Map(),
-      });
+      registerControllerWorkflowCommands(
+        registrarFrom((name, handler) => leafCommands.set(name, handler)),
+        {
+          commands: new Map(),
+        },
+      );
       let starts = 0;
       const leafContext = {
         storage: {
@@ -911,7 +1015,11 @@ describe("workflows on a node", () => {
     const { run, scope, world, associations } = await setup({
       answers: {
         get_multi_review_workflow: { snapshot: review("w1", "preparing"), revision: 1 },
-        controller_multi_review_surface: { outcome: "pending" },
+        // The node answers a MultiReviewActionResult, which always names its workflow.
+        controller_multi_review_surface: {
+          outcome: "pending",
+          workflow: review("w1", "preparing"),
+        },
       },
     });
     await run("coordinator_node_multi_review_surface", {
@@ -954,7 +1062,7 @@ describe("deliverNow through a linked command and leaf handler", () => {
         emit: () => {},
       });
       const commands = new Map<string, CommandHandler>();
-      registerNodeCommands((name, handler) => commands.set(name, handler));
+      registerNodeCommands(registrarFrom((name, handler) => commands.set(name, handler)));
       const leafContext = {
         storage: leaf.storage,
         nodeCoordination,

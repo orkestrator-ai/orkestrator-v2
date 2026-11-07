@@ -4,6 +4,7 @@
  * coordinator's own checkout) and delivers the answers to the conversation's
  * mailbox, where its session's rows and Stop find them. Provider fakes only.
  */
+import { registrarFrom } from "./commands-registry-contracts.js";
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   COORDINATOR_EXECUTION_POLICY,
@@ -62,7 +63,10 @@ async function coordinatorWorld(options: { homeFails?: boolean; agentless?: bool
     if (options.homeFails) throw new Error("This project has no local checkout configured");
     return w.storage.getEnvironment("e1");
   });
-  registerCoordinatorSuborkActions((name, handler) => commands.set(name, handler), { commands });
+  registerCoordinatorSuborkActions(
+    registrarFrom((name, handler) => commands.set(name, handler)),
+    { commands },
+  );
   const context = { storage: w.storage, suborks: w.service } as unknown as CommandContext;
   return {
     w,
@@ -191,7 +195,10 @@ describe("ask_agents from a coordinator conversation", () => {
   test("a scope that does not name a live conversation is refused before anything starts", async () => {
     const { w, homes } = await coordinatorWorld();
     const commands = new Map<string, CommandHandler>();
-    registerCoordinatorSuborkActions((name, handler) => commands.set(name, handler), { commands });
+    registerCoordinatorSuborkActions(
+      registrarFrom((name, handler) => commands.set(name, handler)),
+      { commands },
+    );
     await expect(
       commands.get("ask_coordinator_suborks")!(
         { scope: { ...SCOPE, conversationId: "someone-else" }, input: { targets: [{}] } },

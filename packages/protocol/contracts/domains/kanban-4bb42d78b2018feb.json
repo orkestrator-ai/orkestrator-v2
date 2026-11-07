@@ -1,0 +1,90 @@
+{
+  "schemaVersion": 1,
+  "domain": "kanban",
+  "commands": {
+    "add_kanban_comment": {
+      "untyped": true
+    },
+    "add_kanban_image": {
+      "untyped": true
+    },
+    "add_kanban_task": {
+      "untyped": true
+    },
+    "append_feature_plan_message": {
+      "untyped": true
+    },
+    "append_feature_story_message": {
+      "untyped": true
+    },
+    "cancel_feature_planning": {
+      "untyped": true
+    },
+    "claim_feature_plan_build": {
+      "untyped": true
+    },
+    "connect_linear": {
+      "untyped": true
+    },
+    "create_feature_plan": {
+      "untyped": true
+    },
+    "delete_kanban_comment": {
+      "untyped": true
+    },
+    "delete_kanban_image": {
+      "untyped": true
+    },
+    "delete_kanban_task": {
+      "untyped": true
+    },
+    "disconnect_linear": {
+      "untyped": true
+    },
+    "get_feature_planning_snapshot": {
+      "untyped": true
+    },
+    "get_feature_plans": {
+      "untyped": true
+    },
+    "get_kanban_image_data": {
+      "untyped": true
+    },
+    "get_kanban_tasks": {
+      "untyped": true
+    },
+    "get_linear_connection": {
+      "untyped": true
+    },
+    "get_linear_issue": {
+      "untyped": true
+    },
+    "get_linear_issues": {
+      "untyped": true
+    },
+    "get_project_notes": {
+      "untyped": true
+    },
+    "post_linear_completion_comment": {
+      "untyped": true
+    },
+    "post_linear_issue_comment": {
+      "untyped": true
+    },
+    "retry_feature_planning": {
+      "untyped": true
+    },
+    "save_project_notes": {
+      "untyped": true
+    },
+    "start_feature_planning": {
+      "untyped": true
+    },
+    "update_feature_plan": {
+      "untyped": true
+    },
+    "update_kanban_task": {
+      "untyped": true
+    }
+  }
+}

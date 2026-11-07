@@ -8,7 +8,7 @@ import {
   SIDEBAR_WIDTH_TRANSITION_MS,
   type SidebarPanelMode,
 } from "@/lib/sidebar-width";
-import { useUIStore } from "@/stores/uiStore";
+import { useUIChromeStore } from "@/stores/uiChromeStore";
 
 /** A little past the transition, so its last frame has landed before content is released. */
 const SETTLE_MS = SIDEBAR_WIDTH_TRANSITION_MS + 40;
@@ -28,7 +28,7 @@ export interface SidebarMotionPins {
  * native preview follows its host only on a resize, and its host moved without
  * changing size.
  *
- * The full sidebar's width is kept in `uiStore.sidebarWidth` while it is
+ * The full sidebar's width is kept in `uiChromeStore.sidebarWidth` while it is
  * compact or hidden, so leaving either restores it, across reloads too.
  */
 export function useSidebarPanelMotion(input: {
@@ -67,9 +67,9 @@ export function useSidebarPanelMotion(input: {
     if (previous === mode) return;
     previousMode.current = mode;
 
-    const ui = useUIStore.getState();
+    const chrome = useUIChromeStore.getState();
     const panel = panelRef.current;
-    let remembered = ui.sidebarWidth;
+    let remembered = chrome.sidebarWidth;
     // Reversals can revisit logical full while the visible width is still in
     // flight. Only a settled full panel represents the user's chosen width.
     if (previous === "full" && panel && settleTimer.current === null) {
@@ -83,7 +83,7 @@ export function useSidebarPanelMotion(input: {
         // Not laid out yet.
       }
       remembered = rememberedSidebarWidth(remembered, measured);
-      if (remembered !== ui.sidebarWidth) ui.setSidebarWidth(remembered);
+      if (remembered !== chrome.sidebarWidth) chrome.setSidebarWidth(remembered);
     }
     const target = sidebarPanelWidth(mode, remembered);
 

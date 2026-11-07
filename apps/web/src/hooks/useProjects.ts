@@ -2,13 +2,15 @@
 import { useCallback, useEffect } from "react";
 import { toast } from "sonner";
 import { errorText } from "@/components/settings/machines/machine-ui";
-import {
-  applyProjectSnapshot,
-  getProjectMutationVersion,
-  invalidateProjectSnapshots,
-  useProjectStore,
-} from "@/stores/projectStore";
+import type { StoreApi } from "zustand";
+import { projectStore, useProjectStore, type ProjectState } from "@/stores/projectStore";
 import * as backend from "@/lib/backend";
+import { backendApiForScope } from "@/lib/backend/client";
+import { createDockerSkillsApi } from "@/lib/backend/docker-skills";
+import { createProjectsEnvironmentsApi } from "@/lib/backend/projects-environments";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { useNodeScope } from "@/lib/node-scope/providers";
+import { defineScopedSlot } from "@/lib/node-scope-slots";
 import {
   resolveProjectArrangementIntent,
   type ProjectArrangementIntent,
@@ -20,46 +22,73 @@ interface ProjectLoad {
   promise: Promise<void>;
 }
 
-let latestProjectLoad: ProjectLoad | null = null;
+/** One node's shared project read (plan item 3004): project ids are node-local. */
+interface ProjectLoads {
+  readonly store: StoreApi<ProjectState>;
+  latest: ProjectLoad | null;
+}
 
-export const loadProjectsFromBackend = (): Promise<void> => {
-  const mutationVersion = getProjectMutationVersion();
+const projectLoads = defineScopedSlot<ProjectLoads>("project-loads", (scope) => ({
+  store: scope.store(projectStore),
+  latest: null,
+}));
+
+/** `scope`'s project commands; the command scope keeps the mocked named exports. */
+function projectsApi(scope: NodeScope) {
+  return backendApiForScope<
+    ReturnType<typeof createProjectsEnvironmentsApi>,
+    | "addProject"
+    | "arrangeProjectsByIntent"
+    | "createProjectFromScratch"
+    | "getProjects"
+    | "removeProject"
+    | "reorderProjects"
+    | "updateProject"
+  >(scope, createProjectsEnvironmentsApi, backend);
+}
+
+/** Reads `scope`'s projects into its store; concurrent callers share one read. */
+export const loadProjectsFromBackend = (scope: NodeScope): Promise<void> => {
+  const loads = projectLoads(scope);
+  const store = loads.store;
+  const mutationVersion = store.getState().getMutationVersion();
 
   // All hook instances share the same request for the same data generation.
-  if (latestProjectLoad?.mutationVersion === mutationVersion) {
-    return latestProjectLoad.promise;
+  if (loads.latest?.mutationVersion === mutationVersion) {
+    return loads.latest.promise;
   }
 
-  const { setLoading, setError } = useProjectStore.getState();
+  const { setLoading, setError } = store.getState();
   setLoading(true);
   setError(null);
 
   let promise!: Promise<void>;
   promise = (async () => {
     try {
-      const projects = await backend.getProjects();
-      applyProjectSnapshot(projects, mutationVersion);
+      const projects = await projectsApi(scope).getProjects();
+      store.getState().applySnapshot(projects, mutationVersion);
     } catch (err) {
       // A failure from an obsolete read is no longer relevant to current data.
-      if (getProjectMutationVersion() === mutationVersion) {
-        useProjectStore
-          .getState()
-          .setError(err instanceof Error ? err.message : "Failed to load projects");
+      if (store.getState().getMutationVersion() === mutationVersion) {
+        store.getState().setError(err instanceof Error ? err.message : "Failed to load projects");
       }
     } finally {
       // A superseded request must not clear the newer request's loading state.
-      if (latestProjectLoad?.promise === promise) {
-        latestProjectLoad = null;
-        useProjectStore.getState().setLoading(false);
+      if (loads.latest?.promise === promise) {
+        loads.latest = null;
+        store.getState().setLoading(false);
       }
     }
   })();
 
-  latestProjectLoad = { mutationVersion, promise };
+  loads.latest = { mutationVersion, promise };
   return promise;
 };
 
 export function useProjects() {
+  // The node whose projects this reads: the nearest node scope, which is also
+  // the one `useProjectStore` reads below.
+  const scope = useNodeScope();
   const projects = useProjectStore((state) => state.projects);
   const isLoading = useProjectStore((state) => state.isLoading);
   const error = useProjectStore((state) => state.error);
@@ -72,8 +101,9 @@ export function useProjects() {
   const setLoading = useProjectStore((state) => state.setLoading);
   const setError = useProjectStore((state) => state.setError);
   const getProjectById = useProjectStore((state) => state.getProjectById);
+  const invalidateProjectSnapshots = useProjectStore((state) => state.invalidateSnapshots);
 
-  const loadProjects = loadProjectsFromBackend;
+  const loadProjects = useCallback(() => loadProjectsFromBackend(scope), [scope]);
 
   // Load projects from backend on mount. Concurrent hook mounts share this read.
   useEffect(() => {
@@ -85,11 +115,15 @@ export function useProjects() {
   // first or the shared in-flight read would replay stale data.
   useEffect(
     () =>
-      onResourceChanged("project", () => {
-        invalidateProjectSnapshots();
-        void loadProjects();
-      }),
-    [loadProjects],
+      onResourceChanged(
+        "project",
+        () => {
+          invalidateProjectSnapshots();
+          void loadProjects();
+        },
+        scope,
+      ),
+    [scope, invalidateProjectSnapshots, loadProjects],
   );
 
   // Manifest reconciliation only reloads this collection when its opaque
@@ -102,8 +136,8 @@ export function useProjects() {
         if (request.resources !== null && !request.resources.has("project")) return;
         invalidateProjectSnapshots();
         return loadProjects();
-      }),
-    [loadProjects],
+      }, scope),
+    [scope, invalidateProjectSnapshots, loadProjects],
   );
 
   const addProject = useCallback(
@@ -112,7 +146,7 @@ export function useProjects() {
       setLoading(true);
       setError(null);
       try {
-        const project = await backend.addProject(gitUrl, localPath, cloneOnly);
+        const project = await projectsApi(scope).addProject(gitUrl, localPath, cloneOnly);
         addProjectToStore(project);
         toast.success("Project added", { description: project.name });
         return project;
@@ -125,7 +159,7 @@ export function useProjects() {
         setLoading(false);
       }
     },
-    [addProjectToStore, setLoading, setError],
+    [scope, invalidateProjectSnapshots, addProjectToStore, setLoading, setError],
   );
 
   const createProjectFromScratch = useCallback(
@@ -134,7 +168,7 @@ export function useProjects() {
       setLoading(true);
       setError(null);
       try {
-        const project = await backend.createProjectFromScratch(localPath);
+        const project = await projectsApi(scope).createProjectFromScratch(localPath);
         addProjectToStore(project);
         toast.success("Project created", { description: project.name });
         return project;
@@ -147,7 +181,7 @@ export function useProjects() {
         setLoading(false);
       }
     },
-    [addProjectToStore, setLoading, setError],
+    [scope, invalidateProjectSnapshots, addProjectToStore, setLoading, setError],
   );
 
   const removeProject = useCallback(
@@ -156,7 +190,7 @@ export function useProjects() {
       setLoading(true);
       setError(null);
       try {
-        await backend.removeProject(projectId);
+        await projectsApi(scope).removeProject(projectId);
         removeProjectFromStore(projectId);
         toast.success("Project removed");
       } catch (err) {
@@ -168,16 +202,21 @@ export function useProjects() {
         setLoading(false);
       }
     },
-    [removeProjectFromStore, setLoading, setError],
+    [scope, invalidateProjectSnapshots, removeProjectFromStore, setLoading, setError],
   );
 
-  const validateGitUrl = useCallback(async (url: string) => {
-    try {
-      return await backend.validateGitUrl(url);
-    } catch {
-      return false;
-    }
-  }, []);
+  const validateGitUrl = useCallback(
+    async (url: string) => {
+      try {
+        return await backendApiForScope(scope, createDockerSkillsApi, {
+          validateGitUrl: backend.validateGitUrl,
+        }).validateGitUrl(url);
+      } catch {
+        return false;
+      }
+    },
+    [scope],
+  );
 
   const reorderProjects = useCallback(
     async (projectIds: string[]) => {
@@ -186,7 +225,7 @@ export function useProjects() {
       reorderProjectsInStore(projectIds);
       try {
         // Persist to backend
-        const reorderedProjects = await backend.reorderProjects(projectIds);
+        const reorderedProjects = await projectsApi(scope).reorderProjects(projectIds);
         setProjects(reorderedProjects);
       } catch (err) {
         // Reload from backend on error to restore correct state
@@ -199,7 +238,14 @@ export function useProjects() {
         throw new Error(message);
       }
     },
-    [reorderProjectsInStore, setProjects, setError, loadProjects],
+    [
+      scope,
+      invalidateProjectSnapshots,
+      reorderProjectsInStore,
+      setProjects,
+      setError,
+      loadProjects,
+    ],
   );
 
   /**
@@ -210,12 +256,15 @@ export function useProjects() {
    */
   const arrangeProjectsByIntent = useCallback(
     async (intent: ProjectArrangementIntent) => {
-      const preview = resolveProjectArrangementIntent(intent, useProjectStore.getState().projects);
+      const preview = resolveProjectArrangementIntent(
+        intent,
+        scope.store(projectStore).getState().projects,
+      );
       if (!preview) return;
       invalidateProjectSnapshots();
       arrangeProjectsInStore(preview.projectIds, preview.folders);
       try {
-        setProjects(await backend.arrangeProjectsByIntent(intent, preview));
+        setProjects(await projectsApi(scope).arrangeProjectsByIntent(intent, preview));
       } catch (err) {
         const message = err instanceof Error ? err.message : "Failed to arrange projects";
         // A folder-free arrangement is a plain reorder — the most common drag
@@ -233,7 +282,14 @@ export function useProjects() {
         throw new Error(message);
       }
     },
-    [arrangeProjectsInStore, setProjects, setError, loadProjects],
+    [
+      scope,
+      invalidateProjectSnapshots,
+      arrangeProjectsInStore,
+      setProjects,
+      setError,
+      loadProjects,
+    ],
   );
 
   const updateProject = useCallback(
@@ -246,7 +302,7 @@ export function useProjects() {
     }) => {
       invalidateProjectSnapshots();
       try {
-        const updated = await backend.updateProject(project.id, {
+        const updated = await projectsApi(scope).updateProject(project.id, {
           name: project.name,
           ...(project.gitUrl !== undefined ? { gitUrl: project.gitUrl } : {}),
           localPath: project.localPath,
@@ -261,7 +317,7 @@ export function useProjects() {
         throw new Error(message);
       }
     },
-    [updateProjectInStore, setError],
+    [scope, invalidateProjectSnapshots, updateProjectInStore, setError],
   );
 
   return {

@@ -8,6 +8,7 @@ import {
   useState,
   type ComponentType,
 } from "react";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { useStore } from "zustand";
 import {
   Bell,
@@ -281,6 +282,8 @@ export const MailTile = memo(function MailTile({
   expansionKey,
   timestampLabel,
 }: MailTileProps) {
+  // This node's messages panel (plan item 4001); the command node outside a node scope.
+  const mailScope = useScopesWithCommandFallback().scope;
   const [preferredOpen, setOpen] = useMessagePartExpansion(expansionKey);
   const findActive = useContext(ChatFindActiveContext);
   const open = preferredOpen || findActive;
@@ -376,7 +379,7 @@ export const MailTile = memo(function MailTile({
               type="button"
               aria-label="Open conversation"
               title="Open conversation"
-              onClick={() => openAgentMailConversation(participants[0], participants[1])}
+              onClick={() => openAgentMailConversation(participants[0], participants[1], mailScope)}
               className="mt-1 mr-1.5 shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-foreground/[0.05] hover:text-foreground focus-hairline"
             >
               <MessagesSquare className="size-3.5" aria-hidden="true" />

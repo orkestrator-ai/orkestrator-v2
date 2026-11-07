@@ -1,5 +1,6 @@
-import { create } from "zustand";
 import { createLogger } from "@orkestrator/protocol/logger";
+import { defineScopedStore } from "@/lib/node-scope/scoped-store";
+import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
 
 const log = createLogger("terminal");
 
@@ -60,8 +61,11 @@ export interface TerminalComposeDraftImage {
  * the React component unmounts. By storing the sessionId and serialized buffer,
  * we can reattach to the same session and restore the terminal content when
  * the component remounts in a new pane.
+ *
+ * One instance per node scope (plan item 3010): a session key names a PTY on
+ * that node, so two nodes' `local-env-1:default` never meet.
  */
-interface TerminalSessionStore {
+export interface TerminalSessionStore {
   /** Map of tab ID to terminal session data */
   sessions: Map<string, TerminalSessionData>;
 
@@ -117,142 +121,151 @@ interface TerminalSessionStore {
   clearAllSessions: () => void;
 }
 
-export const useTerminalSessionStore = create<TerminalSessionStore>((set, get) => ({
-  sessions: new Map(),
-  composeDraftText: new Map(),
-  composeDraftImages: new Map(),
+export const terminalSessionStore = defineScopedStore<TerminalSessionStore>(
+  "terminal-session",
+  () => (set, get) => ({
+    sessions: new Map(),
+    composeDraftText: new Map(),
+    composeDraftImages: new Map(),
 
-  getSession: (tabId: string) => {
-    return get().sessions.get(tabId);
-  },
+    getSession: (tabId: string) => {
+      return get().sessions.get(tabId);
+    },
 
-  getSessionId: (tabId: string) => {
-    return get().sessions.get(tabId)?.sessionId;
-  },
+    getSessionId: (tabId: string) => {
+      return get().sessions.get(tabId)?.sessionId;
+    },
 
-  getPersistentSessionId: (tabId: string) => {
-    return get().sessions.get(tabId)?.persistentSessionId;
-  },
+    getPersistentSessionId: (tabId: string) => {
+      return get().sessions.get(tabId)?.persistentSessionId;
+    },
 
-  setSession: (tabId: string, data: TerminalSessionData) => {
-    set((state) => {
-      const newSessions = new Map(state.sessions);
-      newSessions.set(tabId, data);
-      return { sessions: newSessions };
-    });
-  },
+    setSession: (tabId: string, data: TerminalSessionData) => {
+      set((state) => {
+        const newSessions = new Map(state.sessions);
+        newSessions.set(tabId, data);
+        return { sessions: newSessions };
+      });
+    },
 
-  setSerializedBuffer: (tabId: string, buffer: string) => {
-    set((state) => {
-      const existing = state.sessions.get(tabId);
-      if (!existing) return state;
+    setSerializedBuffer: (tabId: string, buffer: string) => {
+      set((state) => {
+        const existing = state.sessions.get(tabId);
+        if (!existing) return state;
 
-      const newSessions = new Map(state.sessions);
-      newSessions.set(tabId, { ...existing, serializedBuffer: buffer });
-      return { sessions: newSessions };
-    });
-  },
+        const newSessions = new Map(state.sessions);
+        newSessions.set(tabId, { ...existing, serializedBuffer: buffer });
+        return { sessions: newSessions };
+      });
+    },
 
-  setPersistentSessionId: (tabId: string, persistentSessionId: string) => {
-    set((state) => {
-      const existing = state.sessions.get(tabId);
-      if (!existing) return state;
+    setPersistentSessionId: (tabId: string, persistentSessionId: string) => {
+      set((state) => {
+        const existing = state.sessions.get(tabId);
+        if (!existing) return state;
 
-      const newSessions = new Map(state.sessions);
-      newSessions.set(tabId, { ...existing, persistentSessionId });
-      return { sessions: newSessions };
-    });
-  },
+        const newSessions = new Map(state.sessions);
+        newSessions.set(tabId, { ...existing, persistentSessionId });
+        return { sessions: newSessions };
+      });
+    },
 
-  getComposeDraftText: (tabId: string) => {
-    return get().composeDraftText.get(tabId) || "";
-  },
+    getComposeDraftText: (tabId: string) => {
+      return get().composeDraftText.get(tabId) || "";
+    },
 
-  setComposeDraftText: (tabId: string, text: string) => {
-    set((state) => {
-      const newDraftText = new Map(state.composeDraftText);
-      if (text.length > 0) {
-        newDraftText.set(tabId, text);
-      } else {
+    setComposeDraftText: (tabId: string, text: string) => {
+      set((state) => {
+        const newDraftText = new Map(state.composeDraftText);
+        if (text.length > 0) {
+          newDraftText.set(tabId, text);
+        } else {
+          newDraftText.delete(tabId);
+        }
+        return { composeDraftText: newDraftText };
+      });
+    },
+
+    getComposeDraftImages: (tabId: string) => {
+      return get().composeDraftImages.get(tabId) || [];
+    },
+
+    setComposeDraftImages: (tabId: string, images: TerminalComposeDraftImage[]) => {
+      set((state) => {
+        const newDraftImages = new Map(state.composeDraftImages);
+        if (images.length > 0) {
+          newDraftImages.set(tabId, images);
+        } else {
+          newDraftImages.delete(tabId);
+        }
+        return { composeDraftImages: newDraftImages };
+      });
+    },
+
+    appendComposeDraftImage: (tabId: string, image: TerminalComposeDraftImage) => {
+      set((state) => {
+        const currentImages = state.composeDraftImages.get(tabId) || [];
+        const newDraftImages = new Map(state.composeDraftImages);
+        newDraftImages.set(tabId, [...currentImages, image]);
+        return { composeDraftImages: newDraftImages };
+      });
+    },
+
+    removeComposeDraftImage: (tabId: string, imageId: string) => {
+      set((state) => {
+        const currentImages = state.composeDraftImages.get(tabId) || [];
+        const filteredImages = currentImages.filter((image) => image.id !== imageId);
+        const newDraftImages = new Map(state.composeDraftImages);
+        if (filteredImages.length > 0) {
+          newDraftImages.set(tabId, filteredImages);
+        } else {
+          newDraftImages.delete(tabId);
+        }
+        return { composeDraftImages: newDraftImages };
+      });
+    },
+
+    clearComposeDraft: (tabId: string) => {
+      set((state) => {
+        const newDraftText = new Map(state.composeDraftText);
+        const newDraftImages = new Map(state.composeDraftImages);
         newDraftText.delete(tabId);
-      }
-      return { composeDraftText: newDraftText };
-    });
-  },
-
-  getComposeDraftImages: (tabId: string) => {
-    return get().composeDraftImages.get(tabId) || [];
-  },
-
-  setComposeDraftImages: (tabId: string, images: TerminalComposeDraftImage[]) => {
-    set((state) => {
-      const newDraftImages = new Map(state.composeDraftImages);
-      if (images.length > 0) {
-        newDraftImages.set(tabId, images);
-      } else {
         newDraftImages.delete(tabId);
-      }
-      return { composeDraftImages: newDraftImages };
-    });
-  },
+        return {
+          composeDraftText: newDraftText,
+          composeDraftImages: newDraftImages,
+        };
+      });
+    },
 
-  appendComposeDraftImage: (tabId: string, image: TerminalComposeDraftImage) => {
-    set((state) => {
-      const currentImages = state.composeDraftImages.get(tabId) || [];
-      const newDraftImages = new Map(state.composeDraftImages);
-      newDraftImages.set(tabId, [...currentImages, image]);
-      return { composeDraftImages: newDraftImages };
-    });
-  },
-
-  removeComposeDraftImage: (tabId: string, imageId: string) => {
-    set((state) => {
-      const currentImages = state.composeDraftImages.get(tabId) || [];
-      const filteredImages = currentImages.filter((image) => image.id !== imageId);
-      const newDraftImages = new Map(state.composeDraftImages);
-      if (filteredImages.length > 0) {
-        newDraftImages.set(tabId, filteredImages);
-      } else {
+    removeSession: (tabId: string) => {
+      set((state) => {
+        const newSessions = new Map(state.sessions);
+        const newDraftText = new Map(state.composeDraftText);
+        const newDraftImages = new Map(state.composeDraftImages);
+        newSessions.delete(tabId);
+        newDraftText.delete(tabId);
         newDraftImages.delete(tabId);
-      }
-      return { composeDraftImages: newDraftImages };
-    });
-  },
+        return {
+          sessions: newSessions,
+          composeDraftText: newDraftText,
+          composeDraftImages: newDraftImages,
+        };
+      });
+    },
 
-  clearComposeDraft: (tabId: string) => {
-    set((state) => {
-      const newDraftText = new Map(state.composeDraftText);
-      const newDraftImages = new Map(state.composeDraftImages);
-      newDraftText.delete(tabId);
-      newDraftImages.delete(tabId);
-      return {
-        composeDraftText: newDraftText,
-        composeDraftImages: newDraftImages,
-      };
-    });
-  },
+    clearAllSessions: () => {
+      set({
+        sessions: new Map(),
+        composeDraftText: new Map(),
+        composeDraftImages: new Map(),
+      });
+    },
+  }),
+);
 
-  removeSession: (tabId: string) => {
-    set((state) => {
-      const newSessions = new Map(state.sessions);
-      const newDraftText = new Map(state.composeDraftText);
-      const newDraftImages = new Map(state.composeDraftImages);
-      newSessions.delete(tabId);
-      newDraftText.delete(tabId);
-      newDraftImages.delete(tabId);
-      return {
-        sessions: newSessions,
-        composeDraftText: newDraftText,
-        composeDraftImages: newDraftImages,
-      };
-    });
-  },
-
-  clearAllSessions: () => {
-    set({
-      sessions: new Map(),
-      composeDraftText: new Map(),
-      composeDraftImages: new Map(),
-    });
-  },
-}));
+/**
+ * Reads the nearest node scope's terminal sessions; other code uses
+ * `scope.store(terminalSessionStore)`.
+ */
+export const useTerminalSessionStore = scopedStoreHook(terminalSessionStore);

@@ -17,6 +17,7 @@ mock.module("@/hooks/useClipboardImagePaste", () => ({
   processLocalClipboardPaste: mockProcessLocalClipboardPaste,
 }));
 
+import * as backend from "@/lib/backend";
 import {
   escapePathForTerminalInput,
   handleTerminalPaste,
@@ -40,6 +41,7 @@ describe("handleTerminalPaste", () => {
 
   test("uses processClipboardPaste for container environments", async () => {
     await handleTerminalPaste({
+      writer: backend,
       containerId: "container-123",
       writeToTerminal: mockWriteToTerminal,
       focusTerminal: mockFocusTerminal,
@@ -47,13 +49,14 @@ describe("handleTerminalPaste", () => {
     });
 
     expect(mockProcessClipboardPaste).toHaveBeenCalledTimes(1);
-    expect(mockProcessClipboardPaste.mock.calls[0]![0]).toBe("container-123");
+    expect(mockProcessClipboardPaste.mock.calls[0]![1]).toBe("container-123");
     expect(mockProcessLocalClipboardPaste).not.toHaveBeenCalled();
     expect(mockReadText).not.toHaveBeenCalled();
   });
 
   test("uses processLocalClipboardPaste for local environments with worktreePath", async () => {
     await handleTerminalPaste({
+      writer: backend,
       containerId: null,
       worktreePath: "/tmp/worktrees/my-env",
       writeToTerminal: mockWriteToTerminal,
@@ -62,13 +65,14 @@ describe("handleTerminalPaste", () => {
     });
 
     expect(mockProcessLocalClipboardPaste).toHaveBeenCalledTimes(1);
-    expect(mockProcessLocalClipboardPaste.mock.calls[0]![0]).toBe("/tmp/worktrees/my-env");
+    expect(mockProcessLocalClipboardPaste.mock.calls[0]![1]).toBe("/tmp/worktrees/my-env");
     expect(mockProcessClipboardPaste).not.toHaveBeenCalled();
     expect(mockReadText).not.toHaveBeenCalled();
   });
 
   test("falls back to text-only paste when neither containerId nor worktreePath", async () => {
     await handleTerminalPaste({
+      writer: backend,
       containerId: null,
       writeToTerminal: mockWriteToTerminal,
       focusTerminal: mockFocusTerminal,
@@ -86,6 +90,7 @@ describe("handleTerminalPaste", () => {
     mockReadText.mockImplementation(() => Promise.resolve(""));
 
     await handleTerminalPaste({
+      writer: backend,
       containerId: null,
       writeToTerminal: mockWriteToTerminal,
       focusTerminal: mockFocusTerminal,
@@ -103,6 +108,7 @@ describe("handleTerminalPaste", () => {
 
     try {
       await handleTerminalPaste({
+        writer: backend,
         containerId: null,
         writeToTerminal: mockWriteToTerminal,
         focusTerminal: mockFocusTerminal,
@@ -129,6 +135,7 @@ describe("handleTerminalPaste", () => {
 
   test("prefers containerId over worktreePath when both provided", async () => {
     await handleTerminalPaste({
+      writer: backend,
       containerId: "container-123",
       worktreePath: "/tmp/worktrees/my-env",
       writeToTerminal: mockWriteToTerminal,
@@ -143,13 +150,14 @@ describe("handleTerminalPaste", () => {
   test("container paste callbacks write path with trailing space for images", async () => {
     // Capture the callbacks passed to processClipboardPaste
     mockProcessClipboardPaste.mockImplementation(
-      async (_containerId, onImageSaved, _onTextPaste, _onError) => {
+      async (_writer, _containerId, onImageSaved, _onTextPaste, _onError) => {
         onImageSaved?.("/workspace/.orkestrator/clipboard/image.png");
         return true;
       },
     );
 
     await handleTerminalPaste({
+      writer: backend,
       containerId: "container-123",
       writeToTerminal: mockWriteToTerminal,
       focusTerminal: mockFocusTerminal,
@@ -164,13 +172,14 @@ describe("handleTerminalPaste", () => {
 
   test("local paste callbacks write path with trailing space for images", async () => {
     mockProcessLocalClipboardPaste.mockImplementation(
-      async (_worktreePath, onImageSaved, _onTextPaste, _onError) => {
+      async (_writer, _worktreePath, onImageSaved, _onTextPaste, _onError) => {
         await onImageSaved?.("/tmp/worktrees/My Project/.orkestrator/clipboard/image (1).png");
         return true;
       },
     );
 
     await handleTerminalPaste({
+      writer: backend,
       containerId: null,
       worktreePath: "/tmp/worktrees/my-env",
       writeToTerminal: mockWriteToTerminal,
@@ -186,13 +195,14 @@ describe("handleTerminalPaste", () => {
 
   test("local paste callbacks write text directly without trailing space", async () => {
     mockProcessLocalClipboardPaste.mockImplementation(
-      async (_worktreePath, _onImageSaved, onTextPaste, _onError) => {
+      async (_writer, _worktreePath, _onImageSaved, onTextPaste, _onError) => {
         onTextPaste?.("hello world");
         return true;
       },
     );
 
     await handleTerminalPaste({
+      writer: backend,
       containerId: null,
       worktreePath: "/tmp/worktrees/my-env",
       writeToTerminal: mockWriteToTerminal,
@@ -216,13 +226,14 @@ describe("handleTerminalPaste", () => {
     );
 
     mockProcessLocalClipboardPaste.mockImplementation(
-      async (_worktreePath, onImageSaved, _onTextPaste, _onError) => {
+      async (_writer, _worktreePath, onImageSaved, _onTextPaste, _onError) => {
         await onImageSaved?.("/tmp/worktrees/my-env/.orkestrator/clipboard/image.png");
         return true;
       },
     );
 
     const pastePromise = handleTerminalPaste({
+      writer: backend,
       containerId: null,
       worktreePath: "/tmp/worktrees/my-env",
       writeToTerminal: mockWriteToTerminal,

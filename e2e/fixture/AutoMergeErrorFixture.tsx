@@ -3,6 +3,7 @@ import { ActionBar } from "../../apps/web/src/components/layout/ActionBar";
 import { TerminalProvider } from "../../apps/web/src/contexts/TerminalContext";
 import { useEnvironmentStore, useProjectStore, useUIStore } from "../../apps/web/src/stores";
 import type { Environment } from "../../apps/web/src/types";
+import { appCommandStore } from "../../apps/web/src/test/app-command-store";
 
 const PROJECT_ID = "auto-merge-project";
 const ENVIRONMENT_ID = "auto-merge-environment";
@@ -20,8 +21,11 @@ function installFixture(message: string) {
     listen: () => () => {},
     invoke: <T,>() => new Promise<T>(() => {}),
   } as unknown as Window["orkestrator"];
-  useUIStore.setState({ selectedProjectId: PROJECT_ID, selectedEnvironmentId: ENVIRONMENT_ID });
-  useProjectStore.setState({
+  appCommandStore(useUIStore.def).setState({
+    selectedProjectId: PROJECT_ID,
+    selectedEnvironmentId: ENVIRONMENT_ID,
+  });
+  appCommandStore(useProjectStore.def).setState({
     projects: [
       {
         id: PROJECT_ID,
@@ -33,7 +37,7 @@ function installFixture(message: string) {
       },
     ],
   });
-  useEnvironmentStore.setState({
+  appCommandStore(useEnvironmentStore.def).setState({
     environments: [
       {
         id: ENVIRONMENT_ID,

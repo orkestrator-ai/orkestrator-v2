@@ -1,3 +1,4 @@
+import { terminalOutputEvents } from "@orkestrator/protocol/contract/domains/events";
 import * as shared from "./tmux-shared.js";
 import { TranscriptTaskTracker, bytesPayload, randomUUID } from "./tmux-shared.js";
 import { AsyncMutex, TmuxSession, TmuxSessionManager } from "./tmux-session-manager.js";
@@ -310,7 +311,7 @@ export class InteractiveTmuxTerminalManager {
     terminal.lastSnapshot = snapshot;
     terminal.forceNextSnapshot = false;
     if (update.text) {
-      context.emit(`terminal-output-${terminal.id}`, bytesPayload(update.text, update.full));
+      context.emit(terminalOutputEvents.at(terminal.id), bytesPayload(update.text, update.full));
     }
   }
 }

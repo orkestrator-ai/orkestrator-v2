@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:14fbdd273c6503750016ef1d51593986d13b3b29b5adbed9df5f9fe039983442",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "body": {
+          "maxLength": 16000,
+          "type": "string"
+        },
+        "capture": {},
+        "draftId": {
+          "maxLength": 200,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "type": "string"
+        },
+        "environmentId": {
+          "maxLength": 200,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "type": "string"
+        },
+        "operationId": {
+          "maxLength": 200,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "type": "string"
+        },
+        "provenance": {
+          "not": {}
+        },
+        "title": {
+          "maxLength": 400,
+          "type": "string"
+        }
+      },
+      "required": ["body", "capture", "environmentId", "operationId"],
+      "type": "object"
+    }
+  }
+}

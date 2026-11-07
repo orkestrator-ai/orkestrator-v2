@@ -411,6 +411,55 @@ real subprocesses without a time budget and small fake pids. Existing offenders
 sit in a baseline that only shrinks; see
 [linting.md](linting.md#source-guards).
 
+### Rendering inside a node scope
+
+Components that read per-node state (`useScopedStore`, `useNodeScope`, from
+`apps/web/src/lib/node-scope/`) need a `WindowScopeProvider` and a
+`NodeScopeProvider` above them; outside one they throw in tests on purpose.
+Render them with `renderInNodeScope` (`apps/web/src/test/render-in-node-scope.tsx`):
+
+```tsx
+import { cleanupNodeScopes, FakeNodeClient, renderInNodeScope } from "@/test/render-in-node-scope";
+
+afterEach(cleanupNodeScopes);
+
+const client = new FakeNodeClient({ invoke: { list_environments: [] } });
+const { scope } = renderInNodeScope(<EnvironmentList />, { client, role: "leaf" });
+client.emit("resource-changed", { kind: "environment" });
+expect(client.calls("list_environments")).toHaveLength(2);
+```
+
+- Each call creates its own `WindowScope` and node scope, never the app's, so
+  tests share no scope state. Options: `nodeId`, `role` (`command` by
+  default), `client`, and `windowScope` to render a second node beside the
+  first.
+- `FakeNodeClient` answers `invokeRaw` from its invoke map (a value or a
+  function of the arguments; an unmapped command rejects), records
+  `invocations`, delivers `emit(event, payload)` and `emitTerminalOutput`
+  synchronously, and exposes `connection` and `domains` as settable signals
+  plus `listenerCount()`.
+- Call `cleanupNodeScopes()` in `afterEach`. It unmounts what the helper
+  rendered and disposes each window scope, which stops every scoped service and
+  releases byte-budget reservations (invariant 15). Unmounting alone never
+  disposes a scope (invariant 2). A test that opens scopes without the helper
+  disposes its own `WindowScope`; one that touches the app's window scope
+  calls `resetWindowScopeForTests()`.
+- Plain modules take the scope explicitly, so their tests need no React:
+  open a scope with `new WindowScope().open({ role, client })` and pass it.
+- A per-node store (`scopedStoreHook`) read under `renderInNodeScope` reads
+  the rendered scope. Seed it with `scope.store(def).setState(...)`. Its hook
+  has no statics, and a component that reads it throws outside a provider in
+  tests (plan item 3018). The per-store recipe, including the tests, is
+  [node-scopes.md](node-scopes.md#tests).
+- A component suite that mocks `@/lib/backend` renders with
+  `renderInAppCommandScope(ui, options)` (or `renderHookInAppCommandScope`,
+  or wraps a `renderToStaticMarkup` element in `InAppCommandScope`) from the
+  same module, and seeds or reads stores with `appCommandStore(def)` from
+  `@/test/app-command-store`: the providers are the app's own window and
+  command scope, so the component reads a provider as it does in the app
+  while the suite's seeds and mocks still apply. It disposes nothing; the
+  suite resets the app's scope with `resetWindowScopeForTests()` as before.
+
 ### Agent CLIs on `PATH`
 
 Default and slow-tier tests must not reach the network or a provider login. A
@@ -655,6 +704,17 @@ real `orkestrator` npm package on a private temporary data directory:
 ```bash
 mise run test:logged -- --name design-mixed-versions -- bun scripts/qualify-design-mixed-versions.ts \
   --old-version 2.22.3 --report output/agent-testing/design-mixed-versions/report.json
+```
+
+Command nodes and leaves across a published release and this checkout, in both
+topologies, for every domain scenario module
+([version-compatibility.md](../architecture/version-compatibility.md#the-manifest-the-ratchet-and-ci),
+"Mixed-version qualification"; scheduled weekly in CI). `--old-version current`
+checks a new module against this checkout on both sides first:
+
+```bash
+mise run test:logged -- --name mixed-versions -- mise run qualify:mixed-versions -- \
+  --old-version latest-stable --report output/agent-testing/mixed-versions/report.json
 ```
 
 `e2e/DesignCanvas.spec.ts` takes `ORKESTRATOR_E2E_DESIGN_CPU_THROTTLE=<rate>`

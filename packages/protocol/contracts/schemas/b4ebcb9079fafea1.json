@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:b4ebcb9079fafea1522cbda93bf01ff24355695b226c88fadb2e0194f4f421a5",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "accountId": {},
+        "accountLabel": {},
+        "nodeId": {},
+        "nodeName": {},
+        "platform": {},
+        "previousAccountId": {},
+        "previousAccountLabel": {},
+        "reason": {},
+        "requestId": {},
+        "requestedBy": {},
+        "selfTimer": {}
+      },
+      "type": "object"
+    }
+  }
+}

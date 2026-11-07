@@ -1,12 +1,14 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, waitFor } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import {
   DIFF_STATS_CHANGED_EVENT,
   type EnvironmentDiffStatsChange,
   type EnvironmentDiffStatsRemoval,
 } from "@orkestrator/protocol/diff-stats";
 import * as realBackend from "@/lib/backend";
-import { useEnvironmentDiffStore } from "../../../apps/web/src/stores/environmentDiffStore";
+import { environmentDiffStore } from "../../../apps/web/src/stores/environmentDiffStore";
+import { appCommandStore } from "../../../apps/web/src/test/app-command-store";
 
 const realBackendSnapshot = { ...realBackend };
 
@@ -105,7 +107,7 @@ describe("useEnvironmentDiffStats", () => {
     mockListen.mockImplementation(defaultListen);
     mockGetEnvironmentDiffStats.mockClear();
     mockGetEnvironmentDiffStats.mockImplementation(() => Promise.resolve({ entries: [] }));
-    useEnvironmentDiffStore.setState({ stats: new Map() });
+    appCommandStore(environmentDiffStore).setState({ stats: new Map() });
   });
 
   afterEach(() => {
@@ -126,12 +128,12 @@ describe("useEnvironmentDiffStats", () => {
       }),
     );
 
-    renderHook(() => useEnvironmentDiffStats());
+    renderHookInAppCommandScope(() => useEnvironmentDiffStats());
 
     await waitFor(() => {
-      expect(useEnvironmentDiffStore.getState().stats.size).toBe(2);
+      expect(appCommandStore(environmentDiffStore).getState().stats.size).toBe(2);
     });
-    expect(useEnvironmentDiffStore.getState().stats.get("env-2")).toEqual({
+    expect(appCommandStore(environmentDiffStore).getState().stats.get("env-2")).toEqual({
       additions: 9,
       deletions: 0,
       filesChanged: 1,
@@ -140,7 +142,7 @@ describe("useEnvironmentDiffStats", () => {
   });
 
   test("applies incremental changes announced by the backend", async () => {
-    renderHook(() => useEnvironmentDiffStats());
+    renderHookInAppCommandScope(() => useEnvironmentDiffStats());
     await flush();
 
     act(() => {
@@ -151,7 +153,7 @@ describe("useEnvironmentDiffStats", () => {
     });
 
     await waitFor(() => {
-      expect(useEnvironmentDiffStore.getState().stats.get("env-1")).toEqual({
+      expect(appCommandStore(environmentDiffStore).getState().stats.get("env-1")).toEqual({
         additions: 12,
         deletions: 4,
         filesChanged: 3,
@@ -161,7 +163,7 @@ describe("useEnvironmentDiffStats", () => {
   });
 
   test("carries the truncated flag through to the store", async () => {
-    renderHook(() => useEnvironmentDiffStats());
+    renderHookInAppCommandScope(() => useEnvironmentDiffStats());
     await flush();
 
     act(() => {
@@ -169,7 +171,9 @@ describe("useEnvironmentDiffStats", () => {
     });
 
     await waitFor(() => {
-      expect(useEnvironmentDiffStore.getState().stats.get("env-1")?.truncated).toBe(true);
+      expect(appCommandStore(environmentDiffStore).getState().stats.get("env-1")?.truncated).toBe(
+        true,
+      );
     });
   });
 
@@ -179,14 +183,16 @@ describe("useEnvironmentDiffStats", () => {
         entries: [change("env-1")],
       }),
     );
-    renderHook(() => useEnvironmentDiffStats());
-    await waitFor(() => expect(useEnvironmentDiffStore.getState().stats.has("env-1")).toBe(true));
+    renderHookInAppCommandScope(() => useEnvironmentDiffStats());
+    await waitFor(() =>
+      expect(appCommandStore(environmentDiffStore).getState().stats.has("env-1")).toBe(true),
+    );
 
     act(() => {
       emitEvent(DIFF_STATS_CHANGED_EVENT, removal("env-1"));
     });
 
-    expect(useEnvironmentDiffStore.getState().stats.has("env-1")).toBe(false);
+    expect(appCommandStore(environmentDiffStore).getState().stats.has("env-1")).toBe(false);
   });
 
   // The payload crosses a process boundary and is the only thing driving the
@@ -213,7 +219,7 @@ describe("useEnvironmentDiffStats", () => {
     ["not an object", "nonsense"],
     ["null", null],
   ])("ignores a malformed change event (%s)", async (_label, payload) => {
-    renderHook(() => useEnvironmentDiffStats());
+    renderHookInAppCommandScope(() => useEnvironmentDiffStats());
     await flush();
 
     act(() => {
@@ -221,13 +227,13 @@ describe("useEnvironmentDiffStats", () => {
     });
     await flush();
 
-    expect(useEnvironmentDiffStore.getState().stats.size).toBe(0);
+    expect(appCommandStore(environmentDiffStore).getState().stats.size).toBe(0);
   });
 
   // The stream has no replay buffer, so anything that happened while this client
   // was disconnected exists only in the snapshot.
   test("re-reads the snapshot when the event stream reconnects", async () => {
-    renderHook(() => useEnvironmentDiffStats());
+    renderHookInAppCommandScope(() => useEnvironmentDiffStats());
     await waitFor(() => expect(mockGetEnvironmentDiffStats).toHaveBeenCalledTimes(1));
 
     mockGetEnvironmentDiffStats.mockImplementation(() =>
@@ -241,7 +247,7 @@ describe("useEnvironmentDiffStats", () => {
     });
 
     await waitFor(() => {
-      expect(useEnvironmentDiffStore.getState().stats.get("env-late")).toEqual({
+      expect(appCommandStore(environmentDiffStore).getState().stats.get("env-late")).toEqual({
         additions: 5,
         deletions: 5,
         filesChanged: 2,
@@ -253,26 +259,26 @@ describe("useEnvironmentDiffStats", () => {
   test("replays a newer event over a snapshot that resolves later", async () => {
     const snapshot = deferred<{ entries: EnvironmentDiffStatsChange[] }>();
     mockGetEnvironmentDiffStats.mockImplementation(() => snapshot.promise);
-    renderHook(() => useEnvironmentDiffStats());
+    renderHookInAppCommandScope(() => useEnvironmentDiffStats());
     await waitFor(() => expect(mockGetEnvironmentDiffStats).toHaveBeenCalledTimes(1));
 
     act(() => {
       emitEvent(DIFF_STATS_CHANGED_EVENT, change("env-1", { additions: 12 }));
     });
-    expect(useEnvironmentDiffStore.getState().stats.has("env-1")).toBe(false);
+    expect(appCommandStore(environmentDiffStore).getState().stats.has("env-1")).toBe(false);
 
     await act(async () => {
       snapshot.resolve({ entries: [change("env-1", { additions: 2 })] });
       await snapshot.promise;
     });
 
-    expect(useEnvironmentDiffStore.getState().stats.get("env-1")?.additions).toBe(12);
+    expect(appCommandStore(environmentDiffStore).getState().stats.get("env-1")?.additions).toBe(12);
   });
 
   test("replays a removal over a snapshot that resolves later", async () => {
     const snapshot = deferred<{ entries: EnvironmentDiffStatsChange[] }>();
     mockGetEnvironmentDiffStats.mockImplementation(() => snapshot.promise);
-    renderHook(() => useEnvironmentDiffStats());
+    renderHookInAppCommandScope(() => useEnvironmentDiffStats());
     await waitFor(() => expect(mockGetEnvironmentDiffStats).toHaveBeenCalledTimes(1));
 
     act(() => {
@@ -283,12 +289,12 @@ describe("useEnvironmentDiffStats", () => {
       await snapshot.promise;
     });
 
-    expect(useEnvironmentDiffStore.getState().stats.has("env-1")).toBe(false);
+    expect(appCommandStore(environmentDiffStore).getState().stats.has("env-1")).toBe(false);
   });
 
   test("serialises overlapping reconnect snapshots and applies the newest last", async () => {
     mockGetEnvironmentDiffStats.mockImplementationOnce(() => Promise.resolve({ entries: [] }));
-    renderHook(() => useEnvironmentDiffStats());
+    renderHookInAppCommandScope(() => useEnvironmentDiffStats());
     await waitFor(() => expect(mockGetEnvironmentDiffStats).toHaveBeenCalledTimes(1));
 
     const first = deferred<{ entries: EnvironmentDiffStatsChange[] }>();
@@ -312,7 +318,7 @@ describe("useEnvironmentDiffStats", () => {
       second.resolve({ entries: [change("env-1", { additions: 9 })] });
       await second.promise;
     });
-    expect(useEnvironmentDiffStore.getState().stats.get("env-1")?.additions).toBe(9);
+    expect(appCommandStore(environmentDiffStore).getState().stats.get("env-1")?.additions).toBe(9);
   });
 
   test("drops environments missing from a later snapshot", async () => {
@@ -321,8 +327,10 @@ describe("useEnvironmentDiffStats", () => {
         entries: [change("env-1"), change("env-2")],
       }),
     );
-    renderHook(() => useEnvironmentDiffStats());
-    await waitFor(() => expect(useEnvironmentDiffStore.getState().stats.size).toBe(2));
+    renderHookInAppCommandScope(() => useEnvironmentDiffStats());
+    await waitFor(() =>
+      expect(appCommandStore(environmentDiffStore).getState().stats.size).toBe(2),
+    );
 
     mockGetEnvironmentDiffStats.mockImplementation(() =>
       Promise.resolve({
@@ -334,7 +342,7 @@ describe("useEnvironmentDiffStats", () => {
     });
 
     await waitFor(() => {
-      expect([...useEnvironmentDiffStore.getState().stats.keys()]).toEqual(["env-1"]);
+      expect([...appCommandStore(environmentDiffStore).getState().stats.keys()]).toEqual(["env-1"]);
     });
   });
 
@@ -342,8 +350,10 @@ describe("useEnvironmentDiffStats", () => {
     mockGetEnvironmentDiffStats.mockImplementation(() =>
       Promise.resolve({ entries: [change("env-1")] }),
     );
-    renderHook(() => useEnvironmentDiffStats());
-    await waitFor(() => expect(useEnvironmentDiffStore.getState().stats.size).toBe(1));
+    renderHookInAppCommandScope(() => useEnvironmentDiffStats());
+    await waitFor(() =>
+      expect(appCommandStore(environmentDiffStore).getState().stats.size).toBe(1),
+    );
 
     mockGetEnvironmentDiffStats.mockImplementation(() => Promise.reject(new Error("backend down")));
     act(() => {
@@ -351,22 +361,24 @@ describe("useEnvironmentDiffStats", () => {
     });
     await flush();
 
-    expect(useEnvironmentDiffStore.getState().stats.get("env-1")).toBeDefined();
+    expect(appCommandStore(environmentDiffStore).getState().stats.get("env-1")).toBeDefined();
   });
 
   test("ignores a malformed snapshot from the process boundary", async () => {
-    useEnvironmentDiffStore.getState().applyChange(change("env-existing"));
+    appCommandStore(environmentDiffStore).getState().applyChange(change("env-existing"));
     mockGetEnvironmentDiffStats.mockImplementation(() =>
       Promise.resolve({
         entries: [change("env-bad", { additions: -1 })],
       }),
     );
 
-    renderHook(() => useEnvironmentDiffStats());
+    renderHookInAppCommandScope(() => useEnvironmentDiffStats());
     await waitFor(() => expect(mockGetEnvironmentDiffStats).toHaveBeenCalledTimes(1));
     await flush();
 
-    expect([...useEnvironmentDiffStore.getState().stats.keys()]).toEqual(["env-existing"]);
+    expect([...appCommandStore(environmentDiffStore).getState().stats.keys()]).toEqual([
+      "env-existing",
+    ]);
   });
 
   test("still rehydrates when the change listener rejects", async () => {
@@ -380,9 +392,11 @@ describe("useEnvironmentDiffStats", () => {
       }),
     );
 
-    renderHook(() => useEnvironmentDiffStats());
+    renderHookInAppCommandScope(() => useEnvironmentDiffStats());
 
-    await waitFor(() => expect(useEnvironmentDiffStore.getState().stats.has("env-1")).toBe(true));
+    await waitFor(() =>
+      expect(appCommandStore(environmentDiffStore).getState().stats.has("env-1")).toBe(true),
+    );
     expect(listenerCount(NATIVE_EVENT_STREAM_CONNECTED_EVENT)).toBe(1);
   });
 
@@ -393,7 +407,7 @@ describe("useEnvironmentDiffStats", () => {
       }
       return defaultListen(event, handler);
     });
-    const { unmount } = renderHook(() => useEnvironmentDiffStats());
+    const { unmount } = renderHookInAppCommandScope(() => useEnvironmentDiffStats());
     await waitFor(() => expect(listenerCount(DIFF_STATS_CHANGED_EVENT)).toBe(1));
 
     unmount();
@@ -402,7 +416,7 @@ describe("useEnvironmentDiffStats", () => {
   });
 
   test("unsubscribes from both streams on unmount", async () => {
-    const { unmount } = renderHook(() => useEnvironmentDiffStats());
+    const { unmount } = renderHookInAppCommandScope(() => useEnvironmentDiffStats());
     await waitFor(() => {
       expect(listenerCount(DIFF_STATS_CHANGED_EVENT)).toBe(1);
       expect(listenerCount(NATIVE_EVENT_STREAM_CONNECTED_EVENT)).toBe(1);
@@ -419,7 +433,7 @@ describe("useEnvironmentDiffStats", () => {
   // `listen` resolves asynchronously, so an unmount can land before the
   // subscription exists. It still has to be torn down.
   test("does not leak a listener when unmounted before subscribing resolves", async () => {
-    const { unmount } = renderHook(() => useEnvironmentDiffStats());
+    const { unmount } = renderHookInAppCommandScope(() => useEnvironmentDiffStats());
     unmount();
     await flush();
 
@@ -436,7 +450,7 @@ describe("useEnvironmentDiffStats", () => {
         }),
     );
 
-    const { unmount } = renderHook(() => useEnvironmentDiffStats());
+    const { unmount } = renderHookInAppCommandScope(() => useEnvironmentDiffStats());
     await waitFor(() => expect(mockGetEnvironmentDiffStats).toHaveBeenCalledTimes(1));
     unmount();
 
@@ -445,6 +459,6 @@ describe("useEnvironmentDiffStats", () => {
       await Promise.resolve();
     });
 
-    expect(useEnvironmentDiffStore.getState().stats.size).toBe(0);
+    expect(appCommandStore(environmentDiffStore).getState().stats.size).toBe(0);
   });
 });

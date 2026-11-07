@@ -1,8 +1,10 @@
 import { afterAll, afterEach, expect, mock, test } from "bun:test";
-import { cleanup, render, screen } from "@testing-library/react";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
-const state = usePaneLayoutStore.getState();
+import { cleanup, screen } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
+const state = appCommandStore(paneLayoutStore).getState();
 import * as realLoaders from "@/lib/lazy-view-loaders";
+import { appCommandStore } from "@/test/app-command-store";
 const snapshot = { ...realLoaders };
 const rejectImport = mock(async () => {
   throw new Error("Failed to fetch dynamically imported module");
@@ -15,10 +17,10 @@ const { LazyTerminalPortalHost } = await import("./LazyTerminalPortalHost");
 afterAll(() => mock.module("@/lib/lazy-view-loaders", () => snapshot));
 afterEach(() => {
   cleanup();
-  usePaneLayoutStore.setState(state, true);
+  appCommandStore(paneLayoutStore).setState(state, true);
 });
 test("failed host import is contained in the inline fallback", async () => {
-  usePaneLayoutStore.setState({
+  appCommandStore(paneLayoutStore).setState({
     environments: new Map([
       [
         "env",
@@ -34,7 +36,7 @@ test("failed host import is contained in the inline fallback", async () => {
       ],
     ]),
   });
-  render(
+  renderInAppCommandScope(
     <main>
       <nav>Shell</nav>
       <LazyTerminalPortalHost environmentId="env" containerId={null} />

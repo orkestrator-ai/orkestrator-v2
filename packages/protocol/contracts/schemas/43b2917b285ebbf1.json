@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:43b2917b285ebbf1c9b01591c45d8b1e7b1a13a72c40acc5d5ad3988b1a0eb70",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "displayName": {},
+        "routeOrder": {},
+        "routes": {},
+        "token": {}
+      },
+      "type": "object"
+    }
+  }
+}

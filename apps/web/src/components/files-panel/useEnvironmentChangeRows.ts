@@ -6,8 +6,12 @@ import {
   type ChangeProjection,
 } from "@orkestrator/protocol/change-resources";
 import * as backend from "@/lib/backend";
+import { backendApiForScope } from "@/lib/backend/client";
+import { createChangesApi } from "@/lib/backend/changes";
 import { useEnvironmentChangeProjection } from "@/hooks/useChangeProjection";
-import { useChangeProjectionStore } from "@/stores/changeProjectionStore";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { useNodeScope } from "@/lib/node-scope/providers";
+import { changeProjectionStore } from "@/stores/changeProjectionStore";
 
 /** Rows fetched past the projection's first page, all of one snapshot token. */
 interface ExtraPages {
@@ -37,16 +41,22 @@ export interface EnvironmentChangeRows {
  * Re-reads a projection unconditionally so it arrives with its first file
  * page. Change events omit pages, so a new measurement can land without one.
  */
-async function readProjectionWithPage(resourceKey: string): Promise<void> {
-  const result = await backend.getChangeView(resourceKey);
+async function readProjectionWithPage(scope: NodeScope, resourceKey: string): Promise<void> {
+  const store = scope.store(changeProjectionStore);
+  const result = await changesApi(scope).getChangeView(resourceKey);
   if (
     (result.kind === "projection" || result.kind === "reset") &&
     isChangeProjection(result.projection)
   ) {
-    useChangeProjectionStore.getState().applyProjection(result.projection);
+    store.getState().applyProjection(result.projection);
   } else if (result.kind === "deleted") {
-    useChangeProjectionStore.getState().markDeleted(resourceKey);
+    store.getState().markDeleted(resourceKey);
   }
+}
+
+/** `scope`'s node's change commands (the named exports on the app's command scope). */
+function changesApi(scope: NodeScope) {
+  return backendApiForScope(scope, createChangesApi, backend);
 }
 
 /**
@@ -61,6 +71,7 @@ export function useEnvironmentChangeRows(
   environmentId: string | null | undefined,
 ): EnvironmentChangeRows {
   const projection = useEnvironmentChangeProjection(environmentId);
+  const scope = useNodeScope();
   const resourceKey = environmentId ? environmentChangeResourceKey(environmentId) : null;
   const [extra, setExtra] = useState<ExtraPages | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -81,10 +92,10 @@ export function useEnvironmentChangeRows(
     if (!pageRequestKey || !resourceKey) return;
     if (pageRequestRef.current === pageRequestKey) return;
     pageRequestRef.current = pageRequestKey;
-    void readProjectionWithPage(resourceKey)
+    void readProjectionWithPage(scope, resourceKey)
       .catch(() => undefined)
       .finally(() => setSettledPageRequest(pageRequestKey));
-  }, [pageRequestKey, resourceKey]);
+  }, [pageRequestKey, resourceKey, scope]);
 
   // Never stitch: pages of another token (or resource) are ignored, and the
   // next page request replaces them.
@@ -101,7 +112,7 @@ export function useEnvironmentChangeRows(
     if (loadMoreRef.current === requestKey) return;
     loadMoreRef.current = requestKey;
     setLoadingMore(true);
-    void backend
+    void changesApi(scope)
       .getChangeFiles(resourceKey, token, nextCursor)
       .then(async (result) => {
         if (result.kind === "page" && result.snapshotToken === token) {
@@ -123,14 +134,14 @@ export function useEnvironmentChangeRows(
         // The measurement moved on (or the cursor is no longer valid):
         // discard what was paged and restart from the current first page.
         setExtra(null);
-        await readProjectionWithPage(resourceKey);
+        await readProjectionWithPage(scope, resourceKey);
       })
       .catch(() => undefined)
       .finally(() => {
         if (loadMoreRef.current === requestKey) loadMoreRef.current = null;
         setLoadingMore(false);
       });
-  }, [resourceKey, token, nextCursor]);
+  }, [resourceKey, scope, token, nextCursor]);
 
   return {
     projection,

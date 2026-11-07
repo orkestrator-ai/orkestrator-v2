@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, screen } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import * as federation from "@/components/federation/FederationProvider";
 import { resetCapabilities } from "@/lib/design-client";
 import { invoke } from "@/lib/native/backend";
@@ -37,7 +38,7 @@ afterEach(() => {
 function openDialog(overrides: Partial<Environment> = {}) {
   const onCancel = mock(() => {});
   const onConfirm = mock(() => {});
-  render(
+  renderInAppCommandScope(
     <LocalEnvironmentDeleteDialog
       environment={{ ...environment, ...overrides }}
       onCancel={onCancel}

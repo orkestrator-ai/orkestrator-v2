@@ -1,13 +1,14 @@
 import type { Duplex } from "node:stream";
 import { CONTROLLER_HEADER } from "@orkestrator/protocol/command-nodes";
 import {
-  isWorkspaceExcludedCommand,
+  admitsWorkspaceCommand,
   NODE_RELAY_PREFIX,
   parseRelayPath,
   relayHttp,
   relayUpgrade,
 } from "./core/nodes/index.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { MULTIPLEXED_RELAY_EVENTS_PATH } from "@orkestrator/protocol/multiplexed-relay-events";
 
 const log = createLogger("gateway");
 
@@ -141,6 +142,18 @@ export class GatewayAuth {
   /** Only the durable token, sent as a bearer header, may read or rotate itself. */
   private authenticatedWithDurableBearer(request: IncomingMessage): boolean {
     return tokenMatches(this.ctx.token, getBearerToken(request.headers));
+  }
+
+  /**
+   * The workspace allow-list a client grant and the relay share: only
+   * commands this backend defines with `access: "workspace"`, failing closed.
+   */
+  private admitsWorkspaceCommand(command: string, path: "grant" | "relay"): boolean {
+    const backend = this.ctx.backend;
+    return admitsWorkspaceCommand(command, path, {
+      accessOf: backend.commandAccess?.bind(backend),
+      isRegistered: backend.hasCommand?.bind(backend),
+    });
   }
 
   private grantExpiresAt(candidate: string): number | null {
@@ -426,11 +439,20 @@ export class GatewayAuth {
       return;
     }
 
+    // Several relayed leaves' main streams on one request (plan item 5005).
+    // Without the hooks it answers 404 below, as an older command node does.
+    if (url.pathname === MULTIPLEXED_RELAY_EVENTS_PATH && this.ctx.nodeEventMultiplexer) {
+      this.ctx.nodeEventMultiplexer.serve(request, response, url);
+      return;
+    }
+
     if (url.pathname.startsWith(NODE_RELAY_PREFIX)) {
       const resolve = this.ctx.nodeHooks?.relayTarget;
       if (
         !resolve ||
-        !(await relayHttp(request, response, url, resolve.bind(this.ctx.nodeHooks)))
+        !(await relayHttp(request, response, url, resolve.bind(this.ctx.nodeHooks), (command) =>
+          this.admitsWorkspaceCommand(command, "relay"),
+        ))
       ) {
         jsonResponse(response, 404, { error: "Not found" });
       }
@@ -505,7 +527,7 @@ export class GatewayAuth {
         response,
         requestMetrics,
         viaGrant
-          ? { refuseCommand: isWorkspaceExcludedCommand }
+          ? { refuseCommand: (command: string) => !this.admitsWorkspaceCommand(command, "grant") }
           : controllerId
             ? { controllerId }
             : undefined,
@@ -622,6 +644,11 @@ export class GatewayAuth {
     };
     if (identity.nodeMode) hello.nodeMode = identity.nodeMode;
     if (identity.buildCommit) hello.buildCommit = identity.buildCommit;
+    // Contract domains are a top-level field, never capabilities, and the
+    // schema version stays 1 (§11.2 "Negotiation"). Always present, empty
+    // until a domain has defined commands, so a peer can tell this backend
+    // from a pre-contract one.
+    hello.domains = { ...identity.domains };
     jsonResponse(response, 200, hello, { "cache-control": "no-store" });
   }
 

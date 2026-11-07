@@ -4,6 +4,25 @@ import {
 } from "@orkestrator/protocol/preview-access";
 import { parsePreviewClientMetricsReport } from "@orkestrator/protocol/preview-client-metrics";
 import { previewFailure } from "@orkestrator/protocol/preview-services";
+import {
+  createPreviewAttachmentCommand,
+  createPreviewHandoffUrlCommand,
+  getPreviewCapabilitiesCommand,
+  getPreviewDiagnosticsCommand,
+  getPreviewPublicOriginCommand,
+  getPreviewServicesCommand,
+  getPreviewSettingsCommand,
+  probePreviewServiceCommand,
+  recordPreviewClientMetricsCommand,
+  registerPreviewServiceCommand,
+  releasePreviewAttachmentCommand,
+  removePreviewServiceCommand,
+  renewPreviewAttachmentCommand,
+  resolvePreviewTargetCommand,
+  revokePreviewAccessCommand,
+  updatePreviewServiceCommand,
+  updatePreviewSettingsCommand,
+} from "@orkestrator/protocol/contract/domains/previews";
 
 import type { CommandContext } from "./commands-context.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
@@ -47,11 +66,11 @@ function revision(value: unknown, field: string): number {
  * explicit attachment commands registered with the access service.
  */
 export function registerPreviewCommands(register: CommandRegistrar): void {
-  register("get_preview_capabilities", async (_args, context) =>
+  register(getPreviewCapabilitiesCommand, async (_args, context) =>
     (await previews(context)).capabilities(),
   );
 
-  register("get_preview_services", async (args, context) => {
+  register(getPreviewServicesCommand, async (args, context) => {
     const runtime = await previews(context);
     const knownRevision = args.knownRevision;
     return runtime.registry.snapshot({
@@ -61,14 +80,14 @@ export function registerPreviewCommands(register: CommandRegistrar): void {
     });
   });
 
-  register("register_preview_service", async (args, context) => {
+  register(registerPreviewServiceCommand, async (args, context) => {
     const runtime = await previews(context);
     return runtime.registry.register(args.service, {
       operationId: optionalString(args.operationId, "operation id"),
     });
   });
 
-  register("update_preview_service", async (args, context) => {
+  register(updatePreviewServiceCommand, async (args, context) => {
     const runtime = await previews(context);
     return runtime.registry.update(
       requiredString(args.serviceId, "serviceId"),
@@ -78,7 +97,7 @@ export function registerPreviewCommands(register: CommandRegistrar): void {
     );
   });
 
-  register("remove_preview_service", async (args, context) => {
+  register(removePreviewServiceCommand, async (args, context) => {
     const runtime = await previews(context);
     return runtime.registry.remove(
       requiredString(args.serviceId, "serviceId"),
@@ -89,29 +108,29 @@ export function registerPreviewCommands(register: CommandRegistrar): void {
     );
   });
 
-  register("resolve_preview_target", async (args, context) => {
+  register(resolvePreviewTargetCommand, async (args, context) => {
     const runtime = await previews(context);
     return resolvePreviewTargetIntent(runtime.registry, args, (environmentId) =>
       context.storage.getEnvironment(environmentId),
     );
   });
 
-  register("probe_preview_service", async (args, context) => {
+  register(probePreviewServiceCommand, async (args, context) => {
     const runtime = await previews(context);
     return runtime.registry.refresh(requiredString(args.serviceId, "serviceId"), { probe: true });
   });
 
-  register("create_preview_attachment", async (args, context) => {
+  register(createPreviewAttachmentCommand, async (args, context) => {
     const runtime = await previews(context);
     return runtime.access.createAttachment(args);
   });
 
-  register("renew_preview_attachment", async (args, context) => {
+  register(renewPreviewAttachmentCommand, async (args, context) => {
     const runtime = await previews(context);
     return runtime.access.renewAttachment(args.attachmentId);
   });
 
-  register("release_preview_attachment", async (args, context) => {
+  register(releasePreviewAttachmentCommand, async (args, context) => {
     const runtime = await previews(context);
     return runtime.access.releaseAttachment(args.attachmentId);
   });
@@ -122,7 +141,7 @@ export function registerPreviewCommands(register: CommandRegistrar): void {
    * here, server-side; the returned URL carries only the one-use, 30-second
    * session code bound to the service's own host.
    */
-  register("create_preview_handoff_url", async (args, context) => {
+  register(createPreviewHandoffUrlCommand, async (args, context) => {
     const runtime = await previews(context);
     const attachment = await runtime.access.createAttachment({
       ...args,
@@ -146,7 +165,7 @@ export function registerPreviewCommands(register: CommandRegistrar): void {
   });
 
   /** The clean, shareable private origin of a published service (no credential). */
-  register("get_preview_public_origin", async (args, context) => {
+  register(getPreviewPublicOriginCommand, async (args, context) => {
     const runtime = await previews(context);
     return {
       origin: runtime.publication?.originFor(requiredString(args.serviceId, "serviceId")) ?? null,
@@ -154,7 +173,7 @@ export function registerPreviewCommands(register: CommandRegistrar): void {
   });
 
   /** Operator action: close active preview transport. Separate from the issuance kill switch. */
-  register("revoke_preview_access", async (args, context) => {
+  register(revokePreviewAccessCommand, async (args, context) => {
     const runtime = await previews(context);
     const serviceId = optionalString(args.serviceId, "serviceId");
     return {
@@ -164,7 +183,7 @@ export function registerPreviewCommands(register: CommandRegistrar): void {
     };
   });
 
-  register("get_preview_diagnostics", async (_args, context) =>
+  register(getPreviewDiagnosticsCommand, async (_args, context) =>
     (await previews(context)).diagnostics(),
   );
 
@@ -173,19 +192,19 @@ export function registerPreviewCommands(register: CommandRegistrar): void {
    * folded into the diagnostics above. Fixed names and numbers only; anything
    * else rejects the whole report.
    */
-  register("record_preview_client_metrics", async (args, context) => {
+  register(recordPreviewClientMetricsCommand, async (args, context) => {
     const report = parsePreviewClientMetricsReport(args.report);
     if (!report) throw previewFailure("invalid-request", { message: "Invalid metrics report." });
     (await previews(context)).metrics.merge(report);
     return { recorded: true };
   });
 
-  register("get_preview_settings", async (_args, context) => {
+  register(getPreviewSettingsCommand, async (_args, context) => {
     const runtime = await previews(context);
     return { stored: runtime.storedSettings(), effective: runtime.effectiveSettings() };
   });
 
-  register("update_preview_settings", async (args, context) => {
+  register(updatePreviewSettingsCommand, async (args, context) => {
     const runtime = await previews(context);
     const patch = args.settings;
     if (!patch || typeof patch !== "object" || Array.isArray(patch)) {

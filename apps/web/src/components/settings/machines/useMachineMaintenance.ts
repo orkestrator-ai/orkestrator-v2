@@ -6,7 +6,7 @@ import {
   type HostMaintenanceSnapshot,
 } from "@orkestrator/protocol/host-maintenance";
 import type { HostMaintenanceClient } from "@/lib/host-maintenance-client";
-import { portalListenAuthoritative } from "@/lib/portal/portal-transport";
+import { commandScopeListenAuthoritative } from "@/lib/portal/command-scope";
 import { machineMaintenanceClient } from "./machine-access";
 import type { MachineEntry } from "./machine-list";
 
@@ -117,7 +117,7 @@ export function useMachineMaintenance(
   useEffect(() => {
     if (!client || role !== "self") return;
     const controller = new AbortController();
-    void portalListenAuthoritative<HostMaintenanceSnapshot>(
+    void commandScopeListenAuthoritative<HostMaintenanceSnapshot>(
       HOST_MAINTENANCE_EVENT,
       (event) => accept(event.payload),
       { onResync: reload, resyncOnSubscribe: true, signal: controller.signal },

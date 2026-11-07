@@ -4,7 +4,8 @@
  * worker and on a finished one read back from the transcript store.
  */
 import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, render } from "@testing-library/react";
+import { cleanup } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { renderAgentMailCarrier, type AgentMailMessage } from "@orkestrator/protocol/agent-mail";
 import type { BuildPipeline, PipelineSession } from "@/stores/buildPipelineStore";
 import { PEER_MAIL_UNREADABLE_TEXT } from "@/lib/chat/client-only-messages";
@@ -25,11 +26,12 @@ mock.module("@/components/chat/VirtualizedMessageList", () => ({
 }));
 
 import {
-  useGraphRunStore,
   graphRunCacheKey,
+  graphRunStore,
   type GraphRunTranscriptEntry,
 } from "@/stores/graphRunStore";
 import type { NodeActivation } from "@orkestrator/protocol/graphs/run";
+import { appCommandStore } from "@/test/app-command-store";
 const { GraphActivationTranscript } =
   await import("@/components/graph-run/GraphActivationTranscript");
 const { PipelineSessionTranscript } = await import("./PipelineSessionTranscript");
@@ -102,7 +104,7 @@ function renderTranscript(
     sessions: [session],
     currentSessionIndex: 0,
   } as unknown as BuildPipeline;
-  return render(
+  return renderInAppCommandScope(
     <PipelineSessionTranscript
       pipeline={pipeline}
       session={session}
@@ -179,8 +181,8 @@ describe("PipelineSessionTranscript agent mail", () => {
   });
 
   test("graph activations render stored mail after remount", () => {
-    const before = useGraphRunStore.getState().transcripts;
-    useGraphRunStore.setState({
+    const before = appCommandStore(graphRunStore).getState().transcripts;
+    appCommandStore(graphRunStore).setState({
       transcripts: new Map([
         [
           graphRunCacheKey("run", "activation"),
@@ -211,7 +213,7 @@ describe("PipelineSessionTranscript agent mail", () => {
     } as unknown as NodeActivation;
     try {
       for (let mount = 0; mount < 2; mount += 1) {
-        const view = render(
+        const view = renderInAppCommandScope(
           <GraphActivationTranscript
             runId="run"
             environmentId="env-1"
@@ -228,7 +230,7 @@ describe("PipelineSessionTranscript agent mail", () => {
         view.unmount();
       }
     } finally {
-      useGraphRunStore.setState({ transcripts: before });
+      appCommandStore(graphRunStore).setState({ transcripts: before });
     }
   });
 

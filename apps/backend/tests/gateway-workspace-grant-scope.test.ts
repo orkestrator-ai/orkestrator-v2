@@ -2,6 +2,11 @@ import { describe, expect, mock, test } from "bun:test";
 import { createServer } from "node:http";
 import { redactGlobalConfig, stripRendererCredentials } from "../src/core/commands-validation.js";
 import type { BackendHelloIdentity } from "../src/gateway";
+import type { BackendInvoker } from "../src/gateway-support-core.js";
+import {
+  registryCommandAccess,
+  registryCommands,
+} from "../src/core/nodes/workspace-grant-test-support.js";
 import { requestUrl, startGateway } from "./gateway-test-harness.js";
 
 /**
@@ -106,7 +111,7 @@ describe("a client grant at the leaf's gateway", () => {
   async function gatewayWithBackend() {
     const invoke = mock(async (command: string) => (command === "get_config" ? leafConfig : null));
     const { info } = await startGateway({
-      backend: { invoke },
+      backend: { invoke, commandAccess: registryCommandAccess },
       backendHello: async () => identity,
       nodeHooks,
     });
@@ -183,7 +188,7 @@ describe("a client grant at the leaf's gateway", () => {
       throw new Error("storage unavailable");
     });
     const { info } = await startGateway({
-      backend: { invoke },
+      backend: { invoke, commandAccess: registryCommandAccess },
       backendHello: async () => identity,
       nodeHooks,
     });
@@ -193,6 +198,71 @@ describe("a client grant at the leaf's gateway", () => {
       body: JSON.stringify({ command: "update_global_config", args: olderRealmFavouriteEcho }),
     });
     expect(refused.status).toBe(403);
+  });
+});
+
+describe("the allow-list at the gateway (plan item 7012)", () => {
+  const grant = "okg_allow.secret";
+  const nodeHooks = {
+    isPortalOriginAllowed: mock(() => false),
+    noteControllerContact: mock(() => undefined),
+    authenticateGrant: (token: string) => (token === grant ? Date.now() + 60_000 : null),
+  };
+  const headers = { authorization: `Bearer ${grant}`, "content-type": "application/json" };
+
+  async function grantGateway(backend: BackendInvoker) {
+    const { info } = await startGateway({ backend, backendHello: async () => identity, nodeHooks });
+    return (command: string) =>
+      requestUrl(new URL("/__orkestrator/invoke", info.url).toString(), {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ command, args: {} }),
+      });
+  }
+
+  test("a grant runs every workspace command and is refused every admin and internal one", async () => {
+    const invoke = mock(async (_command: string) => null);
+    const call = await grantGateway({ invoke, commandAccess: registryCommandAccess });
+    const commands = registryCommands();
+    const statuses: Record<string, number> = {};
+    for (const [command] of commands) {
+      // The two settings writes are answered from `get_config` when unchanged;
+      // `null` settings never are, so they are refused like the rest.
+      statuses[command] = (await call(command)).status;
+    }
+    const expected = Object.fromEntries(
+      commands.map(([command, access]) => [command, access === "workspace" ? 200 : 403]),
+    );
+    expect(statuses).toEqual(expected);
+    // Every workspace command reached the backend, and nothing else did but
+    // the two `get_config` reads that checked the settings writes.
+    const admitted = commands.filter(([, access]) => access === "workspace").map(([c]) => c);
+    expect(invoke.mock.calls.map(([command]) => command).sort()).toEqual(
+      [...admitted, "get_config", "get_config"].sort(),
+    );
+  });
+
+  test("an unregistered or undefined command is refused through a grant", async () => {
+    const invoke = mock(async () => null);
+    const call = await grantGateway({
+      invoke,
+      commandAccess: (command) =>
+        command === "string_registered" ? undefined : registryCommandAccess(command),
+      hasCommand: (command) => command === "string_registered",
+    });
+    for (const command of ["no_such_command", "string_registered", "__proto__"]) {
+      expect({ command, status: (await call(command)).status }).toEqual({ command, status: 403 });
+    }
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  test("fails closed when the backend cannot say a command's access", async () => {
+    const invoke = mock(async () => null);
+    const call = await grantGateway({ invoke });
+    for (const command of ["get_config", "get_projects", "local_terminal_write"]) {
+      expect({ command, status: (await call(command)).status }).toEqual({ command, status: 403 });
+    }
+    expect(invoke).not.toHaveBeenCalled();
   });
 });
 
@@ -281,6 +351,37 @@ describe("the relay through the command node", () => {
       expect(seen.map(({ command }) => command)).toEqual(
         terminalCommands.map(([command]) => command),
       );
+    } finally {
+      await close();
+    }
+  });
+
+  test("relays every workspace command and refuses the rest, unknown names included (7012)", async () => {
+    const { seen, call, close } = await relayToFakeLeaf();
+    try {
+      const commands = registryCommands();
+      const statuses: Record<string, number> = {};
+      for (const [command] of [...commands, ["no_such_command", undefined] as const]) {
+        statuses[command] = (await call(command, {})).status;
+      }
+      expect(statuses).toEqual({
+        ...Object.fromEntries(
+          commands.map(([command, access]) => [command, access === "workspace" ? 200 : 403]),
+        ),
+        // An empty patch changes nothing: answered with the leaf's settings,
+        // never forwarded (`isGlobalConfigEcho`).
+        patch_global_config: 200,
+        no_such_command: 403,
+      });
+      // Only workspace commands, and the reads that checked the two settings
+      // writes, reached the leaf.
+      const admitted = commands.filter(([, access]) => access === "workspace").map(([c]) => c);
+      expect(seen.map(({ command }) => command).filter((c) => !admitted.includes(c))).toEqual([]);
+      expect(
+        seen.filter(({ command }) =>
+          ["update_global_config", "patch_global_config"].includes(command),
+        ),
+      ).toEqual([]);
     } finally {
       await close();
     }

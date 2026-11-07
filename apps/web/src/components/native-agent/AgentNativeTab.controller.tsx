@@ -1,12 +1,7 @@
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { parseUserCommand } from "@orkestrator/protocol/user-commands";
 import { bugReportIdFromRuntimeId } from "@orkestrator/protocol/bug-report";
-import {
-  getNativeAgentGoal,
-  runNativeAgentGoalCommand,
-  runUserCommand,
-  stopNativeAgentSuborks,
-} from "@/lib/backend";
+import { backendForScope } from "@/lib/backend/scope-backend";
 import { isGoalCarrierContent } from "@orkestrator/protocol/native-agent-goal";
 import { GoalDetailLoaderContext } from "@/components/chat/goal-detail-context";
 import { GoalPanel } from "@/components/chat/GoalPanel";
@@ -16,6 +11,7 @@ import {
   type SuborkGroupActions,
 } from "@/components/chat/subork-context";
 import { SuborkTranscriptDialog } from "@/components/chat/SuborkTranscriptDialog";
+import { useNodeScope, useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { withSuborkGroupRows, withSuborkRequestText } from "@/lib/chat/subork-messages";
 import {
   createGoalTurnNativeMessage,
@@ -127,16 +123,7 @@ import { useHeldTranscriptPlace, useRestoreHeldPlace } from "@/hooks/useHeldTran
 import { useRestorePlaceAfterHistoryDrop } from "@/hooks/useRestorePlaceAfterHistoryDrop";
 import { useAutoLoadEarlier } from "./useAutoLoadEarlier";
 import { readTranscriptTail } from "./transcript-tail";
-import {
-  adoptNativeAgentSession,
-  beginNativeAgentSignIn,
-  cancelNativeAgentSignIn,
-  getNativeAgentAuthStatus,
-  openInBrowser,
-  recoverMultiReviewAddressFindingsSession,
-  writeCoordinatorAttachment,
-  writeBugReportAttachment,
-} from "@/lib/backend";
+import { openInBrowser } from "@/lib/backend";
 import { buildInitialPromptWithAttachmentReferences } from "@/lib/initial-prompt-attachments";
 import { beginTabInitialPromptFallback, tabInitialPromptRequestId } from "@/lib/tab-initial-prompt";
 import { STARTUP_AGENT_TAB_ID } from "@/lib/startup-agent-handoff";
@@ -206,11 +193,12 @@ import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useShallow } from "zustand/react/shallow";
 import {
   nativeComposeDraft,
-  nativeComposePersistenceStore,
+  nativeComposePersistence,
+  nativeComposeStore,
   useNativeComposeStore,
   type NativeComposeDraft,
 } from "@/stores/nativeComposeStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore, usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import {
   useNativeNoticeDismissalStore,
@@ -221,7 +209,8 @@ import {
   nativeNoticeToastId,
   nativeNoticeToastType,
 } from "./native-notice-identity";
-import { useMultiReviewStore } from "@/stores/multiReviewStore";
+import { multiReviewStore, useMultiReviewStore } from "@/stores/multiReviewStore";
+import { agentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 import type { FileCandidate } from "@/types";
 import {
   openWebAnnotationRequest,
@@ -400,7 +389,17 @@ export function SharedNativeAgentController({
   const configuredReasoning = configured.reasoningEffort;
   // Read once per tab, as before: a tab's environment never changes, and the
   // catalog reads the provider stores through getState() without subscribing.
-  const speedCatalog = useMemo(() => buildReviewModelCatalog(), []);
+  const modelCatalog = useNodeScope().store(agentModelCatalogStore);
+  const speedCatalog = useMemo(
+    () => buildReviewModelCatalog(modelCatalog.getState()),
+    [modelCatalog],
+  );
+  const multiReviews = useNodeScope().store(multiReviewStore);
+  // The node this tab's drafts live on: the scope `useNativeComposeStore` reads.
+  const composeScope = useNodeScope();
+  const composeDrafts = composeScope.store(nativeComposeStore);
+  // The same node's pane layouts (plan item 3013).
+  const paneLayouts = composeScope.store(paneLayoutStore);
   const speedCompatible = modelSupportsSpeed(
     platform,
     speedCatalog,
@@ -499,7 +498,7 @@ export function SharedNativeAgentController({
       replacementProviderSessionId: string;
     }) => {
       const key = createSessionKey(data.environmentId, tabId);
-      const composeStore = useNativeComposeStore.getState();
+      const composeStore = composeDrafts.getState();
       const held = nativeComposeDraft(composeStore, key).heldSubmit;
       if (
         held &&
@@ -511,22 +510,24 @@ export function SharedNativeAgentController({
         });
       }
       if (!tabId.startsWith("multi-review-fix:")) return;
-      const workflow = await recoverMultiReviewAddressFindingsSession({
-        environmentId: data.environmentId,
-        tabId,
-        expectedProviderSessionId: replacement.requestedProviderSessionId,
-        replacementProviderSessionId: replacement.replacementProviderSessionId,
-      });
-      usePaneLayoutStore
+      const workflow = await backendForScope(composeScope).recoverMultiReviewAddressFindingsSession(
+        {
+          environmentId: data.environmentId,
+          tabId,
+          expectedProviderSessionId: replacement.requestedProviderSessionId,
+          replacementProviderSessionId: replacement.replacementProviderSessionId,
+        },
+      );
+      paneLayouts
         .getState()
         .updateTabNativeSessionId(
           tabId,
           replacement.replacementProviderSessionId,
           data.environmentId,
         );
-      useMultiReviewStore.getState().replaceWorkflow(workflow);
+      multiReviews.getState().replaceWorkflow(workflow);
     },
-    [data.environmentId, tabId],
+    [composeScope, data.environmentId, multiReviews, tabId, composeDrafts, paneLayouts],
   );
   const draft = useNativeComposeStore((state) =>
     nativeComposeDraft(state, createSessionKey(data.environmentId, tabId)),
@@ -653,15 +654,16 @@ export function SharedNativeAgentController({
     platform,
     data.environmentId,
     sessionKey,
-    nativeComposePersistenceStore,
+    nativeComposePersistence(composeDrafts),
     "agent-native",
+    composeScope,
   );
   const addTranscriptAnnotation = useCallback(
     (selectedText: string): TranscriptAnnotation | null => {
       if (queueEditPendingRef.current || submitInFlightRef.current || isDispatching) return null;
       const text = normalizeTranscriptAnnotationText(selectedText);
       if (!text) return null;
-      const current = nativeComposeDraft(useNativeComposeStore.getState(), sessionKey);
+      const current = nativeComposeDraft(composeDrafts.getState(), sessionKey);
       // Migrated references are links, not prompt content: they do not use
       // up the per-prompt allowance.
       if (sendableTranscriptAnnotations(current.annotations).length >= MAX_TRANSCRIPT_ANNOTATIONS) {
@@ -672,12 +674,12 @@ export function SharedNativeAgentController({
       updateDraft(sessionKey, { annotations: [...current.annotations, annotation] });
       return annotation;
     },
-    [isDispatching, sessionKey, updateDraft],
+    [isDispatching, sessionKey, updateDraft, composeDrafts],
   );
   const updateTranscriptAnnotationComment = useCallback(
     (annotationId: string, comment: string) => {
       if (queueEditPendingRef.current || submitInFlightRef.current || isDispatching) return;
-      const current = nativeComposeDraft(useNativeComposeStore.getState(), sessionKey);
+      const current = nativeComposeDraft(composeDrafts.getState(), sessionKey);
       updateDraft(sessionKey, {
         annotations: current.annotations.map((annotation) =>
           annotation.id === annotationId
@@ -686,14 +688,14 @@ export function SharedNativeAgentController({
         ),
       });
     },
-    [isDispatching, sessionKey, updateDraft],
+    [isDispatching, sessionKey, updateDraft, composeDrafts],
   );
   // Back to the prompt once a comment is entered, so the user can keep
   // typing or press Enter again to send.
   const focusComposerAfterAnnotationComment = useCallback(() => {
-    const { text } = nativeComposeDraft(useNativeComposeStore.getState(), sessionKey);
+    const { text } = nativeComposeDraft(composeDrafts.getState(), sessionKey);
     inputRef.current?.focusAtEnd(text);
-  }, [sessionKey]);
+  }, [sessionKey, composeDrafts]);
   const clearTabInitialPrompt = usePaneLayoutStore((state) => state.clearTabInitialPrompt);
   const consumeTabAgentHandoff = usePaneLayoutStore((state) => state.consumeTabAgentHandoff);
   const clearTabAgentHandoff = usePaneLayoutStore((state) => state.clearTabAgentHandoff);
@@ -751,8 +753,15 @@ export function SharedNativeAgentController({
   );
   // An "open full conversation" request parked for this tab outranks the
   // activation policy, whichever effect happens to run first.
+  const scrollTargetNodeId = useScopesWithCommandFallback().scope.nodeId;
   const explicitScrollTargetPending = useConversationScrollTargetStore((state) =>
-    state.targets.has(conversationScrollTargetKey(data.environmentId, tabId)),
+    state.targets.has(
+      conversationScrollTargetKey({
+        nodeId: scrollTargetNodeId,
+        environmentId: data.environmentId,
+        tabId,
+      }),
+    ),
   );
   const { isAtBottom, scrollToBottom, scrollToIndex, virtuosoRef, scrollProps } =
     useVirtuosoScrollState({
@@ -1328,7 +1337,7 @@ export function SharedNativeAgentController({
     let failures = 0;
     const read = async () => {
       try {
-        const status = await getNativeAgentAuthStatus({
+        const status = await backendForScope(composeScope).getNativeAgentAuthStatus({
           environmentId: data.environmentId,
           agent: platform,
           logicalSessionKey: sessionKey,
@@ -1365,6 +1374,7 @@ export function SharedNativeAgentController({
       clearTimeout(timer);
     };
   }, [
+    composeScope,
     signInReadNeeded,
     authReadKey,
     authReadAttempt,
@@ -1423,17 +1433,20 @@ export function SharedNativeAgentController({
     },
     [label],
   );
+  // The node this tab's agent runs on (the command node until this tab is scoped).
+  const signInScope = useScopesWithCommandFallback().scope;
   const startSignIn = useCallback(() => {
     setSignInPending(true);
     setSignInDetails(null);
-    void beginNativeAgentSignIn({
-      environmentId: data.environmentId,
-      agent: platform,
-      logicalSessionKey: sessionKey,
-      // A browser on another machine cannot reach a loopback callback on the
-      // backend's, so a remote connection signs in with a device code.
-      ...(isRemoteGatewayConnection() ? { deviceCode: true } : {}),
-    })
+    void backendForScope(composeScope)
+      .beginNativeAgentSignIn({
+        environmentId: data.environmentId,
+        agent: platform,
+        logicalSessionKey: sessionKey,
+        // A browser on another machine cannot reach a loopback callback on the
+        // backend's, so a remote connection signs in with a device code.
+        ...(isRemoteGatewayConnection(signInScope) ? { deviceCode: true } : {}),
+      })
       .then((result) => {
         // Keep cancellation available even when the provider returns a bad URL.
         setSignInDetails(
@@ -1448,11 +1461,13 @@ export function SharedNativeAgentController({
             if (url.protocol !== "https:" && url.protocol !== "http:")
               throw new Error("Invalid scheme");
           } catch {
-            void cancelNativeAgentSignIn({
-              environmentId: data.environmentId,
-              agent: platform,
-              logicalSessionKey: sessionKey,
-            }).catch(() => undefined);
+            void backendForScope(composeScope)
+              .cancelNativeAgentSignIn({
+                environmentId: data.environmentId,
+                agent: platform,
+                logicalSessionKey: sessionKey,
+              })
+              .catch(() => undefined);
             throw new Error("The sign-in URL is invalid");
           }
           setSignInDetails((previous) => ({ ...previous, url: url.href }));
@@ -1468,24 +1483,34 @@ export function SharedNativeAgentController({
         );
       })
       .finally(() => setSignInPending(false));
-  }, [data.environmentId, label, openSignInUrl, platform, sessionKey, setAuthReadAttempt]);
+  }, [
+    composeScope,
+    data.environmentId,
+    label,
+    openSignInUrl,
+    platform,
+    sessionKey,
+    setAuthReadAttempt,
+    signInScope,
+  ]);
   // Abandoning the sign-in releases the provider's side of it too (Codex stops
   // waiting on its loopback callback or device code). A device code lapses on
   // the bridge by itself, so only an explicit abandon needs this.
   const cancelSignIn = useCallback(() => {
     setSignInDetails(null);
-    void cancelNativeAgentSignIn({
-      environmentId: data.environmentId,
-      agent: platform,
-      logicalSessionKey: sessionKey,
-    })
+    void backendForScope(composeScope)
+      .cancelNativeAgentSignIn({
+        environmentId: data.environmentId,
+        agent: platform,
+        logicalSessionKey: sessionKey,
+      })
       .catch((error: unknown) => {
         toast.error(
           `Could not cancel ${label} sign-in: ${error instanceof Error ? error.message : String(error)}`,
         );
       })
       .finally(() => setAuthReadAttempt((attempt) => attempt + 1));
-  }, [data.environmentId, label, platform, sessionKey, setAuthReadAttempt]);
+  }, [composeScope, data.environmentId, label, platform, sessionKey, setAuthReadAttempt]);
   const resolvedComposer = useMemo(
     () =>
       withResolvedNativeComposerModel(composer?.models ?? [], composer?.selectedModelId, platform),
@@ -1696,14 +1721,16 @@ export function SharedNativeAgentController({
   );
   const discardProvisionalDraft = useCallback(() => {
     const discard = (namespace: "agent-native" | typeof platform) =>
-      discardComposeDraft(composeDraftKey(namespace, data.environmentId, sessionKey)).catch(
-        (error) => {
-          log.warn("compose-draft.discard-failed", { error: formatLogError(error) });
-        },
-      );
+      discardComposeDraft(
+        composeDraftKey(namespace, data.environmentId, sessionKey),
+        undefined,
+        composeScope,
+      ).catch((error) => {
+        log.warn("compose-draft.discard-failed", { error: formatLogError(error) });
+      });
     void discard("agent-native");
     void discard(platform);
-  }, [data.environmentId, platform, sessionKey]);
+  }, [composeScope, data.environmentId, platform, sessionKey]);
 
   const releaseRetiredRequestId = useCallback(
     (requestId: string, error: string) => {
@@ -1724,7 +1751,7 @@ export function SharedNativeAgentController({
         { sessionIdentity: noticeSessionIdentity, noticeId },
       ]);
       dismissNotice(noticeSessionIdentity, noticeId);
-      const current = useNativeComposeStore.getState().drafts.get(sessionKey);
+      const current = composeDrafts.getState().drafts.get(sessionKey);
       if (current?.requestId !== requestId) return;
       updateDraft(sessionKey, {
         requestId: undefined,
@@ -1732,7 +1759,7 @@ export function SharedNativeAgentController({
         submissionError: error,
       });
     },
-    [dismissNotice, noticeSessionIdentity, sessionKey, updateDraft],
+    [dismissNotice, noticeSessionIdentity, sessionKey, updateDraft, composeDrafts],
   );
 
   /*
@@ -1780,7 +1807,7 @@ export function SharedNativeAgentController({
   const clearConfirmedDraft = useCallback(
     (requestId: string | undefined): boolean => {
       if (!requestId) return false;
-      const current = useNativeComposeStore.getState().drafts.get(sessionKey);
+      const current = composeDrafts.getState().drafts.get(sessionKey);
       // Editing any content clears requestId in nativeComposeStore. That makes
       // this comparison the ownership check which prevents a late transcript
       // echo from deleting the user's next prompt.
@@ -1794,6 +1821,7 @@ export function SharedNativeAgentController({
       return true;
     },
     [
+      composeDrafts,
       clearDraft,
       consumeBrowserAnnotations,
       data.environmentId,
@@ -1919,14 +1947,14 @@ export function SharedNativeAgentController({
   const selectedModelId = composer?.selectedModelId;
   const runGoalCommand = useCallback(
     (text: string) =>
-      runNativeAgentGoalCommand({
+      backendForScope(composeScope).runNativeAgentGoalCommand({
         environmentId: data.environmentId,
         agent: platform,
         logicalSessionKey: sessionKey,
         text,
         ...(selectedModelId ? { model: selectedModelId } : {}),
       }),
-    [data.environmentId, platform, selectedModelId, sessionKey],
+    [composeScope, data.environmentId, platform, selectedModelId, sessionKey],
   );
   const pendingHandoff = Boolean(handoff.pendingHistory);
   const runGoalCommandFromPanel = useCallback(
@@ -1942,14 +1970,14 @@ export function SharedNativeAgentController({
     () => ({
       openTranscript: (batchId, suborkId) => setOpenSubork({ batchId, suborkId }),
       stop: (batchId) =>
-        stopNativeAgentSuborks({
+        backendForScope(composeScope).stopNativeAgentSuborks({
           environmentId: data.environmentId,
           agent: platform,
           logicalSessionKey: sessionKey,
           batchId,
         }),
     }),
-    [data.environmentId, platform, sessionKey],
+    [composeScope, data.environmentId, platform, sessionKey],
   );
   const openSuborkBatch = openSubork
     ? projection?.suborks?.find((batch) => batch.id === openSubork.batchId)
@@ -1959,12 +1987,12 @@ export function SharedNativeAgentController({
   );
   const loadGoalDetail = useCallback(
     () =>
-      getNativeAgentGoal({
+      backendForScope(composeScope).getNativeAgentGoal({
         environmentId: data.environmentId,
         agent: platform,
         logicalSessionKey: sessionKey,
       }),
-    [data.environmentId, platform, sessionKey],
+    [composeScope, data.environmentId, platform, sessionKey],
   );
 
   const submit = useCallback(
@@ -2022,7 +2050,7 @@ export function SharedNativeAgentController({
         submitInFlightRef.current = true;
         setIsSubmitting(true);
         try {
-          await runUserCommand({
+          await backendForScope(composeScope).runUserCommand({
             environmentId: data.environmentId,
             tabId,
             command: userCommand,
@@ -2308,13 +2336,13 @@ export function SharedNativeAgentController({
       // still edit it, and a remounted composer must never replay this send.
       if (submitOptions?.preflight && beforeSend) {
         const lifetime = composerLifetimeRef.current;
-        const pendingDraft = nativeComposeDraft(useNativeComposeStore.getState(), sessionKey);
+        const pendingDraft = nativeComposeDraft(composeDrafts.getState(), sessionKey);
         beforeSendPendingRef.current = true;
         setPreparingSend(true);
         try {
           const proceed = await beforeSend();
           if (composerLifetimeRef.current !== lifetime || proceed === false) return false;
-          const currentDraft = nativeComposeDraft(useNativeComposeStore.getState(), sessionKey);
+          const currentDraft = nativeComposeDraft(composeDrafts.getState(), sessionKey);
           if (
             currentDraft.text !== pendingDraft.text ||
             currentDraft.mentions !== pendingDraft.mentions ||
@@ -2462,7 +2490,7 @@ export function SharedNativeAgentController({
           transcriptConfirmedRequestIdRef.current = null;
           // The transcript echo may already have cleared this prompt, and a
           // dispatch can take long enough for the next one to be typed since.
-          const ownedDraft = useNativeComposeStore.getState().drafts.get(sessionKey);
+          const ownedDraft = composeDrafts.getState().drafts.get(sessionKey);
           if (ownedDraft?.requestId === dispatchRequestId) {
             clearDraft(sessionKey);
             consumeBrowserAnnotations(data.environmentId, submittedBrowserAnnotationIds);
@@ -2524,6 +2552,8 @@ export function SharedNativeAgentController({
       return false;
     },
     [
+      composeScope,
+      composeDrafts,
       adapter.capabilities.attachments,
       autoSteerEnabled,
       beforeSend,
@@ -2593,10 +2623,10 @@ export function SharedNativeAgentController({
 
   useEffect(() => {
     sendAsTextRef.current = () => {
-      const current = nativeComposeDraft(useNativeComposeStore.getState(), sessionKey);
+      const current = nativeComposeDraft(composeDrafts.getState(), sessionKey);
       sendFromComposer(current.text, { literal: true });
     };
-  }, [sendFromComposer, sessionKey]);
+  }, [sendFromComposer, sessionKey, composeDrafts]);
 
   const canArchiveResumable = Boolean(adapter.capabilities.actions?.archive);
   /**
@@ -2720,7 +2750,7 @@ export function SharedNativeAgentController({
   const handleWorkspaceFileAttach = useCallback(
     (file: FileCandidate) => {
       if (queueEditPendingRef.current) return;
-      const current = useNativeComposeStore.getState().drafts.get(sessionKey);
+      const current = composeDrafts.getState().drafts.get(sessionKey);
       const resolved = resolveWorkspaceAttachment(file, {
         containerId: data.containerId,
         worktreePath: envWorktreePath ?? coordinatorWorkspacePath,
@@ -2739,6 +2769,7 @@ export function SharedNativeAgentController({
       });
     },
     [
+      composeDrafts,
       adapter.capabilities.attachments.files,
       adapter.capabilities.attachments.images,
       data.containerId,
@@ -2753,19 +2784,23 @@ export function SharedNativeAgentController({
   const handlePastedImage = useCallback(
     (attachment: { id: string; type: "image"; path: string; previewUrl: string; name: string }) => {
       if (queueEditPendingRef.current) return;
-      const current = useNativeComposeStore.getState().drafts.get(sessionKey);
+      const current = composeDrafts.getState().drafts.get(sessionKey);
       updateDraft(sessionKey, {
         attachments: [...(current?.attachments ?? []), attachment],
       });
     },
-    [sessionKey, updateDraft],
+    [sessionKey, updateDraft, composeDrafts],
   );
   const writeSpecialImage = useCallback(
     (filename: string, base64Data: string) =>
       reportId
-        ? writeBugReportAttachment(reportId, filename, base64Data)
-        : writeCoordinatorAttachment(data.environmentId, filename, base64Data),
-    [data.environmentId, reportId],
+        ? backendForScope(composeScope).writeBugReportAttachment(reportId, filename, base64Data)
+        : backendForScope(composeScope).writeCoordinatorAttachment(
+            data.environmentId,
+            filename,
+            base64Data,
+          ),
+    [composeScope, data.environmentId, reportId],
   );
   useNativeComposeBarPaste({
     inputContainerRef,
@@ -2829,7 +2864,7 @@ export function SharedNativeAgentController({
         const forkTabId = crypto.randomUUID();
         const forkSessionKey = createSessionKey(data.environmentId, forkTabId);
         if (outcome) {
-          await adoptNativeAgentSession({
+          await backendForScope(composeScope).adoptNativeAgentSession({
             environmentId: data.environmentId,
             agent: platform,
             logicalSessionKey: forkSessionKey,
@@ -2846,7 +2881,7 @@ export function SharedNativeAgentController({
             annotations: restoredDraft.annotations,
           });
         }
-        const panes = usePaneLayoutStore.getState();
+        const panes = paneLayouts.getState();
         panes.addTab(
           panes.getActivePaneId(data.environmentId),
           {
@@ -2870,7 +2905,17 @@ export function SharedNativeAgentController({
         setForkInFlight(false);
       }
     },
-    [data, fork, forkSourceSessionId, forkSourceTitle, label, platform, updateDraft],
+    [
+      composeScope,
+      data,
+      fork,
+      forkSourceSessionId,
+      forkSourceTitle,
+      label,
+      platform,
+      updateDraft,
+      paneLayouts,
+    ],
   );
   const handleForkAction = useCallback(
     (messageId: string, kind: MessageForkKind) => {
@@ -3046,7 +3091,7 @@ export function SharedNativeAgentController({
     if (!heldSubmit) return;
     // Effects and timers from an older render must never consume a newer send.
     const isCurrent = () =>
-      nativeComposeDraft(useNativeComposeStore.getState(), sessionKey).heldSubmit === heldSubmit;
+      nativeComposeDraft(composeDrafts.getState(), sessionKey).heldSubmit === heldSubmit;
     if (!isCurrent()) return;
     if (draft.text !== heldSubmit.draftText) {
       settleHeldSubmit();
@@ -3103,6 +3148,7 @@ export function SharedNativeAgentController({
     );
     return () => window.clearTimeout(timeout);
   }, [
+    composeDrafts,
     heldSubmit,
     draft.text,
     platform,
@@ -3736,7 +3782,7 @@ export function SharedNativeAgentController({
     // Editing loads the prompt into the composer, so anything
     // already there would be destroyed. Refusing with a reason
     // beats the silent overwrite.
-    const current = nativeComposeDraft(useNativeComposeStore.getState(), sessionKey);
+    const current = nativeComposeDraft(composeDrafts.getState(), sessionKey);
     if (
       queueEditPendingRef.current ||
       submitInFlightRef.current ||
@@ -4027,7 +4073,7 @@ export function SharedNativeAgentController({
           }}
           annotations={draft.annotations}
           onOpenMigratedAnnotation={(annotationId) =>
-            openWebAnnotationThread(data.environmentId, annotationId)
+            openWebAnnotationThread(data.environmentId, annotationId, {}, composeScope)
           }
           onClearAnnotations={() => {
             if (queueEditPendingRef.current || draft.submissionPending) return;
@@ -4400,7 +4446,7 @@ export function SharedNativeAgentController({
                   onOpenChange={setQueueDialogOpen}
                   messages={queuedMessages}
                   onOpenWebAnnotationRequest={(requestId) =>
-                    openWebAnnotationRequest(data.environmentId, requestId)
+                    openWebAnnotationRequest(data.environmentId, requestId, composeScope)
                   }
                   onEdit={editQueuedPrompt}
                   onMove={async (fromIndex, toIndex) => {

@@ -1,3 +1,4 @@
+import { registrarFrom } from "./commands-registry-contracts.js";
 import { describe, expect, mock, test } from "bun:test";
 import { createCommandRegistry } from "./commands.js";
 import type { CommandContext } from "./commands-context.js";
@@ -136,10 +137,13 @@ describe("projectless bug report catalogue", () => {
       },
     } as unknown as CommandContext;
     const commands = new Map();
-    registerProjectCommands((name, handler) => commands.set(name, handler), {
-      commands,
-      refreshHostModelCatalog: refresh,
-    } as never);
+    registerProjectCommands(
+      registrarFrom((name, handler) => commands.set(name, handler)),
+      {
+        commands,
+        refreshHostModelCatalog: refresh,
+      } as never,
+    );
     const result = await commands.get("get_native_agent_model_catalog")(
       { environmentId: "bug-report:r1", ensureAgent: "opencode" },
       context,
@@ -188,5 +192,8 @@ test("summary reads bound icons before serialization without changing ordinary r
   }
   expect(await handler({}, context)).toEqual(stored);
   expect(stored.every((project) => project.icon === icon)).toBe(true);
-  await expect(handler({ summaryIcons: "yes" }, context)).rejects.toThrow("summaryIcons");
+  // The registry decodes the arguments before the handler runs, so the refusal is synchronous.
+  await expect(
+    Promise.resolve().then(() => handler({ summaryIcons: "yes" }, context)),
+  ).rejects.toThrow("summaryIcons");
 });

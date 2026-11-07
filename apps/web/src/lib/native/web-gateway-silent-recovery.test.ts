@@ -1,14 +1,12 @@
 import { afterEach, expect, mock, spyOn, test } from "bun:test";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { createBrowserGatewayApi } from "./web-gateway";
-import { clearDirectGatewayTransport } from "./gateway-auth-transport";
 
 const originalFetch = globalThis.fetch;
 const restorers: Array<() => void> = [];
 afterEach(() => {
   for (const restore of restorers.splice(0).reverse()) restore();
   globalThis.fetch = originalFetch;
-  clearDirectGatewayTransport();
 });
 
 async function flush() {

@@ -18,7 +18,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { designApi } from "@/lib/design-client";
+import { useDesignApi } from "./design-scope";
 import type { DesignFrameAction } from "./design-canvas-context";
 import {
   applyPage,
@@ -87,7 +87,7 @@ export interface DesignLayerTreeProps {
   onFrameAction: (frameId: string, action: DesignFrameAction) => void;
   /** Frames with an unsettled optimistic edit; labelled "(saving)". */
   pendingFrames?: ReadonlySet<string>;
-  /** Backend hierarchy source for frames without a live, current iframe. Defaults to `designApi.hierarchy`. */
+  /** Backend hierarchy source for frames without a live, current iframe. Defaults to the canvas node's `hierarchy`. */
   loadHierarchy?: HierarchyLoader;
 }
 
@@ -160,6 +160,8 @@ export function DesignLayerTree(props: DesignLayerTreeProps) {
     onSelectElement,
     onFrameAction,
   } = props;
+  // The canvas's node: frames without a live iframe read their layers there (plan item 4007).
+  const nodeDesign = useDesignApi();
   const latest = useRef(props);
   useLayoutEffect(() => {
     latest.current = props;
@@ -267,7 +269,7 @@ export function DesignLayerTree(props: DesignLayerTreeProps) {
           return page;
         });
       } else {
-        const loader = current.loadHierarchy ?? designApi.hierarchy;
+        const loader = current.loadHierarchy ?? nodeDesign.hierarchy;
         const expected = current.metas[frameId]?.structureId;
         pending = loader(current.environmentId, current.canvasId, frameId, query).then((result) => {
           if (expected && result.structureId && result.structureId !== expected)
@@ -307,7 +309,7 @@ export function DesignLayerTree(props: DesignLayerTreeProps) {
         },
       );
     },
-    [commit, protectedBranches, sourceOf],
+    [commit, protectedBranches, sourceOf, nodeDesign],
   );
 
   // Auto-expansion: selection/focus reveal their frame; small canvases open live frames once.

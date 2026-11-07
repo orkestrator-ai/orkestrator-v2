@@ -1,9 +1,11 @@
 /**
  * The sidebar's empty states and drag card look the same on this window's
- * tree, another machine's section and the merged lists (to-do 2190, task 7).
+ * tree, another machine's section and the merged lists (to-do 2190, task 7),
+ * and another machine's rows look the same from its summary and from its
+ * warm or live scope (plan item 5007).
  */
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import {
   toNodeEnvironmentSummary,
   toNodeProjectSummary,
@@ -15,7 +17,16 @@ import { FederationProvider } from "@/components/federation/FederationProvider";
 import { HierarchicalSidebar } from "@/components/sidebar/HierarchicalSidebar";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
-import { useEnvironmentStore, useProjectStore, useUIStore } from "@/stores";
+import { uiStore } from "@/stores";
+import { useUIChromeStore } from "@/stores/uiChromeStore";
+import { environmentStore } from "@/stores/environmentStore";
+import { projectStore } from "@/stores/projectStore";
+import { getWindowScope } from "@/lib/node-scope/app-window-scope";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { noteAuthoritativeRead } from "@/lib/node-scope/snapshot-sync";
+import { portalStore } from "@/lib/portal/portal-store";
+import { FakeNodeClient, renderInAppCommandScope } from "@/test/render-in-node-scope";
+import type { Environment, Project } from "@/types";
 import {
   connectionList,
   installDesktopFake,
@@ -23,11 +34,12 @@ import {
   uninstallDesktopFake,
   type MachineDataset,
 } from "@/test/federation-desktop-fake";
+import { appCommandStore } from "@/test/app-command-store";
 
 const initialView = useMachineViewStore.getState();
-const initialUI = useUIStore.getState();
-const initialProjects = useProjectStore.getState();
-const initialEnvironments = useEnvironmentStore.getState();
+const initialUI = appCommandStore(uiStore).getState();
+const initialProjects = appCommandStore(projectStore).getState();
+const initialEnvironments = appCommandStore(environmentStore).getState();
 const initialRemote = useRemoteWorkspaceStore.getState();
 
 function renderSidebar(grouping: "machine" | "project", dataset: MachineDataset) {
@@ -41,8 +53,8 @@ function renderSidebar(grouping: "machine" | "project", dataset: MachineDataset)
         ? []
         : undefined,
   });
-  useProjectStore.getState().setProjects([]);
-  useEnvironmentStore.getState().setEnvironments([]);
+  appCommandStore(projectStore).getState().setProjects([]);
+  appCommandStore(environmentStore).getState().setEnvironments([]);
   useMachineViewStore.setState({
     grouping,
     machineFilter: "all",
@@ -52,7 +64,7 @@ function renderSidebar(grouping: "machine" | "project", dataset: MachineDataset)
     revealedProject: null,
     recentKeys: [],
   });
-  render(
+  renderInAppCommandScope(
     <FederationProvider>
       <HierarchicalSidebar />
     </FederationProvider>,
@@ -71,22 +83,28 @@ async function startKeyboardDrag(handle: HTMLElement): Promise<void> {
 beforeEach(() => {
   if (!HTMLElement.prototype.scrollIntoView) HTMLElement.prototype.scrollIntoView = () => {};
   useRemoteWorkspaceStore.setState({ active: null });
-  useUIStore.setState({
+  appCommandStore(uiStore).setState({
     selectedProjectId: null,
     selectedEnvironmentId: null,
     recentProjectIds: [],
-    environmentSortMode: "project",
     collapsedProjects: [],
+  });
+  useUIChromeStore.setState({
+    environmentSortMode: "project",
   });
 });
 
+let leafScope: NodeScope | null = null;
+
 afterEach(() => {
   cleanup();
+  if (leafScope && !leafScope.disposed) leafScope.dispose();
+  leafScope = null;
   uninstallDesktopFake();
   useMachineViewStore.setState(initialView, true);
-  useUIStore.setState(initialUI, true);
-  useProjectStore.setState(initialProjects, true);
-  useEnvironmentStore.setState(initialEnvironments, true);
+  appCommandStore(uiStore).setState(initialUI, true);
+  appCommandStore(projectStore).setState(initialProjects, true);
+  appCommandStore(environmentStore).setState(initialEnvironments, true);
   useRemoteWorkspaceStore.setState(initialRemote, true);
 });
 
@@ -162,7 +180,7 @@ for (const mode of ["project", "repository"] as const) {
           </FederationProvider>
         );
       }
-      const view = render(<List loading />);
+      const view = renderInAppCommandScope(<List loading />);
       expect(screen.getByText("Loading projects...")).toBeTruthy();
       expect(screen.queryByRole("button", { name: "Add your first project" }) === null).toBe(true);
       view.rerender(<List loading={false} />);
@@ -219,7 +237,7 @@ for (const order of ["priority", "newest", "oldest"] as const) {
         ]),
       ),
     };
-    render(
+    renderInAppCommandScope(
       <FederatedActivityList
         machines={[machine]}
         order={order}
@@ -236,3 +254,131 @@ for (const order of ["priority", "newest", "oldest"] as const) {
     ]);
   });
 }
+
+// Plan item 5007: a node whose scope the window holds warm or live draws its
+// rows from that scope's stores, and every other node from its summary.
+const scopeProject = {
+  id: "project-1",
+  name: "app",
+  gitUrl: "https://github.com/o/app.git",
+  localPath: "/work/app",
+  addedAt: "2026-10-01T00:00:00Z",
+  order: 0,
+};
+
+function scopeEnvironment(id: string, order: number, extra: Record<string, unknown> = {}) {
+  return {
+    id,
+    projectId: "project-1",
+    name: id,
+    branch: id,
+    environmentType: "local",
+    status: "running",
+    agentActivityState: "idle",
+    prUrl: null,
+    prState: null,
+    hasMergeConflicts: null,
+    containerId: null,
+    createdAt: "2026-10-01T00:00:00Z",
+    networkAccessMode: "restricted",
+    order,
+    ...extra,
+  };
+}
+
+function overlayDataset(): MachineDataset {
+  return {
+    projects: [scopeProject],
+    environments: {
+      "project-1": [
+        scopeEnvironment("alpha", 0, { agentActivityState: "waiting", hasUnreadWork: true }),
+        scopeEnvironment("beta", 1, { agentMailUnread: 2 }),
+        scopeEnvironment("gamma", 2, { prUrl: "https://github.com/o/app/pull/3", prState: "open" }),
+      ],
+    },
+  };
+}
+
+/** Machine A's scope on the app's window, holding `dataset`'s records as the node's own. */
+function openLeafScope(dataset: MachineDataset, tier: "warm" | "live" = "warm"): NodeScope {
+  const scope = getWindowScope().open({
+    role: "leaf",
+    client: new FakeNodeClient({ nodeId: "bk_a" as BackendId }),
+    tier,
+  });
+  leafScope = scope;
+  act(() => {
+    scope
+      .store(projectStore)
+      .getState()
+      .setProjects(dataset.projects as unknown as Project[]);
+    scope
+      .store(environmentStore)
+      .getState()
+      .setEnvironments(Object.values(dataset.environments).flat() as unknown as Environment[]);
+    noteAuthoritativeRead(scope, "environment");
+  });
+  return scope;
+}
+
+function machineARows(): string[] {
+  return screen.getAllByTestId("federated-environment-row").map((row) => row.textContent ?? "");
+}
+
+function machineASection(): string {
+  return screen
+    .getAllByTestId("federated-project")
+    .map((group) => group.outerHTML)
+    .join("");
+}
+
+test("another machine's rows are the same from its summary and from its warm scope, and a tier change keeps them", async () => {
+  renderSidebar("machine", overlayDataset());
+  await screen.findByRole("button", { name: /^alpha, on Machine A/ });
+  const fromSummary = machineASection();
+  const rowElement = screen.getByRole("button", { name: /^beta, on Machine A/ });
+
+  const scope = openLeafScope(overlayDataset());
+  expect(machineASection()).toBe(fromSummary);
+  // The same element: the row was not remounted when its source changed.
+  expect(screen.getByRole("button", { name: /^beta, on Machine A/ })).toBe(rowElement);
+
+  act(() => scope.setTier("live"));
+  expect(machineASection()).toBe(fromSummary);
+  act(() => scope.setTier("suspended"));
+  expect(machineASection()).toBe(fromSummary);
+  act(() => scope.setTier("warm"));
+  expect(machineASection()).toBe(fromSummary);
+  expect(screen.getByRole("button", { name: /^beta, on Machine A/ })).toBe(rowElement);
+});
+
+test("a rename in the warm scope shows before the next summary, and the summary takes over when it suspends", async () => {
+  const dataset = overlayDataset();
+  renderSidebar("machine", dataset);
+  await screen.findByRole("button", { name: /^alpha, on Machine A/ });
+  const scope = openLeafScope(overlayDataset());
+  const before = portalStore.getState().nodes;
+
+  act(() => scope.store(environmentStore).getState().updateEnvironment("beta", { name: "beta-2" }));
+  expect(await screen.findByRole("button", { name: /^beta-2, on Machine A/ })).toBeTruthy();
+  // No summary was read for it.
+  expect(portalStore.getState().nodes).toBe(before);
+  const rows = machineARows();
+  expect(rows).toHaveLength(3);
+  expect(["alpha", "beta-2", "gamma"].every((name, index) => rows[index]!.startsWith(name))).toBe(
+    true,
+  );
+  // The summary-only mail badge is kept on the renamed row.
+  expect(screen.getAllByLabelText("2 unread agent messages").length).toBeGreaterThan(0);
+
+  // Suspended, the scope no longer hears its node: the summary is the row again.
+  act(() => scope.setTier("suspended"));
+  expect(await screen.findByRole("button", { name: /^beta, on Machine A/ })).toBeTruthy();
+  // The summary catches up on its own.
+  dataset.environments["project-1"]![1] = scopeEnvironment("beta", 1, {
+    name: "beta-2",
+    agentMailUnread: 2,
+  });
+  await act(() => portalStore.refresh());
+  expect(await screen.findByRole("button", { name: /^beta-2, on Machine A/ })).toBeTruthy();
+});

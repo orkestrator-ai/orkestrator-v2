@@ -10,6 +10,7 @@ import { FileViewerTab } from "../../apps/web/src/components/terminal/FileViewer
 import { useChangeProjectionStore } from "../../apps/web/src/stores/changeProjectionStore";
 import { useToolChangePresentation } from "../../apps/web/src/hooks/useChangeProjection";
 import { NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "../../apps/web/src/lib/native/events";
+import { appCommandStore } from "../../apps/web/src/test/app-command-store";
 
 declare global {
   interface Window {
@@ -37,7 +38,7 @@ export function installChangeTrackingFixture() {
   };
   window.changesInvalidate = (generation) => {
     const resourceKey = environmentChangeResourceKey("env-1");
-    const ownerGeneration = useChangeProjectionStore
+    const ownerGeneration = appCommandStore(useChangeProjectionStore.def)
       .getState()
       .projections.get(resourceKey)?.ownerGeneration;
     for (const listener of listeners.get(CHANGE_PROJECTION_CHANGED_EVENT) ?? []) {

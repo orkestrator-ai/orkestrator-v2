@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 
+import { nodeFilesApi, type NodeFilesApi } from "@orkestrator/protocol/contract/domains/node-files";
+
 import { NODE_FILE_CHUNK_BYTES, type NodeFileScope } from "./node-files.js";
 
 /**
@@ -49,6 +51,16 @@ export type NodeFileInvoker = (
   nodeId: string,
 ) => <T>(command: string, args: Record<string, unknown>) => Promise<T>;
 
+/** The `node-files` API on one node: its domain client (plan item 1010), or this node's own commands. */
+export type NodeFilesFor = (nodeId: string) => NodeFilesApi;
+
+/** The `node-files` API over a plain invoker, without a contract envelope. */
+export function nodeFilesOverInvoker(
+  invoke: <T>(command: string, args: Record<string, unknown>) => Promise<T>,
+): NodeFilesApi {
+  return nodeFilesApi((def, args) => invoke(def.name, args as Record<string, unknown>));
+}
+
 export class NodeFileTransfer {
   private receipts: TransferReceipt[] = [];
   private loaded = false;
@@ -56,11 +68,17 @@ export class NodeFileTransfer {
   constructor(
     private readonly options: {
       invokerFor: NodeFileInvoker;
+      /** The file commands per node through its domain client; `invokerFor` otherwise. */
+      filesFor?: NodeFilesFor;
       load?(): Promise<unknown>;
       save?(receipts: TransferReceipt[]): Promise<void>;
       now?: () => number;
     },
   ) {}
+
+  private files(nodeId: string): NodeFilesApi {
+    return this.options.filesFor?.(nodeId) ?? nodeFilesOverInvoker(this.options.invokerFor(nodeId));
+  }
 
   private iso(): string {
     return new Date((this.options.now ?? Date.now)()).toISOString();
@@ -109,20 +127,14 @@ export class NodeFileTransfer {
       startedAt: this.iso(),
       status: "running",
     };
-    const source = this.options.invokerFor(input.from.nodeId);
-    const destination = this.options.invokerFor(input.to.nodeId);
+    const source = this.files(input.from.nodeId);
+    const destination = this.files(input.to.nodeId);
     try {
       for (const path of input.files) {
         const target = input.toDirectory
           ? `${input.toDirectory.replace(/\/+$/, "")}/${path}`
           : path;
-        const stat = await source<{ exists: boolean; size?: number; sha256?: string }>(
-          "stat_node_file",
-          {
-            scope: input.from.scope,
-            path,
-          },
-        );
+        const stat = await source.stat({ scope: input.from.scope, path });
         if (!stat.exists || stat.size === undefined || !stat.sha256) {
           throw Object.assign(new Error(`${path} does not exist at the source.`), {
             code: "not-found",
@@ -133,13 +145,15 @@ export class NodeFileTransfer {
         }
         let uploadId: string;
         try {
-          ({ uploadId } = await destination<{ uploadId: string }>("begin_node_file_write", {
+          const begun = await destination.beginWrite({
             scope: input.to.scope,
             path: target,
             size: stat.size,
             sha256: stat.sha256,
             overwrite: input.overwrite,
-          }));
+          });
+          if (!begun.uploadId) throw new Error(`${target} could not be opened there.`);
+          uploadId = begun.uploadId;
         } catch (error) {
           if (!input.overwrite && input.skipExisting && isExistsError(error)) {
             (receipt.skipped ??= []).push(path);
@@ -151,36 +165,30 @@ export class NodeFileTransfer {
         try {
           let offset = 0;
           while (offset < stat.size) {
-            const chunk = await source<{ contentBase64: string; eof: boolean }>("read_node_file", {
+            const chunk = await source.read({
               scope: input.from.scope,
               path,
               offset,
               length: NODE_FILE_CHUNK_BYTES,
             });
-            const bytes = Buffer.byteLength(chunk.contentBase64, "base64");
+            const contentBase64 = chunk.contentBase64 ?? "";
+            const bytes = Buffer.byteLength(contentBase64, "base64");
             if (bytes === 0) break;
-            await destination("append_node_file_write", {
-              uploadId,
-              contentBase64: chunk.contentBase64,
-            });
+            await destination.appendWrite({ uploadId, contentBase64 });
             offset += bytes;
           }
-          const committed = await destination<{ bytes: number; sha256: string }>(
-            "commit_node_file_write",
-            {
-              uploadId,
-            },
-          );
+          const committed = await destination.commitWrite({ uploadId });
+          const bytes = committed.bytes ?? offset;
           receipt.files.push({
             path,
             destination: target,
-            bytes: committed.bytes,
-            sha256: committed.sha256,
+            bytes,
+            sha256: committed.sha256 ?? stat.sha256,
           });
-          receipt.bytes += committed.bytes;
-          input.onFile?.({ path, bytes: committed.bytes, skipped: false });
+          receipt.bytes += bytes;
+          input.onFile?.({ path, bytes, skipped: false });
         } catch (error) {
-          await destination("abort_node_file_write", { uploadId }).catch(() => undefined);
+          await destination.abortWrite({ uploadId }).catch(() => undefined);
           throw error;
         }
       }

@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test, type Mock } from "bun:test";
 import type { GraphDescribeJobView } from "@orkestrator/protocol/graphs/describe";
 import { invoke } from "@/lib/native/backend";
-import { useGraphDescribeStore } from "./graphDescribeStore";
+import { graphDescribeStore } from "./graphDescribeStore";
+import { appCommandStore } from "@/test/app-command-store";
 
 // `@/lib/native/backend` is replaced once for every suite in tests/setup.ts.
 const invokeMock = invoke as unknown as Mock<(...args: unknown[]) => Promise<unknown>>;
@@ -23,9 +24,9 @@ function job(overrides: Partial<GraphDescribeJobView> = {}): GraphDescribeJobVie
   };
 }
 
-const entry = () => useGraphDescribeStore.getState().entries.get("env-1");
+const entry = () => appCommandStore(graphDescribeStore).getState().entries.get("env-1");
 
-beforeEach(() => useGraphDescribeStore.setState({ entries: new Map() }));
+beforeEach(() => appCommandStore(graphDescribeStore).setState({ entries: new Map() }));
 afterEach(() => {
   invokeMock.mockReset();
   invokeMock.mockImplementation(() => Promise.resolve());
@@ -39,11 +40,11 @@ describe("graphDescribeStore", () => {
       if (command === "graph_describe_dismiss") return { dismissed: true };
       throw new Error(`unexpected ${String(command)}`);
     });
-    await useGraphDescribeStore.getState().refresh("env-1");
+    await appCommandStore(graphDescribeStore).getState().refresh("env-1");
     expect(entry()).toMatchObject({ loaded: true, job: { status: "running" } });
-    await useGraphDescribeStore.getState().cancel("env-1");
+    await appCommandStore(graphDescribeStore).getState().cancel("env-1");
     expect(entry()?.job?.status).toBe("cancelled");
-    await useGraphDescribeStore.getState().dismiss("env-1", "job-1");
+    await appCommandStore(graphDescribeStore).getState().dismiss("env-1", "job-1");
     expect(entry()?.job).toBeNull();
     expect(invokeMock.mock.calls.map((call) => call[0])).toEqual([
       "graph_describe_status",
@@ -58,7 +59,7 @@ describe("graphDescribeStore", () => {
       throw new Error("Start the environment first");
     });
     await expect(
-      useGraphDescribeStore
+      appCommandStore(graphDescribeStore)
         .getState()
         .start({ environmentId: "env-1", description: "A graph", agent: "codex" }),
     ).rejects.toThrow("Start the environment first");
@@ -75,8 +76,8 @@ describe("graphDescribeStore", () => {
       }
       return job({ id: "job-2", progress: "starting" });
     });
-    const reading = useGraphDescribeStore.getState().refresh("env-1");
-    await useGraphDescribeStore
+    const reading = appCommandStore(graphDescribeStore).getState().refresh("env-1");
+    await appCommandStore(graphDescribeStore)
       .getState()
       .start({ environmentId: "env-1", description: "A graph", agent: "codex" });
     answer(null);

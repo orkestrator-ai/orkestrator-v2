@@ -1,3 +1,15 @@
+import {
+  applyProjectRootChangesCommand,
+  createCoordinatorPrCommand,
+  editCoordinatorWorkerTabCommand,
+  getCoordinatorFeaturePlanCommand,
+  launchCoordinatorFeaturePlanCommand,
+  launchCoordinatorTerminalCommand,
+  listProjectRootChangesCommand,
+  openCoordinatorBrowserCommand,
+  requestCoordinatorRootChangesCommand,
+  resolveCoordinatorConflictsCommand,
+} from "@orkestrator/protocol/contract/domains/coordinator";
 import { createHash, randomUUID } from "node:crypto";
 import {
   coordinatorRuntimeId,
@@ -146,7 +158,7 @@ export function registerCoordinatorSurfaceActions(
     return (await handler(args, context)) as T;
   };
 
-  register("launch_coordinator_terminal", async (args, context) => {
+  register(launchCoordinatorTerminalCommand, async (args, context) => {
     const caller = await coordinatorCaller(args.scope, context);
     const input = record(args.input, "the terminal input");
     const requestId = asNonBlankString(input.requestId, "requestId");
@@ -189,7 +201,7 @@ export function registerCoordinatorSurfaceActions(
     );
   });
 
-  register("open_coordinator_browser", async (args, context) => {
+  register(openCoordinatorBrowserCommand, async (args, context) => {
     const caller = await coordinatorCaller(args.scope, context);
     const input = record(args.input, "the browser input");
     const requestId = asNonBlankString(input.requestId, "requestId");
@@ -232,7 +244,7 @@ export function registerCoordinatorSurfaceActions(
     );
   });
 
-  register("edit_coordinator_worker_tab", async (args, context) => {
+  register(editCoordinatorWorkerTabCommand, async (args, context) => {
     const caller = await coordinatorCaller(args.scope, context);
     const input = record(args.input, "the tab edit");
     const remote = await remoteNode(context, caller, optionalText(input.nodeId, "nodeId", 200));
@@ -285,7 +297,7 @@ export function registerCoordinatorSurfaceActions(
    * coordinator's work becomes a pull request, after review. A build
    * pipeline raises its own while active; forks and terminal leftovers can publish.
    */
-  register("create_coordinator_pr", async (args, context) => {
+  register(createCoordinatorPrCommand, async (args, context) => {
     const caller = await coordinatorCaller(args.scope, context);
     const input = record(args.input, "the pull request input");
     const requestId = asNonBlankString(input.requestId, "requestId");
@@ -336,7 +348,7 @@ export function registerCoordinatorSurfaceActions(
    * followed (the same record `create_pr` writes), and the Resolve tab
    * finishing wakes the coordinator once with the refreshed PR state.
    */
-  register("resolve_coordinator_conflicts", async (args, context) => {
+  register(resolveCoordinatorConflictsCommand, async (args, context) => {
     const caller = await coordinatorCaller(args.scope, context);
     const input = record(args.input, "the conflict resolution input");
     const requestId = asNonBlankString(input.requestId, "requestId");
@@ -384,7 +396,7 @@ export function registerCoordinatorSurfaceActions(
     );
   });
 
-  register("launch_coordinator_feature_plan", async (args, context) => {
+  register(launchCoordinatorFeaturePlanCommand, async (args, context) => {
     const caller = await coordinatorCaller(args.scope, context);
     const input = record(args.input, "the feature plan input");
     const requestId = asNonBlankString(input.requestId, "requestId");
@@ -456,7 +468,7 @@ export function registerCoordinatorSurfaceActions(
     );
   });
 
-  register("get_coordinator_feature_plan", async (args, context) => {
+  register(getCoordinatorFeaturePlanCommand, async (args, context) => {
     const caller = await coordinatorCaller(args.scope, context);
     const featureId = asNonBlankString(args.featureId, "featureId");
     const plan = await context.storage.kanban.getFeaturePlan(featureId);
@@ -480,7 +492,7 @@ export function registerCoordinatorSurfaceActions(
     };
   });
 
-  register("request_coordinator_root_changes", async (args, context) => {
+  register(requestCoordinatorRootChangesCommand, async (args, context) => {
     const caller = await coordinatorCaller(args.scope, context);
     const input = record(args.input, "the request");
     const requestId = asNonBlankString(input.requestId, "requestId");
@@ -548,7 +560,7 @@ export function registerCoordinatorSurfaceActions(
   });
 
   /** The user's file picker: the checkout's changed files. Read-only. */
-  register("list_project_root_changes", async (args, context) => {
+  register(listProjectRootChangesCommand, async (args, context) => {
     const projectId = asNonBlankString(args.projectId, "projectId");
     return listRootChanges(await resolveProjectGitRoot(context.storage, projectId));
   });
@@ -558,7 +570,7 @@ export function registerCoordinatorSurfaceActions(
    * coordinator's command invoker refuses it by name): the user picked these
    * paths.
    */
-  register("apply_project_root_changes", async (args, context) => {
+  register(applyProjectRootChangesCommand, async (args, context) => {
     const paths = args.paths;
     if (!Array.isArray(paths) || !paths.every((entry) => typeof entry === "string"))
       throw new Error("Expected paths");

@@ -1,3 +1,5 @@
+import { unknownCommand } from "@orkestrator/protocol/contract/errors";
+import { registrarFrom } from "./core/commands-registry-contracts.js";
 import { configureLogger } from "@orkestrator/protocol/logger";
 /**
  * Test-only isolated backend for the preview latency baseline self-test
@@ -102,13 +104,13 @@ export async function startPreviewBaselineHarness(): Promise<PreviewBaselineHarn
     await manager.start();
 
     const handlers = new Map<string, CommandHandler>();
-    registerPreviewCommands((name, handler) => handlers.set(name, handler));
+    registerPreviewCommands(registrarFrom((name, handler) => handlers.set(name, handler)));
     const context = { previews: preview.runtime } as unknown as CommandContext;
     gateway = new OrkestratorGateway({
       backend: {
         invoke: async (command, args) => {
           const handler = handlers.get(command);
-          if (!handler) throw new Error(`Unknown backend command: ${command}`);
+          if (!handler) throw unknownCommand(command);
           return handler(args as Parameters<CommandHandler>[0], context);
         },
       },

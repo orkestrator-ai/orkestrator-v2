@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import {
   PR_MONITOR_CHANGED_EVENT,
   type PrMonitorEnvironmentState,
@@ -51,8 +52,9 @@ mock.module("@/lib/native/events", () => ({
 
 // Import every stateful dependency after installing module mocks, so the hook
 // and the assertions observe the same Zustand store instances.
-const { usePrMonitorStore } = await import("../../../apps/web/src/stores/prMonitorStore");
-const { useEnvironmentStore } = await import("../../../apps/web/src/stores/environmentStore");
+const { prMonitorStore } = await import("../../../apps/web/src/stores/prMonitorStore");
+const { appCommandStore } = await import("@/test/app-command-store");
+const { environmentStore } = await import("../../../apps/web/src/stores/environmentStore");
 const { usePrMonitorService } = await import("../../../apps/web/src/hooks/usePrMonitorService");
 
 function emitEvent(event: string, payload: unknown) {
@@ -136,8 +138,8 @@ describe("usePrMonitorService", () => {
     mockGetPrMonitorState.mockClear();
     mockGetPrMonitorState.mockImplementation(() => Promise.resolve({ entries: [] }));
     mockToastSuccess.mockClear();
-    usePrMonitorStore.setState({ states: new Map() });
-    useEnvironmentStore.setState({ environments: [] });
+    appCommandStore(prMonitorStore).setState({ states: new Map() });
+    appCommandStore(environmentStore).setState({ environments: [] });
   });
 
   afterEach(() => {
@@ -158,11 +160,11 @@ describe("usePrMonitorService", () => {
       }),
     );
 
-    renderHook(() => usePrMonitorService());
+    renderHookInAppCommandScope(() => usePrMonitorService());
     await flush();
 
     expect(mockGetPrMonitorState).toHaveBeenCalledTimes(1);
-    const states = usePrMonitorStore.getState().states;
+    const states = appCommandStore(prMonitorStore).getState().states;
     expect(states.size).toBe(2);
     expect(states.get("env-1")?.prState).toBe("open");
     expect(states.get("env-2")?.mode).toBe("create-pending");
@@ -172,24 +174,24 @@ describe("usePrMonitorService", () => {
     mockGetPrMonitorState.mockResolvedValueOnce({
       entries: [makeState("env-1", { checkSummary: { passed: 2, total: 3, pending: 1 } })],
     });
-    const mounted = renderHook(() => usePrMonitorService());
+    const mounted = renderHookInAppCommandScope(() => usePrMonitorService());
     await flush();
-    expect(usePrMonitorStore.getState().states.get("env-1")?.checkSummary).toEqual({
+    expect(appCommandStore(prMonitorStore).getState().states.get("env-1")?.checkSummary).toEqual({
       passed: 2,
       total: 3,
       pending: 1,
     });
 
     mounted.unmount();
-    usePrMonitorStore.setState({ states: new Map() });
+    appCommandStore(prMonitorStore).setState({ states: new Map() });
     mockGetPrMonitorState.mockResolvedValueOnce({
       entries: [makeState("env-1", { checkSummary: { passed: 3, total: 3, pending: 0 } })],
     });
 
-    renderHook(() => usePrMonitorService());
+    renderHookInAppCommandScope(() => usePrMonitorService());
     await flush();
 
-    expect(usePrMonitorStore.getState().states.get("env-1")?.checkSummary).toEqual({
+    expect(appCommandStore(prMonitorStore).getState().states.get("env-1")?.checkSummary).toEqual({
       passed: 3,
       total: 3,
       pending: 0,
@@ -197,45 +199,47 @@ describe("usePrMonitorService", () => {
   });
 
   test("ignores a malformed snapshot rather than trusting the wire", async () => {
-    usePrMonitorStore.getState().applyEvent(stateEvent("env-1"));
+    appCommandStore(prMonitorStore).getState().applyEvent(stateEvent("env-1"));
     mockGetPrMonitorState.mockImplementation(() =>
       Promise.resolve({ entries: [{ environmentId: "env-2" }] } as never),
     );
 
-    renderHook(() => usePrMonitorService());
+    renderHookInAppCommandScope(() => usePrMonitorService());
     await flush();
 
     // The invalid payload neither replaced nor cleared the existing state.
-    expect(usePrMonitorStore.getState().states.get("env-1")).toBeDefined();
-    expect(usePrMonitorStore.getState().states.get("env-2")).toBeUndefined();
+    expect(appCommandStore(prMonitorStore).getState().states.get("env-1")).toBeDefined();
+    expect(appCommandStore(prMonitorStore).getState().states.get("env-2")).toBeUndefined();
   });
 
   test("applies live state changes and removals to the store", async () => {
-    renderHook(() => usePrMonitorService());
+    renderHookInAppCommandScope(() => usePrMonitorService());
     await flush();
 
     act(() => {
       emitEvent(PR_MONITOR_CHANGED_EVENT, stateEvent("env-1", { mode: "merge-pending" }));
     });
-    expect(usePrMonitorStore.getState().states.get("env-1")?.mode).toBe("merge-pending");
+    expect(appCommandStore(prMonitorStore).getState().states.get("env-1")?.mode).toBe(
+      "merge-pending",
+    );
 
     act(() => {
       emitEvent(PR_MONITOR_CHANGED_EVENT, { environmentId: "env-1", removed: true });
     });
-    expect(usePrMonitorStore.getState().states.has("env-1")).toBe(false);
+    expect(appCommandStore(prMonitorStore).getState().states.has("env-1")).toBe(false);
 
     // Malformed payloads are dropped.
     act(() => {
       emitEvent(PR_MONITOR_CHANGED_EVENT, { environmentId: "env-9" });
     });
-    expect(usePrMonitorStore.getState().states.has("env-9")).toBe(false);
+    expect(appCommandStore(prMonitorStore).getState().states.has("env-9")).toBe(false);
   });
 
   test("buffers events during a rehydrate and replays them over the snapshot", async () => {
     const snapshot = deferred<PrMonitorSnapshot>();
     mockGetPrMonitorState.mockImplementation(() => snapshot.promise);
 
-    renderHook(() => usePrMonitorService());
+    renderHookInAppCommandScope(() => usePrMonitorService());
     await flush();
 
     // The snapshot is still in flight; a newer live update arrives.
@@ -248,11 +252,11 @@ describe("usePrMonitorService", () => {
 
     // The buffered event was applied after the snapshot, so the newer merged
     // reading was not overwritten by the older snapshot.
-    expect(usePrMonitorStore.getState().states.get("env-1")?.prState).toBe("merged");
+    expect(appCommandStore(prMonitorStore).getState().states.get("env-1")?.prState).toBe("merged");
   });
 
   test("rehydrates again on every event-stream reconnect", async () => {
-    renderHook(() => usePrMonitorService());
+    renderHookInAppCommandScope(() => usePrMonitorService());
     await flush();
     expect(mockGetPrMonitorState).toHaveBeenCalledTimes(1);
 
@@ -273,7 +277,7 @@ describe("usePrMonitorService", () => {
       return defaultListen(event, handler);
     });
 
-    renderHook(() => usePrMonitorService());
+    renderHookInAppCommandScope(() => usePrMonitorService());
     await flush();
 
     expect(changeAttempts).toBe(1);
@@ -291,12 +295,12 @@ describe("usePrMonitorService", () => {
     act(() => {
       emitEvent(PR_MONITOR_CHANGED_EVENT, stateEvent("env-1"));
     });
-    expect(usePrMonitorStore.getState().states.get("env-1")?.prState).toBe("open");
+    expect(appCommandStore(prMonitorStore).getState().states.get("env-1")?.prState).toBe("open");
   });
 
   test("announces a merged transition once, with the environment branch", async () => {
-    useEnvironmentStore.setState({ environments: [makeEnvironment()] });
-    renderHook(() => usePrMonitorService());
+    appCommandStore(environmentStore).setState({ environments: [makeEnvironment()] });
+    renderHookInAppCommandScope(() => usePrMonitorService());
     await flush();
 
     const transition = {
@@ -323,10 +327,10 @@ describe("usePrMonitorService", () => {
   });
 
   test("a transition buffered during a rehydrate still notifies", async () => {
-    useEnvironmentStore.setState({ environments: [makeEnvironment()] });
+    appCommandStore(environmentStore).setState({ environments: [makeEnvironment()] });
     const snapshot = deferred<PrMonitorSnapshot>();
     mockGetPrMonitorState.mockImplementation(() => snapshot.promise);
-    renderHook(() => usePrMonitorService());
+    renderHookInAppCommandScope(() => usePrMonitorService());
     await flush();
 
     act(() => {
@@ -352,7 +356,7 @@ describe("usePrMonitorService", () => {
   });
 
   test("does not announce open or closed transitions", async () => {
-    renderHook(() => usePrMonitorService());
+    renderHookInAppCommandScope(() => usePrMonitorService());
     await flush();
 
     act(() => {
@@ -386,7 +390,7 @@ describe("usePrMonitorService", () => {
   });
 
   test("unsubscribes from the stream on unmount", async () => {
-    const { unmount } = renderHook(() => usePrMonitorService());
+    const { unmount } = renderHookInAppCommandScope(() => usePrMonitorService());
     await flush();
     expect(listenerCount(PR_MONITOR_CHANGED_EVENT)).toBe(1);
     expect(listenerCount(NATIVE_EVENT_STREAM_CONNECTED_EVENT)).toBe(1);
@@ -399,13 +403,13 @@ describe("usePrMonitorService", () => {
 
   test("keeps working when the snapshot request fails", async () => {
     mockGetPrMonitorState.mockImplementation(() => Promise.reject(new Error("backend offline")));
-    renderHook(() => usePrMonitorService());
+    renderHookInAppCommandScope(() => usePrMonitorService());
     await flush();
 
     act(() => {
       emitEvent(PR_MONITOR_CHANGED_EVENT, stateEvent("env-1"));
     });
 
-    expect(usePrMonitorStore.getState().states.get("env-1")?.prState).toBe("open");
+    expect(appCommandStore(prMonitorStore).getState().states.get("env-1")?.prState).toBe("open");
   });
 });

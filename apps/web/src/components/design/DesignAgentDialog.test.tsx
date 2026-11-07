@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, jest, mock, test, type Mock } from "bun:test";
 import { useEffect, type ReactNode } from "react";
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { DesignFrame } from "@orkestrator/protocol/design-canvas";
 import type {
   DesignContextReference,
@@ -17,9 +18,9 @@ import {
 } from "@/contexts/TerminalContext";
 import { createSessionKey } from "@/lib/utils";
 import { emptyProjection, type DesignProjection } from "@/stores/designStore";
-import { useEnvironmentStore } from "@/stores/environmentStore";
-import { nativeComposeDraft, useNativeComposeStore } from "@/stores/nativeComposeStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { environmentStore } from "@/stores/environmentStore";
+import { nativeComposeDraft, nativeComposeStore } from "@/stores/nativeComposeStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import type { Environment } from "@/types";
 import type { TabInfo } from "@/types/paneLayout";
 import { toast } from "sonner";
@@ -32,6 +33,7 @@ import {
   pasteImage,
   settlePaste,
 } from "./design-paste-test-support";
+import { appCommandStore } from "@/test/app-command-store";
 
 const invokeMock = invoke as unknown as Mock<
   (command: string, args?: Record<string, unknown>) => Promise<unknown>
@@ -114,7 +116,7 @@ function agentTab(id: string, platform?: "claude" | "codex"): TabInfo {
 }
 
 function seedTabs(tabs: TabInfo[]) {
-  usePaneLayoutStore.setState({
+  appCommandStore(paneLayoutStore).setState({
     activeEnvironmentId: "env-1",
     hydration: new Map([["env-1", "done"]]),
     environments: new Map([
@@ -130,7 +132,7 @@ function seedTabs(tabs: TabInfo[]) {
 }
 
 const createTabMock = mock((_type: CreatableTabType, options?: CreateTabOptions) => {
-  const store = usePaneLayoutStore.getState();
+  const store = appCommandStore(paneLayoutStore).getState();
   store.addTab("pane-1", agentTab(options!.tabId!), "env-1");
   return true;
 });
@@ -151,7 +153,7 @@ async function renderDialog(props: {
 }) {
   const onOpenChange = props.onOpenChange ?? mock();
   await act(async () => {
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <RegisterCreateTab>
           <DesignAgentDialog
@@ -171,7 +173,7 @@ function commandCalls(command: string) {
 }
 
 beforeEach(() => {
-  useNativeComposeStore.setState({ drafts: new Map() });
+  appCommandStore(nativeComposeStore).setState({ drafts: new Map() });
   createTabMock.mockClear();
   invokeMock.mockReset();
   invokeMock.mockImplementation(() =>
@@ -182,7 +184,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   // After unmount, so the reset does not re-render a mounted dialog outside act().
-  useEnvironmentStore.setState({ environments: [] });
+  appCommandStore(environmentStore).setState({ environments: [] });
   invokeMock.mockReset();
   invokeMock.mockImplementation(() => Promise.resolve());
 });
@@ -190,7 +192,7 @@ afterEach(() => {
 describe("DesignAgentDialog", () => {
   function supportPaste(write?: Promise<string>) {
     const restore = installImagePasteSupport();
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [
         {
           id: "env-1",
@@ -247,7 +249,7 @@ describe("DesignAgentDialog", () => {
         expect(commandCalls("write_local_file")).toHaveLength(1);
         const tabId = createTabMock.mock.calls[0]![1]!.tabId!;
         const draft = nativeComposeDraft(
-          useNativeComposeStore.getState(),
+          appCommandStore(nativeComposeStore).getState(),
           createSessionKey("env-1", tabId),
         );
         expect(draft.attachments).toHaveLength(1);
@@ -270,17 +272,19 @@ describe("DesignAgentDialog", () => {
       const restore = supportPaste();
       seedTabs([agentTab("agent-open", "claude")]);
       const key = createSessionKey("env-1", "agent-open");
-      useNativeComposeStore.getState().updateDraft(key, {
-        text: "keep me",
-        annotations: [{ id: "existing", text: "existing", comment: "" }],
-        attachments: Array.from({ length: existingCount }, (_, i) => ({
-          id: `image-${i}`,
-          type: "image" as const,
-          path: `/tmp/wt/${i}.png`,
-          name: `${i}.png`,
-        })),
-      });
-      const original = nativeComposeDraft(useNativeComposeStore.getState(), key);
+      appCommandStore(nativeComposeStore)
+        .getState()
+        .updateDraft(key, {
+          text: "keep me",
+          annotations: [{ id: "existing", text: "existing", comment: "" }],
+          attachments: Array.from({ length: existingCount }, (_, i) => ({
+            id: `image-${i}`,
+            type: "image" as const,
+            path: `/tmp/wt/${i}.png`,
+            name: `${i}.png`,
+          })),
+        });
+      const original = nativeComposeDraft(appCommandStore(nativeComposeStore).getState(), key);
       try {
         const { onOpenChange } = await renderDialog({ sessions: [link("open", "agent-open")] });
         await pasteImage(screen.getByPlaceholderText("What would you like to know or change?"));
@@ -288,7 +292,9 @@ describe("DesignAgentDialog", () => {
           await pasteImage(screen.getByPlaceholderText("What would you like to know or change?"));
         fireEvent.click(screen.getByRole("button", { name: "Add to composer" }));
         await settlePaste();
-        expect(nativeComposeDraft(useNativeComposeStore.getState(), key)).toEqual(original);
+        expect(nativeComposeDraft(appCommandStore(nativeComposeStore).getState(), key)).toEqual(
+          original,
+        );
         expect(screen.getByRole("alert").textContent).toContain("maximum number of attachments");
         expect(onOpenChange).not.toHaveBeenCalled();
         expect(createTabMock).not.toHaveBeenCalled();
@@ -333,7 +339,7 @@ describe("DesignAgentDialog", () => {
       await settlePaste();
       expect(
         nativeComposeDraft(
-          useNativeComposeStore.getState(),
+          appCommandStore(nativeComposeStore).getState(),
           createSessionKey("env-1", "agent-open"),
         ).attachments,
       ).toHaveLength(1);
@@ -453,7 +459,7 @@ describe("DesignAgentDialog", () => {
     // Resuming alone leaves the reopened conversation's composer untouched.
     expect(
       nativeComposeDraft(
-        useNativeComposeStore.getState(),
+        appCommandStore(nativeComposeStore).getState(),
         createSessionKey("env-1", options!.tabId!),
       ).annotations,
     ).toEqual([]);
@@ -503,7 +509,7 @@ describe("DesignAgentDialog", () => {
     const options = createTabMock.mock.calls[0]![1]!;
     expect(options.initialPrompt).toBeUndefined();
     const draft = nativeComposeDraft(
-      useNativeComposeStore.getState(),
+      appCommandStore(nativeComposeStore).getState(),
       createSessionKey("env-1", options.tabId!),
     );
     expect(draft.annotations).toHaveLength(1);
@@ -631,7 +637,7 @@ describe("DesignAgentDialog", () => {
     seedTabs([agentTab("agent-open", "claude")]);
     const sessionKey = createSessionKey("env-1", "agent-open");
     const existing = { id: "t1", text: "quoted excerpt", comment: "" };
-    useNativeComposeStore
+    appCommandStore(nativeComposeStore)
       .getState()
       .updateDraft(sessionKey, { text: "my unsent words", annotations: [existing] });
     const { onOpenChange } = await renderDialog({ sessions: [link("open", "agent-open")] });
@@ -643,7 +649,7 @@ describe("DesignAgentDialog", () => {
       fireEvent.click(screen.getByRole("button", { name: "Add to composer" }));
     });
 
-    const draft = nativeComposeDraft(useNativeComposeStore.getState(), sessionKey);
+    const draft = nativeComposeDraft(appCommandStore(nativeComposeStore).getState(), sessionKey);
     expect(draft.text).toBe("my unsent words");
     expect(draft.annotations).toHaveLength(2);
     expect(draft.annotations[0]).toEqual(existing);
@@ -657,7 +663,7 @@ describe("DesignAgentDialog", () => {
 
   test("attaches a pasted image to the chosen conversation's draft", async () => {
     const restorePaste = installImagePasteSupport();
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [
         {
           id: "env-1",
@@ -686,15 +692,15 @@ describe("DesignAgentDialog", () => {
         screen.getByRole("list", { name: "Attached images" }).querySelectorAll("img"),
       ).toHaveLength(1);
       // Nothing reaches the conversation until the user confirms.
-      expect(nativeComposeDraft(useNativeComposeStore.getState(), sessionKey).attachments).toEqual(
-        [],
-      );
+      expect(
+        nativeComposeDraft(appCommandStore(nativeComposeStore).getState(), sessionKey).attachments,
+      ).toEqual([]);
 
       await act(async () => {
         fireEvent.click(screen.getByRole("button", { name: "Add to composer" }));
       });
 
-      const draft = nativeComposeDraft(useNativeComposeStore.getState(), sessionKey);
+      const draft = nativeComposeDraft(appCommandStore(nativeComposeStore).getState(), sessionKey);
       expect(draft.attachments).toHaveLength(1);
       expect(draft.attachments[0]).toMatchObject({ type: "image" });
       expect(draft.attachments[0]!.path).toStartWith("/tmp/wt/.orkestrator/clipboard/");
@@ -750,7 +756,7 @@ describe("DesignAgentDialog", () => {
     });
     // The unassigned composer sends annotations, so the context stays a removable chip.
     const draft = nativeComposeDraft(
-      useNativeComposeStore.getState(),
+      appCommandStore(nativeComposeStore).getState(),
       createSessionKey("env-1", options!.tabId!),
     );
     expect(draft.text).toBe(
@@ -812,7 +818,7 @@ describe("DesignAgentDialog", () => {
       },
     });
     const draft = nativeComposeDraft(
-      useNativeComposeStore.getState(),
+      appCommandStore(nativeComposeStore).getState(),
       createSessionKey("env-1", options!.tabId!),
     );
     expect(draft.text).toContain("Build the marketing page");

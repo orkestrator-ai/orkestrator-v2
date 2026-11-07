@@ -1,3 +1,4 @@
+import { registrarFrom } from "./commands-registry-contracts.js";
 import { expect, spyOn, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import type { CommandContext, CommandHandler } from "./commands-context.js";
@@ -9,7 +10,7 @@ import { REVIEW_WORKTREE_FINGERPRINT_SCRIPT } from "./review-worktree-fingerprin
 function harness(environmentType: "local" | "container" = "local") {
   const commands = new Map<string, CommandHandler>();
   registerTerminalCommands(
-    (name, handler) => commands.set(name, handler),
+    registrarFrom((name, handler) => commands.set(name, handler)),
     {} as RegistryDependencies,
   );
   const prefix = randomUUID();

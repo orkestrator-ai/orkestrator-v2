@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "domain": "ticket-sync",
+  "commands": {
+    "ack_ticket_sync_outbox": {
+      "untyped": true,
+      "read": false
+    },
+    "apply_ticket_sync": {
+      "untyped": true,
+      "read": false
+    },
+    "collect_ticket_sync_outbox": {
+      "untyped": true,
+      "read": false
+    },
+    "coordinator_node_ticket": {
+      "untyped": true,
+      "read": false
+    },
+    "get_ticket_sync_cursor": {
+      "untyped": true,
+      "read": true
+    },
+    "get_ticket_sync_status": {
+      "untyped": true,
+      "read": true
+    },
+    "sync_node_tickets": {
+      "untyped": true,
+      "read": false
+    }
+  }
+}

@@ -12,8 +12,8 @@ export interface EnvironmentTooltipDetails {
   branch?: string;
   environmentType?: string;
   networkAccessMode?: string;
-  entryPort?: number;
-  hostEntryPort?: number;
+  entryPort?: number | null;
+  hostEntryPort?: number | null;
   prUrl?: string | null;
 }
 

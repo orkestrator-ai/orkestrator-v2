@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:b3b528a02fec339a824da4149b6035cb978313264368c3bef167659941543c1c",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "artifactId": {},
+        "captureIndex": {},
+        "environmentId": {},
+        "logicalSessionKey": {},
+        "operationId": {},
+        "representation": {},
+        "revision": {},
+        "sourceRange": {}
+      },
+      "type": "object"
+    }
+  }
+}

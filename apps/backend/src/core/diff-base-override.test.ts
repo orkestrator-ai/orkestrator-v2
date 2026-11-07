@@ -1,3 +1,4 @@
+import { registrarFrom } from "./commands-registry-contracts.js";
 import { expect, test } from "bun:test";
 import {
   environmentBaselineCommit,
@@ -14,6 +15,7 @@ import {
   type DiffBaseGit,
 } from "./diff-base-override.js";
 import type { Environment } from "./models.js";
+import { createEnvironment } from "./storage-shared-core.js";
 
 const TIP = "a".repeat(40);
 const OLDER = "b".repeat(40);
@@ -124,13 +126,16 @@ test("stored overrides are validated and normalised", () => {
 function commandHarness(environment: Environment) {
   const handlers = new Map<string, CommandHandler>();
   const gitCalls: string[][] = [];
-  registerDiffBaseCommands((name, handler) => handlers.set(name, handler), {
-    gitFor: () => async (args) => {
-      gitCalls.push(args);
-      if (args[0] === "for-each-ref") return "refs/remotes/origin/main\n";
-      return "Tip subject\n";
+  registerDiffBaseCommands(
+    registrarFrom((name, handler) => handlers.set(name, handler)),
+    {
+      gitFor: () => async (args) => {
+        gitCalls.push(args);
+        if (args[0] === "for-each-ref") return "refs/remotes/origin/main\n";
+        return "Tip subject\n";
+      },
     },
-  });
+  );
   let stored: Environment = environment;
   const events: string[] = [];
   const context = {
@@ -154,7 +159,9 @@ function commandHarness(environment: Environment) {
 }
 
 test("set_environment_diff_base saves, retargets scans and clears", async () => {
-  const harness = commandHarness({ id: "env-1" } as Environment);
+  // A whole environment record: the command answers `ClientEnvironment`,
+  // which tests validate against its schema (plan item 7006).
+  const harness = commandHarness({ ...createEnvironment("project-1"), id: "env-1" });
   const saved = (await harness.run("set_environment_diff_base", {
     environmentId: "env-1",
     ref: "refs/remotes/origin/main",

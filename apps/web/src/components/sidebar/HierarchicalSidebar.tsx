@@ -1,4 +1,4 @@
-import { MOBILE_SHELL_MEDIA_QUERY } from "@/lib/mobile-shell";
+import { MOBILE_SHELL_MEDIA_QUERY, noteDrawerNavigation } from "@/lib/mobile-shell";
 import { useSidebarHydration } from "./useSidebarHydration";
 import { useSelectedEnvironmentActions } from "./useSelectedEnvironmentActions";
 import { onCreateEnvironmentRequest, openMachineWorkspace } from "@/lib/federation/open-workspace";
@@ -51,7 +51,17 @@ import {
   displayedActivityResolver,
   sortEnvironmentsByActivity,
 } from "@/lib/environment-activity-sort";
-import { useUIStore, useProjectStore, useEnvironmentStore } from "@/stores";
+import {
+  environmentStore,
+  projectStore,
+  uiStore,
+  useUIStore,
+  useProjectStore,
+  useEnvironmentStore,
+} from "@/stores";
+import { useUIChromeStore } from "@/stores/uiChromeStore";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { drainProjectHomeEnsures } from "@/hooks/useFilesPanel";
 import { useEnvironmentDiffStats } from "@/hooks/useEnvironmentDiffStats";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
@@ -246,15 +256,18 @@ export async function deleteProjectAndEnvironments(
   environments: Environment[],
   deleteEnvironment: (environmentId: string) => Promise<unknown>,
   removeProject: (projectId: string) => Promise<unknown>,
+  scope: NodeScope,
 ): Promise<void> {
-  const projectStore = useProjectStore.getState();
-  projectStore.setDeleting(projectId, true);
-  if (useUIStore.getState().selectedProjectId === projectId) {
-    useUIStore.getState().selectProject(null);
+  const projects = scope.store(projectStore).getState();
+  projects.setDeleting(projectId, true);
+  const ui = scope.store(uiStore);
+  if (ui.getState().selectedProjectId === projectId) {
+    ui.getState().selectProject(null);
   }
   try {
-    const admittedHomes = await drainProjectHomeEnsures(projectId);
-    const currentEnvironments = useEnvironmentStore
+    const admittedHomes = await drainProjectHomeEnsures(projectId, scope);
+    const currentEnvironments = scope
+      .store(environmentStore)
       .getState()
       .environments.filter((environment) => environment.projectId === projectId);
     const toDelete = new Map(
@@ -277,10 +290,10 @@ export async function deleteProjectAndEnvironments(
     }
     await removeProject(projectId);
   } finally {
-    if (useUIStore.getState().selectedProjectId === projectId) {
-      useUIStore.getState().selectProject(null);
+    if (ui.getState().selectedProjectId === projectId) {
+      ui.getState().selectProject(null);
     }
-    projectStore.setDeleting(projectId, false);
+    projects.setDeleting(projectId, false);
   }
 }
 
@@ -322,6 +335,8 @@ export function HierarchicalSidebar() {
     reorderEnvironments,
     updateEnvironment,
   } = useEnvironments(null);
+  // The node this sidebar lists: the one the hooks above read.
+  const scope = useNodeScope();
 
   useEnvironmentListSync(
     projects.map((project) => project.id),
@@ -335,8 +350,8 @@ export function HierarchicalSidebar() {
   const collapsedProjects = useUIStore((state) => state.collapsedProjects);
   const collapsedProjectFolders = useUIStore((state) => state.collapsedProjectFolders);
   const selectedEnvironmentIds = useUIStore((state) => state.selectedEnvironmentIds);
-  const environmentSortMode = useUIStore((state) => state.environmentSortMode);
-  const activitySortOrder = useUIStore((state) => state.activitySortOrder);
+  const environmentSortMode = useUIChromeStore((state) => state.environmentSortMode);
+  const activitySortOrder = useUIChromeStore((state) => state.activitySortOrder);
   const selectProject = useUIStore((state) => state.selectProject);
   const selectProjectAndEnvironment = useUIStore((state) => state.selectProjectAndEnvironment);
   const setProjectCollapsed = useUIStore((state) => state.setProjectCollapsed);
@@ -345,8 +360,8 @@ export function HierarchicalSidebar() {
   const setProjectFolderCollapsed = useUIStore((state) => state.setProjectFolderCollapsed);
   const clearMultiSelection = useUIStore((state) => state.clearMultiSelection);
   const projectsLoaded = useProjectStore((state) => state.hasLoaded);
-  const setEnvironmentSortMode = useUIStore((state) => state.setEnvironmentSortMode);
-  const setActivitySortOrder = useUIStore((state) => state.setActivitySortOrder);
+  const setEnvironmentSortMode = useUIChromeStore((state) => state.setEnvironmentSortMode);
+  const setActivitySortOrder = useUIChromeStore((state) => state.setActivitySortOrder);
   // Multi-machine presentation. This sidebar's own machine keeps its full
   // tree; other machines appear as their own sections, or merged into one
   // projection when grouped by project/repository or sorted by activity.
@@ -501,14 +516,14 @@ export function HierarchicalSidebar() {
   useEffect(
     () =>
       onAppShortcut("rotate-sidebar-grouping", () => {
-        const ui = useUIStore.getState();
-        if (!isMobile && !ui.sidebarOpen) ui.toggleSidebar();
+        const chrome = useUIChromeStore.getState();
+        if (!isMobile && !chrome.sidebarOpen) chrome.toggleSidebar();
         const views = useMachineViewStore.getState();
         const next = nextSidebarView(
           {
             grouping: views.grouping,
             groupingBeforeCompact: views.groupingBeforeCompact,
-            sortMode: useUIStore.getState().environmentSortMode,
+            sortMode: useUIChromeStore.getState().environmentSortMode,
           },
           { mergedModes: mergedModesAvailable, compact: !isMobile },
         );
@@ -681,7 +696,13 @@ export function HierarchicalSidebar() {
       (environment) => environment.projectId === projectId,
     );
     try {
-      await deleteProjectAndEnvironments(projectId, projectEnvs, deleteEnvironment, removeProject);
+      await deleteProjectAndEnvironments(
+        projectId,
+        projectEnvs,
+        deleteEnvironment,
+        removeProject,
+        scope,
+      );
     } catch (err) {
       log.error("project.delete-failed", { projectId, error: formatLogError(err) });
       throw err;
@@ -716,6 +737,8 @@ export function HierarchicalSidebar() {
       const environment = allEnvironments.find((e) => e.id === environmentId);
       if (environment) {
         selectProjectAndEnvironment(environment.projectId, environmentId);
+        // The phone drawer closes even when this is the environment already shown.
+        noteDrawerNavigation();
         // Auto-start local environments on selection so a terminal can open
         if (startsOnSelection(environment)) {
           log.info("auto-start.started", {

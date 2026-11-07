@@ -1,7 +1,8 @@
+import { designCanvasChangedEvent } from "@orkestrator/protocol/contract/domains/events";
+import type { BackendEmit } from "../backend-emit.js";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import {
-  DESIGN_EVENT,
   DESIGN_MAX_CANVASES,
   DESIGN_MAX_DOCUMENT_BYTES,
   type DesignCanvas,
@@ -83,6 +84,7 @@ import { buildSync, snapshotEnvelope, tombstone } from "./sync.js";
 import * as lifecycle from "./service-lifecycle.js";
 import * as validation from "./validation.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { decodeSync } from "../tool-schema.js";
 
 const log = createLogger("design");
 
@@ -195,7 +197,7 @@ export class DesignService {
   private readonly executeWaitMs: number;
   constructor(
     dataDir: string,
-    private readonly emit: (event: string, payload: unknown) => void,
+    private readonly emit: BackendEmit,
     readonly renderer: DesignRendererLike = new DesignRenderer({
       profiles: new DesignProfileLedger(join(dataDir, DESIGN_BROWSER_PROFILES_DIRECTORY)),
     }),
@@ -517,7 +519,7 @@ export class DesignService {
 
   /** Committed record (never mutate); legacy documents are migrated in memory. */
   async load(id: string): Promise<LoadedRecord> {
-    designId.parse(id);
+    decodeSync(designId, id);
     const cached = this.cache.get(id);
     if (cached) {
       // Another process may have committed (or removed) the record: the cache
@@ -550,7 +552,7 @@ export class DesignService {
     environmentId: string,
     options: { allowDeleted?: boolean; allowProvisional?: boolean } = {},
   ): Promise<{ record: DesignPrivateRecord; legacy: boolean }> {
-    designId.parse(id);
+    decodeSync(designId, id);
     if (this.environmentDeleted(environmentId))
       throw new DesignError("not-found", "Canvas not found in this environment");
     const loaded = await this.load(id);
@@ -678,7 +680,7 @@ export class DesignService {
 
   publish(change: DesignChange) {
     // Content-free bounded hints; clients read snapshots/deltas and detect gaps.
-    this.emit(DESIGN_EVENT, { ...change, generation: this.generation });
+    this.emit(designCanvasChangedEvent, { ...change, generation: this.generation });
   }
 
   receipt(
@@ -717,7 +719,7 @@ export class DesignService {
     await this.initialize();
     if (this.closed)
       throw new DesignError("unsupported", "Design service is stopping", { retry: "after-delay" });
-    const descriptor = descriptorSchema.parse(raw) as DesignOperationDescriptor;
+    const descriptor = decodeSync(descriptorSchema, raw) as DesignOperationDescriptor;
     const bytes = Buffer.byteLength(JSON.stringify(descriptor));
     if (bytes > DESIGN_LIMITS.admittedPayloadBytes)
       throw new DesignError("capacity", "Design operation input is too large", { retry: "never" });
@@ -894,8 +896,8 @@ export class DesignService {
     options: { waitMs?: number } = {},
   ): Promise<DesignOperationStatus> {
     await this.initialize();
-    designId.parse(canvasId);
-    operationToken.parse(token);
+    decodeSync(designId, canvasId);
+    decodeSync(operationToken, token);
     const owner = `${environmentId}|${canvasId}`;
     let work = this.running.get(token);
     // Joining in-flight work requires the same environment and canvas; anyone
@@ -934,7 +936,7 @@ export class DesignService {
     token: string,
   ): Promise<DesignOperationStatus> {
     await this.initialize();
-    operationToken.parse(token);
+    decodeSync(operationToken, token);
     const { record } = await this.loadFor(canvasId, environmentId, {
       allowDeleted: true,
       allowProvisional: true,
@@ -991,7 +993,7 @@ export class DesignService {
     token: string,
   ): Promise<DesignOperationStatus> {
     await this.initialize();
-    operationToken.parse(token);
+    decodeSync(operationToken, token);
     return this.lane(canvasId, async () => {
       const { record, legacy } = await this.loadFor(canvasId, environmentId, {
         allowDeleted: true,
@@ -1603,7 +1605,7 @@ export class DesignService {
       generation: this.generation,
       canvasId,
     };
-    designId.parse(canvasId);
+    decodeSync(designId, canvasId);
     if (this.environmentDeleted(environmentId)) return { kind: "missing", ...base };
     const loaded = await this.load(canvasId);
     if (loaded.kind === "missing") return { kind: "missing", ...base };
@@ -1641,7 +1643,7 @@ export class DesignService {
       loaded.record,
       this.generation,
       clientGeneration,
-      revision.parse(after),
+      decodeSync(revision, after),
       statusVersion,
     );
     return result;
@@ -1995,7 +1997,7 @@ export class DesignService {
     after: number,
   ): Promise<DesignChanges> {
     await this.initialize();
-    revision.parse(after);
+    decodeSync(revision, after);
     const { record } = await this.loadFor(canvasId, environmentId);
     const current = record.document.revision;
     const events = record.changes

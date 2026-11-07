@@ -1,7 +1,8 @@
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { useEffect, useState } from "react";
-import { cleanup, render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { cleanup, screen, fireEvent, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import {
   COORDINATOR_DELEGATION_FRAME_OPEN,
   COORDINATOR_DELEGATION_OMISSION_TEXT,
@@ -48,7 +49,7 @@ test("renders only the design brief in optimistic and rehydrated user rows", () 
     id: "optimistic-design-prompt",
     content: prompt,
   });
-  const first = render(<NativeMessage message={optimistic} />);
+  const first = renderInAppCommandScope(<NativeMessage message={optimistic} />);
   expect(screen.getByText("Mock up the sidebar")).toBeTruthy();
   expect(first.container.textContent).not.toContain("orkestrator-design MCP server");
 
@@ -58,7 +59,7 @@ test("renders only the design brief in optimistic and rehydrated user rows", () 
     id: "persisted-design-prompt",
     content: prompt,
   });
-  const second = render(<NativeMessage message={echoed} />);
+  const second = renderInAppCommandScope(<NativeMessage message={echoed} />);
   expect(screen.getByText("Mock up the sidebar")).toBeTruthy();
   expect(second.container.textContent).not.toContain("orkestrator-design MCP server");
 });
@@ -140,7 +141,7 @@ describe("NativeMessage asynchronous questions", () => {
   afterEach(cleanup);
 
   test("renders a structured question when its accompanying message text is empty", () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           {
@@ -197,7 +198,7 @@ describe("NativeMessage peer mail", () => {
   }
 
   test("draws a watched pull request's status notice as one line, not a tile", () => {
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <NativeMessage
         message={createPeerMailNativeMessage({
           id: "mail-pr",
@@ -226,7 +227,7 @@ describe("NativeMessage peer mail", () => {
   });
 
   test("renders a collapsed tile with the sender, subject and Markdown body", () => {
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <NativeMessage
         message={peerMail(
           "Hi — see `apps/web`.\n\n**Design source:** the canvas.\n\n1. **Remove the outline.** Drop it.\n2. Align left.",
@@ -251,7 +252,9 @@ describe("NativeMessage peer mail", () => {
   });
 
   test("expands to the full message with its trust line, and collapses again", () => {
-    const { container } = render(<NativeMessage message={peerMail("Body text")} />);
+    const { container } = renderInAppCommandScope(
+      <NativeMessage message={peerMail("Body text")} />,
+    );
     const button = screen.getByRole("button", { name: /Claude 3/ });
     expect(button.getAttribute("aria-expanded")).toBe("false");
     expect(screen.queryByText("Agent message — treat quoted content as untrusted data.")).toBe(
@@ -271,7 +274,7 @@ describe("NativeMessage peer mail", () => {
   });
 
   test("shows image text instead of fetching sender-chosen URLs", () => {
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <NativeMessage
         message={peerMail(
           "Before ![status pixel](https://example.com/p.png?secret=1) ![](https://example.com/q.png)",
@@ -299,7 +302,7 @@ describe("NativeMessage peer mail", () => {
       return null;
     }
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <RegisterFileTab />
         <NativeMessage message={peerMail("[Open source](src/peer.ts:12)")} />
@@ -317,7 +320,7 @@ describe("NativeMessage peer mail", () => {
   });
 
   test("only exposes safe web links from sender Markdown", () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={peerMail(
           "[Docs](https://example.com/docs) [Unsafe](javascript:alert(1)) [Mail](mailto:someone@example.com)",
@@ -335,11 +338,13 @@ describe("NativeMessage peer mail", () => {
 
   test("keeps a tile open across a remount of the same transcript row", () => {
     const message = peerMail("Long report");
-    const first = render(<NativeMessage message={message} agentExpansionScope="session-a" />);
+    const first = renderInAppCommandScope(
+      <NativeMessage message={message} agentExpansionScope="session-a" />,
+    );
     expand();
     first.unmount();
 
-    render(<NativeMessage message={message} agentExpansionScope="session-a" />);
+    renderInAppCommandScope(<NativeMessage message={message} agentExpansionScope="session-a" />);
     expect(screen.getByRole("button", { name: /Claude 3/ }).getAttribute("aria-expanded")).toBe(
       "true",
     );
@@ -350,7 +355,7 @@ describe("NativeMessage transcript references", () => {
   afterEach(cleanup);
 
   test("renders quoted text and the user's comment in a separate reference card", () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage(
           [
@@ -377,7 +382,7 @@ describe("NativeMessage transcript references", () => {
   });
 
   test("omits the comment section and exposes one search root when no comment exists", () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage(
           [{ type: "transcript-reference", content: "Quoted output", reference: 1 }],
@@ -396,7 +401,7 @@ describe("NativeMessage transcript references", () => {
   test("copies the excerpt and comment from a reference-only prompt", async () => {
     mockWriteText.mockClear();
     mockWriteText.mockImplementation(async () => {});
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage(
           [
@@ -425,7 +430,7 @@ describe("NativeMessage transcript references", () => {
 
 describe("NativeMessage assistant attribution", () => {
   test("shows the backend-confirmed model instead of the static provider label", () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([{ type: "text", content: "Done" }], { modelId: "gpt-5.6-sol" })}
         assistantLabel="Codex"
@@ -437,7 +442,7 @@ describe("NativeMessage assistant attribution", () => {
   });
 
   test("keeps the provider label for legacy messages with no confirmed model", () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([{ type: "text", content: "Done" }])}
         assistantLabel="Codex"
@@ -448,7 +453,7 @@ describe("NativeMessage assistant attribution", () => {
   });
 
   test.each(["", "   \n"])("keeps the provider label for an unusable model id %#", (modelId) => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([{ type: "text", content: "Done" }], { modelId })}
         assistantLabel="Codex"
@@ -459,7 +464,7 @@ describe("NativeMessage assistant attribution", () => {
   });
 
   test("uses a friendly catalog label when the tab supplies a resolver", () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([{ type: "text", content: "Done" }], {
           modelId: "anthropic/claude-sonnet-4",
@@ -476,7 +481,7 @@ describe("NativeMessage assistant attribution", () => {
   test.each(["", "   \n"])(
     "falls back to the confirmed model id when the resolver returns an unusable label %#",
     (resolvedLabel) => {
-      render(
+      renderInAppCommandScope(
         <NativeMessage
           message={makeMessage([{ type: "text", content: "Done" }], {
             modelId: "anthropic/claude-sonnet-4",
@@ -492,7 +497,7 @@ describe("NativeMessage assistant attribution", () => {
   );
 
   test("always attributes user messages to You even if they carry a model id", () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([{ type: "text", content: "Prompt" }], {
           role: "user",
@@ -507,7 +512,7 @@ describe("NativeMessage assistant attribution", () => {
   });
 
   test("hides the model label on an empty assistant message with no streamed content", () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([], {
           id: "assistant-empty",
@@ -524,7 +529,7 @@ describe("NativeMessage assistant attribution", () => {
   test("renders nothing at all for an empty assistant message with no actions", () => {
     // Not just the label: the whole row goes, so the placeholder does not leave
     // an unexplained blank gap between the prompt and the reply.
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([], {
           id: "assistant-empty-no-actions",
@@ -539,7 +544,7 @@ describe("NativeMessage assistant attribution", () => {
   });
 
   test("pairs the model label with the timestamp on a content-empty assistant action row", () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([{ type: "tool-result", content: "exit 0" }], {
           id: "assistant-empty-timestamp",
@@ -561,7 +566,7 @@ describe("NativeMessage assistant attribution", () => {
   test("keeps a caller-supplied action reachable on a content-empty assistant message", () => {
     // A content-empty trailing row can still host a fork action; suppressing
     // the footer there would strand the affordance for that section.
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([], {
           id: "assistant-empty-with-fork",
@@ -577,7 +582,7 @@ describe("NativeMessage assistant attribution", () => {
   });
 
   test("shows attribution on a thinking-only assistant message", () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([{ type: "thinking", content: "Reasoning" }], {
           id: "assistant-thinking-only",
@@ -597,7 +602,7 @@ describe("NativeMessage assistant attribution", () => {
       id: "assistant-opus",
       modelId: "opus-5",
     });
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([{ type: "text", content: "Second chunk" }], {
           id: "assistant-sonnet",
@@ -621,7 +626,7 @@ describe("NativeMessage assistant attribution", () => {
       modelId: "gpt-5.6-sol",
       createdAt: "2026-03-21T10:00:10.000Z",
     });
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([{ type: "text", content: "Streamed answer" }], {
           id: "assistant-content",
@@ -643,7 +648,7 @@ describe("NativeMessage assistant attribution", () => {
       modelId: "gpt-5.6-sol",
       createdAt: "2026-03-21T10:00:10.000Z",
     });
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([{ type: "text", content: "Second chunk" }], {
           id: "assistant-content-continuation",
@@ -666,7 +671,7 @@ describe("NativeMessage assistant attribution", () => {
       id: "assistant-text-section",
       createdAt: "2026-03-21T10:00:00.000Z",
     });
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage(
           [
@@ -707,7 +712,7 @@ describe("NativeMessage assistant attribution", () => {
       role: "user",
       createdAt: "2026-03-21T10:00:00.000Z",
     });
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([{ type: "text", content: "Answer" }], {
           id: "assistant-content-after-empty",
@@ -733,7 +738,7 @@ describe("NativeMessage Claude authentication recovery", () => {
   test("adds recovery beside an authoritative terminal error without making it a live alert", () => {
     const error = "Failed to authenticate: OAuth session expired and could not be refreshed";
 
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         platform="claude"
         message={makeMessage([{ type: "text", content: error }], {
@@ -758,7 +763,7 @@ describe("NativeMessage Claude authentication recovery", () => {
     const reply =
       "The integration test failed to authenticate against the mock IdP, so I updated the header.";
 
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         platform="claude"
         actions={<button type="button">Fork response</button>}
@@ -788,7 +793,7 @@ describe("NativeMessage Claude authentication recovery", () => {
   test("keeps a client-only error row on the generic error path", () => {
     const error = "authentication_error: Invalid authentication credentials";
 
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         platform="claude"
         message={makeMessage([{ type: "text", content: error }], {
@@ -805,7 +810,7 @@ describe("NativeMessage Claude authentication recovery", () => {
   test("does not reinterpret another provider's authoritative terminal error", () => {
     const error = "Failed to authenticate: OAuth session expired and could not be refreshed";
 
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         platform="codex"
         message={makeMessage([{ type: "text", content: error }], {
@@ -823,7 +828,7 @@ describe("NativeMessage Claude authentication recovery", () => {
   test("signs in from the app when terminal controls are unavailable", () => {
     const error = "authentication_error: Invalid authentication credentials";
 
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         platform="claude"
         message={makeMessage([{ type: "text", content: error }], {
@@ -876,7 +881,7 @@ describe("NativeMessage task list rendering", () => {
       },
     ]);
 
-    const { container } = render(<NativeMessage message={message} />);
+    const { container } = renderInAppCommandScope(<NativeMessage message={message} />);
 
     // Initially collapsed — content is hidden
     expect(container.textContent).toContain("task list");
@@ -907,7 +912,7 @@ describe("NativeMessage task list rendering", () => {
       },
     ]);
 
-    const { container } = render(<NativeMessage message={message} />);
+    const { container } = renderInAppCommandScope(<NativeMessage message={message} />);
 
     expect(screen.getByText("Thinking")).toBeTruthy();
     expect(container.textContent).toContain("Let me analyze the code structure here");
@@ -919,7 +924,7 @@ describe("NativeMessage task list rendering", () => {
   });
 
   test("renders Markdown formatting in the collapsed thinking summary", () => {
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([{ type: "thinking", content: "**Preparing bug investigation**" }])}
       />,
@@ -931,7 +936,7 @@ describe("NativeMessage task list rendering", () => {
   });
 
   test("renders a code span in the collapsed thinking summary", () => {
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([{ type: "thinking", content: "I will patch `applySessionEvent`" }])}
       />,
@@ -944,7 +949,7 @@ describe("NativeMessage task list rendering", () => {
   // Parsing the preview must not eat text: a leading bullet is a list marker in
   // block Markdown, and dropping it would shorten the line the user reads.
   test("keeps leading block markers in the collapsed thinking summary", () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([{ type: "thinking", content: "- inspect the reducer first" }])}
       />,
@@ -956,7 +961,9 @@ describe("NativeMessage task list rendering", () => {
   // A block that reduces to nothing would render a chevron promising hidden
   // content beside an empty preview.
   test("shows a non-empty collapsed preview for a thinking block of only punctuation", () => {
-    render(<NativeMessage message={makeMessage([{ type: "thinking", content: "---" }])} />);
+    renderInAppCommandScope(
+      <NativeMessage message={makeMessage([{ type: "thinking", content: "---" }])} />,
+    );
 
     expect(screen.getByText("---")).toBeTruthy();
   });
@@ -965,7 +972,9 @@ describe("NativeMessage task list rendering", () => {
   // grow with reasoning that is clipped off the end of the line anyway.
   test("bounds the collapsed thinking preview instead of parsing the whole block", () => {
     const content = "sentence about the reducer. ".repeat(400);
-    render(<NativeMessage message={makeMessage([{ type: "thinking", content }])} />);
+    renderInAppCommandScope(
+      <NativeMessage message={makeMessage([{ type: "thinking", content }])} />,
+    );
 
     const trigger = screen.getByRole("button", { name: /thinking/i });
     // "Thinking" plus a bounded preview, not the ~11KB block.
@@ -975,7 +984,9 @@ describe("NativeMessage task list rendering", () => {
 
   test("keeps a supplementary Unicode character intact at the preview boundary", () => {
     const content = `${"a".repeat(399)}😀tail`;
-    render(<NativeMessage message={makeMessage([{ type: "thinking", content }])} />);
+    renderInAppCommandScope(
+      <NativeMessage message={makeMessage([{ type: "thinking", content }])} />,
+    );
 
     const trigger = screen.getByRole("button", { name: /thinking/i });
     expect(trigger.textContent).toBe(`Thinking${"a".repeat(399)}😀`);
@@ -987,7 +998,7 @@ describe("NativeMessage task list rendering", () => {
       "First I inspect the reducer.\n\nThen I trace the dispatch path all the way through the bridge before deciding on a fix.";
     const message = makeMessage([{ type: "thinking", content }]);
 
-    const { container } = render(<NativeMessage message={message} />);
+    const { container } = renderInAppCommandScope(<NativeMessage message={message} />);
 
     // Collapsed: whitespace is flattened into a single truncated preview line
     expect(container.textContent).toContain(
@@ -1012,7 +1023,7 @@ describe("NativeMessage task list rendering", () => {
       },
     ]);
 
-    const { container } = render(<NativeMessage message={message} />);
+    const { container } = renderInAppCommandScope(<NativeMessage message={message} />);
 
     const checkboxIcons = container.querySelectorAll('[data-task-list-icon="true"]');
     expect(checkboxIcons).toHaveLength(2);
@@ -1030,7 +1041,7 @@ describe("NativeMessage task list rendering", () => {
       },
     ]);
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     const copyButton = screen.getByRole("button", { name: "Copy text" });
     expect(copyButton.textContent).toBe("");
@@ -1056,7 +1067,7 @@ describe("NativeMessage task list rendering", () => {
       { role: "user", id: "user-1" },
     );
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     const prompt = screen.getByText("First part");
     fireEvent.pointerDown(prompt, {
@@ -1088,7 +1099,7 @@ describe("NativeMessage task list rendering", () => {
       id: "user-discovery",
     });
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     expect(screen.getByText(REVIEW_PACKAGE_PREPARATION_USER_INSTRUCTION)).toBeTruthy();
     expect(document.body.textContent).not.toContain(REVIEW_VALIDATION_DISCOVERY_PROMPT_PREFIX);
@@ -1115,7 +1126,7 @@ describe("NativeMessage task list rendering", () => {
       promptPresentation: COORDINATOR_DELEGATION_PRESENTATION,
     });
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     expect(document.body.textContent).toContain(contract.omissionText);
     expect(document.body.textContent).toContain(COORDINATOR_DELEGATION_OMISSION_TEXT);
@@ -1151,7 +1162,7 @@ describe("NativeMessage task list rendering", () => {
       content: "Fallback prompt content",
     });
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     const prompt = screen.getByText("Fallback prompt content");
     fireEvent.pointerDown(prompt, {
@@ -1189,7 +1200,7 @@ describe("NativeMessage task list rendering", () => {
     });
 
     try {
-      render(<NativeMessage message={message} />);
+      renderInAppCommandScope(<NativeMessage message={message} />);
 
       const prompt = screen.getByText("Prompt that cannot be copied");
       fireEvent.pointerDown(prompt, {
@@ -1239,7 +1250,7 @@ describe("NativeMessage task list rendering", () => {
       createdAt: "2026-03-21T10:00:45.000Z",
     });
 
-    render(<NativeMessage message={message} previousMessage={previousMessage} />);
+    renderInAppCommandScope(<NativeMessage message={message} previousMessage={previousMessage} />);
 
     expect(screen.getByText(/responded in 45s/)).toBeTruthy();
   });
@@ -1251,7 +1262,7 @@ describe("NativeMessage task list rendering", () => {
       createdAt: "2026-03-21T10:00:00.000Z",
     });
     const modelId = "anthropic/claude-sonnet-4-5-20250929-with-a-long-suffix";
-    render(
+    renderInAppCommandScope(
       <div className="w-48">
         <NativeMessage
           message={makeMessage([{ type: "text", content: "Answer" }], {
@@ -1277,7 +1288,7 @@ describe("NativeMessage task list rendering", () => {
       createdAt: "2026-03-21T10:00:00.400Z",
     });
 
-    render(<NativeMessage message={message} previousMessage={previousMessage} />);
+    renderInAppCommandScope(<NativeMessage message={message} previousMessage={previousMessage} />);
 
     expect(screen.getByText(/responded in 1s/)).toBeTruthy();
   });
@@ -1306,7 +1317,7 @@ describe("NativeMessage task list rendering", () => {
       },
     ];
     const first = cases[0]!;
-    const { container, rerender } = render(
+    const { container, rerender } = renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([{ type: "text", content: first.name }], {
           createdAt: first.end,
@@ -1343,7 +1354,7 @@ describe("NativeMessage task list rendering", () => {
       role: "user",
       createdAt: "2026-03-21T10:00:00.000Z",
     });
-    const { rerender } = render(
+    const { rerender } = renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([{ type: "text", content: "Minute answer" }], {
           createdAt: "2026-03-21T10:01:00.000Z",
@@ -1375,7 +1386,7 @@ describe("NativeMessage task list rendering", () => {
       id: "assistant-continuation-start",
       createdAt: "2026-03-21T10:00:10.000Z",
     });
-    const { container, rerender } = render(
+    const { container, rerender } = renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([{ type: "text", content: "Same-minute chunk" }], {
           createdAt: "2026-03-21T10:00:55.000Z",
@@ -1424,7 +1435,7 @@ describe("NativeMessage task list rendering", () => {
       throw new RangeError("formatter unavailable");
     };
     try {
-      render(
+      renderInAppCommandScope(
         <NativeMessage message={makeMessage([{ type: "text", content: "Still rendered" }])} />,
       );
       expect(screen.getByText("Still rendered")).toBeTruthy();
@@ -1439,7 +1450,7 @@ describe("NativeMessage task list rendering", () => {
       throw new RangeError("date unavailable");
     };
     try {
-      render(
+      renderInAppCommandScope(
         <NativeMessage
           message={makeMessage([{ type: "text", content: "Second answer" }], {
             id: "assistant-after-date-error",
@@ -1473,7 +1484,7 @@ describe("NativeMessage task list rendering", () => {
       },
     ]);
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     const toolButton = screen.getByRole("button", { name: /Run Command/i });
     expect(toolButton.parentElement?.className).toContain("my-0");
@@ -1497,7 +1508,7 @@ describe("NativeMessage task list rendering", () => {
       },
     ]);
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     expect(screen.getByRole("button", { name: /Run Command/i })).toBeTruthy();
     expect(screen.queryByRole("button", { name: /\bbash\b/i }) === null).toBe(true);
@@ -1508,7 +1519,7 @@ describe("NativeMessage task list rendering", () => {
       detailRef,
       toolOutput: "deferred command output",
     }));
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           {
@@ -1535,7 +1546,7 @@ describe("NativeMessage task list rendering", () => {
       detailRef,
       toolOutput: "# Deferred plan\n\nImplement the bounded loader.",
     }));
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           {
@@ -1559,7 +1570,7 @@ describe("NativeMessage task list rendering", () => {
     const loadToolDetails = mock(async () => {
       throw new Error("Native agent tool details are no longer available");
     });
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           {
@@ -1581,7 +1592,7 @@ describe("NativeMessage task list rendering", () => {
   });
 
   test("labels a pending createPlan that has not produced content yet", () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           {
@@ -1600,7 +1611,7 @@ describe("NativeMessage task list rendering", () => {
   });
 
   test("keeps a deferred row collapsed without parking placeholder prose in it", () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           {
@@ -1627,7 +1638,7 @@ describe("NativeMessage task list rendering", () => {
       detailRef,
       toolOutput: "arrived after expanding",
     }));
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           {
@@ -1651,7 +1662,7 @@ describe("NativeMessage task list rendering", () => {
       detailRef,
       toolError: "Task update failed after dispatch",
     }));
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           {
@@ -1724,7 +1735,7 @@ describe("NativeMessage task list rendering", () => {
       toolDiff: { diff: "-old\n+new" },
     }));
     try {
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <NativeMessage
             message={makeMessage([
@@ -1776,7 +1787,7 @@ describe("NativeMessage task list rendering", () => {
   test("routes a location-only diff hint to the generic tool row", () => {
     // The mirror of the case above: metadata with no deferred marker really is
     // just a hint, and must not be dressed up as an edit.
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           {
@@ -1797,7 +1808,7 @@ describe("NativeMessage task list rendering", () => {
     const loadToolDetails = mock(async () => {
       throw new Error("Native agent tool details are no longer available");
     });
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           {
@@ -1818,7 +1829,7 @@ describe("NativeMessage task list rendering", () => {
   });
 
   test("shows the derived command beside a custom exec tool", () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           {
@@ -1843,7 +1854,7 @@ describe("NativeMessage task list rendering", () => {
   });
 
   test("previews raw custom-tool input when no command can be derived", () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           {
@@ -1875,7 +1886,7 @@ describe("NativeMessage task list rendering", () => {
     ["malformed url", { url: "not a url" }, "not a url"],
     ["query", { query: "how to configure vite" }, "how to configure vite"],
   ])("summarizes %s in the collapsed row", (_label, toolArgs, expected) => {
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           {
@@ -1902,7 +1913,7 @@ describe("NativeMessage task list rendering", () => {
   ])(
     "prefers %s over a sibling path in the collapsed row",
     (_label, toolArgs, expected, notExpected) => {
-      const { container } = render(
+      const { container } = renderInAppCommandScope(
         <NativeMessage
           message={makeMessage([
             {
@@ -1931,7 +1942,7 @@ describe("NativeMessage task list rendering", () => {
   );
 
   test("prefers a command over every other collapsed-row summary", () => {
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           {
@@ -1953,7 +1964,7 @@ describe("NativeMessage task list rendering", () => {
   test("keeps a descriptive tool title alongside a raw-input preview", () => {
     // The raw-input fallback is generic, so it must not displace a title that
     // says which server the tool came from.
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           {
@@ -1973,7 +1984,7 @@ describe("NativeMessage task list rendering", () => {
   });
 
   test("lets a specific command displace the tool title", () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           {
@@ -1994,7 +2005,7 @@ describe("NativeMessage task list rendering", () => {
 
   test("flattens and caps an oversized command in the collapsed row", () => {
     const command = `echo ${"a".repeat(400)}\n\n\tsecond line`;
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           {
@@ -2017,7 +2028,7 @@ describe("NativeMessage task list rendering", () => {
   });
 
   test("collapses interior whitespace in a raw-input preview", () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           {
@@ -2040,7 +2051,7 @@ describe("NativeMessage task list rendering", () => {
 
   test("keeps the full exec source visible when the row is expanded", () => {
     const input = `const r = await tools.exec_command({ cmd: "${"echo hi; ".repeat(40)}" });`;
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           {
@@ -2082,7 +2093,9 @@ describe("NativeMessage task list rendering", () => {
       { id: "assistant-failed-test-run" },
     );
 
-    const first = render(<NativeMessage message={message} agentExpansionScope="environment-1" />);
+    const first = renderInAppCommandScope(
+      <NativeMessage message={message} agentExpansionScope="environment-1" />,
+    );
     const trigger = screen.getByRole("button", {
       name: /Run Command bun run test failure/i,
     });
@@ -2094,7 +2107,9 @@ describe("NativeMessage task list rendering", () => {
     // recreate that row while reconciling its measurements, so local state
     // would make the disclosure immediately snap shut again.
     first.unmount();
-    render(<NativeMessage message={message} agentExpansionScope="environment-1" />);
+    renderInAppCommandScope(
+      <NativeMessage message={message} agentExpansionScope="environment-1" />,
+    );
 
     expect(
       screen
@@ -2118,7 +2133,7 @@ describe("NativeMessage task list rendering", () => {
     };
     const triggerName = /Run Command bun run typecheck success/i;
 
-    const first = render(
+    const first = renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([{ type: "tool-group", content: "", parts: [command] }], {
           id: "assistant-durable-command",
@@ -2132,7 +2147,7 @@ describe("NativeMessage task list rendering", () => {
     // The same tool call, now the *second* part because text streamed in ahead
     // of it. Only the durable tool id survives that; a positional key would
     // have moved to `part-1` and read as a different, still-collapsed row.
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage(
           [
@@ -2174,7 +2189,7 @@ describe("NativeMessage task list rendering", () => {
         { id: "assistant-shared-position" },
       );
 
-    const first = render(
+    const first = renderInAppCommandScope(
       <NativeMessage
         message={makeCommandMessage("command-a", "bun run lint")}
         agentExpansionScope="environment-1"
@@ -2185,7 +2200,7 @@ describe("NativeMessage task list rendering", () => {
 
     // Same message id and same part position, but a different tool call. It
     // must not inherit the previous row's disclosure.
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeCommandMessage("command-b", "bun run build")}
         agentExpansionScope="environment-1"
@@ -2221,7 +2236,7 @@ describe("NativeMessage task list rendering", () => {
     const triggerName = /Edit index\.ts .*success/i;
 
     // EditToolPart reads the terminal context for its open-diff-in-tab action.
-    const first = render(
+    const first = renderInAppCommandScope(
       <TerminalProvider>
         <NativeMessage message={message} agentExpansionScope="environment-1" />
       </TerminalProvider>,
@@ -2230,7 +2245,7 @@ describe("NativeMessage task list rendering", () => {
     expect(screen.getByText("/repo/src/index.ts")).toBeTruthy();
     first.unmount();
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <NativeMessage message={message} agentExpansionScope="environment-1" />
       </TerminalProvider>,
@@ -2267,7 +2282,7 @@ describe("NativeMessage task list rendering", () => {
         { id: "shared-scoped-message" },
       );
 
-    render(
+    renderInAppCommandScope(
       <>
         <NativeMessage
           message={makeCommandMessage("first scoped command")}
@@ -2342,7 +2357,7 @@ describe("NativeMessage task list rendering", () => {
       },
     ]);
 
-    const { container } = render(<NativeMessage message={message} />);
+    const { container } = renderInAppCommandScope(<NativeMessage message={message} />);
 
     expect(screen.getByRole("button", { name: /task list/i }).parentElement?.className).toContain(
       "my-0",
@@ -2373,7 +2388,7 @@ describe("NativeMessage task list rendering", () => {
       { type: "text", content: "After tools" },
     ]);
 
-    const { container } = render(<NativeMessage message={message} />);
+    const { container } = renderInAppCommandScope(<NativeMessage message={message} />);
 
     expect(container.textContent).toContain("Before tools");
     expect(container.textContent).toContain("After tools");
@@ -2410,7 +2425,7 @@ describe("NativeMessage task list rendering", () => {
       },
     ]);
 
-    const { container } = render(<NativeMessage message={message} />);
+    const { container } = renderInAppCommandScope(<NativeMessage message={message} />);
 
     expect(screen.getByText("Agent")).toBeTruthy();
     expect(screen.getByText("Review presentation polish (explorer)")).toBeTruthy();
@@ -2458,7 +2473,7 @@ describe("NativeMessage task list rendering", () => {
       },
     ]);
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     // Explicit name drives the primary label (with role), description is secondary.
     expect(screen.getByText("Presentation Reviewer (explorer)")).toBeTruthy();
@@ -2483,7 +2498,7 @@ describe("NativeMessage task list rendering", () => {
       },
     ]);
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     expect(screen.getByText("CustomReviewer")).toBeTruthy();
   });
@@ -2504,7 +2519,7 @@ describe("NativeMessage task list rendering", () => {
       },
     ]);
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     expect(screen.getByText("Subagent")).toBeTruthy();
   });
@@ -2526,7 +2541,7 @@ describe("NativeMessage task list rendering", () => {
       },
     ]);
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     expect(screen.getByText("Waiting for activity.")).toBeTruthy();
     expect(screen.queryByText("0 tools") === null).toBe(true);
@@ -2558,7 +2573,7 @@ describe("NativeMessage task list rendering", () => {
       },
     ]);
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     expect(screen.getByText("Response")).toBeTruthy();
     expect(screen.queryByText("Waiting for activity.") === null).toBe(true);
@@ -2587,7 +2602,7 @@ describe("NativeMessage task list rendering", () => {
       },
     ]);
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     expect(screen.getByText("8 tool uses")).toBeTruthy();
     expect(screen.getByText("20.4k tokens")).toBeTruthy();
@@ -2615,7 +2630,7 @@ describe("NativeMessage task list rendering", () => {
       { modelId: "gpt-5.6-sol" },
     );
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     const agentGroup = screen.getByRole("region", { name: "2 agents" });
     const modelLabel = screen.getByText("gpt-5.6-sol");
@@ -2642,7 +2657,7 @@ describe("NativeMessage task list rendering", () => {
   });
 
   test("keeps a standalone agent in its own card without an agents group", () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           {
@@ -2693,7 +2708,7 @@ describe("NativeMessage task list rendering", () => {
       },
     ]);
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     expect(screen.getByRole("region", { name: "4 agents" })).toBeTruthy();
     expect(screen.getByText("2 active")).toBeTruthy();
@@ -2714,7 +2729,9 @@ describe("NativeMessage task list rendering", () => {
       toolState: "pending",
       subagentActions: [],
     };
-    const { rerender } = render(<NativeMessage message={makeMessage([firstAgent])} />);
+    const { rerender } = renderInAppCommandScope(
+      <NativeMessage message={makeMessage([firstAgent])} />,
+    );
 
     fireEvent.click(screen.getByRole("button", { name: /reviewer/i }));
     expect(screen.getAllByText("Inspect the original task details")).toHaveLength(2);
@@ -2755,14 +2772,14 @@ describe("NativeMessage task list rendering", () => {
       },
     ]);
 
-    const first = render(<NativeMessage message={message} />);
+    const first = renderInAppCommandScope(<NativeMessage message={message} />);
     fireEvent.click(screen.getByRole("button", { name: /reviewer/i }));
     expect(screen.getByRole("button", { name: /reviewer/i }).getAttribute("aria-expanded")).toBe(
       "true",
     );
 
     first.unmount();
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     const remountedTrigger = screen.getByRole("button", { name: /reviewer/i });
     expect(remountedTrigger.getAttribute("aria-expanded")).toBe("true");
@@ -2773,7 +2790,7 @@ describe("NativeMessage task list rendering", () => {
   });
 
   test("isolates matching standalone agent ids between messages", () => {
-    render(
+    renderInAppCommandScope(
       <>
         <NativeMessage
           message={makeMessage(
@@ -2811,7 +2828,7 @@ describe("NativeMessage task list rendering", () => {
   });
 
   test("isolates matching message and agent ids between containers", () => {
-    render(
+    renderInAppCommandScope(
       <>
         <NativeMessage
           message={makeMessage(
@@ -2855,7 +2872,7 @@ describe("NativeMessage task list rendering", () => {
   });
 
   test("isolates matching message and agent ids between explicit transcript scopes", () => {
-    render(
+    renderInAppCommandScope(
       <>
         <NativeMessage
           message={makeMessage(
@@ -2904,7 +2921,7 @@ describe("NativeMessage task list rendering", () => {
       ],
       { id: "late-container-message" },
     );
-    const view = render(<NativeMessage message={message} />);
+    const view = renderInAppCommandScope(<NativeMessage message={message} />);
     const trigger = screen.getByRole("button", {
       name: /late container reviewer/i,
     });
@@ -2922,7 +2939,7 @@ describe("NativeMessage task list rendering", () => {
   });
 
   test("isolates id-less task agents with the same generic tool fallback between messages", () => {
-    render(
+    renderInAppCommandScope(
       <>
         <NativeMessage
           message={makeMessage(
@@ -2966,7 +2983,7 @@ describe("NativeMessage task list rendering", () => {
   });
 
   test("isolates id-less task agents within one message by part position", () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           makeAgentTaskGroupPart({
@@ -3013,12 +3030,12 @@ describe("NativeMessage task list rendering", () => {
       { id: "assistant-task-remount" },
     );
 
-    const first = render(<NativeMessage message={message} />);
+    const first = renderInAppCommandScope(<NativeMessage message={message} />);
     fireEvent.click(screen.getByRole("button", { name: /remount reviewer/i }));
     expect(screen.getByText("Inspect the task-group transcript")).toBeTruthy();
 
     first.unmount();
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     const remountedTrigger = screen.getByRole("button", {
       name: /remount reviewer/i,
@@ -3053,7 +3070,7 @@ describe("NativeMessage task list rendering", () => {
       },
     ]);
 
-    render(<NativeMessage message={message} containerId="container-1" />);
+    renderInAppCommandScope(<NativeMessage message={message} containerId="container-1" />);
 
     fireEvent.click(screen.getByRole("button", { name: /reviewer/i }));
     const previewButton = screen.getAllByRole("button", { name: /relative-preview\.png/i }).at(-1);
@@ -3074,7 +3091,7 @@ describe("NativeMessage task list rendering", () => {
       content: rawContent,
     });
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     expect(screen.getByText("Use this screenshot")).toBeTruthy();
     expect(screen.queryByText(/attached-files/) === null).toBe(true);
@@ -3119,7 +3136,7 @@ describe("NativeMessage task list rendering", () => {
       { id: "codex-structured-image", role: "user", content: "Inspect the diagram" },
     );
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     expect(screen.getByText("Inspect the diagram")).toBeTruthy();
     expect(await screen.findByAltText("Thumbnail: diagram.png")).toBeTruthy();
@@ -3133,7 +3150,7 @@ describe("NativeMessage task list rendering", () => {
       detailRef,
       fileDataUrl: "data:image/png;base64,iVBORw0KGgo=",
     }));
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           {
@@ -3157,7 +3174,7 @@ describe("NativeMessage task list rendering", () => {
     const loadToolDetails = mock(async () => {
       throw new Error("Native agent tool details are no longer available");
     });
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           {
@@ -3180,7 +3197,7 @@ describe("NativeMessage task list rendering", () => {
     // The backend stores an error stub when a payload exceeds the detail cache,
     // so a resolved reference can legitimately carry no `fileDataUrl`.
     const loadToolDetails = mock(async (detailRef: string) => ({ detailRef }));
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           {
@@ -3199,7 +3216,7 @@ describe("NativeMessage task list rendering", () => {
   });
 
   test("reports a deferred image as unavailable without a detail loader", () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           {
@@ -3219,7 +3236,7 @@ describe("NativeMessage task list rendering", () => {
   test("renders a caption-only image as a quiet row rather than a broken thumbnail", () => {
     // Codex reports an image with no path when the item carries no bytes.
     // Forcing the image treatment would immediately fail its eager load.
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           { type: "image", content: "a generated cat", imageSource: "generated" },
@@ -3233,7 +3250,7 @@ describe("NativeMessage task list rendering", () => {
   });
 
   test("previews a Claude image read the same way Codex imageView is shown", async () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           {
@@ -3252,7 +3269,7 @@ describe("NativeMessage task list rendering", () => {
   });
 
   test("previews Cursor and OpenCode image reads from their path argument names", async () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           {
@@ -3280,7 +3297,7 @@ describe("NativeMessage task list rendering", () => {
   });
 
   test("keeps a relative host image read as a plain tool row", () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           {
@@ -3310,7 +3327,7 @@ describe("NativeMessage task list rendering", () => {
         toolArgs: { file_path: "/workspace/screens/shot.png" },
       },
     ]);
-    const { rerender } = render(<NativeMessage message={pending} />);
+    const { rerender } = renderInAppCommandScope(<NativeMessage message={pending} />);
 
     expect(screen.queryByText("Image read") === null).toBe(true);
     expect(screen.queryByAltText(/Thumbnail:/) === null).toBe(true);
@@ -3331,7 +3348,7 @@ describe("NativeMessage task list rendering", () => {
   });
 
   test("prefers a first-class image returned by the same tool call", async () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           {
@@ -3358,7 +3375,7 @@ describe("NativeMessage task list rendering", () => {
   });
 
   test("does not preview a failed image read or a read of a non-image", () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           {
@@ -3386,7 +3403,7 @@ describe("NativeMessage task list rendering", () => {
 
   test("does not treat a deferred file reference as an image", () => {
     const loadToolDetails = mock(async (detailRef: string) => ({ detailRef }));
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           {
@@ -3423,7 +3440,7 @@ describe("NativeMessage task list rendering", () => {
       { id: "initial-prompt-path-reference", role: "user", content: rawContent },
     );
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     expect(screen.getByText("Make the profile match")).toBeTruthy();
     expect(screen.queryByText(/Attached files have been saved/) === null).toBe(true);
@@ -3448,7 +3465,7 @@ describe("NativeMessage task list rendering", () => {
       { id: "codex-rehydrated-image", role: "user", content: "Inspect the diagram" },
     );
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     expect(await screen.findByAltText("Thumbnail: diagram.png")).toBeTruthy();
   });
@@ -3476,7 +3493,7 @@ describe("NativeMessage task list rendering", () => {
       },
     ]);
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     const agent = screen.getByRole("button", {
       name: /Heisenberg \(correctness_review\)/i,
@@ -3516,7 +3533,7 @@ describe("NativeMessage task list rendering", () => {
       },
     ]);
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     expect(screen.getByText("Finished")).toBeTruthy();
     expect(screen.getByText("Task ·")).toBeTruthy();
@@ -3524,7 +3541,7 @@ describe("NativeMessage task list rendering", () => {
   });
 
   test("centers single-line agent and task headers while keeping preview rows top-aligned", () => {
-    const { rerender } = render(
+    const { rerender } = renderInAppCommandScope(
       <BackgroundTaskCard
         task={{ id: "task-1", description: "Install dependencies", status: "completed" }}
         command="Install dependencies"
@@ -3580,7 +3597,7 @@ describe("NativeMessage task list rendering", () => {
     const originalNow = Date.now;
     Date.now = () => Date.parse(startedAt) + 125_000;
     try {
-      render(
+      renderInAppCommandScope(
         <BackgroundTaskCard
           task={{
             id: "task-1",
@@ -3607,7 +3624,7 @@ describe("NativeMessage task list rendering", () => {
   });
 
   test("freezes a completed background task timer at its backend settle clock", () => {
-    render(
+    renderInAppCommandScope(
       <BackgroundTaskCard
         task={{
           id: "task-1",
@@ -3654,7 +3671,7 @@ describe("NativeMessage task list rendering", () => {
         />
       );
     }
-    render(<Harness />);
+    renderInAppCommandScope(<Harness />);
 
     // The collapsed row leads with the failure.
     expect(screen.getByText("Command failed with exit code 1")).toBeTruthy();
@@ -3692,7 +3709,7 @@ describe("NativeMessage task list rendering", () => {
       const invokeMock = invoke as unknown as ReturnType<typeof mock>;
       invokeMock.mockClear();
       const rows = rowlessBackgroundTaskMessages([task], [makeMessage([])]);
-      const view = render(<NativeMessage platform="claude" message={rows[0]!} />);
+      const view = renderInAppCommandScope(<NativeMessage platform="claude" message={rows[0]!} />);
       fireEvent.click(screen.getByRole("button", { name: /Task Review validation/ }));
       expect(screen.getByText("Two checks failed")).toBeTruthy();
       const loaded = makeMessage([
@@ -3733,7 +3750,7 @@ describe("NativeMessage task list rendering", () => {
   }
 
   test("shows a summary that only repeats the failure once", () => {
-    render(
+    renderInAppCommandScope(
       <BackgroundTaskCard
         task={{
           id: "task-1",
@@ -3758,7 +3775,7 @@ describe("NativeMessage task list rendering", () => {
   test("leaves a task whose only details are its counts unexpandable", () => {
     // Usage used to be the whole body of such a task. It now sits in the
     // header, so there is nothing left to expand.
-    render(
+    renderInAppCommandScope(
       <BackgroundTaskCard
         task={{
           id: "repeat-task",
@@ -3786,7 +3803,7 @@ describe("NativeMessage task list rendering", () => {
     const originalNow = Date.now;
     Date.now = () => Date.parse(startedAt) + 125_000;
     try {
-      render(
+      renderInAppCommandScope(
         <BackgroundTaskCard
           task={{
             id: "task-1",
@@ -3825,7 +3842,7 @@ describe("NativeMessage task list rendering", () => {
   });
 
   test("puts an icon-only stop control in the spinner's slot, revealed on hover", () => {
-    render(
+    renderInAppCommandScope(
       <BackgroundTaskCard
         task={{ id: "task-1", description: "Run validation", status: "running" }}
         command="mise run test"
@@ -3868,7 +3885,7 @@ describe("NativeMessage task list rendering", () => {
 
   for (const status of ["completed", "killed"] as const) {
     test(`retains captured activity in a ${status} background Agent's collapsed rail`, () => {
-      render(
+      renderInAppCommandScope(
         <NativeMessage
           platform="claude"
           message={makeMessage([
@@ -3918,7 +3935,7 @@ describe("NativeMessage task list rendering", () => {
   }
 
   test("retains update-only captured activity on a background Agent", () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           makeAgentTaskGroupPart({
@@ -3941,7 +3958,7 @@ describe("NativeMessage task list rendering", () => {
       },
       childTools: [{ type: "tool-invocation", content: "Read", toolName: "Read" }],
     });
-    const view = render(<NativeMessage message={makeMessage([part])} />);
+    const view = renderInAppCommandScope(<NativeMessage message={makeMessage([part])} />);
     expect(screen.getByText("5 tool uses")).toBeTruthy();
     expect(screen.getByText("8k tokens")).toBeTruthy();
     expect(screen.queryByText("1 tool use") === null).toBe(true);
@@ -3971,7 +3988,7 @@ describe("NativeMessage task list rendering", () => {
   });
 
   test("does not replace an explicit zero tool count with captured tools", () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           makeAgentTaskGroupPart({
@@ -3994,7 +4011,7 @@ describe("NativeMessage task list rendering", () => {
 
   for (const source of ["captured", "launch", "snapshot"] as const) {
     test(`hides Cursor background Agent activity counts from ${source} usage`, () => {
-      render(
+      renderInAppCommandScope(
         <NativeMessage
           platform="cursor"
           message={makeMessage([
@@ -4029,7 +4046,7 @@ describe("NativeMessage task list rendering", () => {
           finishStop = resolve;
         }),
     );
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         stopBackgroundTask={onStop}
         message={makeMessage([
@@ -4072,7 +4089,7 @@ describe("NativeMessage task list rendering", () => {
   });
 
   test("leaves a task with nothing to add unexpandable", () => {
-    render(
+    renderInAppCommandScope(
       <BackgroundTaskCard
         task={{ id: "task-1", description: "Build", status: "completed", summary: "Build" }}
         open={false}
@@ -4090,7 +4107,7 @@ describe("NativeMessage task list rendering", () => {
     const originalNow = Date.now;
     Date.now = () => Date.parse(startedAt) + 125_000;
     try {
-      render(
+      renderInAppCommandScope(
         <NativeMessage
           stopBackgroundTask={async () => true}
           message={makeMessage([
@@ -4128,7 +4145,7 @@ describe("NativeMessage task list rendering", () => {
     const originalNow = Date.now;
     Date.now = () => Date.parse(launchStartedAt) + 125_000;
     try {
-      const { rerender } = render(
+      const { rerender } = renderInAppCommandScope(
         <BackgroundTaskCard
           task={{ id: "task-1", description: "Run validation", status: "running" }}
           launchStartedAt={launchStartedAt}
@@ -4168,7 +4185,7 @@ describe("NativeMessage task list rendering", () => {
     const originalNow = Date.now;
     Date.now = () => Date.parse(launchStartedAt) + 125_000;
     try {
-      render(
+      renderInAppCommandScope(
         <NativeMessage
           stopBackgroundTask={async () => true}
           message={makeMessage([
@@ -4198,7 +4215,7 @@ describe("NativeMessage task list rendering", () => {
   test("shows no background task timer when the settle clock precedes the start", () => {
     // Clock skew between the two backend stamps would otherwise render as a
     // negative runtime. Nothing is the honest answer; a guess is not.
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <BackgroundTaskCard
         task={{
           id: "task-1",
@@ -4222,7 +4239,7 @@ describe("NativeMessage task list rendering", () => {
     // The duration used to reach the usage block on the Cursor branch alone, so
     // a finished subagent elsewhere reported tools and updates but never how
     // long it took.
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         platform="claude"
         message={makeMessage([
@@ -4239,7 +4256,7 @@ describe("NativeMessage task list rendering", () => {
   });
 
   test("shows a settled agent runtime beside a token-only usage count", () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         platform="claude"
         message={makeMessage([
@@ -4260,7 +4277,7 @@ describe("NativeMessage task list rendering", () => {
   test("collapses a Codex agent label whose role only restates its name", () => {
     // Codex multi-agent v2 derives both the name and the role from the same
     // task path, so rendering both would read "metadata_review (metadata_review)".
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           {
@@ -4281,7 +4298,7 @@ describe("NativeMessage task list rendering", () => {
   });
 
   test("keeps a genuinely different role beside the agent name, ignoring case", () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           {
@@ -4333,7 +4350,7 @@ describe("NativeMessage task list rendering", () => {
       },
     ]);
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     expect(screen.getByText("45.7k tokens")).toBeTruthy();
     expect(screen.queryByText("0 tools") === null).toBe(true);
@@ -4356,7 +4373,7 @@ describe("NativeMessage task list rendering", () => {
       },
     ]);
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     expect(screen.getByText("8 tool uses")).toBeTruthy();
     expect(screen.getByText("20.4k tokens")).toBeTruthy();
@@ -4379,7 +4396,7 @@ describe("NativeMessage task list rendering", () => {
       },
     ]);
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     expect(screen.getByText("37.3k tokens")).toBeTruthy();
     expect(screen.queryByText("0 tools") === null).toBe(true);
@@ -4401,7 +4418,7 @@ describe("NativeMessage task list rendering", () => {
       },
     ]);
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     expect(screen.getByText("1 tool use")).toBeTruthy();
     expect(screen.getByText("980 tokens")).toBeTruthy();
@@ -4424,7 +4441,7 @@ describe("NativeMessage task list rendering", () => {
       },
     ]);
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     expect(screen.getByText("No activity captured.")).toBeTruthy();
     expect(screen.queryByText("0 tools") === null).toBe(true);
@@ -4457,7 +4474,7 @@ describe("NativeMessage task list rendering", () => {
       },
     ]);
 
-    render(<NativeMessage message={message} platform="cursor" />);
+    renderInAppCommandScope(<NativeMessage message={message} platform="cursor" />);
 
     expect(screen.getByText("Summarize two docs (explore)")).toBeTruthy();
     expect(screen.getByText("1.2s")).toBeTruthy();
@@ -4487,7 +4504,7 @@ describe("NativeMessage task list rendering", () => {
     const originalNow = Date.now;
     Date.now = () => Date.parse(startedAt) + 125_000;
     try {
-      render(
+      renderInAppCommandScope(
         <NativeMessage
           message={makeMessage([
             {
@@ -4524,7 +4541,7 @@ describe("NativeMessage task list rendering", () => {
   });
 
   test("does not show Cursor spawn duration on an active card without a launch clock", () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           {
@@ -4592,7 +4609,7 @@ describe("NativeMessage task list rendering", () => {
       },
     ]);
 
-    render(<NativeMessage message={message} platform="cursor" />);
+    renderInAppCommandScope(<NativeMessage message={message} platform="cursor" />);
 
     expect(screen.queryByText("Waiting for activity.") === null).toBe(true);
     expect(screen.getByText("Read")).toBeTruthy();
@@ -4625,7 +4642,7 @@ describe("NativeMessage task list rendering", () => {
       },
     ]);
 
-    render(<NativeMessage message={message} platform="claude" />);
+    renderInAppCommandScope(<NativeMessage message={message} platform="claude" />);
 
     expect(screen.getByText("8 tool uses")).toBeTruthy();
     expect(screen.getByText("Review the diff (explore)")).toBeTruthy();
@@ -4633,7 +4650,7 @@ describe("NativeMessage task list rendering", () => {
 
   describe("agent result disclosure", () => {
     function renderTaskWithOutput(toolOutput: string) {
-      render(
+      renderInAppCommandScope(
         <NativeMessage
           message={makeMessage([
             {
@@ -4694,7 +4711,7 @@ describe("NativeMessage task list rendering", () => {
     });
 
     test("renders a bounded Result frame for a plain subagent part too", () => {
-      render(
+      renderInAppCommandScope(
         <NativeMessage
           message={makeMessage([
             {
@@ -4751,7 +4768,7 @@ describe("NativeMessage task list rendering", () => {
       },
     ]);
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     // Preview prefers the latest child's command over the task description.
     expect(screen.getByText("bun run build")).toBeTruthy();
@@ -4772,7 +4789,7 @@ describe("NativeMessage task list rendering", () => {
     ]);
 
     try {
-      render(<NativeMessage message={message} />);
+      renderInAppCommandScope(<NativeMessage message={message} />);
 
       fireEvent.click(screen.getByRole("button", { name: "Copy text" }));
 
@@ -4795,7 +4812,7 @@ describe("NativeMessage task list rendering", () => {
       },
     ]);
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Copy text" }));
 
@@ -4813,7 +4830,7 @@ describe("NativeMessage task list rendering", () => {
       "I need to work through several items:\n\n- [x] Read the file\n- [ ] Write the fix\n\nLet me start with the fix.";
     const message = makeMessage([{ type: "thinking", content }]);
 
-    const { container } = render(<NativeMessage message={message} />);
+    const { container } = renderInAppCommandScope(<NativeMessage message={message} />);
 
     // Should detect the task list and use the collapsible variant
     const trigger = screen.getByRole("button", { name: /thinking/i });
@@ -4832,7 +4849,7 @@ describe("NativeMessage task list rendering", () => {
       },
     ]);
 
-    const { container } = render(<NativeMessage message={message} />);
+    const { container } = renderInAppCommandScope(<NativeMessage message={message} />);
 
     // Should render without crashing
     const checkboxIcons = container.querySelectorAll('[data-task-list-icon="true"]');
@@ -4862,7 +4879,7 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
       },
     ]);
 
-    const { container } = render(<NativeMessage message={message} />);
+    const { container } = renderInAppCommandScope(<NativeMessage message={message} />);
 
     // Should render the TodoToolPart with completion count
     expect(container.textContent).toContain("Todo Write");
@@ -4887,7 +4904,7 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
       },
     ]);
 
-    const { container } = render(<NativeMessage message={message} />);
+    const { container } = renderInAppCommandScope(<NativeMessage message={message} />);
 
     expect(container.textContent).toContain("Todo Write");
     expect(container.textContent).toContain("1/2 complete");
@@ -4907,7 +4924,7 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
       },
     ]);
 
-    const { container } = render(<NativeMessage message={message} />);
+    const { container } = renderInAppCommandScope(<NativeMessage message={message} />);
 
     expect(container.textContent).toContain("Split discovery");
     expect(container.textContent).toContain("work");
@@ -4926,7 +4943,7 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
       },
     ]);
 
-    const { container } = render(<NativeMessage message={message} />);
+    const { container } = renderInAppCommandScope(<NativeMessage message={message} />);
 
     expect(container.textContent).toContain("Legacy");
     expect(container.textContent).toContain("Recovered body.");
@@ -4945,7 +4962,7 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
       },
     ]);
 
-    const { container } = render(<NativeMessage message={message} />);
+    const { container } = renderInAppCommandScope(<NativeMessage message={message} />);
 
     expect(container.textContent).not.toContain("complete");
     expect(container.textContent).toContain("Plan the work");
@@ -4969,7 +4986,7 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
       },
     ]);
 
-    const { container } = render(<NativeMessage message={message} />);
+    const { container } = renderInAppCommandScope(<NativeMessage message={message} />);
 
     expect(container.textContent).toContain("Update TODOs");
     expect(container.textContent).toContain("1/2 complete");
@@ -4993,7 +5010,7 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
       },
     ]);
 
-    const { container } = render(<NativeMessage message={message} />);
+    const { container } = renderInAppCommandScope(<NativeMessage message={message} />);
 
     // Should render using TodoToolPart with "Todo List" label
     expect(container.textContent).toContain("Todo List");
@@ -5016,7 +5033,7 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
       },
     ]);
 
-    const { container } = render(<NativeMessage message={message} />);
+    const { container } = renderInAppCommandScope(<NativeMessage message={message} />);
 
     expect(container.textContent).toContain("Task Update");
     expect(container.textContent).toContain("1/1 complete");
@@ -5040,7 +5057,7 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
       },
     ]);
 
-    const { container } = render(<NativeMessage message={message} />);
+    const { container } = renderInAppCommandScope(<NativeMessage message={message} />);
 
     expect(container.textContent).toContain("Task Create");
     expect(container.textContent).toContain("1/2 complete");
@@ -5074,7 +5091,7 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
       },
     ]);
 
-    const { container } = render(<NativeMessage message={message} />);
+    const { container } = renderInAppCommandScope(<NativeMessage message={message} />);
 
     // The list, not the single task the call named.
     expect(container.textContent).toContain("1/2 complete");
@@ -5095,7 +5112,7 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
       },
     ]);
 
-    const { container } = render(<NativeMessage message={message} />);
+    const { container } = renderInAppCommandScope(<NativeMessage message={message} />);
 
     // Should NOT render TodoToolPart completion count
     expect(container.textContent).not.toContain("complete");
@@ -5105,7 +5122,7 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
 
   test("renders a background command as a task card with a stop control", () => {
     const stopBackgroundTask = mock(async () => true);
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         stopBackgroundTask={stopBackgroundTask}
         message={makeMessage([
@@ -5164,7 +5181,7 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
       [],
     );
 
-    const view = render(
+    const view = renderInAppCommandScope(
       <NativeMessage stopBackgroundTask={stopBackgroundTask} message={rows[0]!} />,
     );
 
@@ -5206,7 +5223,7 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
           },
         }),
       ]);
-    const view = render(
+    const view = renderInAppCommandScope(
       <NativeMessage message={message("running")} stopBackgroundTask={stopBackgroundTask} />,
     );
 
@@ -5230,7 +5247,7 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
   });
 
   test("offers no stop control when the tab cannot stop background tasks", () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           {
@@ -5252,7 +5269,7 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
   });
 
   test("shows the task name, id, and stopped state on TaskStop rows", () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           {
@@ -5283,7 +5300,7 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
   });
 
   test("reads the stopped command from a structured TaskStop result when no name was recovered", () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           {
@@ -5311,7 +5328,7 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
   });
 
   test("recovers the stopped command from a legacy plain-text TaskStop result", () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           {
@@ -5334,7 +5351,7 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
   });
 
   test("falls back to the task id when nothing names a stopped task", () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           {
@@ -5355,7 +5372,7 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
   });
 
   test("names a TaskOutput row after its task and shows the task's live state", () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           {
@@ -5391,7 +5408,7 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
   ] as const)(
     "labels a background task card %s as %s and offers a stop control: %s",
     (status, label, stoppable) => {
-      render(
+      renderInAppCommandScope(
         <NativeMessage
           stopBackgroundTask={async () => true}
           message={makeMessage([
@@ -5423,7 +5440,7 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
   );
 
   test("keeps a background task card open when it has no live snapshot", () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         stopBackgroundTask={async () => true}
         message={makeMessage([
@@ -5447,7 +5464,7 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
   });
 
   test("reports a refused stop on the card that asked for it", async () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         stopBackgroundTask={async () => false}
         message={makeMessage([
@@ -5493,7 +5510,7 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
           backgroundTask: { id: "bg-dev", description: "Run the dev server", status },
         },
       ]);
-    const view = render(
+    const view = renderInAppCommandScope(
       <NativeMessage message={message("running")} stopBackgroundTask={async () => true} />,
     );
 
@@ -5515,7 +5532,7 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
   test("cards a command backgrounded after it started, with a stop control", () => {
     // Ctrl+B and a foreground timeout both background a command launched
     // without `run_in_background`, so the argument alone cannot route this row.
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         stopBackgroundTask={async () => true}
         message={makeMessage([
@@ -5544,7 +5561,7 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
       detailRef,
       toolOutput: "Command running in background with ID: bg-suite.",
     }));
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         loadToolDetails={loadToolDetails}
         stopBackgroundTask={async () => true}
@@ -5577,7 +5594,7 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
   });
 
   test("surfaces a failed deferred load on the background task card", async () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         loadToolDetails={mock(async () => {
           throw new Error("Tool details expired");
@@ -5606,7 +5623,7 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
   });
 
   test("shows a failed task action instead of the task's own lifecycle state", () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           {
@@ -5632,7 +5649,7 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
   });
 
   test("labels an in-flight stop as stopping", () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           {
@@ -5651,7 +5668,7 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
   });
 
   test("renders a task description as prose and a command as code", () => {
-    const { unmount } = render(
+    const { unmount } = renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           {
@@ -5678,7 +5695,7 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
     expect(screen.getByText("bun test").className).toContain("font-mono");
     unmount();
 
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           {
@@ -5698,7 +5715,7 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
   test.each(["task_stop", " TaskStop "] as const)(
     "treats %s as a background task stop row",
     (toolName) => {
-      render(
+      renderInAppCommandScope(
         <NativeMessage
           message={makeMessage([
             {
@@ -5733,7 +5750,7 @@ describe("NativeMessage thinking parts", () => {
   });
 
   test("renders nothing for a thinking part with no content", () => {
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <NativeMessage message={makeMessage([{ type: "thinking", content: "" }])} />,
     );
 
@@ -5744,7 +5761,7 @@ describe("NativeMessage thinking parts", () => {
   });
 
   test("renders nothing for a thinking part that is only whitespace", () => {
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <NativeMessage message={makeMessage([{ type: "thinking", content: "   \n\n\t  " }])} />,
     );
 
@@ -5754,7 +5771,7 @@ describe("NativeMessage thinking parts", () => {
   });
 
   test("keeps the activity block for real reasoning alongside an empty part", () => {
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           { type: "thinking", content: "" },
@@ -5768,7 +5785,7 @@ describe("NativeMessage thinking parts", () => {
   });
 
   test("keeps single newlines as visible line breaks in expanded reasoning", () => {
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([{ type: "thinking", content: "first line\nsecond line" }])}
       />,
@@ -5784,7 +5801,7 @@ describe("NativeMessage thinking parts", () => {
   });
 
   test("disables line breaks for task-list reasoning so list syntax still parses", () => {
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           {
@@ -5805,7 +5822,7 @@ describe("NativeMessage thinking parts", () => {
   });
 
   test("detects numbered task list syntax for the collapsed preview", () => {
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           {
@@ -5829,7 +5846,7 @@ describe("NativeMessage thinking parts", () => {
       { type: "thinking", content: "Long reasoning that the user opened" },
     ]);
 
-    const first = render(<NativeMessage message={message} />);
+    const first = renderInAppCommandScope(<NativeMessage message={message} />);
     fireEvent.click(screen.getByRole("button", { name: /thinking/i }));
     expect(screen.getByRole("button", { name: /thinking/i }).getAttribute("aria-expanded")).toBe(
       "true",
@@ -5838,7 +5855,7 @@ describe("NativeMessage thinking parts", () => {
     // The virtualized transcript unmounts a message once it scrolls out of the
     // viewport window; scrolling back must not collapse what the user opened.
     first.unmount();
-    const { container } = render(<NativeMessage message={message} />);
+    const { container } = renderInAppCommandScope(<NativeMessage message={message} />);
 
     expect(screen.getByRole("button", { name: /thinking/i }).getAttribute("aria-expanded")).toBe(
       "true",
@@ -5853,7 +5870,7 @@ describe("NativeMessage thinking parts", () => {
       { type: "thinking", content: "Second reasoning block" },
     ]);
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     const triggers = screen.getAllByRole("button", { name: /reasoning block/i });
     expect(triggers).toHaveLength(2);
@@ -5865,14 +5882,14 @@ describe("NativeMessage thinking parts", () => {
   });
 
   test("tracks thinking parts of different messages independently", () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([{ type: "thinking", content: "Message one reasoning" }], {
           id: "assistant-a",
         })}
       />,
     );
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([{ type: "thinking", content: "Message two reasoning" }], {
           id: "assistant-b",
@@ -5907,7 +5924,7 @@ describe("NativeMessage thinking parts", () => {
       },
     ]);
 
-    const { container } = render(<NativeMessage message={message} />);
+    const { container } = renderInAppCommandScope(<NativeMessage message={message} />);
 
     const group = container.querySelector(".rounded-lg.border.border-divider");
     expect(group).toBeTruthy();
@@ -5940,7 +5957,7 @@ describe("NativeMessage thinking parts", () => {
       },
     ]);
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     fireEvent.click(screen.getByRole("button", { name: /reviewer/i }));
 
@@ -5961,7 +5978,7 @@ describe("NativeMessage part routing and message-level fallbacks", () => {
   });
 
   test("renders nothing for tool-result parts", () => {
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           {
@@ -5983,13 +6000,13 @@ describe("NativeMessage part routing and message-level fallbacks", () => {
       { type: "mystery-part", content: "unknown payload" } as unknown as NativeMessagePart,
     ]);
 
-    const { container } = render(<NativeMessage message={message} />);
+    const { container } = renderInAppCommandScope(<NativeMessage message={message} />);
 
     expect(container.textContent).not.toContain("unknown payload");
   });
 
   test("renders no body, no attribution, and no copy control for an empty assistant message", () => {
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <NativeMessage message={makeMessage([], { id: "assistant-empty", content: "" })} />,
     );
 
@@ -6007,7 +6024,7 @@ describe("NativeMessage part routing and message-level fallbacks", () => {
       content: "Assistant fallback content",
     });
 
-    render(<NativeMessage message={message} />);
+    renderInAppCommandScope(<NativeMessage message={message} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Copy text" }));
 
@@ -6024,7 +6041,7 @@ describe("NativeMessage agent status and grouping details", () => {
   });
 
   test("colours the agent status pill by state", () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           {
@@ -6058,7 +6075,7 @@ describe("NativeMessage agent status and grouping details", () => {
   });
 
   test("keeps successful terminal agents finished despite stale pending descendants", () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           {
@@ -6102,7 +6119,7 @@ describe("NativeMessage agent status and grouping details", () => {
   });
 
   test("prefers authoritative agent lifecycle over a successful launch tool", () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           {
@@ -6122,7 +6139,7 @@ describe("NativeMessage agent status and grouping details", () => {
   });
 
   test("renders an authoritative agent failure even when the launch tool succeeded", () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           {
@@ -6150,7 +6167,7 @@ describe("NativeMessage agent status and grouping details", () => {
   });
 
   test("expands standalone agents whose identity uses fallback fields", () => {
-    const { rerender } = render(
+    const { rerender } = renderInAppCommandScope(
       <NativeMessage
         message={makeMessage(
           [
@@ -6271,11 +6288,11 @@ describe("NativeMessage agent status and grouping details", () => {
       const message = makeMessage([part], {
         id: `assistant-task-identity-${identityName.replaceAll(" ", "-")}`,
       });
-      const first = render(<NativeMessage message={message} />);
+      const first = renderInAppCommandScope(<NativeMessage message={message} />);
       fireEvent.click(screen.getByRole("button", { name: triggerName }));
 
       first.unmount();
-      render(<NativeMessage message={message} />);
+      renderInAppCommandScope(<NativeMessage message={message} />);
 
       expect(screen.getByRole("button", { name: triggerName }).getAttribute("aria-expanded")).toBe(
         "true",
@@ -6340,11 +6357,11 @@ describe("NativeMessage agent status and grouping details", () => {
       const message = makeMessage([part], {
         id: `assistant-subagent-identity-${identityName.replaceAll(" ", "-")}`,
       });
-      const first = render(<NativeMessage message={message} />);
+      const first = renderInAppCommandScope(<NativeMessage message={message} />);
       fireEvent.click(screen.getByRole("button", { name: triggerName }));
 
       first.unmount();
-      render(<NativeMessage message={message} />);
+      renderInAppCommandScope(<NativeMessage message={message} />);
 
       expect(screen.getByRole("button", { name: triggerName }).getAttribute("aria-expanded")).toBe(
         "true",
@@ -6353,7 +6370,7 @@ describe("NativeMessage agent status and grouping details", () => {
   );
 
   test("uses the response fallback for standalone whitespace text and omits a whitespace prompt", () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           makeStandaloneSubagentPart({
@@ -6372,7 +6389,7 @@ describe("NativeMessage agent status and grouping details", () => {
   });
 
   test("previews the latest thinking and file updates in task agents", () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           makeAgentTaskGroupPart({
@@ -6414,7 +6431,7 @@ describe("NativeMessage agent status and grouping details", () => {
   });
 
   test("previews the latest thinking and file updates in standalone agents", () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           makeStandaloneSubagentPart({
@@ -6440,7 +6457,7 @@ describe("NativeMessage agent status and grouping details", () => {
   });
 
   test("renders no shell for an empty agent group", () => {
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           { type: "text", content: "Before agents" },
@@ -6457,7 +6474,7 @@ describe("NativeMessage agent status and grouping details", () => {
   });
 
   test("omits the active badge when every grouped agent has finished", () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           {
@@ -6483,7 +6500,7 @@ describe("NativeMessage agent status and grouping details", () => {
   });
 
   test("counts active agents across mixed subagent and task-group children", () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           {
@@ -6519,7 +6536,7 @@ describe("NativeMessage agent status and grouping details", () => {
   });
 
   test("falls back to the generic subagent label with no name, role or content", () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           {
@@ -6536,7 +6553,7 @@ describe("NativeMessage agent status and grouping details", () => {
   });
 
   test("uses singular tool-use wording for a standalone subagent with one external use", () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           {
@@ -6555,7 +6572,7 @@ describe("NativeMessage agent status and grouping details", () => {
   });
 
   test("ignores a blank subagent prompt instead of rendering an empty task block", () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           {
@@ -6593,7 +6610,7 @@ describe("NativeMessage agent status and grouping details", () => {
       childTools: [],
     });
 
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           makeTaskGroup("task-camel", {
@@ -6613,7 +6630,7 @@ describe("NativeMessage agent status and grouping details", () => {
   });
 
   test("omits the secondary header label when a named agent has no description", () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           {
@@ -6638,7 +6655,7 @@ describe("NativeMessage agent status and grouping details", () => {
   });
 
   test("treats every casing of the generic Task tool label as a subagent", () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           {
@@ -6663,7 +6680,7 @@ describe("NativeMessage agent status and grouping details", () => {
   });
 
   test("falls back to an update count when an external agent reports no token text", () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           {
@@ -6711,7 +6728,7 @@ describe("NativeMessage actions slot", () => {
       content: "Ship it",
     });
 
-    render(
+    renderInAppCommandScope(
       <NativeMessage message={message} actions={<button type="button">Fork from here</button>} />,
     );
 
@@ -6723,7 +6740,7 @@ describe("NativeMessage actions slot", () => {
   });
 
   test("renders actions on an assistant message alongside the copy button", () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([{ type: "text", content: "Done" }])}
         actions={<button type="button">Custom action</button>}
@@ -6735,7 +6752,7 @@ describe("NativeMessage actions slot", () => {
   });
 
   test("keeps assistant actions visible on mobile and hover-revealed on desktop", () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([{ type: "text", content: "Done" }])}
         actions={<button type="button">Custom action</button>}
@@ -6751,7 +6768,7 @@ describe("NativeMessage actions slot", () => {
   });
 
   test("keeps user actions visible on mobile and hover-revealed on desktop", () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([{ type: "text", content: "Ship it" }], {
           id: "user-1",
@@ -6780,7 +6797,7 @@ describe("NativeMessage actions slot", () => {
       { type: "tool-invocation", content: "Read", toolName: "Read", toolState: "success" },
     ]);
 
-    render(
+    renderInAppCommandScope(
       <NativeMessage message={message} actions={<button type="button">Fork from here</button>} />,
     );
 
@@ -6789,7 +6806,9 @@ describe("NativeMessage actions slot", () => {
   });
 
   test("leaves the copy-only layout undisturbed when no actions are passed", () => {
-    render(<NativeMessage message={makeMessage([{ type: "text", content: "Done" }])} />);
+    renderInAppCommandScope(
+      <NativeMessage message={makeMessage([{ type: "text", content: "Done" }])} />,
+    );
 
     const copy = screen.getByRole("button", { name: "Copy text" });
     expect(copy).toBeTruthy();
@@ -6798,7 +6817,7 @@ describe("NativeMessage actions slot", () => {
   });
 
   test("renders no action row at all when there is neither copy content nor actions", () => {
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           { type: "tool-invocation", content: "Read", toolName: "Read", toolState: "success" },
@@ -6830,7 +6849,7 @@ describe("NativeMessage permission-denied tool rows", () => {
       },
     ]);
 
-    const { container } = render(<NativeMessage message={message} />);
+    const { container } = renderInAppCommandScope(<NativeMessage message={message} />);
 
     expect(container.textContent).toContain("denied");
     expect(container.textContent).not.toContain("failure");
@@ -6850,7 +6869,7 @@ describe("NativeMessage permission-denied tool rows", () => {
           toolDenied: { reason: "Blocked by workspace rule", source: "rule" },
         },
       ]);
-      const { container } = render(<NativeMessage message={message} />);
+      const { container } = renderInAppCommandScope(<NativeMessage message={message} />);
       expect(container.textContent).toContain("denied");
       expect(container.textContent).toContain("Denied (rule): Blocked by workspace rule");
       expect(container.textContent).not.toContain("failure");
@@ -6882,7 +6901,7 @@ describe("NativeMessage shell command changes", () => {
       }, [setCreateFileTab]);
       return null;
     }
-    render(
+    renderInAppCommandScope(
       <NativeChangeScopeContext.Provider value={{ environmentId: "env-1" }}>
         <TerminalProvider>
           <RegisterFileTab />
@@ -6939,7 +6958,7 @@ describe("NativeMessage shell command changes", () => {
       }, [setCreateFileTab]);
       return null;
     }
-    render(
+    renderInAppCommandScope(
       <NativeChangeScopeContext.Provider value={{ environmentId: "env-1" }}>
         <TerminalProvider>
           <RegisterFileTab />
@@ -6984,7 +7003,7 @@ describe("NativeMessage shell command changes", () => {
   });
 
   test("shows measured paths as text without a terminal provider or environment", () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage(
           [
@@ -7003,7 +7022,7 @@ describe("NativeMessage shell command changes", () => {
   });
 
   test("marks approximate counts and explains why", () => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           command({
@@ -7021,7 +7040,7 @@ describe("NativeMessage shell command changes", () => {
   });
 
   test("shows a file count when git cannot count lines, and nothing for a no-op", () => {
-    const { unmount } = render(
+    const { unmount } = renderInAppCommandScope(
       <NativeMessage
         message={makeMessage([
           command({
@@ -7035,7 +7054,7 @@ describe("NativeMessage shell command changes", () => {
     expect(screen.getByTestId("command-change-stats").textContent).toBe("1 file");
     unmount();
 
-    render(
+    renderInAppCommandScope(
       <NativeMessage message={makeMessage([command({ additions: 0, deletions: 0, files: [] })])} />,
     );
     expect(screen.queryByTestId("command-change-stats") === null).toBe(true);
@@ -7057,7 +7076,7 @@ describe("OpenCode error-row authentication recovery", () => {
       }) as typeof nativeBackend.invoke);
       try {
         const content = "Model request failed (HTTP 401): Invalid API key";
-        render(
+        renderInAppCommandScope(
           <NativeMessage
             platform="opencode"
             containerId={containerId}
@@ -7101,7 +7120,7 @@ describe("OpenCode error-row authentication recovery", () => {
       content: "Model request failed (HTTP 401): Invalid API key",
     },
   ])("does not offer recovery for $id", ({ platform, id, content }) => {
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         platform={platform}
         message={makeMessage([{ type: "text", content }], {

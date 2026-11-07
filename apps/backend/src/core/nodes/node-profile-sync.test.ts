@@ -1,3 +1,4 @@
+import { eventSink } from "../backend-emit.js";
 import { afterEach, describe, expect, test } from "bun:test";
 
 import {
@@ -51,10 +52,10 @@ async function setup() {
   const portal = new NodePortal({
     nodes: command.service,
     fetchImpl: network.fetch,
-    emit(event, payload) {
+    emit: eventSink((event, payload) => {
       command.events.push({ event, payload });
       if (event === NODE_SUMMARY_CHANGED_EVENT) reads.push(portal.summaries());
-    },
+    }),
   });
   cleanups.push(() => portal.stop());
   await portal.start();

@@ -4,7 +4,7 @@ import path from "node:path";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import { Z_FULLSCREEN_DIALOG, Z_FULLSCREEN_DIALOG_POPOVER } from "@/constants/z-index";
-import { useConfigStore } from "@/stores/configStore";
+import { configStore } from "@/stores/configStore";
 
 import {
   AlertDialog,
@@ -18,6 +18,7 @@ import {
   AlertDialogTrigger,
 } from "./alert-dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./select";
+import { appCommandStore } from "@/test/app-command-store";
 
 afterEach(() => cleanup());
 
@@ -140,8 +141,8 @@ describe("AlertDialog primitives", () => {
   });
 
   test("keeps alert contrast independent of a light terminal background", () => {
-    const originalConfig = useConfigStore.getState().config;
-    useConfigStore.setState((state) => ({
+    const originalConfig = appCommandStore(configStore).getState().config;
+    appCommandStore(configStore).setState((state) => ({
       config: {
         ...state.config,
         global: {
@@ -168,7 +169,7 @@ describe("AlertDialog primitives", () => {
       expect(dialog.className).toContain("bg-background");
       expect(dialog.style.getPropertyValue("--color-background")).toBe("");
     } finally {
-      useConfigStore.setState({ config: originalConfig });
+      appCommandStore(configStore).setState({ config: originalConfig });
     }
   });
 

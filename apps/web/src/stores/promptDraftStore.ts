@@ -1,6 +1,8 @@
 import { useCallback, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
-import { create } from "zustand";
+import { defineScopedStore } from "@/lib/node-scope/scoped-store";
+import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
+import { useNodeScope } from "@/lib/node-scope/providers";
 
 /**
  * In-progress user input for blocking agent prompts: multi-question form
@@ -15,7 +17,8 @@ import { create } from "zustand";
  * pending request clears them when the request resolves (submitted, rejected,
  * or withdrawn), so a stale draft can never reappear on a reused request id.
  *
- * Renderer-only state: none of this needs to survive an app restart.
+ * Renderer-only state: none of this needs to survive an app restart. One
+ * instance per node scope, because the pending requests are that node's.
  */
 
 type DraftRecord = Record<string, unknown>;
@@ -27,7 +30,7 @@ type DraftRecord = Record<string, unknown>;
  */
 const MAX_DRAFTS = 100;
 
-interface PromptDraftState {
+export interface PromptDraftState {
   drafts: ReadonlyMap<string, DraftRecord>;
   setDraftValue: (draftKey: string, field: string, value: unknown) => void;
   clearDraft: (draftKey: string) => void;
@@ -35,46 +38,52 @@ interface PromptDraftState {
   reset: () => void;
 }
 
-export const usePromptDraftStore = create<PromptDraftState>((set) => ({
-  drafts: new Map(),
+export const promptDraftStore = defineScopedStore<PromptDraftState>(
+  "prompt-draft",
+  () => (set) => ({
+    drafts: new Map(),
 
-  setDraftValue: (draftKey, field, value) =>
-    set((state) => {
-      const next = new Map(state.drafts);
-      const record = { ...next.get(draftKey), [field]: value };
-      // Delete-then-set keeps actively edited drafts at the back so the cap
-      // trims the stalest ones first.
-      next.delete(draftKey);
-      next.set(draftKey, record);
-      while (next.size > MAX_DRAFTS) {
-        const oldest = next.keys().next().value;
-        if (oldest === undefined) break;
-        next.delete(oldest);
-      }
-      return { drafts: next };
-    }),
-
-  clearDraft: (draftKey) =>
-    set((state) => {
-      if (!state.drafts.has(draftKey)) return state;
-      const next = new Map(state.drafts);
-      next.delete(draftKey);
-      return { drafts: next };
-    }),
-
-  clearDrafts: (draftKeys) =>
-    set((state) => {
-      let next: Map<string, DraftRecord> | null = null;
-      for (const draftKey of draftKeys) {
-        if (!state.drafts.has(draftKey)) continue;
-        next ??= new Map(state.drafts);
+    setDraftValue: (draftKey, field, value) =>
+      set((state) => {
+        const next = new Map(state.drafts);
+        const record = { ...next.get(draftKey), [field]: value };
+        // Delete-then-set keeps actively edited drafts at the back so the cap
+        // trims the stalest ones first.
         next.delete(draftKey);
-      }
-      return next ? { drafts: next } : state;
-    }),
+        next.set(draftKey, record);
+        while (next.size > MAX_DRAFTS) {
+          const oldest = next.keys().next().value;
+          if (oldest === undefined) break;
+          next.delete(oldest);
+        }
+        return { drafts: next };
+      }),
 
-  reset: () => set({ drafts: new Map() }),
-}));
+    clearDraft: (draftKey) =>
+      set((state) => {
+        if (!state.drafts.has(draftKey)) return state;
+        const next = new Map(state.drafts);
+        next.delete(draftKey);
+        return { drafts: next };
+      }),
+
+    clearDrafts: (draftKeys) =>
+      set((state) => {
+        let next: Map<string, DraftRecord> | null = null;
+        for (const draftKey of draftKeys) {
+          if (!state.drafts.has(draftKey)) continue;
+          next ??= new Map(state.drafts);
+          next.delete(draftKey);
+        }
+        return next ? { drafts: next } : state;
+      }),
+
+    reset: () => set({ drafts: new Map() }),
+  }),
+);
+
+/** Reads the nearest node scope's drafts; other code uses `scope.store(promptDraftStore)`. */
+export const usePromptDraftStore = scopedStoreHook(promptDraftStore);
 
 /**
  * Key builders shared by the cards and by the stores that clear drafts on
@@ -137,6 +146,7 @@ export function usePromptDraftField<T>(
     value: fallbackValue,
   }));
 
+  const drafts = useNodeScope().store(promptDraftStore);
   const stored = usePromptDraftStore((state) =>
     draftKey === undefined ? undefined : state.drafts.get(draftKey)?.[field],
   );
@@ -155,13 +165,13 @@ export function usePromptDraftField<T>(
         });
         return;
       }
-      const store = usePromptDraftStore.getState();
+      const store = drafts.getState();
       const current = store.drafts.get(draftKey)?.[field];
       const previous = current === undefined ? fallbackValue : (current as T);
       const next = typeof action === "function" ? (action as (prev: T) => T)(previous) : action;
       store.setDraftValue(draftKey, field, next);
     },
-    [draftKey, field, fallbackValue],
+    [draftKey, drafts, field, fallbackValue],
   );
 
   if (draftKey === undefined) {

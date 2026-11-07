@@ -20,7 +20,8 @@
     "@orkestrator/backend": "workspace:*",
     "@orkestrator/protocol": "workspace:*",
     "@orkestrator/toolchain": "workspace:*",
-    "@orkestrator/web": "workspace:*"
+    "@orkestrator/web": "workspace:*",
+    "effect": "4.1.2"
   },
   "devDependencies": {
     "@babel/core": "^8.0.10",

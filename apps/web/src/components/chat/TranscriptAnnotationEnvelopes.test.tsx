@@ -5,7 +5,8 @@
  * legacy reference (which is never sent) all look exactly as before.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, screen } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { buildPromptWithTranscriptAnnotations } from "@/lib/chat/transcript-annotations";
 import { normalizeNativeMessage } from "@/lib/chat/native-message-adapters";
 import { NativeMessage } from "./NativeMessage";
@@ -27,7 +28,7 @@ describe("transcript annotation envelopes", () => {
     const prompt = buildPromptWithTranscriptAnnotations("Is this right?", [
       { id: "a", text: "The trigger runs hourly.", comment: "Check the schedule" },
     ]);
-    render(<NativeMessage message={userMessage(prompt)} assistantLabel="Codex" />);
+    renderInAppCommandScope(<NativeMessage message={userMessage(prompt)} assistantLabel="Codex" />);
 
     const card = screen.getByTestId("transcript-reference-part");
     expect(card.textContent).toContain("Reference 1");
@@ -46,7 +47,9 @@ describe("transcript annotation envelopes", () => {
       '[{"reference":1,"selectedText":"Earlier answer","userComment":"Keep this"}]',
       "</orkestrator_transcript_annotations>",
     ].join("\n");
-    render(<NativeMessage message={userMessage(legacy)} assistantLabel="Claude" />);
+    renderInAppCommandScope(
+      <NativeMessage message={userMessage(legacy)} assistantLabel="Claude" />,
+    );
 
     const card = screen.getByTestId("transcript-reference-part");
     expect(card.textContent).toContain("Earlier answer");
@@ -65,7 +68,9 @@ describe("transcript annotation envelopes", () => {
       },
       { id: "live", text: "Selected answer", comment: "" },
     ]);
-    render(<NativeMessage message={userMessage(prompt)} assistantLabel="Claude" />);
+    renderInAppCommandScope(
+      <NativeMessage message={userMessage(prompt)} assistantLabel="Claude" />,
+    );
 
     const cards = screen.getAllByTestId("transcript-reference-part");
     expect(cards).toHaveLength(1);

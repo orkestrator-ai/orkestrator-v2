@@ -3,7 +3,8 @@ import {
   webAnnotationPageKey,
   type WebAnnotationAnchorResolution,
 } from "@orkestrator/protocol/web-annotations";
-import { act, cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import { resetWebAnnotationAssetsForTests } from "@/lib/web-annotations/assets";
 import {
   createFakeCaptureApi,
@@ -58,7 +59,7 @@ describe("Show on page hook", () => {
   });
   function setup() {
     const annotation = backend.seed();
-    const hook = renderHook(() =>
+    const hook = renderHookInAppCommandScope(() =>
       useAnnotationPins({
         tabId: "browser-1",
         environmentId: "env-1",

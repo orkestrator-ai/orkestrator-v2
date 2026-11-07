@@ -1,8 +1,10 @@
-import { create } from "zustand";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
 import type { ClaudeModel } from "@/lib/claude-types";
 import { CODEX_MODELS, type CodexModel } from "@/lib/codex-models";
 import type { ClaudeModelCatalogSnapshot } from "@/types";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { defineScopedStore } from "@/lib/node-scope/scoped-store";
+import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
 
 /**
  * Model catalogues for launchers, settings, review options and Claude Tmux.
@@ -20,7 +22,7 @@ import type { ClaudeModelCatalogSnapshot } from "@/types";
  * - Cursor, Grok and Pi: `setAcpModels` replaces only the platforms present in
  *   the published catalogue and ignores a catalogue with none of them.
  */
-interface AgentModelCatalogState {
+export interface AgentModelCatalogState {
   claudeModels: ClaudeModel[];
   claudeModelCatalogs: Map<string, ClaudeModelCatalogSnapshot>;
   codexModels: CodexModel[];
@@ -43,53 +45,66 @@ interface AgentModelCatalogState {
   setAcpModels: (models: AgentModel[]) => void;
 }
 
-export const useAgentModelCatalogStore = create<AgentModelCatalogState>((set, get) => ({
-  claudeModels: [],
-  claudeModelCatalogs: new Map(),
-  codexModels: CODEX_MODELS,
-  cursorModels: [],
-  grokModels: [],
-  piModels: [],
+/**
+ * Per node: each node owns its catalogue cache and its environments (plan item
+ * 3003; recipe in docs/development/node-scopes.md).
+ */
+export const agentModelCatalogStore = defineScopedStore<AgentModelCatalogState>(
+  "agent-model-catalog",
+  () => (set, get) => ({
+    claudeModels: [],
+    claudeModelCatalogs: new Map(),
+    codexModels: CODEX_MODELS,
+    cursorModels: [],
+    grokModels: [],
+    piModels: [],
 
-  setClaudeModels: (models, environmentId) =>
-    set((state) => {
-      if (!environmentId) return { claudeModels: models };
-      const next = new Map(state.claudeModelCatalogs);
-      next.set(environmentId, {
-        environmentId,
-        models,
-        source: "sdk",
-        fetchedAt: new Date().toISOString(),
-        stale: false,
-      });
-      return { claudeModelCatalogs: next };
-    }),
-  setClaudeModelCatalog: (catalog) =>
-    set((state) => {
-      const next = new Map(state.claudeModelCatalogs);
-      next.set(catalog.environmentId, catalog);
-      return { claudeModelCatalogs: next };
-    }),
-  getClaudeModels: (environmentId) =>
-    get().claudeModelCatalogs.get(environmentId)?.models ?? get().claudeModels,
-  getClaudeModelCatalog: (environmentId) => get().claudeModelCatalogs.get(environmentId),
+    setClaudeModels: (models, environmentId) =>
+      set((state) => {
+        if (!environmentId) return { claudeModels: models };
+        const next = new Map(state.claudeModelCatalogs);
+        next.set(environmentId, {
+          environmentId,
+          models,
+          source: "sdk",
+          fetchedAt: new Date().toISOString(),
+          stale: false,
+        });
+        return { claudeModelCatalogs: next };
+      }),
+    setClaudeModelCatalog: (catalog) =>
+      set((state) => {
+        const next = new Map(state.claudeModelCatalogs);
+        next.set(catalog.environmentId, catalog);
+        return { claudeModelCatalogs: next };
+      }),
+    getClaudeModels: (environmentId) =>
+      get().claudeModelCatalogs.get(environmentId)?.models ?? get().claudeModels,
+    getClaudeModelCatalog: (environmentId) => get().claudeModelCatalogs.get(environmentId),
 
-  setCodexModels: (models) => set({ codexModels: models.length > 0 ? models : CODEX_MODELS }),
+    setCodexModels: (models) => set({ codexModels: models.length > 0 ? models : CODEX_MODELS }),
 
-  setAcpModels: (models) => {
-    const cursorModels = models.filter((model) => model.platform === "cursor");
-    const grokModels = models.filter((model) => model.platform === "grok");
-    const piModels = models.filter((model) => model.platform === "pi");
-    if (cursorModels.length === 0 && grokModels.length === 0 && piModels.length === 0) return;
-    set((state) => ({
-      ...(cursorModels.length > 0 ? { cursorModels } : { cursorModels: state.cursorModels }),
-      ...(grokModels.length > 0 ? { grokModels } : { grokModels: state.grokModels }),
-      ...(piModels.length > 0 ? { piModels } : { piModels: state.piModels }),
-    }));
-  },
-}));
+    setAcpModels: (models) => {
+      const cursorModels = models.filter((model) => model.platform === "cursor");
+      const grokModels = models.filter((model) => model.platform === "grok");
+      const piModels = models.filter((model) => model.platform === "pi");
+      if (cursorModels.length === 0 && grokModels.length === 0 && piModels.length === 0) return;
+      set((state) => ({
+        ...(cursorModels.length > 0 ? { cursorModels } : { cursorModels: state.cursorModels }),
+        ...(grokModels.length > 0 ? { grokModels } : { grokModels: state.grokModels }),
+        ...(piModels.length > 0 ? { piModels } : { piModels: state.piModels }),
+      }));
+    },
+  }),
+);
 
-/** Publish a backend-normalized catalogue to every model-catalog consumer. */
-export function syncCachedAcpModels(models: AgentModel[]): void {
-  useAgentModelCatalogStore.getState().setAcpModels(models);
+/**
+ * Reads the nearest node scope's catalogues; other code uses
+ * `scope.store(agentModelCatalogStore)`.
+ */
+export const useAgentModelCatalogStore = scopedStoreHook(agentModelCatalogStore);
+
+/** Publish `scope`'s backend-normalized catalogue to every model-catalog consumer of that node. */
+export function syncCachedAcpModels(scope: NodeScope, models: AgentModel[]): void {
+  scope.store(agentModelCatalogStore).getState().setAcpModels(models);
 }

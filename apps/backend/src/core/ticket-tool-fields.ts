@@ -1,4 +1,5 @@
-import { z } from "zod";
+import { Schema } from "effect";
+import { describe, list, str, strictObject, type Infer } from "./tool-schema.js";
 import {
   TICKET_LABEL_COLOR_PATTERN,
   TICKET_LABEL_LIMITS,
@@ -20,85 +21,84 @@ import {
  */
 
 const MAX_SECTION_TEXT = 100_000;
-const sectionText = z.string().max(MAX_SECTION_TEXT).optional();
+const sectionText = Schema.optionalKey(str({ max: MAX_SECTION_TEXT }));
 
-export const ticketKindField = z.enum(TICKET_KINDS).optional().describe(TICKET_KIND_GUIDANCE);
+export const ticketKindField = Schema.optionalKey(
+  describe(Schema.Literals(TICKET_KINDS), TICKET_KIND_GUIDANCE),
+);
 
-export const ticketSectionsField = z
-  .object({
-    summary: sectionText,
-    problem: sectionText,
-    context: sectionText,
-    decisions: sectionText,
-    constraints: sectionText,
-    acceptanceCriteria: z
-      .array(z.string().trim().min(1).max(TICKET_SECTION_LIMITS.maxCriterionLength))
-      .max(TICKET_SECTION_LIMITS.maxAcceptanceCriteria)
-      .optional(),
-    checks: z
-      .array(z.string().trim().min(1).max(TICKET_SECTION_LIMITS.maxCheckLength))
-      .max(TICKET_SECTION_LIMITS.maxChecks)
-      .optional(),
-    delivery: z
-      .object({
-        policy: z.enum(DELIVERY_POLICIES).optional(),
-        note: z.string().max(MAX_SECTION_TEXT).optional(),
-      })
-      .strict()
-      .optional(),
-    reporting: sectionText,
-    outOfScope: sectionText,
-    custom: z
-      .array(
-        z
-          .object({
-            title: z
-              .string()
-              .trim()
-              .min(1)
-              .max(TICKET_SECTION_LIMITS.maxCustomTitleLength)
-              .regex(/^[^\n]*$/, "Section titles are one line"),
-            body: z.string().max(MAX_SECTION_TEXT),
-          })
-          .strict(),
-      )
-      .max(TICKET_SECTION_LIMITS.maxCustomSections)
-      .optional(),
-    notes: sectionText,
-  })
-  .strict()
-  .optional()
-  .describe(TICKET_SECTIONS_GUIDANCE);
+export const ticketSectionsField = Schema.optionalKey(
+  describe(
+    strictObject({
+      summary: sectionText,
+      problem: sectionText,
+      context: sectionText,
+      decisions: sectionText,
+      constraints: sectionText,
+      acceptanceCriteria: Schema.optionalKey(
+        list(str({ trim: true, min: 1, max: TICKET_SECTION_LIMITS.maxCriterionLength }), {
+          max: TICKET_SECTION_LIMITS.maxAcceptanceCriteria,
+        }),
+      ),
+      checks: Schema.optionalKey(
+        list(str({ trim: true, min: 1, max: TICKET_SECTION_LIMITS.maxCheckLength }), {
+          max: TICKET_SECTION_LIMITS.maxChecks,
+        }),
+      ),
+      delivery: Schema.optionalKey(
+        strictObject({
+          policy: Schema.optionalKey(Schema.Literals(DELIVERY_POLICIES)),
+          note: Schema.optionalKey(str({ max: MAX_SECTION_TEXT })),
+        }),
+      ),
+      reporting: sectionText,
+      outOfScope: sectionText,
+      custom: Schema.optionalKey(
+        list(
+          strictObject({
+            title: str({
+              trim: true,
+              min: 1,
+              max: TICKET_SECTION_LIMITS.maxCustomTitleLength,
+              pattern: /^[^\n]*$/,
+              message: "Section titles are one line",
+            }),
+            body: str({ max: MAX_SECTION_TEXT }),
+          }),
+          { max: TICKET_SECTION_LIMITS.maxCustomSections },
+        ),
+      ),
+      notes: sectionText,
+    }),
+    TICKET_SECTIONS_GUIDANCE,
+  ),
+);
 
-export type TicketSectionsFieldValue = z.infer<typeof ticketSectionsField>;
+export type TicketSectionsFieldValue = Infer<typeof ticketSectionsField>;
 
 /** One label name; storage normalizes it again (`@orkestrator/protocol/ticket-labels`). */
-export const ticketLabelNameField = z
-  .string()
-  .trim()
-  .min(1)
-  .max(TICKET_LABEL_LIMITS.maxNameLength)
-  .describe("Label name; case is ignored when matching.");
+export const ticketLabelNameField = describe(
+  str({ trim: true, min: 1, max: TICKET_LABEL_LIMITS.maxNameLength }),
+  "Label name; case is ignored when matching.",
+);
 
-export const ticketLabelsField = z
-  .array(ticketLabelNameField)
-  .max(TICKET_LABEL_LIMITS.maxPerTicket)
-  .optional()
-  .describe(
+export const ticketLabelsField = Schema.optionalKey(
+  describe(
+    list(ticketLabelNameField, { max: TICKET_LABEL_LIMITS.maxPerTicket }),
     "Label names (list_ticket_labels has the project's). Replaces every label; [] removes them all.",
-  );
+  ),
+);
 
-export const ticketLabelColorField = z
-  .string()
-  .regex(TICKET_LABEL_COLOR_PATTERN, "A colour is #rrggbb")
-  .optional()
-  .describe("Colour as #rrggbb.");
+export const ticketLabelColorField = Schema.optionalKey(
+  describe(
+    str({ pattern: TICKET_LABEL_COLOR_PATTERN, message: "A colour is #rrggbb" }),
+    "Colour as #rrggbb.",
+  ),
+);
 
-export const ticketLabelDescriptionField = z
-  .string()
-  .max(TICKET_LABEL_LIMITS.maxDescriptionLength)
-  .optional()
-  .describe("What the label means.");
+export const ticketLabelDescriptionField = Schema.optionalKey(
+  describe(str({ max: TICKET_LABEL_LIMITS.maxDescriptionLength }), "What the label means."),
+);
 
 /** Each criterion's text in tool output; the full text is in `acceptanceCriteria`. */
 const MAX_CRITERION_OUTPUT_CHARS = 500;

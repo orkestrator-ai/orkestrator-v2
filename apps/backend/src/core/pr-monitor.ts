@@ -1,6 +1,7 @@
+import { prMonitorChangedEvent } from "@orkestrator/protocol/contract/domains/events";
+import type { BackendEmit } from "./backend-emit.js";
 import { randomUUID } from "node:crypto";
 import {
-  PR_MONITOR_CHANGED_EVENT,
   PR_MONITOR_MODE_TIMEOUTS_MS,
   type PrMonitorEnvironmentState,
   type PrMonitorEvent,
@@ -235,7 +236,7 @@ export interface PrMonitorEffects {
 
 export interface PrMonitorServiceOptions {
   effects: PrMonitorEffects;
-  emit: (event: string, payload: unknown) => void;
+  emit: BackendEmit;
   now?: () => string;
   /** Milliseconds from an arbitrary origin; only differences are used. */
   monotonicNow?: () => number;
@@ -1863,7 +1864,7 @@ export class PrMonitorService {
 
   private emitSafely(payload: PrMonitorEvent): void {
     try {
-      this.options.emit(PR_MONITOR_CHANGED_EVENT, payload);
+      this.options.emit(prMonitorChangedEvent, payload);
     } catch (error) {
       // One faulty event sink must not stop the background loop it describes.
       this.warn("monitor.emit-failed", payload.environmentId, error);

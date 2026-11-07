@@ -1,7 +1,29 @@
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
+import { withAsyncArgumentFailures } from "./commands-registry-async-args.js";
+import {
+  createAgentHandoffCommand,
+  deleteAgentHandoffCommand,
+  deleteComposeDraftCommand,
+  deleteFileDraftCommand,
+  enqueuePromptQueueMessageCommand,
+  getAgentHandoffCapabilitiesCommand,
+  getAgentHandoffCommand,
+  getComposeDraftCommand,
+  getFileDraftCommand,
+  getPromptQueueCommand,
+  listComposeDraftsCommand,
+  listEnvironmentHydrationCommand,
+  listPromptQueuesCommand,
+  movePromptQueueMessageCommand,
+  pruneAgentHandoffsCommand,
+  removePromptQueueMessageCommand,
+  retryPromptQueueDispatchCommand,
+  saveAgentHandoffCommand,
+  saveComposeDraftCommand,
+  saveFileDraftCommand,
+} from "@orkestrator/protocol/contract/domains/native-sessions";
 import { webAnnotationQueueOrigin } from "@orkestrator/protocol/web-annotations";
 import {
-  LIST_ENVIRONMENT_HYDRATION_COMMAND,
   MAX_ENVIRONMENT_HYDRATION_IDS,
   type EnvironmentHydrationBatch,
   type EnvironmentHydrationPart,
@@ -17,14 +39,16 @@ import {
 } from "./agent-handoffs.js";
 
 export function registerPromptCommands(
-  register: CommandRegistrar,
+  registerCommand: CommandRegistrar,
   dependencies: RegistryDependencies,
 ): void {
+  // `async` handlers keep rejecting on bad arguments (`commands-registry-async-args.ts`).
+  const register = withAsyncArgumentFailures(registerCommand);
   const { conditionalManifestSnapshot } = dependencies;
-  register("get_prompt_queue", ({ queueKey }, { storage }) =>
+  register(getPromptQueueCommand, ({ queueKey }, { storage }) =>
     storage.getPromptQueue(asString(queueKey, "queueKey")),
   );
-  register("list_prompt_queues", (args, { storage }) =>
+  register(listPromptQueuesCommand, (args, { storage }) =>
     conditionalManifestSnapshot(args, storage, "prompt-queue", () =>
       storage.listPromptQueues(asString(args.environmentId, "environmentId")),
     ),
@@ -33,7 +57,7 @@ export function registerPromptCommands(
   // `@orkestrator/protocol/environment-hydration`. Each list is the same read
   // `list_prompt_queues` and `list_multi_review_workflows` serve, and each
   // environment's lists fail on their own.
-  register(LIST_ENVIRONMENT_HYDRATION_COMMAND, async (args, { storage }) => {
+  register(listEnvironmentHydrationCommand, async (args, { storage }) => {
     const environmentIds = environmentHydrationIds(args.environmentIds);
     const part = async <T>(load: () => Promise<T[]>): Promise<EnvironmentHydrationPart<T>> => {
       try {
@@ -54,7 +78,7 @@ export function registerPromptCommands(
     return { environments } satisfies EnvironmentHydrationBatch;
   });
   register(
-    "enqueue_prompt_queue_message",
+    enqueuePromptQueueMessageCommand,
     async ({ queueKey, environmentId, message }, { storage, nativeAgents }) => {
       // Typed origins are backend-authored (annotation requests publish
       // through their own idempotent path). A client cannot declare one.
@@ -84,7 +108,7 @@ export function registerPromptCommands(
     },
   );
   register(
-    "remove_prompt_queue_message",
+    removePromptQueueMessageCommand,
     async ({ queueKey, environmentId, messageId }, { storage, webAnnotations }) => {
       const key = asString(queueKey, "queueKey");
       const environment = asString(environmentId, "environmentId");
@@ -116,7 +140,7 @@ export function registerPromptCommands(
     },
   );
   register(
-    "move_prompt_queue_message",
+    movePromptQueueMessageCommand,
     ({ queueKey, environmentId, messageId, direction }, { storage }) =>
       storage.movePromptQueueMessage(
         asString(queueKey, "queueKey"),
@@ -125,20 +149,20 @@ export function registerPromptCommands(
         asString(direction, "direction") as "up" | "down",
       ),
   );
-  register("retry_prompt_queue_dispatch", ({ queueKey }, { storage }) =>
+  register(retryPromptQueueDispatchCommand, ({ queueKey }, { storage }) =>
     storage.retryPromptQueueDispatch(asString(queueKey, "queueKey")),
   );
-  register("get_compose_draft", ({ draftKey }, { storage }) =>
+  register(getComposeDraftCommand, ({ draftKey }, { storage }) =>
     storage.getComposeDraft(asString(draftKey, "draftKey")),
   );
-  register("list_compose_drafts", ({ ownerType, ownerId }, { storage }) =>
+  register(listComposeDraftsCommand, ({ ownerType, ownerId }, { storage }) =>
     storage.listComposeDrafts(
       asString(ownerType, "ownerType") as "environment" | "project",
       asString(ownerId, "ownerId"),
     ),
   );
   register(
-    "save_compose_draft",
+    saveComposeDraftCommand,
     async (
       { draftKey, ownerType, ownerId, value, expectedRevision },
       { storage, webAnnotations },
@@ -160,17 +184,17 @@ export function registerPromptCommands(
         : saved;
     },
   );
-  register("delete_compose_draft", ({ draftKey, expectedRevision }, { storage }) =>
+  register(deleteComposeDraftCommand, ({ draftKey, expectedRevision }, { storage }) =>
     storage.deleteComposeDraft(
       asString(draftKey, "draftKey"),
       expectedRevision === undefined ? undefined : asNumber(expectedRevision, "expectedRevision"),
     ),
   );
-  register("get_file_draft", ({ draftKey }, { storage }) =>
+  register(getFileDraftCommand, ({ draftKey }, { storage }) =>
     storage.getFileDraft(asString(draftKey, "draftKey")),
   );
   register(
-    "save_file_draft",
+    saveFileDraftCommand,
     (
       { draftKey, environmentId, filePath, content, originalContent, expectedRevision },
       { storage },
@@ -184,37 +208,40 @@ export function registerPromptCommands(
         expectedRevision === undefined ? undefined : asNumber(expectedRevision, "expectedRevision"),
       ),
   );
-  register("delete_file_draft", ({ draftKey, expectedRevision }, { storage }) =>
+  register(deleteFileDraftCommand, ({ draftKey, expectedRevision }, { storage }) =>
     storage.deleteFileDraft(
       asString(draftKey, "draftKey"),
       expectedRevision === undefined ? undefined : asNumber(expectedRevision, "expectedRevision"),
     ),
   );
-  register("get_agent_handoff", ({ handoffId }, { storage }) =>
+  register(getAgentHandoffCommand, ({ handoffId }, { storage }) =>
     storage.getAgentHandoff(asString(handoffId, "handoffId")),
   );
-  register("save_agent_handoff", ({ handoffId, environmentId, version, snapshot }, { storage }) => {
-    // Only a renderer older than `create_agent_handoff` still builds its own.
-    compatibilityPathUsage.record("agent-handoff.renderer-saved");
-    return storage.saveAgentHandoff(
-      asString(handoffId, "handoffId"),
-      asString(environmentId, "environmentId"),
-      asNumber(version, "version"),
-      snapshot,
-    );
-  });
-  register("create_agent_handoff", (args, context) =>
+  register(
+    saveAgentHandoffCommand,
+    ({ handoffId, environmentId, version, snapshot }, { storage }) => {
+      // Only a renderer older than `create_agent_handoff` still builds its own.
+      compatibilityPathUsage.record("agent-handoff.renderer-saved");
+      return storage.saveAgentHandoff(
+        asString(handoffId, "handoffId"),
+        asString(environmentId, "environmentId"),
+        asNumber(version, "version"),
+        snapshot,
+      );
+    },
+  );
+  register(createAgentHandoffCommand, (args, context) =>
     createAgentHandoff(context, parseCreateAgentHandoffInput(args)),
   );
-  register("get_agent_handoff_capabilities", () => AGENT_HANDOFF_CAPABILITIES);
+  register(getAgentHandoffCapabilitiesCommand, () => AGENT_HANDOFF_CAPABILITIES);
   // Older renderers still call these; current ones leave deletion to the backend.
-  register("delete_agent_handoff", ({ handoffId, environmentId }, { storage }) =>
+  register(deleteAgentHandoffCommand, ({ handoffId, environmentId }, { storage }) =>
     storage.deleteAgentHandoff(
       asString(handoffId, "handoffId"),
       asString(environmentId, "environmentId"),
     ),
   );
-  register("prune_agent_handoffs", ({ environmentId, referencedHandoffIds }, { storage }) => {
+  register(pruneAgentHandoffsCommand, ({ environmentId, referencedHandoffIds }, { storage }) => {
     // Deliberately strict rather than `asStringArray`, which coerces a
     // non-array to `[]`. Here that would mean "nothing is referenced" and
     // delete every transcript in the environment.

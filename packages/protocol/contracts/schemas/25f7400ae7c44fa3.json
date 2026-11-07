@@ -1,0 +1,78 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:25f7400ae7c44fa38655bda0b10f8e818b668b77e0b8a032be6320c1de23752a",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "annotationId": {
+          "maxLength": 200,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "type": "string"
+        },
+        "defaultDestination": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "properties": {
+                "agent": {
+                  "enum": ["claude", "codex", "cursor", "grok", "opencode", "pi"],
+                  "type": "string"
+                },
+                "label": {
+                  "maxLength": 200,
+                  "type": "string"
+                },
+                "logicalSessionKey": {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "tabId": {
+                  "maxLength": 200,
+                  "minLength": 1,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+                  "type": "string"
+                }
+              },
+              "required": ["agent", "logicalSessionKey", "tabId"],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "environmentId": {
+          "maxLength": 200,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "type": "string"
+        },
+        "expectedMetadataRevision": {
+          "maximum": 9007199254740990,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "hidden": {
+          "type": "boolean"
+        },
+        "operationId": {
+          "maxLength": 200,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "type": "string"
+        },
+        "title": {
+          "maxLength": 400,
+          "type": "string"
+        }
+      },
+      "required": ["annotationId", "environmentId", "expectedMetadataRevision", "operationId"],
+      "type": "object"
+    }
+  }
+}

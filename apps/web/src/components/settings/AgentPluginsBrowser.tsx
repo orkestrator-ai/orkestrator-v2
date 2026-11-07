@@ -3,7 +3,6 @@ import { AlertTriangle, Loader2, RefreshCw, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import * as backend from "@/lib/backend";
 import type {
   AccountMachine,
   AgentExtensionItem,
@@ -12,6 +11,7 @@ import type {
   AgentSkillProvider,
 } from "@/lib/backend";
 import { cn } from "@/lib/utils";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 const STATUS_LABELS: Record<AgentExtensionItem["status"], string> = {
   connected: "Connected",
@@ -56,6 +56,7 @@ export function useAgentPlugins(
   machine: AccountMachine,
   enabled: boolean,
 ) {
+  const nodeBackend = useScopeBackend();
   const [states, setStates] = useState<Record<string, AgentPluginsState>>({});
   const tokens = useRef<Record<string, number>>({});
   const requested = useRef<Set<string>>(new Set());
@@ -72,7 +73,7 @@ export function useAgentPlugins(
       }));
       try {
         const catalog = normalizePluginCatalog(
-          await backend.listAgentPlugins(target, machine),
+          await nodeBackend.listAgentPlugins(target, machine),
           target,
         );
         if (tokens.current[key] !== token) return;
@@ -91,7 +92,7 @@ export function useAgentPlugins(
         }));
       }
     },
-    [machine],
+    [machine, nodeBackend],
   );
 
   useEffect(() => {

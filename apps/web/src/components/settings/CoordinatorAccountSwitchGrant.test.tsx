@@ -5,6 +5,7 @@ import type {
   CoordinatorAccountSwitchGrantState,
   CoordinatorAccountSwitchRecord,
 } from "@orkestrator/protocol/coordinator-account-switch-grant";
+import { unknownBackendCommandMessage } from "@orkestrator/protocol/unknown-command";
 
 const calls: Array<{ command: string; args: Record<string, unknown> }> = [];
 let state: CoordinatorAccountSwitchGrantState;
@@ -64,16 +65,19 @@ mock.module("@/lib/native/authoritative-events", () => ({
     return Promise.resolve(() => {});
   },
 }));
-mock.module("@/lib/portal/portal-transport", () => ({
-  portalListen: (_event: string, handler: (event: { payload: unknown }) => void) => {
+// The portal APIs are command-scope calls (plan item 5004); `portal-transport` re-exports these.
+mock.module("@/lib/portal/command-scope", () => ({
+  commandScopeListen: (_event: string, handler: (event: { payload: unknown }) => void) => {
     notice = handler;
     return Promise.resolve(() => {
       noticeStop++;
     });
   },
-  workspaceTarget: () => null,
-  portalListenAuthoritative: () => Promise.resolve(() => {}),
-  portalInvoke: (command: string, args?: Record<string, unknown>) => answer(command, args),
+  commandScopeListenAuthoritative: () => Promise.resolve(() => {}),
+  commandScopeInvoke: (command: string, args?: Record<string, unknown>) => answer(command, args),
+  commandScopeBackendClient: {
+    invokeRaw: (command: string, args?: Record<string, unknown>) => answer(command, args),
+  },
 }));
 
 const record: CoordinatorAccountSwitchRecord = {
@@ -95,7 +99,7 @@ function answer(command: string, args: Record<string, unknown> = {}): Promise<un
   switch (command) {
     case "get_coordinator_account_switch_grant":
       return unknown
-        ? Promise.reject(new Error(`Unknown command: ${command}`))
+        ? Promise.reject(new Error(unknownBackendCommandMessage(command)))
         : Promise.resolve(state);
     case "set_coordinator_account_switch_grant":
       state = { ...state, grants: { ...state.grants, claude: args.enabled === true } };

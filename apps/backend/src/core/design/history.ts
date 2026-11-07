@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { readdir, stat, unlink } from "node:fs/promises";
 import { join } from "node:path";
-import { z } from "zod";
+import { Schema } from "effect";
+import { decodeSync, int, list, str, strictObject } from "../tool-schema.js";
 import {
   DESIGN_MAX_DOCUMENT_BYTES,
   type DesignFrame,
@@ -42,24 +43,21 @@ export interface DesignCheckpoint {
   canvasName?: { before: string; after: string };
 }
 
-const checkpointSchema = z
-  .object({
-    entryId: z.string().max(64),
-    canvasId: z.string().max(64),
-    frames: z
-      .array(
-        z.object({
-          frameId: z.string().max(64),
-          before: frameSchema.nullable(),
-          after: frameSchema.nullable(),
-          beforeIndex: z.number().int().nonnegative().optional(),
-          afterIndex: z.number().int().nonnegative().optional(),
-        }),
-      )
-      .max(128),
-    canvasName: z.object({ before: z.string(), after: z.string() }).optional(),
-  })
-  .strict();
+const checkpointSchema = strictObject({
+  entryId: str({ max: 64 }),
+  canvasId: str({ max: 64 }),
+  frames: list(
+    Schema.Struct({
+      frameId: str({ max: 64 }),
+      before: Schema.NullOr(frameSchema),
+      after: Schema.NullOr(frameSchema),
+      beforeIndex: Schema.optionalKey(int({ min: 0 })),
+      afterIndex: Schema.optionalKey(int({ min: 0 })),
+    }),
+    { max: 128 },
+  ),
+  canvasName: Schema.optionalKey(Schema.Struct({ before: Schema.String, after: Schema.String })),
+});
 
 export function checkpointFile(store: DesignRecordStore, canvasId: string, file: string) {
   if (!/^[a-zA-Z0-9-]{1,80}\.json$/.test(file))
@@ -92,7 +90,7 @@ export async function readCheckpoint(
       checkpointFile(store, canvasId, entry.checkpoint),
       DESIGN_MAX_DOCUMENT_BYTES * 2 + 64 * 1024,
     );
-    return checkpointSchema.parse(JSON.parse(raw.toString("utf8"))) as DesignCheckpoint;
+    return decodeSync(checkpointSchema, JSON.parse(raw.toString("utf8"))) as DesignCheckpoint;
   } catch {
     throw new DesignError("history-ineligible", "This history checkpoint is no longer available", {
       retry: "never",

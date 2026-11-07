@@ -12,6 +12,7 @@
 import type { ConnectionTransportState } from "@orkestrator/protocol/connections";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import type { AgentActivityState } from "@orkestrator/protocol/agent-activity";
+import type { MachineRelease } from "@orkestrator/protocol/fleet-currency";
 import type { ActivitySortOrder } from "@/stores/uiStore";
 import { compareActivity, type ActivitySortKey } from "@/lib/activity-order";
 import type { FederatedEnvironment, FederatedProject, SummaryFreshness } from "./summaries";
@@ -22,7 +23,7 @@ export interface MachineView {
   name: string;
   /** Canonical backend profile colour token (or a labelled fallback). */
   colorToken: string;
-  /** This renderer's own machine (its full workspace lives in this realm). */
+  /** This window's own machine (its full workspace lives in the window's command scope). */
   bound: boolean;
   freshness: SummaryFreshness;
   transport: ConnectionTransportState;
@@ -31,6 +32,12 @@ export interface MachineView {
   environmentsByProject: ReadonlyMap<string, readonly FederatedEnvironment[]>;
   truncated: boolean;
   loadedAt: number | null;
+  /**
+   * The version and hello domains of its current connection, as the command
+   * node reports them (plan item 5006); absent when unknown. The machine
+   * header compares it with the command node's.
+   */
+  release?: MachineRelease;
 }
 
 export type SidebarGrouping = "machine" | "project" | "repository" | "activity" | "compact";

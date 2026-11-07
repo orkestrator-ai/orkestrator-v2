@@ -1,6 +1,6 @@
 import type { NativeAgentComposerState } from "@orkestrator/protocol/native-agent";
 import { EMPTY_NATIVE_AGENT_COMPOSER_STATE } from "@orkestrator/protocol/native-agent";
-import { resolveGatewayLoopbackBaseUrl } from "./gateway-url";
+import type { NodeTransport } from "./native/node-transport";
 import type { NativeMessage } from "./chat/native-message-types";
 
 export type AcpProvider = "cursor" | "grok";
@@ -36,26 +36,74 @@ export interface AcpApproval {
   options: Array<{ optionId: string; name: string; kind?: string }>;
 }
 
+/**
+ * What the ACP client needs of the transport of the node its bridge runs on:
+ * where that node's gateway answers, and its bearer. Read per request, so a
+ * credential swap (`setCredential`) reaches later requests.
+ */
+export type AcpNodeTransport = Pick<NodeTransport, "url" | "requestHeaders" | "requestCredentials">;
+
 export interface AcpClient {
+  /** Where requests go: the bridge itself, or its loopback proxy on the node's gateway. */
   baseUrl: string;
   authToken: string;
+  /** The node transport whose gateway proxies the bridge; absent for a direct bridge. */
+  transport?: AcpNodeTransport;
 }
 
-export function createAcpClient(baseUrl: string, authToken: string): AcpClient {
-  return { baseUrl: resolveGatewayLoopbackBaseUrl(baseUrl), authToken };
+function isLoopbackHost(hostname: string): boolean {
+  return (
+    hostname === "127.0.0.1" ||
+    hostname === "localhost" ||
+    hostname === "::1" ||
+    hostname === "[::1]"
+  );
+}
+
+/** The gateway path that proxies a loopback bridge URL, or null for any other URL. */
+export function acpLoopbackProxyPath(bridgeUrl: string): string | null {
+  try {
+    const url = new URL(bridgeUrl);
+    if (!isLoopbackHost(url.hostname)) return null;
+    const port = url.port || (url.protocol === "http:" ? "80" : "");
+    if (!port) return null;
+    const basePath = url.pathname === "/" ? "" : url.pathname.replace(/\/$/, "");
+    return `/__orkestrator/proxy/loopback/${port}${basePath}${url.search}${url.hash}`;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A client for the ACP bridge at `bridgeUrl`. With its node's `transport`, a
+ * loopback bridge is reached through that node's gateway proxy with that
+ * transport's bearer; nothing relies on a page-wide `fetch` patch or on
+ * `window.orkestratorGateway`. Without one, the bridge is called directly.
+ */
+export function createAcpClient(
+  bridgeUrl: string,
+  authToken: string,
+  transport?: AcpNodeTransport | null,
+): AcpClient {
+  const proxyPath = transport ? acpLoopbackProxyPath(bridgeUrl) : null;
+  if (!transport || proxyPath === null) return { baseUrl: bridgeUrl, authToken };
+  return { baseUrl: transport.url(proxyPath), authToken, transport };
 }
 
 async function request<T>(client: AcpClient, pathname: string, init?: RequestInit): Promise<T> {
+  const headers: Record<string, string> = {
+    // The public gateway owns Authorization. A dedicated header preserves
+    // the per-bridge credential through that authenticated proxy hop and is
+    // also accepted by direct local ACP bridges.
+    "X-Orkestrator-Acp-Token": client.authToken,
+    ...(init?.body ? { "content-type": "application/json" } : {}),
+    ...(init?.headers as Record<string, string> | undefined),
+  };
   const response = await fetch(`${client.baseUrl}${pathname}`, {
     ...init,
-    headers: {
-      // The public gateway owns Authorization. A dedicated header preserves
-      // the per-bridge credential through that authenticated proxy hop and is
-      // also accepted by direct local ACP bridges.
-      "X-Orkestrator-Acp-Token": client.authToken,
-      ...(init?.body ? { "content-type": "application/json" } : {}),
-      ...init?.headers,
-    },
+    ...(client.transport ? { credentials: client.transport.requestCredentials } : {}),
+    // The node's bearer, for its gateway's authenticated proxy hop.
+    headers: client.transport ? (client.transport.requestHeaders(headers) ?? headers) : headers,
   });
   const body = (await response.json().catch(() => ({}))) as { error?: string };
   if (!response.ok) throw new Error(body.error || `ACP bridge request failed (${response.status})`);

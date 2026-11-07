@@ -12,8 +12,9 @@ import {
 } from "@orkestrator/protocol/federation";
 import { requestGlobalSettings } from "@/lib/settings-navigation";
 import type { MachineView } from "@/lib/federation/aggregate";
-import { useEnvironmentStore } from "@/stores/environmentStore";
-import { useUIStore } from "@/stores";
+import { useNodeScope } from "@/lib/node-scope/providers";
+import { environmentStore } from "@/stores/environmentStore";
+import { uiStore } from "@/stores";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useFederation } from "./FederationProvider";
 import { useMachineViews } from "./useMachineViews";
@@ -49,9 +50,11 @@ function FederationEffectsActive() {
  * project, and a repository heading's highlight.
  */
 function useRecentSelections(backendId: BackendId | null) {
+  // This window's own node, whose selection the UI store holds.
+  const scope = useNodeScope();
   useEffect(() => {
     if (!backendId) return;
-    return useUIStore.subscribe((state, previous) => {
+    return scope.store(uiStore).subscribe((state, previous) => {
       if (
         state.projectSelectionRevision === previous.projectSelectionRevision &&
         state.selectedEnvironmentId === previous.selectedEnvironmentId
@@ -74,7 +77,8 @@ function useRecentSelections(backendId: BackendId | null) {
           (state.selectedProjectId
             ? projectKey(projectRef(backendId, state.selectedProjectId))
             : null) &&
-        useEnvironmentStore
+        scope
+          .store(environmentStore)
           .getState()
           .environments.some(
             (environment) =>
@@ -84,12 +88,14 @@ function useRecentSelections(backendId: BackendId | null) {
           );
       if (!continuesHeading) views.noteRepositoryOpened(null);
     });
-  }, [backendId]);
+  }, [backendId, scope]);
 }
 
 /** `?resource=` names a machine and a resource; never a route, port or token. */
 function useResourceLink(machines: readonly MachineView[]) {
   const handled = useRef(false);
+  // This window's own node, which a link to a bound machine opens on.
+  const scope = useNodeScope();
   const openPanel = openMachineWorkspace;
   useEffect(() => {
     if (handled.current) return;
@@ -121,12 +127,13 @@ function useResourceLink(machines: readonly MachineView[]) {
           .flat()
           .find((candidate) => candidate.ref.environmentId === ref.environmentId);
         if (environment) {
-          useUIStore
+          scope
+            .store(uiStore)
             .getState()
             .selectProjectAndEnvironment(environment.projectId, ref.environmentId);
         }
       } else {
-        useUIStore.getState().selectProject(ref.projectId);
+        scope.store(uiStore).getState().selectProject(ref.projectId);
       }
       return;
     }
@@ -147,7 +154,7 @@ function useResourceLink(machines: readonly MachineView[]) {
     } else {
       openPanel({ connectionId: machine.connectionId, projectId: ref.projectId, title: "Project" });
     }
-  }, [machines, openPanel]);
+  }, [machines, openPanel, scope]);
 }
 
 /**

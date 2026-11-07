@@ -1,4 +1,48 @@
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
+import { withAsyncArgumentFailures } from "./commands-registry-async-args.js";
+import {
+  adoptNativeAgentSessionCommand,
+  beginNativeAgentSignInCommand,
+  cancelNativeAgentSignInCommand,
+  discardNativeAgentDispatchCommand,
+  dismissNativeAgentSuggestedPromptCommand,
+  dispatchNativeAgentIntentCommand,
+  dispatchNativeAgentPromptCommand,
+  ensureNativeAgentSessionCommand,
+  forkNativeAgentSessionCommand,
+  getAgentInteractionObservationsCommand,
+  getNativeAgentAuthStatusCommand,
+  getNativeAgentDiscoveryUpdateCommand,
+  getNativeAgentGoalCommand,
+  getNativeAgentLiveUpdateCommand,
+  getNativeAgentMessagePageCommand,
+  getNativeAgentProjectionCommand,
+  getNativeAgentProjectionUpdateCommand,
+  getNativeAgentSessionCommand,
+  getNativeAgentSessionStateUpdateCommand,
+  getNativeAgentSignInResendCommand,
+  getNativeAgentSyncCapabilitiesCommand,
+  getNativeAgentToolDetailsCommand,
+  getNativeAgentTranscriptUpdateCommand,
+  holdNativeAgentInteractionCommand,
+  listNativeAgentResumableSessionsCommand,
+  nativeAgentGoalCommand,
+  performNativeAgentMcpActionCommand,
+  performNativeAgentSessionActionCommand,
+  reconcileAgentInteractionsCommand,
+  refreshNativeAgentCommandsCommand,
+  refreshNativeAgentModelsCommand,
+  resolveNativeAgentInteractionCommand,
+  resumeNativeAgentSessionCommand,
+  retryNativeAgentDispatchCommand,
+  setAgentInteractionMonitorAdoptionCommand,
+  setNativeAgentResumableSessionArchivedCommand,
+  signOutNativeAgentCommand,
+  steerNativeAgentQueuedPromptCommand,
+  stopNativeAgentBackgroundTaskCommand,
+  stopNativeAgentSessionCommand,
+  updateNativeAgentControlsCommand,
+} from "@orkestrator/protocol/contract/domains/native-sessions";
 import {
   NATIVE_AGENT_DISCOVERY_SECTIONS,
   NATIVE_AGENT_LIVE_UPDATE_VERSION,
@@ -38,10 +82,12 @@ function assertNativeAgentLiveWindow(liveWindow: unknown): void {
 }
 
 export function registerNativeAgentCommands(
-  register: CommandRegistrar,
+  registerCommand: CommandRegistrar,
   _dependencies: RegistryDependencies,
 ): void {
-  register("ensure_native_agent_session", async (args, context) => {
+  // `async` handlers keep rejecting on bad arguments (`commands-registry-async-args.ts`).
+  const register = withAsyncArgumentFailures(registerCommand);
+  register(ensureNativeAgentSessionCommand, async (args, context) => {
     if (!context.nativeAgents) {
       throw new Error("Native agent service is unavailable");
     }
@@ -79,7 +125,7 @@ export function registerNativeAgentCommands(
     });
   });
 
-  register("adopt_native_agent_session", async (args, context) => {
+  register(adoptNativeAgentSessionCommand, async (args, context) => {
     if (!context.nativeAgents) {
       throw new Error("Native agent service is unavailable");
     }
@@ -120,7 +166,7 @@ export function registerNativeAgentCommands(
     });
   });
 
-  register("dispatch_native_agent_prompt", async (args, context) => {
+  register(dispatchNativeAgentPromptCommand, async (args, context) => {
     if (!context.nativeAgents) {
       throw new Error("Native agent service is unavailable");
     }
@@ -129,7 +175,7 @@ export function registerNativeAgentCommands(
     return context.nativeAgents.dispatchPrompt(input);
   });
 
-  register("dispatch_native_agent_intent", async (args, context) => {
+  register(dispatchNativeAgentIntentCommand, async (args, context) => {
     if (!context.nativeAgents) {
       throw new Error("Native agent service is unavailable");
     }
@@ -138,7 +184,7 @@ export function registerNativeAgentCommands(
     return context.nativeAgents.dispatchIntent(input);
   });
 
-  register("retry_native_agent_dispatch", async (args, context) => {
+  register(retryNativeAgentDispatchCommand, async (args, context) => {
     if (!context.nativeAgents) {
       throw new Error("Native agent service is unavailable");
     }
@@ -150,7 +196,7 @@ export function registerNativeAgentCommands(
     });
   });
 
-  register("discard_native_agent_dispatch", async (args, context) => {
+  register(discardNativeAgentDispatchCommand, async (args, context) => {
     if (!context.nativeAgents) {
       throw new Error("Native agent service is unavailable");
     }
@@ -162,7 +208,7 @@ export function registerNativeAgentCommands(
     });
   });
 
-  register("get_native_agent_session", async (args, context) => {
+  register(getNativeAgentSessionCommand, async (args, context) => {
     const environmentId = asNonBlankString(args.environmentId, "environmentId");
     const agent = asString(args.agent, "agent") as import("./models.js").NativeAgentProvider;
     const logicalSessionKey = asNonBlankString(args.logicalSessionKey, "logicalSessionKey");
@@ -183,7 +229,7 @@ export function registerNativeAgentCommands(
     return session;
   });
 
-  register("get_native_agent_projection", async (args, context) => {
+  register(getNativeAgentProjectionCommand, async (args, context) => {
     if (!context.nativeAgents) {
       throw new Error("Native agent service is unavailable");
     }
@@ -204,7 +250,7 @@ export function registerNativeAgentCommands(
 
   // Whether this tab's refused prompt goes out again after a sign-in; the
   // renderer's sign-in card says so only when it will.
-  register("get_native_agent_sign_in_resend", async (args, context) => {
+  register(getNativeAgentSignInResendCommand, async (args, context) => {
     if (!context.nativeAgents) return { pending: false };
     return context.nativeAgents.signInResends.status({
       environmentId: asNonBlankString(args.environmentId, "environmentId"),
@@ -213,7 +259,7 @@ export function registerNativeAgentCommands(
     });
   });
 
-  register("get_native_agent_sync_capabilities", (_args, context) => ({
+  register(getNativeAgentSyncCapabilitiesCommand, (_args, context) => ({
     projectionSyncVersions: [1],
     historyPagingVersions: [1],
     progressiveViewVersions: [1],
@@ -229,7 +275,7 @@ export function registerNativeAgentCommands(
       : {}),
   }));
 
-  register("get_native_agent_transcript_update", async (args, context) => {
+  register(getNativeAgentTranscriptUpdateCommand, async (args, context) => {
     if (!context.nativeAgents) throw new Error("Native agent service is unavailable");
     if (args.viewVersion !== 1) throw new Error("Native agent progressive view is unsupported");
     assertNativeAgentLiveWindow(args.liveWindow);
@@ -257,7 +303,7 @@ export function registerNativeAgentCommands(
     );
   });
 
-  register("get_native_agent_session_state_update", async (args, context) => {
+  register(getNativeAgentSessionStateUpdateCommand, async (args, context) => {
     if (!context.nativeAgents) throw new Error("Native agent service is unavailable");
     if (args.viewVersion !== 1) throw new Error("Native agent progressive view is unsupported");
     return context.nativeAgents.getSessionStateUpdate({
@@ -276,7 +322,7 @@ export function registerNativeAgentCommands(
     });
   });
 
-  register("get_native_agent_live_update", async (args, context) => {
+  register(getNativeAgentLiveUpdateCommand, async (args, context) => {
     if (!context.nativeAgents) throw new Error("Native agent service is unavailable");
     if (args.viewVersion !== NATIVE_AGENT_LIVE_UPDATE_VERSION) {
       throw new Error("Native agent live update is unsupported");
@@ -305,7 +351,7 @@ export function registerNativeAgentCommands(
     );
   });
 
-  register("get_native_agent_discovery_update", async (args, context) => {
+  register(getNativeAgentDiscoveryUpdateCommand, async (args, context) => {
     if (!context.nativeAgents) throw new Error("Native agent service is unavailable");
     if (args.viewVersion !== 1) throw new Error("Native agent progressive view is unsupported");
     if (
@@ -341,7 +387,7 @@ export function registerNativeAgentCommands(
     });
   });
 
-  register("get_native_agent_projection_update", async (args, context) => {
+  register(getNativeAgentProjectionUpdateCommand, async (args, context) => {
     if (!context.nativeAgents) throw new Error("Native agent service is unavailable");
     if (args.syncVersion !== 1) throw new Error("Native agent sync version is unsupported");
     if (
@@ -372,7 +418,7 @@ export function registerNativeAgentCommands(
     );
   });
 
-  register("get_native_agent_message_page", async (args, context) => {
+  register(getNativeAgentMessagePageCommand, async (args, context) => {
     if (!context.nativeAgents) throw new Error("Native agent service is unavailable");
     if (args.syncVersion !== 1) throw new Error("Native agent sync version is unsupported");
     return markSpliceableResult(
@@ -391,7 +437,7 @@ export function registerNativeAgentCommands(
     );
   });
 
-  register("get_native_agent_tool_details", async (args, context) => {
+  register(getNativeAgentToolDetailsCommand, async (args, context) => {
     if (!context.nativeAgents) {
       throw new Error("Native agent service is unavailable");
     }
@@ -403,7 +449,7 @@ export function registerNativeAgentCommands(
     });
   });
 
-  register("refresh_native_agent_models", async (args, context) => {
+  register(refreshNativeAgentModelsCommand, async (args, context) => {
     if (!context.nativeAgents) {
       throw new Error("Native agent service is unavailable");
     }
@@ -414,7 +460,7 @@ export function registerNativeAgentCommands(
     });
   });
 
-  register("refresh_native_agent_commands", async (args, context) => {
+  register(refreshNativeAgentCommandsCommand, async (args, context) => {
     if (!context.nativeAgents) {
       throw new Error("Native agent service is unavailable");
     }
@@ -425,7 +471,7 @@ export function registerNativeAgentCommands(
     });
   });
 
-  register("native_agent_goal_command", async (args, context) => {
+  register(nativeAgentGoalCommand, async (args, context) => {
     if (!context.nativeAgents) throw new Error("Native agent service is unavailable");
     return context.nativeAgents.runGoalCommand({
       environmentId: asNonBlankString(args.environmentId, "environmentId"),
@@ -435,7 +481,7 @@ export function registerNativeAgentCommands(
       ...(typeof args.model === "string" && args.model ? { model: args.model } : {}),
     });
   });
-  register("get_native_agent_goal", async (args, context) => {
+  register(getNativeAgentGoalCommand, async (args, context) => {
     if (!context.nativeAgents) throw new Error("Native agent service is unavailable");
     return context.nativeAgents.readGoalDetail({
       environmentId: asNonBlankString(args.environmentId, "environmentId"),
@@ -443,7 +489,7 @@ export function registerNativeAgentCommands(
       logicalSessionKey: asNonBlankString(args.logicalSessionKey, "logicalSessionKey"),
     });
   });
-  register("stop_native_agent_session", async (args, context) => {
+  register(stopNativeAgentSessionCommand, async (args, context) => {
     if (!context.nativeAgents) {
       throw new Error("Native agent service is unavailable");
     }
@@ -454,7 +500,7 @@ export function registerNativeAgentCommands(
     });
   });
 
-  register("stop_native_agent_background_task", async (args, context) => {
+  register(stopNativeAgentBackgroundTaskCommand, async (args, context) => {
     if (!context.nativeAgents) throw new Error("Native agent service is unavailable");
     return context.nativeAgents.stopProjectionBackgroundTask({
       environmentId: asNonBlankString(args.environmentId, "environmentId"),
@@ -464,7 +510,7 @@ export function registerNativeAgentCommands(
     });
   });
 
-  register("dismiss_native_agent_suggested_prompt", async (args, context) => {
+  register(dismissNativeAgentSuggestedPromptCommand, async (args, context) => {
     if (!context.nativeAgents) throw new Error("Native agent service is unavailable");
     return context.nativeAgents.dismissProjectionSuggestedPrompt({
       environmentId: asNonBlankString(args.environmentId, "environmentId"),
@@ -473,7 +519,7 @@ export function registerNativeAgentCommands(
     });
   });
 
-  register("list_native_agent_resumable_sessions", async (args, context) => {
+  register(listNativeAgentResumableSessionsCommand, async (args, context) => {
     if (!context.nativeAgents) throw new Error("Native agent service is unavailable");
     return context.nativeAgents.listProjectionResumableSessions({
       environmentId: asNonBlankString(args.environmentId, "environmentId"),
@@ -483,7 +529,7 @@ export function registerNativeAgentCommands(
     });
   });
 
-  register("set_native_agent_resumable_session_archived", async (args, context) => {
+  register(setNativeAgentResumableSessionArchivedCommand, async (args, context) => {
     if (!context.nativeAgents) throw new Error("Native agent service is unavailable");
     if (typeof args.archived !== "boolean") throw new Error("archived must be a boolean");
     await context.nativeAgents.setProjectionResumableSessionArchived({
@@ -496,7 +542,7 @@ export function registerNativeAgentCommands(
     return { archived: args.archived };
   });
 
-  register("resume_native_agent_session", async (args, context) => {
+  register(resumeNativeAgentSessionCommand, async (args, context) => {
     if (!context.nativeAgents) throw new Error("Native agent service is unavailable");
     return context.nativeAgents.resumeProjectionSession({
       environmentId: asNonBlankString(args.environmentId, "environmentId"),
@@ -510,7 +556,7 @@ export function registerNativeAgentCommands(
     });
   });
 
-  register("fork_native_agent_session", async (args, context) => {
+  register(forkNativeAgentSessionCommand, async (args, context) => {
     if (!context.nativeAgents) throw new Error("Native agent service is unavailable");
     return context.nativeAgents.forkProjectionSession({
       environmentId: asNonBlankString(args.environmentId, "environmentId"),
@@ -521,7 +567,7 @@ export function registerNativeAgentCommands(
     });
   });
 
-  register("update_native_agent_controls", async (args, context) => {
+  register(updateNativeAgentControlsCommand, async (args, context) => {
     if (!context.nativeAgents) {
       throw new Error("Native agent service is unavailable");
     }
@@ -534,7 +580,7 @@ export function registerNativeAgentCommands(
     });
   });
 
-  register("steer_native_agent_queued_prompt", async (args, context) => {
+  register(steerNativeAgentQueuedPromptCommand, async (args, context) => {
     if (!context.nativeAgents) throw new Error("Native agent service is unavailable");
     return context.nativeAgents.steerQueuedPrompt({
       environmentId: asNonBlankString(args.environmentId, "environmentId"),
@@ -544,7 +590,7 @@ export function registerNativeAgentCommands(
     });
   });
 
-  register("perform_native_agent_session_action", async (args, context) => {
+  register(performNativeAgentSessionActionCommand, async (args, context) => {
     if (!context.nativeAgents) throw new Error("Native agent service is unavailable");
     return context.nativeAgents.performProjectionAction({
       environmentId: asNonBlankString(args.environmentId, "environmentId"),
@@ -554,7 +600,7 @@ export function registerNativeAgentCommands(
     });
   });
 
-  register("perform_native_agent_mcp_action", async (args, context) => {
+  register(performNativeAgentMcpActionCommand, async (args, context) => {
     if (!context.nativeAgents) throw new Error("Native agent service is unavailable");
     const action = asNonBlankString(args.action, "action");
     if (!["reconnect", "enable", "disable", "sign-in"].includes(action)) {
@@ -569,7 +615,7 @@ export function registerNativeAgentCommands(
     });
   });
 
-  register("get_native_agent_auth_status", async (args, context) => {
+  register(getNativeAgentAuthStatusCommand, async (args, context) => {
     if (!context.nativeAgents) throw new Error("Native agent service is unavailable");
     const agent = asNonBlankString(
       args.agent,
@@ -583,7 +629,7 @@ export function registerNativeAgentCommands(
     });
   });
 
-  register("begin_native_agent_sign_in", async (args, context) => {
+  register(beginNativeAgentSignInCommand, async (args, context) => {
     if (!context.nativeAgents) throw new Error("Native agent service is unavailable");
     return context.nativeAgents.beginProjectionSignIn({
       environmentId: asNonBlankString(args.environmentId, "environmentId"),
@@ -593,7 +639,7 @@ export function registerNativeAgentCommands(
     });
   });
 
-  register("cancel_native_agent_sign_in", async (args, context) => {
+  register(cancelNativeAgentSignInCommand, async (args, context) => {
     if (!context.nativeAgents) throw new Error("Native agent service is unavailable");
     return context.nativeAgents.cancelProjectionSignIn({
       environmentId: asNonBlankString(args.environmentId, "environmentId"),
@@ -602,17 +648,17 @@ export function registerNativeAgentCommands(
     });
   });
 
-  register("sign_out_native_agent", async (args, context) => {
+  register(signOutNativeAgentCommand, async (args, context) => {
     if (!context.nativeAgents) throw new Error("Native agent service is unavailable");
     await context.nativeAgents.signOutProjectionProvider({
       environmentId: asNonBlankString(args.environmentId, "environmentId"),
       agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
       logicalSessionKey: asNonBlankString(args.logicalSessionKey, "logicalSessionKey"),
     });
-    return { ok: true };
+    return { ok: true as const };
   });
 
-  register("resolve_native_agent_interaction", async (args, context) => {
+  register(resolveNativeAgentInteractionCommand, async (args, context) => {
     if (!context.nativeAgents) {
       throw new Error("Native agent service is unavailable");
     }
@@ -627,7 +673,7 @@ export function registerNativeAgentCommands(
     });
   });
 
-  register("hold_native_agent_interaction", async (args, context) => {
+  register(holdNativeAgentInteractionCommand, async (args, context) => {
     if (!context.nativeAgents) {
       throw new Error("Native agent service is unavailable");
     }
@@ -640,20 +686,20 @@ export function registerNativeAgentCommands(
     });
   });
 
-  register("get_agent_interaction_observations", (_args, context) => {
+  register(getAgentInteractionObservationsCommand, (_args, context) => {
     if (!context.nativeAgents) {
       throw new Error("Native agent service is unavailable");
     }
     return context.nativeAgents.getInteractionObservations();
   });
-  register("reconcile_agent_interactions", async (_args, context) => {
+  register(reconcileAgentInteractionsCommand, async (_args, context) => {
     if (!context.nativeAgents) {
       throw new Error("Native agent service is unavailable");
     }
     await context.nativeAgents.reconcileAgentInteractions();
     return context.nativeAgents.getInteractionObservations();
   });
-  register("set_agent_interaction_monitor_adoption", ({ enabled }, context) => {
+  register(setAgentInteractionMonitorAdoptionCommand, ({ enabled }, context) => {
     if (!context.nativeAgents) {
       throw new Error("Native agent service is unavailable");
     }

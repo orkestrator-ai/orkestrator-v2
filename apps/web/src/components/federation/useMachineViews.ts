@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useSyncExternalStore } from "react";
 import { FALLBACK_MACHINE_COLOR } from "@orkestrator/protocol/backend-profile";
 import type { NodeConnectionState } from "@orkestrator/protocol/command-nodes";
 import type { ConnectionTransportState } from "@orkestrator/protocol/connections";
@@ -15,13 +15,18 @@ import {
   environmentHasDeletionTombstone,
   NODE_DELETE_FAILURE,
   type NodeSummary,
-  type SelfNodeSummary,
 } from "@orkestrator/protocol/node-summaries";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useEnvironmentStore, useProjectStore } from "@/stores";
 import type { MachineView } from "@/lib/federation/aggregate";
 import { orderMachines, registryOrder } from "@/lib/federation/sidebar-layout";
 import { usePortalLayout } from "@/lib/portal/portal-layout";
+import { useWindowScopeWithFallback } from "@/lib/node-scope/providers";
+import {
+  machineViewWithScopeRows,
+  scopeRowsSource,
+  type ScopeRows,
+} from "@/lib/federation/scope-overlay";
 import {
   boundedText,
   repositoryHint,
@@ -29,6 +34,8 @@ import {
   type FederatedProject,
 } from "@/lib/federation/summaries";
 import type { Environment, Project } from "@/types";
+import type { MachineRelease } from "@orkestrator/protocol/fleet-currency";
+import type { PortalState } from "@/lib/portal/portal-store";
 import { useFederation } from "./FederationProvider";
 
 const TRANSPORT_FOR_STATE: Record<NodeConnectionState, ConnectionTransportState> = {
@@ -67,6 +74,9 @@ export function viewFromNodeSummary(node: NodeSummary): MachineView {
     environmentsByProject,
     truncated: node.truncated,
     loadedAt: node.loadedAt,
+    ...(node.version !== undefined
+      ? { release: { version: node.version, domains: node.domains ?? null } }
+      : {}),
   };
 }
 
@@ -130,37 +140,31 @@ function boundEnvironments(
   return byProject;
 }
 
-/**
- * The command node itself, from its self summary, while the window's
- * workspace (and so its full stores) is on another node.
- */
-export function viewFromSelfSummary(self: SelfNodeSummary): MachineView {
-  const environmentsByProject = new Map<string, FederatedEnvironment[]>();
-  for (const environment of self.environments) {
-    const list = environmentsByProject.get(environment.projectId) ?? [];
-    list.push(environment);
-    environmentsByProject.set(environment.projectId, list);
-  }
-  return {
-    connectionId: self.nodeId,
-    backendId: self.nodeId,
-    name: self.displayName,
-    colorToken: self.colorToken ?? FALLBACK_MACHINE_COLOR,
-    bound: false,
-    freshness: "current",
-    transport: "connected",
-    projects: self.projects,
-    environmentsByProject,
-    truncated: self.truncated,
-    loadedAt: self.loadedAt,
-  };
-}
-
 const BOUND_MACHINE_LOADED = 1;
 
-/** The machine this realm is bound to, projected from its own full stores. */
+/**
+ * The bound machine's release, from the same command-node read as every
+ * other machine's: the command node's own, or the node summary's.
+ */
+function boundRelease(
+  boundId: BackendId | null,
+  portalState: Pick<PortalState, "selfId" | "nodes" | "commandRelease">,
+): MachineRelease | null {
+  if (!boundId) return null;
+  if (boundId === portalState.selfId) return portalState.commandRelease;
+  const node = portalState.nodes.find((entry) => entry.nodeId === boundId);
+  return node ? (viewFromNodeSummary(node).release ?? null) : null;
+}
+
+/** The machine this window is bound to, projected from its own full stores. */
 export function useBoundMachineView(): MachineView | null {
-  const { bound } = useFederation();
+  const { bound, portalState } = useFederation();
+  const boundId = bound?.backendId ?? null;
+  const { selfId, nodes, commandRelease } = portalState;
+  const release = useMemo(
+    () => boundRelease(boundId, { selfId, nodes, commandRelease }),
+    [boundId, selfId, nodes, commandRelease],
+  );
   const projects = useProjectStore((state) => state.projects);
   const environments = useEnvironmentStore((state) => state.environments);
   const activeBuildEnvironmentIds = useBuildPipelineStore(
@@ -183,28 +187,46 @@ export function useBoundMachineView(): MachineView | null {
         activeBuildEnvironmentIds,
       ),
       truncated: false,
-      // This realm's own stores are its machine's live state.
+      // This window's own stores are its machine's live state.
       loadedAt: BOUND_MACHINE_LOADED,
+      ...(release ? { release } : {}),
     };
-  }, [bound, environments, projects, activeBuildEnvironmentIds]);
+  }, [bound, environments, projects, activeBuildEnvironmentIds, release]);
+}
+
+/** The window's warm and live node scopes' own rows, by node (plan item 5007). */
+function useScopeRows(): ReadonlyMap<BackendId, ScopeRows> {
+  const source = scopeRowsSource(useWindowScopeWithFallback());
+  return useSyncExternalStore(source.subscribe, source.getSnapshot, source.getSnapshot);
 }
 
 /**
- * Every machine but the one the window's workspace is on, from the command
- * node's read model: its other nodes, and the command node itself while the
- * workspace is on one of them.
+ * Every machine but the window's own: its other nodes, from the command
+ * node's read model, with the rows of a node whose scope the window holds
+ * warm or live taken from that scope's stores (`scope-overlay.ts`).
  */
 export function useRemoteMachineViews(): MachineView[] {
   const { portalState, bound } = useFederation();
   const boundId = bound?.backendId ?? null;
+  const scopeRows = useScopeRows();
   return useMemo(() => {
-    const nodes = portalState.nodes
+    return portalState.nodes
       .filter((node) => node.nodeId !== boundId)
-      .map(viewFromNodeSummary);
-    return portalState.self && portalState.self.nodeId !== boundId
-      ? [viewFromSelfSummary(portalState.self), ...nodes]
-      : nodes;
-  }, [boundId, portalState.nodes, portalState.self]);
+      .map((node) => {
+        const view = viewFromNodeSummary(node);
+        const rows = scopeRows.get(node.nodeId);
+        return rows ? machineViewWithScopeRows(view, node, rows) : view;
+      });
+  }, [boundId, portalState.nodes, scopeRows]);
+}
+
+/** One of the window's other machines, as `useRemoteMachineViews` gives it. */
+export function useRemoteMachineView(nodeId: BackendId | null): MachineView | null {
+  const machines = useRemoteMachineViews();
+  return useMemo(
+    () => (nodeId ? (machines.find((machine) => machine.backendId === nodeId) ?? null) : null),
+    [machines, nodeId],
+  );
 }
 
 /**

@@ -1,4 +1,7 @@
-import { invoke } from "@/lib/native/backend";
+import { coordinatorApi } from "@/lib/node-scope/domains/coordinator";
+import { asWebModel, nativeSessions } from "@/lib/node-scope/domains/native-sessions";
+import { terminals } from "@/lib/node-scope/domains/terminals";
+import { agentServersApi } from "@/lib/node-scope/domains/agent-servers";
 import { hydrationRequests } from "@/lib/hydration-request-limiter";
 import {
   LIST_ENVIRONMENT_HYDRATION_COMMAND,
@@ -7,12 +10,7 @@ import {
 } from "@orkestrator/protocol/environment-hydration";
 import { hostTimeZone } from "@orkestrator/protocol/schedule-time";
 import { terminalWriteWasDelivered } from "@/lib/backend/shared";
-import type {
-  CreateFeatureBuildInput,
-  CreateFeatureBuildResult,
-} from "@orkestrator/protocol/feature-build";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
-import type { BuildPipelineRestartSelection } from "@orkestrator/protocol/build-pipeline-restart-selection";
 import type {
   AgentInteractionApplyOutcome,
   AgentInteractionOrigin,
@@ -20,33 +18,7 @@ import type {
   AgentInteractionResolution,
 } from "@orkestrator/protocol/agent-interactions";
 import type {
-  BuildPipeline as BackendBuildPipeline,
-  BuildPipelineCodeRewindPreview,
-  PipelineQueuedSteerDelivery,
-  StartBuildPipelineInput,
-} from "@orkestrator/protocol/build-pipeline";
-import type {
-  ReviewValidationOutput,
-  ReviewValidationOutputKnown,
-  ReviewValidationRun,
-} from "@orkestrator/protocol/review-workflow";
-import {
-  isMultiReviewReviewerHistoryPage,
-  type MultiReviewWorkflow as BackendMultiReviewWorkflow,
-  type MultiReviewReviewerHistoryPage,
-  type MultiReviewReviewerTranscript,
-  type MultiReviewStepKind,
-  type MultiReviewStepTranscript,
-  type StartMultiReviewCustomAddressFindingsInput,
-  type StartMultiReviewInput,
-  type MultiReviewModelSelection,
-  type MultiReviewRewindStep,
-  type MultiReviewSkippableStep,
-} from "@orkestrator/protocol/multi-review";
-import type {
-  Environment,
   PersistedWorkflowRecord,
-  PersistedBuildPipeline,
   PersistedNativeAgentSession,
   PersistedComposeDraft,
   PersistedFileDraft,
@@ -81,40 +53,6 @@ import type {
   NativeAgentModelSubstitution,
 } from "@orkestrator/protocol/native-agent";
 import type { NativeAgentGoal, NativeAgentGoalView } from "@orkestrator/protocol/native-agent-goal";
-
-/**
- * Bounded validation output. With `known` (the size and anchor of the tail the
- * caller holds per stream) a current backend answers only the appended bytes;
- * an older backend ignores it and answers a full tail.
- */
-export async function getReviewValidationOutput(
-  environmentId: string,
-  runId: string,
-  resultId: string,
-  known?: ReviewValidationOutputKnown,
-): Promise<ReviewValidationOutput> {
-  return invoke<ReviewValidationOutput>("get_review_validation_output", {
-    environmentId,
-    runId,
-    resultId,
-    ...(known && (known.stdout || known.stderr) ? { known } : {}),
-  });
-}
-/**
- * Stop one validation command. The environment-owned worker records it as
- * incomplete with its partial output and keeps running the remaining commands.
- */
-export async function stopReviewValidationCommand(
-  environmentId: string,
-  run: ReviewValidationRun,
-  resultId: string,
-): Promise<ReviewValidationRun> {
-  return invoke<ReviewValidationRun>("stop_review_validation_command", {
-    environmentId,
-    run,
-    resultId,
-  });
-}
 import {
   isNativeAgentMessagePage,
   isNativeAgentProjectionUpdate,
@@ -127,12 +65,10 @@ import {
 } from "@orkestrator/protocol/native-agent";
 /** PR detection result containing URL, state, and merge conflict status */
 
-import {
-  isRecord,
-  parseTerminalSessionCreateResult,
-  type TerminalSessionCreateResult,
-} from "./shared";
-import type { KanbanTask } from "./kanban";
+import { parseTerminalSessionCreateResult, type TerminalSessionCreateResult } from "./shared";
+import { commandBackendClient, type BackendClient } from "./client";
+import { createBuildPipelinesApi } from "./build-pipelines";
+import { createMultiReviewsApi } from "./multi-reviews";
 
 /**
  * The platform a native-agent command names.
@@ -160,590 +96,11 @@ export interface NativeAgentJobLaunchResult {
   queued?: boolean;
 }
 
-/**
- * Launch work whose tab is a projection of a backend-owned native session.
- *
- * The command persists the tab and dispatch intent before it returns, so the
- * job never waits for that tab (or even its environment) to be mounted.
- */
-export async function launchNativeAgentJob(input: {
-  requestId: string;
-  environmentId: string;
-  /** The id of the tab this launch creates; a reused tab answers with its own. */
-  tabId?: string;
-  agent: NativeAgentClientPlatform;
-  prompt: string;
-  title?: string;
-  modelId?: string;
-  reasoningId?: string;
-  fastMode?: boolean;
-  conversationMode?: "plan" | "build";
-  completionAction?: "refresh-pr-after-agent-completion";
-  /**
-   * Send to the most recent open tab of the same job when it can take a prompt,
-   * and only otherwise open a new one. `same-agent` restricts that to the chosen
-   * agent and applies the chosen model; `any-agent` keeps the tab's own.
-   */
-  tabReuse?: "any-agent" | "same-agent";
-  activateTab?: boolean;
-}): Promise<NativeAgentJobLaunchResult> {
-  return invoke<NativeAgentJobLaunchResult>("launch_native_agent_job", input);
-}
-
-// --- Multi Review Workflow Commands ---
-
-export async function startMultiReview(
-  input: StartMultiReviewInput,
-): Promise<BackendMultiReviewWorkflow> {
-  return invoke<BackendMultiReviewWorkflow>("start_multi_review", { ...input });
-}
-
-export async function addressMultiReviewFindings(
-  workflowId: string,
-): Promise<BackendMultiReviewWorkflow> {
-  return invoke<BackendMultiReviewWorkflow>("address_multi_review", { workflowId });
-}
-
-export async function startMultiReviewCustomAddressFindings(
-  input: StartMultiReviewCustomAddressFindingsInput,
-): Promise<BackendMultiReviewWorkflow> {
-  return invoke<BackendMultiReviewWorkflow>("start_multi_review_custom_fix", { ...input });
-}
-
-export async function retryMultiReview(workflowId: string): Promise<BackendMultiReviewWorkflow> {
-  return invoke<BackendMultiReviewWorkflow>("retry_multi_review", { workflowId });
-}
-
-export async function recoverMultiReviewAddressFindingsSession(input: {
-  environmentId: string;
-  tabId: string;
-  expectedProviderSessionId: string;
-  replacementProviderSessionId: string;
-}): Promise<BackendMultiReviewWorkflow> {
-  return invoke<BackendMultiReviewWorkflow>("recover_multi_review_fix_session", input);
-}
-
-export async function cancelMultiReview(workflowId: string): Promise<BackendMultiReviewWorkflow> {
-  return invoke<BackendMultiReviewWorkflow>("cancel_multi_review", { workflowId });
-}
-
-/**
- * Retire one reviewer and let the review continue without it. The backend
- * aborts that reviewer's session best-effort and consolidates from whatever the
- * remaining reviewers produced.
- */
-export async function stopMultiReviewReviewer(
-  workflowId: string,
-  reviewerId: string,
-): Promise<BackendMultiReviewWorkflow> {
-  return invoke<BackendMultiReviewWorkflow>("stop_multi_review_reviewer", {
-    workflowId,
-    reviewerId,
-  });
-}
-
-/** Stop validation commands and continue Multi Review with the evidence collected so far. */
-export async function stopMultiReviewValidation(
-  workflowId: string,
-): Promise<BackendMultiReviewWorkflow> {
-  return invoke<BackendMultiReviewWorkflow>("stop_multi_review_validation", { workflowId });
-}
-
-/** A `model` is "Restart in…": the reviewer runs on it from now on. */
-export async function restartMultiReviewReviewer(
-  workflowId: string,
-  reviewerId: string,
-  model?: MultiReviewModelSelection,
-): Promise<BackendMultiReviewWorkflow> {
-  return invoke<BackendMultiReviewWorkflow>("restart_multi_review_reviewer", {
-    workflowId,
-    reviewerId,
-    ...(model ? { model } : {}),
-  });
-}
-
-/** Moves on without a step's result: the reviewers still working, or Address Findings. */
-export async function skipMultiReviewStep(
-  workflowId: string,
-  step: MultiReviewSkippableStep,
-): Promise<BackendMultiReviewWorkflow> {
-  return invoke<BackendMultiReviewWorkflow>("skip_multi_review_step", { workflowId, step });
-}
-
-/** What "Rewind code to here" on a step would drop, and why it cannot run now, if it cannot. */
-export async function previewMultiReviewCodeRewind(
-  workflowId: string,
-  step: MultiReviewRewindStep,
-): Promise<BuildPipelineCodeRewindPreview> {
-  return invoke<BuildPipelineCodeRewindPreview>("preview_multi_review_code_rewind", {
-    workflowId,
-    step,
-  });
-}
-
-/** Resets the worktree to the commit a step started from and restarts that step. */
-export async function rewindMultiReviewCode(
-  workflowId: string,
-  step: MultiReviewRewindStep,
-  expectedHead: string,
-): Promise<BackendMultiReviewWorkflow> {
-  return invoke<BackendMultiReviewWorkflow>("rewind_multi_review_code", {
-    workflowId,
-    step,
-    expectedHead,
-  });
-}
-
-export async function restartMultiReviewStep(
-  workflowId: string,
-  kind: "prepare" | "consolidate" | "fix",
-  model?: BackendMultiReviewWorkflow["fixModel"],
-): Promise<BackendMultiReviewWorkflow> {
-  return invoke<BackendMultiReviewWorkflow>("restart_multi_review_step", {
-    workflowId,
-    kind,
-    ...(model ? { model } : {}),
-  });
-}
-
-export async function pauseMultiReviewStep(
-  workflowId: string,
-  kind: "prepare" | "consolidate" | "fix",
-): Promise<BackendMultiReviewWorkflow> {
-  return invoke<BackendMultiReviewWorkflow>("pause_multi_review_step", { workflowId, kind });
-}
-
-export async function resumeMultiReviewStep(
-  workflowId: string,
-  kind: "prepare" | "consolidate" | "fix",
-): Promise<BackendMultiReviewWorkflow> {
-  return invoke<BackendMultiReviewWorkflow>("resume_multi_review_step", { workflowId, kind });
-}
-
-export async function unstickMultiReviewReviewer(
-  workflowId: string,
-  reviewerId: string,
-): Promise<BackendMultiReviewWorkflow> {
-  return invoke<BackendMultiReviewWorkflow>("unstick_multi_review_reviewer", {
-    workflowId,
-    reviewerId,
-  });
-}
-
-export async function getMultiReviewWorkflow<T = unknown>(
-  workflowId: string,
-): Promise<PersistedWorkflowRecord<T> | null> {
-  return invoke<PersistedWorkflowRecord<T> | null>("get_multi_review_workflow", {
-    workflowId,
-  });
-}
-
-/**
- * `unchanged` when the record is still at `knownRevision`, otherwise the
- * record. A backend that predates the conditional read ignores the revision
- * and always answers with the record.
- */
-export async function getMultiReviewWorkflowConditional<T = unknown>(
-  workflowId: string,
-  knownRevision?: number,
-): Promise<{ unchanged: true; revision: number } | PersistedWorkflowRecord<T> | null> {
-  const response = await invoke<unknown>("get_multi_review_workflow", {
-    workflowId,
-    ...(knownRevision === undefined ? {} : { knownRevision }),
-  });
-  if (response === null || response === undefined) return null;
-  if (
-    isRecord(response) &&
-    response.unchanged === true &&
-    Number.isSafeInteger(response.revision) &&
-    (response.revision as number) >= 0
-  ) {
-    return response as { unchanged: true; revision: number };
-  }
-  if (!isRecord(response) || "unchanged" in response || typeof response.id !== "string") {
-    throw new Error("Invalid get_multi_review_workflow response");
-  }
-  return response as unknown as PersistedWorkflowRecord<T>;
-}
-
-export async function listMultiReviewWorkflows<T = unknown>(
-  environmentId: string,
-): Promise<Array<PersistedWorkflowRecord<T>>> {
-  return hydrationRequests.run(() =>
-    invoke<Array<PersistedWorkflowRecord<T>>>("list_multi_review_workflows", {
-      environmentId,
-    }),
-  );
-}
-
-/**
- * Reads a bounded reviewer transcript tail. Passing the previous response's
- * `sourceToken` lets the backend answer `transcript: "unchanged"` with no
- * messages when nothing moved; the caller then keeps what it already shows.
- */
-export async function getMultiReviewReviewerTranscript(
-  workflowId: string,
-  reviewerId: string,
-  options: { knownSourceToken?: string } = {},
-): Promise<MultiReviewReviewerTranscript> {
-  return invoke<MultiReviewReviewerTranscript>("get_multi_review_reviewer_transcript", {
-    workflowId,
-    reviewerId,
-    ...(options.knownSourceToken ? { knownSourceToken: options.knownSourceToken } : {}),
-  });
-}
-
-/**
- * Reads a bounded tail of a preparation, consolidation or Fix session, with
- * the reviewer transcript's conditional `knownSourceToken` contract.
- */
-export async function getMultiReviewStepTranscript(
-  workflowId: string,
-  step: MultiReviewStepKind,
-  options: { knownSourceToken?: string } = {},
-): Promise<MultiReviewStepTranscript> {
-  return invoke<MultiReviewStepTranscript>("get_multi_review_step_transcript", {
-    workflowId,
-    step,
-    ...(options.knownSourceToken ? { knownSourceToken: options.knownSourceToken } : {}),
-  });
-}
-
-/** The body behind a step row, resolved against its authoritative owned session. */
-export async function getMultiReviewStepToolDetails(
-  workflowId: string,
-  step: MultiReviewStepKind,
-  detailRef: string,
-): Promise<NativeAgentToolDetails> {
-  return invoke<NativeAgentToolDetails>("get_multi_review_step_tool_details", {
-    workflowId,
-    step,
-    detailRef,
-  });
-}
-
-/** The body behind a reviewer row's deferred `detailRef`, read on expansion. */
-export async function getMultiReviewReviewerToolDetails(
-  workflowId: string,
-  reviewerId: string,
-  detailRef: string,
-): Promise<NativeAgentToolDetails> {
-  return invoke<NativeAgentToolDetails>("get_multi_review_reviewer_tool_details", {
-    workflowId,
-    reviewerId,
-    detailRef,
-  });
-}
-
-/**
- * Reviewer history before `before` (a transcript `historyCursor` or a page's
- * `nextCursor`). An answer outside the protocol's bounds is refused rather
- * than rendered.
- */
-export async function getMultiReviewReviewerHistoryPage(
-  workflowId: string,
-  reviewerId: string,
-  options: { before: string; limit?: number; targetBytes?: number },
-): Promise<MultiReviewReviewerHistoryPage> {
-  const page = await invoke<unknown>("get_multi_review_reviewer_history_page", {
-    workflowId,
-    reviewerId,
-    before: options.before,
-    ...(options.limit === undefined ? {} : { limit: options.limit }),
-    ...(options.targetBytes === undefined ? {} : { targetBytes: options.targetBytes }),
-  });
-  if (!isMultiReviewReviewerHistoryPage(page)) {
-    throw new Error("The reviewer history page was malformed");
-  }
-  return page;
-}
-
-export async function deleteMultiReviewWorkflow(workflowId: string): Promise<void> {
-  return invoke("delete_multi_review_workflow", { workflowId });
-}
-
-// Controller leases are backend-only. The renderer has no caller for
-// claim/validate/release, and backend-owned records reject renderer writes, so
-// keeping wrappers here would only advertise an API the renderer must not use.
-
-export async function ensureNativeAgentSession(input: {
-  environmentId: string;
-  agent: NativeAgentClientPlatform;
-  logicalSessionKey: string;
-  origin?: AgentInteractionOrigin;
-  interactionPolicy?: AgentInteractionPolicy;
-  title?: string;
-  model?: string;
-  /** Only inherited defaults may be substituted when their provider is disconnected. */
-  modelSource?: "default" | "explicit";
-  reasoningEffort?: string;
-  phase?: "build" | "review" | "verify" | "fix" | "pr" | "resolve-conflicts";
-  /**
-   * Overrides the mode the phase would imply, for a session whose phase-derived
-   * mode does not match what it must do (a review session that has to commit
-   * changes would fail in a phase-derived read-only session).
-   */
-  sessionMode?: "plan" | "build";
-  fastMode?: boolean;
-  executionProfileId?: string;
-  parameterValues?: Record<string, string | boolean>;
-}): Promise<PersistedNativeAgentSession & { modelSubstitution?: NativeAgentModelSubstitution }> {
-  return invoke<PersistedNativeAgentSession & { modelSubstitution?: NativeAgentModelSubstitution }>(
-    "ensure_native_agent_session",
-    input,
-  );
-}
-
-export async function adoptNativeAgentSession(input: {
-  environmentId: string;
-  agent: NativeAgentClientPlatform;
-  logicalSessionKey: string;
-  origin?: AgentInteractionOrigin;
-  interactionPolicy?: AgentInteractionPolicy;
-  providerSessionId: string;
-  expectedProviderSessionId?: string;
-  model?: string;
-  reasoningEffort?: string;
-  sessionMode?: "plan" | "build";
-  fastMode?: boolean;
-  executionProfileId?: string;
-  controls?: NativeAgentControlUpdate;
-}): Promise<PersistedNativeAgentSession> {
-  return invoke<PersistedNativeAgentSession>("adopt_native_agent_session", input);
-}
-
-export async function getNativeAgentSession(input: {
-  environmentId: string;
-  agent: NativeAgentClientPlatform;
-  logicalSessionKey: string;
-}): Promise<PersistedNativeAgentSession | null> {
-  return invoke<PersistedNativeAgentSession | null>("get_native_agent_session", input);
-}
-
-export async function getNativeAgentProjection<TMessage = unknown>(input: {
-  environmentId: string;
-  agent: NativeAgentClientPlatform;
-  logicalSessionKey: string;
-  /** Omit to keep the window this session already has; never to shrink it. */
-  messageLimit?: number;
-  /** Request the provider's detailed billing/quota snapshot. */
-  refreshUsage?: boolean;
-}): Promise<NativeAgentSessionProjection<TMessage> | null> {
-  return invoke("get_native_agent_projection", input);
-}
-
-export async function getNativeAgentSyncCapabilities(): Promise<{
-  projectionSyncVersions: number[];
-  historyPagingVersions: number[];
-  progressiveViewVersions?: number[];
-  /** Stamped, session-scoped activity announcements (step 07). */
-  observationEventVersions?: number[];
-  /** Part-level patches inside transcript deltas (efficiency step 14). */
-  transcriptPatchVersions?: number[];
-  /** One request for transcript and state (`get_native_agent_live_update`). */
-  liveUpdateVersions?: number[];
-}> {
-  const response = await invoke<unknown>("get_native_agent_sync_capabilities");
-  if (!response || typeof response !== "object" || Array.isArray(response)) {
-    throw new Error("Invalid native agent sync capabilities response");
-  }
-  const candidate = response as Record<string, unknown>;
-  if (
-    !Array.isArray(candidate.projectionSyncVersions) ||
-    candidate.projectionSyncVersions.length > 16 ||
-    !candidate.projectionSyncVersions.every(Number.isSafeInteger) ||
-    !Array.isArray(candidate.historyPagingVersions) ||
-    candidate.historyPagingVersions.length > 16 ||
-    !candidate.historyPagingVersions.every(Number.isSafeInteger) ||
-    (candidate.progressiveViewVersions !== undefined &&
-      (!Array.isArray(candidate.progressiveViewVersions) ||
-        candidate.progressiveViewVersions.length > 16 ||
-        !candidate.progressiveViewVersions.every(Number.isSafeInteger))) ||
-    (candidate.observationEventVersions !== undefined &&
-      (!Array.isArray(candidate.observationEventVersions) ||
-        candidate.observationEventVersions.length > 16 ||
-        !candidate.observationEventVersions.every(Number.isSafeInteger))) ||
-    (candidate.transcriptPatchVersions !== undefined &&
-      (!Array.isArray(candidate.transcriptPatchVersions) ||
-        candidate.transcriptPatchVersions.length > 16 ||
-        !candidate.transcriptPatchVersions.every(Number.isSafeInteger))) ||
-    (candidate.liveUpdateVersions !== undefined &&
-      (!Array.isArray(candidate.liveUpdateVersions) ||
-        candidate.liveUpdateVersions.length > 16 ||
-        !candidate.liveUpdateVersions.every(Number.isSafeInteger)))
-  ) {
-    throw new Error("Invalid native agent sync capabilities response");
-  }
-  return response as {
-    projectionSyncVersions: number[];
-    historyPagingVersions: number[];
-    progressiveViewVersions?: number[];
-    observationEventVersions?: number[];
-    transcriptPatchVersions?: number[];
-    liveUpdateVersions?: number[];
-  };
-}
-
-export async function getNativeAgentTranscriptUpdate<TMessage = unknown>(input: {
-  environmentId: string;
-  agent: NativeAgentClientPlatform;
-  logicalSessionKey: string;
-  viewVersion: 1;
-  liveWindow: NativeAgentLiveWindow;
-  knownToken?: string;
-  forceSnapshot?: boolean;
-  /** Ask for part-level patches; only when the backend advertised them. */
-  patchVersion?: 2;
-}): Promise<NativeAgentTranscriptUpdate<TMessage>> {
-  const response = await invoke<unknown>("get_native_agent_transcript_update", input);
-  if (
-    new TextEncoder().encode(JSON.stringify(response)).byteLength >
-    NATIVE_AGENT_SYNC_MAX_SNAPSHOT_BYTES
-  ) {
-    throw new Error("Native agent transcript update response exceeded 20 MiB");
-  }
-  if (!isNativeAgentTranscriptUpdate(response)) {
-    throw new Error("Invalid native agent transcript update response");
-  }
-  return response as NativeAgentTranscriptUpdate<TMessage>;
-}
-
-export async function getNativeAgentSessionStateUpdate(input: {
-  environmentId: string;
-  agent: NativeAgentClientPlatform;
-  logicalSessionKey: string;
-  viewVersion: 1;
-  knownToken?: string;
-  forceSnapshot?: boolean;
-}): Promise<NativeAgentSessionStateUpdate> {
-  const response = await invoke<unknown>("get_native_agent_session_state_update", input);
-  if (!isNativeAgentSessionStateUpdate(response)) {
-    throw new Error("Invalid native agent session-state update response");
-  }
-  return response;
-}
-
-export async function getNativeAgentLiveUpdate<TMessage = unknown>(input: {
-  environmentId: string;
-  agent: NativeAgentClientPlatform;
-  logicalSessionKey: string;
-  viewVersion: 1;
-  liveWindow: NativeAgentLiveWindow;
-  transcriptToken?: string;
-  stateToken?: string;
-  /** Ask for part-level patches; only when the backend advertised them. */
-  patchVersion?: 2;
-}): Promise<NativeAgentLiveUpdate<TMessage>> {
-  const response = await invoke<unknown>("get_native_agent_live_update", input);
-  if (
-    new TextEncoder().encode(JSON.stringify(response)).byteLength >
-    NATIVE_AGENT_SYNC_MAX_SNAPSHOT_BYTES
-  ) {
-    throw new Error("Native agent live update response exceeded 20 MiB");
-  }
-  if (!isNativeAgentLiveUpdate(response)) {
-    throw new Error("Invalid native agent live update response");
-  }
-  return response as NativeAgentLiveUpdate<TMessage>;
-}
-
-export async function getNativeAgentDiscoveryUpdate(input: {
-  environmentId: string;
-  agent: NativeAgentClientPlatform;
-  logicalSessionKey: string;
-  viewVersion: 1;
-  sections: NativeAgentDiscoverySection[];
-  knownToken?: string;
-  forceSnapshot?: boolean;
-}): Promise<NativeAgentDiscoveryUpdate> {
-  const response = await invoke<unknown>("get_native_agent_discovery_update", input);
-  if (!isNativeAgentDiscoveryUpdate(response)) {
-    throw new Error("Invalid native agent discovery update response");
-  }
-  return response;
-}
-
-export async function getNativeAgentProjectionUpdate<TMessage = unknown>(input: {
-  environmentId: string;
-  agent: NativeAgentClientPlatform;
-  logicalSessionKey: string;
-  syncVersion: 1;
-  liveWindow: NativeAgentLiveWindow;
-  knownToken?: string;
-  forceSnapshot?: boolean;
-}): Promise<NativeAgentProjectionUpdate<TMessage>> {
-  const response = await invoke<unknown>("get_native_agent_projection_update", input);
-  if (
-    new TextEncoder().encode(JSON.stringify(response)).byteLength >
-    NATIVE_AGENT_SYNC_MAX_SNAPSHOT_BYTES
-  ) {
-    throw new Error("Native agent projection update response exceeded 20 MiB");
-  }
-  if (!isNativeAgentProjectionUpdate(response)) {
-    throw new Error("Invalid native agent projection update response");
-  }
-  return response as NativeAgentProjectionUpdate<TMessage>;
-}
-
-export async function getNativeAgentMessagePage<TMessage = unknown>(input: {
-  environmentId: string;
-  agent: NativeAgentClientPlatform;
-  logicalSessionKey: string;
-  syncVersion: 1;
-  before: string;
-  limit?: number;
-  targetBytes?: number;
-}): Promise<NativeAgentMessagePage<TMessage>> {
-  const response = await invoke<unknown>("get_native_agent_message_page", input);
-  if (
-    new TextEncoder().encode(JSON.stringify(response)).byteLength > NATIVE_AGENT_SYNC_MAX_PAGE_BYTES
-  ) {
-    throw new Error("Native agent message page response exceeded its limit");
-  }
-  if (!isNativeAgentMessagePage(response)) {
-    throw new Error("Invalid native agent message page response");
-  }
-  return response as NativeAgentMessagePage<TMessage>;
-}
-
-export async function getNativeAgentToolDetails(input: {
-  environmentId: string;
-  agent: NativeAgentClientPlatform;
-  logicalSessionKey: string;
-  detailRef: string;
-}): Promise<NativeAgentToolDetails> {
-  return invoke("get_native_agent_tool_details", input);
-}
-
-export async function refreshNativeAgentModels<TMessage = unknown>(input: {
-  environmentId: string;
-  agent: NativeAgentClientPlatform;
-  logicalSessionKey: string;
-}): Promise<NativeAgentSessionProjection<TMessage> | null> {
-  return invoke("refresh_native_agent_models", input);
-}
-
 /** What an explicit command-list refresh did, with the projection it produced. */
 export interface NativeAgentCommandRefreshResult<TMessage = unknown> {
   outcome: NativeAgentCommandRefreshOutcome;
   message?: string;
   projection: NativeAgentSessionProjection<TMessage> | null;
-}
-
-export async function refreshNativeAgentCommands<TMessage = unknown>(input: {
-  environmentId: string;
-  agent: NativeAgentClientPlatform;
-  logicalSessionKey: string;
-}): Promise<NativeAgentCommandRefreshResult<TMessage>> {
-  return invoke("refresh_native_agent_commands", input);
-}
-
-export async function stopNativeAgentSession<TMessage = unknown>(input: {
-  environmentId: string;
-  agent: NativeAgentClientPlatform;
-  logicalSessionKey: string;
-}): Promise<NativeAgentSessionProjection<TMessage> | null> {
-  return invoke("stop_native_agent_session", input);
 }
 
 /** What `/goal` did. A refusal rejects with a message the user can read. */
@@ -752,42 +109,10 @@ export interface NativeAgentGoalCommandResult {
   goal?: NativeAgentGoalView;
 }
 
-/**
- * Run `/goal` now, whether or not a turn is running. `text` is what follows the
- * command name; it never goes through the prompt queue.
- */
-export async function runNativeAgentGoalCommand(input: {
-  environmentId: string;
-  agent: NativeAgentClientPlatform;
-  logicalSessionKey: string;
-  text: string;
-  model?: string;
-}): Promise<NativeAgentGoalCommandResult> {
-  return invoke("native_agent_goal_command", input);
-}
-
 /** A goal with its check output, which the session snapshot leaves out. */
 export interface NativeAgentGoalDetail {
   goal?: NativeAgentGoal;
   history: NativeAgentGoal[];
-}
-
-export async function getNativeAgentGoal(input: {
-  environmentId: string;
-  agent: NativeAgentClientPlatform;
-  logicalSessionKey: string;
-}): Promise<NativeAgentGoalDetail> {
-  return invoke("get_native_agent_goal", input);
-}
-
-/** Stops a session's running suborks: one call's, or every call's when `batchId` is absent. */
-export async function stopNativeAgentSuborks(input: {
-  environmentId: string;
-  agent: NativeAgentClientPlatform;
-  logicalSessionKey: string;
-  batchId?: string;
-}): Promise<void> {
-  await invoke("stop_native_agent_suborks", input);
 }
 
 /** One subork's stored transcript. Reading it touches no provider. */
@@ -802,903 +127,1037 @@ export type NativeAgentSuborkTranscript =
     }
   | { status: "missing" | "none" | "unavailable" };
 
-export async function getNativeAgentSuborkTranscript(input: {
-  environmentId: string;
-  batchId: string;
-  suborkId: string;
-  fromIndex?: number;
-}): Promise<NativeAgentSuborkTranscript> {
-  return invoke("native_agent_subork_transcript", input);
-}
+// --- Build pipelines and Multi Review: `build-pipelines.ts`, `multi-reviews.ts` ---
 
-export async function stopNativeAgentBackgroundTask<TMessage = unknown>(input: {
-  environmentId: string;
-  agent: NativeAgentClientPlatform;
-  logicalSessionKey: string;
-  taskId: string;
-}): Promise<NativeAgentSessionProjection<TMessage> | null> {
-  return invoke("stop_native_agent_background_task", input);
-}
-
-export async function dismissNativeAgentSuggestedPrompt<TMessage = unknown>(input: {
-  environmentId: string;
-  agent: NativeAgentClientPlatform;
-  logicalSessionKey: string;
-}): Promise<NativeAgentSessionProjection<TMessage> | null> {
-  return invoke("dismiss_native_agent_suggested_prompt", input);
-}
-
-export async function listNativeAgentResumableSessions(input: {
-  environmentId: string;
-  agent: NativeAgentClientPlatform;
-  logicalSessionKey: string;
-  /** Also lists conversations taken out of the list, flagged `archived`. */
-  includeArchived?: boolean;
-}): Promise<NativeAgentResumeEntry[]> {
-  return invoke("list_native_agent_resumable_sessions", input);
-}
-
-/** Takes a conversation out of the resume list, or puts it back. Never a delete. */
-export async function setNativeAgentResumableSessionArchived(input: {
-  environmentId: string;
-  agent: NativeAgentClientPlatform;
-  logicalSessionKey: string;
-  resumableSessionId: string;
-  archived: boolean;
-}): Promise<{ archived: boolean }> {
-  return invoke("set_native_agent_resumable_session_archived", input);
-}
-
-export async function resumeNativeAgentSession<TMessage = unknown>(input: {
-  environmentId: string;
-  agent: NativeAgentClientPlatform;
-  logicalSessionKey: string;
-  providerSessionId: string;
-  controls?: NativeAgentControlUpdate;
-}): Promise<NativeAgentSessionProjection<TMessage> | null> {
-  return invoke("resume_native_agent_session", input);
-}
-
-export async function forkNativeAgentSession(input: {
-  environmentId: string;
-  agent: NativeAgentClientPlatform;
-  logicalSessionKey: string;
-  messageId?: string;
-}): Promise<NativeAgentForkOutcome> {
-  return invoke("fork_native_agent_session", input);
-}
-
-export async function updateNativeAgentControls<TMessage = unknown>(input: {
-  environmentId: string;
-  agent: NativeAgentClientPlatform;
-  logicalSessionKey: string;
-  update: NativeAgentControlUpdate;
-}): Promise<NativeAgentSessionProjection<TMessage> | null> {
-  return invoke("update_native_agent_controls", input);
-}
-
-export async function steerNativeAgentQueuedPrompt(input: {
-  environmentId: string;
-  agent: NativeAgentClientPlatform;
-  logicalSessionKey: string;
-  messageId: string;
-}): Promise<NativeAgentSessionActionOutcome | null> {
-  return invoke("steer_native_agent_queued_prompt", input);
-}
-
-export async function performNativeAgentSessionAction(input: {
-  environmentId: string;
-  agent: NativeAgentClientPlatform;
-  logicalSessionKey: string;
-  action: NativeAgentSessionAction;
-}): Promise<NativeAgentSessionActionOutcome> {
-  return invoke("perform_native_agent_session_action", input);
-}
-
-export async function performNativeAgentMcpAction(input: {
-  environmentId: string;
-  agent: NativeAgentClientPlatform;
-  logicalSessionKey: string;
-  serverId: string;
-  action: NativeAgentMcpServerAction;
-}): Promise<{ url?: string }> {
-  return invoke("perform_native_agent_mcp_action", input);
-}
-
-/**
- * Read the provider's account now. Not part of the projection: an account read
- * can reach the provider's auth service, so ask only when the answer is shown.
- */
-export async function getNativeAgentAuthStatus(input: {
-  environmentId: string;
-  agent: NativeAgentClientPlatform;
-  logicalSessionKey: string;
-}): Promise<NativeAgentAuthStatus | null> {
-  return invoke("get_native_agent_auth_status", input);
-}
-
-export async function beginNativeAgentSignIn(input: {
-  environmentId: string;
-  agent: NativeAgentClientPlatform;
-  logicalSessionKey: string;
-  /** Ask for a device code: the browser cannot reach the agent's loopback. */
-  deviceCode?: boolean;
-}): Promise<{ url?: string; code?: string }> {
-  return invoke("begin_native_agent_sign_in", input);
-}
-
-/** Abandon an in-tab sign-in so the provider stops waiting for it. */
-export async function cancelNativeAgentSignIn(input: {
-  environmentId: string;
-  agent: NativeAgentClientPlatform;
-  logicalSessionKey: string;
-}): Promise<{ cancelled: boolean }> {
-  return invoke("cancel_native_agent_sign_in", input);
-}
-
-export async function signOutNativeAgent(input: {
-  environmentId: string;
-  agent: NativeAgentClientPlatform;
-  logicalSessionKey: string;
-}): Promise<void> {
-  await invoke("sign_out_native_agent", input);
-}
-
-export async function resolveNativeAgentInteraction(input: {
-  environmentId: string;
-  agent: NativeAgentClientPlatform;
-  logicalSessionKey: string;
-  interactionId: string;
-  resolution: AgentInteractionResolution;
-}): Promise<AgentInteractionApplyOutcome> {
-  return invoke("resolve_native_agent_interaction", input);
-}
-
-/** Pause (`held`) or resume an interaction's countdown where the agent enforces it. */
-export async function holdNativeAgentInteraction(input: {
-  environmentId: string;
-  agent: NativeAgentClientPlatform;
-  logicalSessionKey: string;
-  interactionId: string;
-  held: boolean;
-}): Promise<AgentInteractionApplyOutcome> {
-  return invoke("hold_native_agent_interaction", input);
-}
-
-export async function dispatchNativeAgentPrompt(input: {
-  environmentId: string;
-  agent: NativeAgentClientPlatform;
-  logicalSessionKey: string;
-  origin?: AgentInteractionOrigin;
-  interactionPolicy?: AgentInteractionPolicy;
-  title?: string;
-  model?: string;
-  reasoningEffort?: string;
-  phase?: "build" | "review" | "verify" | "fix" | "pr" | "resolve-conflicts";
-  prompt: string;
-  requestId: string;
-  images?: Array<{ filename: string; data: string }>;
-  schema?: Record<string, unknown>;
-  mode?: "plan" | "build";
-  fastMode?: boolean;
-  /** Absent is legacy behaviour: the backend treats the text as typed. */
-  command?: NativeAgentCommandIntent;
-}): Promise<PersistedNativeAgentSession> {
-  return invoke<PersistedNativeAgentSession>("dispatch_native_agent_prompt", input);
-}
-
-export async function dispatchNativeAgentIntent(input: {
-  environmentId: string;
-  agent: NativeAgentClientPlatform;
-  logicalSessionKey: string;
-  origin?: AgentInteractionOrigin;
-  interactionPolicy?: AgentInteractionPolicy;
-  title?: string;
-  model?: string;
-  modelSource?: "default" | "explicit";
-  reasoningEffort?: string;
-  phase?: "build" | "review" | "verify" | "fix" | "pr" | "resolve-conflicts";
-  prompt: string;
-  requestId: string;
-  images?: Array<{ filename: string; data: string }>;
-  attachments?: Array<{
-    type: "image" | "file";
-    path: string;
-    dataUrl?: string;
-    filename?: string;
-  }>;
-  schema?: Record<string, unknown>;
-  mode?: "plan" | "build";
-  fastMode?: boolean;
-  subAgent?: string;
-  executionAgent?: string;
-  includeLocalSettings?: boolean;
-  promptSuggestions?: boolean;
-  sessionMode?: "plan" | "build";
-  executionProfileId?: string;
-  parameterValues?: Record<string, string | boolean>;
-  /** Approval mode for a session this dispatch creates. */
-  approvalMode?: string;
-  /**
-   * How to interpret the prompt. Absent is legacy behaviour (typed). For a
-   * non-literal intent the backend keeps the prompt bytes, trimming only
-   * leading whitespace, so a command's arguments arrive exactly as typed.
-   */
-  command?: NativeAgentCommandIntent;
-  /** Defaults to this device's zone; a coordinator reads its user's zone from it. */
-  clientTimeZone?: string;
-}): Promise<NativeAgentDispatchOutcome> {
-  return invoke<NativeAgentDispatchOutcome>("dispatch_native_agent_intent", {
-    ...input,
-    clientTimeZone: input.clientTimeZone ?? hostTimeZone(),
-  });
-}
-
-export async function retryNativeAgentDispatch(input: {
-  environmentId: string;
-  agent: NativeAgentClientPlatform;
-  logicalSessionKey: string;
-  requestId: string;
-}): Promise<NativeAgentDispatchOutcome> {
-  return invoke<NativeAgentDispatchOutcome>("retry_native_agent_dispatch", input);
-}
-
-export async function discardNativeAgentDispatch(input: {
-  environmentId: string;
-  agent: NativeAgentClientPlatform;
-  logicalSessionKey: string;
-  requestId: string;
-}): Promise<{ discarded: boolean }> {
-  return invoke<{ discarded: boolean }>("discard_native_agent_dispatch", input);
-}
-
-// --- Build Pipeline Persistence ---
-
-export async function startBuildPipeline(
-  input: StartBuildPipelineInput,
-): Promise<BackendBuildPipeline> {
-  return invoke<BackendBuildPipeline>("start_build_pipeline", { ...input });
-}
-
-/**
- * Creates the ticket and starts its build in one backend-owned request.
- *
- * The renderer deliberately does not create the ticket itself and then start a
- * pipeline: those are two writes, and a tab that goes away between them leaves
- * a ticket nobody is building. `requestId` makes a retry return the same ticket
- * and the same pipeline rather than a second of each.
- */
-export async function createFeatureBuild(
-  input: CreateFeatureBuildInput,
-): Promise<CreateFeatureBuildResult> {
-  return invoke<CreateFeatureBuildResult>("create_feature_build", { ...input });
-}
-
-export async function pauseBuildPipeline(pipelineId: string): Promise<BackendBuildPipeline> {
-  return invoke<BackendBuildPipeline>("pause_build_pipeline", { pipelineId });
-}
-
-export async function resumeBuildPipeline(pipelineId: string): Promise<BackendBuildPipeline> {
-  return invoke<BackendBuildPipeline>("resume_build_pipeline", { pipelineId });
-}
-
-export async function cancelBuildPipeline(pipelineId: string): Promise<BackendBuildPipeline> {
-  return invoke<BackendBuildPipeline>("cancel_build_pipeline", { pipelineId });
-}
-
-export async function sendBuildPipelineMessage(
-  pipelineId: string,
-  text: string,
-): Promise<BackendBuildPipeline> {
-  return invoke<BackendBuildPipeline>("send_build_pipeline_message", {
-    pipelineId,
-    text,
-  });
-}
-
-/**
- * Injects an instruction into the turn the pipeline agent is running now.
- * `delivery` is `queued` when there was no live turn to steer, in which case the
- * instruction waits for the agent like an ordinary message.
- */
-export async function steerBuildPipeline(
-  pipelineId: string,
-  text: string,
-): Promise<{ pipeline: BackendBuildPipeline; delivery: "steered" | "queued" }> {
-  return invoke<{ pipeline: BackendBuildPipeline; delivery: "steered" | "queued" }>(
-    "steer_build_pipeline",
-    { pipelineId, text },
-  );
-}
-
-/**
- * Moves one queued message into the turn the pipeline agent is running now.
- * `notice` is the agent's reason when it refused, or the warning when delivery
- * could not be confirmed.
- */
-export async function steerQueuedBuildPipelineMessage(
-  pipelineId: string,
-  messageId: string,
-): Promise<{
-  pipeline: BackendBuildPipeline;
-  delivery: PipelineQueuedSteerDelivery;
-  notice?: string;
-}> {
-  return invoke<{
-    pipeline: BackendBuildPipeline;
-    delivery: PipelineQueuedSteerDelivery;
-    notice?: string;
-  }>("steer_queued_build_pipeline_message", { pipelineId, messageId });
-}
-
-/** `removed` is false when the message had already left the queue as the next turn. */
-export async function removeQueuedBuildPipelineMessage(
-  pipelineId: string,
-  messageId: string,
-): Promise<{ pipeline: BackendBuildPipeline; removed: boolean }> {
-  return invoke<{ pipeline: BackendBuildPipeline; removed: boolean }>(
-    "remove_queued_build_pipeline_message",
-    { pipelineId, messageId },
-  );
-}
-
-export async function restartBuildPipelineCurrentStep(
-  pipelineId: string,
-): Promise<BackendBuildPipeline> {
-  return invoke<BackendBuildPipeline>("restart_build_pipeline_current_step", { pipelineId });
-}
-
-export async function retryBuildPipelineStage(pipelineId: string): Promise<BackendBuildPipeline> {
-  return invoke<BackendBuildPipeline>("retry_build_pipeline_stage", {
-    pipelineId,
-  });
-}
-
-/** Runs one failed reviewer of the current review pass again. */
-export async function retryBuildPipelineReviewer(
-  pipelineId: string,
-  reviewerId: string,
-): Promise<BackendBuildPipeline> {
-  return invoke<BackendBuildPipeline>("retry_build_pipeline_reviewer", { pipelineId, reviewerId });
-}
-
-/**
- * Runs one reviewer again whatever state it is in, keeping the rest of the panel.
- * `reviewerId` names a live reviewer, or the session of one whose pass has ended.
- */
-export async function restartBuildPipelineReviewer(
-  pipelineId: string,
-  reviewerId: string,
-): Promise<BackendBuildPipeline> {
-  return invoke<BackendBuildPipeline>("restart_build_pipeline_reviewer", {
-    pipelineId,
-    reviewerId,
-  });
-}
-
-/** Stops one reviewer of the running review, keeping the rest of the panel. */
-export async function stopBuildPipelineReviewer(
-  pipelineId: string,
-  reviewerId: string,
-): Promise<BackendBuildPipeline> {
-  return invoke<BackendBuildPipeline>("stop_build_pipeline_reviewer", { pipelineId, reviewerId });
-}
-
-/**
- * Restarts a pipeline step. A `selection` ("Restart in…") runs the step, and
- * every later run of it, on that agent and model instead.
- */
-export async function restartBuildPipelineStep(
-  pipelineId: string,
-  stageId: string,
-  selection?: BuildPipelineRestartSelection,
-): Promise<BackendBuildPipeline> {
-  return invoke<BackendBuildPipeline>("restart_build_pipeline_step", {
-    pipelineId,
-    stageId,
-    ...(selection ? { selection } : {}),
-  });
-}
-
-/** What "Rewind code to here" would drop, read before the user confirms it. */
-export async function previewBuildPipelineCodeRewind(
-  pipelineId: string,
-  stageId: string,
-): Promise<BuildPipelineCodeRewindPreview> {
-  return invoke<BuildPipelineCodeRewindPreview>("preview_build_pipeline_code_rewind", {
-    pipelineId,
-    stageId,
-  });
-}
-
-/**
- * Resets the worktree to the commit a step started from and restarts that
- * step. `expectedHead` is the HEAD the confirmed preview showed.
- */
-export async function rewindBuildPipelineCode(
-  pipelineId: string,
-  stageId: string,
-  expectedHead: string,
-): Promise<BackendBuildPipeline> {
-  return invoke<BackendBuildPipeline>("rewind_build_pipeline_code", {
-    pipelineId,
-    stageId,
-    expectedHead,
-  });
-}
-
-/** Skips the pipeline's current stage and moves on to the next one. */
-export async function skipBuildPipelineStep(
-  pipelineId: string,
-  stageId: string,
-): Promise<BackendBuildPipeline> {
-  return invoke<BackendBuildPipeline>("skip_build_pipeline_step", { pipelineId, stageId });
-}
-
-export async function retryBuildPipelineInteractionFailure(
-  pipelineId: string,
-): Promise<BackendBuildPipeline> {
-  return invoke<BackendBuildPipeline>("retry_build_pipeline_interaction_failure", {
-    pipelineId,
-  });
-}
-
-export async function retryBuildPipelineCompletionComment(
-  pipelineId: string,
-): Promise<BackendBuildPipeline> {
-  return invoke<BackendBuildPipeline>("retry_build_pipeline_completion_comment", { pipelineId });
-}
-
-export async function importLegacyBuildPipelines(
-  projectId: string,
-  snapshots: unknown[],
-): Promise<{ importedIds: string[]; skipped: number }> {
-  return invoke("import_legacy_build_pipelines", { projectId, snapshots });
-}
-
-export async function getBuildPipeline<T = unknown>(
-  pipelineId: string,
-): Promise<PersistedBuildPipeline<T> | null> {
-  return invoke<PersistedBuildPipeline<T> | null>("get_build_pipeline", { pipelineId });
-}
-
-/**
- * Resolve one backend-owned build stage through the same native projection used
- * by an ordinary agent tab. The backend validates both identifiers against the
- * persisted pipeline before adopting the provider session for inspection.
- */
-export async function getBuildPipelineSessionProjection<TMessage = unknown>(input: {
-  pipelineId: string;
-  sessionKey: string;
-  refreshUsage?: boolean;
-}): Promise<NativeAgentSessionProjection<TMessage> | null> {
-  return invoke<NativeAgentSessionProjection<TMessage> | null>(
-    "get_build_pipeline_session_projection",
-    input,
-  );
-}
-
-/**
- * Resolve one Multi Review reviewer's provider session through the native
- * projection, as {@link getBuildPipelineSessionProjection} does for a stage.
- * The backend finds the session from the persisted workflow.
- */
-export async function getMultiReviewReviewerProjection<TMessage = unknown>(input: {
-  workflowId: string;
-  reviewerId: string;
-  refreshUsage?: boolean;
-}): Promise<NativeAgentSessionProjection<TMessage> | null> {
-  return invoke<NativeAgentSessionProjection<TMessage> | null>(
-    "get_multi_review_reviewer_projection",
-    input,
-  );
-}
-
-export type ConditionalBuildPipeline<T> =
-  | { unchanged: true; revision: number }
-  | {
-      unchanged: false;
-      record: PersistedBuildPipeline<T>;
-      messagePatches: Array<{
-        sessionKey: string;
-        baseRevision?: number;
-        baseCount?: number;
-        startIndex: number;
-        revision: number;
-        messages: unknown[];
-        /** The stored transcript could not be read; keep what is held. */
-        unavailable?: true;
-        /** Over the response budget; a later read fetches it. */
-        deferred?: true;
-        /** Some history was not retained by the backend's transcript bound. */
-        complete?: false;
-      }>;
-    }
-  | PersistedBuildPipeline<T>
-  | null;
-
-/**
- * Control state plus transcript windows for the sessions whose bodies the
- * caller does not hold at their committed revision. `knownSessions` names the
- * bodies held (revision and count); omitted sessions come back whole, and
- * `prioritySessionKey` is served first when the response budget runs out.
- */
-export async function getBuildPipelineConditional<T = unknown>(
-  pipelineId: string,
-  knownRevision?: number,
-  knownSessions: Record<string, { revision: number; count: number }> = {},
-  prioritySessionKey?: string,
-): Promise<ConditionalBuildPipeline<T>> {
-  const response = await invoke<unknown>("get_build_pipeline", {
-    pipelineId,
-    knownRevision,
-    knownSessions,
-    ...(prioritySessionKey ? { prioritySessionKey } : {}),
-  });
-  if (response === null) return null;
-  if (!isRecord(response)) {
-    throw new Error("Invalid get_build_pipeline response");
-  }
-  if (!("unchanged" in response)) {
-    if (typeof response.id !== "string") {
-      throw new Error("Invalid get_build_pipeline response");
-    }
-    return response as unknown as PersistedBuildPipeline<T>;
-  }
-  if (
-    response.unchanged === true &&
-    Number.isSafeInteger(response.revision) &&
-    (response.revision as number) >= 0
-  ) {
-    return response as { unchanged: true; revision: number };
-  }
-  if (
-    response.unchanged !== false ||
-    !isRecord(response.record) ||
-    typeof response.record.id !== "string" ||
-    !Array.isArray(response.messagePatches) ||
-    !response.messagePatches.every((value) => {
-      if (!isRecord(value)) return false;
-      return (
-        typeof value.sessionKey === "string" &&
-        Number.isSafeInteger(value.startIndex) &&
-        (value.startIndex as number) >= 0 &&
-        Number.isSafeInteger(value.revision) &&
-        (value.revision as number) >= 0 &&
-        (value.baseRevision === undefined ||
-          (Number.isSafeInteger(value.baseRevision) && (value.baseRevision as number) >= 0)) &&
-        (value.baseCount === undefined ||
-          (Number.isSafeInteger(value.baseCount) && (value.baseCount as number) >= 0)) &&
-        (value.unavailable === undefined || value.unavailable === true) &&
-        (value.deferred === undefined || value.deferred === true) &&
-        (value.complete === undefined || value.complete === false) &&
-        Array.isArray(value.messages)
-      );
-    })
-  ) {
-    throw new Error("Invalid get_build_pipeline response");
-  }
-  return response as unknown as ConditionalBuildPipeline<T>;
-}
-
-/**
- * Control state only: `unchanged` when the record is still at `knownRevision`,
- * otherwise the record without any transcript body.
- */
-export async function getBuildPipelineControl<T = unknown>(
-  pipelineId: string,
-  knownRevision?: number,
-): Promise<{ unchanged: true; revision: number } | PersistedBuildPipeline<T> | null> {
-  const response = await invoke<unknown>("get_build_pipeline", {
-    pipelineId,
-    ...(knownRevision === undefined ? {} : { knownRevision }),
-  });
-  if (response === null) return null;
-  if (
-    isRecord(response) &&
-    response.unchanged === true &&
-    Number.isSafeInteger(response.revision) &&
-    (response.revision as number) >= 0
-  ) {
-    return response as { unchanged: true; revision: number };
-  }
-  if (!isRecord(response) || "unchanged" in response || typeof response.id !== "string") {
-    throw new Error("Invalid get_build_pipeline response");
-  }
-  return response as unknown as PersistedBuildPipeline<T>;
-}
-
-export async function listBuildPipelines<T = unknown>(
-  projectId: string,
-): Promise<Array<PersistedBuildPipeline<T>>> {
-  return hydrationRequests.run(() =>
-    invoke<Array<PersistedBuildPipeline<T>>>("list_build_pipelines", { projectId }),
-  );
-}
-
-export async function listBuildPipelinesConditional<T = unknown>(
-  projectId: string,
-  knownRevisions: Record<string, number>,
-): Promise<{ ids: string[]; records: Array<PersistedBuildPipeline<T>> }> {
-  const response = await hydrationRequests.run(() =>
-    invoke<unknown>("list_build_pipelines", {
-      projectId,
-      knownRevisions,
-    }),
-  );
-  // Older backends ignore knownRevisions and return the complete record array.
-  if (Array.isArray(response)) {
-    if (!response.every((entry) => isRecord(entry) && typeof entry.id === "string")) {
-      throw new Error("Invalid list_build_pipelines response");
-    }
-    return {
-      ids: response.map((entry) => entry.id as string),
-      records: response as Array<PersistedBuildPipeline<T>>,
-    };
-  }
-  if (
-    !isRecord(response) ||
-    !Array.isArray(response.ids) ||
-    !response.ids.every((id) => typeof id === "string") ||
-    !Array.isArray(response.records) ||
-    !response.records.every((entry) => isRecord(entry) && typeof entry.id === "string")
-  ) {
-    throw new Error("Invalid list_build_pipelines response");
-  }
-  return response as unknown as {
-    ids: string[];
-    records: Array<PersistedBuildPipeline<T>>;
-  };
-}
-
-export async function deleteBuildPipeline(pipelineId: string): Promise<void> {
-  return invoke("delete_build_pipeline", { pipelineId });
-}
-
-export async function clearTaskBuildStatus(taskId: string): Promise<{
-  task: KanbanTask;
-  removedPipelineIds: string[];
-}> {
-  return invoke("clear_task_build_status", { taskId });
-}
-
-/**
- * Marks or clears the environment's unread badge.
- *
- * A dedicated command rather than a general update so two clients racing on the
- * badge cannot clobber each other's unrelated environment fields.
- */
-export async function setEnvironmentUnread(
-  environmentId: string,
-  unread: boolean,
-  expectedLastActivityAt?: string | null,
-): Promise<Environment> {
-  return invoke<Environment>("set_environment_unread", {
-    environmentId,
-    unread,
-    ...(expectedLastActivityAt === undefined ? {} : { expectedLastActivityAt }),
-  });
-}
+export type { ConditionalBuildPipeline } from "./build-pipelines";
 
 // --- Prompt Queues ---
 
-export async function getPromptQueue<T = unknown>(
-  queueKey: string,
-): Promise<PersistedPromptQueue<T> | null> {
-  return invoke<PersistedPromptQueue<T> | null>("get_prompt_queue", { queueKey });
-}
-
-export async function listPromptQueues<T = unknown>(
-  environmentId: string,
-): Promise<Array<PersistedPromptQueue<T>>> {
-  return hydrationRequests.run(() =>
-    invoke<Array<PersistedPromptQueue<T>>>("list_prompt_queues", { environmentId }),
-  );
-}
-
-/**
- * Prompt queues and Multi Review workflows for up to
- * `MAX_ENVIRONMENT_HYDRATION_IDS` environments in one bounded request. A
- * backend before this command rejects it as unknown; callers fall back to the
- * per-environment reads (`boot-hydration.ts`).
- */
-export async function listEnvironmentHydration(
-  environmentIds: string[],
-): Promise<EnvironmentHydrationBatch<PersistedPromptQueue, PersistedWorkflowRecord<unknown>>> {
-  const response = await hydrationRequests.run(() =>
-    invoke<unknown>(LIST_ENVIRONMENT_HYDRATION_COMMAND, { environmentIds }),
-  );
-  if (!isEnvironmentHydrationBatch(response)) {
-    throw new Error(`Invalid ${LIST_ENVIRONMENT_HYDRATION_COMMAND} response`);
-  }
-  return response as EnvironmentHydrationBatch<
-    PersistedPromptQueue,
-    PersistedWorkflowRecord<unknown>
-  >;
-}
-
-export async function enqueuePromptQueueMessage<T>(
-  queueKey: string,
-  environmentId: string,
-  message: T,
-): Promise<PersistedPromptQueue<T>> {
-  return invoke<PersistedPromptQueue<T>>("enqueue_prompt_queue_message", {
-    queueKey,
-    environmentId,
-    message,
-  });
-}
-
-export async function removePromptQueueMessage<T>(
-  queueKey: string,
-  environmentId: string,
-  messageId: string,
-): Promise<{
-  removed: T | null;
-  queue: PersistedPromptQueue<T> | null;
-}> {
-  return invoke("remove_prompt_queue_message", {
-    queueKey,
-    environmentId,
-    messageId,
-  });
-}
-
-export async function movePromptQueueMessage<T>(
-  queueKey: string,
-  environmentId: string,
-  messageId: string,
-  direction: "up" | "down",
-): Promise<PersistedPromptQueue<T> | null> {
-  return invoke<PersistedPromptQueue<T> | null>("move_prompt_queue_message", {
-    queueKey,
-    environmentId,
-    messageId,
-    direction,
-  });
-}
-
-export async function retryPromptQueueDispatch<T = unknown>(
-  queueKey: string,
-): Promise<PersistedPromptQueue<T> | null> {
-  return invoke<PersistedPromptQueue<T> | null>("retry_prompt_queue_dispatch", { queueKey });
-}
-
 // --- Unsent drafts ---
-
-export async function getComposeDraft<T = unknown>(
-  draftKey: string,
-): Promise<PersistedComposeDraft<T> | null> {
-  return invoke<PersistedComposeDraft<T> | null>("get_compose_draft", { draftKey });
-}
-
-export async function listComposeDrafts<T = unknown>(
-  ownerType: "environment" | "project",
-  ownerId: string,
-): Promise<Array<PersistedComposeDraft<T>>> {
-  return invoke<Array<PersistedComposeDraft<T>>>("list_compose_drafts", {
-    ownerType,
-    ownerId,
-  });
-}
-
-export async function saveComposeDraft<T>(
-  draftKey: string,
-  ownerType: "environment" | "project",
-  ownerId: string,
-  value: T,
-  expectedRevision?: number,
-): Promise<PersistedComposeDraft<T>> {
-  return invoke<PersistedComposeDraft<T>>("save_compose_draft", {
-    draftKey,
-    ownerType,
-    ownerId,
-    value,
-    ...(expectedRevision === undefined ? {} : { expectedRevision }),
-  });
-}
-
-export async function deleteComposeDraft(
-  draftKey: string,
-  expectedRevision?: number,
-): Promise<void> {
-  return invoke("delete_compose_draft", {
-    draftKey,
-    ...(expectedRevision === undefined ? {} : { expectedRevision }),
-  });
-}
-
-export async function getFileDraft(draftKey: string): Promise<PersistedFileDraft | null> {
-  return invoke<PersistedFileDraft | null>("get_file_draft", { draftKey });
-}
-
-export async function saveFileDraft(
-  draftKey: string,
-  environmentId: string,
-  filePath: string,
-  content: string,
-  originalContent: string,
-  expectedRevision?: number,
-): Promise<PersistedFileDraft> {
-  return invoke<PersistedFileDraft>("save_file_draft", {
-    draftKey,
-    environmentId,
-    filePath,
-    content,
-    originalContent,
-    ...(expectedRevision === undefined ? {} : { expectedRevision }),
-  });
-}
-
-export async function deleteFileDraft(draftKey: string, expectedRevision?: number): Promise<void> {
-  return invoke("delete_file_draft", {
-    draftKey,
-    ...(expectedRevision === undefined ? {} : { expectedRevision }),
-  });
-}
 
 // --- Local Server Commands (for local/worktree environments) ---
 
-/** Join the backend-owned startup wait for one environment/provider pair. */
-export async function awaitBridgeReady(
-  environmentId: string,
-  agent: AgentBridgeKind,
-  timeoutMs = 60_000,
-): Promise<AwaitBridgeReadyResult> {
-  const result = await invoke<unknown>("await_bridge_ready", {
-    environmentId,
-    agent,
-    timeoutMs,
-  });
-  if (!isAwaitBridgeReadyResult(result)) {
-    throw new Error("Backend returned an invalid bridge readiness result");
-  }
-  return result;
-}
-
 // --- Local Terminal Commands (for local/worktree environments) ---
 
-/** Create a local terminal session for a local environment */
-export async function createLocalTerminalSession(
-  environmentId: string,
-  cols: number,
-  rows: number,
-  trackEnvironmentActivity = false,
-  terminalKey?: string,
-): Promise<TerminalSessionCreateResult> {
-  const result = await invoke<unknown>("create_local_terminal_session", {
-    environmentId,
-    cols,
-    rows,
-    trackEnvironmentActivity,
-    terminalKey,
-  });
-  return parseTerminalSessionCreateResult(result);
-}
-
-/** Start a local terminal session and begin forwarding output */
-export async function startLocalTerminalSession(sessionId: string): Promise<void> {
-  return invoke("start_local_terminal_session", { sessionId });
-}
-
 /**
- * Write data to a local terminal session. Resolves to whether the backend
- * actually reached a live PTY; see `terminalWriteWasDelivered`.
+ * This file's commands on `client`'s node (plan item 3002). A scoped store or
+ * service passes its own node's client; the named exports below are this
+ * over the window's command scope.
  */
-export async function writeLocalTerminal(sessionId: string, data: string): Promise<boolean> {
-  return terminalWriteWasDelivered(await invoke("local_terminal_write", { sessionId, data }));
+export function createWorkflowsApi(client: BackendClient) {
+  // Build pipelines and Multi Review live in their own files (plan item 7007).
+  const buildPipelinesApi = createBuildPipelinesApi(client);
+  const multiReviewsApi = createMultiReviewsApi(client);
+  const native = () => nativeSessions(client);
+  // The `terminals` domain client for local terminals (plan item 7002).
+  const terminalsDomain = () => terminals(client);
+
+  /**
+   * Launch work whose tab is a projection of a backend-owned native session.
+   *
+   * The command persists the tab and dispatch intent before it returns, so the
+   * job never waits for that tab (or even its environment) to be mounted.
+   */
+  async function launchNativeAgentJob(input: {
+    requestId: string;
+    environmentId: string;
+    /** The id of the tab this launch creates; a reused tab answers with its own. */
+    tabId?: string;
+    agent: NativeAgentClientPlatform;
+    prompt: string;
+    title?: string;
+    modelId?: string;
+    reasoningId?: string;
+    fastMode?: boolean;
+    conversationMode?: "plan" | "build";
+    completionAction?: "refresh-pr-after-agent-completion";
+    /**
+     * Send to the most recent open tab of the same job when it can take a prompt,
+     * and only otherwise open a new one. `same-agent` restricts that to the chosen
+     * agent and applies the chosen model; `any-agent` keeps the tab's own.
+     */
+    tabReuse?: "any-agent" | "same-agent";
+    activateTab?: boolean;
+  }): Promise<NativeAgentJobLaunchResult> {
+    return coordinatorApi(client).launch_native_agent_job(
+      input,
+    ) as Promise<NativeAgentJobLaunchResult>;
+  }
+
+  async function ensureNativeAgentSession(input: {
+    environmentId: string;
+    agent: NativeAgentClientPlatform;
+    logicalSessionKey: string;
+    origin?: AgentInteractionOrigin;
+    interactionPolicy?: AgentInteractionPolicy;
+    title?: string;
+    model?: string;
+    /** Only inherited defaults may be substituted when their provider is disconnected. */
+    modelSource?: "default" | "explicit";
+    reasoningEffort?: string;
+    phase?: "build" | "review" | "verify" | "fix" | "pr" | "resolve-conflicts";
+    /**
+     * Overrides the mode the phase would imply, for a session whose phase-derived
+     * mode does not match what it must do (a review session that has to commit
+     * changes would fail in a phase-derived read-only session).
+     */
+    sessionMode?: "plan" | "build";
+    fastMode?: boolean;
+    executionProfileId?: string;
+    parameterValues?: Record<string, string | boolean>;
+  }): Promise<PersistedNativeAgentSession & { modelSubstitution?: NativeAgentModelSubstitution }> {
+    return asWebModel<
+      PersistedNativeAgentSession & { modelSubstitution?: NativeAgentModelSubstitution }
+    >(native().ensure_native_agent_session(input));
+  }
+
+  async function adoptNativeAgentSession(input: {
+    environmentId: string;
+    agent: NativeAgentClientPlatform;
+    logicalSessionKey: string;
+    origin?: AgentInteractionOrigin;
+    interactionPolicy?: AgentInteractionPolicy;
+    providerSessionId: string;
+    expectedProviderSessionId?: string;
+    model?: string;
+    reasoningEffort?: string;
+    sessionMode?: "plan" | "build";
+    fastMode?: boolean;
+    executionProfileId?: string;
+    controls?: NativeAgentControlUpdate;
+  }): Promise<PersistedNativeAgentSession> {
+    return asWebModel<PersistedNativeAgentSession>(native().adopt_native_agent_session(input));
+  }
+
+  async function getNativeAgentSession(input: {
+    environmentId: string;
+    agent: NativeAgentClientPlatform;
+    logicalSessionKey: string;
+  }): Promise<PersistedNativeAgentSession | null> {
+    return asWebModel<PersistedNativeAgentSession | null>(native().get_native_agent_session(input));
+  }
+
+  async function getNativeAgentProjection<TMessage = unknown>(input: {
+    environmentId: string;
+    agent: NativeAgentClientPlatform;
+    logicalSessionKey: string;
+    /** Omit to keep the window this session already has; never to shrink it. */
+    messageLimit?: number;
+    /** Request the provider's detailed billing/quota snapshot. */
+    refreshUsage?: boolean;
+  }): Promise<NativeAgentSessionProjection<TMessage> | null> {
+    return asWebModel(native().get_native_agent_projection(input));
+  }
+
+  async function getNativeAgentSyncCapabilities(): Promise<{
+    projectionSyncVersions: number[];
+    historyPagingVersions: number[];
+    progressiveViewVersions?: number[];
+    /** Stamped, session-scoped activity announcements (step 07). */
+    observationEventVersions?: number[];
+    /** Part-level patches inside transcript deltas (efficiency step 14). */
+    transcriptPatchVersions?: number[];
+    /** One request for transcript and state (`get_native_agent_live_update`). */
+    liveUpdateVersions?: number[];
+  }> {
+    // Folded into native-sessions version 1: such a node answers without a round trip.
+    const response = await native().syncCapabilities();
+    if (!response || typeof response !== "object" || Array.isArray(response)) {
+      throw new Error("Invalid native agent sync capabilities response");
+    }
+    const candidate = response as Record<string, unknown>;
+    if (
+      !Array.isArray(candidate.projectionSyncVersions) ||
+      candidate.projectionSyncVersions.length > 16 ||
+      !candidate.projectionSyncVersions.every(Number.isSafeInteger) ||
+      !Array.isArray(candidate.historyPagingVersions) ||
+      candidate.historyPagingVersions.length > 16 ||
+      !candidate.historyPagingVersions.every(Number.isSafeInteger) ||
+      (candidate.progressiveViewVersions !== undefined &&
+        (!Array.isArray(candidate.progressiveViewVersions) ||
+          candidate.progressiveViewVersions.length > 16 ||
+          !candidate.progressiveViewVersions.every(Number.isSafeInteger))) ||
+      (candidate.observationEventVersions !== undefined &&
+        (!Array.isArray(candidate.observationEventVersions) ||
+          candidate.observationEventVersions.length > 16 ||
+          !candidate.observationEventVersions.every(Number.isSafeInteger))) ||
+      (candidate.transcriptPatchVersions !== undefined &&
+        (!Array.isArray(candidate.transcriptPatchVersions) ||
+          candidate.transcriptPatchVersions.length > 16 ||
+          !candidate.transcriptPatchVersions.every(Number.isSafeInteger))) ||
+      (candidate.liveUpdateVersions !== undefined &&
+        (!Array.isArray(candidate.liveUpdateVersions) ||
+          candidate.liveUpdateVersions.length > 16 ||
+          !candidate.liveUpdateVersions.every(Number.isSafeInteger)))
+    ) {
+      throw new Error("Invalid native agent sync capabilities response");
+    }
+    return response as {
+      projectionSyncVersions: number[];
+      historyPagingVersions: number[];
+      progressiveViewVersions?: number[];
+      observationEventVersions?: number[];
+      transcriptPatchVersions?: number[];
+      liveUpdateVersions?: number[];
+    };
+  }
+
+  async function getNativeAgentTranscriptUpdate<TMessage = unknown>(input: {
+    environmentId: string;
+    agent: NativeAgentClientPlatform;
+    logicalSessionKey: string;
+    viewVersion: 1;
+    liveWindow: NativeAgentLiveWindow;
+    knownToken?: string;
+    forceSnapshot?: boolean;
+    /** Ask for part-level patches; only when the backend advertised them. */
+    patchVersion?: 2;
+  }): Promise<NativeAgentTranscriptUpdate<TMessage>> {
+    const response = await native().get_native_agent_transcript_update(input);
+    if (
+      new TextEncoder().encode(JSON.stringify(response)).byteLength >
+      NATIVE_AGENT_SYNC_MAX_SNAPSHOT_BYTES
+    ) {
+      throw new Error("Native agent transcript update response exceeded 20 MiB");
+    }
+    if (!isNativeAgentTranscriptUpdate(response)) {
+      throw new Error("Invalid native agent transcript update response");
+    }
+    return response as NativeAgentTranscriptUpdate<TMessage>;
+  }
+
+  async function getNativeAgentSessionStateUpdate(input: {
+    environmentId: string;
+    agent: NativeAgentClientPlatform;
+    logicalSessionKey: string;
+    viewVersion: 1;
+    knownToken?: string;
+    forceSnapshot?: boolean;
+  }): Promise<NativeAgentSessionStateUpdate> {
+    const response = await native().get_native_agent_session_state_update(input);
+    if (!isNativeAgentSessionStateUpdate(response)) {
+      throw new Error("Invalid native agent session-state update response");
+    }
+    return response;
+  }
+
+  async function getNativeAgentLiveUpdate<TMessage = unknown>(input: {
+    environmentId: string;
+    agent: NativeAgentClientPlatform;
+    logicalSessionKey: string;
+    viewVersion: 1;
+    liveWindow: NativeAgentLiveWindow;
+    transcriptToken?: string;
+    stateToken?: string;
+    /** Ask for part-level patches; only when the backend advertised them. */
+    patchVersion?: 2;
+  }): Promise<NativeAgentLiveUpdate<TMessage>> {
+    const response = await native().get_native_agent_live_update(input);
+    if (
+      new TextEncoder().encode(JSON.stringify(response)).byteLength >
+      NATIVE_AGENT_SYNC_MAX_SNAPSHOT_BYTES
+    ) {
+      throw new Error("Native agent live update response exceeded 20 MiB");
+    }
+    if (!isNativeAgentLiveUpdate(response)) {
+      throw new Error("Invalid native agent live update response");
+    }
+    return response as NativeAgentLiveUpdate<TMessage>;
+  }
+
+  async function getNativeAgentDiscoveryUpdate(input: {
+    environmentId: string;
+    agent: NativeAgentClientPlatform;
+    logicalSessionKey: string;
+    viewVersion: 1;
+    sections: NativeAgentDiscoverySection[];
+    knownToken?: string;
+    forceSnapshot?: boolean;
+  }): Promise<NativeAgentDiscoveryUpdate> {
+    const response = await native().get_native_agent_discovery_update(input);
+    if (!isNativeAgentDiscoveryUpdate(response)) {
+      throw new Error("Invalid native agent discovery update response");
+    }
+    return response;
+  }
+
+  async function getNativeAgentProjectionUpdate<TMessage = unknown>(input: {
+    environmentId: string;
+    agent: NativeAgentClientPlatform;
+    logicalSessionKey: string;
+    syncVersion: 1;
+    liveWindow: NativeAgentLiveWindow;
+    knownToken?: string;
+    forceSnapshot?: boolean;
+  }): Promise<NativeAgentProjectionUpdate<TMessage>> {
+    const response = await native().get_native_agent_projection_update(input);
+    if (
+      new TextEncoder().encode(JSON.stringify(response)).byteLength >
+      NATIVE_AGENT_SYNC_MAX_SNAPSHOT_BYTES
+    ) {
+      throw new Error("Native agent projection update response exceeded 20 MiB");
+    }
+    if (!isNativeAgentProjectionUpdate(response)) {
+      throw new Error("Invalid native agent projection update response");
+    }
+    return response as NativeAgentProjectionUpdate<TMessage>;
+  }
+
+  async function getNativeAgentMessagePage<TMessage = unknown>(input: {
+    environmentId: string;
+    agent: NativeAgentClientPlatform;
+    logicalSessionKey: string;
+    syncVersion: 1;
+    before: string;
+    limit?: number;
+    targetBytes?: number;
+  }): Promise<NativeAgentMessagePage<TMessage>> {
+    const response = await native().get_native_agent_message_page(input);
+    if (
+      new TextEncoder().encode(JSON.stringify(response)).byteLength >
+      NATIVE_AGENT_SYNC_MAX_PAGE_BYTES
+    ) {
+      throw new Error("Native agent message page response exceeded its limit");
+    }
+    if (!isNativeAgentMessagePage(response)) {
+      throw new Error("Invalid native agent message page response");
+    }
+    return response as NativeAgentMessagePage<TMessage>;
+  }
+
+  async function getNativeAgentToolDetails(input: {
+    environmentId: string;
+    agent: NativeAgentClientPlatform;
+    logicalSessionKey: string;
+    detailRef: string;
+  }): Promise<NativeAgentToolDetails> {
+    return asWebModel(native().get_native_agent_tool_details(input));
+  }
+
+  async function refreshNativeAgentModels<TMessage = unknown>(input: {
+    environmentId: string;
+    agent: NativeAgentClientPlatform;
+    logicalSessionKey: string;
+  }): Promise<NativeAgentSessionProjection<TMessage> | null> {
+    return asWebModel(native().refresh_native_agent_models(input));
+  }
+
+  async function refreshNativeAgentCommands<TMessage = unknown>(input: {
+    environmentId: string;
+    agent: NativeAgentClientPlatform;
+    logicalSessionKey: string;
+  }): Promise<NativeAgentCommandRefreshResult<TMessage>> {
+    return asWebModel(native().refresh_native_agent_commands(input));
+  }
+
+  async function stopNativeAgentSession<TMessage = unknown>(input: {
+    environmentId: string;
+    agent: NativeAgentClientPlatform;
+    logicalSessionKey: string;
+  }): Promise<NativeAgentSessionProjection<TMessage> | null> {
+    return asWebModel(native().stop_native_agent_session(input));
+  }
+
+  /**
+   * Run `/goal` now, whether or not a turn is running. `text` is what follows the
+   * command name; it never goes through the prompt queue.
+   */
+  async function runNativeAgentGoalCommand(input: {
+    environmentId: string;
+    agent: NativeAgentClientPlatform;
+    logicalSessionKey: string;
+    text: string;
+    model?: string;
+  }): Promise<NativeAgentGoalCommandResult> {
+    return asWebModel(native().native_agent_goal_command(input));
+  }
+
+  async function getNativeAgentGoal(input: {
+    environmentId: string;
+    agent: NativeAgentClientPlatform;
+    logicalSessionKey: string;
+  }): Promise<NativeAgentGoalDetail> {
+    return asWebModel(native().get_native_agent_goal(input));
+  }
+
+  /** Stops a session's running suborks: one call's, or every call's when `batchId` is absent. */
+  async function stopNativeAgentSuborks(input: {
+    environmentId: string;
+    agent: NativeAgentClientPlatform;
+    logicalSessionKey: string;
+    batchId?: string;
+  }): Promise<void> {
+    await native().stop_native_agent_suborks(input);
+  }
+
+  async function getNativeAgentSuborkTranscript(input: {
+    environmentId: string;
+    batchId: string;
+    suborkId: string;
+    fromIndex?: number;
+  }): Promise<NativeAgentSuborkTranscript> {
+    return asWebModel(native().native_agent_subork_transcript(input));
+  }
+
+  async function stopNativeAgentBackgroundTask<TMessage = unknown>(input: {
+    environmentId: string;
+    agent: NativeAgentClientPlatform;
+    logicalSessionKey: string;
+    taskId: string;
+  }): Promise<NativeAgentSessionProjection<TMessage> | null> {
+    return asWebModel(native().stop_native_agent_background_task(input));
+  }
+
+  async function dismissNativeAgentSuggestedPrompt<TMessage = unknown>(input: {
+    environmentId: string;
+    agent: NativeAgentClientPlatform;
+    logicalSessionKey: string;
+  }): Promise<NativeAgentSessionProjection<TMessage> | null> {
+    return asWebModel(native().dismiss_native_agent_suggested_prompt(input));
+  }
+
+  async function listNativeAgentResumableSessions(input: {
+    environmentId: string;
+    agent: NativeAgentClientPlatform;
+    logicalSessionKey: string;
+    /** Also lists conversations taken out of the list, flagged `archived`. */
+    includeArchived?: boolean;
+  }): Promise<NativeAgentResumeEntry[]> {
+    return asWebModel(native().list_native_agent_resumable_sessions(input));
+  }
+
+  /** Takes a conversation out of the resume list, or puts it back. Never a delete. */
+  async function setNativeAgentResumableSessionArchived(input: {
+    environmentId: string;
+    agent: NativeAgentClientPlatform;
+    logicalSessionKey: string;
+    resumableSessionId: string;
+    archived: boolean;
+  }): Promise<{ archived: boolean }> {
+    return native().set_native_agent_resumable_session_archived(input);
+  }
+
+  async function resumeNativeAgentSession<TMessage = unknown>(input: {
+    environmentId: string;
+    agent: NativeAgentClientPlatform;
+    logicalSessionKey: string;
+    providerSessionId: string;
+    controls?: NativeAgentControlUpdate;
+  }): Promise<NativeAgentSessionProjection<TMessage> | null> {
+    return asWebModel(native().resume_native_agent_session(input));
+  }
+
+  async function forkNativeAgentSession(input: {
+    environmentId: string;
+    agent: NativeAgentClientPlatform;
+    logicalSessionKey: string;
+    messageId?: string;
+  }): Promise<NativeAgentForkOutcome> {
+    return asWebModel(native().fork_native_agent_session(input));
+  }
+
+  async function updateNativeAgentControls<TMessage = unknown>(input: {
+    environmentId: string;
+    agent: NativeAgentClientPlatform;
+    logicalSessionKey: string;
+    update: NativeAgentControlUpdate;
+  }): Promise<NativeAgentSessionProjection<TMessage> | null> {
+    return asWebModel(native().update_native_agent_controls(input));
+  }
+
+  async function steerNativeAgentQueuedPrompt(input: {
+    environmentId: string;
+    agent: NativeAgentClientPlatform;
+    logicalSessionKey: string;
+    messageId: string;
+  }): Promise<NativeAgentSessionActionOutcome | null> {
+    return asWebModel(native().steer_native_agent_queued_prompt(input));
+  }
+
+  async function performNativeAgentSessionAction(input: {
+    environmentId: string;
+    agent: NativeAgentClientPlatform;
+    logicalSessionKey: string;
+    action: NativeAgentSessionAction;
+  }): Promise<NativeAgentSessionActionOutcome> {
+    return asWebModel(native().perform_native_agent_session_action(input));
+  }
+
+  async function performNativeAgentMcpAction(input: {
+    environmentId: string;
+    agent: NativeAgentClientPlatform;
+    logicalSessionKey: string;
+    serverId: string;
+    action: NativeAgentMcpServerAction;
+  }): Promise<{ url?: string }> {
+    return native().perform_native_agent_mcp_action(input);
+  }
+
+  /**
+   * Read the provider's account now. Not part of the projection: an account read
+   * can reach the provider's auth service, so ask only when the answer is shown.
+   */
+  async function getNativeAgentAuthStatus(input: {
+    environmentId: string;
+    agent: NativeAgentClientPlatform;
+    logicalSessionKey: string;
+  }): Promise<NativeAgentAuthStatus | null> {
+    return asWebModel(native().get_native_agent_auth_status(input));
+  }
+
+  async function beginNativeAgentSignIn(input: {
+    environmentId: string;
+    agent: NativeAgentClientPlatform;
+    logicalSessionKey: string;
+    /** Ask for a device code: the browser cannot reach the agent's loopback. */
+    deviceCode?: boolean;
+  }): Promise<{ url?: string; code?: string }> {
+    return native().begin_native_agent_sign_in(input);
+  }
+
+  /** Abandon an in-tab sign-in so the provider stops waiting for it. */
+  async function cancelNativeAgentSignIn(input: {
+    environmentId: string;
+    agent: NativeAgentClientPlatform;
+    logicalSessionKey: string;
+  }): Promise<{ cancelled: boolean }> {
+    return native().cancel_native_agent_sign_in(input);
+  }
+
+  async function signOutNativeAgent(input: {
+    environmentId: string;
+    agent: NativeAgentClientPlatform;
+    logicalSessionKey: string;
+  }): Promise<void> {
+    await native().sign_out_native_agent(input);
+  }
+
+  async function resolveNativeAgentInteraction(input: {
+    environmentId: string;
+    agent: NativeAgentClientPlatform;
+    logicalSessionKey: string;
+    interactionId: string;
+    resolution: AgentInteractionResolution;
+  }): Promise<AgentInteractionApplyOutcome> {
+    return asWebModel(native().resolve_native_agent_interaction(input));
+  }
+
+  /** Pause (`held`) or resume an interaction's countdown where the agent enforces it. */
+  async function holdNativeAgentInteraction(input: {
+    environmentId: string;
+    agent: NativeAgentClientPlatform;
+    logicalSessionKey: string;
+    interactionId: string;
+    held: boolean;
+  }): Promise<AgentInteractionApplyOutcome> {
+    return asWebModel(native().hold_native_agent_interaction(input));
+  }
+
+  async function dispatchNativeAgentPrompt(input: {
+    environmentId: string;
+    agent: NativeAgentClientPlatform;
+    logicalSessionKey: string;
+    origin?: AgentInteractionOrigin;
+    interactionPolicy?: AgentInteractionPolicy;
+    title?: string;
+    model?: string;
+    reasoningEffort?: string;
+    phase?: "build" | "review" | "verify" | "fix" | "pr" | "resolve-conflicts";
+    prompt: string;
+    requestId: string;
+    images?: Array<{ filename: string; data: string }>;
+    schema?: Record<string, unknown>;
+    mode?: "plan" | "build";
+    fastMode?: boolean;
+    /** Absent is legacy behaviour: the backend treats the text as typed. */
+    command?: NativeAgentCommandIntent;
+  }): Promise<PersistedNativeAgentSession> {
+    return asWebModel<PersistedNativeAgentSession>(native().dispatch_native_agent_prompt(input));
+  }
+
+  async function dispatchNativeAgentIntent(input: {
+    environmentId: string;
+    agent: NativeAgentClientPlatform;
+    logicalSessionKey: string;
+    origin?: AgentInteractionOrigin;
+    interactionPolicy?: AgentInteractionPolicy;
+    title?: string;
+    model?: string;
+    modelSource?: "default" | "explicit";
+    reasoningEffort?: string;
+    phase?: "build" | "review" | "verify" | "fix" | "pr" | "resolve-conflicts";
+    prompt: string;
+    requestId: string;
+    images?: Array<{ filename: string; data: string }>;
+    attachments?: Array<{
+      type: "image" | "file";
+      path: string;
+      dataUrl?: string;
+      filename?: string;
+    }>;
+    schema?: Record<string, unknown>;
+    mode?: "plan" | "build";
+    fastMode?: boolean;
+    subAgent?: string;
+    executionAgent?: string;
+    includeLocalSettings?: boolean;
+    promptSuggestions?: boolean;
+    sessionMode?: "plan" | "build";
+    executionProfileId?: string;
+    parameterValues?: Record<string, string | boolean>;
+    /** Approval mode for a session this dispatch creates. */
+    approvalMode?: string;
+    /**
+     * How to interpret the prompt. Absent is legacy behaviour (typed). For a
+     * non-literal intent the backend keeps the prompt bytes, trimming only
+     * leading whitespace, so a command's arguments arrive exactly as typed.
+     */
+    command?: NativeAgentCommandIntent;
+    /** Defaults to this device's zone; a coordinator reads its user's zone from it. */
+    clientTimeZone?: string;
+  }): Promise<NativeAgentDispatchOutcome> {
+    return asWebModel<NativeAgentDispatchOutcome>(
+      native().dispatch_native_agent_intent({
+        ...input,
+        clientTimeZone: input.clientTimeZone ?? hostTimeZone(),
+      }),
+    );
+  }
+
+  async function retryNativeAgentDispatch(input: {
+    environmentId: string;
+    agent: NativeAgentClientPlatform;
+    logicalSessionKey: string;
+    requestId: string;
+  }): Promise<NativeAgentDispatchOutcome> {
+    return asWebModel<NativeAgentDispatchOutcome>(native().retry_native_agent_dispatch(input));
+  }
+
+  async function discardNativeAgentDispatch(input: {
+    environmentId: string;
+    agent: NativeAgentClientPlatform;
+    logicalSessionKey: string;
+    requestId: string;
+  }): Promise<{ discarded: boolean }> {
+    return native().discard_native_agent_dispatch(input);
+  }
+
+  async function getPromptQueue<T = unknown>(
+    queueKey: string,
+  ): Promise<PersistedPromptQueue<T> | null> {
+    return asWebModel<PersistedPromptQueue<T> | null>(native().get_prompt_queue({ queueKey }));
+  }
+
+  async function listPromptQueues<T = unknown>(
+    environmentId: string,
+  ): Promise<Array<PersistedPromptQueue<T>>> {
+    return hydrationRequests.run(() =>
+      asWebModel<Array<PersistedPromptQueue<T>>>(native().list_prompt_queues({ environmentId })),
+    );
+  }
+
+  /**
+   * Prompt queues and Multi Review workflows for up to
+   * `MAX_ENVIRONMENT_HYDRATION_IDS` environments in one bounded request. A
+   * backend before this command rejects it as unknown; callers fall back to the
+   * per-environment reads (`boot-hydration.ts`).
+   */
+  async function listEnvironmentHydration(
+    environmentIds: string[],
+  ): Promise<EnvironmentHydrationBatch<PersistedPromptQueue, PersistedWorkflowRecord<unknown>>> {
+    const response = await hydrationRequests.run(() =>
+      native().list_environment_hydration({ environmentIds }),
+    );
+    if (!isEnvironmentHydrationBatch(response)) {
+      throw new Error(`Invalid ${LIST_ENVIRONMENT_HYDRATION_COMMAND} response`);
+    }
+    return response as EnvironmentHydrationBatch<
+      PersistedPromptQueue,
+      PersistedWorkflowRecord<unknown>
+    >;
+  }
+
+  async function enqueuePromptQueueMessage<T>(
+    queueKey: string,
+    environmentId: string,
+    message: T,
+  ): Promise<PersistedPromptQueue<T>> {
+    return asWebModel<PersistedPromptQueue<T>>(
+      native().enqueue_prompt_queue_message({
+        queueKey,
+        environmentId,
+        message,
+      }),
+    );
+  }
+
+  async function removePromptQueueMessage<T>(
+    queueKey: string,
+    environmentId: string,
+    messageId: string,
+  ): Promise<{
+    removed: T | null;
+    queue: PersistedPromptQueue<T> | null;
+  }> {
+    return asWebModel(
+      native().remove_prompt_queue_message({
+        queueKey,
+        environmentId,
+        messageId,
+      }),
+    );
+  }
+
+  async function movePromptQueueMessage<T>(
+    queueKey: string,
+    environmentId: string,
+    messageId: string,
+    direction: "up" | "down",
+  ): Promise<PersistedPromptQueue<T> | null> {
+    return asWebModel<PersistedPromptQueue<T> | null>(
+      native().move_prompt_queue_message({
+        queueKey,
+        environmentId,
+        messageId,
+        direction,
+      }),
+    );
+  }
+
+  async function retryPromptQueueDispatch<T = unknown>(
+    queueKey: string,
+  ): Promise<PersistedPromptQueue<T> | null> {
+    return asWebModel<PersistedPromptQueue<T> | null>(
+      native().retry_prompt_queue_dispatch({ queueKey }),
+    );
+  }
+
+  async function getComposeDraft<T = unknown>(
+    draftKey: string,
+  ): Promise<PersistedComposeDraft<T> | null> {
+    return asWebModel<PersistedComposeDraft<T> | null>(native().get_compose_draft({ draftKey }));
+  }
+
+  async function listComposeDrafts<T = unknown>(
+    ownerType: "environment" | "project",
+    ownerId: string,
+  ): Promise<Array<PersistedComposeDraft<T>>> {
+    return asWebModel<Array<PersistedComposeDraft<T>>>(
+      native().list_compose_drafts({
+        ownerType,
+        ownerId,
+      }),
+    );
+  }
+
+  async function saveComposeDraft<T>(
+    draftKey: string,
+    ownerType: "environment" | "project",
+    ownerId: string,
+    value: T,
+    expectedRevision?: number,
+  ): Promise<PersistedComposeDraft<T>> {
+    return asWebModel<PersistedComposeDraft<T>>(
+      native().save_compose_draft({
+        draftKey,
+        ownerType,
+        ownerId,
+        value,
+        ...(expectedRevision === undefined ? {} : { expectedRevision }),
+      }),
+    );
+  }
+
+  async function deleteComposeDraft(draftKey: string, expectedRevision?: number): Promise<void> {
+    return native().delete_compose_draft({
+      draftKey,
+      ...(expectedRevision === undefined ? {} : { expectedRevision }),
+    });
+  }
+
+  async function getFileDraft(draftKey: string): Promise<PersistedFileDraft | null> {
+    return asWebModel<PersistedFileDraft | null>(native().get_file_draft({ draftKey }));
+  }
+
+  async function saveFileDraft(
+    draftKey: string,
+    environmentId: string,
+    filePath: string,
+    content: string,
+    originalContent: string,
+    expectedRevision?: number,
+  ): Promise<PersistedFileDraft> {
+    return asWebModel<PersistedFileDraft>(
+      native().save_file_draft({
+        draftKey,
+        environmentId,
+        filePath,
+        content,
+        originalContent,
+        ...(expectedRevision === undefined ? {} : { expectedRevision }),
+      }),
+    );
+  }
+
+  async function deleteFileDraft(draftKey: string, expectedRevision?: number): Promise<void> {
+    return native().delete_file_draft({
+      draftKey,
+      ...(expectedRevision === undefined ? {} : { expectedRevision }),
+    });
+  }
+
+  /** Join the backend-owned startup wait for one environment/provider pair. */
+  async function awaitBridgeReady(
+    environmentId: string,
+    agent: AgentBridgeKind,
+    timeoutMs = 60_000,
+  ): Promise<AwaitBridgeReadyResult> {
+    const result: unknown = await agentServersApi(client).await_bridge_ready({
+      environmentId,
+      agent,
+      timeoutMs,
+    });
+    if (!isAwaitBridgeReadyResult(result)) {
+      throw new Error("Backend returned an invalid bridge readiness result");
+    }
+    return result;
+  }
+
+  /** Create a local terminal session for a local environment */
+  async function createLocalTerminalSession(
+    environmentId: string,
+    cols: number,
+    rows: number,
+    trackEnvironmentActivity = false,
+    terminalKey?: string,
+  ): Promise<TerminalSessionCreateResult> {
+    const result = await terminalsDomain().create_local_terminal_session({
+      environmentId,
+      cols,
+      rows,
+      trackEnvironmentActivity,
+      terminalKey,
+    });
+    return parseTerminalSessionCreateResult(result);
+  }
+
+  /** Start a local terminal session and begin forwarding output */
+  async function startLocalTerminalSession(sessionId: string): Promise<void> {
+    await terminalsDomain().start_local_terminal_session({ sessionId });
+  }
+
+  /**
+   * Write data to a local terminal session. Resolves to whether the backend
+   * actually reached a live PTY; see `terminalWriteWasDelivered`.
+   */
+  async function writeLocalTerminal(sessionId: string, data: string): Promise<boolean> {
+    return terminalWriteWasDelivered(
+      await terminalsDomain().local_terminal_write({ sessionId, data }),
+    );
+  }
+
+  /** Resize a local terminal session */
+  async function resizeLocalTerminal(sessionId: string, cols: number, rows: number): Promise<void> {
+    await terminalsDomain().local_terminal_resize({ sessionId, cols, rows });
+  }
+
+  /** Close a local terminal session */
+  async function closeLocalTerminalSession(sessionId: string): Promise<void> {
+    await terminalsDomain().close_local_terminal_session({ sessionId });
+  }
+
+  return {
+    ...buildPipelinesApi,
+    ...multiReviewsApi,
+    launchNativeAgentJob,
+    ensureNativeAgentSession,
+    adoptNativeAgentSession,
+    getNativeAgentSession,
+    getNativeAgentProjection,
+    getNativeAgentSyncCapabilities,
+    getNativeAgentTranscriptUpdate,
+    getNativeAgentSessionStateUpdate,
+    getNativeAgentLiveUpdate,
+    getNativeAgentDiscoveryUpdate,
+    getNativeAgentProjectionUpdate,
+    getNativeAgentMessagePage,
+    getNativeAgentToolDetails,
+    refreshNativeAgentModels,
+    refreshNativeAgentCommands,
+    stopNativeAgentSession,
+    runNativeAgentGoalCommand,
+    getNativeAgentGoal,
+    stopNativeAgentSuborks,
+    getNativeAgentSuborkTranscript,
+    stopNativeAgentBackgroundTask,
+    dismissNativeAgentSuggestedPrompt,
+    listNativeAgentResumableSessions,
+    setNativeAgentResumableSessionArchived,
+    resumeNativeAgentSession,
+    forkNativeAgentSession,
+    updateNativeAgentControls,
+    steerNativeAgentQueuedPrompt,
+    performNativeAgentSessionAction,
+    performNativeAgentMcpAction,
+    getNativeAgentAuthStatus,
+    beginNativeAgentSignIn,
+    cancelNativeAgentSignIn,
+    signOutNativeAgent,
+    resolveNativeAgentInteraction,
+    holdNativeAgentInteraction,
+    dispatchNativeAgentPrompt,
+    dispatchNativeAgentIntent,
+    retryNativeAgentDispatch,
+    discardNativeAgentDispatch,
+    getPromptQueue,
+    listPromptQueues,
+    listEnvironmentHydration,
+    enqueuePromptQueueMessage,
+    removePromptQueueMessage,
+    movePromptQueueMessage,
+    retryPromptQueueDispatch,
+    getComposeDraft,
+    listComposeDrafts,
+    saveComposeDraft,
+    deleteComposeDraft,
+    getFileDraft,
+    saveFileDraft,
+    deleteFileDraft,
+    awaitBridgeReady,
+    createLocalTerminalSession,
+    startLocalTerminalSession,
+    writeLocalTerminal,
+    resizeLocalTerminal,
+    closeLocalTerminalSession,
+  };
 }
 
-/** Resize a local terminal session */
-export async function resizeLocalTerminal(
-  sessionId: string,
-  cols: number,
-  rows: number,
-): Promise<void> {
-  return invoke("local_terminal_resize", { sessionId, cols, rows });
-}
+export type WorkflowsApi = ReturnType<typeof createWorkflowsApi>;
 
-/** Close a local terminal session */
-export async function closeLocalTerminalSession(sessionId: string): Promise<void> {
-  return invoke("close_local_terminal_session", { sessionId });
-}
+/** The window's command-scope binding (the counted shim, plan item 3002). */
+export const {
+  launchNativeAgentJob,
+  ensureNativeAgentSession,
+  adoptNativeAgentSession,
+  getNativeAgentSession,
+  getNativeAgentProjection,
+  getNativeAgentSyncCapabilities,
+  getNativeAgentTranscriptUpdate,
+  getNativeAgentSessionStateUpdate,
+  getNativeAgentLiveUpdate,
+  getNativeAgentDiscoveryUpdate,
+  getNativeAgentProjectionUpdate,
+  getNativeAgentMessagePage,
+  getNativeAgentToolDetails,
+  refreshNativeAgentModels,
+  refreshNativeAgentCommands,
+  stopNativeAgentSession,
+  runNativeAgentGoalCommand,
+  getNativeAgentGoal,
+  stopNativeAgentSuborks,
+  getNativeAgentSuborkTranscript,
+  stopNativeAgentBackgroundTask,
+  dismissNativeAgentSuggestedPrompt,
+  listNativeAgentResumableSessions,
+  setNativeAgentResumableSessionArchived,
+  resumeNativeAgentSession,
+  forkNativeAgentSession,
+  updateNativeAgentControls,
+  steerNativeAgentQueuedPrompt,
+  performNativeAgentSessionAction,
+  performNativeAgentMcpAction,
+  getNativeAgentAuthStatus,
+  beginNativeAgentSignIn,
+  cancelNativeAgentSignIn,
+  signOutNativeAgent,
+  resolveNativeAgentInteraction,
+  holdNativeAgentInteraction,
+  dispatchNativeAgentPrompt,
+  dispatchNativeAgentIntent,
+  retryNativeAgentDispatch,
+  discardNativeAgentDispatch,
+  getPromptQueue,
+  listPromptQueues,
+  listEnvironmentHydration,
+  enqueuePromptQueueMessage,
+  removePromptQueueMessage,
+  movePromptQueueMessage,
+  retryPromptQueueDispatch,
+  getComposeDraft,
+  listComposeDrafts,
+  saveComposeDraft,
+  deleteComposeDraft,
+  getFileDraft,
+  saveFileDraft,
+  deleteFileDraft,
+  awaitBridgeReady,
+  createLocalTerminalSession,
+  startLocalTerminalSession,
+  writeLocalTerminal,
+  resizeLocalTerminal,
+  closeLocalTerminalSession,
+} = createWorkflowsApi(commandBackendClient);
+
+/** The split files' command-scope bindings, exported here as before (plan item 7007). */
+export {
+  startBuildPipeline,
+  createFeatureBuild,
+  pauseBuildPipeline,
+  resumeBuildPipeline,
+  cancelBuildPipeline,
+  sendBuildPipelineMessage,
+  steerBuildPipeline,
+  steerQueuedBuildPipelineMessage,
+  removeQueuedBuildPipelineMessage,
+  restartBuildPipelineCurrentStep,
+  retryBuildPipelineStage,
+  retryBuildPipelineReviewer,
+  restartBuildPipelineReviewer,
+  stopBuildPipelineReviewer,
+  restartBuildPipelineStep,
+  previewBuildPipelineCodeRewind,
+  rewindBuildPipelineCode,
+  skipBuildPipelineStep,
+  retryBuildPipelineInteractionFailure,
+  retryBuildPipelineCompletionComment,
+  importLegacyBuildPipelines,
+  getBuildPipeline,
+  getBuildPipelineSessionProjection,
+  getBuildPipelineConditional,
+  getBuildPipelineControl,
+  listBuildPipelines,
+  listBuildPipelinesConditional,
+  deleteBuildPipeline,
+  clearTaskBuildStatus,
+  setEnvironmentUnread,
+} from "./build-pipelines";
+export {
+  getReviewValidationOutput,
+  stopReviewValidationCommand,
+  startMultiReview,
+  addressMultiReviewFindings,
+  startMultiReviewCustomAddressFindings,
+  retryMultiReview,
+  recoverMultiReviewAddressFindingsSession,
+  cancelMultiReview,
+  stopMultiReviewReviewer,
+  stopMultiReviewValidation,
+  restartMultiReviewReviewer,
+  skipMultiReviewStep,
+  previewMultiReviewCodeRewind,
+  rewindMultiReviewCode,
+  restartMultiReviewStep,
+  pauseMultiReviewStep,
+  resumeMultiReviewStep,
+  unstickMultiReviewReviewer,
+  getMultiReviewWorkflow,
+  getMultiReviewWorkflowConditional,
+  listMultiReviewWorkflows,
+  getMultiReviewReviewerTranscript,
+  getMultiReviewStepTranscript,
+  getMultiReviewStepToolDetails,
+  getMultiReviewReviewerToolDetails,
+  getMultiReviewReviewerHistoryPage,
+  deleteMultiReviewWorkflow,
+  getMultiReviewReviewerProjection,
+} from "./multi-reviews";

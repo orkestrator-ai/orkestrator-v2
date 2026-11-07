@@ -1,6 +1,7 @@
+import { nodeSshPromptEvent } from "@orkestrator/protocol/contract/domains/events";
+import type { BackendEmit } from "../backend-emit.js";
 import { randomUUID } from "node:crypto";
 
-import { NODE_SSH_PROMPT_EVENT } from "@orkestrator/protocol/command-nodes";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import type { SshAskpassPrompt } from "@orkestrator/protocol/node/ssh/askpass";
 
@@ -30,7 +31,7 @@ interface PendingPrompt {
 export class NodeSshPrompts {
   private readonly pending = new Map<string, PendingPrompt>();
 
-  constructor(private readonly emit: (event: string, payload: unknown) => void) {}
+  constructor(private readonly emit: BackendEmit) {}
 
   ask(nodeId: BackendId, prompt: SshAskpassPrompt): Promise<string | null> {
     if (prompt.signal.aborted) return Promise.resolve(null);
@@ -46,13 +47,13 @@ export class NodeSshPrompts {
       const finish = (answer: string | null) => {
         if (!this.pending.delete(promptId)) return;
         prompt.signal.removeEventListener("abort", abort);
-        this.emit(NODE_SSH_PROMPT_EVENT, { ...view, state: "closed" });
+        this.emit(nodeSshPromptEvent, { ...view, state: "closed" });
         resolve(answer);
       };
       const abort = () => finish(null);
       prompt.signal.addEventListener("abort", abort, { once: true });
       this.pending.set(promptId, { view, resolve: finish });
-      this.emit(NODE_SSH_PROMPT_EVENT, view);
+      this.emit(nodeSshPromptEvent, view);
     });
   }
 

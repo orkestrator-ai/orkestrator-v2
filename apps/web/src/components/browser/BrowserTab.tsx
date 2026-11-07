@@ -37,6 +37,7 @@ import {
 } from "@/lib/preview-service-entry";
 import {
   attachBrowserPreview,
+  previewNodeFor,
   goBackBrowserPreview,
   goForwardBrowserPreview,
   hasNativeBrowserPreview,
@@ -45,8 +46,13 @@ import {
   reloadBrowserPreview,
   setBrowserPreviewVisible,
 } from "@/lib/native/browser-preview";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
-import { ensurePreviewServiceSync, usePreviewServiceStore } from "@/stores/previewServiceStore";
+import { paneLayoutStore, usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { useNodeScope } from "@/lib/node-scope/providers";
+import {
+  ensurePreviewServiceSync,
+  previewServiceStore,
+  usePreviewServiceStore,
+} from "@/stores/previewServiceStore";
 import type { BrowserTabData } from "@/types/paneLayout";
 import { AnnotatedPreviewArea, AnnotationsButton } from "./annotations/BrowserAnnotationsLayout";
 import { currentPageForManualUrl } from "./annotations/format";
@@ -61,6 +67,7 @@ import {
   useBlockingOverlay,
 } from "./browser-tab-hooks";
 import { ServiceBrowserTab } from "./ServiceBrowserTab";
+import { commandClient } from "@/lib/node-scope/app-window-scope";
 
 interface BrowserTabProps {
   tabId: string;
@@ -94,6 +101,9 @@ function ManualBrowserTab({
   const previewPublicationAvailable = usePreviewServiceStore(
     (state) => state.capabilities?.surfaces.browserTopLevel.available === true,
   );
+  // The environment's node: its preview registry and its preview addresses.
+  const previewScope = useNodeScope();
+  const resolvePreviewUrl = usePreviewServiceStore((state) => state.resolvePreviewUrl);
   const browserPreviewSupported = (() => {
     try {
       return isGatewayBrowserPreviewSupported();
@@ -306,7 +316,7 @@ function ManualBrowserTab({
 
   useEffect(() => {
     if (!nativeBrowserPreview || !browserPreviewSupported) return;
-    return window.orkestrator?.listen<BrowserPreviewState>(
+    return commandClient().listenRaw<BrowserPreviewState>(
       "browser-preview-state",
       applyNativeState,
     );
@@ -325,11 +335,11 @@ function ManualBrowserTab({
       return { resolved: null, error: null };
     }
     try {
-      return { resolved: resolveBrowserAddress(currentUrl), error: null };
+      return { resolved: resolveBrowserAddress(currentUrl, resolvePreviewUrl), error: null };
     } catch (resolutionError) {
       return { resolved: null, error: errorMessage(resolutionError) };
     }
-  }, [browserPreviewSupported, currentUrl]);
+  }, [browserPreviewSupported, currentUrl, resolvePreviewUrl]);
   const resolved = resolution.resolved;
 
   // "Open as service": offered only when this tab's own environment has
@@ -343,9 +353,9 @@ function ManualBrowserTab({
   );
   useEffect(() => {
     if (!isActive || legacyHostPort === null || !browserPreviewSupported) return;
-    ensurePreviewServiceSync();
-    void usePreviewServiceStore.getState().refreshEnvironment(environmentId);
-  }, [browserPreviewSupported, environmentId, isActive, legacyHostPort]);
+    ensurePreviewServiceSync(previewScope);
+    void previewScope.store(previewServiceStore).getState().refreshEnvironment(environmentId);
+  }, [browserPreviewSupported, environmentId, isActive, legacyHostPort, previewScope]);
   const serviceMatch = useMemo(
     () =>
       legacyUrlServiceMatch(
@@ -366,8 +376,10 @@ function ManualBrowserTab({
     if (!serviceMatch) return;
     const url = currentUrl;
     const attempt = ++conversionAttempt.current;
+    // The tab's own node (the preview scope is this component's node scope).
     const liveData = () =>
-      usePaneLayoutStore
+      previewScope
+        .store(paneLayoutStore)
         .getState()
         .getAllTabs(environmentId)
         .find((tab) => tab.id === tabId)?.browserData;
@@ -380,7 +392,7 @@ function ManualBrowserTab({
     const clearCancelled = () =>
       setServiceConversion((current) => (current?.attempt === attempt ? null : current));
     setServiceConversion({ url, state: "checking", attempt });
-    void confirmLegacyUrlServiceMatch(url, environmentId, serviceMatch)
+    void confirmLegacyUrlServiceMatch(url, environmentId, serviceMatch, previewScope)
       .then((target) => {
         if (!isCurrent()) {
           if (conversionMounted.current) clearCancelled();
@@ -401,6 +413,7 @@ function ManualBrowserTab({
   }, [
     currentUrl,
     environmentId,
+    previewScope,
     serviceMatch,
     stopAnnotationForPageChange,
     tabId,
@@ -439,7 +452,7 @@ function ManualBrowserTab({
     (nextAddress: string, recordHistory = true) => {
       let next;
       try {
-        next = resolveBrowserAddress(nextAddress);
+        next = resolveBrowserAddress(nextAddress, resolvePreviewUrl);
       } catch (navigationError) {
         setError(errorMessage(navigationError));
         return;
@@ -496,6 +509,7 @@ function ManualBrowserTab({
       applyNativeState,
       environmentId,
       nativeBrowserPreview,
+      resolvePreviewUrl,
       stopAnnotationForPageChange,
       tabId,
       updateTabBrowserUrl,
@@ -606,6 +620,8 @@ function ManualBrowserTab({
           ...(urlBasis === undefined ? {} : { navigationBasis: urlBasis }),
           bounds,
           visible: isActive && !hasBlockingOverlay && !annotations.previewHidden,
+          // Another node's tab in the window's tree: that node's preview runtime.
+          ...previewNodeFor(previewScope),
         })
           .then((state) => {
             if (disposed) return;
@@ -635,6 +651,7 @@ function ManualBrowserTab({
       hideNativePreview(false);
     };
   }, [
+    previewScope,
     annotations.previewHidden,
     applyNativeState,
     browserPreviewSupported,

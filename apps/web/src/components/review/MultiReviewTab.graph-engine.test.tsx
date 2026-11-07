@@ -5,14 +5,15 @@
  * and the pull request step read it as the graph engine runs it.
  */
 import { afterEach, beforeEach, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type {
   MultiReviewReviewerTranscript,
   MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
 import { onGraphRunViewRequested, type GraphRunViewRequest } from "@/lib/graph-run-navigation";
 import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore";
-import { useMultiReviewStore } from "@/stores/multiReviewStore";
+import { multiReviewStore } from "@/stores/multiReviewStore";
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 import { MultiReviewReviewerTab } from "./MultiReviewReviewerTab";
 import { MultiReviewTab } from "./MultiReviewTab";
@@ -22,6 +23,7 @@ import {
   addressFindingsStep,
   pullRequestStep,
 } from "./multi-review-steps";
+import { appCommandStore } from "@/test/app-command-store";
 
 const timestamp = "2026-10-29T00:00:00.000Z";
 
@@ -73,8 +75,8 @@ function commands(workflow: MultiReviewWorkflow) {
 }
 
 function mount(workflow: MultiReviewWorkflow) {
-  useMultiReviewStore.getState().replaceWorkflow(workflow);
-  return render(
+  appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow);
+  return renderInAppCommandScope(
     <MultiReviewTab
       data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
       isActive
@@ -85,7 +87,7 @@ function mount(workflow: MultiReviewWorkflow) {
 }
 
 beforeEach(() => {
-  useMultiReviewStore.setState({ workflows: new Map() });
+  appCommandStore(multiReviewStore).setState({ workflows: new Map() });
   useMessagePartExpansionStore.getState().reset();
 });
 afterEach(cleanup);
@@ -195,8 +197,8 @@ test("graph-engine steps: a failed Address Findings, and a pull request opened b
 });
 
 test("a graph-engine reviewer's tab offers no Stop, Restart or Unstick", async () => {
-  useMultiReviewStore.getState().replaceWorkflow(graphReviewing());
-  render(
+  appCommandStore(multiReviewStore).getState().replaceWorkflow(graphReviewing());
+  renderInAppCommandScope(
     <MultiReviewReviewerTab
       data={{
         environmentId: "env-1",

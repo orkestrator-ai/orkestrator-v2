@@ -1,9 +1,10 @@
 import { useEffect, useRef } from "react";
 import { showEnvironmentUnreadToast } from "@/components/environments/environmentUnreadToast";
-import * as backend from "@/lib/backend";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { useNodeScope } from "@/lib/node-scope/providers";
+import { environmentStore, useEnvironmentStore } from "@/stores/environmentStore";
 import { useVisibleEnvironmentId } from "./useVisibleEnvironmentId";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 const log = createLogger("web.environment");
 
@@ -16,7 +17,10 @@ const log = createLogger("web.environment");
  * other client the work has been seen.
  */
 export function useUnreadEnvironmentSync(): void {
+  const nodeBackend = useScopeBackend();
   const selectedEnvironmentId = useVisibleEnvironmentId();
+  // The node whose environments this watches: the one the selector below reads.
+  const scope = useNodeScope();
   const environments = useEnvironmentStore((state) => state.environments);
   // The environment the user just switched to, until its row has been seen.
   // Work that finishes while it is already on screen clears silently instead
@@ -38,16 +42,15 @@ export function useUnreadEnvironmentSync(): void {
 
     if (activated) showEnvironmentUnreadToast(environment);
     const observedActivityAt = environment.lastActivityAt ?? null;
-    useEnvironmentStore.getState().updateEnvironment(selectedEnvironmentId, {
+    const store = scope.store(environmentStore);
+    store.getState().updateEnvironment(selectedEnvironmentId, {
       hasUnreadWork: false,
       unreadReason: undefined,
     });
-    void backend
+    void nodeBackend
       .setEnvironmentUnread(selectedEnvironmentId, false, observedActivityAt)
       .then((persistedEnvironment) => {
-        const currentEnvironment = useEnvironmentStore
-          .getState()
-          .getEnvironmentById(selectedEnvironmentId);
+        const currentEnvironment = store.getState().getEnvironmentById(selectedEnvironmentId);
         if (!currentEnvironment) return;
 
         const currentActivityAt = currentEnvironment.lastActivityAt ?? null;
@@ -59,7 +62,7 @@ export function useUnreadEnvironmentSync(): void {
             (currentActivityAt === null ||
               Date.parse(persistedActivityAt) >= Date.parse(currentActivityAt)));
         if (persistedIsCurrent) {
-          useEnvironmentStore.getState().updateEnvironment(selectedEnvironmentId, {
+          store.getState().updateEnvironment(selectedEnvironmentId, {
             hasUnreadWork: persistedEnvironment.hasUnreadWork === true,
             unreadReason: persistedEnvironment.unreadReason,
           });
@@ -74,5 +77,5 @@ export function useUnreadEnvironmentSync(): void {
           error: formatLogError(error),
         });
       });
-  }, [selectedEnvironmentId, environments]);
+  }, [scope, selectedEnvironmentId, environments, nodeBackend]);
 }

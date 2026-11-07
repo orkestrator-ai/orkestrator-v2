@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:ef1775c2fbc8e8835e15e3480da4bf8b2dd08b9aa22b0224764d47048b56b242",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "commit": {},
+        "environmentId": {
+          "type": "string"
+        },
+        "ref": {}
+      },
+      "required": ["environmentId"],
+      "type": "object"
+    }
+  }
+}

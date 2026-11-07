@@ -1,6 +1,7 @@
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   installBackend,
@@ -10,14 +11,15 @@ import {
   resetBackend,
   resetPullRequestsStore,
 } from "@/components/pull-requests/pull-request-test-fixtures";
-import { useFilesPanelStore } from "@/stores/filesPanelStore";
-import { useUIStore } from "@/stores/uiStore";
+import { uiStore } from "@/stores/uiStore";
 import { PullRequestPaneTab } from "./PullRequestPaneTab";
+import { filesPanelTestState, setFilesPanelTestState } from "@/test/files-panel-state";
+import { appCommandStore } from "@/test/app-command-store";
 
 beforeEach(() => {
   resetPullRequestsStore();
-  useFilesPanelStore.setState({ isOpen: false, activeTab: "changes", pullRequestTabs: {} });
-  useUIStore.setState({ selectedProjectId: "project", selectedEnvironmentId: "env" });
+  setFilesPanelTestState({ isOpen: false, activeTab: "changes", pullRequestTabs: {} });
+  appCommandStore(uiStore).setState({ selectedProjectId: "project", selectedEnvironmentId: "env" });
   installBackend({
     get_github_pull_request: () =>
       makeDetail({ body: "Follows [the API change](https://github.com/acme/api/pull/7)." }),
@@ -28,13 +30,13 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   resetBackend();
-  useUIStore.setState({ selectedProjectId: null, selectedEnvironmentId: null });
+  appCommandStore(uiStore).setState({ selectedProjectId: null, selectedEnvironmentId: null });
 });
 
 test("a pull request linked from a main-area pull request opens in the right-hand PR pane", async () => {
-  const layout = usePaneLayoutStore.getState();
+  const layout = appCommandStore(paneLayoutStore).getState();
   layout.initialize(null, "env");
-  const owner = usePaneLayoutStore.getState().environments.get("env")!;
+  const owner = appCommandStore(paneLayoutStore).getState().environments.get("env")!;
   layout.addTab(
     owner.activePaneId,
     {
@@ -45,7 +47,7 @@ test("a pull request linked from a main-area pull request opens in the right-han
     },
     "env",
   );
-  render(
+  renderInAppCommandScope(
     <TooltipProvider>
       <PullRequestPaneTab
         tabId="pr-tab"
@@ -58,15 +60,15 @@ test("a pull request linked from a main-area pull request opens in the right-han
 
   fireEvent.click(await screen.findByRole("link", { name: "the API change" }));
 
-  const panel = useFilesPanelStore.getState();
+  const panel = filesPanelTestState();
   expect(panel.isOpen).toBe(true);
   expect(panel.activeTab).toBe("pull-request:acme/api#7");
   expect(panel.pullRequestTabs.env?.map((tab) => tab.ref)).toEqual([
     { owner: "acme", repo: "api", number: 7 },
   ]);
-  expect(usePaneLayoutStore.getState().findPaneWithTab("pr-tab", "env")?.activeTabId).toBe(
-    "pr-tab",
-  );
+  expect(
+    appCommandStore(paneLayoutStore).getState().findPaneWithTab("pr-tab", "env")?.activeTabId,
+  ).toBe("pr-tab");
   // The main-area pull request is still the one shown.
   expect(screen.getByRole("heading", { name: "feat: add usage history tab" })).toBeTruthy();
 });
@@ -86,7 +88,7 @@ test("an inaccessible recognized PR falls back to its original URL only once", a
   });
   const url = "https://github.com/acme/private/pull/9/files";
   await openPullRequestUrl(url);
-  const { rerender } = render(
+  const { rerender } = renderInAppCommandScope(
     <TooltipProvider>
       <FilesPanelPullRequests targetId="env" />
     </TooltipProvider>,
@@ -100,7 +102,7 @@ test("an inaccessible recognized PR falls back to its original URL only once", a
     </TooltipProvider>,
   );
   expect(calls).toEqual([url]);
-  expect(useUIStore.getState().selectedEnvironmentId).toBe("env");
+  expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("env");
 });
 
 test("reopening after failure waits for the pending new load and preserves a terminal deep link", async () => {
@@ -124,7 +126,7 @@ test("reopening after failure waits for the pending new load and preserves a ter
     sourceTabId: "terminal",
     openExternal: async () => {},
   })({ button: 0, ctrlKey: true, shiftKey: false, metaKey: false } as MouseEvent, url);
-  render(
+  renderInAppCommandScope(
     <TooltipProvider>
       <FilesPanelPullRequests targetId="env" />
     </TooltipProvider>,

@@ -12,6 +12,7 @@ import { SegmentedSelector } from "@/components/ui/segmented-selector";
 import * as backend from "@/lib/backend";
 import { useAccountMachine } from "./account-machine";
 import { useSettingsConfig } from "./settings-config";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 export interface ResourceLimitDraft {
   cpus: string;
@@ -140,6 +141,7 @@ export function ContainerResourceLimitsSettings({
 }: {
   initial: ContainerResourceLimits | null | undefined;
 }) {
+  const nodeBackend = useScopeBackend();
   const [mode, setMode] = useState<BudgetMode>(initialMode(initial));
   const [draft, setDraft] = useState(
     limitsToDraft(initialMode(initial) === "custom" ? initial : null),
@@ -153,7 +155,7 @@ export function ContainerResourceLimitsSettings({
     let cancelled = false;
     const load = async () => {
       try {
-        const next = await backend.getDockerCapacity(false, machine);
+        const next = await nodeBackend.getDockerCapacity(false, machine);
         if (!cancelled) setCapacity(next);
       } catch {
         if (!cancelled) setCapacity(null);
@@ -163,7 +165,7 @@ export function ContainerResourceLimitsSettings({
     return () => {
       cancelled = true;
     };
-  }, [machine]);
+  }, [machine, nodeBackend]);
 
   // An older backend reports no built-in default and applies none.
   const builtIn = capacity?.builtInDefault;
@@ -176,7 +178,7 @@ export function ContainerResourceLimitsSettings({
   const save = async () => {
     setSaving(true);
     try {
-      const saved = await backend.setContainerResourceLimits(
+      const saved = await nodeBackend.setContainerResourceLimits(
         mode === "custom"
           ? draftToLimits(draft)
           : mode === "unrestricted"

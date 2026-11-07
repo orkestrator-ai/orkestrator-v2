@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:aa6500da69e206cd2a4f921e47488fe220409a6cef7dc29466541d78c71fb390",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "projectId": {},
+        "requestId": {},
+        "taskId": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": ["taskId", "text"],
+      "type": "object"
+    }
+  }
+}

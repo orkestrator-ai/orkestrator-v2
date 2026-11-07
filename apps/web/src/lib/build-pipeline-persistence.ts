@@ -1,12 +1,18 @@
 import { backfillLegacyTestResults } from "@orkestrator/protocol/structured-review";
 import { canonicalBuildPipeline } from "@orkestrator/protocol/workflow-vocabulary";
+import type { StoreApi } from "zustand/vanilla";
 import * as backend from "@/lib/backend";
+import { backendApiForScope } from "@/lib/backend/client";
+import { createWorkflowsApi } from "@/lib/backend/workflows";
 import { hydrationActivity } from "@/lib/hydration-activity";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { appCommandScope, defineScopedSlot } from "@/lib/node-scope-slots";
 import {
   BUILD_PIPELINE_VERSION,
+  buildPipelineStore,
   isBuildPipeline,
-  useBuildPipelineStore,
   type BuildPipeline,
+  type BuildPipelineState,
 } from "@/stores/buildPipelineStore";
 import type { PersistedBuildPipeline } from "@/types";
 import { createLogger } from "@orkestrator/protocol/logger";
@@ -24,16 +30,72 @@ type LegacyPipelineImporter = (
   snapshots: unknown[],
 ) => Promise<{ importedIds: string[]; skipped: number }>;
 
-let hydrationGeneration = 0;
-const pipelineHydrationGenerations = new Map<string, number>();
-const projectHydrationGenerations = new Map<string, number>();
-const pipelineDeletionGenerations = new Map<string, number>();
+/**
+ * Every function here acts on one node's pipelines: the `scope` it is given,
+ * or the app's command scope when it is given none (callers with no scope
+ * yet). Pipeline ids belong to one node, so the hydration markers, the
+ * unavailable markers, the watched transcripts and the reads in flight are
+ * held per scope (plan item 3011).
+ */
+
+/** `scope`'s pipeline reads: the suites' mocked named exports on the app's command scope. */
+function pipelineReadsApi(scope: NodeScope) {
+  return backendApiForScope(scope, createWorkflowsApi, {
+    getBuildPipeline: backend.getBuildPipeline,
+    getBuildPipelineConditional: backend.getBuildPipelineConditional,
+    getBuildPipelineControl: backend.getBuildPipelineControl,
+    importLegacyBuildPipelines: backend.importLegacyBuildPipelines,
+    listBuildPipelinesConditional: backend.listBuildPipelinesConditional,
+  });
+}
+
 const MAX_PIPELINE_HYDRATION_MARKERS = 2_048;
 const MAX_PROJECT_HYDRATION_MARKERS = 512;
 
-function nextHydrationGeneration(): number {
-  hydrationGeneration += 1;
-  return hydrationGeneration;
+type PipelineRead = {
+  /** Settles when the read in flight does. */
+  settled: Promise<void>;
+  /** The one follow-up read every caller that arrived meanwhile shares. */
+  queued: { options: HydrateBuildPipelineOptions; result: Promise<BuildPipeline | null> } | null;
+};
+
+interface BuildPipelinePersistenceState {
+  /** The last hydration generation handed out on this node. */
+  hydrationGeneration: number;
+  readonly pipelineHydrationGenerations: Map<string, number>;
+  readonly projectHydrationGenerations: Map<string, number>;
+  readonly pipelineDeletionGenerations: Map<string, number>;
+  /**
+   * Pipelines whose last point read found no usable record: deleted, or
+   * failing validation in this client. Pane-layout restore skips them, so a
+   * Build or key-information tab left pointing at a finished pipeline is not
+   * fetched again on every layout change. A change event for the id still
+   * reads it, and any read that finds a record clears the marker. Bounded
+   * like the hydration markers.
+   */
+  readonly unavailablePipelines: Set<string>;
+  /** Transcript views on screen, by pipeline: their session keys, newest last. */
+  readonly watchedTranscripts: Map<string, string[]>;
+  /** Point reads in flight, by pipeline. */
+  readonly pipelineReads: Map<string, PipelineRead>;
+}
+
+const persistenceState = defineScopedSlot<BuildPipelinePersistenceState>(
+  "build-pipeline-persistence",
+  () => ({
+    hydrationGeneration: 0,
+    pipelineHydrationGenerations: new Map(),
+    projectHydrationGenerations: new Map(),
+    pipelineDeletionGenerations: new Map(),
+    unavailablePipelines: new Set(),
+    watchedTranscripts: new Map(),
+    pipelineReads: new Map(),
+  }),
+);
+
+function nextHydrationGeneration(state: BuildPipelinePersistenceState): number {
+  state.hydrationGeneration += 1;
+  return state.hydrationGeneration;
 }
 
 function setBoundedGeneration(
@@ -51,17 +113,7 @@ function setBoundedGeneration(
   }
 }
 
-/**
- * Pipelines whose last point read found no usable record: deleted, or failing
- * validation in this client. Pane-layout restore skips them, so a Build or
- * key-information tab left pointing at a finished pipeline is not fetched
- * again on every layout change. A change event for the id still reads it,
- * and any read that finds a record clears the marker. Bounded like the
- * hydration markers.
- */
-const unavailablePipelines = new Set<string>();
-
-function markPipelineUnavailable(pipelineId: string): void {
+function markPipelineUnavailable(unavailablePipelines: Set<string>, pipelineId: string): void {
   unavailablePipelines.delete(pipelineId);
   unavailablePipelines.add(pipelineId);
   while (unavailablePipelines.size > MAX_PIPELINE_HYDRATION_MARKERS) {
@@ -71,14 +123,19 @@ function markPipelineUnavailable(pipelineId: string): void {
   }
 }
 
-/** Whether the last point read of `pipelineId` found no usable record. */
-export function isBuildPipelineKnownUnavailable(pipelineId: string): boolean {
-  return unavailablePipelines.has(pipelineId);
+/** Whether the last point read of `pipelineId` on `scope`'s node found no usable record. */
+export function isBuildPipelineKnownUnavailable(
+  pipelineId: string,
+  scope: NodeScope = appCommandScope(),
+): boolean {
+  return persistenceState(scope).unavailablePipelines.has(pipelineId);
 }
 
-/** Test seam: forget every unavailable marker. */
-export function resetBuildPipelineUnavailableMarkersForTests(): void {
-  unavailablePipelines.clear();
+/** Test seam: forget every unavailable marker of `scope`'s node. */
+export function resetBuildPipelineUnavailableMarkersForTests(
+  scope: NodeScope = appCommandScope(),
+): void {
+  persistenceState(scope).unavailablePipelines.clear();
 }
 
 function toSnapshot(persisted: PersistedBuildPipeline<BuildPipeline>): BuildPipeline | null {
@@ -254,15 +311,17 @@ export interface HydrateBuildPipelineOptions {
   transcripts?: boolean;
 }
 
-/** Transcript views on screen, by pipeline: their session keys, newest last. */
-const watchedTranscripts = new Map<string, string[]>();
-
 /**
  * Marks a stage transcript as on screen until the returned function runs.
  * Change events for its pipeline then patch bodies too, with that session
  * first, instead of leaving the view to ask in a second read.
  */
-export function watchBuildPipelineTranscript(pipelineId: string, sessionKey: string): () => void {
+export function watchBuildPipelineTranscript(
+  pipelineId: string,
+  sessionKey: string,
+  scope: NodeScope = appCommandScope(),
+): () => void {
+  const { watchedTranscripts } = persistenceState(scope);
   const keys = watchedTranscripts.get(pipelineId) ?? [];
   keys.push(sessionKey);
   watchedTranscripts.set(pipelineId, keys);
@@ -279,20 +338,13 @@ export function watchBuildPipelineTranscript(pipelineId: string, sessionKey: str
 }
 
 /** Read options for a change to `pipelineId`: bodies only while a transcript is on screen. */
-export function buildPipelineChangeReadOptions(pipelineId: string): HydrateBuildPipelineOptions {
-  const prioritySessionKey = watchedTranscripts.get(pipelineId)?.at(-1);
+export function buildPipelineChangeReadOptions(
+  pipelineId: string,
+  scope: NodeScope = appCommandScope(),
+): HydrateBuildPipelineOptions {
+  const prioritySessionKey = persistenceState(scope).watchedTranscripts.get(pipelineId)?.at(-1);
   return prioritySessionKey ? { transcripts: true, prioritySessionKey } : {};
 }
-
-type PipelineRead = {
-  /** Settles when the read in flight does. */
-  settled: Promise<void>;
-  /** The one follow-up read every caller that arrived meanwhile shares. */
-  queued: { options: HydrateBuildPipelineOptions; result: Promise<BuildPipeline | null> } | null;
-};
-
-/** Point reads in flight, by pipeline. */
-const pipelineReads = new Map<string, PipelineRead>();
 
 function mergeHydrationOptions(
   queued: HydrateBuildPipelineOptions,
@@ -305,12 +357,25 @@ function mergeHydrationOptions(
   };
 }
 
+/** One node's pipeline reads: its store and slot, held across awaits. */
+interface PipelineNode {
+  readonly scope: NodeScope;
+  readonly store: StoreApi<BuildPipelineState>;
+  readonly state: BuildPipelinePersistenceState;
+}
+
+function pipelineNode(scope: NodeScope): PipelineNode {
+  return { scope, store: scope.store(buildPipelineStore), state: persistenceState(scope) };
+}
+
 function startPipelineRead(
+  node: PipelineNode,
   pipelineId: string,
   read: PipelineRead,
   options: HydrateBuildPipelineOptions,
 ): Promise<BuildPipeline | null> {
-  const result = hydrateBuildPipelineOnce(pipelineId, undefined, options);
+  const { pipelineReads } = node.state;
+  const result = hydrateBuildPipelineOnce(node, pipelineId, undefined, options);
   const settled = result.then(
     () => undefined,
     () => undefined,
@@ -337,11 +402,18 @@ export function hydrateBuildPipeline(
   pipelineId: string,
   load?: PipelineLoader,
   options: HydrateBuildPipelineOptions = {},
+  scope: NodeScope = appCommandScope(),
 ): Promise<BuildPipeline | null> {
-  if (load) return hydrateBuildPipelineOnce(pipelineId, load, options);
-  const read = pipelineReads.get(pipelineId);
+  const node = pipelineNode(scope);
+  if (load) return hydrateBuildPipelineOnce(node, pipelineId, load, options);
+  const read = node.state.pipelineReads.get(pipelineId);
   if (!read) {
-    return startPipelineRead(pipelineId, { settled: Promise.resolve(), queued: null }, options);
+    return startPipelineRead(
+      node,
+      pipelineId,
+      { settled: Promise.resolve(), queued: null },
+      options,
+    );
   }
   if (read.queued) {
     read.queued.options = mergeHydrationOptions(read.queued.options, options);
@@ -351,7 +423,7 @@ export function hydrateBuildPipeline(
     options,
     result: read.settled.then(() => {
       read.queued = null;
-      return startPipelineRead(pipelineId, read, queued.options);
+      return startPipelineRead(node, pipelineId, read, queued.options);
     }),
   };
   read.queued = queued;
@@ -359,29 +431,30 @@ export function hydrateBuildPipeline(
 }
 
 async function hydrateBuildPipelineOnce(
+  node: PipelineNode,
   pipelineId: string,
   load: PipelineLoader | undefined,
   options: HydrateBuildPipelineOptions,
 ): Promise<BuildPipeline | null> {
-  const generation = nextHydrationGeneration();
+  const { store, state } = node;
+  const { pipelineHydrationGenerations, pipelineDeletionGenerations, unavailablePipelines } = state;
+  const reads = pipelineReadsApi(node.scope);
+  const generation = nextHydrationGeneration(state);
   setBoundedGeneration(
     pipelineHydrationGenerations,
     pipelineId,
     generation,
     MAX_PIPELINE_HYDRATION_MARKERS,
   );
-  const localBefore = useBuildPipelineStore.getState().pipelines.get(pipelineId);
+  const localBefore = store.getState().pipelines.get(pipelineId);
   const localSessions = new Map<string, CachedSession>(
     localBefore?.sessions.map((session) => [session.sessionKey, session]) ?? [],
   );
   const loaded = load
     ? await load(pipelineId)
     : !options.transcripts
-      ? await backend.getBuildPipelineControl<BuildPipeline>(
-          pipelineId,
-          localBefore?.backendRevision,
-        )
-      : await backend.getBuildPipelineConditional<BuildPipeline>(
+      ? await reads.getBuildPipelineControl<BuildPipeline>(pipelineId, localBefore?.backendRevision)
+      : await reads.getBuildPipelineConditional<BuildPipeline>(
           pipelineId,
           localBefore?.backendRevision,
           Object.fromEntries(
@@ -394,7 +467,7 @@ async function hydrateBuildPipelineOnce(
         );
   if (loaded && "unchanged" in loaded && loaded.unchanged) {
     unavailablePipelines.delete(pipelineId);
-    return useBuildPipelineStore.getState().pipelines.get(pipelineId) ?? null;
+    return store.getState().pipelines.get(pipelineId) ?? null;
   }
   let persisted: PersistedBuildPipeline<BuildPipeline> | null;
   if (loaded && "unchanged" in loaded && loaded.unchanged === false) {
@@ -412,14 +485,14 @@ async function hydrateBuildPipelineOnce(
     });
     if (invalidPatch) {
       // Ask again naming no bodies: every stale session comes back whole.
-      const full = await backend.getBuildPipelineConditional<BuildPipeline>(
+      const full = await reads.getBuildPipelineConditional<BuildPipeline>(
         pipelineId,
         undefined,
         {},
         options.prioritySessionKey,
       );
       if (full && "unchanged" in full && full.unchanged) {
-        return useBuildPipelineStore.getState().pipelines.get(pipelineId) ?? null;
+        return store.getState().pipelines.get(pipelineId) ?? null;
       }
       persisted =
         full && "unchanged" in full
@@ -435,7 +508,7 @@ async function hydrateBuildPipelineOnce(
     );
   }
   if (pipelineHydrationGenerations.get(pipelineId) !== generation) {
-    return useBuildPipelineStore.getState().pipelines.get(pipelineId) ?? null;
+    return store.getState().pipelines.get(pipelineId) ?? null;
   }
   if (!persisted || persisted.id !== pipelineId) {
     setBoundedGeneration(
@@ -444,7 +517,7 @@ async function hydrateBuildPipelineOnce(
       generation,
       MAX_PIPELINE_HYDRATION_MARKERS,
     );
-    markPipelineUnavailable(pipelineId);
+    markPipelineUnavailable(unavailablePipelines, pipelineId);
     return null;
   }
   const snapshot = toSnapshot(persisted);
@@ -455,13 +528,13 @@ async function hydrateBuildPipelineOnce(
       generation,
       MAX_PIPELINE_HYDRATION_MARKERS,
     );
-    markPipelineUnavailable(pipelineId);
+    markPipelineUnavailable(unavailablePipelines, pipelineId);
     return null;
   }
-  const local = useBuildPipelineStore.getState().pipelines.get(pipelineId);
+  const local = store.getState().pipelines.get(pipelineId);
   unavailablePipelines.delete(pipelineId);
   if (local && local.backendRevision > snapshot.backendRevision) return local;
-  useBuildPipelineStore.getState().replacePipeline(snapshot);
+  store.getState().replacePipeline(snapshot);
   return snapshot;
 }
 
@@ -469,33 +542,38 @@ async function hydrateBuildPipelineOnce(
 export function hydrateBuildPipelinesForProject(
   projectId: string,
   list?: PipelineListLoader,
+  scope: NodeScope = appCommandScope(),
 ): Promise<BuildPipeline[]> {
-  return hydrationActivity.track(() => restoreBuildPipelinesForProject(projectId, list));
+  const node = pipelineNode(scope);
+  return hydrationActivity.track(() => restoreBuildPipelinesForProject(node, projectId, list));
 }
 
 async function restoreBuildPipelinesForProject(
+  node: PipelineNode,
   projectId: string,
   list?: PipelineListLoader,
 ): Promise<BuildPipeline[]> {
-  const generation = nextHydrationGeneration();
+  const { store, state } = node;
+  const { projectHydrationGenerations, pipelineDeletionGenerations, unavailablePipelines } = state;
+  const generation = nextHydrationGeneration(state);
   setBoundedGeneration(
     projectHydrationGenerations,
     projectId,
     generation,
     MAX_PROJECT_HYDRATION_MARKERS,
   );
-  const localBefore = Array.from(useBuildPipelineStore.getState().pipelines.values()).filter(
+  const localBefore = Array.from(store.getState().pipelines.values()).filter(
     (pipeline) => pipeline.projectId === projectId,
   );
   const conditional = list
     ? null
-    : await backend.listBuildPipelinesConditional<BuildPipeline>(
+    : await pipelineReadsApi(node.scope).listBuildPipelinesConditional<BuildPipeline>(
         projectId,
         Object.fromEntries(localBefore.map((pipeline) => [pipeline.id, pipeline.backendRevision])),
       );
   const persisted = list ? await list(projectId) : conditional!.records;
   if (projectHydrationGenerations.get(projectId) !== generation) {
-    return Array.from(useBuildPipelineStore.getState().pipelines.values()).filter(
+    return Array.from(store.getState().pipelines.values()).filter(
       (pipeline) => pipeline.projectId === projectId,
     );
   }
@@ -507,7 +585,7 @@ async function restoreBuildPipelinesForProject(
     // began is newer authority. Skipping the stale list entry prevents a slow
     // project hydration from resurrecting a pipeline deleted in the meantime.
     if ((pipelineDeletionGenerations.get(entry.id) ?? 0) > generation) continue;
-    const local = useBuildPipelineStore.getState().pipelines.get(entry.id);
+    const local = store.getState().pipelines.get(entry.id);
     // List entries are control state only; keep the transcript bodies this
     // renderer already fetched rather than blanking every open build tab.
     const merged = withLocalTranscripts(entry, local);
@@ -515,7 +593,7 @@ async function restoreBuildPipelinesForProject(
     if (!snapshot) continue;
     unavailablePipelines.delete(snapshot.id);
     if (!local || local.backendRevision <= snapshot.backendRevision) {
-      useBuildPipelineStore.getState().replacePipeline(snapshot);
+      store.getState().replacePipeline(snapshot);
       restored.push(snapshot);
     } else {
       restored.push(local);
@@ -556,9 +634,14 @@ export async function migrateLegacyBuildPipelines(
   storage: Pick<Storage, "getItem" | "removeItem"> | undefined = typeof localStorage === "undefined"
     ? undefined
     : localStorage,
-  importLegacy: LegacyPipelineImporter = backend.importLegacyBuildPipelines,
-  load: PipelineLoader = backend.getBuildPipeline,
+  importLegacy?: LegacyPipelineImporter,
+  load?: PipelineLoader,
+  scope: NodeScope = appCommandScope(),
 ): Promise<LegacyBuildPipelineMigrationResult> {
+  // The legacy copy is this browser's, so it is the command node's to import.
+  const reads = pipelineReadsApi(scope);
+  const importPipelines = importLegacy ?? reads.importLegacyBuildPipelines;
+  const loadPipeline = load ?? reads.getBuildPipeline;
   const empty = { importedIds: [], skipped: 0 };
   if (!storage) return empty;
 
@@ -636,7 +719,7 @@ export async function migrateLegacyBuildPipelines(
 
   const importedIds: string[] = [];
   for (const [projectId, snapshots] of byProject) {
-    const result = await importLegacy(projectId, snapshots);
+    const result = await importPipelines(projectId, snapshots);
     importedIds.push(...result.importedIds);
     skipped += result.skipped;
   }
@@ -647,6 +730,10 @@ export async function migrateLegacyBuildPipelines(
     // Repeating the migration is safe because the backend never overwrites IDs.
   }
 
-  await Promise.all(importedIds.map((id) => hydrateBuildPipeline(id, load)));
+  await Promise.all(
+    importedIds.map((id) =>
+      hydrateBuildPipeline(id, loadPipeline as PipelineLoader, undefined, scope),
+    ),
+  );
   return { importedIds, skipped };
 }

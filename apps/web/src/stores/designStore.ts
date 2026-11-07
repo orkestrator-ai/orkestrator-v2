@@ -1,4 +1,5 @@
-import { create } from "zustand";
+import { defineScopedStore } from "@/lib/node-scope/scoped-store";
+import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
 import type { DesignCanvas, DesignFrame } from "@orkestrator/protocol/design-canvas";
 import type {
   DesignFailure,
@@ -87,14 +88,19 @@ export function emptyProjection(
   };
 }
 
-interface DesignStoreState {
+export interface DesignStoreState {
   projections: Map<string, DesignProjection>;
   update: (key: string, update: (projection: DesignProjection) => DesignProjection) => void;
   put: (projection: DesignProjection) => void;
   remove: (key: string) => void;
 }
 
-export const useDesignStore = create<DesignStoreState>((set) => ({
+/**
+ * Per node (plan item 3012): an environment's canvases belong to its node, and
+ * each node scope's canvas controllers (`design-controller.ts`) project into
+ * that scope's instance.
+ */
+export const designStore = defineScopedStore<DesignStoreState>("design", () => (set) => ({
   projections: new Map(),
   update: (key, update) =>
     set((state) => {
@@ -120,6 +126,12 @@ export const useDesignStore = create<DesignStoreState>((set) => ({
       return { projections };
     }),
 }));
+
+/**
+ * Reads the nearest node scope's canvas projections; other code uses
+ * `scope.store(designStore)`.
+ */
+export const useDesignStore = scopedStoreHook(designStore);
 
 /** Frames with optimistic previews applied, preserving unchanged frame identities. */
 export function projectedFrames(projection: DesignProjection | undefined): DesignFrame[] {

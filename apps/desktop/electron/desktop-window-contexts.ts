@@ -5,9 +5,9 @@ import {
   relayedNodeEventNodeId,
 } from "@orkestrator/protocol/node-events";
 import type { ConnectionManager } from "./connection-manager.js";
-import { PORTAL_EVENT_CHANNEL } from "./federation-ipc.js";
+import { NODE_EVENT_CHANNEL } from "./node-ipc.js";
 import { rebindWindowPreviews, type WindowPreviewRuntime } from "./preview-connection-backend.js";
-import { editDesktopConnection, type WorkspaceContext } from "./window-workspace-target.js";
+import { editDesktopConnection, type ConnectionEditContext } from "./desktop-connection-edits.js";
 import { formatLogError, type Logger, type LogEventOf } from "@orkestrator/protocol/logger";
 
 /** A renderer's web contents, as far as the window bookkeeping uses it. */
@@ -17,18 +17,18 @@ export type RendererContents = {
   send(channel: string, ...args: unknown[]): void;
 };
 
-/** The main process resources of one renderer: a window's own, or a realm's. */
+/** The main process resources of one window's renderer. */
 export interface DesktopWindowContextRecord
   extends
-    WorkspaceContext,
+    ConnectionEditContext,
     WindowPreviewRuntime<{ destroyAll(): void }, { disposeAll(): Promise<void> }> {
-  /** The renderer: the window's own, or a workspace realm inside it. */
+  /** The window's renderer. */
   contents: RendererContents;
   slot: number;
   artifactHosts: { dispose(): void };
   /**
    * Read when the window was created: on Local it takes backend events and
-   * commands over the gateway itself. Never set on a workspace realm.
+   * commands over the gateway itself.
    */
   localGatewayTransport?: boolean;
 }
@@ -46,18 +46,9 @@ export type DesktopWindowConnections = Pick<
   | "relayedEventReady"
 >;
 
-/** Which of a renderer's event channels a per-node listen is on. */
-export type RelayedListenChannel = "workspace" | "portal";
-
-export function isRelayedListenChannel(value: unknown): value is RelayedListenChannel {
-  return value === "workspace" || value === "portal";
-}
-
 type IpcSender = { sender?: { id: number } };
 
 export interface DesktopWindowContextsOptions<T extends DesktopWindowContextRecord> {
-  /** Workspace realms, by their own renderer's ID. */
-  realms: { get(id: number): T | undefined; values(): Iterable<T> };
   /** The connection manager, once connections are initialized. */
   connections(): DesktopWindowConnections | null;
   /** A new preview runtime for `context` on `connectionId`. */
@@ -66,11 +57,14 @@ export interface DesktopWindowContextsOptions<T extends DesktopWindowContextReco
     connectionId: string,
     partitionKey: string,
   ): { manager: T["browserPreviewManager"]; previewTransport: T["previewTransport"] };
-  /** Close the workspace realms inside a window. */
-  closeRealms(webContentsId: number): void;
   cancelPrompts(webContentsId: number): void;
   /** Revoke a scope's node workspace grant, if it holds one. */
   releaseWorkspaceGrant(scope: string): void;
+  /**
+   * Release a window's node scopes (`node-scopes.ts`): on close, and when its
+   * command node changes.
+   */
+  releaseNodeScopes?(context: T): void;
   releaseSlot(slot: number): void;
   setConnectionTitle(context: T): void;
   publishConnectionLists(): void;
@@ -84,17 +78,22 @@ export function emitToContents(contents: RendererContents, event: string, payloa
 }
 
 /**
- * The desktop windows by their renderer's ID, and the realms inside them:
- * which renderer an IPC call came from, which renderers a connection's events
- * reach, and what each window owns until it closes.
+ * The desktop windows by their renderer's ID: which window an IPC call came
+ * from, which windows a connection's events reach, and what each window owns
+ * until it closes. Other nodes reach a window through its node scopes.
  */
 export class DesktopWindowContexts<T extends DesktopWindowContextRecord> {
   private readonly contexts = new Map<number, T>();
   readonly windows: ReadonlyMap<number, T> = this.contexts;
-  /** The per-node relayed events each renderer listens to, by its ID. */
-  private readonly relayedListens = new Map<number, Record<RelayedListenChannel, Set<string>>>();
+  /** The per-node relayed events each window listens to, by its renderer's ID. */
+  private readonly relayedListens = new Map<number, Set<string>>();
   /** What each connection's filtered stream was last told to carry. */
   private readonly appliedRelayedEvents = new Map<string, string>();
+  /** Node scope connections: whose `orkestrator:node-event` each one feeds. */
+  private readonly nodeConnections = new Map<
+    string,
+    Set<{ contents: RendererContents; nodeId: string }>
+  >();
   lastFocusedWindowId: number | null = null;
 
   constructor(private readonly options: DesktopWindowContextsOptions<T>) {}
@@ -110,7 +109,6 @@ export class DesktopWindowContexts<T extends DesktopWindowContextRecord> {
     this.lastFocusedWindowId = webContentsId;
     return () => {
       const closing = this.contexts.get(webContentsId);
-      this.options.closeRealms(webContentsId);
       closing?.browserPreviewManager.destroyAll();
       closing?.artifactHosts.dispose();
       // Owned local listeners and tunnel connections end with the window;
@@ -122,8 +120,8 @@ export class DesktopWindowContexts<T extends DesktopWindowContextRecord> {
       this.contexts.delete(webContentsId);
       this.dropRelayedListens(webContentsId);
       // Closing never stops the node's work; it only revokes the grant.
+      if (closing) this.options.releaseNodeScopes?.(closing);
       this.options.releaseWorkspaceGrant(scope);
-      if (closing?.portalScope) this.options.connections()?.release(closing.portalScope);
       this.options.connections()?.release(scope);
       this.options.releaseSlot(slot);
       if (this.lastFocusedWindowId === webContentsId) {
@@ -133,15 +131,13 @@ export class DesktopWindowContexts<T extends DesktopWindowContextRecord> {
     };
   }
 
-  /** Every renderer: main windows and the realms inside them. */
+  /** Every window renderer. */
   renderers(): T[] {
-    return [...this.contexts.values(), ...this.options.realms.values()];
+    return [...this.contexts.values()];
   }
 
   forEvent(event?: IpcSender): T {
-    const context = event?.sender
-      ? (this.contexts.get(event.sender.id) ?? this.options.realms.get(event.sender.id))
-      : null;
+    const context = event?.sender ? this.contexts.get(event.sender.id) : null;
     if (!context) throw new Error("The requesting window is no longer available");
     return context;
   }
@@ -160,6 +156,26 @@ export class DesktopWindowContexts<T extends DesktopWindowContextRecord> {
     this.sendToConnection(connectionId, event, payload, connectionId === LOCAL_CONNECTION_ID);
   }
 
+  /**
+   * Deliver a node scope's connection events to its window, tagged with the
+   * node, until the returned callback runs (the scope's release).
+   */
+  mapNodeConnection(
+    context: { contents: RendererContents },
+    nodeId: string,
+    connectionId: string,
+  ): () => void {
+    const entry = { contents: context.contents, nodeId };
+    const entries = this.nodeConnections.get(connectionId) ?? new Set();
+    this.nodeConnections.set(connectionId, entries);
+    entries.add(entry);
+    return () => {
+      const current = this.nodeConnections.get(connectionId);
+      if (!current?.delete(entry)) return;
+      if (current.size === 0) this.nodeConnections.delete(connectionId);
+    };
+  }
+
   /** Whether any open window would take terminal output from main's local stream. */
   needsLocalTerminalRelay(): boolean {
     for (const context of this.contexts.values()) {
@@ -172,55 +188,50 @@ export class DesktopWindowContexts<T extends DesktopWindowContextRecord> {
    * A renderer started listening to a per-node relayed event. Settles once the
    * stream carrying it is open, so a read that follows cannot precede it.
    */
-  addRelayedListen(event: IpcSender | undefined, channel: unknown, name: unknown): Promise<void> {
+  addRelayedListen(event: IpcSender | undefined, name: unknown): Promise<void> {
     const context = this.forEvent(event);
-    if (
-      !isRelayedListenChannel(channel) ||
-      typeof name !== "string" ||
-      !relayedNodeEventNodeId(name)
-    )
+    if (typeof name !== "string" || !relayedNodeEventNodeId(name))
       throw new Error("Expected a per-node relayed event");
     let listens = this.relayedListens.get(context.contents.id);
     if (!listens) {
-      listens = { workspace: new Set(), portal: new Set() };
+      listens = new Set();
       this.relayedListens.set(context.contents.id, listens);
     }
-    if (listens[channel].size >= MAX_NODE_EVENT_WATCHES && !listens[channel].has(name))
+    if (listens.size >= MAX_NODE_EVENT_WATCHES && !listens.has(name))
       throw new Error("Too many per-node relayed events");
-    listens[channel].add(name);
+    listens.add(name);
     this.syncRelayedEvents();
-    const connectionId = this.relayChannelConnection(context, channel);
+    const connectionId = this.relayConnection(context);
     return connectionId === null
       ? Promise.resolve()
       : (this.options.connections()?.relayedEventReady(connectionId, name) ?? Promise.resolve());
   }
 
-  removeRelayedListen(event: IpcSender | undefined, channel: unknown, name: unknown): void {
-    if (!isRelayedListenChannel(channel) || typeof name !== "string") return;
+  removeRelayedListen(event: IpcSender | undefined, name: unknown): void {
+    if (typeof name !== "string") return;
     const context = this.forEvent(event);
-    if (this.relayedListens.get(context.contents.id)?.[channel].delete(name)) {
+    if (this.relayedListens.get(context.contents.id)?.delete(name)) {
       this.syncRelayedEvents();
     }
   }
 
-  /** A renderer's document is new: nothing the previous one listened to still stands. */
-  resetRelayedListens(event: IpcSender | undefined, channel: unknown): void {
-    if (!isRelayedListenChannel(channel)) return;
-    const listens = this.relayedListens.get(this.forEvent(event).contents.id)?.[channel];
+  /** A window's document is new: nothing the previous one listened to still stands. */
+  resetRelayedListens(event: IpcSender | undefined): void {
+    const listens = this.relayedListens.get(this.forEvent(event).contents.id);
     if (!listens?.size) return;
     listens.clear();
     this.syncRelayedEvents();
   }
 
-  /** A window or realm closed. */
+  /** A window closed. */
   dropRelayedListens(webContentsId: number): void {
     if (this.relayedListens.delete(webContentsId)) this.syncRelayedEvents();
   }
 
   /**
    * Tell each connection what its windows listen to now. Also what follows a
-   * window or realm moving to another connection: the listens are the renderer's,
-   * and the stream that carries them is whichever its scope is bound to.
+   * window moving to another connection: the listens are the renderer's, and
+   * the stream that carries them is whichever its scope is bound to.
    */
   syncRelayedEvents(): void {
     const connections = this.options.connections();
@@ -228,15 +239,12 @@ export class DesktopWindowContexts<T extends DesktopWindowContextRecord> {
     const wanted = new Map<string, Set<string>>();
     for (const context of this.renderers()) {
       const listens = this.relayedListens.get(context.contents.id);
-      if (!listens) continue;
-      for (const channel of ["workspace", "portal"] as const) {
-        if (listens[channel].size === 0) continue;
-        const connectionId = this.relayChannelConnection(context, channel);
-        if (connectionId === null) continue;
-        const events = wanted.get(connectionId) ?? new Set<string>();
-        wanted.set(connectionId, events);
-        for (const name of listens[channel]) events.add(name);
-      }
+      if (!listens?.size) continue;
+      const connectionId = this.relayConnection(context);
+      if (connectionId === null) continue;
+      const events = wanted.get(connectionId) ?? new Set<string>();
+      wanted.set(connectionId, events);
+      for (const name of listens) events.add(name);
     }
     for (const connectionId of Array.from(this.appliedRelayedEvents.keys())) {
       if (wanted.has(connectionId)) continue;
@@ -253,31 +261,27 @@ export class DesktopWindowContexts<T extends DesktopWindowContextRecord> {
   }
 
   /**
-   * The connection whose relay feeds this channel. None for a window on the direct
-   * gateway transport, which has these events from its own stream, or for a scope
-   * that has just been released.
+   * The connection whose relay feeds a window's listens. None for a window on
+   * the direct gateway transport, which has these events from its own stream,
+   * or for a scope that has just been released.
    */
-  private relayChannelConnection(context: T, channel: RelayedListenChannel): string | null {
-    const scope = channel === "portal" ? context.portalScope : context.scope;
-    if (!scope) return null;
+  private relayConnection(context: T): string | null {
     let connectionId: string | undefined;
     try {
-      connectionId = this.options.connections()?.getConnectionId(scope);
+      connectionId = this.options.connections()?.getConnectionId(context.scope);
     } catch {
       return null;
     }
     if (!connectionId) return null;
-    return channel === "workspace" &&
-      connectionId === LOCAL_CONNECTION_ID &&
-      context.localGatewayTransport
+    return connectionId === LOCAL_CONNECTION_ID && context.localGatewayTransport
       ? null
       : connectionId;
   }
 
-  private listensTo(context: T, channel: RelayedListenChannel, event: string): boolean {
+  private listensTo(context: T, event: string): boolean {
     return (
       !isPerNodeRelayedEvent(event) ||
-      this.relayedListens.get(context.contents.id)?.[channel].has(event) === true
+      this.relayedListens.get(context.contents.id)?.has(event) === true
     );
   }
 
@@ -293,19 +297,17 @@ export class DesktopWindowContexts<T extends DesktopWindowContextRecord> {
       if (
         connections.getConnectionId(context.scope) === connectionId &&
         !(skipDirectTransport && context.localGatewayTransport) &&
-        this.listensTo(context, "workspace", event)
+        this.listensTo(context, event)
       ) {
         emitToContents(context.contents, event, payload);
       }
-      // The portal channel of a realm: its window's command node.
-      if (
-        context.portalScope &&
-        connections.getConnectionId(context.portalScope) === connectionId &&
-        !context.contents.isDestroyed() &&
-        this.listensTo(context, "portal", event)
-      ) {
-        context.contents.send(PORTAL_EVENT_CHANNEL, event, payload);
-      }
+    }
+    // A node scope's own stream, terminal output included. Per-node relayed
+    // events are a command-node channel; a node scope never asks for them.
+    const nodes = this.nodeConnections.get(connectionId);
+    if (!nodes || isPerNodeRelayedEvent(event)) return;
+    for (const { contents, nodeId } of nodes) {
+      if (!contents.isDestroyed()) contents.send(NODE_EVENT_CHANNEL, nodeId, event, payload);
     }
   }
 
@@ -315,17 +317,11 @@ export class DesktopWindowContexts<T extends DesktopWindowContextRecord> {
     if (!connections) return;
     this.syncRelayedEvents();
     rebindWindowPreviews(context, connections.getConnectionId(context.scope), (connectionId) =>
-      this.options.createPreviews(
-        context,
-        connectionId,
-        // A workspace connection is new on every switch; preview site data
-        // stays with the node, as it would for a direct connection.
-        context.target ? `node:${context.target.nodeId}` : connectionId,
-      ),
+      this.options.createPreviews(context, connectionId, connectionId),
     );
   }
 
-  /** Retitle the requesting window; a realm has no title of its own. */
+  /** Retitle the requesting window. */
   updateWindowTitle(event: IpcSender | undefined): void {
     const senderId = event?.sender?.id;
     const context = senderId === undefined ? undefined : this.contexts.get(senderId);
@@ -344,7 +340,9 @@ export class DesktopWindowContexts<T extends DesktopWindowContextRecord> {
       context,
       { kind: "use", connectionId },
       connections,
-      async () => this.options.closeRealms(context.contents.id),
+      async () => {
+        this.options.releaseNodeScopes?.(context);
+      },
     );
     this.followConnection(context);
     this.updateWindowTitle(event);
@@ -353,20 +351,12 @@ export class DesktopWindowContexts<T extends DesktopWindowContextRecord> {
   }
 }
 
-/** Lifecycle callbacks shared by main's realm and connection owners. */
+/** Lifecycle callbacks of main's connection owners. */
 export function createDesktopRelayedLifecycle(
-  windows: Pick<
-    DesktopWindowContexts<DesktopWindowContextRecord>,
-    "dropRelayedListens" | "syncRelayedEvents"
-  >,
-  realms: { unregister(id: number): void },
+  windows: Pick<DesktopWindowContexts<DesktopWindowContextRecord>, "syncRelayedEvents">,
   publish: () => void,
 ) {
   return {
-    unregisterRealm(record: { webContents: { id: number } }): void {
-      realms.unregister(record.webContents.id);
-      windows.dropRelayedListens(record.webContents.id);
-    },
     onStateChange(): void {
       windows.syncRelayedEvents();
       publish();

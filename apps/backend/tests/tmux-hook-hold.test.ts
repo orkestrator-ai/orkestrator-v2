@@ -1,3 +1,4 @@
+import { eventSink } from "../src/core/backend-emit.js";
 import { describe, expect, test } from "bun:test";
 import path from "node:path";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
@@ -285,8 +286,9 @@ describe("generated hook script pause", () => {
       const emitted: Array<Record<string, unknown>> = [];
       const context = {
         storage: { getEnvironment: async () => environment },
-        emit: (_event: string, payload: unknown) =>
+        emit: eventSink((_event: string, payload: unknown) =>
           emitted.push(payload as Record<string, unknown>),
+        ),
         appRoot: "",
         resourceRoot: "",
       };

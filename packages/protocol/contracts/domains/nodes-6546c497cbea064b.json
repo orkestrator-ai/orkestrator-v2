@@ -1,0 +1,198 @@
+{
+  "schemaVersion": 1,
+  "domain": "nodes",
+  "commands": {
+    "accept_command_handover": {
+      "untyped": true,
+      "read": false
+    },
+    "add_node": {
+      "untyped": true,
+      "read": false
+    },
+    "allow_controller": {
+      "untyped": true,
+      "read": false
+    },
+    "answer_node_ssh_prompt": {
+      "untyped": true,
+      "read": false
+    },
+    "apply_env_keys": {
+      "untyped": true,
+      "read": false
+    },
+    "attach_controller": {
+      "untyped": true,
+      "read": false
+    },
+    "close_node_workspace": {
+      "untyped": true,
+      "read": false
+    },
+    "compare_project_files": {
+      "untyped": true,
+      "read": false
+    },
+    "copy_project_to_node": {
+      "untyped": true,
+      "read": false
+    },
+    "create_client_grant": {
+      "untyped": true,
+      "read": false
+    },
+    "detach_controller": {
+      "untyped": true,
+      "read": false
+    },
+    "detach_controller_here": {
+      "untyped": true,
+      "read": false
+    },
+    "discard_node_detach": {
+      "untyped": true,
+      "read": false
+    },
+    "dismiss_node_outcome": {
+      "untyped": true,
+      "read": false
+    },
+    "fingerprint_project_files": {
+      "untyped": true,
+      "read": false
+    },
+    "forget_node": {
+      "untyped": true,
+      "read": false
+    },
+    "get_backend_profile": {
+      "untyped": true,
+      "read": true
+    },
+    "get_node_status": {
+      "untyped": true,
+      "read": true
+    },
+    "get_node_summaries": {
+      "untyped": true,
+      "read": true
+    },
+    "get_portal_layout": {
+      "untyped": true,
+      "read": true
+    },
+    "get_project_copy_options": {
+      "untyped": true,
+      "read": true
+    },
+    "get_project_seed_files": {
+      "untyped": true,
+      "read": true
+    },
+    "hand_over_command": {
+      "untyped": true,
+      "read": false
+    },
+    "import_desktop_connections": {
+      "untyped": true,
+      "read": false
+    },
+    "invoke_on_node": {
+      "untyped": true,
+      "read": false
+    },
+    "list_controllers": {
+      "untyped": true,
+      "read": true
+    },
+    "list_node_outcomes": {
+      "untyped": true,
+      "read": true
+    },
+    "list_node_ssh_prompts": {
+      "untyped": true,
+      "read": true
+    },
+    "list_nodes": {
+      "untyped": true,
+      "read": true
+    },
+    "list_project_copies": {
+      "untyped": true,
+      "read": true
+    },
+    "open_node_workspace": {
+      "untyped": true,
+      "read": false
+    },
+    "preview_agents_md_update": {
+      "untyped": true,
+      "read": false
+    },
+    "preview_command_handover": {
+      "untyped": true,
+      "read": false
+    },
+    "probe_node_host_key": {
+      "untyped": true,
+      "read": false
+    },
+    "read_env_values": {
+      "untyped": true,
+      "read": true
+    },
+    "read_environment_details": {
+      "untyped": true,
+      "read": true
+    },
+    "reconnect_node": {
+      "untyped": true,
+      "read": false
+    },
+    "renew_client_grant": {
+      "untyped": true,
+      "read": false
+    },
+    "renew_node_workspace": {
+      "untyped": true,
+      "read": false
+    },
+    "revoke_client_grant": {
+      "untyped": true,
+      "read": false
+    },
+    "set_command_node_enabled": {
+      "untyped": true,
+      "read": false
+    },
+    "sync_controller_settings": {
+      "untyped": true,
+      "read": false
+    },
+    "trust_node_host_key": {
+      "untyped": true,
+      "read": false
+    },
+    "unwatch_node_events": {
+      "untyped": true,
+      "read": false
+    },
+    "update_backend_profile": {
+      "untyped": true,
+      "read": false
+    },
+    "update_node": {
+      "untyped": true,
+      "read": false
+    },
+    "update_portal_layout": {
+      "untyped": true,
+      "read": false
+    },
+    "watch_node_events": {
+      "untyped": true,
+      "read": false
+    }
+  }
+}

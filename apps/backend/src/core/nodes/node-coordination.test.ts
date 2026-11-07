@@ -1,3 +1,5 @@
+import { eventSink } from "../backend-emit.js";
+import { registrarFrom } from "../commands-registry-contracts.js";
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 
 import { createHash } from "node:crypto";
@@ -45,7 +47,7 @@ function coordination(world: MailWorld, controllers: Array<{ id: string; name: s
     nodes: nodes as never,
     portal: portal as never,
     invoke: async () => undefined as never,
-    emit: (event, payload) => events.push({ event, payload }),
+    emit: eventSink((event, payload) => events.push({ event, payload })),
   });
   return { instance, events };
 }
@@ -522,7 +524,7 @@ describe("a command node's deliverNow on this leaf", () => {
     const recipient = await world.addEnvironment("worker", worker);
     const { instance } = coordination(world, [{ id: "bk_cmd", name: "Office desktop" }]);
     const commands = new Map<string, CommandHandler>();
-    registerNodeCommands((name, handler) => commands.set(name, handler));
+    registerNodeCommands(registrarFrom((name, handler) => commands.set(name, handler)));
     const context = {
       storage: world.storage,
       nodeCoordination: instance,
@@ -665,9 +667,15 @@ describe("a command node's deliverNow on this leaf", () => {
     expect(world.steered(recipient)).toEqual([]);
   });
 
-  test("other unknown fields are still refused", async () => {
-    const { deliver } = await leaf();
-    await expect(deliver("hi", { deliverNow: true })).rejects.toThrow("deliverNow");
+  // Strict until plan item 1010: `deliver_node_mail` is now a defined command,
+  // whose arguments decode tolerantly (§11.4). An unknown key is dropped; a
+  // must-understand one would be named in the envelope's `critical` list.
+  test("other unknown fields are dropped, not refused, and do not steer", async () => {
+    const { world, recipient, deliver } = await leaf({ launched: true });
+    const result = await deliver("hi", { deliverNow: true });
+    expect(result).toMatchObject({ placement: "pending-inject" });
+    expect(result).not.toHaveProperty("deliverNow");
+    expect(world.steered(recipient)).toEqual([]);
   });
 });
 

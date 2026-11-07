@@ -57,7 +57,7 @@ matrix with evidence for every row are in
   - writes are refused while the node is unavailable;
   - a lost answer becomes an outcome-unknown record (`list_node_outcomes`)
     and is never resent;
-  - administrative commands never cross nodes (`NODE_EXCLUDED_COMMANDS`).
+  - administrative commands never cross nodes (`NODE_ROUTING_EXCLUDED_COMMANDS`).
 - **Leaf workspaces.** `open_node_workspace` returns a 15-minute,
   hash-only client grant issued by the leaf, along with the leaf's direct
   origins, a loopback origin and the relay base.
@@ -68,17 +68,18 @@ matrix with evidence for every row are in
   terminal WebSockets with the leaf's credential.
 - **Renderer** (`lib/portal`, `components/federation`):
   - One `FederationProvider` reads the command node's portal over the
-    portal channel (`lib/portal/portal-transport.ts`).
+    window's command scope (`lib/portal/command-scope.ts`).
   - The window always stays on its command node. Opening another node's
-    environment shows that node's workspace realm in the central region
-    (`lib/federation/workspace-realm.ts`, `stores/remoteWorkspaceStore.ts`,
-    `components/federation/RemoteWorkspaceRegion.tsx`), without reloading.
-    The desktop binds a realm's child view to the node in main
-    (`workspace-views.ts`, `setDesktopWorkspaceTarget`: direct first, then
-    the command node's own route); a browser or iOS window keeps each
-    realm's grant in session storage under its workspace ID
-    (`workspaceTargetGatewayOptions` in the frame): direct first, then the
-    relay.
+    environment shows that node's workspace in the central region, without
+    reloading. As built here it was a workspace realm, a separate document
+    per node (`lib/federation/workspace-realm.ts`, desktop
+    `workspace-views.ts` and `setDesktopWorkspaceTarget`, the browser's realm
+    grant in session storage). Those are deleted (plan items 6002 and 6003,
+    2026-11-07): the workspace now renders in the window's own tree on the
+    node's scope (`stores/remoteWorkspaceStore.ts`,
+    `components/federation/RemoteWorkspaceRegion.tsx`, `InTreeWorkspace`;
+    [federation.md](../architecture/federation.md#node-scopes-one-scope-per-node-in-the-windows-tree)),
+    still direct first, then the command node's own route or relay.
   - The info panel shows the connection path.
 - **Removed:**
   - renderer per-machine runtimes and the registry;

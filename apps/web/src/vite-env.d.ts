@@ -7,6 +7,8 @@ interface ImportMetaEnv {
   readonly ORKESTRATOR_STATIC_HTML_FRAME_DOCUMENT?: string;
   /** `"unavailable"` in a build whose hosting policy cannot run the frame. */
   readonly ORKESTRATOR_STATIC_HTML_PRESENTATION?: string;
+  /** The dev launcher's profile flavor (`development` or `agent-test`); unset in builds. */
+  readonly VITE_ORKESTRATOR_PROFILE_FLAVOR?: string;
 }
 
 interface Window {
@@ -34,30 +36,16 @@ interface Window {
    * Electron only: the machine this renderer is bound to, for presentation
    * storage namespaces. Never a route, port or credential.
    */
-  /**
-   * The command node this client is connected to, while the window's
-   * workspace (`orkestrator`) is on another node. Only the portal layer uses
-   * it; see `lib/portal/portal-transport.ts`.
-   */
-  orkestratorPortal?: {
-    invoke<T = unknown>(command: string, args?: Record<string, unknown>): Promise<T>;
-    listen<T = unknown>(event: string, callback: (payload: T) => void): () => void;
-    eventStreamReady?(event: string): Promise<void>;
-  };
-  /** The node the window's workspace is on, when it is not the command node. */
-  orkestratorWorkspaceTarget?: {
-    nodeId: string;
-    nodeName: string;
-    path: "direct" | "relay";
-    routeKind?: "https" | "ssh";
-    via?: string;
-  };
   orkestratorDesktopIdentity?: {
     connectionId: string;
     backendId: string | null;
     legacyOrigin: string | null;
-    /** The window's own machine, while its workspace is on another node. */
-    portal?: { connectionId: string; backendId: string | null; legacyOrigin: string | null };
+    /**
+     * This computer's own backend installation id, null until known: a node
+     * is on this device exactly when its id equals this
+     * (`backendOnThisDevice(nodeId)` in `lib/gateway-url.ts`).
+     */
+    localInstallationId?: string | null;
   };
   /**
    * Electron only, on a local window using the direct gateway transport: the
@@ -73,7 +61,45 @@ interface Window {
     keyboardShortcuts?: { closed(): Promise<void> };
     /** Electron windows keep focus and renderer storage independent. */
     isolatedViewState?: true;
-    invoke<T = unknown>(command: string, args?: Record<string, unknown>): Promise<T>;
+    /** Electron also takes `{ nodeId?, envelope? }`; an absent `nodeId` is the command node. */
+    invoke<T = unknown>(
+      command: string,
+      args?: Record<string, unknown>,
+      options?: { nodeId?: string; envelope?: Record<string, unknown> },
+    ): Promise<T>;
+    /**
+     * Browser gateway (and a local desktop window on the direct gateway
+     * transport) only: the command node's hello, `null` when it answered
+     * none (plan item 2011). Electron's IPC windows read it from
+     * `nodes.gateway(commandNodeId)` instead.
+     */
+    hello?(): Promise<unknown>;
+    /**
+     * Electron only: another node through this window's scope on it. Refusals
+     * lead their message with `[code] ` (`unknown-node`, `node-scope-closed`, ...).
+     */
+    node?(nodeId: string): {
+      readonly nodeId: string;
+      invoke<T = unknown>(
+        command: string,
+        args?: Record<string, unknown>,
+        options?: { envelope?: Record<string, unknown> },
+      ): Promise<T>;
+      listen<T = unknown>(event: string, callback: (payload: T) => void): () => void;
+      eventStreamReady(event: string): Promise<void>;
+      eventStreamConnection: {
+        state(): "idle" | "connecting" | "connected" | "disconnected";
+        subscribe(
+          listener: (state: "idle" | "connecting" | "connected" | "disconnected") => void,
+        ): () => void;
+      };
+    };
+    /** Electron only: open (with a hold), release and read a node scope's snapshot. */
+    nodes?: {
+      open(nodeId: string): Promise<unknown>;
+      release(nodeId: string): Promise<void>;
+      gateway(nodeId: string): Promise<unknown>;
+    };
     listen<T = unknown>(event: string, callback: (payload: T) => void): () => void;
     /** Browser gateway only: resolves once the event's filtered stream is live. */
     eventStreamReady?(event: string): Promise<void>;
@@ -198,45 +224,6 @@ interface Window {
         routeFallback?: boolean;
       }): Promise<import("@orkestrator/protocol/connections").ConnectionList>;
       answerSshPrompt?(promptId: string, answer: string | null): void;
-    };
-    /**
-     * Electron only: workspace realms of other nodes in this window's central
-     * region (see `lib/federation/workspace-realm.ts`). The main process binds
-     * each to its node; the window only places it and passes messages.
-     */
-    workspaceViews?: {
-      open(input: {
-        nodeId: string;
-        request: Omit<import("@/lib/federation/workspace-realm").RealmSelectRequest, "type">;
-      }): Promise<{ viewId: string }>;
-      setBounds(
-        viewId: string,
-        bounds: { x: number; y: number; width: number; height: number },
-      ): Promise<void>;
-      setVisible(viewId: string, visible: boolean): Promise<void>;
-      /** A still of the realm (a data URL), shown while one of the window's overlays covers it. */
-      capture(viewId: string): Promise<string | null>;
-      send(
-        viewId: string,
-        message: import("@/lib/federation/workspace-realm").ShellToRealmMessage,
-      ): Promise<void>;
-      close(viewId: string): Promise<void>;
-      onEvent(
-        callback: (
-          event:
-            | { viewId: string; type: "message"; message: unknown }
-            | { viewId: string; type: "closed" | "crashed" | "load-failed" },
-        ) => void,
-      ): () => void;
-    };
-    /** Electron only, in a workspace realm: messages to and from its window. */
-    workspaceRealm?: {
-      post(
-        message:
-          | import("@/lib/federation/workspace-realm").RealmToShellMessage
-          | import("@orkestrator/protocol/realm-boot-timing").RealmBootTimingMessage,
-      ): void;
-      onMessage(callback: (message: unknown) => void): () => void;
     };
     process: {
       exit(code?: number): Promise<void>;

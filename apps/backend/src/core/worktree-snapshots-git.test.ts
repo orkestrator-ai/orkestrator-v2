@@ -1,3 +1,4 @@
+import { eventSink } from "./backend-emit.js";
 import { afterAll, beforeAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { promises as fs, watch } from "node:fs";
 import path from "node:path";
@@ -158,11 +159,11 @@ beforeAll(
       metrics,
       pollIntervalMs: 10 * 60_000,
       safetyNetIntervalMs: 10 * 60_000,
-      emit: (event, payload) => {
+      emit: eventSink((event, payload) => {
         if (event !== WORKTREE_SNAPSHOT_CHANGED_EVENT) return;
         events.push(payload as never);
         publishedRows = scannedRows;
-      },
+      }),
       startWatcher: (options) =>
         startWorktreeWatcher({
           ...options,

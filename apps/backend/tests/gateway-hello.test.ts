@@ -5,8 +5,17 @@ import {
   BACKEND_CAPABILITIES,
   BACKEND_HELLO_PATH,
   CLIENT_API_VERSION,
+  domainRange,
+  isPreContract,
   parseBackendHello,
 } from "@orkestrator/protocol/backend-profile";
+import { defineCommand } from "@orkestrator/protocol/contract/command";
+import { defineDomain } from "@orkestrator/protocol/contract/domain";
+import * as Schema from "effect/Schema";
+import {
+  CommandRegistry,
+  createRegistryRegistrar,
+} from "../src/core/commands-registry-contracts.js";
 import { GatewayLifecycle } from "../src/gateway-lifecycle.js";
 import type { BackendHelloIdentity } from "../src/gateway";
 import {
@@ -121,6 +130,7 @@ describe("authenticated hello handshake", () => {
       },
       profile: identity.profile,
       endpointRole: "client",
+      domains: {},
     });
 
     const control = await requestUrl(helloUrl(info.url), { headers });
@@ -141,6 +151,55 @@ describe("authenticated hello handshake", () => {
     expect(post.status).toBe(405);
     expect(post.headers.allow).toBe("GET");
     expect(backendHello).toHaveBeenCalledTimes(2);
+  });
+
+  test("advertises the registry's domain ranges at the top level, never as capabilities", async () => {
+    // The registry's ranges for a defined command (plan items 1003 and 1004):
+    // max is the domain's version, min the oldest declared next to it.
+    const system = defineDomain({ name: "system", version: 3, min: 2 });
+    const probe = defineCommand({
+      domain: system,
+      name: "hello_domains_probe",
+      since: 1,
+      access: "workspace",
+      read: true,
+      args: Schema.Struct({}),
+      result: Schema.Struct({}),
+      critical: [],
+    });
+    const registry = new CommandRegistry();
+    createRegistryRegistrar(registry, { validateResults: true })(probe, () => ({}));
+    expect(registry.helloDomains()).toEqual({ system: { min: 2, max: 3 } });
+
+    for (const [domains, expected] of [
+      [registry.helloDomains(), { system: { min: 2, max: 3 } }],
+      // A contract-aware backend with no defined commands still says so.
+      [undefined, {}],
+    ] as const) {
+      const { info } = await startGateway({
+        backendHello: async () => ({
+          ...identity,
+          nodeMode: "leaf",
+          ...(domains ? { domains } : {}),
+        }),
+      });
+      const response = await requestUrl(helloUrl(info.url), {
+        headers: { authorization: `Bearer ${info.token}` },
+      });
+      expect(response.status).toBe(200);
+      const raw = response.json() as Record<string, unknown>;
+      expect(raw.schemaVersion).toBe(1);
+      expect(raw.domains).toEqual(expected);
+      const parsed = parseBackendHello(raw);
+      expect(parsed.domains).toEqual(expected);
+      expect(isPreContract(parsed)).toBe(false);
+      expect(domainRange(parsed, "system")).toEqual(
+        "system" in expected ? { min: 2, max: 3 } : undefined,
+      );
+      for (const name of Object.keys(parsed.capabilities)) {
+        expect(name in expected).toBe(false);
+      }
+    }
   });
 
   test("answers CORS preflight like the other API routes", async () => {

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { usePullRequestsStore } from "@/stores/pullRequestsStore";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
+import { pullRequestsStore, usePullRequestsStore } from "@/stores/pullRequestsStore";
 import { mockToastError } from "../../../../../tests/mocks/sonner";
 import { AUTO_EXPAND_FILE_LIMIT, PullRequestCodeTab } from "./PullRequestCodeTab";
 import {
@@ -13,6 +14,7 @@ import {
   resetBackend,
   resetPullRequestsStore,
 } from "./pull-request-test-fixtures";
+import { appCommandStore } from "@/test/app-command-store";
 
 const key = "acme/widget#42";
 
@@ -32,13 +34,13 @@ afterEach(() => {
 
 describe("PullRequestCodeTab", () => {
   test("viewed checkbox is optimistic, collapses the file and reverts on failure", async () => {
-    usePullRequestsStore.setState({ files: new Map([[key, makeFiles()]]) });
+    appCommandStore(pullRequestsStore).setState({ files: new Map([[key, makeFiles()]]) });
     const pending = deferred<never>();
     installBackend({
       set_github_pull_request_file_viewed: () => pending.promise,
       get_github_pull_request_files: () => makeFiles(),
     });
-    render(<ConnectedCodeTab />);
+    renderInAppCommandScope(<ConnectedCodeTab />);
 
     expect(screen.getByTestId("pull-request-diff")).toBeTruthy();
     const checkbox = screen.getByRole("checkbox", { name: "Viewed src/app.ts" });
@@ -62,12 +64,12 @@ describe("PullRequestCodeTab", () => {
   });
 
   test("files without a patch link to GitHub instead of a diff", () => {
-    usePullRequestsStore.setState({
+    appCommandStore(pullRequestsStore).setState({
       files: new Map([
         [key, makeFiles({ files: [makeFile({ patchAvailable: false, hunks: [] })] })],
       ]),
     });
-    render(<ConnectedCodeTab />);
+    renderInAppCommandScope(<ConnectedCodeTab />);
     expect(screen.getByText(/Diff not available here/)).toBeTruthy();
     expect(screen.getByRole("button", { name: /View on GitHub/ })).toBeTruthy();
   });
@@ -76,8 +78,10 @@ describe("PullRequestCodeTab", () => {
     const many = Array.from({ length: AUTO_EXPAND_FILE_LIMIT + 1 }, (_, index) =>
       makeFile({ path: `src/file-${index}.ts` }),
     );
-    usePullRequestsStore.setState({ files: new Map([[key, makeFiles({ files: many })]]) });
-    render(<ConnectedCodeTab />);
+    appCommandStore(pullRequestsStore).setState({
+      files: new Map([[key, makeFiles({ files: many })]]),
+    });
+    renderInAppCommandScope(<ConnectedCodeTab />);
     expect(screen.queryByTestId("pull-request-diff") === null).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Expand all files" }));
     expect(screen.getAllByTestId("pull-request-diff")).toHaveLength(many.length);

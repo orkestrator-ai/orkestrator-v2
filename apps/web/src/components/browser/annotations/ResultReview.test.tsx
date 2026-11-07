@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type {
   WebAnnotationComparisonMetadata,
   WebAnnotationResult,
@@ -113,7 +114,7 @@ describe("result review", () => {
       fixtureCapture("page", { id: "after-1", annotationId: "annotation-1" }),
     );
     seedBrowserLayout({ open: true, selectedAnnotationId: "annotation-1" });
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
 
     const report = await screen.findByRole("region", { name: "Agent report" });
     expect(within(report).getByText(/Reported by the agent \(report revision 1\)/)).toBeTruthy();
@@ -147,7 +148,7 @@ describe("result review", () => {
       requestIds: [request.id],
     });
     seedBrowserLayout({ open: true, selectedAnnotationId: "annotation-1" });
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     expect(await screen.findByText(/No structured result was reported/)).toBeTruthy();
     expect(screen.queryByRole("region", { name: "Agent report" }) === null).toBe(true);
     expect(screen.getByRole("region", { name: "Observed by Orkestrator" })).toBeTruthy();

@@ -11,7 +11,7 @@ import {
   parseLeadingSlashCommand,
 } from "@orkestrator/protocol/agent-slash-commands";
 import { nativeAgentCapabilities } from "@orkestrator/protocol/native-agent";
-import * as backend from "@/lib/backend";
+import type * as backend from "@/lib/backend";
 import { COMPOSER_OCCUPIED_MESSAGE } from "@/lib/prompt-queue-errors";
 import {
   QueuedPromptStack,
@@ -27,6 +27,7 @@ import {
   type PipelineSession,
 } from "@/stores/buildPipelineStore";
 import { useConfigStore } from "@/stores/configStore";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 /**
  * A slash or `$` command. The pipeline has no command catalogue to classify one
@@ -126,6 +127,7 @@ export function usePipelineMessageComposer({
   agent: string | undefined;
   agentLabel: string;
 }): PipelineComposerState {
+  const nodeBackend = useScopeBackend();
   const replacePipeline = useBuildPipelineStore((state) => state.replacePipeline);
   const autoSteerEnabled = useConfigStore((state) => state.config.global.autoSteer === true);
   const [draft, updateDraft] = useState("");
@@ -180,7 +182,7 @@ export function usePipelineMessageComposer({
   };
 
   const queueThenSteer = async (text: string): Promise<void> => {
-    const queued = await backend.sendBuildPipelineMessage(pipeline.id, text);
+    const queued = await nodeBackend.sendBuildPipelineMessage(pipeline.id, text);
     // The backend owns the message from here on, so whatever happens to the steer
     // it must not also stay in the box to be sent again.
     setDraft("");
@@ -194,7 +196,7 @@ export function usePipelineMessageComposer({
       return;
     }
     try {
-      const result = await backend.steerQueuedBuildPipelineMessage(pipeline.id, message.id);
+      const result = await nodeBackend.steerQueuedBuildPipelineMessage(pipeline.id, message.id);
       applySteerResult(result, text, "auto-steer");
     } catch (error) {
       replacePipeline(queued);
@@ -219,7 +221,7 @@ export function usePipelineMessageComposer({
     setSendPending(true);
     try {
       if (steer) {
-        const result = await backend.steerBuildPipeline(pipeline.id, command.arguments!.trim());
+        const result = await nodeBackend.steerBuildPipeline(pipeline.id, command.arguments!.trim());
         replacePipeline(result.pipeline);
         if (result.delivery === "steered") {
           toast.success("Sent to the active turn");
@@ -230,7 +232,7 @@ export function usePipelineMessageComposer({
         await queueThenSteer(text);
         return;
       } else {
-        replacePipeline(await backend.sendBuildPipelineMessage(pipeline.id, text));
+        replacePipeline(await nodeBackend.sendBuildPipelineMessage(pipeline.id, text));
       }
       // Cleared only after the backend has durably queued it, so a failed send
       // leaves the user's text in the box to retry rather than losing it.
@@ -244,7 +246,7 @@ export function usePipelineMessageComposer({
 
   const steerQueued = async (message: { id: string; text: string }) => {
     try {
-      const result = await backend.steerQueuedBuildPipelineMessage(pipeline.id, message.id);
+      const result = await nodeBackend.steerQueuedBuildPipelineMessage(pipeline.id, message.id);
       applySteerResult(result, message.text, "steer-button");
     } catch (error) {
       toast.error(`Could not steer the running turn: ${errorText(error)}`);
@@ -253,7 +255,7 @@ export function usePipelineMessageComposer({
 
   const removeQueued = async (messageId: string): Promise<boolean> => {
     try {
-      const result = await backend.removeQueuedBuildPipelineMessage(pipeline.id, messageId);
+      const result = await nodeBackend.removeQueuedBuildPipelineMessage(pipeline.id, messageId);
       replacePipeline(result.pipeline);
       if (!result.removed) {
         toast.error("This message already left the queue, so it can no longer be changed.");

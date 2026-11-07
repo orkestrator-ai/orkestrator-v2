@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:e73aa9567fa0b130bd191853530d87d5e67dca66ee922bfe39eab781b8fe0258",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "document": {
+          "type": "string"
+        },
+        "environmentId": {
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": ["document", "environmentId"],
+      "type": "object"
+    }
+  }
+}

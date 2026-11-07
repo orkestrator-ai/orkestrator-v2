@@ -47,7 +47,7 @@ import { appVersionSkew, BUNDLED_APP_VERSION, normalizeBackendVersion } from "@/
 import { describeVersionReminder, versionClientKind } from "@/lib/version-reminder";
 import * as backend from "@/lib/backend";
 import { getGatewayBaseUrl, isRemoteGatewayConnection } from "@/lib/gateway-url";
-import { pickHostPath } from "@/lib/host-path-picker";
+import { usePickHostPath } from "@/lib/host-path-picker";
 import {
   Loader2,
   Eye,
@@ -273,6 +273,8 @@ function CredentialClearButton({
 }
 
 export function GlobalSettingsSections({ activeSection, settings }: GlobalSettingsSectionsProps) {
+  // Browses the host of the node this component renders in.
+  const pickHostPath = usePickHostPath();
   // Another machine's files are not on this one, so there is nothing to reveal.
   const { machine } = useAccountMachine();
   const canRevealFiles = isWindowMachine(machine);
@@ -2257,6 +2259,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
   };
 
   const describeBackendLocation = () => {
+    // Settings describe the command node, as `getGatewayBaseUrl()` does.
     if (!isRemoteGatewayConnection()) return "this machine";
     try {
       return new URL(getGatewayBaseUrl()).host || "remote backend";

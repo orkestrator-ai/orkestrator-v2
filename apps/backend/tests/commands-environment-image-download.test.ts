@@ -1,3 +1,4 @@
+import { registrarFrom } from "../src/core/commands-registry-contracts.js";
 import { afterEach, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { promises as fs } from "node:fs";
@@ -96,7 +97,7 @@ async function fixture() {
   ).toBe(0);
   const commands = new Map<string, CommandHandler>();
   registerDockerCommands(
-    (name, handler) => commands.set(name, handler),
+    registrarFrom((name, handler) => commands.set(name, handler)),
     {} as RegistryDependencies,
   );
   const invoke = (kind: "start" | "provision") =>

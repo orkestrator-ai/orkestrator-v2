@@ -1,0 +1,314 @@
+{
+  "schemaVersion": 1,
+  "domain": "agent-servers",
+  "commands": {
+    "await_bridge_ready": {
+      "untyped": true,
+      "read": false
+    },
+    "cache_agent_model_catalog": {
+      "untyped": true,
+      "read": false
+    },
+    "cache_opencode_model_catalog": {
+      "untyped": true,
+      "read": false
+    },
+    "cancel_github_cli_login": {
+      "untyped": true,
+      "read": false
+    },
+    "check_any_ai_cli": {
+      "untyped": true,
+      "read": true
+    },
+    "check_claude_cli": {
+      "untyped": true,
+      "read": true
+    },
+    "check_claude_config": {
+      "untyped": true,
+      "read": true
+    },
+    "check_codex_cli": {
+      "untyped": true,
+      "read": true
+    },
+    "check_cursor_cli": {
+      "untyped": true,
+      "read": true
+    },
+    "check_github_cli": {
+      "untyped": true,
+      "read": true
+    },
+    "check_grok_cli": {
+      "untyped": true,
+      "read": true
+    },
+    "check_opencode_cli": {
+      "untyped": true,
+      "read": true
+    },
+    "check_pi_cli": {
+      "untyped": true,
+      "read": true
+    },
+    "cleanup_stale_local_servers_cmd": {
+      "untyped": true,
+      "read": false
+    },
+    "ensure_host_pi_model_catalog": {
+      "untyped": true,
+      "read": false
+    },
+    "get_agent_model_catalog_cache": {
+      "untyped": true,
+      "read": true
+    },
+    "get_available_ai_cli": {
+      "untyped": true,
+      "read": true
+    },
+    "get_claude_model_catalog": {
+      "untyped": true,
+      "read": true
+    },
+    "get_claude_server_log": {
+      "untyped": true,
+      "read": true
+    },
+    "get_claude_server_status": {
+      "untyped": true,
+      "read": true
+    },
+    "get_codex_server_log": {
+      "untyped": true,
+      "read": true
+    },
+    "get_codex_server_status": {
+      "untyped": true,
+      "read": true
+    },
+    "get_container_github_credential_status": {
+      "untyped": true,
+      "read": true
+    },
+    "get_credential_status": {
+      "untyped": true,
+      "read": true
+    },
+    "get_cursor_server_log": {
+      "untyped": true,
+      "read": true
+    },
+    "get_cursor_server_status": {
+      "untyped": true,
+      "read": true
+    },
+    "get_github_cli_login": {
+      "untyped": true,
+      "read": true
+    },
+    "get_github_cli_status": {
+      "untyped": true,
+      "read": true
+    },
+    "get_grok_server_log": {
+      "untyped": true,
+      "read": true
+    },
+    "get_grok_server_status": {
+      "untyped": true,
+      "read": true
+    },
+    "get_local_claude_server_status": {
+      "untyped": true,
+      "read": true
+    },
+    "get_local_codex_server_status": {
+      "untyped": true,
+      "read": true
+    },
+    "get_local_cursor_server_status": {
+      "untyped": true,
+      "read": true
+    },
+    "get_local_grok_server_status": {
+      "untyped": true,
+      "read": true
+    },
+    "get_local_opencode_server_status": {
+      "untyped": true,
+      "read": true
+    },
+    "get_local_pi_server_status": {
+      "untyped": true,
+      "read": true
+    },
+    "get_native_agent_model_catalog": {
+      "untyped": true,
+      "read": true
+    },
+    "get_opencode_model_catalog_cache": {
+      "untyped": true,
+      "read": true
+    },
+    "get_opencode_model_preferences": {
+      "untyped": true,
+      "read": true
+    },
+    "get_opencode_server_log": {
+      "untyped": true,
+      "read": true
+    },
+    "get_opencode_server_status": {
+      "untyped": true,
+      "read": true
+    },
+    "get_pi_server_log": {
+      "untyped": true,
+      "read": true
+    },
+    "get_pi_server_status": {
+      "untyped": true,
+      "read": true
+    },
+    "has_claude_credentials": {
+      "untyped": true,
+      "read": false
+    },
+    "list_agent_plugins": {
+      "untyped": true,
+      "read": true
+    },
+    "list_agent_skills": {
+      "untyped": true,
+      "read": true
+    },
+    "list_environment_agent_skills": {
+      "untyped": true,
+      "read": true
+    },
+    "peek_container_agent_bridge": {
+      "untyped": true,
+      "read": false
+    },
+    "peek_local_agent_bridge": {
+      "untyped": true,
+      "read": false
+    },
+    "read_agent_skill": {
+      "untyped": true,
+      "read": true
+    },
+    "read_environment_agent_skill": {
+      "untyped": true,
+      "read": true
+    },
+    "refresh_host_agent_model_catalog": {
+      "untyped": true,
+      "read": false
+    },
+    "start_claude_server": {
+      "untyped": true,
+      "read": false
+    },
+    "start_codex_server": {
+      "untyped": true,
+      "read": false
+    },
+    "start_cursor_server": {
+      "untyped": true,
+      "read": false
+    },
+    "start_github_cli_login": {
+      "untyped": true,
+      "read": false
+    },
+    "start_grok_server": {
+      "untyped": true,
+      "read": false
+    },
+    "start_local_claude_server_cmd": {
+      "untyped": true,
+      "read": false
+    },
+    "start_local_codex_server_cmd": {
+      "untyped": true,
+      "read": false
+    },
+    "start_local_cursor_server_cmd": {
+      "untyped": true,
+      "read": false
+    },
+    "start_local_grok_server_cmd": {
+      "untyped": true,
+      "read": false
+    },
+    "start_local_opencode_server_cmd": {
+      "untyped": true,
+      "read": false
+    },
+    "start_local_pi_server_cmd": {
+      "untyped": true,
+      "read": false
+    },
+    "start_opencode_server": {
+      "untyped": true,
+      "read": false
+    },
+    "start_pi_server": {
+      "untyped": true,
+      "read": false
+    },
+    "stop_claude_server": {
+      "untyped": true,
+      "read": false
+    },
+    "stop_codex_server": {
+      "untyped": true,
+      "read": false
+    },
+    "stop_cursor_server": {
+      "untyped": true,
+      "read": false
+    },
+    "stop_grok_server": {
+      "untyped": true,
+      "read": false
+    },
+    "stop_local_claude_server_cmd": {
+      "untyped": true,
+      "read": false
+    },
+    "stop_local_codex_server_cmd": {
+      "untyped": true,
+      "read": false
+    },
+    "stop_local_cursor_server_cmd": {
+      "untyped": true,
+      "read": false
+    },
+    "stop_local_grok_server_cmd": {
+      "untyped": true,
+      "read": false
+    },
+    "stop_local_opencode_server_cmd": {
+      "untyped": true,
+      "read": false
+    },
+    "stop_local_pi_server_cmd": {
+      "untyped": true,
+      "read": false
+    },
+    "stop_opencode_server": {
+      "untyped": true,
+      "read": false
+    },
+    "stop_pi_server": {
+      "untyped": true,
+      "read": false
+    }
+  }
+}

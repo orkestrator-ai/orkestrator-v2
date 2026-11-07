@@ -314,7 +314,18 @@ in one store update; otherwise it fetches a snapshot.
 ## Client
 
 `design-controller.ts` keeps one projection, hint listener and intent queue
-per backend/environment/canvas (`apps/web/src/stores/designStore.ts`).
+per backend/environment/canvas (`apps/web/src/stores/designStore.ts`). Each
+node scope holds its own controllers, store and read coordinator subscription,
+and sends its commands through `designApiFor(scope)`; disposing the scope
+disposes its controllers ([node scopes](../development/node-scopes.md)).
+The rest of the canvas surface (the tab's own calls, the agent, workspace,
+export and history dialogs, the library, the layer tree, the deletion notice
+and opening a `.orkdes` file) uses the same node through `useDesignScope()` /
+`useDesignApi()` (`components/design/design-scope.ts`). The design client has
+no command-bound default: `designAction`, `importDesignDocument`,
+`importDesignHostFile`, `runDesignLifecycle` and `designLibraryClient` take
+the node, so one canvas never splits its operations across two nodes
+(plan item 4007).
 Activation subscribes before reading; a 3 s cursor check repairs lost hints
 while visible; with no visible view, polling stops but queued and admitted
 work continues. `refresh()` resolves only after a sync cycle that started

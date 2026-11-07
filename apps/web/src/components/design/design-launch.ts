@@ -12,10 +12,13 @@ import type {
 import {
   classifyTransportError,
   DesignClientError,
-  designApi,
+  designApiFor,
+  designBackendKeyFor,
   failureOf,
   getCapabilities,
+  type DesignV2Api,
 } from "@/lib/design-client";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
 import type { DesignPlacement } from "./design-open";
 
 // ---------------------------------------------------------------------------
@@ -324,10 +327,13 @@ export interface DesignReadinessDeps {
   readiness: (probe: boolean) => Promise<DesignReadiness>;
 }
 
-const defaultReadinessDeps: DesignReadinessDeps = {
-  capabilities: () => getCapabilities(),
-  readiness: (probe) => designApi.readiness(probe),
-};
+/** Readiness of `scope`'s node: the design canvas's (plan item 4007). */
+export function designReadinessDeps(scope: NodeScope): DesignReadinessDeps {
+  return {
+    capabilities: () => getCapabilities(designBackendKeyFor(scope), scope),
+    readiness: (probe) => designApiFor(scope).readiness(probe),
+  };
+}
 
 const UNKNOWN_RENDERER = {
   state: "unknown",
@@ -342,7 +348,7 @@ const UNKNOWN_RENDERER = {
  */
 export async function loadDesignReadiness(
   probe: boolean,
-  deps: DesignReadinessDeps = defaultReadinessDeps,
+  deps: DesignReadinessDeps,
 ): Promise<DesignReadinessView> {
   let capabilities: DesignCapabilities;
   try {
@@ -430,7 +436,8 @@ export async function runDesignLifecycle(
   canvasId: string,
   input: DesignOperationInput,
   preconditions: DesignPreconditions,
-  api: Pick<typeof designApi, "prepare" | "execute"> = designApi,
+  /** The canvas's node: `designApiFor(scope)`. */
+  api: Pick<DesignV2Api, "prepare" | "execute">,
 ): Promise<DesignOperationStatus> {
   const prepared = await api.prepare(environmentId, {
     canvasId,

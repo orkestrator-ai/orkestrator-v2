@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:83315c2244564c94b3c6069fa93f391d82ac4fdc1e5badf29dcd8cd258173256",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "reportId": {
+          "type": "string"
+        },
+        "url": {}
+      },
+      "required": ["reportId"],
+      "type": "object"
+    }
+  }
+}

@@ -11,7 +11,8 @@
  */
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { memo } from "react";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type {
   CoordinatorConversation,
   CoordinatorSnapshot,
@@ -23,11 +24,11 @@ import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
 import type { Environment } from "@/types";
 import * as realBackend from "@/lib/backend";
 import * as realNativeAgent from "@/components/native-agent";
-import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
-import { useEnvironmentStore } from "@/stores/environmentStore";
-import { useMultiReviewStore } from "@/stores/multiReviewStore";
-import { useProjectStore } from "@/stores/projectStore";
-import { useCoordinatorPaneLayoutStore } from "@/stores/coordinatorPaneLayoutStore";
+import { buildPipelineStore } from "@/stores/buildPipelineStore";
+import { environmentStore } from "@/stores/environmentStore";
+import { multiReviewStore } from "@/stores/multiReviewStore";
+import { projectStore } from "@/stores/projectStore";
+import { coordinatorPaneLayoutStore } from "@/stores/coordinatorPaneLayoutStore";
 import {
   reconcileCoordinatorLayout,
   splitCoordinatorPaneAtEdge,
@@ -160,6 +161,7 @@ mock.module("@/components/native-agent", () => ({
 }));
 
 import { CoordinatorPanel } from "./CoordinatorPanel";
+import { appCommandStore } from "@/test/app-command-store";
 
 const worker = { id: "worker-env", projectId: "project-1", name: "api-fix" } as Environment;
 const unrelated = {
@@ -174,7 +176,7 @@ function counts() {
 }
 
 async function renderPanel() {
-  render(<CoordinatorPanel projectId="project-1" />);
+  renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
   await waitFor(() => expect(screen.getAllByTestId("native-agent")).toHaveLength(2));
   // Let the first reads (git, prompts, the checkout turn) settle.
   await act(async () => {
@@ -184,19 +186,19 @@ async function renderPanel() {
 }
 
 describe("CoordinatorPanel render cost", () => {
-  const previousEnvironments = useEnvironmentStore.getState().environments;
-  const previousPipelines = useBuildPipelineStore.getState().pipelines;
-  const previousReviews = useMultiReviewStore.getState().workflows;
+  const previousEnvironments = appCommandStore(environmentStore).getState().environments;
+  const previousPipelines = appCommandStore(buildPipelineStore).getState().pipelines;
+  const previousReviews = appCommandStore(multiReviewStore).getState().workflows;
 
   beforeEach(() => {
     tabRenders.clear();
     workerPrompts = [];
     resetUpstreamCheckForTests();
     resetClientStateCapabilitiesForTests();
-    useCoordinatorPaneLayoutStore.getState().reset();
+    appCommandStore(coordinatorPaneLayoutStore).getState().reset();
     // Two groups, so both conversations' tabs are mounted.
     const single = reconcileCoordinatorLayout(null, ["conversation-1", "side-1"]);
-    useCoordinatorPaneLayoutStore
+    appCommandStore(coordinatorPaneLayoutStore)
       .getState()
       .setLayout(
         "project-1",
@@ -208,8 +210,8 @@ describe("CoordinatorPanel render cost", () => {
           single.activePaneId,
         ),
       );
-    useEnvironmentStore.setState({ environments: [worker, unrelated] });
-    useProjectStore.setState({
+    appCommandStore(environmentStore).setState({ environments: [worker, unrelated] });
+    appCommandStore(projectStore).setState({
       projects: [
         {
           id: "project-1",
@@ -225,9 +227,9 @@ describe("CoordinatorPanel render cost", () => {
   afterEach(() => {
     cleanup();
     resetReadCoordinatorForTests();
-    useEnvironmentStore.setState({ environments: previousEnvironments });
-    useBuildPipelineStore.setState({ pipelines: previousPipelines });
-    useMultiReviewStore.setState({ workflows: previousReviews });
+    appCommandStore(environmentStore).setState({ environments: previousEnvironments });
+    appCommandStore(buildPipelineStore).setState({ pipelines: previousPipelines });
+    appCommandStore(multiReviewStore).setState({ workflows: previousReviews });
   });
   afterAll(() => {
     mock.module("@/lib/backend", () => backendSnapshot);
@@ -247,7 +249,7 @@ describe("CoordinatorPanel render cost", () => {
 
     for (let index = 0; index < 5; index += 1) {
       act(() =>
-        useEnvironmentStore.setState((state) => ({
+        appCommandStore(environmentStore).setState((state) => ({
           environments: state.environments.map((item) =>
             item.id === unrelated.id
               ? ({ ...item, status: index % 2 ? "running" : "stopped" } as Environment)
@@ -256,7 +258,7 @@ describe("CoordinatorPanel render cost", () => {
         })),
       );
       act(() =>
-        useBuildPipelineStore.setState((state) => ({
+        appCommandStore(buildPipelineStore).setState((state) => ({
           pipelines: new Map(state.pipelines).set(`pipeline-${index}`, {
             id: `pipeline-${index}`,
             environmentId: unrelated.id,
@@ -264,7 +266,7 @@ describe("CoordinatorPanel render cost", () => {
         })),
       );
       act(() =>
-        useMultiReviewStore.setState((state) => ({
+        appCommandStore(multiReviewStore).setState((state) => ({
           workflows: new Map(state.workflows).set(`review-${index}`, {
             id: `review-${index}`,
             environmentId: unrelated.id,
@@ -279,7 +281,7 @@ describe("CoordinatorPanel render cost", () => {
     const settled = await renderPanel();
     // A refreshed project list: the panel's own project, as a new object.
     act(() =>
-      useProjectStore.setState((state) => ({
+      appCommandStore(projectStore).setState((state) => ({
         projects: state.projects.map((item) => ({ ...item })),
       })),
     );
@@ -302,7 +304,7 @@ describe("CoordinatorPanel render cost", () => {
     const settled = counts();
 
     act(() =>
-      useEnvironmentStore.setState((state) => ({
+      appCommandStore(environmentStore).setState((state) => ({
         environments: state.environments.map((item) =>
           item.id === worker.id ? { ...item, name: "parser-fix" } : item,
         ),

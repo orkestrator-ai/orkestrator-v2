@@ -7,14 +7,15 @@ import { FilesPanelPullRequests } from "./FilesPanelPullRequests";
 import { FileActionDialog, type PendingFileAction } from "./FileActionDialog";
 import { DiffBaseDialog } from "./DiffBaseDialog";
 import { DiffBaseNotice } from "./DiffBaseNotice";
-import { useFilesPanelStore, useUIStore } from "@/stores";
-import { isFilesPanelFileTab } from "@/stores/filesPanelStore";
+import { uiStore, useFilesPanelStore } from "@/stores";
+import { filesPanelStore, isFilesPanelFileTab } from "@/stores/filesPanelStore";
 import { useFilesPanel, FileBatchActionError } from "@/hooks";
 import { ensureProjectHomeInStore } from "@/hooks/useFilesPanel";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { errorText } from "@/components/settings/machines/machine-ui";
 import type { CreateFileTabOptions } from "@/contexts";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { revealInFileManager } from "@/lib/backend";
+import { backendForScope } from "@/lib/backend/scope-backend";
 import { useWorktreeSnapshotStore } from "@/stores/worktreeSnapshotStore";
 import { hydrationFreshnessNotice, remoteFreshnessNotice } from "@/lib/view-freshness";
 import { FreshnessIndicator } from "@/components/freshness/FreshnessIndicator";
@@ -27,6 +28,7 @@ function resolveLocalFilePath(worktreePath: string, filePath: string): string {
 export function FilesPanel() {
   const activeTab = useFilesPanelStore((state) => state.activeTab);
   const targetBranch = useFilesPanelStore((state) => state.targetBranch);
+  const scope = useNodeScope();
   const [pendingAction, setPendingAction] = useState<PendingFileAction | null>(null);
   const [diffBaseDialogOpen, setDiffBaseDialogOpen] = useState(false);
 
@@ -53,12 +55,14 @@ export function FilesPanel() {
   const openInProjectHome = useCallback(
     (filePath: string, options?: CreateFileTabOptions) => {
       if (!projectScopeProjectId) return;
-      void ensureProjectHomeInStore(projectScopeProjectId)
+      void ensureProjectHomeInStore(projectScopeProjectId, scope)
         .then((home) => {
-          useFilesPanelStore
+          if (scope.disposed) return;
+          scope
+            .store(filesPanelStore)
             .getState()
             .requestFileOpen({ environmentId: home.id, filePath, options });
-          const ui = useUIStore.getState();
+          const ui = scope.store(uiStore).getState();
           ui.selectProjectAndEnvironment(projectScopeProjectId, home.id);
           ui.setProjectBoardTab("home");
         })
@@ -68,7 +72,7 @@ export function FilesPanel() {
           });
         });
     },
-    [projectScopeProjectId],
+    [projectScopeProjectId, scope],
   );
   const onOpenFile = projectScopeProjectId ? openInProjectHome : undefined;
 
@@ -119,13 +123,15 @@ export function FilesPanel() {
   const revealFile = useCallback(
     (filePath: string) => {
       if (!isLocalEnvironment || !worktreePath) return;
-      void revealInFileManager(resolveLocalFilePath(worktreePath, filePath)).catch((error) => {
-        toast.error("Failed to reveal file", {
-          description: error instanceof Error ? error.message : String(error),
+      void backendForScope(scope)
+        .revealInFileManager(resolveLocalFilePath(worktreePath, filePath))
+        .catch((error) => {
+          toast.error("Failed to reveal file", {
+            description: error instanceof Error ? error.message : String(error),
+          });
         });
-      });
     },
-    [isLocalEnvironment, worktreePath],
+    [scope, isLocalEnvironment, worktreePath],
   );
 
   const confirmFileAction = async () => {

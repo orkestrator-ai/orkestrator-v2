@@ -1,12 +1,14 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { MultiReviewModelSelection } from "@orkestrator/protocol/multi-review";
 import type { AgentModelCatalog } from "@/lib/agent-launch";
-import { useConfigStore } from "@/stores/configStore";
+import { configStore } from "@/stores/configStore";
 import {
   DEFAULT_MULTI_REVIEW_ADDRESS_FINDINGS_PROMPT,
   MultiReviewAddressFindingsPromptDialog,
 } from "./MultiReviewAddressFindingsPromptDialog";
+import { appCommandStore } from "@/test/app-command-store";
 
 const catalog: AgentModelCatalog = {
   claude: [{ id: "opus", name: "Opus", reasoningEfforts: ["high", "xhigh"] }],
@@ -49,8 +51,8 @@ const speedCatalog: AgentModelCatalog = {
 };
 
 function setFavoritesEmpty() {
-  const config = useConfigStore.getState().config;
-  useConfigStore.setState({
+  const config = appCommandStore(configStore).getState().config;
+  appCommandStore(configStore).setState({
     config: { ...config, global: { ...config.global, favoriteModels: [] } },
   });
 }
@@ -71,7 +73,11 @@ function renderDialog(
     onSubmit,
     ...overrides,
   };
-  return { onSubmit, props, view: render(<MultiReviewAddressFindingsPromptDialog {...props} />) };
+  return {
+    onSubmit,
+    props,
+    view: renderInAppCommandScope(<MultiReviewAddressFindingsPromptDialog {...props} />),
+  };
 }
 
 afterEach(cleanup);

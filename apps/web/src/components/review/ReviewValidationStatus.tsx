@@ -20,7 +20,7 @@ import { RuntimeClockContext, useRuntimeClockNow } from "@/lib/review/runtime-cl
 import { knownValidationOutput, mergeValidationOutput } from "./validation-output-merge";
 import { Copy, Loader2, RefreshCw, Square, SquareTerminal } from "lucide-react";
 import { toast } from "sonner";
-import { getReviewValidationOutput, stopReviewValidationCommand } from "@/lib/backend";
+import type { getReviewValidationOutput, stopReviewValidationCommand } from "@/lib/backend";
 import { stripAnsi } from "@/lib/terminal-utils";
 import { Button } from "@/components/ui/button";
 import {
@@ -30,6 +30,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 /** Live output cadence while the modal is open on a queued or running command. */
 export const VALIDATION_OUTPUT_POLL_INTERVAL_MS = 2_000;
@@ -328,8 +329,8 @@ export function ReviewValidationStatus({
   environmentId,
   run,
   now: liveNow,
-  loadOutput = getReviewValidationOutput,
-  stopCommand = stopReviewValidationCommand,
+  loadOutput: loadOutputOverride,
+  stopCommand: stopCommandOverride,
   onStop,
   stopping = false,
 }: {
@@ -351,6 +352,13 @@ export function ReviewValidationStatus({
   onStop?: () => void;
   stopping?: boolean;
 }) {
+  const nodeBackend = useScopeBackend();
+  const loadOutput =
+    loadOutputOverride === undefined ? nodeBackend.getReviewValidationOutput : loadOutputOverride;
+  const stopCommand =
+    stopCommandOverride === undefined
+      ? nodeBackend.stopReviewValidationCommand
+      : stopCommandOverride;
   // Without a parent time or clock, times are measured from when this mounted.
   const [mountedAt] = useState(Date.now);
   const clock = useContext(RuntimeClockContext);

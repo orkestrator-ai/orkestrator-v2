@@ -19,7 +19,8 @@ afterAll(() => {
   mock.module("@/lib/backend", () => realBackendSnapshot);
 });
 
-const { usePaneLayoutStore } = await import("./paneLayoutStore");
+const { paneLayoutStore } = await import("./paneLayoutStore");
+const { appCommandStore } = await import("@/test/app-command-store");
 const { tabTeardownBridgeUpgradeToastId } = await import("@/lib/tab-teardown-notice");
 
 type ToastSpy = ReturnType<typeof spyOn>;
@@ -36,7 +37,7 @@ function nativeTab(id: string, platform: string): TabInfo {
 }
 
 function seedTabs(environmentId: string, tabs: TabInfo[]) {
-  usePaneLayoutStore.setState({
+  appCommandStore(paneLayoutStore).setState({
     activeEnvironmentId: environmentId,
     environments: new Map([
       [
@@ -57,7 +58,7 @@ async function flushTeardownRejections() {
 
 beforeEach(() => {
   teardownTab.mockReset();
-  usePaneLayoutStore.setState({
+  appCommandStore(paneLayoutStore).setState({
     environments: new Map(),
     hydration: new Map(),
     activeEnvironmentId: null,
@@ -88,7 +89,7 @@ describe("paneLayoutStore native teardown failure notice", () => {
     });
     seedTabs("env-old-bridge", [nativeTab("claude-a", "claude"), nativeTab("claude-b", "claude")]);
 
-    const store = usePaneLayoutStore.getState();
+    const store = appCommandStore(paneLayoutStore).getState();
     store.removeTab("default", "claude-a", "env-old-bridge");
     store.removeTab("default", "claude-b", "env-old-bridge");
     await flushTeardownRejections();
@@ -116,7 +117,7 @@ describe("paneLayoutStore native teardown failure notice", () => {
     });
     seedTabs("env-old-bridge", [nativeTab("codex-a", "codex"), nativeTab("pi-a", "pi")]);
 
-    const store = usePaneLayoutStore.getState();
+    const store = appCommandStore(paneLayoutStore).getState();
     store.removeTab("default", "codex-a", "env-old-bridge");
     store.removeTab("default", "pi-a", "env-old-bridge");
     await flushTeardownRejections();

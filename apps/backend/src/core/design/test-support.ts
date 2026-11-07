@@ -5,6 +5,7 @@
  *
  * Never import this module from production code.
  */
+import { eventSink } from "../backend-emit.js";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -252,9 +253,9 @@ export async function createDesignHarness(
   const dir = await mkdtemp(join(tmpdir(), options.prefix ?? "ork-design-"));
   const renderer = options.renderer ?? createTestRenderer();
   const events: DesignChange[] = [];
-  const emit = (event: string, payload: unknown) => {
+  const emit = eventSink((event, payload) => {
     if (event === DESIGN_EVENT) events.push(payload as DesignChange);
-  };
+  });
   let closed = false;
   const harness: DesignHarness = {
     dir,

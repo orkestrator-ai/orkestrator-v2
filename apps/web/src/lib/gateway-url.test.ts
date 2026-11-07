@@ -1,16 +1,20 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { provisionalBackendId } from "@orkestrator/protocol/federation";
 import {
+  backendOnThisDevice,
   getGatewayBaseUrl,
   isBackendOnAnotherDevice,
   isGatewayBrowserPreviewSupported,
   isRemoteGatewayConnection,
   resolveGatewayApiUrl,
   resolveGatewayBrowserPreviewUrl,
+  localInstallationId,
   resolveGatewayLoopbackBaseUrl,
 } from "./gateway-url";
 
 afterEach(() => {
   delete window.orkestratorGateway;
+  delete window.orkestratorDesktopIdentity;
 });
 
 describe("isRemoteGatewayConnection", () => {
@@ -81,6 +85,72 @@ describe("isBackendOnAnotherDevice", () => {
     expect(isBackendOnAnotherDevice()).toBe(false);
     // The commands still travel through a gateway, so proxy decisions keep it.
     expect(isRemoteGatewayConnection()).toBe(true);
+  });
+});
+
+describe("backendOnThisDevice(nodeId)", () => {
+  const desktop = (backendId: string | null, local: string | null) => {
+    window.orkestratorDesktopIdentity = {
+      connectionId: backendId === local ? "local" : "remote-1",
+      backendId,
+      legacyOrigin: null,
+      localInstallationId: local,
+    };
+  };
+  const scope = (nodeId: string, role: "command" | "leaf") => ({ nodeId, role });
+
+  test("is true only for this computer's installation id", () => {
+    desktop("bk_cmd", "bk_desk");
+    window.orkestratorGateway = { enabled: true, desktop: true, baseUrl: "https://cmd.test" };
+    expect(localInstallationId()).toBe("bk_desk");
+    expect(backendOnThisDevice("bk_desk")).toBe(true);
+    expect(backendOnThisDevice(scope("bk_desk", "leaf"))).toBe(true);
+    expect(backendOnThisDevice("bk_leaf")).toBe(false);
+    expect(backendOnThisDevice(scope("bk_leaf", "leaf"))).toBe(false);
+    // The command node (another computer here) by id, by scope or by default.
+    expect(backendOnThisDevice("bk_cmd")).toBe(false);
+    expect(backendOnThisDevice(scope(provisionalBackendId("command-node"), "command"))).toBe(false);
+    expect(backendOnThisDevice()).toBe(false);
+    expect(isBackendOnAnotherDevice("bk_leaf")).toBe(true);
+    expect(isBackendOnAnotherDevice("bk_desk")).toBe(false);
+  });
+
+  test("a command node that is this computer is on this device, gateway or not", () => {
+    desktop("bk_desk", "bk_desk");
+    expect(backendOnThisDevice()).toBe(true);
+    expect(backendOnThisDevice(provisionalBackendId("command-node"))).toBe(true);
+    // Even when its route is a gateway (this computer shown through a tunnel).
+    window.orkestratorGateway = { enabled: true, desktop: true, baseUrl: "https://desk.test" };
+    expect(isBackendOnAnotherDevice()).toBe(false);
+    expect(backendOnThisDevice("bk_other")).toBe(false);
+  });
+
+  test("without a local installation id, only the command node can be on this device", () => {
+    // A browser client: no desktop identity at all.
+    expect(localInstallationId()).toBeNull();
+    expect(backendOnThisDevice()).toBe(true);
+    expect(backendOnThisDevice("bk_leaf")).toBe(false);
+    window.orkestratorGateway = { enabled: true, baseUrl: "https://cmd.example/" };
+    expect(backendOnThisDevice()).toBe(false);
+    // Desktop before the local backend answered: the gateway's flag decides.
+    desktop("bk_cmd", null);
+    window.orkestratorGateway = {
+      enabled: true,
+      desktop: true,
+      backendOnThisDevice: true,
+      baseUrl: "https://cmd.test",
+    };
+    expect(backendOnThisDevice()).toBe(true);
+    expect(backendOnThisDevice("bk_cmd")).toBe(true);
+    expect(backendOnThisDevice("bk_leaf")).toBe(false);
+  });
+
+  test("a leaf is always reached through a gateway", () => {
+    desktop("bk_desk", "bk_desk");
+    expect(isRemoteGatewayConnection()).toBe(false);
+    expect(isRemoteGatewayConnection(scope("bk_desk", "command"))).toBe(false);
+    expect(isRemoteGatewayConnection("bk_leaf")).toBe(true);
+    expect(isRemoteGatewayConnection(scope("bk_leaf", "leaf"))).toBe(true);
   });
 });
 

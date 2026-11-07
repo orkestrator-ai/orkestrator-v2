@@ -1,7 +1,11 @@
 import { environmentDeletionFailure } from "@orkestrator/protocol/node-summaries";
 import { useEnvironmentChangeProjection } from "@/hooks/useChangeProjection";
 import { environmentBrowserTarget } from "@/lib/preview-service-entry";
-import { ensurePreviewServiceSync, usePreviewServiceStore } from "@/stores/previewServiceStore";
+import {
+  ensurePreviewServiceSync,
+  previewServiceStore,
+  usePreviewServiceStore,
+} from "@/stores/previewServiceStore";
 import {
   agentSettingsTiers,
   resolvedActionDefault,
@@ -21,8 +25,10 @@ import {
   useProjectStore,
   useConfigStore,
   useFilesPanelStore,
-  useMultiReviewStore,
+  multiReviewStore,
 } from "@/stores";
+import { useUIChromeStore } from "@/stores/uiChromeStore";
+import { useFilesPanelChromeStore } from "@/stores/filesPanelChromeStore";
 import { useTerminalContext, MAX_TABS, type AgentLaunchModeOverride } from "@/contexts";
 import type { DefaultAgent, Environment } from "@/types";
 import type {
@@ -40,12 +46,13 @@ import {
 } from "@orkestrator/protocol/git-workflow-prompts";
 import { createOrkestratorScriptPrompt } from "@orkestrator/protocol/orkestrator-script-prompt";
 import { createPRPrompt, createResolveConflictsPrompt } from "@orkestrator/protocol/pr-prompt";
-import * as backend from "@/lib/backend";
-import { isUnsupportedBackendCommand } from "@/lib/backend/shared";
+import { backendForScope } from "@/lib/backend/scope-backend";
+import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import { getEnvironmentBrowserUrl, getEnvironmentPortAddress } from "@/lib/environment-address";
 import { isBackendOnAnotherDevice, isGatewayBrowserPreviewSupported } from "@/lib/gateway-url";
 import { showTabLimitReachedToast } from "@/lib/tab-limit-toast";
 import { onAppShortcut } from "@/lib/app-shortcuts";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { beginTabLaunch, claimTabLaunch, type TabLaunchHandle } from "@/lib/tab-launch";
 import type { TabLaunchSurface } from "@/stores/tabLaunchStore";
 import { getReviewAgent, type ReviewLaunchSelection } from "@/components/review/ReviewLaunchDialog";
@@ -57,6 +64,7 @@ import { useLongPressAction } from "@/hooks/useLongPressAction";
 import { handTabInitialPromptToBackend } from "@/lib/tab-initial-prompt";
 import { createUuid } from "@/lib/uuid";
 import {
+  paneLayoutStore,
   usePaneLayoutStore,
   getAllLeaves,
   type EnvironmentPaneState,
@@ -70,6 +78,7 @@ import { useMergePrRequestStore } from "@/stores/mergePrRequestStore";
 import { toast } from "sonner";
 import type { ResolveLaunchResult } from "./ActionBar.types";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 const log = createLogger("web.action-bar");
 
@@ -128,6 +137,7 @@ export interface ActionBarControllerInput {
 }
 
 export function useActionBarController({ presentation }: ActionBarControllerInput) {
+  const nodeBackend = useScopeBackend();
   const dockerAvailable = useDockerAvailability();
   const isGrid = presentation === "grid";
   const selectedEnvironmentId = useUIStore((state) => state.selectedEnvironmentId);
@@ -147,16 +157,16 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   const getProjectById = useProjectStore((state) => state.getProjectById);
   const config = useConfigStore((state) => state.config);
   const { createTab, selectTab, tabCount } = useTerminalContext();
-  const filesPanelOpen = useFilesPanelStore((state) => state.isOpen);
-  const toggleFilesPanelStore = useFilesPanelStore((state) => state.togglePanel);
+  const filesPanelOpen = useFilesPanelChromeStore((state) => state.isOpen);
+  const toggleFilesPanelStore = useFilesPanelChromeStore((state) => state.togglePanel);
   const openFilesPanelOnAllFiles = useFilesPanelStore((state) => state.openPanelOnAllFiles);
   const changes = useFilesPanelStore((state) => state.changes);
   // The Files button's dot follows the environment's backend measurement; the
   // panel's legacy list is only the fallback for a backend without one.
   const changeProjection = useEnvironmentChangeProjection(selectedEnvironmentId);
   const hasChanges = changeProjection ? changeProjection.badge.visible : changes.length > 0;
-  const sidebarOpen = useUIStore((state) => state.sidebarOpen);
-  const toggleSidebar = useUIStore((state) => state.toggleSidebar);
+  const sidebarOpen = useUIChromeStore((state) => state.sidebarOpen);
+  const toggleSidebar = useUIChromeStore((state) => state.toggleSidebar);
 
   const [isOpeningEditor, setIsOpeningEditor] = useState(false);
   const [editorError, setEditorError] = useState<string | null>(null);
@@ -195,6 +205,12 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   // dialog the green button opens. Eligibility is checked once on admission;
   // an admitted dialog has the same lifetime as one opened with the button.
   const mergePrRequest = useMergePrRequestStore((state) => state.request);
+  // The selected environment is on this action bar's node; a request for the
+  // same id on another node is not for it.
+  const actionBarScope = useScopesWithCommandFallback().scope;
+  const actionBarNodeId = actionBarScope.nodeId;
+  // The selected environment's pane layouts, on the same node (plan item 3013).
+  const paneLayouts = actionBarScope.store(paneLayoutStore);
   const selectedMergePrControl = selectedEnvironment
     ? mergePrControl(selectedEnvironment, {
         dockerAvailable,
@@ -203,6 +219,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     : null;
   const mergePrRequested =
     mergePrRequest !== null &&
+    mergePrRequest.nodeId === actionBarNodeId &&
     mergePrRequest.environmentId === selectedEnvironmentId &&
     selectedMergePrControl?.disabled === false;
   const [handledMergePrNonce, setHandledMergePrNonce] = useState<number | null>(null);
@@ -336,9 +353,9 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     (environmentId: string, tabId: string, title: string, surface: TabLaunchSurface = "agent") => {
       const { homeId, tab } = projectHomeRevealRef.current;
       if (homeId === environmentId && tab !== "home") setProjectBoardTab("home");
-      return beginTabLaunch(environmentId, { tabId, title, surface });
+      return beginTabLaunch(environmentId, { tabId, title, surface }, actionBarScope);
     },
-    [setProjectBoardTab],
+    [actionBarScope, setProjectBoardTab],
   );
 
   const openProjectBoardTab = useCallback(
@@ -421,7 +438,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
 
   const bindCreatePrLaunchTab = useCallback(
     (environmentId: string, tabId: string) => {
-      const { environments } = usePaneLayoutStore.getState();
+      const { environments } = paneLayouts.getState();
       const tabOpen = isTabOpen(environments, environmentId, tabId);
       const seenDuringPending =
         pendingSeenTabIdsRef.current.get(environmentId)?.has(tabId) ?? false;
@@ -444,7 +461,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       });
       setCreatePrLaunchClaims(new Map(createPrLaunchClaimsRef.current));
     },
-    [releaseCreatePrLaunch],
+    [releaseCreatePrLaunch, paneLayouts],
   );
 
   useEffect(() => {
@@ -473,7 +490,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   useEffect(() => {
     if (createPrLaunchClaims.size === 0) return;
     const recordPendingSeenTabs = () => {
-      const { environments } = usePaneLayoutStore.getState();
+      const { environments } = paneLayouts.getState();
       for (const [environmentId, claim] of createPrLaunchClaimsRef.current) {
         if (claim.tabId) continue;
         let seen = pendingSeenTabIdsRef.current.get(environmentId);
@@ -487,8 +504,8 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       }
     };
     recordPendingSeenTabs();
-    return usePaneLayoutStore.subscribe(recordPendingSeenTabs);
-  }, [createPrLaunchClaims]);
+    return paneLayouts.subscribe(recordPendingSeenTabs);
+  }, [createPrLaunchClaims, paneLayouts]);
 
   // A claim survives its launch only while the tab that owns the work is open.
   // Closing that tab tears the session down (Codex interrupt included), so a
@@ -497,7 +514,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   useEffect(() => {
     const claims = createPrLaunchClaimsRef.current;
     if (claims.size === 0) return;
-    const { environments } = usePaneLayoutStore.getState();
+    const { environments } = paneLayouts.getState();
     let changed = false;
     for (const [environmentId, claim] of Array.from(claims)) {
       if (!claim.tabId) continue;
@@ -514,7 +531,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     if (changed) setCreatePrLaunchClaims(new Map(claims));
     // `createPrLaunchTabPresence` is the trigger, not an input: the effect reads
     // the same state it was computed from, one level below the memoized key.
-  }, [createPrLaunchTabPresence]);
+  }, [createPrLaunchTabPresence, paneLayouts]);
 
   // One timer per unacknowledged claim, keyed by that claim's own claimedAt.
   // A later Create PR in another environment must not restart this one, and an
@@ -571,7 +588,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   });
   const canLaunchResolve =
     canLaunchBackendJob || Boolean(selectedEnvironmentId && hasOpenResolveTab);
-  const editorOnAnotherDevice = isBackendOnAnotherDevice();
+  const editorOnAnotherDevice = isBackendOnAnotherDevice(actionBarScope);
   // For containers, we need containerId; for local environments, we need worktreePath
   const canOpenEditor =
     !editorOnAnotherDevice &&
@@ -586,9 +603,9 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     (state) => state.capabilities?.surfaces.browserTopLevel.available === true,
   );
   useEffect(() => {
-    ensurePreviewServiceSync();
-    void usePreviewServiceStore.getState().loadCapabilities();
-  }, []);
+    ensurePreviewServiceSync(actionBarScope);
+    void actionBarScope.store(previewServiceStore).getState().loadCapabilities();
+  }, [actionBarScope]);
   const browserPreviewSupported = isGatewayBrowserPreviewSupported() || previewPublicationAvailable;
   const canCopyEnvironmentUrl = !!environmentPortAddress;
 
@@ -632,9 +649,9 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     try {
       const editor = config.global.preferredEditor || "vscode";
       if (isLocalEnvironment && worktreePath) {
-        await backend.openLocalInEditor(worktreePath, editor);
+        await backendForScope(actionBarScope).openLocalInEditor(worktreePath, editor);
       } else if (containerId) {
-        await backend.openInEditor(containerId, editor);
+        await backendForScope(actionBarScope).openInEditor(containerId, editor);
       }
     } catch (err) {
       log.error("editor.open-failed", { error: formatLogError(err) });
@@ -644,6 +661,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       setIsOpeningEditor(false);
     }
   }, [
+    actionBarScope,
     selectedEnvironment?.containerId,
     selectedEnvironment?.worktreePath,
     editorOnAnotherDevice,
@@ -769,6 +787,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       const releaseLaunch = claimTabLaunch(
         `review:${agentOverride ?? "default"}`,
         selectedEnvironmentId,
+        actionBarScope,
       );
       if (!releaseLaunch) return;
 
@@ -837,19 +856,25 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       // Do not await UI lifecycle work after this hand-off. The queue mutation is
       // durable and wakes the backend dispatcher, so unmounting this ActionBar or
       // switching environments cannot delay the review until the tab is opened.
-      void handTabInitialPromptToBackend({
-        environmentId: selectedEnvironmentId,
-        tabId,
-        agent,
-        prompt: reviewPrompt,
-        options: {
-          model,
-          reasoningEffort:
-            agent === "claude" || agent === "codex" ? (reasoningEffort ?? "high") : reasoningEffort,
-          mode: "build",
-          ...(typeof initialFastMode === "boolean" ? { fastMode: initialFastMode } : {}),
+      void handTabInitialPromptToBackend(
+        {
+          environmentId: selectedEnvironmentId,
+          tabId,
+          agent,
+          prompt: reviewPrompt,
+          options: {
+            model,
+            reasoningEffort:
+              agent === "claude" || agent === "codex"
+                ? (reasoningEffort ?? "high")
+                : reasoningEffort,
+            mode: "build",
+            ...(typeof initialFastMode === "boolean" ? { fastMode: initialFastMode } : {}),
+          },
         },
-      })
+        undefined,
+        actionBarScope,
+      )
         .then(() => releaseLaunch())
         .catch((error) => {
           releaseLaunch({ retryable: true });
@@ -859,6 +884,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         });
     },
     [
+      actionBarScope,
       actionDefaultFor,
       canCreateTab,
       preferredModelsByPlatform,
@@ -956,7 +982,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         // One request: the backend reuses an active review, takes the target
         // branch and instruction from saved settings, starts the review and
         // writes its tab into the layout, so a crash here cannot orphan it.
-        const launched = await backend
+        const launched = await nodeBackend
           .launchMultiReview({
             requestId,
             environmentId: selectedEnvironmentId,
@@ -967,12 +993,14 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
             autoPr: selection.autoPr,
           })
           .catch((error: unknown) => {
-            if (!isUnsupportedBackendCommand(error, "launch_multi_review")) throw error;
+            if (incompatibility(error, "launch_multi_review")?.code !== "unknown-command")
+              throw error;
             return null;
           });
         if (!launched) {
           launch.failed();
           const legacy = await legacyLaunchMultiReview({
+            scope: actionBarScope,
             environmentId: selectedEnvironmentId,
             projectId: selectedProjectId,
             targetBranch: defaultPrTargetBranch(
@@ -991,7 +1019,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
           if (legacy.reused) announceReused();
           return;
         }
-        useMultiReviewStore.getState().replaceWorkflow(launched.workflow);
+        actionBarScope.store(multiReviewStore).getState().replaceWorkflow(launched.workflow);
         if (launched.ui.status !== "opened" || !launched.ui.tabId) {
           throw new Error(launched.recovery ?? "The review's tab could not be opened.");
         }
@@ -1010,6 +1038,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       }
     },
     [
+      actionBarScope,
       beginLaunchedTab,
       canCreateTab,
       config.global.reviewInstruction,
@@ -1021,6 +1050,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       selectedProjectId,
       setupRunning,
       workspaceReady,
+      nodeBackend,
     ],
   );
 
@@ -1053,9 +1083,9 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
 
     const readConfigPromise =
       isLocalEnvironment && worktreePath
-        ? backend.readLocalFile(worktreePath, "orkestrator-ai.json")
+        ? backendForScope(actionBarScope).readLocalFile(worktreePath, "orkestrator-ai.json")
         : containerId
-          ? backend.readContainerFile(containerId, "orkestrator-ai.json")
+          ? backendForScope(actionBarScope).readContainerFile(containerId, "orkestrator-ai.json")
           : null;
 
     if (!readConfigPromise) {
@@ -1099,6 +1129,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       cancelled = true;
     };
   }, [
+    actionBarScope,
     selectedEnvironmentId,
     selectedEnvironment?.containerId,
     selectedEnvironment?.worktreePath,
@@ -1134,12 +1165,12 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   const handleRun = useCallback(async () => {
     const environmentId = selectedEnvironmentId;
     if (!environmentId || tabCount >= MAX_TABS || !runCommands || runCommands.length === 0) return;
-    const releaseLaunch = claimTabLaunch("run", environmentId);
+    const releaseLaunch = claimTabLaunch("run", environmentId, actionBarScope);
     if (!releaseLaunch) return;
     const tabId = `terminal-job-${createUuid()}`;
     const launch = beginLaunchedTab(environmentId, tabId, "Run Commands", "terminal");
     try {
-      const result = await backend.launchTerminalJob({
+      const result = await backendForScope(actionBarScope).launchTerminalJob({
         requestId: `run-commands-${createUuid()}`,
         environmentId,
         tabId,
@@ -1156,7 +1187,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         description: error instanceof Error ? error.message : String(error),
       });
     }
-  }, [beginLaunchedTab, runCommands, selectedEnvironmentId, tabCount]);
+  }, [actionBarScope, beginLaunchedTab, runCommands, selectedEnvironmentId, tabCount]);
 
   const handleCreateScript = useCallback(
     (
@@ -1191,11 +1222,12 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       const releaseLaunch = claimTabLaunch(
         `create-script:${agentOverride ?? "default"}`,
         environmentId,
+        actionBarScope,
       );
       if (!releaseLaunch) return Promise.resolve(false);
       const tabId = `agent-job-${createUuid()}`;
       const launch = beginLaunchedTab(environmentId, tabId, "Run Script");
-      return backend
+      return nodeBackend
         .launchNativeAgentJob({
           requestId: `run-script-${createUuid()}`,
           environmentId,
@@ -1227,6 +1259,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         });
     },
     [
+      actionBarScope,
       beginLaunchedTab,
       actionDefaultFor,
       isRunning,
@@ -1236,6 +1269,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       reviewModelCatalog,
       selectedEnvironmentId,
       tabCount,
+      nodeBackend,
     ],
   );
 
@@ -1311,15 +1345,23 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     const launch = beginLaunchedTab(environmentId, tabId, "Browser", "page");
     // Prefer the registered entry service: the tab then follows the service
     // across container recreation instead of pinning today's host port.
-    void environmentBrowserTarget(selectedEnvironment, environmentBrowserUrl)
+    void environmentBrowserTarget(selectedEnvironment, environmentBrowserUrl, actionBarScope)
       .catch(() => environmentBrowserUrl ?? undefined)
       .then((initialUrl) => {
         if (initialUrl) {
-          usePaneLayoutStore.getState().updateTabBrowserUrl(tabId, initialUrl, environmentId);
+          paneLayouts.getState().updateTabBrowserUrl(tabId, initialUrl, environmentId);
         }
         launch.settled();
       });
-  }, [beginLaunchedTab, canCreateTab, createTab, environmentBrowserUrl, selectedEnvironment]);
+  }, [
+    paneLayouts,
+    actionBarScope,
+    beginLaunchedTab,
+    canCreateTab,
+    createTab,
+    environmentBrowserUrl,
+    selectedEnvironment,
+  ]);
 
   const hasRunCommands = runCommands && runCommands.length > 0;
   const canRunCommands =
@@ -1397,18 +1439,24 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   }, []);
 
   // An app shortcut, so it opens a tab wherever focus is. Setup owns the first
-  // tab while it runs, so the key waits for it.
+  // tab while it runs, so the key waits for it. Only the workspace on show
+  // takes it: a hidden one (this window's own while another node is shown in
+  // its tree, plan item 5003) stays as it is.
   useEffect(
     () =>
-      onAppShortcut("new-agent-tab", () => {
-        if (setupRunning) return;
-        if (tabCount >= MAX_TABS && createTab && selectedEnvironment) {
-          showTabLimitReachedToast(MAX_TABS);
-          return;
-        }
-        if (canCreateTab) createTab?.("agent-native");
-      }),
-    [canCreateTab, createTab, selectedEnvironment, setupRunning, tabCount],
+      onAppShortcut(
+        "new-agent-tab",
+        () => {
+          if (setupRunning) return;
+          if (tabCount >= MAX_TABS && createTab && selectedEnvironment) {
+            showTabLimitReachedToast(MAX_TABS);
+            return;
+          }
+          if (canCreateTab) createTab?.("agent-native");
+        },
+        { workspace: actionBarScope },
+      ),
+    [actionBarScope, canCreateTab, createTab, selectedEnvironment, setupRunning, tabCount],
   );
 
   // Keyboard shortcuts for terminal tabs
@@ -1577,7 +1625,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
             : undefined;
         const tabId = `agent-job-${createUuid()}`;
         launch = beginLaunchedTab(operationEnvironmentId, tabId, "PR");
-        const result = await backend.launchNativeAgentJob({
+        const result = await backendForScope(actionBarScope).launchNativeAgentJob({
           requestId: `create-pr-${createUuid()}`,
           environmentId: operationEnvironmentId,
           tabId,
@@ -1615,6 +1663,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       }
     },
     [
+      actionBarScope,
       beginLaunchedTab,
       actionDefaultFor,
       bindCreatePrLaunchTab,
@@ -1695,13 +1744,19 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     const request = ++prBranchRequestRef.current;
     setPrBranchSuggestions([targetBranch]);
     void Promise.resolve()
-      .then(() => backend.getProjectGitStatus(projectId))
+      .then(() => backendForScope(actionBarScope).getProjectGitStatus(projectId))
       .then((status) => {
         if (prBranchRequestRef.current !== request) return;
         setPrBranchSuggestions(prTargetBranchSuggestions(status.branches, targetBranch));
       })
       .catch(() => undefined);
-  }, [canConfigurePR, config.repositories, selectedEnvironmentId, selectedProjectId]);
+  }, [
+    actionBarScope,
+    canConfigurePR,
+    config.repositories,
+    selectedEnvironmentId,
+    selectedProjectId,
+  ]);
 
   const prLongPress = useLongPressAction(openPrDialog, canConfigurePR);
 
@@ -1753,7 +1808,11 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     async (agentOverride?: AgentPlatform) => {
       const environmentId = selectedEnvironmentId;
       if (!environmentId || tabCount >= MAX_TABS || !isRunning) return;
-      const releaseLaunch = claimTabLaunch(`push:${agentOverride ?? "default"}`, environmentId);
+      const releaseLaunch = claimTabLaunch(
+        `push:${agentOverride ?? "default"}`,
+        environmentId,
+        actionBarScope,
+      );
       if (!releaseLaunch) return;
 
       const pushPrompt = createPushChangesPrompt();
@@ -1772,7 +1831,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       const tabId = `agent-job-${createUuid()}`;
       const launch = beginLaunchedTab(environmentId, tabId, PUSH_CHANGES_TAB_TITLE);
       try {
-        const result = await backend.launchNativeAgentJob({
+        const result = await backendForScope(actionBarScope).launchNativeAgentJob({
           requestId: `push-changes-${createUuid()}`,
           environmentId,
           tabId,
@@ -1800,6 +1859,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       }
     },
     [
+      actionBarScope,
       beginLaunchedTab,
       actionDefaultFor,
       isRunning,
@@ -1890,7 +1950,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
           tabId ?? `resolve-focus-${createUuid()}`,
           "Resolve",
         );
-        const result = await backend.launchNativeAgentJob({
+        const result = await backendForScope(actionBarScope).launchNativeAgentJob({
           requestId: `resolve-${createUuid()}`,
           environmentId: operationEnvironmentId,
           ...(tabId ? { tabId } : {}),
@@ -1940,6 +2000,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       }
     },
     [
+      actionBarScope,
       beginLaunchedTab,
       actionDefaultFor,
       canLaunchResolve,
@@ -2171,7 +2232,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
 
       try {
         log.info("merge.started", { environmentId: operationEnvironmentId });
-        const mergeResult = await backend.mergeEnvironmentPr(
+        const mergeResult = await backendForScope(actionBarScope).mergeEnvironmentPr(
           operationEnvironmentId,
           "squash",
           true,
@@ -2221,6 +2282,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       }
     },
     [
+      actionBarScope,
       activateProjectForCleanup,
       selectedEnvironment?.branch,
       selectedEnvironment?.name,

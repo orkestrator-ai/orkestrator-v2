@@ -3,9 +3,9 @@ import { Container, FolderGit2, HardDrive, Loader2, RefreshCw } from "lucide-rea
 
 import { formatBytes, formatRelativeTime } from "@/components/docker/docker-stats-format";
 import { Button } from "@/components/ui/button";
-import * as backend from "@/lib/backend";
 import type { AccountMachine, DiskUsageItem, EnvironmentDiskUsage } from "@/lib/backend";
 import { cn } from "@/lib/utils";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 export function formatDiskBytes(bytes: number | null | undefined): string {
   return bytes === null || bytes === undefined ? "Unknown" : formatBytes(bytes);
@@ -19,6 +19,7 @@ export function useEnvironmentDiskUsage(
   environmentId: string,
   options: { enabled?: boolean; initial?: EnvironmentDiskUsage; machine?: AccountMachine } = {},
 ) {
+  const nodeBackend = useScopeBackend();
   const enabled = options.enabled ?? true;
   const machine = options.machine;
   const [usage, setUsage] = useState<EnvironmentDiskUsage | null>(options.initial ?? null);
@@ -34,7 +35,7 @@ export function useEnvironmentDiskUsage(
       setLoading(true);
       setError(null);
       try {
-        const result = await backend.getEnvironmentDiskUsage(environmentId, refresh, machine);
+        const result = await nodeBackend.getEnvironmentDiskUsage(environmentId, refresh, machine);
         if (request !== requestRef.current) return null;
         setUsage(result);
         return result;
@@ -47,7 +48,7 @@ export function useEnvironmentDiskUsage(
         if (request === requestRef.current) setLoading(false);
       }
     },
-    [environmentId, machine],
+    [environmentId, machine, nodeBackend],
   );
 
   const initial = options.initial?.environmentId === environmentId ? options.initial : undefined;

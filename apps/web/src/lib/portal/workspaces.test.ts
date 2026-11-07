@@ -1,9 +1,12 @@
 import { afterEach, expect, mock, test } from "bun:test";
 import { invoke } from "@/lib/native/backend";
 import { openLeafWorkspace } from "./workspaces";
-import { removeRealmWorkspace, writeRealmWorkspace } from "./workspace-target-storage";
-import { desktopConnectionStorageKey } from "@/lib/desktop-storage-key";
-import { createBrowserGatewayApi, workspaceTargetGatewayOptions } from "@/lib/native/web-gateway";
+import { COMMAND_STORAGE_NODE, desktopConnectionStorageKey } from "@/lib/desktop-storage-key";
+import {
+  createBrowserGatewayApi,
+  disposeBrowserGatewayApi,
+  installBrowserGatewayApi,
+} from "@/lib/native/web-gateway";
 
 const happyDOM = (window as unknown as { happyDOM: { setURL(url: string): void } }).happyDOM;
 const originalFetch = globalThis.fetch;
@@ -62,64 +65,47 @@ test("desktop storage uses verified leaf identity across new workspace IDs", () 
       backendId: "bk_leaf",
       legacyOrigin: null,
     };
-    const first = desktopConnectionStorageKey("workspace-draft");
+    const first = desktopConnectionStorageKey("workspace-draft", COMMAND_STORAGE_NODE);
     localStorage.setItem(first, "remembered draft");
     window.orkestratorDesktopIdentity = {
       ...window.orkestratorDesktopIdentity,
       connectionId: "workspace:two",
     };
-    expect(desktopConnectionStorageKey("workspace-draft")).toBe(first);
-    expect(localStorage.getItem(desktopConnectionStorageKey("workspace-draft"))).toBe(
-      "remembered draft",
-    );
+    expect(desktopConnectionStorageKey("workspace-draft", COMMAND_STORAGE_NODE)).toBe(first);
+    expect(
+      localStorage.getItem(desktopConnectionStorageKey("workspace-draft", COMMAND_STORAGE_NODE)),
+    ).toBe("remembered draft");
   } finally {
     window.orkestratorDesktopIdentity = originalIdentity;
   }
 });
 
-test("a browser realm boots as its leaf's client with the command node as portal; its window never does", async () => {
-  happyDOM.setURL("https://command.test/");
+/*
+ * A leaf shown in the window's tree is reached through the node-client
+ * registry on its own grant, directly or relayed (`lib/node-scope/node-clients.test.ts`
+ * "opening a leaf" and "grant lifetime"; live: `e2e/agent-testing/multi-node-window.spec.ts`).
+ * The page itself is never a leaf's client.
+ */
+test("the page boots as its command node's client, whatever its URL names", async () => {
+  happyDOM.setURL("https://command.test/?workspace=w1&project=p");
   const fetchMock = mock(async () => new Response(JSON.stringify({ result: [] })));
   globalThis.fetch = fetchMock as unknown as typeof fetch;
   const target = {
     orkestrator: undefined,
     orkestratorGateway: undefined,
-    orkestratorPortal: undefined,
-    orkestratorWorkspaceTarget: undefined,
     location: window.location,
   } as unknown as Window;
-  expect(workspaceTargetGatewayOptions(target)).toEqual({});
-  expect(target.orkestratorPortal).toBeUndefined();
-
-  // The grant is in the tab; only the realm's URL names it.
-  writeRealmWorkspace({
-    workspaceId: "w1",
-    nodeId: "bk_leaf" as never,
-    nodeName: "Leaf",
-    path: "relay",
-    routeKind: "ssh",
-    via: "Desk",
-    baseUrl: "https://command.test/__orkestrator/nodes/bk_leaf",
-    expiresAt: Date.now() + 60_000,
-  });
-  expect(workspaceTargetGatewayOptions(target)).toEqual({});
-  happyDOM.setURL("https://command.test/?realm=workspace&workspace=w1");
+  installBrowserGatewayApi(target, { browserSessionActivity: false });
   try {
-    const options = workspaceTargetGatewayOptions(target);
-    expect(options).toEqual({ baseUrl: "https://command.test/__orkestrator/nodes/bk_leaf" });
-    expect(target.orkestratorWorkspaceTarget).toEqual({
-      nodeId: "bk_leaf",
-      nodeName: "Leaf",
-      path: "relay",
-      routeKind: "ssh",
-      via: "Desk",
-    });
-    await target.orkestratorPortal!.invoke("get_node_summaries");
+    expect(target.orkestratorGateway).toEqual({ enabled: true });
+    expect("orkestratorPortal" in target).toBe(false);
+    await target.orkestrator!.invoke("get_node_summaries");
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-    expect(String(url)).toBe("https://command.test/__orkestrator/invoke");
+    expect(new URL(String(url), window.location.href).href).toBe(
+      "https://command.test/__orkestrator/invoke",
+    );
     expect(init.credentials).toBe("same-origin");
   } finally {
-    removeRealmWorkspace("w1");
-    happyDOM.setURL("https://command.test/");
+    disposeBrowserGatewayApi(target.orkestrator!);
   }
 });

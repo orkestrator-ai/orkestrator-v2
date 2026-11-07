@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, screen } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { useState, type ReactNode } from "react";
 import { NativeMessage } from "./NativeMessage";
 import { MessageForkAction, useMessageForkAction } from "./MessageForkAction";
@@ -53,7 +54,7 @@ describe("useMessageForkAction", () => {
      * user message and the whole transcript re-rendered mid-answer.
      */
     const renders: ReactNode[][] = [];
-    render(
+    renderInAppCommandScope(
       <Harness
         messageIds={["user-1", "user-2"]}
         disabled={false}
@@ -80,7 +81,7 @@ describe("useMessageForkAction", () => {
     // The latch that blocks a double fork is exactly this prop; a stale cache
     // entry would keep the button clickable while a fork was in flight.
     const renders: ReactNode[][] = [];
-    const view = render(
+    const view = renderInAppCommandScope(
       <Harness
         messageIds={["user-1"]}
         disabled={false}
@@ -113,7 +114,7 @@ describe("useMessageForkAction", () => {
 
   test("forks the message the button belongs to", () => {
     const onFork = mock((_messageId: string, _kind: MessageForkKind) => {});
-    render(
+    renderInAppCommandScope(
       <Harness
         messageIds={["user-1", "user-2"]}
         disabled={false}
@@ -131,7 +132,7 @@ describe("useMessageForkAction", () => {
 
   test("names and describes a response action by its kind", () => {
     const onFork = mock((_messageId: string, _kind: MessageForkKind) => {});
-    render(
+    renderInAppCommandScope(
       <Harness
         messageIds={["assistant-1"]}
         disabled={false}
@@ -151,7 +152,7 @@ describe("useMessageForkAction", () => {
   });
 
   test("describes a prompt action as an edit", () => {
-    render(
+    renderInAppCommandScope(
       <Harness messageIds={["user-1"]} disabled={false} onFork={() => {}} collect={() => {}} />,
     );
 
@@ -180,7 +181,7 @@ describe("useMessageForkAction", () => {
       );
       return null;
     }
-    render(<BothKinds />);
+    renderInAppCommandScope(<BothKinds />);
 
     expect(seen[0]).not.toBe(seen[1]);
     expect(seen[0]).toBe(seen[2]);
@@ -194,7 +195,7 @@ describe("useMessageForkAction", () => {
      * transcript that has since moved on.
      */
     const renders: ReactNode[][] = [];
-    const view = render(
+    const view = renderInAppCommandScope(
       <Harness
         messageIds={["user-1"]}
         disabled={false}
@@ -220,7 +221,7 @@ describe("useMessageForkAction", () => {
 describe("MessageForkAction inside NativeMessage", () => {
   test("renders in the message action slot and forks on click", () => {
     const onFork = mock((_messageId: string, _kind: MessageForkKind) => {});
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={{
           id: "user-1",

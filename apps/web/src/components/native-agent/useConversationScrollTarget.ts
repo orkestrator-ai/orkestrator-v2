@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import {
   CONVERSATION_SCROLL_TARGET_SETTLED_GRACE_MS,
   conversationScrollTargetKey,
@@ -49,6 +50,8 @@ interface UseConversationScrollTargetOptions {
  * the transcript settles without the message (it may be outside the loaded
  * window), or at the request's TTL, whichever is first. The reader is then
  * simply left where the chat put them, at the bottom.
+ *
+ * Only requests for this chat's own node (its scope's) are read.
  */
 export function useConversationScrollTarget({
   environmentId,
@@ -61,8 +64,10 @@ export function useConversationScrollTarget({
   settledGraceMs = CONVERSATION_SCROLL_TARGET_SETTLED_GRACE_MS,
   highlightMs = CONVERSATION_TARGET_HIGHLIGHT_MS,
 }: UseConversationScrollTargetOptions): string | null {
+  const nodeId = useScopesWithCommandFallback().scope.nodeId;
+  const ref = useMemo(() => ({ nodeId, environmentId, tabId }), [nodeId, environmentId, tabId]);
   const pending = useConversationScrollTargetStore(
-    (state) => state.targets.get(conversationScrollTargetKey(environmentId, tabId)) ?? null,
+    (state) => state.targets.get(conversationScrollTargetKey(ref)) ?? null,
   );
   const clear = useConversationScrollTargetStore((state) => state.clear);
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
@@ -77,7 +82,7 @@ export function useConversationScrollTarget({
   useEffect(() => {
     if (!pending || !isActive || targetIndex < 0 || !targetMessageId) return;
     if (pending.expiresAt <= Date.now()) {
-      clear(environmentId, tabId, pending.nonce);
+      clear(ref, pending.nonce);
       return;
     }
     let attempts = 0;
@@ -90,7 +95,7 @@ export function useConversationScrollTarget({
       // (`explicitTargetPending`), so no ordering between effects decides
       // the outcome; the navigation retires anything still in flight.
       if (scrollToIndex(targetIndex, { rowKey: targetMessageId }, "message-link")) {
-        clear(environmentId, tabId, pending.nonce);
+        clear(ref, pending.nonce);
         setHighlightedMessageId(targetMessageId);
         return;
       }
@@ -102,7 +107,7 @@ export function useConversationScrollTarget({
       if (frame !== null) cancelAnimationFrame(frame);
       if (retry !== null) clearTimeout(retry);
     };
-  }, [clear, environmentId, isActive, pending, scrollToIndex, tabId, targetIndex, targetMessageId]);
+  }, [clear, isActive, pending, ref, scrollToIndex, targetIndex, targetMessageId]);
 
   // Bounded wait for a message that has not appeared.
   const unresolvedAfterSettle =
@@ -111,9 +116,9 @@ export function useConversationScrollTarget({
     if (!pending) return;
     const remaining = Math.max(0, pending.expiresAt - Date.now());
     const delay = unresolvedAfterSettle ? Math.min(remaining, settledGraceMs) : remaining;
-    const timer = setTimeout(() => clear(environmentId, tabId, pending.nonce), delay);
+    const timer = setTimeout(() => clear(ref, pending.nonce), delay);
     return () => clearTimeout(timer);
-  }, [clear, environmentId, pending, settledGraceMs, tabId, unresolvedAfterSettle]);
+  }, [clear, pending, ref, settledGraceMs, unresolvedAfterSettle]);
 
   useEffect(() => {
     if (!highlightedMessageId) return;

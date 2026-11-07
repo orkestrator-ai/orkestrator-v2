@@ -5,7 +5,8 @@ import {
   useVirtuosoScrollState,
   clearPersistedVirtuosoState,
 } from "@/hooks/useVirtuosoScrollState";
-import { useUIStore } from "@/stores/uiStore";
+import { uiStore } from "@/stores/uiStore";
+import { appCommandStore } from "../../../apps/web/src/test/app-command-store";
 
 /**
  * happy-dom reports 0 for every layout metric, so a scroller that can actually
@@ -2212,7 +2213,7 @@ describe("useVirtuosoScrollState", () => {
     }
 
     test("a detached reader keeps their place after an environment switch", async () => {
-      useUIStore.setState({ selectedEnvironmentId: "env-1" });
+      appCommandStore(uiStore).setState({ selectedEnvironmentId: "env-1" });
       const { result, rerender } = renderHook(
         ({ isActive }) => useVirtuosoScrollState({ isActive, environmentId: "env-1" }),
         { initialProps: { isActive: true } },
@@ -2225,9 +2226,9 @@ describe("useVirtuosoScrollState", () => {
         el.scrollTop = 700;
         act(() => result.current.scrollProps.scrollerRef(el));
         act(() => wheelUp(el, 500));
-        act(() => useUIStore.setState({ selectedEnvironmentId: "env-2" }));
+        act(() => appCommandStore(uiStore).setState({ selectedEnvironmentId: "env-2" }));
         rerender({ isActive: false });
-        act(() => useUIStore.setState({ selectedEnvironmentId: "env-1" }));
+        act(() => appCommandStore(uiStore).setState({ selectedEnvironmentId: "env-1" }));
         rerender({ isActive: true });
         await act(() => new Promise((resolve) => setTimeout(resolve, 60)));
         expect(scrollToIndexCalls).toEqual([]);
@@ -2236,12 +2237,12 @@ describe("useVirtuosoScrollState", () => {
         expect(result.current.scrollProps.followOutput(false)).toBe(false);
       } finally {
         document.body.removeChild(el);
-        useUIStore.setState({ selectedEnvironmentId: null });
+        appCommandStore(uiStore).setState({ selectedEnvironmentId: null });
       }
     });
 
     test("a follower catches up on return after an environment switch", async () => {
-      useUIStore.setState({ selectedEnvironmentId: "env-1" });
+      appCommandStore(uiStore).setState({ selectedEnvironmentId: "env-1" });
       const { result, rerender } = renderHook(
         ({ isActive }) => useVirtuosoScrollState({ isActive, environmentId: "env-1" }),
         { initialProps: { isActive: true } },
@@ -2253,9 +2254,9 @@ describe("useVirtuosoScrollState", () => {
       try {
         el.scrollTop = 700;
         act(() => result.current.scrollProps.scrollerRef(el));
-        act(() => useUIStore.setState({ selectedEnvironmentId: "env-2" }));
+        act(() => appCommandStore(uiStore).setState({ selectedEnvironmentId: "env-2" }));
         rerender({ isActive: false });
-        act(() => useUIStore.setState({ selectedEnvironmentId: "env-1" }));
+        act(() => appCommandStore(uiStore).setState({ selectedEnvironmentId: "env-1" }));
         rerender({ isActive: true });
         await waitFor(() => expect(scrollToCalls).toHaveLength(1));
         expect(scrollToIndexCalls).toEqual([{ index: "LAST", align: "end" }]);
@@ -2263,7 +2264,7 @@ describe("useVirtuosoScrollState", () => {
         expect(result.current.scrollProps.followOutput(false)).toBe("auto");
       } finally {
         document.body.removeChild(el);
-        useUIStore.setState({ selectedEnvironmentId: null });
+        appCommandStore(uiStore).setState({ selectedEnvironmentId: null });
       }
     });
 

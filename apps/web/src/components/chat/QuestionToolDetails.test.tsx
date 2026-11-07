@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { TerminalProvider } from "@/contexts";
 import type { NativeMessagePart } from "@/lib/chat/native-message-types";
 import { NativeMessage } from "./NativeMessage";
@@ -10,7 +11,7 @@ let messageCounter = 0;
 
 function renderParts(parts: NativeMessagePart[]) {
   messageCounter += 1;
-  return render(
+  return renderInAppCommandScope(
     <TerminalProvider>
       <NativeMessage
         message={{

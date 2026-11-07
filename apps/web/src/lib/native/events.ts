@@ -1,3 +1,6 @@
+import { getWindowScope } from "@/lib/node-scope/app-window-scope";
+import { clientEventSource } from "@/lib/node-scope/scope-transport";
+
 export type UnlistenFn = () => void;
 
 export interface NativeEvent<T> {
@@ -50,12 +53,18 @@ export interface EventSource {
   eventStreamReady?(event: string): Promise<void>;
 }
 
+/**
+ * `event` on the window's command node, through the command scope's client
+ * (report §6.4: global `listen` is command-scope only during the migration).
+ * Scoped code passes its own client to `listenOn` (`clientEventSource`).
+ */
 export function listen<T>(
   event: string,
   handler: (event: NativeEvent<T>) => unknown,
   options: ListenOptions = {},
 ): Promise<UnlistenFn> {
-  return listenOn(window.orkestrator, event, handler, options);
+  const client = getWindowScope().commandScope().client;
+  return listenOn(clientEventSource(client), event, handler, options);
 }
 
 /** `listen` against an explicit transport (the portal's, for example). */

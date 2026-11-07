@@ -1,13 +1,15 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { useConfigStore } from "@/stores/configStore";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
+import { configStore } from "@/stores/configStore";
 import type { ActionDefaults } from "../../../packages/protocol/src/action-defaults";
 import { installControlledTimeout } from "../../helpers/controlled-timeout";
+import { appCommandStore } from "../../../apps/web/src/test/app-command-store";
 
 // As the backend does, merge the changed keys onto the current settings.
 const mockPatchGlobalConfig = mock(async (patch: Record<string, unknown>, _options?: unknown) => ({
   version: "1.0",
-  global: { ...useConfigStore.getState().config.global, ...patch },
+  global: { ...appCommandStore(configStore).getState().config.global, ...patch },
   repositories: {},
 }));
 const mockGetLogDirectory = mock(async () => null);
@@ -57,7 +59,7 @@ describe("GlobalSettings defaults section", () => {
     mockGetLogDirectory.mockClear();
     window.orkestratorGateway = { enabled: true };
 
-    useConfigStore.setState({
+    appCommandStore(configStore).setState({
       config: {
         version: "1.0",
         global: {
@@ -96,7 +98,7 @@ describe("GlobalSettings defaults section", () => {
   });
 
   test("offers a picker per action, all on the app default until configured", () => {
-    render(<GlobalSettings activeSection="defaults" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="defaults" />);
 
     for (const action of [
       "New environments",
@@ -115,7 +117,7 @@ describe("GlobalSettings defaults section", () => {
   });
 
   test("saves the chosen platform and model for an action", async () => {
-    render(<GlobalSettings activeSection="defaults" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="defaults" />);
 
     openPicker("Review");
     fireEvent.click(screen.getByRole("menuitemradio", { name: /^Haiku/ }));
@@ -135,7 +137,7 @@ describe("GlobalSettings defaults section", () => {
   });
 
   test("edits and clears the new Multi Review defaults independently", async () => {
-    render(<GlobalSettings activeSection="defaults" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="defaults" />);
 
     openPicker("Review 2");
     fireEvent.click(screen.getByRole("button", { name: "codex models" }));
@@ -168,7 +170,7 @@ describe("GlobalSettings defaults section", () => {
   });
 
   test("switching provider on the rail drops the previous provider's model", async () => {
-    render(<GlobalSettings activeSection="defaults" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="defaults" />);
 
     openPicker("PR");
     fireEvent.click(screen.getByRole("menuitemradio", { name: /^Haiku/ }));
@@ -186,7 +188,7 @@ describe("GlobalSettings defaults section", () => {
   });
 
   test("uses unsaved platform changes when configuring defaults before one combined save", async () => {
-    const view = render(<GlobalSettings activeSection="platforms" />);
+    const view = renderInAppCommandScope(<GlobalSettings activeSection="platforms" />);
 
     // Platform changes live in GlobalSettings until the shared Save button is
     // pressed. The Defaults pane must consume that same draft rather than the
@@ -217,7 +219,7 @@ describe("GlobalSettings defaults section", () => {
   });
 
   test("clears a configured default back to the app default", async () => {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,
@@ -230,7 +232,7 @@ describe("GlobalSettings defaults section", () => {
         },
       },
     }));
-    render(<GlobalSettings activeSection="defaults" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="defaults" />);
 
     const picker = screen.getByRole("combobox", {
       name: "Push default agent, model and reasoning",
@@ -249,7 +251,7 @@ describe("GlobalSettings defaults section", () => {
   });
 
   test("keeps unsaved edits when the picker's favorite star writes to the store", async () => {
-    render(<GlobalSettings activeSection="defaults" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="defaults" />);
 
     openPicker("Review");
     fireEvent.click(screen.getByRole("menuitemradio", { name: /^Haiku/ }));
@@ -278,7 +280,7 @@ describe("GlobalSettings defaults section", () => {
   });
 
   test("re-syncs the form when the stored defaults actually change", async () => {
-    render(<GlobalSettings activeSection="defaults" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="defaults" />);
 
     openPicker("Review");
     fireEvent.click(screen.getByRole("menuitemradio", { name: /^Haiku/ }));
@@ -287,7 +289,7 @@ describe("GlobalSettings defaults section", () => {
     // The other half of the guard above: a write that does change a value this
     // form owns is a genuine reload and must win over the local edit, or the
     // form would keep showing state the backend has already replaced.
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,
@@ -310,7 +312,7 @@ describe("GlobalSettings defaults section", () => {
   });
 
   test("sets and clears an action's reasoning level", async () => {
-    render(<GlobalSettings activeSection="defaults" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="defaults" />);
 
     // The picker opens on the app default platform, so reach Codex's catalog
     // through the rail before choosing one of its models.
@@ -345,7 +347,7 @@ describe("GlobalSettings defaults section", () => {
   });
 
   test("warns about a saved model the current catalog no longer lists", () => {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,
@@ -358,7 +360,7 @@ describe("GlobalSettings defaults section", () => {
         },
       },
     }));
-    render(<GlobalSettings activeSection="defaults" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="defaults" />);
 
     // The value is kept and sent as-is rather than quietly rewritten, so the
     // pane has to say why it is not showing a catalog entry.
@@ -366,7 +368,7 @@ describe("GlobalSettings defaults section", () => {
   });
 
   test("never offers OpenCode's placeholder model as a durable default", async () => {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,
@@ -376,7 +378,7 @@ describe("GlobalSettings defaults section", () => {
         },
       },
     }));
-    render(<GlobalSettings activeSection="defaults" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="defaults" />);
 
     openPicker("Push");
     fireEvent.click(screen.getByRole("button", { name: "opencode models" }));
@@ -397,7 +399,7 @@ describe("GlobalSettings defaults section", () => {
 
   test("a save from another section does not resend saved defaults", async () => {
     const stored: ActionDefaults = { review: { platform: "codex", reasoningEffort: "xhigh" } };
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,
@@ -407,7 +409,7 @@ describe("GlobalSettings defaults section", () => {
         },
       },
     }));
-    render(<GlobalSettings activeSection="review" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="review" />);
 
     // Only the changed field travels; the backend merges it onto its own
     // copy, so another window's newer defaults cannot be overwritten from here.
@@ -420,11 +422,13 @@ describe("GlobalSettings defaults section", () => {
     expect(mockPatchGlobalConfig.mock.calls.at(-1)?.[0]).toEqual({
       reviewInstruction: "Focus on release blockers.",
     });
-    expect(useConfigStore.getState().config.global.agentSettings?.actionDefaults).toEqual(stored);
+    expect(
+      appCommandStore(configStore).getState().config.global.agentSettings?.actionDefaults,
+    ).toEqual(stored);
   });
 
   test("an unrelated global save does not resend notification preferences", async () => {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,
@@ -440,7 +444,7 @@ describe("GlobalSettings defaults section", () => {
         },
       },
     }));
-    render(<GlobalSettings activeSection="review" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="review" />);
 
     fireEvent.change(screen.getByLabelText("Review instruction"), {
       target: { value: "Preserve unrelated preferences." },
@@ -451,7 +455,7 @@ describe("GlobalSettings defaults section", () => {
     expect(mockPatchGlobalConfig.mock.calls.at(-1)?.[0]).toEqual({
       reviewInstruction: "Preserve unrelated preferences.",
     });
-    expect(useConfigStore.getState().config.global.notificationSounds).toEqual({
+    expect(appCommandStore(configStore).getState().config.global.notificationSounds).toEqual({
       agentStopped: false,
       prMerged: true,
       coordinatorReport: false,
@@ -461,7 +465,7 @@ describe("GlobalSettings defaults section", () => {
   });
 
   test("edits a two-column variable reviewer list shared with Defaults", async () => {
-    const view = render(<GlobalSettings activeSection="review" />);
+    const view = renderInAppCommandScope(<GlobalSettings activeSection="review" />);
 
     const grid = screen.getByRole("group", { name: "Default Multi Review models" });
     expect(grid.className).toContain("sm:grid-cols-2");
@@ -504,7 +508,7 @@ describe("GlobalSettings defaults section", () => {
   });
 
   test("shows unset secondary reviewers as following the resolved Review default", () => {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,
@@ -522,7 +526,7 @@ describe("GlobalSettings defaults section", () => {
       },
     }));
 
-    render(<GlobalSettings activeSection="review" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="review" />);
 
     expect(
       screen.getByRole("combobox", {
@@ -540,7 +544,7 @@ describe("GlobalSettings defaults section", () => {
   });
 
   test("decreasing to two reviewers discards trailing defaults and removes multiReview", async () => {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,
@@ -556,7 +560,7 @@ describe("GlobalSettings defaults section", () => {
         },
       },
     }));
-    render(<GlobalSettings activeSection="review" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="review" />);
 
     fireEvent.click(screen.getByRole("button", { name: "Use one fewer reviewer" }));
     expect(
@@ -571,7 +575,7 @@ describe("GlobalSettings defaults section", () => {
   });
 
   test("resetting a middle reviewer preserves later reviewer positions", async () => {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,
@@ -590,7 +594,7 @@ describe("GlobalSettings defaults section", () => {
         },
       },
     }));
-    render(<GlobalSettings activeSection="review" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="review" />);
 
     const rows = screen
       .getByRole("group", { name: "Default Multi Review models" })
@@ -606,7 +610,7 @@ describe("GlobalSettings defaults section", () => {
   });
 
   test("resetting the only additional reviewer trims the trailing null", async () => {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,
@@ -622,7 +626,7 @@ describe("GlobalSettings defaults section", () => {
         },
       },
     }));
-    render(<GlobalSettings activeSection="review" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="review" />);
 
     const rows = screen
       .getByRole("group", { name: "Default Multi Review models" })
@@ -635,7 +639,7 @@ describe("GlobalSettings defaults section", () => {
   });
 
   test("disables the reviewer-count controls at both bounds", () => {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,
@@ -648,14 +652,14 @@ describe("GlobalSettings defaults section", () => {
         },
       },
     }));
-    const view = render(<GlobalSettings activeSection="review" />);
+    const view = renderInAppCommandScope(<GlobalSettings activeSection="review" />);
     expect(
       (screen.getByRole("button", { name: "Use one fewer reviewer" }) as HTMLButtonElement)
         .disabled,
     ).toBe(true);
 
     view.unmount();
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,
@@ -668,7 +672,7 @@ describe("GlobalSettings defaults section", () => {
         },
       },
     }));
-    render(<GlobalSettings activeSection="review" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="review" />);
     expect(
       (screen.getByRole("button", { name: "Use one more reviewer" }) as HTMLButtonElement).disabled,
     ).toBe(true);

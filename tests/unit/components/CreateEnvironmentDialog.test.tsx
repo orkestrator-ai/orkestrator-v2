@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, jest, mock, test } from "bun:test";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { useConfigStore } from "@/stores/configStore";
-import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
+import { configStore } from "@/stores/configStore";
+import { agentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 import { invoke } from "@/lib/native/backend";
 import { mockReadImage } from "../../mocks/clipboard";
 import {
@@ -12,6 +13,7 @@ import {
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
 import type { CreateFeatureBuildInput } from "@orkestrator/protocol/feature-build";
 import type { ClaudeOptions } from "@/components/environments/CreateEnvironmentDialog";
+import { appCommandStore } from "../../../apps/web/src/test/app-command-store";
 
 // Attachment cases allocate and encode tens of megabytes. Under the aggregate
 // suite that work can legitimately outlive Bun's generic five-second budget.
@@ -23,9 +25,9 @@ const {
   pngFilenameForDroppedImage,
   resolveAgentDefaults,
 } = await import("../../../apps/web/src/components/environments/CreateEnvironmentDialog");
-const defaultConfig = structuredClone(useConfigStore.getInitialState().config);
-const defaultClaudeModels = useAgentModelCatalogStore.getInitialState().claudeModels;
-const defaultCodexModels = useAgentModelCatalogStore.getInitialState().codexModels;
+const defaultConfig = structuredClone(appCommandStore(configStore).getInitialState().config);
+const defaultClaudeModels = appCommandStore(agentModelCatalogStore).getInitialState().claudeModels;
+const defaultCodexModels = appCommandStore(agentModelCatalogStore).getInitialState().codexModels;
 const invokeMock = invoke as ReturnType<typeof mock>;
 
 if (typeof globalThis.ImageData === "undefined") {
@@ -135,12 +137,12 @@ async function selectReasoning(name: string) {
 describe("resolveAgentDefaults", () => {
   beforeEach(() => {
     cleanup();
-    useConfigStore.setState({
+    appCommandStore(configStore).setState({
       config: structuredClone(defaultConfig),
       isLoading: false,
       error: null,
     });
-    useAgentModelCatalogStore.setState({
+    appCommandStore(agentModelCatalogStore).setState({
       claudeModels: defaultClaudeModels,
       codexModels: defaultCodexModels,
       cursorModels: [],
@@ -196,7 +198,7 @@ describe("resolveAgentDefaults", () => {
 
   test("disables container creation and falls back to a local worktree without Docker", async () => {
     const onCreate = mock(async (_options: ClaudeOptions) => {});
-    render(
+    renderInAppCommandScope(
       <DockerAvailabilityProvider available={false}>
         <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />
       </DockerAvailabilityProvider>,
@@ -214,7 +216,7 @@ describe("resolveAgentDefaults", () => {
   test("falls back to a local worktree when Docker stops while the dialog is open", async () => {
     const onCreate = mock(async (_options: ClaudeOptions) => {});
     const dialog = <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />;
-    const view = render(
+    const view = renderInAppCommandScope(
       <DockerAvailabilityProvider available>{dialog}</DockerAvailabilityProvider>,
     );
 
@@ -237,7 +239,7 @@ describe("resolveAgentDefaults", () => {
 
   test("does not force a local submission when the project has no local checkout", () => {
     const onCreate = mock(async () => {});
-    render(
+    renderInAppCommandScope(
       <DockerAvailabilityProvider available={false}>
         <CreateEnvironmentDialog
           open
@@ -349,7 +351,7 @@ describe("resolveAgentDefaults", () => {
   });
 
   test("shows the project name in the title and presents the compact agent controls in order", () => {
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog
         open
         onOpenChange={() => {}}
@@ -375,7 +377,7 @@ describe("resolveAgentDefaults", () => {
   });
 
   test("starts on the prompt tab and preserves values while moving between mobile sections", () => {
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog
         open={true}
         onOpenChange={() => {}}
@@ -423,7 +425,7 @@ describe("resolveAgentDefaults", () => {
   });
 
   test("sets every mobile panel's animation direction from section order", () => {
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog
         open={true}
         onOpenChange={() => {}}
@@ -468,7 +470,7 @@ describe("resolveAgentDefaults", () => {
   });
 
   test("hides container-only mobile tabs when local setup is selected", () => {
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog
         open={true}
         onOpenChange={() => {}}
@@ -491,7 +493,7 @@ describe("resolveAgentDefaults", () => {
   test.each(["Access", "Ports"])(
     "returns to Setup when the active %s tab becomes unavailable",
     async (tabName) => {
-      render(
+      renderInAppCommandScope(
         <CreateEnvironmentDialog
           open={true}
           onOpenChange={() => {}}
@@ -523,7 +525,7 @@ describe("resolveAgentDefaults", () => {
   );
 
   test("moves from Prompt to Agent when launching an agent is disabled", async () => {
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog
         open={true}
         onOpenChange={() => {}}
@@ -551,7 +553,9 @@ describe("resolveAgentDefaults", () => {
       onOpenChange: () => {},
       onCreate: mock(async () => {}),
     };
-    const { rerender } = render(<CreateEnvironmentDialog open={true} {...props} />);
+    const { rerender } = renderInAppCommandScope(
+      <CreateEnvironmentDialog open={true} {...props} />,
+    );
 
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Setup" }), {
       button: 0,
@@ -582,7 +586,7 @@ describe("resolveAgentDefaults", () => {
   });
 
   test("clears the delayed prompt autofocus when the dialog unmounts", async () => {
-    const { unmount } = render(
+    const { unmount } = renderInAppCommandScope(
       <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={mock(async () => {})} />,
     );
     const prompt = screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement;
@@ -604,7 +608,7 @@ describe("resolveAgentDefaults", () => {
       onCreate,
       projectId,
     };
-    const { unmount } = render(<CreateEnvironmentDialog open={true} {...props} />);
+    const { unmount } = renderInAppCommandScope(<CreateEnvironmentDialog open={true} {...props} />);
 
     fireEvent.change(screen.getByLabelText(/Initial Prompt/i), {
       target: { value: "  Keep this draft  " },
@@ -621,7 +625,7 @@ describe("resolveAgentDefaults", () => {
     expect((screen.getByLabelText(/Environment Name/i) as HTMLInputElement).value).toBe("");
 
     unmount();
-    render(<CreateEnvironmentDialog open={true} {...props} />);
+    renderInAppCommandScope(<CreateEnvironmentDialog open={true} {...props} />);
     await waitFor(() => {
       expect((screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement).value).toBe(
         "Keep this draft",
@@ -652,14 +656,16 @@ describe("resolveAgentDefaults", () => {
       onCreate: mock(async () => {}),
       projectId,
     };
-    const firstRender = render(<CreateEnvironmentDialog open={true} {...props} />);
+    const firstRender = renderInAppCommandScope(<CreateEnvironmentDialog open={true} {...props} />);
     fireEvent.change(screen.getByLabelText(/Initial Prompt/i), {
       target: { value: "Remove this draft" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     firstRender.unmount();
 
-    const secondRender = render(<CreateEnvironmentDialog open={true} {...props} />);
+    const secondRender = renderInAppCommandScope(
+      <CreateEnvironmentDialog open={true} {...props} />,
+    );
     await waitFor(() => {
       expect((screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement).value).toBe(
         "Remove this draft",
@@ -671,7 +677,7 @@ describe("resolveAgentDefaults", () => {
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     secondRender.unmount();
 
-    render(<CreateEnvironmentDialog open={true} {...props} />);
+    renderInAppCommandScope(<CreateEnvironmentDialog open={true} {...props} />);
     expect((screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement).value).toBe("");
   });
 
@@ -682,14 +688,16 @@ describe("resolveAgentDefaults", () => {
       onCreate: mock(async () => {}),
       projectId,
     };
-    const firstRender = render(<CreateEnvironmentDialog open={true} {...props} />);
+    const firstRender = renderInAppCommandScope(<CreateEnvironmentDialog open={true} {...props} />);
     fireEvent.change(screen.getByLabelText(/Initial Prompt/i), {
       target: { value: "Saved until creation" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     firstRender.unmount();
 
-    const secondRender = render(<CreateEnvironmentDialog open={true} {...props} />);
+    const secondRender = renderInAppCommandScope(
+      <CreateEnvironmentDialog open={true} {...props} />,
+    );
     await waitFor(() => {
       expect((screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement).value).toBe(
         "Saved until creation",
@@ -699,13 +707,15 @@ describe("resolveAgentDefaults", () => {
     await waitFor(() => expect(props.onCreate).toHaveBeenCalled());
     secondRender.unmount();
 
-    render(<CreateEnvironmentDialog open={true} {...props} />);
+    renderInAppCommandScope(<CreateEnvironmentDialog open={true} {...props} />);
     expect((screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement).value).toBe("");
   });
 
   test("submits the selected restricted network mode", async () => {
     const onCreate = mock(async () => {});
-    render(<CreateEnvironmentDialog open={true} onOpenChange={() => {}} onCreate={onCreate} />);
+    renderInAppCommandScope(
+      <CreateEnvironmentDialog open={true} onOpenChange={() => {}} onCreate={onCreate} />,
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "Restricted" }));
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
@@ -720,7 +730,7 @@ describe("resolveAgentDefaults", () => {
   test("submits only on Cmd/Ctrl+Enter in the prompt", async () => {
     for (const modifier of ["metaKey", "ctrlKey"] as const) {
       const onCreate = mock(async () => {});
-      const view = render(
+      const view = renderInAppCommandScope(
         <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />,
       );
       const prompt = screen.getByLabelText(/Initial Prompt/i);
@@ -736,7 +746,7 @@ describe("resolveAgentDefaults", () => {
 
   test("disables form actions and controls while environment creation is loading", () => {
     const onCreate = mock(async () => {});
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog
         open={true}
         onOpenChange={() => {}}
@@ -765,7 +775,7 @@ describe("resolveAgentDefaults", () => {
   });
 
   test("submits the configured Codex mode alongside the prompt", async () => {
-    useConfigStore.setState({
+    appCommandStore(configStore).setState({
       config: {
         version: "1.0",
         global: {
@@ -795,7 +805,9 @@ describe("resolveAgentDefaults", () => {
 
     const onCreate = mock(async () => {});
 
-    render(<CreateEnvironmentDialog open={true} onOpenChange={() => {}} onCreate={onCreate} />);
+    renderInAppCommandScope(
+      <CreateEnvironmentDialog open={true} onOpenChange={() => {}} onCreate={onCreate} />,
+    );
 
     await selectAgentPlatform("Codex");
     fireEvent.change(screen.getByLabelText(/Initial Prompt/i), {
@@ -816,7 +828,9 @@ describe("resolveAgentDefaults", () => {
 
   test("submits the selected model and reasoning effort", async () => {
     const onCreate = mock(async () => {});
-    render(<CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />);
+    renderInAppCommandScope(
+      <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />,
+    );
 
     await selectAgentPlatform("Codex");
     await selectAgentModel(/GPT-5\.4-Mini/);
@@ -835,7 +849,7 @@ describe("resolveAgentDefaults", () => {
   });
 
   test("starts a new project's environment on the configured New projects default", async () => {
-    useAgentModelCatalogStore.setState({
+    appCommandStore(agentModelCatalogStore).setState({
       codexModels: [
         {
           id: "codex-a",
@@ -876,10 +890,12 @@ describe("resolveAgentDefaults", () => {
         newProject: { platform: "codex", model: "codex-b", reasoningEffort: "high" },
       },
     };
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
     const onCreate = mock(async () => {});
 
-    render(<CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />);
+    renderInAppCommandScope(
+      <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />,
+    );
 
     await waitFor(() => expect(getAgentModelPicker().textContent).toContain("Codex B"));
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
@@ -896,7 +912,7 @@ describe("resolveAgentDefaults", () => {
   });
 
   test("takes agent, model, and reasoning from New projects defaults, not the last agent used", async () => {
-    useAgentModelCatalogStore.setState({
+    appCommandStore(agentModelCatalogStore).setState({
       codexModels: [
         {
           id: "codex-a",
@@ -930,10 +946,10 @@ describe("resolveAgentDefaults", () => {
         mode: "native",
       },
     };
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
     const onCreate = mock(async () => {});
 
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog
         open
         projectId="project-1"
@@ -977,10 +993,10 @@ describe("resolveAgentDefaults", () => {
       prBaseBranch: "main",
       lastEnvironmentAgentSelection: { platform: "codex", mode: "native" },
     };
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
     const onCreate = mock(async () => {});
 
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog
         open
         projectId="project-1"
@@ -999,7 +1015,7 @@ describe("resolveAgentDefaults", () => {
   });
 
   test("uses a repository New projects action default before the app default", async () => {
-    useAgentModelCatalogStore.setState({
+    appCommandStore(agentModelCatalogStore).setState({
       codexModels: [{ id: "repo-codex", name: "Repo Codex", reasoningEfforts: ["high"] }],
     });
     const config = structuredClone(defaultConfig);
@@ -1017,10 +1033,10 @@ describe("resolveAgentDefaults", () => {
         },
       },
     };
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
     const onCreate = mock(async () => {});
 
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog
         open
         projectId="project-1"
@@ -1060,10 +1076,12 @@ describe("resolveAgentDefaults", () => {
         newProject: { platform: "codex", model: "codex-b", reasoningEffort: "high" },
       },
     };
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
     const onCreate = mock(async () => {});
 
-    render(<CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />);
+    renderInAppCommandScope(
+      <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />,
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
 
@@ -1090,28 +1108,32 @@ describe("resolveAgentDefaults", () => {
       },
     };
     config.global.enabledAgentPlatforms = ["cursor"];
-    useConfigStore.setState({ config });
-    useAgentModelCatalogStore.getState().setAcpModels([
-      {
-        platform: "cursor",
-        id: "grok-4.6",
-        label: "Cursor Grok 4.6",
-        providerLabel: "Cursor",
-        reasoning: [
-          { id: "low", label: "Low" },
-          { id: "high", label: "High" },
-        ],
-      },
-      {
-        platform: "cursor",
-        id: "composer-2.5",
-        label: "Composer 2.5",
-        providerLabel: "Cursor",
-      },
-    ]);
+    appCommandStore(configStore).setState({ config });
+    appCommandStore(agentModelCatalogStore)
+      .getState()
+      .setAcpModels([
+        {
+          platform: "cursor",
+          id: "grok-4.6",
+          label: "Cursor Grok 4.6",
+          providerLabel: "Cursor",
+          reasoning: [
+            { id: "low", label: "Low" },
+            { id: "high", label: "High" },
+          ],
+        },
+        {
+          platform: "cursor",
+          id: "composer-2.5",
+          label: "Composer 2.5",
+          providerLabel: "Cursor",
+        },
+      ]);
     const onCreate = mock(async () => {});
 
-    render(<CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />);
+    renderInAppCommandScope(
+      <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />,
+    );
 
     await waitFor(() => expect(getAgentModelPicker().textContent).toContain("Cursor Grok 4.6"));
     openAgentModelPicker();
@@ -1143,7 +1165,7 @@ describe("resolveAgentDefaults", () => {
       },
     };
     config.global.enabledAgentPlatforms = ["pi"];
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
     invokeMock.mockImplementation((command: string) => {
       if (command === "ensure_host_pi_model_catalog") {
         return Promise.resolve([
@@ -1163,7 +1185,7 @@ describe("resolveAgentDefaults", () => {
       return Promise.resolve(undefined);
     });
 
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={mock(async () => {})} />,
     );
 
@@ -1175,9 +1197,11 @@ describe("resolveAgentDefaults", () => {
     // No model is marked as the default, so the choice is left to Pi's own
     // resolution rather than the catalogue's first row.
     await waitFor(() => expect(getAgentModelPicker().textContent).toContain("Pi default"));
-    expect(useAgentModelCatalogStore.getState().piModels.map((model) => model.id)).toEqual([
-      "openai-codex/gpt-5.4",
-    ]);
+    expect(
+      appCommandStore(agentModelCatalogStore)
+        .getState()
+        .piModels.map((model) => model.id),
+    ).toEqual(["openai-codex/gpt-5.4"]);
     // Seeding spawns a real bridge on the backend, so one attempt per opening
     // is the budget: a re-render must not buy another.
     expect(
@@ -1188,13 +1212,13 @@ describe("resolveAgentDefaults", () => {
   test("does not seed the Pi catalogue when Pi is not an enabled platform", async () => {
     const config = structuredClone(defaultConfig);
     config.global.enabledAgentPlatforms = ["claude", "codex"];
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
     invokeMock.mockImplementation((command: string) => {
       if (command === "get_opencode_model_catalog_cache") return Promise.resolve(null);
       return Promise.resolve(undefined);
     });
 
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={mock(async () => {})} />,
     );
 
@@ -1209,7 +1233,7 @@ describe("resolveAgentDefaults", () => {
   test("retries the Pi seed the next time the dialog is opened", async () => {
     const config = structuredClone(defaultConfig);
     config.global.enabledAgentPlatforms = ["pi"];
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
     // A failed probe leaves the picker on its fallback rather than breaking the
     // dialog, and the attempt is not held against the next opening.
     const logs = captureLogs();
@@ -1222,7 +1246,7 @@ describe("resolveAgentDefaults", () => {
         return Promise.resolve(undefined);
       });
 
-      const { rerender } = render(
+      const { rerender } = renderInAppCommandScope(
         <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={mock(async () => {})} />,
       );
 
@@ -1231,7 +1255,7 @@ describe("resolveAgentDefaults", () => {
           invokeMock.mock.calls.filter(([command]) => command === "ensure_host_pi_model_catalog"),
         ).toHaveLength(1),
       );
-      expect(useAgentModelCatalogStore.getState().piModels).toEqual([]);
+      expect(appCommandStore(agentModelCatalogStore).getState().piModels).toEqual([]);
 
       rerender(
         <CreateEnvironmentDialog
@@ -1268,7 +1292,7 @@ describe("resolveAgentDefaults", () => {
     // The cross-agent branch re-derives the effort from the target agent's
     // defaults. The same-agent branch must instead keep what the user chose,
     // which only shows up when the new model still supports it.
-    useAgentModelCatalogStore.setState({
+    appCommandStore(agentModelCatalogStore).setState({
       codexModels: [
         {
           id: "codex-a",
@@ -1303,10 +1327,12 @@ describe("resolveAgentDefaults", () => {
         codex: { ...config.global.agentSettings?.platforms?.codex, reasoningEffort: "medium" },
       },
     };
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
     const onCreate = mock(async () => {});
 
-    render(<CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />);
+    renderInAppCommandScope(
+      <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />,
+    );
 
     expect(getAgentModelPicker().textContent).toContain("Codex A");
     expect(getAgentModelPicker().textContent).toContain("Medium");
@@ -1337,7 +1363,7 @@ describe("resolveAgentDefaults", () => {
     // Selecting a platform resets that agent's model to its configured default.
     // Re-selecting the agent already in use is not a change and must not throw
     // away a model the user picked after opening the dialog.
-    useAgentModelCatalogStore.setState({
+    appCommandStore(agentModelCatalogStore).setState({
       codexModels: [
         {
           id: "codex-a",
@@ -1362,10 +1388,12 @@ describe("resolveAgentDefaults", () => {
         codex: { ...config.global.agentSettings?.platforms?.codex, model: "codex-a" },
       },
     };
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
     const onCreate = mock(async () => {});
 
-    render(<CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />);
+    renderInAppCommandScope(
+      <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />,
+    );
 
     await selectAgentModel(/Codex B/);
     await waitFor(() => expect(getAgentModelPicker().textContent).toContain("Codex B"));
@@ -1398,9 +1426,11 @@ describe("resolveAgentDefaults", () => {
         opencode: { ...config.global.agentSettings?.platforms?.opencode, model: undefined },
       },
     };
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
     const onCreate = mock(async () => {});
-    render(<CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />);
+    renderInAppCommandScope(
+      <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />,
+    );
 
     await selectAgentPlatform("OpenCode");
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
@@ -1415,9 +1445,11 @@ describe("resolveAgentDefaults", () => {
   test("keeps Claude's real 'default' model id, which is not a placeholder", async () => {
     // The mirror of the test above: `CLAUDE_FALLBACK_MODELS` genuinely contains
     // an id of "default", so it must keep flowing through untouched.
-    useAgentModelCatalogStore.setState({ claudeModels: [] });
+    appCommandStore(agentModelCatalogStore).setState({ claudeModels: [] });
     const onCreate = mock(async () => {});
-    render(<CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />);
+    renderInAppCommandScope(
+      <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />,
+    );
 
     await selectAgentPlatform("Claude");
     await selectAgentModel(/Default \(recommended\)/);
@@ -1432,7 +1464,9 @@ describe("resolveAgentDefaults", () => {
 
   test("submits an unset reasoning effort as undefined", async () => {
     const onCreate = mock(async () => {});
-    render(<CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />);
+    renderInAppCommandScope(
+      <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />,
+    );
 
     await selectAgentPlatform("Codex");
     await selectReasoning("Default");
@@ -1446,7 +1480,7 @@ describe("resolveAgentDefaults", () => {
   });
 
   test("omits reasoning choices when the selected model supports none", async () => {
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={mock(async () => {})} />,
     );
 
@@ -1474,10 +1508,10 @@ describe("resolveAgentDefaults", () => {
       prBaseBranch: "main",
       agentSettings: { platforms: { claude: { mode: "native" } } },
     };
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
     const onCreate = mock(async () => {});
 
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog
         open
         onOpenChange={() => {}}
@@ -1495,7 +1529,7 @@ describe("resolveAgentDefaults", () => {
   });
 
   test("falls back to the global Codex effort when the project has no override", async () => {
-    useAgentModelCatalogStore.setState({
+    appCommandStore(agentModelCatalogStore).setState({
       codexModels: [
         {
           id: "codex-preferred",
@@ -1526,10 +1560,10 @@ describe("resolveAgentDefaults", () => {
       prBaseBranch: "main",
       agentSettings: { defaultAgent: "codex", platforms: { codex: { model: "codex-preferred" } } },
     };
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
     const onCreate = mock(async () => {});
 
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog
         open
         onOpenChange={() => {}}
@@ -1552,7 +1586,7 @@ describe("resolveAgentDefaults", () => {
   });
 
   test("prefers a project effort and drops an unsupported configured effort", async () => {
-    useAgentModelCatalogStore.setState({
+    appCommandStore(agentModelCatalogStore).setState({
       codexModels: [
         {
           id: "codex-medium-only",
@@ -1586,10 +1620,10 @@ describe("resolveAgentDefaults", () => {
         platforms: { codex: { model: "codex-medium-only", reasoningEffort: "medium" } },
       },
     };
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
     const onCreate = mock(async () => {});
 
-    const { unmount } = render(
+    const { unmount } = renderInAppCommandScope(
       <CreateEnvironmentDialog
         open
         onOpenChange={() => {}}
@@ -1606,8 +1640,8 @@ describe("resolveAgentDefaults", () => {
       ...config.repositories["project-codex"]!.agentSettings,
       platforms: { codex: { model: "codex-medium-only", reasoningEffort: "high" } },
     };
-    useConfigStore.setState({ config: structuredClone(config) });
-    render(
+    appCommandStore(configStore).setState({ config: structuredClone(config) });
+    renderInAppCommandScope(
       <CreateEnvironmentDialog
         open
         onOpenChange={() => {}}
@@ -1653,10 +1687,10 @@ describe("resolveAgentDefaults", () => {
         platforms: { opencode: { model: "provider/model-b", reasoningEffort: "deep" } },
       },
     };
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
     const onCreate = mock(async () => {});
 
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog
         open
         onOpenChange={() => {}}
@@ -1705,7 +1739,7 @@ describe("resolveAgentDefaults", () => {
         platforms: { opencode: { model: "provider/model-a", reasoningEffort: "fast" } },
       },
     };
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
     invokeMock.mockImplementation((command: string, args?: Record<string, unknown>) => {
       if (command === "get_opencode_model_catalog_cache") {
         expect(args).toEqual({ projectId: "durable-project" });
@@ -1737,7 +1771,7 @@ describe("resolveAgentDefaults", () => {
     });
     const onCreate = mock(async () => {});
 
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog
         open
         onOpenChange={() => {}}
@@ -1788,7 +1822,7 @@ describe("resolveAgentDefaults", () => {
       { platform: "opencode", modelId: "provider/model-b" },
       { platform: "opencode", modelId: "provider/model-a" },
     ];
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
     invokeMock.mockImplementation((command: string) => {
       if (command === "get_opencode_model_catalog_cache") {
         return Promise.resolve({
@@ -1806,7 +1840,7 @@ describe("resolveAgentDefaults", () => {
       return Promise.resolve(undefined);
     });
 
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog
         open
         onOpenChange={() => {}}
@@ -1837,7 +1871,7 @@ describe("resolveAgentDefaults", () => {
         variants: ["deep"],
       },
     ]);
-    useAgentModelCatalogStore.setState({
+    appCommandStore(agentModelCatalogStore).setState({
       codexModels: [
         {
           id: "codex-favorite",
@@ -1879,10 +1913,10 @@ describe("resolveAgentDefaults", () => {
         platforms: { opencode: { model: "provider/source", reasoningEffort: "deep" } },
       },
     };
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
     const onCreate = mock(async () => {});
 
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog
         open
         onOpenChange={() => {}}
@@ -1924,9 +1958,9 @@ describe("resolveAgentDefaults", () => {
         opencode: { ...config.global.agentSettings?.platforms?.opencode, model: undefined },
       },
     };
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
 
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={mock(async () => {})} />,
     );
     await selectAgentPlatform("OpenCode");
@@ -1946,7 +1980,7 @@ describe("resolveAgentDefaults", () => {
         opencode: { ...config.global.agentSettings?.platforms?.opencode, model: undefined },
       },
     };
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
     const projectA = deferred<Record<string, unknown>>();
     invokeMock.mockImplementation((command: string, args?: Record<string, unknown>) => {
       if (command === "get_opencode_model_catalog_cache") {
@@ -1975,7 +2009,9 @@ describe("resolveAgentDefaults", () => {
       onOpenChange: () => {},
       onCreate: mock(async () => {}),
     };
-    const { rerender } = render(<CreateEnvironmentDialog {...props} projectId="project-a" />);
+    const { rerender } = renderInAppCommandScope(
+      <CreateEnvironmentDialog {...props} projectId="project-a" />,
+    );
     await selectAgentPlatform("OpenCode");
     rerender(<CreateEnvironmentDialog {...props} projectId="project-b" />);
     await waitFor(() => expect(getAgentModelPicker().textContent).toContain("Project B Model"));
@@ -2008,7 +2044,7 @@ describe("resolveAgentDefaults", () => {
         opencode: { ...config.global.agentSettings?.platforms?.opencode, model: undefined },
       },
     };
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
     let cacheRead = 0;
     invokeMock.mockImplementation((command: string) => {
       if (command === "get_opencode_model_catalog_cache") {
@@ -2041,7 +2077,7 @@ describe("resolveAgentDefaults", () => {
       onCreate: mock(async () => {}),
       projectId: "repeat-project",
     };
-    const { rerender } = render(<CreateEnvironmentDialog open {...props} />);
+    const { rerender } = renderInAppCommandScope(<CreateEnvironmentDialog open {...props} />);
     await selectAgentPlatform("OpenCode");
     await waitFor(() => expect(getAgentModelPicker().textContent).toContain("Old Cached Model"));
 
@@ -2081,7 +2117,7 @@ describe("resolveAgentDefaults", () => {
         opencode: { ...config.global.agentSettings?.platforms?.opencode, model: undefined },
       },
     };
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
     invokeMock.mockImplementation((command: string) => {
       if (command === "get_opencode_model_catalog_cache") return cacheResult();
       if (command === "get_opencode_model_preferences") {
@@ -2090,7 +2126,7 @@ describe("resolveAgentDefaults", () => {
       return Promise.resolve(undefined);
     });
 
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog
         open
         onOpenChange={() => {}}
@@ -2125,7 +2161,7 @@ describe("resolveAgentDefaults", () => {
         platforms: { opencode: { model: "configured/missing-model", reasoningEffort: "turbo" } },
       },
     };
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
     invokeMock.mockImplementation((command: string) => {
       if (command === "get_opencode_model_catalog_cache") {
         return Promise.resolve({
@@ -2150,7 +2186,7 @@ describe("resolveAgentDefaults", () => {
     });
     const onCreate = mock(async () => {});
 
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog
         open
         onOpenChange={() => {}}
@@ -2201,7 +2237,7 @@ describe("resolveAgentDefaults", () => {
         platforms: { opencode: { model: "provider/configured-model", reasoningEffort: "turbo" } },
       },
     };
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
     invokeMock.mockImplementation((command: string) => {
       if (command === "get_opencode_model_catalog_cache") {
         return Promise.resolve({
@@ -2225,7 +2261,7 @@ describe("resolveAgentDefaults", () => {
       return Promise.resolve(undefined);
     });
 
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog
         open
         onOpenChange={() => {}}
@@ -2250,7 +2286,7 @@ describe("resolveAgentDefaults", () => {
         opencode: { ...config.global.agentSettings?.platforms?.opencode, model: undefined },
       },
     };
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
     invokeMock.mockImplementation((command: string) => {
       if (command === "get_opencode_model_catalog_cache") {
         return Promise.resolve({
@@ -2273,7 +2309,7 @@ describe("resolveAgentDefaults", () => {
       return Promise.resolve(undefined);
     });
 
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog
         open
         onOpenChange={() => {}}
@@ -2303,7 +2339,7 @@ describe("resolveAgentDefaults", () => {
         opencode: { ...config.global.agentSettings?.platforms?.opencode, model: undefined },
       },
     };
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
     invokeMock.mockImplementation((command: string) => {
       if (command === "get_opencode_model_catalog_cache") {
         return Promise.resolve({
@@ -2326,7 +2362,7 @@ describe("resolveAgentDefaults", () => {
       return Promise.resolve(undefined);
     });
 
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog
         open
         onOpenChange={() => {}}
@@ -2356,7 +2392,7 @@ describe("resolveAgentDefaults", () => {
         },
       },
     };
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
     let resolveCache: (value: unknown) => void = () => {};
     const cacheRead = new Promise((resolve) => {
       resolveCache = resolve;
@@ -2370,7 +2406,7 @@ describe("resolveAgentDefaults", () => {
     });
     const onCreate = mock(async () => {});
 
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog
         open
         onOpenChange={() => {}}
@@ -2410,7 +2446,7 @@ describe("resolveAgentDefaults", () => {
   });
 
   test("resets effort for an incompatible model and reconciles a refreshed catalog", async () => {
-    useAgentModelCatalogStore.setState({
+    appCommandStore(agentModelCatalogStore).setState({
       codexModels: [
         {
           id: "codex-high",
@@ -2442,9 +2478,9 @@ describe("resolveAgentDefaults", () => {
         codex: { ...config.global.agentSettings?.platforms?.codex, reasoningEffort: "high" },
       },
     };
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
 
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={mock(async () => {})} />,
     );
 
@@ -2452,7 +2488,7 @@ describe("resolveAgentDefaults", () => {
     expect(getAgentModelPicker().textContent).toContain("Default");
 
     await act(async () => {
-      useAgentModelCatalogStore.setState({
+      appCommandStore(agentModelCatalogStore).setState({
         codexModels: [
           {
             id: "codex-refreshed",
@@ -2521,9 +2557,11 @@ describe("resolveAgentDefaults", () => {
           },
         },
       };
-      useConfigStore.setState({ config });
+      appCommandStore(configStore).setState({ config });
       const onCreate = mock(async () => {});
-      render(<CreateEnvironmentDialog open={true} onOpenChange={() => {}} onCreate={onCreate} />);
+      renderInAppCommandScope(
+        <CreateEnvironmentDialog open={true} onOpenChange={() => {}} onCreate={onCreate} />,
+      );
 
       await selectAgentPlatform(agentLabel);
       fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
@@ -2541,7 +2579,9 @@ describe("resolveAgentDefaults", () => {
 
   test("submits a trimmed environment name without launching an agent", async () => {
     const onCreate = mock(async () => {});
-    render(<CreateEnvironmentDialog open={true} onOpenChange={() => {}} onCreate={onCreate} />);
+    renderInAppCommandScope(
+      <CreateEnvironmentDialog open={true} onOpenChange={() => {}} onCreate={onCreate} />,
+    );
 
     fireEvent.change(screen.getByLabelText(/Environment Name/i), {
       target: { value: "  local-review  " },
@@ -2562,7 +2602,7 @@ describe("resolveAgentDefaults", () => {
   });
 
   test("defaults to the project's last created environment type", async () => {
-    useConfigStore.setState({
+    appCommandStore(configStore).setState({
       config: {
         version: "1.0",
         global: {
@@ -2598,7 +2638,7 @@ describe("resolveAgentDefaults", () => {
 
     const onCreate = mock(async () => {});
 
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog
         open={true}
         onOpenChange={() => {}}
@@ -2619,7 +2659,7 @@ describe("resolveAgentDefaults", () => {
   });
 
   test("resets environment type to the saved project default when reopened", async () => {
-    useConfigStore.setState({
+    appCommandStore(configStore).setState({
       config: {
         version: "1.0",
         global: {
@@ -2660,7 +2700,9 @@ describe("resolveAgentDefaults", () => {
       projectId: "project-1",
     };
 
-    const { rerender } = render(<CreateEnvironmentDialog open={true} {...props} />);
+    const { rerender } = renderInAppCommandScope(
+      <CreateEnvironmentDialog open={true} {...props} />,
+    );
 
     fireEvent.click(screen.getByRole("button", { name: /Containerized/ }));
 
@@ -2686,7 +2728,9 @@ describe("resolveAgentDefaults", () => {
 
     const onCreate = mock(async () => {});
 
-    render(<CreateEnvironmentDialog open={true} onOpenChange={() => {}} onCreate={onCreate} />);
+    renderInAppCommandScope(
+      <CreateEnvironmentDialog open={true} onOpenChange={() => {}} onCreate={onCreate} />,
+    );
 
     const prompt = screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement;
     prompt.focus();
@@ -2730,7 +2774,7 @@ describe("resolveAgentDefaults", () => {
       size: async () => ({ width: 1, height: 1 }),
     }));
 
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog
         open={true}
         onOpenChange={() => {}}
@@ -2768,7 +2812,7 @@ describe("resolveAgentDefaults", () => {
       drawImage,
     })) as unknown as typeof HTMLCanvasElement.prototype.getContext;
 
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog
         open={true}
         onOpenChange={() => {}}
@@ -2809,7 +2853,7 @@ describe("resolveAgentDefaults", () => {
       return this.width === width ? oversizedDataUrl : "data:image/png;base64,QUJD";
     };
 
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={mock(async () => {})} />,
     );
     screen.getByLabelText(/Initial Prompt/i).focus();
@@ -2838,7 +2882,7 @@ describe("resolveAgentDefaults", () => {
     HTMLCanvasElement.prototype.toDataURL = (() =>
       oversizedDataUrl) as typeof HTMLCanvasElement.prototype.toDataURL;
 
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={mock(async () => {})} />,
     );
     screen.getByLabelText(/Initial Prompt/i).focus();
@@ -2864,7 +2908,9 @@ describe("resolveAgentDefaults", () => {
 
     const onCreate = mock(async () => {});
 
-    render(<CreateEnvironmentDialog open={true} onOpenChange={() => {}} onCreate={onCreate} />);
+    renderInAppCommandScope(
+      <CreateEnvironmentDialog open={true} onOpenChange={() => {}} onCreate={onCreate} />,
+    );
 
     const prompt = screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement;
     prompt.focus();
@@ -2909,7 +2955,7 @@ describe("resolveAgentDefaults", () => {
     }));
     HTMLCanvasElement.prototype.getContext = (() =>
       null) as unknown as typeof HTMLCanvasElement.prototype.getContext;
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog
         open={true}
         onOpenChange={() => {}}
@@ -2936,7 +2982,7 @@ describe("resolveAgentDefaults", () => {
     }));
     HTMLCanvasElement.prototype.toDataURL = (() =>
       "data:image/png;base64,") as typeof HTMLCanvasElement.prototype.toDataURL;
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog
         open={true}
         onOpenChange={() => {}}
@@ -2965,7 +3011,9 @@ describe("resolveAgentDefaults", () => {
   test("lets normal paste continue when the clipboard has no image", async () => {
     const onCreate = mock(async () => {});
 
-    render(<CreateEnvironmentDialog open={true} onOpenChange={() => {}} onCreate={onCreate} />);
+    renderInAppCommandScope(
+      <CreateEnvironmentDialog open={true} onOpenChange={() => {}} onCreate={onCreate} />,
+    );
 
     const prompt = screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement;
     prompt.focus();
@@ -2986,7 +3034,9 @@ describe("resolveAgentDefaults", () => {
       onOpenChange: () => {},
       onCreate: mock(async () => {}),
     };
-    const { rerender } = render(<CreateEnvironmentDialog open={true} {...props} />);
+    const { rerender } = renderInAppCommandScope(
+      <CreateEnvironmentDialog open={true} {...props} />,
+    );
 
     screen.getByLabelText(/Environment Name/i).focus();
     document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
@@ -3021,7 +3071,7 @@ describe("resolveAgentDefaults", () => {
         }),
     );
     const onOpenChange = mock(() => {});
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog
         open={true}
         onOpenChange={onOpenChange}
@@ -3059,7 +3109,7 @@ describe("resolveAgentDefaults", () => {
           resolveImage = resolve;
         }),
     );
-    const { unmount } = render(
+    const { unmount } = renderInAppCommandScope(
       <CreateEnvironmentDialog
         open={true}
         onOpenChange={() => {}}
@@ -3089,7 +3139,7 @@ describe("resolveAgentDefaults", () => {
     const size = mock(async () => ({ width: 1, height: 1 }));
     mockReadImage.mockImplementation(async () => ({ rgba, size }));
     const onOpenChange = mock(() => {});
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog open onOpenChange={onOpenChange} onCreate={mock(async () => {})} />,
     );
     const prompt = screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement;
@@ -3113,7 +3163,7 @@ describe("resolveAgentDefaults", () => {
     const size = mock(() => pendingSize.promise);
     mockReadImage.mockImplementation(async () => ({ rgba, size }));
     const onOpenChange = mock(() => {});
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog open onOpenChange={onOpenChange} onCreate={mock(async () => {})} />,
     );
     const prompt = screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement;
@@ -3139,7 +3189,7 @@ describe("resolveAgentDefaults", () => {
     const rgba = mock(async () => new Uint8Array([255, 0, 0, 255]));
     const size = mock(async () => ({ width: 1, height: 1 }));
     mockReadImage.mockImplementation(() => pendingImage.promise);
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={mock(async () => {})} />,
     );
     const prompt = screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement;
@@ -3173,7 +3223,7 @@ describe("resolveAgentDefaults", () => {
         size: async () => ({ width: 1, height: 1 }),
       });
     });
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={mock(async () => {})} />,
     );
     const prompt = screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement;
@@ -3204,7 +3254,7 @@ describe("resolveAgentDefaults", () => {
       size: () => pendingSize.promise,
     }));
     const onOpenChange = mock(() => {});
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog open onOpenChange={onOpenChange} onCreate={mock(async () => {})} />,
     );
     screen.getByLabelText(/Initial Prompt/i).focus();
@@ -3226,7 +3276,7 @@ describe("resolveAgentDefaults", () => {
       rgba: async () => new Uint8Array([255, 0, 0, 255]),
       size: async () => ({ width: 1, height: 1 }),
     }));
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={mock(async () => {})} />,
     );
     const image = new File(["image"], "photo.jpeg", { type: "image/jpeg" });
@@ -3240,7 +3290,7 @@ describe("resolveAgentDefaults", () => {
   });
 
   test("keeps the drag affordance visible until every nested drag leaves", () => {
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={mock(async () => {})} />,
     );
     const dialog = screen.getByRole("dialog");
@@ -3264,7 +3314,7 @@ describe("resolveAgentDefaults", () => {
   });
 
   test("rejects empty, oversized, and over-count drops before reading files", () => {
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={mock(async () => {})} />,
     );
     const dialog = screen.getByRole("dialog");
@@ -3294,7 +3344,7 @@ describe("resolveAgentDefaults", () => {
   });
 
   test("attaches successful siblings when one dropped file cannot be read", async () => {
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={mock(async () => {})} />,
     );
     const failed = new File(["bad"], "bad.txt", { type: "text/plain" });
@@ -3315,7 +3365,7 @@ describe("resolveAgentDefaults", () => {
   });
 
   test("rejects three 8MB files whose durable base64 JSON exceeds 32MB", async () => {
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={mock(async () => {})} />,
     );
     const payload = new ArrayBuffer(8 * 1024 * 1024);
@@ -3347,7 +3397,9 @@ describe("resolveAgentDefaults", () => {
     const file = new File(["pending"], "pending.txt", { type: "text/plain" });
     Object.defineProperty(file, "arrayBuffer", { value: () => pendingBuffer.promise });
     const onCreate = mock(async () => {});
-    render(<CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />);
+    renderInAppCommandScope(
+      <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />,
+    );
 
     fireEvent.drop(screen.getByRole("dialog"), {
       dataTransfer: attachmentDataTransfer([file]),
@@ -3372,7 +3424,7 @@ describe("resolveAgentDefaults", () => {
     const file = new File(["pending"], "cancelled.txt", { type: "text/plain" });
     Object.defineProperty(file, "arrayBuffer", { value: () => pendingBuffer.promise });
     const onOpenChange = mock(() => {});
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog open onOpenChange={onOpenChange} onCreate={mock(async () => {})} />,
     );
     fireEvent.drop(screen.getByRole("dialog"), {
@@ -3391,7 +3443,7 @@ describe("resolveAgentDefaults", () => {
     const unmountedBuffer = deferred<ArrayBuffer>();
     const unmountedFile = new File(["pending"], "unmounted.txt");
     Object.defineProperty(unmountedFile, "arrayBuffer", { value: () => unmountedBuffer.promise });
-    const first = render(
+    const first = renderInAppCommandScope(
       <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={mock(async () => {})} />,
     );
     fireEvent.drop(screen.getByRole("dialog"), {
@@ -3404,7 +3456,7 @@ describe("resolveAgentDefaults", () => {
     const disabledBuffer = deferred<ArrayBuffer>();
     const disabledFile = new File(["pending"], "disabled.txt");
     Object.defineProperty(disabledFile, "arrayBuffer", { value: () => disabledBuffer.promise });
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={mock(async () => {})} />,
     );
     fireEvent.drop(screen.getByRole("dialog"), {
@@ -3422,7 +3474,7 @@ describe("resolveAgentDefaults", () => {
     const first = new File(["first"], "first.txt");
     Object.defineProperty(first, "arrayBuffer", { value: () => firstBuffer.promise });
     const second = new File(["second"], "second.txt");
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={mock(async () => {})} />,
     );
     const dialog = screen.getByRole("dialog");
@@ -3438,7 +3490,9 @@ describe("resolveAgentDefaults", () => {
 
   test("adds, validates, updates, and removes port mappings", async () => {
     const onCreate = mock(async () => {});
-    render(<CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />);
+    renderInAppCommandScope(
+      <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />,
+    );
 
     fireEvent.click(screen.getByRole("button", { name: /Port Configuration/ }));
     fireEvent.click(screen.getByRole("button", { name: "Add Port Mapping" }));
@@ -3462,7 +3516,7 @@ describe("resolveAgentDefaults", () => {
 
     cleanup();
     onCreate.mockClear();
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog
         open
         onOpenChange={() => {}}
@@ -3481,7 +3535,7 @@ describe("resolveAgentDefaults", () => {
 
   test("submits a UDP port mapping", async () => {
     const onCreate = mock(async () => {});
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog
         open
         onOpenChange={() => {}}
@@ -3506,7 +3560,7 @@ describe("resolveAgentDefaults", () => {
 
   test("rejects empty and out-of-range ports and accepts both boundaries", async () => {
     const onCreate = mock(async () => {});
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog
         open
         onOpenChange={() => {}}
@@ -3552,7 +3606,7 @@ describe("resolveAgentDefaults", () => {
 
   test("rejects invalid ports again at form submission time", () => {
     const onCreate = mock(async () => {});
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog
         open
         onOpenChange={() => {}}
@@ -3570,7 +3624,7 @@ describe("resolveAgentDefaults", () => {
 
   test("ignores hidden invalid port mappings when creating a local environment", async () => {
     const onCreate = mock(async () => {});
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog
         open
         onOpenChange={() => {}}
@@ -3603,7 +3657,9 @@ describe("resolveAgentDefaults", () => {
     const onCreate = mock(async () => {
       throw new Error("creation failed");
     });
-    render(<CreateEnvironmentDialog open onOpenChange={onOpenChange} onCreate={onCreate} />);
+    renderInAppCommandScope(
+      <CreateEnvironmentDialog open onOpenChange={onOpenChange} onCreate={onCreate} />,
+    );
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
     await waitFor(() => expect(onCreate).toHaveBeenCalled());
     expect(onOpenChange).not.toHaveBeenCalledWith(false);
@@ -3616,7 +3672,9 @@ describe("resolveAgentDefaults", () => {
   test("keeps the form intact when a creation preflight defers submission", async () => {
     const onOpenChange = mock(() => {});
     const onCreate = mock(async () => false);
-    render(<CreateEnvironmentDialog open onOpenChange={onOpenChange} onCreate={onCreate} />);
+    renderInAppCommandScope(
+      <CreateEnvironmentDialog open onOpenChange={onOpenChange} onCreate={onCreate} />,
+    );
     const nameInput = screen.getByLabelText(/Environment Name/i);
     fireEvent.change(nameInput, { target: { value: "Keep this name" } });
 
@@ -3631,12 +3689,12 @@ describe("resolveAgentDefaults", () => {
 describe("CreateEnvironmentDialog feature builds", () => {
   beforeEach(() => {
     cleanup();
-    useConfigStore.setState({
+    appCommandStore(configStore).setState({
       config: structuredClone(defaultConfig),
       isLoading: false,
       error: null,
     });
-    useAgentModelCatalogStore.setState({
+    appCommandStore(agentModelCatalogStore).setState({
       claudeModels: defaultClaudeModels,
       codexModels: defaultCodexModels,
       cursorModels: [],
@@ -3696,7 +3754,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
   }
 
   test("starts on the prompt option and swaps the fields when a feature is chosen", () => {
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog
         open
         onOpenChange={() => {}}
@@ -3716,7 +3774,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
   });
 
   test("shares the initial prompt text with the feature description in both directions", () => {
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog
         open
         onOpenChange={() => {}}
@@ -3748,7 +3806,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
       onCreate: mock(async () => {}),
       onCreateFeatureBuild: mock(async () => true),
     };
-    const { rerender } = render(<CreateEnvironmentDialog open {...props} />);
+    const { rerender } = renderInAppCommandScope(<CreateEnvironmentDialog open {...props} />);
     chooseFeature({ description: "  Keep this feature description.  " });
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(props.onOpenChange).toHaveBeenCalledWith(false);
@@ -3771,7 +3829,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
       onCreate: mock(async () => {}),
       onCreateFeatureBuild: mock(async (_input: CreateFeatureBuildInput) => true),
     };
-    const { rerender } = render(<CreateEnvironmentDialog open {...props} />);
+    const { rerender } = renderInAppCommandScope(<CreateEnvironmentDialog open {...props} />);
     fireEvent.change(screen.getByLabelText(/Initial Prompt/i), {
       target: { value: "Saved draft A" },
     });
@@ -3821,7 +3879,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
           return outcome === "successful";
         }),
       };
-      const view = render(<CreateEnvironmentDialog open {...props} />);
+      const view = renderInAppCommandScope(<CreateEnvironmentDialog open {...props} />);
       chooseFeature({ description: "Saved feature draft" });
       fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
       view.rerender(<CreateEnvironmentDialog open={false} {...props} />);
@@ -3855,7 +3913,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
       // Remount without cancelling: cancellation would write a new draft and
       // hide whether submission preserved or deleted the previously saved one.
       view.unmount();
-      render(<CreateEnvironmentDialog open {...props} />);
+      renderInAppCommandScope(<CreateEnvironmentDialog open {...props} />);
       expect((screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement).value).toBe(
         outcome === "successful" ? "" : "Saved feature draft",
       );
@@ -3865,7 +3923,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
   test("submits the prompt text as the feature description", async () => {
     const onCreate = mock(async () => {});
     const onCreateFeatureBuild = mock(async (_input: CreateFeatureBuildInput) => true);
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog
         open
         projectId="project-1"
@@ -3892,7 +3950,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
     const onCreate = mock(async () => {});
     const onCreateFeatureBuild = mock(async (_input: CreateFeatureBuildInput) => {});
     const onOpenChange = mock(() => {});
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog
         open
         projectId="project-1"
@@ -3926,7 +3984,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
 
   test("allows a description-only feature so the backend can generate its name", async () => {
     const onCreateFeatureBuild = mock(async (_input: CreateFeatureBuildInput) => true);
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog
         open
         projectId="project-1"
@@ -3948,7 +4006,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
 
   test("keeps Create disabled when the feature has neither a name nor a description", () => {
     const onCreateFeatureBuild = mock(async () => true);
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog
         open
         projectId="project-1"
@@ -3966,7 +4024,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
   });
 
   test("labels the feature name as optional and explains a blank name is generated", () => {
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog
         open
         projectId="project-1"
@@ -3989,7 +4047,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
       size: async () => ({ width: 1, height: 1 }),
     }));
     const onCreateFeatureBuild = mock(async (_input: CreateFeatureBuildInput) => true);
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog
         open
         projectId="project-1"
@@ -4028,7 +4086,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
       size: async () => ({ width: 1, height: 1 }),
     }));
     const onCreateFeatureBuild = mock(async (_input: CreateFeatureBuildInput) => true);
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog
         open
         projectId="project-1"
@@ -4059,7 +4117,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
   });
 
   test("leaves a text-only feature paste untouched without reading the clipboard", async () => {
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog
         open
         projectId="project-1"
@@ -4098,7 +4156,9 @@ describe("CreateEnvironmentDialog feature builds", () => {
       size: async () => ({ width: 1, height: 1 }),
     }));
     const onCreate = mock(async (_options: ClaudeOptions) => true);
-    render(<CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />);
+    renderInAppCommandScope(
+      <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />,
+    );
     const image = new File(["image"], "reference.png", { type: "image/png" });
     const documentFile = new File(["notes"], "notes.txt", { type: "text/plain" });
 
@@ -4129,7 +4189,9 @@ describe("CreateEnvironmentDialog feature builds", () => {
       size: async () => ({ width: 1, height: 1 }),
     }));
     const onCreate = mock(async (_options: ClaudeOptions) => true);
-    render(<CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />);
+    renderInAppCommandScope(
+      <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />,
+    );
     const promptFiles = Array.from(
       { length: 20 },
       (_, index) => new File(["notes"], `prompt-${index}.txt`, { type: "text/plain" }),
@@ -4163,7 +4225,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
       rgba: async () => new Uint8Array([255, 0, 0, 255]),
       size: async () => ({ width: 1, height: 1 }),
     }));
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog
         open
         projectId="project-1"
@@ -4208,7 +4270,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
 
   test("omits retained prompt-only files when submitting a feature build", async () => {
     const onCreateFeatureBuild = mock(async (_input: CreateFeatureBuildInput) => true);
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog
         open
         projectId="project-1"
@@ -4237,7 +4299,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
       rgba: async () => new Uint8Array([255, 0, 0, 255]),
       size: async () => ({ width: 1, height: 1 }),
     }));
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog
         open
         projectId="project-1"
@@ -4270,7 +4332,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
   });
 
   test("rejects wholly unsupported feature drops and advertises copy dropEffect", () => {
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog
         open
         projectId="project-1"
@@ -4305,7 +4367,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
     const rgba = mock(async () => new Uint8Array([255, 0, 0, 255]));
     const size = mock(async () => ({ width: 1, height: 1 }));
     mockReadImage.mockImplementation(() => pendingImage.promise);
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog
         open
         projectId="project-1"
@@ -4339,7 +4401,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
       size: async () => ({ width: 1, height: 1 }),
     }));
     const onCreateFeatureBuild = mock(async (_input: CreateFeatureBuildInput) => true);
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog
         open
         projectId="project-1"
@@ -4367,7 +4429,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
       rgba: async () => new Uint8Array([255, 0, 0, 255]),
       size: async () => ({ width: 1, height: 1 }),
     }));
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog
         open
         projectId="project-1"
@@ -4416,7 +4478,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
     const onCreateFeatureBuild = mock(async () => {
       throw new Error("Feature images exceed the 32MB total limit");
     });
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog
         open
         projectId="project-1"
@@ -4453,9 +4515,9 @@ describe("CreateEnvironmentDialog feature builds", () => {
         resolve: { platform: "claude", model: "haiku" },
       },
     };
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
     const onCreateFeatureBuild = mock(async (_input: CreateFeatureBuildInput) => {});
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog
         open
         projectId="project-1"
@@ -4487,9 +4549,9 @@ describe("CreateEnvironmentDialog feature builds", () => {
   test("uses the visible Default Agent, model and reasoning for a closed feature build", async () => {
     const config = structuredClone(defaultConfig);
     config.global.enabledAgentPlatforms = ["claude", "codex"];
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
     const onCreateFeatureBuild = mock(async (_input: CreateFeatureBuildInput) => {});
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog
         open
         projectId="project-1"
@@ -4517,7 +4579,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
 
   test("will not submit a feature with no name", () => {
     const onCreateFeatureBuild = mock(async () => {});
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog
         open
         projectId="project-1"
@@ -4546,7 +4608,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
 
   test("reuses the request id when an unchanged create is retried", async () => {
     const onCreateFeatureBuild = mock(async (_input: CreateFeatureBuildInput) => false);
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog
         open
         projectId="project-1"
@@ -4571,7 +4633,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
 
   test("pins implicit reviewers and the request id across a late catalog refresh", async () => {
     const onCreateFeatureBuild = mock(async (_input: CreateFeatureBuildInput) => false);
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog
         open
         projectId="project-1"
@@ -4586,7 +4648,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
     await waitFor(() => expect(onCreateFeatureBuild).toHaveBeenCalledTimes(1));
 
     act(() => {
-      useAgentModelCatalogStore.setState({
+      appCommandStore(agentModelCatalogStore).setState({
         claudeModels: [
           {
             id: "late-catalog-model",
@@ -4608,7 +4670,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
 
   test("mints a new request id when the ticket is edited after a failed create", async () => {
     const onCreateFeatureBuild = mock(async (_input: CreateFeatureBuildInput) => false);
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog
         open
         projectId="project-1"
@@ -4636,7 +4698,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
 
   test("mints a new request id for the next feature after one succeeds", async () => {
     const onCreateFeatureBuild = mock(async (_input: CreateFeatureBuildInput) => true);
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog
         open
         projectId="project-1"
@@ -4663,7 +4725,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
   });
 
   test("cannot start a feature build when the caller offers no handler", () => {
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog
         open
         projectId="project-1"
@@ -4680,7 +4742,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
 
   test("offers a model per step behind Advanced, with two reviewers by default", async () => {
     const onCreateFeatureBuild = mock(async (_input: CreateFeatureBuildInput) => {});
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog
         open
         projectId="project-1"
@@ -4749,9 +4811,9 @@ describe("CreateEnvironmentDialog feature builds", () => {
         resolve: { platform: "claude", model: "haiku" },
       },
     };
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
     const onCreateFeatureBuild = mock(async (_input: CreateFeatureBuildInput) => {});
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog
         open
         projectId="project-1"
@@ -4798,7 +4860,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
   });
 
   test("adds and removes reviewers, and never removes the last one", () => {
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentDialog
         open
         projectId="project-1"

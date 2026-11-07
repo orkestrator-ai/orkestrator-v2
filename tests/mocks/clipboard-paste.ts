@@ -9,6 +9,7 @@ import { mock } from "bun:test";
 
 export const mockProcessClipboardPaste = mock(
   async (
+    _writer: unknown,
     _containerId: string,
     _onImageSaved?: (filePath: string) => void | Promise<void>,
     _onTextPaste?: (text: string) => void | Promise<void>,
@@ -18,6 +19,7 @@ export const mockProcessClipboardPaste = mock(
 
 export const mockProcessLocalClipboardPaste = mock(
   async (
+    _writer: unknown,
     _worktreePath: string,
     _onImageSaved?: (filePath: string) => void | Promise<void>,
     _onTextPaste?: (text: string) => void | Promise<void>,

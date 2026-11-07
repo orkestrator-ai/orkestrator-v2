@@ -8,8 +8,8 @@ import type {
  * Worker tabs on this backend whose launch overrode the saved default, for the
  * marker on the tab. Derived from the delegations the coordinator store already
  * holds, so a tab with no delegation is simply absent. A worker on another node
- * is absent too: its delegation is on the command node, while its tab renders in
- * that node's realm and reads that node's backend.
+ * is absent too: its delegation is on the command node, while its tab renders
+ * through that node's scope and reads that node's backend.
  */
 export interface CoordinatorLaunchOverride {
   environmentId: string;

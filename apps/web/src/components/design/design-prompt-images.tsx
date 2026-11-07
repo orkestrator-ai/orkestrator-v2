@@ -16,7 +16,13 @@ import {
 } from "@/hooks/useNativeComposeBarPaste";
 import { MAX_PROMPT_ATTACHMENTS } from "@/lib/chat/workspace-attachments";
 import { useEnvironmentStore } from "@/stores/environmentStore";
-import { nativeComposeDraft, useNativeComposeStore } from "@/stores/nativeComposeStore";
+import type { StoreApi } from "zustand/vanilla";
+import { appCommandScope } from "@/lib/node-scope-slots";
+import {
+  nativeComposeDraft,
+  nativeComposeStore,
+  type NativeComposeState,
+} from "@/stores/nativeComposeStore";
 
 /**
  * Images pasted into a design prompt (the New design brief or the Ask agent
@@ -35,15 +41,17 @@ interface Reservations {
 }
 
 /**
- * Adds images to a conversation's unsent draft. Returns false, changing
- * nothing, when the draft would exceed the per-prompt attachment limit.
+ * Adds images to a conversation's unsent draft on `drafts`' node (the app's
+ * command scope when omitted). Returns false, changing nothing, when the draft
+ * would exceed the per-prompt attachment limit.
  */
 export function addDesignImagesToDraft(
   sessionKey: string,
   images: readonly DesignPromptImage[],
+  drafts: StoreApi<NativeComposeState> = appCommandScope().store(nativeComposeStore),
 ): boolean {
   if (images.length === 0) return true;
-  const store = useNativeComposeStore.getState();
+  const store = drafts.getState();
   const current = nativeComposeDraft(store, sessionKey).attachments;
   const known = new Set(current.map((attachment) => attachment.path));
   const added = images.filter((image) => !known.has(image.path));

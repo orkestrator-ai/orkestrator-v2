@@ -1,20 +1,22 @@
 import { useEffect, useReducer } from "react";
 import { useCoordinatedRead } from "@/hooks/useCoordinatedRead";
-import {
-  getEnvironmentProcessUsage,
-  getSystemUsage,
-  type EnvironmentProcessUsageSnapshot,
-  type SystemUsageSnapshot,
-} from "@/lib/backend";
+import type { EnvironmentProcessUsageSnapshot, SystemUsageSnapshot } from "@/lib/backend";
+import { backendClientOver, NO_ARGS } from "@/lib/node-scope/domains/invoke-over";
+import { asSystemModel, systemApi } from "@/lib/node-scope/domains/system";
+import { scopeBackendClient } from "@/lib/backend/client";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { isAppCommandScope } from "@/lib/node-scope-slots";
 import { portalStore } from "@/lib/portal/portal-store";
 import {
   getReadCoordinator,
+  readCoordinatorFor,
   readKeyId,
   type ReadCoordinator,
   type ReadCoordinatorClock,
   type ReadKey,
 } from "@/lib/read-coordinator";
 import type { BackendId } from "@orkestrator/protocol/federation";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 /**
  * Shared, demand-driven system and process meters.
@@ -163,9 +165,11 @@ function useUsageRead<T extends { sampledAt: string }>(options: {
   intervalMs: number;
   read: () => Promise<T>;
   isSample: (value: unknown) => value is T;
+  /** The node whose coordinator reads; the app's command scope when omitted. */
+  scope?: NodeScope;
 }): UsageView<T> {
-  const { key, active, intervalMs, read, isSample } = options;
-  const coordinator = getReadCoordinator();
+  const { key, active, intervalMs, read, isSample, scope } = options;
+  const coordinator = scope ? readCoordinatorFor(scope) : getReadCoordinator();
   const { state } = useCoordinatedRead<T>({
     key,
     coordinator,
@@ -196,65 +200,126 @@ function useUsageRead<T extends { sampledAt: string }>(options: {
   };
 }
 
-/** Host CPU/RAM/GPU/disk sample shared by every mounted meter. */
+/**
+ * Host CPU/RAM/GPU/disk sample shared by every mounted meter. With `scope`
+ * (another node's workspace in the window's tree, plan item 4001) the sample
+ * is that node's, read on its own scope; the app's command scope keeps the
+ * `@/lib/backend` read suites spy on.
+ */
 export function useSystemUsage({
   intervalMs,
   active = true,
+  scope,
 }: {
   intervalMs: number;
   active?: boolean;
+  scope?: NodeScope;
 }): UsageView<SystemUsageSnapshot> {
+  const nodeBackend = useScopeBackend();
+  const own = !scope || isAppCommandScope(scope);
   return useUsageRead({
     key: SYSTEM_USAGE_READ_KEY,
     active,
     intervalMs,
-    read: getSystemUsage,
+    read: own
+      ? nodeBackend.getSystemUsage
+      : () =>
+          asSystemModel<SystemUsageSnapshot>(
+            systemApi(scopeBackendClient(scope)).get_system_usage(NO_ARGS),
+          ),
     isSample: isSystemUsageSnapshot,
+    ...(own ? {} : { scope }),
   });
 }
 
 /**
  * One machine's host sample, for a view of several machines. The machine this
  * window is on shares the title-bar meters' read, so both show the same figure.
- * Every other machine has a read of its own through the command node, so a slow
- * or unreachable machine holds up nothing but its own figure.
+ * A machine this window has a node scope for (one shown in the window's own
+ * tree, plan items 4001 and 5002) is read on that scope, the same read its
+ * title-bar meters and popovers join (`useSystemUsage({ scope })`). Every
+ * other machine has a read of its own through the command node, so a slow or
+ * unreachable machine holds up nothing but its own figure.
  */
 export function useMachineSystemUsage({
   nodeId,
   bound,
   intervalMs,
   active = true,
+  scope,
 }: {
   nodeId: BackendId;
   bound: boolean;
   intervalMs: number;
   active?: boolean;
+  /** `nodeId`'s scope in this window, when it has one. */
+  scope?: NodeScope | null;
 }): UsageView<SystemUsageSnapshot> {
+  const nodeBackend = useScopeBackend();
+  const onScope = !bound && scope && !isAppCommandScope(scope) ? scope : null;
   return useUsageRead({
-    key: bound ? SYSTEM_USAGE_READ_KEY : { ...SYSTEM_USAGE_READ_KEY, target: `node:${nodeId}` },
+    key:
+      bound || onScope
+        ? SYSTEM_USAGE_READ_KEY
+        : { ...SYSTEM_USAGE_READ_KEY, target: `node:${nodeId}` },
     active,
     intervalMs,
     read: bound
-      ? getSystemUsage
-      : () => portalStore.invokeOnNode<SystemUsageSnapshot>(nodeId, "get_system_usage"),
+      ? nodeBackend.getSystemUsage
+      : onScope
+        ? () =>
+            asSystemModel<SystemUsageSnapshot>(
+              systemApi(scopeBackendClient(onScope)).get_system_usage(NO_ARGS),
+            )
+        : () =>
+            asSystemModel<SystemUsageSnapshot>(
+              systemApi(routedClient(nodeId)).get_system_usage(NO_ARGS),
+            ),
     isSample: isSystemUsageSnapshot,
+    ...(onScope ? { scope: onScope } : {}),
   });
 }
 
-/** Per-environment process list; only read while a panel shows it. */
+/**
+ * `nodeId` through the command node (`invoke_on_node`), as the `system`
+ * domain's client: today's call, `invokeOnNode(nodeId, command)` for a read
+ * without arguments.
+ */
+function routedClient(nodeId: BackendId) {
+  return backendClientOver(<T>(command: string, args?: Record<string, unknown>) =>
+    args === undefined
+      ? portalStore.invokeOnNode<T>(nodeId, command)
+      : portalStore.invokeOnNode<T>(nodeId, command, args),
+  );
+}
+
+/**
+ * Per-environment process list; only read while a panel shows it. With
+ * `scope` (another node shown in the window's tree) the list is that node's.
+ */
 export function useEnvironmentProcessUsage({
   intervalMs,
   active = true,
+  scope,
 }: {
   intervalMs: number;
   active?: boolean;
+  scope?: NodeScope;
 }): UsageView<EnvironmentProcessUsageSnapshot> {
+  const nodeBackend = useScopeBackend();
+  const own = !scope || isAppCommandScope(scope);
   return useUsageRead({
     key: ENVIRONMENT_PROCESS_USAGE_READ_KEY,
     active,
     intervalMs,
-    read: getEnvironmentProcessUsage,
+    read: own
+      ? nodeBackend.getEnvironmentProcessUsage
+      : () =>
+          asSystemModel<EnvironmentProcessUsageSnapshot>(
+            systemApi(scopeBackendClient(scope)).get_environment_process_usage(NO_ARGS),
+          ),
     isSample: isProcessUsageSnapshot,
+    ...(own ? {} : { scope }),
   });
 }
 

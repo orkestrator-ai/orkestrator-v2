@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, waitFor } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 import * as realBackend from "@/lib/backend";
 
@@ -101,7 +102,7 @@ const EMPTY_MESSAGES: NativeMessage[] = [];
 describe("useAgentHandoff", () => {
   test("returns provider messages immediately when no handoff is requested", () => {
     const providerMessage = message("provider-1", "assistant", "Already here");
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useAgentHandoff(undefined, "codex", "env-1", [providerMessage]),
     );
 
@@ -122,7 +123,9 @@ describe("useAgentHandoff", () => {
     const snapshot = handoff("handoff-success");
     mockGetAgentHandoff.mockImplementationOnce(async () => pending.promise);
 
-    const { result } = renderHook(() => useAgentHandoff("handoff-success", "codex", "env-1", []));
+    const { result } = renderHookInAppCommandScope(() =>
+      useAgentHandoff("handoff-success", "codex", "env-1", []),
+    );
 
     expect(result.current).toMatchObject({
       handoffId: "handoff-success",
@@ -153,7 +156,7 @@ describe("useAgentHandoff", () => {
       "A restored response without a bootstrap marker",
     );
 
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useAgentHandoff("handoff-restored", "codex", "env-1", [providerMessage]),
     );
     await waitFor(() => expect(result.current.ready).toBe(true));
@@ -176,7 +179,7 @@ describe("useAgentHandoff", () => {
       const snapshot = handoff(`handoff-client-only-${_kind}`);
       mockGetAgentHandoff.mockResolvedValueOnce(record(snapshot));
 
-      const { result } = renderHook(() =>
+      const { result } = renderHookInAppCommandScope(() =>
         useAgentHandoff(snapshot.id, "codex", "env-1", [message(id, role, content)]),
       );
       await waitFor(() => expect(result.current.ready).toBe(true));
@@ -193,7 +196,7 @@ describe("useAgentHandoff", () => {
     );
     mockGetAgentHandoff.mockResolvedValueOnce(record(snapshot));
 
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useAgentHandoff(snapshot.id, "codex", "env-1", [
         message("optimistic-carrier", "user", transported),
       ]),
@@ -216,7 +219,7 @@ describe("useAgentHandoff", () => {
     );
     mockGetAgentHandoff.mockResolvedValueOnce(record(snapshot));
 
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useAgentHandoff(snapshot.id, "codex", "env-1", [
         message("error-first-send", "assistant", "First send failed"),
         message("optimistic-retry", "user", transported),
@@ -246,7 +249,7 @@ describe("useAgentHandoff", () => {
       delivery: true,
       pruning: true,
     }));
-    const delivers = renderHook(() =>
+    const delivers = renderHookInAppCommandScope(() =>
       useAgentHandoff(snapshot.id, "codex", "env-1", EMPTY_MESSAGES),
     );
     // Not ready until the answer is in, so nothing can be sent on a guess.
@@ -270,7 +273,7 @@ describe("useAgentHandoff", () => {
     const snapshot = handoff("handoff-keeps");
     mockGetAgentHandoff.mockImplementation(async () => record(snapshot));
     mockGetAgentHandoffCapabilities.mockImplementation(answer);
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useAgentHandoff(snapshot.id, "codex", "env-1", EMPTY_MESSAGES),
     );
     await waitFor(() => expect(result.current.ready).toBe(true));
@@ -279,7 +282,9 @@ describe("useAgentHandoff", () => {
   });
 
   test("reports a missing handoff and leaves the destination usable", async () => {
-    const { result } = renderHook(() => useAgentHandoff("handoff-missing", "codex", "env-1", []));
+    const { result } = renderHookInAppCommandScope(() =>
+      useAgentHandoff("handoff-missing", "codex", "env-1", []),
+    );
 
     await waitFor(() => expect(result.current.ready).toBe(true));
     expect(result.current.handoff).toBeNull();
@@ -295,7 +300,9 @@ describe("useAgentHandoff", () => {
     const snapshot = handoff("handoff-cursor", { destinationProvider: "cursor" });
     mockGetAgentHandoff.mockResolvedValueOnce(record(snapshot));
 
-    const { result } = renderHook(() => useAgentHandoff("handoff-cursor", "cursor", "env-1", []));
+    const { result } = renderHookInAppCommandScope(() =>
+      useAgentHandoff("handoff-cursor", "cursor", "env-1", []),
+    );
 
     await waitFor(() => expect(result.current.ready).toBe(true));
     expect(result.current.error).toBeNull();
@@ -312,7 +319,9 @@ describe("useAgentHandoff", () => {
     const snapshot = handoff("handoff-grok", { destinationProvider: "grok" });
     mockGetAgentHandoff.mockResolvedValueOnce(record(snapshot));
 
-    const { result } = renderHook(() => useAgentHandoff("handoff-grok", "cursor", "env-1", []));
+    const { result } = renderHookInAppCommandScope(() =>
+      useAgentHandoff("handoff-grok", "cursor", "env-1", []),
+    );
 
     await waitFor(() => expect(result.current.ready).toBe(true));
     expect(result.current.handoff).toBeNull();
@@ -323,7 +332,7 @@ describe("useAgentHandoff", () => {
     const snapshot = handoff("handoff-provider");
     mockGetAgentHandoff.mockResolvedValueOnce(record(snapshot));
 
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useAgentHandoff("handoff-provider", "opencode", "env-1", []),
     );
 
@@ -337,7 +346,7 @@ describe("useAgentHandoff", () => {
     const snapshot = handoff("handoff-environment");
     mockGetAgentHandoff.mockResolvedValueOnce(record(snapshot));
 
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useAgentHandoff("handoff-environment", "codex", "env-2", []),
     );
 
@@ -351,7 +360,7 @@ describe("useAgentHandoff", () => {
     const providerMessage = message("provider-1", "assistant", "Existing output");
     mockGetAgentHandoff.mockRejectedValueOnce(new Error("handoff storage unavailable"));
 
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useAgentHandoff("handoff-error", "codex", "env-1", [providerMessage]),
     );
 
@@ -367,7 +376,9 @@ describe("useAgentHandoff", () => {
   test("uses a safe generic error for a non-Error load rejection", async () => {
     mockGetAgentHandoff.mockRejectedValueOnce("storage rejected without an Error");
 
-    const { result } = renderHook(() => useAgentHandoff("handoff-non-error", "codex", "env-1", []));
+    const { result } = renderHookInAppCommandScope(() =>
+      useAgentHandoff("handoff-non-error", "codex", "env-1", []),
+    );
 
     await waitFor(() => expect(result.current.ready).toBe(true));
     expect(result.current.error).toBe("The transferred conversation could not be loaded.");
@@ -383,7 +394,7 @@ describe("useAgentHandoff", () => {
       handoffId === "handoff-first" ? firstPending.promise : secondPending.promise,
     );
 
-    const { result, rerender } = renderHook(
+    const { result, rerender } = renderHookInAppCommandScope(
       ({ handoffId }: { handoffId: string }) => useAgentHandoff(handoffId, "codex", "env-1", []),
       { initialProps: { handoffId: "handoff-first" } },
     );
@@ -408,7 +419,7 @@ describe("useAgentHandoff", () => {
     const snapshot = handoff("handoff-in-flight-identity");
     mockGetAgentHandoff.mockImplementation(async () => pending.promise);
 
-    const { result, rerender } = renderHook(
+    const { result, rerender } = renderHookInAppCommandScope(
       ({ environmentId }: { environmentId: string }) =>
         useAgentHandoff(snapshot.id, "codex", environmentId, []),
       { initialProps: { environmentId: "env-1" } },
@@ -435,7 +446,7 @@ describe("useAgentHandoff", () => {
     const snapshot = handoff("handoff-reset-in-flight");
     mockGetAgentHandoff.mockImplementationOnce(async () => pending.promise);
 
-    const { result, rerender } = renderHook(
+    const { result, rerender } = renderHookInAppCommandScope(
       ({ handoffId }: { handoffId?: string }) => useAgentHandoff(handoffId, "codex", "env-1", []),
       {
         initialProps: {
@@ -471,7 +482,7 @@ describe("useAgentHandoff", () => {
     const snapshot = handoff("handoff-unmounted");
     mockGetAgentHandoff.mockImplementationOnce(async () => pending.promise);
 
-    const { result, unmount } = renderHook(() =>
+    const { result, unmount } = renderHookInAppCommandScope(() =>
       useAgentHandoff(snapshot.id, "codex", "env-1", []),
     );
     expect(result.current.ready).toBe(false);
@@ -486,7 +497,7 @@ describe("useAgentHandoff", () => {
     const snapshot = handoff("handoff-revalidated");
     mockGetAgentHandoff.mockResolvedValue(record(snapshot));
 
-    const { result, rerender } = renderHook(
+    const { result, rerender } = renderHookInAppCommandScope(
       ({
         destinationProvider,
         environmentId,
@@ -520,7 +531,7 @@ describe("useAgentHandoff", () => {
 
   test("the error row keeps the timestamp it was created with", async () => {
     mockGetAgentHandoff.mockResolvedValue(null);
-    const { result, rerender } = renderHook(
+    const { result, rerender } = renderHookInAppCommandScope(
       ({ providerMessages }: { providerMessages: NativeMessage[] }) =>
         useAgentHandoff("handoff-missing", "codex", "env-1", providerMessages),
       { initialProps: { providerMessages: [] as NativeMessage[] } },
@@ -555,7 +566,7 @@ describe("useAgentHandoff", () => {
     });
     mockGetAgentHandoff.mockResolvedValue(record(snapshot));
 
-    const { result, rerender } = renderHook(
+    const { result, rerender } = renderHookInAppCommandScope(
       ({ providerMessages }: { providerMessages: NativeMessage[] }) =>
         useAgentHandoff("handoff-stable", "codex", "env-1", providerMessages),
       { initialProps: { providerMessages: [] as NativeMessage[] } },
@@ -594,7 +605,7 @@ describe("useAgentHandoff", () => {
     });
     mockGetAgentHandoff.mockResolvedValueOnce(record(snapshot));
 
-    const { result, rerender } = renderHook(
+    const { result, rerender } = renderHookInAppCommandScope(
       ({
         providerMessages,
         consumedHandoffId,
@@ -644,7 +655,7 @@ describe("useAgentHandoff", () => {
      * deleted), but the prompt it produced is still the session's first message.
      * No backend read should happen, and the raw frame must stay hidden.
      */
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useAgentHandoff(undefined, "codex", "env-1", [bootstrap, reply], "handoff-consumed"),
     );
 

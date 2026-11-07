@@ -1,0 +1,110 @@
+{
+  "schemaVersion": 1,
+  "domain": "multi-review",
+  "commands": {
+    "address_multi_review": {
+      "untyped": true,
+      "read": false
+    },
+    "cancel_multi_review": {
+      "untyped": true,
+      "read": false
+    },
+    "cancel_review_validation": {
+      "untyped": true,
+      "read": false
+    },
+    "delete_multi_review_workflow": {
+      "untyped": true,
+      "read": false
+    },
+    "get_multi_review_reviewer_history_page": {
+      "untyped": true,
+      "read": true
+    },
+    "get_multi_review_reviewer_tool_details": {
+      "untyped": true,
+      "read": true
+    },
+    "get_multi_review_reviewer_transcript": {
+      "untyped": true,
+      "read": true
+    },
+    "get_multi_review_step_tool_details": {
+      "untyped": true,
+      "read": true
+    },
+    "get_multi_review_step_transcript": {
+      "untyped": true,
+      "read": true
+    },
+    "get_multi_review_workflow": {
+      "untyped": true,
+      "read": true
+    },
+    "get_review_validation_output": {
+      "untyped": true,
+      "read": true
+    },
+    "list_multi_review_workflows": {
+      "untyped": true,
+      "read": true
+    },
+    "pause_multi_review_step": {
+      "untyped": true,
+      "read": false
+    },
+    "recover_multi_review_fix_session": {
+      "untyped": true,
+      "read": false
+    },
+    "restart_multi_review_reviewer": {
+      "untyped": true,
+      "read": false
+    },
+    "restart_multi_review_step": {
+      "untyped": true,
+      "read": false
+    },
+    "resume_multi_review_step": {
+      "untyped": true,
+      "read": false
+    },
+    "retry_multi_review": {
+      "untyped": true,
+      "read": false
+    },
+    "start_multi_review": {
+      "untyped": true,
+      "read": false
+    },
+    "start_multi_review_custom_fix": {
+      "untyped": true,
+      "read": false
+    },
+    "start_review_validation": {
+      "untyped": true,
+      "read": false
+    },
+    "status_review_validation": {
+      "untyped": true,
+      "read": false
+    },
+    "stop_multi_review_reviewer": {
+      "untyped": true,
+      "read": false
+    },
+    "stop_multi_review_validation": {
+      "untyped": true,
+      "read": false
+    },
+    "stop_review_validation_command": {
+      "untyped": true,
+      "read": false
+    },
+    "unstick_multi_review_reviewer": {
+      "untyped": true,
+      "read": false
+    }
+  }
+}

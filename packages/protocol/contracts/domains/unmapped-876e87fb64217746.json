@@ -1,0 +1,66 @@
+{
+  "schemaVersion": 1,
+  "domain": null,
+  "commands": {
+    "acknowledge_prompt_queue_claim": {
+      "untyped": true
+    },
+    "cancel_looped_review": {
+      "untyped": true
+    },
+    "claim_looped_review_controller": {
+      "untyped": true
+    },
+    "claim_prompt_queue_head": {
+      "untyped": true
+    },
+    "delete_looped_review_workflow": {
+      "untyped": true
+    },
+    "export_build_pipeline_for_downgrade": {
+      "untyped": true
+    },
+    "generate_looped_review_package": {
+      "untyped": true
+    },
+    "get_looped_review_provider_session": {
+      "untyped": true
+    },
+    "get_looped_review_workflow": {
+      "untyped": true
+    },
+    "list_looped_review_workflows": {
+      "untyped": true
+    },
+    "pause_looped_review": {
+      "untyped": true
+    },
+    "reject_prompt_queue_claim": {
+      "untyped": true
+    },
+    "release_looped_review_controller": {
+      "untyped": true
+    },
+    "requeue_prompt_queue_message": {
+      "untyped": true
+    },
+    "resume_looped_review": {
+      "untyped": true
+    },
+    "retry_looped_review": {
+      "untyped": true
+    },
+    "save_looped_review_workflow": {
+      "untyped": true
+    },
+    "start_looped_review": {
+      "untyped": true
+    },
+    "validate_looped_review_controller": {
+      "untyped": true
+    },
+    "verify_looped_review_package": {
+      "untyped": true
+    }
+  }
+}

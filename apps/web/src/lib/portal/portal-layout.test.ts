@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, expect, mock, test } from "bun:test";
 import { waitFor } from "@testing-library/react";
+import { fromWire, toWire, unknownCommand } from "@orkestrator/protocol/contract/errors";
+import { unknownBackendCommandMessage } from "@orkestrator/protocol/unknown-command";
 import {
   emptyPortalLayout,
   PORTAL_LAYOUT_CHANGED_EVENT,
 } from "@orkestrator/protocol/portal-layout";
-import { NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
+import { invoke as nativeInvoke } from "@/lib/native/backend";
+import { listen, NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
 import {
   getPortalLayout,
   portalLayoutStore,
@@ -32,19 +35,25 @@ const layout = (revision: number, machineOrder = ["bk_a"]) => ({
 beforeEach(() => {
   handlers = new Map();
   portalLayoutStore.setState({ layout: emptyPortalLayout(), loaded: false, error: null });
-  invoke = mock(async () => layout(1));
-  window.orkestratorPortal = {
-    invoke,
-    listen: (event: string, callback: (payload: unknown) => void) => {
-      handlers.set(event, callback);
+  // The window's command scope: its transport is what suites mock.
+  invoke = nativeInvoke as unknown as ReturnType<typeof mock>;
+  invoke.mockReset();
+  invoke.mockImplementation(async () => layout(1));
+  (listen as unknown as ReturnType<typeof mock>).mockImplementation(
+    async (event: string, handler: (event: { payload: unknown }) => unknown) => {
+      handlers.set(event, (payload) => handler({ payload }));
       return () => handlers.delete(event);
     },
-  } as never;
+  );
 });
 afterEach(() => {
   stop?.();
   stop = undefined;
-  delete window.orkestratorPortal;
+  invoke.mockReset();
+  invoke.mockResolvedValue(undefined);
+  (listen as unknown as ReturnType<typeof mock>).mockImplementation(() =>
+    Promise.resolve(() => {}),
+  );
 });
 async function start() {
   stop = startPortalLayout();
@@ -108,12 +117,18 @@ test("rejected write rolls back by rereading even if no event arrives", async ()
   expect(getPortalLayout().machineOrder).toEqual(["bk_a"]);
 });
 
-test("only unknown-command reads enable the in-page fallback", async () => {
-  invoke.mockRejectedValue(new Error("Unknown command: get_portal_layout"));
-  await start();
-  await updatePortalLayout({ machineOrder: ["bk_local"] });
-  expect(getPortalLayout().machineOrder).toEqual(["bk_local"]);
-});
+for (const [label, answer] of [
+  ["coded", (command: string) => fromWire(toWire(unknownCommand(command)))],
+  ["legacy text", (command: string) => new Error(unknownBackendCommandMessage(command))],
+] as const)
+  test(`only unknown-command reads enable the in-page fallback (${label})`, async () => {
+    invoke.mockImplementation(async (command: string) => {
+      throw answer(command);
+    });
+    await start();
+    await updatePortalLayout({ machineOrder: ["bk_local"] });
+    expect(getPortalLayout().machineOrder).toEqual(["bk_local"]);
+  });
 
 test("storage or transport read failure stays unloaded and prevents writes until reconnect succeeds", async () => {
   invoke.mockRejectedValue(new Error("storage unavailable"));

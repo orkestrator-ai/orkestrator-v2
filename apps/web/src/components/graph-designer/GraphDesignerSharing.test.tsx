@@ -1,14 +1,16 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { graphTemplateExample } from "@orkestrator/protocol/graphs/examples";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
-import { useEnvironmentStore } from "@/stores/environmentStore";
-import { useGraphDesignerStore } from "@/stores/graphDesignerStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { environmentStore } from "@/stores/environmentStore";
+import { graphDesignerStore } from "@/stores/graphDesignerStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import type { Environment } from "@/types";
 import { GraphDesignerTab } from "./GraphDesignerTab";
 import { builtInDetail, fixtureSummary, listResult } from "./graph-designer.test-fixtures";
 import { installReactFlowDomStubs } from "./react-flow.test-support";
+import { appCommandStore } from "@/test/app-command-store";
 
 /** The designer's item 405 entry points: Share, Import bundle and Review. */
 
@@ -61,11 +63,11 @@ beforeEach(() => {
     }
   });
   window.orkestrator = { invoke: invokeMock, listen: () => () => undefined } as never;
-  useGraphDesignerStore.setState({ libraries: new Map(), tabs: new Map() });
-  useEnvironmentStore.setState({
+  appCommandStore(graphDesignerStore).setState({ libraries: new Map(), tabs: new Map() });
+  appCommandStore(environmentStore).setState({
     environments: [{ id: ENVIRONMENT_ID, projectId: "project-1" } as Environment],
   });
-  usePaneLayoutStore.setState({
+  appCommandStore(paneLayoutStore).setState({
     environments: new Map([
       [
         ENVIRONMENT_ID,
@@ -91,7 +93,7 @@ afterEach(() => {
 
 describe("GraphDesignerTab sharing", () => {
   test("counts project templates needing review and opens the review panel", async () => {
-    render(
+    renderInAppCommandScope(
       <div style={{ width: 1600, height: 1000, position: "relative" }}>
         <GraphDesignerTab tabId={TAB_ID} environmentId={ENVIRONMENT_ID} data={{}} isActive />
       </div>,
@@ -113,7 +115,7 @@ describe("GraphDesignerTab sharing", () => {
   });
 
   test("Share needs a template; Import bundle opens the two-step import", async () => {
-    render(
+    renderInAppCommandScope(
       <div style={{ width: 1600, height: 1000, position: "relative" }}>
         <GraphDesignerTab tabId={TAB_ID} environmentId={ENVIRONMENT_ID} data={{}} isActive />
       </div>,

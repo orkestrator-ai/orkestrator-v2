@@ -1,11 +1,13 @@
 import { afterEach, beforeEach, expect, mock, spyOn, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import * as backend from "@/lib/backend";
 import { EnvironmentSettingsDialog } from "@/components/environments/EnvironmentSettingsDialog";
 import { RepositorySettings } from "./RepositorySettings";
-import { useConfigStore } from "@/stores/configStore";
+import { configStore } from "@/stores/configStore";
 import { COORDINATOR_OTHER_ENVIRONMENTS_SETTING_LABEL } from "@orkestrator/protocol/coordinator";
 import type { Environment, Project } from "@/types";
+import { appCommandStore } from "@/test/app-command-store";
 
 const project: Project = {
   id: "layout-project",
@@ -59,7 +61,7 @@ for (const [section, title, width] of [
   ["previews", "Preview services", "default"],
 ] as const) {
   test(`environment ${section} uses its menu title and ${width} page width`, () => {
-    render(
+    renderInAppCommandScope(
       <EnvironmentSettingsDialog
         open
         onOpenChange={() => {}}
@@ -73,7 +75,7 @@ for (const [section, title, width] of [
 }
 
 test("repository section navigation uses menu titles and widens Defaults only", () => {
-  render(<RepositorySettings project={project} open onOpenChange={() => {}} />);
+  renderInAppCommandScope(<RepositorySettings project={project} open onOpenChange={() => {}} />);
   expectPage("General", "default");
   fireEvent.click(screen.getByRole("button", { name: "Defaults" }));
   expectPage("Defaults", "wide");
@@ -83,7 +85,7 @@ test("repository section navigation uses menu titles and widens Defaults only", 
 
 for (const stored of [undefined, true]) {
   test(`repository coordinator form loads ${stored ?? "default off"} and saves the edited switch`, async () => {
-    const original = useConfigStore.getState().config;
+    const original = appCommandStore(configStore).getState().config;
     const config = {
       ...original,
       repositories: {
@@ -95,11 +97,11 @@ for (const stored of [undefined, true]) {
         },
       },
     };
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
     const save = spyOn(backend, "patchRepositorySettings").mockResolvedValue(config);
     const close = mock(() => {});
     try {
-      render(<RepositorySettings project={project} open onOpenChange={close} />);
+      renderInAppCommandScope(<RepositorySettings project={project} open onOpenChange={close} />);
       fireEvent.click(screen.getByRole("button", { name: "Coordinator" }));
       const control = screen.getByRole("switch", {
         name: COORDINATOR_OTHER_ENVIRONMENTS_SETTING_LABEL,
@@ -114,7 +116,7 @@ for (const stored of [undefined, true]) {
       expect(save.mock.calls[0]![2]).toEqual(stored ? ["coordinatorOtherEnvironments"] : []);
       await waitFor(() => expect(close).toHaveBeenCalledWith(false));
     } finally {
-      useConfigStore.setState({ config: original });
+      appCommandStore(configStore).setState({ config: original });
     }
   });
 }

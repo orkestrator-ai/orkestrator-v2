@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:834a1a0c1bb1ff6e94ad244491b84abc14d8a4261ddba2a0cea78530373531dc",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "containerId": {
+          "type": "string"
+        },
+        "includeUncommitted": {},
+        "knownDigest": {},
+        "refresh": {},
+        "targetBranch": {
+          "type": "string"
+        }
+      },
+      "required": ["containerId", "targetBranch"],
+      "type": "object"
+    }
+  }
+}

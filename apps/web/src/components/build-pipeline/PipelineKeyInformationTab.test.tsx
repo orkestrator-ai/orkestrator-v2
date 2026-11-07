@@ -1,9 +1,10 @@
 import { afterAll, beforeEach, mock, describe, expect, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { BuildPipelineKeyInformation } from "@orkestrator/protocol/build-pipeline-key-information";
 import { emptyKeyInformation } from "@orkestrator/protocol/build-pipeline-key-information";
-import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { type BuildPipeline, buildPipelineStore } from "@/stores/buildPipelineStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import type { PaneLeaf, TabInfo } from "@/types/paneLayout";
 import * as realPersistence from "@/lib/build-pipeline-persistence";
 const persistenceSnapshot = { ...realPersistence };
@@ -15,6 +16,7 @@ mock.module("@/lib/build-pipeline-persistence", () => ({
 afterAll(() => mock.module("@/lib/build-pipeline-persistence", () => persistenceSnapshot));
 const { PipelineKeyInformationTab } = await import("./PipelineKeyInformationTab");
 import { keyInformation } from "./key-information-test-fixture";
+import { appCommandStore } from "@/test/app-command-store";
 
 /**
  * The key information tab: the brief the header panel shows, laid out for a
@@ -77,11 +79,11 @@ const briefTab: TabInfo = {
 };
 
 function seed(next: BuildPipeline, tabs: TabInfo[] = [buildTab, briefTab]) {
-  useBuildPipelineStore.setState({
+  appCommandStore(buildPipelineStore).setState({
     pipelines: new Map([[next.id, next]]),
     buildEnvironmentIds: new Set([next.environmentId]),
   });
-  usePaneLayoutStore.setState({
+  appCommandStore(paneLayoutStore).setState({
     environments: new Map([
       [
         ENVIRONMENT_ID,
@@ -97,7 +99,7 @@ function seed(next: BuildPipeline, tabs: TabInfo[] = [buildTab, briefTab]) {
 
 function renderTab(next: BuildPipeline, tabs?: TabInfo[]) {
   seed(next, tabs);
-  render(
+  renderInAppCommandScope(
     <PipelineKeyInformationTab data={{ environmentId: ENVIRONMENT_ID, pipelineId: PIPELINE_ID }} />,
   );
   return screen.getByTestId("pipeline-key-information-tab");
@@ -111,8 +113,8 @@ describe("PipelineKeyInformationTab", () => {
   });
 
   function renderCold() {
-    useBuildPipelineStore.setState({ pipelines: new Map() });
-    render(
+    appCommandStore(buildPipelineStore).setState({ pipelines: new Map() });
+    renderInAppCommandScope(
       <PipelineKeyInformationTab
         data={{ environmentId: ENVIRONMENT_ID, pipelineId: PIPELINE_ID }}
       />,
@@ -161,7 +163,7 @@ describe("PipelineKeyInformationTab", () => {
 
   describe("notes view", () => {
     const renderNotes = () =>
-      render(
+      renderInAppCommandScope(
         <PipelineKeyInformationTab
           data={{ environmentId: ENVIRONMENT_ID, pipelineId: PIPELINE_ID, view: "notes" }}
         />,
@@ -183,7 +185,7 @@ describe("PipelineKeyInformationTab", () => {
       );
 
       act(() =>
-        useBuildPipelineStore.setState({
+        appCommandStore(buildPipelineStore).setState({
           pipelines: new Map([[PIPELINE_ID, { ...pipeline, backendRevision: 3 }]]),
         }),
       );
@@ -192,7 +194,7 @@ describe("PipelineKeyInformationTab", () => {
     });
 
     test("names the notes while it loads an uncached pipeline", async () => {
-      useBuildPipelineStore.setState({ pipelines: new Map() });
+      appCommandStore(buildPipelineStore).setState({ pipelines: new Map() });
       let finish!: () => void;
       hydrate.mockImplementationOnce(
         () =>
@@ -342,7 +344,8 @@ describe("PipelineKeyInformationTab", () => {
 
     fireEvent.click(within(tab).getByRole("button", { name: "Open pipeline" }));
 
-    const leaf = usePaneLayoutStore.getState().environments.get(ENVIRONMENT_ID)!.root as PaneLeaf;
+    const leaf = appCommandStore(paneLayoutStore).getState().environments.get(ENVIRONMENT_ID)!
+      .root as PaneLeaf;
     expect(leaf.activeTabId).toBe("build");
   });
 
@@ -450,7 +453,7 @@ describe("PipelineKeyInformationTab", () => {
     act(() => {
       // The store's own snapshot validation is covered elsewhere; this
       // fixture is minimal, so swap the record directly.
-      useBuildPipelineStore.setState({
+      appCommandStore(buildPipelineStore).setState({
         pipelines: new Map([[PIPELINE_ID, { ...pipeline, keyInformation, backendRevision: 8 }]]),
       });
     });

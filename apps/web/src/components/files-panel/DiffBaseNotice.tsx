@@ -2,6 +2,7 @@ import { useState } from "react";
 import { GitCommitHorizontal } from "lucide-react";
 import { shortDiffBaseRefName } from "@orkestrator/protocol/diff-stats";
 import { Button } from "@/components/ui/button";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { useEnvironmentStore } from "@/stores";
 import { saveDiffBase } from "./DiffBaseDialog";
 
@@ -17,6 +18,7 @@ export function DiffBaseNotice({ environmentId, onChange }: DiffBaseNoticeProps)
       ? state.environments.find((environment) => environment.id === environmentId)?.diffBaseOverride
       : null,
   );
+  const scope = useNodeScope();
   const [clearing, setClearing] = useState(false);
   if (!environmentId || !override) return null;
   const label = override.subject || override.commit.slice(0, 12);
@@ -42,7 +44,7 @@ export function DiffBaseNotice({ environmentId, onChange }: DiffBaseNoticeProps)
           disabled={clearing}
           onClick={() => {
             setClearing(true);
-            void saveDiffBase(environmentId, null).finally(() => setClearing(false));
+            void saveDiffBase(environmentId, null, scope).finally(() => setClearing(false));
           }}
         >
           Reset

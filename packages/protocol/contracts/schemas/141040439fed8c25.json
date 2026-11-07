@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:141040439fed8c2551dfc04c75075d68234fcc16f9931832e05ece11ff87f342",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "arguments": {},
+        "command": {
+          "type": "string"
+        },
+        "environmentId": {},
+        "expectedBindingRevision": {},
+        "key": {
+          "type": "string"
+        },
+        "projectId": {
+          "type": "string"
+        },
+        "tabId": {
+          "type": "string"
+        }
+      },
+      "required": ["command", "key", "projectId", "tabId"],
+      "type": "object"
+    }
+  }
+}

@@ -8,7 +8,9 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { useEnvironmentStore, useFilesPanelStore } from "@/stores";
+import { useFilesPanelChromeStore } from "@/stores/filesPanelChromeStore";
 import type { FilesPanelTab } from "@/stores";
 import { isFilesPanelFileTab } from "@/stores/filesPanelStore";
 import { PullRequestStateIcon } from "@/components/pull-requests/PullRequestStateIcon";
@@ -35,6 +37,7 @@ export function FilesPanelHeader({
   targetId = null,
   onChooseDiffBase,
 }: FilesPanelHeaderProps) {
+  const scope = useNodeScope();
   const hasDiffBaseOverride = useEnvironmentStore((state) =>
     changeEnvironmentId
       ? !!state.environments.find((environment) => environment.id === changeEnvironmentId)
@@ -46,7 +49,7 @@ export function FilesPanelHeader({
   const activeTab = useFilesPanelStore((state) => state.activeTab);
   const setActiveTab = useFilesPanelStore((state) => state.setActiveTab);
   const changes = useFilesPanelStore((state) => state.changes);
-  const closePanel = useFilesPanelStore((state) => state.closePanel);
+  const closePanel = useFilesPanelChromeStore((state) => state.closePanel);
   const isLoadingChanges = useFilesPanelStore((state) => state.isLoadingChanges);
   const isLoadingTree = useFilesPanelStore((state) => state.isLoadingTree);
   const changeProjection = useEnvironmentChangeProjection(changeEnvironmentId);
@@ -99,7 +102,9 @@ export function FilesPanelHeader({
                 Compare against…
               </ContextMenuItem>
               {hasDiffBaseOverride && changeEnvironmentId && (
-                <ContextMenuItem onSelect={() => void saveDiffBase(changeEnvironmentId, null)}>
+                <ContextMenuItem
+                  onSelect={() => void saveDiffBase(changeEnvironmentId, null, scope)}
+                >
                   Use automatic base
                 </ContextMenuItem>
               )}

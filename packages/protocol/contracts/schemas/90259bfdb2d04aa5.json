@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:90259bfdb2d04aa50aa139388fb0f2de9823eb69b0348b4432396f91dcb703b2",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "entries": {
+          "items": {
+            "additionalProperties": true,
+            "properties": {
+              "count": {
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "domain": {
+                "maxLength": 64,
+                "minLength": 1,
+                "pattern": "^[a-z][a-z0-9-]*$",
+                "type": "string"
+              },
+              "version": {
+                "maximum": 1000,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": ["count", "domain", "version"],
+            "type": "object"
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": ["entries"],
+      "type": "object"
+    }
+  }
+}

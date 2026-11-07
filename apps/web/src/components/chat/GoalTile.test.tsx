@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { renderGoalCarrier, type NativeAgentGoal } from "@orkestrator/protocol/native-agent-goal";
 import { createGoalTurnNativeMessage, goalStatusRows } from "@/lib/chat/goal-messages";
 import type { NativeMessage as NativeMessageType } from "@/lib/chat/native-message-types";
@@ -36,7 +37,9 @@ function providerRow(content: string): NativeMessageType {
 }
 
 function tile(carrier: string) {
-  return render(<NativeMessage message={createGoalTurnNativeMessage(providerRow(carrier))!} />);
+  return renderInAppCommandScope(
+    <NativeMessage message={createGoalTurnNativeMessage(providerRow(carrier))!} />,
+  );
 }
 
 afterEach(() => {
@@ -92,7 +95,7 @@ describe("GoalTurnTile", () => {
 
   test("opens by itself for transcript find", () => {
     const row = createGoalTurnNativeMessage(providerRow(renderGoalCarrier(goal())))!;
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <ChatFindActiveContext.Provider value={true}>
         <NativeMessage message={row} />
       </ChatFindActiveContext.Provider>,
@@ -113,7 +116,7 @@ describe("GoalTurnTile", () => {
 test("carrier-like text in the middle of a message renders as the user's message", () => {
   const content = `Why does ${renderGoalCarrier(goal())} show up?`;
   const row = createGoalTurnNativeMessage(providerRow(content)) ?? providerRow(content);
-  const { container } = render(<NativeMessage message={row} />);
+  const { container } = renderInAppCommandScope(<NativeMessage message={row} />);
   expect(container.querySelector("[data-goal-turn-tile]") === null).toBe(true);
   expect(screen.getByText("You")).toBeTruthy();
   expect(container.textContent).toContain("Why does");
@@ -140,7 +143,7 @@ describe("GoalStatusRow", () => {
       ],
       ["ended", { ...view, status: "complete", endedAt: AT }, "Complete: the check passed"],
     ] as const) {
-      const { container, unmount } = render(
+      const { container, unmount } = renderInAppCommandScope(
         <NativeMessage message={row(kind, source as Parameters<typeof goalStatusRows>[0])} />,
       );
       const rendered = container.querySelector<HTMLElement>(`[data-goal-status-row="${kind}"]`)!;
@@ -155,7 +158,7 @@ describe("GoalStatusRow", () => {
       goal: { lastCheck: { outputTail: "1 failing", at: checkAt } },
       history: [],
     }));
-    render(
+    renderInAppCommandScope(
       <GoalDetailLoaderContext.Provider value={load as never}>
         <NativeMessage message={row("check", withCheck)} />
       </GoalDetailLoaderContext.Provider>,
@@ -171,7 +174,7 @@ describe("GoalStatusRow", () => {
       goal: { lastCheck: { outputTail: "newer", at: "2026-10-31T12:00:00.000Z" } },
       history: [],
     }));
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <GoalDetailLoaderContext.Provider value={load as never}>
         <NativeMessage message={row("check", withCheck)} />
       </GoalDetailLoaderContext.Provider>,
@@ -189,7 +192,7 @@ describe("GoalStatusRow", () => {
     const load = mock(async () => {
       throw new Error("offline");
     });
-    render(
+    renderInAppCommandScope(
       <GoalDetailLoaderContext.Provider value={load as never}>
         <NativeMessage message={row("check", withCheck)} />
       </GoalDetailLoaderContext.Provider>,

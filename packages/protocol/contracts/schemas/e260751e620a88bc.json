@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:e260751e620a88bcb39dc5ee5764d0df98a9513714c11ef26d4dd8015393375a",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "input": {},
+        "scope": {},
+        "target": {}
+      },
+      "type": "object"
+    }
+  }
+}

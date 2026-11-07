@@ -69,8 +69,8 @@ export type ShortcutFocus = "terminal" | "text" | "page";
 /**
  * A keyboard shortcut that belongs to the application rather than to the
  * surface that has focus, so it works wherever focus is in the window:
- * the sidebar, the main area, the composer, a terminal, a leaf node's
- * workspace realm, a design frame or an artifact.
+ * the sidebar, the main area, the composer, a terminal, any node's
+ * workspace shown in the window's tree, a design frame or an artifact.
  *
  * Every router reads this list: Electron main (`before-input-event` on every
  * WebContents), each app document's capture-phase key router, and the design
@@ -85,11 +85,14 @@ export interface AppShortcut {
   shift: boolean;
   /**
    * Which document opens the UI. `window`: the window's shell renderer,
-   * which owns the sidebar; a realm forwards the shortcut to it. `document`:
-   * the app document that has focus, realm included (each one renders its
-   * own copy of the UI). `workspace`: the app document holding the focused
-   * workspace, realm included, with no dialog involved; a key typed in a native
-   * view is handed to the renderer that owns that view.
+   * which owns the sidebar. `document`: the app document that has focus
+   * (each one renders its own copy of the UI). `workspace`: the app document
+   * holding the focused workspace, acting on the shown workspace with no
+   * dialog involved. A key typed in a native view (an artifact) is handed to
+   * the shell renderer, or for `workspace` to the renderer that owns that
+   * view. Every node's workspace now renders in the window's own renderer
+   * through its node scope (plan items 6002, 6003 retired the per-node
+   * workspace realms that once forwarded `window` shortcuts to the shell).
    */
   owner: "window" | "document" | "workspace";
   /**

@@ -10,18 +10,24 @@ import { useMachineViewStore } from "@/stores/machineViewStore";
 import { portalStore } from "@/lib/portal/portal-store";
 import { useAppDialogStore } from "@/stores/appDialogStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
-import { useUIStore } from "@/stores/uiStore";
+import { uiStore } from "@/stores/uiStore";
 import { openMachineWorkspace } from "./open-workspace";
+import { getWindowScope } from "@/lib/node-scope/app-window-scope";
+import { selectOnNode } from "@/test/node-selection";
+import { appCommandStore } from "@/test/app-command-store";
+
+/** Outside a node scope provider, components act for the app's command node. */
+const commandNodeId = () => getWindowScope().commandScope().nodeId;
 
 const originalViews = useMachineViewStore.getState();
 const originalPortal = portalStore.getState();
 const originalRemote = useRemoteWorkspaceStore.getState();
-const originalUI = useUIStore.getState();
+const originalUI = appCommandStore(uiStore).getState();
 afterEach(() => {
   useMachineViewStore.setState(originalViews, true);
   portalStore.store.setState(originalPortal, true);
   useRemoteWorkspaceStore.setState(originalRemote, true);
-  useUIStore.setState(originalUI, true);
+  appCommandStore(uiStore).setState(originalUI, true);
   useAppDialogStore.setState({ request: null });
 });
 
@@ -38,13 +44,13 @@ for (const dialog of ["delete-project", "repository-settings", "environment-sett
     });
     expect(useAppDialogStore.getState().request).toEqual(
       dialog === "environment-settings"
-        ? { kind: dialog, environmentId: "env" }
-        : { kind: dialog, projectId: "project" },
+        ? { nodeId: commandNodeId(), kind: dialog, environmentId: "env" }
+        : { nodeId: commandNodeId(), kind: dialog, projectId: "project" },
     );
     expect(useRemoteWorkspaceStore.getState().active).toBeNull();
-    expect(useUIStore.getState().selectedProjectId).toBe("project");
+    expect(appCommandStore(uiStore).getState().selectedProjectId).toBe("project");
     if (dialog === "environment-settings")
-      expect(useUIStore.getState().selectedEnvironmentId).toBe("env");
+      expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("env");
   });
 }
 
@@ -58,14 +64,15 @@ test("an environment's rebuild opens its settings on the Container section", () 
     title: "Local",
   });
   expect(useAppDialogStore.getState().request).toEqual({
+    nodeId: commandNodeId(),
     kind: "environment-settings",
     environmentId: "env",
     section: "container",
   });
-  expect(useUIStore.getState().selectedEnvironmentId).toBe("env");
+  expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("env");
 });
 
-test("another node's environment rebuild goes to that node's realm", () => {
+test("another node's environment rebuild goes to that node's workspace", () => {
   portalStore.store.setState({ selfId: "bk_self" as never });
   openMachineWorkspace({
     connectionId: "bk_other",
@@ -88,47 +95,37 @@ const remoteProject = (nodeId: string, id: string) =>
 const remoteEnvironment = (nodeId: string, id: string) =>
   environmentKey(environmentRef(nodeId as BackendId, id));
 
-test("active realm navigation and creation update machine-qualified recency without local selections", () => {
+test("navigation and creation in the shown node update machine-qualified recency without local selections", () => {
   portalStore.store.setState({ selfId: "bk_self" as BackendId });
   openMachineWorkspace({ connectionId: "bk_other", projectId: "project", title: "Remote" });
-  const local = useUIStore.getState();
-  useRemoteWorkspaceStore
-    .getState()
-    .noteRealmSelection("bk_other", { projectId: "project", environmentId: "selected" });
+  const local = appCommandStore(uiStore).getState();
+  selectOnNode("bk_other", { projectId: "project", environmentId: "selected" });
   expect(useMachineViewStore.getState().recentKeys.slice(0, 2)).toEqual([
     remoteEnvironment("bk_other", "selected"),
     remoteProject("bk_other", "project"),
   ]);
-  useRemoteWorkspaceStore
-    .getState()
-    .noteRealmSelection("bk_other", { projectId: "new-project", environmentId: "created" });
+  selectOnNode("bk_other", { projectId: "new-project", environmentId: "created" });
   expect(useMachineViewStore.getState().recentKeys.slice(0, 2)).toEqual([
     remoteEnvironment("bk_other", "created"),
     remoteProject("bk_other", "new-project"),
   ]);
-  expect(useUIStore.getState()).toBe(local);
+  expect(appCommandStore(uiStore).getState()).toBe(local);
   const views = useMachineViewStore.getState();
-  useRemoteWorkspaceStore
-    .getState()
-    .noteRealmSelection("bk_inactive", { projectId: "inactive", environmentId: "hidden" });
+  selectOnNode("bk_inactive", { projectId: "inactive", environmentId: "hidden" });
   expect(useMachineViewStore.getState()).toBe(views);
   expect(useRemoteWorkspaceStore.getState().active?.projectId).toBe("new-project");
 });
 
-test("remote opens and accepted realm selections clear a different reveal but preserve opening its project", () => {
+test("remote opens and the shown node's selections clear a different reveal but preserve opening its project", () => {
   portalStore.store.setState({ selfId: "bk_self" as BackendId });
-  useUIStore.getState().selectProject(null);
+  appCommandStore(uiStore).getState().selectProject(null);
   const key = remoteProject("bk_other", "project");
   useMachineViewStore.getState().revealProject(key);
   openMachineWorkspace({ connectionId: "bk_other", projectId: "project", title: "Remote" });
   expect(useMachineViewStore.getState().revealedProject?.key).toBe(key);
-  useRemoteWorkspaceStore
-    .getState()
-    .noteRealmSelection("bk_inactive", { projectId: "elsewhere", environmentId: "hidden" });
+  selectOnNode("bk_inactive", { projectId: "elsewhere", environmentId: "hidden" });
   expect(useMachineViewStore.getState().revealedProject?.key).toBe(key);
-  useRemoteWorkspaceStore
-    .getState()
-    .noteRealmSelection("bk_other", { projectId: "project", environmentId: "selected" });
+  selectOnNode("bk_other", { projectId: "project", environmentId: "selected" });
   expect(useMachineViewStore.getState().revealedProject).toBeNull();
   useMachineViewStore.getState().revealProject(key);
   openMachineWorkspace({

@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
-import { useConfigStore } from "@/stores/configStore";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
+import { nativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
+import { configStore } from "@/stores/configStore";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
 import { createSessionKey } from "@/lib/utils";
 import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
@@ -13,6 +14,7 @@ import {
   type NativeAgentSessionProjection,
 } from "@orkestrator/protocol/native-agent";
 import { AgentInfoButton } from "./AgentInfoButton";
+import { appCommandStore } from "@/test/app-command-store";
 
 const COORDINATOR_ENVIRONMENT_ID = coordinatorRuntimeId("workspace-1", "conversation-1");
 const TAB_ID = "coordinator-tab-1";
@@ -97,15 +99,16 @@ function open() {
   fireEvent.click(screen.getByRole("button", { name: "Open agent information" }));
 }
 
-const originalGlobalConfig = useConfigStore.getState().config.global;
+const originalGlobalConfig = appCommandStore(configStore).getState().config.global;
 beforeEach(() => {
-  useNativeAgentProjectionStore.getState().reset();
+  appCommandStore(nativeAgentProjectionStore).getState().reset();
   nativeInvokeMock.mockClear();
   nativeInvokeMock.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
     if (command === "get_native_agent_projection") {
       return (
-        useNativeAgentProjectionStore.getState().projections.get(String(args?.logicalSessionKey)) ??
-        null
+        appCommandStore(nativeAgentProjectionStore)
+          .getState()
+          .projections.get(String(args?.logicalSessionKey)) ?? null
       );
     }
     if (command === "get_native_agent_auth_status") {
@@ -140,17 +143,19 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   resetReadCoordinatorForTests();
-  useNativeAgentProjectionStore.getState().reset();
-  useConfigStore.setState((state) => ({
+  appCommandStore(nativeAgentProjectionStore).getState().reset();
+  appCommandStore(configStore).setState((state) => ({
     config: { ...state.config, global: originalGlobalConfig },
   }));
 });
 
 describe("AgentInfoButton coordinator conversations", () => {
   test("reports a coordinator conversation's usage, quota and account like an agent tab", async () => {
-    useNativeAgentProjectionStore.getState().setProjection(SESSION_KEY, coordinatorProjection());
+    appCommandStore(nativeAgentProjectionStore)
+      .getState()
+      .setProjection(SESSION_KEY, coordinatorProjection());
 
-    render(<AgentInfoButton activeTab={coordinatorTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={coordinatorTab()} />);
     open();
 
     expect(screen.getByText("Claude Native")).toBeTruthy();
@@ -184,9 +189,9 @@ describe("AgentInfoButton coordinator conversations", () => {
   test("reads the account's plan limits when the coordinator's CLI reports none", async () => {
     const projection = coordinatorProjection();
     delete projection.contextUsage!.account;
-    useNativeAgentProjectionStore.getState().setProjection(SESSION_KEY, projection);
+    appCommandStore(nativeAgentProjectionStore).getState().setProjection(SESSION_KEY, projection);
 
-    render(<AgentInfoButton activeTab={coordinatorTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={coordinatorTab()} />);
     open();
 
     const quota = within(await screen.findByRole("region", { name: "Account usage" }));
@@ -204,8 +209,8 @@ describe("AgentInfoButton coordinator conversations", () => {
       { window: "daily:2026-11-02", label: "2026-11-02", tokens: 60_000_000 },
     ];
     projection.turn = { phase: "running" };
-    useNativeAgentProjectionStore.getState().setProjection(SESSION_KEY, projection);
-    render(<AgentInfoButton activeTab={coordinatorTab()} />);
+    appCommandStore(nativeAgentProjectionStore).getState().setProjection(SESSION_KEY, projection);
+    renderInAppCommandScope(<AgentInfoButton activeTab={coordinatorTab()} />);
     open();
     expect(await screen.findByText("Weekly limit")).toBeTruthy();
     expect(screen.getByRole("region", { name: "Daily tokens" })).toBeTruthy();
@@ -214,21 +219,25 @@ describe("AgentInfoButton coordinator conversations", () => {
         .length;
     const before = reads();
     await act(async () => {
-      useNativeAgentProjectionStore.getState().setProjection(SESSION_KEY, {
-        ...projection,
-        revision: 2,
-        turn: { phase: "idle" },
-      });
+      appCommandStore(nativeAgentProjectionStore)
+        .getState()
+        .setProjection(SESSION_KEY, {
+          ...projection,
+          revision: 2,
+          turn: { phase: "idle" },
+        });
     });
     await waitFor(() => expect(reads()).toBeGreaterThan(before));
     const afterTurn = reads();
     await act(async () => {
-      useNativeAgentProjectionStore.getState().setProjection(SESSION_KEY, {
-        ...projection,
-        revision: 3,
-        generation: "next-generation",
-        turn: { phase: "idle" },
-      });
+      appCommandStore(nativeAgentProjectionStore)
+        .getState()
+        .setProjection(SESSION_KEY, {
+          ...projection,
+          revision: 3,
+          generation: "next-generation",
+          turn: { phase: "idle" },
+        });
     });
     await waitFor(() => expect(reads()).toBeGreaterThan(afterTurn));
     expect(screen.getByText("Weekly limit")).toBeTruthy();
@@ -236,9 +245,11 @@ describe("AgentInfoButton coordinator conversations", () => {
   });
 
   test("keeps the session's own plan limits when the coordinator reports them", async () => {
-    useNativeAgentProjectionStore.getState().setProjection(SESSION_KEY, coordinatorProjection());
+    appCommandStore(nativeAgentProjectionStore)
+      .getState()
+      .setProjection(SESSION_KEY, coordinatorProjection());
 
-    render(<AgentInfoButton activeTab={coordinatorTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={coordinatorTab()} />);
     open();
 
     const quota = within(screen.getByRole("region", { name: "Account usage" }));
@@ -252,13 +263,13 @@ describe("AgentInfoButton coordinator conversations", () => {
     const projection = coordinatorProjection();
     delete projection.contextUsage!.account;
     projection.environmentId = "environment-1";
-    useNativeAgentProjectionStore
+    appCommandStore(nativeAgentProjectionStore)
       .getState()
       .setProjection(createSessionKey("environment-1", TAB_ID), projection);
     const tab = coordinatorTab();
     tab.nativeAgentData!.environmentId = "environment-1";
 
-    render(<AgentInfoButton activeTab={tab} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={tab} />);
     open();
 
     await waitFor(() =>
@@ -277,10 +288,10 @@ describe("AgentInfoButton coordinator conversations", () => {
     projection.capabilities = nativeAgentCapabilities("opencode");
     expect(projection.capabilities.actions?.undo).toBe(true);
     expect(projection.capabilities.actions?.redo).toBe(true);
-    useNativeAgentProjectionStore.getState().setProjection(SESSION_KEY, projection);
+    appCommandStore(nativeAgentProjectionStore).getState().setProjection(SESSION_KEY, projection);
     const tab = coordinatorTab();
     tab.nativeAgentData!.platform = "opencode";
-    const view = render(<AgentInfoButton activeTab={tab} />);
+    const view = renderInAppCommandScope(<AgentInfoButton activeTab={tab} />);
     open();
     expect(screen.queryByRole("button", { name: "Undo turn" })).toBe(null);
     expect(screen.queryByRole("button", { name: "Redo turn" })).toBe(null);
@@ -293,7 +304,7 @@ describe("AgentInfoButton coordinator conversations", () => {
         }}
       />,
     );
-    useNativeAgentProjectionStore
+    appCommandStore(nativeAgentProjectionStore)
       .getState()
       .setProjection(createSessionKey("environment-1", TAB_ID), {
         ...projection,
@@ -305,9 +316,11 @@ describe("AgentInfoButton coordinator conversations", () => {
   });
 
   test("keeps tab-creating, file-changing and policy controls for environment tabs", async () => {
-    useNativeAgentProjectionStore.getState().setProjection(SESSION_KEY, coordinatorProjection());
+    appCommandStore(nativeAgentProjectionStore)
+      .getState()
+      .setProjection(SESSION_KEY, coordinatorProjection());
 
-    render(<AgentInfoButton activeTab={coordinatorTab()} />);
+    renderInAppCommandScope(<AgentInfoButton activeTab={coordinatorTab()} />);
     open();
 
     await waitFor(() => expect(screen.getByRole("button", { name: "Compact" })).toBeTruthy());

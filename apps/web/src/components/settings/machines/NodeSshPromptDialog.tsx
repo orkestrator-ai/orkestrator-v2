@@ -17,7 +17,7 @@ import {
   listNodeSshPrompts,
   nodeErrorText,
 } from "@/lib/backend/command-nodes";
-import { portalListenAuthoritative } from "@/lib/portal/portal-transport";
+import { commandScopeListenAuthoritative } from "@/lib/portal/command-scope";
 
 const errorText = nodeErrorText;
 
@@ -51,7 +51,7 @@ export function NodeSshPromptDialog() {
       }
       setPrompts(snapshot.filter((entry) => entry.state === "open"));
     };
-    void portalListenAuthoritative<PromptEvent>(
+    void commandScopeListenAuthoritative<PromptEvent>(
       NODE_SSH_PROMPT_EVENT,
       ({ payload }) => {
         revision++;

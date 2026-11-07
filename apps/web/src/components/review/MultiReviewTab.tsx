@@ -1,6 +1,6 @@
 import { ReviewValidationStatus } from "./ReviewValidationStatus";
 import { WorkflowResultStatus } from "./WorkflowResultStatus";
-import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   AlertCircle,
   ExternalLink,
@@ -32,15 +32,17 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { StructuredReviewReportView } from "./StructuredReviewReportView";
 import { StackedEyes } from "./MultiReviewLaunchDialog";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useMultiReviewPrPhase } from "./useMultiReviewPrPhase";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore, usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { hydrateMultiReviewWorkflow } from "@/lib/multi-review-persistence";
 import { requestGraphRunView } from "@/lib/graph-run-navigation";
 import { useOptionalTerminalContext } from "@/contexts/TerminalContext";
 import { MultiReviewReviewerTab } from "./MultiReviewReviewerTab";
 import { PipelineReviewTab } from "@/components/build-pipeline/PipelineReviewTab";
-import * as backend from "@/lib/backend";
+import type * as backend from "@/lib/backend";
+import type { ScopeBackend } from "@/lib/backend/scope-backend";
 import { openPullRequestUrl } from "@/lib/pull-request-opener";
 import { MultiReviewAddressFindingsPromptDialog } from "./MultiReviewAddressFindingsPromptDialog";
 import { ModelRestartDialog, MultiReviewRestartDialog } from "./MultiReviewRestartDialog";
@@ -108,6 +110,7 @@ import {
 } from "./multi-review-steps";
 import { ReviewerStartFailureNotice } from "./ReviewerStartFailureNotice";
 import { FloatingNotice, FloatingNoticeLayer } from "@/components/ui/floating-notice";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 interface MultiReviewCommands {
   address: (workflowId: string) => Promise<MultiReviewWorkflow>;
@@ -141,22 +144,25 @@ interface MultiReviewCommands {
   unstickReviewer?: (workflowId: string, reviewerId: string) => Promise<MultiReviewWorkflow>;
 }
 
-const defaultCommands: MultiReviewCommands = {
-  address: backend.addressMultiReviewFindings,
-  customAddressFindings: (workflowId, fixModel, instruction) =>
-    backend.startMultiReviewCustomAddressFindings({ workflowId, fixModel, instruction }),
-  retry: backend.retryMultiReview,
-  cancel: backend.cancelMultiReview,
-  stopValidation: backend.stopMultiReviewValidation,
-  stopReviewer: backend.stopMultiReviewReviewer,
-  restartReviewer: backend.restartMultiReviewReviewer,
-  skipStep: backend.skipMultiReviewStep,
-  rewindCode: backend.rewindMultiReviewCode,
-  restartStep: backend.restartMultiReviewStep,
-  pauseStep: backend.pauseMultiReviewStep,
-  resumeStep: backend.resumeMultiReviewStep,
-  unstickReviewer: backend.unstickMultiReviewReviewer,
-};
+/** The workflow's commands on its node (`useScopeBackend()`, plan item 4007). */
+function nodeMultiReviewCommands(node: ScopeBackend): MultiReviewCommands {
+  return {
+    address: (...args) => node.addressMultiReviewFindings(...args),
+    customAddressFindings: (workflowId, fixModel, instruction) =>
+      node.startMultiReviewCustomAddressFindings({ workflowId, fixModel, instruction }),
+    retry: (...args) => node.retryMultiReview(...args),
+    cancel: (...args) => node.cancelMultiReview(...args),
+    stopValidation: (...args) => node.stopMultiReviewValidation(...args),
+    stopReviewer: (...args) => node.stopMultiReviewReviewer(...args),
+    restartReviewer: (...args) => node.restartMultiReviewReviewer(...args),
+    skipStep: (...args) => node.skipMultiReviewStep(...args),
+    rewindCode: (...args) => node.rewindMultiReviewCode(...args),
+    restartStep: (...args) => node.restartMultiReviewStep(...args),
+    pauseStep: (...args) => node.pauseMultiReviewStep(...args),
+    resumeStep: (...args) => node.resumeMultiReviewStep(...args),
+    unstickReviewer: (...args) => node.unstickMultiReviewReviewer(...args),
+  };
+}
 
 interface MultiReviewTabProps {
   ownsGlobalShortcuts?: boolean;
@@ -540,13 +546,18 @@ function MultiReviewOverviewTab({
   data,
   isActive,
   hydrateWorkflow = hydrateMultiReviewWorkflow,
-  commands: providedCommands = defaultCommands,
+  commands: commandsOverride,
   openReviewer,
   loadReviewerTranscript,
   loadStepTranscript,
   loadPrSessionState,
 }: MultiReviewTabProps) {
+  const nodeBackend = useScopeBackend();
+  const defaultCommands = useMemo(() => nodeMultiReviewCommands(nodeBackend), [nodeBackend]);
+  const providedCommands = commandsOverride === undefined ? defaultCommands : commandsOverride;
   const createTab = useOptionalTerminalContext()?.createTab;
+  // The workflow belongs to this node; its point reads go to this node (plan item 3003).
+  const workflowScope = useNodeScope();
   const workflow = useMultiReviewStore((state) => state.workflows.get(data.workflowId));
   const replaceWorkflow = useMultiReviewStore((state) => state.replaceWorkflow);
   // A graph-engine review refuses bespoke step controls even once its run has
@@ -593,7 +604,7 @@ function MultiReviewOverviewTab({
     pending,
     {
       readPreview: (id, stageId) =>
-        backend.previewMultiReviewCodeRewind(id, stageId as MultiReviewRewindStep),
+        nodeBackend.previewMultiReviewCodeRewind(id, stageId as MultiReviewRewindStep),
       subject: "the review",
     },
   );
@@ -669,14 +680,14 @@ function MultiReviewOverviewTab({
     () =>
       // The executor turns a synchronous throw into a rejection, as `await` did.
       new Promise<Awaited<ReturnType<typeof hydrateWorkflow>>>((resolve) =>
-        resolve(hydrateWorkflow(data.workflowId)),
+        resolve(hydrateWorkflow(data.workflowId, workflowScope)),
       ).then(
         (result) => {
           if (!result) setError("The authoritative Multi Review workflow could not be found.");
         },
         (reason: unknown) => setError(reason instanceof Error ? reason.message : String(reason)),
       ),
-    [data.workflowId, hydrateWorkflow],
+    [data.workflowId, hydrateWorkflow, workflowScope],
   );
 
   const hydrate = () => {
@@ -1015,12 +1026,12 @@ function MultiReviewOverviewTab({
   });
   const openPrTab = useCallback(() => {
     if (!prTabId) return;
-    const layout = usePaneLayoutStore.getState();
+    const layout = workflowScope.store(paneLayoutStore).getState();
     const pane = layout.findPaneWithTab(prTabId, data.environmentId);
     if (!pane) return;
     layout.setActivePane(pane.id, data.environmentId);
     layout.setActiveTab(pane.id, prTabId, data.environmentId);
-  }, [data.environmentId, prTabId]);
+  }, [data.environmentId, prTabId, workflowScope]);
   // In the right-hand PR pane, so the review stays in view; GitHub on request.
   const viewPullRequest = useCallback(
     async (options?: { external?: boolean }) => {
@@ -1962,13 +1973,16 @@ function MultiReviewOverviewTab({
           variant="outline"
           size="sm"
           onClick={() =>
-            requestGraphRunView({
-              runId,
-              projectId: workflow.projectId,
-              environmentId: workflow.environmentId,
-              mock: false,
-              title: "Multi Review",
-            })
+            requestGraphRunView(
+              {
+                runId,
+                projectId: workflow.projectId,
+                environmentId: workflow.environmentId,
+                mock: false,
+                title: "Multi Review",
+              },
+              workflowScope,
+            )
           }
         >
           Open graph run

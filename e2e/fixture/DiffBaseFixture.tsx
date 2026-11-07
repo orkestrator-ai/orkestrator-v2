@@ -6,6 +6,7 @@ import { TooltipProvider } from "../../apps/web/src/components/ui/tooltip";
 import { useEnvironmentStore } from "../../apps/web/src/stores/environmentStore";
 import { useFilesPanelStore } from "../../apps/web/src/stores/filesPanelStore";
 import type { Environment } from "../../apps/web/src/types";
+import { appCommandStore } from "../../apps/web/src/test/app-command-store";
 
 const TIP = "a".repeat(40);
 const OLDER = "b".repeat(40);
@@ -24,8 +25,8 @@ export function installDiffBaseFixture() {
     projectId: "project-1",
     diffBaseOverride: JSON.parse(localStorage.getItem("fixture-diff-base") ?? "null"),
   } as Environment;
-  useEnvironmentStore.setState({ environments: [environment] });
-  useFilesPanelStore.setState({ activeTab: "changes", changes: [] });
+  appCommandStore(useEnvironmentStore.def).setState({ environments: [environment] });
+  appCommandStore(useFilesPanelStore.def).setState({ activeTab: "changes", changes: [] });
   window.orkestrator = {
     invoke: async (command: string, args?: Record<string, unknown>) => {
       if (command === "list_environment_diff_base_branches") return branches;

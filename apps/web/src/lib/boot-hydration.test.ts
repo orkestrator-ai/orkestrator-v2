@@ -209,7 +209,7 @@ describe("EnvironmentHydrationBatcher", () => {
 
 describe("boot fan-out", () => {
   /**
-   * A cold boot of a realm with 10 projects of 12 environments, the projects'
+   * A cold boot of a node with 10 projects of 12 environments, the projects'
    * environment lists arriving one after another as `get_environments`
    * answers. Before: one `list_prompt_queues` and one
    * `list_multi_review_workflows` per environment, all at once. After: one

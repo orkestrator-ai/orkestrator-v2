@@ -6,6 +6,7 @@
  * for this page only.
  */
 
+import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import { useEffect } from "react";
 import { useStore } from "zustand";
 import { createStore } from "zustand/vanilla";
@@ -17,7 +18,8 @@ import {
   type PortalLayoutUpdate,
 } from "@orkestrator/protocol/portal-layout";
 import { NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
-import { portalInvoke, portalListen } from "./portal-transport";
+import { NO_ARGS, portalNodesApi } from "@/lib/node-scope/domains/nodes";
+import { commandScopeListen } from "./command-scope";
 
 interface PortalLayoutState {
   layout: PortalLayout;
@@ -47,18 +49,22 @@ function apply(next: PortalLayout): void {
   );
 }
 
-function unsupportedCommand(error: unknown): boolean {
-  return /unknown command|not available in this backend/i.test(String(error));
+/** A backend older than `command`, or one without the command-node portal. */
+function unsupportedCommand(error: unknown, command: string): boolean {
+  return (
+    incompatibility(error, command) !== null || /not available in this backend/i.test(String(error))
+  );
 }
 
 async function read(): Promise<void> {
   const request = ++readRevision;
   try {
-    const layout = parsePortalLayout(await portalInvoke<unknown>("get_portal_layout"));
+    const layout = parsePortalLayout(await portalNodesApi().get_portal_layout(NO_ARGS));
     if (request === readRevision) apply(layout);
   } catch (error) {
     if (request !== readRevision || writing > 0) return;
-    if (unsupportedCommand(error)) store.setState({ loaded: true, error: null });
+    if (unsupportedCommand(error, "get_portal_layout"))
+      store.setState({ loaded: true, error: null });
     else
       store.setState({
         loaded: false,
@@ -75,7 +81,7 @@ export function startPortalLayout(): () => void {
     const subscriptions = [];
     for (const event of [PORTAL_LAYOUT_CHANGED_EVENT, NATIVE_EVENT_STREAM_CONNECTED_EVENT]) {
       subscriptions.push(
-        portalListen<unknown>(event, (payload) => {
+        commandScopeListen<unknown>(event, (payload) => {
           if (generation !== current) return;
           if (event === PORTAL_LAYOUT_CHANGED_EVENT) apply(parsePortalLayout(payload.payload));
           else void read();
@@ -119,9 +125,9 @@ export async function updatePortalLayout(update: PortalLayoutUpdate): Promise<vo
   writing += 1;
   let unsupported = false;
   try {
-    await portalInvoke<unknown>("update_portal_layout", { ...update });
+    await portalNodesApi().update_portal_layout({ ...update });
   } catch (error) {
-    unsupported = unsupportedCommand(error);
+    unsupported = unsupportedCommand(error, "update_portal_layout");
     if (!unsupported) throw error;
   } finally {
     writing -= 1;

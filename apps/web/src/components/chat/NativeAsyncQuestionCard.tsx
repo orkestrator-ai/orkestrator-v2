@@ -4,10 +4,11 @@ import { Button } from "@/components/ui/button";
 import { isSubmitShortcut } from "@/lib/keyboard-shortcuts";
 import { cn } from "@/lib/utils";
 import type { NativeAsyncQuestionPart } from "@/lib/chat/native-message-types";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import {
   nativeAsyncQuestionDraftKey,
+  promptDraftStore,
   usePromptDraftField,
-  usePromptDraftStore,
 } from "@/stores/promptDraftStore";
 import { AsyncQuestionResponseContext } from "./NativeMessage.shared";
 import { TextPart } from "./NativeMessage.file-parts";
@@ -92,6 +93,7 @@ export function NativeAsyncQuestionCard({ part }: { part: NativeAsyncQuestionPar
         ]),
       ),
   );
+  const drafts = useNodeScope().store(promptDraftStore);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const response = responses.find((candidate) => candidate.itemId === part.asyncQuestion.itemId);
@@ -114,7 +116,7 @@ export function NativeAsyncQuestionCard({ part }: { part: NativeAsyncQuestionPar
     setError(null);
     void respond(part.asyncQuestion.itemId, serializeAsyncQuestionAnswers(questions, answers))
       .then(() => {
-        if (draftKey) usePromptDraftStore.getState().clearDraft(draftKey);
+        if (draftKey) drafts.getState().clearDraft(draftKey);
       })
       .catch((reason: unknown) => {
         setError(reason instanceof Error ? reason.message : "Failed to queue answer");
@@ -123,8 +125,8 @@ export function NativeAsyncQuestionCard({ part }: { part: NativeAsyncQuestionPar
   };
 
   useEffect(() => {
-    if (response && draftKey) usePromptDraftStore.getState().clearDraft(draftKey);
-  }, [draftKey, response]);
+    if (response && draftKey) drafts.getState().clearDraft(draftKey);
+  }, [draftKey, drafts, response]);
 
   return (
     // ⌘↵ / Ctrl+Enter anywhere in the card (the text field or a picked

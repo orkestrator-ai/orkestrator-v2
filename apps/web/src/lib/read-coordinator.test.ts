@@ -7,13 +7,18 @@ import {
   createReadCoordinator,
   getReadCoordinator,
   notifyReadCoordinatorReconnected,
+  readCoordinatorFor,
   resetReadCoordinatorForTests,
+  setReadCoordinatorScopeHidden,
   type ReadContext,
   type ReadCoordinator,
   type ReadKey,
   type ReadState,
 } from "./read-coordinator";
+import type { BackendId } from "@orkestrator/protocol/federation";
+import { WindowScope } from "./node-scope/window-scope";
 import { createFakeReadEnvironment, flushMicrotasks as flush } from "./testing/read-coordinator";
+import { FakeNodeClient } from "@/test/render-in-node-scope";
 
 const setup = createFakeReadEnvironment;
 
@@ -374,6 +379,132 @@ describe("read coordinator: visibility, focus and reconnect", () => {
     expect(transport.calls).toHaveLength(2);
     await transport.resolveLast("reconciled");
     expect(sub.getState()).toMatchObject({ value: "reconciled", stale: false, revision: 2 });
+  });
+
+  test("a host-hidden document defers like a hidden one and re-reads on host-visible", async () => {
+    const { clock, document, coordinator } = setup();
+    const order: string[] = [];
+    const reads = (name: string) => async () => {
+      order.push(name);
+      return name;
+    };
+    coordinator.subscribe({
+      key: key({ resource: "metrics" }),
+      read: reads("metrics"),
+      readOnSubscribe: false,
+      demand: { intervalMs: 5_000, priority: "auxiliary" },
+    });
+    const session = coordinator.subscribe({
+      key: key({ resource: "session" }),
+      read: reads("session"),
+      demand: { priority: "critical" },
+    });
+    await flush();
+    expect(order).toEqual(["session"]);
+    order.length = 0;
+
+    // The page's own document stays visible; its embedder hid the frame.
+    coordinator.setHostHidden(true);
+    expect(coordinator.getDiagnostics()).toMatchObject({
+      paused: true,
+      hidden: true,
+      hostHidden: true,
+    });
+    session.invalidate();
+    await clock.advance(60_000);
+    expect(order).toEqual([]);
+    expect(clock.pending).toBe(0);
+    expect(session.getState()).toMatchObject({ value: "session", stale: true });
+    // Its own visibility returning does not resume a frame the window still hides.
+    document.setVisibility("hidden");
+    document.setVisibility("visible");
+    await clock.advance(1_000);
+    expect(order).toEqual([]);
+
+    coordinator.setHostHidden(false);
+    await clock.advance(CRITICAL_READ_RESUME_MAX_DELAY_MS);
+    expect(order).toEqual(["session"]);
+    expect(session.getState()).toMatchObject({ stale: false, revision: 2 });
+    await clock.advance(300);
+    expect(order).toEqual(["session", "metrics"]);
+    expect(coordinator.getDiagnostics()).toMatchObject({ paused: false, hostHidden: false });
+  });
+
+  test("a hidden node scope pauses only its own node's reads (plan item 4002)", async () => {
+    const { clock, coordinator } = setup();
+    // A second node's coordinator over the same window policy.
+    const other = createReadCoordinator({ clock, policy: coordinator.policy, random: () => 0 });
+    const order: string[] = [];
+    const subscribe = (target: ReadCoordinator, name: string) =>
+      target.subscribe({
+        key: key({ resource: name }),
+        read: async () => {
+          order.push(name);
+          return name;
+        },
+        readOnSubscribe: false,
+        demand: { intervalMs: 5_000, priority: "critical" },
+      });
+    subscribe(coordinator, "hidden-node");
+    subscribe(other, "shown-node");
+
+    coordinator.setScopeHidden(true);
+    expect(coordinator.getDiagnostics()).toMatchObject({
+      paused: true,
+      hidden: true,
+      scopeHidden: true,
+      hostHidden: false,
+    });
+    expect(other.getDiagnostics()).toMatchObject({ paused: false, scopeHidden: false });
+    expect(coordinator.policy.hostHidden()).toBe(false);
+    await clock.advance(10_000);
+    expect(order.filter((name) => name === "hidden-node")).toEqual([]);
+    expect(order.filter((name) => name === "shown-node").length).toBeGreaterThan(0);
+
+    order.length = 0;
+    coordinator.setScopeHidden(false);
+    await clock.advance(CRITICAL_READ_RESUME_MAX_DELAY_MS);
+    expect(order).toContain("hidden-node");
+    other.dispose();
+  });
+
+  test("a node's hidden flag is kept for its coordinator made later", () => {
+    const windowScope = new WindowScope();
+    windowScope.open({
+      role: "command",
+      client: new FakeNodeClient({ nodeId: "bk_command" as BackendId }),
+    });
+    const leaf = windowScope.open({
+      role: "leaf",
+      client: new FakeNodeClient({ nodeId: "bk_leaf" as BackendId }),
+    });
+    setReadCoordinatorScopeHidden(leaf, true);
+    expect(readCoordinatorFor(leaf).getDiagnostics()).toMatchObject({ scopeHidden: true });
+    setReadCoordinatorScopeHidden(leaf, false);
+    expect(readCoordinatorFor(leaf).getDiagnostics()).toMatchObject({ scopeHidden: false });
+    windowScope.dispose();
+    // A disposed scope is ignored.
+    setReadCoordinatorScopeHidden(leaf, true);
+  });
+
+  test("a host-visible frame of a hidden document stays paused", async () => {
+    const { clock, document, coordinator } = setup();
+    const transport = deferredTransport<string>();
+    coordinator.subscribe({
+      key: key(),
+      read: transport.read,
+      readOnSubscribe: false,
+      demand: { intervalMs: 1_000, priority: "critical" },
+    });
+    coordinator.setHostHidden(true);
+    document.setVisibility("hidden");
+    coordinator.setHostHidden(false);
+    await clock.advance(10_000);
+    expect(transport.calls).toHaveLength(0);
+    document.setVisibility("visible");
+    await clock.advance(READ_RESUME_COALESCE_MS);
+    expect(transport.calls).toHaveLength(1);
+    expect(transport.last().context.reason).toBe("resume");
   });
 
   test("visibility, focus and reconnect signals coalesce into one reconcile", async () => {

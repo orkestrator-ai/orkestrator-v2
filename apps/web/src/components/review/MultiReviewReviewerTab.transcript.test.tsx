@@ -1,11 +1,12 @@
 import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type {
   MultiReviewReviewerTranscript,
   MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
-import { useMultiReviewStore } from "@/stores/multiReviewStore";
+import { multiReviewStore } from "@/stores/multiReviewStore";
 import {
   MultiReviewReviewerTab,
   mergeMultiReviewReviewerTranscript,
@@ -13,6 +14,7 @@ import {
   toMultiReviewReviewerMessages,
   toMultiReviewSessionMessages,
 } from "./MultiReviewReviewerTab";
+import { appCommandStore } from "@/test/app-command-store";
 
 const STARTED_AT = "2026-09-14T22:00:00.000Z";
 
@@ -75,7 +77,7 @@ const data = {
 };
 
 beforeEach(() => {
-  useMultiReviewStore.setState({ workflows: new Map() });
+  appCommandStore(multiReviewStore).setState({ workflows: new Map() });
 });
 afterEach(() => {
   cleanup();
@@ -125,7 +127,7 @@ describe("conditional reviewer transcript reads", () => {
           ? transcript({ transcript: "unchanged", messages: [] })
           : transcript(),
     );
-    render(
+    renderInAppCommandScope(
       <MultiReviewReviewerTab
         data={data}
         isActive
@@ -141,9 +143,9 @@ describe("conditional reviewer transcript reads", () => {
   });
 
   test("a workflow checkpoint refreshes the active tab without waiting for the poll", async () => {
-    useMultiReviewStore.getState().replaceWorkflow(workflow(7));
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow(7));
     const loadTranscript = mock(async () => transcript());
-    render(
+    renderInAppCommandScope(
       <MultiReviewReviewerTab
         data={data}
         isActive
@@ -155,14 +157,14 @@ describe("conditional reviewer transcript reads", () => {
     await screen.findByText("opus · Read only");
     const callsBefore = loadTranscript.mock.calls.length;
 
-    act(() => useMultiReviewStore.getState().replaceWorkflow(workflow(8)));
+    act(() => appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow(8)));
     await waitFor(() => expect(loadTranscript.mock.calls.length).toBe(callsBefore + 1));
   });
 
   test("an inactive tab does not poll or react to checkpoints", async () => {
-    useMultiReviewStore.getState().replaceWorkflow(workflow(7));
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow(7));
     const loadTranscript = mock(async () => transcript());
-    render(
+    renderInAppCommandScope(
       <MultiReviewReviewerTab
         data={data}
         isActive={false}
@@ -170,7 +172,7 @@ describe("conditional reviewer transcript reads", () => {
         refreshIntervalMs={20}
       />,
     );
-    act(() => useMultiReviewStore.getState().replaceWorkflow(workflow(8)));
+    act(() => appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow(8)));
     await new Promise((resolve) => setTimeout(resolve, 80));
     expect(loadTranscript).not.toHaveBeenCalled();
   });

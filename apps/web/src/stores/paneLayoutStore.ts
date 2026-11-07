@@ -1,5 +1,4 @@
 import { createSessionKey } from "@/lib/utils";
-import { create } from "zustand";
 import type {
   BrowserAnnotationPanelState,
   GraphDesignerTabData,
@@ -17,15 +16,21 @@ import {
   sanitizeBrowserAnnotationPanelState,
 } from "@/types/paneLayout";
 import {
-  useTerminalSessionStore,
+  terminalSessionStore,
   // Distinct from the native `createSessionKey`: terminal keys also carry the
   // container id.
   createSessionKey as createTerminalSessionKey,
 } from "./terminalSessionStore";
 import { useTerminalPortalStore } from "./terminalPortalStore";
-import { createClaudeTmuxStateKey, useClaudeTmuxStore } from "./claudeTmuxStore";
-import { useNativeComposeStore } from "./nativeComposeStore";
+import { claudeTmuxStore, createClaudeTmuxStateKey } from "./claudeTmuxStore";
+import { nativeComposeStore } from "./nativeComposeStore";
 import * as backend from "@/lib/backend";
+import { createAgentHandoffsApi } from "@/lib/backend/agent-handoffs";
+import { backendApiForScope } from "@/lib/backend/client";
+import { createTerminalsApi } from "@/lib/backend/terminals";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { defineScopedStore } from "@/lib/node-scope/scoped-store";
+import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
 import { boundBrowserHistory, sanitizeBrowserHistoryForPersistence } from "@/lib/browser-history";
 import { createUuid } from "@/lib/uuid";
 import { destroyBrowserPreview } from "@/lib/native/browser-preview";
@@ -198,7 +203,7 @@ export function getAllLeaves(node: PaneNode): PaneLeaf[] {
   return [...getAllLeaves(node.children[0]), ...getAllLeaves(node.children[1])];
 }
 
-interface PaneLayoutState {
+export interface PaneLayoutState {
   // Per-environment state (keyed by environmentId)
   environments: Map<string, EnvironmentPaneState>;
   // Restore-on-connect state (keyed by environmentId)
@@ -364,8 +369,29 @@ function getEnvironmentPaneState(
 
 const TERMINAL_TAB_TYPES = new Set(["plain", "claude", "opencode", "codex", "pi", "root"]);
 
-function cleanupTerminalTab(envId: string, containerId: string | null, tabId: string) {
-  const sessionStore = useTerminalSessionStore.getState();
+/**
+ * The tab-teardown and handoff commands, on the scope's node. On the app's
+ * command scope these are the `@/lib/backend` named exports, read per call so
+ * a suite's module mock is seen.
+ */
+function tabTeardownBackend(scope: NodeScope) {
+  return backendApiForScope(scope, createTerminalsApi, { teardownTab: backend.teardownTab });
+}
+
+function agentHandoffBackend(scope: NodeScope) {
+  return backendApiForScope(scope, createAgentHandoffsApi, {
+    getAgentHandoffCapabilities: backend.getAgentHandoffCapabilities,
+    pruneAgentHandoffs: backend.pruneAgentHandoffs,
+  });
+}
+
+function cleanupTerminalTab(
+  scope: NodeScope,
+  envId: string,
+  containerId: string | null,
+  tabId: string,
+) {
+  const sessionStore = scope.store(terminalSessionStore).getState();
   const sessionKey = createTerminalSessionKey(containerId, tabId, envId);
   const sessionData = sessionStore.sessions.get(sessionKey);
   if (sessionData) {
@@ -375,7 +401,7 @@ function cleanupTerminalTab(envId: string, containerId: string | null, tabId: st
       sessionId: sessionData.sessionId,
     }));
   }
-  void backend
+  void tabTeardownBackend(scope)
     .teardownTab({
       environmentId: envId,
       tabId,
@@ -399,20 +425,21 @@ function cleanupTerminalTab(envId: string, containerId: string | null, tabId: st
  * resolves the provider session from its own persisted tab mapping.
  */
 function cleanupBackendNativeTab(
+  scope: NodeScope,
   envId: string,
   tabId: string,
   kind: "claude-native" | "codex-native" | "opencode-native",
   label: string,
 ) {
-  void backend
+  void tabTeardownBackend(scope)
     .teardownTab({ environmentId: envId, tabId, kind })
     .catch((err) => reportNativeTabTeardownFailure(envId, label, err));
 }
 
-function cleanupSharedNativeTab(envId: string, tab: TabInfo) {
+function cleanupSharedNativeTab(scope: NodeScope, envId: string, tab: TabInfo) {
   const data = getNativeAgentData(tab);
   if (data?.platform !== "cursor" && data?.platform !== "grok" && data?.platform !== "pi") return;
-  void backend
+  void tabTeardownBackend(scope)
     .teardownTab({
       environmentId: envId,
       tabId: tab.id,
@@ -422,23 +449,30 @@ function cleanupSharedNativeTab(envId: string, tab: TabInfo) {
     .catch((err) => reportNativeTabTeardownFailure(envId, "shared native", err));
 }
 
-function cleanupClaudeTmuxTab(envId: string, tabId: string) {
-  const store = useClaudeTmuxStore.getState();
+function cleanupClaudeTmuxTab(scope: NodeScope, envId: string, tabId: string) {
+  const store = scope.store(claudeTmuxStore).getState();
   store.resetTab(createClaudeTmuxStateKey(envId, tabId));
   // Also clear any legacy bare-key state that may exist from before the
   // (envId, tabId) composite key migration.
   store.resetTab(tabId);
-  void backend.teardownTab({ environmentId: envId, tabId, kind: "claude-tmux" }).catch((err) =>
-    log.debug("teardown.pending", () => ({
-      environmentId: envId,
-      tabId,
-      source: "tmux",
-      error: formatLogError(err),
-    })),
-  );
+  void tabTeardownBackend(scope)
+    .teardownTab({ environmentId: envId, tabId, kind: "claude-tmux" })
+    .catch((err) =>
+      log.debug("teardown.pending", () => ({
+        environmentId: envId,
+        tabId,
+        source: "tmux",
+        error: formatLogError(err),
+      })),
+    );
 }
 
-function cleanupTabResources(envId: string, containerId: string | null, tab: TabInfo) {
+function cleanupTabResources(
+  scope: NodeScope,
+  envId: string,
+  containerId: string | null,
+  tab: TabInfo,
+) {
   if (tab.type === "browser") {
     destroyBrowserPreview(tab.id).catch((err) => {
       log.debug("browser-preview.destroy-failed", () => ({
@@ -450,24 +484,26 @@ function cleanupTabResources(envId: string, containerId: string | null, tab: Tab
   }
 
   if (TERMINAL_TAB_TYPES.has(tab.type)) {
-    cleanupTerminalTab(envId, containerId, tab.id);
+    cleanupTerminalTab(scope, envId, containerId, tab.id);
     return;
   }
 
   if (tab.type === "agent-native") {
-    useNativeComposeStore.getState().clearSession(createSessionKey(envId, tab.id));
+    scope.store(nativeComposeStore).getState().clearSession(createSessionKey(envId, tab.id));
     const platform = getNativeAgentData(tab)?.platform;
-    if (platform === "claude") cleanupBackendNativeTab(envId, tab.id, "claude-native", "Claude");
+    if (platform === "claude")
+      cleanupBackendNativeTab(scope, envId, tab.id, "claude-native", "Claude");
     else if (platform === "opencode")
-      cleanupBackendNativeTab(envId, tab.id, "opencode-native", "OpenCode");
-    else if (platform === "codex") cleanupBackendNativeTab(envId, tab.id, "codex-native", "Codex");
+      cleanupBackendNativeTab(scope, envId, tab.id, "opencode-native", "OpenCode");
+    else if (platform === "codex")
+      cleanupBackendNativeTab(scope, envId, tab.id, "codex-native", "Codex");
     else if (platform === "cursor" || platform === "grok" || platform === "pi")
-      cleanupSharedNativeTab(envId, tab);
+      cleanupSharedNativeTab(scope, envId, tab);
     return;
   }
 
   if (tab.type === "claude-tmux") {
-    cleanupClaudeTmuxTab(envId, tab.id);
+    cleanupClaudeTmuxTab(scope, envId, tab.id);
   }
 }
 
@@ -480,12 +516,13 @@ function cleanupTabResources(envId: string, containerId: string | null, tab: Tab
  * closes/detaches it and records the persistent session as disconnected.
  */
 function cleanupLocalTabResources(
+  scope: NodeScope,
   envId: string,
   containerId: string | null,
   tab: TabInfo,
   permanent = false,
 ): void {
-  useTerminalPortalStore.getState().disposeTerminal(envId, tab.id);
+  useTerminalPortalStore.getState().disposeTerminal(scope.nodeId, envId, tab.id);
 
   if (tab.type === "browser") {
     destroyBrowserPreview(tab.id).catch((err) => {
@@ -498,17 +535,17 @@ function cleanupLocalTabResources(
   }
 
   if (TERMINAL_TAB_TYPES.has(tab.type)) {
-    cleanupTerminalTab(envId, containerId, tab.id);
+    cleanupTerminalTab(scope, envId, containerId, tab.id);
     return;
   }
 
   if (tab.type === "agent-native") {
-    const store = useNativeComposeStore.getState();
+    const store = scope.store(nativeComposeStore).getState();
     const key = createSessionKey(envId, tab.id);
     if (permanent) store.clearSession(key);
   }
   if (tab.type === "claude-tmux") {
-    const store = useClaudeTmuxStore.getState();
+    const store = scope.store(claudeTmuxStore).getState();
     store.resetTab(createClaudeTmuxStateKey(envId, tab.id));
     store.resetTab(tab.id);
   }
@@ -523,18 +560,26 @@ function tabHandoffIds(tab: TabInfo): string[] {
  * the backend prunes the stored record when the layout write reaches it, on the
  * authoritative tree rather than this client's copy.
  */
-function forgetRemovedAgentHandoffs(removedTabs: TabInfo[], remainingRoot: PaneNode): void {
+function forgetRemovedAgentHandoffs(
+  scope: NodeScope,
+  removedTabs: TabInfo[],
+  remainingRoot: PaneNode,
+): void {
   const remainingHandoffIds = new Set(
     getAllLeaves(remainingRoot)
       .flatMap((leaf) => leaf.tabs)
       .flatMap(tabHandoffIds),
   );
   for (const handoffId of new Set(removedTabs.flatMap(tabHandoffIds))) {
-    if (!remainingHandoffIds.has(handoffId)) forgetAgentHandoff(handoffId);
+    if (!remainingHandoffIds.has(handoffId)) forgetAgentHandoff(handoffId, scope);
   }
 }
 
-function forgetUnreferencedAgentHandoffs(previousRoot: PaneNode, remainingRoot: PaneNode): void {
+function forgetUnreferencedAgentHandoffs(
+  scope: NodeScope,
+  previousRoot: PaneNode,
+  remainingRoot: PaneNode,
+): void {
   const previousHandoffIds = new Set(
     getAllLeaves(previousRoot)
       .flatMap((leaf) => leaf.tabs)
@@ -546,7 +591,7 @@ function forgetUnreferencedAgentHandoffs(previousRoot: PaneNode, remainingRoot: 
       .flatMap(tabHandoffIds),
   );
   for (const handoffId of previousHandoffIds) {
-    if (!remainingHandoffIds.has(handoffId)) forgetAgentHandoff(handoffId);
+    if (!remainingHandoffIds.has(handoffId)) forgetAgentHandoff(handoffId, scope);
   }
 }
 
@@ -558,14 +603,15 @@ function forgetUnreferencedAgentHandoffs(previousRoot: PaneNode, remainingRoot: 
  * An older backend only ever pruned when a renderer asked, so without this a
  * sensitive transcript would stay on disk until the environment was deleted.
  */
-function pruneUnreferencedAgentHandoffs(envId: string, root: PaneNode): void {
+function pruneUnreferencedAgentHandoffs(scope: NodeScope, envId: string, root: PaneNode): void {
   const referenced = getAllLeaves(root)
     .flatMap((leaf) => leaf.tabs)
     .flatMap(tabHandoffIds);
   void Promise.resolve()
     .then(async () => {
-      const capabilities = await backend.getAgentHandoffCapabilities();
-      if (!capabilities.pruning) await backend.pruneAgentHandoffs(envId, referenced);
+      const api = agentHandoffBackend(scope);
+      const capabilities = await api.getAgentHandoffCapabilities();
+      if (!capabilities.pruning) await api.pruneAgentHandoffs(envId, referenced);
     })
     .catch((error) => {
       log.debug("handoffs.prune-failed", () => ({
@@ -575,404 +621,450 @@ function pruneUnreferencedAgentHandoffs(envId: string, root: PaneNode): void {
     });
 }
 
-export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
-  environments: new Map(),
-  hydration: new Map(),
-  activeEnvironmentId: null,
+/**
+ * One node's pane layouts (plan item 3013). Pane ids (`"default"`) and tab ids
+ * are only unique within a node, so every node scope has its own instance:
+ * two nodes' identical ids never meet. Tab teardown reaches the scope's own
+ * node, its terminal sessions, tmux, compose drafts, terminal portals and
+ * handoff cache.
+ */
+export const paneLayoutStore = defineScopedStore<PaneLayoutState>(
+  "pane-layout",
+  (scope) => (set, get) => ({
+    environments: new Map(),
+    hydration: new Map(),
+    activeEnvironmentId: null,
 
-  // Getter functions for current environment state
-  getRoot: (environmentId) => getEnvironmentPaneState(get(), environmentId).root,
-  getActivePaneId: (environmentId) => getEnvironmentPaneState(get(), environmentId).activePaneId,
-  getContainerId: (environmentId) => getEnvironmentPaneState(get(), environmentId).containerId,
+    // Getter functions for current environment state
+    getRoot: (environmentId) => getEnvironmentPaneState(get(), environmentId).root,
+    getActivePaneId: (environmentId) => getEnvironmentPaneState(get(), environmentId).activePaneId,
+    getContainerId: (environmentId) => getEnvironmentPaneState(get(), environmentId).containerId,
 
-  setActiveEnvironment: (environmentId: string) => {
-    const state = get();
-    if (state.activeEnvironmentId === environmentId) return;
+    setActiveEnvironment: (environmentId: string) => {
+      const state = get();
+      if (state.activeEnvironmentId === environmentId) return;
 
-    log.debug("environment.activated", () => ({ environmentId }));
+      log.debug("environment.activated", () => ({ environmentId }));
 
-    // Ensure the environment has state (create if not exists)
-    if (!state.environments.has(environmentId)) {
+      // Ensure the environment has state (create if not exists)
+      if (!state.environments.has(environmentId)) {
+        const newEnvs = new Map(state.environments);
+        newEnvs.set(environmentId, {
+          root: createInitialLayout(),
+          activePaneId: "default",
+          containerId: null,
+          backendRevision: 0,
+        });
+        set({ environments: newEnvs, activeEnvironmentId: environmentId });
+      } else {
+        set({ activeEnvironmentId: environmentId });
+      }
+    },
+
+    initialize: (containerId, environmentId) => {
+      const state = get();
+      const envId = environmentId ?? state.activeEnvironmentId;
+      if (!envId) {
+        log.warn("environment.initialize-skipped");
+        return;
+      }
+
+      log.debug("environment.initialized", () => ({ environmentId: envId, containerId }));
+
+      const existing = state.environments.get(envId);
+      const existingTabs = existing ? getAllLeaves(existing.root).flatMap((leaf) => leaf.tabs) : [];
       const newEnvs = new Map(state.environments);
-      newEnvs.set(environmentId, {
+      // A tab can already be here: the build supervisor inserts its tab as soon
+      // as the backend returns a pipeline, which is before this container mounts.
+      // Replacing the root wholesale would drop it, and nothing re-adds it.
+      // Adopting the existing layout still records the containerId, which is what
+      // the terminal session keys are built from.
+      newEnvs.set(
+        envId,
+        existingTabs.length > 0
+          ? { ...existing!, containerId }
+          : {
+              root: createInitialLayout(),
+              activePaneId: "default",
+              containerId,
+              backendRevision: 0,
+            },
+      );
+      set({ environments: newEnvs });
+    },
+
+    reset: (environmentId) => {
+      const state = get();
+      const envId = environmentId ?? state.activeEnvironmentId;
+      if (!envId) return;
+
+      const envState = state.environments.get(envId);
+
+      const terminalPortalStore = useTerminalPortalStore.getState();
+      const containerId = envState?.containerId ?? null;
+
+      const envTabs = envState ? getAllLeaves(envState.root).flatMap((leaf) => leaf.tabs) : [];
+      envTabs.forEach((tab) => {
+        // Reset discards runtime views, not the durable tabs. A native teardown
+        // intent would outlive an unavailable bridge and close the session after
+        // the next start restores and re-adopts it.
+        cleanupLocalTabResources(scope, envId, containerId, tab);
+      });
+
+      // Clear all terminal instances from portal store for this environment
+      log.debug("environment.terminals-cleared", () => ({ environmentId: envId }));
+      terminalPortalStore.clearTerminalsForEnvironment(scope.nodeId, envId);
+
+      const newEnvs = new Map(state.environments);
+      newEnvs.set(envId, {
         root: createInitialLayout(),
         activePaneId: "default",
         containerId: null,
         backendRevision: 0,
       });
-      set({ environments: newEnvs, activeEnvironmentId: environmentId });
-    } else {
-      set({ activeEnvironmentId: environmentId });
-    }
-  },
+      // The persisted layout outlives the runtime (agent tabs and their sessions
+      // survive a stop), so the next start must restore it from the backend
+      // rather than seed a default terminal over an empty local copy.
+      const hydration = new Map(state.hydration);
+      hydration.delete(envId);
+      set({ environments: newEnvs, hydration });
+    },
 
-  initialize: (containerId, environmentId) => {
-    const state = get();
-    const envId = environmentId ?? state.activeEnvironmentId;
-    if (!envId) {
-      log.warn("environment.initialize-skipped");
-      return;
-    }
-
-    log.debug("environment.initialized", () => ({ environmentId: envId, containerId }));
-
-    const existing = state.environments.get(envId);
-    const existingTabs = existing ? getAllLeaves(existing.root).flatMap((leaf) => leaf.tabs) : [];
-    const newEnvs = new Map(state.environments);
-    // A tab can already be here: the build supervisor inserts its tab as soon
-    // as the backend returns a pipeline, which is before this container mounts.
-    // Replacing the root wholesale would drop it, and nothing re-adds it.
-    // Adopting the existing layout still records the containerId, which is what
-    // the terminal session keys are built from.
-    newEnvs.set(
-      envId,
-      existingTabs.length > 0
-        ? { ...existing!, containerId }
-        : {
-            root: createInitialLayout(),
-            activePaneId: "default",
-            containerId,
-            backendRevision: 0,
-          },
-    );
-    set({ environments: newEnvs });
-  },
-
-  reset: (environmentId) => {
-    const state = get();
-    const envId = environmentId ?? state.activeEnvironmentId;
-    if (!envId) return;
-
-    const envState = state.environments.get(envId);
-
-    const terminalPortalStore = useTerminalPortalStore.getState();
-    const containerId = envState?.containerId ?? null;
-
-    const envTabs = envState ? getAllLeaves(envState.root).flatMap((leaf) => leaf.tabs) : [];
-    envTabs.forEach((tab) => {
-      // Reset discards runtime views, not the durable tabs. A native teardown
-      // intent would outlive an unavailable bridge and close the session after
-      // the next start restores and re-adopts it.
-      cleanupLocalTabResources(envId, containerId, tab);
-    });
-
-    // Clear all terminal instances from portal store for this environment
-    log.debug("environment.terminals-cleared", () => ({ environmentId: envId }));
-    terminalPortalStore.clearTerminalsForEnvironment(envId);
-
-    const newEnvs = new Map(state.environments);
-    newEnvs.set(envId, {
-      root: createInitialLayout(),
-      activePaneId: "default",
-      containerId: null,
-      backendRevision: 0,
-    });
-    // The persisted layout outlives the runtime (agent tabs and their sessions
-    // survive a stop), so the next start must restore it from the backend
-    // rather than seed a default terminal over an empty local copy.
-    const hydration = new Map(state.hydration);
-    hydration.delete(envId);
-    set({ environments: newEnvs, hydration });
-  },
-
-  beginHydration: (environmentId) => {
-    const state = get();
-    if (state.hydration.has(environmentId)) return;
-    const hydration = new Map(state.hydration);
-    hydration.set(environmentId, "pending");
-    set({ hydration });
-  },
-
-  finishHydration: (environmentId, restored) => {
-    const state = get();
-    const hydration = new Map(state.hydration);
-    hydration.set(environmentId, "done");
-
-    if (!restored) {
+    beginHydration: (environmentId) => {
+      const state = get();
+      if (state.hydration.has(environmentId)) return;
+      const hydration = new Map(state.hydration);
+      hydration.set(environmentId, "pending");
       set({ hydration });
-      // Nothing was restored, so no tab in this environment references a
-      // handoff. Any stored record is orphaned.
-      pruneUnreferencedAgentHandoffs(
-        environmentId,
-        state.environments.get(environmentId)?.root ?? createInitialLayout(),
-      );
-      return;
-    }
+    },
 
-    const environments = new Map(state.environments);
-    const reconciled = mergeTabsAddedDuringHydration(
-      state.environments.get(environmentId),
-      restored,
-    );
-    environments.set(environmentId, reconciled);
-    set({ environments, hydration });
-    pruneUnreferencedAgentHandoffs(environmentId, reconciled.root);
-  },
+    finishHydration: (environmentId, restored) => {
+      const state = get();
+      const hydration = new Map(state.hydration);
+      hydration.set(environmentId, "done");
 
-  applyAuthoritativeLayout: (environmentId, restored) => {
-    const state = get();
-    // Hydration must have settled so a snapshot cannot clobber an in-flight
-    // restore. A missing local record is still installable: a backend-owned
-    // native launch can finish hydrating to null, then a later pane-layout
-    // announcement has to be able to create the environment rather than
-    // no-op forever.
-    if (state.hydration.get(environmentId) !== "done") {
-      return;
-    }
-
-    const current = state.environments.get(environmentId);
-    const restoredTabs = getAllLeaves(restored.root).flatMap((leaf) => leaf.tabs);
-    const restoredTabIds = new Set(restoredTabs.map((tab) => tab.id));
-    if (current) {
-      const removedTabs = getAllLeaves(current.root)
-        .flatMap((leaf) => leaf.tabs)
-        .filter((tab) => !restoredTabIds.has(tab.id));
-      for (const tab of removedTabs) {
-        cleanupLocalTabResources(environmentId, current.containerId, tab, true);
+      if (!restored) {
+        set({ hydration });
+        // Nothing was restored, so no tab in this environment references a
+        // handoff. Any stored record is orphaned.
+        pruneUnreferencedAgentHandoffs(
+          scope,
+          environmentId,
+          state.environments.get(environmentId)?.root ?? createInitialLayout(),
+        );
+        return;
       }
-    }
 
-    const environments = new Map(state.environments);
-    environments.set(environmentId, restored);
-    set({ environments });
-    if (current) {
-      forgetUnreferencedAgentHandoffs(current.root, restored.root);
-    }
-    pruneUnreferencedAgentHandoffs(environmentId, restored.root);
-  },
+      const environments = new Map(state.environments);
+      const reconciled = mergeTabsAddedDuringHydration(
+        state.environments.get(environmentId),
+        restored,
+      );
+      environments.set(environmentId, reconciled);
+      set({ environments, hydration });
+      pruneUnreferencedAgentHandoffs(scope, environmentId, reconciled.root);
+    },
 
-  addTab: (paneId, tab, environmentId, options) => {
-    const state = get();
-    // Use explicit environmentId if provided, otherwise fall back to activeEnvironmentId
-    const envId = environmentId ?? state.activeEnvironmentId;
-    if (!envId) return;
+    applyAuthoritativeLayout: (environmentId, restored) => {
+      const state = get();
+      // Hydration must have settled so a snapshot cannot clobber an in-flight
+      // restore. A missing local record is still installable: a backend-owned
+      // native launch can finish hydrating to null, then a later pane-layout
+      // announcement has to be able to create the environment rather than
+      // no-op forever.
+      if (state.hydration.get(environmentId) !== "done") {
+        return;
+      }
 
-    const envState = state.environments.get(envId);
-    if (!envState) return;
+      const current = state.environments.get(environmentId);
+      const restoredTabs = getAllLeaves(restored.root).flatMap((leaf) => leaf.tabs);
+      const restoredTabIds = new Set(restoredTabs.map((tab) => tab.id));
+      if (current) {
+        const removedTabs = getAllLeaves(current.root)
+          .flatMap((leaf) => leaf.tabs)
+          .filter((tab) => !restoredTabIds.has(tab.id));
+        for (const tab of removedTabs) {
+          cleanupLocalTabResources(scope, environmentId, current.containerId, tab, true);
+        }
+      }
 
-    // Check if a tab with this ID already exists in any pane
-    const existingPane = findPaneWithTab(envState.root, tab.id);
-    if (existingPane) {
-      // Tab already exists - just activate it instead of duplicating
-      log.debug("tab.reactivated", () => ({ tabId: tab.id, paneId: existingPane.id }));
-      const newRoot = updateLeaf(envState.root, existingPane.id, (leaf) => ({
+      const environments = new Map(state.environments);
+      environments.set(environmentId, restored);
+      set({ environments });
+      if (current) {
+        forgetUnreferencedAgentHandoffs(scope, current.root, restored.root);
+      }
+      pruneUnreferencedAgentHandoffs(scope, environmentId, restored.root);
+    },
+
+    addTab: (paneId, tab, environmentId, options) => {
+      const state = get();
+      // Use explicit environmentId if provided, otherwise fall back to activeEnvironmentId
+      const envId = environmentId ?? state.activeEnvironmentId;
+      if (!envId) return;
+
+      const envState = state.environments.get(envId);
+      if (!envState) return;
+
+      // Check if a tab with this ID already exists in any pane
+      const existingPane = findPaneWithTab(envState.root, tab.id);
+      if (existingPane) {
+        // Tab already exists - just activate it instead of duplicating
+        log.debug("tab.reactivated", () => ({ tabId: tab.id, paneId: existingPane.id }));
+        const newRoot = updateLeaf(envState.root, existingPane.id, (leaf) => ({
+          ...leaf,
+          activeTabId: tab.id,
+        }));
+        const newEnvs = new Map(state.environments);
+        newEnvs.set(envId, { ...envState, root: newRoot, activePaneId: existingPane.id });
+        set({ environments: newEnvs });
+        return;
+      }
+
+      // Every newly-created native tab immediately carries the canonical
+      // provider-neutral identity, even while legacy fields remain for callers
+      // restored from older pane records.
+      const nativeAgentData = getNativeAgentData(tab);
+      const canonicalTab = nativeAgentData ? { ...tab, nativeAgentData } : tab;
+
+      // Tab doesn't exist - add it to the specified pane
+      const newRoot = updateLeaf(envState.root, paneId, (leaf) => ({
         ...leaf,
-        activeTabId: tab.id,
+        tabs: [...leaf.tabs, canonicalTab],
+        activeTabId: options?.activate === false && leaf.activeTabId ? leaf.activeTabId : tab.id,
       }));
+
       const newEnvs = new Map(state.environments);
-      newEnvs.set(envId, { ...envState, root: newRoot, activePaneId: existingPane.id });
+      newEnvs.set(envId, { ...envState, root: newRoot });
       set({ environments: newEnvs });
-      return;
-    }
+    },
 
-    // Every newly-created native tab immediately carries the canonical
-    // provider-neutral identity, even while legacy fields remain for callers
-    // restored from older pane records.
-    const nativeAgentData = getNativeAgentData(tab);
-    const canonicalTab = nativeAgentData ? { ...tab, nativeAgentData } : tab;
+    canAddTabInSplit: (paneId, environmentId) => {
+      const state = get();
+      const environment = state.environments.get(environmentId);
+      return Boolean(
+        environment &&
+        state.hydration.get(environmentId) === "done" &&
+        findLeaf(environment.root, paneId) &&
+        getDepth(environment.root) < MAX_SPLIT_DEPTH,
+      );
+    },
 
-    // Tab doesn't exist - add it to the specified pane
-    const newRoot = updateLeaf(envState.root, paneId, (leaf) => ({
-      ...leaf,
-      tabs: [...leaf.tabs, canonicalTab],
-      activeTabId: options?.activate === false && leaf.activeTabId ? leaf.activeTabId : tab.id,
-    }));
+    addTabInSplit: (paneId, tab, environmentId) => {
+      const state = get();
+      const environment = state.environments.get(environmentId);
+      if (!environment || state.hydration.get(environmentId) !== "done") return false;
+      const leaf = findLeaf(environment.root, paneId);
+      const depth = getDepth(environment.root);
+      if (!leaf || depth >= MAX_SPLIT_DEPTH || findPaneWithTab(environment.root, tab.id))
+        return false;
+      const newPane: PaneLeaf = {
+        kind: "leaf",
+        id: generateId("pane"),
+        tabs: [tab],
+        activeTabId: tab.id,
+      };
+      const split: PaneSplit = {
+        kind: "split",
+        id: generateId("split"),
+        direction: "horizontal",
+        children: [leaf, newPane],
+        sizes: [35, 65],
+        depth: depth + 1,
+      };
+      // Publish creation and placement together: otherwise the persistence merge
+      // can observe the new tab in its temporary pane and undo the split.
+      const environments = new Map(state.environments);
+      environments.set(environmentId, {
+        ...environment,
+        root: replaceNode(environment.root, paneId, split),
+        activePaneId: newPane.id,
+      });
+      set({ environments });
+      return true;
+    },
 
-    const newEnvs = new Map(state.environments);
-    newEnvs.set(envId, { ...envState, root: newRoot });
-    set({ environments: newEnvs });
-  },
+    removeTab: (paneId, tabId, environmentId) => {
+      const state = get();
+      const envId = environmentId ?? state.activeEnvironmentId;
+      if (!envId) return;
 
-  canAddTabInSplit: (paneId, environmentId) => {
-    const state = get();
-    const environment = state.environments.get(environmentId);
-    return Boolean(
-      environment &&
-      state.hydration.get(environmentId) === "done" &&
-      findLeaf(environment.root, paneId) &&
-      getDepth(environment.root) < MAX_SPLIT_DEPTH,
-    );
-  },
+      const envState = state.environments.get(envId);
+      if (!envState) return;
 
-  addTabInSplit: (paneId, tab, environmentId) => {
-    const state = get();
-    const environment = state.environments.get(environmentId);
-    if (!environment || state.hydration.get(environmentId) !== "done") return false;
-    const leaf = findLeaf(environment.root, paneId);
-    const depth = getDepth(environment.root);
-    if (!leaf || depth >= MAX_SPLIT_DEPTH || findPaneWithTab(environment.root, tab.id))
-      return false;
-    const newPane: PaneLeaf = {
-      kind: "leaf",
-      id: generateId("pane"),
-      tabs: [tab],
-      activeTabId: tab.id,
-    };
-    const split: PaneSplit = {
-      kind: "split",
-      id: generateId("split"),
-      direction: "horizontal",
-      children: [leaf, newPane],
-      sizes: [35, 65],
-      depth: depth + 1,
-    };
-    // Publish creation and placement together: otherwise the persistence merge
-    // can observe the new tab in its temporary pane and undo the split.
-    const environments = new Map(state.environments);
-    environments.set(environmentId, {
-      ...environment,
-      root: replaceNode(environment.root, paneId, split),
-      activePaneId: newPane.id,
-    });
-    set({ environments });
-    return true;
-  },
+      const leaf = findLeaf(envState.root, paneId);
+      if (!leaf) return;
 
-  removeTab: (paneId, tabId, environmentId) => {
-    const state = get();
-    const envId = environmentId ?? state.activeEnvironmentId;
-    if (!envId) return;
+      const closedTab = leaf.tabs.find((t) => t.id === tabId);
+      if (!closedTab) return;
 
-    const envState = state.environments.get(envId);
-    if (!envState) return;
+      const remainingTabs = leaf.tabs.filter((t) => t.id !== tabId);
 
-    const leaf = findLeaf(envState.root, paneId);
-    if (!leaf) return;
+      // If this was the last tab, close the pane
+      if (remainingTabs.length === 0) {
+        const parentSplit = findParentSplit(envState.root, paneId);
+        if (parentSplit) {
+          get().closePane(paneId, envId);
+        } else {
+          cleanupTabResources(scope, envId, envState.containerId, closedTab);
+          useTerminalPortalStore.getState().disposeTerminal(scope.nodeId, envId, tabId);
+          const newRoot = updateLeaf(envState.root, paneId, () => ({
+            ...leaf,
+            tabs: [],
+            activeTabId: null,
+          }));
+          const newEnvs = new Map(state.environments);
+          newEnvs.set(envId, { ...envState, root: newRoot });
+          set({ environments: newEnvs });
+          forgetRemovedAgentHandoffs(scope, [closedTab], newRoot);
+        }
+        return;
+      }
 
-    const closedTab = leaf.tabs.find((t) => t.id === tabId);
-    if (!closedTab) return;
+      cleanupTabResources(scope, envId, envState.containerId, closedTab);
+      useTerminalPortalStore.getState().disposeTerminal(scope.nodeId, envId, tabId);
 
-    const remainingTabs = leaf.tabs.filter((t) => t.id !== tabId);
+      // Update the leaf with remaining tabs
+      const newActiveTabId =
+        leaf.activeTabId === tabId
+          ? (remainingTabs[remainingTabs.length - 1]?.id ?? null)
+          : leaf.activeTabId;
 
-    // If this was the last tab, close the pane
-    if (remainingTabs.length === 0) {
-      const parentSplit = findParentSplit(envState.root, paneId);
-      if (parentSplit) {
-        get().closePane(paneId, envId);
-      } else {
-        cleanupTabResources(envId, envState.containerId, closedTab);
-        useTerminalPortalStore.getState().disposeTerminal(envId, tabId);
-        const newRoot = updateLeaf(envState.root, paneId, () => ({
+      const newRoot = updateLeaf(envState.root, paneId, () => ({
+        ...leaf,
+        tabs: remainingTabs,
+        activeTabId: newActiveTabId,
+      }));
+
+      const newEnvs = new Map(state.environments);
+      newEnvs.set(envId, { ...envState, root: newRoot });
+      set({ environments: newEnvs });
+      forgetRemovedAgentHandoffs(scope, [closedTab], newRoot);
+    },
+
+    setActiveTab: (paneId, tabId, environmentId) => {
+      const state = get();
+      const envId = environmentId ?? state.activeEnvironmentId;
+      if (!envId) return;
+
+      const envState = state.environments.get(envId);
+      if (!envState) return;
+      const pane = findLeaf(envState.root, paneId);
+      if (!pane || !pane.tabs.some((tab) => tab.id === tabId)) return;
+
+      const newRoot = updateLeaf(envState.root, paneId, (leaf) => ({
+        ...leaf,
+        activeTabId: tabId,
+      }));
+
+      const newEnvs = new Map(state.environments);
+      newEnvs.set(envId, { ...envState, root: newRoot, activePaneId: paneId });
+      set({ environments: newEnvs });
+    },
+
+    moveTab: (fromPaneId, toPaneId, tabId, toIndex, environmentId) => {
+      const state = get();
+      const envId = environmentId ?? state.activeEnvironmentId;
+      if (!envId) {
+        log.warn("tab.move-failed", { tabId, reason: "no-active-environment" });
+        return;
+      }
+
+      const envState = state.environments.get(envId);
+      if (!envState) {
+        log.warn("tab.move-failed", {
+          environmentId: envId,
+          tabId,
+          reason: "no-environment-state",
+        });
+        return;
+      }
+
+      const fromLeaf = findLeaf(envState.root, fromPaneId);
+      const toLeaf = findLeaf(envState.root, toPaneId);
+      if (!fromLeaf || !toLeaf) {
+        log.warn("tab.move-failed", {
+          environmentId: envId,
+          tabId,
+          reason: "pane-not-found",
+          fromPaneId,
+          toPaneId,
+          fromLeaf: !!fromLeaf,
+          toLeaf: !!toLeaf,
+        });
+        return;
+      }
+
+      const tab = fromLeaf.tabs.find((t) => t.id === tabId);
+      if (!tab) {
+        log.warn("tab.move-failed", {
+          environmentId: envId,
+          tabId,
+          reason: "tab-not-found",
+          availableTabCount: fromLeaf.tabs.length,
+        });
+        return;
+      }
+
+      log.debug("tab.move-started", () => ({ fromPaneId, toPaneId, tabId }));
+
+      // If moving within the same pane, just reorder
+      if (fromPaneId === toPaneId) {
+        const fromIndex = fromLeaf.tabs.findIndex((t) => t.id === tabId);
+        if (toIndex !== undefined && fromIndex !== toIndex) {
+          get().reorderTabs(fromPaneId, fromIndex, toIndex, envId);
+        }
+        return;
+      }
+
+      // Remove from source
+      const remainingTabs = fromLeaf.tabs.filter((t) => t.id !== tabId);
+
+      // If source pane will be empty, we need to close it
+      if (remainingTabs.length === 0) {
+        // Remove the tab before collapsing the source so moving a live tab does
+        // not look like closing it and trigger resource cleanup.
+        let newRoot = updateLeaf(envState.root, fromPaneId, (leaf) => ({
           ...leaf,
           tabs: [],
           activeTabId: null,
         }));
+        newRoot = updateLeaf(newRoot, toPaneId, (leaf) => {
+          const newTabs = [...leaf.tabs];
+          if (toIndex !== undefined) {
+            newTabs.splice(toIndex, 0, tab);
+          } else {
+            newTabs.push(tab);
+          }
+          return {
+            ...leaf,
+            tabs: newTabs,
+            activeTabId: tab.id,
+          };
+        });
+        const sourceParent = findParentSplit(newRoot, fromPaneId);
+        if (!sourceParent) return;
+        const siblingIndex = sourceParent.children[0].id === fromPaneId ? 1 : 0;
+        newRoot = replaceNode(newRoot, sourceParent.id, sourceParent.children[siblingIndex]);
+
         const newEnvs = new Map(state.environments);
-        newEnvs.set(envId, { ...envState, root: newRoot });
+        newEnvs.set(envId, { ...envState, root: newRoot, activePaneId: toPaneId });
         set({ environments: newEnvs });
-        forgetRemovedAgentHandoffs([closedTab], newRoot);
+        return;
       }
-      return;
-    }
 
-    cleanupTabResources(envId, envState.containerId, closedTab);
-    useTerminalPortalStore.getState().disposeTerminal(envId, tabId);
-
-    // Update the leaf with remaining tabs
-    const newActiveTabId =
-      leaf.activeTabId === tabId
-        ? (remainingTabs[remainingTabs.length - 1]?.id ?? null)
-        : leaf.activeTabId;
-
-    const newRoot = updateLeaf(envState.root, paneId, () => ({
-      ...leaf,
-      tabs: remainingTabs,
-      activeTabId: newActiveTabId,
-    }));
-
-    const newEnvs = new Map(state.environments);
-    newEnvs.set(envId, { ...envState, root: newRoot });
-    set({ environments: newEnvs });
-    forgetRemovedAgentHandoffs([closedTab], newRoot);
-  },
-
-  setActiveTab: (paneId, tabId, environmentId) => {
-    const state = get();
-    const envId = environmentId ?? state.activeEnvironmentId;
-    if (!envId) return;
-
-    const envState = state.environments.get(envId);
-    if (!envState) return;
-    const pane = findLeaf(envState.root, paneId);
-    if (!pane || !pane.tabs.some((tab) => tab.id === tabId)) return;
-
-    const newRoot = updateLeaf(envState.root, paneId, (leaf) => ({
-      ...leaf,
-      activeTabId: tabId,
-    }));
-
-    const newEnvs = new Map(state.environments);
-    newEnvs.set(envId, { ...envState, root: newRoot, activePaneId: paneId });
-    set({ environments: newEnvs });
-  },
-
-  moveTab: (fromPaneId, toPaneId, tabId, toIndex, environmentId) => {
-    const state = get();
-    const envId = environmentId ?? state.activeEnvironmentId;
-    if (!envId) {
-      log.warn("tab.move-failed", { tabId, reason: "no-active-environment" });
-      return;
-    }
-
-    const envState = state.environments.get(envId);
-    if (!envState) {
-      log.warn("tab.move-failed", {
-        environmentId: envId,
-        tabId,
-        reason: "no-environment-state",
-      });
-      return;
-    }
-
-    const fromLeaf = findLeaf(envState.root, fromPaneId);
-    const toLeaf = findLeaf(envState.root, toPaneId);
-    if (!fromLeaf || !toLeaf) {
-      log.warn("tab.move-failed", {
-        environmentId: envId,
-        tabId,
-        reason: "pane-not-found",
-        fromPaneId,
-        toPaneId,
-        fromLeaf: !!fromLeaf,
-        toLeaf: !!toLeaf,
-      });
-      return;
-    }
-
-    const tab = fromLeaf.tabs.find((t) => t.id === tabId);
-    if (!tab) {
-      log.warn("tab.move-failed", {
-        environmentId: envId,
-        tabId,
-        reason: "tab-not-found",
-        availableTabCount: fromLeaf.tabs.length,
-      });
-      return;
-    }
-
-    log.debug("tab.move-started", () => ({ fromPaneId, toPaneId, tabId }));
-
-    // If moving within the same pane, just reorder
-    if (fromPaneId === toPaneId) {
-      const fromIndex = fromLeaf.tabs.findIndex((t) => t.id === tabId);
-      if (toIndex !== undefined && fromIndex !== toIndex) {
-        get().reorderTabs(fromPaneId, fromIndex, toIndex, envId);
-      }
-      return;
-    }
-
-    // Remove from source
-    const remainingTabs = fromLeaf.tabs.filter((t) => t.id !== tabId);
-
-    // If source pane will be empty, we need to close it
-    if (remainingTabs.length === 0) {
-      // Remove the tab before collapsing the source so moving a live tab does
-      // not look like closing it and trigger resource cleanup.
+      // Both panes will have tabs after the move
+      // Remove from source
       let newRoot = updateLeaf(envState.root, fromPaneId, (leaf) => ({
         ...leaf,
-        tabs: [],
-        activeTabId: null,
+        tabs: remainingTabs,
+        activeTabId:
+          leaf.activeTabId === tabId
+            ? (remainingTabs[remainingTabs.length - 1]?.id ?? null)
+            : leaf.activeTabId,
       }));
+
+      // Add to target
       newRoot = updateLeaf(newRoot, toPaneId, (leaf) => {
         const newTabs = [...leaf.tabs];
         if (toIndex !== undefined) {
@@ -986,867 +1078,847 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
           activeTabId: tab.id,
         };
       });
-      const sourceParent = findParentSplit(newRoot, fromPaneId);
-      if (!sourceParent) return;
-      const siblingIndex = sourceParent.children[0].id === fromPaneId ? 1 : 0;
-      newRoot = replaceNode(newRoot, sourceParent.id, sourceParent.children[siblingIndex]);
 
       const newEnvs = new Map(state.environments);
       newEnvs.set(envId, { ...envState, root: newRoot, activePaneId: toPaneId });
       set({ environments: newEnvs });
-      return;
-    }
-
-    // Both panes will have tabs after the move
-    // Remove from source
-    let newRoot = updateLeaf(envState.root, fromPaneId, (leaf) => ({
-      ...leaf,
-      tabs: remainingTabs,
-      activeTabId:
-        leaf.activeTabId === tabId
-          ? (remainingTabs[remainingTabs.length - 1]?.id ?? null)
-          : leaf.activeTabId,
-    }));
-
-    // Add to target
-    newRoot = updateLeaf(newRoot, toPaneId, (leaf) => {
-      const newTabs = [...leaf.tabs];
-      if (toIndex !== undefined) {
-        newTabs.splice(toIndex, 0, tab);
-      } else {
-        newTabs.push(tab);
-      }
-      return {
-        ...leaf,
-        tabs: newTabs,
-        activeTabId: tab.id,
-      };
-    });
-
-    const newEnvs = new Map(state.environments);
-    newEnvs.set(envId, { ...envState, root: newRoot, activePaneId: toPaneId });
-    set({ environments: newEnvs });
-  },
-
-  reorderTabs: (paneId, fromIndex, toIndex, environmentId) => {
-    const state = get();
-    const envId = environmentId ?? state.activeEnvironmentId;
-    if (!envId) return;
-
-    const envState = state.environments.get(envId);
-    if (!envState) return;
-
-    const newRoot = updateLeaf(envState.root, paneId, (leaf) => {
-      const hasValidIndexes =
-        Number.isInteger(fromIndex) &&
-        Number.isInteger(toIndex) &&
-        fromIndex >= 0 &&
-        fromIndex < leaf.tabs.length &&
-        toIndex >= 0 &&
-        toIndex < leaf.tabs.length;
-      if (!hasValidIndexes || fromIndex === toIndex) {
-        return leaf;
-      }
-
-      const newTabs = [...leaf.tabs];
-      const [moved] = newTabs.splice(fromIndex, 1);
-      if (moved) {
-        newTabs.splice(toIndex, 0, moved);
-      }
-      return {
-        ...leaf,
-        tabs: newTabs,
-      };
-    });
-
-    const newEnvs = new Map(state.environments);
-    newEnvs.set(envId, { ...envState, root: newRoot });
-    set({ environments: newEnvs });
-  },
-
-  clearTabInitialPrompt: (tabId, environmentId) => {
-    const state = get();
-    const envId = environmentId ?? state.activeEnvironmentId;
-    if (!envId) return;
-
-    const envState = state.environments.get(envId);
-    if (!envState) return;
-
-    // Find the pane containing this tab
-    const paneWithTab = findPaneWithTab(envState.root, tabId);
-    if (!paneWithTab) return;
-
-    // Update the tab to remove initialPrompt
-    const newRoot = updateLeaf(envState.root, paneWithTab.id, (leaf) => ({
-      ...leaf,
-      tabs: leaf.tabs.map((tab) => (tab.id === tabId ? { ...tab, initialPrompt: undefined } : tab)),
-    }));
-
-    const newEnvs = new Map(state.environments);
-    newEnvs.set(envId, { ...envState, root: newRoot });
-    set({ environments: newEnvs });
-    log.debug("tab.initial-prompt-cleared", () => ({ environmentId: envId, tabId }));
-  },
-
-  clearTabInitialAgentOptions: (tabId, environmentId) => {
-    const state = get();
-    const envId = environmentId ?? state.activeEnvironmentId;
-    if (!envId) return;
-
-    const envState = state.environments.get(envId);
-    if (!envState) return;
-
-    const paneWithTab = findPaneWithTab(envState.root, tabId);
-    if (!paneWithTab) return;
-
-    const newRoot = updateLeaf(envState.root, paneWithTab.id, (leaf) => ({
-      ...leaf,
-      tabs: leaf.tabs.map((tab) =>
-        tab.id === tabId
-          ? {
-              ...tab,
-              initialAgentPlatform: undefined,
-              initialAgentModel: undefined,
-              initialReasoningEffort: undefined,
-              initialConversationMode: undefined,
-              initialFastMode: undefined,
-              initialExecutionProfileId: undefined,
-            }
-          : tab,
-      ),
-    }));
-
-    const newEnvs = new Map(state.environments);
-    newEnvs.set(envId, { ...envState, root: newRoot });
-    set({ environments: newEnvs });
-    log.debug("tab.initial-agent-options-cleared", () => ({ environmentId: envId, tabId }));
-  },
-
-  consumeTabAgentHandoff: (tabId, environmentId) => {
-    const state = get();
-    const envId = environmentId ?? state.activeEnvironmentId;
-    if (!envId) return;
-
-    const envState = state.environments.get(envId);
-    if (!envState) return;
-    const paneWithTab = findPaneWithTab(envState.root, tabId);
-    if (!paneWithTab) return;
-    const tabWithHandoff = paneWithTab.tabs.find((tab) => tab.id === tabId);
-    if (!tabWithHandoff?.agentHandoffId) return;
-    if (tabWithHandoff.consumedAgentHandoffId === tabWithHandoff.agentHandoffId) return;
-
-    const consumedAgentHandoffId = tabWithHandoff.agentHandoffId;
-    const newRoot = updateLeaf(envState.root, paneWithTab.id, (leaf) => ({
-      ...leaf,
-      tabs: leaf.tabs.map((tab) => (tab.id === tabId ? { ...tab, consumedAgentHandoffId } : tab)),
-    }));
-    const newEnvs = new Map(state.environments);
-    newEnvs.set(envId, { ...envState, root: newRoot });
-    set({ environments: newEnvs });
-  },
-
-  clearTabAgentHandoff: (tabId, environmentId) => {
-    const state = get();
-    const envId = environmentId ?? state.activeEnvironmentId;
-    if (!envId) return;
-
-    const envState = state.environments.get(envId);
-    if (!envState) return;
-    const paneWithTab = findPaneWithTab(envState.root, tabId);
-    if (!paneWithTab) return;
-    const tabWithHandoff = paneWithTab.tabs.find((tab) => tab.id === tabId);
-    if (!tabWithHandoff?.agentHandoffId) return;
-
-    // Drop the live reference so imported rows leave the transcript. Keep the
-    // id as consumed: the bootstrap prompt it produced can still be the
-    // destination session's first message, and forgetting it would render that
-    // raw JSON frame.
-    const consumedAgentHandoffId = tabWithHandoff.agentHandoffId;
-    const newRoot = updateLeaf(envState.root, paneWithTab.id, (leaf) => ({
-      ...leaf,
-      tabs: leaf.tabs.map((tab) =>
-        tab.id === tabId ? { ...tab, agentHandoffId: undefined, consumedAgentHandoffId } : tab,
-      ),
-    }));
-    const newEnvs = new Map(state.environments);
-    newEnvs.set(envId, { ...envState, root: newRoot });
-    set({ environments: newEnvs });
-    forgetRemovedAgentHandoffs([tabWithHandoff], newRoot);
-  },
-
-  retireSetupTabMarker: (tabId, environmentId) => {
-    const state = get();
-    const envId = environmentId ?? state.activeEnvironmentId;
-    if (!envId) return false;
-
-    const envState = state.environments.get(envId);
-    if (!envState) return false;
-    const paneWithTab = findPaneWithTab(envState.root, tabId);
-    const existingTab = paneWithTab?.tabs.find((tab) => tab.id === tabId);
-    if (!paneWithTab || !existingTab?.isSetupTab) return false;
-
-    const newRoot = updateLeaf(envState.root, paneWithTab.id, (leaf) => ({
-      ...leaf,
-      tabs: leaf.tabs.map((tab) => {
-        if (tab.id !== tabId) return tab;
-        // Dropped rather than set to false: the persisted layout reader treats
-        // the field's presence as the marker, and a tab carrying
-        // `isSetupTab: false` would round-trip as one that was never a setup
-        // tab anyway. Everything else about the tab — id, title, ordering — is
-        // kept so the user sees the same tab they were already looking at.
-        const { isSetupTab: _retired, ...rest } = tab;
-        return rest;
-      }),
-    }));
-
-    const environments = new Map(state.environments);
-    environments.set(envId, { ...envState, root: newRoot });
-    set({ environments });
-    return true;
-  },
-
-  updateTabNativeSessionId: (tabId, sessionId, environmentId) => {
-    const state = get();
-    const envId = environmentId ?? state.activeEnvironmentId;
-    if (!envId) return;
-
-    const envState = state.environments.get(envId);
-    if (!envState) return;
-    const paneWithTab = findPaneWithTab(envState.root, tabId);
-    const existingTab = paneWithTab?.tabs.find((tab) => tab.id === tabId);
-    if (!paneWithTab || !existingTab) return;
-
-    const nativeAgentData = getNativeAgentData(existingTab);
-    if (!nativeAgentData) return;
-
-    const currentSessionId = nativeAgentData.sessionId;
-    if (currentSessionId === sessionId) return;
-
-    // Imported history belongs to the destination session that accepted it.
-    // A later real session — resume of another conversation, or the
-    // connect-time replacement for a missing provider session — must drop
-    // that transcript rather than prepend it onto a thread that never saw
-    // the handoff. First assignment (no prior id) and an unloaded id stay
-    // attached so an unsent transfer can still go to the new session.
-    const shouldDetachConsumedHandoff =
-      Boolean(currentSessionId) &&
-      Boolean(sessionId) &&
-      Boolean(existingTab.agentHandoffId) &&
-      existingTab.consumedAgentHandoffId === existingTab.agentHandoffId;
-
-    const newRoot = updateLeaf(envState.root, paneWithTab.id, (leaf) => ({
-      ...leaf,
-      tabs: leaf.tabs.map((tab) => {
-        if (tab.id !== tabId) return tab;
-        const nextNativeAgentData = getNativeAgentData(tab);
-        if (!nextNativeAgentData) return tab;
-        const next = {
-          ...tab,
-          nativeAgentData: { ...nextNativeAgentData, sessionId },
-          ...(shouldDetachConsumedHandoff
-            ? {
-                agentHandoffId: undefined,
-                consumedAgentHandoffId: tab.agentHandoffId,
-              }
-            : {}),
-        };
-        return next;
-      }),
-    }));
-
-    const environments = new Map(state.environments);
-    environments.set(envId, { ...envState, root: newRoot });
-    set({ environments });
-    if (shouldDetachConsumedHandoff) {
-      forgetRemovedAgentHandoffs([existingTab], newRoot);
-    }
-  },
-
-  navigateFileTab: (tabId, lineNumber, columnNumber, environmentId) => {
-    if (!Number.isSafeInteger(lineNumber) || lineNumber < 1) return;
-    if (columnNumber !== undefined && (!Number.isSafeInteger(columnNumber) || columnNumber < 1)) {
-      return;
-    }
-
-    const state = get();
-    const envId = environmentId ?? state.activeEnvironmentId;
-    if (!envId) return;
-    const envState = state.environments.get(envId);
-    if (!envState) return;
-    const pane = findPaneWithTab(envState.root, tabId);
-    const existingTab = pane?.tabs.find((tab) => tab.id === tabId);
-    if (!pane || existingTab?.type !== "file" || !existingTab.fileData) return;
-
-    const previousRequestId = existingTab.fileData.navigationRequestId ?? 0;
-    const navigationRequestId =
-      previousRequestId >= Number.MAX_SAFE_INTEGER ? 1 : previousRequestId + 1;
-    const root = updateLeaf(envState.root, pane.id, (leaf) => ({
-      ...leaf,
-      tabs: leaf.tabs.map((tab) =>
-        tab.id === tabId && tab.type === "file" && tab.fileData
-          ? {
-              ...tab,
-              fileData: {
-                ...tab.fileData,
-                lineNumber,
-                columnNumber,
-                navigationRequestId,
-              },
-            }
-          : tab,
-      ),
-    }));
-    const environments = new Map(state.environments);
-    environments.set(envId, { ...envState, root });
-    set({ environments });
-  },
-
-  clearFileTabNavigation: (tabId, environmentId) => {
-    const state = get();
-    const envId = environmentId ?? state.activeEnvironmentId;
-    if (!envId) return;
-    const envState = state.environments.get(envId);
-    if (!envState) return;
-    const pane = findPaneWithTab(envState.root, tabId);
-    const existingTab = pane?.tabs.find((tab) => tab.id === tabId);
-    if (!pane || existingTab?.type !== "file" || !existingTab.fileData) return;
-    if (
-      existingTab.fileData.lineNumber === undefined &&
-      existingTab.fileData.columnNumber === undefined &&
-      existingTab.fileData.navigationRequestId === undefined
-    ) {
-      return;
-    }
-
-    const root = updateLeaf(envState.root, pane.id, (leaf) => ({
-      ...leaf,
-      tabs: leaf.tabs.map((tab) => {
-        if (tab.id !== tabId || tab.type !== "file" || !tab.fileData) return tab;
-        const fileData = { ...tab.fileData };
-        delete fileData.lineNumber;
-        delete fileData.columnNumber;
-        delete fileData.navigationRequestId;
-        return { ...tab, fileData };
-      }),
-    }));
-    const environments = new Map(state.environments);
-    environments.set(envId, { ...envState, root });
-    set({ environments });
-  },
-
-  lockTabNativePlatform: (tabId, platform, environmentId, initial) => {
-    const state = get();
-    const envId = environmentId ?? state.activeEnvironmentId;
-    if (!envId) return null;
-    const envState = state.environments.get(envId);
-    if (!envState) return null;
-    const pane = findPaneWithTab(envState.root, tabId);
-    const tab = pane?.tabs.find((candidate) => candidate.id === tabId);
-    const data = tab ? getNativeAgentData(tab) : null;
-    if (!pane || !data) return null;
-    if (data.platform) return data.platform;
-    const initialOptions =
-      typeof initial === "string" ? { initialPrompt: initial } : (initial ?? {});
-
-    const root = updateLeaf(envState.root, pane.id, (leaf) => ({
-      ...leaf,
-      tabs: leaf.tabs.map((candidate) =>
-        candidate.id === tabId
-          ? {
-              ...candidate,
-              nativeAgentData: { ...data, platform },
-              ...(initialOptions.initialPrompt !== undefined
-                ? { initialPrompt: initialOptions.initialPrompt }
-                : {}),
-              ...(initialOptions.initialAgentModel !== undefined
-                ? { initialAgentModel: initialOptions.initialAgentModel }
-                : {}),
-              ...(initialOptions.initialReasoningEffort !== undefined
-                ? { initialReasoningEffort: initialOptions.initialReasoningEffort }
-                : {}),
-              ...(initialOptions.initialConversationMode !== undefined
-                ? { initialConversationMode: initialOptions.initialConversationMode }
-                : {}),
-              ...(initialOptions.initialFastMode !== undefined
-                ? { initialFastMode: initialOptions.initialFastMode }
-                : {}),
-              ...(initialOptions.initialExecutionProfileId !== undefined
-                ? { initialExecutionProfileId: initialOptions.initialExecutionProfileId }
-                : {}),
-            }
-          : candidate,
-      ),
-    }));
-    const environments = new Map(state.environments);
-    environments.set(envId, { ...envState, root });
-    set({ environments });
-    return platform;
-  },
-
-  updateTabBrowserAnnotationPanel: (tabId, patch, environmentId) => {
-    const state = get();
-    const envId = environmentId ?? state.activeEnvironmentId;
-    if (!envId) return;
-    const envState = state.environments.get(envId);
-    if (!envState) return;
-    const paneWithTab = findPaneWithTab(envState.root, tabId);
-    const existingTab = paneWithTab?.tabs.find((tab) => tab.id === tabId);
-    if (!paneWithTab || existingTab?.type !== "browser" || !existingTab.browserData) return;
-    const previous = existingTab.browserData.annotationPanel ?? { open: false };
-    const next = sanitizeBrowserAnnotationPanelState({ ...previous, ...patch });
-    if (!next || JSON.stringify(next) === JSON.stringify(existingTab.browserData.annotationPanel))
-      return;
-    const newRoot = updateLeaf(envState.root, paneWithTab.id, (leaf) => ({
-      ...leaf,
-      tabs: leaf.tabs.map((tab) =>
-        tab.id === tabId && tab.type === "browser" && tab.browserData
-          ? { ...tab, browserData: { ...tab.browserData, annotationPanel: next } }
-          : tab,
-      ),
-    }));
-    const environments = new Map(state.environments);
-    environments.set(envId, { ...envState, root: newRoot });
-    set({ environments });
-  },
-
-  updateTabBrowserUrl: (tabId, url, environmentId, history, historyIndex, navigationRequestId) => {
-    const state = get();
-    const envId = environmentId ?? state.activeEnvironmentId;
-    if (!envId) return;
-
-    const envState = state.environments.get(envId);
-    if (!envState) return;
-    const paneWithTab = findPaneWithTab(envState.root, tabId);
-    const existingTab = paneWithTab?.tabs.find((tab) => tab.id === tabId);
-    if (!paneWithTab || existingTab?.type !== "browser" || !existingTab.browserData) return;
-    if (
-      existingTab.browserData.url === url &&
-      history === undefined &&
-      historyIndex === undefined &&
-      navigationRequestId === undefined
-    )
-      return;
-
-    // A cursor without a new array still has to be clamped: it addresses the
-    // history already stored on the tab.
-    const { history: boundedHistory, historyIndex: boundedHistoryIndex } = boundBrowserHistory(
-      history
-        ? sanitizeBrowserHistoryForPersistence(history)
-        : existingTab.browserData.history
-          ? sanitizeBrowserHistoryForPersistence(existingTab.browserData.history)
-          : undefined,
-      historyIndex ?? (history === undefined ? existingTab.browserData.historyIndex : undefined),
-    );
-
-    const newRoot = updateLeaf(envState.root, paneWithTab.id, (leaf) => ({
-      ...leaf,
-      tabs: leaf.tabs.map((tab) =>
-        tab.id === tabId && tab.type === "browser" && tab.browserData
-          ? {
-              ...tab,
-              browserData: {
-                ...tab.browserData,
-                url,
-                ...(url !== tab.browserData.url || navigationRequestId !== undefined
-                  ? { navigationRequestId: navigationRequestId ?? createUuid() }
-                  : {}),
-                ...(boundedHistory !== undefined ? { history: boundedHistory } : {}),
-                ...(boundedHistoryIndex !== undefined ? { historyIndex: boundedHistoryIndex } : {}),
-              },
-            }
-          : tab,
-      ),
-    }));
-
-    const environments = new Map(state.environments);
-    environments.set(envId, { ...envState, root: newRoot });
-    set({ environments });
-  },
-
-  updateTabPullRequest: (tabId, patch, environmentId) => {
-    const state = get();
-    const envId = environmentId ?? state.activeEnvironmentId;
-    if (!envId) return;
-    const envState = state.environments.get(envId);
-    if (!envState) return;
-    const paneWithTab = findPaneWithTab(envState.root, tabId);
-    const existingTab = paneWithTab?.tabs.find((tab) => tab.id === tabId);
-    const current = existingTab?.type === "pull-request" ? existingTab.pullRequestData : undefined;
-    if (!paneWithTab || !current) return;
-    const title = patch.title?.slice(0, 300);
-    const next: PullRequestTabData = {
-      ...current,
-      ...(patch.view ? { view: patch.view } : {}),
-      ...(title !== undefined ? { title } : {}),
-      ...(patch.reopen ? { openRequest: (current.openRequest ?? 0) + 1 } : {}),
-    };
-    if (
-      next.view === current.view &&
-      next.title === current.title &&
-      next.openRequest === current.openRequest
-    ) {
-      return;
-    }
-    const newRoot = updateLeaf(envState.root, paneWithTab.id, (leaf) => ({
-      ...leaf,
-      tabs: leaf.tabs.map((tab) => (tab.id === tabId ? { ...tab, pullRequestData: next } : tab)),
-    }));
-    const environments = new Map(state.environments);
-    environments.set(envId, { ...envState, root: newRoot });
-    set({ environments });
-  },
-
-  updateTabGraphDesigner: (tabId, data, environmentId) => {
-    const state = get();
-    const envId = environmentId ?? state.activeEnvironmentId;
-    if (!envId) return;
-    const envState = state.environments.get(envId);
-    if (!envState) return;
-    const paneWithTab = findPaneWithTab(envState.root, tabId);
-    const existingTab = paneWithTab?.tabs.find((tab) => tab.id === tabId);
-    if (!paneWithTab || existingTab?.type !== "graph-designer") return;
-    if (JSON.stringify(existingTab.graphDesignerData ?? {}) === JSON.stringify(data)) return;
-    const newRoot = updateLeaf(envState.root, paneWithTab.id, (leaf) => ({
-      ...leaf,
-      tabs: leaf.tabs.map((tab) =>
-        tab.id === tabId ? { ...tab, graphDesignerData: { ...data } } : tab,
-      ),
-    }));
-    const environments = new Map(state.environments);
-    environments.set(envId, { ...envState, root: newRoot });
-    set({ environments });
-  },
-
-  splitPane: (paneId, direction, tabId, environmentId) => {
-    const state = get();
-    const envId = environmentId ?? state.activeEnvironmentId;
-    if (!envId) return;
-
-    const envState = state.environments.get(envId);
-    if (!envState) return;
-
-    const leaf = findLeaf(envState.root, paneId);
-    if (!leaf) return;
-
-    // Check depth limit
-    const currentDepth = getDepth(envState.root);
-    if (currentDepth >= MAX_SPLIT_DEPTH) {
-      log.debug("pane.split-depth-reached", () => ({ environmentId: envId, paneId }));
-      return;
-    }
-
-    // Find the tab to move to the new pane
-    const tab = leaf.tabs.find((t) => t.id === tabId);
-    if (!tab) return;
-
-    // Remove the tab from the original pane
-    const remainingTabs = leaf.tabs.filter((t) => t.id !== tabId);
-
-    // Create the new pane with the moved tab
-    const newPaneId = generateId("pane");
-    const newPane: PaneLeaf = {
-      kind: "leaf",
-      id: newPaneId,
-      tabs: [tab],
-      activeTabId: tab.id,
-    };
-
-    // Update the original pane
-    const updatedOriginalPane: PaneLeaf = {
-      ...leaf,
-      tabs: remainingTabs,
-      activeTabId:
-        remainingTabs.length > 0 ? (remainingTabs[remainingTabs.length - 1]?.id ?? null) : null,
-    };
-
-    // Create the split - new pane goes to the right/bottom
-    const newSplit: PaneSplit = {
-      kind: "split",
-      id: generateId("split"),
-      direction,
-      children: [updatedOriginalPane, newPane],
-      sizes: [50, 50],
-      depth: currentDepth + 1,
-    };
-
-    // Replace the original pane with the split
-    const newRoot = replaceNode(envState.root, paneId, newSplit);
-    const newEnvs = new Map(state.environments);
-    newEnvs.set(envId, { ...envState, root: newRoot, activePaneId: newPaneId });
-    set({ environments: newEnvs });
-  },
-
-  splitPaneAtEdge: (targetPaneId, edge, tabId, fromPaneId, environmentId) => {
-    const state = get();
-    const envId = environmentId ?? state.activeEnvironmentId;
-    if (!envId) {
-      log.warn("pane.edge-split-failed", { tabId, reason: "no-active-environment" });
-      return;
-    }
-
-    const envState = state.environments.get(envId);
-    if (!envState) {
-      log.warn("pane.edge-split-failed", {
-        environmentId: envId,
-        tabId,
-        reason: "no-environment-state",
-      });
-      return;
-    }
-
-    const targetLeaf = findLeaf(envState.root, targetPaneId);
-    if (!targetLeaf) {
-      log.warn("pane.edge-split-failed", {
-        environmentId: envId,
-        tabId,
-        reason: "target-pane-not-found",
-        targetPaneId,
-      });
-      return;
-    }
-
-    const sourceLeaf = findLeaf(envState.root, fromPaneId);
-    if (!sourceLeaf) {
-      log.warn("pane.edge-split-failed", {
-        environmentId: envId,
-        tabId,
-        reason: "source-pane-not-found",
-        fromPaneId,
-      });
-      return;
-    }
-
-    // Check depth limit
-    const currentDepth = getDepth(envState.root);
-    if (currentDepth >= MAX_SPLIT_DEPTH) {
-      log.debug("pane.split-depth-reached", () => ({
-        environmentId: envId,
-        paneId: targetPaneId,
-      }));
-      return;
-    }
-
-    // Find the tab in the SOURCE pane
-    const tab = sourceLeaf.tabs.find((t) => t.id === tabId);
-    if (!tab) {
-      log.warn("pane.edge-split-failed", {
-        environmentId: envId,
-        tabId,
-        reason: "tab-not-found",
-        fromPaneId,
-      });
-      return;
-    }
-
-    log.debug("pane.edge-split-started", () => ({ targetPaneId, edge, tabId, fromPaneId }));
-
-    // Create the new pane with the moved tab
-    const newPaneId = generateId("pane");
-    const newPane: PaneLeaf = {
-      kind: "leaf",
-      id: newPaneId,
-      tabs: [tab],
-      activeTabId: tab.id,
-    };
-
-    // Determine split direction and child order based on edge
-    const direction: "horizontal" | "vertical" =
-      edge === "left" || edge === "right" ? "horizontal" : "vertical";
-
-    // Check if we're splitting within the same pane (source === target)
-    const isSamePaneSplit = fromPaneId === targetPaneId;
-
-    let newRoot: PaneNode;
-
-    if (isSamePaneSplit) {
-      // When splitting within the same pane, we need to:
-      // 1. Create updated target leaf WITHOUT the moved tab
-      // 2. Create the split with the updated target leaf
-      const remainingTabs = targetLeaf.tabs.filter((t) => t.id !== tabId);
-      const updatedTargetLeaf: PaneLeaf = {
-        ...targetLeaf,
-        tabs: remainingTabs,
-        activeTabId:
-          targetLeaf.activeTabId === tabId
-            ? (remainingTabs[remainingTabs.length - 1]?.id ?? null)
-            : targetLeaf.activeTabId,
-      };
-
-      // For left/top edges, new pane comes first; for right/bottom, updated target comes first
-      const children: [PaneNode, PaneNode] =
-        edge === "left" || edge === "top"
-          ? [newPane, updatedTargetLeaf]
-          : [updatedTargetLeaf, newPane];
-
-      const newSplit: PaneSplit = {
-        kind: "split",
-        id: generateId("split"),
-        direction,
-        children,
-        sizes: [50, 50],
-        depth: currentDepth + 1,
-      };
-
-      // Replace the pane with the split (no need to update source separately since it's the same pane)
-      newRoot = replaceNode(envState.root, targetPaneId, newSplit);
-    } else {
-      // Different panes: remove from source, then create split at target
-      // For left/top edges, new pane comes first; for right/bottom, target comes first
-      const children: [PaneNode, PaneNode] =
-        edge === "left" || edge === "top" ? [newPane, targetLeaf] : [targetLeaf, newPane];
-
-      const newSplit: PaneSplit = {
-        kind: "split",
-        id: generateId("split"),
-        direction,
-        children,
-        sizes: [50, 50],
-        depth: currentDepth + 1,
-      };
-
-      // First, remove the tab from the source pane
-      newRoot = updateLeaf(envState.root, fromPaneId, (leaf) => {
-        const remainingTabs = leaf.tabs.filter((t) => t.id !== tabId);
+    },
+
+    reorderTabs: (paneId, fromIndex, toIndex, environmentId) => {
+      const state = get();
+      const envId = environmentId ?? state.activeEnvironmentId;
+      if (!envId) return;
+
+      const envState = state.environments.get(envId);
+      if (!envState) return;
+
+      const newRoot = updateLeaf(envState.root, paneId, (leaf) => {
+        const hasValidIndexes =
+          Number.isInteger(fromIndex) &&
+          Number.isInteger(toIndex) &&
+          fromIndex >= 0 &&
+          fromIndex < leaf.tabs.length &&
+          toIndex >= 0 &&
+          toIndex < leaf.tabs.length;
+        if (!hasValidIndexes || fromIndex === toIndex) {
+          return leaf;
+        }
+
+        const newTabs = [...leaf.tabs];
+        const [moved] = newTabs.splice(fromIndex, 1);
+        if (moved) {
+          newTabs.splice(toIndex, 0, moved);
+        }
         return {
           ...leaf,
-          tabs: remainingTabs,
-          activeTabId:
-            leaf.activeTabId === tabId
-              ? (remainingTabs[remainingTabs.length - 1]?.id ?? null)
-              : leaf.activeTabId,
+          tabs: newTabs,
         };
       });
 
-      // Then, replace the target pane with the split
-      newRoot = replaceNode(newRoot, targetPaneId, newSplit);
-    }
+      const newEnvs = new Map(state.environments);
+      newEnvs.set(envId, { ...envState, root: newRoot });
+      set({ environments: newEnvs });
+    },
 
-    const newEnvs = new Map(state.environments);
-    newEnvs.set(envId, { ...envState, root: newRoot, activePaneId: newPaneId });
-    set({ environments: newEnvs });
+    clearTabInitialPrompt: (tabId, environmentId) => {
+      const state = get();
+      const envId = environmentId ?? state.activeEnvironmentId;
+      if (!envId) return;
 
-    // If the source pane is now empty, close it (only for cross-pane splits)
-    // For same-pane splits, the source pane was replaced by the split, so it doesn't exist anymore
-    if (!isSamePaneSplit) {
-      const updatedSourceLeaf = findLeaf(newRoot, fromPaneId);
-      if (updatedSourceLeaf && updatedSourceLeaf.tabs.length === 0) {
-        // Use a timeout to avoid state update conflicts
-        setTimeout(() => get().closePane(fromPaneId, envId), 0);
+      const envState = state.environments.get(envId);
+      if (!envState) return;
+
+      // Find the pane containing this tab
+      const paneWithTab = findPaneWithTab(envState.root, tabId);
+      if (!paneWithTab) return;
+
+      // Update the tab to remove initialPrompt
+      const newRoot = updateLeaf(envState.root, paneWithTab.id, (leaf) => ({
+        ...leaf,
+        tabs: leaf.tabs.map((tab) =>
+          tab.id === tabId ? { ...tab, initialPrompt: undefined } : tab,
+        ),
+      }));
+
+      const newEnvs = new Map(state.environments);
+      newEnvs.set(envId, { ...envState, root: newRoot });
+      set({ environments: newEnvs });
+      log.debug("tab.initial-prompt-cleared", () => ({ environmentId: envId, tabId }));
+    },
+
+    clearTabInitialAgentOptions: (tabId, environmentId) => {
+      const state = get();
+      const envId = environmentId ?? state.activeEnvironmentId;
+      if (!envId) return;
+
+      const envState = state.environments.get(envId);
+      if (!envState) return;
+
+      const paneWithTab = findPaneWithTab(envState.root, tabId);
+      if (!paneWithTab) return;
+
+      const newRoot = updateLeaf(envState.root, paneWithTab.id, (leaf) => ({
+        ...leaf,
+        tabs: leaf.tabs.map((tab) =>
+          tab.id === tabId
+            ? {
+                ...tab,
+                initialAgentPlatform: undefined,
+                initialAgentModel: undefined,
+                initialReasoningEffort: undefined,
+                initialConversationMode: undefined,
+                initialFastMode: undefined,
+                initialExecutionProfileId: undefined,
+              }
+            : tab,
+        ),
+      }));
+
+      const newEnvs = new Map(state.environments);
+      newEnvs.set(envId, { ...envState, root: newRoot });
+      set({ environments: newEnvs });
+      log.debug("tab.initial-agent-options-cleared", () => ({ environmentId: envId, tabId }));
+    },
+
+    consumeTabAgentHandoff: (tabId, environmentId) => {
+      const state = get();
+      const envId = environmentId ?? state.activeEnvironmentId;
+      if (!envId) return;
+
+      const envState = state.environments.get(envId);
+      if (!envState) return;
+      const paneWithTab = findPaneWithTab(envState.root, tabId);
+      if (!paneWithTab) return;
+      const tabWithHandoff = paneWithTab.tabs.find((tab) => tab.id === tabId);
+      if (!tabWithHandoff?.agentHandoffId) return;
+      if (tabWithHandoff.consumedAgentHandoffId === tabWithHandoff.agentHandoffId) return;
+
+      const consumedAgentHandoffId = tabWithHandoff.agentHandoffId;
+      const newRoot = updateLeaf(envState.root, paneWithTab.id, (leaf) => ({
+        ...leaf,
+        tabs: leaf.tabs.map((tab) => (tab.id === tabId ? { ...tab, consumedAgentHandoffId } : tab)),
+      }));
+      const newEnvs = new Map(state.environments);
+      newEnvs.set(envId, { ...envState, root: newRoot });
+      set({ environments: newEnvs });
+    },
+
+    clearTabAgentHandoff: (tabId, environmentId) => {
+      const state = get();
+      const envId = environmentId ?? state.activeEnvironmentId;
+      if (!envId) return;
+
+      const envState = state.environments.get(envId);
+      if (!envState) return;
+      const paneWithTab = findPaneWithTab(envState.root, tabId);
+      if (!paneWithTab) return;
+      const tabWithHandoff = paneWithTab.tabs.find((tab) => tab.id === tabId);
+      if (!tabWithHandoff?.agentHandoffId) return;
+
+      // Drop the live reference so imported rows leave the transcript. Keep the
+      // id as consumed: the bootstrap prompt it produced can still be the
+      // destination session's first message, and forgetting it would render that
+      // raw JSON frame.
+      const consumedAgentHandoffId = tabWithHandoff.agentHandoffId;
+      const newRoot = updateLeaf(envState.root, paneWithTab.id, (leaf) => ({
+        ...leaf,
+        tabs: leaf.tabs.map((tab) =>
+          tab.id === tabId ? { ...tab, agentHandoffId: undefined, consumedAgentHandoffId } : tab,
+        ),
+      }));
+      const newEnvs = new Map(state.environments);
+      newEnvs.set(envId, { ...envState, root: newRoot });
+      set({ environments: newEnvs });
+      forgetRemovedAgentHandoffs(scope, [tabWithHandoff], newRoot);
+    },
+
+    retireSetupTabMarker: (tabId, environmentId) => {
+      const state = get();
+      const envId = environmentId ?? state.activeEnvironmentId;
+      if (!envId) return false;
+
+      const envState = state.environments.get(envId);
+      if (!envState) return false;
+      const paneWithTab = findPaneWithTab(envState.root, tabId);
+      const existingTab = paneWithTab?.tabs.find((tab) => tab.id === tabId);
+      if (!paneWithTab || !existingTab?.isSetupTab) return false;
+
+      const newRoot = updateLeaf(envState.root, paneWithTab.id, (leaf) => ({
+        ...leaf,
+        tabs: leaf.tabs.map((tab) => {
+          if (tab.id !== tabId) return tab;
+          // Dropped rather than set to false: the persisted layout reader treats
+          // the field's presence as the marker, and a tab carrying
+          // `isSetupTab: false` would round-trip as one that was never a setup
+          // tab anyway. Everything else about the tab — id, title, ordering — is
+          // kept so the user sees the same tab they were already looking at.
+          const { isSetupTab: _retired, ...rest } = tab;
+          return rest;
+        }),
+      }));
+
+      const environments = new Map(state.environments);
+      environments.set(envId, { ...envState, root: newRoot });
+      set({ environments });
+      return true;
+    },
+
+    updateTabNativeSessionId: (tabId, sessionId, environmentId) => {
+      const state = get();
+      const envId = environmentId ?? state.activeEnvironmentId;
+      if (!envId) return;
+
+      const envState = state.environments.get(envId);
+      if (!envState) return;
+      const paneWithTab = findPaneWithTab(envState.root, tabId);
+      const existingTab = paneWithTab?.tabs.find((tab) => tab.id === tabId);
+      if (!paneWithTab || !existingTab) return;
+
+      const nativeAgentData = getNativeAgentData(existingTab);
+      if (!nativeAgentData) return;
+
+      const currentSessionId = nativeAgentData.sessionId;
+      if (currentSessionId === sessionId) return;
+
+      // Imported history belongs to the destination session that accepted it.
+      // A later real session — resume of another conversation, or the
+      // connect-time replacement for a missing provider session — must drop
+      // that transcript rather than prepend it onto a thread that never saw
+      // the handoff. First assignment (no prior id) and an unloaded id stay
+      // attached so an unsent transfer can still go to the new session.
+      const shouldDetachConsumedHandoff =
+        Boolean(currentSessionId) &&
+        Boolean(sessionId) &&
+        Boolean(existingTab.agentHandoffId) &&
+        existingTab.consumedAgentHandoffId === existingTab.agentHandoffId;
+
+      const newRoot = updateLeaf(envState.root, paneWithTab.id, (leaf) => ({
+        ...leaf,
+        tabs: leaf.tabs.map((tab) => {
+          if (tab.id !== tabId) return tab;
+          const nextNativeAgentData = getNativeAgentData(tab);
+          if (!nextNativeAgentData) return tab;
+          const next = {
+            ...tab,
+            nativeAgentData: { ...nextNativeAgentData, sessionId },
+            ...(shouldDetachConsumedHandoff
+              ? {
+                  agentHandoffId: undefined,
+                  consumedAgentHandoffId: tab.agentHandoffId,
+                }
+              : {}),
+          };
+          return next;
+        }),
+      }));
+
+      const environments = new Map(state.environments);
+      environments.set(envId, { ...envState, root: newRoot });
+      set({ environments });
+      if (shouldDetachConsumedHandoff) {
+        forgetRemovedAgentHandoffs(scope, [existingTab], newRoot);
       }
-    }
-  },
+    },
 
-  closePane: (paneId, environmentId) => {
-    const state = get();
-    const envId = environmentId ?? state.activeEnvironmentId;
-    if (!envId) return;
-
-    const envState = state.environments.get(envId);
-    if (!envState) return;
-
-    const parentSplit = findParentSplit(envState.root, paneId);
-
-    // If no parent, this is the only pane - can't close it
-    if (!parentSplit) {
-      log.debug("pane.close-refused", () => ({ environmentId: envId, paneId }));
-      return;
-    }
-
-    const pane = findLeaf(envState.root, paneId);
-    if (!pane) return;
-
-    pane.tabs.forEach((tab) => {
-      cleanupTabResources(envId, envState.containerId, tab);
-      useTerminalPortalStore.getState().disposeTerminal(envId, tab.id);
-    });
-
-    // Find the sibling
-    const siblingIndex = parentSplit.children[0].id === paneId ? 1 : 0;
-    const sibling = parentSplit.children[siblingIndex];
-
-    // Replace parent split with sibling
-    const newRoot = replaceNode(envState.root, parentSplit.id, sibling);
-    // Update active pane if needed
-    let newActivePaneId = envState.activePaneId;
-    if (envState.activePaneId === paneId) {
-      const firstLeaf = findFirstLeaf(sibling);
-      newActivePaneId = firstLeaf.id;
-    }
-
-    const newEnvs = new Map(state.environments);
-    newEnvs.set(envId, { ...envState, root: newRoot, activePaneId: newActivePaneId });
-    set({ environments: newEnvs });
-    forgetRemovedAgentHandoffs(pane.tabs, newRoot);
-  },
-
-  setActivePane: (paneId, environmentId) => {
-    const state = get();
-    const envId = environmentId ?? state.activeEnvironmentId;
-    if (!envId) return;
-
-    const envState = state.environments.get(envId);
-    if (!envState) return;
-    if (!findLeaf(envState.root, paneId)) return;
-
-    const newEnvs = new Map(state.environments);
-    newEnvs.set(envId, { ...envState, activePaneId: paneId });
-    set({ environments: newEnvs });
-  },
-
-  updateSizes: (splitId, sizes, environmentId) => {
-    const state = get();
-    const envId = environmentId ?? state.activeEnvironmentId;
-    if (!envId) return;
-
-    const envState = state.environments.get(envId);
-    if (!envState) return;
-
-    const update = (node: PaneNode): PaneNode => {
-      if (isPaneLeaf(node)) return node;
-      if (node.id === splitId) {
-        return { ...node, sizes };
+    navigateFileTab: (tabId, lineNumber, columnNumber, environmentId) => {
+      if (!Number.isSafeInteger(lineNumber) || lineNumber < 1) return;
+      if (columnNumber !== undefined && (!Number.isSafeInteger(columnNumber) || columnNumber < 1)) {
+        return;
       }
-      return {
-        ...node,
-        children: [update(node.children[0]), update(node.children[1])] as [PaneNode, PaneNode],
+
+      const state = get();
+      const envId = environmentId ?? state.activeEnvironmentId;
+      if (!envId) return;
+      const envState = state.environments.get(envId);
+      if (!envState) return;
+      const pane = findPaneWithTab(envState.root, tabId);
+      const existingTab = pane?.tabs.find((tab) => tab.id === tabId);
+      if (!pane || existingTab?.type !== "file" || !existingTab.fileData) return;
+
+      const previousRequestId = existingTab.fileData.navigationRequestId ?? 0;
+      const navigationRequestId =
+        previousRequestId >= Number.MAX_SAFE_INTEGER ? 1 : previousRequestId + 1;
+      const root = updateLeaf(envState.root, pane.id, (leaf) => ({
+        ...leaf,
+        tabs: leaf.tabs.map((tab) =>
+          tab.id === tabId && tab.type === "file" && tab.fileData
+            ? {
+                ...tab,
+                fileData: {
+                  ...tab.fileData,
+                  lineNumber,
+                  columnNumber,
+                  navigationRequestId,
+                },
+              }
+            : tab,
+        ),
+      }));
+      const environments = new Map(state.environments);
+      environments.set(envId, { ...envState, root });
+      set({ environments });
+    },
+
+    clearFileTabNavigation: (tabId, environmentId) => {
+      const state = get();
+      const envId = environmentId ?? state.activeEnvironmentId;
+      if (!envId) return;
+      const envState = state.environments.get(envId);
+      if (!envState) return;
+      const pane = findPaneWithTab(envState.root, tabId);
+      const existingTab = pane?.tabs.find((tab) => tab.id === tabId);
+      if (!pane || existingTab?.type !== "file" || !existingTab.fileData) return;
+      if (
+        existingTab.fileData.lineNumber === undefined &&
+        existingTab.fileData.columnNumber === undefined &&
+        existingTab.fileData.navigationRequestId === undefined
+      ) {
+        return;
+      }
+
+      const root = updateLeaf(envState.root, pane.id, (leaf) => ({
+        ...leaf,
+        tabs: leaf.tabs.map((tab) => {
+          if (tab.id !== tabId || tab.type !== "file" || !tab.fileData) return tab;
+          const fileData = { ...tab.fileData };
+          delete fileData.lineNumber;
+          delete fileData.columnNumber;
+          delete fileData.navigationRequestId;
+          return { ...tab, fileData };
+        }),
+      }));
+      const environments = new Map(state.environments);
+      environments.set(envId, { ...envState, root });
+      set({ environments });
+    },
+
+    lockTabNativePlatform: (tabId, platform, environmentId, initial) => {
+      const state = get();
+      const envId = environmentId ?? state.activeEnvironmentId;
+      if (!envId) return null;
+      const envState = state.environments.get(envId);
+      if (!envState) return null;
+      const pane = findPaneWithTab(envState.root, tabId);
+      const tab = pane?.tabs.find((candidate) => candidate.id === tabId);
+      const data = tab ? getNativeAgentData(tab) : null;
+      if (!pane || !data) return null;
+      if (data.platform) return data.platform;
+      const initialOptions =
+        typeof initial === "string" ? { initialPrompt: initial } : (initial ?? {});
+
+      const root = updateLeaf(envState.root, pane.id, (leaf) => ({
+        ...leaf,
+        tabs: leaf.tabs.map((candidate) =>
+          candidate.id === tabId
+            ? {
+                ...candidate,
+                nativeAgentData: { ...data, platform },
+                ...(initialOptions.initialPrompt !== undefined
+                  ? { initialPrompt: initialOptions.initialPrompt }
+                  : {}),
+                ...(initialOptions.initialAgentModel !== undefined
+                  ? { initialAgentModel: initialOptions.initialAgentModel }
+                  : {}),
+                ...(initialOptions.initialReasoningEffort !== undefined
+                  ? { initialReasoningEffort: initialOptions.initialReasoningEffort }
+                  : {}),
+                ...(initialOptions.initialConversationMode !== undefined
+                  ? { initialConversationMode: initialOptions.initialConversationMode }
+                  : {}),
+                ...(initialOptions.initialFastMode !== undefined
+                  ? { initialFastMode: initialOptions.initialFastMode }
+                  : {}),
+                ...(initialOptions.initialExecutionProfileId !== undefined
+                  ? { initialExecutionProfileId: initialOptions.initialExecutionProfileId }
+                  : {}),
+              }
+            : candidate,
+        ),
+      }));
+      const environments = new Map(state.environments);
+      environments.set(envId, { ...envState, root });
+      set({ environments });
+      return platform;
+    },
+
+    updateTabBrowserAnnotationPanel: (tabId, patch, environmentId) => {
+      const state = get();
+      const envId = environmentId ?? state.activeEnvironmentId;
+      if (!envId) return;
+      const envState = state.environments.get(envId);
+      if (!envState) return;
+      const paneWithTab = findPaneWithTab(envState.root, tabId);
+      const existingTab = paneWithTab?.tabs.find((tab) => tab.id === tabId);
+      if (!paneWithTab || existingTab?.type !== "browser" || !existingTab.browserData) return;
+      const previous = existingTab.browserData.annotationPanel ?? { open: false };
+      const next = sanitizeBrowserAnnotationPanelState({ ...previous, ...patch });
+      if (!next || JSON.stringify(next) === JSON.stringify(existingTab.browserData.annotationPanel))
+        return;
+      const newRoot = updateLeaf(envState.root, paneWithTab.id, (leaf) => ({
+        ...leaf,
+        tabs: leaf.tabs.map((tab) =>
+          tab.id === tabId && tab.type === "browser" && tab.browserData
+            ? { ...tab, browserData: { ...tab.browserData, annotationPanel: next } }
+            : tab,
+        ),
+      }));
+      const environments = new Map(state.environments);
+      environments.set(envId, { ...envState, root: newRoot });
+      set({ environments });
+    },
+
+    updateTabBrowserUrl: (
+      tabId,
+      url,
+      environmentId,
+      history,
+      historyIndex,
+      navigationRequestId,
+    ) => {
+      const state = get();
+      const envId = environmentId ?? state.activeEnvironmentId;
+      if (!envId) return;
+
+      const envState = state.environments.get(envId);
+      if (!envState) return;
+      const paneWithTab = findPaneWithTab(envState.root, tabId);
+      const existingTab = paneWithTab?.tabs.find((tab) => tab.id === tabId);
+      if (!paneWithTab || existingTab?.type !== "browser" || !existingTab.browserData) return;
+      if (
+        existingTab.browserData.url === url &&
+        history === undefined &&
+        historyIndex === undefined &&
+        navigationRequestId === undefined
+      )
+        return;
+
+      // A cursor without a new array still has to be clamped: it addresses the
+      // history already stored on the tab.
+      const { history: boundedHistory, historyIndex: boundedHistoryIndex } = boundBrowserHistory(
+        history
+          ? sanitizeBrowserHistoryForPersistence(history)
+          : existingTab.browserData.history
+            ? sanitizeBrowserHistoryForPersistence(existingTab.browserData.history)
+            : undefined,
+        historyIndex ?? (history === undefined ? existingTab.browserData.historyIndex : undefined),
+      );
+
+      const newRoot = updateLeaf(envState.root, paneWithTab.id, (leaf) => ({
+        ...leaf,
+        tabs: leaf.tabs.map((tab) =>
+          tab.id === tabId && tab.type === "browser" && tab.browserData
+            ? {
+                ...tab,
+                browserData: {
+                  ...tab.browserData,
+                  url,
+                  ...(url !== tab.browserData.url || navigationRequestId !== undefined
+                    ? { navigationRequestId: navigationRequestId ?? createUuid() }
+                    : {}),
+                  ...(boundedHistory !== undefined ? { history: boundedHistory } : {}),
+                  ...(boundedHistoryIndex !== undefined
+                    ? { historyIndex: boundedHistoryIndex }
+                    : {}),
+                },
+              }
+            : tab,
+        ),
+      }));
+
+      const environments = new Map(state.environments);
+      environments.set(envId, { ...envState, root: newRoot });
+      set({ environments });
+    },
+
+    updateTabPullRequest: (tabId, patch, environmentId) => {
+      const state = get();
+      const envId = environmentId ?? state.activeEnvironmentId;
+      if (!envId) return;
+      const envState = state.environments.get(envId);
+      if (!envState) return;
+      const paneWithTab = findPaneWithTab(envState.root, tabId);
+      const existingTab = paneWithTab?.tabs.find((tab) => tab.id === tabId);
+      const current =
+        existingTab?.type === "pull-request" ? existingTab.pullRequestData : undefined;
+      if (!paneWithTab || !current) return;
+      const title = patch.title?.slice(0, 300);
+      const next: PullRequestTabData = {
+        ...current,
+        ...(patch.view ? { view: patch.view } : {}),
+        ...(title !== undefined ? { title } : {}),
+        ...(patch.reopen ? { openRequest: (current.openRequest ?? 0) + 1 } : {}),
       };
-    };
+      if (
+        next.view === current.view &&
+        next.title === current.title &&
+        next.openRequest === current.openRequest
+      ) {
+        return;
+      }
+      const newRoot = updateLeaf(envState.root, paneWithTab.id, (leaf) => ({
+        ...leaf,
+        tabs: leaf.tabs.map((tab) => (tab.id === tabId ? { ...tab, pullRequestData: next } : tab)),
+      }));
+      const environments = new Map(state.environments);
+      environments.set(envId, { ...envState, root: newRoot });
+      set({ environments });
+    },
 
-    const newRoot = update(envState.root);
-    const newEnvs = new Map(state.environments);
-    newEnvs.set(envId, { ...envState, root: newRoot });
-    set({ environments: newEnvs });
-  },
+    updateTabGraphDesigner: (tabId, data, environmentId) => {
+      const state = get();
+      const envId = environmentId ?? state.activeEnvironmentId;
+      if (!envId) return;
+      const envState = state.environments.get(envId);
+      if (!envState) return;
+      const paneWithTab = findPaneWithTab(envState.root, tabId);
+      const existingTab = paneWithTab?.tabs.find((tab) => tab.id === tabId);
+      if (!paneWithTab || existingTab?.type !== "graph-designer") return;
+      if (JSON.stringify(existingTab.graphDesignerData ?? {}) === JSON.stringify(data)) return;
+      const newRoot = updateLeaf(envState.root, paneWithTab.id, (leaf) => ({
+        ...leaf,
+        tabs: leaf.tabs.map((tab) =>
+          tab.id === tabId ? { ...tab, graphDesignerData: { ...data } } : tab,
+        ),
+      }));
+      const environments = new Map(state.environments);
+      environments.set(envId, { ...envState, root: newRoot });
+      set({ environments });
+    },
 
-  getPane: (paneId, environmentId) => {
-    const state = get();
-    const envState = getEnvironmentPaneState(state, environmentId);
-    return findLeaf(envState.root, paneId);
-  },
+    splitPane: (paneId, direction, tabId, environmentId) => {
+      const state = get();
+      const envId = environmentId ?? state.activeEnvironmentId;
+      if (!envId) return;
 
-  getActivePane: (environmentId) => {
-    const state = get();
-    const envState = getEnvironmentPaneState(state, environmentId);
-    return findLeaf(envState.root, envState.activePaneId);
-  },
+      const envState = state.environments.get(envId);
+      if (!envState) return;
 
-  getAllTabs: (environmentId) => {
-    const state = get();
-    const envState = getEnvironmentPaneState(state, environmentId);
-    const leaves = getAllLeaves(envState.root);
-    return leaves.flatMap((leaf) => leaf.tabs);
-  },
+      const leaf = findLeaf(envState.root, paneId);
+      if (!leaf) return;
 
-  getOpenFilePaths: (environmentId) => {
-    const tabs = get().getAllTabs(environmentId);
-    return tabs
-      .filter((t) => t.type === "file" && t.fileData?.filePath)
-      .map((t) => t.fileData!.filePath);
-  },
+      // Check depth limit
+      const currentDepth = getDepth(envState.root);
+      if (currentDepth >= MAX_SPLIT_DEPTH) {
+        log.debug("pane.split-depth-reached", () => ({ environmentId: envId, paneId }));
+        return;
+      }
 
-  findPaneWithTab: (tabId: string, environmentId) => {
-    const state = get();
-    const envState = getEnvironmentPaneState(state, environmentId);
-    return findPaneWithTab(envState.root, tabId);
-  },
-}));
+      // Find the tab to move to the new pane
+      const tab = leaf.tabs.find((t) => t.id === tabId);
+      if (!tab) return;
+
+      // Remove the tab from the original pane
+      const remainingTabs = leaf.tabs.filter((t) => t.id !== tabId);
+
+      // Create the new pane with the moved tab
+      const newPaneId = generateId("pane");
+      const newPane: PaneLeaf = {
+        kind: "leaf",
+        id: newPaneId,
+        tabs: [tab],
+        activeTabId: tab.id,
+      };
+
+      // Update the original pane
+      const updatedOriginalPane: PaneLeaf = {
+        ...leaf,
+        tabs: remainingTabs,
+        activeTabId:
+          remainingTabs.length > 0 ? (remainingTabs[remainingTabs.length - 1]?.id ?? null) : null,
+      };
+
+      // Create the split - new pane goes to the right/bottom
+      const newSplit: PaneSplit = {
+        kind: "split",
+        id: generateId("split"),
+        direction,
+        children: [updatedOriginalPane, newPane],
+        sizes: [50, 50],
+        depth: currentDepth + 1,
+      };
+
+      // Replace the original pane with the split
+      const newRoot = replaceNode(envState.root, paneId, newSplit);
+      const newEnvs = new Map(state.environments);
+      newEnvs.set(envId, { ...envState, root: newRoot, activePaneId: newPaneId });
+      set({ environments: newEnvs });
+    },
+
+    splitPaneAtEdge: (targetPaneId, edge, tabId, fromPaneId, environmentId) => {
+      const state = get();
+      const envId = environmentId ?? state.activeEnvironmentId;
+      if (!envId) {
+        log.warn("pane.edge-split-failed", { tabId, reason: "no-active-environment" });
+        return;
+      }
+
+      const envState = state.environments.get(envId);
+      if (!envState) {
+        log.warn("pane.edge-split-failed", {
+          environmentId: envId,
+          tabId,
+          reason: "no-environment-state",
+        });
+        return;
+      }
+
+      const targetLeaf = findLeaf(envState.root, targetPaneId);
+      if (!targetLeaf) {
+        log.warn("pane.edge-split-failed", {
+          environmentId: envId,
+          tabId,
+          reason: "target-pane-not-found",
+          targetPaneId,
+        });
+        return;
+      }
+
+      const sourceLeaf = findLeaf(envState.root, fromPaneId);
+      if (!sourceLeaf) {
+        log.warn("pane.edge-split-failed", {
+          environmentId: envId,
+          tabId,
+          reason: "source-pane-not-found",
+          fromPaneId,
+        });
+        return;
+      }
+
+      // Check depth limit
+      const currentDepth = getDepth(envState.root);
+      if (currentDepth >= MAX_SPLIT_DEPTH) {
+        log.debug("pane.split-depth-reached", () => ({
+          environmentId: envId,
+          paneId: targetPaneId,
+        }));
+        return;
+      }
+
+      // Find the tab in the SOURCE pane
+      const tab = sourceLeaf.tabs.find((t) => t.id === tabId);
+      if (!tab) {
+        log.warn("pane.edge-split-failed", {
+          environmentId: envId,
+          tabId,
+          reason: "tab-not-found",
+          fromPaneId,
+        });
+        return;
+      }
+
+      log.debug("pane.edge-split-started", () => ({ targetPaneId, edge, tabId, fromPaneId }));
+
+      // Create the new pane with the moved tab
+      const newPaneId = generateId("pane");
+      const newPane: PaneLeaf = {
+        kind: "leaf",
+        id: newPaneId,
+        tabs: [tab],
+        activeTabId: tab.id,
+      };
+
+      // Determine split direction and child order based on edge
+      const direction: "horizontal" | "vertical" =
+        edge === "left" || edge === "right" ? "horizontal" : "vertical";
+
+      // Check if we're splitting within the same pane (source === target)
+      const isSamePaneSplit = fromPaneId === targetPaneId;
+
+      let newRoot: PaneNode;
+
+      if (isSamePaneSplit) {
+        // When splitting within the same pane, we need to:
+        // 1. Create updated target leaf WITHOUT the moved tab
+        // 2. Create the split with the updated target leaf
+        const remainingTabs = targetLeaf.tabs.filter((t) => t.id !== tabId);
+        const updatedTargetLeaf: PaneLeaf = {
+          ...targetLeaf,
+          tabs: remainingTabs,
+          activeTabId:
+            targetLeaf.activeTabId === tabId
+              ? (remainingTabs[remainingTabs.length - 1]?.id ?? null)
+              : targetLeaf.activeTabId,
+        };
+
+        // For left/top edges, new pane comes first; for right/bottom, updated target comes first
+        const children: [PaneNode, PaneNode] =
+          edge === "left" || edge === "top"
+            ? [newPane, updatedTargetLeaf]
+            : [updatedTargetLeaf, newPane];
+
+        const newSplit: PaneSplit = {
+          kind: "split",
+          id: generateId("split"),
+          direction,
+          children,
+          sizes: [50, 50],
+          depth: currentDepth + 1,
+        };
+
+        // Replace the pane with the split (no need to update source separately since it's the same pane)
+        newRoot = replaceNode(envState.root, targetPaneId, newSplit);
+      } else {
+        // Different panes: remove from source, then create split at target
+        // For left/top edges, new pane comes first; for right/bottom, target comes first
+        const children: [PaneNode, PaneNode] =
+          edge === "left" || edge === "top" ? [newPane, targetLeaf] : [targetLeaf, newPane];
+
+        const newSplit: PaneSplit = {
+          kind: "split",
+          id: generateId("split"),
+          direction,
+          children,
+          sizes: [50, 50],
+          depth: currentDepth + 1,
+        };
+
+        // First, remove the tab from the source pane
+        newRoot = updateLeaf(envState.root, fromPaneId, (leaf) => {
+          const remainingTabs = leaf.tabs.filter((t) => t.id !== tabId);
+          return {
+            ...leaf,
+            tabs: remainingTabs,
+            activeTabId:
+              leaf.activeTabId === tabId
+                ? (remainingTabs[remainingTabs.length - 1]?.id ?? null)
+                : leaf.activeTabId,
+          };
+        });
+
+        // Then, replace the target pane with the split
+        newRoot = replaceNode(newRoot, targetPaneId, newSplit);
+      }
+
+      const newEnvs = new Map(state.environments);
+      newEnvs.set(envId, { ...envState, root: newRoot, activePaneId: newPaneId });
+      set({ environments: newEnvs });
+
+      // If the source pane is now empty, close it (only for cross-pane splits)
+      // For same-pane splits, the source pane was replaced by the split, so it doesn't exist anymore
+      if (!isSamePaneSplit) {
+        const updatedSourceLeaf = findLeaf(newRoot, fromPaneId);
+        if (updatedSourceLeaf && updatedSourceLeaf.tabs.length === 0) {
+          // Use a timeout to avoid state update conflicts
+          setTimeout(() => get().closePane(fromPaneId, envId), 0);
+        }
+      }
+    },
+
+    closePane: (paneId, environmentId) => {
+      const state = get();
+      const envId = environmentId ?? state.activeEnvironmentId;
+      if (!envId) return;
+
+      const envState = state.environments.get(envId);
+      if (!envState) return;
+
+      const parentSplit = findParentSplit(envState.root, paneId);
+
+      // If no parent, this is the only pane - can't close it
+      if (!parentSplit) {
+        log.debug("pane.close-refused", () => ({ environmentId: envId, paneId }));
+        return;
+      }
+
+      const pane = findLeaf(envState.root, paneId);
+      if (!pane) return;
+
+      pane.tabs.forEach((tab) => {
+        cleanupTabResources(scope, envId, envState.containerId, tab);
+        useTerminalPortalStore.getState().disposeTerminal(scope.nodeId, envId, tab.id);
+      });
+
+      // Find the sibling
+      const siblingIndex = parentSplit.children[0].id === paneId ? 1 : 0;
+      const sibling = parentSplit.children[siblingIndex];
+
+      // Replace parent split with sibling
+      const newRoot = replaceNode(envState.root, parentSplit.id, sibling);
+      // Update active pane if needed
+      let newActivePaneId = envState.activePaneId;
+      if (envState.activePaneId === paneId) {
+        const firstLeaf = findFirstLeaf(sibling);
+        newActivePaneId = firstLeaf.id;
+      }
+
+      const newEnvs = new Map(state.environments);
+      newEnvs.set(envId, { ...envState, root: newRoot, activePaneId: newActivePaneId });
+      set({ environments: newEnvs });
+      forgetRemovedAgentHandoffs(scope, pane.tabs, newRoot);
+    },
+
+    setActivePane: (paneId, environmentId) => {
+      const state = get();
+      const envId = environmentId ?? state.activeEnvironmentId;
+      if (!envId) return;
+
+      const envState = state.environments.get(envId);
+      if (!envState) return;
+      if (!findLeaf(envState.root, paneId)) return;
+
+      const newEnvs = new Map(state.environments);
+      newEnvs.set(envId, { ...envState, activePaneId: paneId });
+      set({ environments: newEnvs });
+    },
+
+    updateSizes: (splitId, sizes, environmentId) => {
+      const state = get();
+      const envId = environmentId ?? state.activeEnvironmentId;
+      if (!envId) return;
+
+      const envState = state.environments.get(envId);
+      if (!envState) return;
+
+      const update = (node: PaneNode): PaneNode => {
+        if (isPaneLeaf(node)) return node;
+        if (node.id === splitId) {
+          return { ...node, sizes };
+        }
+        return {
+          ...node,
+          children: [update(node.children[0]), update(node.children[1])] as [PaneNode, PaneNode],
+        };
+      };
+
+      const newRoot = update(envState.root);
+      const newEnvs = new Map(state.environments);
+      newEnvs.set(envId, { ...envState, root: newRoot });
+      set({ environments: newEnvs });
+    },
+
+    getPane: (paneId, environmentId) => {
+      const state = get();
+      const envState = getEnvironmentPaneState(state, environmentId);
+      return findLeaf(envState.root, paneId);
+    },
+
+    getActivePane: (environmentId) => {
+      const state = get();
+      const envState = getEnvironmentPaneState(state, environmentId);
+      return findLeaf(envState.root, envState.activePaneId);
+    },
+
+    getAllTabs: (environmentId) => {
+      const state = get();
+      const envState = getEnvironmentPaneState(state, environmentId);
+      const leaves = getAllLeaves(envState.root);
+      return leaves.flatMap((leaf) => leaf.tabs);
+    },
+
+    getOpenFilePaths: (environmentId) => {
+      const tabs = get().getAllTabs(environmentId);
+      return tabs
+        .filter((t) => t.type === "file" && t.fileData?.filePath)
+        .map((t) => t.fileData!.filePath);
+    },
+
+    findPaneWithTab: (tabId: string, environmentId) => {
+      const state = get();
+      const envState = getEnvironmentPaneState(state, environmentId);
+      return findPaneWithTab(envState.root, tabId);
+    },
+  }),
+);
+
+/** Reads the nearest node scope's pane layouts; other code uses `scope.store(paneLayoutStore)`. */
+export const usePaneLayoutStore = scopedStoreHook(paneLayoutStore);

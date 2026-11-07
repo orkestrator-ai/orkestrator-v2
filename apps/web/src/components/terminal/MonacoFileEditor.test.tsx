@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import * as realMonacoReact from "@monaco-editor/react";
 import * as realMonacoLoader from "@/lib/monaco-loader";
 
@@ -184,7 +185,7 @@ describe("MonacoFileEditor component", () => {
       }),
     };
 
-    const view = render(
+    const view = renderInAppCommandScope(
       <MonacoFileEditor
         language="markdown"
         value="initial"
@@ -246,7 +247,7 @@ describe("MonacoFileEditor component", () => {
       KeyMod: { CtrlCmd: 4 },
       KeyCode: { KeyS: 8 },
     };
-    const view = render(
+    const view = renderInAppCommandScope(
       <MonacoFileEditor
         language="typescript"
         value=""
@@ -293,7 +294,7 @@ describe("MonacoFileEditor component", () => {
       KeyMod: { CtrlCmd: 4 },
       KeyCode: { KeyS: 8 },
     };
-    const view = render(
+    const view = renderInAppCommandScope(
       <MonacoFileEditor
         language="typescript"
         value=""
@@ -335,7 +336,7 @@ describe("MonacoFileEditor component", () => {
         }),
     );
 
-    render(
+    renderInAppCommandScope(
       <MonacoFileEditor
         language="typescript"
         value="const value = 1"
@@ -356,7 +357,7 @@ describe("MonacoFileEditor component", () => {
       .mockRejectedValueOnce(new Error("worker chunk unavailable"))
       .mockResolvedValueOnce(undefined);
 
-    render(
+    renderInAppCommandScope(
       <MonacoFileEditor
         language="typescript"
         value=""
@@ -381,7 +382,7 @@ describe("MonacoFileEditor component", () => {
       .mockRejectedValueOnce(new Error("second failure"))
       .mockResolvedValueOnce(undefined);
 
-    render(
+    renderInAppCommandScope(
       <MonacoFileEditor
         language="typescript"
         value=""
@@ -413,7 +414,7 @@ describe("MonacoFileEditor component", () => {
           resolveConfiguration = resolve;
         }),
     );
-    const view = render(
+    const view = renderInAppCommandScope(
       <MonacoFileEditor
         language="typescript"
         value=""

@@ -1,3 +1,4 @@
+import { eventSink } from "./backend-emit.js";
 import { configureLogger, resetLogger, type LogOutput } from "@orkestrator/protocol/logger";
 import { describe, expect, mock, test } from "bun:test";
 import type { CommandContext } from "./commands-context.js";
@@ -27,7 +28,7 @@ describe("refreshClaudeModelCatalog", () => {
         updateEnvironment,
         cacheAgentModelCatalog,
       },
-      emit: (...args: unknown[]) => emitted.push(args),
+      emit: eventSink((...args: unknown[]) => emitted.push(args)),
       runtime: { logPolicy: { bridgeStarted } },
     } as unknown as CommandContext;
 

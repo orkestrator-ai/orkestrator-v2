@@ -2,11 +2,12 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import {
   createSessionKey,
   type TerminalComposeDraftImage,
-  useTerminalSessionStore,
+  terminalSessionStore,
 } from "./terminalSessionStore";
+import { appCommandStore } from "@/test/app-command-store";
 
 function resetTerminalSessionStore() {
-  useTerminalSessionStore.setState({
+  appCommandStore(terminalSessionStore).setState({
     sessions: new Map(),
     composeDraftText: new Map(),
     composeDraftImages: new Map(),
@@ -29,20 +30,22 @@ describe("terminalSessionStore compose drafts", () => {
   });
 
   test("stores and clears compose draft text", () => {
-    const store = useTerminalSessionStore.getState();
+    const store = appCommandStore(terminalSessionStore).getState();
     const sessionKey = "container-1:tab-1";
 
     store.setComposeDraftText(sessionKey, "draft command");
-    expect(useTerminalSessionStore.getState().getComposeDraftText(sessionKey)).toBe(
+    expect(appCommandStore(terminalSessionStore).getState().getComposeDraftText(sessionKey)).toBe(
       "draft command",
     );
 
     store.setComposeDraftText(sessionKey, "");
-    expect(useTerminalSessionStore.getState().getComposeDraftText(sessionKey)).toBe("");
+    expect(appCommandStore(terminalSessionStore).getState().getComposeDraftText(sessionKey)).toBe(
+      "",
+    );
   });
 
   test("appends and removes compose draft images without overwriting existing images", () => {
-    const store = useTerminalSessionStore.getState();
+    const store = appCommandStore(terminalSessionStore).getState();
     const sessionKey = "container-1:tab-1";
     const imageA = createDraftImage("img-a");
     const imageB = createDraftImage("img-b");
@@ -50,20 +53,23 @@ describe("terminalSessionStore compose drafts", () => {
     store.appendComposeDraftImage(sessionKey, imageA);
     store.appendComposeDraftImage(sessionKey, imageB);
 
-    expect(useTerminalSessionStore.getState().getComposeDraftImages(sessionKey)).toEqual([
-      imageA,
-      imageB,
-    ]);
+    expect(
+      appCommandStore(terminalSessionStore).getState().getComposeDraftImages(sessionKey),
+    ).toEqual([imageA, imageB]);
 
     store.removeComposeDraftImage(sessionKey, "img-a");
-    expect(useTerminalSessionStore.getState().getComposeDraftImages(sessionKey)).toEqual([imageB]);
+    expect(
+      appCommandStore(terminalSessionStore).getState().getComposeDraftImages(sessionKey),
+    ).toEqual([imageB]);
 
     store.removeComposeDraftImage(sessionKey, "img-b");
-    expect(useTerminalSessionStore.getState().getComposeDraftImages(sessionKey)).toEqual([]);
+    expect(
+      appCommandStore(terminalSessionStore).getState().getComposeDraftImages(sessionKey),
+    ).toEqual([]);
   });
 
   test("removeSession clears persisted compose drafts", () => {
-    const store = useTerminalSessionStore.getState();
+    const store = appCommandStore(terminalSessionStore).getState();
     const sessionKey = "container-2:tab-3";
 
     store.setSession(sessionKey, { sessionId: "pty-1" });
@@ -72,9 +78,13 @@ describe("terminalSessionStore compose drafts", () => {
 
     store.removeSession(sessionKey);
 
-    expect(useTerminalSessionStore.getState().getSession(sessionKey)).toBeUndefined();
-    expect(useTerminalSessionStore.getState().getComposeDraftText(sessionKey)).toBe("");
-    expect(useTerminalSessionStore.getState().getComposeDraftImages(sessionKey)).toEqual([]);
+    expect(appCommandStore(terminalSessionStore).getState().getSession(sessionKey)).toBeUndefined();
+    expect(appCommandStore(terminalSessionStore).getState().getComposeDraftText(sessionKey)).toBe(
+      "",
+    );
+    expect(
+      appCommandStore(terminalSessionStore).getState().getComposeDraftImages(sessionKey),
+    ).toEqual([]);
   });
 
   test("creates container, local, and fallback session keys", () => {
@@ -84,7 +94,7 @@ describe("terminalSessionStore compose drafts", () => {
   });
 
   test("reads and updates every session identifier and buffer field", () => {
-    const store = useTerminalSessionStore.getState();
+    const store = appCommandStore(terminalSessionStore).getState();
     store.setSession("tab", {
       sessionId: "pty",
       persistentSessionId: "persist",
@@ -95,20 +105,20 @@ describe("terminalSessionStore compose drafts", () => {
 
     store.setSerializedBuffer("tab", "new");
     store.setPersistentSessionId("tab", "persist-2");
-    expect(useTerminalSessionStore.getState().getSession("tab")).toEqual({
+    expect(appCommandStore(terminalSessionStore).getState().getSession("tab")).toEqual({
       sessionId: "pty",
       persistentSessionId: "persist-2",
       serializedBuffer: "new",
     });
 
-    const before = useTerminalSessionStore.getState().sessions;
+    const before = appCommandStore(terminalSessionStore).getState().sessions;
     store.setSerializedBuffer("missing", "ignored");
     store.setPersistentSessionId("missing", "ignored");
-    expect(useTerminalSessionStore.getState().sessions).toBe(before);
+    expect(appCommandStore(terminalSessionStore).getState().sessions).toBe(before);
   });
 
   test("sets image collections and clears every store map", () => {
-    const store = useTerminalSessionStore.getState();
+    const store = appCommandStore(terminalSessionStore).getState();
     const image = createDraftImage("img");
     store.setSession("tab", { sessionId: "pty" });
     store.setComposeDraftText("tab", "draft");
@@ -118,7 +128,7 @@ describe("terminalSessionStore compose drafts", () => {
     expect(store.getComposeDraftImages("tab")).toEqual([]);
     store.clearComposeDraft("tab");
     store.clearAllSessions();
-    const state = useTerminalSessionStore.getState();
+    const state = appCommandStore(terminalSessionStore).getState();
     expect(state.sessions.size).toBe(0);
     expect(state.composeDraftText.size).toBe(0);
     expect(state.composeDraftImages.size).toBe(0);

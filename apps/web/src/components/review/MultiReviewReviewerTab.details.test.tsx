@@ -1,5 +1,6 @@
 import { afterAll, afterEach, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { ReactNode } from "react";
 import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
 
@@ -60,7 +61,7 @@ test("the real message renderer loads a reviewer's deferred tool body", async ()
       },
     ],
   }));
-  render(
+  renderInAppCommandScope(
     <MultiReviewReviewerTab
       data={{
         environmentId: "env-1",

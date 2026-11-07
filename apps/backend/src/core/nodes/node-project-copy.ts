@@ -1,11 +1,13 @@
+import { projectCopyChangedEvent } from "@orkestrator/protocol/contract/domains/events";
+import type { BackendEmit } from "../backend-emit.js";
 import { randomUUID } from "node:crypto";
+import { incompatibility } from "@orkestrator/protocol/contract/errors";
 
 import { repositoryHint, type NodeSummariesResult } from "@orkestrator/protocol/node-summaries";
 import {
   MAX_PROJECT_COPY_RECORDS,
   MAX_PROJECT_COPY_BYTES,
   MAX_PROJECT_COPY_FILES,
-  PROJECT_COPY_CHANGED_EVENT,
   type ProjectCopyCandidate,
   type ProjectCopyFileList,
   type ProjectCopyOptions,
@@ -50,9 +52,9 @@ function message(error: unknown): string {
   return (error instanceof Error ? error.message : String(error)).slice(0, 300);
 }
 
+/** The node cannot serve `command` (it predates it, or the call's version): it needs an update. */
 function unknownCommand(error: unknown, command: string): boolean {
-  const text = error instanceof Error ? error.message : String(error);
-  return text.includes(command) && /unknown|not found|unsupported/i.test(text);
+  return incompatibility(error, command) !== null;
 }
 
 function repositoryName(gitUrl: string, fallback: string): string {
@@ -75,7 +77,7 @@ export interface NodeProjectCopiesOptions {
   summaries(nodeIds?: string[]): Promise<NodeSummariesResult>;
   invokerFor: NodeFileInvoker;
   transfer: NodeFileTransfer;
-  emit(event: string, payload: unknown): void;
+  emit: BackendEmit;
   /** Ran after a copy finishes, successful or not (approved coordinator requests). */
   onFinished?(record: ProjectCopyRecord): void;
   sleep?(ms: number): Promise<void>;
@@ -219,7 +221,7 @@ export class NodeProjectCopies {
   }
 
   private publish(record: ProjectCopyRecord): void {
-    this.deps.emit(PROJECT_COPY_CHANGED_EVENT, {
+    this.deps.emit(projectCopyChangedEvent, {
       copyId: record.copyId,
       stage: record.stage,
     });

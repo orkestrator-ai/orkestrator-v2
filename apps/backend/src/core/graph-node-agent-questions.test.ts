@@ -191,8 +191,8 @@ describe("ask_human", () => {
       string,
       (args: Record<string, unknown>, context: unknown) => unknown
     >();
-    registerGraphRunCommands(((name: string, handler: never) =>
-      handlers.set(name, handler)) as never);
+    registerGraphRunCommands(((target: string | { name: string }, handler: never) =>
+      handlers.set(typeof target === "string" ? target : target.name, handler)) as never);
     const answer = handlers.get("graph_run_answer")!;
     const context = { graphQuestions: world.current().wiring.questions };
     const activation = activationOf(waiting);

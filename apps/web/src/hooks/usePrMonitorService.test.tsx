@@ -1,4 +1,5 @@
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, waitFor } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import {
   PR_MONITOR_CHANGED_EVENT,
@@ -10,7 +11,8 @@ import { NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
 import * as realBackend from "@/lib/backend";
 import * as realNativeEvents from "@/lib/native/events";
 import * as realNotificationSounds from "@/lib/notification-sounds";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { environmentStore } from "@/stores/environmentStore";
+import { appCommandStore } from "@/test/app-command-store";
 
 const handlers = new Map<string, (event: { payload: unknown }) => void>();
 const callOrder: string[] = [];
@@ -42,7 +44,7 @@ mock.module("@/lib/notification-sounds", () => ({
 
 const { usePrMonitorService } = await import("./usePrMonitorService");
 const { requestViewSafetyChecks } = await import("@/lib/resource-sync");
-const { usePrMonitorStore } = await import("@/stores/prMonitorStore");
+const { prMonitorStore } = await import("@/stores/prMonitorStore");
 
 beforeEach(() => {
   handlers.clear();
@@ -56,8 +58,8 @@ beforeEach(() => {
   playConfiguredNotificationSound.mockClear();
   prMonitorWatch.mockClear();
   prMonitorRefresh.mockClear();
-  usePrMonitorStore.setState({ states: new Map(), syncStatus: "idle" });
-  useEnvironmentStore.setState({
+  appCommandStore(prMonitorStore).setState({ states: new Map(), syncStatus: "idle" });
+  appCommandStore(environmentStore).setState({
     environments: [{ id: "env-1", branch: "feature/sounds" }] as never,
   });
 });
@@ -72,7 +74,7 @@ afterAll(() => {
 
 describe("usePrMonitorService sound notifications", () => {
   test("plays the merge cue once for a deduplicated merged transition", async () => {
-    const observer = renderHook(() => usePrMonitorService());
+    const observer = renderHookInAppCommandScope(() => usePrMonitorService());
     await waitFor(() => expect(handlers.has(PR_MONITOR_CHANGED_EVENT)).toBe(true));
 
     const event: PrMonitorEvent = {
@@ -150,8 +152,10 @@ async function mountRevisioned(revision: number, entries: PrMonitorEnvironmentSt
     callOrder.push("snapshot");
     return { entries, generation: GENERATION, revision };
   });
-  const observer = renderHook(() => usePrMonitorService());
-  await waitFor(() => expect(usePrMonitorStore.getState().syncStatus).toBe("current"));
+  const observer = renderHookInAppCommandScope(() => usePrMonitorService());
+  await waitFor(() =>
+    expect(appCommandStore(prMonitorStore).getState().syncStatus).toBe("current"),
+  );
   return observer;
 }
 
@@ -190,7 +194,7 @@ describe("usePrMonitorService revision-aware recovery", () => {
     expect(getPrMonitorState.mock.calls[1]?.[0]).toEqual({ generation: GENERATION, revision: 3 });
 
     expect(playConfiguredNotificationSound).toHaveBeenCalledTimes(1);
-    expect(usePrMonitorStore.getState().states.get("env-1")?.prState).toBe("merged");
+    expect(appCommandStore(prMonitorStore).getState().states.get("env-1")?.prState).toBe("merged");
     // The subscriber never performs terminal side effects itself.
     expect(prMonitorWatch).not.toHaveBeenCalled();
     expect(prMonitorRefresh).not.toHaveBeenCalled();
@@ -206,7 +210,7 @@ describe("usePrMonitorService revision-aware recovery", () => {
     emit(stamped(4, { prUrl: PR_2, prState: "merged" }, merged(PR_2)));
 
     expect(playConfiguredNotificationSound).toHaveBeenCalledTimes(2);
-    expect(usePrMonitorStore.getState().states.get("env-1")?.prUrl).toBe(PR_2);
+    expect(appCommandStore(prMonitorStore).getState().states.get("env-1")?.prUrl).toBe(PR_2);
     observer.unmount();
   });
 
@@ -227,9 +231,11 @@ describe("usePrMonitorService revision-aware recovery", () => {
     emit(stamped(3, { prState: "merged", checkSummary: { passed: 2, total: 2, pending: 0 } }));
     await waitFor(() => expect(getPrMonitorState).toHaveBeenCalledTimes(2));
     expect(getPrMonitorState.mock.calls[1]?.[0]).toEqual({ generation: GENERATION, revision: 1 });
-    await waitFor(() => expect(usePrMonitorStore.getState().syncStatus).toBe("current"));
+    await waitFor(() =>
+      expect(appCommandStore(prMonitorStore).getState().syncStatus).toBe("current"),
+    );
 
-    expect(usePrMonitorStore.getState().states.get("env-1")?.prState).toBe("merged");
+    expect(appCommandStore(prMonitorStore).getState().states.get("env-1")?.prState).toBe("merged");
     // Best-effort notifications: the lost transition is not replayed.
     expect(playConfiguredNotificationSound).not.toHaveBeenCalled();
     observer.unmount();
@@ -237,7 +243,7 @@ describe("usePrMonitorService revision-aware recovery", () => {
 
   test("the resource-sync safety cadence runs a compact check that writes nothing when unchanged", async () => {
     const observer = await mountRevisioned(4, [monitorState()]);
-    const before = usePrMonitorStore.getState().states;
+    const before = appCommandStore(prMonitorStore).getState().states;
     getPrMonitorState.mockImplementation(async () => ({
       status: "unchanged",
       generation: GENERATION,
@@ -251,8 +257,8 @@ describe("usePrMonitorService revision-aware recovery", () => {
       await Promise.resolve();
     });
 
-    expect(usePrMonitorStore.getState().states).toBe(before);
-    expect(usePrMonitorStore.getState().syncStatus).toBe("current");
+    expect(appCommandStore(prMonitorStore).getState().states).toBe(before);
+    expect(appCommandStore(prMonitorStore).getState().syncStatus).toBe("current");
     observer.unmount();
 
     // Unmounting unsubscribes from the cadence.
@@ -264,8 +270,10 @@ describe("usePrMonitorService revision-aware recovery", () => {
     getPrMonitorState.mockImplementation(async () => {
       throw new Error("Unknown backend command: get_pr_monitor_state");
     });
-    const observer = renderHook(() => usePrMonitorService());
-    await waitFor(() => expect(usePrMonitorStore.getState().syncStatus).toBe("unsupported"));
+    const observer = renderHookInAppCommandScope(() => usePrMonitorService());
+    await waitFor(() =>
+      expect(appCommandStore(prMonitorStore).getState().syncStatus).toBe("unsupported"),
+    );
 
     act(() => requestViewSafetyChecks("interval"));
     expect(getPrMonitorState).toHaveBeenCalledTimes(1);

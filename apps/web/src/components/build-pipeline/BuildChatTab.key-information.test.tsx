@@ -1,12 +1,12 @@
-import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { useEffect } from "react";
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, within } from "@testing-library/react";
 import {
   TerminalProvider,
   useTerminalContext,
   type CreateTabOptions,
 } from "@/contexts/TerminalContext";
-import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
+import type { BuildPipeline } from "@/stores/buildPipelineStore";
 import { BuildChatTab } from "./BuildChatTab";
 import { keyInformation } from "./key-information-test-fixture";
 import {
@@ -14,6 +14,9 @@ import {
   renderTab,
   restoreBuildChatTabMocks,
   reviewed,
+  cleanupBuildChatScope,
+  pipelineStore,
+  renderInBuildChat,
 } from "./build-chat-tab-test-support";
 
 /**
@@ -22,6 +25,7 @@ import {
  */
 
 afterAll(restoreBuildChatTabMocks);
+afterEach(cleanupBuildChatScope);
 
 function header(): HTMLElement {
   return screen.getByTestId("build-pipeline-header");
@@ -195,7 +199,7 @@ describe("BuildChatTab key information", () => {
     renderTab({ ...reviewed, backendRevision: 93 });
     openPanel();
     act(() => {
-      useBuildPipelineStore
+      pipelineStore()
         .getState()
         .replacePipeline({ ...reviewed, keyInformation, backendRevision: 94 });
     });
@@ -219,11 +223,11 @@ describe("BuildChatTab key information as a tab", () => {
   }
 
   function renderWithTabs(next: BuildPipeline) {
-    useBuildPipelineStore.setState({
+    pipelineStore().setState({
       pipelines: new Map([[next.id, next]]),
       buildEnvironmentIds: new Set([next.environmentId]),
     });
-    render(
+    renderInBuildChat(
       <TerminalProvider>
         <TabOpener />
         <BuildChatTab

@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:5c5b50ce46e9dc80b8ab1e96184e6675efbbdbaf8320062215f4f2492501f5ee",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "environmentId": {
+          "type": "string"
+        },
+        "reviewPackage": {}
+      },
+      "required": ["environmentId"],
+      "type": "object"
+    }
+  }
+}

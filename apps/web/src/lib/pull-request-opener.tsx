@@ -6,10 +6,13 @@ import {
 } from "@orkestrator/protocol/github-pull-requests";
 import { armPullRequestFallback } from "./pull-request-load-fallback";
 import { openInBrowser } from "@/lib/backend";
-import { projectRootFilesTargetId, useFilesPanelStore } from "@/stores/filesPanelStore";
-import { useProjectStore } from "@/stores/projectStore";
-import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
-import { useUIStore } from "@/stores/uiStore";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { useNodeScope } from "@/lib/node-scope/providers";
+import { filesPanelStore, projectRootFilesTargetId } from "@/stores/filesPanelStore";
+import { appCommandScope } from "@/lib/node-scope-slots";
+import { shownNodeScope } from "@/lib/node-scope/shown-scope";
+import { projectStore } from "@/stores/projectStore";
+import { uiStore } from "@/stores/uiStore";
 
 /**
  * Opens a pull request inside the app. Returns false when there is nowhere to
@@ -48,16 +51,18 @@ export function PullRequestOpenerProvider({
 }
 
 /**
- * The target whose pull request tabs the right-hand files panel shows now:
- * the selected environment, or the selected project's root checkout. Mirrors
- * `useFilesPanel`. Null when nothing is selected, as under another machine's
- * workspace, which clears this window's selection and has its own panel.
+ * The target whose pull request tabs `scope`'s files panel shows now (the
+ * command node's by default): the selected environment, or the selected
+ * project's root checkout. Mirrors `useFilesPanel`. Null when nothing is
+ * selected there, as while the window shows another node, whose workspace
+ * has its own panel.
  */
-export function currentFilesPanelTargetId(): string | null {
-  const ui = useUIStore.getState();
+export function currentFilesPanelTargetId(scope: NodeScope = appCommandScope()): string | null {
+  const ui = scope.store(uiStore).getState();
   if (ui.selectedEnvironmentId) return ui.selectedEnvironmentId;
   if (!ui.selectedProjectId) return null;
-  const project = useProjectStore
+  const project = scope
+    .store(projectStore)
     .getState()
     .projects.find((candidate) => candidate.id === ui.selectedProjectId);
   return project ? projectRootFilesTargetId(project.id) : null;
@@ -69,16 +74,23 @@ export function currentFilesPanelTargetId(): string | null {
  * or environment the pull request belongs to. Nothing in the main view
  * changes (no selection, board tab or pane tab), so closing the panel returns
  * the user exactly where they were.
+ *
+ * `scope` is the node whose files panel shows it. Without one, the node the
+ * window shows (`shownNodeScope`, plan item 5002): the command node, or
+ * another node shown in the window's own tree. A node whose scope is not
+ * open (yet) has none here, so the caller falls back to the browser.
  */
 export function openPullRequestInApp(
   ref: GitHubPullRequestRef,
   view?: GitHubPullRequestViewTab,
+  scope: NodeScope | null = shownNodeScope(),
 ): boolean {
-  if (useRemoteWorkspaceStore.getState().active) return false;
-  const targetId = currentFilesPanelTargetId();
+  if (!scope) return false;
+  // Null while nothing is selected on that node.
+  const targetId = currentFilesPanelTargetId(scope);
   if (!targetId) return false;
   armPullRequestFallback(ref);
-  useFilesPanelStore.getState().openPullRequest(targetId, ref, view);
+  scope.store(filesPanelStore).getState().openPullRequest(targetId, ref, view);
   return true;
 }
 
@@ -101,6 +113,13 @@ export async function openPullRequestUrl(
   return false;
 }
 
+/** The nearest provider's opener, else `openPullRequestInApp` on the nearest node scope. */
 export function usePullRequestOpener(): PullRequestOpener {
-  return useContext(PullRequestOpenerContext) ?? openPullRequestInApp;
+  const provided = useContext(PullRequestOpenerContext);
+  const scope = useNodeScope();
+  const inScope = useMemo<PullRequestOpener>(
+    () => (ref, view) => openPullRequestInApp(ref, view, scope),
+    [scope],
+  );
+  return provided ?? inScope;
 }

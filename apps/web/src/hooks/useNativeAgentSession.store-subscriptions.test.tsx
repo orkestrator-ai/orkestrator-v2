@@ -3,7 +3,8 @@
  * with it the whole agent tab (WEB-2's narrower subscriptions).
  */
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, waitFor } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import type {
   NativeAgentSessionProjection,
   NativeAgentSessionStateUpdate,
@@ -12,8 +13,9 @@ import type {
 } from "@orkestrator/protocol/native-agent";
 import { nativeAgentCapabilities } from "@orkestrator/protocol/native-agent";
 import * as realBackend from "@/lib/backend";
-import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { nativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
+import { appCommandStore } from "@/test/app-command-store";
 
 interface TestMessage {
   id: string;
@@ -104,7 +106,7 @@ afterAll(() => {
 
 function renderCountedSession() {
   const seen = { renders: 0 };
-  const rendered = renderHook(() => {
+  const rendered = renderHookInAppCommandScope(() => {
     seen.renders += 1;
     return useNativeAgentSession<TestMessage>({
       platform: "codex",
@@ -125,7 +127,9 @@ async function settledSession() {
   });
   await waitFor(() => expect(session.result.current.sessionStateAvailability).toBe("current"));
   await waitFor(() =>
-    expect(useNativeAgentProjectionStore.getState().progressiveCaches.has(SESSION_KEY)).toBe(true),
+    expect(
+      appCommandStore(nativeAgentProjectionStore).getState().progressiveCaches.has(SESSION_KEY),
+    ).toBe(true),
   );
   session.seen.renders = 0;
   return session;
@@ -134,33 +138,35 @@ async function settledSession() {
 beforeEach(() => {
   resetNativeAgentSyncCapabilityForTests();
   transcriptKnownTokens.length = 0;
-  usePaneLayoutStore.setState({
+  appCommandStore(paneLayoutStore).setState({
     environments: new Map(),
     hydration: new Map(),
     activeEnvironmentId: null,
   });
-  useNativeAgentProjectionStore.getState().reset();
+  appCommandStore(nativeAgentProjectionStore).getState().reset();
 });
 
 afterEach(() => {
   cleanup();
-  useNativeAgentProjectionStore.getState().reset();
+  appCommandStore(nativeAgentProjectionStore).getState().reset();
 });
 
 describe("useNativeAgentSession store subscriptions", () => {
   test("a progressive cache write does not re-render the hook", async () => {
     const { seen } = await settledSession();
-    const store = useNativeAgentProjectionStore.getState();
+    const store = appCommandStore(nativeAgentProjectionStore).getState();
     const entry = store.progressiveCaches.get(SESSION_KEY)!;
 
     act(() => {
       for (let tick = 1; tick <= 3; tick += 1) {
-        useNativeAgentProjectionStore
+        appCommandStore(nativeAgentProjectionStore)
           .getState()
           .setProgressiveCache(SESSION_KEY, { ...entry, discoveryToken: `moved-${tick}` });
       }
     });
-    expect(useNativeAgentProjectionStore.getState().progressiveCaches.get(SESSION_KEY)).toEqual({
+    expect(
+      appCommandStore(nativeAgentProjectionStore).getState().progressiveCaches.get(SESSION_KEY),
+    ).toEqual({
       ...entry,
       discoveryToken: "moved-3",
     });
@@ -169,26 +175,30 @@ describe("useNativeAgentSession store subscriptions", () => {
 
   test("a sync cache write that keeps the projection does not re-render the hook", async () => {
     const { seen } = await settledSession();
-    const projection = useNativeAgentProjectionStore.getState().projections.get(SESSION_KEY)!;
+    const projection = appCommandStore(nativeAgentProjectionStore)
+      .getState()
+      .projections.get(SESSION_KEY)!;
 
     act(() => {
-      useNativeAgentProjectionStore.getState().setProjection(SESSION_KEY, projection, {
-        token: "sync-moved",
-        liveProjection: projection,
-        historyMessages: [],
-        historyBytes: 0,
-        historyComplete: true,
-      });
+      appCommandStore(nativeAgentProjectionStore)
+        .getState()
+        .setProjection(SESSION_KEY, projection, {
+          token: "sync-moved",
+          liveProjection: projection,
+          historyMessages: [],
+          historyBytes: 0,
+          historyComplete: true,
+        });
     });
-    expect(useNativeAgentProjectionStore.getState().syncCaches.get(SESSION_KEY)?.token).toBe(
-      "sync-moved",
-    );
+    expect(
+      appCommandStore(nativeAgentProjectionStore).getState().syncCaches.get(SESSION_KEY)?.token,
+    ).toBe("sync-moved");
     expect(seen.renders).toBe(0);
   });
 
   test("a new shared projection still reaches the hook", async () => {
     const { result, seen } = await settledSession();
-    const store = useNativeAgentProjectionStore.getState();
+    const store = appCommandStore(nativeAgentProjectionStore).getState();
     const projection = store.projections.get(
       SESSION_KEY,
     ) as NativeAgentSessionProjection<TestMessage>;
@@ -199,7 +209,7 @@ describe("useNativeAgentSession store subscriptions", () => {
     };
 
     act(() => {
-      useNativeAgentProjectionStore
+      appCommandStore(nativeAgentProjectionStore)
         .getState()
         .setProjection(SESSION_KEY, next, store.syncCaches.get(SESSION_KEY) ?? null);
     });

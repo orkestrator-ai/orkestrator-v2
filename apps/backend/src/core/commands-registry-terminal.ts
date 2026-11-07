@@ -1,5 +1,59 @@
 import { canonicalWorktreePath } from "@orkestrator/protocol/node/worktree-paths";
 import { isEnvironmentReadyForAgents } from "@orkestrator/protocol/environment-readiness";
+import {
+  attachTerminalCommand,
+  bootstrapTerminalSessionCommand,
+  closeLocalTerminalSessionCommand,
+  createLocalTerminalSessionCommand,
+  createTerminalSessionCommand,
+  detachTerminalCommand,
+  getTerminalHistoryPageCommand,
+  getTerminalOutputBufferCommand,
+  getTerminalOutputSnapshotCommand,
+  getTerminalSessionCommand,
+  getTerminalStateSnapshotCommand,
+  launchTerminalJobCommand,
+  listTerminalSessionsCommand,
+  localTerminalResizeCommand,
+  localTerminalWriteCommand,
+  startLocalTerminalSessionCommand,
+  startTerminalSessionCommand,
+  terminalResizeCommand,
+  terminalSnapshotAppliedCommand,
+  terminalSnapshotFailedCommand,
+  terminalWriteCommand,
+} from "@orkestrator/protocol/contract/domains/terminals";
+import {
+  checkContainerWorkspacePathsCommand,
+  copyExternalFileCommand,
+  createContainerFolderCommand,
+  createLocalFolderCommand,
+  deleteContainerAnnotationEvidenceCommand,
+  deleteContainerFileCommand,
+  deleteLocalFileCommand,
+  getFileSubtreeCommand,
+  getFileTreeCommand,
+  getLocalFileSubtreeCommand,
+  getLocalFileTreeCommand,
+  getWorktreeSnapshotRevisionsCommand,
+  moveContainerFileCommand,
+  moveLocalFileCommand,
+  readContainerFileBase64Command,
+  readContainerFileCommand,
+  readEnvironmentFileBase64Command,
+  readFileAtBranchCommand,
+  readFileBase64Command,
+  readLocalFileAtBranchCommand,
+  readLocalFileCommand,
+  renameContainerFileCommand,
+  renameLocalFileCommand,
+  revertContainerFileCommand,
+  revertLocalFileCommand,
+  writeContainerFileCommand,
+  writeInitialPromptAttachmentsCommand,
+  writeLocalFileCommand,
+  type FileTreeNode,
+} from "@orkestrator/protocol/contract/domains/files";
 import type { CommandContext } from "./commands-context.js";
 import type { Environment } from "./models.js";
 import { assertContainerNotDraining } from "./container-readiness.js";
@@ -7,6 +61,15 @@ import { gitDockerScanPool } from "./git-docker-scan-pool.js";
 import { createHash, randomUUID } from "node:crypto";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { WEB_ANNOTATION_LIMITS } from "@orkestrator/protocol/web-annotations";
+import {
+  getEnvironmentCommitAncestryCommand,
+  getEnvironmentDiffStatsCommand,
+  getEnvironmentUncommittedPathsCommand,
+  getGitStatusCommand,
+  getLocalGitStatusCommand,
+  refreshEnvironmentDiffStatsCommand,
+} from "@orkestrator/protocol/contract/domains/git";
+import { ASYNC_HANDLER } from "./commands-registry-async-decode.js";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import {
   MAX_BASE64_PAYLOAD_BYTES,
@@ -73,7 +136,6 @@ import {
   containerTerminalUserArgs,
   asString,
   asRecord,
-  assertOnlyKeys,
   asOptionalString,
   asBoolean,
   asRequiredBoolean,
@@ -279,151 +341,159 @@ export function registerTerminalCommands(
   register: CommandRegistrar,
   dependencies: RegistryDependencies,
 ): void {
-  register("launch_terminal_job", async (args, context) => {
-    const environmentId = asNonBlankString(args.environmentId, "environmentId");
-    const requestId = asNonBlankString(args.requestId, "requestId");
-    if (requestId.length > 256) throw new Error("requestId must be at most 256 characters");
-    const requestedTabId = asOptionalString(args.tabId)?.trim();
-    if (requestedTabId && requestedTabId.length > 256) {
-      throw new Error("tabId must be at most 256 characters");
-    }
-    const tabType = asNonBlankString(args.tabType, "tabType");
-    if (
-      tabType !== "plain" &&
-      tabType !== "claude-tmux" &&
-      (!isAgentPlatform(tabType) || tabType === "cursor")
-    ) {
-      throw new Error("Terminal job tab type is invalid");
-    }
-    const title = asOptionalString(args.title)?.trim();
-    if (title && title.length > 200) throw new Error("title must be at most 200 characters");
-    const data = tabType === "claude-tmux" ? undefined : asString(args.data, "data");
-    if (data !== undefined && !data.trim()) throw new Error("data must not be blank");
-    if (data !== undefined && data.length > 500_000) {
-      throw new Error("data must be at most 500000 characters");
-    }
-    const environment = await context.storage.getEnvironment(environmentId);
-    if (!environment) throw new Error(`Environment not found: ${environmentId}`);
-    if (environment.deletionRequestedAt || environment.lifecycleOperation === "deleting") {
-      throw new Error("Environment is being deleted");
-    }
-    if (!isEnvironmentReadyForAgents(environment)) {
-      throw new Error("Environment is not running with setup complete");
-    }
-    if (
-      tabType !== "claude-tmux" &&
-      environment.environmentType !== "local" &&
-      !environment.containerId
-    ) {
-      throw new Error("Environment container is unavailable");
-    }
+  register(
+    launchTerminalJobCommand,
+    async (args, context) => {
+      const environmentId = asNonBlankString(args.environmentId, "environmentId");
+      const requestId = asNonBlankString(args.requestId, "requestId");
+      if (requestId.length > 256) throw new Error("requestId must be at most 256 characters");
+      const requestedTabId = asOptionalString(args.tabId)?.trim();
+      if (requestedTabId && requestedTabId.length > 256) {
+        throw new Error("tabId must be at most 256 characters");
+      }
+      const tabType = asNonBlankString(args.tabType, "tabType");
+      if (
+        tabType !== "plain" &&
+        tabType !== "claude-tmux" &&
+        (!isAgentPlatform(tabType) || tabType === "cursor")
+      ) {
+        throw new Error("Terminal job tab type is invalid");
+      }
+      const title = asOptionalString(args.title)?.trim();
+      if (title && title.length > 200) throw new Error("title must be at most 200 characters");
+      const data = tabType === "claude-tmux" ? undefined : asString(args.data, "data");
+      if (data !== undefined && !data.trim()) throw new Error("data must not be blank");
+      if (data !== undefined && data.length > 500_000) {
+        throw new Error("data must be at most 500000 characters");
+      }
+      const environment = await context.storage.getEnvironment(environmentId);
+      if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+      if (environment.deletionRequestedAt || environment.lifecycleOperation === "deleting") {
+        throw new Error("Environment is being deleted");
+      }
+      if (!isEnvironmentReadyForAgents(environment)) {
+        throw new Error("Environment is not running with setup complete");
+      }
+      if (
+        tabType !== "claude-tmux" &&
+        environment.environmentType !== "local" &&
+        !environment.containerId
+      ) {
+        throw new Error("Environment container is unavailable");
+      }
 
-    const jobId = createHash("sha256")
-      .update(environmentId)
-      .update("\0")
-      .update(requestId)
-      .digest("hex")
-      .slice(0, 24);
-    const tabId = requestedTabId || `terminal-job-${jobId}`;
-    await context.storage.ensureTerminalJobTab({
-      environmentId,
-      tabId,
-      type: tabType,
-      title,
-      activate: args.activateTab === "setup-handoff" ? "setup-handoff" : args.activateTab === true,
-    });
-
-    const invoke = async <T>(command: string, commandArgs: Record<string, unknown>): Promise<T> => {
-      const handler = dependencies.commands.get(command);
-      if (!handler) throw new Error(`Backend command is unavailable: ${command}`);
-      return (await handler(commandArgs, context)) as T;
-    };
-
-    if (tabType === "claude-tmux") {
-      const status = await invoke<{ running?: boolean } | null>("claude_tmux_status", {
-        tabId,
+      const jobId = createHash("sha256")
+        .update(environmentId)
+        .update("\0")
+        .update(requestId)
+        .digest("hex")
+        .slice(0, 24);
+      const tabId = requestedTabId || `terminal-job-${jobId}`;
+      await context.storage.ensureTerminalJobTab({
         environmentId,
+        tabId,
+        type: tabType,
+        title,
+        activate:
+          args.activateTab === "setup-handoff" ? "setup-handoff" : args.activateTab === true,
       });
-      if (!status?.running) {
-        await invoke("claude_tmux_start", {
+
+      const invoke = async <T>(
+        command: string,
+        commandArgs: Record<string, unknown>,
+      ): Promise<T> => {
+        const handler = dependencies.commands.get(command);
+        if (!handler) throw new Error(`Backend command is unavailable: ${command}`);
+        return (await handler(commandArgs, context)) as T;
+      };
+
+      if (tabType === "claude-tmux") {
+        const status = await invoke<{ running?: boolean } | null>("claude_tmux_status", {
           tabId,
           environmentId,
-          initialPrompt: asOptionalString(args.initialPrompt),
-          model: asOptionalString(args.model),
-          effort: asOptionalString(args.reasoningEffort),
-          ...(typeof args.fastMode === "boolean" ? { fastMode: args.fastMode } : {}),
         });
+        if (!status?.running) {
+          await invoke("claude_tmux_start", {
+            tabId,
+            environmentId,
+            initialPrompt: asOptionalString(args.initialPrompt),
+            model: asOptionalString(args.model),
+            effort: asOptionalString(args.reasoningEffort),
+            ...(typeof args.fastMode === "boolean" ? { fastMode: args.fastMode } : {}),
+          });
+        }
+        return { jobId, environmentId, tabId, tabType, status: "started" as const };
       }
-      return { jobId, environmentId, tabId, tabType, status: "started" };
-    }
 
-    if (data === undefined) throw new Error("data is required for terminal jobs");
-    const trackEnvironmentActivity = tabType !== "plain";
-    let created: { sessionId: string; created?: boolean; bootstrapped?: boolean };
-    if (environment.environmentType === "local") {
-      created = await invoke("create_local_terminal_session", {
-        environmentId,
-        terminalKey: tabId,
-        cols: 80,
-        rows: 24,
-        trackEnvironmentActivity,
+      if (data === undefined) throw new Error("data is required for terminal jobs");
+      const trackEnvironmentActivity = tabType !== "plain";
+      let created: { sessionId: string; created?: boolean; bootstrapped?: boolean };
+      if (environment.environmentType === "local") {
+        created = await invoke("create_local_terminal_session", {
+          environmentId,
+          terminalKey: tabId,
+          cols: 80,
+          rows: 24,
+          trackEnvironmentActivity,
+        });
+        await invoke("start_local_terminal_session", { sessionId: created.sessionId });
+      } else {
+        created = await invoke("create_terminal_session", {
+          containerId: environment.containerId,
+          environmentId,
+          terminalKey: tabId,
+          cols: 80,
+          rows: 24,
+          trackEnvironmentActivity,
+        });
+        await invoke("start_terminal_session", { sessionId: created.sessionId });
+      }
+      const bootstrap = await invoke<{
+        bootstrapped: boolean;
+        duplicate?: boolean;
+        matchesExisting?: boolean;
+      }>("bootstrap_terminal_session", {
+        sessionId: created.sessionId,
+        data,
       });
-      await invoke("start_local_terminal_session", { sessionId: created.sessionId });
-    } else {
-      created = await invoke("create_terminal_session", {
-        containerId: environment.containerId,
+      if (!bootstrap.bootstrapped) throw new Error("Terminal job could not be started");
+      if (bootstrap.duplicate && bootstrap.matchesExisting !== true) {
+        throw new Error("Terminal job session was already bootstrapped by another owner");
+      }
+      // Publish the backend-owned PTY identity only after it is ready to attach.
+      // The renderer is intentionally forbidden from manufacturing a replacement
+      // for these tabs, so the durable pane snapshot must carry the exact session.
+      await context.storage.ensureTerminalJobTab({
         environmentId,
-        terminalKey: tabId,
-        cols: 80,
-        rows: 24,
-        trackEnvironmentActivity,
+        tabId,
+        type: tabType,
+        title,
+        // The first publish already handled the requested selection. By the time
+        // bootstrap finishes the user may have moved elsewhere or closed this
+        // tab, and the identity update must not override either action.
+        activate: false,
+        terminalSessionId: created.sessionId,
+        existingOnly: true,
       });
-      await invoke("start_terminal_session", { sessionId: created.sessionId });
-    }
-    const bootstrap = await invoke<{
-      bootstrapped: boolean;
-      duplicate?: boolean;
-      matchesExisting?: boolean;
-    }>("bootstrap_terminal_session", {
-      sessionId: created.sessionId,
-      data,
-    });
-    if (!bootstrap.bootstrapped) throw new Error("Terminal job could not be started");
-    if (bootstrap.duplicate && bootstrap.matchesExisting !== true) {
-      throw new Error("Terminal job session was already bootstrapped by another owner");
-    }
-    // Publish the backend-owned PTY identity only after it is ready to attach.
-    // The renderer is intentionally forbidden from manufacturing a replacement
-    // for these tabs, so the durable pane snapshot must carry the exact session.
-    await context.storage.ensureTerminalJobTab({
-      environmentId,
-      tabId,
-      type: tabType,
-      title,
-      // The first publish already handled the requested selection. By the time
-      // bootstrap finishes the user may have moved elsewhere or closed this
-      // tab, and the identity update must not override either action.
-      activate: false,
-      terminalSessionId: created.sessionId,
-      existingOnly: true,
-    });
-    return {
-      jobId,
-      environmentId,
-      tabId,
-      tabType,
-      sessionId: created.sessionId,
-      status: "started",
-    };
-  });
+      return {
+        jobId,
+        environmentId,
+        tabId,
+        tabType,
+        sessionId: created.sessionId,
+        status: "started" as const,
+      };
+    },
+    ASYNC_HANDLER,
+  );
 
   register(
-    "create_terminal_session",
+    createTerminalSessionCommand,
     async (
       { containerId, environmentId, terminalKey, cols, rows, user, trackEnvironmentActivity },
       { storage, runtime },
     ) => {
-      const resolvedContainerId = asString(containerId, "containerId");
+      const resolvedContainerId = containerId;
       const requestedEnvironmentId = asOptionalString(environmentId);
       runtime.environments.assertNotDeleting(requestedEnvironmentId);
       // A stop that is draining the container refuses new terminals into it.
@@ -486,14 +556,15 @@ export function registerTerminalCommands(
       });
       return { sessionId: id, created: true, bootstrapped: false };
     },
+    ASYNC_HANDLER,
   );
-  register("attach_terminal", ({ containerId, cols, rows, user }, context) => {
+  register(attachTerminalCommand, ({ containerId, cols, rows, user }, context) => {
     const { storage, runtime } = context;
-    assertContainerNotDraining(asString(containerId, "containerId"));
-    const id = `${asString(containerId, "containerId")}:${randomUUID()}`;
+    assertContainerNotDraining(containerId);
+    const id = `${containerId}:${randomUUID()}`;
     const config = {
       kind: "container" as const,
-      containerId: asString(containerId, "containerId"),
+      containerId,
       cols: asTerminalDimension(cols, 80),
       rows: asTerminalDimension(rows, 24),
       user: asOptionalString(user),
@@ -509,57 +580,58 @@ export function registerTerminalCommands(
     spawnContainerTerminal(id, config, context);
     return id;
   });
-  register("start_terminal_session", async ({ sessionId }, context) => {
-    const { storage, runtime } = context;
-    const id = asString(sessionId, "sessionId");
-    const storedConfig = runtime.terminals.sessionConfig(id);
-    const config =
-      storedConfig?.kind === "container"
-        ? storedConfig
-        : {
-            kind: "container" as const,
-            containerId: id.split(":")[0] ?? id,
-            cols: 80,
-            rows: 24,
-          };
-    const environmentId =
-      config.environmentId ??
-      config.activityEnvironmentId ??
-      runtime.terminals.stableKeyEnvironmentId(id) ??
-      undefined;
-    runtime.environments.assertNotDeleting(environmentId);
-    if (environmentId) {
-      const environment = await storage.getEnvironment(environmentId);
+  register(
+    startTerminalSessionCommand,
+    async ({ sessionId }, context) => {
+      const { storage, runtime } = context;
+      const id = sessionId;
+      const storedConfig = runtime.terminals.sessionConfig(id);
+      const config =
+        storedConfig?.kind === "container"
+          ? storedConfig
+          : {
+              kind: "container" as const,
+              containerId: id.split(":")[0] ?? id,
+              cols: 80,
+              rows: 24,
+            };
+      const environmentId =
+        config.environmentId ??
+        config.activityEnvironmentId ??
+        runtime.terminals.stableKeyEnvironmentId(id) ??
+        undefined;
       runtime.environments.assertNotDeleting(environmentId);
-      assertEnvironmentDeletionNotRequested(environment, environmentId);
-    }
-    if (storedConfig && runtime.terminals.sessionConfig(id) !== storedConfig) {
-      throw new Error("Container terminal session is no longer available");
-    }
-    // A `claude` or `codex` run in this shell should use the active account,
-    // not whichever login the container was last handed. Best effort.
-    await applyActiveAgentAccountsForContainerTerminal(context, config.containerId);
-    if (storedConfig && runtime.terminals.sessionConfig(id) !== storedConfig) {
-      throw new Error("Container terminal session is no longer available");
-    }
-    await runtime.terminals.history.resume(id);
-    spawnContainerTerminal(id, config, context, runtime.terminals.activityHooks(id, context));
-  });
+      if (environmentId) {
+        const environment = await storage.getEnvironment(environmentId);
+        runtime.environments.assertNotDeleting(environmentId);
+        assertEnvironmentDeletionNotRequested(environment, environmentId);
+      }
+      if (storedConfig && runtime.terminals.sessionConfig(id) !== storedConfig) {
+        throw new Error("Container terminal session is no longer available");
+      }
+      // A `claude` or `codex` run in this shell should use the active account,
+      // not whichever login the container was last handed. Best effort.
+      await applyActiveAgentAccountsForContainerTerminal(context, config.containerId);
+      if (storedConfig && runtime.terminals.sessionConfig(id) !== storedConfig) {
+        throw new Error("Container terminal session is no longer available");
+      }
+      await runtime.terminals.history.resume(id);
+      spawnContainerTerminal(id, config, context, runtime.terminals.activityHooks(id, context));
+    },
+    ASYNC_HANDLER,
+  );
   // `delivered` is additive: HTTP callers ignore the result, while the terminal
   // WebSocket gateway needs it to avoid acknowledging input that never reached a
   // shell. Dropping it silently would tell the user a keystroke landed.
-  register("terminal_write", ({ sessionId, data }, context) => {
+  register(terminalWriteCommand, ({ sessionId: id, data: terminalData }, context) => {
     const { runtime } = context;
-    const id = asString(sessionId, "sessionId");
-    const terminalData = asString(data, "data");
     const terminalProcess = runtime.terminals.process(id);
     if (!terminalProcess) return { delivered: false };
     terminalProcess.write(terminalData);
     runtime.terminals.recordInputActivity(id, terminalData, context);
     return { delivered: true };
   });
-  register("terminal_resize", ({ sessionId, cols, rows }, { runtime }) => {
-    const id = asString(sessionId, "sessionId");
+  register(terminalResizeCommand, ({ sessionId: id, cols, rows }, { runtime }) => {
     const terminalProcess = runtime.terminals.process(id);
     if (!terminalProcess) return { delivered: false };
     const resolvedCols = asTerminalDimension(cols, 80);
@@ -568,12 +640,11 @@ export function registerTerminalCommands(
     resizeTerminalHistoryBestEffort(runtime.terminals.history, id, resolvedCols, resolvedRows);
     return { delivered: true };
   });
-  register("detach_terminal", ({ sessionId }, { runtime }) => {
-    runtime.terminals.explicitlyCloseSession(asString(sessionId, "sessionId"));
+  register(detachTerminalCommand, ({ sessionId }, { runtime }) => {
+    runtime.terminals.explicitlyCloseSession(sessionId);
   });
-  register("list_terminal_sessions", (_args, { runtime }) => runtime.terminals.processIds());
-  register("get_terminal_session", ({ sessionId }, { runtime }) => {
-    const id = asString(sessionId, "sessionId");
+  register(listTerminalSessionsCommand, (_args, { runtime }) => runtime.terminals.processIds());
+  register(getTerminalSessionCommand, ({ sessionId: id }, { runtime }) => {
     const running = isTerminalSessionAttachable({ runtime }, id);
     if (isSetupTerminalSessionId(id)) {
       logSetupTerminal("setup.renderer-checked-session", {
@@ -585,10 +656,8 @@ export function registerTerminalCommands(
     }
     return { id, running, bootstrapped: runtime.terminals.isBootstrapped(id) };
   });
-  register("bootstrap_terminal_session", ({ sessionId, data }, context) => {
+  register(bootstrapTerminalSessionCommand, ({ sessionId: id, data: terminalData }, context) => {
     const { runtime } = context;
-    const id = asString(sessionId, "sessionId");
-    const terminalData = asString(data, "data");
     const bootstrapDataHash = createHash("sha256").update(terminalData).digest("hex");
     if (runtime.terminals.isBootstrapped(id)) {
       return {
@@ -617,8 +686,7 @@ export function registerTerminalCommands(
       throw error;
     }
   });
-  register("get_terminal_output_buffer", ({ sessionId }, { runtime }) => {
-    const id = asString(sessionId, "sessionId");
+  register(getTerminalOutputBufferCommand, ({ sessionId: id }, { runtime }) => {
     const buffer = runtime.terminals.readOutput(id);
     if (isSetupTerminalSessionId(id)) {
       logSetupTerminal("setup.renderer-requested-buffer", {
@@ -630,9 +698,8 @@ export function registerTerminalCommands(
     return buffer;
   });
   register(
-    "get_terminal_output_snapshot",
-    ({ sessionId, sinceRevision, sinceGeneration }, { runtime }) => {
-      const id = asString(sessionId, "sessionId");
+    getTerminalOutputSnapshotCommand,
+    ({ sessionId: id, sinceRevision, sinceGeneration }, { runtime }) => {
       const revision = runtime.terminals.outputRevision(id) ?? 0;
       const generation = runtime.terminals.outputGeneration(id) ?? 0;
       if (sinceRevision !== undefined || sinceGeneration !== undefined) {
@@ -652,7 +719,7 @@ export function registerTerminalCommands(
             .filter((entry) => entry.revision > requestedRevision)
             .map((entry) => ({ revision: entry.revision, text: entry.text }));
           return {
-            mode: "delta",
+            mode: "delta" as const,
             output: retainedDeltas.map((entry) => entry.text).join(""),
             // The WebSocket gateway preserves revision boundaries when replaying
             // raw binary output. Existing HTTP clients ignore this additive field.
@@ -663,8 +730,11 @@ export function registerTerminalCommands(
           };
         }
         return {
-          mode: "full",
-          reason: requestedGeneration === generation ? "expired" : "generation-changed",
+          mode: "full" as const,
+          reason:
+            requestedGeneration === generation
+              ? ("expired" as const)
+              : ("generation-changed" as const),
           output: runtime.terminals.readOutput(id),
           revision,
           generation,
@@ -680,48 +750,47 @@ export function registerTerminalCommands(
     },
   );
 
-  register("get_terminal_state_snapshot", async ({ sessionId }, { storage, runtime }) => {
-    const id = asString(sessionId, "sessionId");
-    let snapshot = await runtime.terminals.history.stateSnapshot(id);
-    if (!snapshot && isSetupTerminalSessionId(id)) {
-      const environmentId = id.slice(0, -":setup".length);
-      if (await storage.getEnvironment(environmentId)) {
-        runtime.terminals.history.configure({
-          sessionId: id,
-          dataDir: storage.getDataDir(),
-          stableIdentity: `setup\0${environmentId}`,
-          cols: 80,
-          rows: 24,
-          environmentId,
-          tabId: "setup",
-          generation: runtime.terminals.outputGeneration(id) ?? 1,
-        });
-        snapshot = await runtime.terminals.history.stateSnapshot(id);
+  register(
+    getTerminalStateSnapshotCommand,
+    async ({ sessionId: id }, { storage, runtime }) => {
+      let snapshot = await runtime.terminals.history.stateSnapshot(id);
+      if (!snapshot && isSetupTerminalSessionId(id)) {
+        const environmentId = id.slice(0, -":setup".length);
+        if (await storage.getEnvironment(environmentId)) {
+          runtime.terminals.history.configure({
+            sessionId: id,
+            dataDir: storage.getDataDir(),
+            stableIdentity: `setup\0${environmentId}`,
+            cols: 80,
+            rows: 24,
+            environmentId,
+            tabId: "setup",
+            generation: runtime.terminals.outputGeneration(id) ?? 1,
+          });
+          snapshot = await runtime.terminals.history.stateSnapshot(id);
+        }
       }
-    }
-    return snapshot;
-  });
+      return snapshot;
+    },
+    ASYNC_HANDLER,
+  );
 
-  register("get_terminal_history_page", ({ sessionId, cursor }, { runtime }) =>
-    runtime.terminals.history.page(
-      asString(sessionId, "sessionId"),
-      cursor === undefined ? undefined : asString(cursor, "cursor"),
-    ),
+  register(getTerminalHistoryPageCommand, ({ sessionId, cursor }, { runtime }) =>
+    runtime.terminals.history.page(sessionId, cursor),
   );
 
   // Browser gateways consume this locally to release their buffered live
   // frames. Native/Electron callers still need the command to exist so the
   // renderer can use one application barrier on every transport.
-  register("terminal_snapshot_applied", () => ({ acknowledged: true }));
-  register("terminal_snapshot_failed", () => ({ acknowledged: true }));
+  register(terminalSnapshotAppliedCommand, () => ({ acknowledged: true as const }));
+  register(terminalSnapshotFailedCommand, () => ({ acknowledged: true as const }));
 
   register(
-    "create_local_terminal_session",
+    createLocalTerminalSessionCommand,
     async (
-      { environmentId, terminalKey, cols, rows, trackEnvironmentActivity },
+      { environmentId: resolvedEnvironmentId, terminalKey, cols, rows, trackEnvironmentActivity },
       { storage, runtime },
     ) => {
-      const resolvedEnvironmentId = asString(environmentId, "environmentId");
       runtime.environments.assertNotDeleting(resolvedEnvironmentId);
       // A shell opened in the folder being moved would be left behind in it.
       runtime.environments.fence.assertNotMoving(resolvedEnvironmentId);
@@ -764,89 +833,93 @@ export function registerTerminalCommands(
       });
       return { sessionId: id, created: true, bootstrapped: false };
     },
+    ASYNC_HANDLER,
   );
-  register("start_local_terminal_session", async ({ sessionId }, context) => {
-    const { storage, runtime } = context;
-    const id = asString(sessionId, "sessionId");
-    const storedConfig = runtime.terminals.sessionConfig(id);
-    const config =
-      storedConfig?.kind === "local"
-        ? storedConfig
-        : {
-            kind: "local" as const,
-            environmentId: id.split(":")[0] ?? id,
-            cols: 80,
-            rows: 24,
-          };
-    const environmentId = config.environmentId;
-    runtime.environments.assertNotDeleting(environmentId);
-    const env = await storage.getEnvironment(environmentId);
-    runtime.environments.assertNotDeleting(environmentId);
-    assertEnvironmentDeletionNotRequested(env, environmentId);
-    if (!env?.worktreePath) throw new Error("Local environment worktree is not available");
-    if (!(await pathExists(env.worktreePath)))
-      throw new Error(`Local environment worktree does not exist: ${env.worktreePath}`);
-    runtime.environments.assertNotDeleting(environmentId);
-    const currentEnvironment = await storage.getEnvironment(environmentId);
-    runtime.environments.assertNotDeleting(environmentId);
-    context.runtime.environments.fence.assertNotMoving(environmentId);
-    assertEnvironmentDeletionNotRequested(currentEnvironment, environmentId);
-    if (!currentEnvironment?.worktreePath || currentEnvironment.worktreePath !== env.worktreePath) {
-      throw new Error("Local environment worktree is no longer available");
-    }
-    if (storedConfig && runtime.terminals.sessionConfig(id) !== storedConfig) {
-      throw new Error("Local terminal session is no longer available");
-    }
-    // A terminal keeps the account that was active when it started; a switch
-    // applies to terminals opened after it.
-    const accountEnvironment = await activeAgentAccountShellEnvironment(context);
-    const launchEnvironment = { ...envWithManagedBinaries(context), ...accountEnvironment };
-    if (accountEnvironment.CLAUDE_CONFIG_DIR || accountEnvironment.CODEX_HOME) {
-      stripInheritedAgentCredentials(launchEnvironment);
-    }
-    await runtime.terminals.history.resume(id);
-    const launchTarget = await storage.getEnvironment(environmentId);
-    runtime.environments.assertNotDeleting(environmentId);
-    context.runtime.environments.fence.assertNotMoving(environmentId);
-    assertEnvironmentDeletionNotRequested(launchTarget, environmentId);
-    if (
-      launchTarget?.worktreePath !== currentEnvironment.worktreePath ||
-      runtime.terminals.sessionConfig(id) !== storedConfig
-    ) {
-      throw new Error("Local terminal session or worktree is no longer available");
-    }
-    const alreadyRunning = runtime.terminals.hasProcess(id);
-    const terminalProcess = spawnTerminalProcess(
-      id,
-      resolveLocalShellPath(),
-      ["-l"],
-      {
-        cwd: currentEnvironment.worktreePath,
-        cols: config.cols,
-        rows: config.rows,
-        env: launchEnvironment,
-      },
-      context,
-      runtime.terminals.activityHooks(id, context),
-    );
-    if (!alreadyRunning && runtime.terminals.process(id) === terminalProcess) {
-      for (const home of [accountEnvironment.CLAUDE_CONFIG_DIR, accountEnvironment.CODEX_HOME]) {
-        if (home) runtime.terminals.recordAccountHome(`${id}:${home}`, home);
+  register(
+    startLocalTerminalSessionCommand,
+    async ({ sessionId: id }, context) => {
+      const { storage, runtime } = context;
+      const storedConfig = runtime.terminals.sessionConfig(id);
+      const config =
+        storedConfig?.kind === "local"
+          ? storedConfig
+          : {
+              kind: "local" as const,
+              environmentId: id.split(":")[0] ?? id,
+              cols: 80,
+              rows: 24,
+            };
+      const environmentId = config.environmentId;
+      runtime.environments.assertNotDeleting(environmentId);
+      const env = await storage.getEnvironment(environmentId);
+      runtime.environments.assertNotDeleting(environmentId);
+      assertEnvironmentDeletionNotRequested(env, environmentId);
+      if (!env?.worktreePath) throw new Error("Local environment worktree is not available");
+      if (!(await pathExists(env.worktreePath)))
+        throw new Error(`Local environment worktree does not exist: ${env.worktreePath}`);
+      runtime.environments.assertNotDeleting(environmentId);
+      const currentEnvironment = await storage.getEnvironment(environmentId);
+      runtime.environments.assertNotDeleting(environmentId);
+      context.runtime.environments.fence.assertNotMoving(environmentId);
+      assertEnvironmentDeletionNotRequested(currentEnvironment, environmentId);
+      if (
+        !currentEnvironment?.worktreePath ||
+        currentEnvironment.worktreePath !== env.worktreePath
+      ) {
+        throw new Error("Local environment worktree is no longer available");
       }
-    }
-  });
-  register("local_terminal_write", ({ sessionId, data }, context) => {
+      if (storedConfig && runtime.terminals.sessionConfig(id) !== storedConfig) {
+        throw new Error("Local terminal session is no longer available");
+      }
+      // A terminal keeps the account that was active when it started; a switch
+      // applies to terminals opened after it.
+      const accountEnvironment = await activeAgentAccountShellEnvironment(context);
+      const launchEnvironment = { ...envWithManagedBinaries(context), ...accountEnvironment };
+      if (accountEnvironment.CLAUDE_CONFIG_DIR || accountEnvironment.CODEX_HOME) {
+        stripInheritedAgentCredentials(launchEnvironment);
+      }
+      await runtime.terminals.history.resume(id);
+      const launchTarget = await storage.getEnvironment(environmentId);
+      runtime.environments.assertNotDeleting(environmentId);
+      context.runtime.environments.fence.assertNotMoving(environmentId);
+      assertEnvironmentDeletionNotRequested(launchTarget, environmentId);
+      if (
+        launchTarget?.worktreePath !== currentEnvironment.worktreePath ||
+        runtime.terminals.sessionConfig(id) !== storedConfig
+      ) {
+        throw new Error("Local terminal session or worktree is no longer available");
+      }
+      const alreadyRunning = runtime.terminals.hasProcess(id);
+      const terminalProcess = spawnTerminalProcess(
+        id,
+        resolveLocalShellPath(),
+        ["-l"],
+        {
+          cwd: currentEnvironment.worktreePath,
+          cols: config.cols,
+          rows: config.rows,
+          env: launchEnvironment,
+        },
+        context,
+        runtime.terminals.activityHooks(id, context),
+      );
+      if (!alreadyRunning && runtime.terminals.process(id) === terminalProcess) {
+        for (const home of [accountEnvironment.CLAUDE_CONFIG_DIR, accountEnvironment.CODEX_HOME]) {
+          if (home) runtime.terminals.recordAccountHome(`${id}:${home}`, home);
+        }
+      }
+    },
+    ASYNC_HANDLER,
+  );
+  register(localTerminalWriteCommand, ({ sessionId: id, data: terminalData }, context) => {
     const { runtime } = context;
-    const id = asString(sessionId, "sessionId");
-    const terminalData = asString(data, "data");
     const terminalProcess = runtime.terminals.process(id);
     if (!terminalProcess) return { delivered: false };
     terminalProcess.write(terminalData);
     runtime.terminals.recordInputActivity(id, terminalData, context);
     return { delivered: true };
   });
-  register("local_terminal_resize", ({ sessionId, cols, rows }, { runtime }) => {
-    const id = asString(sessionId, "sessionId");
+  register(localTerminalResizeCommand, ({ sessionId: id, cols, rows }, { runtime }) => {
     const terminalProcess = runtime.terminals.process(id);
     if (!terminalProcess) return { delivered: false };
     const resolvedCols = asTerminalDimension(cols, 80);
@@ -855,12 +928,14 @@ export function registerTerminalCommands(
     resizeTerminalHistoryBestEffort(runtime.terminals.history, id, resolvedCols, resolvedRows);
     return { delivered: true };
   });
-  register("close_local_terminal_session", ({ sessionId }, { runtime }) => {
-    runtime.terminals.explicitlyCloseSession(asString(sessionId, "sessionId"));
+  register(closeLocalTerminalSessionCommand, ({ sessionId }, { runtime }) => {
+    runtime.terminals.explicitlyCloseSession(sessionId);
   });
 
+  // The git status, diff-stat and worktree-probe commands are registered with
+  // their `git` definitions (plan item 7006).
   register(
-    "get_local_git_status",
+    getLocalGitStatusCommand,
     async ({ worktreePath, targetBranch, includeUncommitted, knownDigest, refresh }, context) => {
       // The sidebar badge, every client's Files panel and the background scan
       // look at the same worktree; they share one read owner and one scan.
@@ -878,6 +953,7 @@ export function registerTerminalCommands(
         read.view,
       );
     },
+    ASYNC_HANDLER,
   );
   /**
    * Authoritative diff-stat snapshot.
@@ -887,106 +963,129 @@ export function registerTerminalCommands(
    * also arms tracking, so the first client to ask starts the work even if no
    * lifecycle command has run since the backend started.
    */
-  register("get_environment_diff_stats", async (args, context) => {
-    await context.runtime.diffStats.sync(context);
-    // Legacy `{ entries }` shape (additively stamped) without known-revision
-    // arguments; the compact conditional outcome from `view-sync.ts` with them.
-    const request = parseViewSnapshotRequest(args);
-    if (request.kind === "absent") {
-      return context.runtime.diffStats.service.revisionedSnapshot() satisfies EnvironmentDiffStatsSnapshot;
-    }
-    return resolveViewSnapshotOutcome(
-      request,
-      context.runtime.diffStats.service.currentRevision(),
-      () => ({
-        entries: context.runtime.diffStats.service.snapshot(),
-      }),
-    ) satisfies EnvironmentDiffStatsSnapshotOutcome;
-  });
-  register("refresh_environment_diff_stats", async ({ environmentId }, context) => {
-    await context.runtime.diffStats.sync(context);
-    context.runtime.diffStats.refreshExplicitly(asString(environmentId, "environmentId"));
-  });
+  register(
+    getEnvironmentDiffStatsCommand,
+    async (args, context) => {
+      await context.runtime.diffStats.sync(context);
+      // Legacy `{ entries }` shape (additively stamped) without known-revision
+      // arguments; the compact conditional outcome from `view-sync.ts` with them.
+      const request = parseViewSnapshotRequest(args);
+      if (request.kind === "absent") {
+        return context.runtime.diffStats.service.revisionedSnapshot() satisfies EnvironmentDiffStatsSnapshot;
+      }
+      return resolveViewSnapshotOutcome(
+        request,
+        context.runtime.diffStats.service.currentRevision(),
+        () => ({
+          entries: context.runtime.diffStats.service.snapshot(),
+        }),
+      ) satisfies EnvironmentDiffStatsSnapshotOutcome;
+    },
+    ASYNC_HANDLER,
+  );
+  register(
+    refreshEnvironmentDiffStatsCommand,
+    async ({ environmentId }, context) => {
+      await context.runtime.diffStats.sync(context);
+      context.runtime.diffStats.refreshExplicitly(asString(environmentId, "environmentId"));
+    },
+    ASYNC_HANDLER,
+  );
   /**
    * File-list and tree revisions of every tracked environment
    * (`@orkestrator/protocol/worktree-snapshots`). Like the diff-stat snapshot,
    * it arms tracking and answers conditional reads compactly.
    */
-  register("get_worktree_snapshot_revisions", async (args, context) => {
-    await context.runtime.diffStats.sync(context);
-    const request = parseViewSnapshotRequest(args);
-    if (request.kind === "absent") {
-      return context.runtime.diffStats.service.revisionedWorktreeSnapshot() satisfies WorktreeSnapshotRevisionsSnapshot;
-    }
-    return resolveViewSnapshotOutcome(
-      request,
-      context.runtime.diffStats.service.currentWorktreeRevision(),
-      () => ({
-        entries: context.runtime.diffStats.service.worktreeSnapshotEntries(),
-      }),
-    ) satisfies WorktreeSnapshotRevisionsOutcome;
-  });
+  register(
+    getWorktreeSnapshotRevisionsCommand,
+    async (args, context) => {
+      await context.runtime.diffStats.sync(context);
+      const request = parseViewSnapshotRequest(args);
+      if (request.kind === "absent") {
+        return context.runtime.diffStats.service.revisionedWorktreeSnapshot() satisfies WorktreeSnapshotRevisionsSnapshot;
+      }
+      return resolveViewSnapshotOutcome(
+        request,
+        context.runtime.diffStats.service.currentWorktreeRevision(),
+        () => ({
+          entries: context.runtime.diffStats.service.worktreeSnapshotEntries(),
+        }),
+      ) satisfies WorktreeSnapshotRevisionsOutcome;
+    },
+    ASYNC_HANDLER,
+  );
 
-  register("get_local_file_tree", async ({ worktreePath, knownDigest, refresh }, context) => {
-    const read = await context.runtime.diffStats.service.readTree({
-      lookup: { worktreePath: asString(worktreePath, "worktreePath") },
-      refresh: refreshRequested(refresh),
-    });
-    return snapshotResponse("file-tree-read", read.tree, read.digest, knownDigest, read.view);
-  });
+  register(
+    getLocalFileTreeCommand,
+    async ({ worktreePath, knownDigest, refresh }, context) => {
+      const read = await context.runtime.diffStats.service.readTree({
+        lookup: { worktreePath },
+        refresh: refreshRequested(refresh),
+      });
+      return snapshotResponse(
+        "file-tree-read",
+        // The owner's tree is the walker's `FileTreeNode[]` (`commands-files.ts`).
+        read.tree as readonly FileTreeNode[],
+        read.digest,
+        knownDigest,
+        read.view,
+      );
+    },
+    ASYNC_HANDLER,
+  );
   // One truncated tree directory, read when the files panel expands it. Not
   // cached: each expansion or refresh reads the directory as it is now. With a
   // `knownDigest` an unchanged directory answers with no contents.
-  register("get_local_file_subtree", async ({ worktreePath, directory, knownDigest }) =>
-    conditionalSnapshot(
-      await buildFileSubtree(
-        asString(worktreePath, "worktreePath"),
-        asString(directory, "directory"),
-      ),
-      knownDigest,
-    ),
+  register(
+    getLocalFileSubtreeCommand,
+    async ({ worktreePath, directory, knownDigest }) =>
+      conditionalSnapshot(await buildFileSubtree(worktreePath, directory), knownDigest),
+    ASYNC_HANDLER,
   );
-  register("read_local_file", async ({ worktreePath, filePath }, context) => {
-    const relativePath = asString(filePath, "filePath");
-    const { environment } = await requireRegisteredLocalRoot(
-      context,
-      asString(worktreePath, "worktreePath"),
-    );
-    return readTextFile(environment.worktreePath, relativePath);
-  });
-  register("read_local_file_at_branch", ({ worktreePath, filePath, branch }, context) =>
+  register(
+    readLocalFileCommand,
+    async ({ worktreePath, filePath: relativePath }, context) => {
+      const { environment } = await requireRegisteredLocalRoot(context, worktreePath);
+      return readTextFile(environment.worktreePath, relativePath);
+    },
+    ASYNC_HANDLER,
+  );
+  register(readLocalFileAtBranchCommand, ({ worktreePath, filePath, branch }, context) =>
     readLocalFileAtBranch(
-      asString(worktreePath, "worktreePath"),
-      asString(filePath, "filePath"),
-      asString(branch, "branch"),
+      worktreePath,
+      filePath,
+      branch,
       context.runtime.diffStats.gitFetchScheduler,
     ),
   );
-  register("read_file_base64", async ({ filePath }, context) =>
-    readFileBase64(asString(filePath, "filePath"), await readableHostFileRoots(context)),
+  register(
+    readFileBase64Command,
+    async ({ filePath }, context) => readFileBase64(filePath, await readableHostFileRoots(context)),
+    ASYNC_HANDLER,
   );
-  register("read_environment_file_base64", async (args, context) => {
-    assertOnlyKeys(args, ["environmentId", "filePath"], "arguments");
-    const environment = await requireLocalMutationEnvironment(
-      context.storage,
-      asString(args.environmentId, "environmentId"),
-    );
-    const relative = validateRelativeFilePath(asString(args.filePath, "filePath"));
-    return readFileBase64(path.join(environment.worktreePath!, relative), [
-      environment.worktreePath!,
-    ]);
-  });
+  // Strict (`assertOnlyKeys`) before plan item 7002; tolerant now (§11.4).
+  register(
+    readEnvironmentFileBase64Command,
+    async (args, context) => {
+      const environment = await requireLocalMutationEnvironment(
+        context.storage,
+        args.environmentId,
+      );
+      const relative = validateRelativeFilePath(args.filePath);
+      return readFileBase64(path.join(environment.worktreePath!, relative), [
+        environment.worktreePath!,
+      ]);
+    },
+    ASYNC_HANDLER,
+  );
   // `expected` (optional) is the editor's precondition: the write happens
   // only while the file still has the content it loaded. Older clients omit it.
   register(
-    "write_local_file",
-    async ({ worktreePath, filePath, base64Data, expected }, context) => {
-      const root = asString(worktreePath, "worktreePath");
+    writeLocalFileCommand,
+    async ({ worktreePath: root, filePath: relativePath, base64Data: data, expected }, context) => {
       const precondition = parseFileWritePrecondition(expected);
       const release = context.runtime.environments.fence.beginWorktreeMutation(root);
       try {
-        const relativePath = asString(filePath, "filePath");
-        const data = asString(base64Data, "base64Data");
         // Coordinators stage pasted images through `write_coordinator_attachment`;
         // nothing may write a directory that is not an environment's worktree.
         const { environment, canonical } = await requireRegisteredLocalRoot(context, root);
@@ -1005,46 +1104,52 @@ export function registerTerminalCommands(
         release();
       }
     },
+    ASYNC_HANDLER,
   );
-  register("revert_local_file", async ({ environmentId, filePath, targetBranch }, context) => {
-    const id = asString(environmentId, "environmentId");
-    return withLocalFileMutation(context, id, async (environment) => {
-      const result = await revertLocalFile(
-        environment.worktreePath!,
-        asString(filePath, "filePath"),
-        asString(targetBranch, "targetBranch"),
-        context.runtime.diffStats.gitFetchScheduler,
-      );
-      context.runtime.diffStats.service.invalidateChanges({
-        worktreePath: environment.worktreePath!,
-      });
-      context.runtime.diffStats.service.refresh(id);
-      return result;
-    });
-  });
-  register("delete_local_file", async ({ environmentId, filePath }, context) => {
-    const id = asString(environmentId, "environmentId");
-    return withLocalFileMutation(context, id, async (environment) => {
-      try {
-        return await deleteLocalFile(environment.worktreePath!, asString(filePath, "filePath"));
-      } finally {
-        // A failed recursive removal can still have changed files or the index.
+  register(
+    revertLocalFileCommand,
+    async ({ environmentId: id, filePath, targetBranch }, context) => {
+      return withLocalFileMutation(context, id, async (environment) => {
+        const result = await revertLocalFile(
+          environment.worktreePath!,
+          filePath,
+          targetBranch,
+          context.runtime.diffStats.gitFetchScheduler,
+        );
         context.runtime.diffStats.service.invalidateChanges({
           worktreePath: environment.worktreePath!,
         });
         context.runtime.diffStats.service.refresh(id);
-      }
-    });
-  });
+        return result;
+      });
+    },
+    ASYNC_HANDLER,
+  );
   register(
-    "move_local_file",
-    async ({ environmentId, sourcePath, destinationDirectory }, context) => {
-      const id = asString(environmentId, "environmentId");
+    deleteLocalFileCommand,
+    async ({ environmentId: id, filePath }, context) => {
+      return withLocalFileMutation(context, id, async (environment) => {
+        try {
+          return await deleteLocalFile(environment.worktreePath!, filePath);
+        } finally {
+          // A failed recursive removal can still have changed files or the index.
+          context.runtime.diffStats.service.invalidateChanges({
+            worktreePath: environment.worktreePath!,
+          });
+          context.runtime.diffStats.service.refresh(id);
+        }
+      });
+    },
+    ASYNC_HANDLER,
+  );
+  register(
+    moveLocalFileCommand,
+    async ({ environmentId: id, sourcePath, destinationDirectory }, context) => {
       return withLocalFileMutation(context, id, async (environment) => {
         const result = await moveLocalFile(
           environment.worktreePath!,
-          asString(sourcePath, "sourcePath"),
-          asString(destinationDirectory, "destinationDirectory"),
+          sourcePath,
+          destinationDirectory,
         );
         context.runtime.diffStats.service.invalidateChanges({
           worktreePath: environment.worktreePath!,
@@ -1053,31 +1158,30 @@ export function registerTerminalCommands(
         return result;
       });
     },
+    ASYNC_HANDLER,
   );
-  register("rename_local_file", async ({ environmentId, filePath, newName }, context) => {
-    const id = asString(environmentId, "environmentId");
-    return withLocalFileMutation(context, id, async (environment) => {
-      const result = await renameLocalFile(
-        environment.worktreePath!,
-        asString(filePath, "filePath"),
-        asString(newName, "newName"),
-      );
-      context.runtime.diffStats.service.invalidateChanges({
-        worktreePath: environment.worktreePath!,
-      });
-      context.runtime.diffStats.service.refresh(id);
-      return result;
-    });
-  });
   register(
-    "create_local_folder",
-    async ({ environmentId, parentDirectory, folderName }, context) => {
-      const id = asString(environmentId, "environmentId");
+    renameLocalFileCommand,
+    async ({ environmentId: id, filePath, newName }, context) => {
+      return withLocalFileMutation(context, id, async (environment) => {
+        const result = await renameLocalFile(environment.worktreePath!, filePath, newName);
+        context.runtime.diffStats.service.invalidateChanges({
+          worktreePath: environment.worktreePath!,
+        });
+        context.runtime.diffStats.service.refresh(id);
+        return result;
+      });
+    },
+    ASYNC_HANDLER,
+  );
+  register(
+    createLocalFolderCommand,
+    async ({ environmentId: id, parentDirectory, folderName }, context) => {
       return withLocalFileMutation(context, id, async (environment) => {
         const result = await createLocalFolder(
           environment.worktreePath!,
-          asString(parentDirectory, "parentDirectory"),
-          asString(folderName, "folderName"),
+          parentDirectory,
+          folderName,
         );
         context.runtime.diffStats.service.invalidateChanges({
           worktreePath: environment.worktreePath!,
@@ -1086,10 +1190,11 @@ export function registerTerminalCommands(
         return result;
       });
     },
+    ASYNC_HANDLER,
   );
 
   register(
-    "get_git_status",
+    getGitStatusCommand,
     async ({ containerId, targetBranch, includeUncommitted, knownDigest, refresh }, context) => {
       const ref = validateGitRefName(asString(targetBranch, "targetBranch"), "target branch");
       const id = asString(containerId, "containerId");
@@ -1120,6 +1225,7 @@ export function registerTerminalCommands(
         read.view,
       );
     },
+    ASYNC_HANDLER,
   );
   /**
    * Authoritative uncommitted-path list for one environment, for callers that
@@ -1141,49 +1247,48 @@ export function registerTerminalCommands(
    * outside the worktree are invisible here, so no caller may describe this as
    * proof that the workspace was untouched.
    */
-  register("get_environment_uncommitted_paths", async (args, context) => {
-    assertOnlyKeys(
-      asRecord(args, "args"),
-      ["environmentId", "fingerprint"],
-      "get_environment_uncommitted_paths",
-    );
-    const { environmentId, fingerprint } = args;
-    const environment = await context.storage.getEnvironment(
-      asString(environmentId, "environmentId"),
-    );
-    if (!environment) throw new Error("Environment not found");
-    const wantFingerprint =
-      fingerprint === undefined ? false : asRequiredBoolean(fingerprint, "fingerprint");
-    const runner = createEnvironmentCommandRunner(
-      environment,
-      context.runtime.environments.fence,
-      context.storage,
-      context.runtime.gitHubCli,
-    );
-    // The container image ships Node; a local worktree runs on the user's own
-    // machine, where the backend's inherited PATH is whatever the OS handed
-    // Electron and need not contain any Node at all. Use the same managed Bun
-    // the rest of the local command surface relies on.
-    const local = environment.environmentType === "local";
-    const timeoutMs = wantFingerprint
-      ? REVIEW_WORKTREE_FINGERPRINT_TIMEOUT_MS
-      : REVIEW_WORKTREE_PROBE_TIMEOUT_MS;
-    const captured = parseReviewWorktreeFingerprint(
-      await worktreeProbes.run(`${environment.id}\0${wantFingerprint}`, () =>
-        runner(
-          local ? resolveBunBinary(context) : "node",
-          reviewWorktreeProbeArgs(wantFingerprint, timeoutMs),
-          timeoutMs,
-          local ? envWithManagedBinaries(context) : undefined,
+  register(
+    getEnvironmentUncommittedPathsCommand,
+    async (args, context) => {
+      const { environmentId, fingerprint } = args;
+      const environment = await context.storage.getEnvironment(
+        asString(environmentId, "environmentId"),
+      );
+      if (!environment) throw new Error("Environment not found");
+      const wantFingerprint =
+        fingerprint === undefined ? false : asRequiredBoolean(fingerprint, "fingerprint");
+      const runner = createEnvironmentCommandRunner(
+        environment,
+        context.runtime.environments.fence,
+        context.storage,
+        context.runtime.gitHubCli,
+      );
+      // The container image ships Node; a local worktree runs on the user's own
+      // machine, where the backend's inherited PATH is whatever the OS handed
+      // Electron and need not contain any Node at all. Use the same managed Bun
+      // the rest of the local command surface relies on.
+      const local = environment.environmentType === "local";
+      const timeoutMs = wantFingerprint
+        ? REVIEW_WORKTREE_FINGERPRINT_TIMEOUT_MS
+        : REVIEW_WORKTREE_PROBE_TIMEOUT_MS;
+      const captured = parseReviewWorktreeFingerprint(
+        await worktreeProbes.run(`${environment.id}\0${wantFingerprint}`, () =>
+          runner(
+            local ? resolveBunBinary(context) : "node",
+            reviewWorktreeProbeArgs(wantFingerprint, timeoutMs),
+            timeoutMs,
+            local ? envWithManagedBinaries(context) : undefined,
+          ),
         ),
-      ),
-    );
-    return {
-      head: captured.head,
-      paths: parseGitPorcelainPaths(captured.status),
-      ...(captured.fingerprint === undefined ? {} : { fingerprint: captured.fingerprint }),
-    };
-  });
+      );
+      return {
+        head: captured.head,
+        paths: parseGitPorcelainPaths(captured.status),
+        ...(captured.fingerprint === undefined ? {} : { fingerprint: captured.fingerprint }),
+      };
+    },
+    ASYNC_HANDLER,
+  );
   /**
    * Whether commit `ancestor` is `descendant` or one of its ancestors in an
    * environment's repository. The build pipeline asks before Verify whether
@@ -1193,265 +1298,309 @@ export function registerTerminalCommands(
    * histories). The answer comes from `git merge-base` rather than
    * `--is-ancestor`, whose nonzero exit means both "no" and "failed".
    */
-  register("get_environment_commit_ancestry", async (args, context) => {
-    assertOnlyKeys(
-      asRecord(args, "args"),
-      ["environmentId", "ancestor", "descendant"],
-      "get_environment_commit_ancestry",
-    );
-    const commit = (value: unknown, name: string) => {
-      const id = asString(value, name).toLowerCase();
-      if (!/^[0-9a-f]{40,64}$/.test(id)) throw new Error(`${name} must be a full commit id`);
-      return id;
-    };
-    const ancestor = commit(args.ancestor, "ancestor");
-    const descendant = commit(args.descendant, "descendant");
-    const environment = await context.storage.getEnvironment(
-      asString(args.environmentId, "environmentId"),
-    );
-    if (!environment) throw new Error("Environment not found");
-    const runner = createEnvironmentCommandRunner(
-      environment,
-      context.runtime.environments.fence,
-      context.storage,
-      context.runtime.gitHubCli,
-    );
-    let mergeBase: string;
-    try {
-      mergeBase = (await runner("git", ["merge-base", ancestor, descendant], 30_000))
-        .trim()
-        .toLowerCase();
-    } catch {
-      return { isAncestor: null };
-    }
-    return { isAncestor: /^[0-9a-f]{40,64}$/.test(mergeBase) ? mergeBase === ancestor : null };
-  });
-  register("get_file_tree", async ({ containerId, knownDigest, refresh }, context) => {
-    const read = await context.runtime.diffStats.service.readTree({
-      lookup: { containerId: asString(containerId, "containerId") },
-      refresh: refreshRequested(refresh),
-    });
-    return snapshotResponse("file-tree-read", read.tree, read.digest, knownDigest, read.view);
-  });
-  register("get_file_subtree", async ({ containerId, directory, knownDigest }) => {
-    const target = validateFileTreeDirectory(asString(directory, "directory"));
-    return conditionalSnapshot(
-      parseContainerFileSubtree(
-        await dockerExec(
-          asString(containerId, "containerId"),
-          `node -e ${quoteShell(CONTAINER_FILE_TREE_LISTER)} -- /workspace ${MAX_FILE_TREE_NODES} ${quoteShell(target)}`,
+  register(
+    getEnvironmentCommitAncestryCommand,
+    async (args, context) => {
+      const commit = (value: unknown, name: string) => {
+        const id = asString(value, name).toLowerCase();
+        if (!/^[0-9a-f]{40,64}$/.test(id)) throw new Error(`${name} must be a full commit id`);
+        return id;
+      };
+      const ancestor = commit(args.ancestor, "ancestor");
+      const descendant = commit(args.descendant, "descendant");
+      const environment = await context.storage.getEnvironment(
+        asString(args.environmentId, "environmentId"),
+      );
+      if (!environment) throw new Error("Environment not found");
+      const runner = createEnvironmentCommandRunner(
+        environment,
+        context.runtime.environments.fence,
+        context.storage,
+        context.runtime.gitHubCli,
+      );
+      let mergeBase: string;
+      try {
+        mergeBase = (await runner("git", ["merge-base", ancestor, descendant], 30_000))
+          .trim()
+          .toLowerCase();
+      } catch {
+        return { isAncestor: null };
+      }
+      return { isAncestor: /^[0-9a-f]{40,64}$/.test(mergeBase) ? mergeBase === ancestor : null };
+    },
+    ASYNC_HANDLER,
+  );
+  register(
+    getFileTreeCommand,
+    async ({ containerId, knownDigest, refresh }, context) => {
+      const read = await context.runtime.diffStats.service.readTree({
+        lookup: { containerId },
+        refresh: refreshRequested(refresh),
+      });
+      return snapshotResponse(
+        "file-tree-read",
+        // The owner's tree is the walker's `FileTreeNode[]` (`commands-files.ts`).
+        read.tree as readonly FileTreeNode[],
+        read.digest,
+        knownDigest,
+        read.view,
+      );
+    },
+    ASYNC_HANDLER,
+  );
+  register(
+    getFileSubtreeCommand,
+    async ({ containerId, directory, knownDigest }) => {
+      const target = validateFileTreeDirectory(directory);
+      return conditionalSnapshot(
+        parseContainerFileSubtree(
+          await dockerExec(
+            containerId,
+            `node -e ${quoteShell(CONTAINER_FILE_TREE_LISTER)} -- /workspace ${MAX_FILE_TREE_NODES} ${quoteShell(target)}`,
+          ),
+          target,
         ),
-        target,
-      ),
-      knownDigest,
-    );
-  });
-  register("read_container_file", async ({ containerId, filePath }) => {
-    const target = validateRelativeFilePath(asString(filePath, "filePath"));
-    const encoded = await dockerExec(
-      asString(containerId, "containerId"),
-      `node -e ${quoteShell(CONTAINER_SAFE_BASE64_READER)} -- /workspace ${quoteShell(workspaceFilePath(target))} ${MAX_TEXT_FILE_BYTES} editor ${quoteShell(MAX_TEXT_FILE_SIZE_LABEL)}`,
-    );
-    const content = decodeEditorTextFile(Buffer.from(encoded.trim(), "base64"));
-    return { path: target, content, language: inferLanguage(target) };
-  });
-  register("read_file_at_branch", async ({ containerId, filePath, branch }) => {
-    const target = validateRelativeFilePath(asString(filePath, "filePath"));
-    const object = `${asString(branch, "branch")}:${target}`;
-    // One `git cat-file --batch` answers the size and the body; the output is
-    // cut after the largest acceptable answer, so an oversized blob is refused
-    // from its header without crossing the exec channel in full.
-    const encoded = await dockerExec(
-      asString(containerId, "containerId"),
-      containerGitBlobReadCommand(object, MAX_TEXT_FILE_BYTES),
-    );
-    const read = decodeGitBatchOutput(Buffer.from(encoded, "base64"), MAX_TEXT_FILE_BYTES);
-    if (read?.kind === "too-large") assertEditorTextFileSize(read.size);
-    if (read?.kind !== "blob") return null;
-    const content = decodeEditorTextFile(read.bytes);
-    return { path: target, content, language: inferLanguage(target) };
-  });
-  register("read_container_file_base64", async ({ containerId, filePath }) => {
-    const fullPath = workspaceFilePath(asString(filePath, "filePath"));
-    return (
-      await dockerExec(
-        asString(containerId, "containerId"),
-        `node -e ${quoteShell(CONTAINER_SAFE_BASE64_READER)} -- /workspace ${quoteShell(fullPath)} ${MAX_BINARY_FILE_BYTES}`,
-      )
-    ).trim();
-  });
-  register("write_container_file", async ({ containerId, filePath, base64Data, expected }) => {
-    const id = asString(containerId, "containerId");
-    const target = validateRelativeFilePath(asString(filePath, "filePath"));
-    const precondition = parseFileWritePrecondition(expected);
-    const fullPath = workspaceFilePath(target);
-    const data = asString(base64Data, "base64Data");
-    assertBase64PayloadWithinLimit(data);
-    if (isAnnotationEvidencePath(target)) {
-      // App-owned evidence: no symbolic link anywhere on the path, exclusive
-      // temp file, atomic rename. A workspace cannot redirect this write.
-      await runContainerEvidenceScript(
-        runCommand,
-        id,
-        CONTAINER_EVIDENCE_WRITER,
-        ["/workspace", target, String(MAX_BASE64_PAYLOAD_BYTES)],
-        data,
+        knownDigest,
       );
-      return fullPath;
-    }
-    const write = async () => {
-      // A refused precondition exits before reading stdin, which is expected.
-      await runContainerWrite(
-        id,
-        ["bash", "-lc", containerFileWriteScript(fullPath, precondition)],
-        data,
-        {
-          errorForExit: (code) =>
-            code === CONTAINER_WRITE_CONFLICT_EXIT ? fileWriteConflictError() : undefined,
-        },
+    },
+    ASYNC_HANDLER,
+  );
+  register(
+    readContainerFileCommand,
+    async ({ containerId, filePath }) => {
+      const target = validateRelativeFilePath(filePath);
+      const encoded = await dockerExec(
+        containerId,
+        `node -e ${quoteShell(CONTAINER_SAFE_BASE64_READER)} -- /workspace ${quoteShell(workspaceFilePath(target))} ${MAX_TEXT_FILE_BYTES} editor ${quoteShell(MAX_TEXT_FILE_SIZE_LABEL)}`,
       );
-      return fullPath;
-    };
-    return precondition ? serializeFileWrite(`container:${id}:${fullPath}`, write) : write();
-  });
+      const content = decodeEditorTextFile(Buffer.from(encoded.trim(), "base64"));
+      return { path: target, content, language: inferLanguage(target) };
+    },
+    ASYNC_HANDLER,
+  );
+  register(
+    readFileAtBranchCommand,
+    async ({ containerId, filePath, branch }) => {
+      const target = validateRelativeFilePath(filePath);
+      const object = `${branch}:${target}`;
+      // One `git cat-file --batch` answers the size and the body; the output is
+      // cut after the largest acceptable answer, so an oversized blob is refused
+      // from its header without crossing the exec channel in full.
+      const encoded = await dockerExec(
+        containerId,
+        containerGitBlobReadCommand(object, MAX_TEXT_FILE_BYTES),
+      );
+      const read = decodeGitBatchOutput(Buffer.from(encoded, "base64"), MAX_TEXT_FILE_BYTES);
+      if (read?.kind === "too-large") assertEditorTextFileSize(read.size);
+      if (read?.kind !== "blob") return null;
+      const content = decodeEditorTextFile(read.bytes);
+      return { path: target, content, language: inferLanguage(target) };
+    },
+    ASYNC_HANDLER,
+  );
+  register(
+    readContainerFileBase64Command,
+    async ({ containerId, filePath }) => {
+      const fullPath = workspaceFilePath(filePath);
+      return (
+        await dockerExec(
+          containerId,
+          `node -e ${quoteShell(CONTAINER_SAFE_BASE64_READER)} -- /workspace ${quoteShell(fullPath)} ${MAX_BINARY_FILE_BYTES}`,
+        )
+      ).trim();
+    },
+    ASYNC_HANDLER,
+  );
+  register(
+    writeContainerFileCommand,
+    async ({ containerId: id, filePath, base64Data: data, expected }) => {
+      const target = validateRelativeFilePath(filePath);
+      const precondition = parseFileWritePrecondition(expected);
+      const fullPath = workspaceFilePath(target);
+      assertBase64PayloadWithinLimit(data);
+      if (isAnnotationEvidencePath(target)) {
+        // App-owned evidence: no symbolic link anywhere on the path, exclusive
+        // temp file, atomic rename. A workspace cannot redirect this write.
+        await runContainerEvidenceScript(
+          runCommand,
+          id,
+          CONTAINER_EVIDENCE_WRITER,
+          ["/workspace", target, String(MAX_BASE64_PAYLOAD_BYTES)],
+          data,
+        );
+        return fullPath;
+      }
+      const write = async () => {
+        // A refused precondition exits before reading stdin, which is expected.
+        await runContainerWrite(
+          id,
+          ["bash", "-lc", containerFileWriteScript(fullPath, precondition)],
+          data,
+          {
+            errorForExit: (code) =>
+              code === CONTAINER_WRITE_CONFLICT_EXIT ? fileWriteConflictError() : undefined,
+          },
+        );
+        return fullPath;
+      };
+      return precondition ? serializeFileWrite(`container:${id}:${fullPath}`, write) : write();
+    },
+    ASYNC_HANDLER,
+  );
   // Containment and existence of agent-reported paths in a container
   // workspace (web annotation file checks). Runs `stat` only, inside the
   // container, with the same bounds as the local check; never reads contents.
-  register("check_container_workspace_paths", async ({ containerId, paths }) => {
-    const id = asNonBlankString(containerId, "containerId");
-    if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(id)) {
-      throw new Error("containerId must be a Docker container name or ID");
-    }
-    if (
-      !Array.isArray(paths) ||
-      paths.length > MAX_WORKSPACE_PATH_CHECKS ||
-      !paths.every((entry) => typeof entry === "string" && isSafeRelativePath(entry))
-    ) {
-      throw new Error("paths must be at most 200 workspace-relative paths");
-    }
-    // Paths travel as JSON on stdin, never on the exec command line.
-    return runContainerPathCheck(runCommand, id, paths as string[]);
-  });
-  register("delete_container_annotation_evidence", async ({ containerId, filePath, digest }) => {
-    const id = asString(containerId, "containerId");
-    const target = validateRelativeFilePath(asString(filePath, "filePath"));
-    if (!isAnnotationEvidencePath(target)) {
-      throw new Error("Path is not an app-generated evidence path");
-    }
-    const hash = asString(digest, "digest");
-    if (!/^[a-f0-9]{64}$/.test(hash)) throw new Error("digest is invalid");
-    const output = await runContainerEvidenceScript(
-      runCommand,
-      id,
-      CONTAINER_EVIDENCE_REMOVER,
-      ["/workspace", target, hash, String(WEB_ANNOTATION_LIMITS.imageBytes)],
-      "",
-    );
-    const outcome = output.trim();
-    if (outcome !== "removed" && outcome !== "missing" && outcome !== "mismatch") {
-      throw new Error("Unexpected evidence removal result");
-    }
-    return outcome;
-  });
-  register("revert_container_file", async ({ environmentId, filePath, targetBranch }, context) => {
-    const environmentIdString = asString(environmentId, "environmentId");
-    const environment = await requireContainerMutationEnvironment(
-      context.storage,
-      environmentIdString,
-    );
-    const id = environment.containerId!;
-    const target = validateWorkspaceMutationPath(asString(filePath, "filePath"));
-    const branch = validateGitRefName(asString(targetBranch, "targetBranch"), "target branch");
-    await revertContainerFile(id, target, branch, {
-      exec: (containerId, script) => dockerExec(containerId, script),
-      fetches: context.runtime.diffStats.containerGitFetchPolicy,
-      admission: gitDockerScanPool,
-    });
-    context.runtime.diffStats.service.invalidateChanges({ containerId: id });
-    context.runtime.diffStats.service.refresh(environmentIdString);
-    return target;
-  });
-  register("delete_container_file", async ({ environmentId, filePath }, context) => {
-    const environmentIdString = asString(environmentId, "environmentId");
-    const environment = await requireContainerMutationEnvironment(
-      context.storage,
-      environmentIdString,
-    );
-    const id = environment.containerId!;
-    const target = validateWorkspaceMutationPath(asString(filePath, "filePath"));
-    try {
-      await dockerExec(id, containerDeleteFileCommand(target));
-      return target;
-    } finally {
-      context.runtime.diffStats.service.invalidateChanges({ containerId: id });
-      context.runtime.diffStats.service.refresh(environmentIdString);
-    }
-  });
   register(
-    "move_container_file",
-    async ({ environmentId, sourcePath, destinationDirectory }, context) => {
-      const environmentIdString = asString(environmentId, "environmentId");
+    checkContainerWorkspacePathsCommand,
+    async ({ containerId, paths }) => {
+      const id = asNonBlankString(containerId, "containerId");
+      if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(id)) {
+        throw new Error("containerId must be a Docker container name or ID");
+      }
+      if (
+        !Array.isArray(paths) ||
+        paths.length > MAX_WORKSPACE_PATH_CHECKS ||
+        !paths.every((entry) => typeof entry === "string" && isSafeRelativePath(entry))
+      ) {
+        throw new Error("paths must be at most 200 workspace-relative paths");
+      }
+      // Paths travel as JSON on stdin, never on the exec command line.
+      return runContainerPathCheck(runCommand, id, paths as string[]);
+    },
+    ASYNC_HANDLER,
+  );
+  register(
+    deleteContainerAnnotationEvidenceCommand,
+    async ({ containerId: id, filePath, digest: hash }) => {
+      const target = validateRelativeFilePath(filePath);
+      if (!isAnnotationEvidencePath(target)) {
+        throw new Error("Path is not an app-generated evidence path");
+      }
+      if (!/^[a-f0-9]{64}$/.test(hash)) throw new Error("digest is invalid");
+      const output = await runContainerEvidenceScript(
+        runCommand,
+        id,
+        CONTAINER_EVIDENCE_REMOVER,
+        ["/workspace", target, hash, String(WEB_ANNOTATION_LIMITS.imageBytes)],
+        "",
+      );
+      const outcome = output.trim();
+      if (outcome !== "removed" && outcome !== "missing" && outcome !== "mismatch") {
+        throw new Error("Unexpected evidence removal result");
+      }
+      return outcome;
+    },
+    ASYNC_HANDLER,
+  );
+  register(
+    revertContainerFileCommand,
+    async ({ environmentId, filePath, targetBranch }, context) => {
+      const environmentIdString = environmentId;
       const environment = await requireContainerMutationEnvironment(
         context.storage,
         environmentIdString,
       );
       const id = environment.containerId!;
-      const move = resolveWorkspaceFileMove(
-        asString(sourcePath, "sourcePath"),
-        asString(destinationDirectory, "destinationDirectory"),
+      const target = validateWorkspaceMutationPath(filePath);
+      const branch = validateGitRefName(targetBranch, "target branch");
+      await revertContainerFile(id, target, branch, {
+        exec: (containerId, script) => dockerExec(containerId, script),
+        fetches: context.runtime.diffStats.containerGitFetchPolicy,
+        admission: gitDockerScanPool,
+      });
+      context.runtime.diffStats.service.invalidateChanges({ containerId: id });
+      context.runtime.diffStats.service.refresh(environmentIdString);
+      return target;
+    },
+    ASYNC_HANDLER,
+  );
+  register(
+    deleteContainerFileCommand,
+    async ({ environmentId, filePath }, context) => {
+      const environmentIdString = environmentId;
+      const environment = await requireContainerMutationEnvironment(
+        context.storage,
+        environmentIdString,
       );
+      const id = environment.containerId!;
+      const target = validateWorkspaceMutationPath(filePath);
+      try {
+        await dockerExec(id, containerDeleteFileCommand(target));
+        return target;
+      } finally {
+        context.runtime.diffStats.service.invalidateChanges({ containerId: id });
+        context.runtime.diffStats.service.refresh(environmentIdString);
+      }
+    },
+    ASYNC_HANDLER,
+  );
+  register(
+    moveContainerFileCommand,
+    async ({ environmentId, sourcePath, destinationDirectory }, context) => {
+      const environmentIdString = environmentId;
+      const environment = await requireContainerMutationEnvironment(
+        context.storage,
+        environmentIdString,
+      );
+      const id = environment.containerId!;
+      const move = resolveWorkspaceFileMove(sourcePath, destinationDirectory);
       await dockerExec(id, containerMoveFileCommand(move.source, move.directory, move.destination));
       context.runtime.diffStats.service.invalidateChanges({ containerId: id });
       context.runtime.diffStats.service.refresh(environmentIdString);
       return move.destination;
     },
+    ASYNC_HANDLER,
   );
-  register("rename_container_file", async ({ environmentId, filePath, newName }, context) => {
-    const environmentIdString = asString(environmentId, "environmentId");
-    const environment = await requireContainerMutationEnvironment(
-      context.storage,
-      environmentIdString,
-    );
-    const id = environment.containerId!;
-    const rename = resolveWorkspaceFileRename(
-      asString(filePath, "filePath"),
-      asString(newName, "newName"),
-    );
-    await dockerExec(
-      id,
-      containerMoveFileCommand(rename.source, rename.directory, rename.destination),
-    );
-    context.runtime.diffStats.service.invalidateChanges({ containerId: id });
-    context.runtime.diffStats.service.refresh(environmentIdString);
-    return rename.destination;
-  });
   register(
-    "create_container_folder",
-    async ({ environmentId, parentDirectory, folderName }, context) => {
-      const environmentIdString = asString(environmentId, "environmentId");
+    renameContainerFileCommand,
+    async ({ environmentId, filePath, newName }, context) => {
+      const environmentIdString = environmentId;
       const environment = await requireContainerMutationEnvironment(
         context.storage,
         environmentIdString,
       );
       const id = environment.containerId!;
-      const created = resolveWorkspaceFolderCreate(
-        asString(parentDirectory, "parentDirectory"),
-        asString(folderName, "folderName"),
+      const rename = resolveWorkspaceFileRename(filePath, newName);
+      await dockerExec(
+        id,
+        containerMoveFileCommand(rename.source, rename.directory, rename.destination),
       );
+      context.runtime.diffStats.service.invalidateChanges({ containerId: id });
+      context.runtime.diffStats.service.refresh(environmentIdString);
+      return rename.destination;
+    },
+    ASYNC_HANDLER,
+  );
+  register(
+    createContainerFolderCommand,
+    async ({ environmentId, parentDirectory, folderName }, context) => {
+      const environmentIdString = environmentId;
+      const environment = await requireContainerMutationEnvironment(
+        context.storage,
+        environmentIdString,
+      );
+      const id = environment.containerId!;
+      const created = resolveWorkspaceFolderCreate(parentDirectory, folderName);
       await dockerExec(id, containerCreateFolderCommand(created.directory, created.folderPath));
       context.runtime.diffStats.service.invalidateChanges({ containerId: id });
       context.runtime.diffStats.service.refresh(environmentIdString);
       return created.folderPath;
     },
+    ASYNC_HANDLER,
   );
 
   register(
-    "copy_external_file",
-    async ({ environmentId, destinationDirectory, fileName, base64Data }, context) => {
-      const environmentIdString = asString(environmentId, "environmentId");
-      const directory = asString(destinationDirectory, "destinationDirectory");
-      const name = asString(fileName, "fileName");
-      const data = assertBase64PayloadWithinLimit(asString(base64Data, "base64Data"));
+    copyExternalFileCommand,
+    async (
+      {
+        environmentId: environmentIdString,
+        destinationDirectory: directory,
+        fileName: name,
+        base64Data,
+      },
+      context,
+    ) => {
+      const data = assertBase64PayloadWithinLimit(base64Data);
       const copy = resolveWorkspaceExternalFileCopy(directory, name);
       const environment = await context.storage.getEnvironment(environmentIdString);
       if (!environment) throw new Error(`Environment not found: ${environmentIdString}`);
@@ -1511,13 +1660,16 @@ export function registerTerminalCommands(
       context.runtime.diffStats.service.refresh(environmentIdString);
       return copy.destination;
     },
+    ASYNC_HANDLER,
   );
 
   const writeInitialPromptAttachments = async (
-    { environmentId, attachments }: Record<string, unknown>,
+    {
+      environmentId: environmentIdString,
+      attachments,
+    }: { environmentId: string; attachments?: unknown },
     context: CommandContext,
   ) => {
-    const environmentIdString = asString(environmentId, "environmentId");
     if (!Array.isArray(attachments) || attachments.length === 0 || attachments.length > 20) {
       throw new Error("Expected between 1 and 20 initial prompt attachments");
     }
@@ -1566,8 +1718,9 @@ export function registerTerminalCommands(
     // once here; the per-item write reuses the normalized payload.
     let totalDecodedBytes = 0;
     const parsedAttachments = attachments.map((rawAttachment) => {
+      // Each item was strict (`assertOnlyKeys`) before plan item 7002; an
+      // unknown key is ignored now (§11.4).
       const attachment = asRecord(rawAttachment, "attachment");
-      assertOnlyKeys(attachment, ["id", "name", "base64Data"], "attachment");
       asNonBlankString(attachment.id, "attachment.id");
       const name = allocateName(attachment.name);
       const data = assertBase64PayloadWithinLimit(
@@ -1645,10 +1798,8 @@ export function registerTerminalCommands(
       throw error;
     }
   };
-  register("write_initial_prompt_attachments", (args, context) => {
-    const release = context.runtime.environments.fence.beginMutation(
-      asString(args.environmentId, "environmentId"),
-    );
+  register(writeInitialPromptAttachmentsCommand, (args, context) => {
+    const release = context.runtime.environments.fence.beginMutation(args.environmentId);
     return writeInitialPromptAttachments(args, context).finally(release);
   });
 }

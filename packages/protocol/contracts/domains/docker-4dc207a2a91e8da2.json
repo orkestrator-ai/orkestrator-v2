@@ -1,0 +1,93 @@
+{
+  "schemaVersion": 1,
+  "domain": "docker",
+  "commands": {
+    "check_base_image": {
+      "untyped": true
+    },
+    "check_container_host_reachability": {
+      "untyped": true
+    },
+    "check_docker": {
+      "untyped": true
+    },
+    "cleanup_orphaned_containers": {
+      "untyped": true
+    },
+    "close_container_logs": {
+      "untyped": true
+    },
+    "docker_cleanup_execute": {
+      "untyped": true
+    },
+    "docker_cleanup_preview": {
+      "untyped": true
+    },
+    "docker_container_status": {
+      "untyped": true
+    },
+    "docker_remove_container": {
+      "untyped": true
+    },
+    "docker_start_container": {
+      "untyped": true
+    },
+    "docker_stop_container": {
+      "untyped": true
+    },
+    "docker_system_prune": {
+      "untyped": true
+    },
+    "docker_version": {
+      "untyped": true
+    },
+    "get_container_host_port": {
+      "untyped": true
+    },
+    "get_container_host_reachability": {
+      "untyped": true
+    },
+    "get_container_logs": {
+      "untyped": true
+    },
+    "get_container_usage": {
+      "untyped": true
+    },
+    "get_docker_capacity": {
+      "untyped": true
+    },
+    "get_docker_image_status": {
+      "untyped": true
+    },
+    "get_docker_system_stats": {
+      "untyped": true
+    },
+    "get_docker_topology": {
+      "untyped": true
+    },
+    "get_orkestrator_containers": {
+      "untyped": true
+    },
+    "list_docker_containers": {
+      "untyped": true
+    },
+    "open_container_logs": {
+      "untyped": true
+    },
+    "propagate_github_token_to_containers": {
+      "untyped": true
+    },
+    "provision_environment": {
+      "untyped": true
+    },
+    "read_container_logs": {
+      "untyped": true
+    },
+    "reattach_container": {
+      "untyped": true
+    },
+    "stream_container_logs": {
+      "untyped": true
+    }
+  }
+}

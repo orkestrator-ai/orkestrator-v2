@@ -1,13 +1,38 @@
 import { describe, expect, mock, test } from "bun:test";
 import { createCommandRegistry, type CommandContext } from "./commands.js";
 
+// The services answer the real shapes: defined commands validate their results in tests.
+function planningRecord(featureId: string) {
+  return {
+    version: 1,
+    operationId: "op-1",
+    featureId,
+    projectId: "project-1",
+    kind: "feature",
+    userMessage: "Plan",
+    phase: "dispatching",
+    startedAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    backendRevision: 0,
+  };
+}
+
 function harness(withService = true) {
-  const start = mock(async (input: unknown) => ({ input }));
-  const snapshot = mock(async (projectId: string) => ({ projectId }));
-  const retry = mock(async (featureId: string) => ({ featureId, retried: true }));
-  const cancel = mock(async (featureId: string) => ({ featureId, cancelled: true }));
+  const start = mock(async (input: { featureId: string }) => planningRecord(input.featureId));
+  const snapshot = mock(async (_projectId: string) => [planningRecord("feature-1")]);
+  const retry = mock(async (featureId: string) => planningRecord(featureId));
+  const cancel = mock(async (_featureId: string) => undefined);
   const updateFeaturePlan = mock(async (featureId: string, updates: unknown) => ({
     id: featureId,
+    projectId: "project-1",
+    title: "Plan",
+    status: "collecting",
+    summary: "",
+    messages: [],
+    stories: [],
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    order: 0,
     updates,
   }));
   const context = {
@@ -51,8 +76,9 @@ describe("feature planning commands", () => {
     expect(cancel).toHaveBeenCalledWith("feature-1");
   });
 
-  test("rejects unknown fields and invalid start envelopes", async () => {
-    const { invoke } = harness();
+  // Defined commands (plan item 7008) drop unknown argument keys rather than refuse them.
+  test("drops unknown fields and rejects invalid start envelopes", async () => {
+    const { invoke, start, snapshot, retry, cancel } = harness();
     for (const [command, args] of [
       [
         "start_feature_planning",
@@ -67,8 +93,16 @@ describe("feature planning commands", () => {
       ["retry_feature_planning", { featureId: "feature-1", extra: true }],
       ["cancel_feature_planning", { featureId: "feature-1", extra: true }],
     ] as const) {
-      await expect(invoke(command, args)).rejects.toThrow("Unexpected arguments field: extra");
+      await invoke(command, args);
     }
+    expect(start).toHaveBeenCalledWith({
+      featureId: "feature-1",
+      kind: "feature",
+      userMessage: "Plan",
+    });
+    expect(snapshot).toHaveBeenCalledWith("project-1");
+    expect(retry).toHaveBeenCalledWith("feature-1");
+    expect(cancel).toHaveBeenCalledWith("feature-1");
     await expect(
       invoke("start_feature_planning", {
         featureId: "feature-1",
@@ -212,12 +246,12 @@ describe("feature planning commands", () => {
         updates: [],
       }),
     ).rejects.toThrow("Expected updates to be an object");
-    await expect(
-      invoke("update_feature_plan", {
-        featureId: "feature-1",
-        updates: {},
-        extra: true,
-      }),
-    ).rejects.toThrow("Unexpected arguments field: extra");
+    updateFeaturePlan.mockClear();
+    await invoke("update_feature_plan", {
+      featureId: "feature-1",
+      updates: {},
+      extra: true,
+    });
+    expect(updateFeaturePlan).toHaveBeenCalledWith("feature-1", {});
   });
 });

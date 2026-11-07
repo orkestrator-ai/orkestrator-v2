@@ -1,3 +1,4 @@
+import { environmentSetupCompleteEvent } from "@orkestrator/protocol/contract/domains/events";
 import { createHash } from "node:crypto";
 import { constants as fsConstants, promises as fs } from "node:fs";
 import path from "node:path";
@@ -253,7 +254,7 @@ export async function holdEnvironmentSetupForApproval(
       errorName: (error as Error)?.name,
     });
   });
-  context.emit("environment-setup-complete", {
+  context.emit(environmentSetupCompleteEvent, {
     environment_id: environment.id,
     success: false,
     error: SETUP_APPROVAL_MESSAGE,

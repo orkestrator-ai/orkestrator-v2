@@ -20,7 +20,8 @@ import { Input } from "@/components/ui/input";
 import type { FileNode } from "@/lib/backend";
 import { useFilesPanelStore } from "@/stores";
 import type { DesignProjection } from "@/stores/designStore";
-import { designApi, failureOf } from "@/lib/design-client";
+import { failureOf, type DesignV2Api } from "@/lib/design-client";
+import { useDesignApi } from "./design-scope";
 import type { DesignCanvasController } from "./design-controller";
 
 import { DESIGN_EXPORT_NAME, DESIGN_EXPORT_PATH_MAX } from "./design-export-path";
@@ -51,7 +52,7 @@ function collectFolders(nodes: FileNode[], out: string[] = []): string[] {
   return out;
 }
 
-export type DesignExportApi = Pick<typeof designApi, "exportPreview" | "exportReconcile">;
+export type DesignExportApi = Pick<DesignV2Api, "exportPreview" | "exportReconcile">;
 
 const COLLISIONS: Record<NonNullable<DesignExportTarget["reason"]>, string> = {
   "other-canvas": "already contains a different design. Replacing it would overwrite that design.",
@@ -74,7 +75,7 @@ export function DesignExportDialog({
   onOpenChange,
   controller,
   projection,
-  api = designApi,
+  api: apiOverride,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -83,6 +84,9 @@ export function DesignExportDialog({
   /** Injected in tests (must be referentially stable); defaults to the design client. */
   api?: DesignExportApi;
 }) {
+  // The canvas's node (plan item 4007).
+  const nodeDesign = useDesignApi();
+  const api = apiOverride ?? nodeDesign;
   const { environmentId, canvasId } = projection;
   // Opened from a toolbar button, not a DialogTrigger: Radix would return focus
   // to its (absent) trigger, dropping it to <body>. Return it to the opener.

@@ -9,7 +9,8 @@
  * and says why.
  */
 import { afterAll, afterEach, describe, expect, mock, spyOn, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type {
   NativeAgentSessionActionOutcome,
   NativeAgentSessionProjection,
@@ -20,12 +21,13 @@ import * as realAgentHandoff from "@/hooks/useAgentHandoff";
 import * as realBackend from "@/lib/backend";
 import * as realPaneLayoutPersistence from "@/lib/pane-layout-persistence";
 import * as realNativeComposeBarPaste from "@/hooks/useNativeComposeBarPaste";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
-import { useNativeComposeStore } from "@/stores/nativeComposeStore";
-import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
-import { useConfigStore } from "@/stores/configStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
+import { nativeComposeStore } from "@/stores/nativeComposeStore";
+import { nativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
+import { configStore } from "@/stores/configStore";
 import { createSessionKey } from "@/lib/utils";
 import { mockToastSuccess, resetSonnerMocks } from "../../../../../tests/mocks/sonner";
+import { appCommandStore } from "@/test/app-command-store";
 
 const ENV_ID = "coordinator:workspace-1:conversation-1";
 const realHandoffSnapshot = { ...realAgentHandoff };
@@ -105,7 +107,7 @@ function projectionFor(agent: AgentPlatform): NativeAgentSessionProjection<Nativ
   } as NativeAgentSessionProjection<NativeMessage>;
 }
 
-const configSnapshot = useConfigStore.getState().config;
+const configSnapshot = appCommandStore(configStore).getState().config;
 
 const getNativeAgentProjectionMock = mock(async (input: { agent: AgentPlatform }) => {
   if (refreshError && steerNativeAgentQueuedPromptMock.mock.calls.length)
@@ -196,17 +198,20 @@ afterAll(() => {
 const TAB_ID = "coordinator-conversation-1";
 
 function draftText() {
-  return useNativeComposeStore.getState().drafts.get(createSessionKey(ENV_ID, TAB_ID))?.text;
+  return appCommandStore(nativeComposeStore).getState().drafts.get(createSessionKey(ENV_ID, TAB_ID))
+    ?.text;
 }
 
 function setAutoSteer(autoSteer: boolean) {
-  useConfigStore.getState().updateGlobalConfig({ autoSteer });
+  appCommandStore(configStore).getState().updateGlobalConfig({ autoSteer });
 }
 
 /** Mount the tab the way `CoordinatorPanel` does, then send while it works. */
 async function sendToWorkingCoordinator(text: string) {
-  useNativeComposeStore.getState().updateDraft(createSessionKey(ENV_ID, TAB_ID), { text });
-  render(
+  appCommandStore(nativeComposeStore)
+    .getState()
+    .updateDraft(createSessionKey(ENV_ID, TAB_ID), { text });
+  renderInAppCommandScope(
     <AgentNativeTab
       tabId={TAB_ID}
       data={{
@@ -253,19 +258,19 @@ afterEach(() => {
   running = true;
   queuedItems = [];
   resetSonnerMocks();
-  useConfigStore.getState().setConfig(configSnapshot);
+  appCommandStore(configStore).getState().setConfig(configSnapshot);
   steerNativeAgentQueuedPromptMock.mockClear();
   getNativeAgentProjectionMock.mockClear();
   dispatchNativeAgentIntentMock.mockClear();
   enqueuePromptQueueMessageMock.mockClear();
   performNativeAgentSessionActionMock.mockClear();
-  usePaneLayoutStore.setState({
+  appCommandStore(paneLayoutStore).setState({
     environments: new Map(),
     hydration: new Map(),
     activeEnvironmentId: null,
   });
-  useNativeComposeStore.setState({ drafts: new Map() });
-  useNativeAgentProjectionStore.getState().reset();
+  appCommandStore(nativeComposeStore).setState({ drafts: new Map() });
+  appCommandStore(nativeAgentProjectionStore).getState().reset();
 });
 
 describe("Coordinator chat steering", () => {
@@ -382,7 +387,7 @@ describe("Coordinator chat steering", () => {
 
 async function publishProjection() {
   await act(async () => {
-    useNativeAgentProjectionStore
+    appCommandStore(nativeAgentProjectionStore)
       .getState()
       .setProjection(createSessionKey(ENV_ID, TAB_ID), projectionFor("claude"));
   });
@@ -549,7 +554,7 @@ test("a later applied auto-steer clears history for the same id", async () => {
   try {
     steerOutcome = { outcome: "applied" };
     await act(async () => {
-      useNativeComposeStore
+      appCommandStore(nativeComposeStore)
         .getState()
         .updateDraft(createSessionKey(ENV_ID, TAB_ID), { text: "retry" });
     });

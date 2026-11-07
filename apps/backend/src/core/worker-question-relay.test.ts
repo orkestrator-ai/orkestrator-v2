@@ -10,7 +10,8 @@ import { createCommandRegistry } from "./commands-registry.js";
 import { CoordinatorService } from "./coordinator-service.js";
 import { EnvironmentMutationFence } from "./environment-replacement-fence.js";
 import { CoordinatorRequestFlights } from "./coordinator-request-flights.js";
-import { isNodeExcludedCommand, isWorkspaceExcludedCommand } from "./nodes/node-routing.js";
+import { isNodeRoutingExcludedCommand } from "./nodes/node-routing.js";
+import { grantAdmits } from "./nodes/workspace-grant-test-support.js";
 import { NodeActionRequests } from "./nodes/node-action-requests.js";
 import { NodeCoordination } from "./nodes/node-coordination.js";
 import { runCommand } from "./shell.js";
@@ -354,11 +355,11 @@ describe("answer_project_worker_question", () => {
   });
 
   test("the approval-only commands are never reachable through a node or workspace grant", () => {
-    expect(isNodeExcludedCommand("request_coordinator_worker_answer")).toBe(true);
-    expect(isNodeExcludedCommand("answer_project_worker_question")).toBe(true);
+    expect(isNodeRoutingExcludedCommand("request_coordinator_worker_answer")).toBe(true);
+    expect(isNodeRoutingExcludedCommand("answer_project_worker_question")).toBe(true);
     // A command node reaches a worker on this node only over the node link.
-    expect(isNodeExcludedCommand("answer_controller_worker_question")).toBe(false);
-    expect(isWorkspaceExcludedCommand("answer_controller_worker_question")).toBe(true);
+    expect(isNodeRoutingExcludedCommand("answer_controller_worker_question")).toBe(false);
+    expect(grantAdmits("answer_controller_worker_question")).toBe(false);
   });
 });
 

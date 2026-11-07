@@ -1,4 +1,5 @@
-import { act, cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import {
   WORKTREE_SNAPSHOT_CHANGED_EVENT,
@@ -6,8 +7,9 @@ import {
 } from "@orkestrator/protocol/worktree-snapshots";
 import * as backend from "@/lib/backend";
 import * as nativeEvents from "@/lib/native/events";
-import { useWorktreeSnapshotStore } from "@/stores/worktreeSnapshotStore";
+import { worktreeSnapshotStore } from "@/stores/worktreeSnapshotStore";
 import { useWorktreeSnapshotRevisions } from "./useWorktreeSnapshotRevisions";
+import { appCommandStore } from "@/test/app-command-store";
 
 const callbacks = new Map<string, (event: { payload: unknown }) => void>();
 const order: string[] = [];
@@ -26,7 +28,11 @@ const state = (overrides: Record<string, unknown> = {}) => ({
 });
 
 function resetStore() {
-  useWorktreeSnapshotStore.setState({ entries: new Map(), generation: null, syncStatus: "idle" });
+  appCommandStore(worktreeSnapshotStore).setState({
+    entries: new Map(),
+    generation: null,
+    syncStatus: "idle",
+  });
 }
 
 beforeEach(() => {
@@ -59,68 +65,71 @@ async function flush() {
 
 describe("useWorktreeSnapshotRevisions", () => {
   test("subscribes before hydrating and records the owner generation", async () => {
-    renderHook(() => useWorktreeSnapshotRevisions({ enabled: true }));
+    renderHookInAppCommandScope(() => useWorktreeSnapshotRevisions({ enabled: true }));
     await flush();
 
     expect(order.indexOf(`listen:${WORKTREE_SNAPSHOT_CHANGED_EVENT}`)).toBeLessThan(
       order.indexOf("snapshot"),
     );
-    const store = useWorktreeSnapshotStore.getState();
+    const store = appCommandStore(worktreeSnapshotStore).getState();
     expect(store.generation).toBe("gen-1");
     expect(store.entries.get("env-1")).toMatchObject({ fileListRevision: 1 });
     expect(store.syncStatus).toBe("current");
   });
 
   test("applies a stamped change, ignores invalid payloads and keeps identical state", async () => {
-    renderHook(() => useWorktreeSnapshotRevisions({ enabled: true }));
+    renderHookInAppCommandScope(() => useWorktreeSnapshotRevisions({ enabled: true }));
     await flush();
     const emit = callbacks.get(WORKTREE_SNAPSHOT_CHANGED_EVENT)!;
 
     act(() =>
       emit({ payload: { ...state({ fileListRevision: 2 }), generation: "gen-1", revision: 2 } }),
     );
-    const afterChange = useWorktreeSnapshotStore.getState().entries;
+    const afterChange = appCommandStore(worktreeSnapshotStore).getState().entries;
     expect(afterChange.get("env-1")).toMatchObject({ fileListRevision: 2 });
 
     act(() =>
       emit({ payload: { ...state({ freshness: "bogus" }), generation: "gen-1", revision: 3 } }),
     );
-    expect(useWorktreeSnapshotStore.getState().entries).toBe(afterChange);
+    expect(appCommandStore(worktreeSnapshotStore).getState().entries).toBe(afterChange);
 
     act(() =>
       emit({
         payload: { environmentId: "env-1", removed: true, generation: "gen-1", revision: 3 },
       }),
     );
-    expect(useWorktreeSnapshotStore.getState().entries.has("env-1")).toBe(false);
+    expect(appCommandStore(worktreeSnapshotStore).getState().entries.has("env-1")).toBe(false);
   });
 
   test("an older backend without the command is unsupported, not retried", async () => {
     snapshotSpy.mockImplementation(async () => {
       throw new Error("Unknown backend command: get_worktree_snapshot_revisions");
     });
-    renderHook(() => useWorktreeSnapshotRevisions({ enabled: true }));
+    renderHookInAppCommandScope(() => useWorktreeSnapshotRevisions({ enabled: true }));
     await flush();
-    expect(useWorktreeSnapshotStore.getState().syncStatus).toBe("unsupported");
+    expect(appCommandStore(worktreeSnapshotStore).getState().syncStatus).toBe("unsupported");
     expect(snapshotSpy).toHaveBeenCalledTimes(1);
   });
 
   test("does nothing while disabled", async () => {
-    renderHook(() => useWorktreeSnapshotRevisions({ enabled: false }));
+    renderHookInAppCommandScope(() => useWorktreeSnapshotRevisions({ enabled: false }));
     await flush();
     expect(listenSpy).not.toHaveBeenCalled();
     expect(snapshotSpy).not.toHaveBeenCalled();
   });
 
   test("an identical rehydrate keeps every entry object", async () => {
-    const { rerender } = renderHook(({ enabled }) => useWorktreeSnapshotRevisions({ enabled }), {
-      initialProps: { enabled: true },
-    });
+    const { rerender } = renderHookInAppCommandScope(
+      ({ enabled }) => useWorktreeSnapshotRevisions({ enabled }),
+      {
+        initialProps: { enabled: true },
+      },
+    );
     await flush();
-    const entry = useWorktreeSnapshotStore.getState().entries.get("env-1");
+    const entry = appCommandStore(worktreeSnapshotStore).getState().entries.get("env-1");
     rerender({ enabled: false });
     rerender({ enabled: true });
     await flush();
-    expect(useWorktreeSnapshotStore.getState().entries.get("env-1")).toBe(entry);
+    expect(appCommandStore(worktreeSnapshotStore).getState().entries.get("env-1")).toBe(entry);
   });
 });

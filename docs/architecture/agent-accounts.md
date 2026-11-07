@@ -1189,9 +1189,11 @@ itself. Where each surface acts:
   Codex accounts, OpenCode providers, Cursor sign-in, GitHub CLI) sits under a
   "Sign-ins on" machine picker (`AccountMachineScope`). It defaults to the
   machine on screen; closing Settings forgets a choice. Another machine is
-  asked through the command node (`portalStore.invokeOnNode`, so an
-  ambiguous write reports an unknown outcome rather than retrying); the
-  command node itself through the portal transport (`machine: null`); an omitted
+  asked on its own scope while the window holds it warm or live, otherwise
+  through the command node (`invokeOnMachine`, then `portalStore.invokeOnNode`,
+  so an ambiguous routed write reports an unknown outcome rather than
+  retrying); the command node itself through the command scope
+  (`machine: null`); an omitted
   target follows the current workspace's backend. A sign-in runs on
   the chosen machine, and its link opens in this client's browser. That
   includes Cursor: `cursor_sdk_login_start { openBrowser: false }` starts its

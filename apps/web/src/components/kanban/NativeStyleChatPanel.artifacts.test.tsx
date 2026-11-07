@@ -5,7 +5,8 @@
  * a native tab, and its card resolves in that conversation.
  */
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { ReactNode } from "react";
 import { featurePlanningConversationKey } from "@orkestrator/protocol/feature-planning";
 import { invoke } from "@/lib/native/backend";
@@ -65,7 +66,7 @@ const messages = [
 ];
 
 function renderPanel(conversationKey: string) {
-  return render(
+  return renderInAppCommandScope(
     <NativeStyleChatPanel
       messages={messages}
       artifactConversation={{

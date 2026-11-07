@@ -1,11 +1,13 @@
-import { act, cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { DIFF_STATS_CHANGED_EVENT } from "@orkestrator/protocol/diff-stats";
 import * as backend from "@/lib/backend";
 import * as nativeEvents from "@/lib/native/events";
 import { NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
-import { useEnvironmentDiffStore } from "@/stores/environmentDiffStore";
+import { environmentDiffStore } from "@/stores/environmentDiffStore";
 import { useEnvironmentDiffStats } from "./useEnvironmentDiffStats";
+import { appCommandStore } from "@/test/app-command-store";
 
 type Deferred<T> = { promise: Promise<T>; resolve: (value: T) => void };
 const deferred = <T,>(): Deferred<T> => {
@@ -19,7 +21,7 @@ let snapshotSpy: ReturnType<typeof spyOn>;
 
 beforeEach(() => {
   callbacks.clear();
-  useEnvironmentDiffStore.setState({ stats: new Map() });
+  appCommandStore(environmentDiffStore).setState({ stats: new Map() });
   listenSpy = spyOn(nativeEvents, "listen").mockImplementation(async (event, callback) => {
     callbacks.set(event, callback as (event: { payload: unknown }) => void);
     return mock(() => undefined);
@@ -31,7 +33,7 @@ afterEach(() => {
   cleanup();
   listenSpy.mockRestore();
   snapshotSpy.mockRestore();
-  useEnvironmentDiffStore.setState({ stats: new Map() });
+  appCommandStore(environmentDiffStore).setState({ stats: new Map() });
 });
 
 describe("useEnvironmentDiffStats", () => {
@@ -41,7 +43,7 @@ describe("useEnvironmentDiffStats", () => {
     snapshotSpy
       .mockImplementationOnce(() => first.promise)
       .mockImplementationOnce(() => second.promise);
-    renderHook(() => useEnvironmentDiffStats());
+    renderHookInAppCommandScope(() => useEnvironmentDiffStats());
     await act(async () => {
       await Promise.resolve();
     });
@@ -85,7 +87,7 @@ describe("useEnvironmentDiffStats", () => {
     });
 
     expect(snapshotSpy).toHaveBeenCalledTimes(2);
-    expect(useEnvironmentDiffStore.getState().stats.get("env-1")).toEqual({
+    expect(appCommandStore(environmentDiffStore).getState().stats.get("env-1")).toEqual({
       additions: 9,
       deletions: 2,
       filesChanged: 3,
@@ -99,7 +101,7 @@ describe("useEnvironmentDiffStats", () => {
     snapshotSpy
       .mockImplementationOnce(() => first.promise)
       .mockImplementationOnce(() => second.promise);
-    renderHook(() => useEnvironmentDiffStats());
+    renderHookInAppCommandScope(() => useEnvironmentDiffStats());
     await act(async () => {
       await Promise.resolve();
     });
@@ -131,12 +133,12 @@ describe("useEnvironmentDiffStats", () => {
         return unlisteners[callbacks.size - 1]!;
       },
     );
-    const { unmount } = renderHook(() => useEnvironmentDiffStats());
+    const { unmount } = renderHookInAppCommandScope(() => useEnvironmentDiffStats());
     await act(async () => {
       await Promise.resolve();
     });
     act(() => callbacks.get(DIFF_STATS_CHANGED_EVENT)?.({ payload: { environmentId: 7 } }));
-    expect(useEnvironmentDiffStore.getState().stats.size).toBe(0);
+    expect(appCommandStore(environmentDiffStore).getState().stats.size).toBe(0);
 
     unmount();
     expect(unlisteners[0]).toHaveBeenCalledTimes(1);
@@ -165,7 +167,7 @@ describe("useEnvironmentDiffStats revision-aware recovery", () => {
   test("an older buffered change never overwrites the newer snapshot", async () => {
     const snapshot = deferred<unknown>();
     snapshotSpy.mockImplementationOnce(() => snapshot.promise);
-    renderHook(() => useEnvironmentDiffStats());
+    renderHookInAppCommandScope(() => useEnvironmentDiffStats());
     await act(async () => {
       await Promise.resolve();
     });
@@ -177,17 +179,17 @@ describe("useEnvironmentDiffStats revision-aware recovery", () => {
       await Promise.resolve();
     });
 
-    expect(useEnvironmentDiffStore.getState().stats.get("env-1")?.additions).toBe(5);
-    expect(useEnvironmentDiffStore.getState().syncStatus).toBe("current");
+    expect(appCommandStore(environmentDiffStore).getState().stats.get("env-1")?.additions).toBe(5);
+    expect(appCommandStore(environmentDiffStore).getState().syncStatus).toBe("current");
   });
 
   test("an untracked environment's removal does not resurrect from a late change", async () => {
     snapshotSpy.mockResolvedValue({ entries: [change("env-1", 1)], generation, revision: 1 });
-    renderHook(() => useEnvironmentDiffStats());
+    renderHookInAppCommandScope(() => useEnvironmentDiffStats());
     await act(async () => {
       await Promise.resolve();
     });
-    expect(useEnvironmentDiffStore.getState().stats.has("env-1")).toBe(true);
+    expect(appCommandStore(environmentDiffStore).getState().stats.has("env-1")).toBe(true);
 
     emitChange({
       environmentId: "env-1",
@@ -200,13 +202,13 @@ describe("useEnvironmentDiffStats revision-aware recovery", () => {
     emitChange(change("env-1", 9, 2)); // duplicate revision, different body
     emitChange(change("env-1", 9, 1)); // older than the removal
 
-    expect(useEnvironmentDiffStore.getState().stats.has("env-1")).toBe(false);
+    expect(appCommandStore(environmentDiffStore).getState().stats.has("env-1")).toBe(false);
     expect(snapshotSpy).toHaveBeenCalledTimes(1);
   });
 
   test("a revision gap triggers one conditional read from the contiguous position", async () => {
     snapshotSpy.mockResolvedValueOnce({ entries: [], generation, revision: 3 });
-    renderHook(() => useEnvironmentDiffStats());
+    renderHookInAppCommandScope(() => useEnvironmentDiffStats());
     await act(async () => {
       await Promise.resolve();
     });
@@ -225,7 +227,7 @@ describe("useEnvironmentDiffStats revision-aware recovery", () => {
 
     expect(snapshotSpy).toHaveBeenCalledTimes(2);
     expect(snapshotSpy.mock.calls[1]?.[0]).toEqual({ generation, revision: 3 });
-    expect(useEnvironmentDiffStore.getState().stats.get("env-1")?.additions).toBe(5);
-    expect(useEnvironmentDiffStore.getState().stats.get("env-2")?.additions).toBe(6);
+    expect(appCommandStore(environmentDiffStore).getState().stats.get("env-1")?.additions).toBe(5);
+    expect(appCommandStore(environmentDiffStore).getState().stats.get("env-2")?.additions).toBe(6);
   });
 });

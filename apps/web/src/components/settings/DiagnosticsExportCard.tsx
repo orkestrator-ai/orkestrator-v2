@@ -15,15 +15,53 @@ import * as backend from "@/lib/backend";
 import { base64ToBytes, downloadBlob } from "@/lib/chat/artifact-download";
 import { sha256HexOfBytes } from "@/lib/chat/static-html-document";
 import { cn } from "@/lib/utils";
+import { incompatibilityNotice, type IncompatibilityNotice } from "@/lib/federation/fleet-currency";
+import { portalStore } from "@/lib/portal/portal-store";
 import { useAccountMachine } from "./account-machine";
 import { formatDiagnosticsBytes } from "./DatabaseStorageCard";
 
-function failureText(error: unknown, fallback: string): string {
-  const message = error instanceof Error ? error.message : "";
-  if (/unknown (?:backend )?command/i.test(message)) {
-    return "This machine's backend is too old to export diagnostics. Update it, then try again.";
-  }
-  return message || fallback;
+/** The node a Settings machine choice names: `null` is the command node, `undefined` this view's. */
+function settingsMachineNodeId(machine: string | null | undefined): string | null {
+  if (typeof machine === "string") return machine;
+  return portalStore.getState().selfId;
+}
+
+function failureNotice(
+  error: unknown,
+  fallback: string,
+  machine: string | null | undefined,
+  machineName: string | null,
+  command: string,
+): IncompatibilityNotice {
+  // A typed incompatibility leads to the machine's update (plan item 5006).
+  const tooOld = incompatibilityNotice(
+    error,
+    { nodeId: settingsMachineNodeId(machine), label: machineName ?? "this machine" },
+    command,
+  );
+  if (tooOld) return tooOld;
+  return { text: (error instanceof Error ? error.message : "") || fallback };
+}
+
+const UPDATE_IT = "Update it.";
+
+/** The failure; an incompatibility's closing "Update it." opens the machine's update. */
+function FailureText({ failure }: { failure: IncompatibilityNotice }) {
+  const linked = failure.update && failure.text.endsWith(UPDATE_IT);
+  return (
+    <p className="text-xs text-destructive" role="alert">
+      {linked ? failure.text.slice(0, -UPDATE_IT.length) : failure.text}
+      {linked ? (
+        <button
+          type="button"
+          className="underline underline-offset-2 hover:text-foreground"
+          onClick={failure.update!.onClick}
+        >
+          {UPDATE_IT}
+        </button>
+      ) : null}
+    </p>
+  );
 }
 
 /** Reads a plan piece by piece and checks it adds up before anything is saved. */
@@ -54,11 +92,11 @@ async function fetchBundle(
  * bytes. It goes to a download here, and nowhere else.
  */
 export function DiagnosticsExportCard() {
-  const { machine } = useAccountMachine();
+  const { machine, name } = useAccountMachine();
   const [plan, setPlan] = useState<DiagnosticsBundlePlan | null>(null);
   const [isPlanning, setIsPlanning] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<IncompatibilityNotice | null>(null);
   const [savedName, setSavedName] = useState<string | null>(null);
 
   const startPlan = useCallback(async () => {
@@ -68,11 +106,19 @@ export function DiagnosticsExportCard() {
     try {
       setPlan(await backend.planDiagnosticsBundle(machine));
     } catch (planError) {
-      setError(failureText(planError, "The diagnostics bundle could not be built."));
+      setError(
+        failureNotice(
+          planError,
+          "The diagnostics bundle could not be built.",
+          machine,
+          name,
+          "plan_diagnostics_bundle",
+        ),
+      );
     } finally {
       setIsPlanning(false);
     }
-  }, [machine]);
+  }, [machine, name]);
 
   const save = useCallback(async () => {
     if (!plan) return;
@@ -83,11 +129,19 @@ export function DiagnosticsExportCard() {
       setSavedName(plan.fileName);
       setPlan(null);
     } catch (saveError) {
-      setError(failureText(saveError, "The diagnostics bundle could not be saved."));
+      setError(
+        failureNotice(
+          saveError,
+          "The diagnostics bundle could not be saved.",
+          machine,
+          name,
+          "read_diagnostics_bundle",
+        ),
+      );
     } finally {
       setIsSaving(false);
     }
-  }, [machine, plan]);
+  }, [machine, name, plan]);
 
   return (
     <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4 space-y-3">
@@ -119,11 +173,7 @@ export function DiagnosticsExportCard() {
           {`Saved ${savedName} to your downloads. Read it before sharing it.`}
         </p>
       ) : null}
-      {error && !plan ? (
-        <p className="text-xs text-destructive" role="alert">
-          {error}
-        </p>
-      ) : null}
+      {error && !plan ? <FailureText failure={error} /> : null}
       <Dialog
         open={plan !== null}
         onOpenChange={(open) => {
@@ -178,11 +228,7 @@ export function DiagnosticsExportCard() {
                   </ul>
                 </div>
               ) : null}
-              {error ? (
-                <p className="text-destructive" role="alert">
-                  {error}
-                </p>
-              ) : null}
+              {error ? <FailureText failure={error} /> : null}
             </div>
           ) : null}
           <DialogFooter>

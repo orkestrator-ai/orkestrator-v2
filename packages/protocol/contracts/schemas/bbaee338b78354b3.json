@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:bbaee338b78354b38c4541fbff4f4c76d578408a24ba523f58cc2ac3f3d7d27c",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "apiKey": {
+          "type": "string"
+        }
+      },
+      "required": ["apiKey"],
+      "type": "object"
+    }
+  }
+}

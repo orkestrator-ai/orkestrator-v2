@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:067dda3f74d3f93fb4be03bddd7f276f95bd1a86de23b078f054afde9089bb36",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "cloneOnly": {
+          "type": "boolean"
+        },
+        "gitUrl": {
+          "type": "string"
+        },
+        "localPath": {}
+      },
+      "required": ["gitUrl"],
+      "type": "object"
+    }
+  }
+}

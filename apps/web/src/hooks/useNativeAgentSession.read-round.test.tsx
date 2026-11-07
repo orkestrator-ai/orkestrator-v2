@@ -4,7 +4,8 @@
  * request once the backend offers it and the view holds both tokens.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, waitFor } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import type {
   NativeAgentDiscoveryUpdate,
   NativeAgentLiveUpdate,
@@ -14,8 +15,9 @@ import type {
 } from "@orkestrator/protocol/native-agent";
 import { nativeAgentCapabilities } from "@orkestrator/protocol/native-agent";
 import * as realBackend from "@/lib/backend";
-import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { nativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
+import { appCommandStore } from "@/test/app-command-store";
 
 interface TestMessage {
   id: string;
@@ -160,7 +162,7 @@ function changeFor(revision: number, cause?: string) {
 }
 
 async function settledSession() {
-  const view = renderHook(() =>
+  const view = renderHookInAppCommandScope(() =>
     useNativeAgentSession<TestMessage>({
       platform: "claude",
       environmentId: "env-1",
@@ -184,19 +186,19 @@ beforeEach(() => {
   getNativeAgentSessionStateUpdateMock.mockClear();
   getNativeAgentDiscoveryUpdateMock.mockClear();
   getNativeAgentLiveUpdateMock.mockClear();
-  usePaneLayoutStore.setState({
+  appCommandStore(paneLayoutStore).setState({
     environments: new Map(),
     hydration: new Map(),
     activeEnvironmentId: null,
   });
-  useNativeAgentProjectionStore.getState().reset();
+  appCommandStore(nativeAgentProjectionStore).getState().reset();
 });
 
 afterEach(() => {
   cleanup();
   resetReadCoordinatorForTests();
   resetResourceSync();
-  useNativeAgentProjectionStore.getState().reset();
+  appCommandStore(nativeAgentProjectionStore).getState().reset();
 });
 
 describe("discovery leaves the 500 ms round", () => {

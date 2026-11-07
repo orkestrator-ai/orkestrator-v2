@@ -14,9 +14,9 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Z_FULLSCREEN_DIALOG } from "@/constants/z-index";
-import * as backend from "@/lib/backend";
-import { pickHostPath } from "@/lib/host-path-picker";
+import { usePickHostPath } from "@/lib/host-path-picker";
 import type { Environment } from "@/types";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 interface EnvironmentMoveSectionProps {
   environment: Environment;
@@ -65,6 +65,9 @@ export function environmentMoveBlockedReason(environment: Environment): string |
  * everything shown here, so the disabled state is a courtesy, not the guard.
  */
 export function EnvironmentMoveSection({ environment, onUpdate }: EnvironmentMoveSectionProps) {
+  const nodeBackend = useScopeBackend();
+  // Browses the host of the node this component renders in.
+  const pickHostPath = usePickHostPath();
   const worktreePath = environment.worktreePath ?? "";
   const currentFolder = parentFolder(worktreePath);
   const [destination, setDestination] = useState(currentFolder);
@@ -101,7 +104,7 @@ export function EnvironmentMoveSection({ environment, onUpdate }: EnvironmentMov
     setMoving(true);
     setError(null);
     try {
-      const updated = await backend.moveEnvironment(environment.id, trimmed);
+      const updated = await nodeBackend.moveEnvironment(environment.id, trimmed);
       // The store merges field by field and JSON drops cleared fields, so the
       // settled move markers are passed explicitly.
       onUpdate({

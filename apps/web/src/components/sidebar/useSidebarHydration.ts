@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { useUIStore } from "@/stores/uiStore";
+import { useNodeScope } from "@/lib/node-scope/providers";
+import { uiStore } from "@/stores/uiStore";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("web.sidebar");
@@ -41,12 +42,13 @@ export function useSidebarHydration(
     }
   }, [environments.length, load, projects, projectsLoaded]);
   const ready = projectsLoaded && projects.every((project) => settled.has(project.id));
+  const ui = useNodeScope().store(uiStore);
   useEffect(() => {
     if (!ready) return;
-    useUIStore.getState().collapseEmptyProjects(
+    ui.getState().collapseEmptyProjects(
       projects.map((p) => p.id),
       new Set(environments.filter((e) => !e.projectHome).map((e) => e.projectId)),
     );
-  }, [environments, projects, ready]);
+  }, [environments, projects, ready, ui]);
   return ready;
 }

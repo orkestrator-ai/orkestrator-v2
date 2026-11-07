@@ -1,3 +1,4 @@
+import { eventSink } from "../src/core/backend-emit.js";
 import { describe, expect, spyOn, test } from "bun:test";
 import { compatibilityPathUsage } from "../src/core/compatibility-path-usage";
 import path from "node:path";
@@ -56,7 +57,7 @@ describe("Electron tmux hooks and transcripts", () => {
         storage: {
           getEnvironment: async () => environment,
         },
-        emit: (event: string, payload: unknown) => emitted.push({ event, payload }),
+        emit: eventSink((event: string, payload: unknown) => emitted.push({ event, payload })),
         appRoot: "",
         resourceRoot: "",
       };
@@ -910,7 +911,7 @@ describe("Electron tmux hooks and transcripts", () => {
         storage: {
           getEnvironment: async () => environment,
         },
-        emit: (event: string, payload: unknown) => emitted.push({ event, payload }),
+        emit: eventSink((event: string, payload: unknown) => emitted.push({ event, payload })),
         appRoot: "",
         resourceRoot: "",
       };
@@ -1108,7 +1109,7 @@ describe("Electron tmux hooks and transcripts", () => {
         storage: {
           getEnvironment: async () => environment,
         },
-        emit: (event: string, payload: unknown) => emitted.push({ event, payload }),
+        emit: eventSink((event: string, payload: unknown) => emitted.push({ event, payload })),
         appRoot: "",
         resourceRoot: "",
       };

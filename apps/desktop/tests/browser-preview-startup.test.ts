@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, mock, test } from "bun:test";
 import { BrowserPreviewManager } from "../electron/browser-preview-manager";
+import { nodePreviewRequestOrigin, nodePreviewUrl } from "../electron/node-previews";
 import {
   configurePreviewServiceSession,
   createBrowserPreviewAddressFocusHandler,
@@ -376,6 +377,68 @@ describe("browser preview startup wiring", () => {
     });
     expect(inputEvent.preventDefault).toHaveBeenCalledTimes(1);
     expect(focusAddressBar).toHaveBeenCalledWith("browser-1");
+  });
+
+  test("another node's runtime presents that node's own origin on its authorized preview requests (4006)", async () => {
+    let beforeHeaders: ((details: any, callback: (response: any) => void) => void) | undefined;
+    const browserSession = {
+      webRequest: {
+        onBeforeSendHeaders: mock((_filter: unknown, listener: typeof beforeHeaders) => {
+          beforeHeaders = listener;
+        }),
+        onHeadersReceived: mock(() => undefined),
+      },
+      setPermissionCheckHandler: mock(() => undefined),
+      setPermissionRequestHandler: mock(() => undefined),
+    };
+    const addChildView = mock((_view: FakeWebContentsView) => undefined);
+    const window = {
+      isDestroyed: () => false,
+      contentView: { addChildView, removeChildView: mock(() => undefined) },
+    };
+    const leaf = "https://leaf.example";
+    const runtime = initializeBrowserPreviews({
+      fromPartition: (() => browserSession) as never,
+      partition: "orkestrator-browser-previews-window-1-node",
+      WebContentsViewCtor: FakeWebContentsView as never,
+      menu: { buildFromTemplate: () => ({ popup: () => undefined }) } as never,
+      getWindow: () => window as never,
+      emitState: mock(() => undefined),
+      emitOpenLink: mock(() => undefined),
+      openExternal: mock(() => undefined),
+      writeClipboardText: mock(() => undefined),
+      focusAddressBar: mock(() => undefined),
+      requestPreviewShortcut: mock(() => undefined),
+      getAuthorization: (url) => (url.startsWith(`${leaf}/__orkestrator/`) ? "Bearer grant" : null),
+      resolveAddress: (url) => nodePreviewUrl(leaf, url),
+      requestOrigin: nodePreviewRequestOrigin,
+    });
+    await runtime.manager.attach({
+      tabId: "browser-leaf",
+      url: "http://localhost:3000/",
+      environmentId: "env-leaf",
+      bounds: { x: 1, y: 2, width: 300, height: 200 },
+      visible: true,
+    });
+    const previewContents = addChildView.mock.calls[0]![0].webContents;
+    const result = mock(() => undefined);
+    beforeHeaders?.(
+      {
+        url: `${leaf}/__orkestrator/browser/loopback/3000/`,
+        resourceType: "mainFrame",
+        webContentsId: previewContents.id,
+        requestHeaders: {},
+      },
+      result,
+    );
+    // A workspace grant is refused from the desktop's default origin.
+    expect(result).toHaveBeenCalledWith({
+      requestHeaders: {
+        Authorization: "Bearer grant",
+        Origin: leaf,
+        "x-orkestrator-preview-environment": "env-leaf",
+      },
+    });
   });
 
   test("destroys previews on close and only clears the window that actually closed", () => {

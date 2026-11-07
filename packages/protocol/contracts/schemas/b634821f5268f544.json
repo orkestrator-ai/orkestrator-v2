@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:b634821f5268f544d40849e85691341008ada3e72cc12b1f49a9e65e3fd629ad",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "deleteBranch": {
+          "type": "boolean"
+        },
+        "expectedHeadSha": {},
+        "method": {
+          "enum": ["merge", "squash", "rebase"],
+          "type": "string"
+        },
+        "number": {
+          "type": "number"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "repo": {
+          "type": "string"
+        }
+      },
+      "required": ["deleteBranch", "method", "number", "owner", "repo"],
+      "type": "object"
+    }
+  }
+}

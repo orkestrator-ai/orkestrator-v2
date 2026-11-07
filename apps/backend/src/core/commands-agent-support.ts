@@ -1,3 +1,4 @@
+import { environmentRenamedEvent } from "@orkestrator/protocol/contract/domains/events";
 import { existsSync, promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -1022,7 +1023,7 @@ export async function renameEnvironmentToName(
         : await context.storage.updateEnvironment(environment.id, {
             pendingRenamePrompt: undefined,
           });
-    context.emit("environment-renamed", {
+    context.emit(environmentRenamedEvent, {
       environment_id: updated.id,
       new_name: updated.name,
       new_branch: updated.branch,
@@ -1070,7 +1071,7 @@ export async function renameEnvironmentToName(
     ...(environment.pendingRenamePrompt !== undefined ? { pendingRenamePrompt: undefined } : {}),
   });
 
-  context.emit("environment-renamed", {
+  context.emit(environmentRenamedEvent, {
     environment_id: updated.id,
     new_name: updated.name,
     new_branch: updated.branch,

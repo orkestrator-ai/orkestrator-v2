@@ -22,6 +22,22 @@ import {
   type GraphRunGetResult,
   type GraphRunTranscriptView,
 } from "@orkestrator/protocol/graphs/run-view";
+import {
+  graphRunAnswerCommand,
+  graphRunArtifactCommand,
+  graphRunCancelCommand,
+  graphRunGetCommand,
+  graphRunPauseCommand,
+  graphRunPendingCommand,
+  graphRunRestartCommand,
+  graphRunResumeCommand,
+  graphRunRetryCommand,
+  graphRunRewindCodeCommand,
+  graphRunRewindCodePreviewCommand,
+  graphRunSkipCommand,
+  graphRunsListCommand,
+  graphRunTranscriptCommand,
+} from "@orkestrator/protocol/contract/domains/graphs";
 import type { CommandContext } from "./commands-context.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
 import { GraphAgentQuestionError, type GraphAgentQuestions } from "./graph-agent-questions.js";
@@ -75,6 +91,10 @@ import { GraphRunServiceError, type GraphRunService } from "./graph-run-service.
  *
  * A refusal throws a `GraphRunRewindError` whose `code` is `not-found`,
  * `invalid-request`, `invalid-state`, `limit` or `unavailable`.
+ *
+ * Every command here is defined in the `graphs` contract domain (plan item
+ * 7007): unknown argument keys are dropped before a handler runs, and the
+ * handlers keep their own coded validation.
  */
 
 function questions(context: CommandContext): GraphAgentQuestions {
@@ -111,11 +131,6 @@ function runs(context: CommandContext): GraphRunService {
 
 function badRequest(message: string): never {
   throw new GraphRunServiceError("invalid-request", message);
-}
-
-function onlyKeys(args: Record<string, unknown>, allowed: readonly string[]): void {
-  const unknown = Object.keys(args).filter((key) => !allowed.includes(key));
-  if (unknown.length > 0) badRequest(`Unknown arguments: ${unknown.slice(0, 5).join(", ")}`);
 }
 
 function requiredString(value: unknown, name: string, max: number): string {
@@ -211,8 +226,7 @@ async function readTranscript(
 }
 
 export function registerGraphRunCommands(register: CommandRegistrar): void {
-  register("graph_runs_list", async (args, context) => {
-    onlyKeys(args, ["environmentId"]);
+  register(graphRunsListCommand, async (args, context) => {
     const environmentId = requiredString(args.environmentId, "environmentId", 200);
     const listed = await runs(context).list(environmentId);
     return listed
@@ -221,8 +235,7 @@ export function registerGraphRunCommands(register: CommandRegistrar): void {
       .map(graphRunSummary);
   });
 
-  register("graph_run_get", async (args, context): Promise<GraphRunGetResult> => {
-    onlyKeys(args, ["runId", "knownRevision"]);
+  register(graphRunGetCommand, async (args, context): Promise<GraphRunGetResult> => {
     const runId = runIdArg(args);
     const knownRevision = optionalCount(
       args.knownRevision,
@@ -236,24 +249,28 @@ export function registerGraphRunCommands(register: CommandRegistrar): void {
     return changed(run);
   });
 
-  for (const action of ["cancel", "pause", "resume"] as const) {
-    register(`graph_run_${action}`, async (args, context): Promise<GraphRunGetResult> => {
-      onlyKeys(args, ["runId"]);
-      return changed(await runs(context)[action](runIdArg(args)));
-    });
+  for (const [def, action] of [
+    [graphRunCancelCommand, "cancel"],
+    [graphRunPauseCommand, "pause"],
+    [graphRunResumeCommand, "resume"],
+  ] as const) {
+    register(def, async (args, context): Promise<GraphRunGetResult> =>
+      changed(await runs(context)[action](runIdArg(args))),
+    );
   }
 
-  for (const action of ["retry", "skip"] as const) {
-    register(`graph_run_${action}`, async (args, context): Promise<GraphRunGetResult> => {
-      onlyKeys(args, ["runId", "activationKey"]);
+  for (const [def, action] of [
+    [graphRunRetryCommand, "retry"],
+    [graphRunSkipCommand, "skip"],
+  ] as const) {
+    register(def, async (args, context): Promise<GraphRunGetResult> => {
       const runId = runIdArg(args);
       const activationKey = activationKeyArg(args);
       return changed(await runs(context)[action](runId, activationKey));
     });
   }
 
-  register("graph_run_artifact", async (args, context) => {
-    onlyKeys(args, ["runId", "artifactId"]);
+  register(graphRunArtifactCommand, async (args, context) => {
     return readArtifact(
       context,
       runIdArg(args),
@@ -261,8 +278,7 @@ export function registerGraphRunCommands(register: CommandRegistrar): void {
     );
   });
 
-  register("graph_run_transcript", async (args, context) => {
-    onlyKeys(args, ["runId", "activationKey", "fromIndex", "maxBytes"]);
+  register(graphRunTranscriptCommand, async (args, context) => {
     const runId = runIdArg(args);
     const activationKey = activationKeyArg(args);
     const fromIndex = optionalCount(args.fromIndex, "fromIndex", Number.MAX_SAFE_INTEGER);
@@ -280,8 +296,7 @@ export function registerGraphRunCommands(register: CommandRegistrar): void {
     });
   });
 
-  register("graph_run_pending", async (args, context): Promise<GraphRunPendingInteraction[]> => {
-    onlyKeys(args, ["runId", "environmentId"]);
+  register(graphRunPendingCommand, async (args, context): Promise<GraphRunPendingInteraction[]> => {
     if ((args.runId === undefined) === (args.environmentId === undefined)) {
       badRequest("Pass exactly one of runId and environmentId");
     }
@@ -296,11 +311,8 @@ export function registerGraphRunCommands(register: CommandRegistrar): void {
       .slice(0, GRAPH_HUMAN_BOUNDS.maxPendingInteractions);
   });
 
-  register("graph_run_answer", async (args, context) => {
+  register(graphRunAnswerCommand, async (args, context) => {
     if (args.waitId !== undefined) return answerHumanNode(args, context);
-    const allowed = ["runId", "activationKey", "questionId", "kind", "text", "choice"];
-    const unknown = Object.keys(args).filter((key) => !allowed.includes(key));
-    if (unknown.length > 0) invalid(`Unknown arguments: ${unknown.slice(0, 5).join(", ")}`);
     const runId = stringArg(args.runId, "runId", 128, true)!;
     const activationKey = stringArg(args.activationKey, "activationKey", 256, true)!;
     const questionId = stringArg(args.questionId, "questionId", 64, true)!;
@@ -351,9 +363,6 @@ function humanAnswers(context: CommandContext): GraphHumanAnswers {
 
 /** `graph_run_answer`'s human-node form (item 208). */
 async function answerHumanNode(args: Record<string, unknown>, context: CommandContext) {
-  const allowed = ["runId", "activationKey", "waitId", "decision", "outlet", "value", "note"];
-  const unknown = Object.keys(args).filter((key) => !allowed.includes(key));
-  if (unknown.length > 0) invalid(`Unknown arguments: ${unknown.slice(0, 5).join(", ")}`);
   const runId = stringArg(args.runId, "runId", 128, true)!;
   const activationKey = stringArg(args.activationKey, "activationKey", 256, true)!;
   const waitId = stringArg(args.waitId, "waitId", 64, true)!;
@@ -399,12 +408,11 @@ function graphRuns(context: CommandContext): GraphRunService {
   return context.graphRuns;
 }
 
-function rewindArgs(
-  args: Record<string, unknown>,
-  allowed: readonly string[],
-): { runId: string; activationKey: string; requestId?: string } {
-  const unknown = Object.keys(args).filter((key) => !allowed.includes(key));
-  if (unknown.length > 0) rewindInvalid(`Unknown arguments: ${unknown.slice(0, 5).join(", ")}`);
+function rewindArgs(args: Readonly<Record<string, unknown>>): {
+  runId: string;
+  activationKey: string;
+  requestId?: string;
+} {
   const runId = args.runId;
   if (typeof runId !== "string" || !GRAPH_RUN_ID_PATTERN.test(runId)) {
     rewindInvalid("runId must be a run id");
@@ -428,28 +436,19 @@ function rewindArgs(
 }
 
 export function registerGraphRunRewindCommands(register: CommandRegistrar): void {
-  register("graph_run_restart", async (args, context) => {
-    const { runId, activationKey, requestId } = rewindArgs(args, [
-      "runId",
-      "activationKey",
-      "requestId",
-    ]);
+  register(graphRunRestartCommand, async (args, context) => {
+    const { runId, activationKey, requestId } = rewindArgs(args);
     return graphRuns(context).restart(runId, activationKey, {
       ...(requestId !== undefined ? { requestId } : {}),
       requestedBy: "user",
     });
   });
-  register("graph_run_rewind_code_preview", async (args, context) => {
-    const { runId, activationKey } = rewindArgs(args, ["runId", "activationKey"]);
+  register(graphRunRewindCodePreviewCommand, async (args, context) => {
+    const { runId, activationKey } = rewindArgs(args);
     return graphRuns(context).previewCodeRewind(runId, activationKey);
   });
-  register("graph_run_rewind_code", async (args, context) => {
-    const { runId, activationKey, requestId } = rewindArgs(args, [
-      "runId",
-      "activationKey",
-      "expectedHead",
-      "requestId",
-    ]);
+  register(graphRunRewindCodeCommand, async (args, context) => {
+    const { runId, activationKey, requestId } = rewindArgs(args);
     const expectedHead = args.expectedHead;
     if (typeof expectedHead !== "string" || !GRAPH_COMMIT_PATTERN.test(expectedHead)) {
       rewindInvalid("expectedHead must be the full commit SHA the preview showed");

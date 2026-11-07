@@ -1,0 +1,61 @@
+name: Mixed-version qualification
+
+# This checkout against published releases of the `orkestrator` npm package,
+# in both topologies (this checkout's command node with the release as its
+# leaf, and the release as command node with this checkout as its leaf), for
+# every domain scenario module (docs/architecture/version-compatibility.md,
+# "Mixed-version qualification"; plan item 1012). It installs real releases
+# and runs backends from both, so it is scheduled weekly and on demand, never
+# per pull request. Adding it was approved by the user on 2026-11-07.
+#
+# `floor` is the support floor `contract:ci` computes (or, while npm lacks it,
+# the oldest in-window release npm carries); `latest-stable` is the newest
+# published Stable release, the pre-contract peer most users run today.
+on:
+  schedule:
+    - cron: "41 5 * * 2"
+  workflow_dispatch:
+    inputs:
+      old-version:
+        description: "One release instead of the default pair: floor, latest-stable or an exact version"
+        required: false
+        default: ""
+
+# Scheduled and manual runs each keep their own result.
+concurrency:
+  group: mixed-version-qualification-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  qualify:
+    name: Mixed versions (${{ matrix.release }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        release: ${{ fromJSON(github.event.inputs.old-version && format('["{0}"]', github.event.inputs.old-version) || '["floor","latest-stable"]') }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up mise toolchain
+        uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Run the qualification
+        env:
+          # Validated by the runner (`floor`, `latest-stable`, `current` or x.y.z[-channel]).
+          RELEASE: ${{ matrix.release }}
+        run: |
+          mise run qualify:mixed-versions -- --old-version "$RELEASE" \
+            --report "$RUNNER_TEMP/mixed-version-report.json"
+      - name: Upload the report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mixed-version-report-${{ strategy.job-index }}
+          path: ${{ runner.temp }}/mixed-version-report.json
+          if-no-files-found: ignore
+          retention-days: 30

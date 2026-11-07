@@ -2,7 +2,7 @@
  * `list_environment_hydration`: the per-environment lists a renderer restores
  * when it boots (prompt queues and Multi Review workflows), for many
  * environments in one call. It replaces one `list_prompt_queues` and one
- * `list_multi_review_workflows` request per environment on a cold realm boot.
+ * `list_multi_review_workflows` request per environment on a cold boot.
  * Each environment and each list answers on its own, so one failed read does
  * not fail its neighbours.
  */

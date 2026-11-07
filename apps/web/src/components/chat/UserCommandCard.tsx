@@ -8,9 +8,9 @@ import {
   HumanPromptIcon,
 } from "@/components/chat/HumanPromptActions";
 import { Button } from "@/components/ui/button";
-import { cancelUserCommand, writeUserCommandInput } from "@/lib/backend";
 import { cn } from "@/lib/utils";
 import type { UserCommandRecord } from "@orkestrator/protocol/user-commands";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 const TARGET_LABELS: Record<UserCommandRecord["target"], string> = {
   worktree: "worktree",
@@ -42,6 +42,7 @@ function statusLabel(command: UserCommandRecord): { text: string; className: str
  * the backend's (`list_user_commands`); this only renders and sends.
  */
 export function UserCommandCard({ command }: { command: UserCommandRecord }) {
+  const nodeBackend = useScopeBackend();
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const outputRef = useRef<HTMLPreElement>(null);
@@ -58,7 +59,7 @@ export function UserCommandCard({ command }: { command: UserCommandRecord }) {
   const send = async (text: string) => {
     setBusy(true);
     try {
-      await writeUserCommandInput(command.id, text);
+      await nodeBackend.writeUserCommandInput(command.id, text);
       setInput("");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not send input");
@@ -103,9 +104,11 @@ export function UserCommandCard({ command }: { command: UserCommandRecord }) {
             variant="ghost"
             className="h-6 gap-1 px-2 text-xs"
             onClick={() => {
-              void cancelUserCommand(command.id).catch((error: unknown) =>
-                toast.error(error instanceof Error ? error.message : "Could not cancel"),
-              );
+              void nodeBackend
+                .cancelUserCommand(command.id)
+                .catch((error: unknown) =>
+                  toast.error(error instanceof Error ? error.message : "Could not cancel"),
+                );
             }}
           >
             <Square className="h-3 w-3" />

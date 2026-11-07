@@ -1,12 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  cancelOpenCodeProviderLogin,
-  getOpenCodeProviderLogin,
-  startOpenCodeProviderLogin,
-  submitOpenCodeProviderLoginCode,
-} from "@/lib/backend";
 import type { OpenCodeProviderLoginProgress } from "@orkestrator/protocol/opencode-provider-auth";
 import { useAccountMachine } from "@/components/settings/account-machine";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 const POLL_INTERVAL_MS = 1_500;
 const IDLE: OpenCodeProviderLoginProgress = { state: "idle" };
@@ -18,6 +13,7 @@ function messageOf(cause: unknown): string {
 /** Observe the backend-owned operation, including another provider's pending login.
  * Without a provider id, watch all operations for the Settings section. */
 export function useOpenCodeProviderLogin(providerId?: string, onSucceeded?: () => void) {
+  const nodeBackend = useScopeBackend();
   const [observed, setObserved] = useState<OpenCodeProviderLoginProgress>(IDLE);
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
@@ -62,7 +58,8 @@ export function useOpenCodeProviderLogin(providerId?: string, onSucceeded?: () =
 
   useEffect(() => {
     const version = ++epoch.current;
-    void getOpenCodeProviderLogin(machine)
+    void nodeBackend
+      .getOpenCodeProviderLogin(machine)
       .then((existing) => {
         if (epoch.current === version && existing.state === "pending") adopt(existing);
       })
@@ -70,7 +67,7 @@ export function useOpenCodeProviderLogin(providerId?: string, onSucceeded?: () =
     return () => {
       epoch.current += 1;
     };
-  }, [adopt, machine]);
+  }, [adopt, machine, nodeBackend]);
 
   useEffect(() => {
     if (!pending && providerId) return;
@@ -79,7 +76,7 @@ export function useOpenCodeProviderLogin(providerId?: string, onSucceeded?: () =
     const poll = async () => {
       const version = epoch.current;
       try {
-        const next = await getOpenCodeProviderLogin(machine);
+        const next = await nodeBackend.getOpenCodeProviderLogin(machine);
         if (active && epoch.current === version) adopt(next);
       } catch {
         /* Retry transient read failures while observing backend state. */
@@ -91,7 +88,7 @@ export function useOpenCodeProviderLogin(providerId?: string, onSucceeded?: () =
       active = false;
       clearTimeout(timer);
     };
-  }, [pending, providerId, adopt, machine]);
+  }, [pending, providerId, adopt, machine, nodeBackend]);
 
   const start = useCallback(
     async (input: { providerLabel?: string; method: number; inputs?: Record<string, string> }) => {
@@ -100,7 +97,10 @@ export function useOpenCodeProviderLogin(providerId?: string, onSucceeded?: () =
       setError(null);
       setStarting(true);
       try {
-        const next = await startOpenCodeProviderLogin({ providerId, ...input }, machine);
+        const next = await nodeBackend.startOpenCodeProviderLogin(
+          { providerId, ...input },
+          machine,
+        );
         if (epoch.current === version) adopt(next);
       } catch (cause) {
         if (epoch.current === version) setError(messageOf(cause));
@@ -108,7 +108,7 @@ export function useOpenCodeProviderLogin(providerId?: string, onSucceeded?: () =
         if (epoch.current === version) setStarting(false);
       }
     },
-    [adopt, providerId, starting, machine],
+    [adopt, providerId, starting, machine, nodeBackend],
   );
 
   const cancel = useCallback(async () => {
@@ -117,20 +117,20 @@ export function useOpenCodeProviderLogin(providerId?: string, onSucceeded?: () =
     const version = ++epoch.current;
     setError(null);
     try {
-      const next = await cancelOpenCodeProviderLogin(operationId, machine);
+      const next = await nodeBackend.cancelOpenCodeProviderLogin(operationId, machine);
       if (epoch.current === version) adopt(next);
     } catch (cause) {
       if (epoch.current === version) setError(messageOf(cause));
     }
-  }, [adopt, machine]);
+  }, [adopt, machine, nodeBackend]);
 
   const submitCode = useCallback(
     async (code: string) => {
       const version = ++epoch.current;
-      const next = await submitOpenCodeProviderLoginCode(code, machine);
+      const next = await nodeBackend.submitOpenCodeProviderLoginCode(code, machine);
       if (epoch.current === version) adopt(next);
     },
-    [adopt, machine],
+    [adopt, machine, nodeBackend],
   );
 
   const matches = !providerId || observed.providerId === providerId;

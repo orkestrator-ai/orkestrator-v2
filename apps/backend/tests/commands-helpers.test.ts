@@ -140,7 +140,17 @@ describe("Electron backend command registry", () => {
   test("preserves legacy snapshots and returns changed and unchanged envelopes", async () => {
     const generation = "a".repeat(32);
     const revision = "b".repeat(32);
-    const projects = [{ id: "project-1" }];
+    // A real project record: results are validated against their schema in tests.
+    const projects = [
+      {
+        id: "project-1",
+        name: "project",
+        gitUrl: "https://github.com/acme/project.git",
+        localPath: null,
+        addedAt: "2026-11-07T00:00:00.000Z",
+        order: 0,
+      },
+    ];
     const loadProjects = mock(async () => projects);
     const readConditionalResourceSnapshot = mock(
       async (

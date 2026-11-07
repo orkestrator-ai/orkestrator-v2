@@ -1,55 +1,57 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-import { act, cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import {
   nativeAgentInteractionDraftKey,
   nativeAsyncQuestionDraftKey,
+  promptDraftStore,
   tmuxElicitationDraftKey,
   tmuxPlanDraftKey,
   tmuxQuestionDraftKey,
   usePromptDraftField,
-  usePromptDraftStore,
 } from "./promptDraftStore";
+import { appCommandStore } from "@/test/app-command-store";
 
 beforeEach(() => {
   cleanup();
-  usePromptDraftStore.getState().reset();
+  appCommandStore(promptDraftStore).getState().reset();
 });
 
 describe("promptDraftStore", () => {
   test("merges fields under one draft key and clears them together", () => {
-    const store = usePromptDraftStore.getState();
+    const store = appCommandStore(promptDraftStore).getState();
     store.setDraftValue("k1", "answers", [["A"]]);
     store.setDraftValue("k1", "customTexts", ["draft"]);
 
-    expect(usePromptDraftStore.getState().drafts.get("k1")).toEqual({
+    expect(appCommandStore(promptDraftStore).getState().drafts.get("k1")).toEqual({
       answers: [["A"]],
       customTexts: ["draft"],
     });
 
     store.clearDraft("k1");
-    expect(usePromptDraftStore.getState().drafts.has("k1")).toBe(false);
+    expect(appCommandStore(promptDraftStore).getState().drafts.has("k1")).toBe(false);
   });
 
   test("clearDrafts removes only the given keys and skips misses quietly", () => {
-    const store = usePromptDraftStore.getState();
+    const store = appCommandStore(promptDraftStore).getState();
     store.setDraftValue("k1", "f", 1);
     store.setDraftValue("k2", "f", 2);
 
-    const before = usePromptDraftStore.getState().drafts;
+    const before = appCommandStore(promptDraftStore).getState().drafts;
     store.clearDrafts(["k1", "missing"]);
-    const after = usePromptDraftStore.getState().drafts;
+    const after = appCommandStore(promptDraftStore).getState().drafts;
 
     expect(after.has("k1")).toBe(false);
     expect(after.get("k2")).toEqual({ f: 2 });
 
     // Clearing nothing must not churn the map reference (avoids rerenders).
     store.clearDrafts(["also-missing"]);
-    expect(usePromptDraftStore.getState().drafts).toBe(after);
+    expect(appCommandStore(promptDraftStore).getState().drafts).toBe(after);
     expect(before).not.toBe(after);
   });
 
   test("caps retained drafts by trimming the least recently edited", () => {
-    const store = usePromptDraftStore.getState();
+    const store = appCommandStore(promptDraftStore).getState();
     for (let i = 0; i < 100; i++) {
       store.setDraftValue(`k${i}`, "f", i);
     }
@@ -57,7 +59,7 @@ describe("promptDraftStore", () => {
     store.setDraftValue("k0", "f", "edited");
     store.setDraftValue("k100", "f", 100);
 
-    const drafts = usePromptDraftStore.getState().drafts;
+    const drafts = appCommandStore(promptDraftStore).getState().drafts;
     expect(drafts.size).toBe(100);
     expect(drafts.has("k0")).toBe(true);
     expect(drafts.has("k100")).toBe(true);
@@ -78,20 +80,20 @@ describe("promptDraftStore", () => {
   });
 
   test("renderer restart reset drops every in-memory draft", () => {
-    usePromptDraftStore
+    appCommandStore(promptDraftStore)
       .getState()
       .setDraftValue(nativeAgentInteractionDraftKey("session-a", "request-1"), "answers", [
         ["unfinished"],
       ]);
 
-    usePromptDraftStore.getState().reset();
-    expect(usePromptDraftStore.getState().drafts.size).toBe(0);
+    appCommandStore(promptDraftStore).getState().reset();
+    expect(appCommandStore(promptDraftStore).getState().drafts.size).toBe(0);
   });
 
   test("clearDraft is a no-op without map churn when the key is absent", () => {
-    const before = usePromptDraftStore.getState().drafts;
-    usePromptDraftStore.getState().clearDraft("missing");
-    expect(usePromptDraftStore.getState().drafts).toBe(before);
+    const before = appCommandStore(promptDraftStore).getState().drafts;
+    appCommandStore(promptDraftStore).getState().clearDraft("missing");
+    expect(appCommandStore(promptDraftStore).getState().drafts).toBe(before);
   });
 
   test("builds every public provider key and URI-encodes scoped identities", () => {
@@ -118,20 +120,24 @@ describe("promptDraftStore", () => {
 
 describe("usePromptDraftField", () => {
   test("applies functional updates to shared and component-local fields", () => {
-    const shared = renderHook(() => usePromptDraftField("draft", "count", () => 1));
+    const shared = renderHookInAppCommandScope(() =>
+      usePromptDraftField("draft", "count", () => 1),
+    );
     act(() => shared.result.current[1]((value) => value + 1));
     expect(shared.result.current[0]).toBe(2);
-    expect(usePromptDraftStore.getState().drafts.get("draft")?.count).toBe(2);
+    expect(appCommandStore(promptDraftStore).getState().drafts.get("draft")?.count).toBe(2);
     shared.unmount();
 
-    const local = renderHook(() => usePromptDraftField<number>(undefined, "count", () => 4));
+    const local = renderHookInAppCommandScope(() =>
+      usePromptDraftField<number>(undefined, "count", () => 4),
+    );
     act(() => local.result.current[1]((value) => value + 3));
     expect(local.result.current[0]).toBe(7);
-    expect(usePromptDraftStore.getState().drafts.size).toBe(1);
+    expect(appCommandStore(promptDraftStore).getState().drafts.size).toBe(1);
   });
 
   test("switches key and field identities without leaking the previous fallback", () => {
-    const hook = renderHook(
+    const hook = renderHookInAppCommandScope(
       ({ draftKey, field, seed }: { draftKey?: string; field: string; seed: number }) =>
         usePromptDraftField(draftKey, field, () => seed),
       { initialProps: { draftKey: "first", field: "count", seed: 1 } },
@@ -143,15 +149,15 @@ describe("usePromptDraftField", () => {
     expect(hook.result.current[0]).toBe(10);
     act(() => hook.result.current[1]((value) => value + 1));
     expect(hook.result.current[0]).toBe(11);
-    expect(usePromptDraftStore.getState().drafts.get("first")?.count).toBe(5);
+    expect(appCommandStore(promptDraftStore).getState().drafts.get("first")?.count).toBe(5);
 
     hook.rerender({ draftKey: "second", field: "other", seed: 20 });
     expect(hook.result.current[0]).toBe(20);
   });
 
   test("prefers a stored value over a new identity's initializer", () => {
-    usePromptDraftStore.getState().setDraftValue("second", "count", 42);
-    const hook = renderHook(
+    appCommandStore(promptDraftStore).getState().setDraftValue("second", "count", 42);
+    const hook = renderHookInAppCommandScope(
       ({ draftKey, seed }: { draftKey: string; seed: number }) =>
         usePromptDraftField(draftKey, "count", () => seed),
       { initialProps: { draftKey: "first", seed: 1 } },
@@ -162,7 +168,7 @@ describe("usePromptDraftField", () => {
   });
 
   test("reinitializes local fallback state when its field identity changes", () => {
-    const hook = renderHook(
+    const hook = renderHookInAppCommandScope(
       ({ field, seed }: { field: string; seed: number }) =>
         usePromptDraftField<number>(undefined, field, () => seed),
       { initialProps: { field: "first", seed: 1 } },

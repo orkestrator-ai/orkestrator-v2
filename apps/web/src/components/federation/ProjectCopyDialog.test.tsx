@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { ProjectCopyOptions, ProjectCopyRecord } from "@orkestrator/protocol/project-copy";
 import { invoke } from "@/lib/native/backend";
 import { useProjectCopyStore } from "@/stores/projectCopyStore";
@@ -132,7 +133,7 @@ describe("copying a project to another machine", () => {
         ];
       return undefined;
     });
-    render(
+    renderInAppCommandScope(
       <FederationProvider>
         <ProjectCopyDialog />
       </FederationProvider>,
@@ -260,7 +261,7 @@ describe("copying a project to another machine", () => {
         ];
       return undefined;
     });
-    render(
+    renderInAppCommandScope(
       <FederationProvider>
         <NodeActionRequestsDialog />
         <ProjectCopyDialog />

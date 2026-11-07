@@ -4,7 +4,8 @@
  * dispatch and queue — with a command's argument bytes left alone.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, waitFor } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import type {
   NativeAgentCommandCatalogueState,
   NativeAgentDiscoveryUpdate,
@@ -16,8 +17,9 @@ import type {
 } from "@orkestrator/protocol/native-agent";
 import { nativeAgentCapabilities } from "@orkestrator/protocol/native-agent";
 import * as realBackend from "@/lib/backend";
-import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { nativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
+import { appCommandStore } from "@/test/app-command-store";
 
 interface TestMessage {
   id: string;
@@ -197,7 +199,7 @@ function discoverySnapshot(
 }
 
 function renderSession() {
-  return renderHook(() =>
+  return renderHookInAppCommandScope(() =>
     useNativeAgentSession<TestMessage>({
       platform: "codex",
       environmentId: "env-1",
@@ -218,17 +220,17 @@ beforeEach(() => {
   dispatchNativeAgentIntentMock.mockClear();
   enqueuePromptQueueMessageMock.mockClear();
   setResumableArchivedMock.mockClear();
-  usePaneLayoutStore.setState({
+  appCommandStore(paneLayoutStore).setState({
     environments: new Map(),
     hydration: new Map(),
     activeEnvironmentId: null,
   });
-  useNativeAgentProjectionStore.getState().reset();
+  appCommandStore(nativeAgentProjectionStore).getState().reset();
 });
 
 afterEach(() => {
   cleanup();
-  useNativeAgentProjectionStore.getState().reset();
+  appCommandStore(nativeAgentProjectionStore).getState().reset();
 });
 
 describe("useNativeAgentSession commands", () => {

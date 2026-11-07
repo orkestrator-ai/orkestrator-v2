@@ -5,6 +5,7 @@
  * (`followUpOf`). Nothing is sent from here.
  */
 import { useEffect, useState } from "react";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { Loader2 } from "lucide-react";
 import {
   WEB_ANNOTATION_COMMANDS,
@@ -52,6 +53,8 @@ export function RequestFollowUp({
   onPrepare: (items: ComposerItem[], followUpOf: string) => void;
   onClose: () => void;
 }) {
+  // This node's annotations (plan item 4001); the command node outside a node scope.
+  const annotationScope = useScopesWithCommandFallback().scope;
   const { environmentId } = useAnnotationPanel();
   const cache = useWebAnnotationCache(environmentId);
   const [candidates, setCandidates] = useState<WebAnnotationFollowUpCandidates | null>(null);
@@ -65,10 +68,15 @@ export function RequestFollowUp({
 
   useEffect(() => {
     let cancelled = false;
-    void webAnnotationCommand(WEB_ANNOTATION_COMMANDS.requestFollowUp, {
-      environmentId,
-      requestId: request.id,
-    })
+    void webAnnotationCommand(
+      WEB_ANNOTATION_COMMANDS.requestFollowUp,
+      {
+        environmentId,
+        requestId: request.id,
+      },
+      undefined,
+      annotationScope,
+    )
       .then((result) => {
         if (cancelled) return;
         setCandidates(result);
@@ -83,7 +91,7 @@ export function RequestFollowUp({
     return () => {
       cancelled = true;
     };
-  }, [candidatesKey, environmentId, request.id]);
+  }, [annotationScope, candidatesKey, environmentId, request.id]);
 
   const title = (annotationId: string, reference: number) => {
     const summary = cache.summaries.get(annotationId);
@@ -110,11 +118,16 @@ export function RequestFollowUp({
       ].filter((id, index, all) => selected.has(id) && all.indexOf(id) === index);
       const items: ComposerItem[] = [];
       for (const annotationId of ids) {
-        const { annotation } = await webAnnotationCommand(WEB_ANNOTATION_COMMANDS.get, {
-          environmentId,
-          annotationId,
-          entryLimit: 1,
-        });
+        const { annotation } = await webAnnotationCommand(
+          WEB_ANNOTATION_COMMANDS.get,
+          {
+            environmentId,
+            annotationId,
+            entryLimit: 1,
+          },
+          undefined,
+          annotationScope,
+        );
         items.push({ annotation });
       }
       onPrepare(items, request.id);

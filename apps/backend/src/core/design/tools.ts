@@ -1,5 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/server";
-import { z } from "zod";
+import { Schema } from "effect";
+import { decodeSync, int, str, strictObject, toolInput } from "../tool-schema.js";
 import type { DesignFrame } from "@orkestrator/protocol/design-canvas";
 import type {
   DesignActor,
@@ -10,9 +11,12 @@ import { DesignError, reusedCorrelation, toDesignFailure } from "./errors.js";
 import { exportPreview, exportSave } from "./exports.js";
 import type { DesignExportDestination } from "./export-writer.js";
 import {
+  coordinate,
   descriptorSchema,
   designId,
-  frameSchema,
+  designName,
+  dimension,
+  frameInputSchema,
   htmlSchema,
   revision,
   selectorSchema,
@@ -29,12 +33,8 @@ const mutationInput = { ...frameInput, expectedRevision: revision };
 const selector = selectorSchema;
 const styles = stylesSchema;
 /** Compact results omit HTML; request `full` only when the frame body is needed. */
-const responseShape = { response: z.enum(["full", "compact"]).optional() };
-const correlation = z
-  .string()
-  .min(1)
-  .max(100)
-  .regex(/^[a-zA-Z0-9._:-]+$/);
+const responseShape = { response: Schema.optionalKey(Schema.Literals(["full", "compact"])) };
+const correlation = str({ min: 1, max: 100, pattern: /^[a-zA-Z0-9._:-]+$/ });
 
 export interface DesignActionOptions {
   actor?: DesignActor;
@@ -94,7 +94,7 @@ export function designActions(
     return { frame, canvasRevision: status.result?.canvasRevision ?? frame.revision };
   };
   const submit = async (raw: unknown) => {
-    const descriptor = descriptorSchema.parse(raw) as DesignOperationDescriptor;
+    const descriptor = decodeSync(descriptorSchema, raw) as DesignOperationDescriptor;
     if (!descriptor.correlationId)
       throw new DesignError(
         "invalid-input",
@@ -124,23 +124,23 @@ export function designActions(
   };
   return {
     capabilities: {
-      schema: z.object({}),
+      schema: Schema.Struct({}),
       description: "Report the design protocol version and supported features for this backend.",
       run: async () => service.capabilities(),
     },
     list_canvases: {
-      schema: z.object({}),
+      schema: Schema.Struct({}),
       description: "List live canvases in this environment (id, name, revision). Metadata only.",
       run: () => service.list(environmentId),
     },
     create_canvas: {
-      schema: z.object({ name: z.string().min(1).max(120) }),
+      schema: Schema.Struct({ name: str({ min: 1, max: 120 }) }),
       description:
         "Create a backend-owned design canvas. Designs use self-contained HTML/CSS; scripts and external resources are disabled.",
       run: (a: { name: string }) => service.create(environmentId, a.name, undefined, actor),
     },
     delete_canvas: {
-      schema: z.object({ ...canvasInput, expectedRevision: revision.optional() }),
+      schema: Schema.Struct({ ...canvasInput, expectedRevision: Schema.optionalKey(revision) }),
       description:
         "Move a canvas in this environment to the recycle bin (recoverable for 7 days). Pass the canvas revision you reviewed.",
       run: async (a: { canvasId: string; expectedRevision?: number }) => {
@@ -154,13 +154,13 @@ export function designActions(
       },
     },
     get_canvas: {
-      schema: z.object(canvasInput),
+      schema: Schema.Struct(canvasInput),
       description:
         "Read the authoritative canvas including every frame's HTML. Prefer get_canvas_summary and get_frame for large canvases. Re-read on revision conflict; never blindly retry edits.",
       run: (a: { canvasId: string }) => service.get(a.canvasId, environmentId),
     },
     get_canvas_summary: {
-      schema: z.object(canvasInput),
+      schema: Schema.Struct(canvasInput),
       description:
         "Read canvas and frame revisions, geometry, structure identities and validation without any HTML.",
       run: async (a: { canvasId: string }) => {
@@ -188,21 +188,21 @@ export function designActions(
       },
     },
     get_canvas_state: {
-      schema: z.object(canvasInput),
+      schema: Schema.Struct(canvasInput),
       description:
         "Read one atomic snapshot of the authoritative canvas and your undo/redo availability.",
       run: (a: { canvasId: string }) => service.getCanvasState(a.canvasId, environmentId, actor),
     },
     history_status: {
-      schema: z.object(canvasInput),
+      schema: Schema.Struct(canvasInput),
       description: "Read your undo and redo availability for a canvas.",
       run: (a: { canvasId: string }) => service.historyStatus(a.canvasId, environmentId, actor),
     },
     list_history: {
-      schema: z.object({
+      schema: Schema.Struct({
         ...canvasInput,
-        offset: z.number().int().nonnegative().optional(),
-        limit: z.number().int().min(1).max(100).optional(),
+        offset: Schema.optionalKey(int({ min: 0 })),
+        limit: Schema.optionalKey(int({ min: 1, max: 100 })),
       }),
       description:
         "List recent history entries (actor, time, affected frames). Use restore_checkpoint to restore one explicitly.",
@@ -210,23 +210,23 @@ export function designActions(
         service.historyPage(environmentId, a.canvasId, a.offset, a.limit),
     },
     undo: {
-      schema: z.object({ ...canvasInput, expectedRevision: revision }),
+      schema: Schema.Struct({ ...canvasInput, expectedRevision: revision }),
       description:
         "Undo your latest edit using the expected CANVAS revision. Refused if someone changed the same frames since.",
       run: (a: { canvasId: string; expectedRevision: number }) =>
         service.undo(a.canvasId, environmentId, a.expectedRevision, actor),
     },
     redo: {
-      schema: z.object({ ...canvasInput, expectedRevision: revision }),
+      schema: Schema.Struct({ ...canvasInput, expectedRevision: revision }),
       description: "Redo your latest undone edit using the expected CANVAS revision.",
       run: (a: { canvasId: string; expectedRevision: number }) =>
         service.redo(a.canvasId, environmentId, a.expectedRevision, actor),
     },
     create_frame: {
-      schema: z.object({
+      schema: Schema.Struct({
         ...canvasInput,
         expectedRevision: revision,
-        ...frameSchema.omit({ id: true, revision: true }).shape,
+        ...frameInputSchema.fields,
         ...responseShape,
       }),
       description:
@@ -256,27 +256,27 @@ export function designActions(
       },
     },
     get_frame: {
-      schema: z.object(frameInput),
+      schema: Schema.Struct(frameInput),
       description: "Read frame HTML, geometry and revision.",
       run: (a: { canvasId: string; frameId: string }) =>
         service.getFrame(a.canvasId, environmentId, a.frameId),
     },
     replace_frame_html: {
-      schema: z.object({ ...mutationInput, html: htmlSchema, ...responseShape }),
+      schema: Schema.Struct({ ...mutationInput, html: htmlSchema, ...responseShape }),
       description:
         'Replace HTML using the expected FRAME revision. Byte-identical HTML is an acknowledged no-op. Use response:"compact" to avoid echoing HTML.',
       run: (a: Mutation & { html: string }) =>
         frameMutation(a, { kind: "replace_frame_html", frameId: a.frameId, html: a.html }),
     },
     append_frame_html: {
-      schema: z.object({ ...mutationInput, html: htmlSchema, ...responseShape }),
+      schema: Schema.Struct({ ...mutationInput, html: htmlSchema, ...responseShape }),
       description:
         "Stream a complete HTML fragment into a frame body (styles go in head). Each append commits a frame revision. Do not send incomplete tags.",
       run: (a: Mutation & { html: string }) =>
         frameMutation(a, { kind: "append_frame_html", frameId: a.frameId, html: a.html }),
     },
     set_element_styles: {
-      schema: z.object({ ...mutationInput, selector, styles, ...responseShape }),
+      schema: Schema.Struct({ ...mutationInput, selector, styles, ...responseShape }),
       description:
         "Set inline CSS on exactly one matching element. null removes a property. Invalid values are rejected as a whole (nothing applied). Values equal to the current inline value are an acknowledged no-op. Uses FRAME revision.",
       run: (a: Mutation & { selector: string; styles: Record<string, string | null> }) =>
@@ -288,7 +288,7 @@ export function designActions(
         }),
     },
     replace_element_html: {
-      schema: z.object({ ...mutationInput, selector, html: htmlSchema, ...responseShape }),
+      schema: Schema.Struct({ ...mutationInput, selector, html: htmlSchema, ...responseShape }),
       description: "Replace exactly one element inside the body using FRAME revision.",
       run: (a: Mutation & { selector: string; html: string }) =>
         frameMutation(a, {
@@ -299,11 +299,11 @@ export function designActions(
         }),
     },
     move_element: {
-      schema: z.object({
+      schema: Schema.Struct({
         ...mutationInput,
         selector,
         parentSelector: selector,
-        beforeSelector: selector.optional(),
+        beforeSelector: Schema.optionalKey(selector),
         ...responseShape,
       }),
       description:
@@ -318,9 +318,15 @@ export function designActions(
         }),
     },
     update_frame: {
-      schema: z.object({
+      schema: Schema.Struct({
         ...mutationInput,
-        patch: frameSchema.omit({ id: true, revision: true, html: true }).partial().strict(),
+        patch: strictObject({
+          name: Schema.optionalKey(designName),
+          x: Schema.optionalKey(coordinate),
+          y: Schema.optionalKey(coordinate),
+          width: Schema.optionalKey(dimension),
+          height: Schema.optionalKey(dimension),
+        }),
         ...responseShape,
       }),
       description: "Move, resize or rename a frame using FRAME revision. Equal values are a no-op.",
@@ -334,13 +340,13 @@ export function designActions(
       run: submit,
     },
     operation_status: {
-      schema: z.object({ ...canvasInput, token: z.string().max(100) }),
+      schema: Schema.Struct({ ...canvasInput, token: str({ max: 100 }) }),
       description: "Read the state of a submitted operation. Side-effect free.",
       run: async (a: { canvasId: string; token: string }) =>
         compactStatus(await service.status(environmentId, a.canvasId, a.token)),
     },
     find_operation: {
-      schema: z.object({ ...canvasInput, correlationId: correlation }),
+      schema: Schema.Struct({ ...canvasInput, correlationId: correlation }),
       description: "Find the outcome of an earlier submit_operation by its correlationId.",
       run: async (a: { canvasId: string; correlationId: string }) => {
         const { record } = await service.loadFor(a.canvasId, environmentId, { allowDeleted: true });
@@ -351,19 +357,19 @@ export function designActions(
       },
     },
     inspect_element: {
-      schema: z.object({ ...frameInput, selector }),
+      schema: Schema.Struct({ ...frameInput, selector }),
       description:
         "Inspect computed styles, inline overrides, attributes and bounds on the backend, even without a connected client.",
       run: async (a: { canvasId: string; frameId: string; selector: string }) =>
         service.inspect(environmentId, a.canvasId, a.frameId, a.selector),
     },
     get_frame_layers: {
-      schema: z.object({
+      schema: Schema.Struct({
         ...frameInput,
-        rootSelector: selector.optional(),
-        cursor: z.string().max(200).optional(),
-        maxNodes: z.number().int().min(1).max(200).optional(),
-        maxDepth: z.number().int().min(1).max(32).optional(),
+        rootSelector: Schema.optionalKey(selector),
+        cursor: Schema.optionalKey(str({ max: 200 })),
+        maxNodes: Schema.optionalKey(int({ min: 1, max: 200 })),
+        maxDepth: Schema.optionalKey(int({ min: 1, max: 32 })),
       }),
       description:
         "Page through a frame's element hierarchy (≤200 nodes/128 KiB per page). Continue with nextCursor; a structure change invalidates the cursor.",
@@ -383,7 +389,7 @@ export function designActions(
         }),
     },
     validate_frame: {
-      schema: z.object(frameInput),
+      schema: Schema.Struct(frameInput),
       description:
         "Validate a frame's current HTML in the design runtime and report removed scripts, blocked external resources and DOM limits.",
       run: async (a: { canvasId: string; frameId: string }) =>
@@ -392,24 +398,24 @@ export function designActions(
         },
     },
     capture_frame: {
-      schema: z.object(frameInput),
+      schema: Schema.Struct(frameInput),
       description:
         "Capture a PNG of the authoritative frame in backend Chromium. Works while the canvas is closed. The result names the exact revision it depicts.",
       run: async (a: { canvasId: string; frameId: string }) =>
         service.capture(environmentId, a.canvasId, a.frameId),
     },
     export_canvas: {
-      schema: z.object(canvasInput),
+      schema: Schema.Struct(canvasInput),
       description:
         "Get the portable .orkdes document content. To save it into the repository use save_canvas instead of copying this JSON.",
       run: (a: { canvasId: string }) => service.get(a.canvasId, environmentId),
     },
     save_canvas: {
-      schema: z.object({
+      schema: Schema.Struct({
         ...canvasInput,
         expectedRevision: revision,
-        filePath: z.string().max(240),
-        replaceFingerprint: z.string().max(80).optional(),
+        filePath: str({ max: 240 }),
+        replaceFingerprint: Schema.optionalKey(str({ max: 80 })),
       }),
       description:
         "Save the canvas revision you reviewed to a repository-relative .orkdes file (folders are created as needed; `designs/` is the convention). Never overwrites an existing file unless you pass its replaceFingerprint (from a previous collision error); otherwise choose a new filePath. Returns a path/revision receipt, not the document.",
@@ -474,7 +480,7 @@ export async function runDesignAction(
   const actions = designActions(service, environmentId, options);
   if (!Object.hasOwn(actions, action)) throw new Error("Unknown design action");
   const tool = actions[action as keyof typeof actions];
-  const args = tool.schema.parse(input);
+  const args = decodeSync(tool.schema, input);
   return (tool.run as (input: unknown) => Promise<unknown>)(args);
 }
 
@@ -491,7 +497,7 @@ export function createDesignMcp(
   for (const [toolName, tool] of Object.entries(designActions(service, environmentId, options))) {
     server.registerTool(
       toolName,
-      { description: tool.description, inputSchema: tool.schema },
+      { description: tool.description, inputSchema: toolInput(tool.schema) },
       async (args: unknown) => {
         try {
           const result = await runDesignAction(service, environmentId, toolName, args, options);

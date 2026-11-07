@@ -872,8 +872,12 @@ test("Home native preview hides beneath board panels and returns without losing 
       async ({ projectId, homeId }) => {
         const modulePath = "/src/stores/uiStore.ts";
         const { useUIStore } = await import(modulePath);
-        useUIStore.getState().selectProjectAndEnvironment(projectId, homeId);
-        useUIStore.getState().setProjectBoardTab("home");
+        const { getWindowScope } = await import(
+          /* @vite-ignore */ "/src/lib/node-scope/app-window-scope.ts" as string
+        );
+        const ui = getWindowScope().commandScope().store(useUIStore.def).getState();
+        ui.selectProjectAndEnvironment(projectId, homeId);
+        ui.setProjectBoardTab("home");
       },
       { projectId: environment.projectId, homeId: home.id },
     );
@@ -884,7 +888,10 @@ test("Home native preview hides beneath board panels and returns without losing 
     await s().window.evaluate(async () => {
       const modulePath = "/src/stores/uiStore.ts";
       const { useUIStore } = await import(modulePath);
-      useUIStore.getState().selectProject(null);
+      const { getWindowScope } = await import(
+        /* @vite-ignore */ "/src/lib/node-scope/app-window-scope.ts" as string
+      );
+      getWindowScope().commandScope().store(useUIStore.def).getState().selectProject(null);
     });
     await preview("destroy", tabId).catch(() => undefined);
     await invoke("delete_environment", { environmentId: home.id });
@@ -1561,10 +1568,27 @@ async function uiStore(action: string, ...args: unknown[]): Promise<void> {
     async ({ action, args }) => {
       const modulePath = "/src/stores/uiStore.ts";
       const { useUIStore } = await import(modulePath);
-      (useUIStore.getState() as Record<string, (...values: unknown[]) => void>)[action]!(...args);
+      const { getWindowScope } = await import(
+        /* @vite-ignore */ "/src/lib/node-scope/app-window-scope.ts" as string
+      );
+      (
+        getWindowScope().commandScope().store(useUIStore.def).getState() as Record<
+          string,
+          (...values: unknown[]) => void
+        >
+      )[action]!(...args);
     },
     { action, args },
   );
+}
+
+/** App zoom lives in the window's chrome store, shared by every node it shows. */
+async function setZoomLevel(level: number): Promise<void> {
+  await s().window.evaluate(async (zoom) => {
+    const modulePath = "/src/stores/uiChromeStore.ts";
+    const { useUIChromeStore } = await import(modulePath);
+    useUIChromeStore.getState().setZoomLevel(zoom);
+  }, level);
 }
 
 async function setHostWindowSize(width: number, height: number): Promise<void> {
@@ -1627,7 +1651,7 @@ async function showRendererPreview(
 }
 
 async function restoreDirectPreview(): Promise<void> {
-  await uiStore("setZoomLevel", 100).catch(() => undefined);
+  await setZoomLevel(100).catch(() => undefined);
   await setHostWindowSize(1440, 960);
   await uiStore("selectProject", null).catch(() => undefined);
   await preview("destroy", UI_TAB_ID).catch(() => undefined);
@@ -1925,7 +1949,7 @@ test("the real Notes column shrinks the native view, overlays hide it, and the n
     await s().window.evaluate(() => window.dispatchEvent(new Event("cleanup-late-startup-notice")));
     await expect(s().window.locator(NOTES_PANEL)).toBeVisible();
     for (const zoom of [100, 80, 125]) {
-      await uiStore("setZoomLevel", zoom);
+      await setZoomLevel(zoom);
       await expect
         .poll(() => rendererLayout({}).then((layout) => layout.zoom))
         .toBeCloseTo(zoom / 100, 2);
@@ -1942,12 +1966,12 @@ test("the real Notes column shrinks the native view, overlays hide it, and the n
     }
     // At 150% the 1440-DIP window is 960 CSS px wide, so the column becomes
     // the narrow Preview/Notes switch; Preview still lands on its host.
-    await uiStore("setZoomLevel", 150);
+    await setZoomLevel(150);
     const zoomedSurfaces = s().window.getByRole("tablist", { name: "Preview or notes" });
     await expect(zoomedSurfaces).toBeVisible({ timeout: 20_000 });
     await pressControl(zoomedSurfaces.getByRole("tab", { name: "Preview" }));
     await expectViewOnHost(testInfo, "notes-open-zoom-150-narrow");
-    await uiStore("setZoomLevel", 100);
+    await setZoomLevel(100);
     await expect(zoomedSurfaces).toHaveCount(0, { timeout: 20_000 });
     await expectViewOnHost(testInfo, "notes-open-zoom-reset");
 

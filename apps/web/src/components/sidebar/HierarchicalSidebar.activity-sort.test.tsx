@@ -1,21 +1,14 @@
 import { afterEach, expect, test } from "bun:test";
-import {
-  act,
-  cleanup,
-  fireEvent,
-  render,
-  renderHook,
-  screen,
-  waitFor,
-  within,
-} from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope, renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import { useBoundMachineView } from "@/components/federation/useMachineViews";
-import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { buildPipelineStore } from "@/stores/buildPipelineStore";
 import { activityRows } from "@/lib/federation/aggregate";
 import { displayedActivityResolver } from "@/lib/environment-activity-sort";
 import { FederationProvider } from "@/components/federation/FederationProvider";
 import { useMachineViewStore } from "@/stores/machineViewStore";
-import { useEnvironmentStore, useProjectStore, useUIStore } from "@/stores";
+import { environmentStore, projectStore, uiStore } from "@/stores";
+import { useUIChromeStore } from "@/stores/uiChromeStore";
 import {
   connectionList,
   installDesktopFake,
@@ -24,23 +17,24 @@ import {
 } from "@/test/federation-desktop-fake";
 import type { Environment, Project } from "@/types";
 import { HierarchicalSidebar, sortEnvironmentsByActivity } from "./HierarchicalSidebar";
+import { appCommandStore } from "@/test/app-command-store";
 
 const originalNative = window.orkestrator;
-const initialBuilds = useBuildPipelineStore.getState();
+const initialBuilds = appCommandStore(buildPipelineStore).getState();
 const initialView = useMachineViewStore.getState();
-const initialUI = useUIStore.getState();
-const initialProjects = useProjectStore.getState();
-const initialEnvironments = useEnvironmentStore.getState();
+const initialUI = appCommandStore(uiStore).getState();
+const initialProjects = appCommandStore(projectStore).getState();
+const initialEnvironments = appCommandStore(environmentStore).getState();
 
 afterEach(() => {
   cleanup();
-  useBuildPipelineStore.setState(initialBuilds, true);
+  appCommandStore(buildPipelineStore).setState(initialBuilds, true);
   uninstallDesktopFake();
   window.orkestrator = originalNative;
   useMachineViewStore.setState(initialView, true);
-  useUIStore.setState(initialUI, true);
-  useProjectStore.setState(initialProjects, true);
-  useEnvironmentStore.setState(initialEnvironments, true);
+  appCommandStore(uiStore).setState(initialUI, true);
+  appCommandStore(projectStore).setState(initialProjects, true);
+  appCommandStore(environmentStore).setState(initialEnvironments, true);
 });
 
 const project: Project = {
@@ -116,11 +110,11 @@ test("sidebar menu orders cross-machine activity and preserves the order under a
     },
     respondPortal: (command) => (command === "get_projects" ? [] : undefined),
   });
-  useProjectStore.setState({ projects: [], hasLoaded: true });
-  useEnvironmentStore.setState({ environments: [], deletingEnvironments: new Set() });
-  useUIStore.setState({ environmentSortMode: "activity", activitySortOrder: "priority" });
+  appCommandStore(projectStore).setState({ projects: [], hasLoaded: true });
+  appCommandStore(environmentStore).setState({ environments: [], deletingEnvironments: new Set() });
+  useUIChromeStore.setState({ environmentSortMode: "activity", activitySortOrder: "priority" });
   useMachineViewStore.setState({ machineFilter: "all" });
-  render(
+  renderInAppCommandScope(
     <FederationProvider>
       <HierarchicalSidebar />
     </FederationProvider>,
@@ -172,9 +166,9 @@ test("the static bottom bar follows the scrolling list, outside it", async () =>
     datasets: { a: { projects: [{ ...project }], environments: { p: [{ ...environment }] } } },
     respondPortal: (command) => (command === "get_projects" ? [] : undefined),
   });
-  useProjectStore.setState({ projects: [], hasLoaded: true });
-  useEnvironmentStore.setState({ environments: [], deletingEnvironments: new Set() });
-  const { container } = render(
+  appCommandStore(projectStore).setState({ projects: [], hasLoaded: true });
+  appCommandStore(environmentStore).setState({ environments: [], deletingEnvironments: new Set() });
+  const { container } = renderInAppCommandScope(
     <FederationProvider>
       <HierarchicalSidebar />
     </FederationProvider>,
@@ -215,18 +209,22 @@ test("bound machine activity order rehydrates from the active build store", asyn
     order: 0,
   } as Environment;
   const idle = { ...build, id: "idle", order: 1 };
-  useEnvironmentStore.setState({ environments: [idle, build] });
-  useProjectStore.setState({ projects: [project] });
-  const { result, unmount } = renderHook(() => useBoundMachineView(), {
+  appCommandStore(environmentStore).setState({ environments: [idle, build] });
+  appCommandStore(projectStore).setState({ projects: [project] });
+  const { result, unmount } = renderHookInAppCommandScope(() => useBoundMachineView(), {
     wrapper: FederationProvider,
   });
   await waitFor(() => expect(result.current).not.toBeNull());
   const ids = () => activityRows([result.current!]).map((row) => row.environment.ref.environmentId);
   expect(ids()).toEqual(["build", "idle"]);
-  act(() => useBuildPipelineStore.setState({ activeBuildEnvironmentIds: new Set(["build"]) }));
+  act(() =>
+    appCommandStore(buildPipelineStore).setState({ activeBuildEnvironmentIds: new Set(["build"]) }),
+  );
   expect(ids()).toEqual(["idle", "build"]);
   unmount();
-  const restored = renderHook(() => useBoundMachineView(), { wrapper: FederationProvider });
+  const restored = renderHookInAppCommandScope(() => useBoundMachineView(), {
+    wrapper: FederationProvider,
+  });
   await waitFor(() => expect(restored.result.current).not.toBeNull());
   expect(
     activityRows([restored.result.current!]).map((row) => row.environment.ref.environmentId),
@@ -237,9 +235,9 @@ test("this machine's merged environments sort below unmerged ones in the merged 
   installDesktopFake({ list: connectionList([]), datasets: {} });
   const merged = { ...environment, id: "merged", prState: "merged", order: 0 } as Environment;
   const open = { ...environment, id: "open", prState: "open", order: 1 } as Environment;
-  useEnvironmentStore.setState({ environments: [merged, open] });
-  useProjectStore.setState({ projects: [project] });
-  const { result, unmount } = renderHook(() => useBoundMachineView(), {
+  appCommandStore(environmentStore).setState({ environments: [merged, open] });
+  appCommandStore(projectStore).setState({ projects: [project] });
+  const { result, unmount } = renderHookInAppCommandScope(() => useBoundMachineView(), {
     wrapper: FederationProvider,
   });
   await waitFor(() => expect(result.current).not.toBeNull());

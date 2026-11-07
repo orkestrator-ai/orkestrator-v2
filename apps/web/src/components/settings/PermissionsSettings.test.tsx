@@ -1,5 +1,6 @@
 import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type {
   ExternalPermissionRuleFile,
   NativeAgentPermissionRule,
@@ -70,7 +71,7 @@ afterAll(() => {
 
 describe("PermissionsSettings", () => {
   test("lists each rule with its agent, scope and use, and the provider files read-only", async () => {
-    render(<PermissionsSettings />);
+    renderInAppCommandScope(<PermissionsSettings />);
     const rows = await screen.findAllByTestId("permission-rule-row");
     expect(rows).toHaveLength(2);
     expect(within(rows[0]!).getByText("npm test")).toBeTruthy();
@@ -84,7 +85,7 @@ describe("PermissionsSettings", () => {
   });
 
   test("removes a rule after confirming", async () => {
-    render(<PermissionsSettings />);
+    renderInAppCommandScope(<PermissionsSettings />);
     await screen.findAllByTestId("permission-rule-row");
     fireEvent.click(screen.getByRole("button", { name: "Remove rule npm test" }));
     fireEvent.click(await screen.findByRole("button", { name: "Remove" }));
@@ -103,7 +104,7 @@ test("shows an ellipsis when a container rule file was cut at the byte limit", a
     truncated: true,
   };
   try {
-    render(<PermissionsSettings />);
+    renderInAppCommandScope(<PermissionsSettings />);
     const file = await screen.findByTestId("external-rule-file");
     expect(file.querySelector("pre")?.textContent).toEndWith("\n…");
   } finally {

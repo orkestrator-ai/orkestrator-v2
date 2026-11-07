@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { Terminal } from "@xterm/xterm";
 import { writeText } from "@/lib/native/clipboard";
 import { processClipboardPaste } from "./useClipboardImagePaste";
+import { useScopeBackend } from "./useScopeBackend";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("terminal");
@@ -42,6 +43,7 @@ export function useTerminalClipboard({
   containerId,
   writeRef,
 }: UseTerminalClipboardOptions): UseTerminalClipboardReturn {
+  const nodeBackend = useScopeBackend();
   const [hasSelection, setHasSelection] = useState(false);
 
   // Track selection state
@@ -78,6 +80,7 @@ export function useTerminalClipboard({
   const handlePaste = useCallback(() => {
     if (!containerId || !terminal) return;
     processClipboardPaste(
+      nodeBackend,
       containerId,
       async (filePath) => {
         await writeRef.current(filePath + " ");
@@ -95,7 +98,7 @@ export function useTerminalClipboard({
         });
       },
     );
-  }, [containerId, terminal, writeRef]);
+  }, [containerId, terminal, writeRef, nodeBackend]);
 
   const attachClipboardKeyHandler = useCallback(() => {
     if (!terminal) return;

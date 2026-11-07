@@ -14,7 +14,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { requestCommandHandover } from "@/lib/command-handover";
 import { subscribeToConnections } from "@/lib/connections";
-import { portalInvoke } from "@/lib/portal/portal-transport";
+import { NO_ARGS, portalNodesApi } from "@/lib/node-scope/domains/nodes";
 import { requestGlobalSettings } from "@/lib/settings-navigation";
 import { MachineDot } from "./MachineDot";
 import { useCommandNode, type CommandNodeIdentity } from "./useCommandNode";
@@ -126,7 +126,8 @@ export function CommandNodeMenuSection() {
         stop();
       };
     }
-    void portalInvoke<NodeListResult>("list_nodes")
+    void portalNodesApi()
+      .list_nodes(NO_ARGS)
       .then((list) => {
         if (active) setNodes(list.nodes);
       })

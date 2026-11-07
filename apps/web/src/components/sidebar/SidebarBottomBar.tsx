@@ -3,6 +3,7 @@ import { Bug, Container, FolderGit2, SlidersHorizontal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useHostMaintenance } from "@/components/settings/useHostMaintenance";
 import { openBugReport } from "@/lib/bug-report/open-bug-report";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { requestGlobalSettings } from "@/lib/settings-navigation";
 import { useAppDialogStore } from "@/stores/appDialogStore";
 import { useBugReportStore } from "@/stores/bugReportStore";
@@ -40,7 +41,8 @@ function IndicatorDot({ testId }: { testId: string }) {
  * drawer closes for them. Global settings go through `requestGlobalSettings`,
  * so every opener shares one path. Repository and environment settings target
  * the active machine’s selected project and environment. Remote requests go
- * to its workspace realm; local requests go to `AppDialogHost`. Buttons stay
+ * to that node's workspace (its request in `remoteWorkspaceStore`); local
+ * requests go to `AppDialogHost`. Buttons stay
  * in place but disabled while
  * there is none, so the bar does not shift as the selection changes.
  *
@@ -57,6 +59,7 @@ export function SidebarBottomBar({ stacked = false }: { stacked?: boolean }) {
   const { snapshot } = useHostMaintenance();
   const updateAvailable = snapshot?.updater.updateAvailable === true;
   const openAppDialog = useAppDialogStore((state) => state.open);
+  const nodeId = useScopesWithCommandFallback().scope.nodeId;
   const selectedProjectId = useUIStore((state) => state.selectedProjectId);
   const selectedEnvironmentId = useUIStore((state) => state.selectedEnvironmentId);
   const remote = useRemoteWorkspaceStore((state) => state.active);
@@ -85,9 +88,9 @@ export function SidebarBottomBar({ stacked = false }: { stacked?: boolean }) {
         });
       }
     } else if (dialog === "repository-settings" && hasLocalProject && selectedProjectId) {
-      openAppDialog({ kind: dialog, projectId: selectedProjectId });
+      openAppDialog({ kind: dialog, nodeId, projectId: selectedProjectId });
     } else if (dialog === "environment-settings" && hasLocalEnvironment && selectedEnvironmentId) {
-      openAppDialog({ kind: dialog, environmentId: selectedEnvironmentId });
+      openAppDialog({ kind: dialog, nodeId, environmentId: selectedEnvironmentId });
     }
   }
 
@@ -146,7 +149,7 @@ export function SidebarBottomBar({ stacked = false }: { stacked?: boolean }) {
         variant="ghost"
         size="icon"
         className="relative h-7 w-7"
-        // The machine in front: another machine's report opens in its realm.
+        // The machine in front: another machine's report opens on its scope.
         onClick={() => openBugReport()}
         title={BUG_REPORT_LABEL}
         aria-label={BUG_REPORT_LABEL}

@@ -1,17 +1,20 @@
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, renderHook } from "@testing-library/react";
-import { useEnvironmentStore, useFilesPanelStore, useProjectStore, useUIStore } from "@/stores";
+import { act, cleanup } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
+import { environmentStore, filesPanelStore, projectStore, uiStore } from "@/stores";
 import type { Environment, Project } from "@/types";
 import * as realBackend from "@/lib/backend";
 import { mockToastError, mockToastSuccess } from "../../../../tests/mocks/sonner";
 import type { ChangesRefreshResult } from "@orkestrator/protocol/change-resources";
-import { useChangeProjectionStore } from "@/stores/changeProjectionStore";
-import { useWorktreeSnapshotStore } from "@/stores/worktreeSnapshotStore";
+import { changeProjectionStore } from "@/stores/changeProjectionStore";
+import { worktreeSnapshotStore } from "@/stores/worktreeSnapshotStore";
 import {
   environmentProjectionFixture,
   resetChangeProjectionStore,
 } from "@/components/files-panel/change-projection-test-fixture";
+import { filesPanelTestState, setFilesPanelTestState } from "@/test/files-panel-state";
+import { appCommandStore } from "@/test/app-command-store";
 
 const realBackendSnapshot = { ...realBackend };
 const copyExternalFileMock = mock(
@@ -98,9 +101,12 @@ beforeEach(() => {
   ensureProjectHomeEnvironmentMock.mockClear();
   refreshChangesMock.mockClear();
   resetChangeProjectionStore();
-  useProjectStore.setState({ projects: [] });
-  useUIStore.setState({ selectedEnvironmentId: "environment-1", selectedProjectId: null });
-  useEnvironmentStore.setState({
+  appCommandStore(projectStore).setState({ projects: [] });
+  appCommandStore(uiStore).setState({
+    selectedEnvironmentId: "environment-1",
+    selectedProjectId: null,
+  });
+  appCommandStore(environmentStore).setState({
     environments: [
       {
         id: "environment-1",
@@ -111,7 +117,7 @@ beforeEach(() => {
       } as Environment,
     ],
   });
-  useFilesPanelStore.setState({
+  setFilesPanelTestState({
     isOpen: false,
     activeTab: "all-files",
     changes: [],
@@ -135,7 +141,7 @@ afterAll(() => {
 
 describe("useFilesPanel external file copies", () => {
   test("encodes dropped bytes, targets the selected environment, and refreshes the tree", async () => {
-    const { result } = renderHook(() => useFilesPanel());
+    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
     const file = droppedFile("image.bin", [0, 1, 127, 255]);
 
     await act(async () => {
@@ -158,7 +164,7 @@ describe("useFilesPanel external file copies", () => {
   });
 
   test("rejects oversized and excessive drops before reading or sending files", async () => {
-    const { result } = renderHook(() => useFilesPanel());
+    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
     const oversized = droppedFile("large.bin", []);
     Object.defineProperty(oversized, "size", { value: MAX_EXTERNAL_FILE_DROP_BYTES + 1 });
 
@@ -178,7 +184,7 @@ describe("useFilesPanel external file copies", () => {
   });
 
   test("copies zero-byte files as regular files", async () => {
-    const { result } = renderHook(() => useFilesPanel());
+    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
 
     await act(async () => {
       await result.current.copyExternalFiles([droppedFile("empty.txt", [])], ".");
@@ -195,7 +201,7 @@ describe("useFilesPanel external file copies", () => {
       if (fileName === "blocked.txt") throw new Error("already exists");
       return `${directory}/${fileName}`;
     });
-    const { result } = renderHook(() => useFilesPanel());
+    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
 
     let failure: unknown;
     await act(async () => {
@@ -225,7 +231,7 @@ describe("useFilesPanel external file copies", () => {
 
   test("does not refresh when every copied file fails", async () => {
     copyExternalFileMock.mockRejectedValue(new Error("copy failed"));
-    const { result } = renderHook(() => useFilesPanel());
+    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
 
     let failure: unknown;
     await act(async () => {
@@ -252,8 +258,8 @@ describe("useFilesPanel external file copies", () => {
   });
 
   test("toasts when the selected environment is unavailable", async () => {
-    useUIStore.setState({ selectedEnvironmentId: null });
-    const { result } = renderHook(() => useFilesPanel());
+    appCommandStore(uiStore).setState({ selectedEnvironmentId: null });
+    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
 
     await expect(
       result.current.copyExternalFiles([droppedFile("notes.txt", [1])], "."),
@@ -267,16 +273,19 @@ describe("useFilesPanel external file copies", () => {
 
 describe("useFilesPanel on the project root", () => {
   beforeEach(() => {
-    useProjectStore.setState({
+    appCommandStore(projectStore).setState({
       projects: [{ id: "project-1", name: "Project", localPath: "/checkout" } as Project],
     });
-    useUIStore.setState({ selectedEnvironmentId: null, selectedProjectId: "project-1" });
-    useEnvironmentStore.setState({ environments: [] });
+    appCommandStore(uiStore).setState({
+      selectedEnvironmentId: null,
+      selectedProjectId: "project-1",
+    });
+    appCommandStore(environmentStore).setState({ environments: [] });
   });
 
   test("reads the project's own checkout when no environment is selected", async () => {
-    useFilesPanelStore.setState({ isOpen: true, activeTab: "all-files" });
-    const { result } = renderHook(() => useFilesPanel());
+    setFilesPanelTestState({ isOpen: true, activeTab: "all-files" });
+    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
     await act(async () => {
       await Promise.resolve();
     });
@@ -291,7 +300,7 @@ describe("useFilesPanel on the project root", () => {
   });
 
   test("drops land in the root checkout through the project home and refresh changes", async () => {
-    const { result } = renderHook(() => useFilesPanel());
+    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
 
     await act(async () => {
       await result.current.copyExternalFiles([droppedFile("notes.txt", [1])], ".");
@@ -305,16 +314,18 @@ describe("useFilesPanel on the project root", () => {
       expect.any(String),
     );
     // The home is now visible to the sidebar and the rest of the renderer.
-    expect(useEnvironmentStore.getState().environments.map((e) => e.id)).toEqual([
-      "project-home-1",
-    ]);
+    expect(
+      appCommandStore(environmentStore)
+        .getState()
+        .environments.map((e) => e.id),
+    ).toEqual(["project-home-1"]);
     expect(getLocalGitStatusSnapshotMock).toHaveBeenCalled();
     expect(mockToastSuccess).toHaveBeenCalledWith("File copied", { description: "notes.txt" });
   });
 
   test("an existing project home is reconciled before mutations", async () => {
-    useEnvironmentStore.setState({ environments: [projectHome] });
-    const { result } = renderHook(() => useFilesPanel());
+    appCommandStore(environmentStore).setState({ environments: [projectHome] });
+    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
 
     await act(async () => {
       await result.current.copyExternalFiles([droppedFile("a.txt", [1])], "docs");
@@ -332,7 +343,7 @@ describe("useFilesPanel on the project root", () => {
   test.each(["deletionError", "cleanupAfterMergeError"] as const)(
     "a failed %s home cannot admit project file actions",
     async (field) => {
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [
           {
             ...projectHome,
@@ -342,7 +353,7 @@ describe("useFilesPanel on the project root", () => {
           },
         ],
       });
-      const { result } = renderHook(() => useFilesPanel());
+      const { result } = renderHookInAppCommandScope(() => useFilesPanel());
       let failure: unknown;
       await act(async () => {
         await result.current
@@ -361,7 +372,7 @@ describe("useFilesPanel on the project root", () => {
     ensureProjectHomeEnvironmentMock.mockImplementationOnce(async () => {
       throw new Error("The configured local checkout is unavailable");
     });
-    const { result } = renderHook(() => useFilesPanel());
+    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
 
     let failure: unknown;
     await act(async () => {
@@ -379,17 +390,17 @@ describe("useFilesPanel on the project root", () => {
   });
 
   test("a project without a checkout has nothing to show", () => {
-    useProjectStore.setState({
+    appCommandStore(projectStore).setState({
       projects: [{ id: "project-1", name: "Project", localPath: null } as Project],
     });
-    const { result } = renderHook(() => useFilesPanel());
+    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
     expect(result.current.isAvailable).toBe(false);
   });
 
   test("opening from the project board starts on all files", () => {
-    useFilesPanelStore.setState({ isOpen: false, activeTab: "changes" });
-    useFilesPanelStore.getState().openPanelOnAllFiles();
-    expect(useFilesPanelStore.getState()).toMatchObject({ isOpen: true, activeTab: "all-files" });
+    setFilesPanelTestState({ isOpen: false, activeTab: "changes" });
+    appCommandStore(filesPanelStore).getState().openPanelOnAllFiles();
+    expect(filesPanelTestState()).toMatchObject({ isOpen: true, activeTab: "all-files" });
   });
 });
 
@@ -419,7 +430,7 @@ describe("useFilesPanel truncated folders", () => {
       digest: "bounded-tree",
       value: boundedTree as never[],
     }));
-    useFilesPanelStore.setState({
+    setFilesPanelTestState({
       isOpen: true,
       activeTab: "all-files",
       expandedFolders: ["skills", "skills/release"],
@@ -447,11 +458,11 @@ describe("useFilesPanel truncated folders", () => {
   }
 
   test("reads an expanded truncated folder once and again after it is collapsed", async () => {
-    renderHook(() => useFilesPanel());
+    renderHookInAppCommandScope(() => useFilesPanel());
     await settle();
 
     expect(getLocalFileSubtreeMock.mock.calls).toEqual([["/worktree", "skills/release"]]);
-    expect(useFilesPanelStore.getState().fileSubtrees).toEqual({
+    expect(appCommandStore(filesPanelStore).getState().fileSubtrees).toEqual({
       "skills/release": {
         children: [
           {
@@ -464,14 +475,18 @@ describe("useFilesPanel truncated folders", () => {
         truncated: false,
       },
     });
-    expect(useFilesPanelStore.getState().loadingFolders).toEqual([]);
+    expect(appCommandStore(filesPanelStore).getState().loadingFolders).toEqual([]);
 
-    act(() => useFilesPanelStore.getState().setFolderExpanded("skills/release", false));
-    expect(useFilesPanelStore.getState().fileSubtrees).toEqual({});
+    act(() =>
+      appCommandStore(filesPanelStore).getState().setFolderExpanded("skills/release", false),
+    );
+    expect(appCommandStore(filesPanelStore).getState().fileSubtrees).toEqual({});
     await settle();
     expect(getLocalFileSubtreeMock).toHaveBeenCalledTimes(1);
 
-    act(() => useFilesPanelStore.getState().setFolderExpanded("skills/release", true));
+    act(() =>
+      appCommandStore(filesPanelStore).getState().setFolderExpanded("skills/release", true),
+    );
     await settle();
     expect(getLocalFileSubtreeMock).toHaveBeenCalledTimes(2);
   });
@@ -482,7 +497,7 @@ describe("useFilesPanel truncated folders", () => {
     });
     const logs = captureLogs();
     try {
-      renderHook(() => useFilesPanel());
+      renderHookInAppCommandScope(() => useFilesPanel());
       await settle();
       expect(logs.records()).toContainEqual(
         expect.objectContaining({ level: "error", area: "web.files", event: "folder.load-failed" }),
@@ -493,33 +508,39 @@ describe("useFilesPanel truncated folders", () => {
     }
 
     expect(getLocalFileSubtreeMock).toHaveBeenCalledTimes(1);
-    expect(useFilesPanelStore.getState().failedFolders).toEqual(["skills/release"]);
-    expect(useFilesPanelStore.getState().fileSubtrees).toEqual({});
+    expect(appCommandStore(filesPanelStore).getState().failedFolders).toEqual(["skills/release"]);
+    expect(appCommandStore(filesPanelStore).getState().fileSubtrees).toEqual({});
 
-    act(() => useFilesPanelStore.getState().setFolderExpanded("skills/release", false));
-    act(() => useFilesPanelStore.getState().setFolderExpanded("skills/release", true));
+    act(() =>
+      appCommandStore(filesPanelStore).getState().setFolderExpanded("skills/release", false),
+    );
+    act(() =>
+      appCommandStore(filesPanelStore).getState().setFolderExpanded("skills/release", true),
+    );
     await settle();
     expect(getLocalFileSubtreeMock).toHaveBeenCalledTimes(2);
-    expect(useFilesPanelStore.getState().failedFolders).toEqual([]);
-    expect(Object.keys(useFilesPanelStore.getState().fileSubtrees)).toEqual(["skills/release"]);
+    expect(appCommandStore(filesPanelStore).getState().failedFolders).toEqual([]);
+    expect(Object.keys(appCommandStore(filesPanelStore).getState().fileSubtrees)).toEqual([
+      "skills/release",
+    ]);
   });
 
   test("silent polling refreshes loaded contents with an unchanged bounded-tree digest", async () => {
     const { clock } = installFakeReadCoordinator();
-    renderHook(() => useFilesPanel());
+    renderHookInAppCommandScope(() => useFilesPanel());
     await settle();
-    const originalTree = useFilesPanelStore.getState().fileTree;
+    const originalTree = appCommandStore(filesPanelStore).getState().fileTree;
     getLocalFileSubtreeMock.mockResolvedValueOnce({
       children: [{ name: "new.txt", path: "skills/release/new.txt", isDirectory: false }],
       truncated: false,
     });
     await act(() => clock.advance(5_000));
     await settle();
-    expect(useFilesPanelStore.getState().fileTree).toBe(originalTree);
+    expect(appCommandStore(filesPanelStore).getState().fileTree).toBe(originalTree);
     expect(getLocalFileSubtreeMock).toHaveBeenCalledTimes(2);
-    expect(useFilesPanelStore.getState().fileSubtrees["skills/release"]?.children[0]?.name).toBe(
-      "new.txt",
-    );
+    expect(
+      appCommandStore(filesPanelStore).getState().fileSubtrees["skills/release"]?.children[0]?.name,
+    ).toBe("new.txt");
   });
 
   for (const action of ["refresh", "copy"] as const) {
@@ -538,7 +559,7 @@ describe("useFilesPanel truncated folders", () => {
             resolveNew = resolve;
           }),
       );
-      const { result } = renderHook(() => useFilesPanel());
+      const { result } = renderHookInAppCommandScope(() => useFilesPanel());
       await settle();
       let complete = false;
       let operation!: Promise<void>;
@@ -567,15 +588,16 @@ describe("useFilesPanel truncated folders", () => {
         await operation;
       });
       expect(complete).toBe(true);
-      expect(useFilesPanelStore.getState().fileSubtrees["skills/release"]?.children[0]?.name).toBe(
-        "new.txt",
-      );
+      expect(
+        appCommandStore(filesPanelStore).getState().fileSubtrees["skills/release"]?.children[0]
+          ?.name,
+      ).toBe("new.txt");
     });
   }
 
   test("a changed bounded tree reloads existing subtrees and reopening the view reconciles them", async () => {
     const { clock } = installFakeReadCoordinator();
-    renderHook(() => useFilesPanel());
+    renderHookInAppCommandScope(() => useFilesPanel());
     await settle();
     getLocalFileTreeSnapshotMock.mockResolvedValueOnce({
       unchanged: false,
@@ -586,26 +608,26 @@ describe("useFilesPanel truncated folders", () => {
     await settle();
     const reads = getLocalFileSubtreeMock.mock.calls.length;
     expect(reads).toBeGreaterThan(1);
-    act(() => useFilesPanelStore.getState().setActiveTab("changes"));
+    act(() => appCommandStore(filesPanelStore).getState().setActiveTab("changes"));
     await settle();
-    act(() => useFilesPanelStore.getState().setActiveTab("all-files"));
+    act(() => appCommandStore(filesPanelStore).getState().setActiveTab("all-files"));
     await settle();
     expect(getLocalFileSubtreeMock.mock.calls.length).toBeGreaterThan(reads);
   });
 
   test("collapsing a parent invalidates descendant results and reopening fetches them again", async () => {
-    renderHook(() => useFilesPanel());
+    renderHookInAppCommandScope(() => useFilesPanel());
     await settle();
-    act(() => useFilesPanelStore.getState().setFolderExpanded("skills", false));
-    expect(useFilesPanelStore.getState().fileSubtrees).toEqual({});
-    act(() => useFilesPanelStore.getState().setFolderExpanded("skills", true));
+    act(() => appCommandStore(filesPanelStore).getState().setFolderExpanded("skills", false));
+    expect(appCommandStore(filesPanelStore).getState().fileSubtrees).toEqual({});
+    act(() => appCommandStore(filesPanelStore).getState().setFolderExpanded("skills", true));
     await settle();
     expect(getLocalFileSubtreeMock).toHaveBeenCalledTimes(2);
   });
 
   test("a closed panel reads no folders", async () => {
-    useFilesPanelStore.setState({ isOpen: false });
-    renderHook(() => useFilesPanel());
+    setFilesPanelTestState({ isOpen: false });
+    renderHookInAppCommandScope(() => useFilesPanel());
     await settle();
     expect(getLocalFileSubtreeMock).not.toHaveBeenCalled();
   });
@@ -618,8 +640,8 @@ describe("useFilesPanel coordinated auto-refresh", () => {
   });
 
   async function openPanel(activeTab: "all-files" | "changes" = "all-files") {
-    useFilesPanelStore.setState({ isOpen: true, activeTab });
-    const view = renderHook(() => useFilesPanel());
+    setFilesPanelTestState({ isOpen: true, activeTab });
+    const view = renderHookInAppCommandScope(() => useFilesPanel());
     // The open read stays a direct, immediate load.
     await act(async () => {
       await Promise.resolve();
@@ -672,7 +694,7 @@ describe("useFilesPanel coordinated auto-refresh", () => {
   test("with data saving on, a watched worktree's poll backs off to 30 s and a refresh restores it", async () => {
     const { clock, coordinator } = installFakeReadCoordinator();
     coordinator.setDataSaving(true);
-    useWorktreeSnapshotStore.setState({
+    appCommandStore(worktreeSnapshotStore).setState({
       entries: new Map([
         [
           "environment-1",
@@ -701,7 +723,7 @@ describe("useFilesPanel coordinated auto-refresh", () => {
       await act(() => clock.advance(5_000));
       expect(snapshotCalls().tree).toBe(afterRefresh.tree + 1);
     } finally {
-      act(() => useWorktreeSnapshotStore.setState({ entries: new Map() }));
+      act(() => appCommandStore(worktreeSnapshotStore).setState({ entries: new Map() }));
     }
   });
 
@@ -727,7 +749,7 @@ describe("useFilesPanel coordinated auto-refresh", () => {
     await act(() => clock.advance(15_000));
     const setWatched = (watched: boolean) =>
       act(() =>
-        useWorktreeSnapshotStore.setState({
+        appCommandStore(worktreeSnapshotStore).setState({
           entries: new Map([
             [
               "environment-1",
@@ -761,14 +783,14 @@ describe("useFilesPanel coordinated auto-refresh", () => {
       await act(() => clock.advance(10_000));
       expect(snapshotCalls().tree).toBe(unwatchedReads.tree + 1);
     } finally {
-      act(() => useWorktreeSnapshotStore.setState({ entries: new Map() }));
+      act(() => appCommandStore(worktreeSnapshotStore).setState({ entries: new Map() }));
     }
   });
 
   test("a closed panel keeps no periodic demand", async () => {
     const { clock } = installFakeReadCoordinator();
-    useFilesPanelStore.setState({ isOpen: false });
-    renderHook(() => useFilesPanel());
+    setFilesPanelTestState({ isOpen: false });
+    renderHookInAppCommandScope(() => useFilesPanel());
     await act(() => clock.advance(30_000));
     expect(snapshotCalls()).toEqual({ tree: 0, changes: 0 });
     expect(clock.pending).toBe(0);
@@ -814,7 +836,7 @@ describe("useFilesPanel coordinated auto-refresh", () => {
 
   test("an event-driven change projection owns the Changes tab: the list is not polled", async () => {
     const { clock } = installFakeReadCoordinator();
-    useChangeProjectionStore
+    appCommandStore(changeProjectionStore)
       .getState()
       .applyProjection(environmentProjectionFixture("environment-1"));
     const { result } = await openPanel("changes");
@@ -844,7 +866,7 @@ describe("useFilesPanel coordinated auto-refresh", () => {
     );
     expect(snapshotCalls().changes).toBe(0);
     expect(
-      useChangeProjectionStore
+      appCommandStore(changeProjectionStore)
         .getState()
         .projections.get("environment-net/environment/environment-1/live")?.measurementId,
     ).toBe("m-2");
@@ -852,7 +874,7 @@ describe("useFilesPanel coordinated auto-refresh", () => {
 
   test("the file tree keeps its cadence while a change projection exists", async () => {
     const { clock } = installFakeReadCoordinator();
-    useChangeProjectionStore
+    appCommandStore(changeProjectionStore)
       .getState()
       .applyProjection(environmentProjectionFixture("environment-1"));
     await openPanel("all-files");
@@ -872,11 +894,16 @@ describe("useFilesPanel coordinated auto-refresh", () => {
 });
 
 test("the board follows a changed checkout and stops reading or mutating when it is cleared", async () => {
-  useProjectStore.setState({ projects: [{ id: "project-1", localPath: "/checkout" } as Project] });
-  useUIStore.setState({ selectedProjectId: "project-1", selectedEnvironmentId: null });
-  useEnvironmentStore.setState({ environments: [projectHome] });
-  useFilesPanelStore.setState({ isOpen: true });
-  const { result } = renderHook(() => useFilesPanel());
+  appCommandStore(projectStore).setState({
+    projects: [{ id: "project-1", localPath: "/checkout" } as Project],
+  });
+  appCommandStore(uiStore).setState({
+    selectedProjectId: "project-1",
+    selectedEnvironmentId: null,
+  });
+  appCommandStore(environmentStore).setState({ environments: [projectHome] });
+  setFilesPanelTestState({ isOpen: true });
+  const { result } = renderHookInAppCommandScope(() => useFilesPanel());
   await act(async () => {
     await Promise.resolve();
   });
@@ -885,7 +912,7 @@ test("the board follows a changed checkout and stops reading or mutating when it
     worktreePath: "/checkout-B",
   }));
   await act(async () => {
-    useProjectStore.setState({
+    appCommandStore(projectStore).setState({
       projects: [{ id: "project-1", localPath: "/checkout-B" } as Project],
     });
   });
@@ -894,11 +921,15 @@ test("the board follows a changed checkout and stops reading or mutating when it
     await result.current.copyExternalFiles([droppedFile("B.txt", [1])], ".");
   });
   expect(ensureProjectHomeEnvironmentMock).toHaveBeenCalledWith("project-1");
-  expect(useEnvironmentStore.getState().environments[0]?.worktreePath).toBe("/checkout-B");
+  expect(appCommandStore(environmentStore).getState().environments[0]?.worktreePath).toBe(
+    "/checkout-B",
+  );
   expect(getLocalFileTreeSnapshotMock.mock.calls.at(-1)?.[0]).toBe("/checkout-B");
   const staleAction = result.current.copyExternalFiles;
   await act(async () => {
-    useProjectStore.setState({ projects: [{ id: "project-1", localPath: null } as Project] });
+    appCommandStore(projectStore).setState({
+      projects: [{ id: "project-1", localPath: null } as Project],
+    });
   });
   expect(result.current.isAvailable).toBe(false);
   expect(result.current.worktreePath).toBeNull();

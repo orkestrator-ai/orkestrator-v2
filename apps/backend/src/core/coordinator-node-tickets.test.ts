@@ -5,6 +5,7 @@
  * between them goes over in-process links that run the leaf's real commands.
  * No leaf-local ticket id and no relay through the leaf's coordinator.
  */
+import { registrarFrom } from "./commands-registry-contracts.js";
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -52,7 +53,7 @@ async function setup(
   const leafProject = await leaf.addProject(createProject(REPO));
   const started: Array<Record<string, unknown>> = [];
   const leafCommands = new Map<string, CommandHandler>();
-  const registerLeaf = (name: string, handler: CommandHandler) => leafCommands.set(name, handler);
+  const registerLeaf = registrarFrom((name, handler) => leafCommands.set(name, handler));
   registerTicketSyncCommands(registerLeaf);
   registerKanbanCommands(registerLeaf, {
     conditionalManifestSnapshot: async (
@@ -152,8 +153,10 @@ async function setup(
     nodeCoordination: { ticketSync },
   } as unknown as CommandContext;
   const commands = new Map<string, CommandHandler>();
-  registerCoordinatorNodeCommands((name, handler) => commands.set(name, handler));
-  registerCoordinatorNodeTicketCommands((name, handler) => commands.set(name, handler));
+  registerCoordinatorNodeCommands(registrarFrom((name, handler) => commands.set(name, handler)));
+  registerCoordinatorNodeTicketCommands(
+    registrarFrom((name, handler) => commands.set(name, handler)),
+  );
   const run = (name: string, args: Record<string, unknown>) =>
     commands.get(name)!(args, context) as Promise<Record<string, unknown>>;
   const ticketOnNode = (action: string, input: Record<string, unknown>) =>

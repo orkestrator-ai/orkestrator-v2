@@ -12,7 +12,8 @@ import {
   LOCAL_COORDINATOR_MAIL_ADDRESS,
 } from "@orkestrator/protocol/coordinator";
 import { McpServer } from "@modelcontextprotocol/server";
-import { z } from "zod";
+import { Schema } from "effect";
+import { int, refine, str, toolInput, withDefault } from "./tool-schema.js";
 import type { StorageService } from "./storage.js";
 
 export type AgentMessagingToolScope = {
@@ -195,10 +196,10 @@ const WORKER_CAPABILITY_HINT =
 function messagingScopeFields(resolver: AgentMessagingScopeResolver | undefined) {
   return {
     ...(resolver?.kind === "broker"
-      ? { resultKey: z.string().min(1), capability: z.string().min(1) }
+      ? { resultKey: str({ min: 1 }), capability: str({ min: 1 }) }
       : {}),
     ...(resolver?.kind === "worker-capability"
-      ? { mailCapability: z.string().min(1).max(2_048).optional() }
+      ? { mailCapability: Schema.optionalKey(str({ min: 1, max: 2_048 })) }
       : {}),
   };
 }
@@ -236,13 +237,15 @@ export function registerAgentMessagingTools(
     {
       title: "List agent mailboxes",
       description: describe("Discover and cache addressable tabs."),
-      inputSchema: z.object({
-        ...scopeFields,
-        tabId: z.string().trim().min(1).max(256).optional(),
-        q: z.string().trim().max(200).optional(),
-        offset: z.number().int().min(0).default(0),
-        limit: z.number().int().min(1).max(200).default(100),
-      }),
+      inputSchema: toolInput(
+        Schema.Struct({
+          ...scopeFields,
+          tabId: Schema.optionalKey(str({ trim: true, min: 1, max: 256 })),
+          q: Schema.optionalKey(str({ trim: true, max: 200 })),
+          offset: withDefault(int({ min: 0 }), 0),
+          limit: withDefault(int({ min: 1, max: 200 }), 100),
+        }),
+      ),
       annotations: {
         readOnlyHint: true,
         destructiveHint: false,
@@ -299,22 +302,23 @@ export function registerAgentMessagingTools(
       description: describe(
         `Durably send bounded Markdown text to one other tab. Idle delivery can start a turn that edits files; use a stable requestId when retrying. To reach your project coordinator set toEnvironmentId to "${COORDINATOR_MAIL_ADDRESS}" and omit toTabId: it reaches the coordinator that most recently launched, delegated to or messaged this environment, on this machine or on a command node; on a machine controlled by a command node, with no such contact, it reaches the command node's coordinator. The result names which. Only when the user asks for the coordinator on this machine, set toEnvironmentId to "${LOCAL_COORDINATOR_MAIL_ADDRESS}"; only when they ask for the command node's while another coordinator is working with you, set it to "${COMMAND_NODE_COORDINATOR_MAIL_ADDRESS}". To answer a specific message use reply_message, which always goes back to that message's sender. For an environment with one agent tab, toTabId may be omitted. Subagents share their parent tab's mailbox, so this cannot reach the session that launched you.`,
       ),
-      inputSchema: z.object({
-        ...scopeFields,
-        requestId: z.string().trim().min(1).max(256),
-        fromTabId: z.string().trim().min(1).max(256).optional(),
-        toEnvironmentId: z.string().trim().min(1).max(256),
-        toTabId: z.string().trim().min(1).max(256).optional(),
-        subject: z.string().trim().max(200).optional(),
-        body: z
-          .string()
-          .min(1)
-          .refine(
-            (value) => Buffer.byteLength(value, "utf8") <= AGENT_MAIL_MAX_BODY_BYTES,
-            "body must be at most 32 KiB UTF-8",
+      inputSchema: toolInput(
+        Schema.Struct({
+          ...scopeFields,
+          requestId: str({ trim: true, min: 1, max: 256 }),
+          fromTabId: Schema.optionalKey(str({ trim: true, min: 1, max: 256 })),
+          toEnvironmentId: str({ trim: true, min: 1, max: 256 }),
+          toTabId: Schema.optionalKey(str({ trim: true, min: 1, max: 256 })),
+          subject: Schema.optionalKey(str({ trim: true, max: 200 })),
+          body: str({ min: 1 }).check(
+            refine(
+              (value) => Buffer.byteLength(value, "utf8") <= AGENT_MAIL_MAX_BODY_BYTES,
+              "body must be at most 32 KiB UTF-8",
+            ),
           ),
-        replyToMessageId: z.string().trim().min(1).max(256).optional(),
-      }),
+          replyToMessageId: Schema.optionalKey(str({ trim: true, min: 1, max: 256 })),
+        }),
+      ),
       annotations: {
         readOnlyHint: false,
         destructiveHint: true,
@@ -411,13 +415,15 @@ export function registerAgentMessagingTools(
     {
       title: "Check agent inbox",
       description: describe("List metadata without bodies or acknowledgement."),
-      inputSchema: z.object({
-        ...scopeFields,
-        tabId: z.string().trim().min(1).max(256).optional(),
-        unreadOnly: z.boolean().default(true),
-        offset: z.number().int().min(0).default(0),
-        limit: z.number().int().min(1).max(200).default(100),
-      }),
+      inputSchema: toolInput(
+        Schema.Struct({
+          ...scopeFields,
+          tabId: Schema.optionalKey(str({ trim: true, min: 1, max: 256 })),
+          unreadOnly: withDefault(Schema.Boolean, true),
+          offset: withDefault(int({ min: 0 }), 0),
+          limit: withDefault(int({ min: 1, max: 200 }), 100),
+        }),
+      ),
       annotations: {
         readOnlyHint: true,
         destructiveHint: false,
@@ -449,11 +455,13 @@ export function registerAgentMessagingTools(
     {
       title: "Read an agent message",
       description: describe("Read one message body without acknowledging it."),
-      inputSchema: z.object({
-        ...scopeFields,
-        tabId: z.string().trim().min(1).max(256).optional(),
-        messageId: z.string().trim().min(1).max(256),
-      }),
+      inputSchema: toolInput(
+        Schema.Struct({
+          ...scopeFields,
+          tabId: Schema.optionalKey(str({ trim: true, min: 1, max: 256 })),
+          messageId: str({ trim: true, min: 1, max: 256 }),
+        }),
+      ),
       annotations: {
         readOnlyHint: true,
         destructiveHint: false,
@@ -495,11 +503,13 @@ export function registerAgentMessagingTools(
       description: describe(
         "Explicitly acknowledge one received message separately from the human seen receipt.",
       ),
-      inputSchema: z.object({
-        ...scopeFields,
-        tabId: z.string().trim().min(1).max(256).optional(),
-        messageId: z.string().trim().min(1).max(256),
-      }),
+      inputSchema: toolInput(
+        Schema.Struct({
+          ...scopeFields,
+          tabId: Schema.optionalKey(str({ trim: true, min: 1, max: 256 })),
+          messageId: str({ trim: true, min: 1, max: 256 }),
+        }),
+      ),
       annotations: {
         readOnlyHint: false,
         destructiveHint: false,
@@ -539,20 +549,21 @@ export function registerAgentMessagingTools(
       description: describe(
         "Reply to one inbound message; the backend derives the sender and destination.",
       ),
-      inputSchema: z.object({
-        ...scopeFields,
-        requestId: z.string().trim().min(1).max(256),
-        fromTabId: z.string().trim().min(1).max(256).optional(),
-        messageId: z.string().trim().min(1).max(256),
-        subject: z.string().trim().max(200).optional(),
-        body: z
-          .string()
-          .min(1)
-          .refine(
-            (value) => Buffer.byteLength(value, "utf8") <= AGENT_MAIL_MAX_BODY_BYTES,
-            "body must be at most 32 KiB UTF-8",
+      inputSchema: toolInput(
+        Schema.Struct({
+          ...scopeFields,
+          requestId: str({ trim: true, min: 1, max: 256 }),
+          fromTabId: Schema.optionalKey(str({ trim: true, min: 1, max: 256 })),
+          messageId: str({ trim: true, min: 1, max: 256 }),
+          subject: Schema.optionalKey(str({ trim: true, max: 200 })),
+          body: str({ min: 1 }).check(
+            refine(
+              (value) => Buffer.byteLength(value, "utf8") <= AGENT_MAIL_MAX_BODY_BYTES,
+              "body must be at most 32 KiB UTF-8",
+            ),
           ),
-      }),
+        }),
+      ),
       annotations: {
         readOnlyHint: false,
         destructiveHint: true,
@@ -616,11 +627,13 @@ export function registerAgentMessagingTools(
       description: describe(
         "Read placement and both receipt states for one message sent by this tab.",
       ),
-      inputSchema: z.object({
-        ...scopeFields,
-        fromTabId: z.string().trim().min(1).max(256).optional(),
-        messageId: z.string().trim().min(1).max(256),
-      }),
+      inputSchema: toolInput(
+        Schema.Struct({
+          ...scopeFields,
+          fromTabId: Schema.optionalKey(str({ trim: true, min: 1, max: 256 })),
+          messageId: str({ trim: true, min: 1, max: 256 }),
+        }),
+      ),
       annotations: {
         readOnlyHint: true,
         destructiveHint: false,

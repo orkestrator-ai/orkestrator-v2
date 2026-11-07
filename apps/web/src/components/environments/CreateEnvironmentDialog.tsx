@@ -61,7 +61,7 @@ import {
   resizeCanvasToMaxDimension,
 } from "@/lib/canvas-utils";
 import { createUuid } from "@/lib/uuid";
-import { pickHostPath } from "@/lib/host-path-picker";
+import { usePickHostPath } from "@/lib/host-path-picker";
 import { getPastedImageBlob } from "@/lib/clipboard-event";
 import { toast } from "sonner";
 import type {
@@ -101,12 +101,7 @@ import {
 } from "@/lib/feature-build-launch";
 import { buildPipelineConfiguredDefaults } from "@/lib/build-launch-options";
 import type { CreateFeatureBuildInput } from "@orkestrator/protocol/feature-build";
-import {
-  getCachedOpenCodeModelCatalog,
-  getWorktreeLocations,
-  ensureHostPiModelCatalog,
-  type CachedOpenCodeModel,
-} from "@/lib/backend";
+import type { CachedOpenCodeModel } from "@/lib/backend";
 import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 import {
   firstEnabledAgentPlatform,
@@ -119,7 +114,9 @@ import {
   openCodeModelProviderId,
 } from "@orkestrator/protocol/native-agent";
 import { syncCachedAcpModels, useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 const log = createLogger("web.environment");
 
@@ -274,6 +271,9 @@ export function CreateEnvironmentDialog({
   defaultPortMappings = EMPTY_PORT_MAPPINGS,
   localEnvironmentAvailable = true,
 }: CreateEnvironmentDialogProps) {
+  const nodeBackend = useScopeBackend();
+  // Browses the host of the node this component renders in.
+  const pickHostPath = usePickHostPath();
   const federation = useFederation();
   const dockerAvailable = useDockerAvailability();
   const config = useConfigStore((state) => state.config);
@@ -310,6 +310,8 @@ export function CreateEnvironmentDialog({
       : !localEnvironmentAvailable && configEnvironmentType === "local" && dockerAvailable
         ? "containerized"
         : configEnvironmentType;
+  // The node whose catalogue this dialog reads and seeds (plan item 3003).
+  const catalogScope = useNodeScope();
   const claudeModels = useAgentModelCatalogStore((state) => state.claudeModels);
   const codexModels = useAgentModelCatalogStore((state) => state.codexModels);
   const cursorModels = useAgentModelCatalogStore((state) => state.cursorModels);
@@ -330,14 +332,15 @@ export function CreateEnvironmentDialog({
       return;
     }
     piCatalogSeedAttemptedRef.current = true;
-    void ensureHostPiModelCatalog()
+    void nodeBackend
+      .ensureHostPiModelCatalog()
       .then((models) => {
-        if (Array.isArray(models) && models.length > 0) syncCachedAcpModels(models);
+        if (Array.isArray(models) && models.length > 0) syncCachedAcpModels(catalogScope, models);
       })
       .catch((error) => {
         log.warn("models.pi-seed-failed", { error: formatLogError(error) });
       });
-  }, [enabledAgentPlatforms, open, piModels.length]);
+  }, [catalogScope, enabledAgentPlatforms, open, piModels.length, nodeBackend]);
   const {
     favorites: favoriteModels,
     toggleFavorite: toggleFavoriteModel,
@@ -379,7 +382,13 @@ export function CreateEnvironmentDialog({
    */
   const hasAvailableOpenCodeModels = cachedOpenCodeModels.length > 0;
   const modelCatalog = useMemo(() => {
-    const baseCatalog = buildReviewModelCatalog();
+    const baseCatalog = buildReviewModelCatalog({
+      claudeModels,
+      codexModels,
+      cursorModels,
+      grokModels,
+      piModels,
+    });
     const catalog =
       cachedOpenCodeModels.length > 0
         ? {
@@ -445,11 +454,6 @@ export function CreateEnvironmentDialog({
         normalizeOpenCodeModelProviders(config.global.openCodeModelProviders),
       ),
     };
-    // buildReviewModelCatalog reads the Claude/Codex/Cursor/Grok/Pi stores through
-    // getState(), which does not subscribe. These selectors are the subscription:
-    // the rule sees them as unused because the body never names them, but dropping
-    // them freezes the catalog at whatever was loaded on first render.
-    // oxlint-disable-next-line react-hooks/exhaustive-deps
   }, [
     claudeModels,
     cachedOpenCodeModels,
@@ -673,7 +677,8 @@ export function CreateEnvironmentDialog({
 
     const normalizedProjectId = projectId?.trim();
     if (normalizedProjectId) {
-      void getCachedOpenCodeModelCatalog(normalizedProjectId)
+      void nodeBackend
+        .getCachedOpenCodeModelCatalog(normalizedProjectId)
         .then((snapshot) => {
           const models = normalizeCachedOpenCodeModels(snapshot?.models);
           if (!cancelled && snapshot && snapshot.projectId === normalizedProjectId && models) {
@@ -688,7 +693,7 @@ export function CreateEnvironmentDialog({
     return () => {
       cancelled = true;
     };
-  }, [open, projectId]);
+  }, [open, projectId, nodeBackend]);
 
   // Restore drafts only for a new dialog/project, never for navigation changes.
   useEffect(() => {
@@ -716,7 +721,8 @@ export function CreateEnvironmentDialog({
   const handleChooseWorktreeLocation = useCallback(async () => {
     let defaultPath = worktreeBaseDir ?? undefined;
     if (!defaultPath) {
-      defaultPath = await getWorktreeLocations()
+      defaultPath = await nodeBackend
+        .getWorktreeLocations()
         .then((locations) => locations.environments.effective)
         .catch(() => undefined);
     }
@@ -726,7 +732,7 @@ export function CreateEnvironmentDialog({
       defaultPath,
     });
     if (chosen) setWorktreeBaseDir(chosen);
-  }, [worktreeBaseDir]);
+  }, [pickHostPath, worktreeBaseDir, nodeBackend]);
 
   const resetForm = useCallback(() => {
     promptPasteRequestIdRef.current += 1;

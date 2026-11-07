@@ -1,15 +1,18 @@
 import { useState } from "react";
-import { useUIStore } from "@/stores/uiStore";
-import { useFilesPanelStore } from "@/stores/filesPanelStore";
+import { uiStore } from "@/stores/uiStore";
+import { filesPanelStore } from "@/stores/filesPanelStore";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { captureLogs, type LogCapture } from "@orkestrator/protocol/testing/log-capture";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { KanbanTask } from "@/stores/kanbanStore";
 import type { ClipboardImage } from "@/lib/native/clipboard";
 import {
   mockToastError as toastErrorMock,
   mockToastSuccess as toastSuccessMock,
 } from "../../mocks/sonner";
+import { setFilesPanelTestState } from "@/test/files-panel-state";
+import { useFilesPanelChromeStore } from "@/stores/filesPanelChromeStore";
 
 type KanbanTaskUpdates = Partial<
   Pick<
@@ -100,6 +103,7 @@ const deleteImageMock = mock(async (_taskId: string, _imageId: string) => {});
 import * as realUseBuildPipeline from "@/hooks/useBuildPipeline";
 import * as realBackend from "@/lib/backend";
 import * as realClipboard from "@/lib/native/clipboard";
+import { appCommandStore } from "../../../apps/web/src/test/app-command-store";
 const realUseBuildPipelineSnapshot = { ...realUseBuildPipeline };
 const realBackendSnapshot = { ...realBackend };
 const realClipboardSnapshot = { ...realClipboard };
@@ -130,15 +134,15 @@ mock.module("@/lib/native/clipboard", () => ({
 }));
 
 const { KanbanTaskDialog } = await import("@/components/kanban/KanbanTaskDialog");
-const { useKanbanStore } = await import("@/stores/kanbanStore");
-const { useEnvironmentStore } = await import("@/stores/environmentStore");
-const { useBuildPipelineStore } = await import("@/stores/buildPipelineStore");
-const { useConfigStore } = await import("@/stores/configStore");
-const { useProjectStore } = await import("@/stores/projectStore");
+const { kanbanStore } = await import("@/stores/kanbanStore");
+const { environmentStore } = await import("@/stores/environmentStore");
+const { buildPipelineStore } = await import("@/stores/buildPipelineStore");
+const { configStore } = await import("@/stores/configStore");
+const { projectStore } = await import("@/stores/projectStore");
 const { buildPipelineFixture } = await import("@/test/build-pipeline-fixture");
-const initialKanbanState = useKanbanStore.getState();
-const initialEnvironmentState = useEnvironmentStore.getState();
-const initialConfig = useConfigStore.getState().config;
+const initialKanbanState = appCommandStore(kanbanStore).getState();
+const initialEnvironmentState = appCommandStore(environmentStore).getState();
+const initialConfig = appCommandStore(configStore).getState().config;
 const originalGetContext = HTMLCanvasElement.prototype.getContext;
 const originalToDataURL = HTMLCanvasElement.prototype.toDataURL;
 const originalReadAsDataURL = FileReader.prototype.readAsDataURL;
@@ -258,7 +262,7 @@ function deferred<T>() {
 }
 
 function installKanbanActionMocks() {
-  useKanbanStore.setState({
+  appCommandStore(kanbanStore).setState({
     tasks: [],
     isLoading: false,
     currentProjectId: null,
@@ -281,22 +285,22 @@ function installKanbanActionMocks() {
 }
 
 function resetStores() {
-  useKanbanStore.setState({
+  appCommandStore(kanbanStore).setState({
     ...initialKanbanState,
     tasks: [],
     notes: "",
     currentProjectId: null,
     currentNotesProjectId: null,
   });
-  useEnvironmentStore.setState({
+  appCommandStore(environmentStore).setState({
     ...initialEnvironmentState,
     environments: [],
     deletingEnvironments: new Set(),
   });
   // The build launcher reads its defaults and its model catalog from these, so
   // a test that seeds them must not leak into the next one.
-  useConfigStore.setState({ config: initialConfig });
-  useProjectStore.setState({
+  appCommandStore(configStore).setState({ config: initialConfig });
+  appCommandStore(projectStore).setState({
     projects: [
       {
         id: "project-1",
@@ -308,7 +312,7 @@ function resetStores() {
       },
     ],
   });
-  useBuildPipelineStore.setState({
+  appCommandStore(buildPipelineStore).setState({
     pipelines: new Map(),
     buildEnvironmentIds: new Set(),
   });
@@ -412,10 +416,10 @@ describe("KanbanTaskDialog", () => {
   });
 
   test("ticket Markdown opens the pane and dismisses the full dialog", async () => {
-    const ui = useUIStore.getState();
-    const panel = useFilesPanelStore.getState();
-    useUIStore.setState({ selectedEnvironmentId: "env-pr" });
-    useFilesPanelStore.setState({ isOpen: false, pullRequestTabs: {} });
+    const ui = appCommandStore(uiStore).getState();
+    const panel = appCommandStore(filesPanelStore).getState();
+    appCommandStore(uiStore).setState({ selectedEnvironmentId: "env-pr" });
+    setFilesPanelTestState({ isOpen: false, pullRequestTabs: {} });
     function Ticket() {
       const [open, setOpen] = useState(true);
       return (
@@ -427,24 +431,26 @@ describe("KanbanTaskDialog", () => {
       );
     }
     try {
-      render(<Ticket />);
+      renderInAppCommandScope(<Ticket />);
       fireEvent.click(screen.getByRole("link", { name: "Review PR" }));
       await waitFor(() => expect(screen.queryByRole("dialog") === null).toBe(true));
-      expect(useFilesPanelStore.getState().isOpen).toBe(true);
-      expect(useFilesPanelStore.getState().pullRequestTabs["env-pr"]?.[0]?.ref.number).toBe(42);
+      expect(useFilesPanelChromeStore.getState().isOpen).toBe(true);
+      expect(
+        appCommandStore(filesPanelStore).getState().pullRequestTabs["env-pr"]?.[0]?.ref.number,
+      ).toBe(42);
       expect(openInBrowserMock).not.toHaveBeenCalled();
     } finally {
       cleanup();
-      useUIStore.setState(ui);
-      useFilesPanelStore.setState(panel);
+      appCommandStore(uiStore).setState(ui);
+      appCommandStore(filesPanelStore).setState(panel);
     }
   });
 
   test("ticket comment opens the pane and dismisses the full dialog", async () => {
-    const ui = useUIStore.getState();
-    const panel = useFilesPanelStore.getState();
-    useUIStore.setState({ selectedEnvironmentId: "env-pr" });
-    useFilesPanelStore.setState({ isOpen: false, pullRequestTabs: {} });
+    const ui = appCommandStore(uiStore).getState();
+    const panel = appCommandStore(filesPanelStore).getState();
+    appCommandStore(uiStore).setState({ selectedEnvironmentId: "env-pr" });
+    setFilesPanelTestState({ isOpen: false, pullRequestTabs: {} });
     function Ticket() {
       const [open, setOpen] = useState(true);
       return (
@@ -464,28 +470,30 @@ describe("KanbanTaskDialog", () => {
       );
     }
     try {
-      render(<Ticket />);
+      renderInAppCommandScope(<Ticket />);
       fireEvent.click(screen.getByRole("button", { name: "https://github.com/o/r/pull/42" }));
       await waitFor(() => expect(screen.queryByRole("dialog") === null).toBe(true));
-      expect(useFilesPanelStore.getState().isOpen).toBe(true);
-      expect(useFilesPanelStore.getState().pullRequestTabs["env-pr"]?.[0]?.ref.number).toBe(42);
+      expect(useFilesPanelChromeStore.getState().isOpen).toBe(true);
+      expect(
+        appCommandStore(filesPanelStore).getState().pullRequestTabs["env-pr"]?.[0]?.ref.number,
+      ).toBe(42);
       expect(openInBrowserMock).not.toHaveBeenCalled();
     } finally {
       cleanup();
-      useUIStore.setState(ui);
-      useFilesPanelStore.setState(panel);
+      appCommandStore(uiStore).setState(ui);
+      appCommandStore(filesPanelStore).setState(panel);
     }
   });
 
   test("editing comment PR links open externally and preserve the unsaved draft", async () => {
-    const ui = useUIStore.getState();
-    const panel = useFilesPanelStore.getState();
-    useUIStore.setState({ selectedEnvironmentId: "env-pr" });
-    useFilesPanelStore.setState({ isOpen: false, pullRequestTabs: {} });
+    const ui = appCommandStore(uiStore).getState();
+    const panel = appCommandStore(filesPanelStore).getState();
+    appCommandStore(uiStore).setState({ selectedEnvironmentId: "env-pr" });
+    setFilesPanelTestState({ isOpen: false, pullRequestTabs: {} });
     const onOpenChange = mock(() => {});
     const url = "https://github.com/o/r/pull/42";
     try {
-      render(
+      renderInAppCommandScope(
         <KanbanTaskDialog
           task={makeTask({
             comments: [{ id: "pr", text: url, createdAt: "2026-01-01T00:00:00Z" }],
@@ -500,7 +508,7 @@ describe("KanbanTaskDialog", () => {
       });
       fireEvent.click(screen.getByRole("button", { name: url }));
       await waitFor(() => expect(openInBrowserMock).toHaveBeenCalledWith(url));
-      expect(useFilesPanelStore.getState().isOpen).toBe(false);
+      expect(useFilesPanelChromeStore.getState().isOpen).toBe(false);
       expect((screen.getByLabelText("Ticket text") as HTMLTextAreaElement).value).toBe(
         "Unsaved draft",
       );
@@ -508,13 +516,13 @@ describe("KanbanTaskDialog", () => {
       expect(onOpenChange).not.toHaveBeenCalled();
     } finally {
       cleanup();
-      useUIStore.setState(ui);
-      useFilesPanelStore.setState(panel);
+      appCommandStore(uiStore).setState(ui);
+      appCommandStore(filesPanelStore).setState(panel);
     }
   });
 
   test("create mode renders an sr-only dialog description", () => {
-    render(
+    renderInAppCommandScope(
       <KanbanTaskDialog task={null} open onOpenChange={() => {}} createForProjectId="project-1" />,
     );
 
@@ -528,7 +536,7 @@ describe("KanbanTaskDialog", () => {
   });
 
   test("edit mode renders an sr-only dialog description", () => {
-    render(<KanbanTaskDialog task={makeTask()} open onOpenChange={() => {}} />);
+    renderInAppCommandScope(<KanbanTaskDialog task={makeTask()} open onOpenChange={() => {}} />);
 
     const description = screen.getByText(
       "View and edit task details, build actions, images, and comments.",
@@ -545,7 +553,7 @@ describe("KanbanTaskDialog", () => {
       ),
     });
 
-    render(<KanbanTaskDialog task={longTask} open onOpenChange={() => {}} />);
+    renderInAppCommandScope(<KanbanTaskDialog task={longTask} open onOpenChange={() => {}} />);
 
     const dialog = screen.getByRole("dialog");
     expect(dialog.className).toContain("max-h-[85vh]");
@@ -570,7 +578,7 @@ describe("KanbanTaskDialog", () => {
       (_, i) => `Draft acceptance ${i + 1}`,
     ).join("\n");
 
-    render(
+    renderInAppCommandScope(
       <KanbanTaskDialog task={null} open onOpenChange={() => {}} createForProjectId="project-1" />,
     );
 
@@ -619,7 +627,7 @@ describe("KanbanTaskDialog", () => {
       updatedAt: "2026-01-02T00:00:00.000Z",
     });
 
-    render(
+    renderInAppCommandScope(
       <KanbanTaskDialog task={null} open onOpenChange={() => {}} createForProjectId="project-1" />,
     );
 
@@ -652,7 +660,7 @@ describe("KanbanTaskDialog", () => {
       updatedAt: "2026-01-02T00:00:00.000Z",
     });
 
-    render(
+    renderInAppCommandScope(
       <KanbanTaskDialog task={null} open onOpenChange={() => {}} createForProjectId="project-1" />,
     );
 
@@ -663,7 +671,7 @@ describe("KanbanTaskDialog", () => {
 
   test("reports rejected create-task draft hydration without breaking input", async () => {
     getComposeDraftMock.mockRejectedValueOnce(new Error("draft storage unavailable"));
-    render(
+    renderInAppCommandScope(
       <KanbanTaskDialog task={null} open onOpenChange={() => {}} createForProjectId="project-1" />,
     );
 
@@ -689,7 +697,7 @@ describe("KanbanTaskDialog", () => {
   });
 
   test("persists create-task edits after the debounce", async () => {
-    render(
+    renderInAppCommandScope(
       <KanbanTaskDialog task={null} open onOpenChange={() => {}} createForProjectId="project-1" />,
     );
     await waitFor(() => expect(getComposeDraftMock).toHaveBeenCalled());
@@ -715,7 +723,7 @@ describe("KanbanTaskDialog", () => {
   });
 
   test("deletes the persisted draft after the create form is cleared", async () => {
-    render(
+    renderInAppCommandScope(
       <KanbanTaskDialog task={null} open onOpenChange={() => {}} createForProjectId="project-1" />,
     );
     await waitFor(() => expect(getComposeDraftMock).toHaveBeenCalled());
@@ -733,7 +741,7 @@ describe("KanbanTaskDialog", () => {
 
   test("reports rejected debounced persistence and explicit discard", async () => {
     saveComposeDraftMock.mockRejectedValueOnce(new Error("save rejected"));
-    render(
+    renderInAppCommandScope(
       <KanbanTaskDialog task={null} open onOpenChange={() => {}} createForProjectId="project-1" />,
     );
     await waitFor(() => expect(getComposeDraftMock).toHaveBeenCalled());
@@ -778,7 +786,7 @@ describe("KanbanTaskDialog", () => {
   test("keeps typing entered while create-draft hydration is pending", async () => {
     const snapshot = deferred<Awaited<ReturnType<typeof realBackend.getComposeDraft>>>();
     getComposeDraftMock.mockImplementationOnce(() => snapshot.promise);
-    render(
+    renderInAppCommandScope(
       <KanbanTaskDialog task={null} open onOpenChange={() => {}} createForProjectId="project-1" />,
     );
 
@@ -807,7 +815,7 @@ describe("KanbanTaskDialog", () => {
   });
 
   test("flushes a create-task edit when the dialog unmounts before debounce", async () => {
-    const view = render(
+    const view = renderInAppCommandScope(
       <KanbanTaskDialog task={null} open onOpenChange={() => {}} createForProjectId="project-1" />,
     );
     await waitFor(() => expect(getComposeDraftMock).toHaveBeenCalled());
@@ -830,7 +838,7 @@ describe("KanbanTaskDialog", () => {
 
   test("keeps the create-task draft when task creation fails", async () => {
     addTaskMock.mockResolvedValueOnce(undefined);
-    render(
+    renderInAppCommandScope(
       <KanbanTaskDialog task={null} open onOpenChange={() => {}} createForProjectId="project-1" />,
     );
 
@@ -859,7 +867,7 @@ describe("KanbanTaskDialog", () => {
   test("create mode saves a new task and acceptance criteria", async () => {
     const onOpenChange = mock(() => {});
 
-    render(
+    renderInAppCommandScope(
       <KanbanTaskDialog
         task={null}
         open
@@ -890,7 +898,7 @@ describe("KanbanTaskDialog", () => {
   });
 
   test("edit mode shows the ticket as section tiles with criteria ticks", () => {
-    render(
+    renderInAppCommandScope(
       <KanbanTaskDialog
         task={makeTask({
           kind: "work-brief",
@@ -964,7 +972,7 @@ describe("KanbanTaskDialog", () => {
       ]);
 
     test("a ticket with no policy shows the default and can set one", async () => {
-      render(<KanbanTaskDialog task={makeTask()} open onOpenChange={() => {}} />);
+      renderInAppCommandScope(<KanbanTaskDialog task={makeTask()} open onOpenChange={() => {}} />);
       expect(select().value).toBe("open-pr");
       expect(Array.from(select().options).map((option) => option.text)).toEqual([
         "Open a PR, don't merge",
@@ -981,7 +989,7 @@ describe("KanbanTaskDialog", () => {
     });
 
     test("changing the policy keeps the delivery note", async () => {
-      render(
+      renderInAppCommandScope(
         <KanbanTaskDialog
           task={makeTask({
             description: "Text\n\n## Delivery\n\nPolicy: open-pr\n\nMail me.",
@@ -1002,7 +1010,7 @@ describe("KanbanTaskDialog", () => {
     });
 
     test("commit-only shows as the current selection only on a ticket that has it", () => {
-      render(
+      renderInAppCommandScope(
         <KanbanTaskDialog
           task={makeTask({
             description: "Text\n\n## Delivery\n\nPolicy: commit-only",
@@ -1017,12 +1025,12 @@ describe("KanbanTaskDialog", () => {
     });
 
     test("says so when the change comes too late for the running build", () => {
-      useBuildPipelineStore.setState({
+      appCommandStore(buildPipelineStore).setState({
         pipelines: pipelineWith({
           delivery: { policy: "open-pr", decidedAt: "2026-11-02T00:00:00.000Z" },
         }),
       });
-      render(
+      renderInAppCommandScope(
         <KanbanTaskDialog
           task={makeTask({
             buildPipelineId: "pipeline-1",
@@ -1040,8 +1048,10 @@ describe("KanbanTaskDialog", () => {
     });
 
     test("says nothing while the build still follows the ticket", () => {
-      useBuildPipelineStore.setState({ pipelines: pipelineWith({ phase: "building" }) });
-      render(
+      appCommandStore(buildPipelineStore).setState({
+        pipelines: pipelineWith({ phase: "building" }),
+      });
+      renderInAppCommandScope(
         <KanbanTaskDialog
           task={makeTask({
             buildPipelineId: "pipeline-1",
@@ -1057,7 +1067,7 @@ describe("KanbanTaskDialog", () => {
   });
 
   test("a legacy ticket without sections still shows its text as tiles", () => {
-    render(<KanbanTaskDialog task={makeTask()} open onOpenChange={() => {}} />);
+    renderInAppCommandScope(<KanbanTaskDialog task={makeTask()} open onOpenChange={() => {}} />);
     expect(screen.getByTestId("ticket-kind").textContent).toBe("Feature ticket");
     expect(screen.getByTestId("ticket-tile-summary").textContent).toContain("A description");
     expect(screen.getByTestId("ticket-tile-acceptanceCriteria").textContent).toContain(
@@ -1066,7 +1076,7 @@ describe("KanbanTaskDialog", () => {
   });
 
   test("a legacy ticket opened in the editor and saved untouched sends nothing", async () => {
-    render(
+    renderInAppCommandScope(
       <KanbanTaskDialog
         task={makeTask({
           description: "**Problem:** loops.\n\n## Background\n\nSeen on mobile.",
@@ -1095,7 +1105,7 @@ describe("KanbanTaskDialog", () => {
   });
 
   test("edit opens one markdown editor and saves only what changed", async () => {
-    render(<KanbanTaskDialog task={makeTask()} open onOpenChange={() => {}} />);
+    renderInAppCommandScope(<KanbanTaskDialog task={makeTask()} open onOpenChange={() => {}} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     const editor = screen.getByLabelText("Ticket text") as HTMLTextAreaElement;
@@ -1127,7 +1137,7 @@ describe("KanbanTaskDialog", () => {
 
   test("a failed save keeps the editor open with the edit", async () => {
     updateTaskContentMock.mockImplementation(async () => false);
-    render(<KanbanTaskDialog task={makeTask()} open onOpenChange={() => {}} />);
+    renderInAppCommandScope(<KanbanTaskDialog task={makeTask()} open onOpenChange={() => {}} />);
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     fireEvent.change(screen.getByLabelText("Ticket text"), { target: { value: "Kept" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
@@ -1136,7 +1146,7 @@ describe("KanbanTaskDialog", () => {
   });
 
   test("edit mode cancel discards title and text edits", () => {
-    render(
+    renderInAppCommandScope(
       <KanbanTaskDialog
         task={makeTask({ description: "", acceptanceCriteria: "" })}
         open
@@ -1161,7 +1171,7 @@ describe("KanbanTaskDialog", () => {
   });
 
   test("saving an untouched template sends nothing", async () => {
-    render(
+    renderInAppCommandScope(
       <KanbanTaskDialog
         task={makeTask({ description: "", acceptanceCriteria: "" })}
         open
@@ -1175,7 +1185,7 @@ describe("KanbanTaskDialog", () => {
   });
 
   test("pressing Enter in the create title submits the task", async () => {
-    render(
+    renderInAppCommandScope(
       <KanbanTaskDialog task={null} open onOpenChange={() => {}} createForProjectId="project-1" />,
     );
     const title = screen.getByPlaceholderText("Task title...");
@@ -1198,7 +1208,7 @@ describe("KanbanTaskDialog", () => {
       ],
     });
 
-    render(<KanbanTaskDialog task={task} open onOpenChange={() => {}} />);
+    renderInAppCommandScope(<KanbanTaskDialog task={task} open onOpenChange={() => {}} />);
 
     fireEvent.change(screen.getByPlaceholderText("Add a comment..."), {
       target: { value: "  New comment  " },
@@ -1218,7 +1228,7 @@ describe("KanbanTaskDialog", () => {
   });
 
   test("comments ignore whitespace and Shift+Enter does not submit", () => {
-    render(<KanbanTaskDialog task={makeTask()} open onOpenChange={() => {}} />);
+    renderInAppCommandScope(<KanbanTaskDialog task={makeTask()} open onOpenChange={() => {}} />);
     const input = screen.getByPlaceholderText("Add a comment...") as HTMLInputElement;
 
     fireEvent.change(input, { target: { value: "   " } });
@@ -1236,7 +1246,7 @@ describe("KanbanTaskDialog", () => {
   });
 
   test("renders real comment links and opens them through the backend wrapper", () => {
-    render(
+    renderInAppCommandScope(
       <KanbanTaskDialog
         task={makeTask({
           comments: [
@@ -1260,7 +1270,7 @@ describe("KanbanTaskDialog", () => {
   test("loads image thumbnails, opens preview, and deletes images", async () => {
     getKanbanImageDataMock.mockImplementation(async () => "base64-image-data");
 
-    render(
+    renderInAppCommandScope(
       <KanbanTaskDialog
         task={makeTask({
           images: [
@@ -1294,7 +1304,7 @@ describe("KanbanTaskDialog", () => {
 
   test("leaves a missing image in its loading placeholder when hydration fails", async () => {
     getKanbanImageDataMock.mockRejectedValueOnce(new Error("image missing"));
-    render(
+    renderInAppCommandScope(
       <KanbanTaskDialog
         task={makeTask({
           images: [
@@ -1318,7 +1328,7 @@ describe("KanbanTaskDialog", () => {
   test("does not publish a late image hydration after unmount", async () => {
     const image = deferred<string>();
     getKanbanImageDataMock.mockImplementationOnce(() => image.promise);
-    const view = render(
+    const view = renderInAppCommandScope(
       <KanbanTaskDialog
         task={makeTask({
           images: [
@@ -1341,7 +1351,7 @@ describe("KanbanTaskDialog", () => {
   });
 
   test("create mode attaches selected image files and saves them with the new task", async () => {
-    render(
+    renderInAppCommandScope(
       <KanbanTaskDialog task={null} open onOpenChange={() => {}} createForProjectId="project-1" />,
     );
 
@@ -1375,7 +1385,7 @@ describe("KanbanTaskDialog", () => {
   });
 
   test("rejects non-image and oversized attachments", async () => {
-    render(
+    renderInAppCommandScope(
       <KanbanTaskDialog task={null} open onOpenChange={() => {}} createForProjectId="project-1" />,
     );
     const fileInput = document.querySelector<HTMLInputElement>("input[type='file']")!;
@@ -1403,7 +1413,7 @@ describe("KanbanTaskDialog", () => {
     FileReader.prototype.readAsDataURL = function (this: FileReader) {
       this.onerror?.(new ProgressEvent("error") as ProgressEvent<FileReader>);
     } as typeof FileReader.prototype.readAsDataURL;
-    render(
+    renderInAppCommandScope(
       <KanbanTaskDialog task={null} open onOpenChange={() => {}} createForProjectId="project-1" />,
     );
     const fileInput = document.querySelector<HTMLInputElement>("input[type='file']")!;
@@ -1422,7 +1432,7 @@ describe("KanbanTaskDialog", () => {
   });
 
   test("attach control opens the hidden image picker", () => {
-    render(
+    renderInAppCommandScope(
       <KanbanTaskDialog task={null} open onOpenChange={() => {}} createForProjectId="project-1" />,
     );
     const fileInput = document.querySelector<HTMLInputElement>("input[type='file']")!;
@@ -1435,7 +1445,7 @@ describe("KanbanTaskDialog", () => {
   });
 
   test("selected image files attach directly to an existing task", async () => {
-    render(<KanbanTaskDialog task={makeTask()} open onOpenChange={() => {}} />);
+    renderInAppCommandScope(<KanbanTaskDialog task={makeTask()} open onOpenChange={() => {}} />);
     const fileInput = document.querySelector<HTMLInputElement>("input[type='file']")!;
     fireEvent.change(fileInput, {
       target: {
@@ -1451,7 +1461,7 @@ describe("KanbanTaskDialog", () => {
 
   test("reports failed image persistence after creating a task", async () => {
     addImageMock.mockRejectedValueOnce(new Error("disk full"));
-    render(
+    renderInAppCommandScope(
       <KanbanTaskDialog task={null} open onOpenChange={() => {}} createForProjectId="project-1" />,
     );
     fireEvent.change(screen.getByPlaceholderText("Task title..."), {
@@ -1469,7 +1479,7 @@ describe("KanbanTaskDialog", () => {
   });
 
   test("removes a pending image before creating the task", async () => {
-    render(
+    renderInAppCommandScope(
       <KanbanTaskDialog task={null} open onOpenChange={() => {}} createForProjectId="project-1" />,
     );
     const fileInput = document.querySelector<HTMLInputElement>("input[type='file']")!;
@@ -1494,7 +1504,7 @@ describe("KanbanTaskDialog", () => {
 
   test("reports when task creation for a build returns no id", async () => {
     addTaskMock.mockImplementationOnce(async () => "");
-    render(
+    renderInAppCommandScope(
       <KanbanTaskDialog task={null} open onOpenChange={() => {}} createForProjectId="project-1" />,
     );
     fireEvent.change(screen.getByPlaceholderText("Task title..."), {
@@ -1512,11 +1522,11 @@ describe("KanbanTaskDialog", () => {
       title: "Partial build task",
     });
     addTaskMock.mockImplementationOnce(async () => {
-      useKanbanStore.setState({ tasks: [createdTask] });
+      appCommandStore(kanbanStore).setState({ tasks: [createdTask] });
       return createdTask.id;
     });
     updateTaskMock.mockRejectedValueOnce(new Error("storage unavailable"));
-    render(
+    renderInAppCommandScope(
       <KanbanTaskDialog task={null} open onOpenChange={() => {}} createForProjectId="project-1" />,
     );
     fireEvent.change(screen.getByPlaceholderText("Task title..."), {
@@ -1545,7 +1555,7 @@ describe("KanbanTaskDialog", () => {
   });
 
   test("reports when a newly created task cannot be found for building", async () => {
-    render(
+    renderInAppCommandScope(
       <KanbanTaskDialog task={null} open onOpenChange={() => {}} createForProjectId="project-1" />,
     );
     fireEvent.change(screen.getByPlaceholderText("Task title..."), {
@@ -1564,10 +1574,10 @@ describe("KanbanTaskDialog", () => {
       title: "Created build task",
     });
     addTaskMock.mockImplementationOnce(async () => {
-      useKanbanStore.setState({ tasks: [createdTask] });
+      appCommandStore(kanbanStore).setState({ tasks: [createdTask] });
       return createdTask.id;
     });
-    render(
+    renderInAppCommandScope(
       <KanbanTaskDialog task={null} open onOpenChange={() => {}} createForProjectId="project-1" />,
     );
     fireEvent.change(screen.getByPlaceholderText("Task title..."), {
@@ -1594,11 +1604,11 @@ describe("KanbanTaskDialog", () => {
       title: "Build with missing image",
     });
     addTaskMock.mockImplementationOnce(async () => {
-      useKanbanStore.setState({ tasks: [createdTask] });
+      appCommandStore(kanbanStore).setState({ tasks: [createdTask] });
       return createdTask.id;
     });
     addImageMock.mockRejectedValueOnce(new Error("disk full"));
-    render(
+    renderInAppCommandScope(
       <KanbanTaskDialog task={null} open onOpenChange={() => {}} createForProjectId="project-1" />,
     );
     fireEvent.change(screen.getByPlaceholderText("Task title..."), {
@@ -1633,11 +1643,11 @@ describe("KanbanTaskDialog", () => {
     const onOpenChange = mock(() => {});
     const createdTask = makeTask({ id: "task-created", title: "Retry build" });
     addTaskMock.mockImplementationOnce(async () => {
-      useKanbanStore.setState({ tasks: [createdTask] });
+      appCommandStore(kanbanStore).setState({ tasks: [createdTask] });
       return createdTask.id;
     });
     startBuildMock.mockResolvedValueOnce(undefined).mockResolvedValueOnce("pipeline-retry");
-    render(
+    renderInAppCommandScope(
       <KanbanTaskDialog
         task={null}
         open
@@ -1666,10 +1676,10 @@ describe("KanbanTaskDialog", () => {
       title: "Mixed harness build",
     });
     addTaskMock.mockImplementationOnce(async () => {
-      useKanbanStore.setState({ tasks: [createdTask] });
+      appCommandStore(kanbanStore).setState({ tasks: [createdTask] });
       return createdTask.id;
     });
-    render(
+    renderInAppCommandScope(
       <KanbanTaskDialog task={null} open onOpenChange={() => {}} createForProjectId="project-1" />,
     );
     fireEvent.change(screen.getByPlaceholderText("Task title..."), {
@@ -1698,7 +1708,7 @@ describe("KanbanTaskDialog", () => {
       throw new Error("kanban store unavailable");
     });
 
-    render(
+    renderInAppCommandScope(
       <KanbanTaskDialog task={null} open onOpenChange={() => {}} createForProjectId="project-1" />,
     );
     fireEvent.change(screen.getByPlaceholderText("Task title..."), {
@@ -1729,7 +1739,7 @@ describe("KanbanTaskDialog", () => {
       size: async () => ({ width: 1, height: 1 }),
     }));
 
-    render(
+    renderInAppCommandScope(
       <KanbanTaskDialog task={null} open onOpenChange={() => {}} createForProjectId="project-1" />,
     );
 
@@ -1765,7 +1775,7 @@ describe("KanbanTaskDialog", () => {
       rgba: async () => new Uint8Array([255, 0, 0, 255]),
       size: async () => ({ width: 1, height: 1 }),
     }));
-    render(
+    renderInAppCommandScope(
       <KanbanTaskDialog task={null} open onOpenChange={() => {}} createForProjectId="project-1" />,
     );
     const pasteEvent = new Event("paste", { bubbles: true, cancelable: true });
@@ -1790,7 +1800,7 @@ describe("KanbanTaskDialog", () => {
       rgba: async () => new Uint8Array([255, 0, 0, 255]),
       size: async () => ({ width: 1, height: 1 }),
     }));
-    render(
+    renderInAppCommandScope(
       <KanbanTaskDialog task={null} open onOpenChange={() => {}} createForProjectId="project-1" />,
     );
     const outside = document.createElement("button");
@@ -1812,7 +1822,7 @@ describe("KanbanTaskDialog", () => {
     }));
     HTMLCanvasElement.prototype.getContext = (() =>
       null) as unknown as typeof HTMLCanvasElement.prototype.getContext;
-    render(
+    renderInAppCommandScope(
       <KanbanTaskDialog task={null} open onOpenChange={() => {}} createForProjectId="project-1" />,
     );
     document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
@@ -1827,7 +1837,7 @@ describe("KanbanTaskDialog", () => {
     })) as unknown as typeof HTMLCanvasElement.prototype.getContext;
     HTMLCanvasElement.prototype.toDataURL = (() =>
       "data:image/png;base64,") as typeof HTMLCanvasElement.prototype.toDataURL;
-    render(
+    renderInAppCommandScope(
       <KanbanTaskDialog task={null} open onOpenChange={() => {}} createForProjectId="project-1" />,
     );
     document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
@@ -1843,7 +1853,7 @@ describe("KanbanTaskDialog", () => {
     }));
     HTMLCanvasElement.prototype.toDataURL = (() =>
       `data:image/png;base64,${"A".repeat(7 * 1024 * 1024)}`) as typeof HTMLCanvasElement.prototype.toDataURL;
-    render(
+    renderInAppCommandScope(
       <KanbanTaskDialog task={null} open onOpenChange={() => {}} createForProjectId="project-1" />,
     );
 
@@ -1860,7 +1870,7 @@ describe("KanbanTaskDialog", () => {
       rgba: async () => new Uint8Array([255, 0, 0, 255]),
       size: async () => ({ width: 1, height: 1 }),
     }));
-    render(<KanbanTaskDialog task={makeTask()} open onOpenChange={() => {}} />);
+    renderInAppCommandScope(<KanbanTaskDialog task={makeTask()} open onOpenChange={() => {}} />);
 
     document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
 
@@ -1878,7 +1888,7 @@ describe("KanbanTaskDialog", () => {
     const onOpenChange = mock(() => {});
     const task = makeTask();
 
-    render(<KanbanTaskDialog task={task} open onOpenChange={onOpenChange} />);
+    renderInAppCommandScope(<KanbanTaskDialog task={task} open onOpenChange={onOpenChange} />);
 
     launchBuild("Container");
 
@@ -1901,7 +1911,7 @@ describe("KanbanTaskDialog", () => {
     const onOpenChange = mock(() => {});
     const task = makeTask();
     startBuildMock.mockResolvedValueOnce(undefined).mockResolvedValueOnce("pipeline-retry");
-    render(<KanbanTaskDialog task={task} open onOpenChange={onOpenChange} />);
+    renderInAppCommandScope(<KanbanTaskDialog task={task} open onOpenChange={onOpenChange} />);
 
     launchBuild("Local");
     await waitFor(() => expect(startBuildMock).toHaveBeenCalledTimes(1));
@@ -1916,7 +1926,7 @@ describe("KanbanTaskDialog", () => {
   test("existing environment build actions require confirmation before starting", async () => {
     const task = makeTask({ environmentId: "env-1" });
 
-    render(<KanbanTaskDialog task={task} open onOpenChange={() => {}} />);
+    renderInAppCommandScope(<KanbanTaskDialog task={task} open onOpenChange={() => {}} />);
 
     launchBuild("Container");
     expect(startBuildMock).not.toHaveBeenCalled();
@@ -1957,7 +1967,7 @@ describe("KanbanTaskDialog", () => {
   test("cancelling the existing-environment confirmation starts no build", async () => {
     const task = makeTask({ environmentId: "env-1" });
 
-    render(<KanbanTaskDialog task={task} open onOpenChange={() => {}} />);
+    renderInAppCommandScope(<KanbanTaskDialog task={task} open onOpenChange={() => {}} />);
 
     launchBuild("Container");
     expect(screen.getByText("Environment Already Exists")).toBeTruthy();
@@ -1973,7 +1983,7 @@ describe("KanbanTaskDialog", () => {
   });
 
   test("the launcher reopens on the default agent after being cancelled", () => {
-    render(<KanbanTaskDialog task={makeTask()} open onOpenChange={() => {}} />);
+    renderInAppCommandScope(<KanbanTaskDialog task={makeTask()} open onOpenChange={() => {}} />);
 
     openLauncher();
     const defaultModelLabel = launcherPicker("Build").textContent;
@@ -1989,7 +1999,7 @@ describe("KanbanTaskDialog", () => {
     const pending = deferred<string | undefined>();
     startBuildMock.mockImplementationOnce(() => pending.promise);
 
-    render(<KanbanTaskDialog task={makeTask()} open onOpenChange={() => {}} />);
+    renderInAppCommandScope(<KanbanTaskDialog task={makeTask()} open onOpenChange={() => {}} />);
 
     launchBuild("Container");
 
@@ -2007,7 +2017,7 @@ describe("KanbanTaskDialog", () => {
       throw new Error("bridge exploded");
     });
 
-    render(<KanbanTaskDialog task={makeTask()} open onOpenChange={() => {}} />);
+    renderInAppCommandScope(<KanbanTaskDialog task={makeTask()} open onOpenChange={() => {}} />);
 
     launchBuild("Container");
 
@@ -2024,31 +2034,35 @@ describe("KanbanTaskDialog", () => {
   });
 
   test("an unfinished pipeline for the task blocks launching another build", () => {
-    useBuildPipelineStore.getState().replacePipeline(
-      buildPipelineFixture({
-        id: "pipeline-active",
-        taskId: "task-1",
-        projectId: "project-1",
-        phase: "building",
-      }),
-    );
+    appCommandStore(buildPipelineStore)
+      .getState()
+      .replacePipeline(
+        buildPipelineFixture({
+          id: "pipeline-active",
+          taskId: "task-1",
+          projectId: "project-1",
+          phase: "building",
+        }),
+      );
 
-    render(<KanbanTaskDialog task={makeTask()} open onOpenChange={() => {}} />);
+    renderInAppCommandScope(<KanbanTaskDialog task={makeTask()} open onOpenChange={() => {}} />);
     expect(buildButton().disabled).toBe(true);
 
     cleanup();
     // A pipeline that already finished is not an active build.
-    useBuildPipelineStore.getState().replacePipeline(
-      buildPipelineFixture({
-        id: "pipeline-active",
-        taskId: "task-1",
-        projectId: "project-1",
-        phase: "complete",
-        backendRevision: 2,
-      }),
-    );
+    appCommandStore(buildPipelineStore)
+      .getState()
+      .replacePipeline(
+        buildPipelineFixture({
+          id: "pipeline-active",
+          taskId: "task-1",
+          projectId: "project-1",
+          phase: "complete",
+          backendRevision: 2,
+        }),
+      );
 
-    render(<KanbanTaskDialog task={makeTask()} open onOpenChange={() => {}} />);
+    renderInAppCommandScope(<KanbanTaskDialog task={makeTask()} open onOpenChange={() => {}} />);
     expect(buildButton().disabled).toBe(false);
   });
 
@@ -2061,7 +2075,7 @@ describe("KanbanTaskDialog", () => {
       models: [{ id: "openrouter/zeta", name: "Zeta", provider: "OpenRouter", variants: [] }],
     });
 
-    render(
+    renderInAppCommandScope(
       <KanbanTaskDialog task={makeTask({ environmentId: "env-1" })} open onOpenChange={() => {}} />,
     );
 
@@ -2090,7 +2104,7 @@ describe("KanbanTaskDialog", () => {
         },
       ],
     });
-    render(
+    renderInAppCommandScope(
       <KanbanTaskDialog task={makeTask({ environmentId: "env-1" })} open onOpenChange={() => {}} />,
     );
 
@@ -2100,7 +2114,7 @@ describe("KanbanTaskDialog", () => {
   });
 
   test("the launcher opens on the repository and project defaults", async () => {
-    useConfigStore.setState({
+    appCommandStore(configStore).setState({
       config: {
         ...initialConfig,
         global: {
@@ -2126,7 +2140,7 @@ describe("KanbanTaskDialog", () => {
         },
       },
     });
-    useProjectStore.setState({
+    appCommandStore(projectStore).setState({
       projects: [
         {
           id: "project-1",
@@ -2139,7 +2153,7 @@ describe("KanbanTaskDialog", () => {
       ],
     });
 
-    render(<KanbanTaskDialog task={makeTask()} open onOpenChange={() => {}} />);
+    renderInAppCommandScope(<KanbanTaskDialog task={makeTask()} open onOpenChange={() => {}} />);
     openLauncher();
 
     // A project with a local path defaults to a worktree, not a container.
@@ -2166,7 +2180,7 @@ describe("KanbanTaskDialog", () => {
     // launcher's failure path is an early return from inside the try block.
     // Only the finally clause can put the buttons back.
     addTaskMock.mockImplementationOnce(async () => "");
-    render(
+    renderInAppCommandScope(
       <KanbanTaskDialog task={null} open onOpenChange={() => {}} createForProjectId="project-1" />,
     );
     fireEvent.change(screen.getByPlaceholderText("Task title..."), {
@@ -2186,7 +2200,7 @@ describe("KanbanTaskDialog", () => {
   test("view build navigates to the linked environment and closes the dialog", () => {
     const onOpenChange = mock(() => {});
     const task = makeTask({ environmentId: "env-1" });
-    render(<KanbanTaskDialog task={task} open onOpenChange={onOpenChange} />);
+    renderInAppCommandScope(<KanbanTaskDialog task={task} open onOpenChange={onOpenChange} />);
 
     fireEvent.click(screen.getByRole("button", { name: /View Build/ }));
 
@@ -2197,7 +2211,9 @@ describe("KanbanTaskDialog", () => {
   test("delete task control removes the task and closes the dialog", () => {
     const onOpenChange = mock(() => {});
 
-    render(<KanbanTaskDialog task={makeTask()} open onOpenChange={onOpenChange} />);
+    renderInAppCommandScope(
+      <KanbanTaskDialog task={makeTask()} open onOpenChange={onOpenChange} />,
+    );
 
     const deleteButton = screen.getByRole("dialog").querySelector("button");
     expect(deleteButton).toBeTruthy();
@@ -2208,7 +2224,7 @@ describe("KanbanTaskDialog", () => {
   });
 
   test("renders nothing when closed in edit mode with no task", () => {
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <KanbanTaskDialog task={null} open={false} onOpenChange={() => {}} />,
     );
 

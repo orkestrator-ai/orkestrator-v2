@@ -1,12 +1,14 @@
-import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import type { StateCreator } from "zustand/vanilla";
 import {
   gitHubPullRequestKey,
   isGitHubPullRequestRef,
   type GitHubPullRequestRef,
   type GitHubPullRequestViewTab,
 } from "@orkestrator/protocol/github-pull-requests";
-import { desktopConnectionStorageKey } from "@/lib/desktop-storage-key";
+import { nodeStorageKey } from "@/lib/persistence-keys";
+import { defineScopedStore } from "@/lib/node-scope/scoped-store";
+import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
 import type { FilesPanelPullRequestTab } from "./filesPanelStore";
 
 const MAX_TABS_PER_PROJECT = 10;
@@ -18,7 +20,7 @@ export interface ProjectPullRequestTabs {
   activeKey: string | null;
 }
 
-interface ProjectPullRequestsState {
+export interface ProjectPullRequestsState {
   projects: Record<string, ProjectPullRequestTabs>;
   openPullRequest: (
     projectId: string,
@@ -82,88 +84,115 @@ function sanitize(value: unknown): Record<string, ProjectPullRequestTabs> {
   return result;
 }
 
-/** Pull requests opened as tabs on a project's "Pull requests" page. */
-export const useProjectPullRequestsStore = create<ProjectPullRequestsState>()(
-  persist(
-    (set) => ({
-      projects: {},
-      openPullRequest: (projectId, ref, view = "summary") =>
-        set((state) => {
-          const current = state.projects[projectId] ?? EMPTY;
-          const key = gitHubPullRequestKey(ref);
-          const existing = current.tabs.find((tab) => tab.key === key);
-          const opened: FilesPanelPullRequestTab = existing
-            ? { ...existing, view, openRequest: existing.openRequest + 1 }
-            : {
-                key,
-                ref: { owner: ref.owner, repo: ref.repo, number: ref.number },
-                view,
-                openRequest: 0,
-              };
-          let tabs = existing
-            ? current.tabs.map((tab) => (tab.key === key ? opened : tab))
-            : [...current.tabs, opened];
-          if (tabs.length > MAX_TABS_PER_PROJECT) tabs = tabs.slice(1);
-          return { projects: withProject(state.projects, projectId, { tabs, activeKey: key }) };
-        }),
-      closePullRequest: (projectId, key) =>
-        set((state) => {
-          const current = state.projects[projectId];
-          if (!current) return {};
-          const index = current.tabs.findIndex((tab) => tab.key === key);
-          if (index < 0) return {};
-          const tabs = current.tabs.filter((tab) => tab.key !== key);
-          const activeKey =
-            current.activeKey === key
-              ? (tabs[Math.min(index, tabs.length - 1)]?.key ?? null)
-              : current.activeKey;
-          return { projects: withProject(state.projects, projectId, { tabs, activeKey }) };
-        }),
-      setActive: (projectId, key) =>
-        set((state) => {
-          const current = state.projects[projectId] ?? EMPTY;
-          if (key !== null && !current.tabs.some((tab) => tab.key === key)) return {};
-          if (current.activeKey === key) return {};
-          return {
-            projects: withProject(state.projects, projectId, { ...current, activeKey: key }),
-          };
-        }),
-      updateTab: (projectId, key, summary) =>
-        set((state) => {
-          const current = state.projects[projectId];
-          const tab = current?.tabs.find((candidate) => candidate.key === key);
-          if (
-            !current ||
-            !tab ||
-            (tab.title === summary.title &&
-              tab.state === summary.state &&
-              tab.isDraft === summary.isDraft)
-          ) {
-            return {};
-          }
-          return {
-            projects: {
-              ...state.projects,
-              [projectId]: {
-                ...current,
-                tabs: current.tabs.map((candidate) =>
-                  candidate.key === key ? { ...candidate, ...summary } : candidate,
-                ),
+/** Applies a node's stored tabs to `current`, sanitized and bounded. */
+export function mergePersistedProjectPullRequests(
+  persisted: unknown,
+  current: ProjectPullRequestsState,
+): ProjectPullRequestsState {
+  return {
+    ...current,
+    projects: sanitize((persisted as { projects?: unknown } | undefined)?.projects),
+  };
+}
+
+/**
+ * Pull requests opened as tabs on a project's "Pull requests" page, per node
+ * (plan item 3007): project ids and pull request keys are the node's, so each
+ * node keeps its own under its key (`nodeStorageKey("project-pull-requests", scope)`).
+ */
+export const projectPullRequestsStore = defineScopedStore<ProjectPullRequestsState>(
+  "project-pull-requests",
+  (scope) => {
+    const creator: StateCreator<
+      ProjectPullRequestsState,
+      [],
+      [["zustand/persist", Pick<ProjectPullRequestsState, "projects">]]
+    > = persist(
+      (set) => ({
+        projects: {},
+        openPullRequest: (projectId, ref, view = "summary") =>
+          set((state) => {
+            const current = state.projects[projectId] ?? EMPTY;
+            const key = gitHubPullRequestKey(ref);
+            const existing = current.tabs.find((tab) => tab.key === key);
+            const opened: FilesPanelPullRequestTab = existing
+              ? { ...existing, view, openRequest: existing.openRequest + 1 }
+              : {
+                  key,
+                  ref: { owner: ref.owner, repo: ref.repo, number: ref.number },
+                  view,
+                  openRequest: 0,
+                };
+            let tabs = existing
+              ? current.tabs.map((tab) => (tab.key === key ? opened : tab))
+              : [...current.tabs, opened];
+            if (tabs.length > MAX_TABS_PER_PROJECT) tabs = tabs.slice(1);
+            return { projects: withProject(state.projects, projectId, { tabs, activeKey: key }) };
+          }),
+        closePullRequest: (projectId, key) =>
+          set((state) => {
+            const current = state.projects[projectId];
+            if (!current) return {};
+            const index = current.tabs.findIndex((tab) => tab.key === key);
+            if (index < 0) return {};
+            const tabs = current.tabs.filter((tab) => tab.key !== key);
+            const activeKey =
+              current.activeKey === key
+                ? (tabs[Math.min(index, tabs.length - 1)]?.key ?? null)
+                : current.activeKey;
+            return { projects: withProject(state.projects, projectId, { tabs, activeKey }) };
+          }),
+        setActive: (projectId, key) =>
+          set((state) => {
+            const current = state.projects[projectId] ?? EMPTY;
+            if (key !== null && !current.tabs.some((tab) => tab.key === key)) return {};
+            if (current.activeKey === key) return {};
+            return {
+              projects: withProject(state.projects, projectId, { ...current, activeKey: key }),
+            };
+          }),
+        updateTab: (projectId, key, summary) =>
+          set((state) => {
+            const current = state.projects[projectId];
+            const tab = current?.tabs.find((candidate) => candidate.key === key);
+            if (
+              !current ||
+              !tab ||
+              (tab.title === summary.title &&
+                tab.state === summary.state &&
+                tab.isDraft === summary.isDraft)
+            ) {
+              return {};
+            }
+            return {
+              projects: {
+                ...state.projects,
+                [projectId]: {
+                  ...current,
+                  tabs: current.tabs.map((candidate) =>
+                    candidate.key === key ? { ...candidate, ...summary } : candidate,
+                  ),
+                },
               },
-            },
-          };
-        }),
-    }),
-    {
-      name: desktopConnectionStorageKey("project-pull-requests"),
-      partialize: (state) => ({ projects: state.projects }),
-      merge: (persisted, current) => ({
-        ...current,
-        projects: sanitize((persisted as { projects?: unknown } | undefined)?.projects),
+            };
+          }),
       }),
-    },
-  ),
+      {
+        name: nodeStorageKey("project-pull-requests", scope),
+        partialize: (state) => ({ projects: state.projects }),
+        merge: mergePersistedProjectPullRequests,
+      },
+    );
+    // `persist` adds its `persist` API to the store; nothing here reads it.
+    return creator as StateCreator<ProjectPullRequestsState>;
+  },
 );
+
+/**
+ * Reads the nearest node scope's project pull request tabs; other code uses
+ * `scope.store(projectPullRequestsStore)`.
+ */
+export const useProjectPullRequestsStore = scopedStoreHook(projectPullRequestsStore);
 
 export function selectProjectPullRequestTabs(
   state: ProjectPullRequestsState,

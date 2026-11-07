@@ -10,7 +10,7 @@ const log = createLogger("desktop");
  * killed from outside (or crashed, or out of memory) turned the whole window
  * white until the app was restarted, while the backend kept serving remote
  * clients. The window already treats a reload as a fresh document (prompts and
- * realms are dropped on navigation, state is reconciled after load), so a
+ * node scopes are dropped on navigation, state is reconciled after load), so a
  * reload is the whole recovery.
  *
  * Bounded: a renderer that dies again straight after loading would otherwise

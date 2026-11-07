@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { Bot, FileQuestion, Info, User } from "lucide-react";
 import {
   WEB_ANNOTATION_COMMANDS,
@@ -40,6 +41,8 @@ function EntryEditor({
   entry: WebAnnotationEntry;
   onDone: () => void;
 }) {
+  // This node's annotations (plan item 4001); the command node outside a node scope.
+  const annotationScope = useScopesWithCommandFallback().scope;
   const { environmentId, announce } = useAnnotationPanel();
   const [text, setText] = useState(entry.body ?? "");
   const [error, setError] = useState<string | null>(null);
@@ -55,30 +58,40 @@ function EntryEditor({
     setError(null);
     try {
       if (mode === "edit") {
-        await webAnnotationCommand(WEB_ANNOTATION_COMMANDS.entryEdit, {
-          environmentId,
-          operationId: newWebAnnotationOperationId("edit"),
-          annotationId: annotation.id,
-          entryId: entry.id,
-          expectedContentRevision: annotation.contentRevision,
-          body: text,
-        });
+        await webAnnotationCommand(
+          WEB_ANNOTATION_COMMANDS.entryEdit,
+          {
+            environmentId,
+            operationId: newWebAnnotationOperationId("edit"),
+            annotationId: annotation.id,
+            entryId: entry.id,
+            expectedContentRevision: annotation.contentRevision,
+            body: text,
+          },
+          undefined,
+          annotationScope,
+        );
       } else {
-        await webAnnotationCommand(WEB_ANNOTATION_COMMANDS.entryAppend, {
-          environmentId,
-          operationId: newWebAnnotationOperationId("reply"),
-          annotationId: annotation.id,
-          expectedContentRevision: annotation.contentRevision,
-          body: text,
-        });
+        await webAnnotationCommand(
+          WEB_ANNOTATION_COMMANDS.entryAppend,
+          {
+            environmentId,
+            operationId: newWebAnnotationOperationId("reply"),
+            annotationId: annotation.id,
+            expectedContentRevision: annotation.contentRevision,
+            body: text,
+          },
+          undefined,
+          annotationScope,
+        );
       }
-      refreshWebAnnotations(environmentId, { annotationIds: [annotation.id] });
+      refreshWebAnnotations(environmentId, { annotationIds: [annotation.id] }, annotationScope);
       announce(mode === "edit" ? "Note updated" : "Reply saved");
       onDone();
     } catch (saveError) {
       if (isWebAnnotationConflict(saveError)) {
         setConflict(true);
-        refreshWebAnnotations(environmentId, { annotationIds: [annotation.id] });
+        refreshWebAnnotations(environmentId, { annotationIds: [annotation.id] }, annotationScope);
       } else {
         const message = describeWebAnnotationError(saveError);
         setError(message);

@@ -4,6 +4,7 @@
  * container id against the environment, and `transcript_artifact_prepare_worker`
  * reports honestly when no preparation is wired.
  */
+import { registrarFrom } from "../commands-registry-contracts.js";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { TRANSCRIPT_ARTIFACT_COMMANDS } from "@orkestrator/protocol/transcript-artifact-commands";
@@ -25,9 +26,9 @@ function reader(name: string, answer: (args: Record<string, unknown>) => unknown
   });
 }
 
-registerTranscriptArtifactCommands((name, handler) => commands.set(name, handler));
+registerTranscriptArtifactCommands(registrarFrom((name, handler) => commands.set(name, handler)));
 registerTranscriptArtifactPdfCommands(
-  (name, handler) => commands.set(name, handler),
+  registrarFrom((name, handler) => commands.set(name, handler)),
   (name) => commands.get(name),
 );
 reader("read_file_base64", () => PDF_BASE64);

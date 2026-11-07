@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { MultiReviewModelSelection } from "@orkestrator/protocol/multi-review";
 import type { AgentModelCatalog } from "@/lib/agent-launch";
-import { useConfigStore } from "@/stores/configStore";
+import { configStore } from "@/stores/configStore";
 import { MultiReviewRestartDialog } from "./MultiReviewRestartDialog";
+import { appCommandStore } from "@/test/app-command-store";
 
 const catalog: AgentModelCatalog = {
   claude: [{ id: "opus", name: "Opus", reasoningEfforts: ["high", "xhigh"] }],
@@ -19,8 +21,8 @@ const catalog: AgentModelCatalog = {
 };
 
 beforeEach(() => {
-  const config = useConfigStore.getState().config;
-  useConfigStore.setState({
+  const config = appCommandStore(configStore).getState().config;
+  appCommandStore(configStore).setState({
     config: { ...config, global: { ...config.global, favoriteModels: [] } },
   });
 });
@@ -29,7 +31,7 @@ afterEach(cleanup);
 describe("MultiReviewRestartDialog", () => {
   test("switching to Pi selects its later session-default row", () => {
     const onSubmit = mock((_selection: MultiReviewModelSelection) => undefined);
-    render(
+    renderInAppCommandScope(
       <MultiReviewRestartDialog
         open
         onOpenChange={() => undefined}
@@ -65,7 +67,7 @@ describe("MultiReviewRestartDialog", () => {
 
   test("selects a different provider, model, and effort for the restart", () => {
     const onSubmit = mock((_selection: MultiReviewModelSelection) => undefined);
-    render(
+    renderInAppCommandScope(
       <MultiReviewRestartDialog
         open
         onOpenChange={() => undefined}
@@ -99,7 +101,7 @@ describe("MultiReviewRestartDialog", () => {
   });
 
   test("shows backend errors without dismissing the dialog", () => {
-    render(
+    renderInAppCommandScope(
       <MultiReviewRestartDialog
         open
         onOpenChange={() => undefined}

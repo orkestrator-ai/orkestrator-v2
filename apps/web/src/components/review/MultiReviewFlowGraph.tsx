@@ -1,5 +1,5 @@
 import { Clock3, GitMerge, GitPullRequest, Wrench, type LucideIcon } from "lucide-react";
-import { useUIStore } from "@/stores/uiStore";
+import { useUIChromeStore } from "@/stores/uiChromeStore";
 import {
   FlowGraph,
   FlowStateIcon,
@@ -101,8 +101,8 @@ export function MultiReviewFlowGraph({
   isActive = true,
 }: MultiReviewFlowGraphProps) {
   // The height dragged with the divider, shared by every Multi Review.
-  const storedHeight = useUIStore((state) => state.multiReviewGraphHeight);
-  const setStoredHeight = useUIStore((state) => state.setMultiReviewGraphHeight);
+  const storedHeight = useUIChromeStore((state) => state.multiReviewGraphHeight);
+  const setStoredHeight = useUIChromeStore((state) => state.setMultiReviewGraphHeight);
   const nodes = [packageNode, ...reviewerNodes, consolidationNode, addressFindingsNode, prNode].map(
     withIdleIcon,
   );

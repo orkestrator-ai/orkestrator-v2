@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { ReactNode } from "react";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import {
   environmentKey,
   environmentRef,
@@ -14,7 +15,7 @@ import type { FederatedEnvironment } from "@/lib/federation/summaries";
 import { portalStore } from "@/lib/portal/portal-store";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
-import { useUIStore } from "@/stores/uiStore";
+import { uiStore, useUIStore } from "@/stores/uiStore";
 import { LeafModeCoordinatorGate } from "@/components/projects/LeafModeCoordinatorGate";
 import {
   SELF_NODE_ID,
@@ -28,6 +29,8 @@ import { MergedProjectList, RemoteMachineSection } from "./FederatedSidebarSecti
 import { RemoteProjectGroup } from "./RemoteMachineTree";
 import { FederationProvider } from "./FederationProvider";
 import { useMachineViews } from "./useMachineViews";
+import { selectOnNode } from "@/test/node-selection";
+import { appCommandStore } from "@/test/app-command-store";
 
 /** A project's header button, found through its "+" button, which names project and machine. */
 function projectHeading(project: string, machine: string): HTMLElement {
@@ -35,7 +38,7 @@ function projectHeading(project: string, machine: string): HTMLElement {
   return add.parentElement!.querySelector("button")!;
 }
 
-const initialUI = useUIStore.getState();
+const initialUI = appCommandStore(uiStore).getState();
 const initialRemote = useRemoteWorkspaceStore.getState();
 const initialMachines = useMachineViewStore.getState();
 const MACHINE_A = remoteConnection("a", "Machine A", "teal");
@@ -50,7 +53,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   uninstallDesktopFake();
-  useUIStore.setState(initialUI, true);
+  appCommandStore(uiStore).setState(initialUI, true);
   useRemoteWorkspaceStore.setState(initialRemote, true);
   useMachineViewStore.setState(initialMachines, true);
 });
@@ -63,7 +66,7 @@ function installTwoMachines() {
 }
 
 function renderWithFederation(node: ReactNode) {
-  return render(<FederationProvider>{node}</FederationProvider>);
+  return renderInAppCommandScope(<FederationProvider>{node}</FederationProvider>);
 }
 
 function RemoteSections() {
@@ -136,7 +139,7 @@ function rowOf(connectionId: string): HTMLElement {
 describe("a project's entry opens on the tab its grouping calls for", () => {
   for (const mode of ["command", "leaf"] as const) {
     test(`a repository heading opens a bound ${mode} node on ${mode === "leaf" ? "Home" : "Coordinator"}`, async () => {
-      const initialUI = useUIStore.getState();
+      const initialUI = appCommandStore(uiStore).getState();
       installDesktopFake({
         list: connectionList([]),
         datasets: {},
@@ -171,7 +174,7 @@ describe("a project's entry opens on the tab its grouping calls for", () => {
         );
       }
       try {
-        useUIStore.setState({ selectedProjectId: null, projectBoardTab: "kanban" });
+        appCommandStore(uiStore).setState({ selectedProjectId: null, projectBoardTab: "kanban" });
         renderWithFederation(
           <>
             <MergedProjectList
@@ -187,14 +190,14 @@ describe("a project's entry opens on the tab its grouping calls for", () => {
         await waitFor(() => expect(portalStore.getState().status?.mode).toBe(mode));
         const heading = screen.getByRole("button", { name: "Open acme/app on Machine A" });
         for (let click = 0; click < 2; click++) {
-          act(() => useUIStore.getState().setProjectBoardTab("kanban"));
+          act(() => appCommandStore(uiStore).getState().setProjectBoardTab("kanban"));
           fireEvent.click(heading);
           await waitFor(() =>
-            expect(useUIStore.getState().projectBoardTab).toBe(
+            expect(appCommandStore(uiStore).getState().projectBoardTab).toBe(
               mode === "leaf" ? "home" : "coordinator",
             ),
           );
-          expect(useUIStore.getState().selectedProjectId).toBe("project-1");
+          expect(appCommandStore(uiStore).getState().selectedProjectId).toBe("project-1");
           expect(
             screen.getByText(mode === "leaf" ? "Project Home" : "Project Coordinator"),
           ).toBeTruthy();
@@ -204,7 +207,7 @@ describe("a project's entry opens on the tab its grouping calls for", () => {
         }
       } finally {
         cleanup();
-        useUIStore.setState(initialUI, true);
+        appCommandStore(uiStore).setState(initialUI, true);
       }
     });
   }
@@ -230,7 +233,7 @@ describe("a project's entry opens on the tab its grouping calls for", () => {
       await waitFor(() => expect(project.getAttribute("aria-current")).toBe("page"));
       const report = (environmentId: string | null) =>
         act(() =>
-          useRemoteWorkspaceStore.getState().noteRealmSelection("bk_a", {
+          selectOnNode("bk_a", {
             projectId: "project-1",
             environmentId,
           }),
@@ -287,7 +290,6 @@ describe("a project's entry opens on the tab its grouping calls for", () => {
       fireEvent.click(projectHeading("app", "Machine A"));
       await waitFor(() =>
         expect(request()).toEqual({
-          type: "select",
           projectId: "project-1",
           ...(coordinator ? { boardTab: "coordinator" } : {}),
         }),
@@ -298,7 +300,6 @@ describe("a project's entry opens on the tab its grouping calls for", () => {
       );
       await waitFor(() =>
         expect(request()).toEqual({
-          type: "select",
           projectId: "project-1",
           environmentId: "env-1",
         }),
@@ -319,7 +320,6 @@ describe("a project's entry opens on the tab its grouping calls for", () => {
         fireEvent.click(repository);
         await waitFor(() =>
           expect(request()).toEqual({
-            type: "select",
             projectId: "project-1",
             boardTab: "coordinator",
           }),
@@ -328,9 +328,9 @@ describe("a project's entry opens on the tab its grouping calls for", () => {
         expect(member.getAttribute("aria-current")).toBeNull();
 
         expect(useMachineViewStore.getState().revealedProject).toBeNull();
-        // The realm can ensure Home before the shell's next summary arrives.
+        // The node can ensure Home before the shell's next summary arrives.
         act(() =>
-          useRemoteWorkspaceStore.getState().noteRealmSelection("bk_a", {
+          selectOnNode("bk_a", {
             projectId: "project-1",
             environmentId: "ensured-home",
             projectHome: true,
@@ -347,14 +347,10 @@ describe("a project's entry opens on the tab its grouping calls for", () => {
         await waitFor(() => expect(member.getAttribute("aria-current")).toBe("page"));
         expect(repository.getAttribute("aria-current")).toBeNull();
 
-        // So does anything else the realm selects.
+        // So does anything else the node selects.
         fireEvent.click(repository);
         await waitFor(() => expect(repository.getAttribute("aria-current")).toBe("page"));
-        act(() =>
-          useRemoteWorkspaceStore
-            .getState()
-            .noteRealmSelection("bk_a", { projectId: "project-1", environmentId: "env-1" }),
-        );
+        act(() => selectOnNode("bk_a", { projectId: "project-1", environmentId: "env-1" }));
         expect(repository.getAttribute("aria-current")).toBeNull();
         expect(member.getAttribute("aria-current")).toBeNull();
       }

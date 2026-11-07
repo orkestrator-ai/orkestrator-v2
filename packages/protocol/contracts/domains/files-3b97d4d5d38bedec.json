@@ -1,0 +1,110 @@
+{
+  "schemaVersion": 1,
+  "domain": "files",
+  "commands": {
+    "check_container_workspace_paths": {
+      "untyped": true,
+      "read": true
+    },
+    "copy_external_file": {
+      "untyped": true,
+      "read": false
+    },
+    "create_container_folder": {
+      "untyped": true,
+      "read": false
+    },
+    "create_local_folder": {
+      "untyped": true,
+      "read": false
+    },
+    "delete_container_annotation_evidence": {
+      "untyped": true,
+      "read": false
+    },
+    "delete_container_file": {
+      "untyped": true,
+      "read": false
+    },
+    "delete_local_file": {
+      "untyped": true,
+      "read": false
+    },
+    "get_file_tree": {
+      "untyped": true,
+      "read": true
+    },
+    "get_local_file_tree": {
+      "untyped": true,
+      "read": true
+    },
+    "get_worktree_snapshot_revisions": {
+      "untyped": true,
+      "read": true
+    },
+    "move_container_file": {
+      "untyped": true,
+      "read": false
+    },
+    "move_local_file": {
+      "untyped": true,
+      "read": false
+    },
+    "read_container_file": {
+      "untyped": true,
+      "read": true
+    },
+    "read_container_file_base64": {
+      "untyped": true,
+      "read": true
+    },
+    "read_environment_file_base64": {
+      "untyped": true,
+      "read": true
+    },
+    "read_file_at_branch": {
+      "untyped": true,
+      "read": true
+    },
+    "read_file_base64": {
+      "untyped": true,
+      "read": true
+    },
+    "read_local_file": {
+      "untyped": true,
+      "read": true
+    },
+    "read_local_file_at_branch": {
+      "untyped": true,
+      "read": true
+    },
+    "rename_container_file": {
+      "untyped": true,
+      "read": false
+    },
+    "rename_local_file": {
+      "untyped": true,
+      "read": false
+    },
+    "revert_container_file": {
+      "untyped": true,
+      "read": false
+    },
+    "revert_local_file": {
+      "untyped": true,
+      "read": false
+    },
+    "write_container_file": {
+      "untyped": true,
+      "read": false
+    },
+    "write_initial_prompt_attachments": {
+      "untyped": true,
+      "read": false
+    },
+    "write_local_file": {
+      "untyped": true,
+      "read": false
+    }
+  }
+}

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type {
   DesignExportPreview,
   DesignExportReceipt,
@@ -8,11 +9,12 @@ import type {
   DesignWorkspaceMeta,
 } from "@orkestrator/protocol/design-operations";
 import { emptyProjection, type DesignIntent, type DesignProjection } from "@/stores/designStore";
-import { useFilesPanelStore } from "@/stores";
+import { filesPanelStore } from "@/stores";
 import type { FileNode } from "@/lib/backend";
 import { DesignClientError } from "@/lib/design-client";
 import type { DesignCanvasController } from "./design-controller";
 import { DesignExportDialog, type DesignExportApi } from "./DesignExportDialog";
+import { appCommandStore } from "@/test/app-command-store";
 
 const environmentId = "env-1";
 const canvasId = "canvas-1";
@@ -96,7 +98,7 @@ const controller = { exportSave, settleEdits, refresh } as unknown as DesignCanv
 
 function renderDialog(current: DesignProjection) {
   const props = { open: true, onOpenChange: () => {}, controller, api };
-  const view = render(<DesignExportDialog {...props} projection={current} />);
+  const view = renderInAppCommandScope(<DesignExportDialog {...props} projection={current} />);
   return {
     ...view,
     update: (next: DesignProjection) =>
@@ -122,7 +124,7 @@ beforeEach(() => {
   exportSave.mockReset();
   settleEdits.mockReset();
   refresh.mockClear();
-  useFilesPanelStore.setState({ fileTree: [] });
+  appCommandStore(filesPanelStore).setState({ fileTree: [] });
 });
 
 afterEach(() => cleanup());
@@ -158,7 +160,7 @@ describe("DesignExportDialog", () => {
   });
 
   test("folder suggestions include valid nested directories and omit files and hidden paths", async () => {
-    useFilesPanelStore.setState({
+    appCommandStore(filesPanelStore).setState({
       fileTree: [
         {
           name: "mocks",
@@ -205,7 +207,7 @@ describe("DesignExportDialog", () => {
   test("retains the committed revision while a new preview loads or fails, but resets on reopen", async () => {
     exportPreview.mockResolvedValue(preview());
     const props = { onOpenChange: () => {}, controller, api, projection: projection() };
-    const view = render(<DesignExportDialog {...props} open />);
+    const view = renderInAppCommandScope(<DesignExportDialog {...props} open />);
     await screen.findByText("Exports committed revision 7.");
     const next = deferred<DesignExportPreview>();
     exportPreview.mockReturnValue(next.promise);
@@ -237,7 +239,7 @@ describe("DesignExportDialog", () => {
     try {
       opener.focus();
       const props = { onOpenChange: () => {}, controller, api, projection: projection() };
-      const view = render(<DesignExportDialog {...props} open />);
+      const view = renderInAppCommandScope(<DesignExportDialog {...props} open />);
       await screen.findByText("Exports committed revision 7.");
       expect(document.activeElement).not.toBe(opener);
       view.rerender(<DesignExportDialog {...props} open={false} />);

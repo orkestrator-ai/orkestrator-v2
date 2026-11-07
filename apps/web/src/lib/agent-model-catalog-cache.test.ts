@@ -2,8 +2,12 @@ import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { invoke } from "@/lib/native/backend";
 import { CODEX_MODELS, type CodexModel } from "@/lib/codex-models";
 import type { ClaudeModel } from "@/lib/claude-types";
-import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
+import type { BackendId } from "@orkestrator/protocol/federation";
+import { WindowScope } from "@/lib/node-scope/window-scope";
+import { FakeNodeClient } from "@/test/render-in-node-scope";
+import { agentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 import { hydrateAgentModelCatalogCache } from "./agent-model-catalog-cache";
+import { appCommandStore } from "@/test/app-command-store";
 
 const invokeMock = invoke as ReturnType<typeof mock>;
 
@@ -17,7 +21,7 @@ function deferred<T>() {
 
 describe("hydrateAgentModelCatalogCache", () => {
   beforeEach(() => {
-    useAgentModelCatalogStore.setState({
+    appCommandStore(agentModelCatalogStore).setState({
       claudeModels: [],
       codexModels: CODEX_MODELS,
       cursorModels: [],
@@ -85,11 +89,11 @@ describe("hydrateAgentModelCatalogCache", () => {
     await hydrateAgentModelCatalogCache();
 
     expect(invokeMock).toHaveBeenCalledWith("get_agent_model_catalog_cache");
-    expect(useAgentModelCatalogStore.getState().claudeModels).toEqual(claudeModels);
-    expect(useAgentModelCatalogStore.getState().codexModels).toEqual(codexModels);
-    expect(useAgentModelCatalogStore.getState().cursorModels).toEqual(cursorModels);
-    expect(useAgentModelCatalogStore.getState().grokModels).toEqual(grokModels);
-    expect(useAgentModelCatalogStore.getState().piModels).toEqual(piModels);
+    expect(appCommandStore(agentModelCatalogStore).getState().claudeModels).toEqual(claudeModels);
+    expect(appCommandStore(agentModelCatalogStore).getState().codexModels).toEqual(codexModels);
+    expect(appCommandStore(agentModelCatalogStore).getState().cursorModels).toEqual(cursorModels);
+    expect(appCommandStore(agentModelCatalogStore).getState().grokModels).toEqual(grokModels);
+    expect(appCommandStore(agentModelCatalogStore).getState().piModels).toEqual(piModels);
   });
 
   test("leaves fallback stores intact when a catalogue is absent", async () => {
@@ -97,11 +101,11 @@ describe("hydrateAgentModelCatalogCache", () => {
 
     await hydrateAgentModelCatalogCache();
 
-    expect(useAgentModelCatalogStore.getState().claudeModels).toEqual([]);
-    expect(useAgentModelCatalogStore.getState().codexModels).toEqual(CODEX_MODELS);
-    expect(useAgentModelCatalogStore.getState().cursorModels).toEqual([]);
-    expect(useAgentModelCatalogStore.getState().grokModels).toEqual([]);
-    expect(useAgentModelCatalogStore.getState().piModels).toEqual([]);
+    expect(appCommandStore(agentModelCatalogStore).getState().claudeModels).toEqual([]);
+    expect(appCommandStore(agentModelCatalogStore).getState().codexModels).toEqual(CODEX_MODELS);
+    expect(appCommandStore(agentModelCatalogStore).getState().cursorModels).toEqual([]);
+    expect(appCommandStore(agentModelCatalogStore).getState().grokModels).toEqual([]);
+    expect(appCommandStore(agentModelCatalogStore).getState().piModels).toEqual([]);
   });
 
   test("hydrates an available agent without disturbing the absent agent", async () => {
@@ -121,8 +125,8 @@ describe("hydrateAgentModelCatalogCache", () => {
 
     await hydrateAgentModelCatalogCache();
 
-    expect(useAgentModelCatalogStore.getState().claudeModels).toEqual(claudeModels);
-    expect(useAgentModelCatalogStore.getState().codexModels).toEqual(CODEX_MODELS);
+    expect(appCommandStore(agentModelCatalogStore).getState().claudeModels).toEqual(claudeModels);
+    expect(appCommandStore(agentModelCatalogStore).getState().codexModels).toEqual(CODEX_MODELS);
   });
 
   test("treats explicit empty catalogues as missing cached data", async () => {
@@ -138,7 +142,7 @@ describe("hydrateAgentModelCatalogCache", () => {
         name: "GPT Existing",
       },
     ];
-    useAgentModelCatalogStore.setState({
+    appCommandStore(agentModelCatalogStore).setState({
       claudeModels: existingClaude,
       codexModels: existingCodex,
     });
@@ -156,19 +160,19 @@ describe("hydrateAgentModelCatalogCache", () => {
 
     await hydrateAgentModelCatalogCache();
 
-    expect(useAgentModelCatalogStore.getState().claudeModels).toBe(existingClaude);
-    expect(useAgentModelCatalogStore.getState().codexModels).toBe(existingCodex);
+    expect(appCommandStore(agentModelCatalogStore).getState().claudeModels).toBe(existingClaude);
+    expect(appCommandStore(agentModelCatalogStore).getState().codexModels).toBe(existingCodex);
   });
 
   test("propagates a backend read failure without changing either store", async () => {
-    const existingClaude = useAgentModelCatalogStore.getState().claudeModels;
-    const existingCodex = useAgentModelCatalogStore.getState().codexModels;
+    const existingClaude = appCommandStore(agentModelCatalogStore).getState().claudeModels;
+    const existingCodex = appCommandStore(agentModelCatalogStore).getState().codexModels;
     invokeMock.mockRejectedValue(new Error("cache unavailable"));
 
     await expect(hydrateAgentModelCatalogCache()).rejects.toThrow("cache unavailable");
 
-    expect(useAgentModelCatalogStore.getState().claudeModels).toBe(existingClaude);
-    expect(useAgentModelCatalogStore.getState().codexModels).toBe(existingCodex);
+    expect(appCommandStore(agentModelCatalogStore).getState().claudeModels).toBe(existingClaude);
+    expect(appCommandStore(agentModelCatalogStore).getState().codexModels).toBe(existingCodex);
   });
 
   test("does not let a late backend read overwrite newer live catalogues", async () => {
@@ -187,9 +191,9 @@ describe("hydrateAgentModelCatalogCache", () => {
     const liveClaude = [{ id: "claude-live", name: "Claude Live" }];
     const liveCodex = [{ id: "gpt-live", name: "GPT Live" }];
     const liveCursor = [{ platform: "cursor" as const, id: "cursor-live", label: "Cursor Live" }];
-    useAgentModelCatalogStore.getState().setClaudeModels(liveClaude);
-    useAgentModelCatalogStore.getState().setCodexModels(liveCodex);
-    useAgentModelCatalogStore.getState().setAcpModels(liveCursor);
+    appCommandStore(agentModelCatalogStore).getState().setClaudeModels(liveClaude);
+    appCommandStore(agentModelCatalogStore).getState().setCodexModels(liveCodex);
+    appCommandStore(agentModelCatalogStore).getState().setAcpModels(liveCursor);
     cacheRead.resolve({
       schemaVersion: 1,
       claude: {
@@ -208,8 +212,49 @@ describe("hydrateAgentModelCatalogCache", () => {
 
     await hydration;
 
-    expect(useAgentModelCatalogStore.getState().claudeModels).toEqual(liveClaude);
-    expect(useAgentModelCatalogStore.getState().codexModels).toEqual(liveCodex);
-    expect(useAgentModelCatalogStore.getState().cursorModels).toEqual(liveCursor);
+    expect(appCommandStore(agentModelCatalogStore).getState().claudeModels).toEqual(liveClaude);
+    expect(appCommandStore(agentModelCatalogStore).getState().codexModels).toEqual(liveCodex);
+    expect(appCommandStore(agentModelCatalogStore).getState().cursorModels).toEqual(liveCursor);
+  });
+});
+
+describe("hydrateAgentModelCatalogCache per node scope (plan item 3003)", () => {
+  test("reads the scope's node and fills only that scope's store", async () => {
+    invokeMock.mockReset();
+    const windowScope = new WindowScope();
+    try {
+      const command = windowScope.open({
+        role: "command",
+        client: new FakeNodeClient({ nodeId: "bk_catalog-a" as BackendId }),
+      });
+      const client = new FakeNodeClient({
+        nodeId: "bk_catalog-b" as BackendId,
+        invoke: {
+          get_agent_model_catalog_cache: {
+            schemaVersion: 1,
+            claude: {
+              updatedAt: "2026-11-07T00:00:00.000Z",
+              models: [{ id: "claude-leaf", name: "Claude Leaf" }],
+            },
+          },
+        },
+      });
+      const leaf = windowScope.open({ role: "leaf", client });
+      const appCommandModels = appCommandStore(agentModelCatalogStore).getState().claudeModels;
+
+      await hydrateAgentModelCatalogCache({ seed: true, scope: leaf });
+
+      expect(client.calls("get_agent_model_catalog_cache")[0]?.args).toEqual({ seed: true });
+      expect(invokeMock).not.toHaveBeenCalled();
+      expect(leaf.store(agentModelCatalogStore).getState().claudeModels).toEqual([
+        { id: "claude-leaf", name: "Claude Leaf" },
+      ]);
+      expect(command.store(agentModelCatalogStore).getState().claudeModels).toEqual([]);
+      expect(appCommandStore(agentModelCatalogStore).getState().claudeModels).toBe(
+        appCommandModels,
+      );
+    } finally {
+      windowScope.dispose();
+    }
   });
 });

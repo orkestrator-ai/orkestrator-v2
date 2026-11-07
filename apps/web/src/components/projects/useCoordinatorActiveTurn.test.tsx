@@ -4,15 +4,16 @@
  */
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { Profiler } from "react";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, screen } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { CoordinatorWorkspace } from "@orkestrator/protocol/coordinator";
 import type { NativeAgentSessionProjection } from "@orkestrator/protocol/native-agent";
 import type { Environment } from "@/types";
 import * as realBackend from "@/lib/backend";
 import { PROJECT_HOME_TURN_LABEL } from "@/lib/coordinator-active-turn";
 import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
-import { useEnvironmentStore } from "@/stores/environmentStore";
-import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
+import { environmentStore } from "@/stores/environmentStore";
+import { nativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 
 const backendSnapshot = { ...realBackend };
 // An older backend: only the projections answer.
@@ -24,6 +25,7 @@ mock.module("@/lib/backend", () => ({
 }));
 
 import { useCoordinatorActiveTurn } from "./useCoordinatorActiveTurn";
+import { appCommandStore } from "@/test/app-command-store";
 
 const workspace = {
   version: 1,
@@ -44,30 +46,32 @@ const home = { id: "home-env", projectId: "project-1", name: "Home" } as Environ
 const other = { id: "other-env", projectId: "project-2", name: "Other" } as Environment;
 
 describe("useCoordinatorActiveTurn", () => {
-  const previousEnvironments = useEnvironmentStore.getState().environments;
+  const previousEnvironments = appCommandStore(environmentStore).getState().environments;
   beforeEach(() => {
     renders = 0;
-    useNativeAgentProjectionStore.getState().reset();
-    useEnvironmentStore.setState({ environments: [home, other] });
-    useNativeAgentProjectionStore.getState().setProjection("home-env:home-tab", {
-      environmentId: "home-env",
-      turn: { phase: "running" },
-      messages: [],
-      interactions: [],
-    } as unknown as NativeAgentSessionProjection);
+    appCommandStore(nativeAgentProjectionStore).getState().reset();
+    appCommandStore(environmentStore).setState({ environments: [home, other] });
+    appCommandStore(nativeAgentProjectionStore)
+      .getState()
+      .setProjection("home-env:home-tab", {
+        environmentId: "home-env",
+        turn: { phase: "running" },
+        messages: [],
+        interactions: [],
+      } as unknown as NativeAgentSessionProjection);
   });
   afterEach(() => {
     cleanup();
     resetReadCoordinatorForTests();
-    useNativeAgentProjectionStore.getState().reset();
-    useEnvironmentStore.setState({ environments: previousEnvironments });
+    appCommandStore(nativeAgentProjectionStore).getState().reset();
+    appCommandStore(environmentStore).setState({ environments: previousEnvironments });
   });
   afterAll(() => {
     mock.module("@/lib/backend", () => backendSnapshot);
   });
 
   test("a write to another environment renders nothing; a new project home is followed", async () => {
-    render(
+    renderInAppCommandScope(
       <Profiler id="probe" onRender={() => (renders += 1)}>
         <Probe />
       </Profiler>,
@@ -81,7 +85,7 @@ describe("useCoordinatorActiveTurn", () => {
 
     for (const status of ["stopped", "running", "stopped"]) {
       act(() =>
-        useEnvironmentStore.setState((state) => ({
+        appCommandStore(environmentStore).setState((state) => ({
           environments: state.environments.map((item) =>
             item.id === other.id ? ({ ...item, status } as Environment) : item,
           ),
@@ -91,7 +95,7 @@ describe("useCoordinatorActiveTurn", () => {
     expect(renders).toBe(settled);
 
     act(() =>
-      useEnvironmentStore.setState((state) => ({
+      appCommandStore(environmentStore).setState((state) => ({
         environments: state.environments.map((item) =>
           item.id === home.id ? { ...item, projectHome: true } : item,
         ),

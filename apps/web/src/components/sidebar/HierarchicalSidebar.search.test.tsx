@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import {
   environmentKey,
   environmentRef,
@@ -12,7 +13,8 @@ import { FederationProvider } from "@/components/federation/FederationProvider";
 import { projectFolderKey } from "@/lib/project-folders";
 import { sidebarFolderKey, useMachineViewStore } from "@/stores/machineViewStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
-import { useEnvironmentStore, useProjectStore, useUIStore } from "@/stores";
+import { environmentStore, projectStore, uiStore } from "@/stores";
+import { useUIChromeStore } from "@/stores/uiChromeStore";
 import {
   SELF_NODE_ID,
   connectionList,
@@ -22,6 +24,7 @@ import {
 } from "@/test/federation-desktop-fake";
 import type { Environment, Project } from "@/types";
 import { HierarchicalSidebar } from "./HierarchicalSidebar";
+import { appCommandStore } from "@/test/app-command-store";
 
 /** A project's header button, found through its "+" button, which names project and machine. */
 async function findProjectHeading(project: string, machine: string): Promise<HTMLElement> {
@@ -32,19 +35,19 @@ async function findProjectHeading(project: string, machine: string): Promise<HTM
 }
 
 const initialView = useMachineViewStore.getState();
-const initialUI = useUIStore.getState();
-const initialProjects = useProjectStore.getState();
-const initialEnvironments = useEnvironmentStore.getState();
+const initialUI = appCommandStore(uiStore).getState();
+const initialProjects = appCommandStore(projectStore).getState();
+const initialEnvironments = appCommandStore(environmentStore).getState();
 const initialRemote = useRemoteWorkspaceStore.getState();
 const key = projectKey(projectRef("bk_mbp3" as BackendId, "tg"));
 const folderKey = sidebarFolderKey("bk_mbp3", projectFolderKey("Scrapers"));
 
 beforeEach(() => {
   if (!HTMLElement.prototype.scrollIntoView) HTMLElement.prototype.scrollIntoView = () => {};
-  useProjectStore.setState({ projects: [], hasLoaded: true });
-  useEnvironmentStore.setState({ environments: [], deletingEnvironments: new Set() });
+  appCommandStore(projectStore).setState({ projects: [], hasLoaded: true });
+  appCommandStore(environmentStore).setState({ environments: [], deletingEnvironments: new Set() });
   useRemoteWorkspaceStore.setState({ active: null });
-  useUIStore.setState({
+  appCommandStore(uiStore).setState({
     selectedProjectId: null,
     selectedEnvironmentId: null,
     recentProjectIds: [],
@@ -55,9 +58,9 @@ afterEach(() => {
   cleanup();
   uninstallDesktopFake();
   useMachineViewStore.setState(initialView, true);
-  useUIStore.setState(initialUI, true);
-  useProjectStore.setState(initialProjects, true);
-  useEnvironmentStore.setState(initialEnvironments, true);
+  appCommandStore(uiStore).setState(initialUI, true);
+  appCommandStore(projectStore).setState(initialProjects, true);
+  appCommandStore(environmentStore).setState(initialEnvironments, true);
   useRemoteWorkspaceStore.setState(initialRemote, true);
 });
 
@@ -90,7 +93,9 @@ for (const { mode, offline } of [
       },
       respondPortal: (command) => (command === "get_projects" ? [] : undefined),
     });
-    useUIStore.setState({ environmentSortMode: mode === "activity" ? "activity" : "project" });
+    useUIChromeStore.setState({
+      environmentSortMode: mode === "activity" ? "activity" : "project",
+    });
     useMachineViewStore.setState({
       grouping: mode === "repository" ? "repository" : "machine",
       machineFilter: SELF_NODE_ID,
@@ -100,7 +105,7 @@ for (const { mode, offline } of [
       revealedProject: null,
       recentKeys: [],
     });
-    render(
+    renderInAppCommandScope(
       <FederationProvider>
         <HierarchicalSidebar />
       </FederationProvider>,
@@ -130,11 +135,11 @@ for (const { mode, offline } of [
     expect(view.collapsedProjectKeys).not.toContain(key);
     expect(view.collapsedFolderKeys).not.toContain(folderKey);
     expect(view.recentKeys[0]).toBe(key);
-    expect(useUIStore.getState().environmentSortMode).toBe("project");
-    expect(useUIStore.getState().selectedProjectId).toBeNull();
-    expect(useUIStore.getState().selectedEnvironmentId).toBeNull();
-    expect(useProjectStore.getState().projects).toEqual([]);
-    expect(useEnvironmentStore.getState().environments).toEqual([]);
+    expect(useUIChromeStore.getState().environmentSortMode).toBe("project");
+    expect(appCommandStore(uiStore).getState().selectedProjectId).toBeNull();
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBeNull();
+    expect(appCommandStore(projectStore).getState().projects).toEqual([]);
+    expect(appCommandStore(environmentStore).getState().environments).toEqual([]);
     expect(useRemoteWorkspaceStore.getState().active).toEqual({
       nodeId: "bk_mbp3",
       projectId: "tg",
@@ -144,10 +149,10 @@ for (const { mode, offline } of [
     expect(request).toBeDefined();
     if (mode === "repository" && !offline) {
       // Repository grouping lands on Home, so it must not send a board tab override.
-      expect(request).toEqual({ type: "select", projectId: "tg" });
+      expect(request).toEqual({ projectId: "tg" });
       expect(request).not.toHaveProperty("boardTab");
     } else {
-      expect(request).toEqual({ type: "select", projectId: "tg", boardTab: "coordinator" });
+      expect(request).toEqual({ projectId: "tg", boardTab: "coordinator" });
     }
   });
 }
@@ -204,9 +209,9 @@ for (const mode of ["machine", "project", "repository", "activity"] as const) {
             ? [localEnvironment]
             : undefined,
     });
-    useProjectStore.setState({ projects: [localProject], hasLoaded: true });
-    useEnvironmentStore.setState({ environments: [localEnvironment] });
-    useUIStore.setState({
+    appCommandStore(projectStore).setState({ projects: [localProject], hasLoaded: true });
+    appCommandStore(environmentStore).setState({ environments: [localEnvironment] });
+    useUIChromeStore.setState({
       environmentSortMode: mode === "activity" ? "activity" : "project",
       activitySortOrder: "oldest",
     });
@@ -222,7 +227,7 @@ for (const mode of ["machine", "project", "repository", "activity"] as const) {
       revealedProject: null,
       recentKeys: [],
     });
-    render(
+    renderInAppCommandScope(
       <FederationProvider>
         <HierarchicalSidebar />
       </FederationProvider>,
@@ -248,7 +253,6 @@ for (const mode of ["machine", "project", "repository", "activity"] as const) {
       environmentId: "run",
     });
     expect(useRemoteWorkspaceStore.getState().requests.bk_mbp3?.request).toEqual({
-      type: "select",
       projectId: "tg",
       environmentId: "run",
     });
@@ -263,14 +267,14 @@ for (const mode of ["machine", "project", "repository", "activity"] as const) {
       environmentKey(environmentRef("bk_mbp3" as BackendId, "run")),
       key,
     ]);
-    expect(useUIStore.getState().environmentSortMode).toBe(
+    expect(useUIChromeStore.getState().environmentSortMode).toBe(
       mode === "activity" ? "activity" : "project",
     );
-    expect(useUIStore.getState().activitySortOrder).toBe("oldest");
-    expect(useUIStore.getState().selectedProjectId).toBeNull();
-    expect(useUIStore.getState().selectedEnvironmentId).toBeNull();
-    expect(useProjectStore.getState().projects).toEqual([localProject]);
-    expect(useEnvironmentStore.getState().environments).toEqual([localEnvironment]);
+    expect(useUIChromeStore.getState().activitySortOrder).toBe("oldest");
+    expect(appCommandStore(uiStore).getState().selectedProjectId).toBeNull();
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBeNull();
+    expect(appCommandStore(projectStore).getState().projects).toEqual([localProject]);
+    expect(appCommandStore(environmentStore).getState().environments).toEqual([localEnvironment]);
     expectDomAbsent(screen.queryByRole("dialog"), "palette after environment selection");
   });
 }

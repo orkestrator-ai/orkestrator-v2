@@ -1,4 +1,3 @@
-import { create } from "zustand";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { FieldError } from "@orkestrator/protocol/field-validation";
 import type { GraphCapabilityCeiling } from "@orkestrator/protocol/graphs/capability-profiles";
@@ -25,16 +24,12 @@ import {
   type GraphTemplateRef as GraphSubgraphRef,
   type GraphTemplateV1,
 } from "@orkestrator/protocol/graphs/template";
-import {
-  compileGraphTemplateInBackend,
-  duplicateGraphTemplate,
-  exportGraphTemplate,
-  getGraphTemplate,
-  importGraphTemplate,
-  listGraphTemplates,
-  saveGraphTemplate,
-  setGraphTemplateTrust,
-} from "@/lib/backend/graph-templates";
+import * as graphTemplates from "@/lib/backend/graph-templates";
+import { backendApiForScope } from "@/lib/backend/client";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { defineScopedStore } from "@/lib/node-scope/scoped-store";
+import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
+import { appCommandScope } from "@/lib/node-scope-slots";
 import {
   acknowledgeGraphWarning,
   graphIdFrom,
@@ -138,7 +133,7 @@ export interface GraphDraftCompileContext {
   ceiling?: GraphCapabilityCeiling;
 }
 
-interface GraphDesignerState {
+export interface GraphDesignerState {
   libraries: Map<string, GraphDesignerLibrary>;
   tabs: Map<string, GraphDesignerTabState>;
   /**
@@ -247,7 +242,7 @@ export function isGraphRevisionConflict(error: unknown): boolean {
 
 /** The backend's compile response as the designer keeps it. */
 function fromBackend(
-  response: Awaited<ReturnType<typeof compileGraphTemplateInBackend>>,
+  response: Awaited<ReturnType<typeof graphTemplates.compileGraphTemplateInBackend>>,
 ): GraphDesignerCompile {
   return {
     source: "backend",
@@ -303,436 +298,461 @@ export function graphDraftDirty(editor: GraphDesignerEditor | null): boolean {
   return editor !== null && (editor.isNew || editor.draft !== editor.saved);
 }
 
-/** Sub-graph reads in flight, by cache key: concurrent compiles share one. */
-const subgraphLoads = new Map<string, Promise<GraphDesignerSubgraphEntry>>();
-/** Each tab's last draft-compile context, to recompile when a child changes. */
-const compileContexts = new Map<string, GraphDraftCompileContext>();
+/** `scope`'s template commands: the suites' mocked named exports on the app's command scope. */
+function graphTemplatesApi(scope: NodeScope) {
+  return backendApiForScope(scope, graphTemplates.createGraphTemplatesApi, {
+    compileGraphTemplateInBackend: graphTemplates.compileGraphTemplateInBackend,
+    duplicateGraphTemplate: graphTemplates.duplicateGraphTemplate,
+    exportGraphTemplate: graphTemplates.exportGraphTemplate,
+    getGraphTemplate: graphTemplates.getGraphTemplate,
+    importGraphTemplate: graphTemplates.importGraphTemplate,
+    listGraphTemplates: graphTemplates.listGraphTemplates,
+    saveGraphTemplate: graphTemplates.saveGraphTemplate,
+    setGraphTemplateTrust: graphTemplates.setGraphTemplateTrust,
+  });
+}
 
-export const useGraphDesignerStore = create<GraphDesignerState>()((set, get) => {
-  const tab = (tabId: string) => get().tabs.get(tabId) ?? EMPTY_TAB;
-  const patchTab = (tabId: string, patch: Partial<GraphDesignerTabState>) =>
-    set((state) => {
-      const tabs = new Map(state.tabs);
-      tabs.set(tabId, { ...(state.tabs.get(tabId) ?? EMPTY_TAB), ...patch });
-      return { tabs };
-    });
-  /** Patches only while `request` is still the tab's latest load. */
-  const patchIfCurrent = (
-    tabId: string,
-    request: number,
-    patch: Partial<GraphDesignerTabState>,
-  ) => {
-    if (tab(tabId).request !== request) return;
-    patchTab(tabId, patch);
-  };
-  const patchEditor = (tabId: string, patch: Partial<GraphDesignerEditor>) => {
-    const editor = tab(tabId).editor;
-    if (editor) patchTab(tabId, { editor: { ...editor, ...patch } });
-  };
+/** Per node: a template library belongs to the node that stores it (plan item 3011). */
+export const graphDesignerStore = defineScopedStore<GraphDesignerState>(
+  "graph-designer",
+  (scope) => (set, get) => {
+    /** Read per call, so a suite's module mock installed later is seen. */
+    const api = () => graphTemplatesApi(scope);
+    /** Sub-graph reads in flight, by cache key: concurrent compiles share one. */
+    const subgraphLoads = new Map<string, Promise<GraphDesignerSubgraphEntry>>();
+    /** Each tab's last draft-compile context, to recompile when a child changes. */
+    const compileContexts = new Map<string, GraphDraftCompileContext>();
+    const tab = (tabId: string) => get().tabs.get(tabId) ?? EMPTY_TAB;
+    const patchTab = (tabId: string, patch: Partial<GraphDesignerTabState>) =>
+      set((state) => {
+        const tabs = new Map(state.tabs);
+        tabs.set(tabId, { ...(state.tabs.get(tabId) ?? EMPTY_TAB), ...patch });
+        return { tabs };
+      });
+    /** Patches only while `request` is still the tab's latest load. */
+    const patchIfCurrent = (
+      tabId: string,
+      request: number,
+      patch: Partial<GraphDesignerTabState>,
+    ) => {
+      if (tab(tabId).request !== request) return;
+      patchTab(tabId, patch);
+    };
+    const patchEditor = (tabId: string, patch: Partial<GraphDesignerEditor>) => {
+      const editor = tab(tabId).editor;
+      if (editor) patchTab(tabId, { editor: { ...editor, ...patch } });
+    };
 
-  /** After a save: the editor continues on the stored template (history kept). */
-  const rebase = (tabId: string, saved: GraphTemplateDetail) => {
-    const editor = tab(tabId).editor;
-    patchTab(tabId, {
-      detail: saved,
-      selected: saved.summary.ref,
-      detailStatus: "ready",
-      detailError: null,
-      editor: {
-        ...freshEditor(saved.template, saved.summary.revision, false),
-        history: editor?.history ?? EMPTY_GRAPH_HISTORY,
-      },
-    });
-  };
-
-  const load = async (tabId: string, ref: GraphTemplateRef, projectId: string | null) => {
-    const request = tab(tabId).request + 1;
-    const sameTemplate =
-      tab(tabId).selected !== null &&
-      graphTemplateRefKey(tab(tabId).selected!) === graphTemplateRefKey(ref);
-    patchTab(tabId, {
-      projectId,
-      selected: ref,
-      request,
-      detailStatus: "loading",
-      detailError: null,
-      compileStatus: "loading",
-      compileError: null,
-      ...(sameTemplate ? {} : { detail: null, compile: null, selection: null, editor: null }),
-    });
-    const input = projectId ? { projectId } : {};
-    const [detail, compiled] = await Promise.allSettled([
-      getGraphTemplate(ref, input),
-      compileGraphTemplateInBackend({ ref }, { ...input, includePlan: true }),
-    ]);
-    patchIfCurrent(
-      tabId,
-      request,
-      detail.status === "fulfilled"
-        ? { detail: detail.value, detailStatus: "ready", detailError: null }
-        : { detail: null, detailStatus: "error", detailError: errorText(detail.reason) },
-    );
-    // A draft being edited keeps its own browser compile.
-    if (tab(tabId).editor) {
-      patchIfCurrent(tabId, request, { compileStatus: "ready", compileError: null });
-      return;
-    }
-    patchIfCurrent(
-      tabId,
-      request,
-      compiled.status === "fulfilled"
-        ? { compile: fromBackend(compiled.value), compileStatus: "ready", compileError: null }
-        : { compileStatus: "error", compileError: errorText(compiled.reason) },
-    );
-  };
-
-  const setSubgraph = (key: string, entry: GraphDesignerSubgraphEntry | null) =>
-    set((state) => {
-      const subgraphTemplates = new Map(state.subgraphTemplates);
-      if (entry) subgraphTemplates.set(key, entry);
-      else subgraphTemplates.delete(key);
-      return { subgraphTemplates };
-    });
-
-  return {
-    libraries: new Map(),
-    tabs: new Map(),
-    subgraphTemplates: new Map(),
-
-    loadSubgraphTemplate: async (projectId, ref) => {
-      const key = graphDesignerSubgraphKey(projectId, ref);
-      const pending = subgraphLoads.get(key);
-      if (pending) return pending;
-      const cached = get().subgraphTemplates.get(key);
-      if (cached?.status === "ready") return cached;
-      const load = (async (): Promise<GraphDesignerSubgraphEntry> => {
-        if (ref.scope === "builtin") {
-          const builtIn = graphBuiltInTemplate(ref.id);
-          return builtIn
-            ? {
-                status: "ready",
-                resolution: { template: builtIn.template },
-                template: builtIn.template,
-              }
-            : { status: "ready", resolution: { missing: "not-found" } };
-        }
-        const summaries = get().libraries.get(graphDesignerLibraryKey(projectId))?.result
-          ?.templates;
-        const libraryRef = graphSubgraphLibraryRef(ref, projectId, summaries ?? []);
-        if ("missing" in libraryRef) {
-          return { status: "ready", resolution: { missing: libraryRef.missing } };
-        }
-        try {
-          const detail = await getGraphTemplate(libraryRef, projectId ? { projectId } : {});
-          return {
-            status: "ready",
-            resolution: graphSubgraphResolutionFor(detail.summary, detail.template),
-            template: detail.template,
-            summary: detail.summary,
-          };
-        } catch {
-          return { status: "ready", resolution: { missing: "not-found" } };
-        }
-      })();
-      subgraphLoads.set(key, load);
-      setSubgraph(key, { status: "loading" });
-      try {
-        const entry = await load;
-        setSubgraph(key, entry);
-        return entry;
-      } finally {
-        subgraphLoads.delete(key);
-      }
-    },
-
-    loadLibrary: async (projectId) => {
-      const key = graphDesignerLibraryKey(projectId);
-      const previous = get().libraries.get(key);
-      const mark = (library: GraphDesignerLibrary) =>
-        set((state) => {
-          const libraries = new Map(state.libraries);
-          libraries.set(key, library);
-          return { libraries };
-        });
-      mark({ status: "loading", result: previous?.result ?? null, error: null });
-      try {
-        const result = await listGraphTemplates(projectId ? { projectId } : {});
-        mark({ status: "ready", result, error: null });
-        // A library read is the moment a child may have changed: drop what
-        // sub-graph compiles read, and recompile the open drafts.
-        const prefix = `${key}|`;
-        const stale = [...get().subgraphTemplates.keys()].filter((entry) =>
-          entry.startsWith(prefix),
-        );
-        if (stale.length > 0) {
-          set((state) => {
-            const subgraphTemplates = new Map(state.subgraphTemplates);
-            for (const entry of stale) subgraphTemplates.delete(entry);
-            return { subgraphTemplates };
-          });
-          for (const [tabId, state] of get().tabs) {
-            const context = compileContexts.get(tabId);
-            if (state.editor && context && graphDesignerLibraryKey(state.projectId) === key) {
-              get().compileDraft(tabId, context);
-            }
-          }
-        }
-      } catch (error) {
-        mark({ status: "error", result: previous?.result ?? null, error: errorText(error) });
-      }
-    },
-
-    openTemplate: (tabId, ref, projectId) => load(tabId, ref, projectId),
-
-    refreshTab: async (tabId) => {
-      const current = tab(tabId);
-      if (!current.selected) return;
-      await load(tabId, current.selected, current.projectId);
-    },
-
-    select: (tabId, selection, focus = false) => {
-      const current = tab(tabId);
+    /** After a save: the editor continues on the stored template (history kept). */
+    const rebase = (tabId: string, saved: GraphTemplateDetail) => {
+      const editor = tab(tabId).editor;
       patchTab(tabId, {
-        selection,
-        ...(focus ? { focusRequest: current.focusRequest + 1 } : {}),
+        detail: saved,
+        selected: saved.summary.ref,
+        detailStatus: "ready",
+        detailError: null,
+        editor: {
+          ...freshEditor(saved.template, saved.summary.revision, false),
+          history: editor?.history ?? EMPTY_GRAPH_HISTORY,
+        },
       });
-    },
+    };
 
-    importTemplate: async (tabId, text, projectId) => {
-      const result = await importGraphTemplate(text, projectId ? { projectId } : {});
-      if (result.ok) {
-        await get().loadLibrary(projectId);
-        await load(tabId, result.detail.summary.ref, projectId);
-      }
-      return result;
-    },
-
-    duplicateTemplate: async (tabId, summary, projectId) => {
-      const detail = await duplicateGraphTemplate(summary.ref, {
-        ...(summary.scope === "project" ? { digest: summary.digest } : {}),
-        ...(projectId ? { projectId } : {}),
-      });
-      await get().loadLibrary(projectId);
-      await load(tabId, detail.summary.ref, projectId);
-      return detail;
-    },
-
-    exportTemplate: (ref) => exportGraphTemplate(ref),
-
-    setTrust: async (summary, action, tabId) => {
-      if (summary.ref.scope !== "project") return;
-      const { projectId, path } = summary.ref;
-      await setGraphTemplateTrust(
-        action === "approve"
-          ? { projectId, path, action, digest: summary.digest }
-          : { projectId, path, action },
-      );
-      await get().loadLibrary(projectId);
-      if (tabId) await get().refreshTab(tabId);
-    },
-
-    openEditor: (tabId) => {
-      const detail = tab(tabId).detail;
-      if (!detail || detail.summary.scope !== "user") return;
-      patchTab(tabId, { editor: freshEditor(detail.template, detail.summary.revision, false) });
-    },
-
-    openDraft: (tabId, template, projectId) => {
-      const draft = { ...structuredClone(template), revision: 0 };
-      delete draft.engine;
+    const load = async (tabId: string, ref: GraphTemplateRef, projectId: string | null) => {
+      const request = tab(tabId).request + 1;
+      const sameTemplate =
+        tab(tabId).selected !== null &&
+        graphTemplateRefKey(tab(tabId).selected!) === graphTemplateRefKey(ref);
       patchTab(tabId, {
         projectId,
-        selected: null,
-        detail: null,
-        detailStatus: "idle",
+        selected: ref,
+        request,
+        detailStatus: "loading",
         detailError: null,
-        compile: null,
-        compileStatus: "idle",
+        compileStatus: "loading",
         compileError: null,
-        selection: null,
-        request: tab(tabId).request + 1,
-        editor: { ...freshEditor(draft, 0, true), saved: null },
+        ...(sameTemplate ? {} : { detail: null, compile: null, selection: null, editor: null }),
       });
-    },
+      const input = projectId ? { projectId } : {};
+      const [detail, compiled] = await Promise.allSettled([
+        api().getGraphTemplate(ref, input),
+        api().compileGraphTemplateInBackend({ ref }, { ...input, includePlan: true }),
+      ]);
+      patchIfCurrent(
+        tabId,
+        request,
+        detail.status === "fulfilled"
+          ? { detail: detail.value, detailStatus: "ready", detailError: null }
+          : { detail: null, detailStatus: "error", detailError: errorText(detail.reason) },
+      );
+      // A draft being edited keeps its own browser compile.
+      if (tab(tabId).editor) {
+        patchIfCurrent(tabId, request, { compileStatus: "ready", compileError: null });
+        return;
+      }
+      patchIfCurrent(
+        tabId,
+        request,
+        compiled.status === "fulfilled"
+          ? { compile: fromBackend(compiled.value), compileStatus: "ready", compileError: null }
+          : { compileStatus: "error", compileError: errorText(compiled.reason) },
+      );
+    };
 
-    closeEditor: (tabId) => {
-      const wasNew = tab(tabId).editor?.isNew ?? false;
-      patchTab(tabId, { editor: null, ...(wasNew ? { compile: null, selection: null } : {}) });
-      if (!wasNew) void get().refreshTab(tabId);
-    },
-
-    edit: (tabId, label, recipe, options = {}) => {
-      const editor = tab(tabId).editor;
-      if (!editor) return;
-      const next = recipe(editor.draft);
-      if (next === editor.draft) return;
-      patchEditor(tabId, {
-        draft: next,
-        history: pushGraphHistory(editor.history, editor.draft, label, options),
-        error: null,
-        saveErrors: [],
+    const setSubgraph = (key: string, entry: GraphDesignerSubgraphEntry | null) =>
+      set((state) => {
+        const subgraphTemplates = new Map(state.subgraphTemplates);
+        if (entry) subgraphTemplates.set(key, entry);
+        else subgraphTemplates.delete(key);
+        return { subgraphTemplates };
       });
-    },
 
-    undo: (tabId) => {
-      const editor = tab(tabId).editor;
-      if (!editor) return null;
-      const step = undoGraphHistory(editor.history, editor.draft);
-      if (!step) return null;
-      patchEditor(tabId, { draft: step.template, history: step.history, error: null });
-      return step.label;
-    },
+    return {
+      libraries: new Map(),
+      tabs: new Map(),
+      subgraphTemplates: new Map(),
 
-    redo: (tabId) => {
-      const editor = tab(tabId).editor;
-      if (!editor) return null;
-      const step = redoGraphHistory(editor.history, editor.draft);
-      if (!step) return null;
-      patchEditor(tabId, { draft: step.template, history: step.history, error: null });
-      return step.label;
-    },
+      loadSubgraphTemplate: async (projectId, ref) => {
+        const key = graphDesignerSubgraphKey(projectId, ref);
+        const pending = subgraphLoads.get(key);
+        if (pending) return pending;
+        const cached = get().subgraphTemplates.get(key);
+        if (cached?.status === "ready") return cached;
+        const load = (async (): Promise<GraphDesignerSubgraphEntry> => {
+          if (ref.scope === "builtin") {
+            const builtIn = graphBuiltInTemplate(ref.id);
+            return builtIn
+              ? {
+                  status: "ready",
+                  resolution: { template: builtIn.template },
+                  template: builtIn.template,
+                }
+              : { status: "ready", resolution: { missing: "not-found" } };
+          }
+          const summaries = get().libraries.get(graphDesignerLibraryKey(projectId))?.result
+            ?.templates;
+          const libraryRef = graphSubgraphLibraryRef(ref, projectId, summaries ?? []);
+          if ("missing" in libraryRef) {
+            return { status: "ready", resolution: { missing: libraryRef.missing } };
+          }
+          try {
+            const detail = await api().getGraphTemplate(libraryRef, projectId ? { projectId } : {});
+            return {
+              status: "ready",
+              resolution: graphSubgraphResolutionFor(detail.summary, detail.template),
+              template: detail.template,
+              summary: detail.summary,
+            };
+          } catch {
+            return { status: "ready", resolution: { missing: "not-found" } };
+          }
+        })();
+        subgraphLoads.set(key, load);
+        setSubgraph(key, { status: "loading" });
+        try {
+          const entry = await load;
+          setSubgraph(key, entry);
+          return entry;
+        } finally {
+          subgraphLoads.delete(key);
+        }
+      },
 
-    compileDraft: (tabId, context) => {
-      const current = tab(tabId);
-      const editor = current.editor;
-      if (!editor) return;
-      compileContexts.set(tabId, context);
-      // Sub-graph children not read yet are fetched, then the draft compiles again.
-      const entries = get().subgraphTemplates;
-      for (const ref of graphSubgraphRefsToFetch(editor.draft, entries, current.projectId)) {
-        void get()
-          .loadSubgraphTemplate(current.projectId, ref)
-          .then(() => get().compileDraft(tabId, context));
-      }
-      const result = compile(editor.draft, {
-        ...(context.providers && context.providers.length > 0
-          ? { providers: [...context.providers] }
-          : {}),
-        ...(context.ceiling ? { ceiling: context.ceiling } : {}),
-        resolveTemplate: graphDesignerSubgraphResolver(entries, current.projectId),
-      });
-      // A newer edit may have landed meanwhile; the next debounce compiles it.
-      if (tab(tabId).editor?.draft !== editor.draft) return;
-      patchTab(tabId, {
-        compile: {
-          source: "browser",
-          ok: result.ok,
-          launchable: result.launchable,
-          diagnostics: result.diagnostics,
-          omittedDiagnostics: result.omittedDiagnostics,
-          cost: result.cost,
-          pendingAcknowledgements: result.pendingAcknowledgements,
-          plan: result.plan,
-        },
-        compileStatus: "ready",
-        compileError: null,
-      });
-    },
+      loadLibrary: async (projectId) => {
+        const key = graphDesignerLibraryKey(projectId);
+        const previous = get().libraries.get(key);
+        const mark = (library: GraphDesignerLibrary) =>
+          set((state) => {
+            const libraries = new Map(state.libraries);
+            libraries.set(key, library);
+            return { libraries };
+          });
+        mark({ status: "loading", result: previous?.result ?? null, error: null });
+        try {
+          const result = await api().listGraphTemplates(projectId ? { projectId } : {});
+          mark({ status: "ready", result, error: null });
+          // A library read is the moment a child may have changed: drop what
+          // sub-graph compiles read, and recompile the open drafts.
+          const prefix = `${key}|`;
+          const stale = [...get().subgraphTemplates.keys()].filter((entry) =>
+            entry.startsWith(prefix),
+          );
+          if (stale.length > 0) {
+            set((state) => {
+              const subgraphTemplates = new Map(state.subgraphTemplates);
+              for (const entry of stale) subgraphTemplates.delete(entry);
+              return { subgraphTemplates };
+            });
+            for (const [tabId, state] of get().tabs) {
+              const context = compileContexts.get(tabId);
+              if (state.editor && context && graphDesignerLibraryKey(state.projectId) === key) {
+                get().compileDraft(tabId, context);
+              }
+            }
+          }
+        } catch (error) {
+          mark({ status: "error", result: previous?.result ?? null, error: errorText(error) });
+        }
+      },
 
-    saveDraft: async (tabId) => {
-      const current = tab(tabId);
-      const editor = current.editor;
-      if (!editor || editor.saving) return null;
-      const template = { ...editor.draft, revision: editor.baseRevision };
-      const guard = validateGraphTemplate(template);
-      if (!guard.ok) {
-        patchEditor(tabId, {
-          saveErrors: guard.errors,
-          error: "The template is not complete yet; fix these before saving.",
+      openTemplate: (tabId, ref, projectId) => load(tabId, ref, projectId),
+
+      refreshTab: async (tabId) => {
+        const current = tab(tabId);
+        if (!current.selected) return;
+        await load(tabId, current.selected, current.projectId);
+      },
+
+      select: (tabId, selection, focus = false) => {
+        const current = tab(tabId);
+        patchTab(tabId, {
+          selection,
+          ...(focus ? { focusRequest: current.focusRequest + 1 } : {}),
         });
-        return null;
-      }
-      patchEditor(tabId, { saving: true, error: null, saveErrors: [], conflict: false });
-      try {
-        const saved = await saveGraphTemplate(template, {
-          expectedRevision: editor.baseRevision,
-          ...(current.projectId ? { projectId: current.projectId } : {}),
-        });
-        rebase(tabId, saved);
-        void get().loadLibrary(current.projectId);
-        return saved;
-      } catch (error) {
-        const conflict = isGraphRevisionConflict(error);
-        patchEditor(tabId, {
-          saving: false,
-          conflict,
-          error: conflict
-            ? editor.isNew
-              ? `A template with the id ${editor.draft.id} already exists. Save as a copy, or change the id.`
-              : `Someone saved this template since you started editing (your edit is based on revision ${editor.baseRevision}). Your edits are kept: save them as a copy, or reload the latest revision.`
-            : errorText(error),
-        });
-        return null;
-      }
-    },
+      },
 
-    saveDraftAsCopy: async (tabId) => {
-      const current = tab(tabId);
-      const editor = current.editor;
-      if (!editor || editor.saving) return null;
-      const draft = editor.draft;
-      const copy: GraphTemplateV1 = {
-        ...draft,
-        id: editor.isNew ? draft.id : graphIdFrom(`${draft.id}-copy`, "graph-copy"),
-        name: editor.isNew ? draft.name : `${draft.name} (copy)`.slice(0, 200),
-        revision: 0,
-      };
-      const guard = validateGraphTemplate(copy);
-      if (!guard.ok) {
-        patchEditor(tabId, {
-          saveErrors: guard.errors,
-          error: "The template is not complete yet; fix these before saving.",
+      importTemplate: async (tabId, text, projectId) => {
+        const result = await api().importGraphTemplate(text, projectId ? { projectId } : {});
+        if (result.ok) {
+          await get().loadLibrary(projectId);
+          await load(tabId, result.detail.summary.ref, projectId);
+        }
+        return result;
+      },
+
+      duplicateTemplate: async (tabId, summary, projectId) => {
+        const detail = await api().duplicateGraphTemplate(summary.ref, {
+          ...(summary.scope === "project" ? { digest: summary.digest } : {}),
+          ...(projectId ? { projectId } : {}),
         });
-        return null;
-      }
-      patchEditor(tabId, { saving: true, error: null, saveErrors: [], conflict: false });
-      try {
-        // Import picks a free id when the copy's is taken.
-        const result = await importGraphTemplate(
-          graphTemplateExportText(copy),
-          current.projectId ? { projectId: current.projectId } : {},
+        await get().loadLibrary(projectId);
+        await load(tabId, detail.summary.ref, projectId);
+        return detail;
+      },
+
+      exportTemplate: (ref) => api().exportGraphTemplate(ref),
+
+      setTrust: async (summary, action, tabId) => {
+        if (summary.ref.scope !== "project") return;
+        const { projectId, path } = summary.ref;
+        await api().setGraphTemplateTrust(
+          action === "approve"
+            ? { projectId, path, action, digest: summary.digest }
+            : { projectId, path, action },
         );
-        if (!result.ok) {
+        await get().loadLibrary(projectId);
+        if (tabId) await get().refreshTab(tabId);
+      },
+
+      openEditor: (tabId) => {
+        const detail = tab(tabId).detail;
+        if (!detail || detail.summary.scope !== "user") return;
+        patchTab(tabId, { editor: freshEditor(detail.template, detail.summary.revision, false) });
+      },
+
+      openDraft: (tabId, template, projectId) => {
+        const draft = { ...structuredClone(template), revision: 0 };
+        delete draft.engine;
+        patchTab(tabId, {
+          projectId,
+          selected: null,
+          detail: null,
+          detailStatus: "idle",
+          detailError: null,
+          compile: null,
+          compileStatus: "idle",
+          compileError: null,
+          selection: null,
+          request: tab(tabId).request + 1,
+          editor: { ...freshEditor(draft, 0, true), saved: null },
+        });
+      },
+
+      closeEditor: (tabId) => {
+        const wasNew = tab(tabId).editor?.isNew ?? false;
+        patchTab(tabId, { editor: null, ...(wasNew ? { compile: null, selection: null } : {}) });
+        if (!wasNew) void get().refreshTab(tabId);
+      },
+
+      edit: (tabId, label, recipe, options = {}) => {
+        const editor = tab(tabId).editor;
+        if (!editor) return;
+        const next = recipe(editor.draft);
+        if (next === editor.draft) return;
+        patchEditor(tabId, {
+          draft: next,
+          history: pushGraphHistory(editor.history, editor.draft, label, options),
+          error: null,
+          saveErrors: [],
+        });
+      },
+
+      undo: (tabId) => {
+        const editor = tab(tabId).editor;
+        if (!editor) return null;
+        const step = undoGraphHistory(editor.history, editor.draft);
+        if (!step) return null;
+        patchEditor(tabId, { draft: step.template, history: step.history, error: null });
+        return step.label;
+      },
+
+      redo: (tabId) => {
+        const editor = tab(tabId).editor;
+        if (!editor) return null;
+        const step = redoGraphHistory(editor.history, editor.draft);
+        if (!step) return null;
+        patchEditor(tabId, { draft: step.template, history: step.history, error: null });
+        return step.label;
+      },
+
+      compileDraft: (tabId, context) => {
+        const current = tab(tabId);
+        const editor = current.editor;
+        if (!editor) return;
+        compileContexts.set(tabId, context);
+        // Sub-graph children not read yet are fetched, then the draft compiles again.
+        const entries = get().subgraphTemplates;
+        for (const ref of graphSubgraphRefsToFetch(editor.draft, entries, current.projectId)) {
+          void get()
+            .loadSubgraphTemplate(current.projectId, ref)
+            .then(() => get().compileDraft(tabId, context));
+        }
+        const result = compile(editor.draft, {
+          ...(context.providers && context.providers.length > 0
+            ? { providers: [...context.providers] }
+            : {}),
+          ...(context.ceiling ? { ceiling: context.ceiling } : {}),
+          resolveTemplate: graphDesignerSubgraphResolver(entries, current.projectId),
+        });
+        // A newer edit may have landed meanwhile; the next debounce compiles it.
+        if (tab(tabId).editor?.draft !== editor.draft) return;
+        patchTab(tabId, {
+          compile: {
+            source: "browser",
+            ok: result.ok,
+            launchable: result.launchable,
+            diagnostics: result.diagnostics,
+            omittedDiagnostics: result.omittedDiagnostics,
+            cost: result.cost,
+            pendingAcknowledgements: result.pendingAcknowledgements,
+            plan: result.plan,
+          },
+          compileStatus: "ready",
+          compileError: null,
+        });
+      },
+
+      saveDraft: async (tabId) => {
+        const current = tab(tabId);
+        const editor = current.editor;
+        if (!editor || editor.saving) return null;
+        const template = { ...editor.draft, revision: editor.baseRevision };
+        const guard = validateGraphTemplate(template);
+        if (!guard.ok) {
           patchEditor(tabId, {
-            saving: false,
-            saveErrors: result.errors,
-            error: "The copy was refused.",
+            saveErrors: guard.errors,
+            error: "The template is not complete yet; fix these before saving.",
           });
           return null;
         }
-        rebase(tabId, result.detail);
-        void get().loadLibrary(current.projectId);
-        return result.detail;
-      } catch (error) {
-        patchEditor(tabId, { saving: false, error: errorText(error) });
-        return null;
-      }
-    },
+        patchEditor(tabId, { saving: true, error: null, saveErrors: [], conflict: false });
+        try {
+          const saved = await api().saveGraphTemplate(template, {
+            expectedRevision: editor.baseRevision,
+            ...(current.projectId ? { projectId: current.projectId } : {}),
+          });
+          rebase(tabId, saved);
+          void get().loadLibrary(current.projectId);
+          return saved;
+        } catch (error) {
+          const conflict = isGraphRevisionConflict(error);
+          patchEditor(tabId, {
+            saving: false,
+            conflict,
+            error: conflict
+              ? editor.isNew
+                ? `A template with the id ${editor.draft.id} already exists. Save as a copy, or change the id.`
+                : `Someone saved this template since you started editing (your edit is based on revision ${editor.baseRevision}). Your edits are kept: save them as a copy, or reload the latest revision.`
+              : errorText(error),
+          });
+          return null;
+        }
+      },
 
-    reloadDraft: async (tabId) => {
-      const current = tab(tabId);
-      if (!current.selected) return;
-      const detail = await getGraphTemplate(
-        current.selected,
-        current.projectId ? { projectId: current.projectId } : {},
-      );
-      patchTab(tabId, {
-        detail,
-        editor: freshEditor(detail.template, detail.summary.revision, false),
-      });
-    },
+      saveDraftAsCopy: async (tabId) => {
+        const current = tab(tabId);
+        const editor = current.editor;
+        if (!editor || editor.saving) return null;
+        const draft = editor.draft;
+        const copy: GraphTemplateV1 = {
+          ...draft,
+          id: editor.isNew ? draft.id : graphIdFrom(`${draft.id}-copy`, "graph-copy"),
+          name: editor.isNew ? draft.name : `${draft.name} (copy)`.slice(0, 200),
+          revision: 0,
+        };
+        const guard = validateGraphTemplate(copy);
+        if (!guard.ok) {
+          patchEditor(tabId, {
+            saveErrors: guard.errors,
+            error: "The template is not complete yet; fix these before saving.",
+          });
+          return null;
+        }
+        patchEditor(tabId, { saving: true, error: null, saveErrors: [], conflict: false });
+        try {
+          // Import picks a free id when the copy's is taken.
+          const result = await api().importGraphTemplate(
+            graphTemplateExportText(copy),
+            current.projectId ? { projectId: current.projectId } : {},
+          );
+          if (!result.ok) {
+            patchEditor(tabId, {
+              saving: false,
+              saveErrors: result.errors,
+              error: "The copy was refused.",
+            });
+            return null;
+          }
+          rebase(tabId, result.detail);
+          void get().loadLibrary(current.projectId);
+          return result.detail;
+        } catch (error) {
+          patchEditor(tabId, { saving: false, error: errorText(error) });
+          return null;
+        }
+      },
 
-    acknowledge: (tabId, ref) => {
-      get().edit(tabId, `Acknowledge ${ref.code}`, (template) =>
-        acknowledgeGraphWarning(template, ref),
-      );
-    },
-  };
-});
+      reloadDraft: async (tabId) => {
+        const current = tab(tabId);
+        if (!current.selected) return;
+        const detail = await api().getGraphTemplate(
+          current.selected,
+          current.projectId ? { projectId: current.projectId } : {},
+        );
+        patchTab(tabId, {
+          detail,
+          editor: freshEditor(detail.template, detail.summary.revision, false),
+        });
+      },
+
+      acknowledge: (tabId, ref) => {
+        get().edit(tabId, `Acknowledge ${ref.code}`, (template) =>
+          acknowledgeGraphWarning(template, ref),
+        );
+      },
+    };
+  },
+);
+
+/** Reads the nearest node scope's designer; other code uses `scope.store(graphDesignerStore)`. */
+export const useGraphDesignerStore = scopedStoreHook(graphDesignerStore);
 
 /** A tab's state, or the empty state before its first load. */
-export function graphDesignerTab(tabId: string): GraphDesignerTabState {
-  return useGraphDesignerStore.getState().tabs.get(tabId) ?? EMPTY_TAB;
+export function graphDesignerTab(
+  tabId: string,
+  scope: NodeScope = appCommandScope(),
+): GraphDesignerTabState {
+  return scope.store(graphDesignerStore).getState().tabs.get(tabId) ?? EMPTY_TAB;
 }
 
 export const EMPTY_GRAPH_DESIGNER_TAB = EMPTY_TAB;

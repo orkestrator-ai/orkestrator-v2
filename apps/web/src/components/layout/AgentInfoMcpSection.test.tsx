@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 
 import { MCP_MANAGEMENT_CHANGED_EVENT } from "@orkestrator/protocol/mcp-management";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
@@ -10,7 +11,7 @@ import { McpServersSettingsLink } from "@/components/settings/mcp-servers/McpSer
 import { onMcpSettingsIntent, type McpSettingsIntent } from "@/lib/mcp-settings-navigation";
 import { listen as nativeListen } from "@/lib/native/events";
 import { onResourceChanged } from "@/lib/resource-sync";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { environmentStore } from "@/stores/environmentStore";
 import type { Environment } from "@/types";
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 
@@ -18,6 +19,7 @@ import { joinLiveMcpServer } from "../settings/mcp-servers/mcp-live-join";
 import { definition, snapshot } from "../settings/mcp-servers/mcp-test-fixtures";
 import { McpLiveJoinNotice } from "../settings/mcp-servers/McpLiveJoinNotice";
 import { AgentInfoMcpSection } from "./AgentInfoMcpSection";
+import { appCommandStore } from "@/test/app-command-store";
 
 const listenMock = nativeListen as unknown as ReturnType<typeof mock>;
 
@@ -57,7 +59,7 @@ function renderSection(
   list: NativeAgentMcpServer[] | undefined,
   provider: AgentPlatform = "codex",
 ) {
-  return render(
+  return renderInAppCommandScope(
     <AgentInfoMcpSection
       environmentId="env-1"
       provider={provider}
@@ -127,7 +129,7 @@ describe("AgentInfoMcpSection links into saved configuration", () => {
     const join = joinLiveMcpServer(rows, liveRef);
     expect(join.kind).toBe("injected");
     if (join.kind === "other-target") throw new Error("wrong target");
-    render(<McpLiveJoinNotice liveRef={liveRef} join={join} snapshot={rows} />);
+    renderInAppCommandScope(<McpLiveJoinNotice liveRef={liveRef} join={join} snapshot={rows} />);
     expect(screen.getByRole("note").textContent).toContain("Orkestrator's own connection");
     expect(screen.getByRole("note").textContent).toContain("not saved in these files");
   });
@@ -158,7 +160,7 @@ describe("AgentInfoMcpSection links into saved configuration", () => {
 
   test("platform settings link opens that platform's servers", () => {
     const intents = captureIntents();
-    render(<McpServersSettingsLink platform="pi" />);
+    renderInAppCommandScope(<McpServersSettingsLink platform="pi" />);
     fireEvent.click(screen.getByRole("button", { name: "Manage Pi MCP servers" }));
     expect(intents).toEqual([{ provider: "pi" }]);
   });
@@ -183,11 +185,11 @@ describe("AgentInfoMcpSection shows what to do outside Orkestrator", () => {
 
 describe("AgentInfoMcpSection says where servers connect from", () => {
   function withEnvironment(environmentType: "local" | "container") {
-    const previous = useEnvironmentStore.getState().environments;
-    useEnvironmentStore.setState({
+    const previous = appCommandStore(environmentStore).getState().environments;
+    appCommandStore(environmentStore).setState({
       environments: [{ id: "env-1", name: "env-a", environmentType } as Environment],
     });
-    cleanups.push(() => useEnvironmentStore.setState({ environments: previous }));
+    cleanups.push(() => appCommandStore(environmentStore).setState({ environments: previous }));
   }
 
   test("a failing server in a container names the container", () => {

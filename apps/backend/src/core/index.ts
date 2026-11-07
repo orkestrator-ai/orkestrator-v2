@@ -1,4 +1,6 @@
 import { findCoordinatorCheckoutTurn } from "./coordinator-checkout-turn.js";
+import { unknownCommand } from "@orkestrator/protocol/contract/errors";
+import type { CommandAccess } from "@orkestrator/protocol/contract/command";
 import { agentTestTerminalSurvival } from "./agent-test-fixtures.js";
 import { closeContainerTerminalShell } from "./container-terminal-shell.js";
 import { combineWorkerMailPorts } from "./build-pipeline-worker-mail.js";
@@ -43,6 +45,7 @@ import {
   coordinatorNodeContext,
   createNodeSshFactory,
   errorCode,
+  leafTakesCoordinatorNotices,
   NodeCoordination,
   NodeCoordinatorRemote,
   NodePortal,
@@ -51,14 +54,16 @@ import {
 } from "./nodes/index.js";
 import { isBackendId, type BackendId } from "@orkestrator/protocol/federation";
 import type { GatewayNodeHooks } from "../gateway-support-core.js";
+import { legacyAutoSwitchEvent } from "@orkestrator/protocol/agent-account-auto-switch";
+import { AGENT_ACCOUNT_PLATFORMS } from "@orkestrator/protocol/agent-accounts";
 import {
-  AGENT_ACCOUNT_AUTO_SWITCHED_EVENT,
-  legacyAutoSwitchEvent,
-} from "@orkestrator/protocol/agent-account-auto-switch";
-import {
-  AGENT_ACCOUNT_PLATFORMS,
-  AGENT_ACCOUNTS_CHANGED_EVENT,
-} from "@orkestrator/protocol/agent-accounts";
+  agentAccountAutoSwitchedEvent,
+  agentAccountsChangedEvent,
+  controlMcpStateChangedEvent,
+  nativeAgentAsyncQuestionEvent,
+  nativeAgentSessionActivityEvent,
+} from "@orkestrator/protocol/contract/domains/events";
+import { createBackendEmit, type BackendEventSink } from "./backend-emit.js";
 import { pickInheritedGlobalSettings } from "@orkestrator/protocol/controller-settings";
 import type { NodeMode } from "@orkestrator/protocol/command-nodes";
 import { stoppedWorkerMailHook } from "./agent-mail-stopped-worker.js";
@@ -151,8 +156,8 @@ import {
   createCommandRegistry,
   scheduleMergeCleanupRecovery,
   tmuxLocalClaudeConfigDirectory,
-  type BackendEmit,
   type CommandContext,
+  type CommandInvocation,
 } from "./commands.js";
 import { reapOrphanedClaudeTmuxRuntimes, reapOrphanedLocalServers } from "./local-server-reaper.js";
 import {
@@ -178,7 +183,7 @@ import {
   ensureContainerHostServicePorts,
 } from "./commands-environment.js";
 import { APP_VERSION, BUILD_COMMIT, DOCKER_IMAGE } from "./constants.js";
-import { BACKEND_CAPABILITIES, type BackendProfile } from "@orkestrator/protocol/backend-profile";
+import { type BackendProfile } from "@orkestrator/protocol/backend-profile";
 import { WorkflowResultService } from "./workflow-result-service.js";
 import { HostMaintenanceService } from "./host-maintenance.js";
 import { readImageStatus, readRestartImpact, readToolStatus } from "./host-maintenance-readers.js";
@@ -448,7 +453,11 @@ export class OrkestratorBackend {
     credentialSources?: import("@orkestrator/protocol/agent-platforms").AgentPlatform[];
     /** Exact agent tools port (`--agent-tools-port`); a busy one fails startup. */
     agentToolsPort?: number;
-    emit: BackendEmit;
+    /**
+     * The event transport (the gateway's fan-out). Read at emit time; the
+     * backend wraps it in its typed, checked `BackendEmit`.
+     */
+    emit: BackendEventSink;
     /** What applies remote update requests on this host (default: nothing). */
     hostUpdater?: import("@orkestrator/protocol/host-maintenance").HostUpdaterKind;
     /** The standalone launcher's record of a release it rolled back. */
@@ -529,6 +538,7 @@ export class OrkestratorBackend {
     /** Test seam: node links (fetch, SSH, timers). */
     nodeLinks?: Pick<NodeServiceOptions, "fetchImpl" | "createSsh" | "timers" | "heartbeatMs">;
   }) {
+    const emit = createBackendEmit((event, payload) => options.emit(event, payload));
     this.keyedActivityJobs =
       options.keyedActivityJobs ?? keyedSchedulingEnabled("backend-activity");
     this.activityJobClock = options.activityJobClock;
@@ -541,7 +551,7 @@ export class OrkestratorBackend {
       dataDir: options.dataDir,
       updater: options.hostUpdater ?? "none",
       version: APP_VERSION,
-      emit: (event, payload) => options.emit(event, payload),
+      emit,
       rollbackEvidence: options.hostRollbackEvidence,
       onCheck: (latestVersion, isCurrent) => {
         if (!latestVersion || latestVersion === APP_VERSION) return;
@@ -553,10 +563,10 @@ export class OrkestratorBackend {
     this.workflowResultRollout = new WorkflowResultRollout(
       async () => (await storage.loadConfig()).global.workflowResultTools,
     );
-    const design = new DesignService(options.dataDir, options.emit);
+    const design = new DesignService(options.dataDir, emit);
     const previews = new PreviewRuntime({
       storage,
-      emit: options.emit,
+      emit,
       strictDockerOwner: options.strictDockerOwner ?? false,
       // Read at call time: `this.runtime` is assigned below.
       managedProcessRoots: () => [
@@ -575,7 +585,7 @@ export class OrkestratorBackend {
             ownerNamespace: dockerOwnerNamespace(options.dataDir),
             fallbackImage: () => options.dockerImage ?? DOCKER_IMAGE,
             // Read lazily: the gateway that receives events is created after init.
-            emit: (event, payload) => options.emit(event, payload),
+            emit,
             prepareContainer: async (containerId) => {
               await ensureContainerAgentToolsHost(
                 containerId,
@@ -632,7 +642,7 @@ export class OrkestratorBackend {
     this.runtime =
       options.runtime ??
       new BackendRuntime({
-        emit: (event, payload) => options.emit(event, payload),
+        emit,
         // Docker-backed, so unit tests keep the unwatched bounds unless they inject one.
         worktreeSignal:
           process.env.NODE_ENV === "test" ? undefined : containerWorktreeSignalInstaller,
@@ -674,13 +684,13 @@ export class OrkestratorBackend {
         createBackendChangeTracking({
           dataDir: options.dataDir,
           storage,
-          emit: (event, payload) => options.emit(event, payload),
+          emit,
           diffStats: this.runtime.diffStats,
         }),
       );
     }
     // The node portal is created below; a change before then has no self summary to refresh.
-    installStorageEventFanout(storage, options.emit, (change) =>
+    installStorageEventFanout(storage, emit, (change) =>
       this.nodePortal?.readModel.noteLocalEvent(RESOURCE_CHANGED_EVENT, change),
     );
     const context = {
@@ -695,7 +705,7 @@ export class OrkestratorBackend {
       dockerImage: options.dockerImage,
       strictDockerOwner: options.strictDockerOwner ?? false,
       credentialSources: new Set(options.credentialSources ?? []),
-      emit: options.emit,
+      emit,
       agentTools: this.agentTools,
       containerHostReachability: this.containerHostReachability,
       controlMcp: this.controlMcp,
@@ -828,7 +838,7 @@ export class OrkestratorBackend {
     context.coordinators = this.coordinators;
     this.nodes = new NodeService({
       storage,
-      emit: (event, payload) => options.emit(event, payload),
+      emit,
       forceRegistration: options.commandNode === true,
       portalOrigins: () => normalizePortalOrigins(this.portalOriginsSource()),
       selfAccess: () => this.selfAccessSource(),
@@ -846,7 +856,7 @@ export class OrkestratorBackend {
         storage.announceInheritedSettingsChanged();
         for (const platform of AGENT_ACCOUNT_PLATFORMS) {
           // The ticks may have arrived, and every view of them re-reads on this.
-          options.emit(AGENT_ACCOUNTS_CHANGED_EVENT, { platform });
+          emit(agentAccountsChangedEvent, { platform });
           this.accountAutoSwitch?.nudge(platform);
         }
       },
@@ -862,8 +872,14 @@ export class OrkestratorBackend {
     storage.inheritedGlobalSettings = () => this.nodes.inheritedSettings.current();
     this.nodePortal = new NodePortal({
       nodes: this.nodes,
-      emit: (event, payload) => options.emit(event, payload),
+      emit,
       local: { invoke: (command, args = {}) => this.invoke(command, args) },
+      // What this node's hello announces, without the hello's storage reads.
+      selfHello: async () => ({ appVersion: APP_VERSION, domains: this.commands.helloDomains() }),
+      fleetUpdatePolicy: {
+        load: () => storage.nodes.loadFleetUpdatePolicy(),
+        save: (policy) => storage.nodes.saveFleetUpdatePolicy(policy),
+      },
       summaries: {
         load: () => storage.nodes.loadNodeSummariesCache(),
         save: (value) => storage.nodes.saveNodeSummariesCache(value),
@@ -880,7 +896,7 @@ export class OrkestratorBackend {
       nodes: this.nodes,
       portal: this.nodePortal,
       invoke: (command, args = {}) => this.invoke(command, args),
-      emit: (event, payload) => options.emit(event, payload),
+      emit,
     });
     context.nodeCoordination = this.nodeCoordination;
     // Coordinator work on the nodes this one controls is read through the
@@ -904,10 +920,11 @@ export class OrkestratorBackend {
       nodeName: async (nodeId) =>
         (await this.nodePortal.summaries([nodeId])).nodes[0]?.view.displayName ?? nodeId,
       mail: (event, machineName) => mailAutoSwitchNotice(storage, event, machineName),
-      sendsThroughOutbox: (nodeId) =>
-        isBackendId(nodeId) &&
-        this.nodes.link(nodeId)?.hello?.capabilities?.[BACKEND_CAPABILITIES.coordinatorNotices] ===
-          1,
+      // The same answer the mail collector acts on (the node-mail client, plan item 1010).
+      sendsThroughOutbox: (nodeId) => {
+        const link = isBackendId(nodeId) ? this.nodes.link(nodeId) : null;
+        return link ? leafTakesCoordinatorNotices(link) : false;
+      },
     });
     bridgeRemoteCoordinatorEvents({
       onNodeEvent: (listener) => this.nodePortal.readModel.onNodeEvent(listener),
@@ -972,7 +989,7 @@ export class OrkestratorBackend {
       notify: async ({ quietProjectId, ...notice }) => {
         // An older command node hears through its event stream; a newer one
         // ignores that and takes this machine's notice from its outbox.
-        options.emit(AGENT_ACCOUNT_AUTO_SWITCHED_EVENT, legacyAutoSwitchEvent(notice));
+        emit(agentAccountAutoSwitchedEvent, legacyAutoSwitchEvent(notice));
         await this.coordinators.noticeRouter.deliverAutoSwitch(notice, "this machine", {
           coalesceMs: COORDINATOR_STATUS_COALESCE_MS,
           ...(quietProjectId ? { quietProjectId } : {}),
@@ -1004,7 +1021,7 @@ export class OrkestratorBackend {
       storage,
       async <T>(command: string, args: Record<string, unknown> = {}) => {
         const handler = this.commands.get(command);
-        if (!handler) throw new Error(`Unknown backend command: ${command}`);
+        if (!handler) throw unknownCommand(command);
         return (await handler(args, context)) as T;
       },
       {
@@ -1032,7 +1049,7 @@ export class OrkestratorBackend {
         // hangs off it; it is not a turn edge.
         onObservationInvalidation: (event) => {
           nativeSessionInvalidationMetrics.record(event.cause, event.agent);
-          options.emit("native-agent-session-activity", {
+          emit(nativeAgentSessionActivityEvent, {
             environment_id: event.environmentId,
             previous_state: event.state,
             state: event.state,
@@ -1046,7 +1063,7 @@ export class OrkestratorBackend {
         },
         onActivityTransition: (event) => {
           nativeSessionInvalidationMetrics.record("transition", event.agent);
-          options.emit("native-agent-session-activity", {
+          emit(nativeAgentSessionActivityEvent, {
             environment_id: event.environmentId,
             previous_state: event.previousState,
             state: event.state,
@@ -1230,7 +1247,7 @@ export class OrkestratorBackend {
           await this.agentMail.drainInjects();
         },
         onAsyncQuestionAttention: (event) => {
-          options.emit("native-agent-async-question", {
+          emit(nativeAgentAsyncQuestionEvent, {
             environment_id: event.environmentId,
             session_key: event.sessionKey,
           });
@@ -1287,7 +1304,7 @@ export class OrkestratorBackend {
     context.mcpManagement = new McpManagementService({
       dataDir: options.dataDir,
       storage,
-      emit: options.emit,
+      emit,
       probe: createMcpRuntimeProbe(context),
       ...mcpContainerOptions(context),
       loadRollout: mcpRolloutLoader(context),
@@ -1307,7 +1324,7 @@ export class OrkestratorBackend {
     );
     this.webAnnotations = new WebAnnotationService({
       dataDir: options.dataDir,
-      emit: options.emit,
+      emit,
       rolloutMode: () => this.webAnnotationRollout.mode,
       storage,
       dispatch: new WebAnnotationDispatchAdapter({
@@ -1369,7 +1386,7 @@ export class OrkestratorBackend {
       storage,
       async <T>(command: string, args: Record<string, unknown> = {}) => {
         const handler = this.commands.get(command);
-        if (!handler) throw new Error(`Unknown backend command: ${command}`);
+        if (!handler) throw unknownCommand(command);
         return (await handler(args, context)) as T;
       },
       {
@@ -1428,7 +1445,7 @@ export class OrkestratorBackend {
       storage,
       async <T>(command: string, args: Record<string, unknown> = {}) => {
         const handler = this.commands.get(command);
-        if (!handler) throw new Error(`Unknown backend command: ${command}`);
+        if (!handler) throw unknownCommand(command);
         return (await handler(args, context)) as T;
       },
       {
@@ -1483,7 +1500,7 @@ export class OrkestratorBackend {
     // Node executors (items 204–208) register on `graphRuns.executors`.
     const invokeCommand = async <T>(command: string, args: Record<string, unknown> = {}) => {
       const handler = this.commands.get(command);
-      if (!handler) throw new Error(`Unknown backend command: ${command}`);
+      if (!handler) throw unknownCommand(command);
       return (await handler(args, context)) as T;
     };
     const graphArtifacts = new GraphArtifactStore({
@@ -1756,7 +1773,7 @@ export class OrkestratorBackend {
       storage,
       async <T>(command: string, args: Record<string, unknown> = {}) => {
         const handler = this.commands.get(command);
-        if (!handler) throw new Error(`Unknown backend command: ${command}`);
+        if (!handler) throw unknownCommand(command);
         return (await handler(args, context)) as T;
       },
       {
@@ -1777,7 +1794,7 @@ export class OrkestratorBackend {
       storage,
       async <T>(command: string, args: Record<string, unknown> = {}) => {
         const handler = this.commands.get(command);
-        if (!handler) throw new Error(`Unknown backend command: ${command}`);
+        if (!handler) throw unknownCommand(command);
         return (await handler(args, context)) as T;
       },
     );
@@ -2788,7 +2805,7 @@ export class OrkestratorBackend {
     this.controlMcp.onStateChange?.(() => {
       if (this.shuttingDown) return;
       this.reserveOwnedPreviewPorts();
-      this.context.emit("control-mcp-state-changed", {});
+      this.context.emit(controlMcpStateChangedEvent, {});
     });
     // Backend-owned timing for scheduled jobs. Fires need the registry writer
     // lease, the Control MCP (coordinator schedules) and the agent tools.
@@ -2838,6 +2855,14 @@ export class OrkestratorBackend {
    */
   hasCommand(command: string): boolean {
     return this.commands.has(command);
+  }
+
+  /**
+   * The `access` of `command`'s definition, `undefined` without one: the
+   * workspace grant allow-list the gateway and the relay apply (plan item 7012).
+   */
+  commandAccess(command: string): CommandAccess | undefined {
+    return this.commands.contracts.get(command)?.access;
   }
 
   /** Orkestrator's own listeners can never be registered as preview targets. */
@@ -2930,8 +2955,9 @@ export class OrkestratorBackend {
 
   /**
    * Safe identity for the gateway's authenticated hello handshake: the
-   * installation identity, this process's resource generation, the version
-   * and the canonical machine profile. No paths or credentials.
+   * installation identity, this process's resource generation, the version,
+   * the canonical machine profile and the contract domain ranges the command
+   * registry accepts (plan item 1004). No paths or credentials.
    */
   async backendHelloIdentity(): Promise<{
     installationId: string;
@@ -2940,6 +2966,7 @@ export class OrkestratorBackend {
     buildCommit: string | null;
     profile: BackendProfile;
     nodeMode: NodeMode;
+    domains: Record<string, { min: number; max: number }>;
   }> {
     const storage = this.context.storage;
     const [identity, profile] = await Promise.all([
@@ -2953,6 +2980,7 @@ export class OrkestratorBackend {
       buildCommit: BUILD_COMMIT,
       profile,
       nodeMode: this.nodes.mode(),
+      domains: this.commands.helloDomains(),
     };
   }
 
@@ -2967,6 +2995,8 @@ export class OrkestratorBackend {
       authenticateGrant: (token) => this.nodePortal.grants.authenticate(token)?.expiresAt ?? null,
       onGrantRevoked: (token, listener) => this.nodePortal.grants.onRevoke(token, listener),
       relayTarget: (nodeId) => this.nodePortal.relayTarget(nodeId),
+      relayWorkspaceOpen: (workspaceId, nodeId) =>
+        this.nodePortal.workspaceOpenFor(workspaceId, nodeId),
       isRelayedNodeWatched: (nodeId) => this.nodePortal.events.isWatched(nodeId),
     };
   }
@@ -2974,6 +3004,8 @@ export class OrkestratorBackend {
   /** Set once the gateway has bound: the origins clients use for this node, read on each attach. */
   setPortalOriginsSource(source: () => string[]): void {
     this.portalOriginsSource = source;
+    // Links that attached before the gateway bound sent no (or old) origins.
+    this.nodes.portalOriginsChanged();
   }
 
   /**
@@ -3030,11 +3062,20 @@ export class OrkestratorBackend {
     return this.controlMcp.getSettings();
   }
 
-  async invoke<T>(command: string, args: Record<string, unknown> = {}): Promise<T> {
+  /**
+   * Runs a registered command. `invocation` is the invoke envelope's contract
+   * fields (plan item 1003) when a transport received them.
+   */
+  async invoke<T>(
+    command: string,
+    args: Record<string, unknown> = {},
+    invocation?: CommandInvocation,
+  ): Promise<T> {
     if (this.shuttingDown) throw new Error("Backend is shutting down");
     const handler = this.commands.get(command);
-    if (!handler) throw new Error(`Unknown backend command: ${command}`);
-    return (await handler(args, this.context)) as T;
+    // Coded (plan item 1005), with the legacy text, so older clients still match it.
+    if (!handler) throw unknownCommand(command, invocation?.domain);
+    return (await handler(args, this.context, invocation)) as T;
   }
 
   private startLogPolicy(): void {

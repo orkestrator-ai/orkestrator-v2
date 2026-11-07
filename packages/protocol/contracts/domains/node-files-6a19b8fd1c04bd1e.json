@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "domain": "node-files",
+  "commands": {
+    "abort_node_file_write": {
+      "untyped": true,
+      "read": false
+    },
+    "append_node_file_write": {
+      "untyped": true,
+      "read": false
+    },
+    "begin_node_file_write": {
+      "untyped": true,
+      "read": false
+    },
+    "commit_node_file_write": {
+      "untyped": true,
+      "read": false
+    },
+    "list_node_transfers": {
+      "untyped": true,
+      "read": true
+    },
+    "read_node_file": {
+      "untyped": true,
+      "read": true
+    },
+    "stat_node_file": {
+      "untyped": true,
+      "read": false
+    },
+    "transfer_node_files": {
+      "untyped": true,
+      "read": false
+    }
+  }
+}

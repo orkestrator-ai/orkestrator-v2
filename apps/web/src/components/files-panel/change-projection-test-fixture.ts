@@ -8,7 +8,8 @@ import {
   type ChangeFileRow,
   type ChangeProjection,
 } from "@orkestrator/protocol/change-resources";
-import { useChangeProjectionStore } from "@/stores/changeProjectionStore";
+import { changeProjectionStore } from "@/stores/changeProjectionStore";
+import { appCommandStore } from "@/test/app-command-store";
 
 export function exactCount(value: number): LineCount {
   return { value, quality: "complete", bound: "exact" };
@@ -85,7 +86,7 @@ export function environmentProjectionFixture(
 }
 
 export function resetChangeProjectionStore(): void {
-  useChangeProjectionStore.setState({
+  appCommandStore(changeProjectionStore).setState({
     projections: new Map(),
     retiredOwners: new Map(),
     transportRevision: 0,

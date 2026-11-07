@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:450263f6a32576ea97acadd90f49b31cd5d610fd6191d42f0754a64878ca9a6f",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "canvasId": {},
+        "cursor": {},
+        "environmentId": {},
+        "frameId": {},
+        "maxDepth": {},
+        "maxNodes": {},
+        "rootSelector": {}
+      },
+      "type": "object"
+    }
+  }
+}

@@ -1,9 +1,16 @@
 import { isBackendId } from "@orkestrator/protocol/federation";
+import {
+  ackTicketSyncOutboxCommand,
+  applyTicketSyncCommand,
+  collectTicketSyncOutboxCommand,
+  getTicketSyncCursorCommand,
+  getTicketSyncStatusCommand,
+  syncNodeTicketsCommand,
+} from "@orkestrator/protocol/contract/domains/ticket-sync";
 import { parseTicketSyncItem, TICKET_SYNC_LIMITS } from "@orkestrator/protocol/ticket-sync";
 
 import type { CommandContext } from "./commands-context.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
-import { assertOnlyKeys } from "./commands-validation.js";
 
 /**
  * Kanban sync commands (docs/architecture/tickets.md, "Sync across machines").
@@ -15,6 +22,10 @@ import { assertOnlyKeys } from "./commands-validation.js";
  *
  * Command node side: `get_ticket_sync_status` for the board, and
  * `sync_node_tickets` to sync now.
+ *
+ * All six are defined (`@orkestrator/protocol/contract/domains/ticket-sync`,
+ * plan item 1010): their arguments decode tolerantly (an unknown key is
+ * dropped, not refused), and the checks below keep their own messages.
  */
 
 function nonBlank(value: unknown, name: string, max = 200): string {
@@ -33,7 +44,10 @@ function sequence(value: unknown, name: string): number {
 }
 
 /** The calling command node, which must be attached to this node. */
-function attachedController(args: Record<string, unknown>, context: CommandContext): string {
+function attachedController(
+  args: { readonly controllerId?: unknown },
+  context: CommandContext,
+): string {
   const controllerId = args.controllerId;
   if (!isBackendId(controllerId)) throw new Error("Expected controllerId to be a node identity.");
   if (!context.nodes?.listControllers().some((entry) => entry.controllerId === controllerId)) {
@@ -49,21 +63,7 @@ function ticketSync(context: CommandContext) {
 }
 
 export function registerTicketSyncCommands(register: CommandRegistrar): void {
-  register("apply_ticket_sync", async (args, context) => {
-    assertOnlyKeys(
-      args,
-      [
-        "controllerId",
-        "projectId",
-        "sourceProjectId",
-        "epoch",
-        "items",
-        "cursor",
-        "reset",
-        "liveIds",
-      ],
-      "arguments",
-    );
+  register(applyTicketSyncCommand, async (args, context) => {
     const controllerId = attachedController(args, context);
     const projectId = nonBlank(args.projectId, "projectId");
     if (!(await context.storage.getProject(projectId))) {
@@ -95,8 +95,7 @@ export function registerTicketSyncCommands(register: CommandRegistrar): void {
     });
   });
 
-  register("get_ticket_sync_cursor", async (args, context) => {
-    assertOnlyKeys(args, ["controllerId", "projectId"], "arguments");
+  register(getTicketSyncCursorCommand, async (args, context) => {
     const controllerId = attachedController(args, context);
     return context.storage.kanban.getTicketSyncCursor(
       controllerId,
@@ -104,8 +103,7 @@ export function registerTicketSyncCommands(register: CommandRegistrar): void {
     );
   });
 
-  register("collect_ticket_sync_outbox", async (args, context) => {
-    assertOnlyKeys(args, ["controllerId", "after"], "arguments");
+  register(collectTicketSyncOutboxCommand, async (args, context) => {
     const controllerId = attachedController(args, context);
     return context.storage.kanban.collectTicketSyncOutbox(
       controllerId,
@@ -113,8 +111,7 @@ export function registerTicketSyncCommands(register: CommandRegistrar): void {
     );
   });
 
-  register("ack_ticket_sync_outbox", async (args, context) => {
-    assertOnlyKeys(args, ["controllerId", "epoch", "upTo"], "arguments");
+  register(ackTicketSyncOutboxCommand, async (args, context) => {
     const controllerId = attachedController(args, context);
     return context.storage.kanban.ackTicketSyncOutbox(
       controllerId,
@@ -123,16 +120,14 @@ export function registerTicketSyncCommands(register: CommandRegistrar): void {
     );
   });
 
-  register("get_ticket_sync_status", async (args, context) => {
-    assertOnlyKeys(args, ["projectId"], "arguments");
+  register(getTicketSyncStatusCommand, async (args, context) => {
     const projectId = nonBlank(args.projectId, "projectId");
     const service = context.nodeCoordination?.ticketSync;
     if (!service) return { projectId, nodes: [], conflicts: [] };
     return service.status(projectId);
   });
 
-  register("sync_node_tickets", async (args, context) => {
-    assertOnlyKeys(args, ["nodeId"], "arguments");
+  register(syncNodeTicketsCommand, async (args, context) => {
     const service = ticketSync(context);
     if (args.nodeId === undefined) return { nodes: await service.syncAll() };
     return { nodes: [await service.sync(nonBlank(args.nodeId, "nodeId"))] };

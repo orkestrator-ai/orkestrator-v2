@@ -1,4 +1,4 @@
-import { create } from "zustand";
+import type { StoreApi } from "zustand/vanilla";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { AgentConversationMode } from "@orkestrator/protocol/native-agent";
 import { parseNativeAgentCommandIntent } from "@orkestrator/protocol/agent-command-catalogue";
@@ -7,6 +7,9 @@ import type { FileMention } from "@/types";
 import type { WorkspaceAttachment } from "@/components/chat/NativeAttachmentMenu";
 import type { TranscriptAnnotation } from "@/lib/chat/transcript-annotations";
 import { getEnvironmentIdFromSessionKey } from "@/lib/utils";
+import { appCommandScope } from "@/lib/node-scope-slots";
+import { defineScopedStore } from "@/lib/node-scope/scoped-store";
+import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
 
 /**
  * The command a user picked from the `/` menu for this draft.
@@ -84,7 +87,7 @@ const EMPTY_DRAFT: NativeComposeDraft = {
   mode: "build",
 };
 
-interface NativeComposeState {
+export interface NativeComposeState {
   drafts: Map<string, NativeComposeDraft>;
   updateDraft: (sessionKey: string, update: Partial<NativeComposeDraft>) => void;
   clearDraft: (sessionKey: string) => void;
@@ -92,7 +95,7 @@ interface NativeComposeState {
   consumeBrowserAnnotations: (environmentId: string, annotationIds: readonly string[]) => void;
 }
 
-interface NativeComposePersistenceState {
+export interface NativeComposePersistenceState {
   draftText: Map<string, string>;
   draftMentions: Map<string, FileMention[]>;
   attachments: Map<string, WorkspaceAttachment[]>;
@@ -317,95 +320,113 @@ export function nativeComposeDraft(
   return state.drafts.get(sessionKey) ?? EMPTY_DRAFT;
 }
 
-export const useNativeComposeStore = create<NativeComposeState>()((set, get) => ({
-  drafts: new Map(),
-  updateDraft: (sessionKey, update) =>
-    set((state) => {
-      const drafts = new Map(state.drafts);
-      const existing = drafts.get(sessionKey);
-      const contentChanged =
-        update.text !== undefined ||
-        update.mentions !== undefined ||
-        update.attachments !== undefined;
-      const annotationContentChanged = update.annotations !== undefined;
-      const next = { ...EMPTY_DRAFT, ...existing, ...update };
-      // Content edits drop dispatch ownership so a late transcript echo cannot
-      // delete the next prompt. An in-flight first submission is the exception:
-      // clearing requestId there strands settlement and leaves submissionPending
-      // stuck after the backend answers.
-      if (
-        (contentChanged || annotationContentChanged) &&
-        update.requestId === undefined &&
-        !next.submissionPending
-      ) {
-        delete next.requestId;
-        delete next.pendingTranscriptConfirmation;
-      }
-      // A selection lasts exactly as long as its token: argument edits keep
-      // it, any edit to the token itself makes the text a different command.
-      if (
-        update.text !== undefined &&
-        !("commandSelection" in update) &&
-        next.commandSelection &&
-        !commandSelectionMatchesText(next.commandSelection, next.text)
-      ) {
-        delete next.commandSelection;
-      }
-      drafts.set(sessionKey, next);
-      return { drafts };
-    }),
-  clearDraft: (sessionKey) =>
-    set((state) => {
-      if (!state.drafts.has(sessionKey)) return state;
-      const drafts = new Map(state.drafts);
-      drafts.delete(sessionKey);
-      return { drafts };
-    }),
-  clearSession: (sessionKey) => {
-    get().clearDraft(sessionKey);
-  },
-  consumeBrowserAnnotations: (environmentId, annotationIds) =>
-    set((state) => {
-      if (annotationIds.length === 0) return state;
-      const ids = new Set(annotationIds);
-      let changed = false;
-      const drafts = new Map(state.drafts);
-      for (const [sessionKey, draft] of Array.from(drafts)) {
-        if (getEnvironmentIdFromSessionKey(sessionKey) !== environmentId) continue;
-        // Only genuinely unmigrated legacy copies are consumed. A note the
-        // backend imported into a durable thread (`migratedTo`) and anything
-        // it owns stay put; new web annotations never enter drafts at all.
-        const consumed = new Set(
-          draft.annotations
-            .filter(
-              (annotation) =>
-                annotation.source === "browser" && !annotation.migratedTo && ids.has(annotation.id),
-            )
-            .map((annotation) => annotation.id),
-        );
-        if (consumed.size === 0) continue;
-        const annotations = draft.annotations.filter(
-          (annotation) => annotation.source !== "browser" || !consumed.has(annotation.id),
-        );
-        const attachments = draft.attachments.filter(
-          (attachment) => !attachment.annotationId || !consumed.has(attachment.annotationId),
-        );
+/**
+ * Composer drafts, one instance per node scope: a session key names a tab on
+ * its node, and two nodes may both have `env-1:tab-1`.
+ */
+export const nativeComposeStore = defineScopedStore<NativeComposeState>(
+  "native-compose",
+  () => (set, get) => ({
+    drafts: new Map(),
+    updateDraft: (sessionKey, update) =>
+      set((state) => {
+        const drafts = new Map(state.drafts);
+        const existing = drafts.get(sessionKey);
+        const contentChanged =
+          update.text !== undefined ||
+          update.mentions !== undefined ||
+          update.attachments !== undefined;
+        const annotationContentChanged = update.annotations !== undefined;
+        const next = { ...EMPTY_DRAFT, ...existing, ...update };
+        // Content edits drop dispatch ownership so a late transcript echo cannot
+        // delete the next prompt. An in-flight first submission is the exception:
+        // clearing requestId there strands settlement and leaves submissionPending
+        // stuck after the backend answers.
         if (
-          annotations.length === draft.annotations.length &&
-          attachments.length === draft.attachments.length
+          (contentChanged || annotationContentChanged) &&
+          update.requestId === undefined &&
+          !next.submissionPending
         ) {
-          continue;
+          delete next.requestId;
+          delete next.pendingTranscriptConfirmation;
         }
-        changed = true;
-        drafts.set(sessionKey, { ...draft, annotations, attachments });
-      }
-      return changed ? { drafts } : state;
-    }),
-}));
+        // A selection lasts exactly as long as its token: argument edits keep
+        // it, any edit to the token itself makes the text a different command.
+        if (
+          update.text !== undefined &&
+          !("commandSelection" in update) &&
+          next.commandSelection &&
+          !commandSelectionMatchesText(next.commandSelection, next.text)
+        ) {
+          delete next.commandSelection;
+        }
+        drafts.set(sessionKey, next);
+        return { drafts };
+      }),
+    clearDraft: (sessionKey) =>
+      set((state) => {
+        if (!state.drafts.has(sessionKey)) return state;
+        const drafts = new Map(state.drafts);
+        drafts.delete(sessionKey);
+        return { drafts };
+      }),
+    clearSession: (sessionKey) => {
+      get().clearDraft(sessionKey);
+    },
+    consumeBrowserAnnotations: (environmentId, annotationIds) =>
+      set((state) => {
+        if (annotationIds.length === 0) return state;
+        const ids = new Set(annotationIds);
+        let changed = false;
+        const drafts = new Map(state.drafts);
+        for (const [sessionKey, draft] of Array.from(drafts)) {
+          if (getEnvironmentIdFromSessionKey(sessionKey) !== environmentId) continue;
+          // Only genuinely unmigrated legacy copies are consumed. A note the
+          // backend imported into a durable thread (`migratedTo`) and anything
+          // it owns stay put; new web annotations never enter drafts at all.
+          const consumed = new Set(
+            draft.annotations
+              .filter(
+                (annotation) =>
+                  annotation.source === "browser" &&
+                  !annotation.migratedTo &&
+                  ids.has(annotation.id),
+              )
+              .map((annotation) => annotation.id),
+          );
+          if (consumed.size === 0) continue;
+          const annotations = draft.annotations.filter(
+            (annotation) => annotation.source !== "browser" || !consumed.has(annotation.id),
+          );
+          const attachments = draft.attachments.filter(
+            (attachment) => !attachment.annotationId || !consumed.has(attachment.annotationId),
+          );
+          if (
+            annotations.length === draft.annotations.length &&
+            attachments.length === draft.attachments.length
+          ) {
+            continue;
+          }
+          changed = true;
+          drafts.set(sessionKey, { ...draft, annotations, attachments });
+        }
+        return changed ? { drafts } : state;
+      }),
+  }),
+);
 
-function applyRestoredDraftMetadata(sessionKey: string, metadata: unknown): void {
+/** Reads the nearest node scope's drafts; other code uses `scope.store(nativeComposeStore)`. */
+export const useNativeComposeStore = scopedStoreHook(nativeComposeStore);
+
+type ComposeStoreApi = StoreApi<NativeComposeState>;
+
+function applyRestoredDraftMetadata(
+  store: ComposeStoreApi,
+  sessionKey: string,
+  metadata: unknown,
+): void {
   const restored = restoreDraftMetadata(metadata);
-  if (restored) useNativeComposeStore.getState().updateDraft(sessionKey, restored);
+  if (restored) store.getState().updateDraft(sessionKey, restored);
 }
 
 function persistableDraftMetadataMap(state: NativeComposeState): Map<string, unknown> {
@@ -416,102 +437,134 @@ function persistableDraftMetadataMap(state: NativeComposeState): Map<string, unk
   );
 }
 
-function persistenceState(state: NativeComposeState): NativeComposePersistenceState {
+function persistenceState(
+  store: ComposeStoreApi,
+  state: NativeComposeState,
+): NativeComposePersistenceState {
+  const updateDraft = (sessionKey: string, update: Partial<NativeComposeDraft>) =>
+    store.getState().updateDraft(sessionKey, update);
   return {
     draftText: new Map([...state.drafts].map(([key, draft]) => [key, draft.text])),
     draftMentions: new Map([...state.drafts].map(([key, draft]) => [key, draft.mentions])),
     attachments: new Map([...state.drafts].map(([key, draft]) => [key, draft.attachments])),
     annotations: new Map([...state.drafts].map(([key, draft]) => [key, draft.annotations])),
-    setDraftText: (sessionKey, text) =>
-      useNativeComposeStore.getState().updateDraft(sessionKey, { text }),
-    setDraftMentions: (sessionKey, mentions) =>
-      useNativeComposeStore.getState().updateDraft(sessionKey, { mentions }),
-    clearAttachments: (sessionKey) =>
-      useNativeComposeStore.getState().updateDraft(sessionKey, { attachments: [] }),
+    setDraftText: (sessionKey, text) => updateDraft(sessionKey, { text }),
+    setDraftMentions: (sessionKey, mentions) => updateDraft(sessionKey, { mentions }),
+    clearAttachments: (sessionKey) => updateDraft(sessionKey, { attachments: [] }),
     addAttachment: (sessionKey, attachment) => {
-      const current = nativeComposeDraft(useNativeComposeStore.getState(), sessionKey);
-      useNativeComposeStore.getState().updateDraft(sessionKey, {
-        attachments: [...current.attachments, attachment],
-      });
+      const current = nativeComposeDraft(store.getState(), sessionKey);
+      updateDraft(sessionKey, { attachments: [...current.attachments, attachment] });
     },
-    setAnnotations: (sessionKey, annotations) =>
-      useNativeComposeStore.getState().updateDraft(sessionKey, { annotations }),
+    setAnnotations: (sessionKey, annotations) => updateDraft(sessionKey, { annotations }),
   };
 }
 
-function lockedPersistenceState(state: NativeComposeState): NativeComposePersistenceState {
+function lockedPersistenceState(
+  store: ComposeStoreApi,
+  state: NativeComposeState,
+): NativeComposePersistenceState {
   return {
-    ...persistenceState(state),
+    ...persistenceState(store, state),
     draftMetadata: persistableDraftMetadataMap(state),
-    setDraftMetadata: applyRestoredDraftMetadata,
+    setDraftMetadata: (sessionKey, metadata) =>
+      applyRestoredDraftMetadata(store, sessionKey, metadata),
   };
 }
+
+function unassignedPersistenceState(
+  store: ComposeStoreApi,
+  state: NativeComposeState,
+): NativeComposePersistenceState {
+  return {
+    ...persistenceState(store, state),
+    draftMetadata: new Map(
+      [...state.drafts].map(([key, draft]) => [key, persistedDraftMetadata(draft)]),
+    ),
+    setDraftMetadata: (sessionKey, metadata) =>
+      applyRestoredDraftMetadata(store, sessionKey, metadata),
+  };
+}
+
+/** The persistence hook's view of one compose store: `getState` and `subscribe`. */
+export interface NativeComposePersistenceStore {
+  getState: () => NativeComposePersistenceState;
+  subscribe: (
+    listener: (
+      state: NativeComposePersistenceState,
+      previous: NativeComposePersistenceState,
+    ) => void,
+  ) => () => void;
+}
+
+function persistenceView(
+  store: ComposeStoreApi,
+  view: (store: ComposeStoreApi, state: NativeComposeState) => NativeComposePersistenceState,
+): NativeComposePersistenceStore {
+  return {
+    getState: () => view(store, store.getState()),
+    subscribe: (listener) =>
+      store.subscribe((state, previous) => {
+        listener(view(store, state), view(store, previous));
+      }),
+  };
+}
+
+// One adapter per store instance, so a hook that depends on it keeps its
+// effect across renders. Keyed by the scope's instance, dropped with it.
+const lockedViews = new WeakMap<ComposeStoreApi, NativeComposePersistenceStore>();
+const unassignedViews = new WeakMap<ComposeStoreApi, NativeComposePersistenceStore>();
 
 /**
- * Compatibility surface for the existing backend-backed compose-draft hook.
+ * Compatibility surface for the existing backend-backed compose-draft hook,
+ * over one node's compose store.
  *
  * The consolidated store deliberately keeps all draft fields in one record so
  * provider lock-in is atomic. The persistence hook predates that store and
  * consumes field maps; this adapter exposes those maps without creating a
  * second source of truth.
  */
-export const nativeComposePersistenceStore = {
-  getState: () => lockedPersistenceState(useNativeComposeStore.getState()),
-  subscribe: (
-    listener: (
-      state: NativeComposePersistenceState,
-      previous: NativeComposePersistenceState,
-    ) => void,
-  ) =>
-    useNativeComposeStore.subscribe((state, previous) => {
-      listener(lockedPersistenceState(state), lockedPersistenceState(previous));
-    }),
-};
+export function nativeComposePersistence(store: ComposeStoreApi): NativeComposePersistenceStore {
+  let view = lockedViews.get(store);
+  if (!view) {
+    view = persistenceView(store, lockedPersistenceState);
+    lockedViews.set(store, view);
+  }
+  return view;
+}
 
 /**
  * Stable persistence for a provider-neutral tab before its first send locks
  * the pane. Provider choice and composer options live alongside the draft so a
  * reload cannot accidentally look under the default provider's namespace.
  */
-export const unassignedNativeComposePersistenceStore = {
-  getState: (): NativeComposePersistenceState => {
-    const state = useNativeComposeStore.getState();
-    return {
-      ...persistenceState(state),
-      draftMetadata: new Map(
-        [...state.drafts].map(([key, draft]) => [key, persistedDraftMetadata(draft)]),
-      ),
-      setDraftMetadata: applyRestoredDraftMetadata,
-    };
-  },
-  subscribe: (
-    listener: (
-      state: NativeComposePersistenceState,
-      previous: NativeComposePersistenceState,
-    ) => void,
-  ) =>
-    useNativeComposeStore.subscribe((state, previous) => {
-      listener(
-        {
-          ...persistenceState(state),
-          draftMetadata: new Map(
-            [...state.drafts].map(([key, draft]) => [key, persistedDraftMetadata(draft)]),
-          ),
-          setDraftMetadata: (sessionKey, metadata) => {
-            const restored = restoreDraftMetadata(metadata);
-            if (restored) useNativeComposeStore.getState().updateDraft(sessionKey, restored);
-          },
-        },
-        {
-          ...persistenceState(previous),
-          draftMetadata: new Map(
-            [...previous.drafts].map(([key, draft]) => [key, persistedDraftMetadata(draft)]),
-          ),
-          setDraftMetadata: (sessionKey, metadata) => {
-            const restored = restoreDraftMetadata(metadata);
-            if (restored) useNativeComposeStore.getState().updateDraft(sessionKey, restored);
-          },
-        },
-      );
-    }),
+export function unassignedNativeComposePersistence(
+  store: ComposeStoreApi,
+): NativeComposePersistenceStore {
+  let view = unassignedViews.get(store);
+  if (!view) {
+    view = persistenceView(store, unassignedPersistenceState);
+    unassignedViews.set(store, view);
+  }
+  return view;
+}
+
+const commandComposeStore = () => appCommandScope().store(nativeComposeStore);
+
+/**
+ * @deprecated The app command scope's `nativeComposePersistence`, resolved per
+ * call. Name the node: `nativeComposePersistence(scope.store(nativeComposeStore))`.
+ */
+export const nativeComposePersistenceStore: NativeComposePersistenceStore = {
+  getState: () => nativeComposePersistence(commandComposeStore()).getState(),
+  subscribe: (listener) => nativeComposePersistence(commandComposeStore()).subscribe(listener),
+};
+
+/**
+ * @deprecated The app command scope's `unassignedNativeComposePersistence`,
+ * resolved per call. Name the node instead.
+ */
+export const unassignedNativeComposePersistenceStore: NativeComposePersistenceStore = {
+  getState: () => unassignedNativeComposePersistence(commandComposeStore()).getState(),
+  subscribe: (listener) =>
+    unassignedNativeComposePersistence(commandComposeStore()).subscribe(listener),
 };

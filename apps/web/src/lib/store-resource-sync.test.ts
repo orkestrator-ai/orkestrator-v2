@@ -4,7 +4,6 @@ import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import * as portalTransport from "@/lib/portal/portal-transport";
 import type { Environment } from "@/types";
 import type { PersistedPaneLayout } from "@/types/paneLayout";
 
@@ -12,6 +11,7 @@ import type { PersistedPaneLayout } from "@/types/paneLayout";
 // modules before replacing them and restore in afterAll, so a non-isolated run
 // does not leave those suites testing these fakes (AGENTS.md, Bun mock rules).
 import * as realBuildPipeline from "@/lib/build-pipeline-persistence";
+import { appCommandScope } from "@/lib/node-scope-slots";
 import * as realMultiReview from "@/lib/multi-review-persistence";
 import * as realPromptQueue from "@/lib/prompt-queue-persistence";
 import * as realPromptQueueSources from "@/lib/prompt-queue-sources";
@@ -76,23 +76,24 @@ const {
 } = await import("./pane-selection-storage");
 const { startEnvironmentInBackground } =
   await import("@/components/environments/CreateEnvironmentFlowDialog");
-const { useBuildPipelineStore } = await import("@/stores/buildPipelineStore");
-const { useConfigStore } = await import("@/stores/configStore");
-const { useEnvironmentStore } = await import("@/stores/environmentStore");
-const { useFeaturePlanStore } = await import("@/stores/featurePlanStore");
-const { useKanbanStore } = await import("@/stores/kanbanStore");
-const { useMultiReviewStore } = await import("@/stores/multiReviewStore");
-const { usePaneLayoutStore } = await import("@/stores/paneLayoutStore");
-const { invalidateProjectSnapshots, useProjectStore } = await import("@/stores/projectStore");
-const { useSessionStore } = await import("@/stores/sessionStore");
-const { useAgentMailStore } = await import("@/stores/agentMailStore");
+const { buildPipelineStore } = await import("@/stores/buildPipelineStore");
+const { appCommandStore } = await import("@/test/app-command-store");
+const { configStore } = await import("@/stores/configStore");
+const { environmentStore } = await import("@/stores/environmentStore");
+const { featurePlanStore } = await import("@/stores/featurePlanStore");
+const { kanbanStore } = await import("@/stores/kanbanStore");
+const { multiReviewStore } = await import("@/stores/multiReviewStore");
+const { paneLayoutStore } = await import("@/stores/paneLayoutStore");
+const { projectStore } = await import("@/stores/projectStore");
+const { sessionStore } = await import("@/stores/sessionStore");
+const { agentMailStore } = await import("@/stores/agentMailStore");
 const { PANE_LAYOUT_VERSION } = await import("@/types/paneLayout");
 
 const startTestStoreResourceSync = (options: Parameters<typeof startStoreResourceSync>[0] = {}) =>
   startStoreResourceSync({
-    getProjects: async () => useProjectStore.getState().projects,
+    getProjects: async () => appCommandStore(projectStore).getState().projects,
     getEnvironmentSnapshots: async (projectId: string) =>
-      useEnvironmentStore
+      appCommandStore(environmentStore)
         .getState()
         .environments.filter((environment) => environment.projectId === projectId),
     getAgentMailSummary: async () => ({ revision: 0, mailboxes: [] }),
@@ -157,28 +158,31 @@ beforeEach(() => {
   hydrateMultiReviewWorkflowsForEnvironment.mockClear();
   hydrateMultiReviewWorkflowsForEnvironment.mockImplementation(async () => []);
   hydratePromptQueuesForEnvironment.mockClear();
-  useEnvironmentStore.setState({ environments: [] });
-  useBuildPipelineStore.setState({ pipelines: new Map(), buildEnvironmentIds: new Set() });
-  useKanbanStore.setState({ currentProjectId: null, currentNotesProjectId: null });
-  useFeaturePlanStore.setState({ currentProjectId: null });
-  useProjectStore.setState({ projects: [] });
-  useMultiReviewStore.setState({ workflows: new Map() });
-  usePaneLayoutStore.setState({
+  appCommandStore(environmentStore).setState({ environments: [] });
+  appCommandStore(buildPipelineStore).setState({
+    pipelines: new Map(),
+    buildEnvironmentIds: new Set(),
+  });
+  appCommandStore(kanbanStore).setState({ currentProjectId: null, currentNotesProjectId: null });
+  appCommandStore(featurePlanStore).setState({ currentProjectId: null });
+  appCommandStore(projectStore).setState({ projects: [] });
+  appCommandStore(multiReviewStore).setState({ workflows: new Map() });
+  appCommandStore(paneLayoutStore).setState({
     environments: new Map(),
     hydration: new Map(),
     activeEnvironmentId: null,
   });
-  useConfigStore.setState({
-    config: structuredClone(useConfigStore.getInitialState().config),
+  appCommandStore(configStore).setState({
+    config: structuredClone(appCommandStore(configStore).getInitialState().config),
     isLoading: false,
     error: null,
     // Actions, not just data: a case below replaces `setConfig` with a spy, and
     // Zustand stores are module singletons shared with every other suite in the
     // same registry. Leaving the spy installed makes a later file's
     // `setConfig(...)` a silent no-op.
-    setConfig: useConfigStore.getInitialState().setConfig,
+    setConfig: appCommandStore(configStore).getInitialState().setConfig,
   });
-  useAgentMailStore.setState(useAgentMailStore.getInitialState());
+  appCommandStore(agentMailStore).setState(appCommandStore(agentMailStore).getInitialState());
   detach = startTestStoreResourceSync();
 });
 
@@ -192,13 +196,15 @@ describe("agent-mail binding", () => {
   test("authoritative resync repairs cached transcript metadata after missing mailbox events", async () => {
     detach?.();
     const mailboxId = "env-1\0tab-1";
-    useConfigStore.getState().updateGlobalConfig({
-      agentMessaging: {
-        ...useConfigStore.getState().config.global.agentMessaging!,
-        enabled: true,
-      },
-    });
-    useAgentMailStore.setState({
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        agentMessaging: {
+          ...appCommandStore(configStore).getState().config.global.agentMessaging!,
+          enabled: true,
+        },
+      });
+    appCommandStore(agentMailStore).setState({
       mailboxes: new Map([
         [
           mailboxId,
@@ -211,7 +217,7 @@ describe("agent-mail binding", () => {
       ]),
     });
     const refreshMailboxes = mock(async () => undefined);
-    useAgentMailStore.setState({ refreshMailboxes });
+    appCommandStore(agentMailStore).setState({ refreshMailboxes });
     detach = startTestStoreResourceSync({
       getAgentMailSummary: async () => ({
         revision: 2,
@@ -235,7 +241,7 @@ describe("agent-mail binding", () => {
     requestResourceResync();
     await waitForState(() => refreshMailboxes.mock.calls.length === 1, "observed mailbox resync");
     expect(refreshMailboxes).toHaveBeenCalledWith([{ environmentId: "env-1", tabId: "tab-1" }]);
-    expect(useAgentMailStore.getState().sent.size).toBe(0);
+    expect(appCommandStore(agentMailStore).getState().sent.size).toBe(0);
   });
 
   test("adopts authoritative summaries only while messaging is enabled", async () => {
@@ -261,23 +267,27 @@ describe("agent-mail binding", () => {
     dispatchResourceChange({ resource: "agent-mail-summary", id: "all", revision: 1 });
     await tick();
     expect(getAgentMailSummary).toHaveBeenCalledTimes(1);
-    expect(useAgentMailStore.getState().summary.get("env-1\0tab-1")?.unreadCount).toBe(2);
+    expect(
+      appCommandStore(agentMailStore).getState().summary.get("env-1\0tab-1")?.unreadCount,
+    ).toBe(2);
 
-    useConfigStore.getState().updateGlobalConfig({
-      agentMessaging: {
-        ...useConfigStore.getState().config.global.agentMessaging!,
-        enabled: false,
-      },
-    });
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        agentMessaging: {
+          ...appCommandStore(configStore).getState().config.global.agentMessaging!,
+          enabled: false,
+        },
+      });
     dispatchResourceChange({ resource: "agent-mail-summary", id: "all", revision: 2 });
     await tick();
     expect(getAgentMailSummary).toHaveBeenCalledTimes(1);
-    expect(useAgentMailStore.getState().summary.size).toBe(0);
+    expect(appCommandStore(agentMailStore).getState().summary.size).toBe(0);
   });
 
   test("refreshes an already-hydrated mailbox on its record event", async () => {
     const mailboxId = "env-1\0tab-1";
-    useAgentMailStore.setState({
+    appCommandStore(agentMailStore).setState({
       mailboxes: new Map([
         [
           mailboxId,
@@ -290,7 +300,7 @@ describe("agent-mail binding", () => {
       ]),
     });
     const refreshMailbox = mock(async () => undefined);
-    useAgentMailStore.setState({ refreshMailbox });
+    appCommandStore(agentMailStore).setState({ refreshMailbox });
     dispatchResourceChange({ resource: "agent-mail", id: mailboxId, revision: 1 });
     await tick();
     expect(refreshMailbox).toHaveBeenCalledWith("env-1", "tab-1");
@@ -298,12 +308,14 @@ describe("agent-mail binding", () => {
 
   test("deduplicates tracked sent destinations during a summary refresh", async () => {
     detach?.();
-    useConfigStore.getState().updateGlobalConfig({
-      agentMessaging: {
-        ...useConfigStore.getState().config.global.agentMessaging!,
-        enabled: true,
-      },
-    });
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        agentMessaging: {
+          ...appCommandStore(configStore).getState().config.global.agentMessaging!,
+          enabled: true,
+        },
+      });
     const trackedMessage = {
       version: 1 as const,
       id: "message-1",
@@ -322,14 +334,16 @@ describe("agent-mail binding", () => {
       placement: "pending-inject" as const,
       revision: 1,
     };
-    useAgentMailStore.getState().trackSent(trackedMessage);
-    useAgentMailStore.getState().trackSent({
-      ...trackedMessage,
-      id: "message-2",
-      requestId: "request-2",
-    });
+    appCommandStore(agentMailStore).getState().trackSent(trackedMessage);
+    appCommandStore(agentMailStore)
+      .getState()
+      .trackSent({
+        ...trackedMessage,
+        id: "message-2",
+        requestId: "request-2",
+      });
     const refreshMailboxes = mock(async () => undefined);
-    useAgentMailStore.setState({ refreshMailboxes });
+    appCommandStore(agentMailStore).setState({ refreshMailboxes });
     detach = startTestStoreResourceSync({
       getAgentMailSummary: async () => ({ revision: 2, mailboxes: [] }),
     });
@@ -341,39 +355,46 @@ describe("agent-mail binding", () => {
 
   test("skips an empty sent batch and retries after a tracked mailbox refresh fails", async () => {
     detach?.();
-    useConfigStore.getState().updateGlobalConfig({
-      agentMessaging: {
-        ...useConfigStore.getState().config.global.agentMessaging!,
-        enabled: true,
-      },
-    });
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        agentMessaging: {
+          ...appCommandStore(configStore).getState().config.global.agentMessaging!,
+          enabled: true,
+        },
+      });
     const refreshMailboxes = mock(async () => undefined);
-    useAgentMailStore.setState({ refreshMailboxes });
+    appCommandStore(agentMailStore).setState({ refreshMailboxes });
     detach = startTestStoreResourceSync({
       getAgentMailSummary: async () => ({ revision: 2, mailboxes: [] }),
     });
     dispatchResourceChange({ resource: "agent-mail-summary", id: "all", revision: 2 });
-    await waitForState(() => useAgentMailStore.getState().revision === 2, "empty mail summary");
+    await waitForState(
+      () => appCommandStore(agentMailStore).getState().revision === 2,
+      "empty mail summary",
+    );
     expect(refreshMailboxes).not.toHaveBeenCalled();
 
-    useAgentMailStore.getState().trackSent({
-      version: 1,
-      id: "tracked-message",
-      threadId: "tracked-message",
-      requestId: "tracked-request",
-      createdAt: new Date(0).toISOString(),
-      from: { kind: "user" },
-      toEnvironmentId: "env-1",
-      toTabId: "tab-1",
-      toIncarnationId: "incarnation-1",
-      body: "hello",
-      bodyBytes: 5,
-      trust: "user",
-      injectDepth: 0,
-      threadDepth: 0,
-      placement: "pending-inject",
-      revision: 1,
-    });
+    appCommandStore(agentMailStore)
+      .getState()
+      .trackSent({
+        version: 1,
+        id: "tracked-message",
+        threadId: "tracked-message",
+        requestId: "tracked-request",
+        createdAt: new Date(0).toISOString(),
+        from: { kind: "user" },
+        toEnvironmentId: "env-1",
+        toTabId: "tab-1",
+        toIncarnationId: "incarnation-1",
+        body: "hello",
+        bodyBytes: 5,
+        trust: "user",
+        injectDepth: 0,
+        threadDepth: 0,
+        placement: "pending-inject",
+        revision: 1,
+      });
     refreshMailboxes.mockImplementationOnce(async () => {
       throw new Error("mailbox batch offline");
     });
@@ -387,7 +408,7 @@ describe("agent-mail binding", () => {
 
 describe("prompt-queue binding", () => {
   test("refetches the environment's queues when it is known to this client", async () => {
-    useEnvironmentStore.setState({ environments: [environment("env-1")] });
+    appCommandStore(environmentStore).setState({ environments: [environment("env-1")] });
 
     dispatchResourceChange({ resource: "prompt-queue", id: "env-1", revision: 1 });
     await tick();
@@ -404,7 +425,7 @@ describe("prompt-queue binding", () => {
   });
 
   test("does not reject when the refetch fails", async () => {
-    useEnvironmentStore.setState({ environments: [environment("env-1")] });
+    appCommandStore(environmentStore).setState({ environments: [environment("env-1")] });
     hydratePromptQueuesForEnvironment.mockImplementationOnce(async () => {
       throw new Error("backend down");
     });
@@ -419,8 +440,8 @@ describe("prompt-queue binding", () => {
 describe("session binding", () => {
   test("reloads sessions for a known environment", async () => {
     const loadSessionsForEnvironment = mock(async () => {});
-    useEnvironmentStore.setState({ environments: [environment("env-1")] });
-    useSessionStore.setState({ loadSessionsForEnvironment } as never);
+    appCommandStore(environmentStore).setState({ environments: [environment("env-1")] });
+    appCommandStore(sessionStore).setState({ loadSessionsForEnvironment } as never);
 
     dispatchResourceChange({ resource: "session", id: "env-1", revision: 1 });
     await tick();
@@ -430,7 +451,7 @@ describe("session binding", () => {
 
   test("ignores sessions for an environment this client has not loaded", async () => {
     const loadSessionsForEnvironment = mock(async () => {});
-    useSessionStore.setState({ loadSessionsForEnvironment } as never);
+    appCommandStore(sessionStore).setState({ loadSessionsForEnvironment } as never);
 
     dispatchResourceChange({ resource: "session", id: "env-unknown", revision: 1 });
     await tick();
@@ -442,7 +463,7 @@ describe("session binding", () => {
 describe("kanban and notes bindings", () => {
   test("reloads the board only for the project currently open", async () => {
     const loadTasks = mock(async () => {});
-    useKanbanStore.setState({ currentProjectId: "project-1", loadTasks } as never);
+    appCommandStore(kanbanStore).setState({ currentProjectId: "project-1", loadTasks } as never);
 
     dispatchResourceChange({ resource: "kanban", id: "project-1", revision: 1 });
     await tick();
@@ -452,7 +473,7 @@ describe("kanban and notes bindings", () => {
 
   test("ignores a board change for a project the user has navigated away from", async () => {
     const loadTasks = mock(async () => {});
-    useKanbanStore.setState({ currentProjectId: "project-1", loadTasks } as never);
+    appCommandStore(kanbanStore).setState({ currentProjectId: "project-1", loadTasks } as never);
 
     dispatchResourceChange({ resource: "kanban", id: "project-2", revision: 1 });
     await tick();
@@ -462,7 +483,10 @@ describe("kanban and notes bindings", () => {
 
   test("reloads notes only for the project whose notes are open", async () => {
     const loadNotes = mock(async () => {});
-    useKanbanStore.setState({ currentNotesProjectId: "project-1", loadNotes } as never);
+    appCommandStore(kanbanStore).setState({
+      currentNotesProjectId: "project-1",
+      loadNotes,
+    } as never);
 
     dispatchResourceChange({ resource: "project-notes", id: "project-1", revision: 1 });
     await tick();
@@ -477,7 +501,10 @@ describe("kanban and notes bindings", () => {
 describe("feature-plan binding", () => {
   test("reloads features only for the project currently open", async () => {
     const loadFeatures = mock(async () => {});
-    useFeaturePlanStore.setState({ currentProjectId: "project-1", loadFeatures } as never);
+    appCommandStore(featurePlanStore).setState({
+      currentProjectId: "project-1",
+      loadFeatures,
+    } as never);
 
     dispatchResourceChange({ resource: "feature-plan", id: "project-1", revision: 1 });
     await tick();
@@ -494,15 +521,15 @@ describe("config binding", () => {
     // Config is global, so unlike the project-scoped bindings there is no
     // scope guard to satisfy — every client wants every config change.
     const setConfig = mock(() => {});
-    const realSetConfig = useConfigStore.getState().setConfig;
-    useConfigStore.setState({ setConfig } as never);
+    const realSetConfig = appCommandStore(configStore).getState().setConfig;
+    appCommandStore(configStore).setState({ setConfig } as never);
     try {
       dispatchResourceChange({ resource: "config", id: "app", revision: 1 });
       await tick();
 
       expect(setConfig).toHaveBeenCalledTimes(1);
     } finally {
-      useConfigStore.setState({ setConfig: realSetConfig });
+      appCommandStore(configStore).setState({ setConfig: realSetConfig });
     }
   });
 });
@@ -513,7 +540,12 @@ describe("build-pipeline binding", () => {
     await tick();
 
     // Control state only: no transcript of this pipeline is on screen.
-    expect(hydrateBuildPipeline).toHaveBeenCalledWith("pipeline-1", undefined, {});
+    expect(hydrateBuildPipeline).toHaveBeenCalledWith(
+      "pipeline-1",
+      undefined,
+      {},
+      appCommandScope(),
+    );
   });
 
   test("patches bodies too while a transcript of the pipeline is on screen", async () => {
@@ -522,10 +554,12 @@ describe("build-pipeline binding", () => {
       dispatchResourceChange({ resource: "build-pipeline", id: "pipeline-1", revision: 1 });
       await tick();
 
-      expect(hydrateBuildPipeline).toHaveBeenCalledWith("pipeline-1", undefined, {
-        transcripts: true,
-        prioritySessionKey: "session-1",
-      });
+      expect(hydrateBuildPipeline).toHaveBeenCalledWith(
+        "pipeline-1",
+        undefined,
+        { transcripts: true, prioritySessionKey: "session-1" },
+        appCommandScope(),
+      );
     } finally {
       stop();
     }
@@ -534,7 +568,7 @@ describe("build-pipeline binding", () => {
   test("drops a locally persisted pipeline the backend no longer holds", async () => {
     // Treating "not found" as authoritative is what stops a stale tab resuming
     // a build another client already finished.
-    useBuildPipelineStore.setState({
+    appCommandStore(buildPipelineStore).setState({
       pipelines: new Map([["pipeline-1", pipeline("pipeline-1", 4)]]),
       buildEnvironmentIds: new Set(["env-1"]),
     });
@@ -542,13 +576,13 @@ describe("build-pipeline binding", () => {
     dispatchResourceChange({ resource: "build-pipeline", id: "pipeline-1", revision: 5 });
     await tick();
 
-    expect(useBuildPipelineStore.getState().pipelines.has("pipeline-1")).toBe(false);
+    expect(appCommandStore(buildPipelineStore).getState().pipelines.has("pipeline-1")).toBe(false);
   });
 
   test("keeps a pipeline the backend has never seen", async () => {
     // backendRevision 0 means a sibling client may still be mid-way through
     // creating it; deleting locally would race that.
-    useBuildPipelineStore.setState({
+    appCommandStore(buildPipelineStore).setState({
       pipelines: new Map([["pipeline-new", pipeline("pipeline-new", 0)]]),
       buildEnvironmentIds: new Set(["env-1"]),
     });
@@ -556,12 +590,12 @@ describe("build-pipeline binding", () => {
     dispatchResourceChange({ resource: "build-pipeline", id: "pipeline-new", revision: 1 });
     await tick();
 
-    expect(useBuildPipelineStore.getState().pipelines.has("pipeline-new")).toBe(true);
+    expect(appCommandStore(buildPipelineStore).getState().pipelines.has("pipeline-new")).toBe(true);
   });
 
   test("keeps the local pipeline when the backend still holds it", async () => {
     hydrateBuildPipeline.mockImplementationOnce(async () => pipeline("pipeline-1", 5));
-    useBuildPipelineStore.setState({
+    appCommandStore(buildPipelineStore).setState({
       pipelines: new Map([["pipeline-1", pipeline("pipeline-1", 4)]]),
       buildEnvironmentIds: new Set(["env-1"]),
     });
@@ -569,14 +603,14 @@ describe("build-pipeline binding", () => {
     dispatchResourceChange({ resource: "build-pipeline", id: "pipeline-1", revision: 5 });
     await tick();
 
-    expect(useBuildPipelineStore.getState().pipelines.has("pipeline-1")).toBe(true);
+    expect(appCommandStore(buildPipelineStore).getState().pipelines.has("pipeline-1")).toBe(true);
   });
 
   test("leaves the store alone when the refetch fails", async () => {
     hydrateBuildPipeline.mockImplementationOnce(async () => {
       throw new Error("backend down");
     });
-    useBuildPipelineStore.setState({
+    appCommandStore(buildPipelineStore).setState({
       pipelines: new Map([["pipeline-1", pipeline("pipeline-1", 4)]]),
       buildEnvironmentIds: new Set(["env-1"]),
     });
@@ -584,7 +618,7 @@ describe("build-pipeline binding", () => {
     dispatchResourceChange({ resource: "build-pipeline", id: "pipeline-1", revision: 5 });
     await tick();
 
-    expect(useBuildPipelineStore.getState().pipelines.has("pipeline-1")).toBe(true);
+    expect(appCommandStore(buildPipelineStore).getState().pipelines.has("pipeline-1")).toBe(true);
   });
 });
 
@@ -593,7 +627,7 @@ describe("multi-review binding", () => {
     dispatchResourceChange({ resource: "multi-review", id: "multi-1", revision: 1 });
     await tick();
 
-    expect(hydrateMultiReviewWorkflow).toHaveBeenCalledWith("multi-1");
+    expect(hydrateMultiReviewWorkflow).toHaveBeenCalledWith("multi-1", appCommandScope());
   });
 
   test("contains a backend refresh failure", async () => {
@@ -631,15 +665,20 @@ describe("workflow bindings in a hidden window", () => {
     await tick();
 
     expect(hydrateBuildPipeline).toHaveBeenCalledTimes(1);
-    expect(hydrateBuildPipeline).toHaveBeenCalledWith("pipeline-1", undefined, {});
+    expect(hydrateBuildPipeline).toHaveBeenCalledWith(
+      "pipeline-1",
+      undefined,
+      {},
+      appCommandScope(),
+    );
     expect(hydrateMultiReviewWorkflow).toHaveBeenCalledTimes(1);
-    expect(hydrateMultiReviewWorkflow).toHaveBeenCalledWith("multi-1");
+    expect(hydrateMultiReviewWorkflow).toHaveBeenCalledWith("multi-1", appCommandScope());
   });
 
   for (const overflow of [false, true]) {
     test(`retries acknowledged hidden scoped changes after a failed ${overflow ? "overflow" : "point"} read and unchanged manifest`, async () => {
-      useProjectStore.setState({ projects: [{ id: "project-1" } as never] });
-      useEnvironmentStore.setState({ environments: [environment("env-1")] });
+      appCommandStore(projectStore).setState({ projects: [{ id: "project-1" } as never] });
+      appCommandStore(environmentStore).setState({ environments: [environment("env-1")] });
       setVisibility("hidden");
       const retry = installControlledTimeout(DEFERRED_WORKFLOW_RETRY_MS);
       const read = overflow ? hydrateBuildPipelinesForProject : hydrateBuildPipeline;
@@ -721,8 +760,8 @@ describe("workflow bindings in a hidden window", () => {
   }
 
   test("reconciles both collections instead when too many ids changed while hidden", async () => {
-    useProjectStore.setState({ projects: [{ id: "project-1" } as never] });
-    useEnvironmentStore.setState({ environments: [environment("env-1")] });
+    appCommandStore(projectStore).setState({ projects: [{ id: "project-1" } as never] });
+    appCommandStore(environmentStore).setState({ environments: [environment("env-1")] });
     setVisibility("hidden");
     for (let index = 0; index <= MAX_DEFERRED_WORKFLOW_READS; index++) {
       dispatchResourceChange({ resource: "multi-review", id: `multi-${index}`, revision: index });
@@ -733,16 +772,23 @@ describe("workflow bindings in a hidden window", () => {
     await tick();
 
     expect(hydrateMultiReviewWorkflow).not.toHaveBeenCalled();
-    expect(hydrateMultiReviewWorkflowsForEnvironment).toHaveBeenCalledWith("env-1");
-    expect(hydrateBuildPipelinesForProject).toHaveBeenCalledWith("project-1");
+    expect(hydrateMultiReviewWorkflowsForEnvironment).toHaveBeenCalledWith(
+      "env-1",
+      appCommandScope(),
+    );
+    expect(hydrateBuildPipelinesForProject).toHaveBeenCalledWith(
+      "project-1",
+      undefined,
+      appCommandScope(),
+    );
   });
 });
 
 describe("pane-layout binding", () => {
   test("shows a tab created by another client and adopts backend selection", async () => {
     detach?.();
-    useEnvironmentStore.setState({ environments: [environment("env-1")] });
-    const paneStore = usePaneLayoutStore.getState();
+    appCommandStore(environmentStore).setState({ environments: [environment("env-1")] });
+    const paneStore = appCommandStore(paneLayoutStore).getState();
     paneStore.initialize(null, "env-1");
     paneStore.addTab(
       "default",
@@ -759,7 +805,10 @@ describe("pane-layout binding", () => {
       "env-1",
     );
     paneStore.beginHydration("env-1");
-    paneStore.finishHydration("env-1", usePaneLayoutStore.getState().environments.get("env-1"));
+    paneStore.finishHydration(
+      "env-1",
+      appCommandStore(paneLayoutStore).getState().environments.get("env-1"),
+    );
 
     const getPaneLayout = mock(async () => ({
       version: PANE_LAYOUT_VERSION,
@@ -801,7 +850,7 @@ describe("pane-layout binding", () => {
     dispatchResourceChange({ resource: "pane-layout", id: "env-1", revision: 1 });
     await tick();
 
-    const pane = usePaneLayoutStore.getState().getPane("default", "env-1");
+    const pane = appCommandStore(paneLayoutStore).getState().getPane("default", "env-1");
     expect(getPaneLayout).toHaveBeenCalledWith("env-1");
     expect(pane?.tabs.map(({ id }) => id)).toEqual(["review-3", "review-4"]);
     expect(pane?.activeTabId).toBe("review-4");
@@ -810,14 +859,14 @@ describe("pane-layout binding", () => {
 
   test("moves focus to the build tab on setup completion without a pane-layout frame", async () => {
     detach?.();
-    useEnvironmentStore.setState({ environments: [environment("env-1")] });
-    useBuildPipelineStore.setState({
+    appCommandStore(environmentStore).setState({ environments: [environment("env-1")] });
+    appCommandStore(buildPipelineStore).setState({
       pipelines: new Map([["pipe-1", pipeline("pipe-1", 1)]]),
     } as never);
 
     // The renderer is sitting on the setup terminal it seeded while the setup
     // script ran, exactly as it does mid-provision.
-    const paneStore = usePaneLayoutStore.getState();
+    const paneStore = appCommandStore(paneLayoutStore).getState();
     paneStore.initialize(null, "env-1");
     paneStore.addTab(
       "default",
@@ -835,8 +884,13 @@ describe("pane-layout binding", () => {
     );
     paneStore.addTab("default", { id: "default", type: "plain", isSetupTab: true }, "env-1");
     paneStore.beginHydration("env-1");
-    paneStore.finishHydration("env-1", usePaneLayoutStore.getState().environments.get("env-1"));
-    expect(usePaneLayoutStore.getState().getPane("default", "env-1")?.activeTabId).toBe("default");
+    paneStore.finishHydration(
+      "env-1",
+      appCommandStore(paneLayoutStore).getState().environments.get("env-1"),
+    );
+    expect(
+      appCommandStore(paneLayoutStore).getState().getPane("default", "env-1")?.activeTabId,
+    ).toBe("default");
 
     // The backend already handed selection to the build surface.
     const getPaneLayout = mock(async () => ({
@@ -888,9 +942,9 @@ describe("pane-layout binding", () => {
     await tick();
 
     expect(getPaneLayout).toHaveBeenCalledWith("env-1");
-    expect(usePaneLayoutStore.getState().getPane("default", "env-1")?.activeTabId).toBe(
-      "build-pipe-1",
-    );
+    expect(
+      appCommandStore(paneLayoutStore).getState().getPane("default", "env-1")?.activeTabId,
+    ).toBe("build-pipe-1");
 
     // A failed setup publishes the same event. The backend is still the
     // authority on what the layout should be, so re-reading it is correct there
@@ -909,7 +963,7 @@ describe("pane-layout binding", () => {
       value: { isolatedViewState: true },
     });
     try {
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [
           {
             ...environment("env-1"),
@@ -918,11 +972,11 @@ describe("pane-layout binding", () => {
           },
         ],
       });
-      useBuildPipelineStore.setState({
+      appCommandStore(buildPipelineStore).setState({
         pipelines: new Map([["pipe-1", pipeline("pipe-1", 1)]]),
       } as never);
 
-      const paneStore = usePaneLayoutStore.getState();
+      const paneStore = appCommandStore(paneLayoutStore).getState();
       paneStore.initialize(null, "env-1");
       paneStore.addTab("default", { id: "default", type: "plain", isSetupTab: true }, "env-1");
       paneStore.addTab(
@@ -941,15 +995,18 @@ describe("pane-layout binding", () => {
       );
       paneStore.setActiveTab("default", "default", "env-1");
       paneStore.beginHydration("env-1");
-      paneStore.finishHydration("env-1", usePaneLayoutStore.getState().environments.get("env-1"));
+      paneStore.finishHydration(
+        "env-1",
+        appCommandStore(paneLayoutStore).getState().environments.get("env-1"),
+      );
 
       armBuildPipelineTabActivation("env-1", "pipe-1");
       expect(getWindowBuildPipelineActivation("env-1")).toBe("pipe-1");
-      expect(usePaneLayoutStore.getState().getPane("default", "env-1")?.activeTabId).toBe(
-        "default",
-      );
+      expect(
+        appCommandStore(paneLayoutStore).getState().getPane("default", "env-1")?.activeTabId,
+      ).toBe("default");
 
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [
           {
             ...environment("env-1"),
@@ -1004,9 +1061,9 @@ describe("pane-layout binding", () => {
       emitSetupComplete!("env-1");
       await tick();
 
-      expect(usePaneLayoutStore.getState().getPane("default", "env-1")?.activeTabId).toBe(
-        "build-pipe-1",
-      );
+      expect(
+        appCommandStore(paneLayoutStore).getState().getPane("default", "env-1")?.activeTabId,
+      ).toBe("build-pipe-1");
       expect(getWindowBuildPipelineActivation("env-1")).toBeNull();
     } finally {
       if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
@@ -1022,7 +1079,7 @@ describe("pane-layout binding", () => {
       value: { isolatedViewState: true },
     });
     try {
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [
           {
             ...environment("env-1"),
@@ -1031,11 +1088,11 @@ describe("pane-layout binding", () => {
           },
         ],
       });
-      useBuildPipelineStore.setState({
+      appCommandStore(buildPipelineStore).setState({
         pipelines: new Map([["pipe-1", pipeline("pipe-1", 1)]]),
       } as never);
 
-      const paneStore = usePaneLayoutStore.getState();
+      const paneStore = appCommandStore(paneLayoutStore).getState();
       paneStore.initialize(null, "env-1");
       paneStore.addTab("default", { id: "default", type: "plain", isSetupTab: true }, "env-1");
       paneStore.addTab(
@@ -1054,13 +1111,16 @@ describe("pane-layout binding", () => {
       );
       paneStore.setActiveTab("default", "default", "env-1");
       paneStore.beginHydration("env-1");
-      paneStore.finishHydration("env-1", usePaneLayoutStore.getState().environments.get("env-1"));
+      paneStore.finishHydration(
+        "env-1",
+        appCommandStore(paneLayoutStore).getState().environments.get("env-1"),
+      );
 
       // No armBuildPipelineTabActivation: a coordinator or agent started this
       // pipeline, so this window holds no one-shot of its own.
       expect(getWindowBuildPipelineActivation("env-1")).toBeNull();
 
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [
           {
             ...environment("env-1"),
@@ -1103,9 +1163,9 @@ describe("pane-layout binding", () => {
       dispatchResourceChange({ resource: "pane-layout", id: "env-1", revision: 3 });
       await tick();
 
-      expect(usePaneLayoutStore.getState().getPane("default", "env-1")?.activeTabId).toBe(
-        "build-pipe-1",
-      );
+      expect(
+        appCommandStore(paneLayoutStore).getState().getPane("default", "env-1")?.activeTabId,
+      ).toBe("build-pipe-1");
       expect(hasWindowBuildPipelineHandoffResolved("env-1", "pipe-1")).toBe(true);
       expect(getWindowBuildPipelineActivation("env-1")).toBeNull();
     } finally {
@@ -1122,7 +1182,7 @@ describe("pane-layout binding", () => {
       value: { isolatedViewState: true },
     });
     try {
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [
           {
             ...environment("env-1"),
@@ -1132,11 +1192,11 @@ describe("pane-layout binding", () => {
           environment("env-2"),
         ],
       });
-      useBuildPipelineStore.setState({
+      appCommandStore(buildPipelineStore).setState({
         pipelines: new Map([["pipe-1", pipeline("pipe-1", 1)]]),
       } as never);
 
-      const paneStore = usePaneLayoutStore.getState();
+      const paneStore = appCommandStore(paneLayoutStore).getState();
       paneStore.initialize(null, "env-1");
       paneStore.addTab("default", { id: "default", type: "plain", isSetupTab: true }, "env-1");
       paneStore.addTab(
@@ -1155,18 +1215,24 @@ describe("pane-layout binding", () => {
       );
       paneStore.setActiveTab("default", "default", "env-1");
       paneStore.beginHydration("env-1");
-      paneStore.finishHydration("env-1", usePaneLayoutStore.getState().environments.get("env-1"));
+      paneStore.finishHydration(
+        "env-1",
+        appCommandStore(paneLayoutStore).getState().environments.get("env-1"),
+      );
       paneStore.initialize(null, "env-2");
       paneStore.beginHydration("env-2");
-      paneStore.finishHydration("env-2", usePaneLayoutStore.getState().environments.get("env-2"));
+      paneStore.finishHydration(
+        "env-2",
+        appCommandStore(paneLayoutStore).getState().environments.get("env-2"),
+      );
       paneStore.setActiveEnvironment("env-2");
 
       armBuildPipelineTabActivation("env-1", "pipe-1");
-      expect(usePaneLayoutStore.getState().getPane("default", "env-1")?.activeTabId).toBe(
-        "default",
-      );
+      expect(
+        appCommandStore(paneLayoutStore).getState().getPane("default", "env-1")?.activeTabId,
+      ).toBe("default");
 
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [
           {
             ...environment("env-1"),
@@ -1226,16 +1292,16 @@ describe("pane-layout binding", () => {
       emitSetupComplete!("env-1");
       await tick();
 
-      expect(usePaneLayoutStore.getState().getPane("default", "env-1")?.activeTabId).toBe(
-        "build-pipe-1",
-      );
+      expect(
+        appCommandStore(paneLayoutStore).getState().getPane("default", "env-1")?.activeTabId,
+      ).toBe("build-pipe-1");
       expect(getWindowBuildPipelineActivation("env-1")).toBeNull();
 
-      usePaneLayoutStore.getState().setActiveEnvironment("env-1");
-      expect(usePaneLayoutStore.getState().activeEnvironmentId).toBe("env-1");
-      expect(usePaneLayoutStore.getState().getPane("default", "env-1")?.activeTabId).toBe(
-        "build-pipe-1",
-      );
+      appCommandStore(paneLayoutStore).getState().setActiveEnvironment("env-1");
+      expect(appCommandStore(paneLayoutStore).getState().activeEnvironmentId).toBe("env-1");
+      expect(
+        appCommandStore(paneLayoutStore).getState().getPane("default", "env-1")?.activeTabId,
+      ).toBe("build-pipe-1");
     } finally {
       if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
       else delete window.orkestrator;
@@ -1250,7 +1316,7 @@ describe("pane-layout binding", () => {
       value: { isolatedViewState: true },
     });
     try {
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [
           {
             ...environment("env-1"),
@@ -1259,14 +1325,14 @@ describe("pane-layout binding", () => {
           },
         ],
       });
-      useBuildPipelineStore.setState({
+      appCommandStore(buildPipelineStore).setState({
         pipelines: new Map([
           ["pipe-old", pipeline("pipe-old", 1)],
           ["pipe-new", pipeline("pipe-new", 1)],
         ]),
       } as never);
 
-      const paneStore = usePaneLayoutStore.getState();
+      const paneStore = appCommandStore(paneLayoutStore).getState();
       paneStore.initialize(null, "env-1");
       paneStore.addTab(
         "default",
@@ -1284,12 +1350,15 @@ describe("pane-layout binding", () => {
       );
       paneStore.setActiveTab("default", "build-pipe-old", "env-1");
       paneStore.beginHydration("env-1");
-      paneStore.finishHydration("env-1", usePaneLayoutStore.getState().environments.get("env-1"));
+      paneStore.finishHydration(
+        "env-1",
+        appCommandStore(paneLayoutStore).getState().environments.get("env-1"),
+      );
 
       armBuildPipelineTabActivation("env-1", "pipe-new");
-      expect(usePaneLayoutStore.getState().getPane("default", "env-1")?.activeTabId).toBe(
-        "build-pipe-old",
-      );
+      expect(
+        appCommandStore(paneLayoutStore).getState().getPane("default", "env-1")?.activeTabId,
+      ).toBe("build-pipe-old");
       expect(getWindowBuildPipelineActivation("env-1")).toBe("pipe-new");
 
       const getPaneLayout = mock(async () => ({
@@ -1336,9 +1405,9 @@ describe("pane-layout binding", () => {
       dispatchResourceChange({ resource: "pane-layout", id: "env-1", revision: 9 });
       await tick();
 
-      expect(usePaneLayoutStore.getState().getPane("default", "env-1")?.activeTabId).toBe(
-        "build-pipe-new",
-      );
+      expect(
+        appCommandStore(paneLayoutStore).getState().getPane("default", "env-1")?.activeTabId,
+      ).toBe("build-pipe-new");
       expect(getWindowBuildPipelineActivation("env-1")).toBeNull();
     } finally {
       if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
@@ -1348,7 +1417,7 @@ describe("pane-layout binding", () => {
 
   test("stops observing setup completion once detached", async () => {
     detach?.();
-    useEnvironmentStore.setState({ environments: [environment("env-1")] });
+    appCommandStore(environmentStore).setState({ environments: [environment("env-1")] });
 
     const getPaneLayout = mock(async () => null);
     let emitSetupComplete: ((environmentId: string) => void) | null = null;
@@ -1442,8 +1511,8 @@ describe("pane-layout binding", () => {
 
   test("replays a change that arrives while initial layout hydration is pending", async () => {
     detach?.();
-    useEnvironmentStore.setState({ environments: [environment("env-1")] });
-    const paneStore = usePaneLayoutStore.getState();
+    appCommandStore(environmentStore).setState({ environments: [environment("env-1")] });
+    const paneStore = appCommandStore(paneLayoutStore).getState();
     paneStore.initialize(null, "env-1");
     paneStore.beginHydration("env-1");
 
@@ -1478,21 +1547,23 @@ describe("pane-layout binding", () => {
     await tick();
     expect(getPaneLayout).not.toHaveBeenCalled();
 
-    usePaneLayoutStore.getState().finishHydration("env-1", {
-      containerId: null,
-      activePaneId: "default",
-      root: {
-        kind: "leaf",
-        id: "default",
-        tabs: [{ id: "terminal-1", type: "plain" }],
-        activeTabId: "terminal-1",
-      },
-    });
+    appCommandStore(paneLayoutStore)
+      .getState()
+      .finishHydration("env-1", {
+        containerId: null,
+        activePaneId: "default",
+        root: {
+          kind: "leaf",
+          id: "default",
+          tabs: [{ id: "terminal-1", type: "plain" }],
+          activeTabId: "terminal-1",
+        },
+      });
     await tick();
 
     expect(getPaneLayout).toHaveBeenCalledWith("env-1");
     expect(
-      usePaneLayoutStore
+      appCommandStore(paneLayoutStore)
         .getState()
         .getAllTabs("env-1")
         .map(({ id }) => id),
@@ -1501,8 +1572,8 @@ describe("pane-layout binding", () => {
 
   test("preserves renderer-only launch and connection fields on self-echo", async () => {
     detach?.();
-    useEnvironmentStore.setState({ environments: [environment("env-1")] });
-    const paneStore = usePaneLayoutStore.getState();
+    appCommandStore(environmentStore).setState({ environments: [environment("env-1")] });
+    const paneStore = appCommandStore(paneLayoutStore).getState();
     paneStore.initialize(null, "env-1");
     for (const [id, type, dataKey, port] of [
       ["claude", "agent-native", "nativeAgentData", 4101],
@@ -1527,7 +1598,10 @@ describe("pane-layout binding", () => {
       );
     }
     paneStore.beginHydration("env-1");
-    paneStore.finishHydration("env-1", usePaneLayoutStore.getState().environments.get("env-1"));
+    paneStore.finishHydration(
+      "env-1",
+      appCommandStore(paneLayoutStore).getState().environments.get("env-1"),
+    );
     const getPaneLayout = mock(async () => ({
       version: PANE_LAYOUT_VERSION,
       environmentId: "env-1",
@@ -1577,7 +1651,7 @@ describe("pane-layout binding", () => {
     await tick();
 
     const byId = new Map(
-      usePaneLayoutStore
+      appCommandStore(paneLayoutStore)
         .getState()
         .getAllTabs("env-1")
         .map((tab) => [tab.id, tab]),
@@ -1602,20 +1676,23 @@ describe("pane-layout binding", () => {
 
   test("hydrates referenced pipeline and review records before validating tabs", async () => {
     detach?.();
-    useEnvironmentStore.setState({ environments: [environment("env-1")] });
-    const paneStore = usePaneLayoutStore.getState();
+    appCommandStore(environmentStore).setState({ environments: [environment("env-1")] });
+    const paneStore = appCommandStore(paneLayoutStore).getState();
     paneStore.initialize(null, "env-1");
     paneStore.addTab("default", { id: "base", type: "plain" }, "env-1");
     paneStore.beginHydration("env-1");
-    paneStore.finishHydration("env-1", usePaneLayoutStore.getState().environments.get("env-1"));
+    paneStore.finishHydration(
+      "env-1",
+      appCommandStore(paneLayoutStore).getState().environments.get("env-1"),
+    );
     hydrateBuildPipeline.mockImplementationOnce(async (pipelineId) => {
-      useBuildPipelineStore.setState({
+      appCommandStore(buildPipelineStore).setState({
         pipelines: new Map([[pipelineId, pipeline(pipelineId, 1)]]),
       } as never);
       return pipeline(pipelineId, 1);
     });
     hydrateMultiReviewWorkflow.mockImplementationOnce(async (workflowId) => {
-      useMultiReviewStore.setState({
+      appCommandStore(multiReviewStore).setState({
         workflows: new Map([
           [workflowId, { id: workflowId, environmentId: "env-1", backendRevision: 1 } as never],
         ]),
@@ -1662,10 +1739,15 @@ describe("pane-layout binding", () => {
     dispatchResourceChange({ resource: "pane-layout", id: "env-1", revision: 1 });
     await tick();
 
-    expect(hydrateBuildPipeline).toHaveBeenCalledWith("pipeline-remote");
-    expect(hydrateMultiReviewWorkflow).toHaveBeenCalledWith("workflow-remote");
+    expect(hydrateBuildPipeline).toHaveBeenCalledWith(
+      "pipeline-remote",
+      undefined,
+      {},
+      appCommandScope(),
+    );
+    expect(hydrateMultiReviewWorkflow).toHaveBeenCalledWith("workflow-remote", appCommandScope());
     expect(
-      usePaneLayoutStore
+      appCommandStore(paneLayoutStore)
         .getState()
         .getAllTabs("env-1")
         .map(({ id }) => id),
@@ -1674,12 +1756,15 @@ describe("pane-layout binding", () => {
 
   test("does not adopt a layout after disposal during dependency hydration", async () => {
     detach?.();
-    useEnvironmentStore.setState({ environments: [environment("env-1")] });
-    const paneStore = usePaneLayoutStore.getState();
+    appCommandStore(environmentStore).setState({ environments: [environment("env-1")] });
+    const paneStore = appCommandStore(paneLayoutStore).getState();
     paneStore.initialize(null, "env-1");
     paneStore.addTab("default", { id: "base", type: "plain" }, "env-1");
     paneStore.beginHydration("env-1");
-    paneStore.finishHydration("env-1", usePaneLayoutStore.getState().environments.get("env-1"));
+    paneStore.finishHydration(
+      "env-1",
+      appCommandStore(paneLayoutStore).getState().environments.get("env-1"),
+    );
 
     let releaseDependency!: () => void;
     let markDependencyStarted!: () => void;
@@ -1730,7 +1815,7 @@ describe("pane-layout binding", () => {
 
     expect(adoptPaneLayout).not.toHaveBeenCalled();
     expect(
-      usePaneLayoutStore
+      appCommandStore(paneLayoutStore)
         .getState()
         .getAllTabs("env-1")
         .map(({ id }) => id),
@@ -1745,14 +1830,17 @@ describe("pane-layout binding", () => {
         environmentType: "containerized",
         containerId,
       }) as Environment;
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [containerEnvironment("container-a")],
     });
-    const paneStore = usePaneLayoutStore.getState();
+    const paneStore = appCommandStore(paneLayoutStore).getState();
     paneStore.initialize("container-a", "env-1");
     paneStore.addTab("default", { id: "container-a-tab", type: "plain" }, "env-1");
     paneStore.beginHydration("env-1");
-    paneStore.finishHydration("env-1", usePaneLayoutStore.getState().environments.get("env-1"));
+    paneStore.finishHydration(
+      "env-1",
+      appCommandStore(paneLayoutStore).getState().environments.get("env-1"),
+    );
     let resolveLayout!: (value: unknown) => void;
     let markLayoutRequestStarted!: () => void;
     const layoutRequestStarted = new Promise<void>((resolve) => {
@@ -1769,16 +1857,16 @@ describe("pane-layout binding", () => {
 
     dispatchResourceChange({ resource: "pane-layout", id: "env-1", revision: 1 });
     await layoutRequestStarted;
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [containerEnvironment("container-b")],
     });
     // TerminalContainer resets the old container's tabs before initializing
     // the replacement. Mirror that production transition here so this test
     // isolates the delayed authoritative read rather than initialize()'s
     // intentional preservation of tabs inserted before a container mounts.
-    usePaneLayoutStore.getState().reset("env-1");
-    usePaneLayoutStore.getState().initialize("container-b", "env-1");
-    usePaneLayoutStore
+    appCommandStore(paneLayoutStore).getState().reset("env-1");
+    appCommandStore(paneLayoutStore).getState().initialize("container-b", "env-1");
+    appCommandStore(paneLayoutStore)
       .getState()
       .addTab("default", { id: "container-b-tab", type: "plain" }, "env-1");
     // Initializing a replacement container intentionally preserves already
@@ -1786,7 +1874,7 @@ describe("pane-layout binding", () => {
     // container restart. Capture that authoritative local state before the
     // stale request resolves: the assertion below verifies the response does
     // not install its own tab tree over this generation.
-    const tabsBeforeStaleResponse = usePaneLayoutStore
+    const tabsBeforeStaleResponse = appCommandStore(paneLayoutStore)
       .getState()
       .getAllTabs("env-1")
       .map(({ id }) => id);
@@ -1807,36 +1895,39 @@ describe("pane-layout binding", () => {
     await tick(0);
 
     expect(
-      usePaneLayoutStore
+      appCommandStore(paneLayoutStore)
         .getState()
         .getAllTabs("env-1")
         .map(({ id }) => id),
     ).toEqual(tabsBeforeStaleResponse);
     expect(
-      usePaneLayoutStore
+      appCommandStore(paneLayoutStore)
         .getState()
         .getAllTabs("env-1")
         .map(({ id }) => id),
     ).not.toContain("stale-a-tab");
     expect(
-      usePaneLayoutStore
+      appCommandStore(paneLayoutStore)
         .getState()
         .getAllTabs("env-1")
         .some(({ id }) => id === "stale-a-tab"),
     ).toBe(false);
-    expect(usePaneLayoutStore.getState().environments.get("env-1")?.containerId).toBe(
+    expect(appCommandStore(paneLayoutStore).getState().environments.get("env-1")?.containerId).toBe(
       "container-b",
     );
   });
 
   test("ignores older overlapping reads and pending reads after detach", async () => {
     detach?.();
-    useEnvironmentStore.setState({ environments: [environment("env-1")] });
-    const paneStore = usePaneLayoutStore.getState();
+    appCommandStore(environmentStore).setState({ environments: [environment("env-1")] });
+    const paneStore = appCommandStore(paneLayoutStore).getState();
     paneStore.initialize(null, "env-1");
     paneStore.addTab("default", { id: "base", type: "plain" }, "env-1");
     paneStore.beginHydration("env-1");
-    paneStore.finishHydration("env-1", usePaneLayoutStore.getState().environments.get("env-1"));
+    paneStore.finishHydration(
+      "env-1",
+      appCommandStore(paneLayoutStore).getState().environments.get("env-1"),
+    );
     const resolvers: Array<(value: unknown) => void> = [];
     const getPaneLayout = mock(
       () =>
@@ -1869,7 +1960,7 @@ describe("pane-layout binding", () => {
     resolvers[0]?.(saved("older", 2));
     await tick(0);
     expect(
-      usePaneLayoutStore
+      appCommandStore(paneLayoutStore)
         .getState()
         .getAllTabs("env-1")
         .map(({ id }) => id),
@@ -1882,7 +1973,7 @@ describe("pane-layout binding", () => {
     resolvers[2]?.(saved("after-detach", 4));
     await tick(0);
     expect(
-      usePaneLayoutStore
+      appCommandStore(paneLayoutStore)
         .getState()
         .getAllTabs("env-1")
         .map(({ id }) => id),
@@ -1891,12 +1982,15 @@ describe("pane-layout binding", () => {
 
   test("contains fetch failures, invalid snapshots, and declined adoption", async () => {
     detach?.();
-    useEnvironmentStore.setState({ environments: [environment("env-1")] });
-    const paneStore = usePaneLayoutStore.getState();
+    appCommandStore(environmentStore).setState({ environments: [environment("env-1")] });
+    const paneStore = appCommandStore(paneLayoutStore).getState();
     paneStore.initialize(null, "env-1");
     paneStore.addTab("default", { id: "base", type: "plain" }, "env-1");
     paneStore.beginHydration("env-1");
-    paneStore.finishHydration("env-1", usePaneLayoutStore.getState().environments.get("env-1"));
+    paneStore.finishHydration(
+      "env-1",
+      appCommandStore(paneLayoutStore).getState().environments.get("env-1"),
+    );
     const getPaneLayout = mock()
       .mockImplementationOnce(async () => {
         throw new Error("offline");
@@ -1939,7 +2033,7 @@ describe("pane-layout binding", () => {
     expect(getPaneLayout).toHaveBeenCalledTimes(4);
     expect(adoptPaneLayout).toHaveBeenCalledTimes(1);
     expect(
-      usePaneLayoutStore
+      appCommandStore(paneLayoutStore)
         .getState()
         .getAllTabs("env-1")
         .map(({ id }) => id),
@@ -1948,12 +2042,15 @@ describe("pane-layout binding", () => {
 
   test("re-reads a snapshot it declined once the local write chain settles", async () => {
     detach?.();
-    useEnvironmentStore.setState({ environments: [environment("env-1")] });
-    const paneStore = usePaneLayoutStore.getState();
+    appCommandStore(environmentStore).setState({ environments: [environment("env-1")] });
+    const paneStore = appCommandStore(paneLayoutStore).getState();
     paneStore.initialize(null, "env-1");
     paneStore.addTab("default", { id: "base", type: "plain" }, "env-1");
     paneStore.beginHydration("env-1");
-    paneStore.finishHydration("env-1", usePaneLayoutStore.getState().environments.get("env-1"));
+    paneStore.finishHydration(
+      "env-1",
+      appCommandStore(paneLayoutStore).getState().environments.get("env-1"),
+    );
 
     const remoteLayout = (revision: number) => ({
       version: PANE_LAYOUT_VERSION,
@@ -1996,7 +2093,7 @@ describe("pane-layout binding", () => {
     await tick();
     expect(adoptPaneLayout).toHaveBeenCalledTimes(1);
     expect(
-      usePaneLayoutStore
+      appCommandStore(paneLayoutStore)
         .getState()
         .getAllTabs("env-1")
         .map(({ id }) => id),
@@ -2009,7 +2106,7 @@ describe("pane-layout binding", () => {
 
     expect(getPaneLayout).toHaveBeenCalledTimes(2);
     expect(
-      usePaneLayoutStore
+      appCommandStore(paneLayoutStore)
         .getState()
         .getAllTabs("env-1")
         .map(({ id }) => id),
@@ -2031,12 +2128,15 @@ describe("pane-layout binding", () => {
     const originalConsoleError = console.error;
     console.error = mock(() => {});
     try {
-      useEnvironmentStore.setState({ environments: [environment("env-1")] });
-      const paneStore = usePaneLayoutStore.getState();
+      appCommandStore(environmentStore).setState({ environments: [environment("env-1")] });
+      const paneStore = appCommandStore(paneLayoutStore).getState();
       paneStore.initialize(null, "env-1");
       paneStore.addTab("default", { id: "setup", type: "plain", isSetupTab: true }, "env-1");
       paneStore.beginHydration("env-1");
-      paneStore.finishHydration("env-1", usePaneLayoutStore.getState().environments.get("env-1"));
+      paneStore.finishHydration(
+        "env-1",
+        appCommandStore(paneLayoutStore).getState().environments.get("env-1"),
+      );
 
       armStartupAgentTabActivation("env-1");
       startEnvironmentInBackground(async () => {
@@ -2090,14 +2190,16 @@ describe("pane-layout binding", () => {
 
       dispatchResourceChange({ resource: "pane-layout", id: "env-1", revision: 5 });
       await tick();
-      expect(usePaneLayoutStore.getState().getActivePane("env-1")?.activeTabId).toBe("setup");
+      expect(appCommandStore(paneLayoutStore).getState().getActivePane("env-1")?.activeTabId).toBe(
+        "setup",
+      );
       expect(hasWindowStartupAgentActivation("env-1")).toBe(true);
 
       settledBinding.notify?.("env-1");
       await tick();
 
       expect(adoptPaneLayout).toHaveBeenCalledTimes(2);
-      expect(usePaneLayoutStore.getState().getActivePane("env-1")?.activeTabId).toBe(
+      expect(appCommandStore(paneLayoutStore).getState().getActivePane("env-1")?.activeTabId).toBe(
         "startup-agent",
       );
       expect(hasWindowStartupAgentActivation("env-1")).toBe(false);
@@ -2116,7 +2218,7 @@ describe("pane-layout binding", () => {
       value: { isolatedViewState: true },
     });
     try {
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [
           {
             ...environment("env-1"),
@@ -2126,11 +2228,14 @@ describe("pane-layout binding", () => {
           },
         ],
       });
-      const paneStore = usePaneLayoutStore.getState();
+      const paneStore = appCommandStore(paneLayoutStore).getState();
       paneStore.initialize(null, "env-1");
       paneStore.addTab("default", { id: "default", type: "plain", isSetupTab: true }, "env-1");
       paneStore.beginHydration("env-1");
-      paneStore.finishHydration("env-1", usePaneLayoutStore.getState().environments.get("env-1"));
+      paneStore.finishHydration(
+        "env-1",
+        appCommandStore(paneLayoutStore).getState().environments.get("env-1"),
+      );
 
       armStartupAgentTabActivation("env-1");
       const setupTab = { id: "default", type: "plain" as const, isSetupTab: true };
@@ -2172,23 +2277,27 @@ describe("pane-layout binding", () => {
       // setup-ready snapshot until the backend publishes the handoff.
       dispatchResourceChange({ resource: "pane-layout", id: "env-1", revision: 4 });
       await tick();
-      expect(usePaneLayoutStore.getState().getActivePane("env-1")?.activeTabId).toBe("default");
+      expect(appCommandStore(paneLayoutStore).getState().getActivePane("env-1")?.activeTabId).toBe(
+        "default",
+      );
       expect(hasWindowStartupAgentActivation("env-1")).toBe(true);
 
       revision = 5;
       dispatchResourceChange({ resource: "pane-layout", id: "env-1", revision: 5 });
       await tick();
-      expect(usePaneLayoutStore.getState().getActivePane("env-1")?.activeTabId).toBe(
+      expect(appCommandStore(paneLayoutStore).getState().getActivePane("env-1")?.activeTabId).toBe(
         "startup-agent",
       );
       expect(hasWindowStartupAgentActivation("env-1")).toBe(false);
 
       // Returning or reloading the initiating window must keep the user's later
       // setup-tab choice; the retired one-shot must not steal focus again.
-      usePaneLayoutStore.getState().setActiveTab("default", "default", "env-1");
+      appCommandStore(paneLayoutStore).getState().setActiveTab("default", "default", "env-1");
       dispatchResourceChange({ resource: "pane-layout", id: "env-1", revision: 6 });
       await tick();
-      expect(usePaneLayoutStore.getState().getActivePane("env-1")?.activeTabId).toBe("default");
+      expect(appCommandStore(paneLayoutStore).getState().getActivePane("env-1")?.activeTabId).toBe(
+        "default",
+      );
       expect(hasWindowStartupAgentActivation("env-1")).toBe(false);
     } finally {
       if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
@@ -2198,7 +2307,7 @@ describe("pane-layout binding", () => {
 
   test("ignores a change for an environment this client has not loaded", async () => {
     detach?.();
-    useEnvironmentStore.setState({ environments: [] });
+    appCommandStore(environmentStore).setState({ environments: [] });
     const getPaneLayout = mock(async () => null);
     detach = startTestStoreResourceSync({ getPaneLayout: getPaneLayout as never });
 
@@ -2210,11 +2319,11 @@ describe("pane-layout binding", () => {
 
   test("applies a pane-layout snapshot after empty hydration left no local record", async () => {
     detach?.();
-    useEnvironmentStore.setState({ environments: [environment("env-1")] });
-    const paneStore = usePaneLayoutStore.getState();
+    appCommandStore(environmentStore).setState({ environments: [environment("env-1")] });
+    const paneStore = appCommandStore(paneLayoutStore).getState();
     paneStore.beginHydration("env-1");
     paneStore.finishHydration("env-1");
-    expect(usePaneLayoutStore.getState().environments.has("env-1")).toBe(false);
+    expect(appCommandStore(paneLayoutStore).getState().environments.has("env-1")).toBe(false);
 
     const getPaneLayout = mock(async () => ({
       version: PANE_LAYOUT_VERSION,
@@ -2246,7 +2355,7 @@ describe("pane-layout binding", () => {
     await tick();
 
     expect(getPaneLayout).toHaveBeenCalledWith("env-1");
-    expect(usePaneLayoutStore.getState().getAllTabs("env-1")).toMatchObject([
+    expect(appCommandStore(paneLayoutStore).getState().getAllTabs("env-1")).toMatchObject([
       {
         id: "startup-agent",
         nativeAgentData: { sessionId: "late-session" },
@@ -2256,19 +2365,22 @@ describe("pane-layout binding", () => {
 
   test("drops a snapshot once the environment changed shape mid-read", async () => {
     detach?.();
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [{ ...environment("env-1"), worktreePath: "/tmp/before" } as never],
     });
-    const paneStore = usePaneLayoutStore.getState();
+    const paneStore = appCommandStore(paneLayoutStore).getState();
     paneStore.initialize(null, "env-1");
     paneStore.addTab("default", { id: "base", type: "plain" }, "env-1");
     paneStore.beginHydration("env-1");
-    paneStore.finishHydration("env-1", usePaneLayoutStore.getState().environments.get("env-1"));
+    paneStore.finishHydration(
+      "env-1",
+      appCommandStore(paneLayoutStore).getState().environments.get("env-1"),
+    );
 
     const getPaneLayout = mock(async () => {
       // The environment is re-created onto a different worktree while the read
       // is in flight, so its file tabs would resolve against the wrong tree.
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [{ ...environment("env-1"), worktreePath: "/tmp/after" } as never],
       });
       return {
@@ -2295,7 +2407,7 @@ describe("pane-layout binding", () => {
     await tick();
 
     expect(
-      usePaneLayoutStore
+      appCommandStore(paneLayoutStore)
         .getState()
         .getAllTabs("env-1")
         .map(({ id }) => id),
@@ -2304,14 +2416,17 @@ describe("pane-layout binding", () => {
 
   test("drops a snapshot when its environment disappears during the read", async () => {
     detach?.();
-    useEnvironmentStore.setState({ environments: [environment("env-1")] });
-    const paneStore = usePaneLayoutStore.getState();
+    appCommandStore(environmentStore).setState({ environments: [environment("env-1")] });
+    const paneStore = appCommandStore(paneLayoutStore).getState();
     paneStore.initialize(null, "env-1");
     paneStore.addTab("default", { id: "base", type: "plain" }, "env-1");
     paneStore.beginHydration("env-1");
-    paneStore.finishHydration("env-1", usePaneLayoutStore.getState().environments.get("env-1"));
+    paneStore.finishHydration(
+      "env-1",
+      appCommandStore(paneLayoutStore).getState().environments.get("env-1"),
+    );
     const getPaneLayout = mock(async () => {
-      useEnvironmentStore.setState({ environments: [] });
+      appCommandStore(environmentStore).setState({ environments: [] });
       return {
         version: PANE_LAYOUT_VERSION,
         environmentId: "env-1",
@@ -2341,7 +2456,7 @@ describe("pane-layout binding", () => {
 
     expect(adoptPaneLayout).not.toHaveBeenCalled();
     expect(
-      usePaneLayoutStore
+      appCommandStore(paneLayoutStore)
         .getState()
         .getAllTabs("env-1")
         .map(({ id }) => id),
@@ -2350,14 +2465,17 @@ describe("pane-layout binding", () => {
 
   test("drops a snapshot when pane hydration disappears during the read", async () => {
     detach?.();
-    useEnvironmentStore.setState({ environments: [environment("env-1")] });
-    const paneStore = usePaneLayoutStore.getState();
+    appCommandStore(environmentStore).setState({ environments: [environment("env-1")] });
+    const paneStore = appCommandStore(paneLayoutStore).getState();
     paneStore.initialize(null, "env-1");
     paneStore.addTab("default", { id: "base", type: "plain" }, "env-1");
     paneStore.beginHydration("env-1");
-    paneStore.finishHydration("env-1", usePaneLayoutStore.getState().environments.get("env-1"));
+    paneStore.finishHydration(
+      "env-1",
+      appCommandStore(paneLayoutStore).getState().environments.get("env-1"),
+    );
     const getPaneLayout = mock(async () => {
-      usePaneLayoutStore.setState({ hydration: new Map() });
+      appCommandStore(paneLayoutStore).setState({ hydration: new Map() });
       return {
         version: PANE_LAYOUT_VERSION,
         environmentId: "env-1",
@@ -2387,7 +2505,7 @@ describe("pane-layout binding", () => {
 
     expect(adoptPaneLayout).not.toHaveBeenCalled();
     expect(
-      usePaneLayoutStore
+      appCommandStore(paneLayoutStore)
         .getState()
         .getAllTabs("env-1")
         .map(({ id }) => id),
@@ -2396,15 +2514,18 @@ describe("pane-layout binding", () => {
 
   test("drops a snapshot once the environment type changed mid-read", async () => {
     detach?.();
-    useEnvironmentStore.setState({ environments: [environment("env-1")] });
-    const paneStore = usePaneLayoutStore.getState();
+    appCommandStore(environmentStore).setState({ environments: [environment("env-1")] });
+    const paneStore = appCommandStore(paneLayoutStore).getState();
     paneStore.initialize(null, "env-1");
     paneStore.addTab("default", { id: "base", type: "plain" }, "env-1");
     paneStore.beginHydration("env-1");
-    paneStore.finishHydration("env-1", usePaneLayoutStore.getState().environments.get("env-1"));
+    paneStore.finishHydration(
+      "env-1",
+      appCommandStore(paneLayoutStore).getState().environments.get("env-1"),
+    );
 
     const getPaneLayout = mock(async () => {
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [
           {
             ...environment("env-1"),
@@ -2437,7 +2558,7 @@ describe("pane-layout binding", () => {
     await tick();
 
     expect(
-      usePaneLayoutStore
+      appCommandStore(paneLayoutStore)
         .getState()
         .getAllTabs("env-1")
         .map(({ id }) => id),
@@ -2446,12 +2567,15 @@ describe("pane-layout binding", () => {
 
   test("drops a snapshot superseded while its dependencies were hydrating", async () => {
     detach?.();
-    useEnvironmentStore.setState({ environments: [environment("env-1")] });
-    const paneStore = usePaneLayoutStore.getState();
+    appCommandStore(environmentStore).setState({ environments: [environment("env-1")] });
+    const paneStore = appCommandStore(paneLayoutStore).getState();
     paneStore.initialize(null, "env-1");
     paneStore.addTab("default", { id: "base", type: "plain" }, "env-1");
     paneStore.beginHydration("env-1");
-    paneStore.finishHydration("env-1", usePaneLayoutStore.getState().environments.get("env-1"));
+    paneStore.finishHydration(
+      "env-1",
+      appCommandStore(paneLayoutStore).getState().environments.get("env-1"),
+    );
 
     const staleLayout = {
       version: PANE_LAYOUT_VERSION,
@@ -2517,18 +2641,20 @@ describe("pane-layout binding", () => {
     await tick(0);
 
     expect(
-      usePaneLayoutStore
+      appCommandStore(paneLayoutStore)
         .getState()
         .getAllTabs("env-1")
         .map(({ id }) => id),
     ).toEqual(["base", "fresh"]);
-    expect(usePaneLayoutStore.getState().getPane("default", "env-1")?.activeTabId).toBe("fresh");
+    expect(
+      appCommandStore(paneLayoutStore).getState().getPane("default", "env-1")?.activeTabId,
+    ).toBe("fresh");
   });
 
   test("removes a deferred refresh when its hydration record disappears", async () => {
     detach?.();
-    useEnvironmentStore.setState({ environments: [environment("env-1")] });
-    const paneStore = usePaneLayoutStore.getState();
+    appCommandStore(environmentStore).setState({ environments: [environment("env-1")] });
+    const paneStore = appCommandStore(paneLayoutStore).getState();
     paneStore.initialize(null, "env-1");
     paneStore.addTab("default", { id: "base", type: "plain" }, "env-1");
     paneStore.beginHydration("env-1");
@@ -2539,10 +2665,13 @@ describe("pane-layout binding", () => {
     await tick();
     expect(getPaneLayout).not.toHaveBeenCalled();
 
-    usePaneLayoutStore.setState({ hydration: new Map() });
-    usePaneLayoutStore
+    appCommandStore(paneLayoutStore).setState({ hydration: new Map() });
+    appCommandStore(paneLayoutStore)
       .getState()
-      .finishHydration("env-1", usePaneLayoutStore.getState().environments.get("env-1"));
+      .finishHydration(
+        "env-1",
+        appCommandStore(paneLayoutStore).getState().environments.get("env-1"),
+      );
     await tick(0);
     expect(getPaneLayout).not.toHaveBeenCalled();
 
@@ -2553,12 +2682,15 @@ describe("pane-layout binding", () => {
 
   test("forgets a declined refresh when its pane environment disappears", async () => {
     detach?.();
-    useEnvironmentStore.setState({ environments: [environment("env-1")] });
-    const paneStore = usePaneLayoutStore.getState();
+    appCommandStore(environmentStore).setState({ environments: [environment("env-1")] });
+    const paneStore = appCommandStore(paneLayoutStore).getState();
     paneStore.initialize(null, "env-1");
     paneStore.addTab("default", { id: "base", type: "plain" }, "env-1");
     paneStore.beginHydration("env-1");
-    paneStore.finishHydration("env-1", usePaneLayoutStore.getState().environments.get("env-1"));
+    paneStore.finishHydration(
+      "env-1",
+      appCommandStore(paneLayoutStore).getState().environments.get("env-1"),
+    );
     const getPaneLayout = mock(async () => ({
       version: PANE_LAYOUT_VERSION,
       environmentId: "env-1",
@@ -2592,7 +2724,7 @@ describe("pane-layout binding", () => {
     await tick();
     expect(getPaneLayout).toHaveBeenCalledTimes(1);
 
-    usePaneLayoutStore.setState({ environments: new Map() });
+    appCommandStore(paneLayoutStore).setState({ environments: new Map() });
     settledBinding.notify?.("env-1");
     await tick();
 
@@ -2621,7 +2753,8 @@ describe("pane-layout echo ordering", () => {
   }
 
   function tabUrl(): string | undefined {
-    return usePaneLayoutStore.getState().getPane("default", "env-1")?.tabs[0]?.browserData?.url;
+    return appCommandStore(paneLayoutStore).getState().getPane("default", "env-1")?.tabs[0]
+      ?.browserData?.url;
   }
 
   /** A fake backend record: intents merge like the backend and bump the revision. */
@@ -2631,12 +2764,12 @@ describe("pane-layout echo ordering", () => {
       await import("./pane-layout-persistence");
     const { mergePersistedPaneLayouts } = await import("@orkestrator/protocol/pane-layout-merge");
 
-    useEnvironmentStore.setState({ environments: [environment("env-1")] });
-    const paneStore = usePaneLayoutStore.getState();
+    appCommandStore(environmentStore).setState({ environments: [environment("env-1")] });
+    const paneStore = appCommandStore(paneLayoutStore).getState();
     paneStore.initialize(null, "env-1");
     paneStore.addTab("default", browserTab(initialUrl), "env-1");
     const hydrated = {
-      ...usePaneLayoutStore.getState().environments.get("env-1")!,
+      ...appCommandStore(paneLayoutStore).getState().environments.get("env-1")!,
       backendRevision: 4,
     };
     let record: PersistedPaneLayout = {
@@ -2679,10 +2812,10 @@ describe("pane-layout echo ordering", () => {
     detach?.();
     detach = startTestStoreResourceSync({ getPaneLayout: getPaneLayout as never });
     paneStore.beginHydration("env-1");
-    usePaneLayoutStore.getState().finishHydration("env-1", hydrated);
+    appCommandStore(paneLayoutStore).getState().finishHydration("env-1", hydrated);
 
     const urls: Array<string | undefined> = [];
-    const unsubscribe = usePaneLayoutStore.subscribe(() => {
+    const unsubscribe = appCommandStore(paneLayoutStore).subscribe(() => {
       const url = tabUrl();
       if (urls.at(-1) !== url) urls.push(url);
     });
@@ -2714,7 +2847,7 @@ describe("pane-layout echo ordering", () => {
         fake.intentGates.push(gateA, echoArrives === "after the newer save settles" ? null : gateB);
         fake.readGates.push(echo);
 
-        usePaneLayoutStore
+        appCommandStore(paneLayoutStore)
           .getState()
           .updateTabBrowserUrl("browser-1", "http://localhost:3000/a", "env-1");
         await waitForState(() => fake.applyIntent.mock.calls.length === 1, "save A");
@@ -2722,7 +2855,7 @@ describe("pane-layout echo ordering", () => {
         dispatchResourceChange({ resource: "pane-layout", id: "env-1", revision: 5 });
         await waitForState(() => fake.getPaneLayout.mock.calls.length === 1, "echo read");
 
-        usePaneLayoutStore
+        appCommandStore(paneLayoutStore)
           .getState()
           .updateTabBrowserUrl("browser-1", "http://localhost:3000/b", "env-1");
         gateA.open();
@@ -2731,7 +2864,9 @@ describe("pane-layout echo ordering", () => {
 
         if (echoArrives === "after the newer save settles") {
           await waitForState(
-            () => usePaneLayoutStore.getState().environments.get("env-1")?.backendRevision === 6,
+            () =>
+              appCommandStore(paneLayoutStore).getState().environments.get("env-1")
+                ?.backendRevision === 6,
             "save B installed",
           );
           echo.open();
@@ -2781,10 +2916,14 @@ describe("pane-layout echo ordering", () => {
         fake.setRecord({ ...next, revision: 5 });
         dispatchResourceChange({ resource: "pane-layout", id: "env-1", revision: 5 });
         await waitForState(
-          () => usePaneLayoutStore.getState().getPane("default", "env-1")?.tabs.length === 2,
+          () =>
+            appCommandStore(paneLayoutStore).getState().getPane("default", "env-1")?.tabs.length ===
+            2,
           "the external tab set",
         );
-        expect(usePaneLayoutStore.getState().environments.get("env-1")?.backendRevision).toBe(5);
+        expect(
+          appCommandStore(paneLayoutStore).getState().environments.get("env-1")?.backendRevision,
+        ).toBe(5);
         // Adopting it wrote nothing back.
         expect(fake.applyIntent).not.toHaveBeenCalled();
       } finally {
@@ -2844,7 +2983,7 @@ describe("authoritative resync", () => {
         knownRevisions?: Record<string, string>;
       }> = [];
 
-      useSessionStore.setState({
+      appCommandStore(sessionStore).setState({
         loadSessionsForEnvironment: mock(async () => undefined),
       } as never);
       stopStores = startStoreResourceSync({
@@ -2881,14 +3020,16 @@ describe("authoritative resync", () => {
 
       await waitForState(
         () =>
-          useProjectStore.getState().projects.some(({ id }) => id === project.id) &&
-          useEnvironmentStore
+          appCommandStore(projectStore)
+            .getState()
+            .projects.some(({ id }) => id === project.id) &&
+          appCommandStore(environmentStore)
             .getState()
             .environments.some(({ id }) => id === environmentSnapshot.id),
         "initial project and environment hydration",
       );
-      expect(useProjectStore.getState().projects).toEqual([project]);
-      expect(useEnvironmentStore.getState().environments).toEqual([
+      expect(appCommandStore(projectStore).getState().projects).toEqual([project]);
+      expect(appCommandStore(environmentStore).getState().environments).toEqual([
         expect.objectContaining({
           id: environmentSnapshot.id,
           name: environmentSnapshot.name,
@@ -2911,8 +3052,12 @@ describe("authoritative resync", () => {
       await waitForState(
         () =>
           manifestCalls.length >= 2 &&
-          useProjectStore.getState().projects.some(({ name }) => name === "After restart") &&
-          useEnvironmentStore.getState().environments.some(({ name }) => name === "After restart"),
+          appCommandStore(projectStore)
+            .getState()
+            .projects.some(({ name }) => name === "After restart") &&
+          appCommandStore(environmentStore)
+            .getState()
+            .environments.some(({ name }) => name === "After restart"),
         "post-restart authoritative collection hydration",
       );
       // Polling stops at the first satisfying observation, which on its own
@@ -2924,10 +3069,10 @@ describe("authoritative resync", () => {
       expect(manifestCalls).toHaveLength(2);
       expect(manifestCalls[1]?.knownGeneration).toEqual(expect.any(String));
       expect(manifestCalls[1]?.knownGeneration).not.toBe(restartedBackend.getResourceGeneration());
-      expect(useProjectStore.getState().projects).toEqual([
+      expect(appCommandStore(projectStore).getState().projects).toEqual([
         expect.objectContaining({ id: project.id, name: "After restart" }),
       ]);
-      expect(useEnvironmentStore.getState().environments).toEqual([
+      expect(appCommandStore(environmentStore).getState().environments).toEqual([
         expect.objectContaining({ id: environmentSnapshot.id, name: "After restart" }),
       ]);
     } finally {
@@ -2958,11 +3103,11 @@ describe("authoritative resync", () => {
 
     requestResourceResync();
     await tick(0);
-    useProjectStore.setState({ projects: [current] });
+    appCommandStore(projectStore).setState({ projects: [current] });
     resolveProjects([stale]);
     await tick();
 
-    expect(useProjectStore.getState().projects).toEqual([current]);
+    expect(appCommandStore(projectStore).getState().projects).toEqual([current]);
     expect(getProjects).toHaveBeenCalledTimes(2);
   });
 
@@ -2971,7 +3116,7 @@ describe("authoritative resync", () => {
     const initial = { id: "project-initial", name: "initial", order: 0 } as never;
     const stale = { id: "project-stale", name: "stale", order: 0 } as never;
     const converged = { id: "project-current", name: "current", order: 0 } as never;
-    useProjectStore.setState({ projects: [initial] });
+    appCommandStore(projectStore).setState({ projects: [initial] });
     let resolveProjects!: (projects: never[]) => void;
     const getProjects = mock()
       .mockImplementationOnce(
@@ -2989,13 +3134,13 @@ describe("authoritative resync", () => {
     requestResourceResync();
     await tick(0);
     // Leave the array identity alone so this specifically exercises the
-    // applyProjectSnapshot mutation-version rejection path.
-    invalidateProjectSnapshots();
+    // applySnapshot mutation-version rejection path.
+    appCommandStore(projectStore).getState().invalidateSnapshots();
     resolveProjects([stale]);
     await tick();
 
     expect(getProjects).toHaveBeenCalledTimes(2);
-    expect(useProjectStore.getState().projects).toEqual([converged]);
+    expect(appCommandStore(projectStore).getState().projects).toEqual([converged]);
   });
 
   test("does not let an older environment snapshot overwrite a newer collection", async () => {
@@ -3003,7 +3148,7 @@ describe("authoritative resync", () => {
     const project = { id: "project-1", name: "project", order: 0 } as never;
     const stale = environment("env-stale");
     const current = environment("env-current");
-    useProjectStore.setState({ projects: [project] });
+    appCommandStore(projectStore).setState({ projects: [project] });
     let resolveEnvironments!: (environments: Environment[]) => void;
     const getEnvironmentSnapshots = mock()
       .mockImplementationOnce(
@@ -3020,11 +3165,11 @@ describe("authoritative resync", () => {
 
     requestResourceResync();
     await tick(0);
-    useEnvironmentStore.setState({ environments: [current] });
+    appCommandStore(environmentStore).setState({ environments: [current] });
     resolveEnvironments([stale]);
     await tick();
 
-    expect(useEnvironmentStore.getState().environments).toEqual([current]);
+    expect(appCommandStore(environmentStore).getState().environments).toEqual([current]);
     expect(getEnvironmentSnapshots).toHaveBeenCalledTimes(2);
   });
 
@@ -3047,8 +3192,10 @@ describe("authoritative resync", () => {
     requestResourceResync();
     await tick();
 
-    expect(useProjectStore.getState().projects).toEqual([project]);
-    expect(useEnvironmentStore.getState().environments).toEqual([authoritativeEnvironment]);
+    expect(appCommandStore(projectStore).getState().projects).toEqual([project]);
+    expect(appCommandStore(environmentStore).getState().environments).toEqual([
+      authoritativeEnvironment,
+    ]);
     expect(getEnvironmentSnapshots).toHaveBeenCalledWith("project-new");
   });
 
@@ -3057,18 +3204,18 @@ describe("authoritative resync", () => {
     const loadTasks = mock(async () => {});
     const loadNotes = mock(async () => {});
     const loadFeatures = mock(async () => {});
-    useEnvironmentStore.setState({ environments: [environment("env-1")] });
-    useProjectStore.setState({
+    appCommandStore(environmentStore).setState({ environments: [environment("env-1")] });
+    appCommandStore(projectStore).setState({
       projects: [{ id: "project-1" } as never],
     });
-    useSessionStore.setState({ loadSessionsForEnvironment } as never);
-    useKanbanStore.setState({
+    appCommandStore(sessionStore).setState({ loadSessionsForEnvironment } as never);
+    appCommandStore(kanbanStore).setState({
       currentProjectId: "project-1",
       currentNotesProjectId: "project-1",
       loadTasks,
       loadNotes,
     } as never);
-    useFeaturePlanStore.setState({
+    appCommandStore(featurePlanStore).setState({
       currentProjectId: "project-1",
       loadFeatures,
     } as never);
@@ -3076,19 +3223,30 @@ describe("authoritative resync", () => {
     requestResourceResync();
     await tick();
 
-    expect(hydratePromptQueuesForEnvironment).toHaveBeenCalledWith("env-1", expect.anything());
+    expect(hydratePromptQueuesForEnvironment).toHaveBeenCalledWith(
+      "env-1",
+      expect.anything(),
+      expect.any(Function),
+    );
     expect(loadSessionsForEnvironment).toHaveBeenCalledWith("env-1");
-    expect(hydrateMultiReviewWorkflowsForEnvironment).toHaveBeenCalledWith("env-1");
-    expect(hydrateBuildPipelinesForProject).toHaveBeenCalledWith("project-1");
+    expect(hydrateMultiReviewWorkflowsForEnvironment).toHaveBeenCalledWith(
+      "env-1",
+      appCommandScope(),
+    );
+    expect(hydrateBuildPipelinesForProject).toHaveBeenCalledWith(
+      "project-1",
+      undefined,
+      appCommandScope(),
+    );
     expect(loadTasks).toHaveBeenCalledWith("project-1");
     expect(loadNotes).toHaveBeenCalledWith("project-1");
     expect(loadFeatures).toHaveBeenCalledWith("project-1");
   });
 
   test("removes persisted pipelines absent from authoritative lists", async () => {
-    useEnvironmentStore.setState({ environments: [environment("env-1")] });
-    useProjectStore.setState({ projects: [{ id: "project-1" } as never] });
-    useBuildPipelineStore.setState({
+    appCommandStore(environmentStore).setState({ environments: [environment("env-1")] });
+    appCommandStore(projectStore).setState({ projects: [{ id: "project-1" } as never] });
+    appCommandStore(buildPipelineStore).setState({
       pipelines: new Map([["pipeline-1", pipeline("pipeline-1", 4)]]),
       buildEnvironmentIds: new Set(["env-1"]),
     });
@@ -3096,13 +3254,13 @@ describe("authoritative resync", () => {
     requestResourceResync();
     await tick();
 
-    expect(useBuildPipelineStore.getState().pipelines.has("pipeline-1")).toBe(false);
+    expect(appCommandStore(buildPipelineStore).getState().pipelines.has("pipeline-1")).toBe(false);
   });
 
   test("keeps unsaved local records when an authoritative list does not contain them", async () => {
-    useEnvironmentStore.setState({ environments: [environment("env-1")] });
-    useProjectStore.setState({ projects: [{ id: "project-1" } as never] });
-    useBuildPipelineStore.setState({
+    appCommandStore(environmentStore).setState({ environments: [environment("env-1")] });
+    appCommandStore(projectStore).setState({ projects: [{ id: "project-1" } as never] });
+    appCommandStore(buildPipelineStore).setState({
       pipelines: new Map([["pipeline-1", pipeline("pipeline-1", 0)]]),
       buildEnvironmentIds: new Set(["env-1"]),
     });
@@ -3110,7 +3268,7 @@ describe("authoritative resync", () => {
     requestResourceResync();
     await tick();
 
-    expect(useBuildPipelineStore.getState().pipelines.has("pipeline-1")).toBe(true);
+    expect(appCommandStore(buildPipelineStore).getState().pipelines.has("pipeline-1")).toBe(true);
   });
 
   test("retries a failed config refresh on the next resync", async () => {
@@ -3121,7 +3279,7 @@ describe("authoritative resync", () => {
       })
       .mockImplementationOnce(async () => ({ theme: "dark" }));
     const setConfig = mock(() => {});
-    useConfigStore.setState({ setConfig } as never);
+    appCommandStore(configStore).setState({ setConfig } as never);
     detach = startTestStoreResourceSync({ getConfig: getConfig as never });
 
     requestResourceResync();
@@ -3148,7 +3306,7 @@ describe("authoritative resync", () => {
         throw new Error("environments offline");
       })
       .mockImplementation(async () => [authoritativeEnvironment]);
-    useProjectStore.setState({ projects: [project] });
+    appCommandStore(projectStore).setState({ projects: [project] });
     detach = startTestStoreResourceSync({
       getProjects: getProjects as never,
       getEnvironmentSnapshots: getEnvironmentSnapshots as never,
@@ -3161,7 +3319,9 @@ describe("authoritative resync", () => {
 
     expect(getProjects).toHaveBeenCalledTimes(2);
     expect(getEnvironmentSnapshots).toHaveBeenCalledTimes(2);
-    expect(useEnvironmentStore.getState().environments).toEqual([authoritativeEnvironment]);
+    expect(appCommandStore(environmentStore).getState().environments).toEqual([
+      authoritativeEnvironment,
+    ]);
   });
 
   test("does not let an older config read overwrite a newer event refresh", async () => {
@@ -3182,7 +3342,7 @@ describe("authoritative resync", () => {
           }),
       );
     const setConfig = mock(() => {});
-    useConfigStore.setState({ setConfig } as never);
+    appCommandStore(configStore).setState({ setConfig } as never);
     detach = startTestStoreResourceSync({ getConfig: getConfig as never });
 
     requestResourceResync();
@@ -3209,7 +3369,7 @@ describe("authoritative resync", () => {
         }),
     );
     const setConfig = mock(() => {});
-    useConfigStore.setState({ setConfig } as never);
+    appCommandStore(configStore).setState({ setConfig } as never);
     detach = startTestStoreResourceSync({ getConfig: getConfig as never });
 
     requestResourceResync();
@@ -3223,13 +3383,16 @@ describe("authoritative resync", () => {
 
   test("waits for dependency hydration before applying pane layouts", async () => {
     detach?.();
-    useEnvironmentStore.setState({ environments: [environment("env-1")] });
-    useProjectStore.setState({ projects: [{ id: "project-1" } as never] });
-    const paneStore = usePaneLayoutStore.getState();
+    appCommandStore(environmentStore).setState({ environments: [environment("env-1")] });
+    appCommandStore(projectStore).setState({ projects: [{ id: "project-1" } as never] });
+    const paneStore = appCommandStore(paneLayoutStore).getState();
     paneStore.initialize(null, "env-1");
     paneStore.addTab("default", { id: "base", type: "plain" }, "env-1");
     paneStore.beginHydration("env-1");
-    paneStore.finishHydration("env-1", usePaneLayoutStore.getState().environments.get("env-1"));
+    paneStore.finishHydration(
+      "env-1",
+      appCommandStore(paneLayoutStore).getState().environments.get("env-1"),
+    );
     let releaseReviews!: () => void;
     const reviewsBlocked = new Promise<void>((resolve) => {
       releaseReviews = resolve;
@@ -3251,9 +3414,9 @@ describe("authoritative resync", () => {
 
   test("continues pane resync after another authoritative read fails", async () => {
     detach?.();
-    useEnvironmentStore.setState({ environments: [environment("env-1")] });
-    useProjectStore.setState({ projects: [{ id: "project-1" } as never] });
-    const paneStore = usePaneLayoutStore.getState();
+    appCommandStore(environmentStore).setState({ environments: [environment("env-1")] });
+    appCommandStore(projectStore).setState({ projects: [{ id: "project-1" } as never] });
+    const paneStore = appCommandStore(paneLayoutStore).getState();
     paneStore.initialize(null, "env-1");
     paneStore.beginHydration("env-1");
     paneStore.finishHydration("env-1");
@@ -3271,15 +3434,15 @@ describe("authoritative resync", () => {
 
   test("reports a failed pane read without abandoning the other environments", async () => {
     detach?.();
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [environment("env-1"), environment("env-2")],
     });
-    useProjectStore.setState({ projects: [{ id: "project-1" } as never] });
-    const paneStore = usePaneLayoutStore.getState();
+    appCommandStore(projectStore).setState({ projects: [{ id: "project-1" } as never] });
+    const paneStore = appCommandStore(paneLayoutStore).getState();
     for (const environmentId of ["env-1", "env-2"]) {
       paneStore.initialize(null, environmentId);
-      usePaneLayoutStore.getState().beginHydration(environmentId);
-      usePaneLayoutStore.getState().finishHydration(environmentId);
+      appCommandStore(paneLayoutStore).getState().beginHydration(environmentId);
+      appCommandStore(paneLayoutStore).getState().finishHydration(environmentId);
     }
     const getPaneLayout = mock(async (environmentId: string) => {
       if (environmentId === "env-1") throw new Error("pane read offline");
@@ -3297,9 +3460,9 @@ describe("authoritative resync", () => {
 
   test("retries a deferred pane read that fails after initial hydration", async () => {
     detach?.();
-    useEnvironmentStore.setState({ environments: [environment("env-1")] });
-    useProjectStore.setState({ projects: [{ id: "project-1" } as never] });
-    const paneStore = usePaneLayoutStore.getState();
+    appCommandStore(environmentStore).setState({ environments: [environment("env-1")] });
+    appCommandStore(projectStore).setState({ projects: [{ id: "project-1" } as never] });
+    const paneStore = appCommandStore(paneLayoutStore).getState();
     paneStore.initialize(null, "env-1");
     paneStore.beginHydration("env-1");
     const getPaneLayout = mock()
@@ -3312,7 +3475,7 @@ describe("authoritative resync", () => {
     requestResourceResync();
     await tick(0);
     expect(getPaneLayout).not.toHaveBeenCalled();
-    usePaneLayoutStore.getState().finishHydration("env-1");
+    appCommandStore(paneLayoutStore).getState().finishHydration("env-1");
     await tick();
     expect(getPaneLayout).toHaveBeenCalledTimes(1);
 
@@ -3323,8 +3486,8 @@ describe("authoritative resync", () => {
 
   test("does not acknowledge a pane manifest revision until deferred hydration succeeds", async () => {
     detach?.();
-    useEnvironmentStore.setState({ environments: [environment("env-1")] });
-    const paneStore = usePaneLayoutStore.getState();
+    appCommandStore(environmentStore).setState({ environments: [environment("env-1")] });
+    const paneStore = appCommandStore(paneLayoutStore).getState();
     paneStore.initialize(null, "env-1");
     paneStore.beginHydration("env-1");
     const getPaneLayout = mock()
@@ -3355,7 +3518,7 @@ describe("authoritative resync", () => {
       stopResourceSync = startResourceSync({ loadManifest });
       await tick(10);
       expect(getPaneLayout).not.toHaveBeenCalled();
-      usePaneLayoutStore.getState().finishHydration("env-1");
+      appCommandStore(paneLayoutStore).getState().finishHydration("env-1");
       await tick();
       expect(getPaneLayout).toHaveBeenCalledTimes(1);
 
@@ -3406,7 +3569,7 @@ describe("authoritative resync", () => {
       return { theme: "dark" };
     });
     const loadTasks = mock(async () => {});
-    useKanbanStore.setState({ currentProjectId: "project-1", loadTasks } as never);
+    appCommandStore(kanbanStore).setState({ currentProjectId: "project-1", loadTasks } as never);
     detach = startTestStoreResourceSync({ getConfig: getConfig as never });
     const stableGeneration = "a".repeat(32);
 
@@ -3534,14 +3697,16 @@ describe("authoritative resync", () => {
     await tick();
 
     expect(order).toEqual(["project", "environment"]);
-    expect(useProjectStore.getState().projects).toEqual([project]);
-    expect(useEnvironmentStore.getState().environments).toEqual([authoritativeEnvironment]);
+    expect(appCommandStore(projectStore).getState().projects).toEqual([project]);
+    expect(appCommandStore(environmentStore).getState().environments).toEqual([
+      authoritativeEnvironment,
+    ]);
   });
 });
 
 describe("detach", () => {
   test("stops routing once detached", async () => {
-    useEnvironmentStore.setState({ environments: [environment("env-1")] });
+    appCommandStore(environmentStore).setState({ environments: [environment("env-1")] });
     detach?.();
     detach = null;
 
@@ -3549,45 +3714,5 @@ describe("detach", () => {
     await tick();
 
     expect(hydratePromptQueuesForEnvironment).not.toHaveBeenCalled();
-  });
-});
-
-describe("command-node config events in leaf windows", () => {
-  test("refreshes inherited preferences and disposes a listener whose readiness resolves after stop", async () => {
-    let handler: ((payload: unknown) => unknown) | undefined;
-    let ready!: () => void;
-    const unlisten = mock(() => undefined);
-    window.orkestratorWorkspaceTarget = { nodeId: "bk_leaf", nodeName: "Leaf", path: "direct" };
-    const portalListen = spyOn(portalTransport, "portalListen").mockImplementation(
-      (_event, callback) => {
-        handler = (payload) => callback({ payload } as never);
-        return new Promise((resolve) => {
-          ready = () => resolve(unlisten);
-        });
-      },
-    );
-    try {
-      const config = structuredClone(useConfigStore.getState().config);
-      config.global.terminalScrollback = 8765;
-      const getConfig = mock(async () => config);
-      const stop = startTestStoreResourceSync({ getConfig });
-      handler?.({ resource: "project" });
-      expect(getConfig).not.toHaveBeenCalled();
-      handler?.({ resource: "config" });
-      await waitForState(
-        () => useConfigStore.getState().config.global.terminalScrollback === 8765,
-        "command-node config refresh",
-      );
-      expect(getConfig).toHaveBeenCalledTimes(1);
-      stop();
-      handler?.({ resource: "config" });
-      expect(getConfig).toHaveBeenCalledTimes(1);
-      ready();
-      await tick(0);
-      expect(unlisten).toHaveBeenCalledTimes(1);
-    } finally {
-      portalListen.mockRestore();
-      delete window.orkestratorWorkspaceTarget;
-    }
   });
 });

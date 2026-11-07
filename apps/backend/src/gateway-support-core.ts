@@ -1,4 +1,6 @@
+import type { CommandInvocation } from "./core/commands-context.js";
 import type { DatabaseStats } from "@orkestrator/protocol/backend-diagnostics";
+import type { CommandAccess } from "@orkestrator/protocol/contract/command";
 import { mkdir, open, readFile, rename, rm, writeFile } from "node:fs/promises";
 import {
   type IncomingHttpHeaders,
@@ -32,7 +34,15 @@ import {
 } from "@orkestrator/protocol/gateway-token";
 
 export type BackendInvoker = {
-  invoke(command: string, args: Record<string, unknown>): Promise<unknown> | unknown;
+  /**
+   * Runs a command. `invocation` carries the invoke envelope's `domain`,
+   * `version` and `critical` (plan item 1003), only when the body had them.
+   */
+  invoke(
+    command: string,
+    args: Record<string, unknown>,
+    invocation?: CommandInvocation,
+  ): Promise<unknown> | unknown;
   /**
    * Whether `command` is in the registry. Metric labels are gated on this so a
    * rejected, network-supplied name can never be retained — testing the error
@@ -40,6 +50,13 @@ export type BackendInvoker = {
    * such as during shutdown.
    */
   hasCommand?(command: string): boolean;
+  /**
+   * The `access` a registered command's definition declares, `undefined` for
+   * a command without one. A client grant and the relay run only `workspace`
+   * commands (plan item 7012); a backend without this refuses every command
+   * to them.
+   */
+  commandAccess?(command: string): CommandAccess | undefined;
   /** The database figures `/metrics` reports; absent from a backend with no database. */
   databaseStats?(): DatabaseStats;
   /** Lets the backend's diagnostics read the same snapshot `/metrics` answers. */
@@ -98,6 +115,12 @@ export interface BackendHelloIdentity {
   profile: import("@orkestrator/protocol/backend-profile").BackendProfile;
   /** Command-node role; absent from embedded gateways without command nodes. */
   nodeMode?: "standalone" | "command" | "leaf";
+  /**
+   * The contract domain ranges the command registry accepts
+   * (`CommandRegistry.helloDomains`). Absent means none are defined, which the
+   * hello still advertises as an empty `domains` object.
+   */
+  domains?: Readonly<Record<string, { readonly min: number; readonly max: number }>>;
 }
 
 /** Command-node hooks: attached controllers' portal origins and their last contact. */
@@ -117,6 +140,15 @@ export interface GatewayNodeHooks {
     baseUrl: string;
     headers: Record<string, string>;
   } | null;
+  /**
+   * Whether `workspaceId` is a workspace open on this command node for
+   * `nodeId` (`open_node_workspace`): the multiplexed relay stream carries
+   * only nodes the client holds a workspace grant for (plan item 5005).
+   */
+  relayWorkspaceOpen?(
+    workspaceId: string,
+    nodeId: import("@orkestrator/protocol/federation").BackendId,
+  ): boolean;
 }
 
 export interface OrkestratorGatewayOptions {
@@ -150,6 +182,13 @@ export interface OrkestratorGatewayOptions {
    */
   backendHello?: () => Promise<BackendHelloIdentity>;
   nodeHooks?: GatewayNodeHooks;
+  /** Test seam: timings and bounds of the multiplexed relay stream (plan item 5005). */
+  nodeEventMultiplexer?: Partial<
+    Omit<
+      import("./core/nodes/index.js").NodeEventMultiplexerOptions,
+      "relayTarget" | "workspaceOpen"
+    >
+  >;
   env?: NodeJS.ProcessEnv;
   interfaces?: NetworkInterfaceMap;
   allowNonTailscaleBind?: boolean;

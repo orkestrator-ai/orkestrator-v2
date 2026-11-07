@@ -4,7 +4,8 @@
  * transcript visible, separate errors, and the main-only close confirmation.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import {
   coordinatorRuntimeId,
   type CoordinatorConversation,
@@ -18,21 +19,25 @@ import * as clipboard from "@/lib/native/clipboard";
 import { dispatchResourceChange } from "@/lib/resource-sync";
 import { onGlobalSettingsRequest } from "@/lib/settings-navigation";
 import { useAppDialogStore } from "@/stores/appDialogStore";
-import { useAgentMailStore } from "@/stores/agentMailStore";
-import { useConfigStore } from "@/stores/configStore";
-import { useNativeComposeStore } from "@/stores/nativeComposeStore";
-import { useProjectStore } from "@/stores/projectStore";
-import { useUIStore } from "@/stores/uiStore";
-import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
-import { useCoordinatorPaneLayoutStore } from "@/stores/coordinatorPaneLayoutStore";
+import { agentMailStore } from "@/stores/agentMailStore";
+import { configStore } from "@/stores/configStore";
+import { nativeComposeStore } from "@/stores/nativeComposeStore";
+import { projectStore } from "@/stores/projectStore";
+import { useUIChromeStore } from "@/stores/uiChromeStore";
+import { nativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
+import { coordinatorPaneLayoutStore } from "@/stores/coordinatorPaneLayoutStore";
 import { resetClientStateCapabilitiesForTests } from "@/lib/client-state-capabilities";
 import { resetUpstreamCheckForTests } from "@/lib/coordinator-upstream-check";
 import { resetNativeAgentSyncCapabilityForTests } from "@/hooks/useNativeAgentSession";
 import { createSessionKey } from "@/lib/utils";
+import { getWindowScope } from "@/lib/node-scope/app-window-scope";
+
+/** Outside a node scope provider, components act for the app's command node. */
+const commandNodeId = () => getWindowScope().commandScope().nodeId;
 
 const backendSnapshot = { ...realBackend };
 const nativeAgentSnapshot = { ...realNativeAgent };
-const initialConfig = useConfigStore.getState().config;
+const initialConfig = appCommandStore(configStore).getState().config;
 let useRealAgentTab = false;
 
 const gitStatus: ProjectGitStatus = {
@@ -249,6 +254,7 @@ import { COORDINATOR_COMMAND_HINT, COORDINATOR_STARTER_PROMPTS } from "./Coordin
 import { COORDINATOR_INTRO_LINES } from "./CoordinatorIntro";
 import { FIRST_MESSAGE_COMMAND_RULE } from "@/components/native-agent/AgentNativeTab.helpers";
 import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
+import { appCommandStore } from "@/test/app-command-store";
 
 async function openBadgeDetails(): Promise<Element> {
   return waitFor(() => {
@@ -266,7 +272,7 @@ const unassigned = (conversation: CoordinatorConversation) => ({
 function installPendingMail(): void {
   const environmentId = coordinatorRuntimeId("coordinator-1", mainConversation.id);
   const mailboxId = `${environmentId}\0${mainConversation.tabId}`;
-  useAgentMailStore.setState({
+  appCommandStore(agentMailStore).setState({
     summary: new Map([
       [
         mailboxId,
@@ -349,13 +355,13 @@ function installPendingMail(): void {
 describe("CoordinatorPanel outcome-first wording and banners", () => {
   beforeEach(() => {
     useRealAgentTab = false;
-    useAgentMailStore.setState(useAgentMailStore.getInitialState());
-    useUIStore.setState({ coordinatorIntroDismissed: false });
+    appCommandStore(agentMailStore).setState(appCommandStore(agentMailStore).getInitialState());
+    useUIChromeStore.setState({ coordinatorIntroDismissed: false });
     resetNativeAgentSyncCapabilityForTests();
-    useConfigStore.setState({ config: initialConfig });
-    useNativeComposeStore.getState().clearDraft(sessionKey);
-    useNativeAgentProjectionStore.getState().reset();
-    useCoordinatorPaneLayoutStore.getState().reset();
+    appCommandStore(configStore).setState({ config: initialConfig });
+    appCommandStore(nativeComposeStore).getState().clearDraft(sessionKey);
+    appCommandStore(nativeAgentProjectionStore).getState().reset();
+    appCommandStore(coordinatorPaneLayoutStore).getState().reset();
     resetUpstreamCheckForTests();
     resetClientStateCapabilitiesForTests();
     for (const fn of [ensure, getCoordinatorView, getGit, fetchGit, select, assignAgent]) {
@@ -371,7 +377,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
     ensuredSnapshot = baseSnapshot;
     ensuredGit = gitStatus;
     agentProjection = projection();
-    useProjectStore.setState({
+    appCommandStore(projectStore).setState({
       projects: [
         {
           id: "project-1",
@@ -395,7 +401,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
 
   test("passes the outcome-first placeholder and starter prompts only to the main conversation", async () => {
     ensuredSnapshot = withWorkspace({ conversations: [mainConversation, sideConversation] });
-    render(<CoordinatorPanel projectId="project-1" />);
+    renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
     const main = await screen.findByTestId("native-agent");
     expect(main.getAttribute("data-placeholder")).toBe("What would you like to get done?");
     expect(main.getAttribute("data-starter-prompts")).toBe(COORDINATOR_STARTER_PROMPTS.join("|"));
@@ -413,7 +419,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
 
   test("a side composer says what a side agent is for; both mention ! commands", async () => {
     ensuredSnapshot = withWorkspace({ conversations: [mainConversation, sideConversation] });
-    render(<CoordinatorPanel projectId="project-1" />);
+    renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
     const mainHint = (await screen.findByTestId("composer-hint")).textContent ?? "";
     expect(mainHint).toBe("Start a message with ! to run a command yourself in this checkout.");
     expect(screen.getByTestId("intro-slot")).toBeTruthy();
@@ -433,7 +439,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
   });
 
   test("the footer speaks of the coordinator's work, so it does not contradict ! commands", async () => {
-    render(<CoordinatorPanel projectId="project-1" />);
+    renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
     await screen.findByTestId("native-agent");
     expect(
       screen.getByText(
@@ -444,14 +450,16 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
   });
 
   test("the first-run card explains the coordinator until dismissed, and ? shows it again", async () => {
-    useUIStore.setState({ coordinatorIntroDismissed: false });
+    useUIChromeStore.setState({ coordinatorIntroDismissed: false });
     useRealAgentTab = true;
-    useConfigStore.getState().updateGlobalConfig({
-      enabledAgentPlatforms: ["claude"],
-      agentSettings: { defaultAgent: "claude" },
-    });
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        enabledAgentPlatforms: ["claude"],
+        agentSettings: { defaultAgent: "claude" },
+      });
     ensuredSnapshot = withWorkspace({ conversations: [unassigned(mainConversation)] });
-    const view = render(<CoordinatorPanel projectId="project-1" />);
+    const view = renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
 
     const card = await screen.findByRole("region", { name: "How the coordinator works" });
     for (const line of COORDINATOR_INTRO_LINES) expect(card.textContent).toContain(line);
@@ -469,9 +477,9 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
       ),
     );
     // Per user, in the UI store: it stays dismissed after a remount.
-    expect(useUIStore.getState().coordinatorIntroDismissed).toBe(true);
+    expect(useUIChromeStore.getState().coordinatorIntroDismissed).toBe(true);
     view.unmount();
-    render(<CoordinatorPanel projectId="project-1" />);
+    renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
     await screen.findByRole("textbox", { name: "What would you like to get done?" });
     expect(screen.queryByRole("region", { name: "How the coordinator works" }) === null).toBe(true);
 
@@ -490,18 +498,22 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
 
   test("a first message starting with ! shows the rule under the composer, not only a toast", async () => {
     useRealAgentTab = true;
-    useConfigStore.getState().updateGlobalConfig({
-      enabledAgentPlatforms: ["claude"],
-      agentSettings: { defaultAgent: "claude" },
-    });
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        enabledAgentPlatforms: ["claude"],
+        agentSettings: { defaultAgent: "claude" },
+      });
     ensuredSnapshot = withWorkspace({ conversations: [unassigned(mainConversation)] });
-    render(<CoordinatorPanel projectId="project-1" />);
+    renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
     const input = await screen.findByRole("textbox", { name: "What would you like to get done?" });
     expect(screen.getByText(COORDINATOR_COMMAND_HINT)).toBeTruthy();
 
     fireEvent.input(input, { target: { textContent: "!git status" } });
     await waitFor(() =>
-      expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.text).toBe("!git status"),
+      expect(appCommandStore(nativeComposeStore).getState().drafts.get(sessionKey)?.text).toBe(
+        "!git status",
+      ),
     );
     fireEvent.keyDown(input, { key: "Enter" });
     const rule = await screen.findByRole("alert");
@@ -509,12 +521,14 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
     expect(rule.hasAttribute("data-unassigned-command-refusal")).toBe(true);
     // Nothing started, and the text is still in the box.
     expect(assignAgent).not.toHaveBeenCalled();
-    expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.text).toBe("!git status");
+    expect(appCommandStore(nativeComposeStore).getState().drafts.get(sessionKey)?.text).toBe(
+      "!git status",
+    );
 
     // Still shown while the text is a command; gone once the ! is dropped.
     fireEvent.input(input, { target: { textContent: "!git status --short" } });
     await waitFor(() =>
-      expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.text).toBe(
+      expect(appCommandStore(nativeComposeStore).getState().drafts.get(sessionKey)?.text).toBe(
         "!git status --short",
       ),
     );
@@ -526,12 +540,14 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
 
   test("an empty conversation's starter prompt fills the real message box without sending", async () => {
     useRealAgentTab = true;
-    useConfigStore.getState().updateGlobalConfig({
-      enabledAgentPlatforms: ["claude"],
-      agentSettings: { defaultAgent: "claude" },
-    });
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        enabledAgentPlatforms: ["claude"],
+        agentSettings: { defaultAgent: "claude" },
+      });
     ensuredSnapshot = withWorkspace({ conversations: [unassigned(mainConversation)] });
-    render(<CoordinatorPanel projectId="project-1" />);
+    renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
 
     const input = await screen.findByRole("textbox", { name: "What would you like to get done?" });
     const starters = screen.getByRole("group", { name: "Starter prompts" });
@@ -551,7 +567,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
       }),
     );
     await waitFor(() =>
-      expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.text).toBe(
+      expect(appCommandStore(nativeComposeStore).getState().drafts.get(sessionKey)?.text).toBe(
         "Review this branch and tell me what needs attention",
       ),
     );
@@ -564,7 +580,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
     // Still editable, and nothing was sent.
     fireEvent.input(input, { target: { textContent: "Review this branch for security issues" } });
     await waitFor(() =>
-      expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.text).toBe(
+      expect(appCommandStore(nativeComposeStore).getState().drafts.get(sessionKey)?.text).toBe(
         "Review this branch for security issues",
       ),
     );
@@ -585,11 +601,12 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
         createdAt: new Date(0).toISOString(),
       },
     ]);
-    render(<CoordinatorPanel projectId="project-1" />);
+    renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
     await screen.findByRole("textbox");
     await waitFor(() =>
       expect(
-        useNativeAgentProjectionStore.getState().projections.get(sessionKey)?.messages.length,
+        appCommandStore(nativeAgentProjectionStore).getState().projections.get(sessionKey)?.messages
+          .length,
       ).toBe(1),
     );
     expect(screen.queryByRole("group", { name: "Starter prompts" }) === null).toBe(true);
@@ -599,7 +616,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
   });
 
   test("the badge names the enforced tier and keeps the path and revision one tap away", async () => {
-    render(<CoordinatorPanel projectId="project-1" />);
+    renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
     const badge = await screen.findByRole("button", {
       name: /Changes run in isolated environments/,
     });
@@ -642,7 +659,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
     const opened: string[] = [];
     const stop = onGlobalSettingsRequest((section) => opened.push(section));
     try {
-      render(<CoordinatorPanel projectId="project-1" />);
+      renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
       const badge = await screen.findByRole("button", {
         name: /Changes run in isolated environments/,
       });
@@ -679,7 +696,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
         },
       },
     );
-    render(<CoordinatorPanel projectId="project-1" />);
+    renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
     const badge = await screen.findByRole("button", {
       name: /Changes run in isolated environments/,
     });
@@ -704,18 +721,18 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
         : { lifecycleState: hold },
     );
     installPendingMail();
-    const mounted = render(<CoordinatorPanel projectId="project-1" />);
+    const mounted = renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
     expect(await screen.findByText(`Delivery waiting: ${reason}`)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Deliver now" }) === null).toBe(true);
     mounted.unmount();
-    const remounted = render(<CoordinatorPanel projectId="project-1" />);
+    const remounted = renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
     expect(await screen.findByText(`Delivery waiting: ${reason}`)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Deliver now" }) === null).toBe(true);
     expect(screen.getByRole("button", { name: "View" })).toBeTruthy();
 
     remounted.unmount();
     ensuredSnapshot = baseSnapshot;
-    render(<CoordinatorPanel projectId="project-1" />);
+    renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
     expect(await screen.findByRole("button", { name: "Deliver now" })).toBeTruthy();
     expect(screen.queryByText(`Delivery waiting: ${reason}`) === null).toBe(true);
   });
@@ -723,7 +740,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
   test("paused coordination keeps the transcript and resumes from the banner", async () => {
     ensuredSnapshot = withWorkspace({ lifecycleState: "paused" });
     resume.mockImplementationOnce(async () => withWorkspace({ lifecycleState: "ready" }));
-    render(<CoordinatorPanel projectId="project-1" />);
+    renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
 
     const banner = await screen.findByText(/Coordination is paused/);
     expect(banner.textContent).toContain("Mail and new turns wait until you resume");
@@ -739,7 +756,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
 
   test("a startup failure keeps the transcript under an error banner whose Retry reloads", async () => {
     ensuredSnapshot = withWorkspace({ lifecycleState: "error", lastStartupError: "bridge failed" });
-    render(<CoordinatorPanel projectId="project-1" />);
+    renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
 
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("Coordinator startup failed");
@@ -766,7 +783,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
     async (lifecycleState) => {
       useRealAgentTab = true;
       ensuredSnapshot = withWorkspace({ lifecycleState });
-      render(<CoordinatorPanel projectId="project-1" />);
+      renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
       await screen.findByText(
         lifecycleState === "error" ? "Coordinator startup failed." : /Coordination is paused/,
       );
@@ -791,7 +808,8 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
       await waitFor(() => expect(ensureSession.mock.calls.length).toBeGreaterThan(calls));
       await waitFor(() =>
         expect(
-          useNativeAgentProjectionStore.getState().projections.get(sessionKey)?.connection,
+          appCommandStore(nativeAgentProjectionStore).getState().projections.get(sessionKey)
+            ?.connection,
         ).toBe("connected"),
       );
       const input = await screen.findByRole("textbox");
@@ -818,7 +836,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
         conversations,
         selectedConversationId: conversations[0]!.id,
       });
-      return render(<CoordinatorPanel projectId="project-1" />);
+      return renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
     }
 
     test("is named in its own pane, whose transcript stays, and blames nothing else", async () => {
@@ -909,7 +927,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
   test("an older backend's workspace failure keeps the toolbar banner and holds every pane", async () => {
     useRealAgentTab = true;
     ensuredSnapshot = withWorkspace({ lifecycleState: "error", lastStartupError: "bridge failed" });
-    render(<CoordinatorPanel projectId="project-1" />);
+    renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("Coordinator startup failed");
     expect(alert.textContent).toContain("bridge failed");
@@ -924,11 +942,11 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
       agentProjection = projection([
         { id: "saved", role: "assistant", content: "Saved answer", parts: [] },
       ]);
-      render(<CoordinatorPanel projectId="project-1" />);
+      renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
       await screen.findByText(/Coordination is paused/);
       await waitFor(() =>
         expect(
-          useNativeAgentProjectionStore
+          appCommandStore(nativeAgentProjectionStore)
             .getState()
             .projections.get(sessionKey)
             ?.messages.map((item) => (item as { id: string }).id),
@@ -962,7 +980,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
     const savedTranscriptShown = () =>
       waitFor(() =>
         expect(
-          useNativeAgentProjectionStore
+          appCommandStore(nativeAgentProjectionStore)
             .getState()
             .projections.get(sessionKey)
             ?.messages.map((item) => (item as { id: string }).id),
@@ -988,12 +1006,14 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
       "$cause: loads the saved transcript after a reload, establishing nothing and sending nothing",
       async ({ enabled, reason, action }) => {
         useRealAgentTab = true;
-        useConfigStore.getState().updateGlobalConfig({ enabledAgentPlatforms: [...enabled] });
+        appCommandStore(configStore)
+          .getState()
+          .updateGlobalConfig({ enabledAgentPlatforms: [...enabled] });
         ensuredSnapshot = unavailableCodex("Why it is unavailable.");
         agentProjection = projection([
           { id: "saved", role: "assistant", content: "Saved answer", parts: [] },
         ]);
-        render(<CoordinatorPanel projectId="project-1" />);
+        renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
         await screen.findByText(/Codex is unavailable for Coordinator/);
         expect(screen.getByRole("button", { name: action })).toBeTruthy();
         await savedTranscriptShown();
@@ -1011,18 +1031,22 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
 
     test("turning the platform back on connects the same pane and sends", async () => {
       useRealAgentTab = true;
-      useConfigStore.getState().updateGlobalConfig({ enabledAgentPlatforms: ["claude"] });
+      appCommandStore(configStore)
+        .getState()
+        .updateGlobalConfig({ enabledAgentPlatforms: ["claude"] });
       ensuredSnapshot = unavailableCodex("This agent platform is turned off in settings.");
       agentProjection = projection([
         { id: "saved", role: "assistant", content: "Saved answer", parts: [] },
       ]);
-      render(<CoordinatorPanel projectId="project-1" />);
+      renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
       await screen.findByText(/Codex is unavailable for Coordinator/);
       await savedTranscriptShown();
       expect(ensureSession).not.toHaveBeenCalled();
 
       // What saving the setting does: the panel learns from the config change.
-      useConfigStore.getState().updateGlobalConfig({ enabledAgentPlatforms: ["codex", "claude"] });
+      appCommandStore(configStore)
+        .getState()
+        .updateGlobalConfig({ enabledAgentPlatforms: ["codex", "claude"] });
       ensuredSnapshot = baseSnapshot;
       act(() => {
         dispatchResourceChange({ resource: "config", id: "app", revision: 2 });
@@ -1034,7 +1058,8 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
       await waitFor(() => expect(ensureSession).toHaveBeenCalled());
       await waitFor(() =>
         expect(
-          useNativeAgentProjectionStore.getState().projections.get(sessionKey)?.connection,
+          appCommandStore(nativeAgentProjectionStore).getState().projections.get(sessionKey)
+            ?.connection,
         ).toBe("connected"),
       );
       const input = await screen.findByRole("textbox");
@@ -1046,9 +1071,11 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
 
     test("an assigned platform missing from an older snapshot holds sending too", async () => {
       useRealAgentTab = true;
-      useConfigStore.getState().updateGlobalConfig({ enabledAgentPlatforms: ["codex", "claude"] });
+      appCommandStore(configStore)
+        .getState()
+        .updateGlobalConfig({ enabledAgentPlatforms: ["codex", "claude"] });
       ensuredSnapshot = withWorkspace({}, { providerAvailability: {} });
-      render(<CoordinatorPanel projectId="project-1" />);
+      renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
       await screen.findByText(/Codex is unavailable for Coordinator/);
       expect(placeholder(await screen.findByRole("textbox"))).toBe(
         "Codex is below the coordinator safety level. Change it to send.",
@@ -1058,10 +1085,12 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
 
     test("mail on a platform-held pane waits for settings even with another platform available", async () => {
       ensuredSnapshot = unavailableCodex("Off.");
-      useConfigStore.getState().updateGlobalConfig({ enabledAgentPlatforms: ["claude"] });
+      appCommandStore(configStore)
+        .getState()
+        .updateGlobalConfig({ enabledAgentPlatforms: ["claude"] });
       const environmentId = "coordinator:coordinator-1:conversation-1";
       const mailboxId = `${environmentId}\0coordinator-tab`;
-      useAgentMailStore.setState({
+      appCommandStore(agentMailStore).setState({
         summary: new Map([
           [
             mailboxId,
@@ -1082,7 +1111,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
         refreshSummary: async () => undefined,
         refreshMailbox: async () => undefined,
       });
-      render(<CoordinatorPanel projectId="project-1" />);
+      renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
       expect(
         await screen.findByText("Delivery waiting: Codex is turned off. Turn it on to send."),
       ).toBeTruthy();
@@ -1095,7 +1124,9 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
       async (phase) => {
         useRealAgentTab = true;
         ensuredSnapshot = unavailableCodex("Off.");
-        useConfigStore.getState().updateGlobalConfig({ enabledAgentPlatforms: ["claude"] });
+        appCommandStore(configStore)
+          .getState()
+          .updateGlobalConfig({ enabledAgentPlatforms: ["claude"] });
         agentProjection = { ...projection(), turn: { phase } };
         const stop = spyOn(realBackend, "stopNativeAgentSession").mockImplementation(async <
           TMessage,
@@ -1103,10 +1134,10 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
           agentProjection = { ...agentProjection, turn: { phase: "idle" } };
           return agentProjection as NativeAgentSessionProjection<TMessage>;
         });
-        const mounted = render(<CoordinatorPanel projectId="project-1" />);
+        const mounted = renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
         await screen.findByTitle("Stop current query");
         mounted.unmount();
-        render(<CoordinatorPanel projectId="project-1" />);
+        renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
         fireEvent.click(await screen.findByTitle("Stop current query"));
         await waitFor(() => expect(stop).toHaveBeenCalledTimes(1));
         expect(ensureSession).not.toHaveBeenCalled();
@@ -1116,18 +1147,22 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
 
     test("an unavailable platform takes precedence over pause until settings allow it", async () => {
       useRealAgentTab = true;
-      useConfigStore.getState().updateGlobalConfig({ enabledAgentPlatforms: ["claude"] });
+      appCommandStore(configStore)
+        .getState()
+        .updateGlobalConfig({ enabledAgentPlatforms: ["claude"] });
       ensuredSnapshot = withWorkspace(
         { lifecycleState: "paused" },
         { providerAvailability: unavailableCodex("Off.").providerAvailability },
       );
-      render(<CoordinatorPanel projectId="project-1" />);
+      renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
       await screen.findByText(/Coordination is paused/);
       expect(placeholder(await screen.findByRole("textbox"))).toBe(
         "Codex is turned off. Turn it on to send.",
       );
       ensuredSnapshot = withWorkspace({ lifecycleState: "paused" });
-      useConfigStore.getState().updateGlobalConfig({ enabledAgentPlatforms: ["codex", "claude"] });
+      appCommandStore(configStore)
+        .getState()
+        .updateGlobalConfig({ enabledAgentPlatforms: ["codex", "claude"] });
       act(() => dispatchResourceChange({ resource: "config", id: "app", revision: 2 }));
       await waitFor(() =>
         expect(placeholder(screen.getByRole("textbox"))).toBe(
@@ -1139,7 +1174,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
 
   describe("action errors", () => {
     test("show as an announced alert, without a click, and dismiss", async () => {
-      render(<CoordinatorPanel projectId="project-1" />);
+      renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
       await screen.findByTestId("native-agent");
       fireEvent.click(screen.getByRole("button", { name: "Pause" }));
       const alert = await screen.findByRole("alert");
@@ -1151,7 +1186,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
     });
 
     test("clear on the next successful action", async () => {
-      render(<CoordinatorPanel projectId="project-1" />);
+      renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
       await screen.findByTestId("native-agent");
       fireEvent.click(screen.getByRole("button", { name: "Pause" }));
       await screen.findByRole("alert");
@@ -1163,7 +1198,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
 
     test("a failed close is visible too, and clears what came before", async () => {
       ensuredSnapshot = withWorkspace({ conversations: [mainConversation, sideConversation] });
-      render(<CoordinatorPanel projectId="project-1" />);
+      renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
       await screen.findByTestId("native-agent");
       fireEvent.click(screen.getByRole("button", { name: "Pause" }));
       await screen.findByText("pause failed");
@@ -1177,7 +1212,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
   });
 
   test("Pause says it holds mail and new turns for this project", async () => {
-    render(<CoordinatorPanel projectId="project-1" />);
+    renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
     await screen.findByTestId("native-agent");
     const title = screen.getByRole("button", { name: "Pause" }).getAttribute("title") ?? "";
     expect(title).toContain("this project's coordinator");
@@ -1193,7 +1228,9 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
 
     test("a platform held by the safety level links Coordinator settings", async () => {
       const { sections, off } = settingsRequests();
-      useConfigStore.getState().updateGlobalConfig({ enabledAgentPlatforms: ["codex", "claude"] });
+      appCommandStore(configStore)
+        .getState()
+        .updateGlobalConfig({ enabledAgentPlatforms: ["codex", "claude"] });
       ensuredSnapshot = withWorkspace(
         {},
         {
@@ -1207,7 +1244,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
           },
         },
       );
-      render(<CoordinatorPanel projectId="project-1" />);
+      renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
       fireEvent.click(await screen.findByRole("button", { name: "Coordinator settings" }));
       expect(sections).toEqual(["coordinator"]);
       off();
@@ -1215,7 +1252,9 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
 
     test("a platform turned off links Platforms", async () => {
       const { sections, off } = settingsRequests();
-      useConfigStore.getState().updateGlobalConfig({ enabledAgentPlatforms: ["claude"] });
+      appCommandStore(configStore)
+        .getState()
+        .updateGlobalConfig({ enabledAgentPlatforms: ["claude"] });
       ensuredSnapshot = withWorkspace(
         {},
         {
@@ -1229,7 +1268,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
           },
         },
       );
-      render(<CoordinatorPanel projectId="project-1" />);
+      renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
       fireEvent.click(await screen.findByRole("button", { name: "Platform settings" }));
       expect(sections).toEqual(["platforms"]);
       off();
@@ -1242,7 +1281,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
         { conversations: [unassigned(mainConversation)] },
         { providerAvailability: {} },
       );
-      render(<CoordinatorPanel projectId="project-1" />);
+      renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
       expect(await screen.findByText(/No agent platform meets/)).toBeTruthy();
       fireEvent.click(screen.getByRole("button", { name: "Coordinator settings" }));
       expect(sections).toEqual(["coordinator"]);
@@ -1250,12 +1289,13 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
     });
 
     test("no local checkout opens Repository settings", async () => {
-      useProjectStore.setState((state) => ({
+      appCommandStore(projectStore).setState((state) => ({
         projects: state.projects.map((project) => ({ ...project, localPath: null })),
       }));
-      render(<CoordinatorPanel projectId="project-1" />);
+      renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
       fireEvent.click(screen.getByRole("button", { name: "Repository settings" }));
       expect(useAppDialogStore.getState().request).toEqual({
+        nodeId: commandNodeId(),
         kind: "repository-settings",
         projectId: "project-1",
       });
@@ -1265,7 +1305,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
     test("agent messaging off links Messaging", async () => {
       const { sections, off } = settingsRequests();
       ensuredSnapshot = withWorkspace({}, { agentMessaging: { enabled: false } });
-      render(<CoordinatorPanel projectId="project-1" />);
+      renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
       fireEvent.click(
         await screen.findByRole("button", { name: "Turn it on in Settings → Messaging" }),
       );
@@ -1276,7 +1316,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
 
   test("a failed Sync stays announced after identical repository status arrives and can be dismissed", async () => {
     ensuredGit = { ...gitStatus, upstream: "origin/main", behind: 1, ahead: 0 };
-    render(<CoordinatorPanel projectId="project-1" />);
+    renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
     fireEvent.click(await screen.findByRole("button", { name: "Sync" }));
     const alert = await screen.findByRole("alert");
     await waitFor(() => expect(ensuredGit.lastError?.message).toBe("sync failed"));
@@ -1298,7 +1338,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
         retryable: true,
       },
     };
-    render(<CoordinatorPanel projectId="project-1" />);
+    renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
     await screen.findByText("Repository error");
     fireEvent.click(screen.getByRole("button", { name: "Pause" }));
     await waitFor(() => expect(pause).toHaveBeenCalled());
@@ -1319,7 +1359,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
         },
       },
     );
-    render(<CoordinatorPanel projectId="project-1" />);
+    renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
     expect(await screen.findByText("Sign in first")).toBeTruthy();
     expect(screen.getByText(/Codex is unavailable for Coordinator/)).toBeTruthy();
     expect(screen.getByTestId("native-agent")).toBeTruthy();
@@ -1336,7 +1376,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
         retryable: true,
       },
     };
-    render(<CoordinatorPanel projectId="project-1" />);
+    renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
     expect(await screen.findByText("fatal: could not read from remote")).toBeTruthy();
     expect(screen.getByText("Repository error")).toBeTruthy();
 
@@ -1348,7 +1388,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
 
   test("closing the main conversation asks first; cancelling keeps it open", async () => {
     ensuredSnapshot = withWorkspace({ conversations: [mainConversation, sideConversation] });
-    render(<CoordinatorPanel projectId="project-1" />);
+    renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
     await screen.findByTestId("native-agent");
 
     fireEvent.click(screen.getByRole("button", { name: /^Close Coordinator\./ }));
@@ -1377,7 +1417,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
 
   test("closing a side conversation does not ask", async () => {
     ensuredSnapshot = withWorkspace({ conversations: [mainConversation, sideConversation] });
-    render(<CoordinatorPanel projectId="project-1" />);
+    renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
     await screen.findByTestId("native-agent");
 
     fireEvent.click(screen.getByRole("button", { name: "Close Side 1" }));

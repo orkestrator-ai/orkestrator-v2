@@ -1,17 +1,18 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { useState } from "react";
 import type { Environment } from "@/types";
 import type { GitHubCredentialStatus } from "@/lib/backend";
 import type { CreateFeatureBuildResult } from "@orkestrator/protocol/feature-build";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
-import { useClaudeOptionsStore } from "@/stores/claudeOptionsStore";
-import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
-import { useConfigStore } from "@/stores/configStore";
-import { useProjectStore } from "@/stores/projectStore";
-import { useUIStore } from "@/stores/uiStore";
-import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { claudeOptionsStore } from "@/stores/claudeOptionsStore";
+import { agentModelCatalogStore } from "@/stores/agentModelCatalogStore";
+import { configStore } from "@/stores/configStore";
+import { projectStore } from "@/stores/projectStore";
+import { uiStore } from "@/stores/uiStore";
+import { buildPipelineStore } from "@/stores/buildPipelineStore";
+import { environmentStore } from "@/stores/environmentStore";
 import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
 import { mockToastError } from "../../mocks/sonner";
@@ -71,6 +72,7 @@ const {
   resolveEnvironmentCreateRequest,
 } = await import("@/components/environments/CreateEnvironmentFlowDialog");
 import type { ClaudeOptions } from "@/components/environments/CreateEnvironmentDialog";
+import { appCommandStore } from "../../../apps/web/src/test/app-command-store";
 
 const baseOptions: ClaudeOptions = {
   environmentType: "containerized",
@@ -100,7 +102,7 @@ afterEach(cleanup);
 async function submitCreateFlow(options: { turnOffLaunchAgent?: boolean } = {}) {
   const created = { id: "env-created" } as Environment;
   const startEnvironment = mock(async () => {});
-  render(
+  renderInAppCommandScope(
     <CreateEnvironmentFlowDialog
       open
       onOpenChange={() => {}}
@@ -137,16 +139,19 @@ describe("CreateEnvironmentFlowDialog", () => {
       source: "host-cli",
       available: true,
     });
-    useClaudeOptionsStore.setState({ options: {} });
-    useAgentModelCatalogStore.setState({ claudeModels: [] });
-    useBuildPipelineStore.setState({ pipelines: new Map(), buildEnvironmentIds: new Set() });
-    useEnvironmentStore.setState({ environments: [] });
-    useConfigStore.setState({
-      config: structuredClone(useConfigStore.getInitialState().config),
+    appCommandStore(claudeOptionsStore).setState({ options: {} });
+    appCommandStore(agentModelCatalogStore).setState({ claudeModels: [] });
+    appCommandStore(buildPipelineStore).setState({
+      pipelines: new Map(),
+      buildEnvironmentIds: new Set(),
+    });
+    appCommandStore(environmentStore).setState({ environments: [] });
+    appCommandStore(configStore).setState({
+      config: structuredClone(appCommandStore(configStore).getInitialState().config),
       isLoading: false,
       error: null,
     });
-    useProjectStore.setState({
+    appCommandStore(projectStore).setState({
       projects: [
         {
           id: "project-1",
@@ -158,7 +163,7 @@ describe("CreateEnvironmentFlowDialog", () => {
         },
       ],
     });
-    useUIStore.setState({
+    appCommandStore(uiStore).setState({
       selectedProjectId: "project-previous",
       selectedEnvironmentId: "env-previous",
       collapsedProjects: ["project-1"],
@@ -166,7 +171,7 @@ describe("CreateEnvironmentFlowDialog", () => {
   });
 
   test("does not submit a forced local fallback for a remote-only project", async () => {
-    useProjectStore.setState({
+    appCommandStore(projectStore).setState({
       projects: [
         {
           id: "project-1",
@@ -180,7 +185,7 @@ describe("CreateEnvironmentFlowDialog", () => {
     });
     const createEnvironment = mock(async () => ({ id: "env-impossible-local" }) as Environment);
 
-    render(
+    renderInAppCommandScope(
       <DockerAvailabilityProvider available={false}>
         <CreateEnvironmentFlowDialog
           open
@@ -212,7 +217,7 @@ describe("CreateEnvironmentFlowDialog", () => {
     });
     const createEnvironment = mock(async () => ({ id: "env-no-host-auth" }) as Environment);
 
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentFlowDialog
         open
         onOpenChange={() => {}}
@@ -240,7 +245,7 @@ describe("CreateEnvironmentFlowDialog", () => {
     });
     const createEnvironment = mock(async () => ({ id: "env-no-github" }) as Environment);
 
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentFlowDialog
         open
         onOpenChange={() => {}}
@@ -268,7 +273,7 @@ describe("CreateEnvironmentFlowDialog", () => {
     });
     const createEnvironment = mock(async () => ({ id: "env-no-pat" }) as Environment);
 
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentFlowDialog
         open
         onOpenChange={() => {}}
@@ -296,7 +301,7 @@ describe("CreateEnvironmentFlowDialog", () => {
     );
     const createEnvironment = mock(async () => ({ id: "env-status-error" }) as Environment);
 
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentFlowDialog
         open
         onOpenChange={() => {}}
@@ -332,7 +337,7 @@ describe("CreateEnvironmentFlowDialog", () => {
       updateEnvironment: () => {},
       startEnvironment: async () => {},
     };
-    const view = render(<CreateEnvironmentFlowDialog open {...props} />);
+    const view = renderInAppCommandScope(<CreateEnvironmentFlowDialog open {...props} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
     await waitFor(() => expect(getContainerGitHubCredentialStatusMock).toHaveBeenCalledTimes(1));
@@ -363,7 +368,9 @@ describe("CreateEnvironmentFlowDialog", () => {
       updateEnvironment: () => {},
       startEnvironment: async () => {},
     };
-    const view = render(<CreateEnvironmentFlowDialog projectId="project-1" {...sharedProps} />);
+    const view = renderInAppCommandScope(
+      <CreateEnvironmentFlowDialog projectId="project-1" {...sharedProps} />,
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
     await waitFor(() => expect(getContainerGitHubCredentialStatusMock).toHaveBeenCalledTimes(1));
@@ -398,7 +405,7 @@ describe("CreateEnvironmentFlowDialog", () => {
         }),
     );
     const createEnvironment = mock(async () => ({ id: "env-unmounted" }) as Environment);
-    const view = render(
+    const view = renderInAppCommandScope(
       <CreateEnvironmentFlowDialog
         open
         onOpenChange={() => {}}
@@ -437,7 +444,7 @@ describe("CreateEnvironmentFlowDialog", () => {
       updateEnvironment: () => {},
       startEnvironment: async () => {},
     };
-    const view = render(
+    const view = renderInAppCommandScope(
       <DockerAvailabilityProvider available>
         <CreateEnvironmentFlowDialog {...props} />
       </DockerAvailabilityProvider>,
@@ -473,7 +480,7 @@ describe("CreateEnvironmentFlowDialog", () => {
       updateEnvironment: () => {},
       startEnvironment: async () => {},
     };
-    const view = render(
+    const view = renderInAppCommandScope(
       <DockerAvailabilityProvider available>
         <CreateEnvironmentFlowDialog {...props} />
       </DockerAvailabilityProvider>,
@@ -501,7 +508,7 @@ describe("CreateEnvironmentFlowDialog", () => {
     const createEnvironment = mock(async () => ({ id: "env-retry" }) as Environment);
     createEnvironment.mockRejectedValueOnce(new Error("container creation failed"));
 
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentFlowDialog
         open
         onOpenChange={() => {}}
@@ -547,7 +554,7 @@ describe("CreateEnvironmentFlowDialog", () => {
     });
     const createEnvironment = mock(async () => ({ id: "env-feature" }) as Environment);
 
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentFlowDialog
         open
         onOpenChange={() => {}}
@@ -577,7 +584,7 @@ describe("CreateEnvironmentFlowDialog", () => {
   test("starts a description-only feature build through the production wrapper", async () => {
     const createEnvironment = mock(async () => ({ id: "env-feature" }) as Environment);
 
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentFlowDialog
         open
         onOpenChange={() => {}}
@@ -599,7 +606,7 @@ describe("CreateEnvironmentFlowDialog", () => {
   });
 
   test("activates the feature environment so its setup surface mounts", async () => {
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentFlowDialog
         open
         onOpenChange={() => {}}
@@ -613,26 +620,28 @@ describe("CreateEnvironmentFlowDialog", () => {
     startFeatureBuild("Dark mode toggle");
 
     await waitFor(() => {
-      expect(useUIStore.getState()).toMatchObject({
+      expect(appCommandStore(uiStore).getState()).toMatchObject({
         selectedProjectId: "project-1",
         selectedEnvironmentId: "env-feature",
       });
     });
     await waitFor(() =>
-      expect(useEnvironmentStore.getState().getEnvironmentById("env-feature")).toMatchObject({
+      expect(
+        appCommandStore(environmentStore).getState().getEnvironmentById("env-feature"),
+      ).toMatchObject({
         id: "env-feature",
         projectId: "project-1",
       }),
     );
     expect(getEnvironmentMock).toHaveBeenCalledWith("env-feature");
-    expect(useUIStore.getState().collapsedProjects).not.toContain("project-1");
+    expect(appCommandStore(uiStore).getState().collapsedProjects).not.toContain("project-1");
   });
 
   test("leaves null targeted hydration recoverable by resource synchronization", async () => {
     getEnvironmentMock.mockResolvedValueOnce(null);
     const logs = captureLogs();
     try {
-      render(
+      renderInAppCommandScope(
         <CreateEnvironmentFlowDialog
           open
           onOpenChange={() => {}}
@@ -655,16 +664,22 @@ describe("CreateEnvironmentFlowDialog", () => {
           }),
         ),
       );
-      expect(useUIStore.getState().selectedEnvironmentId).toBe("env-feature");
-      expect(useEnvironmentStore.getState().getEnvironmentById("env-feature")).toBeUndefined();
+      expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("env-feature");
+      expect(
+        appCommandStore(environmentStore).getState().getEnvironmentById("env-feature"),
+      ).toBeUndefined();
 
       act(() => {
-        useEnvironmentStore.getState().addEnvironment({
-          id: "env-feature",
-          projectId: "project-1",
-        } as Environment);
+        appCommandStore(environmentStore)
+          .getState()
+          .addEnvironment({
+            id: "env-feature",
+            projectId: "project-1",
+          } as Environment);
       });
-      expect(useEnvironmentStore.getState().getEnvironmentById("env-feature")).toBeTruthy();
+      expect(
+        appCommandStore(environmentStore).getState().getEnvironmentById("env-feature"),
+      ).toBeTruthy();
     } finally {
       logs.restore();
     }
@@ -677,7 +692,7 @@ describe("CreateEnvironmentFlowDialog", () => {
     } as Environment);
     const logs = captureLogs();
     try {
-      render(
+      renderInAppCommandScope(
         <CreateEnvironmentFlowDialog
           open
           onOpenChange={() => {}}
@@ -704,16 +719,22 @@ describe("CreateEnvironmentFlowDialog", () => {
           }),
         ),
       );
-      expect(useUIStore.getState().selectedEnvironmentId).toBe("env-feature");
-      expect(useEnvironmentStore.getState().getEnvironmentById("env-feature")).toBeUndefined();
+      expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("env-feature");
+      expect(
+        appCommandStore(environmentStore).getState().getEnvironmentById("env-feature"),
+      ).toBeUndefined();
 
       act(() => {
-        useEnvironmentStore.getState().addEnvironment({
-          id: "env-feature",
-          projectId: "project-1",
-        } as Environment);
+        appCommandStore(environmentStore)
+          .getState()
+          .addEnvironment({
+            id: "env-feature",
+            projectId: "project-1",
+          } as Environment);
       });
-      expect(useEnvironmentStore.getState().getEnvironmentById("env-feature")).toMatchObject({
+      expect(
+        appCommandStore(environmentStore).getState().getEnvironmentById("env-feature"),
+      ).toMatchObject({
         projectId: "project-1",
       });
     } finally {
@@ -726,7 +747,7 @@ describe("CreateEnvironmentFlowDialog", () => {
     getEnvironmentMock.mockRejectedValueOnce(hydrationError);
     const logs = captureLogs();
     try {
-      render(
+      renderInAppCommandScope(
         <CreateEnvironmentFlowDialog
           open
           onOpenChange={() => {}}
@@ -752,16 +773,22 @@ describe("CreateEnvironmentFlowDialog", () => {
           }),
         ),
       );
-      expect(useUIStore.getState().selectedEnvironmentId).toBe("env-feature");
-      expect(useEnvironmentStore.getState().getEnvironmentById("env-feature")).toBeUndefined();
+      expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("env-feature");
+      expect(
+        appCommandStore(environmentStore).getState().getEnvironmentById("env-feature"),
+      ).toBeUndefined();
 
       act(() => {
-        useEnvironmentStore.getState().addEnvironment({
-          id: "env-feature",
-          projectId: "project-1",
-        } as Environment);
+        appCommandStore(environmentStore)
+          .getState()
+          .addEnvironment({
+            id: "env-feature",
+            projectId: "project-1",
+          } as Environment);
       });
-      expect(useEnvironmentStore.getState().getEnvironmentById("env-feature")).toBeTruthy();
+      expect(
+        appCommandStore(environmentStore).getState().getEnvironmentById("env-feature"),
+      ).toBeTruthy();
     } finally {
       logs.restore();
     }
@@ -773,7 +800,7 @@ describe("CreateEnvironmentFlowDialog", () => {
       pipelineId: "pipeline-pending",
     });
     const onOpenChange = mock(() => {});
-    const { unmount } = render(
+    const { unmount } = renderInAppCommandScope(
       <CreateEnvironmentFlowDialog
         open
         onOpenChange={onOpenChange}
@@ -786,33 +813,37 @@ describe("CreateEnvironmentFlowDialog", () => {
 
     startFeatureBuild("Dark mode toggle");
     await waitFor(() => expect(createFeatureBuildMock).toHaveBeenCalledTimes(1));
-    expect(useUIStore.getState().selectedEnvironmentId).toBe("env-previous");
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("env-previous");
 
     // The create dialog normally closes and unmounts after returning true. The
     // activation intent must remain alive in the app-level resource cache.
     unmount();
     act(() => {
-      useBuildPipelineStore.getState().replacePipeline(
-        buildPipelineFixture({
-          id: "pipeline-pending",
-          projectId: "project-1",
-          environmentId: "env-eventual",
-          phase: "starting-environment",
-        }),
-      );
+      appCommandStore(buildPipelineStore)
+        .getState()
+        .replacePipeline(
+          buildPipelineFixture({
+            id: "pipeline-pending",
+            projectId: "project-1",
+            environmentId: "env-eventual",
+            phase: "starting-environment",
+          }),
+        );
     });
 
-    expect(useUIStore.getState()).toMatchObject({
+    expect(appCommandStore(uiStore).getState()).toMatchObject({
       selectedProjectId: "project-1",
       selectedEnvironmentId: "env-eventual",
     });
     await waitFor(() =>
-      expect(useEnvironmentStore.getState().getEnvironmentById("env-eventual")).toMatchObject({
+      expect(
+        appCommandStore(environmentStore).getState().getEnvironmentById("env-eventual"),
+      ).toMatchObject({
         id: "env-eventual",
         projectId: "project-1",
       }),
     );
-    expect(useUIStore.getState().collapsedProjects).not.toContain("project-1");
+    expect(appCommandStore(uiStore).getState().collapsedProjects).not.toContain("project-1");
   });
 
   test("abandons a feature build when the credential warning is dismissed", async () => {
@@ -821,7 +852,7 @@ describe("CreateEnvironmentFlowDialog", () => {
       available: false,
     });
 
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentFlowDialog
         open
         onOpenChange={() => {}}
@@ -850,7 +881,7 @@ describe("CreateEnvironmentFlowDialog", () => {
     createFeatureBuildMock.mockRejectedValueOnce(new Error("Docker is not running"));
     const onOpenChange = mock(() => {});
 
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentFlowDialog
         open
         onOpenChange={onOpenChange}
@@ -870,7 +901,7 @@ describe("CreateEnvironmentFlowDialog", () => {
   });
 
   test("skips the credential check for a local feature build", async () => {
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentFlowDialog
         open
         onOpenChange={() => {}}
@@ -894,7 +925,7 @@ describe("CreateEnvironmentFlowDialog", () => {
   test("does not check container GitHub credentials for a local worktree", async () => {
     const createEnvironment = mock(async () => ({ id: "env-local" }) as Environment);
 
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentFlowDialog
         open
         onOpenChange={() => {}}
@@ -921,12 +952,12 @@ describe("CreateEnvironmentFlowDialog", () => {
   });
 
   test("arms the creating Electron window for the post-setup agent handoff", async () => {
-    const config = structuredClone(useConfigStore.getState().config);
+    const config = structuredClone(appCommandStore(configStore).getState().config);
     config.global.agentSettings = {
       ...config.global.agentSettings,
       defaultAgent: "codex",
     };
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
 
     const descriptor = Object.getOwnPropertyDescriptor(window, "orkestrator");
     Object.defineProperty(window, "orkestrator", {
@@ -944,7 +975,7 @@ describe("CreateEnvironmentFlowDialog", () => {
   });
 
   test("does not arm the native-tab handoff for a terminal agent launch", async () => {
-    const config = structuredClone(useConfigStore.getState().config);
+    const config = structuredClone(appCommandStore(configStore).getState().config);
     config.global.agentSettings = {
       ...config.global.agentSettings,
       defaultAgent: "claude",
@@ -956,7 +987,7 @@ describe("CreateEnvironmentFlowDialog", () => {
         },
       },
     };
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
 
     const descriptor = Object.getOwnPropertyDescriptor(window, "orkestrator");
     Object.defineProperty(window, "orkestrator", {
@@ -975,7 +1006,7 @@ describe("CreateEnvironmentFlowDialog", () => {
 
   test("starts a newly created environment as a backend-owned background task", async () => {
     const startEnvironment = mock(async () => {});
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentFlowDialog
         open
         onOpenChange={() => {}}
@@ -1004,7 +1035,7 @@ describe("CreateEnvironmentFlowDialog", () => {
         }),
     );
     const onOpenChange = mock(() => {});
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentFlowDialog
         open
         onOpenChange={onOpenChange}
@@ -1035,7 +1066,7 @@ describe("CreateEnvironmentFlowDialog", () => {
     const logs = captureLogs();
 
     try {
-      render(
+      renderInAppCommandScope(
         <CreateEnvironmentFlowDialog
           open
           onOpenChange={onOpenChange}
@@ -1075,7 +1106,7 @@ describe("CreateEnvironmentFlowDialog", () => {
       new Error("Initial prompt attachments exceed the 32 MB limit"),
     );
 
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentFlowDialog
         open
         onOpenChange={onOpenChange}
@@ -1109,7 +1140,7 @@ describe("CreateEnvironmentFlowDialog", () => {
 
   test("keeps the selected model and effort as one-shot launch state without changing defaults", async () => {
     const created = { id: "env-selected-options" } as Environment;
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentFlowDialog
         open
         onOpenChange={() => {}}
@@ -1140,7 +1171,9 @@ describe("CreateEnvironmentFlowDialog", () => {
     expect(call[2]).toBe(true);
     expect(call[3]).toBe("gpt-5.4-mini");
     expect(call[4]).toBe("high");
-    expect(useClaudeOptionsStore.getState().getOptions("env-selected-options")).toEqual(
+    expect(
+      appCommandStore(claudeOptionsStore).getState().getOptions("env-selected-options"),
+    ).toEqual(
       expect.objectContaining({
         agentType: "codex",
         model: "gpt-5.4-mini",
@@ -1151,7 +1184,8 @@ describe("CreateEnvironmentFlowDialog", () => {
     // tab and nothing else. Creating must not write repository-scoped state
     // that would then outrank the configured default for the next create.
     expect(
-      useConfigStore.getState().config.repositories["project-1"]?.lastEnvironmentAgentSelection,
+      appCommandStore(configStore).getState().config.repositories["project-1"]
+        ?.lastEnvironmentAgentSelection,
     ).toBeUndefined();
   });
 
@@ -1175,11 +1209,11 @@ describe("CreateEnvironmentFlowDialog", () => {
       );
     }
 
-    render(<Harness />);
+    renderInAppCommandScope(<Harness />);
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
     expect(screen.queryByRole("dialog") === null).toBe(true);
     act(() => {
-      const config = structuredClone(useConfigStore.getState().config);
+      const config = structuredClone(appCommandStore(configStore).getState().config);
       config.global.enabledAgentPlatforms = ["claude", "codex", "pi"];
       config.global.agentSettings = {
         ...config.global.agentSettings,
@@ -1196,7 +1230,7 @@ describe("CreateEnvironmentFlowDialog", () => {
           mode: "native",
         },
       };
-      useConfigStore.getState().setConfig(config);
+      appCommandStore(configStore).getState().setConfig(config);
     });
     fireEvent.click(screen.getByRole("button", { name: "Reopen creator" }));
     const picker = await screen.findByRole("combobox", { name: "Agent, model and reasoning" });
@@ -1212,7 +1246,7 @@ describe("CreateEnvironmentFlowDialog", () => {
   });
 
   test("does not let a late catalog refresh replace a user-touched agent selection", async () => {
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentFlowDialog
         open
         onOpenChange={() => {}}
@@ -1229,7 +1263,7 @@ describe("CreateEnvironmentFlowDialog", () => {
     fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
 
     act(() => {
-      useAgentModelCatalogStore.setState({
+      appCommandStore(agentModelCatalogStore).setState({
         claudeModels: [
           {
             id: "late-claude",
@@ -1252,7 +1286,7 @@ describe("CreateEnvironmentFlowDialog", () => {
   // catalogues load asynchronously.
   test("applies a configured default once a late catalog makes it resolvable", async () => {
     act(() => {
-      const config = structuredClone(useConfigStore.getState().config);
+      const config = structuredClone(appCommandStore(configStore).getState().config);
       config.repositories["project-1"] = {
         defaultBranch: "main",
         prBaseBranch: "main",
@@ -1268,10 +1302,10 @@ describe("CreateEnvironmentFlowDialog", () => {
           newProject: { platform: "claude", model: "late-claude" },
         },
       };
-      useConfigStore.getState().setConfig(config);
+      appCommandStore(configStore).getState().setConfig(config);
     });
 
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentFlowDialog
         open
         onOpenChange={() => {}}
@@ -1293,7 +1327,7 @@ describe("CreateEnvironmentFlowDialog", () => {
     // "selected model vanished" effect stays quiet. Only the re-apply effect can
     // move the dialog onto the newly resolvable configured model.
     act(() => {
-      useAgentModelCatalogStore.setState({
+      appCommandStore(agentModelCatalogStore).setState({
         claudeModels: [
           { id: "default", name: "Default (recommended)", supportsEffort: false },
           { id: "late-claude", name: "Late Claude", supportsEffort: false },
@@ -1350,7 +1384,7 @@ describe("CreateEnvironmentFlowDialog", () => {
     // means anything for a launch, and leaving one here would hand the next
     // reader a model the user never asked to run.
     const created = { id: "env-agent-off" } as Environment;
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentFlowDialog
         open
         onOpenChange={() => {}}
@@ -1365,21 +1399,21 @@ describe("CreateEnvironmentFlowDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
 
     await waitFor(() => expect(updateEnvironmentAgentSettingsMock).toHaveBeenCalled());
-    const stored = useClaudeOptionsStore.getState().getOptions("env-agent-off");
+    const stored = appCommandStore(claudeOptionsStore).getState().getOptions("env-agent-off");
     expect(stored?.launchAgent).toBe(false);
     expect(stored?.model).toBeUndefined();
     expect(stored?.reasoningEffort).toBeUndefined();
   });
 
   test("falls back to no project name when the id matches no known project", () => {
-    useProjectStore.setState({ projects: [] });
+    appCommandStore(projectStore).setState({ projects: [] });
     const operations = {
       createEnvironment: mock(async () => ({ id: "unused" }) as Environment),
       updateEnvironment: () => {},
       startEnvironment: async () => {},
     };
 
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentFlowDialog
         open
         onOpenChange={() => {}}
@@ -1393,7 +1427,7 @@ describe("CreateEnvironmentFlowDialog", () => {
   });
 
   test("uses the stored project name unless an explicit name is provided", () => {
-    useProjectStore.setState({
+    appCommandStore(projectStore).setState({
       projects: [
         {
           id: "project-1",
@@ -1410,7 +1444,7 @@ describe("CreateEnvironmentFlowDialog", () => {
       updateEnvironment: () => {},
       startEnvironment: async () => {},
     };
-    const { rerender } = render(
+    const { rerender } = renderInAppCommandScope(
       <CreateEnvironmentFlowDialog
         open
         onOpenChange={() => {}}
@@ -1444,7 +1478,7 @@ describe("CreateEnvironmentFlowDialog", () => {
     const createEnvironment = mock(async () => {
       throw new Error("must not be called");
     });
-    render(
+    renderInAppCommandScope(
       <CreateEnvironmentFlowDialog
         open
         onOpenChange={() => {}}

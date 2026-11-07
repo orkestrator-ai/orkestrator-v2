@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { AgentModelRef } from "@orkestrator/protocol/native-agent";
 import type { AgentModelCatalog } from "@/lib/agent-launch";
-import { useConfigStore } from "@/stores/configStore";
+import { configStore } from "@/stores/configStore";
 import type { GlobalConfig } from "@/types";
 import { SHIPPED_REVIEW_LENS_PRESETS } from "@orkestrator/protocol/review-lens";
 import {
@@ -12,6 +13,7 @@ import {
   type MultiReviewLaunchDefaults,
   type MultiReviewLaunchSelection,
 } from "./MultiReviewLaunchDialog";
+import { appCommandStore } from "@/test/app-command-store";
 
 const catalog: AgentModelCatalog = {
   claude: [{ id: "opus", name: "Opus", reasoningEfforts: ["high"] }],
@@ -38,8 +40,8 @@ const speedCatalog: AgentModelCatalog = {
 };
 
 function setFavorites(favoriteModels: AgentModelRef[]) {
-  const config = useConfigStore.getState().config;
-  useConfigStore.setState({
+  const config = appCommandStore(configStore).getState().config;
+  appCommandStore(configStore).setState({
     config: { ...config, global: { ...config.global, favoriteModels } },
   });
 }
@@ -74,7 +76,7 @@ function chooseSpeed(row: string, name: RegExp) {
 describe("MultiReviewLaunchDialog speed", () => {
   test("carries each row's Fast choice independently into the launch", () => {
     const onConfirm = mock((_selection: MultiReviewLaunchSelection) => undefined);
-    render(
+    renderInAppCommandScope(
       <MultiReviewLaunchDialog
         open
         onOpenChange={() => undefined}
@@ -95,7 +97,7 @@ describe("MultiReviewLaunchDialog speed", () => {
 
   test("seeds every row, including the Address Findings model, from the configured speed", () => {
     const onConfirm = mock((_selection: MultiReviewLaunchSelection) => undefined);
-    render(
+    renderInAppCommandScope(
       <MultiReviewLaunchDialog
         open
         onOpenChange={() => undefined}
@@ -142,7 +144,7 @@ describe("MultiReviewLaunchDialog", () => {
       )?.providerLabel,
     ).toBe("Provider Cloud");
 
-    render(
+    renderInAppCommandScope(
       <MultiReviewLaunchDialog
         open
         onOpenChange={() => undefined}
@@ -161,7 +163,7 @@ describe("MultiReviewLaunchDialog", () => {
 
   test("adds and removes reviewer model rows while retaining at least one", () => {
     const onConfirm = mock((_selection: MultiReviewLaunchSelection) => undefined);
-    render(
+    renderInAppCommandScope(
       <MultiReviewLaunchDialog
         open
         onOpenChange={() => undefined}
@@ -191,7 +193,7 @@ describe("MultiReviewLaunchDialog", () => {
   });
 
   test("keeps added models and consolidation controls in the scroll region outside the footer", () => {
-    render(
+    renderInAppCommandScope(
       <MultiReviewLaunchDialog
         open
         onOpenChange={() => undefined}
@@ -219,7 +221,7 @@ describe("MultiReviewLaunchDialog", () => {
   });
 
   test("lays reviewers out in two columns without dark wrapper cards", () => {
-    render(
+    renderInAppCommandScope(
       <MultiReviewLaunchDialog
         open
         onOpenChange={() => undefined}
@@ -253,7 +255,7 @@ describe("MultiReviewLaunchDialog", () => {
   test("disables every model control and guards dismissal and submission while busy", () => {
     const onOpenChange = mock((_open: boolean) => undefined);
     const onConfirm = mock((_selection: MultiReviewLaunchSelection) => undefined);
-    render(
+    renderInAppCommandScope(
       <MultiReviewLaunchDialog
         open
         busy
@@ -298,7 +300,7 @@ describe("MultiReviewLaunchDialog", () => {
       { platform: "cursor", modelId: "grok-4.6" },
     ]);
     const onConfirm = mock((_selection: MultiReviewLaunchSelection) => undefined);
-    render(
+    renderInAppCommandScope(
       <MultiReviewLaunchDialog
         open
         onOpenChange={() => undefined}
@@ -327,7 +329,7 @@ describe("MultiReviewLaunchDialog", () => {
 
   test("seeds reviewer 2, review preparation, and fix from independent defaults", () => {
     const onConfirm = mock((_selection: MultiReviewLaunchSelection) => undefined);
-    render(
+    renderInAppCommandScope(
       <MultiReviewLaunchDialog
         open
         onOpenChange={() => undefined}
@@ -388,7 +390,7 @@ describe("MultiReviewLaunchDialog", () => {
     ]);
 
     const onConfirm = mock((_selection: MultiReviewLaunchSelection) => undefined);
-    render(
+    renderInAppCommandScope(
       <MultiReviewLaunchDialog
         open
         onOpenChange={() => undefined}
@@ -500,7 +502,7 @@ describe("MultiReviewLaunchDialog", () => {
       },
     };
     const onConfirm = mock((_selection: MultiReviewLaunchSelection) => undefined);
-    render(
+    renderInAppCommandScope(
       <MultiReviewLaunchDialog
         open
         onOpenChange={() => undefined}
@@ -517,7 +519,7 @@ describe("MultiReviewLaunchDialog", () => {
   test("keeps each role's effort preferences when its model changes", () => {
     setFavorites([{ platform: "codex", modelId: "gpt-5.6" }]);
     const onConfirm = mock((_selection: MultiReviewLaunchSelection) => undefined);
-    render(
+    renderInAppCommandScope(
       <MultiReviewLaunchDialog
         open
         onOpenChange={() => undefined}
@@ -555,7 +557,7 @@ describe("MultiReviewLaunchDialog", () => {
   test("uses Review defaults for added rows and preserves them when rows are renumbered", () => {
     setFavorites([{ platform: "codex", modelId: "gpt-5.6" }]);
     const onConfirm = mock((_selection: MultiReviewLaunchSelection) => undefined);
-    render(
+    renderInAppCommandScope(
       <MultiReviewLaunchDialog
         open
         onOpenChange={() => undefined}
@@ -587,7 +589,7 @@ describe("MultiReviewLaunchDialog", () => {
   test("includes Pi models in the cross-provider favourites catalog", () => {
     setFavorites([{ platform: "pi", modelId: "anthropic/claude-pi" }]);
     const onConfirm = mock((_selection: MultiReviewLaunchSelection) => undefined);
-    render(
+    renderInAppCommandScope(
       <MultiReviewLaunchDialog
         open
         onOpenChange={() => undefined}
@@ -612,7 +614,7 @@ describe("MultiReviewLaunchDialog", () => {
   test("adopts the platform of a favourite chosen for the consolidation row", () => {
     setFavorites([{ platform: "codex", modelId: "gpt-5.6" }]);
     const onConfirm = mock((_selection: MultiReviewLaunchSelection) => undefined);
-    render(
+    renderInAppCommandScope(
       <MultiReviewLaunchDialog
         open
         onOpenChange={() => undefined}
@@ -645,7 +647,7 @@ describe("MultiReviewLaunchDialog", () => {
    */
   test("applies the configured effort when the provider rail switches platform", () => {
     const onConfirm = mock((_selection: MultiReviewLaunchSelection) => undefined);
-    render(
+    renderInAppCommandScope(
       <MultiReviewLaunchDialog
         open
         onOpenChange={() => undefined}
@@ -702,7 +704,7 @@ describe("MultiReviewLaunchDialog auto-fix", () => {
         onConfirm,
         onOpenChange: () => undefined,
       };
-      const { rerender } = render(<MultiReviewLaunchDialog {...props} open />);
+      const { rerender } = renderInAppCommandScope(<MultiReviewLaunchDialog {...props} open />);
       const checkbox = screen.getByRole("checkbox", {
         name: "Auto-address findings after consolidation",
       });
@@ -749,7 +751,7 @@ describe("MultiReviewLaunchDialog auto-PR", () => {
       onConfirm,
       onOpenChange: () => undefined,
     };
-    const { rerender } = render(<MultiReviewLaunchDialog {...props} open />);
+    const { rerender } = renderInAppCommandScope(<MultiReviewLaunchDialog {...props} open />);
     const checkbox = screen.getByRole("checkbox", { name: "Auto-PR after fix or clean review" });
     expect(checkbox.getAttribute("aria-checked")).toBe("false");
     fireEvent.click(checkbox);
@@ -771,7 +773,7 @@ describe("MultiReviewLaunchDialog auto-PR", () => {
 describe("MultiReviewLaunchDialog launch value", () => {
   test("warns about exact duplicates without blocking or altering the launch", () => {
     const onConfirm = mock((_selection: MultiReviewLaunchSelection) => undefined);
-    render(
+    renderInAppCommandScope(
       <MultiReviewLaunchDialog
         open
         onOpenChange={() => undefined}
@@ -794,7 +796,7 @@ describe("MultiReviewLaunchDialog launch value", () => {
   });
 
   test("a behaviour-affecting difference clears the warning", () => {
-    render(
+    renderInAppCommandScope(
       <MultiReviewLaunchDialog
         open
         onOpenChange={() => undefined}
@@ -808,7 +810,7 @@ describe("MultiReviewLaunchDialog launch value", () => {
   });
 
   test("summarizes expected turns without estimating cost", () => {
-    render(
+    renderInAppCommandScope(
       <MultiReviewLaunchDialog
         open
         onOpenChange={() => undefined}
@@ -830,8 +832,8 @@ describe("MultiReviewLaunchDialog launch value", () => {
 
 describe("MultiReviewLaunchDialog focus", () => {
   function setPresets(reviewLensPresets: GlobalConfig["reviewLensPresets"]) {
-    const config = useConfigStore.getState().config;
-    useConfigStore.setState({
+    const config = appCommandStore(configStore).getState().config;
+    appCommandStore(configStore).setState({
       config: { ...config, global: { ...config.global, reviewLensPresets } },
     });
   }
@@ -839,7 +841,7 @@ describe("MultiReviewLaunchDialog focus", () => {
 
   function renderDialog(defaults: Partial<MultiReviewLaunchDefaults> = {}) {
     const onConfirm = mock((_selection: MultiReviewLaunchSelection) => undefined);
-    render(
+    renderInAppCommandScope(
       <MultiReviewLaunchDialog
         open
         onOpenChange={() => undefined}

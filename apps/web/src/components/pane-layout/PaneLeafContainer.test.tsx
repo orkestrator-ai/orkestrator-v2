@@ -1,7 +1,8 @@
 import { beginTabLaunch, resetTabLaunches } from "@/lib/tab-launch";
-import { useTabLaunchStore } from "@/stores/tabLaunchStore";
+import { tabLaunchStore } from "@/stores/tabLaunchStore";
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { useState } from "react";
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 import type {
@@ -10,11 +11,11 @@ import type {
   AgentMailSummaryEntry,
 } from "@orkestrator/protocol/agent-mail";
 import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
-import { useConfigStore } from "@/stores/configStore";
-import { useEnvironmentStore } from "@/stores/environmentStore";
-import { useAgentMailStore } from "@/stores/agentMailStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
-import { useMultiReviewStore } from "@/stores/multiReviewStore";
+import { configStore } from "@/stores/configStore";
+import { environmentStore } from "@/stores/environmentStore";
+import { agentMailStore } from "@/stores/agentMailStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
+import { multiReviewStore } from "@/stores/multiReviewStore";
 import type { ChangeDiffTarget, PaneLeaf } from "@/types/paneLayout";
 import { createPaneTabElementId } from "@/types/paneLayout";
 import { environmentChangeResourceKey } from "@orkestrator/protocol/change-resources";
@@ -25,6 +26,7 @@ import * as realMultiReviewTab from "@/components/review/MultiReviewTab";
 import * as realFileViewerTab from "@/components/terminal/FileViewerTab";
 import * as realBuildChatTab from "@/components/build-pipeline/BuildChatTab";
 import * as realHooks from "@/hooks";
+import { appCommandStore } from "@/test/app-command-store";
 
 const realClaudeTmuxChatTabSnapshot = { ...realClaudeTmuxChatTab };
 const realNativeAgentSnapshot = { ...realNativeAgent };
@@ -309,11 +311,18 @@ mock.module("@/components/build-pipeline/BuildChatTab", () => ({
 }));
 
 mock.module("@/stores/terminalPortalStore", () => ({
-  createTerminalKey: (environmentId: string, tabId: string) => `${environmentId}::${tabId}`,
+  createTerminalKey: (nodeId: string, environmentId: string, tabId: string) =>
+    `${nodeId}\u0000${environmentId}::${tabId}`,
+  useTerminalPortalNodeId: () => "bk_pane-leaf-node",
   useTerminalPortalStore: <T,>(
     selector: (state: {
-      registerPaneHost: (environmentId: string, paneId: string, host: HTMLDivElement) => void;
-      unregisterPaneHost: (environmentId: string, paneId: string) => void;
+      registerPaneHost: (
+        nodeId: string,
+        environmentId: string,
+        paneId: string,
+        host: HTMLDivElement,
+      ) => void;
+      unregisterPaneHost: (nodeId: string, environmentId: string, paneId: string) => void;
       terminals: Map<string, unknown>;
     }) => T,
   ) =>
@@ -395,7 +404,7 @@ function installPendingMail(environmentIds: string[], tabId: string): void {
       revision: 1,
     });
   }
-  useAgentMailStore.setState({
+  appCommandStore(agentMailStore).setState({
     revision: 1,
     summary: summaries,
     mailboxes,
@@ -442,7 +451,7 @@ describe("PaneLeafContainer", () => {
     cleanup();
     resetTabLaunches();
 
-    usePaneLayoutStore.setState({
+    appCommandStore(paneLayoutStore).setState({
       environments: new Map([
         [
           "env-visible",
@@ -469,7 +478,7 @@ describe("PaneLeafContainer", () => {
       activeEnvironmentId: "env-visible",
     });
 
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [
         {
           id: "env-hidden",
@@ -492,15 +501,15 @@ describe("PaneLeafContainer", () => {
       deletingEnvironments: new Set(),
     });
 
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,
         repositories: {},
       },
     }));
-    useMultiReviewStore.setState({ workflows: new Map() });
-    useAgentMailStore.setState(useAgentMailStore.getInitialState());
+    appCommandStore(multiReviewStore).setState({ workflows: new Map() });
+    appCommandStore(agentMailStore).setState(appCommandStore(agentMailStore).getInitialState());
     clearPersistedVirtuosoState.mockClear();
     nativeAgentTabFailureEnvironment = null;
     nativeAgentMountCount = 0;
@@ -533,7 +542,7 @@ describe("PaneLeafContainer", () => {
         { id: "plain-file", type: "file", fileData: { filePath: "own.txt" } },
       ],
     };
-    render(
+    renderInAppCommandScope(
       <PaneLeafContainer
         pane={pane}
         containerId="container-hidden"
@@ -560,14 +569,17 @@ describe("PaneLeafContainer", () => {
 
   test("a focused launch shows shimmer until user tab selection", () => {
     beginTabLaunch("env-hidden", { tabId: "launch", title: "Run", surface: "agent" });
-    const state = usePaneLayoutStore.getState().environments.get("env-hidden")!;
-    usePaneLayoutStore.setState({
-      environments: new Map(usePaneLayoutStore.getState().environments).set("env-hidden", {
-        ...state,
-        activePaneId: hiddenPane.id,
-      }),
+    const state = appCommandStore(paneLayoutStore).getState().environments.get("env-hidden")!;
+    appCommandStore(paneLayoutStore).setState({
+      environments: new Map(appCommandStore(paneLayoutStore).getState().environments).set(
+        "env-hidden",
+        {
+          ...state,
+          activePaneId: hiddenPane.id,
+        },
+      ),
     });
-    render(
+    renderInAppCommandScope(
       <PaneLeafContainer
         pane={hiddenPane}
         containerId="container-hidden"
@@ -578,11 +590,13 @@ describe("PaneLeafContainer", () => {
     expect(screen.getByTestId("tab-launch-shimmer")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Select tab 2" }));
     expect(screen.queryByTestId("tab-launch-shimmer") === null).toBe(true);
-    expect(useTabLaunchStore.getState().launches.get("env-hidden")?.[0]?.focused).toBe(false);
+    expect(
+      appCommandStore(tabLaunchStore).getState().launches.get("env-hidden")?.[0]?.focused,
+    ).toBe(false);
   });
 
   test("the content is the tabpanel its selected tab labels, launching or not", () => {
-    render(
+    renderInAppCommandScope(
       <PaneLeafContainer
         pane={hiddenPane}
         containerId="container-hidden"
@@ -594,13 +608,16 @@ describe("PaneLeafContainer", () => {
       createPaneTabElementId("env-hidden", hiddenPane.id, hiddenPane.activeTabId),
     );
 
-    const state = usePaneLayoutStore.getState().environments.get("env-hidden")!;
+    const state = appCommandStore(paneLayoutStore).getState().environments.get("env-hidden")!;
     act(() => {
-      usePaneLayoutStore.setState({
-        environments: new Map(usePaneLayoutStore.getState().environments).set("env-hidden", {
-          ...state,
-          activePaneId: hiddenPane.id,
-        }),
+      appCommandStore(paneLayoutStore).setState({
+        environments: new Map(appCommandStore(paneLayoutStore).getState().environments).set(
+          "env-hidden",
+          {
+            ...state,
+            activePaneId: hiddenPane.id,
+          },
+        ),
       });
       beginTabLaunch("env-hidden", { tabId: "launch", title: "Run", surface: "agent" });
     });
@@ -610,7 +627,7 @@ describe("PaneLeafContainer", () => {
   });
 
   test("an empty pane has no tabpanel", () => {
-    render(
+    renderInAppCommandScope(
       <PaneLeafContainer
         pane={{ ...hiddenPane, tabs: [], activeTabId: null }}
         containerId="container-hidden"
@@ -623,7 +640,7 @@ describe("PaneLeafContainer", () => {
 
   test("clicking another pane relinquishes the launch focus and scopes the update", () => {
     beginTabLaunch("env-hidden", { tabId: "launch", title: "Run", surface: "agent" });
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <PaneLeafContainer
         pane={hiddenPane}
         containerId="container-hidden"
@@ -634,17 +651,19 @@ describe("PaneLeafContainer", () => {
 
     expect(container.firstElementChild?.hasAttribute("data-pane-leaf")).toBe(true);
     fireEvent.click(container.firstElementChild as HTMLElement);
-    expect(useTabLaunchStore.getState().launches.get("env-hidden")?.[0]?.focused).toBe(false);
+    expect(
+      appCommandStore(tabLaunchStore).getState().launches.get("env-hidden")?.[0]?.focused,
+    ).toBe(false);
     expect(screen.queryByTestId("tab-launch-shimmer") === null).toBe(true);
 
-    expect(usePaneLayoutStore.getState().environments.get("env-hidden")?.activePaneId).toBe(
-      "pane-hidden",
-    );
-    expect(usePaneLayoutStore.getState().activeEnvironmentId).toBe("env-visible");
+    expect(
+      appCommandStore(paneLayoutStore).getState().environments.get("env-hidden")?.activePaneId,
+    ).toBe("pane-hidden");
+    expect(appCommandStore(paneLayoutStore).getState().activeEnvironmentId).toBe("env-visible");
   });
 
   test("tab selection updates the target environment without touching the active environment", () => {
-    render(
+    renderInAppCommandScope(
       <PaneLeafContainer
         pane={hiddenPane}
         containerId="container-hidden"
@@ -655,14 +674,14 @@ describe("PaneLeafContainer", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Select tab 2" }));
 
-    const envHidden = usePaneLayoutStore.getState().environments.get("env-hidden");
+    const envHidden = appCommandStore(paneLayoutStore).getState().environments.get("env-hidden");
     expect(envHidden?.root.kind).toBe("leaf");
     if (!envHidden || envHidden.root.kind !== "leaf") {
       throw new Error("env-hidden root should be a leaf");
     }
 
     expect(envHidden.root.activeTabId).toBe("tab-2");
-    expect(usePaneLayoutStore.getState().activeEnvironmentId).toBe("env-visible");
+    expect(appCommandStore(paneLayoutStore).getState().activeEnvironmentId).toBe("env-visible");
   });
 
   test("renders ClaudeTmuxChatTab for claude-tmux tabs", async () => {
@@ -679,7 +698,7 @@ describe("PaneLeafContainer", () => {
       activeTabId: "tab-tmux",
     };
 
-    usePaneLayoutStore.setState((s) => {
+    appCommandStore(paneLayoutStore).setState((s) => {
       const envs = new Map(s.environments);
       envs.set("env-visible", {
         root: tmuxPane,
@@ -689,7 +708,7 @@ describe("PaneLeafContainer", () => {
       return { environments: envs };
     });
 
-    render(
+    renderInAppCommandScope(
       <PaneLeafContainer
         pane={tmuxPane}
         containerId="container-visible"
@@ -792,7 +811,7 @@ describe("PaneLeafContainer", () => {
         revision: 1,
       });
     }
-    useAgentMailStore.setState({
+    appCommandStore(agentMailStore).setState({
       revision: 1,
       summary: summaries,
       mailboxes,
@@ -800,7 +819,7 @@ describe("PaneLeafContainer", () => {
       refreshMailbox: mock(async () => undefined),
     });
 
-    render(
+    renderInAppCommandScope(
       <PaneLeafContainer
         pane={chatPane}
         containerId="container-visible"
@@ -830,7 +849,7 @@ describe("PaneLeafContainer", () => {
       activeTabId: "tab-file",
     };
 
-    render(
+    renderInAppCommandScope(
       <PaneLeafContainer pane={filePane} containerId={null} environmentId="env-hidden" isActive />,
     );
 
@@ -844,7 +863,7 @@ describe("PaneLeafContainer", () => {
   });
 
   test("remounts a native agent tab when its owning environment changes", async () => {
-    const view = render(
+    const view = renderInAppCommandScope(
       <PaneLeafContainer
         pane={nativePaneForEnvironment("env-first")}
         containerId="container-first"
@@ -872,7 +891,7 @@ describe("PaneLeafContainer", () => {
   });
 
   test("keeps the active tab of a pane the mobile switcher hides laid out but inactive", async () => {
-    const view = render(
+    const view = renderInAppCommandScope(
       <PaneLeafContainer
         pane={nativePaneForEnvironment("env-first")}
         containerId="container-first"
@@ -904,7 +923,7 @@ describe("PaneLeafContainer", () => {
   });
 
   test("keeps a native agent tab mounted across same-environment rerenders", async () => {
-    const view = render(
+    const view = renderInAppCommandScope(
       <PaneLeafContainer
         pane={nativePaneForEnvironment("env-first")}
         containerId="container-first"
@@ -928,7 +947,7 @@ describe("PaneLeafContainer", () => {
 
   test("does not carry a dismissed mail banner into another environment", async () => {
     installPendingMail(["env-first", "env-second"], "shared-tab-id");
-    const view = render(
+    const view = renderInAppCommandScope(
       <PaneLeafContainer
         pane={nativePaneForEnvironment("env-first")}
         containerId="container-first"
@@ -966,7 +985,7 @@ describe("PaneLeafContainer", () => {
     console.error = mock(() => undefined) as typeof console.error;
 
     try {
-      const view = render(
+      const view = renderInAppCommandScope(
         <PaneLeafContainer
           pane={nativePaneForEnvironment("env-first")}
           containerId="container-first"
@@ -1007,7 +1026,7 @@ describe("PaneLeafContainer", () => {
       ],
       activeTabId: "tab-codex",
     };
-    usePaneLayoutStore.setState((state) => {
+    appCommandStore(paneLayoutStore).setState((state) => {
       const environments = new Map(state.environments);
       environments.set("env-visible", {
         root: chatPane,
@@ -1017,7 +1036,7 @@ describe("PaneLeafContainer", () => {
       return { environments };
     });
 
-    const view = render(
+    const view = renderInAppCommandScope(
       <PaneLeafContainer
         pane={chatPane}
         containerId="container-visible"
@@ -1049,14 +1068,14 @@ describe("PaneLeafContainer", () => {
         },
       ],
     };
-    usePaneLayoutStore.setState((state) => ({
+    appCommandStore(paneLayoutStore).setState((state) => ({
       environments: new Map(state.environments).set("env-visible", {
         root: pane,
         activePaneId: pane.id,
         containerId: "container-visible",
       }),
     }));
-    const view = render(
+    const view = renderInAppCommandScope(
       <PaneLeafContainer
         pane={pane}
         containerId="container-visible"
@@ -1137,7 +1156,7 @@ describe("PaneLeafContainer", () => {
       activeTabId: "tab-claude",
     };
 
-    render(
+    renderInAppCommandScope(
       <PaneLeafContainer
         pane={reviewPane}
         containerId="container-visible"
@@ -1204,7 +1223,7 @@ describe("PaneLeafContainer", () => {
       activeTabId: "tab-cursor",
     };
 
-    render(
+    renderInAppCommandScope(
       <PaneLeafContainer
         pane={pane}
         containerId="container-visible"
@@ -1246,7 +1265,7 @@ describe("PaneLeafContainer", () => {
       activeTabId: "tab-build",
     };
 
-    render(
+    renderInAppCommandScope(
       <PaneLeafContainer
         pane={pane}
         environmentId="env-hidden"
@@ -1282,7 +1301,7 @@ describe("PaneLeafContainer", () => {
       ],
       activeTabId: "tab-build",
     };
-    usePaneLayoutStore.setState((state) => {
+    appCommandStore(paneLayoutStore).setState((state) => {
       const environments = new Map(state.environments);
       environments.set("env-visible", {
         root: pane,
@@ -1292,7 +1311,7 @@ describe("PaneLeafContainer", () => {
       return { environments };
     });
 
-    const view = render(
+    const view = renderInAppCommandScope(
       <PaneLeafContainer
         pane={pane}
         environmentId="env-visible"
@@ -1337,7 +1356,7 @@ describe("PaneLeafContainer", () => {
     };
 
     try {
-      render(
+      renderInAppCommandScope(
         <PaneLeafContainer
           pane={pane}
           environmentId="env-hidden"
@@ -1384,7 +1403,7 @@ describe("PaneLeafContainer", () => {
     };
 
     try {
-      render(
+      renderInAppCommandScope(
         <PaneLeafContainer
           pane={pane}
           environmentId="env-hidden"
@@ -1421,7 +1440,7 @@ describe("PaneLeafContainer", () => {
       updatedAt: timestamp,
       backendRevision,
     });
-    useMultiReviewStore.getState().replaceWorkflow(workflow(1));
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow(1));
     multiReviewTabFailure = new TypeError("transient reviewer render failure");
     const originalError = console.error;
     console.error = mock(() => undefined) as typeof console.error;
@@ -1442,7 +1461,7 @@ describe("PaneLeafContainer", () => {
     };
 
     try {
-      render(
+      renderInAppCommandScope(
         <PaneLeafContainer
           pane={pane}
           environmentId="env-visible"
@@ -1453,7 +1472,7 @@ describe("PaneLeafContainer", () => {
 
       expect(await screen.findByRole("alert")).toBeTruthy();
       multiReviewTabFailure = null;
-      act(() => useMultiReviewStore.getState().replaceWorkflow(workflow(2)));
+      act(() => appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow(2)));
       expect(await screen.findByTestId("multi-review-tab")).toBeTruthy();
       expect(screen.queryByRole("alert") === null).toBe(true);
     } finally {
@@ -1478,7 +1497,7 @@ describe("PaneLeafContainer", () => {
       updatedAt: timestamp,
       backendRevision,
     });
-    useMultiReviewStore.getState().replaceWorkflow(workflow(1));
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow(1));
     multiReviewTabFailure = new TypeError("poisoned reviewer scroll state");
     const originalError = console.error;
     console.error = mock(() => undefined) as typeof console.error;
@@ -1500,7 +1519,7 @@ describe("PaneLeafContainer", () => {
     };
 
     try {
-      render(
+      renderInAppCommandScope(
         <PaneLeafContainer
           pane={pane}
           environmentId="env-visible"
@@ -1518,7 +1537,7 @@ describe("PaneLeafContainer", () => {
       );
 
       multiReviewTabFailure = null;
-      act(() => useMultiReviewStore.getState().replaceWorkflow(workflow(2)));
+      act(() => appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow(2)));
       expect(await screen.findByTestId("multi-review-tab")).toBeTruthy();
       expect(clearPersistedVirtuosoState).toHaveBeenCalledTimes(1);
     } finally {
@@ -1544,7 +1563,7 @@ describe("PaneLeafContainer", () => {
       activeTabId: "tab-multi-review",
     };
 
-    render(
+    renderInAppCommandScope(
       <PaneLeafContainer
         pane={pane}
         environmentId="env-visible"
@@ -1597,7 +1616,7 @@ describe("PaneLeafContainer", () => {
       activeTabId: "tab-claude",
     };
 
-    render(
+    renderInAppCommandScope(
       <PaneLeafContainer
         pane={pane}
         environmentId="env-visible"
@@ -1611,8 +1630,8 @@ describe("PaneLeafContainer", () => {
     // refreshes, so a pane-level subscription would re-render every pane in
     // every environment on any Multi Review event.
     const rendersBefore = paneRenderCount;
-    act(() => useMultiReviewStore.getState().replaceWorkflow(workflow(1)));
-    act(() => useMultiReviewStore.getState().replaceWorkflow(workflow(2)));
+    act(() => appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow(1)));
+    act(() => appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow(2)));
     expect(paneRenderCount).toBe(rendersBefore);
   });
 
@@ -1650,7 +1669,7 @@ describe("PaneLeafContainer", () => {
       activeTabId: "tab-claude",
     };
 
-    render(
+    renderInAppCommandScope(
       <PaneLeafContainer
         pane={agentPane}
         containerId="container-visible"

@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:cdafd54c98eae2d3e40233d8733da1153f86d149916aa93b7e8290df3bcf566c",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "annotationId": {
+          "maxLength": 200,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "type": "string"
+        },
+        "entryLimit": {
+          "maximum": 50,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "entryWindow": {
+          "enum": ["oldest", "latest"],
+          "type": "string"
+        },
+        "environmentId": {
+          "maxLength": 200,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "type": "string"
+        }
+      },
+      "required": ["annotationId", "environmentId"],
+      "type": "object"
+    }
+  }
+}

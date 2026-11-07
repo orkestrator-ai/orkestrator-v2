@@ -2,7 +2,7 @@
 
 Two kinds of shortcut exist. **App-level** shortcuts belong to the
 application and work wherever focus is in the window: the sidebar, the main
-area, the composer, a terminal, Monaco, a leaf node's workspace realm, a design
+area, the composer, a terminal, Monaco, another node's workspace, a design
 frame or an interactive artifact. **Local** shortcuts belong to the surface
 that owns them (the composer's Enter, a terminal's copy, the design canvas's
 keys, ⌘R and the other environment keys) and work only while it has focus.
@@ -12,9 +12,9 @@ The app-level shortcuts are:
 | Shortcut | Opens | Owner |
 | --- | --- | --- |
 | ⌘K / Ctrl+K | Search projects and environments (sidebar) | the window's shell |
-| ⌘⇧/ / Ctrl+Shift+/ (⌘? / Ctrl+?) | The keyboard shortcuts dialog | the focused app document (shell or realm) |
+| ⌘⇧/ / Ctrl+Shift+/ (⌘? / Ctrl+?) | The keyboard shortcuts dialog | the focused app document (the window's renderer) |
 | ⌘, / Ctrl+, | Global settings (`GlobalSettingsHost`) | the window's shell |
-| ⌘T / Ctrl+T | A new agent tab, except while environment setup runs | the focused workspace (shell or realm) |
+| ⌘T / Ctrl+T | A new agent tab, except while environment setup runs | the workspace on show (the command node's or another node's) |
 | ⌘⇧D / Ctrl+Shift+D | Rotate the sidebar's group-by mode ([order](federation.md#compact-sidebar)) | the window's shell |
 
 Either modifier is accepted on every platform, but not both, and not with Alt.
@@ -31,12 +31,11 @@ browser opens its own tab before the page sees the key.
 | Dialog | `apps/web/src/components/layout/KeyboardShortcutsDialog.tsx` (mounted once per renderer by `AppShell`) |
 | Settings | `apps/web/src/components/layout/GlobalSettingsHost.tsx` (mounted once per renderer by `AppShell`) |
 | Sidebar group-by rotation | `apps/web/src/components/sidebar/HierarchicalSidebar.tsx`, `apps/web/src/lib/federation/sidebar-grouping.ts` |
-| Realm → window message | `apps/web/src/lib/federation/workspace-realm.ts` (`{ type: "shortcut" }`), handled in `RemoteWorkspaceRegion.tsx` |
+| Which workspace a workspace-owned shortcut acts on | `onAppShortcut(id, handler, { workspace: scope })`, `setShownAppShortcutWorkspace` in `apps/web/src/lib/app-shortcuts.ts` |
 | Design frame relay | `packages/protocol/src/design-runtime.ts`, `apps/web/src/components/design/frame-bridge.ts` |
 | View › Keyboard Shortcuts… and Settings… menu items | `apps/desktop/electron/application-menu.ts` |
 | Native input wiring and remembered menu focus | `apps/desktop/electron/keyboard-shortcuts-routing.ts` |
 | Native ownership, focus restoration, `requestAppShortcut` | `apps/desktop/electron/keyboard-shortcuts-menu.ts` |
-| Realm → window focus handoff | `apps/desktop/electron/workspace-views.ts` (`post`) |
 
 To add an app-level shortcut, add it to `APP_SHORTCUTS`, add its handler with
 `onAppShortcut(id, …)` in the component that owns its UI, and add its catalog
@@ -50,13 +49,15 @@ catalog only describes them. Update the catalog when adding or changing one.
 Every key press of an app-level shortcut ends in `requestAppShortcut(id)` in
 some app document, which delivers it to the owner:
 
-- A **window-owned** shortcut (⌘K) typed in a workspace realm crosses to the
-  window over the existing realm message channel (`postToShell`): on the
-  desktop through main (`WorkspaceViews.post`, which also gives the window's
-  renderer native keyboard focus), in a browser as a same-origin
-  `postMessage` in the realm's frame envelope. The window's
-  `RemoteWorkspaceRegion` hands it to its own `requestAppShortcut`.
-- Otherwise the document's handlers run. If none is mounted (the sidebar is
+- Another node's workspace is in the window's own document, on its node
+  scope (plan item 5003), so a key typed there reaches the window's router
+  and handlers directly. A **workspace-owned** shortcut (⌘T) runs only the
+  handlers of the workspace on show: each handler names its workspace
+  (`onAppShortcut(id, handler, { workspace: scope })`) and the window says
+  which one it shows (`setShownAppShortcutWorkspace`). The command node's
+  workspace stays mounted, hidden, while another node's is shown, so without
+  this its handler would run too.
+- The document's handlers run. If none is mounted (the sidebar is
   hidden), the window shows the sidebar and the request waits for the search
   to mount. The phone layout's drawer stays closed and the request is
   dropped, so it never opens later by surprise. The compact sidebar has no
@@ -64,7 +65,7 @@ some app document, which delivers it to the owner:
 
 The key press reaches `requestAppShortcut` from one of these entry points:
 
-1. **App documents (shell and realm, desktop and browser).** A capture-phase
+1. **App documents (the window's renderer, desktop and browser).** A capture-phase
    `keydown` listener on `window` matches `APP_SHORTCUTS`, applies the claim
    rule below, then calls `preventDefault` and `stopPropagation` before Monaco,
    xterm or the composer can handle the key. Repeats are consumed without a
@@ -75,7 +76,7 @@ The key press reaches `requestAppShortcut` from one of these entry points:
    over the source-checked frame bridge.
 3. **Desktop main, `before-input-event` on every WebContents.**
    - ⌘⇧/ (document-owned): consumed before page and menu dispatch in every app
-     renderer, realm and artifact view, including their subframes, and
+     renderer and artifact view, including their subframes, and
      delivered as `menu-keyboard-shortcuts` `toggle`. Browser and service
      preview views use their preview manager's hook, which matches the catalog
      and routes entries whose `fromPreviews` flag is enabled.
@@ -139,14 +140,17 @@ key:
   key. Stealing it would break testing that page, as no real browser does.
   ⌘⇧/ is rare on the web and is the app's escape hatch. Click outside the
   preview to use ⌘K. (`AppShortcut.fromPreviews`.)
-- **⌘⇧/ opens the focused realm's dialog, ⌘K the window's search.** Each app
-  document renders its own dialog, which restores focus into that realm's
-  native preview and artifact views; that path is already tested. The search
-  lives in the window's sidebar; a realm has none. (`AppShortcut.owner`.)
+- **⌘⇧/ opens the focused document's dialog, ⌘K the window's search.** Each
+  app document renders its own dialog, which restores focus into its native
+  preview and artifact views; that path is already tested. The search lives
+  in the window's sidebar. Since every node's workspace is in the window's
+  document, the document and the window are the same renderer; the owner
+  values (`AppShortcut.owner`) still differ for artifact views, which run no
+  router.
 - **⌘, opens Settings everywhere, previews included, and never toggles.** It
   is every Mac app's settings key, edits no text (`ctrlEditsText: false`), and
-  web pages rarely bind it. Settings are window-owned like search: a realm
-  forwards ⌘, to its window, whose command node owns them. A repeat while
+  web pages rarely bind it. Settings are window-owned like search: they are
+  the command node's, whichever node's workspace is shown. A repeat while
   Settings are open leaves them on the section shown.
 - **⌘⇧D rotates the sidebar's group-by mode.** ⌘⇧G came first but is the
   run-script dialog on macOS, and because either modifier is accepted everywhere,
@@ -156,9 +160,8 @@ key:
   (`ctrlEditsText: false`), so like the other app-level shortcuts it works from
   text fields and terminals. It stays with a previewed page
   (`fromPreviews: false`), and taking it there would also move keyboard focus out
-  of the page. Window-owned: a realm forwards it. With the sidebar hidden it shows
-  the sidebar and rotates. A realm older than the shortcut leaves the key to its
-  focused surface, and a window older than it ignores the request.
+  of the page. Window-owned. With the sidebar hidden it shows the sidebar and
+  rotates.
 - **Ctrl+Shift+/ opens the dialog on macOS too.** Users coming from another
   platform press it, and Ctrl+Shift+/ edits nothing there.
 - **⌘⇧/ rather than ⌘⇧K.** On some Macs ⌘⇧K and Ctrl+Shift+K were swallowed
@@ -169,8 +172,6 @@ key:
   see whether a terminal or text field has focus, so catching ⌘K in main for
   every WebContents (the ⌘⇧/ design) would take Ctrl+K from shells. Main
   catches window-owned shortcuts only where no router runs (artifact views).
-  The realm-to-window hop reuses the realm message channel on both platforms,
-  so desktop and browser realms share one path.
 
 ## Menu and press ownership
 
@@ -234,9 +235,10 @@ Keyboard Shortcuts… use `CmdOrCtrl` and appear as Ctrl+N, Ctrl+=, Ctrl+- and
 Ctrl+0 (all registered) and Ctrl+Shift+/ and Ctrl+, (display-only). The dialog lists the
 same keys.
 
-**Workspace realms:** ownership is resolved from the actual focused
-WebContents, including its preview and artifact children. Menu clicks reach
-that realm's dialog even while its renderer itself has no native focus. The
+**Native children:** ownership is resolved from the actual focused
+WebContents, including a window's preview and artifact children (another
+node's previews are children of the same window). Menu clicks reach that
+window's dialog even while its renderer itself has no native focus. The
 last focused child is retained per window for native menu activation that
 temporarily clears WebContents focus.
 
@@ -253,8 +255,8 @@ The final dismissal restores once; success, expiry, navigation or renderer
 destruction clears retained origins. Renderer-originated opens retain the
 existing DOM focus restoration.
 
-The search does not return native focus to a realm or artifact it was opened
-from: closing it leaves focus in the window.
+The search does not return native focus to a preview or artifact it was
+opened from: closing it leaves focus in the window.
 
 ## Browser-client limits
 
@@ -273,34 +275,31 @@ is the fallback on macOS.
   the claim table for each platform and focus; serialized design bootstraps
   before and after production minification, including macOS text editing.
 - Renderer: the router from composer, terminal and contenteditable on macOS
-  and Windows, desktop and browser realm forwarding, main's `app-shortcut`
-  event, pending delivery; the search from the composer, a terminal and text
+  and Windows, a workspace shortcut reaching only the workspace on show,
+  main's `app-shortcut` event, pending delivery; the search from the composer, a terminal and text
   fields; the dialog with ⌘⇧/ and Ctrl+Shift+/ on both platforms; the design
-  frame bridge; a realm's forwarded message reaching the window; router reference
-  counting and final DOM/native listener cleanup; AppShell revealing the hidden
-  desktop sidebar and delivering search once, dropping closed mobile-drawer
-  requests, and skipping the shell fallback in a realm.
+  frame bridge; router reference counting and final DOM/native listener
+  cleanup; AppShell revealing the hidden desktop sidebar and delivering search
+  once, and dropping closed mobile-drawer requests.
 - Electron main: ⌘K and non-macOS Ctrl+K from an artifact view reach the window's
   shell, macOS artifact Ctrl+K stays with the surface; preview routing follows
   `fromPreviews`; app documents, previews and unknown contents keep unclaimed
   keys; Ctrl+Shift+/ toggles like ⌘⇧/; ⌘, and Ctrl+, from an artifact view reach the
-  window's shell on macOS and Linux; a visible realm's `shortcut` message focuses its window.
+  window's shell on macOS and Linux.
 - Settings: `GlobalSettingsHost.test.tsx` (⌘,, Ctrl+, and the menu's request open
   Settings and leave an open page where it is), the menu template on all three
   platforms, and the mobile drawer giving way to Settings and the bug report sheet.
 - Browser fixture (`e2e/KeyboardShortcuts.spec.ts`): ⌘K from the composer,
-  Ctrl+K reaching xterm's shell, ⌘K from a design frame and from a same-origin
-  realm frame; real search above fullscreen settings and the shortcuts dialog,
+  Ctrl+K reaching xterm's shell, ⌘K from a design frame, shortcuts from a
+  leaf's composer reaching this window's handlers; real search above fullscreen settings and the shortcuts dialog,
   including pointer input, typing, the portalled filter menu, and Escape at
   desktop and phone widths.
-- Electron scenario (`workspace-realm-electron.spec.ts`): ⌘K in a realm's
-  composer opens the window's search.
 - Additional unit coverage checks Close Tab and shortcut ownership with live or cleared
   WebContents focus, per-window remembered focus, dismissal sender gating, preview
   hook delegation, repeat consumption, reopen/restoration races and expiry.
   Additional checks cover dismissal, disposal, hidden views, startup
   forwarding, keyDown/rawKeyDown and immediate second presses. Electron scenarios
-  cover realm preview ownership, search focus and restored typing after keyboard
+  cover a window's preview ownership, search focus and restored typing after keyboard
   and outside-pointer dismissal, accelerator toggles on already-open dialogs, artifact
   subframes, and design subframes. Windows/Linux coverage includes the menu
   layout and accelerators on `linux` and `win32`, Ctrl and AltGr Electron input,

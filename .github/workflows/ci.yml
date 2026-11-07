@@ -161,6 +161,27 @@ jobs:
         if: ${{ !cancelled() }}
         run: mise run test:logged -- --name doc-numbers -- bun test tests/unit/todo-index.test.ts tests/unit/number-claims.test.ts --parallel=1 --only-failures
 
+      # Every registered command has a contract domain, the committed
+      # manifest matches the registry (plan item 1006), and the untyped
+      # command count did not rise (plan item 1011).
+      - name: Check the command contract manifest
+        if: ${{ !cancelled() }}
+        run: mise run contract:check
+
+      # The committed client adapter list matches the domain client
+      # definitions (plan item 1009); the contract CI job (1008) reads it.
+      - name: Check the domain client adapter list
+        if: ${{ !cancelled() }}
+        run: mise run contract:adapters:check
+
+      # The support window (plan item 1008): an adapter for every (domain,
+      # version) an in-window release speaks, no command removed without a
+      # domain bump and a register row, register rows that name real
+      # counters and adapters, and stored argument schemas.
+      - name: Check the contract against the support window
+        if: ${{ !cancelled() }}
+        run: mise run contract:ci
+
   typecheck:
     name: Typecheck
     runs-on: ubuntu-latest

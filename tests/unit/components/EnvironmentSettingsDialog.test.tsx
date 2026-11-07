@@ -1,11 +1,13 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { useConfigStore } from "@/stores/configStore";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
+import { configStore } from "@/stores/configStore";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
 import type { AgentExtensionCatalog, AgentSkillProvider } from "@/lib/backend";
 import type { Environment } from "@/types";
 import { mockToastError, mockToastSuccess } from "../../mocks/sonner";
+import { appCommandStore } from "../../../apps/web/src/test/app-command-store";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -195,7 +197,7 @@ describe("EnvironmentSettingsDialog", () => {
     mockToastSuccess.mockClear();
     mockToastError.mockClear();
 
-    useConfigStore.setState({
+    appCommandStore(configStore).setState({
       config: {
         version: "1.0",
         global: {
@@ -231,7 +233,7 @@ describe("EnvironmentSettingsDialog", () => {
 
   test("network settings accept TCP and UDP entries, reject invalid ports and save entries intact", async () => {
     mockSection = "network";
-    render(
+    renderInAppCommandScope(
       <EnvironmentSettingsDialog
         open={true}
         onOpenChange={() => {}}
@@ -273,7 +275,7 @@ describe("EnvironmentSettingsDialog", () => {
     mockSection = "codex";
     const onUpdate = mock(() => {});
 
-    render(
+    renderInAppCommandScope(
       <EnvironmentSettingsDialog
         open={true}
         onOpenChange={() => {}}
@@ -313,7 +315,7 @@ describe("EnvironmentSettingsDialog", () => {
         initialSection={initialSection}
       />
     );
-    const { rerender } = render(dialog("container"));
+    const { rerender } = renderInAppCommandScope(dialog("container"));
     expect(capturedDefaultSection).toBe("container");
     rerender(dialog());
     expect(capturedDefaultSection).toBeUndefined();
@@ -321,7 +323,7 @@ describe("EnvironmentSettingsDialog", () => {
 
   test("offers a tab per enabled platform, in platform order", () => {
     extensionHandler = () => new Promise(() => undefined);
-    render(
+    renderInAppCommandScope(
       <EnvironmentSettingsDialog
         open={true}
         onOpenChange={() => {}}
@@ -352,7 +354,7 @@ describe("EnvironmentSettingsDialog", () => {
   test("uses top agent tabs and shows MCP servers, plugins, and skills for each agent", async () => {
     mockSection = "extensions";
 
-    render(
+    renderInAppCommandScope(
       <EnvironmentSettingsDialog
         open={true}
         onOpenChange={() => {}}
@@ -437,7 +439,7 @@ describe("EnvironmentSettingsDialog", () => {
   test("keeps each agent's scanned skills and selection when the tab is revisited", async () => {
     mockSection = "extensions";
 
-    render(
+    renderInAppCommandScope(
       <EnvironmentSettingsDialog
         open={true}
         onOpenChange={() => {}}
@@ -475,7 +477,7 @@ describe("EnvironmentSettingsDialog", () => {
   test("rescans an agent's skills on demand", async () => {
     mockSection = "extensions";
 
-    render(
+    renderInAppCommandScope(
       <EnvironmentSettingsDialog
         open={true}
         onOpenChange={() => {}}
@@ -512,7 +514,7 @@ describe("EnvironmentSettingsDialog", () => {
       { agent: "opencode", mcpServers: [], plugins: [] },
     ];
 
-    render(
+    renderInAppCommandScope(
       <EnvironmentSettingsDialog
         open={true}
         onOpenChange={() => {}}
@@ -539,7 +541,7 @@ describe("EnvironmentSettingsDialog", () => {
       { agent: "opencode", mcpServers: [], plugins: [] },
     ];
 
-    render(
+    renderInAppCommandScope(
       <EnvironmentSettingsDialog
         open={true}
         onOpenChange={() => {}}
@@ -570,7 +572,7 @@ describe("EnvironmentSettingsDialog", () => {
       },
     ];
 
-    render(
+    renderInAppCommandScope(
       <EnvironmentSettingsDialog
         open={true}
         onOpenChange={() => {}}
@@ -596,7 +598,7 @@ describe("EnvironmentSettingsDialog", () => {
     };
 
     try {
-      render(
+      renderInAppCommandScope(
         <EnvironmentSettingsDialog
           open={true}
           onOpenChange={() => {}}
@@ -635,7 +637,7 @@ describe("EnvironmentSettingsDialog", () => {
     };
 
     try {
-      render(
+      renderInAppCommandScope(
         <EnvironmentSettingsDialog
           open={true}
           onOpenChange={() => {}}
@@ -666,7 +668,7 @@ describe("EnvironmentSettingsDialog", () => {
       { agent: "opencode", mcpServers: [], plugins: [] },
     ];
 
-    render(
+    renderInAppCommandScope(
       <EnvironmentSettingsDialog
         open={true}
         onOpenChange={() => {}}
@@ -692,7 +694,7 @@ describe("EnvironmentSettingsDialog", () => {
       },
     ];
 
-    render(
+    renderInAppCommandScope(
       <EnvironmentSettingsDialog
         open={true}
         onOpenChange={() => {}}
@@ -724,7 +726,7 @@ describe("EnvironmentSettingsDialog", () => {
     const gate = deferred<AgentExtensionCatalog[]>();
     extensionHandler = () => gate.promise;
 
-    render(
+    renderInAppCommandScope(
       <EnvironmentSettingsDialog
         open={true}
         onOpenChange={() => {}}
@@ -748,7 +750,7 @@ describe("EnvironmentSettingsDialog", () => {
   test("refresh asks the backend to bypass its cache", async () => {
     mockSection = "extensions";
 
-    render(
+    renderInAppCommandScope(
       <EnvironmentSettingsDialog
         open={true}
         onOpenChange={() => {}}
@@ -771,7 +773,7 @@ describe("EnvironmentSettingsDialog", () => {
     mockSection = "extensions";
     const refreshGate = deferred<AgentExtensionCatalog[]>();
 
-    render(
+    renderInAppCommandScope(
       <EnvironmentSettingsDialog
         open={true}
         onOpenChange={() => {}}
@@ -809,7 +811,7 @@ describe("EnvironmentSettingsDialog", () => {
     const staleGate = deferred<AgentExtensionCatalog[]>();
     extensionHandler = () => staleGate.promise;
 
-    const { rerender } = render(
+    const { rerender } = renderInAppCommandScope(
       <EnvironmentSettingsDialog
         open={true}
         onOpenChange={() => {}}
@@ -878,7 +880,7 @@ describe("EnvironmentSettingsDialog", () => {
     extensionHandler = () => failing.promise;
 
     try {
-      const { rerender } = render(
+      const { rerender } = renderInAppCommandScope(
         <EnvironmentSettingsDialog
           open={true}
           onOpenChange={() => {}}
@@ -922,7 +924,7 @@ describe("EnvironmentSettingsDialog", () => {
   test("reloads when the dialog is reopened for a different environment", async () => {
     mockSection = "extensions";
 
-    const { rerender } = render(
+    const { rerender } = renderInAppCommandScope(
       <EnvironmentSettingsDialog
         open={true}
         onOpenChange={() => {}}
@@ -949,7 +951,7 @@ describe("EnvironmentSettingsDialog", () => {
   test("offers the extensions section for local and containerized environments", async () => {
     mockSection = "extensions";
 
-    render(
+    renderInAppCommandScope(
       <EnvironmentSettingsDialog
         open={true}
         onOpenChange={() => {}}
@@ -961,7 +963,7 @@ describe("EnvironmentSettingsDialog", () => {
     expect(capturedMenuItems.map((item) => item.id)).toContain("extensions");
     cleanup();
 
-    render(
+    renderInAppCommandScope(
       <EnvironmentSettingsDialog
         open={true}
         onOpenChange={() => {}}
@@ -993,7 +995,7 @@ describe("EnvironmentSettingsDialog", () => {
     const onRestart = mock(async () => undefined);
     const onUpdate = mock(() => undefined);
     const onOpenChange = mock(() => undefined);
-    render(
+    renderInAppCommandScope(
       <DockerAvailabilityProvider available={true}>
         <EnvironmentSettingsDialog
           open={true}
@@ -1041,7 +1043,7 @@ describe("EnvironmentSettingsDialog", () => {
         />
       </DockerAvailabilityProvider>
     );
-    const { rerender } = render(dialog());
+    const { rerender } = renderInAppCommandScope(dialog());
 
     addHostPort("3001");
     mockSection = "container";
@@ -1071,7 +1073,7 @@ describe("EnvironmentSettingsDialog", () => {
         />
       </DockerAvailabilityProvider>
     );
-    const { rerender } = render(dialog());
+    const { rerender } = renderInAppCommandScope(dialog());
 
     addHostPort("3001");
     // The reset lives in the Container section; an unsaved port edit made in
@@ -1112,7 +1114,7 @@ describe("EnvironmentSettingsDialog", () => {
   test("a reset keeps a recovery copy by default without the destructive acknowledgement", async () => {
     mockSection = "container";
     const onRestart = mock(async () => undefined);
-    render(
+    renderInAppCommandScope(
       <DockerAvailabilityProvider available={true}>
         <EnvironmentSettingsDialog
           open={true}
@@ -1144,7 +1146,7 @@ describe("EnvironmentSettingsDialog", () => {
         "ContainerLifecycleError:runtime-changed: The container changed after it was reviewed.",
       );
     });
-    render(
+    renderInAppCommandScope(
       <DockerAvailabilityProvider available={true}>
         <EnvironmentSettingsDialog
           open={true}

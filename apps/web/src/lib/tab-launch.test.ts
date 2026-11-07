@@ -8,13 +8,19 @@ import {
   resetTabLaunches,
   TAB_LAUNCH_CLAIM_MIN_MS,
 } from "@/lib/tab-launch";
-import { usePaneLayoutStore, type EnvironmentPaneState } from "@/stores/paneLayoutStore";
-import { useTabLaunchStore } from "@/stores/tabLaunchStore";
+import { type EnvironmentPaneState, paneLayoutStore } from "@/stores/paneLayoutStore";
+
 import type { TabInfo } from "@/types/paneLayout";
+import type { BackendId } from "@orkestrator/protocol/federation";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { WindowScope } from "@/lib/node-scope/window-scope";
+import { tabLaunchStore } from "@/stores/tabLaunchStore";
+import { FakeNodeClient } from "@/test/render-in-node-scope";
+import { appCommandStore } from "@/test/app-command-store";
 
 const ENV = "env-launch";
 
-const launches = () => useTabLaunchStore.getState().launches.get(ENV) ?? [];
+const launches = () => appCommandStore(tabLaunchStore).getState().launches.get(ENV) ?? [];
 
 function paneState(tabs: TabInfo[], activeTabId: string): EnvironmentPaneState {
   return {
@@ -26,23 +32,23 @@ function paneState(tabs: TabInfo[], activeTabId: string): EnvironmentPaneState {
 }
 
 function install(tabs: TabInfo[], activeTabId: string) {
-  const environments = new Map(usePaneLayoutStore.getState().environments);
+  const environments = new Map(appCommandStore(paneLayoutStore).getState().environments);
   environments.set(ENV, paneState(tabs, activeTabId));
-  usePaneLayoutStore.setState({ environments });
+  appCommandStore(paneLayoutStore).setState({ environments });
 }
 
 const terminal: TabInfo = { id: "terminal", type: "plain" };
 const launched: TabInfo = { id: "launched", type: "plain" };
 
 function activeTab(): string | null | undefined {
-  const root = usePaneLayoutStore.getState().environments.get(ENV)?.root;
+  const root = appCommandStore(paneLayoutStore).getState().environments.get(ENV)?.root;
   return root?.kind === "leaf" ? root.activeTabId : undefined;
 }
 
 describe("tab launches", () => {
   beforeEach(() => {
     resetTabLaunches();
-    usePaneLayoutStore.setState({ environments: new Map() });
+    appCommandStore(paneLayoutStore).setState({ environments: new Map() });
     install([terminal], "terminal");
   });
 
@@ -224,5 +230,63 @@ describe("claimTabLaunch", () => {
 
     await new Promise((resolve) => setTimeout(resolve, TAB_LAUNCH_CLAIM_MIN_MS + 50));
     expect(claimTabLaunch("run", ENV)).not.toBeNull();
+  });
+});
+
+describe("per node scope (plan item 3003)", () => {
+  let windowScope: WindowScope;
+  let leaf: NodeScope;
+
+  beforeEach(() => {
+    resetTabLaunches();
+    appCommandStore(paneLayoutStore).setState({ environments: new Map() });
+    install([terminal], "terminal");
+    windowScope = new WindowScope();
+    windowScope.open({
+      role: "command",
+      client: new FakeNodeClient({ nodeId: "bk_tab-launch-a" as BackendId }),
+    });
+    leaf = windowScope.open({
+      role: "leaf",
+      client: new FakeNodeClient({ nodeId: "bk_tab-launch-b" as BackendId }),
+    });
+  });
+
+  afterEach(() => {
+    windowScope.dispose();
+    resetTabLaunches();
+    mock.restore();
+  });
+
+  test("a launch lands in its scope's store only", () => {
+    beginTabLaunch(ENV, { tabId: "launched", title: "Push", surface: "agent" }, leaf);
+
+    expect(leaf.store(tabLaunchStore).getState().launches.get(ENV)?.[0]?.tabId).toBe("launched");
+    expect(launches()).toEqual([]);
+
+    cancelTabLaunchFocus(ENV, leaf);
+    expect(leaf.store(tabLaunchStore).getState().launches.get(ENV)?.[0]?.focused).toBe(false);
+    focusTabLaunch(ENV, "launched", leaf);
+    expect(leaf.store(tabLaunchStore).getState().launches.get(ENV)?.[0]?.focused).toBe(true);
+  });
+
+  test("claims are held per scope", () => {
+    expect(claimTabLaunch("run", ENV, leaf)).not.toBeNull();
+
+    expect(claimTabLaunch("run", ENV, leaf)).toBeNull();
+    expect(claimTabLaunch("run", ENV)).not.toBeNull();
+  });
+
+  test("disposing a scope clears its timers", () => {
+    const cleared = spyOn(globalThis, "clearTimeout");
+    const launch = beginTabLaunch(ENV, { tabId: "launched", title: "Run", surface: "agent" }, leaf);
+    launch.settled("launched");
+    claimTabLaunch("run", ENV, leaf)?.();
+    const timersBefore = cleared.mock.calls.length;
+
+    leaf.dispose();
+
+    // The arrival grace timer and the claim's double-press timer.
+    expect(cleared.mock.calls.length - timersBefore).toBe(2);
   });
 });

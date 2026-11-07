@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:6ad29cf11191266fde40314cf59e5830287153715ef2af071bbbd29474ba0de8",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "agent": {},
+        "anyProvider": {},
+        "environmentId": {},
+        "expiresInMs": {},
+        "interactionId": {},
+        "logicalSessionKey": {},
+        "pattern": {},
+        "scope": {}
+      },
+      "type": "object"
+    }
+  }
+}

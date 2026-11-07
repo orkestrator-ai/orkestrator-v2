@@ -12,7 +12,8 @@
  * React while layout is not required.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { createRef, memo, Profiler, useState, type ReactNode } from "react";
 import * as realVirtuoso from "react-virtuoso";
 import { FRONTEND_RENDER_POLICY } from "@orkestrator/protocol/rich-content-policy";
@@ -314,7 +315,7 @@ describe("long transcript fixture", () => {
     "bounded concurrency and queues; caches converge within bounds over 20 scroll/expand cycles",
     async () => {
       const lists = [fixtureMessages(), fixtureMessages()];
-      render(
+      renderInAppCommandScope(
         <>
           <Transcript scope={SCOPES[0]!} messages={lists[0]!} label="A" />
           <Transcript scope={SCOPES[1]!} messages={lists[1]!} label="B" />
@@ -391,7 +392,7 @@ describe("long transcript fixture", () => {
 
   test("settled rows do not re-render on unrelated updates", async () => {
     const lists = [fixtureMessages(), fixtureMessages()];
-    const view = render(
+    const view = renderInAppCommandScope(
       <>
         <Transcript scope={SCOPES[0]!} messages={lists[0]!} label="A" />
         <Transcript scope={SCOPES[1]!} messages={lists[1]!} label="B" />
@@ -496,7 +497,7 @@ describe("long transcript fixture", () => {
       };
       const lines = Array.from({ length: 6 }, (_, index) => `const line${index} = ${index};`);
       let content = "```ts\n";
-      const view = render(
+      const view = renderInAppCommandScope(
         <Transcript scope={SCOPES[0]!} messages={[table, streamed(content)]} label="S" />,
       );
       for (const line of lines) {

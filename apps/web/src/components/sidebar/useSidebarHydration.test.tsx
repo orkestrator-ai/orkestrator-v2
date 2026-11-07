@@ -1,14 +1,16 @@
 import { afterEach, expect, mock, test } from "bun:test";
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
-import { useUIStore } from "@/stores/uiStore";
+import { act, cleanup, waitFor } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
+import { uiStore } from "@/stores/uiStore";
 import { useSidebarHydration } from "./useSidebarHydration";
+import { appCommandStore } from "@/test/app-command-store";
 
-const initial = useUIStore.getState();
+const initial = appCommandStore(uiStore).getState();
 afterEach(() => {
   cleanup();
   mock.restore();
   sessionStorage.clear();
-  useUIStore.setState(initial, true);
+  appCommandStore(uiStore).setState(initial, true);
 });
 
 function deferred() {
@@ -23,36 +25,41 @@ test("waits for environment results, defaults empty projects only, and respects 
   const pending = deferred();
   const load = mock(() => pending.promise);
   const projects = [{ id: "empty" }, { id: "populated" }, { id: "explicit" }];
-  useUIStore.getState().setProjectCollapsed("explicit", false);
-  const { result, rerender } = renderHook(
+  appCommandStore(uiStore).getState().setProjectCollapsed("explicit", false);
+  const { result, rerender } = renderHookInAppCommandScope(
     ({ environments }) => useSidebarHydration(projects, true, environments, load),
     {
       initialProps: { environments: [] as { projectId: string }[] },
     },
   );
   expect(result.current).toBe(false);
-  expect(useUIStore.getState().collapsedProjects).toEqual([]);
+  expect(appCommandStore(uiStore).getState().collapsedProjects).toEqual([]);
   rerender({ environments: [{ projectId: "populated" }] });
   await act(async () => pending.resolve());
   await waitFor(() => expect(result.current).toBe(true));
-  expect(useUIStore.getState().collapsedProjects).toEqual(["empty"]);
+  expect(appCommandStore(uiStore).getState().collapsedProjects).toEqual(["empty"]);
 });
 
 test("new projects on a seeded client get defaults without resetting existing choices", async () => {
   const load = mock(async () => undefined);
-  useUIStore.getState().setProjectCollapsed("old", false);
-  const { rerender } = renderHook(({ projects }) => useSidebarHydration(projects, true, [], load), {
-    initialProps: { projects: [{ id: "old" }] },
-  });
+  appCommandStore(uiStore).getState().setProjectCollapsed("old", false);
+  const { rerender } = renderHookInAppCommandScope(
+    ({ projects }) => useSidebarHydration(projects, true, [], load),
+    {
+      initialProps: { projects: [{ id: "old" }] },
+    },
+  );
   await waitFor(() => expect(load).toHaveBeenCalledTimes(1));
   rerender({ projects: [{ id: "old" }, { id: "new" }] });
-  await waitFor(() => expect(useUIStore.getState().collapsedProjects).toEqual(["new"]));
+  await waitFor(() =>
+    expect(appCommandStore(uiStore).getState().collapsedProjects).toEqual(["new"]),
+  );
 });
 
 test("a project expanded by default collapses when empty on a later mount; an explicit expansion survives", async () => {
   const load = async () => undefined;
   const projects = [{ id: "default" }, { id: "explicit" }];
-  const first = renderHook(() =>
+  const first = renderHookInAppCommandScope(() =>
     useSidebarHydration(
       projects,
       true,
@@ -61,15 +68,17 @@ test("a project expanded by default collapses when empty on a later mount; an ex
     ),
   );
   await waitFor(() => expect(first.result.current).toBe(true));
-  act(() => useUIStore.getState().setProjectCollapsed("explicit", false));
+  act(() => appCommandStore(uiStore).getState().setProjectCollapsed("explicit", false));
   first.unmount();
-  renderHook(() => useSidebarHydration(projects, true, [], load));
-  await waitFor(() => expect(useUIStore.getState().collapsedProjects).toEqual(["default"]));
+  renderHookInAppCommandScope(() => useSidebarHydration(projects, true, [], load));
+  await waitFor(() =>
+    expect(appCommandStore(uiStore).getState().collapsedProjects).toEqual(["default"]),
+  );
 });
 
 test("project homes do not keep an otherwise empty project expanded", async () => {
   const load = async () => undefined;
-  renderHook(() =>
+  renderHookInAppCommandScope(() =>
     useSidebarHydration(
       [{ id: "home-only" }],
       true,
@@ -77,5 +86,7 @@ test("project homes do not keep an otherwise empty project expanded", async () =
       load,
     ),
   );
-  await waitFor(() => expect(useUIStore.getState().collapsedProjects).toEqual(["home-only"]));
+  await waitFor(() =>
+    expect(appCommandStore(uiStore).getState().collapsedProjects).toEqual(["home-only"]),
+  );
 });

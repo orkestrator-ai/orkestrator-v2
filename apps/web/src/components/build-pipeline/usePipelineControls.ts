@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { toast } from "sonner";
 import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
-import * as backend from "@/lib/backend";
 import type { BuildPipelineRestartSelection } from "@orkestrator/protocol/build-pipeline-restart-selection";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -17,6 +17,7 @@ function describe(error: unknown): string {
  * follows the pipeline there rather than holding the stage being read.
  */
 export function usePipelineControls(pipeline: BuildPipeline | undefined, onFollow: () => void) {
+  const nodeBackend = useScopeBackend();
   const replacePipeline = useBuildPipelineStore((state) => state.replacePipeline);
   const [pending, setPending] = useState(false);
 
@@ -35,10 +36,10 @@ export function usePipelineControls(pipeline: BuildPipeline | undefined, onFollo
       try {
         const next =
           action === "pause"
-            ? await backend.pauseBuildPipeline(pipeline!.id)
+            ? await nodeBackend.pauseBuildPipeline(pipeline!.id)
             : action === "resume"
-              ? await backend.resumeBuildPipeline(pipeline!.id)
-              : await backend.cancelBuildPipeline(pipeline!.id);
+              ? await nodeBackend.resumeBuildPipeline(pipeline!.id)
+              : await nodeBackend.cancelBuildPipeline(pipeline!.id);
         replacePipeline(next);
       } catch (error) {
         toast.error(`Failed to ${action} build`, { description: describe(error) });
@@ -48,7 +49,7 @@ export function usePipelineControls(pipeline: BuildPipeline | undefined, onFollo
   const restartCurrentStage = (label: string | undefined) =>
     run(async () => {
       try {
-        replacePipeline(await backend.restartBuildPipelineCurrentStep(pipeline!.id));
+        replacePipeline(await nodeBackend.restartBuildPipelineCurrentStep(pipeline!.id));
         // The restart opens a new session; follow it rather than leaving the
         // user on whichever stage they were reading.
         onFollow();
@@ -61,7 +62,7 @@ export function usePipelineControls(pipeline: BuildPipeline | undefined, onFollo
   const retryStage = () =>
     run(async () => {
       try {
-        const updated = await backend.retryBuildPipelineStage(pipeline!.id);
+        const updated = await nodeBackend.retryBuildPipelineStage(pipeline!.id);
         replacePipeline(updated);
         onFollow();
         if (updated.phase === "failed") {
@@ -79,7 +80,7 @@ export function usePipelineControls(pipeline: BuildPipeline | undefined, onFollo
   const restartStage = (stageId: string) =>
     run(async () => {
       try {
-        replacePipeline(await backend.restartBuildPipelineStep(pipeline!.id, stageId));
+        replacePipeline(await nodeBackend.restartBuildPipelineStep(pipeline!.id, stageId));
         onFollow();
         toast.success("Stage restarted");
       } catch (error) {
@@ -99,7 +100,9 @@ export function usePipelineControls(pipeline: BuildPipeline | undefined, onFollo
     let failure: string | null = "Another pipeline control is still running";
     await run(async () => {
       try {
-        replacePipeline(await backend.restartBuildPipelineStep(pipeline!.id, stageId, selection));
+        replacePipeline(
+          await nodeBackend.restartBuildPipelineStep(pipeline!.id, stageId, selection),
+        );
         failure = null;
         onFollow();
         toast.success("Stage restarted");
@@ -116,7 +119,9 @@ export function usePipelineControls(pipeline: BuildPipeline | undefined, onFollo
     let rewound = false;
     await run(async () => {
       try {
-        replacePipeline(await backend.rewindBuildPipelineCode(pipeline!.id, stageId, expectedHead));
+        replacePipeline(
+          await nodeBackend.rewindBuildPipelineCode(pipeline!.id, stageId, expectedHead),
+        );
         rewound = true;
         onFollow();
         toast.success("Code rewound and step restarted");
@@ -130,7 +135,7 @@ export function usePipelineControls(pipeline: BuildPipeline | undefined, onFollo
   const skipStage = (stageId: string) =>
     run(async () => {
       try {
-        replacePipeline(await backend.skipBuildPipelineStep(pipeline!.id, stageId));
+        replacePipeline(await nodeBackend.skipBuildPipelineStep(pipeline!.id, stageId));
         onFollow();
         toast.success("Step skipped");
       } catch (error) {
@@ -141,7 +146,7 @@ export function usePipelineControls(pipeline: BuildPipeline | undefined, onFollo
   const retryReviewer = (reviewerId: string) =>
     run(async () => {
       try {
-        replacePipeline(await backend.retryBuildPipelineReviewer(pipeline!.id, reviewerId));
+        replacePipeline(await nodeBackend.retryBuildPipelineReviewer(pipeline!.id, reviewerId));
         toast.success("Reviewer restarted");
       } catch (error) {
         toast.error("Failed to retry the reviewer", { description: describe(error) });
@@ -151,7 +156,7 @@ export function usePipelineControls(pipeline: BuildPipeline | undefined, onFollo
   const restartReviewer = (reviewerId: string) =>
     run(async () => {
       try {
-        replacePipeline(await backend.restartBuildPipelineReviewer(pipeline!.id, reviewerId));
+        replacePipeline(await nodeBackend.restartBuildPipelineReviewer(pipeline!.id, reviewerId));
         toast.success("Reviewer restarted");
       } catch (error) {
         toast.error("Failed to restart the reviewer", { description: describe(error) });
@@ -161,7 +166,7 @@ export function usePipelineControls(pipeline: BuildPipeline | undefined, onFollo
   const stopReviewer = (reviewerId: string) =>
     run(async () => {
       try {
-        replacePipeline(await backend.stopBuildPipelineReviewer(pipeline!.id, reviewerId));
+        replacePipeline(await nodeBackend.stopBuildPipelineReviewer(pipeline!.id, reviewerId));
         toast.success("Reviewer stopped");
       } catch (error) {
         toast.error("Failed to stop the reviewer", { description: describe(error) });

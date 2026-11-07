@@ -1,3 +1,4 @@
+import { registrarFrom } from "./commands-registry-contracts.js";
 import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -9,7 +10,10 @@ import { withTemporaryStorage } from "./storage-test-support.js";
 import { StorageService } from "./storage.js";
 
 const commands = new Map<string, CommandHandler>();
-registerKanbanCommands((name, handler) => commands.set(name, handler), {} as RegistryDependencies);
+registerKanbanCommands(
+  registrarFrom((name, handler) => commands.set(name, handler)),
+  {} as RegistryDependencies,
+);
 const check = {
   status: "passed",
   evidence: "Checked",
@@ -20,7 +24,6 @@ const entry = { id: "ac-1", text: "Criterion", check };
 
 describe("Kanban content commands", () => {
   test.each([
-    ["unknown argument", { taskId: "task", checks: [], extra: true }],
     ["oversized array", { taskId: "task", checks: Array(101).fill(entry) }],
     ["missing array", { taskId: "task" }],
     ["null item", { taskId: "task", checks: [null] }],
@@ -67,15 +70,29 @@ describe("Kanban content commands", () => {
         summary: "Summary",
         acceptanceCriteria: [{ id: "ac-1", text: "Criterion" }],
       });
-      await commands.get("record_kanban_criteria_checks")!({ taskId: task.id, checks: [entry] }, {
-        storage,
-      } as never);
+      // A defined command drops an unknown argument key (plan item 7008) instead of refusing it.
+      await commands.get("record_kanban_criteria_checks")!(
+        { taskId: task.id, checks: [entry], extra: true },
+        { storage } as never,
+      );
       expect(
         (await storage.kanban.getKanbanTask(task.id))?.sections?.acceptanceCriteria?.[0]?.check,
       ).toEqual(check);
     } finally {
       await rm(dataDir, { recursive: true, force: true });
     }
+  });
+
+  test("keeps the handlers' wording for a missing or mistyped argument", () => {
+    expect(() => commands.get("get_kanban_tasks")!({}, {} as never)).toThrow(
+      "Expected projectId to be a string",
+    );
+    expect(() => commands.get("delete_kanban_task")!({ taskId: 7 }, {} as never)).toThrow(
+      "Expected taskId to be a string",
+    );
+    expect(() =>
+      commands.get("start_feature_planning")!({ featureId: "f", kind: "feature" }, {} as never),
+    ).toThrow("Expected userMessage to be a string");
   });
 });
 
@@ -103,14 +120,11 @@ test("terminal status updates preserve done under storage's lease, while users c
 describe("Kanban label command validation", () => {
   test.each([
     ["get_kanban_labels", {}, "projectId"],
-    ["get_kanban_labels", { projectId: "p", extra: true }, "extra"],
     ["get_kanban_labels", { projectId: " " }, "projectId"],
-    ["create_kanban_label", { projectId: "p", name: "bug", extra: true }, "extra"],
     ["create_kanban_label", { name: "bug" }, "projectId"],
     ["create_kanban_label", { projectId: "p", name: " " }, "empty"],
     ["create_kanban_label", { projectId: "p", name: "bug", color: "red" }, "#rrggbb"],
     ["create_kanban_label", { projectId: "p", name: "bug", description: 1 }, "description"],
-    ["set_kanban_task_label", { taskId: "t", name: "bug", extra: true }, "extra"],
     ["set_kanban_task_label", { taskId: "t", name: "bug", present: "false" }, "boolean"],
     ["set_kanban_task_label", { taskId: "t", name: "bug", present: null }, "boolean"],
     ["set_kanban_task_label", { name: "bug" }, "taskId"],
@@ -122,6 +136,41 @@ describe("Kanban label command validation", () => {
         commands.get(name)!(input, { storage: { kanban: {} } } as never),
       ),
     ).rejects.toThrow(message);
+  });
+
+  // Defined commands decode tolerantly (plan item 7008): an unknown key is
+  // dropped before the handler, never refused.
+  test("label commands drop unknown keys before storage", async () => {
+    const calls: Array<[string, unknown[]]> = [];
+    const kanban = {
+      getKanbanLabels: async (...args: unknown[]) => {
+        calls.push(["get", args]);
+        return [];
+      },
+      createKanbanLabel: async (...args: unknown[]) => {
+        calls.push(["create", args]);
+        return { label: { name: "bug", createdAt: "2026-11-07T00:00:00Z" }, created: true };
+      },
+      setKanbanTaskLabel: async (...args: unknown[]) => {
+        calls.push(["set", args]);
+        return { id: "t", labels: ["bug"] };
+      },
+    };
+    const context = { storage: { kanban } } as never;
+    await commands.get("get_kanban_labels")!({ projectId: "p", extra: true }, context);
+    await commands.get("create_kanban_label")!(
+      { projectId: "p", name: "bug", extra: true },
+      context,
+    );
+    await commands.get("set_kanban_task_label")!(
+      { taskId: "t", name: "bug", extra: true },
+      context,
+    );
+    expect(calls).toEqual([
+      ["get", ["p"]],
+      ["create", ["p", { name: "bug" }]],
+      ["set", ["t", "bug", true, undefined]],
+    ]);
   });
 
   test("label commands persist metadata and default present to true, while false removes", async () => {

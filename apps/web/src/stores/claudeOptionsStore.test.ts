@@ -1,51 +1,70 @@
-import { beforeEach, describe, expect, test } from "bun:test";
-import { useClaudeOptionsStore } from "./claudeOptionsStore";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import type { BackendId } from "@orkestrator/protocol/federation";
+import type { StoreApi } from "zustand/vanilla";
+import { getWindowScope, resetWindowScopeForTests } from "@/lib/node-scope/app-window-scope";
+import { WindowScope } from "@/lib/node-scope/window-scope";
+import { FakeNodeClient } from "@/test/render-in-node-scope";
+import { type ClaudeOptionsState, claudeOptionsStore } from "./claudeOptionsStore";
+import { appCommandStore } from "@/test/app-command-store";
+
+const NODE_A = "bk_claude-options-a" as BackendId;
+const NODE_B = "bk_claude-options-b" as BackendId;
+
+let windowScope: WindowScope;
+/** NODE_A's instance; the tests name their scope, as converted code does. */
+let store: StoreApi<ClaudeOptionsState>;
+
+beforeEach(() => {
+  windowScope = new WindowScope();
+  store = windowScope
+    .open({ role: "command", client: new FakeNodeClient({ nodeId: NODE_A }) })
+    .store(claudeOptionsStore);
+});
+
+afterEach(() => {
+  windowScope.dispose();
+  resetWindowScopeForTests();
+});
 
 describe("claudeOptionsStore", () => {
-  beforeEach(() => {
-    useClaudeOptionsStore.setState({
-      options: {},
-    });
-  });
-
   test("stores and clears launch options per environment", () => {
-    useClaudeOptionsStore.getState().setOptions("env-1", {
+    store.getState().setOptions("env-1", {
       launchAgent: true,
       agentType: "codex",
       initialPrompt: "Fix tests",
     });
 
-    expect(useClaudeOptionsStore.getState().getOptions("env-1")).toEqual({
+    expect(store.getState().getOptions("env-1")).toEqual({
       launchAgent: true,
       agentType: "codex",
       initialPrompt: "Fix tests",
     });
-    expect(useClaudeOptionsStore.getState().getOptions("env-2")).toBeUndefined();
+    expect(store.getState().getOptions("env-2")).toBeUndefined();
 
-    useClaudeOptionsStore.getState().clearOptions("env-1");
+    store.getState().clearOptions("env-1");
 
-    expect(useClaudeOptionsStore.getState().getOptions("env-1")).toBeUndefined();
+    expect(store.getState().getOptions("env-1")).toBeUndefined();
   });
 
   test("round-trips one-shot model and reasoning effort", () => {
-    const store = useClaudeOptionsStore.getState();
-    store.setOptions("env-1", {
+    const actions = store.getState();
+    actions.setOptions("env-1", {
       launchAgent: true,
       agentType: "codex",
       initialPrompt: "Fix tests",
       model: "gpt-5.6-sol",
       reasoningEffort: "high",
     });
-    expect(useClaudeOptionsStore.getState().getOptions("env-1")).toEqual(
+    expect(store.getState().getOptions("env-1")).toEqual(
       expect.objectContaining({ model: "gpt-5.6-sol", reasoningEffort: "high" }),
     );
 
-    store.clearOptions("env-1");
-    expect(useClaudeOptionsStore.getState().getOptions("env-1")).toBeUndefined();
+    actions.clearOptions("env-1");
+    expect(store.getState().getOptions("env-1")).toBeUndefined();
   });
 
   test("stores initial prompt attachments with launch options", () => {
-    useClaudeOptionsStore.getState().setOptions("env-1", {
+    store.getState().setOptions("env-1", {
       launchAgent: true,
       agentType: "claude",
       initialPrompt: "Use this image",
@@ -59,7 +78,7 @@ describe("claudeOptionsStore", () => {
       ],
     });
 
-    expect(useClaudeOptionsStore.getState().getOptions("env-1")).toEqual({
+    expect(store.getState().getOptions("env-1")).toEqual({
       launchAgent: true,
       agentType: "claude",
       initialPrompt: "Use this image",
@@ -72,5 +91,33 @@ describe("claudeOptionsStore", () => {
         },
       ],
     });
+  });
+
+  test("each node scope holds its own options", () => {
+    const other = windowScope
+      .open({ role: "leaf", client: new FakeNodeClient({ nodeId: NODE_B }) })
+      .store(claudeOptionsStore);
+    store.getState().setOptions("env-1", {
+      launchAgent: true,
+      agentType: "claude",
+      initialPrompt: "On node A",
+    });
+    expect(other.getState().getOptions("env-1")).toBeUndefined();
+    windowScope.get(NODE_A)?.dispose();
+    expect(windowScope.get(NODE_A)).toBeNull();
+    expect(other.getState().options).toEqual({});
+  });
+
+  test("the app command scope keeps its own instance", () => {
+    resetWindowScopeForTests(new FakeNodeClient({ nodeId: NODE_A }));
+    appCommandStore(claudeOptionsStore).getState().setOptions("env-1", {
+      launchAgent: false,
+      agentType: "codex",
+      initialPrompt: "",
+    });
+    expect(
+      getWindowScope().commandScope().store(claudeOptionsStore).getState().getOptions("env-1"),
+    ).toMatchObject({ agentType: "codex" });
+    expect(store.getState().getOptions("env-1")).toBeUndefined();
   });
 });

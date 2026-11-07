@@ -1,7 +1,8 @@
 import { environmentHasDeletionTombstone } from "@orkestrator/protocol/node-summaries";
-import { create } from "zustand";
 import { deepEqualJson } from "@/lib/chat/message-identity";
 import { clearRichEnvironmentContent } from "@/lib/chat/rich-content-reset";
+import { defineScopedStore } from "@/lib/node-scope/scoped-store";
+import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
 import type { Environment, EnvironmentStatus, PrState } from "@/types";
 
 const sortByOrder = (environments: Environment[]): Environment[] =>
@@ -43,7 +44,7 @@ function reuseUnchangedEnvironments(
 const sameEnvironments = (a: readonly Environment[], b: readonly Environment[]): boolean =>
   a.length === b.length && a.every((environment, index) => environment === b[index]);
 
-interface EnvironmentState {
+export interface EnvironmentState {
   environments: Environment[];
   isLoading: boolean;
   error: string | null;
@@ -75,174 +76,188 @@ interface EnvironmentState {
   isDeleting: (environmentId: string) => boolean;
 }
 
-export const useEnvironmentStore = create<EnvironmentState>()((set, get) => ({
-  environments: [],
-  isLoading: false,
-  error: null,
-  deletingEnvironments: new Set<string>(),
-  deletingStartedAt: new Map<string, string>(),
+/**
+ * The environments of one node, held per node scope (plan item 3004):
+ * environment ids are node-local, so two nodes may both hold `env-1`.
+ */
+export const environmentStore = defineScopedStore<EnvironmentState>(
+  "environment",
+  () => (set, get) => ({
+    environments: [],
+    isLoading: false,
+    error: null,
+    deletingEnvironments: new Set<string>(),
+    deletingStartedAt: new Map<string, string>(),
 
-  setEnvironments: (environments) =>
-    set((state) => {
-      const sorted = sortByOrder(reuseUnchangedEnvironments(state.environments, environments));
-      return sameEnvironments(state.environments, sorted) ? state : { environments: sorted };
-    }),
+    setEnvironments: (environments) =>
+      set((state) => {
+        const sorted = sortByOrder(reuseUnchangedEnvironments(state.environments, environments));
+        return sameEnvironments(state.environments, sorted) ? state : { environments: sorted };
+      }),
 
-  mergeEnvironmentsForProject: (projectId, newEnvironments) =>
-    set((state) => {
-      const current = state.environments.filter(
-        (environment) => environment.projectId === projectId,
-      );
-      const sorted = sortByOrder(reuseUnchangedEnvironments(current, newEnvironments));
-      if (sameEnvironments(current, sorted)) return state;
-      return {
-        environments: sortByOrder([
-          ...state.environments.filter((environment) => environment.projectId !== projectId),
-          ...sorted,
-        ]),
-      };
-    }),
+    mergeEnvironmentsForProject: (projectId, newEnvironments) =>
+      set((state) => {
+        const current = state.environments.filter(
+          (environment) => environment.projectId === projectId,
+        );
+        const sorted = sortByOrder(reuseUnchangedEnvironments(current, newEnvironments));
+        if (sameEnvironments(current, sorted)) return state;
+        return {
+          environments: sortByOrder([
+            ...state.environments.filter((environment) => environment.projectId !== projectId),
+            ...sorted,
+          ]),
+        };
+      }),
 
-  applyEnvironmentSnapshot: (environmentId, snapshot) =>
-    set((state) => {
-      const previous = state.environments.find((environment) => environment.id === environmentId);
-      if (!snapshot) {
-        return previous
-          ? {
-              environments: state.environments.filter(
-                (environment) => environment.id !== environmentId,
-              ),
-            }
-          : state;
-      }
-      const next = reuseUnchangedFields(previous, snapshot);
-      if (next === previous) return state;
-      if (!previous) return { environments: sortByOrder([...state.environments, next]) };
-      const environments = state.environments.map((environment) =>
-        environment === previous ? next : environment,
-      );
-      return {
-        environments: next.order === previous.order ? environments : sortByOrder(environments),
-      };
-    }),
-
-  addEnvironment: (environment) =>
-    set((state) => ({ environments: sortByOrder([...state.environments, environment]) })),
-
-  removeEnvironment: (environmentId) => {
-    // Deleting an environment removes its conversations' rich view state,
-    // render cache entries and cached artifact reads too.
-    clearRichEnvironmentContent(environmentId);
-    set((state) => {
-      const deletingEnvironments = new Set(state.deletingEnvironments);
-      deletingEnvironments.delete(environmentId);
-      const deletingStartedAt = new Map(state.deletingStartedAt);
-      deletingStartedAt.delete(environmentId);
-      return {
-        environments: state.environments.filter((environment) => environment.id !== environmentId),
-        deletingEnvironments,
-        deletingStartedAt,
-      };
-    });
-  },
-
-  updateEnvironment: (environmentId, updates) =>
-    set((state) => {
-      const previous = state.environments.find((environment) => environment.id === environmentId);
-      if (!previous) return state;
-      const changed = (Object.keys(updates) as Array<keyof Environment>).some(
-        (key) => !deepEqualJson(previous[key], updates[key]),
-      );
-      if (!changed) return state;
-      const environments = state.environments.map((environment) =>
-        environment.id === environmentId
-          ? reuseUnchangedFields(environment, { ...environment, ...updates })
-          : environment,
-      );
-      return {
-        environments:
-          updates.order !== undefined && updates.order !== previous.order
-            ? sortByOrder(environments)
-            : environments,
-      };
-    }),
-
-  updateEnvironmentStatus: (environmentId, status) =>
-    set((state) => {
-      const current = state.environments.find((environment) => environment.id === environmentId);
-      if (!current || current.status === status) return state;
-      return {
-        environments: state.environments.map((environment) =>
-          environment === current ? { ...environment, status } : environment,
-        ),
-      };
-    }),
-
-  setEnvironmentPR: (environmentId, prUrl, prState, hasMergeConflicts) =>
-    set((state) => {
-      const current = state.environments.find((environment) => environment.id === environmentId);
-      if (
-        !current ||
-        (current.prUrl === prUrl &&
-          current.prState === prState &&
-          current.hasMergeConflicts === (hasMergeConflicts ?? null))
-      ) {
-        return state;
-      }
-      return {
-        environments: state.environments.map((environment) =>
-          environment === current
+    applyEnvironmentSnapshot: (environmentId, snapshot) =>
+      set((state) => {
+        const previous = state.environments.find((environment) => environment.id === environmentId);
+        if (!snapshot) {
+          return previous
             ? {
-                ...environment,
-                prUrl,
-                prState,
-                hasMergeConflicts: hasMergeConflicts ?? null,
-                prMergeability: environment.prUrl === prUrl ? environment.prMergeability : null,
+                environments: state.environments.filter(
+                  (environment) => environment.id !== environmentId,
+                ),
               }
-            : environment,
-        ),
-      };
-    }),
+            : state;
+        }
+        const next = reuseUnchangedFields(previous, snapshot);
+        if (next === previous) return state;
+        if (!previous) return { environments: sortByOrder([...state.environments, next]) };
+        const environments = state.environments.map((environment) =>
+          environment === previous ? next : environment,
+        );
+        return {
+          environments: next.order === previous.order ? environments : sortByOrder(environments),
+        };
+      }),
 
-  reorderEnvironments: (projectId, environmentIds) =>
-    set((state) => ({
-      environments: [
-        ...state.environments.filter((environment) => environment.projectId !== projectId),
-        ...environmentIds.flatMap((id, order) => {
-          const environment = state.environments.find(
-            (candidate) => candidate.id === id && candidate.projectId === projectId,
-          );
-          return environment ? [{ ...environment, order }] : [];
-        }),
-      ],
-    })),
+    addEnvironment: (environment) =>
+      set((state) => ({ environments: sortByOrder([...state.environments, environment]) })),
 
-  setLoading: (isLoading) => set({ isLoading }),
-  setError: (error) => set({ error }),
-
-  setDeleting: (environmentId, isDeleting) =>
-    set((state) => {
-      const deletingEnvironments = new Set(state.deletingEnvironments);
-      const deletingStartedAt = new Map(state.deletingStartedAt);
-      if (isDeleting) {
-        deletingEnvironments.add(environmentId);
-        if (!deletingStartedAt.has(environmentId))
-          deletingStartedAt.set(environmentId, new Date().toISOString());
-      } else {
+    removeEnvironment: (environmentId) => {
+      // Deleting an environment removes its conversations' rich view state,
+      // render cache entries and cached artifact reads too. That clear is keyed
+      // by environment id alone, so it also drops another node's content for
+      // the same id: a re-render there, never a leak.
+      clearRichEnvironmentContent(environmentId);
+      set((state) => {
+        const deletingEnvironments = new Set(state.deletingEnvironments);
         deletingEnvironments.delete(environmentId);
+        const deletingStartedAt = new Map(state.deletingStartedAt);
         deletingStartedAt.delete(environmentId);
-      }
-      return { deletingEnvironments, deletingStartedAt };
-    }),
+        return {
+          environments: state.environments.filter(
+            (environment) => environment.id !== environmentId,
+          ),
+          deletingEnvironments,
+          deletingStartedAt,
+        };
+      });
+    },
 
-  getEnvironmentById: (environmentId) =>
-    get().environments.find((environment) => environment.id === environmentId),
-  getEnvironmentsByProjectId: (projectId) =>
-    sortByOrder(get().environments.filter((environment) => environment.projectId === projectId)),
-  isDeleting: (environmentId) =>
-    get().deletingEnvironments.has(environmentId) ||
-    get().environments.some(
-      (environment) =>
-        environment.id === environmentId && environmentHasDeletionTombstone(environment),
-    ),
-}));
+    updateEnvironment: (environmentId, updates) =>
+      set((state) => {
+        const previous = state.environments.find((environment) => environment.id === environmentId);
+        if (!previous) return state;
+        const changed = (Object.keys(updates) as Array<keyof Environment>).some(
+          (key) => !deepEqualJson(previous[key], updates[key]),
+        );
+        if (!changed) return state;
+        const environments = state.environments.map((environment) =>
+          environment.id === environmentId
+            ? reuseUnchangedFields(environment, { ...environment, ...updates })
+            : environment,
+        );
+        return {
+          environments:
+            updates.order !== undefined && updates.order !== previous.order
+              ? sortByOrder(environments)
+              : environments,
+        };
+      }),
+
+    updateEnvironmentStatus: (environmentId, status) =>
+      set((state) => {
+        const current = state.environments.find((environment) => environment.id === environmentId);
+        if (!current || current.status === status) return state;
+        return {
+          environments: state.environments.map((environment) =>
+            environment === current ? { ...environment, status } : environment,
+          ),
+        };
+      }),
+
+    setEnvironmentPR: (environmentId, prUrl, prState, hasMergeConflicts) =>
+      set((state) => {
+        const current = state.environments.find((environment) => environment.id === environmentId);
+        if (
+          !current ||
+          (current.prUrl === prUrl &&
+            current.prState === prState &&
+            current.hasMergeConflicts === (hasMergeConflicts ?? null))
+        ) {
+          return state;
+        }
+        return {
+          environments: state.environments.map((environment) =>
+            environment === current
+              ? {
+                  ...environment,
+                  prUrl,
+                  prState,
+                  hasMergeConflicts: hasMergeConflicts ?? null,
+                  prMergeability: environment.prUrl === prUrl ? environment.prMergeability : null,
+                }
+              : environment,
+          ),
+        };
+      }),
+
+    reorderEnvironments: (projectId, environmentIds) =>
+      set((state) => ({
+        environments: [
+          ...state.environments.filter((environment) => environment.projectId !== projectId),
+          ...environmentIds.flatMap((id, order) => {
+            const environment = state.environments.find(
+              (candidate) => candidate.id === id && candidate.projectId === projectId,
+            );
+            return environment ? [{ ...environment, order }] : [];
+          }),
+        ],
+      })),
+
+    setLoading: (isLoading) => set({ isLoading }),
+    setError: (error) => set({ error }),
+
+    setDeleting: (environmentId, isDeleting) =>
+      set((state) => {
+        const deletingEnvironments = new Set(state.deletingEnvironments);
+        const deletingStartedAt = new Map(state.deletingStartedAt);
+        if (isDeleting) {
+          deletingEnvironments.add(environmentId);
+          if (!deletingStartedAt.has(environmentId))
+            deletingStartedAt.set(environmentId, new Date().toISOString());
+        } else {
+          deletingEnvironments.delete(environmentId);
+          deletingStartedAt.delete(environmentId);
+        }
+        return { deletingEnvironments, deletingStartedAt };
+      }),
+
+    getEnvironmentById: (environmentId) =>
+      get().environments.find((environment) => environment.id === environmentId),
+    getEnvironmentsByProjectId: (projectId) =>
+      sortByOrder(get().environments.filter((environment) => environment.projectId === projectId)),
+    isDeleting: (environmentId) =>
+      get().deletingEnvironments.has(environmentId) ||
+      get().environments.some(
+        (environment) =>
+          environment.id === environmentId && environmentHasDeletionTombstone(environment),
+      ),
+  }),
+);
+
+/** Reads the nearest node scope's environments; other code uses `scope.store(environmentStore)`. */
+export const useEnvironmentStore = scopedStoreHook(environmentStore);

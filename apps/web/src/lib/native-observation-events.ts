@@ -4,8 +4,11 @@ import {
   parseNativeAgentActivityAnnouncement,
 } from "@orkestrator/protocol/native-agent-observation";
 import type { ViewRevisionStamp } from "@orkestrator/protocol/view-sync";
-import { listen as nativeListen, type NativeEvent, type UnlistenFn } from "@/lib/native/events";
+import { nativeAgentSessionActivityEvent } from "@orkestrator/protocol/contract/domains/events";
+import type { NativeEvent, UnlistenFn } from "@/lib/native/events";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { appCommandScope, defineScopedSlot, listenInScope } from "@/lib/node-scope-slots";
 
 const log = createLogger("web.resource-sync");
 
@@ -22,8 +25,11 @@ const log = createLogger("web.resource-sync");
  * - `all`: a stamp gap (a transition was missed) or a new observer lifetime
  *   (backend restart). Every mounted view re-reads once.
  *
- * One transport listener serves every view. This is what lets an idle view of
- * a qualified provider read less often: it is told when it must read.
+ * One transport listener per node scope serves every view of that node (plan
+ * item 3009): the stamps are one node's observer lifetime, so two nodes'
+ * announcements must never be ordered against each other. This is what lets
+ * an idle view of a qualified provider read less often: it is told when it
+ * must read.
  */
 export type NativeObservationInvalidation =
   | { kind: "session"; environmentId: string; agent?: string; logicalSessionKey?: string }
@@ -115,12 +121,42 @@ export function createNativeObservationEvents(listen: Listen): NativeObservation
   };
 }
 
-let shared: NativeObservationEvents | null = null;
+/** The node's one listener, created on first subscription and stopped on dispose. */
+const sharedEvents = defineScopedSlot<{ events: NativeObservationEvents | null }>(
+  "native-observation-events",
+  (scope) => {
+    const slot: { events: NativeObservationEvents | null } = { events: null };
+    scope.onDispose("native-observation-events", () => {
+      slot.events?.dispose();
+      slot.events = null;
+    });
+    return slot;
+  },
+);
 
-/** Subscribe a mounted view to the shared observation invalidations. */
-export function subscribeNativeObservationInvalidations(listener: Listener): () => void {
-  shared ??= createNativeObservationEvents(nativeListen);
-  return shared.subscribe(listener);
+function eventsFor(scope: NodeScope): NativeObservationEvents {
+  const slot = sharedEvents(scope);
+  // The one event it listens to, by its definition (plan item 7011), on the
+  // app's command scope (`@/lib/native/events`, what suites emit) or the
+  // scope's own client.
+  slot.events ??= createNativeObservationEvents(
+    <T>(_event: string, handler: (event: NativeEvent<T>) => unknown) =>
+      listenInScope(scope, nativeAgentSessionActivityEvent, (payload) =>
+        handler({ payload: payload as T }),
+      ),
+  );
+  return slot.events;
+}
+
+/**
+ * Subscribe a mounted view to its node's shared observation invalidations
+ * (the app's command scope when `scope` is omitted).
+ */
+export function subscribeNativeObservationInvalidations(
+  listener: Listener,
+  scope: NodeScope = appCommandScope(),
+): () => void {
+  return eventsFor(scope).subscribe(listener);
 }
 
 /** Whether an invalidation applies to one native session view. */
@@ -139,7 +175,8 @@ export function nativeObservationInvalidationMatches(
   );
 }
 
-export function resetNativeObservationEventsForTests(): void {
-  shared?.dispose();
-  shared = null;
+export function resetNativeObservationEventsForTests(scope: NodeScope = appCommandScope()): void {
+  const slot = sharedEvents(scope);
+  slot.events?.dispose();
+  slot.events = null;
 }

@@ -5,6 +5,10 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { openLinkExternally } from "@/lib/preview-link-external";
 import { DEFAULT_TERMINAL_APPEARANCE, DEFAULT_TERMINAL_SCROLLBACK } from "@/constants/terminal";
 import { createTerminalLinkActivator } from "@/lib/terminal-links";
+import type { BackendId } from "@orkestrator/protocol/federation";
+import { getWindowScope } from "@/lib/node-scope/app-window-scope";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { appCommandScope } from "@/lib/node-scope-slots";
 
 export type CreateXtermTerminal = (
   appearance: {
@@ -13,7 +17,8 @@ export type CreateXtermTerminal = (
     backgroundColor?: string;
   },
   scrollback: number | undefined,
-  linkSource: { environmentId: string; tabId: string },
+  /** `nodeId` is the terminal's node (plan item 3013): its links act on that node's scope. */
+  linkSource: { environmentId: string; tabId: string; nodeId?: BackendId },
 ) => {
   terminal: Terminal;
   fitAddon: FitAddon;
@@ -34,14 +39,20 @@ export const createXtermTerminal: CreateXtermTerminal = (appearance, scrollback,
   const scrollbackLines =
     typeof scrollback === "number" && scrollback > 0 ? scrollback : DEFAULT_TERMINAL_SCROLLBACK;
 
+  // Resolved per click: the terminal outlives any one lookup, and a node
+  // that is no longer open falls back to the window's own node.
+  const linkScope = (): NodeScope =>
+    (linkSource.nodeId ? getWindowScope().get(linkSource.nodeId) : null) ?? appCommandScope();
   const activateLink = createTerminalLinkActivator({
     environmentId: linkSource.environmentId,
     sourceTabId: linkSource.tabId,
+    scope: linkScope,
     openExternal: (url) =>
       openLinkExternally({
         environmentId: linkSource.environmentId,
         sourceTabId: linkSource.tabId,
         url,
+        scope: linkScope(),
       }),
   });
 

@@ -2,26 +2,42 @@ import { drainProjectHomeEnsures } from "@/hooks/useFilesPanel";
 // Hook for managing environment operations with Electron backend
 import { useCallback, useEffect, useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { listen, NATIVE_EVENT_STREAM_CONNECTED_EVENT, type UnlistenFn } from "@/lib/native/events";
-import { toast } from "sonner";
 import {
+  environmentRenamedEvent,
+  environmentSetupCompleteEvent,
+  environmentSetupStartedEvent,
+  nativeAgentAsyncQuestionEvent,
+} from "@orkestrator/protocol/contract/domains/events";
+import { NATIVE_EVENT_STREAM_CONNECTED_EVENT, type UnlistenFn } from "@/lib/native/events";
+import { toast } from "sonner";
+import type { StoreApi } from "zustand";
+import {
+  buildPipelineStore,
   createSessionKey,
-  useBuildPipelineStore,
+  environmentStore,
+  projectStore,
   useEnvironmentStore,
   formatErrorContext,
   useErrorDialogStore,
-  useProjectStore,
-  useTerminalSessionStore,
-  useUIStore,
-  usePaneLayoutStore,
+  terminalSessionStore,
+  paneLayoutStore,
   getAllLeaves,
 } from "@/stores";
 import { createSessionKey as createNativeSessionKey } from "@/lib/utils";
 import { getNativeAgentData } from "@/types/paneLayout";
 import { useSessionStore } from "@/stores/sessionStore";
+import { uiStore } from "@/stores/uiStore";
 import * as backend from "@/lib/backend";
+import { backendApiForScope } from "@/lib/backend/client";
+import { createFilesSessionsApi } from "@/lib/backend/files-sessions";
+import { createProjectsEnvironmentsApi } from "@/lib/backend/projects-environments";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { useNodeScope } from "@/lib/node-scope/providers";
+import { appCommandScope, defineScopedSlot, listenInScope } from "@/lib/node-scope-slots";
 import { clearStoredPaneSelection } from "@/lib/pane-selection-storage";
 import type { ErrorContext } from "@/stores";
+import type { EnvironmentState } from "@/stores/environmentStore";
+import type { ProjectState } from "@/stores/projectStore";
 import type {
   Environment,
   EnvironmentType,
@@ -73,10 +89,10 @@ function truncateForToast(message: string, maxLength = 50): string {
  * Name the project and environment an error belongs to, so a generic lifecycle
  * message says which of many environments it is about.
  */
-function describeEnvironment(environmentId: string): ErrorContext {
-  const environment = useEnvironmentStore.getState().getEnvironmentById(environmentId);
+function describeEnvironment(node: EnvironmentNode, environmentId: string): ErrorContext {
+  const environment = node.environments.getState().getEnvironmentById(environmentId);
   const project = environment
-    ? useProjectStore.getState().getProjectById(environment.projectId)
+    ? node.projects.getState().getProjectById(environment.projectId)
     : undefined;
   return { project: project?.name, environment: environment?.name ?? environmentId };
 }
@@ -84,13 +100,6 @@ function describeEnvironment(environmentId: string): ErrorContext {
 /** Toast description that leads with the environment's identity. */
 function describeForToast(context: ErrorContext, message: string): string {
   return `${formatErrorContext(context)}: ${truncateForToast(message)}`;
-}
-
-/** Payload emitted when an environment is renamed in the background */
-interface EnvironmentRenamedPayload {
-  environment_id: string;
-  new_name: string;
-  new_branch: string;
 }
 
 interface EnvironmentSetupStartedPayload {
@@ -104,11 +113,6 @@ interface EnvironmentSetupCompletePayload {
   success: boolean;
   environment?: Environment;
   error?: string;
-}
-
-interface NativeAgentAsyncQuestionPayload {
-  environment_id: string;
-  session_key: string;
 }
 
 interface UseEnvironmentsOptions {
@@ -153,36 +157,100 @@ interface EnvironmentCreationState {
   activeCreations: number;
 }
 
-const environmentCreationStateByProject = new Map<string, EnvironmentCreationState>();
+interface LifecycleAttemptState {
+  attempt: number;
+  revision: number;
+  pending: boolean;
+}
 
-function getEnvironmentCreationState(projectId: string): EnvironmentCreationState {
+interface ForegroundLifecycleErrorReport {
+  attempt: number;
+  kind: "foreground";
+}
+
+/**
+ * One node's environment bookkeeping (plan item 3004). Environment and
+ * project ids are node-local, so creations, start attempts and reported
+ * failures are kept per node scope, next to that scope's stores. Hold the
+ * instance, not the scope, across an await: the slot of a disposed scope can
+ * no longer be read.
+ */
+interface EnvironmentNode {
+  readonly scope: NodeScope;
+  readonly environments: StoreApi<EnvironmentState>;
+  readonly projects: StoreApi<ProjectState>;
+  readonly creationByProject: Map<string, EnvironmentCreationState>;
+  readonly lifecycleAttempts: Map<string, LifecycleAttemptState>;
+  readonly reportedLifecycleErrors: Map<string, string | ForegroundLifecycleErrorReport>;
+  setupSnapshotReconciliation: Promise<void> | null;
+  setupSnapshotReconcileRequested: boolean;
+}
+
+const environmentNode = defineScopedSlot<EnvironmentNode>("environment-lifecycle", (scope) => ({
+  scope,
+  environments: scope.store(environmentStore),
+  projects: scope.store(projectStore),
+  creationByProject: new Map(),
+  lifecycleAttempts: new Map(),
+  reportedLifecycleErrors: new Map(),
+  setupSnapshotReconciliation: null,
+  setupSnapshotReconcileRequested: false,
+}));
+
+/** `scope`'s environment commands; the command scope keeps the mocked named exports. */
+function environmentsApi(scope: NodeScope) {
+  return backendApiForScope<
+    ReturnType<typeof createProjectsEnvironmentsApi>,
+    | "createEnvironment"
+    | "deleteEnvironment"
+    | "forkEnvironment"
+    | "getEnvironment"
+    | "getEnvironmentSnapshot"
+    | "getEnvironmentSnapshots"
+    | "getEnvironments"
+    | "reorderEnvironments"
+    | "startEnvironment"
+    | "startEnvironmentInBackground"
+    | "stopEnvironment"
+    | "syncEnvironmentStatus"
+  >(scope, createProjectsEnvironmentsApi, backend);
+}
+
+function getEnvironmentCreationState(
+  node: EnvironmentNode,
+  projectId: string,
+): EnvironmentCreationState {
   return (
-    environmentCreationStateByProject.get(projectId) ?? {
+    node.creationByProject.get(projectId) ?? {
       generation: 0,
       activeCreations: 0,
     }
   );
 }
 
-function beginEnvironmentCreation(projectId: string): void {
-  const current = getEnvironmentCreationState(projectId);
-  environmentCreationStateByProject.set(projectId, {
+function beginEnvironmentCreation(node: EnvironmentNode, projectId: string): void {
+  const current = getEnvironmentCreationState(node, projectId);
+  node.creationByProject.set(projectId, {
     generation: current.generation + 1,
     activeCreations: current.activeCreations + 1,
   });
 }
 
-function finishEnvironmentCreation(projectId: string): void {
-  const current = getEnvironmentCreationState(projectId);
-  environmentCreationStateByProject.set(projectId, {
+function finishEnvironmentCreation(node: EnvironmentNode, projectId: string): void {
+  const current = getEnvironmentCreationState(node, projectId);
+  node.creationByProject.set(projectId, {
     generation: current.generation + 1,
     activeCreations: Math.max(0, current.activeCreations - 1),
   });
 }
 
-function bindSetupTerminalSession(environment: Environment, sessionId: string): void {
+function bindSetupTerminalSession(
+  environment: Environment,
+  sessionId: string,
+  scope: NodeScope,
+): void {
   const key = createSessionKey(environment.containerId ?? null, "default", environment.id);
-  const store = useTerminalSessionStore.getState();
+  const store = scope.store(terminalSessionStore).getState();
   const existing = store.sessions.get(key);
   setupLog.info("session.bind-from-environment", {
     environmentId: environment.id,
@@ -199,11 +267,17 @@ function bindSetupTerminalSession(environment: Environment, sessionId: string): 
   });
 }
 
-/** Stop store-owned background state after authoritative deletion. */
-export function cleanupDeletedEnvironmentSubscriptions(environmentId: string): void {
-  clearBuildPipelineTabActivation(environmentId);
-  clearBuildPipelineHandoffResolutions(environmentId);
-  clearStartupAgentTabActivation(environmentId);
+/**
+ * Stop store-owned background state after authoritative deletion, on the
+ * environment's node (the app's command scope when omitted).
+ */
+export function cleanupDeletedEnvironmentSubscriptions(
+  environmentId: string,
+  scope: NodeScope = appCommandScope(),
+): void {
+  clearBuildPipelineTabActivation(environmentId, scope);
+  clearBuildPipelineHandoffResolutions(environmentId, scope);
+  clearStartupAgentTabActivation(environmentId, scope);
 }
 
 /**
@@ -214,11 +288,12 @@ export function cleanupDeletedEnvironmentSubscriptions(environmentId: string): v
 export function cleanupSubscriptionsRemovedByProjectSnapshot(
   projectId: string,
   nextEnvironments: readonly Environment[],
+  scope: NodeScope,
 ): void {
   const nextIds = new Set(nextEnvironments.map((environment) => environment.id));
-  for (const environment of useEnvironmentStore.getState().environments) {
+  for (const environment of scope.store(environmentStore).getState().environments) {
     if (environment.projectId === projectId && !nextIds.has(environment.id)) {
-      cleanupDeletedEnvironmentSubscriptions(environment.id);
+      cleanupDeletedEnvironmentSubscriptions(environment.id, scope);
     }
   }
 }
@@ -231,18 +306,20 @@ export function cleanupSubscriptionsRemovedByProjectSnapshot(
 export async function refreshEnvironmentSnapshot(
   projectId: string,
   environmentId: string,
+  scope: NodeScope,
 ): Promise<boolean> {
-  const creationGeneration = getEnvironmentCreationState(projectId).generation;
-  const attemptRevisions = lifecycleAttemptRevisions();
+  const node = environmentNode(scope);
+  const creationGeneration = getEnvironmentCreationState(node, projectId).generation;
+  const attemptRevisions = lifecycleAttemptRevisions(node);
   let snapshot: Environment | null;
   try {
-    snapshot = await backend.getEnvironmentSnapshot(environmentId);
+    snapshot = await environmentsApi(scope).getEnvironmentSnapshot(environmentId);
   } catch (error) {
     if (classifyReadError(error) === "unsupported") return false;
     throw error;
   }
-  const store = useEnvironmentStore.getState();
-  const creation = getEnvironmentCreationState(projectId);
+  const store = node.environments.getState();
+  const creation = getEnvironmentCreationState(node, projectId);
   // Not held yet, so it may be a creation this client is still waiting on: its
   // own response adds it, and adding it here as well would list it twice.
   if (
@@ -251,66 +328,48 @@ export async function refreshEnvironmentSnapshot(
   ) {
     return true;
   }
-  if (!snapshot) cleanupDeletedEnvironmentSubscriptions(environmentId);
+  if (!snapshot) cleanupDeletedEnvironmentSubscriptions(environmentId, scope);
   store.applyEnvironmentSnapshot(
     environmentId,
     snapshot &&
-      preserveLifecycleAttemptState(snapshot, attemptRevisions.get(environmentId)).environment,
+      preserveLifecycleAttemptState(node, snapshot, attemptRevisions.get(environmentId))
+        .environment,
   );
-  reconcileEnvironmentLifecycleErrors();
+  reconcileNodeLifecycleErrors(node);
   return true;
 }
 
-let setupSnapshotReconciliation: Promise<void> | null = null;
-let setupSnapshotReconcileRequested = false;
-
-interface LifecycleAttemptState {
-  attempt: number;
-  revision: number;
-  pending: boolean;
-}
-
-interface ForegroundLifecycleErrorReport {
-  attempt: number;
-  kind: "foreground";
-}
-
-const lifecycleAttemptStateByEnvironment = new Map<string, LifecycleAttemptState>();
-const reportedLifecycleErrorByEnvironment = new Map<
-  string,
-  string | ForegroundLifecycleErrorReport
->();
-
-function beginLifecycleAttempt(environmentId: string): number {
-  const previous = lifecycleAttemptStateByEnvironment.get(environmentId);
+function beginLifecycleAttempt(node: EnvironmentNode, environmentId: string): number {
+  const previous = node.lifecycleAttempts.get(environmentId);
   const attempt = (previous?.attempt ?? 0) + 1;
-  lifecycleAttemptStateByEnvironment.set(environmentId, {
+  node.lifecycleAttempts.set(environmentId, {
     attempt,
     revision: (previous?.revision ?? 0) + 1,
     pending: true,
   });
   // A claim belongs to one specific attempt. In particular, an admission
   // rejection must never suppress the durable failure from a later retry.
-  reportedLifecycleErrorByEnvironment.delete(environmentId);
+  node.reportedLifecycleErrors.delete(environmentId);
   return attempt;
 }
 
-function finishLifecycleAttemptAdmission(environmentId: string, attempt: number): void {
-  const current = lifecycleAttemptStateByEnvironment.get(environmentId);
+function finishLifecycleAttemptAdmission(
+  node: EnvironmentNode,
+  environmentId: string,
+  attempt: number,
+): void {
+  const current = node.lifecycleAttempts.get(environmentId);
   if (!current || current.attempt !== attempt) return;
-  lifecycleAttemptStateByEnvironment.set(environmentId, {
+  node.lifecycleAttempts.set(environmentId, {
     ...current,
     revision: current.revision + 1,
     pending: false,
   });
 }
 
-function lifecycleAttemptRevisions(): Map<string, number> {
+function lifecycleAttemptRevisions(node: EnvironmentNode): Map<string, number> {
   return new Map(
-    [...lifecycleAttemptStateByEnvironment].map(([environmentId, state]) => [
-      environmentId,
-      state.revision,
-    ]),
+    [...node.lifecycleAttempts].map(([environmentId, state]) => [environmentId, state.revision]),
   );
 }
 
@@ -320,11 +379,12 @@ function lifecycleAttemptRevisions(): Map<string, number> {
  * the old response cannot resolve setup gates or discard a new launch intent.
  */
 function preserveLifecycleAttemptState(
+  node: EnvironmentNode,
   snapshot: Environment,
   revisionAtRequest: number | undefined,
 ): { environment: Environment; stale: boolean } {
-  const attempt = lifecycleAttemptStateByEnvironment.get(snapshot.id);
-  const current = useEnvironmentStore.getState().getEnvironmentById(snapshot.id);
+  const attempt = node.lifecycleAttempts.get(snapshot.id);
+  const current = node.environments.getState().getEnvironmentById(snapshot.id);
   const stale = Boolean(
     attempt && current && (attempt.pending || attempt.revision !== revisionAtRequest),
   );
@@ -348,8 +408,12 @@ function preserveLifecycleAttemptState(
  * announces it, which drives a list refetch; without this claim the
  * reconciliation below would toast the identical failure a second time.
  */
-function markLifecycleErrorReportedByForeground(environmentId: string, attempt: number): void {
-  reportedLifecycleErrorByEnvironment.set(environmentId, {
+function markLifecycleErrorReportedByForeground(
+  node: EnvironmentNode,
+  environmentId: string,
+  attempt: number,
+): void {
+  node.reportedLifecycleErrors.set(environmentId, {
     attempt,
     kind: "foreground",
   });
@@ -376,24 +440,28 @@ function withAuthoritativeLifecycleError(snapshot: Environment): Environment {
  * Every path that writes environments into the store calls this: the project
  * list load, both setup lifecycle events, and the snapshot reconciliation.
  */
-export function reconcileEnvironmentLifecycleErrors(): void {
-  const store = useEnvironmentStore.getState();
+export function reconcileEnvironmentLifecycleErrors(scope: NodeScope): void {
+  reconcileNodeLifecycleErrors(environmentNode(scope));
+}
+
+function reconcileNodeLifecycleErrors(node: EnvironmentNode): void {
+  const store = node.environments.getState();
   const liveEnvironmentIds = new Set(store.environments.map((environment) => environment.id));
-  for (const environmentId of reportedLifecycleErrorByEnvironment.keys()) {
+  for (const environmentId of node.reportedLifecycleErrors.keys()) {
     if (!liveEnvironmentIds.has(environmentId)) {
-      reportedLifecycleErrorByEnvironment.delete(environmentId);
+      node.reportedLifecycleErrors.delete(environmentId);
     }
   }
-  for (const environmentId of lifecycleAttemptStateByEnvironment.keys()) {
+  for (const environmentId of node.lifecycleAttempts.keys()) {
     if (!liveEnvironmentIds.has(environmentId)) {
-      lifecycleAttemptStateByEnvironment.delete(environmentId);
+      node.lifecycleAttempts.delete(environmentId);
     }
   }
 
   for (const environment of store.environments) {
     const message = environment.lifecycleError?.trim();
     if (!message) {
-      reportedLifecycleErrorByEnvironment.delete(environment.id);
+      node.reportedLifecycleErrors.delete(environment.id);
       continue;
     }
 
@@ -401,26 +469,26 @@ export function reconcileEnvironmentLifecycleErrors(): void {
     // or a launch that can never happen auto-dispatches the original prompt the
     // next time this env is started.
     store.updateEnvironment(environment.id, { pendingAgentLaunch: false });
-    clearBuildPipelineTabActivation(environment.id);
-    clearStartupAgentTabActivation(environment.id);
+    clearBuildPipelineTabActivation(environment.id, node.scope);
+    clearStartupAgentTabActivation(environment.id, node.scope);
 
-    const reported = reportedLifecycleErrorByEnvironment.get(environment.id);
+    const reported = node.reportedLifecycleErrors.get(environment.id);
     if (reported === message) {
       continue;
     }
     // Record before reporting: the toast action re-enters these stores.
-    reportedLifecycleErrorByEnvironment.set(environment.id, message);
+    node.reportedLifecycleErrors.set(environment.id, message);
     if (
       typeof reported !== "string" &&
       reported?.kind === "foreground" &&
-      reported.attempt === lifecycleAttemptStateByEnvironment.get(environment.id)?.attempt
+      reported.attempt === node.lifecycleAttempts.get(environment.id)?.attempt
     ) {
       // Same failure the foreground start already toasted, wearing the
       // backend's sanitized wording. Consume the claim instead of repeating it.
       continue;
     }
     store.setError(message);
-    const context = describeEnvironment(environment.id);
+    const context = describeEnvironment(node, environment.id);
     toast.error("Failed to start environment", {
       description: describeForToast(context, message),
       action: {
@@ -440,38 +508,45 @@ export function reconcileEnvironmentLifecycleErrors(): void {
  * treated as incremental updates: this snapshot is the catch-up path when a
  * suspended browser missed the one-shot completion frame.
  */
-export function reconcileEnvironmentSetupSnapshots(): Promise<void> {
+export function reconcileEnvironmentSetupSnapshots(scope: NodeScope): Promise<void> {
+  return reconcileNodeSetupSnapshots(environmentNode(scope));
+}
+
+function reconcileNodeSetupSnapshots(node: EnvironmentNode): Promise<void> {
   // Coalesce, but never drop. A trigger that arrives after the in-flight reads
   // were issued would otherwise be answered by a snapshot older than the event
   // it is reacting to, so remember it and run one more pass on completion. On
   // mobile resume four triggers fire in a burst, which makes this the norm.
-  if (setupSnapshotReconciliation) {
-    setupSnapshotReconcileRequested = true;
-    return setupSnapshotReconciliation;
+  if (node.setupSnapshotReconciliation) {
+    node.setupSnapshotReconcileRequested = true;
+    return node.setupSnapshotReconciliation;
   }
 
-  const environmentStore = useEnvironmentStore.getState();
-  const targets = environmentStore.environments.filter(
-    (environment) =>
-      environment.status === "creating" ||
-      Boolean(environment.lifecycleError) ||
-      (environment.status === "running" &&
-        (environment.setupPhase === "running" ||
-          environment.pendingAgentLaunch ||
-          environment.startupAgentSession !== undefined)),
-  );
+  const targets = node.environments
+    .getState()
+    .environments.filter(
+      (environment) =>
+        environment.status === "creating" ||
+        Boolean(environment.lifecycleError) ||
+        (environment.status === "running" &&
+          (environment.setupPhase === "running" ||
+            environment.pendingAgentLaunch ||
+            environment.startupAgentSession !== undefined)),
+    );
 
   if (targets.length === 0) return Promise.resolve();
-  const attemptRevisions = lifecycleAttemptRevisions();
+  const attemptRevisions = lifecycleAttemptRevisions(node);
+  const api = environmentsApi(node.scope);
 
-  setupSnapshotReconciliation = Promise.all(
+  const reconciliation = Promise.all(
     targets.map(async (environment) => {
       try {
-        const snapshot = await backend.getEnvironment(environment.id);
+        const snapshot = await api.getEnvironment(environment.id);
         if (!snapshot) return;
 
-        const store = useEnvironmentStore.getState();
+        const store = node.environments.getState();
         const protectedSnapshot = preserveLifecycleAttemptState(
+          node,
           snapshot,
           attemptRevisions.get(environment.id),
         );
@@ -496,21 +571,24 @@ export function reconcileEnvironmentSetupSnapshots(): Promise<void> {
       // Once, after every snapshot has been merged. The reconciliation scans the
       // whole store, so calling it per target was O(targets x environments) work
       // — and that many store notifications — for one pass.
-      reconcileEnvironmentLifecycleErrors();
+      reconcileNodeLifecycleErrors(node);
     })
     .finally(() => {
-      setupSnapshotReconciliation = null;
-      if (setupSnapshotReconcileRequested) {
-        setupSnapshotReconcileRequested = false;
-        void reconcileEnvironmentSetupSnapshots();
+      node.setupSnapshotReconciliation = null;
+      if (node.setupSnapshotReconcileRequested) {
+        node.setupSnapshotReconcileRequested = false;
+        void reconcileNodeSetupSnapshots(node);
       }
     });
-
-  return setupSnapshotReconciliation;
+  node.setupSnapshotReconciliation = reconciliation;
+  return reconciliation;
 }
 
 /** Apply one incremental setup-completion event to the authoritative stores. */
-export function applyEnvironmentSetupComplete(payload: EnvironmentSetupCompletePayload): void {
+export function applyEnvironmentSetupComplete(
+  payload: EnvironmentSetupCompletePayload,
+  scope: NodeScope,
+): void {
   const { environment_id, success, environment } = payload;
   setupLog.info("setup.complete-received", {
     environmentId: environment_id,
@@ -519,10 +597,11 @@ export function applyEnvironmentSetupComplete(payload: EnvironmentSetupCompleteP
     setupScriptsComplete: environment?.setupScriptsComplete ?? null,
     error: payload.error ? formatLogError(payload.error) : null,
   });
-  const store = useEnvironmentStore.getState();
+  const node = environmentNode(scope);
+  const store = node.environments.getState();
   if (environment) {
     store.updateEnvironment(environment_id, withAuthoritativeLifecycleError(environment));
-    reconcileEnvironmentLifecycleErrors();
+    reconcileNodeLifecycleErrors(node);
   }
   if (!success) {
     // The backend clears the durable launch intent on failure and normally
@@ -530,8 +609,8 @@ export function applyEnvironmentSetupComplete(payload: EnvironmentSetupCompleteP
     // payload omitted the environment, so a failed setup cannot leave this
     // renderer holding a launch it will never be able to perform.
     store.updateEnvironment(environment_id, { pendingAgentLaunch: false });
-    clearBuildPipelineTabActivation(environment_id);
-    clearStartupAgentTabActivation(environment_id);
+    clearBuildPipelineTabActivation(environment_id, scope);
+    clearStartupAgentTabActivation(environment_id, scope);
   }
 }
 
@@ -546,7 +625,10 @@ export function applyEnvironmentSetupComplete(payload: EnvironmentSetupCompleteP
  * registration serves every consumer.
  */
 export function useEnvironmentLifecycleService(): void {
-  useEffect(() => startEnvironmentCleanupSelectionSync(), []);
+  // The node this service keeps current: the nearest node scope (the command
+  // scope where App mounts it).
+  const scope = useNodeScope();
+  useEffect(() => startEnvironmentCleanupSelectionSync(scope), [scope]);
 
   // No mount-time lifecycle-error pass on purpose: the environment store has no
   // persisted state, so at mount it is still the empty initial array. The first
@@ -562,31 +644,32 @@ export function useEnvironmentLifecycleService(): void {
     let disposed = false;
 
     const setupListeners = async () => {
-      const stopStarted = await listen<EnvironmentSetupStartedPayload>(
-        "environment-setup-started",
-        (event) => {
-          const { environment_id, session_id, environment } = event.payload;
-          setupLog.info("setup.started-received", {
-            environmentId: environment_id,
-            sessionId: session_id,
-            hasEnvironment: !!environment,
-            environmentType: environment?.environmentType ?? null,
-            containerId: environment?.containerId ?? null,
-          });
-          const store = useEnvironmentStore.getState();
-          if (environment) {
-            store.updateEnvironment(environment_id, withAuthoritativeLifecycleError(environment));
-            reconcileEnvironmentLifecycleErrors();
-            bindSetupTerminalSession(environment, session_id);
-          }
-        },
-      );
+      // The definitions pin the ids (plan item 7011); the environment in a
+      // setup payload is the web's model, delivered as sent.
+      const stopStarted = await listenInScope(scope, environmentSetupStartedEvent, (payload) => {
+        const { environment_id, session_id, environment } =
+          payload as EnvironmentSetupStartedPayload;
+        setupLog.info("setup.started-received", {
+          environmentId: environment_id,
+          sessionId: session_id,
+          hasEnvironment: !!environment,
+          environmentType: environment?.environmentType ?? null,
+          containerId: environment?.containerId ?? null,
+        });
+        const node = environmentNode(scope);
+        if (environment) {
+          node.environments
+            .getState()
+            .updateEnvironment(environment_id, withAuthoritativeLifecycleError(environment));
+          reconcileNodeLifecycleErrors(node);
+          bindSetupTerminalSession(environment, session_id, scope);
+        }
+      });
       if (disposed) stopStarted();
       else unlistenStarted = stopStarted;
 
-      const stopComplete = await listen<EnvironmentSetupCompletePayload>(
-        "environment-setup-complete",
-        (event) => applyEnvironmentSetupComplete(event.payload),
+      const stopComplete = await listenInScope(scope, environmentSetupCompleteEvent, (payload) =>
+        applyEnvironmentSetupComplete(payload as EnvironmentSetupCompletePayload, scope),
       );
       if (disposed) stopComplete();
       else unlistenComplete = stopComplete;
@@ -599,7 +682,7 @@ export function useEnvironmentLifecycleService(): void {
       unlistenStarted?.();
       unlistenComplete?.();
     };
-  }, []);
+  }, [scope]);
 
   // The durable unread bit is authoritative. This root-mounted listener adds
   // only a transient hint when the question arrived outside the active
@@ -608,24 +691,23 @@ export function useEnvironmentLifecycleService(): void {
     let unlisten: UnlistenFn | null = null;
     let disposed = false;
 
-    void listen<NativeAgentAsyncQuestionPayload>("native-agent-async-question", (event) => {
-      const selectedEnvironmentId = useUIStore.getState().selectedEnvironmentId;
-      if (selectedEnvironmentId === event.payload.environment_id) {
-        const root = usePaneLayoutStore.getState().getRoot(selectedEnvironmentId);
+    void listenInScope(scope, nativeAgentAsyncQuestionEvent, (payload) => {
+      const selectedEnvironmentId = scope.store(uiStore).getState().selectedEnvironmentId;
+      if (selectedEnvironmentId === payload.environment_id) {
+        const root = scope.store(paneLayoutStore).getState().getRoot(selectedEnvironmentId);
         const owningTabIsVisible = getAllLeaves(root).some((pane) => {
           const activeTab = pane.tabs.find((tab) => tab.id === pane.activeTabId);
           const data = activeTab ? getNativeAgentData(activeTab) : null;
           return (
             data?.platform === "codex" &&
-            createNativeSessionKey(selectedEnvironmentId, activeTab!.id) ===
-              event.payload.session_key
+            createNativeSessionKey(selectedEnvironmentId, activeTab!.id) === payload.session_key
           );
         });
         if (owningTabIsVisible) return;
       }
-      const environment = useEnvironmentStore
-        .getState()
-        .getEnvironmentById(event.payload.environment_id);
+      const environment = environmentNode(scope)
+        .environments.getState()
+        .getEnvironmentById(payload.environment_id);
       toast.info("Codex has a question", {
         description: environment
           ? `Open ${environment.name} to answer it.`
@@ -640,7 +722,7 @@ export function useEnvironmentLifecycleService(): void {
       disposed = true;
       unlisten?.();
     };
-  }, []);
+  }, [scope]);
 
   // Mobile browsers routinely suspend network streams while backgrounded.
   // Reconcile from authoritative backend snapshots whenever the gateway
@@ -649,13 +731,13 @@ export function useEnvironmentLifecycleService(): void {
     let unlistenConnected: UnlistenFn | null = null;
     let disposed = false;
     const reconcile = () => {
-      void reconcileEnvironmentSetupSnapshots();
+      void reconcileEnvironmentSetupSnapshots(scope);
     };
     const handleVisibilityChange = () => {
       if (document.visibilityState === "visible") reconcile();
     };
 
-    void listen(NATIVE_EVENT_STREAM_CONNECTED_EVENT, reconcile).then((unlisten) => {
+    void listenInScope(scope, NATIVE_EVENT_STREAM_CONNECTED_EVENT, reconcile).then((unlisten) => {
       if (disposed) unlisten();
       else unlistenConnected = unlisten;
     });
@@ -670,13 +752,16 @@ export function useEnvironmentLifecycleService(): void {
       window.removeEventListener("online", reconcile);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, []);
+  }, [scope]);
 }
 
 const EMPTY_ENVIRONMENTS: Environment[] = [];
 
 export function useEnvironments(projectId: string | null, options: UseEnvironmentsOptions = {}) {
   const { listenForRenameEvents = true } = options;
+  // The node whose environments this reads: the nearest node scope, which is
+  // also the one `useEnvironmentStore` reads below.
+  const scope = useNodeScope();
 
   // Data via narrow selectors: this hook is mounted at several call sites, and
   // a selector-less subscription rerendered all of them on every store write.
@@ -731,16 +816,19 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
     let disposed = false;
 
     const setupListener = async () => {
-      const stop = await listen<EnvironmentRenamedPayload>("environment-renamed", (event) => {
-        log.debug("rename.received", () => ({ environmentId: event.payload.environment_id }));
-        const { environment_id, new_name, new_branch } = event.payload;
+      const stop = await listenInScope(scope, environmentRenamedEvent, (payload) => {
+        log.debug("rename.received", () => ({ environmentId: payload.environment_id }));
+        const { environment_id, new_name, new_branch } = payload;
 
         // The backend clears prUrl/prState/hasMergeConflicts in the same
         // write that advances the branch, so this only mirrors that into the
         // local store. Never clear it on the backend from here: every
         // connected client receives this event, and a late clear could wipe a
         // PR the monitor has just found for the new branch.
-        const currentEnv = useEnvironmentStore.getState().getEnvironmentById(environment_id);
+        const currentEnv = scope
+          .store(environmentStore)
+          .getState()
+          .getEnvironmentById(environment_id);
         if (currentEnv && currentEnv.branch !== new_branch && currentEnv.prUrl) {
           log.debug("rename.pr-state-cleared", () => ({ environmentId: environment_id }));
           setPRInStore(environment_id, null, null, null);
@@ -764,38 +852,43 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
         unlisten();
       }
     };
-  }, [listenForRenameEvents, updateEnvironmentInStore, setPRInStore]);
+  }, [listenForRenameEvents, scope, updateEnvironmentInStore, setPRInStore]);
 
   const loadEnvironments = useCallback(
     async (pid: string, options: LoadEnvironmentsOptions = {}) => {
       const { silent = false, reconcileStatus = true } = options;
-      const creationGeneration = getEnvironmentCreationState(pid).generation;
+      const node = environmentNode(scope);
+      const api = environmentsApi(scope);
+      const creationGeneration = getEnvironmentCreationState(node, pid).generation;
       if (!silent) {
         setLoading(true);
         setError(null);
       }
       try {
-        const attemptRevisions = lifecycleAttemptRevisions();
+        const attemptRevisions = lifecycleAttemptRevisions(node);
         const envs = reconcileStatus
-          ? await backend.getEnvironments(pid)
-          : await backend.getEnvironmentSnapshots(pid);
-        const currentCreationState = getEnvironmentCreationState(pid);
+          ? await api.getEnvironments(pid)
+          : await api.getEnvironmentSnapshots(pid);
+        const currentCreationState = getEnvironmentCreationState(node, pid);
         const snapshotIsCurrent =
           currentCreationState.activeCreations === 0 &&
           currentCreationState.generation === creationGeneration;
         // A snapshot requested before or during creation may omit the newly
         // created environment. Do not let it replace newer local state.
         if (snapshotIsCurrent) {
-          cleanupSubscriptionsRemovedByProjectSnapshot(pid, envs);
+          cleanupSubscriptionsRemovedByProjectSnapshot(pid, envs, scope);
           mergeEnvironmentsForProject(
             pid,
             envs.map(
               (environment) =>
-                preserveLifecycleAttemptState(environment, attemptRevisions.get(environment.id))
-                  .environment,
+                preserveLifecycleAttemptState(
+                  node,
+                  environment,
+                  attemptRevisions.get(environment.id),
+                ).environment,
             ),
           );
-          reconcileEnvironmentLifecycleErrors();
+          reconcileNodeLifecycleErrors(node);
         }
       } catch (err) {
         const message = getErrorMessage(err, "Failed to load environments");
@@ -811,7 +904,7 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
         }
       }
     },
-    [mergeEnvironmentsForProject, setLoading, setError],
+    [scope, mergeEnvironmentsForProject, setLoading, setError],
   );
 
   // Declared after loadEnvironments so the callback can be a real dependency;
@@ -834,11 +927,12 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
       buildPipelineId?: string,
       worktreeBaseDir?: string,
     ) => {
-      beginEnvironmentCreation(pid);
+      const node = environmentNode(scope);
+      beginEnvironmentCreation(node, pid);
       setLoading(true);
       setError(null);
       try {
-        const environment = await backend.createEnvironment(
+        const environment = await environmentsApi(scope).createEnvironment(
           pid,
           name,
           networkAccessMode,
@@ -866,22 +960,26 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
         });
         throw new Error(message);
       } finally {
-        finishEnvironmentCreation(pid);
+        finishEnvironmentCreation(node, pid);
         setLoading(false);
       }
     },
-    [addEnvironmentToStore, setLoading, setError, showError],
+    [scope, addEnvironmentToStore, setLoading, setError, showError],
   );
 
   const forkEnvironment = useCallback(
     async (environmentId: string, environmentType: EnvironmentType) => {
-      const source = useEnvironmentStore.getState().getEnvironmentById(environmentId);
+      const node = environmentNode(scope);
+      const source = node.environments.getState().getEnvironmentById(environmentId);
       const projectId = source?.projectId;
-      if (projectId) beginEnvironmentCreation(projectId);
+      if (projectId) beginEnvironmentCreation(node, projectId);
       setLoading(true);
       setError(null);
       try {
-        const environment = await backend.forkEnvironment(environmentId, environmentType);
+        const environment = await environmentsApi(scope).forkEnvironment(
+          environmentId,
+          environmentType,
+        );
         // The backend records lastEnvironmentType in the same command and
         // announces a config change, which store-resource-sync refetches.
         addEnvironmentToStore(environment);
@@ -901,51 +999,54 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
         });
         throw new Error(message);
       } finally {
-        if (projectId) finishEnvironmentCreation(projectId);
+        if (projectId) finishEnvironmentCreation(node, projectId);
         setLoading(false);
       }
     },
-    [addEnvironmentToStore, setLoading, setError, showError],
+    [scope, addEnvironmentToStore, setLoading, setError, showError],
   );
 
   const deleteEnvironment = useCallback(
     async (environmentId: string) => {
+      const node = environmentNode(scope);
+      // Held across the awaits below: the scope may be disposed by then.
+      const ui = scope.store(uiStore);
       const projectId =
-        useEnvironmentStore.getState().getEnvironmentById(environmentId)?.projectId ??
-        useUIStore.getState().selectedProjectId;
+        node.environments.getState().getEnvironmentById(environmentId)?.projectId ??
+        ui.getState().selectedProjectId;
       setDeleting(environmentId, true);
-      const didActivate = activateProjectForEnvironmentCleanup(environmentId);
+      const didActivate = activateProjectForEnvironmentCleanup(environmentId, scope);
       setError(null);
       try {
         if (
-          useEnvironmentStore.getState().getEnvironmentById(environmentId)?.projectHome &&
+          node.environments.getState().getEnvironmentById(environmentId)?.projectHome &&
           projectId
         ) {
-          await drainProjectHomeEnsures(projectId);
+          await drainProjectHomeEnsures(projectId, scope);
         }
         // Delete all sessions for this environment first (cleans up buffer files too)
         await deleteSessionsByEnvironment(environmentId);
 
-        await backend.deleteEnvironment(environmentId);
+        await environmentsApi(scope).deleteEnvironment(environmentId);
         // The native chat subscriptions are deliberately owned by their stores
         // rather than by a mounted tab, so nothing else stops them. Their
         // desynced probe re-arms itself on every failure, which would otherwise
         // reach for a bridge that no longer exists once a minute forever.
-        cleanupDeletedEnvironmentSubscriptions(environmentId);
-        useBuildPipelineStore.getState().removePipelinesForEnvironment(environmentId);
+        cleanupDeletedEnvironmentSubscriptions(environmentId, scope);
+        scope.store(buildPipelineStore).getState().removePipelinesForEnvironment(environmentId);
         removeEnvironmentFromStore(environmentId);
         // The backend drops this environment's pane layout with the
         // environment, so the remembered selection has nothing left to point
         // at. The bounded store would evict it eventually; dropping it now
         // keeps that budget for environments the user still has.
-        clearStoredPaneSelection(environmentId);
+        clearStoredPaneSelection(environmentId, scope);
         // The unread marker lives on the environment record, so deleting the
         // environment takes it with it — nothing to prune here any more.
         toast.success("Environment deleted");
       } catch (err) {
         const message = getErrorMessage(err, "Failed to delete environment");
         setError(message);
-        const context = describeEnvironment(environmentId);
+        const context = describeEnvironment(node, environmentId);
         toast.error("Failed to delete environment", {
           description: describeForToast(context, message),
           action: {
@@ -959,13 +1060,20 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
         if (
           didActivate &&
           projectId &&
-          useEnvironmentStore.getState().getEnvironmentById(environmentId)
+          node.environments.getState().getEnvironmentById(environmentId)
         ) {
-          useUIStore.getState().selectProjectAndEnvironment(projectId, environmentId);
+          ui.getState().selectProjectAndEnvironment(projectId, environmentId);
         }
       }
     },
-    [removeEnvironmentFromStore, setError, deleteSessionsByEnvironment, setDeleting, showError],
+    [
+      scope,
+      removeEnvironmentFromStore,
+      setError,
+      deleteSessionsByEnvironment,
+      setDeleting,
+      showError,
+    ],
   );
 
   const startEnvironment = useCallback(
@@ -974,7 +1082,9 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
       // Read from store directly to avoid stale closure over `environments`.
       // When called from handleCreateEnvironment, the useCallback closure may
       // capture an older environments array that doesn't include the new env.
-      const existingEnv = useEnvironmentStore
+      const node = environmentNode(scope);
+      const api = environmentsApi(scope);
+      const existingEnv = node.environments
         .getState()
         .environments.find((env) => env.id === environmentId);
       if (!existingEnv) {
@@ -990,12 +1100,12 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
         });
       }
       setError(null);
-      const lifecycleAttempt = beginLifecycleAttempt(environmentId);
+      const lifecycleAttempt = beginLifecycleAttempt(node, environmentId);
       let lifecycleAttemptFinished = false;
       const finishAttemptAdmission = () => {
         if (lifecycleAttemptFinished) return;
         lifecycleAttemptFinished = true;
-        finishLifecycleAttemptAdmission(environmentId, lifecycleAttempt);
+        finishLifecycleAttemptAdmission(node, environmentId, lifecycleAttempt);
       };
 
       // A retry owns fresh setup and launch state. Clear the preceding attempt's
@@ -1008,13 +1118,13 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
         updateStatusInStore(environmentId, "creating");
         if (options?.background) {
           log.debug("start.background-requested", () => ({ environmentId }));
-          await backend.startEnvironmentInBackground(environmentId);
+          await api.startEnvironmentInBackground(environmentId);
           finishAttemptAdmission();
           return [];
         }
 
         log.debug("start.backend-requested", () => ({ environmentId }));
-        const result = await backend.startEnvironment(environmentId);
+        const result = await api.startEnvironment(environmentId);
         finishAttemptAdmission();
         log.debug("start.backend-completed", () => ({
           environmentId,
@@ -1023,7 +1133,7 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
         }));
 
         // Refresh the full environment data (including containerId / worktreePath)
-        const updatedEnv = await backend.getEnvironment(environmentId);
+        const updatedEnv = await api.getEnvironment(environmentId);
         if (updatedEnv) {
           log.debug("start.environment-refreshed", () => ({
             environmentId,
@@ -1037,7 +1147,7 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
           }
           updateEnvironmentInStore(environmentId, updatedEnv);
           if (result.setupSessionId) {
-            bindSetupTerminalSession(updatedEnv, result.setupSessionId);
+            bindSetupTerminalSession(updatedEnv, result.setupSessionId, scope);
           }
         }
 
@@ -1054,12 +1164,12 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
         // Background rejection is only an admission failure and persists no
         // lifecycle outcome; claiming it would suppress a later retry's result.
         if (!options?.background) {
-          markLifecycleErrorReportedByForeground(environmentId, lifecycleAttempt);
+          markLifecycleErrorReportedByForeground(node, environmentId, lifecycleAttempt);
         }
         setError(message);
         updateStatusInStore(environmentId, "error");
         if (!options?.suppressFailureToast) {
-          const context = describeEnvironment(environmentId);
+          const context = describeEnvironment(node, environmentId);
           toast.error("Failed to start environment", {
             description: describeForToast(context, message),
             action: {
@@ -1072,7 +1182,7 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
         throw new Error(message);
       }
     },
-    [updateStatusInStore, updateEnvironmentInStore, setError, showError],
+    [scope, updateStatusInStore, updateEnvironmentInStore, setError, showError],
   );
 
   const stopEnvironment = useCallback(
@@ -1084,7 +1194,7 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
         log.debug("stop.status-set", () => ({ environmentId, status: "stopping" }));
         updateStatusInStore(environmentId, "stopping");
         log.debug("stop.backend-requested", () => ({ environmentId }));
-        await backend.stopEnvironment(environmentId);
+        await environmentsApi(scope).stopEnvironment(environmentId);
         log.debug("stop.backend-completed", () => ({ environmentId }));
         updateStatusInStore(environmentId, "stopped");
         log.debug("stop.status-set", () => ({ environmentId, status: "stopped" }));
@@ -1100,7 +1210,7 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
         setError(message);
         // Revert to running if stop failed
         updateStatusInStore(environmentId, "running");
-        const context = describeEnvironment(environmentId);
+        const context = describeEnvironment(environmentNode(scope), environmentId);
         toast.error("Failed to stop environment", {
           description: describeForToast(context, message),
           action: {
@@ -1111,7 +1221,7 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
         throw new Error(message);
       }
     },
-    [updateStatusInStore, setError, disconnectEnvironmentSessions, showError],
+    [scope, updateStatusInStore, setError, disconnectEnvironmentSessions, showError],
   );
 
   const setEnvironmentPR = useCallback(
@@ -1137,7 +1247,7 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
   const syncEnvironmentStatus = useCallback(
     async (environmentId: string) => {
       try {
-        const updatedEnv = await backend.syncEnvironmentStatus(environmentId);
+        const updatedEnv = await environmentsApi(scope).syncEnvironmentStatus(environmentId);
         updateEnvironmentInStore(environmentId, updatedEnv);
         return updatedEnv;
       } catch (err) {
@@ -1145,7 +1255,7 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
         // Don't throw - just log the error
       }
     },
-    [updateEnvironmentInStore],
+    [scope, updateEnvironmentInStore],
   );
 
   const reorderEnvironments = useCallback(
@@ -1154,7 +1264,7 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
       reorderEnvironmentsInStore(pid, environmentIds);
       try {
         // Persist to backend
-        const reorderedEnvs = await backend.reorderEnvironments(pid, environmentIds);
+        const reorderedEnvs = await environmentsApi(scope).reorderEnvironments(pid, environmentIds);
         // Update with the server response (uses current store state, not stale closure)
         mergeEnvironmentsForProject(pid, reorderedEnvs);
       } catch (err) {
@@ -1175,6 +1285,7 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
       }
     },
     [
+      scope,
       reorderEnvironmentsInStore,
       mergeEnvironmentsForProject,
       setError,
@@ -1186,7 +1297,9 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
   const updatePortMappings = useCallback(
     async (environmentId: string, portMappings: PortMapping[]) => {
       try {
-        const updated = await backend.updatePortMappings(environmentId, portMappings);
+        const updated = await backendApiForScope(scope, createFilesSessionsApi, {
+          updatePortMappings: backend.updatePortMappings,
+        }).updatePortMappings(environmentId, portMappings);
         updateEnvironmentInStore(environmentId, updated);
         return updated;
       } catch (err) {
@@ -1202,7 +1315,7 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
         throw new Error(message);
       }
     },
-    [updateEnvironmentInStore, setError, showError],
+    [scope, updateEnvironmentInStore, setError, showError],
   );
 
   const restartEnvironment = useCallback(
@@ -1211,7 +1324,7 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
       try {
         // Stop the environment
         updateStatusInStore(environmentId, "stopping");
-        await backend.stopEnvironment(environmentId);
+        await environmentsApi(scope).stopEnvironment(environmentId);
 
         // Disconnect all sessions since container is stopped
         await disconnectEnvironmentSessions(environmentId);
@@ -1229,7 +1342,7 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
         const message = getErrorMessage(err, "Failed to restart environment");
         setError(message);
         updateStatusInStore(environmentId, "error");
-        const context = describeEnvironment(environmentId);
+        const context = describeEnvironment(environmentNode(scope), environmentId);
         toast.error("Failed to restart environment", {
           description: describeForToast(context, message),
           action: {
@@ -1240,11 +1353,23 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
         throw new Error(message);
       }
     },
-    [updateStatusInStore, setError, disconnectEnvironmentSessions, startEnvironment, showError],
+    [
+      scope,
+      updateStatusInStore,
+      setError,
+      disconnectEnvironmentSessions,
+      startEnvironment,
+      showError,
+    ],
   );
 
   // Get environments for the current project. Memoized so consumers do not
   // receive a new array identity on renders where nothing changed.
+  const refreshSnapshot = useCallback(
+    (pid: string, environmentId: string) => refreshEnvironmentSnapshot(pid, environmentId, scope),
+    [scope],
+  );
+
   const projectEnvironments = useMemo(
     () =>
       projectId
@@ -1259,7 +1384,7 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
     isLoading,
     error,
     loadEnvironments,
-    refreshEnvironmentSnapshot,
+    refreshEnvironmentSnapshot: refreshSnapshot,
     createEnvironment,
     forkEnvironment,
     deleteEnvironment,

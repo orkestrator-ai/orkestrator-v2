@@ -276,8 +276,8 @@ function DockerSettingsPanel() {
         reattachName || undefined,
         machine,
       );
-      // Only this window's environments belong in its store; remote realms
-      // reconcile their own snapshots from the backend resource events.
+      // Only this window's environments belong in its store; another node's
+      // scope reconciles its own snapshots from the backend resource events.
       if (isWindowMachine(machine)) addEnvironment(newEnvironment);
       // Refresh the containers list
       const containersData = await backend.getOrkestratorContainers(machine);

@@ -1,14 +1,16 @@
 import { createUniqueTabId } from "@/components/terminal/TerminalContainer.helpers";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import type { GraphRunTabData, TabInfo } from "@/types/paneLayout";
 
 /**
  * Opens a graph run in its own `graph-run` tab. There is one tab per run:
  * opening it again focuses that tab rather than counting a new one, so it is
  * resolved before the tab limit. Kept free of the run view's own modules,
- * which load lazily.
+ * which load lazily. The layout is `scope`'s node's.
  */
 export function openGraphRunTab(options: {
+  scope: NodeScope;
   environmentId: string;
   activePaneId: string;
   allTabs: readonly Pick<TabInfo, "id" | "type" | "graphRunData">[];
@@ -18,7 +20,7 @@ export function openGraphRunTab(options: {
   onTabLimit: () => void;
 }): boolean {
   const { environmentId, run } = options;
-  const store = usePaneLayoutStore.getState();
+  const store = options.scope.store(paneLayoutStore).getState();
   const openTab = options.allTabs.find(
     (tab) => tab.type === "graph-run" && tab.graphRunData?.runId === run.runId,
   );

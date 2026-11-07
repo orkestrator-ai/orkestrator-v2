@@ -38,6 +38,14 @@ tailnet HTTPS URL stays the same. Unknown or foreign Serve targets remain
 conflicts and require host-side inspection. Development Electron launches now
 use a free browser port and log the bound URL.
 
+## Pending release note: other machines' workspaces open in the window
+
+Include this note in the next release containing plan items 6001 and 6002:
+
+Another machine's workspace now opens directly in the window, in the window's
+own tree, on desktop, in a browser and in the iOS app, instead of in a separate
+workspace view. Its work keeps running when you switch between machines.
+
 ## Update channels
 
 Each host chooses the releases it updates to in **Settings → Machines →
@@ -88,8 +96,16 @@ Updates → Channel**, then updates as usual.
    mise run release:version -- 2.23.0-beta
    ```
 
-   It writes every manifest listed in `AGENTS.md`, regenerates and verifies
-   both lockfiles with the pinned Bun, and runs the version drift test. It
+   It first checks that the contract manifest is current (`contract:check`'s
+   drift check), then writes every manifest listed in `AGENTS.md`, regenerates
+   and verifies both lockfiles with the pinned Bun, runs the version drift
+   test, and writes the release's contract snapshot
+   (`packages/protocol/contracts/releases/<version>.json` and any new
+   `contracts/domains/` blob) with its `releases/index.json` entry. The index
+   also picks up the publication times of releases GitHub has published since
+   (read-only `gh release list`; without `gh` it warns and leaves them). Commit
+   `packages/protocol/contracts/` with the manifests. A published release
+   without a snapshot is reported; `mise run contract:backfill` writes it. It
    refuses a suffix no channel ships and versions older than the current one.
    If a lockfile step fails after the manifests are written, rerun the same
    target to repeat the install and verification steps. A same-target retry

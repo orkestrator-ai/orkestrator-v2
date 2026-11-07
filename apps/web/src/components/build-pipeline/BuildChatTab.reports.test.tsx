@@ -1,10 +1,10 @@
-import { afterAll, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import {
   REVIEW_PACKAGE_SESSION_LABEL,
   type ResumableBuildPhase,
 } from "@orkestrator/protocol/build-pipeline";
-import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
+import type { BuildPipeline } from "@/stores/buildPipelineStore";
 import { mockToastError, mockToastSuccess } from "../../../../../tests/mocks/sonner";
 import { rewoundToFirstVerify } from "./pipeline-test-fixture";
 import { TEST_STRUCTURED_REVIEW_REPORT } from "./structured-review-test-fixture";
@@ -24,6 +24,8 @@ import {
   validationRun,
   visibleTextContents,
   visibleToolInvocations,
+  cleanupBuildChatScope,
+  pipelineStore,
 } from "./build-chat-tab-test-support";
 
 /**
@@ -31,6 +33,7 @@ import {
  */
 
 afterAll(restoreBuildChatTabMocks);
+afterEach(cleanupBuildChatScope);
 
 describe("BuildChatTab reports and verdicts", () => {
   beforeEach(() => {
@@ -649,11 +652,13 @@ describe("BuildChatTab reports and verdicts", () => {
     // Selecting from the keyboard is a choice, not an auto-follow, so a later
     // backend push must not drag the user off the stage they picked.
     act(() => {
-      useBuildPipelineStore.getState().replacePipeline({
-        ...reviewed,
-        currentSessionIndex: 1,
-        backendRevision: 47,
-      });
+      pipelineStore()
+        .getState()
+        .replacePipeline({
+          ...reviewed,
+          currentSessionIndex: 1,
+          backendRevision: 47,
+        });
     });
 
     expect(screen.getByText("Implementation complete")).toBeTruthy();
@@ -900,7 +905,7 @@ describe("BuildChatTab reports and verdicts", () => {
     fireEvent.click(screen.getByRole("button", { name: "Retry Build Stage" }));
 
     await waitFor(() => {
-      expect(useBuildPipelineStore.getState().pipelines.get(reviewed.id)).toEqual(failedAgain);
+      expect(pipelineStore().getState().pipelines.get(reviewed.id)).toEqual(failedAgain);
     });
     expect(mockToastError).toHaveBeenCalledWith("Failed to restart the stage", {
       description: "fresh session could not be created",

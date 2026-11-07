@@ -13,7 +13,8 @@ import { afterAll, afterEach, beforeEach, expect, mock, test } from "bun:test";
 import { FloatingNoticeLayer } from "@/components/ui/floating-notice";
 import type { HumanPromptEntry } from "@orkestrator/protocol/human-prompts";
 import { Profiler } from "react";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type {
   NativeAgentSessionStateUpdate,
   NativeAgentTabData,
@@ -24,15 +25,16 @@ import { nativeAgentCapabilities } from "@orkestrator/protocol/native-agent";
 import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
 import * as realBackend from "@/lib/backend";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
-import { useConfigStore } from "@/stores/configStore";
-import { useEnvironmentStore } from "@/stores/environmentStore";
-import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
-import { useNativeComposeStore } from "@/stores/nativeComposeStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { configStore } from "@/stores/configStore";
+import { environmentStore } from "@/stores/environmentStore";
+import { nativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
+import { nativeComposeStore } from "@/stores/nativeComposeStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import { createSessionKey } from "@/lib/utils";
 import type { Environment } from "@/types";
 import { tabInitialPromptRequestId } from "@/lib/tab-initial-prompt";
 import type { AgentNativeTabProps } from "./adapter";
+import { appCommandStore } from "@/test/app-command-store";
 
 const realBackendSnapshot = { ...realBackend };
 const realVirtualizedMessageListSnapshot = { ...realVirtualizedMessageList };
@@ -225,10 +227,10 @@ mock.module("@/lib/backend", () => ({
 const { AgentNativeTab } = await import("./AgentNativeTab");
 const { resetNativeAgentSyncCapabilityForTests } = await import("@/hooks/useNativeAgentSession");
 
-const realClearTabInitialPrompt = usePaneLayoutStore.getState().clearTabInitialPrompt;
+const realClearTabInitialPrompt = appCommandStore(paneLayoutStore).getState().clearTabInitialPrompt;
 const clearTabInitialPromptMock = mock((_tabId: string, _environmentId?: string) => {});
-const initialGlobalConfig = useConfigStore.getState().config.global;
-const initialRepositories = useConfigStore.getState().config.repositories;
+const initialGlobalConfig = appCommandStore(configStore).getState().config.global;
+const initialRepositories = appCommandStore(configStore).getState().config.repositories;
 
 afterAll(() => {
   resetNativeAgentSyncCapabilityForTests();
@@ -296,10 +298,10 @@ beforeEach(() => {
   ensureMock.mockClear();
   getLocalFileTreeMock.mockClear();
   clearTabInitialPromptMock.mockClear();
-  useNativeComposeStore.setState({ drafts: new Map() });
-  useNativeAgentProjectionStore.getState().reset();
-  useEnvironmentStore.setState({ environments: [environment()] });
-  usePaneLayoutStore.setState({
+  appCommandStore(nativeComposeStore).setState({ drafts: new Map() });
+  appCommandStore(nativeAgentProjectionStore).getState().reset();
+  appCommandStore(environmentStore).setState({ environments: [environment()] });
+  appCommandStore(paneLayoutStore).setState({
     environments: new Map(),
     hydration: new Map(),
     activeEnvironmentId: null,
@@ -309,10 +311,10 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
-  useNativeAgentProjectionStore.getState().reset();
-  usePaneLayoutStore.setState({ clearTabInitialPrompt: realClearTabInitialPrompt });
-  useConfigStore.getState().updateGlobalConfig(initialGlobalConfig);
-  useConfigStore.setState((state) => ({
+  appCommandStore(nativeAgentProjectionStore).getState().reset();
+  appCommandStore(paneLayoutStore).setState({ clearTabInitialPrompt: realClearTabInitialPrompt });
+  appCommandStore(configStore).getState().updateGlobalConfig(initialGlobalConfig);
+  appCommandStore(configStore).setState((state) => ({
     config: { ...state.config, repositories: initialRepositories },
   }));
 });
@@ -353,7 +355,7 @@ async function renderTab(
     ) : (
       tree(prompt)
     );
-  const { rerender } = render(wrapped(initialPrompt));
+  const { rerender } = renderInAppCommandScope(wrapped(initialPrompt));
   await settle();
   expect(commits).toBeGreaterThan(0);
   commits = 0;
@@ -366,7 +368,7 @@ function holdSessionCreation(): void {
 
 /** Writes to env-1 that change only fields the tab does not read. */
 async function writeUnrelatedFields(): Promise<void> {
-  const store = useEnvironmentStore.getState();
+  const store = appCommandStore(environmentStore).getState();
   await act(async () => {
     store.updateEnvironment("env-1", {
       lastActivityAt: "2024-01-02T00:00:00.000Z",
@@ -387,7 +389,7 @@ async function writeUnrelatedFields(): Promise<void> {
 
 async function writeEnvironment(updates: Partial<Environment>): Promise<void> {
   await act(async () => {
-    useEnvironmentStore.getState().updateEnvironment("env-1", updates);
+    appCommandStore(environmentStore).getState().updateEnvironment("env-1", updates);
   });
 }
 
@@ -405,13 +407,13 @@ test("an unrelated environment field does not render a tab holding a transcript"
 });
 
 test("another environment in the project does not render the tab", async () => {
-  useEnvironmentStore.setState({
+  appCommandStore(environmentStore).setState({
     environments: [environment(), environment({ id: "env-2", order: 1 })],
   });
   await renderTab(OWN_TAB, lockedTab);
 
   await act(async () => {
-    useEnvironmentStore
+    appCommandStore(environmentStore)
       .getState()
       .mergeEnvironmentsForProject("project-1", [
         environment(),
@@ -423,7 +425,7 @@ test("another environment in the project does not render the tab", async () => {
 });
 
 test("the startup session's progress does not render the tab until it fails", async () => {
-  useEnvironmentStore.setState({
+  appCommandStore(environmentStore).setState({
     environments: [environment({ startupAgentSession: startupSession() })],
   });
   await renderTab(OWN_TAB, lockedTab);
@@ -466,7 +468,7 @@ test("setup starting and finishing still swaps the tab's overlay", async () => {
 
 test("settings that arrive during setup reach the session the tab creates", async () => {
   served = [];
-  useEnvironmentStore.setState({
+  appCommandStore(environmentStore).setState({
     environments: [environment({ setupPhase: "running", agentSettings: undefined })],
   });
   await renderTab(OWN_TAB, freshTab);
@@ -487,13 +489,15 @@ test("a project arriving during setup supplies the repository settings for sessi
     ["project-1", "gpt-5.4"],
     ["project-2", "o3"],
   ] as const) {
-    useConfigStore.getState().setRepositoryConfig(projectId, {
-      defaultBranch: "main",
-      prBaseBranch: "main",
-      agentSettings: { platforms: { codex: { model } } },
-    });
+    appCommandStore(configStore)
+      .getState()
+      .setRepositoryConfig(projectId, {
+        defaultBranch: "main",
+        prBaseBranch: "main",
+        agentSettings: { platforms: { codex: { model } } },
+      });
   }
-  useEnvironmentStore.setState({
+  appCommandStore(environmentStore).setState({
     environments: [environment({ setupPhase: "running", projectId: undefined })],
   });
   await renderTab(OWN_TAB, freshTab);
@@ -509,7 +513,7 @@ test("a project arriving during setup supplies the repository settings for sessi
 
 test("a startup tab does not connect until setup is ready, whatever else is written", async () => {
   served = [];
-  useEnvironmentStore.setState({
+  appCommandStore(environmentStore).setState({
     environments: [
       environment({
         setupPhase: "running",
@@ -533,18 +537,20 @@ test("a startup tab does not connect until setup is ready, whatever else is writ
 
 test("a startup tab waits for an environment record that arrives after it mounts", async () => {
   served = [];
-  useEnvironmentStore.setState({ environments: [] });
+  appCommandStore(environmentStore).setState({ environments: [] });
   await renderTab(STARTUP_TAB, freshTab);
   expect(ensureMock).not.toHaveBeenCalled();
 
   await act(async () => {
-    useEnvironmentStore.getState().mergeEnvironmentsForProject("project-1", [
-      environment({
-        pendingAgentLaunch: true,
-        initialPrompt: LAUNCH_PROMPT,
-        startupAgentSession: startupSession(),
-      }),
-    ]);
+    appCommandStore(environmentStore)
+      .getState()
+      .mergeEnvironmentsForProject("project-1", [
+        environment({
+          pendingAgentLaunch: true,
+          initialPrompt: LAUNCH_PROMPT,
+          startupAgentSession: startupSession(),
+        }),
+      ]);
   });
 
   expect(await screen.findByText(LAUNCH_PROMPT)).toBeTruthy();
@@ -580,7 +586,7 @@ test("a launch published after mount previews its prompt and leaves dispatch to 
 test("a failed launch retires its preview only once the launch is no longer pending", async () => {
   served = [];
   holdSessionCreation();
-  useEnvironmentStore.setState({
+  appCommandStore(environmentStore).setState({
     environments: [
       environment({
         pendingAgentLaunch: true,
@@ -645,7 +651,7 @@ test("a render that changes none of the send's inputs does not re-run the openin
   holdSessionCreation();
   // A backend-owned launch clears the tab's prompt each time the effect runs;
   // the mock leaves the prop in place, so every re-run is counted.
-  useEnvironmentStore.setState({
+  appCommandStore(environmentStore).setState({
     environments: [environment({ startupAgentSession: startupSession({ status: "running" }) })],
   });
   await renderTab(STARTUP_TAB, freshTab, LAUNCH_PROMPT);
@@ -662,7 +668,9 @@ test("a render that changes none of the send's inputs does not re-run the openin
 /** Puts text in the tab's draft and presses Enter in its composer. */
 async function sendFromComposer(tabId: string, text: string): Promise<void> {
   await act(async () => {
-    useNativeComposeStore.getState().updateDraft(createSessionKey("env-1", tabId), { text });
+    appCommandStore(nativeComposeStore)
+      .getState()
+      .updateDraft(createSessionKey("env-1", tabId), { text });
   });
   await act(async () => {
     fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
@@ -747,7 +755,7 @@ test("an opening prompt refused during a queue edit is sent once the edit ends",
 
 test("launch fields belong to the startup tab, so another tab still sends its own prompt", async () => {
   served = [];
-  useEnvironmentStore.setState({
+  appCommandStore(environmentStore).setState({
     environments: [
       environment({
         pendingAgentLaunch: true,
@@ -784,9 +792,11 @@ test.each<[string, Partial<Environment>]>([
 });
 
 test("the unassigned composer still follows the environment's default agent", async () => {
-  useConfigStore.getState().updateGlobalConfig({
-    enabledAgentPlatforms: ["claude", "codex"],
-  });
+  appCommandStore(configStore)
+    .getState()
+    .updateGlobalConfig({
+      enabledAgentPlatforms: ["claude", "codex"],
+    });
   await renderTab(OWN_TAB, unassignedTab);
   await waitFor(() =>
     expect(document.querySelector("[data-native-model-platform='codex']")).toBeTruthy(),
@@ -802,8 +812,10 @@ test("the unassigned composer still follows the environment's default agent", as
 test.each(["environmentType", "networkAccessMode"] as const)(
   "%s arriving after mount updates the composer's sandbox policy description",
   async (field) => {
-    useConfigStore.getState().updateGlobalConfig({ enabledAgentPlatforms: ["codex"] });
-    useEnvironmentStore.setState({
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({ enabledAgentPlatforms: ["codex"] });
+    appCommandStore(environmentStore).setState({
       environments: [
         environment({
           environmentType: field === "environmentType" ? undefined : "containerized",
@@ -834,7 +846,7 @@ test.each(["environmentType", "networkAccessMode"] as const)(
 test.each(["locked", "unassigned"] as const)(
   "a worktree path arriving after mount updates %s file search and attachment resolution",
   async (kind) => {
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [environment({ environmentType: "local", worktreePath: undefined })],
     });
     await renderTab(
@@ -853,7 +865,7 @@ test.each(["locked", "unassigned"] as const)(
         fireEvent.click(await screen.findByRole("button", { name: /image.png/ }));
       });
       await waitFor(() => {
-        const draft = useNativeComposeStore
+        const draft = appCommandStore(nativeComposeStore)
           .getState()
           .drafts.get(createSessionKey("env-1", OWN_TAB));
         expect(draft?.attachments.at(-1)).toMatchObject({

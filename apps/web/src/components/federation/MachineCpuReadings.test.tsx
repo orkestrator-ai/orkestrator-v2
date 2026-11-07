@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, mock, test } from "bun:test";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
 import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
 import {
@@ -53,7 +54,7 @@ beforeEach(() => {
   machineOrder = [];
   usageCalls = [];
   unreachable = new Set();
-  portalStore.store.setState({ selfId: null, status: null, nodes: [], self: null, loaded: false });
+  portalStore.store.setState({ selfId: null, status: null, nodes: [], loaded: false });
   portalLayoutStore.setState({ layout: emptyPortalLayout(), loaded: false, error: null });
   invokeMock.mockReset();
   invokeMock.mockImplementation(async (command: string, args: Record<string, unknown> = {}) => {
@@ -84,7 +85,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   resetReadCoordinatorForTests();
-  portalStore.store.setState({ selfId: null, status: null, nodes: [], self: null, loaded: false });
+  portalStore.store.setState({ selfId: null, status: null, nodes: [], loaded: false });
 });
 
 function labels() {
@@ -92,7 +93,7 @@ function labels() {
 }
 
 const renderReadings = () =>
-  render(
+  renderInAppCommandScope(
     <FederationProvider>
       <MachineCpuReadings />
     </FederationProvider>,

@@ -4,16 +4,26 @@ import {
   getEnvironmentSnapshots,
   getPaneLayout,
   getProjects,
+  listPromptQueues,
 } from "@/lib/backend";
 import {
   onResourceChanged,
   onResourceResync,
   type ResourceResyncRequest,
 } from "@/lib/resource-sync";
+import { environmentSetupCompleteEvent } from "@orkestrator/protocol/contract/domains/events";
+import type { AnyEventDef, PayloadOf } from "@orkestrator/protocol/contract/event";
 import { listen, type UnlistenFn } from "@/lib/native/events";
-import { RESOURCE_CHANGED_EVENT } from "@orkestrator/protocol/resource-events";
-import { settingsOnCommandNode } from "@/lib/portal/command-node-config";
-import { portalListen } from "@/lib/portal/portal-transport";
+import { typedHandler } from "@/lib/node-scope/typed-listen";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { defineScopedService } from "@/lib/node-scope/scoped-service";
+import { appCommandScope, isAppCommandScope, listenInScope } from "@/lib/node-scope-slots";
+import type { ResourceKind } from "@orkestrator/protocol/resource-events";
+import { createAgentMailApi } from "@/lib/backend/agent-mail";
+import { backendApiForScope, scopeBackendClient } from "@/lib/backend/client";
+import { createFilesSessionsApi } from "@/lib/backend/files-sessions";
+import { createWorkflowsApi } from "@/lib/backend/workflows";
+import { runConfigCommand } from "@/lib/portal/command-node-config";
 import { adoptPersistedPaneLayout, onPaneLayoutWriteSettled } from "@/lib/pane-layout-persistence";
 import {
   commitBuildPipelineSetupHandoff,
@@ -23,49 +33,38 @@ import {
   reconcileAuthoritativePaneLayout,
 } from "@/lib/pane-layout-authoritative";
 import {
-  hydrateMultiReviewWorkflow,
-  hydrateMultiReviewWorkflowsForEnvironment,
-} from "@/lib/multi-review-persistence";
-import {
-  buildPipelineChangeReadOptions,
-  hydrateBuildPipeline,
-  hydrateBuildPipelinesForProject,
-} from "@/lib/build-pipeline-persistence";
-import { hydratePromptQueuesForEnvironment } from "@/lib/prompt-queue-persistence";
+  hydratePromptQueuesForEnvironment,
+  type PromptQueueListLoader,
+} from "@/lib/prompt-queue-persistence";
 import { createPromptQueueSources } from "@/lib/prompt-queue-sources";
-import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
-import { useConfigStore } from "@/stores/configStore";
-import { useEnvironmentStore } from "@/stores/environmentStore";
-import { useFeaturePlanStore } from "@/stores/featurePlanStore";
-import { useKanbanStore } from "@/stores/kanbanStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { configStore } from "@/stores/configStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
+import { environmentStore } from "@/stores/environmentStore";
 import {
-  applyProjectSnapshot,
-  getProjectMutationVersion,
-  useProjectStore,
-} from "@/stores/projectStore";
-import { useSessionStore } from "@/stores/sessionStore";
-import { refreshObservedAgentMailMailboxes, useAgentMailStore } from "@/stores/agentMailStore";
+  environmentResourceHandlers,
+  projectResourceHandlers,
+} from "@/lib/project-environment-resource-handlers";
+import {
+  featurePlanResourceHandlers,
+  kanbanResourceHandlers,
+  workflowResourceHandlers,
+} from "@/lib/workflow-resource-handlers";
+import { sessionStore } from "@/stores/sessionStore";
+import { agentMailStore } from "@/stores/agentMailStore";
 import type { ResourceManifestKind } from "@orkestrator/protocol/resource-events";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import type { AppConfig } from "@/types";
 
 const log = createLogger("web.resource-sync");
 
-/**
- * Most workflow ids a hidden window remembers to re-read. Past it the window
- * forgets the ids and reconciles both collections once it is shown again.
- */
-export const MAX_DEFERRED_WORKFLOW_READS = 512;
-
-/** Delay between attempts to hydrate acknowledged hidden-window changes. */
-export const DEFERRED_WORKFLOW_RETRY_MS = 1_000;
-
-function documentHidden(): boolean {
-  return typeof document !== "undefined" && document.visibilityState === "hidden";
-}
+export {
+  DEFERRED_WORKFLOW_RETRY_MS,
+  MAX_DEFERRED_WORKFLOW_READS,
+} from "@/lib/workflow-resource-handlers";
 
 /**
- * Binds the backend change feed to the stores that are read-through caches.
+ * Binds a node's backend change feed to the stores that are read-through
+ * caches of it.
  *
  * Each binding refetches only when this client is actually showing the affected
  * scope — a kanban change for a project nobody has open costs nothing.
@@ -79,8 +78,33 @@ function documentHidden(): boolean {
  * Live project/environment changes are also consumed by their UI hooks for
  * low-latency updates. Manifest/full reconciliation owns those collections
  * here as well so convergence never depends on the sidebar being mounted.
+ *
+ * ## Per-store handler registrations (plan item 3014)
+ *
+ * The bindings are split by store into `StoreResourceHandlers` registrations
+ * (`defineStoreResourceHandlers`), listed in `STORE_RESOURCE_HANDLERS`. Each
+ * runs inside one node scope's sync (`storeResourceSyncService`) and gets a
+ * `StoreResourceSyncContext`: the scope, the feed's change and resync
+ * subscriptions (stopped for it), the scope's events, and a phase in the one
+ * serialized authoritative resync:
+ *
+ * 1. `projects`, then 2. `environments`, one participant after another, so
+ *    every later read sees the new collections;
+ * 3. `dependents`, all at once (each read settles on its own);
+ * 4. `layouts`, after every dependent read.
+ *
+ * A participant that refuses a stale snapshot calls `pass.requeue(resource)`
+ * so the same loop reads it again before the manifest handler resolves (and
+ * acknowledges its revision).
+ *
+ * A registration says where it may run. `command-scope` ones write stores that
+ * are still command-scope singletons, so they run only for the command scope:
+ * started for another node they would write that node's data into the command
+ * node's stores. A store item that scopes its store moves its registration into
+ * the store's module, reads `context.scope.store(def)` instead of the hook, and
+ * marks it `every-scope`.
  */
-interface StoreResourceSyncOptions {
+export interface StoreResourceSyncOptions {
   getConfig?: typeof getConfig;
   getProjects?: typeof getProjects;
   getEnvironmentSnapshots?: typeof getEnvironmentSnapshots;
@@ -91,9 +115,83 @@ interface StoreResourceSyncOptions {
   listen?: typeof listen;
 }
 
-/** Only the identity is needed here; the environment body is read authoritatively. */
-interface EnvironmentSetupCompletePayload {
-  environment_id: string;
+/** The authoritative resync's phases, in the order they run. */
+export type StoreResyncPhase = "projects" | "environments" | "dependents" | "layouts";
+
+const RESYNC_PHASES: readonly StoreResyncPhase[] = [
+  "projects",
+  "environments",
+  "dependents",
+  "layouts",
+];
+
+/** The failure each phase logs, as before the split. */
+const RESYNC_PHASE_FAILURE = {
+  projects: "resync.project-failed",
+  environments: "resync.environment-failed",
+  dependents: "resync.read-failed",
+  layouts: "resync.pane-failed",
+} as const;
+
+/** One pass of the serialized resync loop. */
+export interface StoreResyncPass {
+  /** Whether this pass covers `resource`; a full pass covers every one. */
+  includes(resource: ResourceManifestKind): boolean;
+  /** A snapshot was refused as stale: read `resource` again in this loop. */
+  requeue(resource: ResourceManifestKind): void;
+}
+
+/**
+ * What a participant returns: nothing (it does not apply to this pass), one
+ * read, or several reads that each settle on their own.
+ */
+export type StoreResyncWork = void | Promise<unknown> | ReadonlyArray<Promise<unknown>>;
+
+export type StoreResyncParticipant = (pass: StoreResyncPass) => StoreResyncWork;
+
+export interface StoreResourceSyncContext {
+  readonly scope: NodeScope;
+  /** Aborts when the sync stops; every consumer handles the rejection it causes. */
+  readonly signal: AbortSignal;
+  readonly options: StoreResourceSyncOptions;
+  /** True once the sync stopped. Check it after every await before writing. */
+  disposed(): boolean;
+  /** `onResourceChanged` on this scope's feed, unsubscribed when the sync stops. */
+  onResourceChanged(resource: ResourceKind, handler: Parameters<typeof onResourceChanged>[1]): void;
+  /** Joins the authoritative resync in `phase`. */
+  onResync(phase: StoreResyncPhase, participant: StoreResyncParticipant): void;
+  /**
+   * Listens for `def` on this scope's node (through `options.listen` when a
+   * test passes one), stopped when the sync stops. Payloads are typed and
+   * decoded by the definition (plan item 7011); a failed subscribe is passed
+   * to `onError`.
+   */
+  listen<E extends AnyEventDef>(
+    def: E,
+    handler: (payload: PayloadOf<E>) => void,
+    onError?: (error: unknown) => void,
+  ): void;
+  /** Runs `stop` when the sync stops, before the subscriptions are dropped. */
+  onStop(stop: () => void): void;
+  /** Queues a resync in the serialized loop; resolves when the loop is idle. */
+  requestResync(request: ResourceResyncRequest): Promise<void>;
+}
+
+export type StoreResourceHandlersScope = "command-scope" | "every-scope";
+
+export interface StoreResourceHandlers {
+  /** Bounded and stable: the store (or stores) it binds. */
+  readonly name: string;
+  readonly runsOn: StoreResourceHandlersScope;
+  register(context: StoreResourceSyncContext): void;
+}
+
+export function defineStoreResourceHandlers(
+  name: string,
+  runsOn: StoreResourceHandlersScope,
+  register: (context: StoreResourceSyncContext) => void,
+): StoreResourceHandlers {
+  return Object.freeze({ name, runsOn, register });
 }
 
 interface DeferredPaneLayoutRefresh {
@@ -102,47 +200,37 @@ interface DeferredPaneLayoutRefresh {
   reject: (error: unknown) => void;
 }
 
-export function startStoreResourceSync(options: StoreResourceSyncOptions = {}): () => void {
-  const unsubscribes: Array<() => void> = [];
-  const promptQueueSources = createPromptQueueSources();
-  let disposed = false;
-  let configRequestGeneration = 0;
-  let pendingResyncResources: Set<ResourceManifestKind> | null | undefined;
-  let resyncPromise: Promise<void> | null = null;
-  const paneLayoutRequestGenerations = new Map<string, number>();
-  const deferredPaneLayoutRefreshes = new Map<string, DeferredPaneLayoutRefresh>();
-  const declinedPaneLayoutRefreshes = new Set<string>();
-  const deferredPipelineReads = new Set<string>();
-  const deferredMultiReviewReads = new Set<string>();
-  let deferredWorkflowReadsOverflowed = false;
-  let deferredWorkflowGeneration = 0;
-  let workflowFlushRunning = false;
-  let workflowRetryTimer: ReturnType<typeof setTimeout> | null = null;
-
-  /** Remembers a change a hidden window will read when shown; true when deferred. */
-  const deferWhileHidden = (reads: Set<string>, id: string): boolean => {
-    if (!documentHidden()) return false;
-    deferredWorkflowGeneration += 1;
-    if (deferredWorkflowReadsOverflowed) return true;
-    reads.add(id);
-    if (deferredPipelineReads.size + deferredMultiReviewReads.size > MAX_DEFERRED_WORKFLOW_READS) {
-      deferredPipelineReads.clear();
-      deferredMultiReviewReads.clear();
-      deferredWorkflowReadsOverflowed = true;
-    }
-    return true;
+/**
+ * The scope's config store (plan item 3005), and clearing agent mail when
+ * messaging is turned off.
+ *
+ * Every scope reads its own node's config. Under a parent scope (an in-tree
+ * leaf) the store lays the parent's preferences over it itself, and the
+ * parent's own sync keeps that layer current. Turning messaging off clears
+ * this node's agent mail (plan item 3010).
+ */
+const configHandlers = defineStoreResourceHandlers("config", "every-scope", (context) => {
+  const store = context.scope.store(configStore);
+  const readConfig = (): Promise<AppConfig> => {
+    if (context.options.getConfig) return context.options.getConfig();
+    // The app's command scope keeps the `@/lib/backend` read, which suites mock.
+    if (isAppCommandScope(context.scope)) return getConfig();
+    return runConfigCommand(
+      { commandNode: scopeBackendClient(context.scope), node: null },
+      "get_config",
+    );
   };
-
+  let configRequestGeneration = 0;
   const refreshConfig = async (): Promise<void> => {
     const generation = ++configRequestGeneration;
     try {
-      const config = await (options.getConfig ?? getConfig)();
-      if (!disposed && generation === configRequestGeneration) {
-        useConfigStore.getState().setConfig(config);
+      const config = await readConfig();
+      if (!context.disposed() && generation === configRequestGeneration) {
+        store.getState().setConfig(config);
         const messagingEnabled = (config as { global?: { agentMessaging?: { enabled?: boolean } } })
           ?.global?.agentMessaging?.enabled;
         if (messagingEnabled === false) {
-          useAgentMailStore.getState().clear();
+          context.scope.store(agentMailStore).getState().clear();
         }
       }
     } catch (error) {
@@ -151,39 +239,139 @@ export function startStoreResourceSync(options: StoreResourceSyncOptions = {}): 
     }
   };
 
+  context.onResync("dependents", (pass) => (pass.includes("config") ? refreshConfig() : undefined));
+  context.onResourceChanged("config", () => refreshConfig());
+});
+
+/** Each node's agent mail follows that node's feed (plan item 3010). */
+const agentMailHandlers = defineStoreResourceHandlers("agent-mail", "every-scope", (context) => {
+  const mail = context.scope.store(agentMailStore);
+  // The app's command scope keeps the `@/lib/backend` read, which suites mock.
+  const readSummary = () =>
+    context.options.getAgentMailSummary
+      ? context.options.getAgentMailSummary()
+      : backendApiForScope(context.scope, createAgentMailApi, {
+          getAgentMailSummary,
+        }).getAgentMailSummary();
   const refreshAgentMailSummary = async (): Promise<void> => {
-    const enabled = useConfigStore.getState().config?.global?.agentMessaging?.enabled;
+    const enabled = context.scope.store(configStore).getState().config?.global
+      ?.agentMessaging?.enabled;
     if (enabled === false) {
-      useAgentMailStore.getState().clear();
+      mail.getState().clear();
       return;
     }
     if (enabled !== true) return;
-    const snapshot = await (options.getAgentMailSummary ?? getAgentMailSummary)();
-    if (!disposed) {
-      const store = useAgentMailStore.getState();
-      store.setSummary(snapshot);
-      await refreshObservedAgentMailMailboxes();
+    const snapshot = await readSummary();
+    if (!context.disposed()) {
+      mail.getState().setSummary(snapshot);
+      await mail.getState().refreshObservedMailboxes();
     }
   };
 
-  const refreshBuildPipelinesForProject = async (projectId: string): Promise<void> => {
-    const authoritative = await hydrateBuildPipelinesForProject(projectId);
-    if (disposed) return;
-    const authoritativeIds = new Set(authoritative.map(({ id }) => id));
-    const store = useBuildPipelineStore.getState();
-    for (const [pipelineId, pipeline] of store.pipelines) {
-      if (
-        pipeline.projectId === projectId &&
-        pipeline.backendRevision > 0 &&
-        !authoritativeIds.has(pipelineId)
-      ) {
-        store.removePipeline(pipelineId);
-      }
-    }
-  };
+  context.onResync("dependents", (pass) =>
+    pass.includes("agent-mail-summary") ? refreshAgentMailSummary() : undefined,
+  );
+
+  context.onResourceChanged("agent-mail-summary", () => {
+    return refreshAgentMailSummary().catch((error) => {
+      log.warn("agent-mail.summary-refresh-failed", { error: formatLogError(error) });
+      throw error;
+    });
+  });
+
+  context.onResourceChanged("agent-mail", ({ id: mailboxId }) => {
+    const existing = mail.getState().mailboxes.get(mailboxId);
+    if (!existing) return;
+    return mail
+      .getState()
+      .refreshMailbox(existing.descriptor.environmentId, existing.descriptor.tabId)
+      .catch((error) => {
+        log.warn("agent-mail.mailbox-refresh-failed", {
+          environmentId: existing.descriptor.environmentId,
+          tabId: existing.descriptor.tabId,
+          error: formatLogError(error),
+        });
+        throw error;
+      });
+  });
+});
+
+/** Each node's prompt queues follow that node's feed (plan item 4007). */
+const promptQueueHandlers = defineStoreResourceHandlers(
+  "prompt-queues",
+  "every-scope",
+  (context) => {
+    const promptQueueSources = createPromptQueueSources(context.scope);
+    // The app's command scope keeps the `@/lib/backend` read, which suites mock.
+    const readPromptQueues: PromptQueueListLoader = (environmentId) =>
+      backendApiForScope(context.scope, createWorkflowsApi, { listPromptQueues }).listPromptQueues(
+        environmentId,
+      );
+    context.onResync("dependents", (pass) =>
+      pass.includes("prompt-queue")
+        ? context.scope
+            .store(environmentStore)
+            .getState()
+            .environments.map(({ id }) =>
+              hydratePromptQueuesForEnvironment(id, promptQueueSources, readPromptQueues),
+            )
+        : undefined,
+    );
+    context.onResourceChanged("prompt-queue", ({ id: environmentId }) => {
+      // Queues announce against their environment rather than their tab, so this
+      // refetches every queue the environment owns. That is deliberate: a client
+      // that has never opened a tab still needs its queue if it opens one next.
+      if (!context.scope.store(environmentStore).getState().getEnvironmentById(environmentId))
+        return;
+      return hydratePromptQueuesForEnvironment(
+        environmentId,
+        promptQueueSources,
+        readPromptQueues,
+      ).catch((error) => {
+        log.warn("prompt-queues.refresh-failed", {
+          environmentId,
+          error: formatLogError(error),
+        });
+        throw error;
+      });
+    });
+  },
+);
+
+/** Each node's sessions follow that node's feed (plan item 3010). */
+const sessionHandlers = defineStoreResourceHandlers("sessions", "every-scope", (context) => {
+  const sessions = context.scope.store(sessionStore);
+  context.onResync("dependents", (pass) =>
+    pass.includes("session")
+      ? context.scope
+          .store(environmentStore)
+          .getState()
+          .environments.map(({ id }) => sessions.getState().loadSessionsForEnvironment(id))
+      : undefined,
+  );
+  context.onResourceChanged("session", ({ id: environmentId }) => {
+    // Sessions are only meaningful for environments this client has loaded.
+    if (!context.scope.store(environmentStore).getState().getEnvironmentById(environmentId)) return;
+    return sessions.getState().loadSessionsForEnvironment(environmentId);
+  });
+});
+
+const paneLayoutHandlers = defineStoreResourceHandlers("pane-layout", "every-scope", (context) => {
+  const { options, scope } = context;
+  // This node's pane layouts (plan item 3013), held for the registration's
+  // life: the scope outlives it.
+  const panes = scope.store(paneLayoutStore);
+  const loadPaneLayout = (environmentId: string) =>
+    (
+      options.getPaneLayout ??
+      backendApiForScope(scope, createFilesSessionsApi, { getPaneLayout }).getPaneLayout
+    )(environmentId);
+  const paneLayoutRequestGenerations = new Map<string, number>();
+  const deferredPaneLayoutRefreshes = new Map<string, DeferredPaneLayoutRefresh>();
+  const declinedPaneLayoutRefreshes = new Set<string>();
 
   const refreshPaneLayout = async (environmentId: string): Promise<void> => {
-    const paneStore = usePaneLayoutStore.getState();
+    const paneStore = panes.getState();
     const hydration = paneStore.hydration.get(environmentId);
     if (hydration === "pending") {
       const existing = deferredPaneLayoutRefreshes.get(environmentId);
@@ -204,7 +392,10 @@ export function startStoreResourceSync(options: StoreResourceSyncOptions = {}): 
     }
     if (hydration !== "done") return;
 
-    const environment = useEnvironmentStore.getState().getEnvironmentById(environmentId);
+    const environment = context.scope
+      .store(environmentStore)
+      .getState()
+      .getEnvironmentById(environmentId);
     if (!environment) return;
     const requestedContainerId =
       environment.environmentType === "local" ? null : environment.containerId;
@@ -213,21 +404,24 @@ export function startStoreResourceSync(options: StoreResourceSyncOptions = {}): 
 
     const generation = (paneLayoutRequestGenerations.get(environmentId) ?? 0) + 1;
     paneLayoutRequestGenerations.set(environmentId, generation);
-    const saved = await (options.getPaneLayout ?? getPaneLayout)(environmentId);
-    if (disposed || paneLayoutRequestGenerations.get(environmentId) !== generation) {
+    const saved = await loadPaneLayout(environmentId);
+    if (context.disposed() || paneLayoutRequestGenerations.get(environmentId) !== generation) {
       return;
     }
 
     if (saved) {
-      await hydratePaneLayoutDependencies(saved.root);
-      if (disposed || paneLayoutRequestGenerations.get(environmentId) !== generation) {
+      await hydratePaneLayoutDependencies(saved.root, scope);
+      if (context.disposed() || paneLayoutRequestGenerations.get(environmentId) !== generation) {
         return;
       }
     }
 
-    const latestPaneStore = usePaneLayoutStore.getState();
+    const latestPaneStore = panes.getState();
     const current = latestPaneStore.environments.get(environmentId);
-    const latestEnvironment = useEnvironmentStore.getState().getEnvironmentById(environmentId);
+    const latestEnvironment = context.scope
+      .store(environmentStore)
+      .getState()
+      .getEnvironmentById(environmentId);
     if (latestPaneStore.hydration.get(environmentId) !== "done" || !latestEnvironment) {
       return;
     }
@@ -251,12 +445,14 @@ export function startStoreResourceSync(options: StoreResourceSyncOptions = {}): 
         activePaneId: "default",
         containerId: latestContainerId,
       },
+      scope,
     );
     if (!selected) return;
 
     // Prime the persistence mirror before publishing the store update so this
     // read-through snapshot does not become a redundant write-back.
-    if (!(options.adoptPaneLayout ?? adoptPersistedPaneLayout)(environmentId, selected)) {
+    const adopt = options.adoptPaneLayout ?? adoptPersistedPaneLayout;
+    if (!adopt(environmentId, selected, context.scope)) {
       // The layout we just fetched is dropped in favour of a local write that
       // has not landed yet. That write announces its own revision on success —
       // but if it fails, nothing else would ever come back for this snapshot.
@@ -265,9 +461,9 @@ export function startStoreResourceSync(options: StoreResourceSyncOptions = {}): 
     }
     declinedPaneLayoutRefreshes.delete(environmentId);
     latestPaneStore.applyAuthoritativeLayout(environmentId, selected);
-    flushPaneTabActivation(environmentId);
-    commitBuildPipelineSetupHandoff(environmentId, selected);
-    commitStartupAgentSetupHandoff(environmentId, selected);
+    flushPaneTabActivation(environmentId, scope);
+    commitBuildPipelineSetupHandoff(environmentId, selected, scope);
+    commitStartupAgentSetupHandoff(environmentId, selected, scope);
   };
 
   const requestPaneLayoutRefresh = (environmentId: string): void => {
@@ -276,12 +472,13 @@ export function startStoreResourceSync(options: StoreResourceSyncOptions = {}): 
     });
   };
 
-  unsubscribes.push(
-    (options.onPaneLayoutWriteSettled ?? onPaneLayoutWriteSettled)((environmentId) => {
-      if (disposed || !declinedPaneLayoutRefreshes.has(environmentId)) return;
+  const stopWriteSettled = (options.onPaneLayoutWriteSettled ?? onPaneLayoutWriteSettled)(
+    (environmentId) => {
+      if (context.disposed() || !declinedPaneLayoutRefreshes.has(environmentId)) return;
       declinedPaneLayoutRefreshes.delete(environmentId);
       requestPaneLayoutRefresh(environmentId);
-    }),
+    },
+    context.scope,
   );
 
   // Setup completion is the one moment the backend deliberately moves the
@@ -292,60 +489,143 @@ export function startStoreResourceSync(options: StoreResourceSyncOptions = {}): 
   // the single frame that carries it and sit on the setup tab while the agent
   // works out of sight. Re-read the authoritative layout on the completion
   // event itself so the handoff never depends on one frame surviving.
-  {
-    let unlisten: UnlistenFn | null = null;
-    void (options.listen ?? listen)<EnvironmentSetupCompletePayload>(
-      "environment-setup-complete",
-      ({ payload }) => {
-        if (disposed) return;
-        requestPaneLayoutRefresh(payload.environment_id);
-      },
-    )
-      .then((stop) => {
-        if (disposed) stop();
-        else unlisten = stop;
-      })
-      .catch((error) => {
-        log.warn("setup-completion.observe-failed", { error: formatLogError(error) });
-      });
-    unsubscribes.push(() => unlisten?.());
-  }
-
-  unsubscribes.push(
-    usePaneLayoutStore.subscribe((state, previous) => {
-      for (const [environmentId, deferred] of Array.from(deferredPaneLayoutRefreshes)) {
-        if (
-          previous.hydration.get(environmentId) === "pending" &&
-          state.hydration.get(environmentId) === "done"
-        ) {
-          void refreshPaneLayout(environmentId)
-            .then(
-              () => deferred.resolve(),
-              (error) => deferred.reject(error),
-            )
-            .finally(() => {
-              if (deferredPaneLayoutRefreshes.get(environmentId) === deferred) {
-                deferredPaneLayoutRefreshes.delete(environmentId);
-              }
-            });
-        }
-      }
-      // An environment that left the pane store will never settle a write or
-      // finish hydrating, so its queued replays would be retained forever.
-      for (const [environmentId, deferred] of Array.from(deferredPaneLayoutRefreshes)) {
-        if (!state.hydration.has(environmentId)) {
-          deferredPaneLayoutRefreshes.delete(environmentId);
-          deferred.resolve();
-        }
-      }
-      for (const environmentId of Array.from(declinedPaneLayoutRefreshes)) {
-        if (!state.environments.has(environmentId)) {
-          declinedPaneLayoutRefreshes.delete(environmentId);
-          paneLayoutRequestGenerations.delete(environmentId);
-        }
-      }
-    }),
+  // Only the identity is needed here; the environment body is read authoritatively.
+  context.listen(
+    environmentSetupCompleteEvent,
+    (payload) => {
+      if (context.disposed()) return;
+      requestPaneLayoutRefresh(payload.environment_id);
+    },
+    (error) => {
+      log.warn("setup-completion.observe-failed", { error: formatLogError(error) });
+    },
   );
+
+  const stopPaneStore = panes.subscribe((state, previous) => {
+    for (const [environmentId, deferred] of Array.from(deferredPaneLayoutRefreshes)) {
+      if (
+        previous.hydration.get(environmentId) === "pending" &&
+        state.hydration.get(environmentId) === "done"
+      ) {
+        void refreshPaneLayout(environmentId)
+          .then(
+            () => deferred.resolve(),
+            (error) => deferred.reject(error),
+          )
+          .finally(() => {
+            if (deferredPaneLayoutRefreshes.get(environmentId) === deferred) {
+              deferredPaneLayoutRefreshes.delete(environmentId);
+            }
+          });
+      }
+    }
+    // An environment that left the pane store will never settle a write or
+    // finish hydrating, so its queued replays would be retained forever.
+    for (const [environmentId, deferred] of Array.from(deferredPaneLayoutRefreshes)) {
+      if (!state.hydration.has(environmentId)) {
+        deferredPaneLayoutRefreshes.delete(environmentId);
+        deferred.resolve();
+      }
+    }
+    for (const environmentId of Array.from(declinedPaneLayoutRefreshes)) {
+      if (!state.environments.has(environmentId)) {
+        declinedPaneLayoutRefreshes.delete(environmentId);
+        paneLayoutRequestGenerations.delete(environmentId);
+      }
+    }
+  });
+
+  // The layouts phase reads the environments as the dependents phase saw
+  // them, right after the collection phases.
+  let layoutEnvironmentIds: string[] = [];
+  context.onResync("dependents", (pass) => {
+    layoutEnvironmentIds = pass.includes("pane-layout")
+      ? context.scope
+          .store(environmentStore)
+          .getState()
+          .environments.map(({ id }) => id)
+      : [];
+  });
+  context.onResync("layouts", () => {
+    const ids = layoutEnvironmentIds;
+    layoutEnvironmentIds = [];
+    return ids.map(refreshPaneLayout);
+  });
+
+  context.onResourceChanged("pane-layout", ({ id: environmentId }) => {
+    if (!context.scope.store(environmentStore).getState().getEnvironmentById(environmentId)) return;
+    return refreshPaneLayout(environmentId).catch((error) => {
+      log.warn("pane-layout.refresh-failed", { environmentId, error: formatLogError(error) });
+      throw error;
+    });
+  });
+
+  context.onStop(() => {
+    for (const deferred of deferredPaneLayoutRefreshes.values()) {
+      deferred.resolve();
+    }
+    deferredPaneLayoutRefreshes.clear();
+    declinedPaneLayoutRefreshes.clear();
+    paneLayoutRequestGenerations.clear();
+    stopWriteSettled();
+    stopPaneStore();
+  });
+});
+
+/**
+ * Every registration, in the order they bind and their resync reads start.
+ * Projects and environments come first: later phases read those collections.
+ */
+export const STORE_RESOURCE_HANDLERS: readonly StoreResourceHandlers[] = [
+  projectResourceHandlers,
+  environmentResourceHandlers,
+  configHandlers,
+  agentMailHandlers,
+  promptQueueHandlers,
+  sessionHandlers,
+  workflowResourceHandlers,
+  kanbanResourceHandlers,
+  featurePlanResourceHandlers,
+  paneLayoutHandlers,
+];
+
+/** The registrations that may run on `scope` (see `StoreResourceHandlers.runsOn`). */
+export function storeResourceHandlersFor(
+  scope: NodeScope,
+  handlers: readonly StoreResourceHandlers[] = STORE_RESOURCE_HANDLERS,
+): StoreResourceHandlers[] {
+  return handlers.filter((entry) => entry.runsOn === "every-scope" || scope.role === "command");
+}
+
+export interface StartStoreResourceSyncInit {
+  /** Defaults to the command scope. */
+  scope?: NodeScope;
+  /** Defaults to the ones `scope` may run (`storeResourceHandlersFor`). */
+  handlers?: readonly StoreResourceHandlers[];
+  /** The service's signal; without one the sync owns an internal one. */
+  signal?: AbortSignal;
+}
+
+/**
+ * Starts the registrations for one scope (the command scope by default) and
+ * returns the stop. Production starts it through `storeResourceSyncService`.
+ */
+export function startStoreResourceSync(
+  options: StoreResourceSyncOptions = {},
+  init: StartStoreResourceSyncInit = {},
+): () => void {
+  const scope = init.scope ?? appCommandScope();
+  const handlers = init.handlers ?? storeResourceHandlersFor(scope);
+  const ownController = init.signal ? null : new AbortController();
+  const signal = init.signal ?? ownController!.signal;
+  const unsubscribes: Array<() => void> = [];
+  const stops: Array<() => void> = [];
+  const participants = new Map<StoreResyncPhase, StoreResyncParticipant[]>(
+    RESYNC_PHASES.map((phase) => [phase, []]),
+  );
+  let disposed = false;
+  let pendingResyncResources: Set<ResourceManifestKind> | null | undefined;
+  let resyncPromise: Promise<void> | null = null;
 
   const queueSelectiveResync = (resource: ResourceManifestKind): void => {
     // A full request already subsumes this retry. Otherwise keep it in the
@@ -357,105 +637,39 @@ export function startStoreResourceSync(options: StoreResourceSyncOptions = {}): 
   };
 
   const resyncAll = async (resources: ReadonlySet<ResourceManifestKind> | null): Promise<void> => {
-    const includes = (resource: ResourceManifestKind): boolean =>
-      resources === null || resources.has(resource);
-    const tasks: Array<Promise<unknown>> = [];
-    const paneEnvironmentIds: string[] = [];
+    const pass: StoreResyncPass = {
+      includes: (resource) => resources === null || resources.has(resource),
+      requeue: queueSelectiveResync,
+    };
     let failed = false;
-
-    if (includes("project")) {
-      const projectStoreAtRequest = useProjectStore.getState();
-      const projectsAtRequest = projectStoreAtRequest.projects;
-      const mutationVersion = getProjectMutationVersion();
-      try {
-        const projects = await (options.getProjects ?? getProjects)();
-        // A live refresh, local mutation, or newer manifest read may have
-        // installed a newer collection while this request was in flight. Both
-        // guards are needed: the mutation version covers optimistic writes,
-        // while array identity orders concurrent authoritative reads.
-        const accepted =
-          !disposed &&
-          useProjectStore.getState().projects === projectsAtRequest &&
-          applyProjectSnapshot(projects, mutationVersion);
-        if (!disposed && !accepted) {
-          queueSelectiveResync("project");
+    const reportFailure = (phase: StoreResyncPhase, error: unknown) => {
+      failed = true;
+      log.warn(RESYNC_PHASE_FAILURE[phase], { error: formatLogError(error) });
+    };
+    for (const phase of RESYNC_PHASES) {
+      if (phase === "projects" || phase === "environments") {
+        // One participant after another: each later read sees this one's result.
+        for (const participant of participants.get(phase)!) {
+          try {
+            await participant(pass);
+          } catch (error) {
+            reportFailure(phase, error);
+          }
         }
-      } catch (error) {
-        failed = true;
-        log.warn("resync.project-failed", { error: formatLogError(error) });
+        continue;
       }
-    }
-    if (includes("environment")) {
-      const environmentsAtRequest = useEnvironmentStore.getState().environments;
-      try {
-        // This phase runs after the project phase, so it sees projects added or
-        // removed while the renderer was inactive. Install all project scopes
-        // atomically: one failed read must not leave a half-new environment set.
-        const projectIds = useProjectStore.getState().projects.map(({ id }) => id);
-        const snapshots = await Promise.all(
-          projectIds.map((projectId) =>
-            (options.getEnvironmentSnapshots ?? getEnvironmentSnapshots)(projectId),
-          ),
-        );
-        const accepted =
-          !disposed && useEnvironmentStore.getState().environments === environmentsAtRequest;
-        if (accepted) {
-          useEnvironmentStore.getState().setEnvironments(snapshots.flat());
-        } else if (!disposed) {
-          queueSelectiveResync("environment");
+      const work: Promise<unknown>[] = [];
+      for (const participant of participants.get(phase)!) {
+        try {
+          const result = participant(pass);
+          if (Array.isArray(result)) work.push(...(result as ReadonlyArray<Promise<unknown>>));
+          else if (result) work.push(result as Promise<unknown>);
+        } catch (error) {
+          work.push(Promise.reject(error));
         }
-      } catch (error) {
-        failed = true;
-        log.warn("resync.environment-failed", { error: formatLogError(error) });
       }
-    }
-
-    const environments = useEnvironmentStore.getState().environments;
-    const projects = useProjectStore.getState().projects;
-    const kanban = useKanbanStore.getState();
-    const featurePlan = useFeaturePlanStore.getState();
-    if (includes("config")) tasks.push(refreshConfig());
-    if (includes("agent-mail-summary")) tasks.push(refreshAgentMailSummary());
-
-    for (const { id: environmentId } of environments) {
-      if (includes("prompt-queue")) {
-        tasks.push(hydratePromptQueuesForEnvironment(environmentId, promptQueueSources));
-      }
-      if (includes("session")) {
-        tasks.push(useSessionStore.getState().loadSessionsForEnvironment(environmentId));
-      }
-      if (includes("multi-review")) {
-        tasks.push(hydrateMultiReviewWorkflowsForEnvironment(environmentId));
-      }
-      if (includes("pane-layout")) paneEnvironmentIds.push(environmentId);
-    }
-    if (includes("build-pipeline")) {
-      for (const { id: projectId } of projects) {
-        tasks.push(refreshBuildPipelinesForProject(projectId));
-      }
-    }
-    if (includes("kanban") && kanban.currentProjectId) {
-      tasks.push(kanban.loadTasks(kanban.currentProjectId));
-    }
-    if (includes("project-notes") && kanban.currentNotesProjectId) {
-      tasks.push(kanban.loadNotes(kanban.currentNotesProjectId));
-    }
-    if (includes("feature-plan") && featurePlan.currentProjectId) {
-      tasks.push(featurePlan.loadFeatures(featurePlan.currentProjectId));
-    }
-
-    const results = await Promise.allSettled(tasks);
-    for (const result of results) {
-      if (result.status === "rejected") {
-        failed = true;
-        log.warn("resync.read-failed", { error: formatLogError(result.reason) });
-      }
-    }
-    const paneResults = await Promise.allSettled(paneEnvironmentIds.map(refreshPaneLayout));
-    for (const result of paneResults) {
-      if (result.status === "rejected") {
-        failed = true;
-        log.warn("resync.pane-failed", { error: formatLogError(result.reason) });
+      for (const result of await Promise.allSettled(work)) {
+        if (result.status === "rejected") reportFailure(phase, result.reason);
       }
     }
     if (failed) throw new Error("One or more authoritative resync reads failed");
@@ -486,218 +700,56 @@ export function startStoreResourceSync(options: StoreResourceSyncOptions = {}): 
     return resyncPromise;
   };
 
-  unsubscribes.push(onResourceResync(requestStoreResync));
-
-  unsubscribes.push(
-    onResourceChanged("agent-mail-summary", () => {
-      return refreshAgentMailSummary().catch((error) => {
-        log.warn("agent-mail.summary-refresh-failed", { error: formatLogError(error) });
-        throw error;
-      });
-    }),
-  );
-
-  unsubscribes.push(
-    onResourceChanged("agent-mail", ({ id: mailboxId }) => {
-      const existing = useAgentMailStore.getState().mailboxes.get(mailboxId);
-      if (!existing) return;
-      return useAgentMailStore
-        .getState()
-        .refreshMailbox(existing.descriptor.environmentId, existing.descriptor.tabId)
-        .catch((error) => {
-          log.warn("agent-mail.mailbox-refresh-failed", {
-            environmentId: existing.descriptor.environmentId,
-            tabId: existing.descriptor.tabId,
-            error: formatLogError(error),
-          });
-          throw error;
-        });
-    }),
-  );
-
-  unsubscribes.push(
-    onResourceChanged("prompt-queue", ({ id: environmentId }) => {
-      // Queues announce against their environment rather than their tab, so this
-      // refetches every queue the environment owns. That is deliberate: a client
-      // that has never opened a tab still needs its queue if it opens one next.
-      if (!useEnvironmentStore.getState().getEnvironmentById(environmentId)) return;
-      return hydratePromptQueuesForEnvironment(environmentId, promptQueueSources).catch((error) => {
-        log.warn("prompt-queues.refresh-failed", { environmentId, error: formatLogError(error) });
-        throw error;
-      });
-    }),
-  );
-
-  unsubscribes.push(
-    onResourceChanged("config", () => {
-      return refreshConfig();
-    }),
-  );
-
-  // On a leaf window the settings are the command node's: follow its changes too.
-  if (settingsOnCommandNode()) {
-    let stopCommandNodeConfig: UnlistenFn | null = null;
-    void portalListen<{ resource?: unknown }>(RESOURCE_CHANGED_EVENT, (event) => {
-      if (!disposed && event.payload?.resource === "config") {
-        void refreshConfig().catch(() => undefined);
-      }
-    })
-      .then((stop) => {
-        if (disposed) stop();
-        else stopCommandNodeConfig = stop;
-      })
-      .catch(() => undefined);
-    unsubscribes.push(() => stopCommandNodeConfig?.());
-  }
-
-  unsubscribes.push(
-    onResourceChanged("kanban", ({ id: projectId }) => {
-      // Reloading a project the user has since navigated away from would race the
-      // store's own currentProjectId guard and show the wrong board.
-      if (useKanbanStore.getState().currentProjectId !== projectId) return;
-      return useKanbanStore.getState().loadTasks(projectId);
-    }),
-  );
-
-  unsubscribes.push(
-    onResourceChanged("project-notes", ({ id: projectId }) => {
-      if (useKanbanStore.getState().currentNotesProjectId !== projectId) return;
-      return useKanbanStore.getState().loadNotes(projectId);
-    }),
-  );
-
-  unsubscribes.push(
-    onResourceChanged("feature-plan", ({ id: projectId }) => {
-      if (useFeaturePlanStore.getState().currentProjectId !== projectId) return;
-      return useFeaturePlanStore.getState().loadFeatures(projectId);
-    }),
-  );
-
-  unsubscribes.push(
-    onResourceChanged("session", ({ id: environmentId }) => {
-      // Sessions are only meaningful for environments this client has loaded.
-      if (!useEnvironmentStore.getState().getEnvironmentById(environmentId)) return;
-      return useSessionStore.getState().loadSessionsForEnvironment(environmentId);
-    }),
-  );
-
-  unsubscribes.push(
-    onResourceChanged("pane-layout", ({ id: environmentId }) => {
-      if (!useEnvironmentStore.getState().getEnvironmentById(environmentId)) return;
-      return refreshPaneLayout(environmentId).catch((error) => {
-        log.warn("pane-layout.refresh-failed", { environmentId, error: formatLogError(error) });
-        throw error;
-      });
-    }),
-  );
-
-  const refreshPipeline = (pipelineId: string): Promise<void> =>
-    // A missing record means another client finished or deleted this build.
-    // Dropping it locally is what stops a stale tab from resuming a dead
-    // pipeline, so treat "not found" as authoritative rather than as an error.
-    // Bodies only while a transcript of this pipeline is on screen.
-    hydrateBuildPipeline(pipelineId, undefined, buildPipelineChangeReadOptions(pipelineId))
-      .then((pipeline) => {
-        if (pipeline) return;
-        const local = useBuildPipelineStore.getState().pipelines.get(pipelineId);
-        if (local?.backendRevision) {
-          useBuildPipelineStore.getState().removePipeline(pipelineId);
-        }
-      })
-      .catch((error) => {
-        log.warn("build-pipeline.refresh-failed", { pipelineId, error: formatLogError(error) });
-        throw error;
-      });
-
-  const refreshMultiReview = (workflowId: string): Promise<void> =>
-    hydrateMultiReviewWorkflow(workflowId)
-      .then(() => undefined)
-      .catch((error) => {
-        log.warn("multi-review.refresh-failed", { workflowId, error: formatLogError(error) });
-        throw error;
-      });
-
-  unsubscribes.push(
-    onResourceChanged("build-pipeline", ({ id: pipelineId }) => {
-      if (deferWhileHidden(deferredPipelineReads, pipelineId)) return;
-      return refreshPipeline(pipelineId);
-    }),
-  );
-
-  unsubscribes.push(
-    onResourceChanged("multi-review", ({ id: workflowId }) => {
-      if (deferWhileHidden(deferredMultiReviewReads, workflowId)) return;
-      return refreshMultiReview(workflowId);
-    }),
-  );
-
-  const flushDeferredWorkflowReads = (): void => {
-    if (disposed || documentHidden() || workflowFlushRunning) return;
-    if (workflowRetryTimer) clearTimeout(workflowRetryTimer);
-    workflowRetryTimer = null;
-    const generation = deferredWorkflowGeneration;
-    workflowFlushRunning = true;
-    const flush = async (): Promise<void> => {
-      if (deferredWorkflowReadsOverflowed) {
-        await requestStoreResync({
-          resources: new Set<ResourceManifestKind>(["build-pipeline", "multi-review"]),
-          reason: "explicit",
-        });
-        if (generation === deferredWorkflowGeneration) deferredWorkflowReadsOverflowed = false;
-        return;
-      }
-      const refresh = async (ids: Set<string>, read: (id: string) => Promise<void>) => {
-        await Promise.allSettled(
-          Array.from(ids, async (id) => {
-            await read(id);
-            // A hidden-window change arriving during the read still needs replay.
-            if (generation === deferredWorkflowGeneration) ids.delete(id);
-          }),
-        );
-      };
-      await Promise.all([
-        refresh(deferredPipelineReads, refreshPipeline),
-        refresh(deferredMultiReviewReads, refreshMultiReview),
-      ]);
-    };
-    void flush()
-      .catch(() => undefined)
-      .finally(() => {
-        workflowFlushRunning = false;
-        if (
-          !disposed &&
-          !documentHidden() &&
-          (deferredWorkflowReadsOverflowed ||
-            deferredPipelineReads.size ||
-            deferredMultiReviewReads.size)
-        ) {
-          // Manifest delivery already acknowledged these changes. Retry independently
-          // with one bounded timer, even when every subsequent manifest is unchanged.
-          workflowRetryTimer = setTimeout(() => {
-            workflowRetryTimer = null;
-            flushDeferredWorkflowReads();
-          }, DEFERRED_WORKFLOW_RETRY_MS);
-        }
-      });
+  const context: StoreResourceSyncContext = {
+    scope,
+    signal,
+    options,
+    disposed: () => disposed,
+    onResourceChanged(resource, handler) {
+      unsubscribes.push(onResourceChanged(resource, handler, scope));
+    },
+    onResync(phase, participant) {
+      participants.get(phase)!.push(participant);
+    },
+    listen(def, handler, onError) {
+      let unlisten: UnlistenFn | null = null;
+      const injected = options.listen;
+      const deliver = typedHandler(def, handler);
+      const subscribed = injected
+        ? injected<unknown>(def.name, (message) => deliver(message.payload))
+        : listenInScope(scope, def, handler);
+      void subscribed
+        .then((stop) => {
+          if (disposed) stop();
+          else unlisten = stop;
+        })
+        .catch((error: unknown) => onError?.(error));
+      unsubscribes.push(() => unlisten?.());
+    },
+    onStop(stop) {
+      stops.push(stop);
+    },
+    requestResync: requestStoreResync,
   };
-  if (typeof document !== "undefined") {
-    document.addEventListener("visibilitychange", flushDeferredWorkflowReads);
-    unsubscribes.push(() =>
-      document.removeEventListener("visibilitychange", flushDeferredWorkflowReads),
-    );
-  }
+
+  for (const entry of handlers) entry.register(context);
+  unsubscribes.push(onResourceResync(requestStoreResync, scope));
 
   return () => {
+    if (disposed) return;
     disposed = true;
-    if (workflowRetryTimer) clearTimeout(workflowRetryTimer);
-    for (const deferred of deferredPaneLayoutRefreshes.values()) {
-      deferred.resolve();
-    }
-    deferredPaneLayoutRefreshes.clear();
-    declinedPaneLayoutRefreshes.clear();
-    deferredPipelineReads.clear();
-    deferredMultiReviewReads.clear();
-    paneLayoutRequestGenerations.clear();
+    for (const stop of stops) stop();
     for (const unsubscribe of unsubscribes) unsubscribe();
+    ownController?.abort();
   };
 }
+
+/**
+ * The store bindings for one node scope: the registrations that may run on it
+ * (`storeResourceHandlersFor`). Started after `resourceSyncService`, which owns
+ * the feed they subscribe to.
+ */
+export const storeResourceSyncService = defineScopedService(
+  "store-resource-sync",
+  (scope, signal) => ({ stop: startStoreResourceSync({}, { scope, signal }) }),
+);

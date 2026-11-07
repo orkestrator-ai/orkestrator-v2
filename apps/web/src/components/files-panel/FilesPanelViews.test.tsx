@@ -1,9 +1,10 @@
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { useEffect } from "react";
 import { TerminalProvider, useTerminalContext } from "@/contexts";
-import { useFilesPanelStore } from "@/stores";
+import { filesPanelStore } from "@/stores";
 import type { FileNode, GitFileChange } from "@/lib/backend";
 import { restoreMatchMedia, setMobileViewport } from "../../../../../tests/mocks/match-media";
 import { AllFilesView } from "./AllFilesView";
@@ -15,6 +16,9 @@ import { fileNameStemLength, RenameFileDialog } from "./RenameFileDialog";
 import { FilesPanelHeader } from "./FilesPanelHeader";
 import { mockWriteText } from "../../../../../tests/mocks/clipboard";
 import { mockToastError, mockToastSuccess } from "../../../../../tests/mocks/sonner";
+import { setFilesPanelTestState } from "@/test/files-panel-state";
+import { useFilesPanelChromeStore } from "@/stores/filesPanelChromeStore";
+import { appCommandStore } from "@/test/app-command-store";
 
 const createFileTab = mock(() => undefined);
 
@@ -28,7 +32,7 @@ function RegisterFileTab() {
 }
 
 function renderWithTerminal(children: React.ReactNode) {
-  return render(
+  return renderInAppCommandScope(
     <TerminalProvider>
       <RegisterFileTab />
       {children}
@@ -123,7 +127,7 @@ describe("files panel views", () => {
     mockToastError.mockClear();
     mockToastSuccess.mockClear();
     setMobileViewport(false);
-    useFilesPanelStore.setState({
+    setFilesPanelTestState({
       isOpen: true,
       activeTab: "changes",
       expandedFolders: [],
@@ -141,15 +145,15 @@ describe("files panel views", () => {
   });
 
   test("AllFilesView covers loading, empty, and opening a file", async () => {
-    useFilesPanelStore.setState({ isLoadingTree: true });
+    appCommandStore(filesPanelStore).setState({ isLoadingTree: true });
     const view = renderWithTerminal(<AllFilesView />);
     expect(screen.getByText("Loading files...")).toBeTruthy();
 
-    act(() => useFilesPanelStore.setState({ isLoadingTree: false, fileTree: [] }));
+    act(() => appCommandStore(filesPanelStore).setState({ isLoadingTree: false, fileTree: [] }));
     expect(screen.getByText("No files found")).toBeTruthy();
 
     act(() =>
-      useFilesPanelStore.setState({
+      appCommandStore(filesPanelStore).setState({
         fileTree,
         expandedFolders: ["src"],
         changes: [change],
@@ -165,33 +169,33 @@ describe("files panel views", () => {
 
   test("ChangesView covers loading, empty, and diff opening on mobile", async () => {
     setMobileViewport(true);
-    useFilesPanelStore.setState({ isLoadingChanges: true });
+    appCommandStore(filesPanelStore).setState({ isLoadingChanges: true });
     renderWithTerminal(<ChangesView />);
     expect(screen.getByText("Loading changes...")).toBeTruthy();
 
-    act(() => useFilesPanelStore.setState({ isLoadingChanges: false, changes: [] }));
+    act(() => appCommandStore(filesPanelStore).setState({ isLoadingChanges: false, changes: [] }));
     expect(screen.getByText("No changes")).toBeTruthy();
 
-    act(() => useFilesPanelStore.setState({ changes: [change] }));
+    act(() => appCommandStore(filesPanelStore).setState({ changes: [change] }));
     await waitFor(() => expect(screen.getByTitle("src/App.tsx")).toBeTruthy());
     fireEvent.click(screen.getByTitle("src/App.tsx"));
     expect(createFileTab).toHaveBeenCalledWith("src/App.tsx", {
       isDiff: true,
       gitStatus: "M",
     });
-    expect(useFilesPanelStore.getState().isOpen).toBe(false);
+    expect(useFilesPanelChromeStore.getState().isOpen).toBe(false);
   });
 
   test("without environment panes, file clicks fall back to the project-root opener", async () => {
     const onOpenFile = mock((_path: string, _options?: unknown) => undefined);
-    useFilesPanelStore.setState({
+    appCommandStore(filesPanelStore).setState({
       activeTab: "all-files",
       fileTree,
       expandedFolders: ["src"],
       changes: [change],
     });
     // No RegisterFileTab: the project board has no editor panes of its own.
-    const allFiles = render(
+    const allFiles = renderInAppCommandScope(
       <TerminalProvider>
         <AllFilesView onOpenFile={onOpenFile} />
       </TerminalProvider>,
@@ -200,7 +204,7 @@ describe("files panel views", () => {
     expect(onOpenFile).toHaveBeenCalledWith("src/App.tsx");
     allFiles.unmount();
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <ChangesView onOpenFile={onOpenFile} />
       </TerminalProvider>,
@@ -212,7 +216,7 @@ describe("files panel views", () => {
 
   test("environment panes take precedence over the project-root opener", async () => {
     const onOpenFile = mock((_path: string, _options?: unknown) => undefined);
-    useFilesPanelStore.setState({ fileTree, expandedFolders: ["src"] });
+    appCommandStore(filesPanelStore).setState({ fileTree, expandedFolders: ["src"] });
     renderWithTerminal(<AllFilesView onOpenFile={onOpenFile} />);
     fireEvent.click(await screen.findByRole("button", { name: "App.tsx" }));
     expect(createFileTab).toHaveBeenCalledWith("src/App.tsx");
@@ -220,7 +224,7 @@ describe("files panel views", () => {
   });
 
   test("ChangedFileItem copies a workspace-relative path for deleted files", async () => {
-    render(<ChangedFileItem change={{ ...change, status: "D" }} />);
+    renderInAppCommandScope(<ChangedFileItem change={{ ...change, status: "D" }} />);
 
     fireEvent.contextMenu(screen.getByTitle("src/App.tsx"));
     fireEvent.click(await screen.findByText("Copy path"));
@@ -239,7 +243,7 @@ describe("files panel views", () => {
     });
 
     try {
-      render(<ChangedFileItem change={change} />);
+      renderInAppCommandScope(<ChangedFileItem change={change} />);
 
       fireEvent.contextMenu(screen.getByTitle("src/App.tsx"));
       fireEvent.click(await screen.findByText("Copy path"));
@@ -263,7 +267,7 @@ describe("files panel views", () => {
   });
 
   test("FileTreeNode exposes Copy path without optional action callbacks", async () => {
-    render(<FileTreeNode item={fileTree[0]!.children![0]!} depth={1} />);
+    renderInAppCommandScope(<FileTreeNode item={fileTree[0]!.children![0]!} depth={1} />);
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "App.tsx" }));
     fireEvent.click(await screen.findByText("Copy path"));
@@ -278,7 +282,7 @@ describe("files panel views", () => {
     const onReveal = mock(() => undefined);
     const onRevert = mock(() => undefined);
     const onDelete = mock(() => undefined);
-    render(
+    renderInAppCommandScope(
       <FileTreeNode
         item={fileTree[0]!}
         depth={0}
@@ -290,7 +294,7 @@ describe("files panel views", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "src" }));
-    expect(useFilesPanelStore.getState().expandedFolders).toContain("src");
+    expect(appCommandStore(filesPanelStore).getState().expandedFolders).toContain("src");
     const fileButton = await screen.findByRole("button", { name: "App.tsx" });
     fireEvent.contextMenu(fileButton);
     fireEvent.click(await screen.findByText("Copy path"));
@@ -315,12 +319,12 @@ describe("files panel views", () => {
       children: [],
       truncated: true,
     };
-    const view = render(<FileTreeNode item={incomplete} depth={0} />);
+    const view = renderInAppCommandScope(<FileTreeNode item={incomplete} depth={0} />);
     expect(screen.queryByText("Some folder contents are not shown.") === null).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "build" }));
     expect(await screen.findByText("Some folder contents are not shown.")).toBeTruthy();
     view.unmount();
-    const remounted = render(<FileTreeNode item={incomplete} depth={0} />);
+    const remounted = renderInAppCommandScope(<FileTreeNode item={incomplete} depth={0} />);
     expect(await screen.findByText("Some folder contents are not shown.")).toBeTruthy();
     remounted.rerender(<FileTreeNode item={{ ...incomplete, truncated: undefined }} depth={0} />);
     expect(screen.queryByText("Some folder contents are not shown.") === null).toBe(true);
@@ -334,22 +338,24 @@ describe("files panel views", () => {
       children: [],
       truncated: true,
     };
-    useFilesPanelStore.setState({
+    appCommandStore(filesPanelStore).setState({
       expandedFolders: ["build"],
       loadingFolders: ["build"],
       failedFolders: [],
     });
-    render(<FileTreeNode item={incomplete} depth={0} />);
+    renderInAppCommandScope(<FileTreeNode item={incomplete} depth={0} />);
     expect(await screen.findByText("Loading folder…")).toBeTruthy();
-    act(() => useFilesPanelStore.setState({ loadingFolders: [], failedFolders: ["build"] }));
+    act(() =>
+      appCommandStore(filesPanelStore).setState({ loadingFolders: [], failedFolders: ["build"] }),
+    );
     expect((await screen.findByRole("status")).textContent).toBe("Could not load folder.");
     expect(screen.queryByText("Some folder contents are not shown.") === null).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Retry loading build" }));
-    expect(useFilesPanelStore.getState().failedFolders).toEqual([]);
+    expect(appCommandStore(filesPanelStore).getState().failedFolders).toEqual([]);
   });
 
   test("AllFilesView renders loaded subtree children in the merged tree", async () => {
-    useFilesPanelStore.setState({
+    appCommandStore(filesPanelStore).setState({
       expandedFolders: ["build"],
       loadingFolders: [],
       failedFolders: [],
@@ -370,7 +376,7 @@ describe("files panel views", () => {
 
   test("FileTreeNode drags a file onto a destination folder", async () => {
     const onMove = mock(() => undefined);
-    useFilesPanelStore.setState({ fileTree, expandedFolders: ["src"] });
+    appCommandStore(filesPanelStore).setState({ fileTree, expandedFolders: ["src"] });
     renderWithTerminal(<AllFilesView onMove={onMove} onDelete={() => undefined} />);
 
     const fileButton = await screen.findByRole("button", { name: "App.tsx" });
@@ -385,12 +391,12 @@ describe("files panel views", () => {
     fireDrag(destination, "drop", dataTransfer);
 
     expect(onMove).toHaveBeenCalledWith(["src/App.tsx"], "archive");
-    expect(useFilesPanelStore.getState().expandedFolders).toContain("archive");
+    expect(appCommandStore(filesPanelStore).getState().expandedFolders).toContain("archive");
   });
 
   test("offers an explicit Move to dialog for keyboard and touch users", async () => {
     const onMove = mock(() => undefined);
-    useFilesPanelStore.setState({ fileTree, expandedFolders: ["src"] });
+    appCommandStore(filesPanelStore).setState({ fileTree, expandedFolders: ["src"] });
     renderWithTerminal(<AllFilesView onMove={onMove} />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Move App.tsx to another folder" }));
@@ -407,7 +413,7 @@ describe("files panel views", () => {
 
   test("moves nested files to the root and suppresses same-parent drops", async () => {
     const onMove = mock(() => undefined);
-    useFilesPanelStore.setState({ fileTree, expandedFolders: ["src"] });
+    appCommandStore(filesPanelStore).setState({ fileTree, expandedFolders: ["src"] });
     renderWithTerminal(<AllFilesView onMove={onMove} />);
     const fileButton = await screen.findByRole("button", { name: "App.tsx" });
     const sourceFolder = screen.getByRole("button", { name: "src" });
@@ -430,7 +436,7 @@ describe("files panel views", () => {
     const onCopyFiles = mock(() => undefined);
     const first = new File(["hello"], "notes.txt", { type: "text/plain" });
     const second = new File([new Uint8Array([0, 1, 255])], "image.bin");
-    useFilesPanelStore.setState({ fileTree, expandedFolders: ["src"] });
+    appCommandStore(filesPanelStore).setState({ fileTree, expandedFolders: ["src"] });
     renderWithTerminal(<AllFilesView onCopyFiles={onCopyFiles} />);
 
     const destination = screen.getByRole("button", { name: "archive" });
@@ -440,7 +446,7 @@ describe("files panel views", () => {
     expect(destination.className).toContain("ring-primary/60");
     fireDrag(destination, "drop", folderTransfer);
     expect(onCopyFiles).toHaveBeenCalledWith([first, second], "archive");
-    expect(useFilesPanelStore.getState().expandedFolders).toContain("archive");
+    expect(appCommandStore(filesPanelStore).getState().expandedFolders).toContain("archive");
 
     const rootTransfer = createDataTransfer([first]);
     const rootTarget = screen.getByLabelText("Workspace root drop target");
@@ -453,7 +459,7 @@ describe("files panel views", () => {
   test("copies files into the empty workspace drop target", () => {
     const onCopyFiles = mock(() => undefined);
     const file = new File(["hello"], "notes.txt", { type: "text/plain" });
-    useFilesPanelStore.setState({ fileTree: [], isLoadingTree: false });
+    appCommandStore(filesPanelStore).setState({ fileTree: [], isLoadingTree: false });
     renderWithTerminal(<AllFilesView onCopyFiles={onCopyFiles} />);
 
     const target = screen.getByLabelText("Workspace root drop target");
@@ -484,7 +490,7 @@ describe("files panel views", () => {
       getAsFile: () => folder,
       webkitGetAsEntry: () => ({ isDirectory: true }),
     } as unknown as DataTransferItem;
-    useFilesPanelStore.setState({ fileTree, expandedFolders: ["src"] });
+    appCommandStore(filesPanelStore).setState({ fileTree, expandedFolders: ["src"] });
     renderWithTerminal(<AllFilesView onCopyFiles={onCopyFiles} />);
 
     const event = fireDrag(
@@ -504,7 +510,7 @@ describe("files panel views", () => {
     const onMove = mock(() => undefined);
     const onCopyFiles = mock(() => undefined);
     const file = new File(["hello"], "notes.txt");
-    useFilesPanelStore.setState({ fileTree, expandedFolders: ["src"] });
+    appCommandStore(filesPanelStore).setState({ fileTree, expandedFolders: ["src"] });
     renderWithTerminal(<AllFilesView onMove={onMove} onCopyFiles={onCopyFiles} />);
     const destination = screen.getByRole("button", { name: "archive" });
 
@@ -523,7 +529,7 @@ describe("files panel views", () => {
 
   test("ignores foreign drags, clears hover state, and disables moves while pending", async () => {
     const onMove = mock(() => undefined);
-    useFilesPanelStore.setState({ fileTree, expandedFolders: ["src"] });
+    appCommandStore(filesPanelStore).setState({ fileTree, expandedFolders: ["src"] });
     const view = renderWithTerminal(<AllFilesView onMove={onMove} />);
     const destination = screen.getByRole("button", { name: "archive" });
     const foreignTransfer = createDataTransfer();
@@ -565,7 +571,7 @@ describe("files panel views", () => {
     const onCreateFolder = mock(async (parentDirectory: string, folderName: string) =>
       parentDirectory === "." ? folderName : `${parentDirectory}/${folderName}`,
     );
-    useFilesPanelStore.setState({ fileTree, expandedFolders: ["src"] });
+    appCommandStore(filesPanelStore).setState({ fileTree, expandedFolders: ["src"] });
     renderWithTerminal(<AllFilesView onCreateFolder={onCreateFolder} />);
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "src" }));
@@ -580,7 +586,7 @@ describe("files panel views", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create folder" }));
 
     await waitFor(() => expect(onCreateFolder).toHaveBeenCalledWith("src", "hooks"));
-    expect(useFilesPanelStore.getState().expandedFolders).toContain("src");
+    expect(appCommandStore(filesPanelStore).getState().expandedFolders).toContain("src");
     expect(screen.queryByRole("dialog", { name: "New folder" }) === null).toBe(true);
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "App.tsx" }));
@@ -593,7 +599,7 @@ describe("files panel views", () => {
 
   test("opens only the leaf context menu for a nested file", async () => {
     const onCreateFolder = mock(async () => "src/hooks");
-    useFilesPanelStore.setState({ fileTree, expandedFolders: ["src"] });
+    appCommandStore(filesPanelStore).setState({ fileTree, expandedFolders: ["src"] });
     renderWithTerminal(<AllFilesView onCreateFolder={onCreateFolder} />);
 
     const fileButton = await screen.findByRole("button", { name: "App.tsx" });
@@ -611,7 +617,7 @@ describe("files panel views", () => {
   test("deletes a folder from its context menu", async () => {
     const onDelete = mock((_paths: string[]) => undefined);
     const onDeleteFolder = mock((_path: string) => undefined);
-    useFilesPanelStore.setState({ fileTree, expandedFolders: ["src"] });
+    appCommandStore(filesPanelStore).setState({ fileTree, expandedFolders: ["src"] });
     renderWithTerminal(<AllFilesView onDelete={onDelete} onDeleteFolder={onDeleteFolder} />);
 
     // A folder menu exists even without folder creation, and offers only folder deletion.
@@ -631,7 +637,7 @@ describe("files panel views", () => {
 
   test("keeps Delete folder disabled while a mutation is pending", async () => {
     const onDeleteFolder = mock((_path: string) => undefined);
-    useFilesPanelStore.setState({ fileTree, expandedFolders: [] });
+    appCommandStore(filesPanelStore).setState({ fileTree, expandedFolders: [] });
     renderWithTerminal(<AllFilesView onDeleteFolder={onDeleteFolder} movePending />);
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "archive" }));
@@ -643,7 +649,7 @@ describe("files panel views", () => {
 
   test("keeps New folder disabled while a mutation is pending", async () => {
     const onCreateFolder = mock(async () => "src/hooks");
-    useFilesPanelStore.setState({ fileTree, expandedFolders: ["src"] });
+    appCommandStore(filesPanelStore).setState({ fileTree, expandedFolders: ["src"] });
     renderWithTerminal(<AllFilesView onCreateFolder={onCreateFolder} movePending />);
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "src" }));
@@ -655,7 +661,7 @@ describe("files panel views", () => {
 
   test("creates a folder at the workspace root from empty space in a populated tree", async () => {
     const onCreateFolder = mock(async (_parent: string, folderName: string) => folderName);
-    useFilesPanelStore.setState({ fileTree, expandedFolders: ["src"] });
+    appCommandStore(filesPanelStore).setState({ fileTree, expandedFolders: ["src"] });
     renderWithTerminal(<AllFilesView onCreateFolder={onCreateFolder} />);
 
     fireEvent.contextMenu(screen.getByLabelText("Workspace empty space"));
@@ -670,7 +676,7 @@ describe("files panel views", () => {
 
   test("creates a folder at the workspace root from empty space", async () => {
     const onCreateFolder = mock(async (_parent: string, folderName: string) => folderName);
-    useFilesPanelStore.setState({ fileTree: [], isLoadingTree: false });
+    appCommandStore(filesPanelStore).setState({ fileTree: [], isLoadingTree: false });
     renderWithTerminal(<AllFilesView onCreateFolder={onCreateFolder} />);
 
     fireEvent.contextMenu(screen.getByText("No files found"));
@@ -686,7 +692,7 @@ describe("files panel views", () => {
     const onCreate = mock(async () => {
       throw new Error("already exists");
     });
-    render(
+    renderInAppCommandScope(
       <CreateFolderDialog
         parentDirectory="src"
         isPending={false}
@@ -708,7 +714,7 @@ describe("files panel views", () => {
     });
     const onCreate = mock(async () => pending);
     const onCancel = mock(() => undefined);
-    render(
+    renderInAppCommandScope(
       <CreateFolderDialog
         parentDirectory="src"
         isPending
@@ -728,7 +734,7 @@ describe("files panel views", () => {
     const onRename = mock(async (path: string, newName: string) =>
       path.includes("/") ? `${path.slice(0, path.lastIndexOf("/"))}/${newName}` : newName,
     );
-    useFilesPanelStore.setState({ fileTree, expandedFolders: ["src"] });
+    appCommandStore(filesPanelStore).setState({ fileTree, expandedFolders: ["src"] });
     renderWithTerminal(<AllFilesView onRename={onRename} />);
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "App.tsx" }));
@@ -754,7 +760,10 @@ describe("files panel views", () => {
           resolveRename = resolve;
         }),
     );
-    useFilesPanelStore.setState({ fileTree: multiFileTree, expandedFolders: ["src"] });
+    appCommandStore(filesPanelStore).setState({
+      fileTree: multiFileTree,
+      expandedFolders: ["src"],
+    });
     renderWithTerminal(<AllFilesView onRename={onRename} />);
     fireEvent.click(screen.getByRole("button", { name: "App.tsx" }));
     fireEvent.click(screen.getByRole("button", { name: "README.md" }), { metaKey: true });
@@ -765,7 +774,7 @@ describe("files panel views", () => {
     await waitFor(() => expect(onRename).toHaveBeenCalledWith("src/App.tsx", "Main.tsx"));
 
     act(() =>
-      useFilesPanelStore.setState({
+      appCommandStore(filesPanelStore).setState({
         fileTree: multiFileTree.map((node) =>
           node.path === "src"
             ? {
@@ -802,7 +811,7 @@ describe("files panel views", () => {
   });
 
   test("offers Rename only for files and only when renaming is available", async () => {
-    useFilesPanelStore.setState({ fileTree, expandedFolders: ["src"] });
+    appCommandStore(filesPanelStore).setState({ fileTree, expandedFolders: ["src"] });
     const { unmount } = renderWithTerminal(
       <AllFilesView onRename={mock(async () => "x")} onCreateFolder={mock(async () => "x")} />,
     );
@@ -819,7 +828,7 @@ describe("files panel views", () => {
   });
 
   test("keeps Rename disabled while a mutation is pending", async () => {
-    useFilesPanelStore.setState({ fileTree, expandedFolders: ["src"] });
+    appCommandStore(filesPanelStore).setState({ fileTree, expandedFolders: ["src"] });
     renderWithTerminal(<AllFilesView onRename={mock(async () => "x")} movePending />);
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "App.tsx" }));
@@ -833,7 +842,7 @@ describe("files panel views", () => {
     const onRename = mock(async () => {
       throw new Error("A file already exists at src/Main.tsx");
     });
-    render(
+    renderInAppCommandScope(
       <RenameFileDialog
         filePath="src/App.tsx"
         isPending={false}
@@ -852,7 +861,7 @@ describe("files panel views", () => {
 
   test("RenameFileDialog rejects path separators without calling rename", async () => {
     const onRename = mock(async () => undefined);
-    render(
+    renderInAppCommandScope(
       <RenameFileDialog
         filePath="src/App.tsx"
         isPending={false}
@@ -869,7 +878,7 @@ describe("files panel views", () => {
 
   test("RenameFileDialog ignores dismissals while renaming is pending", () => {
     const onCancel = mock(() => undefined);
-    render(
+    renderInAppCommandScope(
       <RenameFileDialog
         filePath="src/App.tsx"
         isPending
@@ -892,7 +901,7 @@ describe("files panel views", () => {
   });
 
   test("Shift-click selects a visible file range without opening files", async () => {
-    useFilesPanelStore.setState({
+    appCommandStore(filesPanelStore).setState({
       fileTree: multiFileTree,
       expandedFolders: ["src"],
     });
@@ -917,7 +926,7 @@ describe("files panel views", () => {
   });
 
   test("Command-click and Control-click add files to the selection", async () => {
-    useFilesPanelStore.setState({
+    appCommandStore(filesPanelStore).setState({
       fileTree: multiFileTree,
       expandedFolders: ["src"],
     });
@@ -939,7 +948,7 @@ describe("files panel views", () => {
   });
 
   test("a second Command-click removes an already-selected file without opening it", async () => {
-    useFilesPanelStore.setState({
+    appCommandStore(filesPanelStore).setState({
       fileTree: multiFileTree,
       expandedFolders: ["src"],
     });
@@ -960,7 +969,7 @@ describe("files panel views", () => {
 
   test("dragging a selected file moves the whole selection", async () => {
     const onMove = mock(() => undefined);
-    useFilesPanelStore.setState({
+    appCommandStore(filesPanelStore).setState({
       fileTree: multiFileTree,
       expandedFolders: ["src"],
     });
@@ -978,7 +987,7 @@ describe("files panel views", () => {
   test("right-click delete and Move to apply to the selected files", async () => {
     const onMove = mock(() => undefined);
     const onDelete = mock(() => undefined);
-    useFilesPanelStore.setState({
+    appCommandStore(filesPanelStore).setState({
       fileTree: multiFileTree,
       expandedFolders: ["src"],
     });
@@ -999,7 +1008,7 @@ describe("files panel views", () => {
 
   test("right-clicking an unselected file acts on that file only", async () => {
     const onDelete = mock(() => undefined);
-    useFilesPanelStore.setState({
+    appCommandStore(filesPanelStore).setState({
       fileTree: multiFileTree,
       expandedFolders: ["src"],
     });
@@ -1020,14 +1029,14 @@ describe("files panel views", () => {
   });
 
   test("Shift-click falls back when the anchor is no longer visible", async () => {
-    useFilesPanelStore.setState({
+    appCommandStore(filesPanelStore).setState({
       fileTree: multiFileTree,
       expandedFolders: ["src"],
     });
     renderWithTerminal(<AllFilesView />);
 
     fireEvent.click(await screen.findByRole("button", { name: "App.tsx" }));
-    act(() => useFilesPanelStore.setState({ expandedFolders: [] }));
+    act(() => appCommandStore(filesPanelStore).setState({ expandedFolders: [] }));
     expect(screen.queryByRole("button", { name: "App.tsx" }) === null).toBe(true);
 
     const readme = screen.getByRole("button", { name: "README.md" });
@@ -1038,7 +1047,7 @@ describe("files panel views", () => {
   });
 
   test("prunes selection when the tree no longer contains a selected path", async () => {
-    useFilesPanelStore.setState({
+    appCommandStore(filesPanelStore).setState({
       fileTree: multiFileTree,
       expandedFolders: ["src"],
     });
@@ -1051,12 +1060,17 @@ describe("files panel views", () => {
     );
 
     act(() =>
-      useFilesPanelStore.setState({
+      appCommandStore(filesPanelStore).setState({
         fileTree: [{ name: "archive", path: "archive", isDirectory: true, children: [] }],
         expandedFolders: [],
       }),
     );
-    act(() => useFilesPanelStore.setState({ fileTree: multiFileTree, expandedFolders: ["src"] }));
+    act(() =>
+      appCommandStore(filesPanelStore).setState({
+        fileTree: multiFileTree,
+        expandedFolders: ["src"],
+      }),
+    );
 
     expect(screen.getByRole("button", { name: "App.tsx" }).getAttribute("aria-pressed")).toBe(
       "false",
@@ -1068,7 +1082,7 @@ describe("files panel views", () => {
 
   test("move dialog names selected files hidden inside a collapsed folder", async () => {
     const onMove = mock(() => undefined);
-    useFilesPanelStore.setState({
+    appCommandStore(filesPanelStore).setState({
       fileTree: multiFileTree,
       expandedFolders: ["src"],
     });
@@ -1077,7 +1091,7 @@ describe("files panel views", () => {
     fireEvent.click(await screen.findByRole("button", { name: "App.tsx" }));
     fireEvent.click(screen.getByRole("button", { name: "README.md" }), { metaKey: true });
 
-    act(() => useFilesPanelStore.setState({ expandedFolders: [] }));
+    act(() => appCommandStore(filesPanelStore).setState({ expandedFolders: [] }));
     expect(screen.queryByRole("button", { name: "App.tsx" }) === null).toBe(true);
     expect(screen.getByRole("button", { name: "README.md" })).toBeTruthy();
 
@@ -1089,7 +1103,7 @@ describe("files panel views", () => {
 
   test("moveTo filters out sources already in the destination", async () => {
     const onMove = mock(() => undefined);
-    useFilesPanelStore.setState({
+    appCommandStore(filesPanelStore).setState({
       fileTree: multiFileTree,
       expandedFolders: ["src"],
     });
@@ -1106,7 +1120,7 @@ describe("files panel views", () => {
   });
 
   test("destinationDisabled reflects the sources that would actually move", async () => {
-    useFilesPanelStore.setState({
+    appCommandStore(filesPanelStore).setState({
       fileTree: multiFileTree,
       expandedFolders: ["src"],
     });
@@ -1124,15 +1138,15 @@ describe("files panel views", () => {
 
   test("FilesPanelHeader switches tabs, reports count, refreshes, and closes", () => {
     const onRefresh = mock(() => undefined);
-    useFilesPanelStore.setState({ changes: [change] });
-    const { container } = render(<FilesPanelHeader onRefresh={onRefresh} />);
+    appCommandStore(filesPanelStore).setState({ changes: [change] });
+    const { container } = renderInAppCommandScope(<FilesPanelHeader onRefresh={onRefresh} />);
     expect(screen.getByText("1")).toBeTruthy();
 
     fireEvent.mouseDown(screen.getByRole("tab", { name: "All files" }), {
       button: 0,
       ctrlKey: false,
     });
-    expect(useFilesPanelStore.getState().activeTab).toBe("all-files");
+    expect(appCommandStore(filesPanelStore).getState().activeTab).toBe("all-files");
 
     const iconButtons = Array.from(container.querySelectorAll("button")).filter((button) =>
       button.querySelector("svg"),
@@ -1140,6 +1154,6 @@ describe("files panel views", () => {
     fireEvent.click(iconButtons.at(-2)!);
     expect(onRefresh).toHaveBeenCalledTimes(1);
     fireEvent.click(iconButtons.at(-1)!);
-    expect(useFilesPanelStore.getState().isOpen).toBe(false);
+    expect(useFilesPanelChromeStore.getState().isOpen).toBe(false);
   });
 });

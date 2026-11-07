@@ -1,7 +1,12 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { asString, assertOnlyKeys } from "./commands-validation.js";
+import {
+  createHostDirectoryCommand,
+  findProjectIconsCommand,
+  listHostDirectoryCommand,
+  readHostImageFileCommand,
+} from "@orkestrator/protocol/contract/domains/projects";
 import type { CommandRegistrar } from "./commands-registry-types.js";
 
 /** Upper bound on entries returned for one directory; the rest are reported as truncated. */
@@ -413,32 +418,17 @@ export async function readHostImageFile(requested: string): Promise<HostImageFil
 }
 
 export function registerHostFileCommands(register: CommandRegistrar): void {
-  register("list_host_directory", async (args) => {
-    assertOnlyKeys(args, ["path", "includeFiles", "showHidden"], "arguments");
-    const requestedPath = args.path === undefined ? undefined : asString(args.path, "path");
-    for (const flag of ["includeFiles", "showHidden"] as const) {
-      if (args[flag] !== undefined && typeof args[flag] !== "boolean") {
-        throw new Error(`Expected ${flag} to be a boolean`);
-      }
-    }
-    return listHostDirectory(requestedPath, {
+  // The flags' `Expected includeFiles to be a boolean` is the schema's text now.
+  register(listHostDirectoryCommand, async (args) => {
+    return listHostDirectory(args.path, {
       includeFiles: args.includeFiles === true,
       showHidden: args.showHidden === true,
     });
   });
 
-  register("create_host_directory", async (args) => {
-    assertOnlyKeys(args, ["parent", "name"], "arguments");
-    return createHostDirectory(asString(args.parent, "parent"), asString(args.name, "name"));
-  });
+  register(createHostDirectoryCommand, async (args) => createHostDirectory(args.parent, args.name));
 
-  register("find_project_icons", async (args) => {
-    assertOnlyKeys(args, ["root"], "arguments");
-    return findProjectIcons(asString(args.root, "root"));
-  });
+  register(findProjectIconsCommand, async (args) => findProjectIcons(args.root));
 
-  register("read_host_image_file", async (args) => {
-    assertOnlyKeys(args, ["path"], "arguments");
-    return readHostImageFile(asString(args.path, "path"));
-  });
+  register(readHostImageFileCommand, async (args) => readHostImageFile(args.path));
 }

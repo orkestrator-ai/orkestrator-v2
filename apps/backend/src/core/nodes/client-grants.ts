@@ -17,11 +17,12 @@ const log = createLogger("nodes");
  *   and the command node issues a new one.
  * - Whatever removes a grant tells the listeners of that grant (`onRevoke`), so
  *   a connection authorized by it does not outlive it.
- * - Valid for the workspace only (see `isWorkspaceExcludedCommand`): agent
+ * - Valid for the workspace only: the commands defined with `access:
+ *   "workspace"` (`admitsWorkspaceCommand`, plan item 7012), which are agent
  *   chat, terminals, previews, files and the project boards. Never for
- *   administration: token rotation, attachment, grants, registry commands,
- *   the machine's global settings and credentials, or host updates
- *   (`WORKSPACE_ADMINISTRATION_COMMANDS`).
+ *   administration (token rotation, attachment, grants, registry commands,
+ *   the machine's global settings and credentials, host updates) or any
+ *   command without a definition: the allow-list fails closed.
  */
 
 export const MAX_GRANT_TTL_MS = 15 * 60_000;

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import {
   AGENT_INTERACTION_CONTRACT_VERSION,
   isAgentInteractionResolution,
@@ -9,11 +10,12 @@ import {
   type AgentInteractionResolution,
 } from "@orkestrator/protocol/agent-interactions";
 import { NativeAgentQuestionCard } from "./NativeAgentQuestionCard";
-import { usePromptDraftStore } from "@/stores/promptDraftStore";
+import { promptDraftStore } from "@/stores/promptDraftStore";
+import { appCommandStore } from "@/test/app-command-store";
 
 afterEach(() => {
   cleanup();
-  usePromptDraftStore.getState().reset();
+  appCommandStore(promptDraftStore).getState().reset();
 });
 
 function question(
@@ -63,7 +65,7 @@ const TWO_OPTIONS = [
 describe("NativeAgentQuestionCard", () => {
   test("shows an option's preview verbatim as monospace text", () => {
     const preview = "<b>not html</b>\n  ├─ src/\n  └─ **not markdown**";
-    render(
+    renderInAppCommandScope(
       <NativeAgentQuestionCard
         interaction={request([
           question({
@@ -82,7 +84,7 @@ describe("NativeAgentQuestionCard", () => {
   });
 
   test("hides the free-text field until the user picks Something else", () => {
-    render(
+    renderInAppCommandScope(
       <NativeAgentQuestionCard
         interaction={request([question({ id: "q0", options: TWO_OPTIONS })])}
         onResolve={async () => applied()}
@@ -97,7 +99,7 @@ describe("NativeAgentQuestionCard", () => {
   });
 
   test("shows the free-text field immediately when there are no options", () => {
-    render(
+    renderInAppCommandScope(
       <NativeAgentQuestionCard
         interaction={request([question({ id: "q0" })])}
         onResolve={async () => applied()}
@@ -110,7 +112,7 @@ describe("NativeAgentQuestionCard", () => {
 
   test("keeps a single-choice option and a custom answer mutually exclusive", async () => {
     const onResolve = mock(async (_resolution: AgentInteractionResolution) => applied());
-    render(
+    renderInAppCommandScope(
       <NativeAgentQuestionCard
         interaction={request([question({ id: "q0", options: TWO_OPTIONS })])}
         onResolve={onResolve}
@@ -131,7 +133,7 @@ describe("NativeAgentQuestionCard", () => {
   });
 
   test("closing Something else discards the text it was holding", () => {
-    render(
+    renderInAppCommandScope(
       <NativeAgentQuestionCard
         interaction={request([question({ id: "q0", options: TWO_OPTIONS })])}
         onResolve={async () => applied()}
@@ -152,7 +154,7 @@ describe("NativeAgentQuestionCard", () => {
 
   test("keeps a custom answer alongside options in a multi-select question", async () => {
     const onResolve = mock(async (_resolution: AgentInteractionResolution) => applied());
-    render(
+    renderInAppCommandScope(
       <NativeAgentQuestionCard
         interaction={request([question({ id: "q0", multiple: true, options: TWO_OPTIONS })])}
         onResolve={onResolve}
@@ -175,7 +177,7 @@ describe("NativeAgentQuestionCard", () => {
 
   test("shows one question at a time and navigates with the tab strip", async () => {
     const onResolve = mock(async (_resolution: AgentInteractionResolution) => applied());
-    render(
+    renderInAppCommandScope(
       <NativeAgentQuestionCard
         interaction={request([
           question({
@@ -218,7 +220,7 @@ describe("NativeAgentQuestionCard", () => {
 
   test("⌘↵ moves to the next question, then submits on the last", async () => {
     const onResolve = mock(async (_resolution: AgentInteractionResolution) => applied());
-    render(
+    renderInAppCommandScope(
       <NativeAgentQuestionCard
         interaction={request([
           question({ id: "q0", prompt: "Which language?", options: TWO_OPTIONS }),
@@ -253,7 +255,7 @@ describe("NativeAgentQuestionCard", () => {
     "IME confirmation does not advance or submit: %j",
     (ime) => {
       const onResolve = mock(async (_resolution: AgentInteractionResolution) => applied());
-      render(
+      renderInAppCommandScope(
         <NativeAgentQuestionCard
           interaction={request([
             question({ id: "q0", options: TWO_OPTIONS }),
@@ -275,7 +277,7 @@ describe("NativeAgentQuestionCard", () => {
   );
 
   test.each([false, true])("advancement focuses the next option or panel (empty: %s)", (empty) => {
-    render(
+    renderInAppCommandScope(
       <NativeAgentQuestionCard
         interaction={request([
           question({ id: "q0", options: TWO_OPTIONS }),
@@ -294,7 +296,7 @@ describe("NativeAgentQuestionCard", () => {
 
   test("⌘↵ does not submit while a required question is unanswered", () => {
     const onResolve = mock(async (_resolution: AgentInteractionResolution) => applied());
-    render(
+    renderInAppCommandScope(
       <NativeAgentQuestionCard
         interaction={request([question({ id: "q0" })])}
         onResolve={onResolve}
@@ -308,7 +310,7 @@ describe("NativeAgentQuestionCard", () => {
   });
 
   test("refuses to submit while a required question is unanswered", () => {
-    render(
+    renderInAppCommandScope(
       <NativeAgentQuestionCard
         interaction={request([
           question({ id: "q0", options: TWO_OPTIONS }),
@@ -339,7 +341,7 @@ describe("NativeAgentQuestionCard", () => {
   test("keeps a secret answer live-only and discards it across unmount", async () => {
     const onResolve = mock(async (_resolution: AgentInteractionResolution) => applied());
     const interaction = request([question({ id: "q0", prompt: "Access token", secret: true })]);
-    const view = render(
+    const view = renderInAppCommandScope(
       <NativeAgentQuestionCard interaction={interaction} onResolve={onResolve} />,
     );
 
@@ -348,10 +350,12 @@ describe("NativeAgentQuestionCard", () => {
     expect(input.autocomplete).toBe("off");
     expect(screen.getByText(/discarded when you leave this tab/)).toBeTruthy();
     fireEvent.change(input, { target: { value: "discard-me" } });
-    expect(usePromptDraftStore.getState().drafts.size).toBe(0);
+    expect(appCommandStore(promptDraftStore).getState().drafts.size).toBe(0);
 
     view.unmount();
-    render(<NativeAgentQuestionCard interaction={interaction} onResolve={onResolve} />);
+    renderInAppCommandScope(
+      <NativeAgentQuestionCard interaction={interaction} onResolve={onResolve} />,
+    );
     expect((screen.getByLabelText("Access token response") as HTMLInputElement).value).toBe("");
 
     fireEvent.change(screen.getByLabelText("Access token response"), {
@@ -362,7 +366,7 @@ describe("NativeAgentQuestionCard", () => {
     expect(onResolve.mock.calls[0]?.[0].answer?.answers).toEqual([
       { questionId: "q0", freeText: "send-live" },
     ]);
-    expect(usePromptDraftStore.getState().drafts.size).toBe(0);
+    expect(appCommandStore(promptDraftStore).getState().drafts.size).toBe(0);
   });
 
   test("omits an unanswered optional question from the resolution", async () => {
@@ -371,7 +375,9 @@ describe("NativeAgentQuestionCard", () => {
       question({ id: "q1", prompt: "Any notes?", required: false }),
     ]);
     const onResolve = mock(async (_resolution: AgentInteractionResolution) => applied());
-    render(<NativeAgentQuestionCard interaction={interaction} onResolve={onResolve} />);
+    renderInAppCommandScope(
+      <NativeAgentQuestionCard interaction={interaction} onResolve={onResolve} />,
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "TypeScript" }));
     fireEvent.click(screen.getByRole("button", { name: "Next question" }));
@@ -390,7 +396,7 @@ describe("NativeAgentQuestionCard", () => {
       sessionId: "session-1",
       revision: 1,
     }));
-    render(
+    renderInAppCommandScope(
       <NativeAgentQuestionCard
         interaction={request([question({ id: "q0", options: TWO_OPTIONS })])}
         onResolve={onResolve}
@@ -418,7 +424,7 @@ describe("NativeAgentQuestionCard", () => {
         options: TWO_OPTIONS,
       }),
     ];
-    const { unmount } = render(
+    const { unmount } = renderInAppCommandScope(
       <NativeAgentQuestionCard
         interaction={request(questions)}
         onResolve={async () => applied()}
@@ -429,7 +435,7 @@ describe("NativeAgentQuestionCard", () => {
     fireEvent.click(screen.getByRole("button", { name: "Rust" }));
     unmount();
 
-    render(
+    renderInAppCommandScope(
       <NativeAgentQuestionCard
         interaction={request(questions)}
         onResolve={async () => applied()}
@@ -442,7 +448,7 @@ describe("NativeAgentQuestionCard", () => {
 
   test("declines the question through the dismiss action", async () => {
     const onResolve = mock(async (_resolution: AgentInteractionResolution) => applied());
-    render(
+    renderInAppCommandScope(
       <NativeAgentQuestionCard
         interaction={request([question({ id: "q0", options: TWO_OPTIONS })])}
         onResolve={onResolve}
@@ -474,7 +480,7 @@ describe("NativeAgentQuestionCard countdown pause", () => {
 
   test("a paused question shows Paused when it mounts, as it does after a reload", () => {
     const heldAt = Date.now();
-    render(
+    renderInAppCommandScope(
       <NativeAgentQuestionCard
         interaction={timed({ available: true, heldAt }, heldAt + CEILING)}
         onResolve={async () => applied()}
@@ -494,7 +500,7 @@ describe("NativeAgentQuestionCard countdown pause", () => {
           finish = resolve;
         }),
     );
-    const { rerender } = render(
+    const { rerender } = renderInAppCommandScope(
       <NativeAgentQuestionCard
         interaction={timed({ available: true })}
         onResolve={async () => applied()}
@@ -527,7 +533,7 @@ describe("NativeAgentQuestionCard countdown pause", () => {
   });
 
   test("a refused pause says so and leaves the countdown running", async () => {
-    render(
+    renderInAppCommandScope(
       <NativeAgentQuestionCard
         interaction={timed({ available: true })}
         onResolve={async () => applied()}
@@ -543,7 +549,7 @@ describe("NativeAgentQuestionCard countdown pause", () => {
 
   test("a request that went away meanwhile is not reported as an error", async () => {
     const onHold = mock(async () => outcome("stale"));
-    render(
+    renderInAppCommandScope(
       <NativeAgentQuestionCard
         interaction={timed({ available: true })}
         onResolve={async () => applied()}
@@ -556,7 +562,7 @@ describe("NativeAgentQuestionCard countdown pause", () => {
   });
 
   test("a countdown from an older bridge cannot be clicked, and says why", () => {
-    render(
+    renderInAppCommandScope(
       <NativeAgentQuestionCard
         interaction={timed({ available: false, reason: "bridge-outdated" })}
         onResolve={async () => applied()}

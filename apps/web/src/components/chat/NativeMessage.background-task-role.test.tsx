@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, screen } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { rowlessBackgroundTaskMessages } from "@/lib/chat/native-message-adapters";
 import { NativeMessage } from "./NativeMessage";
 import { BackgroundTaskCard } from "./NativeMessage.agent-parts";
@@ -13,14 +14,14 @@ describe("background task agent role", () => {
       [],
     );
 
-    render(<NativeMessage message={row!} />);
+    renderInAppCommandScope(<NativeMessage message={row!} />);
 
     expect(screen.getByRole("button", { name: /Agent Explore Running/ })).toBeTruthy();
     expect(screen.queryByText("Background task agent-1") === null).toBe(true);
   });
 
   test("a backgrounded main session is not presented as a delegated agent", () => {
-    render(
+    renderInAppCommandScope(
       <BackgroundTaskCard
         task={{ id: "main-1", status: "running", agentRole: "main-session" }}
         open={false}
@@ -35,7 +36,7 @@ describe("background task agent role", () => {
   });
 
   test("a described agent keeps its description and shows its type in the details", () => {
-    render(
+    renderInAppCommandScope(
       <BackgroundTaskCard
         task={{
           id: "agent-2",
@@ -56,7 +57,7 @@ describe("background task agent role", () => {
   });
 
   test("a task with no role still reads as a task", () => {
-    render(
+    renderInAppCommandScope(
       <BackgroundTaskCard
         task={{ id: "shell-1", status: "running", description: "Watch the build" }}
         open={false}

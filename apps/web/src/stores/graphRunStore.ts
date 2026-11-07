@@ -1,16 +1,14 @@
-import { create } from "zustand";
 import type { GraphRun } from "@orkestrator/protocol/graphs/run";
 import type {
   GraphRunArtifactView,
   GraphRunSummary,
   GraphRunTranscriptView,
 } from "@orkestrator/protocol/graphs/run-view";
-import {
-  getGraphRun,
-  getGraphRunArtifact,
-  getGraphRunTranscript,
-  listGraphRuns,
-} from "@/lib/backend/graph-runs";
+import * as graphRuns from "@/lib/backend/graph-runs";
+import { backendApiForScope } from "@/lib/backend/client";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { defineScopedStore } from "@/lib/node-scope/scoped-store";
+import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
 
 /**
  * Graph runs as the run view and the runs list see them (item 211).
@@ -59,7 +57,7 @@ export interface GraphRunArtifactEntry {
 export const MAX_CACHED_ARTIFACTS = 200;
 export const MAX_CACHED_TRANSCRIPTS = 32;
 
-interface GraphRunState {
+export interface GraphRunState {
   runs: Map<string, GraphRunEntry>;
   lists: Map<string, GraphRunListEntry>;
   transcripts: Map<string, GraphRunTranscriptEntry>;
@@ -101,212 +99,231 @@ function boundedSet<V>(map: Map<string, V>, key: string, value: V, max: number):
   return next;
 }
 
-/** In-flight reads per run, so a burst of change events costs one read at a time. */
-const inFlight = new Map<string, { promise: Promise<void>; again: boolean }>();
+/** `scope`'s run reads: the suites' mocked named exports on the app's command scope. */
+function graphRunsApi(scope: NodeScope) {
+  return backendApiForScope(scope, graphRuns.createGraphRunsApi, {
+    getGraphRun: graphRuns.getGraphRun,
+    getGraphRunArtifact: graphRuns.getGraphRunArtifact,
+    getGraphRunTranscript: graphRuns.getGraphRunTranscript,
+    listGraphRuns: graphRuns.listGraphRuns,
+  });
+}
 
-export const useGraphRunStore = create<GraphRunState>()((set, get) => {
-  const setRun = (runId: string, patch: Partial<GraphRunEntry>) =>
-    set((state) => {
-      const runs = new Map(state.runs);
-      runs.set(runId, { ...(state.runs.get(runId) ?? EMPTY_GRAPH_RUN), ...patch });
-      return { runs };
-    });
-
-  const readRun = async (runId: string): Promise<void> => {
-    const held = get().runs.get(runId);
-    if (!held?.run) setRun(runId, { status: held?.status === "ready" ? "ready" : "loading" });
-    try {
-      const result = await getGraphRun(runId, held?.run?.revision);
-      if (result.status === "unchanged") {
-        setRun(runId, { status: "ready", error: null });
-        return;
-      }
-      get().applyRun(result.run);
-    } catch (error) {
-      if (isGraphRunNotFound(error)) {
-        setRun(runId, { run: null, status: "missing", error: null });
-        return;
-      }
-      // A failed refresh keeps the last snapshot on screen.
-      setRun(runId, {
-        status: get().runs.get(runId)?.run ? "ready" : "error",
-        error: errorText(error),
-      });
-    }
-  };
-
-  return {
-    runs: new Map(),
-    lists: new Map(),
-    transcripts: new Map(),
-    artifacts: new Map(),
-
-    loadRun: (runId) => {
-      const current = inFlight.get(runId);
-      if (current) {
-        // Changes that land during a read are covered by one more read after it.
-        current.again = true;
-        return current.promise;
-      }
-      const entry = { promise: Promise.resolve(), again: false };
-      entry.promise = (async () => {
-        try {
-          do {
-            entry.again = false;
-            await readRun(runId);
-          } while (entry.again);
-        } finally {
-          inFlight.delete(runId);
-        }
-      })();
-      inFlight.set(runId, entry);
-      return entry.promise;
-    },
-
-    applyRun: (run) => {
-      const held = get().runs.get(run.id)?.run;
-      if (held && held.revision > run.revision) return;
-      setRun(run.id, { run, status: "ready", error: null });
-      // Keep a list that shows this run current without a second read.
+/** Per node: a run belongs to the node that runs it (plan item 3011). */
+export const graphRunStore = defineScopedStore<GraphRunState>(
+  "graph-run",
+  (scope) => (set, get) => {
+    /** Read per call, so a suite's module mock installed later is seen. */
+    const api = () => graphRunsApi(scope);
+    /** In-flight reads per run, so a burst of change events costs one read at a time. */
+    const inFlight = new Map<string, { promise: Promise<void>; again: boolean }>();
+    const setRun = (runId: string, patch: Partial<GraphRunEntry>) =>
       set((state) => {
-        let changed = false;
-        const lists = new Map(state.lists);
-        for (const [environmentId, list] of state.lists) {
-          const index = list.runs.findIndex((summary) => summary.id === run.id);
-          if (index < 0) continue;
-          const summary = list.runs[index]!;
-          if (summary.revision >= run.revision) continue;
-          const runs = [...list.runs];
-          runs[index] = {
-            ...summary,
-            status: run.status,
-            revision: run.revision,
-            updatedAt: run.updatedAt,
-            ...(run.finishedAt !== undefined ? { finishedAt: run.finishedAt } : {}),
-            ...(run.error !== undefined ? { error: run.error } : {}),
-            usage: { ...run.usage },
-          };
-          lists.set(environmentId, { ...list, runs });
-          changed = true;
-        }
-        return changed ? { lists } : {};
+        const runs = new Map(state.runs);
+        runs.set(runId, { ...(state.runs.get(runId) ?? EMPTY_GRAPH_RUN), ...patch });
+        return { runs };
       });
-    },
 
-    loadList: async (environmentId) => {
-      const held = get().lists.get(environmentId) ?? EMPTY_GRAPH_RUN_LIST;
-      set((state) => {
-        const lists = new Map(state.lists);
-        lists.set(environmentId, {
-          ...held,
-          status: held.status === "ready" ? "ready" : "loading",
-        });
-        return { lists };
-      });
+    const readRun = async (runId: string): Promise<void> => {
+      const held = get().runs.get(runId);
+      if (!held?.run) setRun(runId, { status: held?.status === "ready" ? "ready" : "loading" });
       try {
-        const runs = await listGraphRuns(environmentId);
-        set((state) => {
-          const lists = new Map(state.lists);
-          lists.set(environmentId, { runs, status: "ready", error: null });
-          return { lists };
-        });
+        const result = await api().getGraphRun(runId, held?.run?.revision);
+        if (result.status === "unchanged") {
+          setRun(runId, { status: "ready", error: null });
+          return;
+        }
+        get().applyRun(result.run);
       } catch (error) {
+        if (isGraphRunNotFound(error)) {
+          setRun(runId, { run: null, status: "missing", error: null });
+          return;
+        }
+        // A failed refresh keeps the last snapshot on screen.
+        setRun(runId, {
+          status: get().runs.get(runId)?.run ? "ready" : "error",
+          error: errorText(error),
+        });
+      }
+    };
+
+    return {
+      runs: new Map(),
+      lists: new Map(),
+      transcripts: new Map(),
+      artifacts: new Map(),
+
+      loadRun: (runId) => {
+        const current = inFlight.get(runId);
+        if (current) {
+          // Changes that land during a read are covered by one more read after it.
+          current.again = true;
+          return current.promise;
+        }
+        const entry = { promise: Promise.resolve(), again: false };
+        entry.promise = (async () => {
+          try {
+            do {
+              entry.again = false;
+              await readRun(runId);
+            } while (entry.again);
+          } finally {
+            inFlight.delete(runId);
+          }
+        })();
+        inFlight.set(runId, entry);
+        return entry.promise;
+      },
+
+      applyRun: (run) => {
+        const held = get().runs.get(run.id)?.run;
+        if (held && held.revision > run.revision) return;
+        setRun(run.id, { run, status: "ready", error: null });
+        // Keep a list that shows this run current without a second read.
+        set((state) => {
+          let changed = false;
+          const lists = new Map(state.lists);
+          for (const [environmentId, list] of state.lists) {
+            const index = list.runs.findIndex((summary) => summary.id === run.id);
+            if (index < 0) continue;
+            const summary = list.runs[index]!;
+            if (summary.revision >= run.revision) continue;
+            const runs = [...list.runs];
+            runs[index] = {
+              ...summary,
+              status: run.status,
+              revision: run.revision,
+              updatedAt: run.updatedAt,
+              ...(run.finishedAt !== undefined ? { finishedAt: run.finishedAt } : {}),
+              ...(run.error !== undefined ? { error: run.error } : {}),
+              usage: { ...run.usage },
+            };
+            lists.set(environmentId, { ...list, runs });
+            changed = true;
+          }
+          return changed ? { lists } : {};
+        });
+      },
+
+      loadList: async (environmentId) => {
+        const held = get().lists.get(environmentId) ?? EMPTY_GRAPH_RUN_LIST;
         set((state) => {
           const lists = new Map(state.lists);
-          const previous = state.lists.get(environmentId) ?? EMPTY_GRAPH_RUN_LIST;
           lists.set(environmentId, {
-            ...previous,
-            status: previous.runs.length > 0 ? "ready" : "error",
-            error: errorText(error),
+            ...held,
+            status: held.status === "ready" ? "ready" : "loading",
           });
           return { lists };
         });
-      }
-    },
-
-    loadTranscript: async (runId, activationKey, revision) => {
-      const key = graphRunCacheKey(runId, activationKey);
-      const held = get().transcripts.get(key);
-      if (
-        held &&
-        held.revision === revision &&
-        (held.status === "ready" || held.status === "loading")
-      ) {
-        return;
-      }
-      set((state) => ({
-        transcripts: boundedSet(
-          state.transcripts,
-          key,
-          { view: held?.view ?? null, status: "loading", error: null, revision },
-          MAX_CACHED_TRANSCRIPTS,
-        ),
-      }));
-      try {
-        const view = await getGraphRunTranscript(runId, activationKey);
-        set((state) => {
-          // A newer revision was asked for meanwhile: that read owns the entry.
-          if (state.transcripts.get(key)?.revision !== revision) return {};
-          return {
-            transcripts: boundedSet(
-              state.transcripts,
-              key,
-              { view, status: "ready", error: null, revision },
-              MAX_CACHED_TRANSCRIPTS,
-            ),
-          };
-        });
-      } catch (error) {
-        set((state) => {
-          if (state.transcripts.get(key)?.revision !== revision) return {};
-          return {
-            transcripts: boundedSet(
-              state.transcripts,
-              key,
-              { view: held?.view ?? null, status: "error", error: errorText(error), revision },
-              MAX_CACHED_TRANSCRIPTS,
-            ),
-          };
-        });
-      }
-    },
-
-    loadArtifact: async (runId, artifactId, options = {}) => {
-      const key = graphRunCacheKey(runId, artifactId);
-      const held = get().artifacts.get(key);
-      if (!options.force && held && (held.status === "ready" || held.status === "loading")) return;
-      set((state) => ({
-        artifacts: boundedSet(
-          state.artifacts,
-          key,
-          { view: held?.view ?? null, status: "loading", error: null },
-          MAX_CACHED_ARTIFACTS,
-        ),
-      }));
-      try {
-        const view = await getGraphRunArtifact(runId, artifactId);
-        set((state) => ({
-          artifacts: boundedSet(
-            state.artifacts,
-            key,
-            { view, status: "ready", error: null },
-            MAX_CACHED_ARTIFACTS,
-          ),
-        }));
-      } catch (error) {
-        set((state) => ({
-          artifacts: boundedSet(
-            state.artifacts,
-            key,
-            {
-              view: held?.view ?? null,
-              status: isGraphRunNotFound(error) ? "missing" : "error",
+        try {
+          const runs = await api().listGraphRuns(environmentId);
+          set((state) => {
+            const lists = new Map(state.lists);
+            lists.set(environmentId, { runs, status: "ready", error: null });
+            return { lists };
+          });
+        } catch (error) {
+          set((state) => {
+            const lists = new Map(state.lists);
+            const previous = state.lists.get(environmentId) ?? EMPTY_GRAPH_RUN_LIST;
+            lists.set(environmentId, {
+              ...previous,
+              status: previous.runs.length > 0 ? "ready" : "error",
               error: errorText(error),
-            },
+            });
+            return { lists };
+          });
+        }
+      },
+
+      loadTranscript: async (runId, activationKey, revision) => {
+        const key = graphRunCacheKey(runId, activationKey);
+        const held = get().transcripts.get(key);
+        if (
+          held &&
+          held.revision === revision &&
+          (held.status === "ready" || held.status === "loading")
+        ) {
+          return;
+        }
+        set((state) => ({
+          transcripts: boundedSet(
+            state.transcripts,
+            key,
+            { view: held?.view ?? null, status: "loading", error: null, revision },
+            MAX_CACHED_TRANSCRIPTS,
+          ),
+        }));
+        try {
+          const view = await api().getGraphRunTranscript(runId, activationKey);
+          set((state) => {
+            // A newer revision was asked for meanwhile: that read owns the entry.
+            if (state.transcripts.get(key)?.revision !== revision) return {};
+            return {
+              transcripts: boundedSet(
+                state.transcripts,
+                key,
+                { view, status: "ready", error: null, revision },
+                MAX_CACHED_TRANSCRIPTS,
+              ),
+            };
+          });
+        } catch (error) {
+          set((state) => {
+            if (state.transcripts.get(key)?.revision !== revision) return {};
+            return {
+              transcripts: boundedSet(
+                state.transcripts,
+                key,
+                { view: held?.view ?? null, status: "error", error: errorText(error), revision },
+                MAX_CACHED_TRANSCRIPTS,
+              ),
+            };
+          });
+        }
+      },
+
+      loadArtifact: async (runId, artifactId, options = {}) => {
+        const key = graphRunCacheKey(runId, artifactId);
+        const held = get().artifacts.get(key);
+        if (!options.force && held && (held.status === "ready" || held.status === "loading"))
+          return;
+        set((state) => ({
+          artifacts: boundedSet(
+            state.artifacts,
+            key,
+            { view: held?.view ?? null, status: "loading", error: null },
             MAX_CACHED_ARTIFACTS,
           ),
         }));
-      }
-    },
-  };
-});
+        try {
+          const view = await api().getGraphRunArtifact(runId, artifactId);
+          set((state) => ({
+            artifacts: boundedSet(
+              state.artifacts,
+              key,
+              { view, status: "ready", error: null },
+              MAX_CACHED_ARTIFACTS,
+            ),
+          }));
+        } catch (error) {
+          set((state) => ({
+            artifacts: boundedSet(
+              state.artifacts,
+              key,
+              {
+                view: held?.view ?? null,
+                status: isGraphRunNotFound(error) ? "missing" : "error",
+                error: errorText(error),
+              },
+              MAX_CACHED_ARTIFACTS,
+            ),
+          }));
+        }
+      },
+    };
+  },
+);
+
+/** Reads the nearest node scope's runs; other code uses `scope.store(graphRunStore)`. */
+export const useGraphRunStore = scopedStoreHook(graphRunStore);

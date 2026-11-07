@@ -1,3 +1,4 @@
+import { eventSink } from "./backend-emit.js";
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import { promises as fs } from "node:fs";
@@ -173,7 +174,7 @@ beforeEach(async () => {
     runtimeFlavor: "agent-test",
     credentialSources: new Set(),
     runtime: new BackendRuntime({ emit: () => undefined }),
-    emit: (event: string, payload: unknown) => emitted.push({ event, payload }),
+    emit: eventSink((event: string, payload: unknown) => emitted.push({ event, payload })),
   } as unknown as CommandContext;
 });
 

@@ -1,13 +1,15 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 import { createPortal } from "react-dom";
 import { onGlobalSettingsRequest } from "@/lib/settings-navigation";
+import { noteDrawerNavigation } from "@/lib/mobile-shell";
 import { SidebarBottomBar } from "../sidebar/SidebarBottomBar";
 import { openMachineWorkspace } from "@/lib/federation/open-workspace";
 import { portalStore } from "@/lib/portal/portal-store";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
-import { useUIStore } from "@/stores/uiStore";
+import { uiStore } from "@/stores/uiStore";
 import { useMergePrRequestStore } from "@/stores/mergePrRequestStore";
 import { useAppDialogStore } from "@/stores/appDialogStore";
 import { useBugReportStore } from "@/stores/bugReportStore";
@@ -18,6 +20,11 @@ import {
   MOBILE_TOOLS_TRIGGER_SELECTOR,
   MobileAppShellLayout,
 } from "./MobileAppShellLayout";
+import { getWindowScope } from "@/lib/node-scope/app-window-scope";
+import { appCommandStore } from "@/test/app-command-store";
+
+/** Outside a node scope provider, components act for the app's command node. */
+const commandNodeId = () => getWindowScope().commandScope().nodeId;
 
 const originalOrkestrator = window.orkestrator;
 const originalGateway = window.orkestratorGateway;
@@ -27,7 +34,7 @@ afterEach(() => {
   useMergePrRequestStore.setState({ request: null });
   useAppDialogStore.setState({ request: null });
   useGlobalSettingsStore.setState({ open: false, section: undefined, sectionRequest: 0 });
-  useBugReportStore.setState({ sheetOpen: false, draftInProgress: false });
+  useBugReportStore.setState({ sheetOpen: false, sheetNodeId: null, draftInProgress: false });
   window.orkestrator = originalOrkestrator;
   window.orkestratorGateway = originalGateway;
 });
@@ -50,7 +57,7 @@ function renderLayout(
     children: <div>Workspace</div>,
     ...overrides,
   };
-  const result = render(<MobileAppShellLayout {...props} />);
+  const result = renderInAppCommandScope(<MobileAppShellLayout {...props} />);
   if (!options.keepInitialDrawerOpen && props.initialSidebarOpen !== false) {
     const dialog = screen.getByRole("dialog", { name: "Projects and environments" });
     const closeButton = dialog.querySelector<HTMLButtonElement>(
@@ -529,7 +536,11 @@ describe("MobileAppShellLayout", () => {
       {
         actionBar: <MergeConfirmation />,
         sidebar: (
-          <button onClick={() => useMergePrRequestStore.getState().requestMergePr("environment-1")}>
+          <button
+            onClick={() =>
+              useMergePrRequestStore.getState().requestMergePr(commandNodeId(), "environment-1")
+            }
+          >
             Merge selected PR
           </button>
         ),
@@ -552,9 +563,11 @@ describe("MobileAppShellLayout", () => {
 
     try {
       act(() => {
-        useAppDialogStore
-          .getState()
-          .open({ kind: "environment-settings", environmentId: "environment-1" });
+        useAppDialogStore.getState().open({
+          nodeId: commandNodeId(),
+          kind: "environment-settings",
+          environmentId: "environment-1",
+        });
       });
       dialogControl.focus();
 
@@ -616,7 +629,9 @@ describe("MobileAppShellLayout", () => {
     try {
       act(() => useGlobalSettingsStore.getState().openSection("machines"));
       act(() =>
-        useAppDialogStore.getState().open({ kind: "repository-settings", projectId: "project-1" }),
+        useAppDialogStore
+          .getState()
+          .open({ nodeId: commandNodeId(), kind: "repository-settings", projectId: "project-1" }),
       );
       surfaceControl.focus();
       act(() => useAppDialogStore.getState().close());
@@ -655,9 +670,11 @@ describe("MobileAppShellLayout", () => {
     const menuButton = getTitleBarSidebarTrigger(container);
 
     act(() => {
-      useAppDialogStore
-        .getState()
-        .open({ kind: "environment-settings", environmentId: "environment-1" });
+      useAppDialogStore.getState().open({
+        nodeId: commandNodeId(),
+        kind: "environment-settings",
+        environmentId: "environment-1",
+      });
     });
     const settings = await screen.findByRole("dialog", { name: "Environment Settings" });
     await waitFor(() => expect(settings.contains(document.activeElement)).toBe(true));
@@ -677,9 +694,11 @@ describe("MobileAppShellLayout", () => {
     try {
       opener.focus();
       act(() => {
-        useAppDialogStore
-          .getState()
-          .open({ kind: "environment-settings", environmentId: "environment-1" });
+        useAppDialogStore.getState().open({
+          nodeId: commandNodeId(),
+          kind: "environment-settings",
+          environmentId: "environment-1",
+        });
       });
       act(() => useAppDialogStore.getState().close());
       expect(document.activeElement).toBe(opener);
@@ -738,6 +757,19 @@ describe("MobileAppShellLayout", () => {
     expect(screen.queryByRole("dialog", { name: "Projects and environments" }) === null).toBe(true);
   });
 
+  test("closes the drawer when the environment already shown is chosen again (restored after a reload)", () => {
+    // A reload restores the selection (plan item 3006) and the drawer opens on
+    // first load; choosing that row changes no selection (4006 smoke regression).
+    renderLayout({}, { keepInitialDrawerOpen: true });
+    expect(screen.getByRole("dialog", { name: "Projects and environments" })).toBeTruthy();
+    act(() => noteDrawerNavigation());
+    expect(screen.queryByRole("dialog", { name: "Projects and environments" }) === null).toBe(true);
+    // Focus stays with the workspace rather than going back to the trigger.
+    expect(document.activeElement).not.toBe(
+      screen.getByRole("button", { name: "Open projects and environments" }),
+    );
+  });
+
   test("closes the tools popover when the active selection changes", () => {
     const { rerender, props } = renderLayout();
     fireEvent.click(screen.getByRole("button", { name: "Open tools" }));
@@ -775,11 +807,11 @@ for (const action of [
 ] as const) {
   test(`closes the drawer for a remote ${action} request with no local selection`, async () => {
     const remote = useRemoteWorkspaceStore.getState();
-    const ui = useUIStore.getState();
+    const ui = appCommandStore(uiStore).getState();
     const portal = portalStore.getState();
     try {
       portalStore.store.setState({ selfId: "bk_self" as never });
-      useUIStore.setState({ selectedProjectId: null, selectedEnvironmentId: null });
+      appCommandStore(uiStore).setState({ selectedProjectId: null, selectedEnvironmentId: null });
       renderLayout(
         { selectedProjectId: null, selectedEnvironmentId: null },
         { keepInitialDrawerOpen: true },
@@ -797,11 +829,11 @@ for (const action of [
       await waitFor(() =>
         expectDomAbsent(screen.queryByRole("dialog", { name: "Projects and environments" })),
       );
-      expect(useUIStore.getState().selectedProjectId).toBeNull();
+      expect(appCommandStore(uiStore).getState().selectedProjectId).toBeNull();
       expect(useRemoteWorkspaceStore.getState().active?.nodeId).toBe("bk_remote");
     } finally {
       useRemoteWorkspaceStore.setState(remote, true);
-      useUIStore.setState(ui, true);
+      appCommandStore(uiStore).setState(ui, true);
       portalStore.store.setState(portal, true);
     }
   });
@@ -813,7 +845,7 @@ for (const [label, dialog] of [
 ] as const) {
   test(`drawer bottom bar routes remote ${dialog} and yields with local selection cleared`, async () => {
     const remote = useRemoteWorkspaceStore.getState();
-    const ui = useUIStore.getState();
+    const ui = appCommandStore(uiStore).getState();
     try {
       useRemoteWorkspaceStore.getState().open("bk_remote", {
         projectId: "p",
@@ -828,7 +860,6 @@ for (const [label, dialog] of [
         expectDomAbsent(screen.queryByRole("dialog", { name: "Projects and environments" })),
       );
       expect(useRemoteWorkspaceStore.getState().requests.bk_remote?.request).toEqual({
-        type: "select",
         projectId: "p",
         environmentId: "e",
         dialog,
@@ -836,7 +867,7 @@ for (const [label, dialog] of [
       expect(useAppDialogStore.getState().request).toBeNull();
     } finally {
       useRemoteWorkspaceStore.setState(remote, true);
-      useUIStore.setState(ui, true);
+      appCommandStore(uiStore).setState(ui, true);
     }
   });
 }
@@ -857,10 +888,10 @@ for (const remoteReport of [false, true]) {
         expectDomAbsent(screen.queryByRole("dialog", { name: "Projects and environments" })),
       );
       if (remoteReport) {
-        expect(useRemoteWorkspaceStore.getState().requests.bk_remote?.request).toMatchObject({
-          bugReport: true,
-          projectId: "p",
-          environmentId: "e",
+        // The window opens that node's sheet on its scope.
+        expect(useBugReportStore.getState()).toMatchObject({
+          sheetOpen: true,
+          sheetNodeId: "bk_remote",
         });
       } else expect(useBugReportStore.getState().sheetOpen).toBe(true);
     } finally {

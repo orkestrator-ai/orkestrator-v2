@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { toCsv } from "@orkestrator/protocol/tabular-export";
 import { setHighlightBackend } from "@/lib/chat/highlighter/client";
 import {
@@ -108,7 +109,7 @@ describe.each([
   ["CRLF", FIXTURE.replace(/\n/g, "\r\n")],
 ])("rich Markdown fixture (%s)", (_label, content) => {
   test("renders every rich construct in the real transcript path", () => {
-    const { container } = render(<NativeMessage message={message(content)} />);
+    const { container } = renderInAppCommandScope(<NativeMessage message={message(content)} />);
     expect(screen.getByRole("note", { name: "Note" })).toBeTruthy();
     expect(screen.getByRole("button", { name: /Inspect the implementation notes/ })).toBeTruthy();
     expect(container.querySelectorAll('[data-rich-block="table"]')).toHaveLength(1);
@@ -123,7 +124,7 @@ describe.each([
 
   test("find text equals the rendered search roots, including the collapsed disclosure body", () => {
     const msg = message(content);
-    const { container } = render(<NativeMessage message={msg} />);
+    const { container } = renderInAppCommandScope(<NativeMessage message={msg} />);
     const searchText = getNativeMessageSearchText(msg);
     expect(searchText).toBe(renderedSearchText(container));
     expect(findAgentChatTextMatches(searchText, "items.length")).toHaveLength(1);
@@ -132,7 +133,7 @@ describe.each([
   });
 
   test("find reveals the disclosure holding items.length and restores it afterwards", () => {
-    const { container } = render(<NativeMessage message={message(content)} />);
+    const { container } = renderInAppCommandScope(<NativeMessage message={message(content)} />);
     const mirror = Array.from(
       container.querySelectorAll<HTMLElement>("[data-rich-search-mirror]"),
     ).find((node) => node.textContent?.includes("items.length"));
@@ -152,7 +153,7 @@ describe.each([
   });
 
   test("a user toggle during a find reveal survives find closing", () => {
-    const { container } = render(<NativeMessage message={message(content)} />);
+    const { container } = renderInAppCommandScope(<NativeMessage message={message(content)} />);
     const key = container.querySelector<HTMLElement>('[data-rich-block="details"]')!.dataset
       .richBlockKey!;
     act(() => revealRichBlockForFind(key, "find-test"));
@@ -164,7 +165,7 @@ describe.each([
   });
 
   test("Copy code copies the exact fence body and the file hint opens nothing", async () => {
-    render(<NativeMessage message={message(content)} />);
+    renderInAppCommandScope(<NativeMessage message={message(content)} />);
     fireEvent.click(screen.getByRole("button", { name: /Inspect the implementation notes/ }));
     const block = screen.getByRole("group", { name: "Example code block" });
     fireEvent.click(within(block).getByRole("button", { name: "Copy code" }));
@@ -209,7 +210,7 @@ describe("find projection", () => {
       "```",
     ].join("\n");
     const msg = message(content, "dup-message");
-    const { container } = render(<NativeMessage message={msg} />);
+    const { container } = renderInAppCommandScope(<NativeMessage message={msg} />);
     // Wait for the diagram preview, so its source is only in the hidden mirror.
     await waitFor(() =>
       expect(container.querySelector("[data-rich-search-exclude] svg")).toBeTruthy(),
@@ -238,7 +239,7 @@ describe("find projection", () => {
         { type: "text", content: "Please run:\n\n```bash\nbun test\n```\n\n> [!TIP]\n> Quick." },
       ],
     };
-    const { container } = render(<NativeMessage message={msg} />);
+    const { container } = renderInAppCommandScope(<NativeMessage message={msg} />);
     expect(getNativeMessageSearchText(msg)).toBe(renderedSearchText(container));
   });
 });
@@ -252,7 +253,7 @@ describe("block identity", () => {
       generation: "1",
     });
     const content = "<details>\n<summary>Same</summary>\n\nBody\n\n</details>";
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <>
         <RichTranscriptScopeContext value={scope("env-a")}>
           <NativeMessage message={message(content, "same-id")} />
@@ -295,7 +296,7 @@ describe("streaming", () => {
       waitFor(() =>
         expect(container.querySelector('[data-highlight-status="pending"]') === null).toBe(true),
       );
-    const reference = render(<TextPart content={STREAMED} expansionKey="ref" />);
+    const reference = renderInAppCommandScope(<TextPart content={STREAMED} expansionKey="ref" />);
     await settled(reference.container);
     const expected = searchRootText(reference.container);
     // React's useId values differ between the two trees; nothing else may.
@@ -304,7 +305,7 @@ describe("streaming", () => {
     const expectedHtml = normalize(reference.container.querySelector(".prose")!.innerHTML, "ref");
     reference.unmount();
 
-    const view = render(<TextPart content="" expansionKey="stream" />);
+    const view = renderInAppCommandScope(<TextPart content="" expansionKey="stream" />);
     // Walk code units so CRLF pairs and surrogate pairs are split mid-way.
     for (let index = 1; index <= STREAMED.length; index++) {
       view.rerender(<TextPart content={STREAMED.slice(0, index)} expansionKey="stream" />);
@@ -353,7 +354,9 @@ describe("fence routing", () => {
       "window.__executed = true;",
       "```",
     ].join("\n");
-    const { container } = render(<TextPart content={content} expansionKey="routes" />);
+    const { container } = renderInAppCommandScope(
+      <TextPart content={content} expansionKey="routes" />,
+    );
     expect(container.querySelectorAll('[data-rich-block="mermaid"]')).toHaveLength(1);
     expect(container.querySelectorAll('[data-rich-block="chart"]').length).toBeGreaterThanOrEqual(
       2,
@@ -388,7 +391,7 @@ describe("fence routing", () => {
       "```",
     ].join("\n");
     const msg = message(content, "chart-message");
-    const { container } = render(<NativeMessage message={msg} />);
+    const { container } = renderInAppCommandScope(<NativeMessage message={msg} />);
     const searchText = getNativeMessageSearchText(msg);
     expect(searchText).toBe(renderedSearchText(container));
     expect(searchText).toContain("Alpha team");
@@ -404,7 +407,7 @@ describe("tables", () => {
   ].join("\n");
 
   test("copies exact Markdown and CSV and offers distinct exact and spreadsheet-safe downloads", async () => {
-    render(<TextPart content={TABLE} expansionKey="table" />);
+    renderInAppCommandScope(<TextPart content={TABLE} expansionKey="table" />);
     fireEvent.click(screen.getByRole("button", { name: "Copy as Markdown" }));
     await waitFor(() => expect(mockWriteText).toHaveBeenCalledWith(TABLE));
     fireEvent.click(screen.getByRole("button", { name: "Copy as CSV" }));
@@ -443,7 +446,7 @@ describe("tables", () => {
       `| ${columns.map(() => "---").join(" | ")} |`,
       `| ${columns.join(" | ")} |`,
     ].join("\n");
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <TextPart content={`${wide}\n\n| Only |\n| --- |`} expansionKey="wide" />,
     );
     const regions = screen.getAllByRole("region", { name: /scroll horizontally/ });
@@ -460,7 +463,7 @@ describe("tables", () => {
       (_, index) => `| row ${index} | ${"x".repeat(10)} |`,
     );
     const content = ["| A | B |", "| --- | --- |", ...rows].join("\n");
-    render(<TextPart content={content} expansionKey="partial" />);
+    renderInAppCommandScope(<TextPart content={content} expansionKey="partial" />);
     expect(screen.getByText(/Partial ·/)).toBeTruthy();
     expect(screen.getByText(/additional characters omitted/)).toBeTruthy();
   });
@@ -471,7 +474,9 @@ describe("callouts", () => {
     const content = ["NOTE", "TIP", "IMPORTANT", "WARNING", "CAUTION", "UNKNOWN"]
       .map((kind) => `> [!${kind}]\n> ${kind.toLowerCase()} body`)
       .join("\n\n");
-    const { container } = render(<TextPart content={content} expansionKey="callouts" />);
+    const { container } = renderInAppCommandScope(
+      <TextPart content={content} expansionKey="callouts" />,
+    );
     for (const label of ["Note", "Tip", "Important", "Warning", "Caution"]) {
       const note = screen.getByRole("note", { name: label });
       expect(note.textContent).toContain(label);
@@ -484,7 +489,7 @@ describe("callouts", () => {
 describe("omission", () => {
   test("a clipped message offers its exact full source", async () => {
     const content = `${"word ".repeat(7_000)}tail-marker`;
-    render(<TextPart content={content} expansionKey="clip" showCopy={false} />);
+    renderInAppCommandScope(<TextPart content={content} expansionKey="clip" showCopy={false} />);
     fireEvent.click(screen.getByRole("button", { name: "Copy full source" }));
     await waitFor(() => expect(mockWriteText).toHaveBeenCalledWith(content));
     const onError = mock(() => {});

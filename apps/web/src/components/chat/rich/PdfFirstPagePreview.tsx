@@ -4,9 +4,9 @@ import type {
   TranscriptMediaPdfPreviewRequest,
   TranscriptMediaPdfPreviewResponse,
 } from "@orkestrator/protocol/transcript-artifact-commands";
-import { getTranscriptMediaPdfPreview } from "@/lib/backend/transcript-artifacts";
 import { artifactErrorInfo } from "@/lib/chat/artifact-requests";
 import { mediaStreamTarget, type MediaReference } from "@/lib/chat/rich-markdown/media-resolver";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 /**
  * Where the backend may read a PDF attachment from: the same confined host or
@@ -68,28 +68,31 @@ export function PdfFirstPagePreview({
   source: TranscriptMediaPdfPreviewRequest | null;
   name: string;
 }) {
+  const nodeBackend = useScopeBackend();
   const key = source ? JSON.stringify(source) : null;
   // Results are tagged with the request they answer; another request reads as loading.
   const [settled, setSettled] = useState<{ key: string; state: State } | null>(null);
   useEffect(() => {
     if (!key) return;
     let cancelled = false;
-    getTranscriptMediaPdfPreview(JSON.parse(key) as TranscriptMediaPdfPreviewRequest).then(
-      (response) => {
-        if (!cancelled) setSettled({ key, state: { status: "done", response } });
-      },
-      (error: unknown) => {
-        if (!cancelled)
-          setSettled({
-            key,
-            state: { status: "error", message: artifactErrorInfo(error).message },
-          });
-      },
-    );
+    nodeBackend
+      .getTranscriptMediaPdfPreview(JSON.parse(key) as TranscriptMediaPdfPreviewRequest)
+      .then(
+        (response) => {
+          if (!cancelled) setSettled({ key, state: { status: "done", response } });
+        },
+        (error: unknown) => {
+          if (!cancelled)
+            setSettled({
+              key,
+              state: { status: "error", message: artifactErrorInfo(error).message },
+            });
+        },
+      );
     return () => {
       cancelled = true;
     };
-  }, [key]);
+  }, [key, nodeBackend]);
   const state: State = settled && settled.key === key ? settled.state : { status: "loading" };
 
   const fallback = "Download the original to open the full document in your PDF viewer.";

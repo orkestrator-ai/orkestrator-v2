@@ -1,10 +1,13 @@
 import { afterAll, afterEach, beforeEach, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import * as realBackend from "@/lib/backend";
-import { useEnvironmentStore, useFilesPanelStore, useProjectStore, useUIStore } from "@/stores";
+import { environmentStore, filesPanelStore, projectStore, uiStore } from "@/stores";
 import { TerminalProvider } from "@/contexts/TerminalContext";
 import { mockToastError } from "../../../../../tests/mocks/sonner";
 import type { Environment, Project } from "@/types";
+import { setFilesPanelTestState } from "@/test/files-panel-state";
+import { appCommandStore } from "@/test/app-command-store";
 
 const originalBackend = { ...realBackend };
 const deleteLocalFile = mock<(id: string, path: string) => Promise<string>>(
@@ -42,10 +45,15 @@ beforeEach(() => {
   deleteLocalFile.mockImplementation(async (_id, path) => path);
   remainingTree = folderTree;
   mockToastError.mockClear();
-  useProjectStore.setState({ projects: [{ id: "project-1", localPath: "/checkout" } as Project] });
-  useUIStore.setState({ selectedEnvironmentId: null, selectedProjectId: "project-1" });
-  useEnvironmentStore.setState({ environments: [] });
-  useFilesPanelStore.setState({
+  appCommandStore(projectStore).setState({
+    projects: [{ id: "project-1", localPath: "/checkout" } as Project],
+  });
+  appCommandStore(uiStore).setState({
+    selectedEnvironmentId: null,
+    selectedProjectId: "project-1",
+  });
+  appCommandStore(environmentStore).setState({ environments: [] });
+  setFilesPanelTestState({
     isOpen: false,
     activeTab: "all-files",
     pendingFileOpens: [],
@@ -61,13 +69,13 @@ afterAll(() => {
 });
 
 test("two board file opens wait for home creation and retain their order", async () => {
-  render(
+  renderInAppCommandScope(
     <TerminalProvider>
       <FilesPanel />
     </TerminalProvider>,
   );
   act(() =>
-    useFilesPanelStore.setState({
+    appCommandStore(filesPanelStore).setState({
       fileTree: [
         { name: "first.txt", path: "first.txt", isDirectory: false },
         { name: "second.txt", path: "second.txt", isDirectory: false },
@@ -77,7 +85,7 @@ test("two board file opens wait for home creation and retain their order", async
   fireEvent.click(screen.getByText("first.txt"));
   fireEvent.click(screen.getByText("second.txt"));
   expect(ensureHome).toHaveBeenCalledTimes(1);
-  expect(useUIStore.getState().selectedEnvironmentId).toBeNull();
+  expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBeNull();
   await act(async () =>
     resolveHome({
       id: "home-1",
@@ -88,21 +96,30 @@ test("two board file opens wait for home creation and retain their order", async
       status: "running",
     } as Environment),
   );
-  await waitFor(() => expect(useUIStore.getState().selectedEnvironmentId).toBe("home-1"));
-  expect(useUIStore.getState().projectBoardTab).toBe("home");
-  expect(useFilesPanelStore.getState().pendingFileOpens.map((request) => request.filePath)).toEqual(
-    ["first.txt", "second.txt"],
+  await waitFor(() =>
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("home-1"),
   );
-  expect(useEnvironmentStore.getState().environments.map((environment) => environment.id)).toEqual([
-    "home-1",
-  ]);
+  expect(appCommandStore(uiStore).getState().projectBoardTab).toBe("home");
+  expect(
+    appCommandStore(filesPanelStore)
+      .getState()
+      .pendingFileOpens.map((request) => request.filePath),
+  ).toEqual(["first.txt", "second.txt"]);
+  expect(
+    appCommandStore(environmentStore)
+      .getState()
+      .environments.map((environment) => environment.id),
+  ).toEqual(["home-1"]);
 });
 
 test("shows delayed announcements and a container's remote freshness without hiding the lists", async () => {
-  const { useWorktreeSnapshotStore } = await import("@/stores/worktreeSnapshotStore");
-  useUIStore.setState({ selectedEnvironmentId: "env-1", selectedProjectId: "project-1" });
-  useFilesPanelStore.setState({ isOpen: false, activeTab: "changes" });
-  useWorktreeSnapshotStore.setState({
+  const { worktreeSnapshotStore } = await import("@/stores/worktreeSnapshotStore");
+  appCommandStore(uiStore).setState({
+    selectedEnvironmentId: "env-1",
+    selectedProjectId: "project-1",
+  });
+  setFilesPanelTestState({ isOpen: false, activeTab: "changes" });
+  appCommandStore(worktreeSnapshotStore).setState({
     syncStatus: "current",
     entries: new Map([
       [
@@ -121,7 +138,7 @@ test("shows delayed announcements and a container's remote freshness without hid
     ]),
   });
   try {
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <FilesPanel />
       </TerminalProvider>,
@@ -129,11 +146,13 @@ test("shows delayed announcements and a container's remote freshness without hid
     expect(document.querySelector("[data-freshness]") === null).toBe(true);
 
     act(() => {
-      useWorktreeSnapshotStore.getState().setSyncStatus("degraded");
-      useWorktreeSnapshotStore.getState().applyChange({
-        ...useWorktreeSnapshotStore.getState().entries.get("env-1")!,
-        remote: { state: "stale", failure: "network" },
-      });
+      appCommandStore(worktreeSnapshotStore).getState().setSyncStatus("degraded");
+      appCommandStore(worktreeSnapshotStore)
+        .getState()
+        .applyChange({
+          ...appCommandStore(worktreeSnapshotStore).getState().entries.get("env-1")!,
+          remote: { state: "stale", failure: "network" },
+        });
     });
     expect(document.querySelector('[data-freshness="degraded"]')?.textContent).toContain(
       "periodic re-read",
@@ -143,24 +162,28 @@ test("shows delayed announcements and a container's remote freshness without hid
     expect(remote?.textContent).toContain("exact");
 
     // The remote baseline belongs to the Changes tab only.
-    act(() => useFilesPanelStore.setState({ activeTab: "all-files" }));
+    act(() => appCommandStore(filesPanelStore).setState({ activeTab: "all-files" }));
     expect(document.querySelector('[data-freshness="remote-stale"]') === null).toBe(true);
 
-    act(() => useWorktreeSnapshotStore.getState().setSyncStatus("current"));
+    act(() => appCommandStore(worktreeSnapshotStore).getState().setSyncStatus("current"));
     expect(document.querySelector("[data-freshness]") === null).toBe(true);
   } finally {
-    useWorktreeSnapshotStore.setState({ entries: new Map(), generation: null, syncStatus: "idle" });
+    appCommandStore(worktreeSnapshotStore).setState({
+      entries: new Map(),
+      generation: null,
+      syncStatus: "idle",
+    });
   }
 });
 
 test("a failed board file open strips Electron's invoke prefix from its toast", async () => {
-  render(
+  renderInAppCommandScope(
     <TerminalProvider>
       <FilesPanel />
     </TerminalProvider>,
   );
   act(() =>
-    useFilesPanelStore.setState({
+    appCommandStore(filesPanelStore).setState({
       fileTree: [{ name: "first.txt", path: "first.txt", isDirectory: false }],
     }),
   );
@@ -177,8 +200,8 @@ test("a failed board file open strips Electron's invoke prefix from its toast", 
       description: "checkout does not exist",
     }),
   );
-  expect(useUIStore.getState().selectedEnvironmentId).toBeNull();
-  expect(useFilesPanelStore.getState().pendingFileOpens).toEqual([]);
+  expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBeNull();
+  expect(appCommandStore(filesPanelStore).getState().pendingFileOpens).toEqual([]);
 });
 
 for (const fails of [false, true]) {
@@ -190,14 +213,19 @@ for (const fails of [false, true]) {
       worktreePath: "/checkout",
       status: "running",
     } as Environment;
-    useEnvironmentStore.setState({ environments: [environment] });
-    useUIStore.setState({ selectedEnvironmentId: environment.id });
-    render(
+    appCommandStore(environmentStore).setState({ environments: [environment] });
+    appCommandStore(uiStore).setState({ selectedEnvironmentId: environment.id });
+    renderInAppCommandScope(
       <TerminalProvider>
         <FilesPanel />
       </TerminalProvider>,
     );
-    act(() => useFilesPanelStore.setState({ fileTree: folderTree, expandedFolders: ["docs"] }));
+    act(() =>
+      appCommandStore(filesPanelStore).setState({
+        fileTree: folderTree,
+        expandedFolders: ["docs"],
+      }),
+    );
     fireEvent.contextMenu(screen.getByRole("button", { name: "docs" }));
     fireEvent.click(await screen.findByText("Delete folder"));
     expect(await screen.findByRole("alertdialog")).toBeTruthy();
@@ -223,8 +251,8 @@ for (const fails of [false, true]) {
       fireEvent.click(screen.getByRole("button", { name: /^Delete folder$/ }));
     }
     await waitFor(() => expect(screen.queryByRole("alertdialog") === null).toBe(true));
-    expect(useFilesPanelStore.getState().expandedFolders).not.toContain("docs");
-    expect(useFilesPanelStore.getState().fileTree).toEqual([]);
+    expect(appCommandStore(filesPanelStore).getState().expandedFolders).not.toContain("docs");
+    expect(appCommandStore(filesPanelStore).getState().fileTree).toEqual([]);
     expect(deleteLocalFile).toHaveBeenCalledTimes(fails ? 2 : 1);
   });
 }

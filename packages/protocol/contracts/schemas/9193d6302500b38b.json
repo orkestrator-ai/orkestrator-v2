@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:9193d6302500b38bb0910187f1d14aa4ec694a6de7a9e7a7556ce1ab38e7e1ce",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "agentType": {},
+        "delegationBaseBranch": {},
+        "delegationBaseCommit": {},
+        "deliveryPolicy": {},
+        "environmentOptions": {},
+        "environmentType": {},
+        "existingEnvironmentId": {},
+        "featurePlanId": {},
+        "maxIterations": {},
+        "namingPrompt": {},
+        "projectId": {},
+        "reviewPreparation": {},
+        "reviewers": {},
+        "source": {},
+        "steps": {},
+        "taskId": {},
+        "taskSnapshot": {},
+        "taskTitle": {}
+      },
+      "type": "object"
+    }
+  }
+}

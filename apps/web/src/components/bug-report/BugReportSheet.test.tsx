@@ -1,12 +1,21 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import type { BugReportSnapshot, BugReportSummary } from "@orkestrator/protocol/bug-report";
 import * as backend from "@/lib/backend";
 import * as coordinatedPoll from "@/lib/coordinated-poll";
 import * as realNativeAgent from "@/components/native-agent";
-import { useNativeComposeStore } from "@/stores/nativeComposeStore";
+
 import { createSessionKey } from "@/lib/utils";
 import { useBugReportStore } from "@/stores/bugReportStore";
+import type { BackendId } from "@orkestrator/protocol/federation";
+import { getWindowScope, resetWindowScopeForTests } from "@/lib/node-scope/app-window-scope";
+import { useOptionalNodeScope, WindowScopeProvider } from "@/lib/node-scope/providers";
+import { openBugReport } from "@/lib/bug-report/open-bug-report";
+import { nativeComposeStore } from "@/stores/nativeComposeStore";
+import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
+import { FakeNodeClient, renderInAppCommandScope } from "@/test/render-in-node-scope";
+import { appCommandStore } from "@/test/app-command-store";
+import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 
 const nativeAgentSnapshot = { ...realNativeAgent };
 const tabProps: Record<string, unknown>[] = [];
@@ -14,11 +23,12 @@ mock.module("@/components/native-agent", () => ({
   ...nativeAgentSnapshot,
   AgentNativeTab: (props: Record<string, unknown>) => {
     tabProps.push(props);
-    return <div data-testid="native-agent" />;
+    // The node scope the session renders in, which it talks to.
+    return <div data-testid="native-agent" data-node={useOptionalNodeScope()?.nodeId ?? "none"} />;
   },
 }));
 
-const { BugReportSheet } = await import("./BugReportSheet");
+const { BugReportSheet, BugReportSheetHost } = await import("./BugReportSheet");
 
 const REPORT: BugReportSummary = {
   id: "r1",
@@ -48,7 +58,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   mock.restore();
-  useBugReportStore.setState({ sheetOpen: false, draftInProgress: false });
+  useBugReportStore.setState({ sheetOpen: false, sheetNodeId: null, draftInProgress: false });
   window.orkestrator = originalOrkestrator;
 });
 
@@ -57,7 +67,7 @@ afterAll(() => {
 });
 
 async function openSheet() {
-  render(<BugReportSheet />);
+  renderInAppCommandScope(<BugReportSheet />);
   await act(async () => {
     useBugReportStore.getState().openSheet();
   });
@@ -268,9 +278,9 @@ describe("BugReportSheet", () => {
       await waitFor(() => expect(save).toHaveBeenCalledWith("r1", "png-base64"));
       const key = createSessionKey(REPORT.runtimeId, REPORT.tabId);
       await waitFor(() =>
-        expect(useNativeComposeStore.getState().drafts.get(key)?.attachments).toMatchObject([
-          { path: savedPath, type: "image" },
-        ]),
+        expect(
+          appCommandStore(nativeComposeStore).getState().drafts.get(key)?.attachments,
+        ).toMatchObject([{ path: savedPath, type: "image" }]),
       );
       expect(useBugReportStore.getState().sheetOpen).toBe(true);
     } finally {
@@ -313,5 +323,95 @@ describe("BugReportSheet", () => {
     fireEvent.click(screen.getByRole("button", { name: "Discard report?" }));
     await waitFor(() => expect(discard).toHaveBeenCalledWith("r1"));
     await waitFor(() => expect(useBugReportStore.getState().sheetOpen).toBe(false));
+  });
+});
+
+describe("a report for a node shown in the window's tree (plan item 5003)", () => {
+  const LEAF = "bk_bug-leaf" as BackendId;
+  const INITIAL_REMOTE = useRemoteWorkspaceStore.getState();
+
+  afterEach(() => {
+    cleanup();
+    useRemoteWorkspaceStore.setState(INITIAL_REMOTE, true);
+    resetWindowScopeForTests();
+  });
+
+  test("is created, captured, filed and hosted on the leaf's own client", async () => {
+    // The window's own sheet reads the command node's report for the bottom
+    // bar's dot; nothing of this report may go there.
+    spyOn(backend, "getBugReport").mockResolvedValue(snapshot(null));
+    const commandCalls = [
+      spyOn(backend, "createBugReport").mockResolvedValue(snapshot({})),
+      spyOn(backend, "saveBugReportScreenshot"),
+      spyOn(backend, "fileBugReport"),
+    ];
+    const leaf = new FakeNodeClient({
+      nodeId: LEAF,
+      invoke: {
+        get_bug_report: snapshot(null),
+        create_bug_report: snapshot({ agent: "claude" }, true),
+        save_bug_report_screenshot: {
+          path: "/tmp/orkestrator-bug-report-x/window.png",
+          snapshot: snapshot({ agent: "claude", screenshots: ["/tmp/x/window.png"] }, true),
+        },
+        file_bug_report: { kind: "filed", url: "https://github.com/a/b/issues/9" },
+      },
+    });
+    const scope = getWindowScope().open({ role: "leaf", client: leaf });
+    useRemoteWorkspaceStore.setState({
+      active: { nodeId: LEAF, projectId: "p1", environmentId: null },
+      openNodes: [LEAF],
+    });
+    window.orkestrator = {
+      bugReport: { captureWindow: async () => "AAAA" },
+    } as unknown as typeof window.orkestrator;
+    renderInAppCommandScope(
+      <WindowScopeProvider>
+        <BugReportSheetHost />
+      </WindowScopeProvider>,
+    );
+
+    // The window opens the leaf's sheet itself, on its scope.
+    act(() => openBugReport(LEAF));
+    expect(useBugReportStore.getState()).toMatchObject({ sheetOpen: true, sheetNodeId: LEAF });
+
+    const session = await screen.findByTestId("native-agent");
+    expect(session.getAttribute("data-node")).toBe(LEAF);
+    expect(leaf.calls("create_bug_report")).toHaveLength(1);
+    expect(leaf.calls("create_bug_report")[0]!.args).toMatchObject({
+      clientContext: { machine: { id: LEAF } },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Capture window" }));
+    await waitFor(() => expect(leaf.calls("save_bug_report_screenshot")).toHaveLength(1));
+    // The capture lands in the leaf's compose draft.
+    await waitFor(() =>
+      expect(
+        scope
+          .store(nativeComposeStore)
+          .getState()
+          .drafts.get(createSessionKey(REPORT.runtimeId, REPORT.tabId))?.attachments,
+      ).toHaveLength(1),
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "File issue" }));
+    await waitFor(() => expect(leaf.calls("file_bug_report")).toHaveLength(1));
+    for (const call of commandCalls) expect(call).not.toHaveBeenCalled();
+    // The bottom bar's dot is the command node's report, which this is not.
+    expect(useBugReportStore.getState().draftInProgress).toBe(false);
+  });
+
+  test("a sheet asked for a node with no scope, and not opening one, is closed", async () => {
+    spyOn(backend, "getBugReport").mockResolvedValue(snapshot(null));
+    renderInAppCommandScope(
+      <WindowScopeProvider>
+        <BugReportSheetHost />
+      </WindowScopeProvider>,
+    );
+    act(() => useBugReportStore.getState().openSheet("bk_gone"));
+    await waitFor(() =>
+      expect(useBugReportStore.getState()).toMatchObject({ sheetOpen: false, sheetNodeId: null }),
+    );
+    expectDomAbsent(screen.queryByTestId("bug-report-sheet"));
   });
 });

@@ -1,13 +1,14 @@
 import { afterEach, beforeEach, describe, expect, mock, test, type Mock } from "bun:test";
 import { useRef, useState } from "react";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { mockToastError } from "../../../../../tests/mocks/sonner";
 import { mockReadImage } from "../../../../../tests/mocks/clipboard";
 import { toast } from "sonner";
 // Registered once in tests/setup.ts; this file only varies its behavior.
 import { invoke } from "@/lib/native/backend";
-import { useEnvironmentStore } from "@/stores/environmentStore";
-import { nativeComposeDraft, useNativeComposeStore } from "@/stores/nativeComposeStore";
+import { environmentStore } from "@/stores/environmentStore";
+import { nativeComposeDraft, nativeComposeStore } from "@/stores/nativeComposeStore";
 import type { Environment } from "@/types";
 import {
   deferred,
@@ -23,6 +24,7 @@ import {
   useDesignPromptImagePaste,
   type DesignPromptImage,
 } from "./design-prompt-images";
+import { appCommandStore } from "@/test/app-command-store";
 
 const invokeMock = invoke as unknown as Mock<
   (command: string, args?: Record<string, unknown>) => Promise<unknown>
@@ -33,7 +35,7 @@ function image(id: string): DesignPromptImage {
 }
 
 function seedEnvironment(overrides: Partial<Environment> = {}) {
-  useEnvironmentStore.setState({
+  appCommandStore(environmentStore).setState({
     environments: [
       {
         id: "env-1",
@@ -96,7 +98,7 @@ let restorePaste: () => void = () => undefined;
 
 beforeEach(() => {
   restorePaste = installImagePasteSupport();
-  useNativeComposeStore.setState({ drafts: new Map() });
+  appCommandStore(nativeComposeStore).setState({ drafts: new Map() });
   invokeMock.mockReset();
   invokeMock.mockImplementation(async (command, args) =>
     command === "write_local_file" ? `${args?.worktreePath}/${args?.filePath}` : undefined,
@@ -106,7 +108,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   restorePaste();
-  useEnvironmentStore.setState({ environments: [] });
+  appCommandStore(environmentStore).setState({ environments: [] });
   invokeMock.mockReset();
   invokeMock.mockImplementation(() => Promise.resolve());
 });
@@ -114,11 +116,13 @@ afterEach(() => {
 describe("addDesignImagesToDraft", () => {
   test("appends images to the draft without duplicating ones already there", () => {
     const key = "env-1:tab-1";
-    useNativeComposeStore.getState().updateDraft(key, { text: "keep", attachments: [image("a")] });
+    appCommandStore(nativeComposeStore)
+      .getState()
+      .updateDraft(key, { text: "keep", attachments: [image("a")] });
 
     expect(addDesignImagesToDraft(key, [image("a"), image("b")])).toBe(true);
 
-    const draft = nativeComposeDraft(useNativeComposeStore.getState(), key);
+    const draft = nativeComposeDraft(appCommandStore(nativeComposeStore).getState(), key);
     expect(draft.text).toBe("keep");
     expect(draft.attachments.map((attachment) => attachment.id)).toEqual(["a", "b"]);
   });
@@ -128,19 +132,19 @@ describe("addDesignImagesToDraft", () => {
     const full = Array.from({ length: DESIGN_PROMPT_IMAGE_LIMIT }, (_, index) =>
       image(`i${index}`),
     );
-    useNativeComposeStore.getState().updateDraft(key, { attachments: full });
+    appCommandStore(nativeComposeStore).getState().updateDraft(key, { attachments: full });
 
     expect(addDesignImagesToDraft(key, [image("extra")])).toBe(false);
-    expect(nativeComposeDraft(useNativeComposeStore.getState(), key).attachments).toHaveLength(
-      DESIGN_PROMPT_IMAGE_LIMIT,
-    );
+    expect(
+      nativeComposeDraft(appCommandStore(nativeComposeStore).getState(), key).attachments,
+    ).toHaveLength(DESIGN_PROMPT_IMAGE_LIMIT);
   });
 });
 
 describe("useDesignPromptImagePaste", () => {
   test("restores native text paste at the image cap without an image rejection toast", async () => {
     seedEnvironment();
-    render(
+    renderInAppCommandScope(
       <Harness
         initial={Array.from({ length: DESIGN_PROMPT_IMAGE_LIMIT }, (_, i) => image(`seed-${i}`))}
       />,
@@ -172,7 +176,7 @@ describe("useDesignPromptImagePaste", () => {
     seedEnvironment();
     const read = deferred<Awaited<ReturnType<typeof mockReadImage>>>();
     mockReadImage.mockImplementationOnce(() => read.promise);
-    render(<Harness />);
+    renderInAppCommandScope(<Harness />);
     act(() => dispatchImagePaste(screen.getByRole("textbox", { name: "Prompt" })));
     const submit = screen.getByRole("button", { name: "Submit" }) as HTMLButtonElement;
     expect(submit.disabled).toBe(true);
@@ -187,7 +191,7 @@ describe("useDesignPromptImagePaste", () => {
     seedEnvironment();
     const write = deferred<string>();
     invokeMock.mockImplementation(() => write.promise);
-    render(
+    renderInAppCommandScope(
       <Harness
         initial={Array.from({ length: DESIGN_PROMPT_IMAGE_LIMIT - 1 }, (_, i) =>
           image(`seed-${i}`),
@@ -222,7 +226,7 @@ describe("useDesignPromptImagePaste", () => {
     seedEnvironment();
     const write = deferred<string>();
     invokeMock.mockImplementation(() => write.promise);
-    render(
+    renderInAppCommandScope(
       <Harness
         initial={Array.from({ length: DESIGN_PROMPT_IMAGE_LIMIT - 1 }, (_, i) =>
           image(`seed-${i}`),
@@ -243,7 +247,7 @@ describe("useDesignPromptImagePaste", () => {
       const old = deferred<string>();
       invokeMock.mockImplementationOnce(() => old.promise);
       const onChange = mock(() => {});
-      const view = render(<Harness onChange={onChange} />);
+      const view = renderInAppCommandScope(<Harness onChange={onChange} />);
       await pasteImage(screen.getByRole("textbox", { name: "Prompt" }));
       if (changed === "environment") {
         act(() => seedEnvironment({ id: "env-2", worktreePath: "/tmp/other" }));
@@ -266,7 +270,7 @@ describe("useDesignPromptImagePaste", () => {
 
   test("freezes new pastes synchronously while submission owns the images", async () => {
     seedEnvironment();
-    render(<Harness />);
+    renderInAppCommandScope(<Harness />);
     act(() => {
       fireEvent.click(screen.getByRole("button", { name: "Submit" }));
       dispatchImagePaste(screen.getByRole("textbox", { name: "Prompt" }));
@@ -280,7 +284,7 @@ describe("useDesignPromptImagePaste", () => {
 
   test("renders an always visible, keyboard accessible image removal control", () => {
     const onRemove = mock();
-    render(<DesignPromptImages images={[image("shot")]} onRemove={onRemove} />);
+    renderInAppCommandScope(<DesignPromptImages images={[image("shot")]} onRemove={onRemove} />);
     const button = screen.getByRole("button", { name: "Remove shot.png" });
     expect(button.className).not.toContain("opacity-0");
     button.focus();
@@ -291,7 +295,7 @@ describe("useDesignPromptImagePaste", () => {
 
   test("writes a pasted image into the worktree and attaches it", async () => {
     seedEnvironment();
-    render(<Harness />);
+    renderInAppCommandScope(<Harness />);
 
     await pasteImage(screen.getByRole("textbox", { name: "Prompt" }));
 
@@ -306,7 +310,7 @@ describe("useDesignPromptImagePaste", () => {
   test("ignores pastes outside the prompt", async () => {
     seedEnvironment();
     const onChange = mock(() => {});
-    render(<Harness onChange={onChange} />);
+    renderInAppCommandScope(<Harness onChange={onChange} />);
 
     await pasteImage(screen.getByRole("textbox", { name: "Elsewhere" }));
 
@@ -322,7 +326,7 @@ describe("useDesignPromptImagePaste", () => {
       containerId: "c1",
     });
     const onChange = mock(() => {});
-    render(<Harness onChange={onChange} />);
+    renderInAppCommandScope(<Harness onChange={onChange} />);
 
     await pasteImage(screen.getByRole("textbox", { name: "Prompt" }));
 
@@ -339,7 +343,7 @@ describe("useDesignPromptImagePaste", () => {
     });
     const write = deferred<void>();
     invokeMock.mockImplementation(() => write.promise);
-    render(<Harness />);
+    renderInAppCommandScope(<Harness />);
     await pasteImage(screen.getByRole("textbox", { name: "Prompt" }));
     const submit = screen.getByRole("button", { name: "Submit" }) as HTMLButtonElement;
     expect(submit.disabled).toBe(true);
@@ -362,7 +366,7 @@ describe("useDesignPromptImagePaste", () => {
     invokeMock.mockImplementation(async (command, args) =>
       command === "write_container_file" ? `/workspace/${args?.filePath}` : undefined,
     );
-    render(<Harness />);
+    renderInAppCommandScope(<Harness />);
 
     await pasteImage(screen.getByRole("textbox", { name: "Prompt" }));
 

@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:91a282014e222052eb0ab305377a783650339a43c6693eb364d6f3a7bc84c3e6",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "environmentId": {
+          "type": "string"
+        },
+        "expectedGeneration": {
+          "type": "string"
+        },
+        "expectedPromptFingerprint": {
+          "type": "string"
+        },
+        "expectedRevision": {},
+        "optionIndex": {},
+        "tabId": {
+          "type": "string"
+        }
+      },
+      "required": ["environmentId", "expectedGeneration", "expectedPromptFingerprint", "tabId"],
+      "type": "object"
+    }
+  }
+}

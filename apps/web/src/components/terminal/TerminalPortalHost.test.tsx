@@ -1,12 +1,14 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { useSyncExternalStore } from "react";
-import { act, cleanup, render, waitFor } from "@testing-library/react";
+import { act, cleanup, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import * as realPersistentTerminal from "./PersistentTerminal";
 import * as realTerminalPortalStore from "@/stores/terminalPortalStore";
-import { useConfigStore } from "@/stores/configStore";
-import { useEnvironmentStore } from "@/stores/environmentStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { configStore } from "@/stores/configStore";
+import { environmentStore } from "@/stores/environmentStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import { createXtermTerminal } from "@/lib/terminal-xterm";
+import { appCommandStore } from "@/test/app-command-store";
 
 const persistentTerminalSnapshot = { ...realPersistentTerminal };
 const terminalPortalStoreSnapshot = { ...realTerminalPortalStore };
@@ -18,9 +20,11 @@ let terminalStoreHasTerminal = true;
 let terminalStorePaneHosts = new Map<string, HTMLDivElement>();
 let terminalStoreVersion = 0;
 const terminalStoreListeners = new Set<() => void>();
+const TEST_NODE = "bk_terminal-host-node";
 let terminalStoreTerminals: Map<
   string,
   {
+    nodeId: string;
     environmentId: string;
     tabId: string;
     portalElement: HTMLDivElement;
@@ -63,7 +67,7 @@ const terminalPortalStoreState = () => ({
   disposeTerminal: disposeTerminalMock,
   clearTerminalsForEnvironment: clearTerminalsForEnvironmentMock,
   hasTerminal: () => terminalStoreHasTerminal,
-  getPaneHost: (environmentId: string, paneId: string) =>
+  getPaneHost: (_nodeId: string, environmentId: string, paneId: string) =>
     terminalStorePaneHosts.get(`${environmentId}::${paneId}`),
 });
 
@@ -73,6 +77,7 @@ const useTerminalPortalStoreMock = (<T,>(
     terminals: Map<
       string,
       {
+        nodeId: string;
         environmentId: string;
         tabId: string;
         portalElement: HTMLDivElement;
@@ -83,8 +88,12 @@ const useTerminalPortalStoreMock = (<T,>(
     createTerminal: typeof createTerminalMock;
     disposeTerminal: typeof disposeTerminalMock;
     clearTerminalsForEnvironment: typeof clearTerminalsForEnvironmentMock;
-    hasTerminal: (environmentId: string, tabId: string) => boolean;
-    getPaneHost: (environmentId: string, paneId: string) => HTMLDivElement | undefined;
+    hasTerminal: (nodeId: string, environmentId: string, tabId: string) => boolean;
+    getPaneHost: (
+      nodeId: string,
+      environmentId: string,
+      paneId: string,
+    ) => HTMLDivElement | undefined;
   }) => T,
 ) => {
   useSyncExternalStore(
@@ -102,7 +111,12 @@ const useTerminalPortalStoreMock = (<T,>(
 useTerminalPortalStoreMock.getState = terminalPortalStoreState;
 
 mock.module("@/stores/terminalPortalStore", () => ({
-  createPortalTargetKey: (environmentId: string, paneId: string) => `${environmentId}::${paneId}`,
+  // The keys ignore the node: every terminal here is on TEST_NODE.
+  createPortalTargetKey: (_nodeId: string, environmentId: string, paneId: string) =>
+    `${environmentId}::${paneId}`,
+  createTerminalKey: (_nodeId: string, environmentId: string, tabId: string) =>
+    `${environmentId}::${tabId}`,
+  useTerminalPortalNodeId: () => TEST_NODE,
   useTerminalPortalStore: useTerminalPortalStoreMock,
 }));
 
@@ -126,6 +140,7 @@ describe("TerminalPortalHost", () => {
       [
         "env-1::default",
         {
+          nodeId: TEST_NODE,
           environmentId: "env-1",
           tabId: "default",
           portalElement: document.createElement("div"),
@@ -135,7 +150,7 @@ describe("TerminalPortalHost", () => {
       ],
     ]);
 
-    useConfigStore.setState({
+    appCommandStore(configStore).setState({
       config: {
         version: "1.0",
         global: {
@@ -161,7 +176,7 @@ describe("TerminalPortalHost", () => {
       },
     });
 
-    usePaneLayoutStore.setState({
+    appCommandStore(paneLayoutStore).setState({
       environments: new Map([
         [
           "env-1",
@@ -180,7 +195,7 @@ describe("TerminalPortalHost", () => {
       activeEnvironmentId: "env-1",
     });
 
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [
         {
           id: "env-1",
@@ -212,16 +227,17 @@ describe("TerminalPortalHost", () => {
   test("creates terminals even before the pane-layout active environment is set", async () => {
     terminalStoreHasTerminal = false;
     terminalStoreTerminals = new Map();
-    usePaneLayoutStore.setState((state) => ({
+    appCommandStore(paneLayoutStore).setState((state) => ({
       ...state,
       activeEnvironmentId: null,
     }));
 
-    render(<TerminalPortalHost environmentId="env-1" containerId="container-1" />);
+    renderInAppCommandScope(<TerminalPortalHost environmentId="env-1" containerId="container-1" />);
 
     await waitFor(() => {
       expect(createTerminalMock).toHaveBeenCalledWith(
         expect.objectContaining({
+          nodeId: TEST_NODE,
           environmentId: "env-1",
           tabId: "default",
           containerId: "container-1",
@@ -234,7 +250,7 @@ describe("TerminalPortalHost", () => {
   test("mounts an existing terminal when its pane host registers later", async () => {
     terminalStorePaneHosts = new Map();
 
-    render(<TerminalPortalHost environmentId="env-1" containerId="container-1" />);
+    renderInAppCommandScope(<TerminalPortalHost environmentId="env-1" containerId="container-1" />);
     expect(lastPersistentTerminalProps).toBeUndefined();
     expect(paneHost.childElementCount).toBe(0);
 
@@ -251,7 +267,7 @@ describe("TerminalPortalHost", () => {
   });
 
   test("forwards review-tab state to persistent terminals", async () => {
-    usePaneLayoutStore.setState((state) => {
+    appCommandStore(paneLayoutStore).setState((state) => {
       const environments = new Map(state.environments);
       const current = environments.get("env-1");
       if (!current || current.root.kind !== "leaf") {
@@ -275,7 +291,7 @@ describe("TerminalPortalHost", () => {
       return { environments };
     });
 
-    render(<TerminalPortalHost environmentId="env-1" containerId="container-1" />);
+    renderInAppCommandScope(<TerminalPortalHost environmentId="env-1" containerId="container-1" />);
 
     await waitFor(() => {
       expect(lastPersistentTerminalProps?.isReviewTab).toBe(true);
@@ -287,7 +303,7 @@ describe("TerminalPortalHost", () => {
   test.each(["cursor", "grok", "pi"] as const)(
     "mounts %s CLI tabs as persistent terminals",
     async (tabType) => {
-      usePaneLayoutStore.setState((state) => {
+      appCommandStore(paneLayoutStore).setState((state) => {
         const environments = new Map(state.environments);
         const current = environments.get("env-1");
         if (!current || current.root.kind !== "leaf") throw new Error("expected env-1 leaf");
@@ -301,7 +317,9 @@ describe("TerminalPortalHost", () => {
         return { environments };
       });
 
-      render(<TerminalPortalHost environmentId="env-1" containerId="container-1" />);
+      renderInAppCommandScope(
+        <TerminalPortalHost environmentId="env-1" containerId="container-1" />,
+      );
 
       await waitFor(() => {
         expect(lastPersistentTerminalProps?.tabType).toBe(tabType);

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { ArrowLeft, Inbox, Loader2, Send } from "lucide-react";
 import {
   AGENT_MAIL_USER_PARTICIPANT,
@@ -13,13 +13,12 @@ import type {
   GitHubPullRequestRef,
   GitHubPullRequestViewTab,
 } from "@orkestrator/protocol/github-pull-requests";
-import * as backend from "@/lib/backend";
 import { openPullRequestInApp, PullRequestOpenerProvider } from "@/lib/pull-request-opener";
 import { cn } from "@/lib/utils";
 import { useAgentMailStore } from "@/stores/agentMailStore";
 import { useConfigStore } from "@/stores/configStore";
 import { AgentMailConversationView, ParticipantIcon } from "./AgentMailConversationView";
-import { agentMailParticipantLabel, formatAgentMailTime } from "./agent-mail-ui";
+import { agentMailParticipantLabel, formatAgentMailTime, useAgentMailScope } from "./agent-mail-ui";
 import { MailboxDeliverySettings } from "./MailboxDeliverySettings";
 
 function errorMessage(error: unknown): string {
@@ -42,6 +41,12 @@ export function AgentMailPanel() {
   const panel = useAgentMailStore((state) => state.panel);
   const openPanel = useAgentMailStore((state) => state.openPanel);
   const closePanel = useAgentMailStore((state) => state.closePanel);
+  // A pull request opened from mail closes this node's panel (plan item 3010).
+  const openPullRequest = useCallback(
+    (ref: GitHubPullRequestRef, view?: GitHubPullRequestViewTab) =>
+      openPullRequestOverMail(ref, view, closePanel),
+    [closePanel],
+  );
   const messagingEnabled = useConfigStore(
     (state) => state.config.global.agentMessaging?.enabled === true,
   );
@@ -57,7 +62,7 @@ export function AgentMailPanel() {
       <SheetContent data-testid="agent-mail-panel">
         {/* This sheet covers the right-hand PR pane, so a pull request opened
             there closes it; with nowhere to show it, the link opens GitHub. */}
-        <PullRequestOpenerProvider open={openPullRequestOverMail}>
+        <PullRequestOpenerProvider open={openPullRequest}>
           {conversation ? (
             <AgentMailConversationView
               key={`${conversation[0]}\n${conversation[1]}`}
@@ -74,9 +79,13 @@ export function AgentMailPanel() {
   );
 }
 
-function openPullRequestOverMail(ref: GitHubPullRequestRef, view?: GitHubPullRequestViewTab) {
+function openPullRequestOverMail(
+  ref: GitHubPullRequestRef,
+  view: GitHubPullRequestViewTab | undefined,
+  closePanel: () => void,
+) {
   if (!openPullRequestInApp(ref, view)) return false;
-  useAgentMailStore.getState().closePanel();
+  closePanel();
   return true;
 }
 
@@ -92,6 +101,7 @@ function AgentMailConversationList({ focus }: { focus?: string }) {
   const [picking, setPicking] = useState(false);
   const [mailboxError, setMailboxError] = useState<string>();
   const [mailboxReload, setMailboxReload] = useState(0);
+  const { api: backend } = useAgentMailScope();
 
   useEffect(() => {
     let cancelled = false;
@@ -108,7 +118,7 @@ function AgentMailConversationList({ focus }: { focus?: string }) {
     return () => {
       cancelled = true;
     };
-  }, [focus, revision]);
+  }, [backend, focus, revision]);
 
   useEffect(() => {
     const address = splitMailbox(focus);
@@ -297,6 +307,7 @@ function RecipientPicker({
   const [mailboxes, setMailboxes] = useState<MailboxDescriptor[] | null>(null);
   const [error, setError] = useState<string>();
   const [query, setQuery] = useState("");
+  const { api: backend } = useAgentMailScope();
 
   useEffect(() => {
     let cancelled = false;
@@ -322,7 +333,7 @@ function RecipientPicker({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [backend]);
 
   const needle = query.trim().toLocaleLowerCase();
   const visible = (mailboxes ?? []).filter(

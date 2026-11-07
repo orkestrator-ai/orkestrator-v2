@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { Loader2, Send, TriangleAlert } from "lucide-react";
 import {
   WEB_ANNOTATION_COMMANDS,
@@ -87,6 +88,8 @@ export function RequestComposer({
    */
   reference?: { retargetOf?: string; followUpOf?: string; previousTabId?: string } | null;
 }) {
+  // This node's annotations (plan item 4001); the command node outside a node scope.
+  const annotationScope = useScopesWithCommandFallback().scope;
   const { environmentId, features, announce } = useAnnotationPanel();
   const [destination, setDestination] = useState<WebAnnotationDestinationOption | null>(null);
   const [instruction, setInstruction] = useState("");
@@ -120,25 +123,30 @@ export function RequestComposer({
     const useTextOnly = overrides.textOnly ?? textOnly;
     const allowHistorical = overrides.historical ?? historical;
     try {
-      const result = await webAnnotationCommand(WEB_ANNOTATION_COMMANDS.requestPrepare, {
-        environmentId,
-        operation: op,
-        destination: destination.destination,
-        // A retarget reuses the old request's exact selections.
-        annotations: reference?.retargetOf
-          ? []
-          : items.map((item) => ({
-              annotationId: item.annotation.id,
-              expectedContentRevision: item.annotation.contentRevision,
-              expectedCaptureId: item.annotation.currentCaptureId,
-              desiredOutcome: item.desiredOutcome?.trim() ? item.desiredOutcome.trim() : null,
-              allowHistoricalEvidence: allowHistorical.has(item.annotation.id),
-            })),
-        instruction,
-        ...(useTextOnly ? { textOnly: true } : {}),
-        ...(reference?.retargetOf ? { retargetOf: reference.retargetOf } : {}),
-        ...(reference?.followUpOf ? { followUpOf: reference.followUpOf } : {}),
-      });
+      const result = await webAnnotationCommand(
+        WEB_ANNOTATION_COMMANDS.requestPrepare,
+        {
+          environmentId,
+          operation: op,
+          destination: destination.destination,
+          // A retarget reuses the old request's exact selections.
+          annotations: reference?.retargetOf
+            ? []
+            : items.map((item) => ({
+                annotationId: item.annotation.id,
+                expectedContentRevision: item.annotation.contentRevision,
+                expectedCaptureId: item.annotation.currentCaptureId,
+                desiredOutcome: item.desiredOutcome?.trim() ? item.desiredOutcome.trim() : null,
+                allowHistoricalEvidence: allowHistorical.has(item.annotation.id),
+              })),
+          instruction,
+          ...(useTextOnly ? { textOnly: true } : {}),
+          ...(reference?.retargetOf ? { retargetOf: reference.retargetOf } : {}),
+          ...(reference?.followUpOf ? { followUpOf: reference.followUpOf } : {}),
+        },
+        undefined,
+        annotationScope,
+      );
       setPreparation(result);
       announce(
         result.sendable
@@ -158,18 +166,27 @@ export function RequestComposer({
     setSending(true);
     setError(null);
     try {
-      const { request } = await webAnnotationCommand(WEB_ANNOTATION_COMMANDS.requestSend, {
-        environmentId,
-        preparationId: preparation.preparationId,
-        requestId: requestIdRef.current,
-        bodyHash: preparation.bodyHash,
-      });
+      const { request } = await webAnnotationCommand(
+        WEB_ANNOTATION_COMMANDS.requestSend,
+        {
+          environmentId,
+          preparationId: preparation.preparationId,
+          requestId: requestIdRef.current,
+          bodyHash: preparation.bodyHash,
+        },
+        undefined,
+        annotationScope,
+      );
       setDeliveryUnknown(false);
       requestIdRef.current = newWebAnnotationOperationId("req");
-      refreshWebAnnotations(environmentId, {
-        annotationIds: items.map((item) => item.annotation.id),
-        requestIds: [request.id],
-      });
+      refreshWebAnnotations(
+        environmentId,
+        {
+          annotationIds: items.map((item) => item.annotation.id),
+          requestIds: [request.id],
+        },
+        annotationScope,
+      );
       announce(`Request sent to ${destinationName(request.destination)}`);
       onSent(request);
     } catch (sendError) {

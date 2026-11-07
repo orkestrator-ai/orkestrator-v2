@@ -1,0 +1,66 @@
+{
+  "schemaVersion": 1,
+  "domain": "agent-mail",
+  "commands": {
+    "ack_agent_mail": {
+      "untyped": true
+    },
+    "discard_agent_mail_inject": {
+      "untyped": true
+    },
+    "get_agent_mail_inbox_snapshot": {
+      "untyped": true
+    },
+    "get_agent_mail_mailbox": {
+      "untyped": true
+    },
+    "get_agent_mail_mailboxes": {
+      "untyped": true
+    },
+    "get_agent_mail_message": {
+      "untyped": true
+    },
+    "get_agent_mail_status": {
+      "untyped": true
+    },
+    "get_agent_mail_summary": {
+      "untyped": true
+    },
+    "get_agent_messaging_settings": {
+      "untyped": true
+    },
+    "get_agent_registry": {
+      "untyped": true
+    },
+    "list_agent_mail_inbox": {
+      "untyped": true
+    },
+    "list_agent_mail_sent": {
+      "untyped": true
+    },
+    "list_agent_mailboxes": {
+      "untyped": true
+    },
+    "mark_agent_mail_seen": {
+      "untyped": true
+    },
+    "mute_agent_mail": {
+      "untyped": true
+    },
+    "retry_agent_mail_inject": {
+      "untyped": true
+    },
+    "send_agent_mail": {
+      "untyped": true
+    },
+    "send_external_agent_mail": {
+      "untyped": true
+    },
+    "set_agent_messaging_paused": {
+      "untyped": true
+    },
+    "update_agent_messaging_settings": {
+      "untyped": true
+    }
+  }
+}

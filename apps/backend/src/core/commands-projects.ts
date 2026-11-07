@@ -1,3 +1,4 @@
+import { claudeModelCatalogUpdatedEvent } from "@orkestrator/protocol/contract/domains/events";
 import { containerCredentialMode } from "./container-credential-mode.js";
 import { bridgeDebugEnvValue } from "@orkestrator/protocol/log-policy";
 import { gitHubCli, type GitHubCliSelection } from "./github-cli-binary.js";
@@ -99,7 +100,7 @@ export async function refreshClaudeModelCatalog(
   await context.storage.updateEnvironment(environmentId, {
     claudeModelCatalog: snapshot,
   });
-  context.emit("claude-model-catalog-updated", snapshot);
+  context.emit(claudeModelCatalogUpdatedEvent, snapshot);
   if (catalog.source === "sdk") {
     // This host-level cache improves the next launch, but it is not part of the
     // authoritative per-environment refresh. Do not hold a successful response

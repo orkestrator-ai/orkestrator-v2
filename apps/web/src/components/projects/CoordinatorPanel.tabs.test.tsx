@@ -4,7 +4,8 @@
  * tab click, and the labelled loading state.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import {
   coordinatorRuntimeId,
   type CoordinatorConversation,
@@ -14,13 +15,13 @@ import {
 import type { NativeAgentSessionProjection } from "@orkestrator/protocol/native-agent";
 import * as realBackend from "@/lib/backend";
 import * as realNativeAgent from "@/components/native-agent";
-import { useConfigStore } from "@/stores/configStore";
-import { useNativeComposeStore } from "@/stores/nativeComposeStore";
-import { useProjectStore } from "@/stores/projectStore";
-import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
+import { configStore } from "@/stores/configStore";
+import { nativeComposeStore } from "@/stores/nativeComposeStore";
+import { projectStore } from "@/stores/projectStore";
+import { nativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import {
+  coordinatorPaneLayoutStore,
   selectCoordinatorPaneLayout,
-  useCoordinatorPaneLayoutStore,
 } from "@/stores/coordinatorPaneLayoutStore";
 import {
   collectCoordinatorLeaves,
@@ -38,7 +39,7 @@ import { createSessionKey } from "@/lib/utils";
 
 const backendSnapshot = { ...realBackend };
 const nativeAgentSnapshot = { ...realNativeAgent };
-const initialConfig = useConfigStore.getState().config;
+const initialConfig = appCommandStore(configStore).getState().config;
 let useRealAgentTab = false;
 
 const gitStatus: ProjectGitStatus = {
@@ -242,15 +243,16 @@ mock.module("@/components/native-agent", () => ({
 
 import { CoordinatorPanel } from "./CoordinatorPanel";
 import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
+import { appCommandStore } from "@/test/app-command-store";
 
 describe("CoordinatorPanel tab strip", () => {
   beforeEach(() => {
     useRealAgentTab = false;
     resetNativeAgentSyncCapabilityForTests();
-    useConfigStore.setState({ config: initialConfig });
-    useNativeComposeStore.getState().clearDraft(sessionKey);
-    useNativeAgentProjectionStore.getState().reset();
-    useCoordinatorPaneLayoutStore.getState().reset();
+    appCommandStore(configStore).setState({ config: initialConfig });
+    appCommandStore(nativeComposeStore).getState().clearDraft(sessionKey);
+    appCommandStore(nativeAgentProjectionStore).getState().reset();
+    appCommandStore(coordinatorPaneLayoutStore).getState().reset();
     resetUpstreamCheckForTests();
     resetClientStateCapabilitiesForTests();
     for (const fn of [ensure, getCoordinatorView, getGit, fetchGit, select, assignAgent]) {
@@ -270,7 +272,7 @@ describe("CoordinatorPanel tab strip", () => {
     ensuredSnapshot = baseSnapshot;
     ensuredGit = gitStatus;
     agentProjection = projection();
-    useProjectStore.setState({
+    appCommandStore(projectStore).setState({
       projects: [
         {
           id: "project-1",
@@ -293,18 +295,20 @@ describe("CoordinatorPanel tab strip", () => {
   });
 
   function storedLayout() {
-    return selectCoordinatorPaneLayout("project-1")(useCoordinatorPaneLayoutStore.getState())!;
+    return selectCoordinatorPaneLayout("project-1")(
+      appCommandStore(coordinatorPaneLayoutStore).getState(),
+    )!;
   }
 
   test("marks the main tab only once side agents are open beside it", async () => {
-    const single = render(<CoordinatorPanel projectId="project-1" />);
+    const single = renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
     const alone = await screen.findByRole("tab", { name: "Coordinator, Codex" });
     expect(alone.getAttribute("aria-selected")).toBe("true");
     expect(document.querySelector("[data-coordinator-main-marker]") === null).toBe(true);
     single.unmount();
 
     ensuredSnapshot = withWorkspace({ conversations: [mainConversation, sideConversation] });
-    render(<CoordinatorPanel projectId="project-1" />);
+    renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
     const main = await screen.findByRole("tab", { name: "Coordinator, main, Codex" });
     expect(main.querySelector("[data-coordinator-main-marker]")?.textContent).toBe("Main");
     const side = screen.getByRole("tab", { name: "Side 1, Codex" });
@@ -340,7 +344,7 @@ describe("CoordinatorPanel tab strip", () => {
       });
       return ensuredSnapshot;
     });
-    render(<CoordinatorPanel projectId="project-1" />);
+    renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
     await screen.findByRole("tab", { name: "Coordinator, main, Codex" });
 
     fireEvent.click(screen.getByRole("button", { name: "Change agent" }));
@@ -385,7 +389,7 @@ describe("CoordinatorPanel tab strip", () => {
         single.activePaneId,
       );
       const originalMainPane = collectCoordinatorLeaves(split.root)[0]!.id;
-      useCoordinatorPaneLayoutStore.getState().setLayout("project-1", split);
+      appCommandStore(coordinatorPaneLayoutStore).getState().setLayout("project-1", split);
       const closed = withWorkspace({
         conversations: [
           { ...mainConversation, closedAt: new Date(1).toISOString() },
@@ -404,7 +408,7 @@ describe("CoordinatorPanel tab strip", () => {
         return closed;
       });
       createConversation.mockImplementation(() => pendingCreate);
-      render(<CoordinatorPanel projectId="project-1" />);
+      renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
       await screen.findByRole("tab", { name: "Coordinator, main, Codex" });
       fireEvent.click(screen.getByRole("button", { name: "Change agent" }));
       fireEvent.click(
@@ -474,7 +478,9 @@ describe("CoordinatorPanel tab strip", () => {
       );
       if (edited.root.kind !== "split") throw new Error("Expected split");
       edited = resizeCoordinatorSplit(edited, edited.root.id, [0.35, 0.65]);
-      act(() => useCoordinatorPaneLayoutStore.getState().setLayout("project-1", edited));
+      act(() =>
+        appCommandStore(coordinatorPaneLayoutStore).getState().setLayout("project-1", edited),
+      );
       const editedSidePane = collectCoordinatorLeaves(edited.root).find((pane) =>
         pane.conversationIds.includes("side-1"),
       )!.id;
@@ -536,7 +542,7 @@ describe("CoordinatorPanel tab strip", () => {
 
   test("closing the main explains Change agent only when there is an agent to change", async () => {
     ensuredSnapshot = withWorkspace({ conversations: [mainConversation, sideConversation] });
-    const assigned = render(<CoordinatorPanel projectId="project-1" />);
+    const assigned = renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
     await screen.findByRole("tab", { name: "Coordinator, main, Codex" });
     fireEvent.click(screen.getByRole("button", { name: /^Close Coordinator\./ }));
     expect((await screen.findByRole("alertdialog")).textContent).toContain(
@@ -547,7 +553,7 @@ describe("CoordinatorPanel tab strip", () => {
     ensuredSnapshot = withWorkspace({
       conversations: [{ ...mainConversation, agent: undefined }, sideConversation],
     });
-    render(<CoordinatorPanel projectId="project-1" />);
+    renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
     await screen.findByRole("tab", { name: "Coordinator, main, no agent chosen yet" });
     fireEvent.click(screen.getByRole("button", { name: /^Close Coordinator\./ }));
     const dialog = await screen.findByRole("alertdialog");
@@ -557,7 +563,7 @@ describe("CoordinatorPanel tab strip", () => {
 
   test("the tab menu opens from the keyboard and moves a tab to a new group and back", async () => {
     ensuredSnapshot = withWorkspace({ conversations: [mainConversation, sideConversation] });
-    render(<CoordinatorPanel projectId="project-1" />);
+    renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
     const side = await screen.findByRole("tab", { name: "Side 1, Codex" });
 
     act(() => side.focus());
@@ -631,10 +637,10 @@ describe("CoordinatorPanel tab strip", () => {
       right!.id,
       "side-1",
     );
-    useCoordinatorPaneLayoutStore
+    appCommandStore(coordinatorPaneLayoutStore)
       .getState()
       .setLayout("project-1", { ...grouped, activePaneId: single.activePaneId });
-    render(<CoordinatorPanel projectId="project-1" />);
+    renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
     await waitFor(() => expect(screen.getAllByTestId("native-agent")).toHaveLength(2));
     await waitFor(() => expect(storedLayout().activePaneId).toBe(single.activePaneId));
     select.mockClear();
@@ -652,12 +658,12 @@ describe("CoordinatorPanel tab strip", () => {
 
   test("the loading state is announced, and New side agent keeps its name when only its icon shows", async () => {
     hangLoads = true;
-    const loading = render(<CoordinatorPanel projectId="project-1" />);
+    const loading = renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
     expect((await screen.findByRole("status")).textContent).toBe("Loading coordinator");
     loading.unmount();
 
     hangLoads = false;
-    render(<CoordinatorPanel projectId="project-1" />);
+    renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
     const create = await screen.findByRole("button", { name: "New side agent" });
     // Its tooltip says what a side agent is for, not only its name.
     expect(create.getAttribute("title")).toBe(

@@ -9,8 +9,9 @@
  * detection status is mirrored into prMonitorStore by usePrMonitorService.
  */
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { backendForScope } from "@/lib/backend/scope-backend";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { useCallback, useState } from "react";
-import * as backend from "@/lib/backend";
 import { useEnvironmentStore } from "@/stores";
 import { usePrMonitorStore } from "@/stores/prMonitorStore";
 import { openPullRequestUrl } from "@/lib/pull-request-opener";
@@ -57,6 +58,8 @@ interface UsePullRequestReturn {
 }
 
 export function usePullRequest({ environmentId }: UsePullRequestOptions): UsePullRequestReturn {
+  // This node's backend (plan item 4001); the command node outside a node scope.
+  const backendScope = useScopesWithCommandFallback().scope;
   const [error, setError] = useState<string | null>(null);
 
   const setEnvironmentPR = useEnvironmentStore((state) => state.setEnvironmentPR);
@@ -94,7 +97,7 @@ export function usePullRequest({ environmentId }: UsePullRequestOptions): UsePul
         // Fallback: try to get the PR URL from the backend
         if (environmentId) {
           try {
-            url = await backend.getEnvironmentPrUrl(environmentId);
+            url = await backendForScope(backendScope).getEnvironmentPrUrl(environmentId);
           } catch (err) {
             log.error("pull-request.url-failed", { environmentId, error: formatLogError(err) });
           }
@@ -114,7 +117,7 @@ export function usePullRequest({ environmentId }: UsePullRequestOptions): UsePul
         setError(message);
       }
     },
-    [prUrl, environmentId],
+    [backendScope, prUrl, environmentId],
   );
 
   // Reset/clear the PR URL, state, and merge conflicts
@@ -122,53 +125,60 @@ export function usePullRequest({ environmentId }: UsePullRequestOptions): UsePul
     if (!environmentId) return;
 
     try {
-      await backend.clearEnvironmentPr(environmentId);
+      await backendForScope(backendScope).clearEnvironmentPr(environmentId);
       setEnvironmentPR(environmentId, null, null, null);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to reset PR";
       setError(message);
     }
-  }, [environmentId, setEnvironmentPR]);
+  }, [backendScope, environmentId, setEnvironmentPR]);
 
   // Request create-pending mode (faster polling after Create PR button).
   // A backend command rather than a store write, so the request survives a
   // renderer reload and keeps polling while another environment is active.
   const setModeCreatePending = useCallback(() => {
     if (environmentId) {
-      void backend.prMonitorWatch(environmentId, "create-pending").catch((err) => {
-        log.warn("pull-request.mode-request-failed", {
-          environmentId,
-          mode: "create-pending",
-          error: formatLogError(err),
+      void backendForScope(backendScope)
+        .prMonitorWatch(environmentId, "create-pending")
+        .catch((err) => {
+          log.warn("pull-request.mode-request-failed", {
+            environmentId,
+            mode: "create-pending",
+            error: formatLogError(err),
+          });
         });
-      });
     }
-  }, [environmentId]);
+  }, [backendScope, environmentId]);
 
   // Request merge-pending mode (fast polling after Merge PR button)
   const setModeMergePending = useCallback(() => {
     if (environmentId) {
-      void backend.prMonitorWatch(environmentId, "merge-pending").catch((err) => {
-        log.warn("pull-request.mode-request-failed", {
-          environmentId,
-          mode: "merge-pending",
-          error: formatLogError(err),
+      void backendForScope(backendScope)
+        .prMonitorWatch(environmentId, "merge-pending")
+        .catch((err) => {
+          log.warn("pull-request.mode-request-failed", {
+            environmentId,
+            mode: "merge-pending",
+            error: formatLogError(err),
+          });
         });
-      });
     }
-  }, [environmentId]);
+  }, [backendScope, environmentId]);
 
   const armRefreshAfterAgentCompletion = useCallback(async () => {
     if (!environmentId) return null;
-    return backend.armPrRefreshAfterAgentCompletion(environmentId);
-  }, [environmentId]);
+    return backendForScope(backendScope).armPrRefreshAfterAgentCompletion(environmentId);
+  }, [backendScope, environmentId]);
 
   const disarmRefreshAfterAgentCompletion = useCallback(
     async (armedAt: string) => {
       if (!environmentId) return;
-      await backend.disarmPrRefreshAfterAgentCompletion(environmentId, armedAt);
+      await backendForScope(backendScope).disarmPrRefreshAfterAgentCompletion(
+        environmentId,
+        armedAt,
+      );
     },
-    [environmentId],
+    [backendScope, environmentId],
   );
 
   return {

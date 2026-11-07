@@ -7,6 +7,7 @@
  * authoring tool, and a scheduled coordinator graph launch runs through the
  * coordinator's own `launch_graph`.
  */
+import { registrarFrom } from "./commands-registry-contracts.js";
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -210,8 +211,12 @@ beforeEach(async () => {
     string,
     (args: Record<string, unknown>, ctx: CommandContext) => unknown
   >();
-  registerCoordinatorGraphActions((name, handler) => commands.set(name, handler as never));
-  registerScheduledJobCommands((name, handler) => commands.set(name, handler as never));
+  registerCoordinatorGraphActions(
+    registrarFrom((name, handler) => commands.set(name, handler as never)),
+  );
+  registerScheduledJobCommands(
+    registrarFrom((name, handler) => commands.set(name, handler as never)),
+  );
   const invoke: ControlMcpInvoker = async <T>(
     command: string,
     args: Record<string, unknown> = {},

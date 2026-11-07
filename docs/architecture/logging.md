@@ -639,7 +639,7 @@ An entry is five fields and nothing else, defined in
 | --- | --- |
 | `errorClass` | A built-in error class, `ChunkLoadError`, or `NonErrorThrow`. A custom class name is application text, so it becomes `Error`. |
 | `boundary` | Where it was caught: `lazy-view`, `message-row` or `rich-block` (the boundaries that name themselves), `boundary` (any other), `root` (no boundary caught it), `recoverable` (React recovered), `window` or `rejection` (the window's own error and unhandled-rejection events). |
-| `route` | Which renderer: `window` (a desktop window's own), `realm` (a workspace realm in one) or `browser` (the web client). The app has no URL router, so the surface stands in for a route pattern. |
+| `route` | Which renderer: `window` (a desktop window's) or `browser` (the web client). The app has no URL router, so the surface stands in for a route pattern. `realm` named the separate per-node workspace documents of earlier releases; this client never sends it, and the list keeps it so older renderers' reports still parse. |
 | `fingerprint` | Eight hex digits of FNV-1a over the class, stack and component stack, the same one the boundaries already log. It tells failures apart without keeping what it was computed from. |
 | `count` | Occurrences since the last report, capped at 1,000,000. |
 
@@ -668,8 +668,9 @@ can cause a duplicate count after reload; this is best-effort diagnostic deliver
   (`renderer-error-upload.ts`) once the app starts: promptly for the first failure, then every 10 seconds, up to 20
   entries a write. A failed send puts the counts back and waits twice as long, up to five
   minutes. A backend that predates the command answers "Unknown backend command", which
-  stops the upload for that load. A workspace realm and a browser tab keep their ring
-  in memory: whose log their entries belong in is open
+  stops the upload for that load. Errors in another node's workspace shown in the
+  window are the window renderer's, so they go to the window's own backend. A browser
+  tab keeps its ring in memory: whose log its entries belong in is open
   ([6300](../todo/cross-cutting/6300-renderer-error-ring-for-realms-and-web-clients.md)).
 - **Validated and rate-bound in the backend.** `record_renderer_errors`
   (`renderer-error-recorder.ts`) parses every entry against the fixed lists again: any
@@ -1373,11 +1374,6 @@ flowchart LR
   console holds the markers and no logger line. That console is what the saved log
   is made of, and `application-logging.test.ts` covers the file: the tee is installed
   only for the production flavor, which no test may run against real data.
-
-One more exception carries timings rather than text: a desktop workspace realm sends
-its boot steps to the main process as a fixed-shape message, and the main process
-writes them as `[workspaces] realm.boot-step` with the realm's node. See
-[Realm boot](federation.md#realm-boot).
 
 Recommendation R8 in the review (`git show 413bd6219:docs/reports/2026-10-29-logging-and-database-efficiency.md`)
 asked whether more may be saved. The answer is the content-free error ring:

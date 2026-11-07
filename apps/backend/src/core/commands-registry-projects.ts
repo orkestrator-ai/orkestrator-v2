@@ -4,6 +4,12 @@ import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 import { isGitRemoteUrl } from "@orkestrator/protocol/git-remote-url";
 import { parseProjectArrangementIntent } from "@orkestrator/protocol/project-arrangement";
 import {
+  getResourceRevisionManifestCommand,
+  getScopedResourceRevisionManifestCommand,
+  getScopedResourceSnapshotsCommand,
+  greetCommand,
+} from "@orkestrator/protocol/contract/domains/system";
+import {
   isResourceChange,
   type ResourceChange,
   type ResourceManifestKind,
@@ -13,7 +19,49 @@ import {
   isResourceSnapshotRevision,
   type ResourceRevisionMap,
 } from "@orkestrator/protocol/resource-events";
+import {
+  cursorSdkLoginCancelCommand,
+  cursorSdkLoginStartCommand,
+  cursorSdkLoginStatusCommand,
+  cursorSdkLogoutCommand,
+  getPlanUsageCommand,
+} from "@orkestrator/protocol/contract/domains/accounts";
+import { ASYNC_HANDLER, asyncHandlerCheckingFirst } from "./commands-registry-async-decode.js";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
+import {
+  addProjectCommand,
+  arrangeProjectsByIntentCommand,
+  arrangeProjectsCommand,
+  createProjectFromScratchCommand,
+  getGitRemoteUrlCommand,
+  getProjectCommand,
+  getProjectsCommand,
+  listGitHubCloneAccountsCommand,
+  listGitHubCloneRepositoriesCommand,
+  rememberEnvironmentAgentSelectionCommand,
+  removeProjectCommand,
+  reorderProjectsCommand,
+  updateProjectCommand,
+  validateGitUrlCommand,
+} from "@orkestrator/protocol/contract/domains/projects";
+import {
+  getConfigCommand,
+  getDesktopConnectionsCommand,
+  getGlobalConfigCommand,
+  getRepositoryConfigCommand,
+  patchGlobalConfigCommand,
+  patchRepositorySettingsCommand,
+  saveConfigCommand,
+  saveDesktopConnectionsCommand,
+  setAnthropicApiKeyCommand,
+  setCursorApiKeyCommand,
+  setGitHubCliReminderDismissedCommand,
+  setGitHubTokenCommand,
+  setOpenCodeZenApiKeyCommand,
+  updateGlobalConfigCommand,
+  updateNotificationSoundSettingsCommand,
+  updateRepositoryConfigCommand,
+} from "@orkestrator/protocol/contract/domains/config";
 import type { CommandContext } from "./commands-context.js";
 import { parseStoredDesktopConnections } from "@orkestrator/protocol/connections";
 import { parseUpdateObject } from "./storage.js";
@@ -64,7 +112,6 @@ import { normalizeAgentPlatforms, isAgentPlatform } from "@orkestrator/protocol/
 import {
   asString,
   asRecord,
-  assertOnlyKeys,
   redactGlobalConfig,
   redactAppConfig,
   stripRendererCredentials,
@@ -89,6 +136,13 @@ import {
 } from "./host-model-catalog-seed.js";
 import { listGitHubCloneAccounts, listGitHubCloneRepositories } from "./github-clone-browser.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import {
+  cacheAgentModelCatalogCommand,
+  ensureHostPiModelCatalogCommand,
+  getAgentModelCatalogCacheCommand,
+  getNativeAgentModelCatalogCommand,
+  refreshHostAgentModelCatalogCommand,
+} from "@orkestrator/protocol/contract/domains/agent-servers";
 
 const log = createLogger("models");
 
@@ -252,32 +306,34 @@ export function registerProjectCommands(
     planUsageReader,
   } = dependencies;
   register(
-    "greet",
-    ({ name }) =>
-      `Hello, ${asString(name, "name")}! You've been greeted from the Orkestrator backend!`,
+    greetCommand,
+    ({ name }) => `Hello, ${name}! You've been greeted from the Orkestrator backend!`,
   );
-  register("get_resource_revision_manifest", ({ knownGeneration, knownRevisions }, { storage }) => {
-    const parsed: Partial<ResourceRevisionMap> = {};
-    if (knownRevisions !== undefined) {
-      const revisions = asRecord(knownRevisions, "knownRevisions");
-      for (const [resource, revision] of Object.entries(revisions)) {
-        if (!isResourceManifestKind(resource)) {
-          throw new Error(`Unknown manifest resource: ${resource}`);
+  register(
+    getResourceRevisionManifestCommand,
+    ({ knownGeneration, knownRevisions }, { storage }) => {
+      const parsed: Partial<ResourceRevisionMap> = {};
+      if (knownRevisions !== undefined) {
+        const revisions = asRecord(knownRevisions, "knownRevisions");
+        for (const [resource, revision] of Object.entries(revisions)) {
+          if (!isResourceManifestKind(resource)) {
+            throw new Error(`Unknown manifest resource: ${resource}`);
+          }
+          if (!isResourceSnapshotRevision(revision)) {
+            throw new Error(`Invalid manifest revision for ${resource}`);
+          }
+          parsed[resource] = revision;
         }
-        if (!isResourceSnapshotRevision(revision)) {
-          throw new Error(`Invalid manifest revision for ${resource}`);
-        }
-        parsed[resource] = revision;
       }
-    }
-    if (knownGeneration !== undefined && !isResourceGeneration(knownGeneration)) {
-      throw new Error("knownGeneration must be an opaque resource generation");
-    }
-    return storage.getResourceRevisionManifest(knownGeneration, parsed);
-  });
+      if (knownGeneration !== undefined && !isResourceGeneration(knownGeneration)) {
+        throw new Error("knownGeneration must be an opaque resource generation");
+      }
+      return storage.getResourceRevisionManifest(knownGeneration, parsed);
+    },
+  );
 
   register(
-    "get_scoped_resource_revision_manifest",
+    getScopedResourceRevisionManifestCommand,
     ({ knownGeneration, cursor, highWater, knownRevisions }, { storage }) => {
       const parsed: Partial<ResourceRevisionMap> = {};
       if (knownRevisions !== undefined) {
@@ -312,7 +368,7 @@ export function registerProjectCommands(
     },
   );
 
-  register("get_scoped_resource_snapshots", async ({ changes }, context) => {
+  register(getScopedResourceSnapshotsCommand, async ({ changes }, context) => {
     if (
       !Array.isArray(changes) ||
       changes.length > 32 ||
@@ -442,16 +498,10 @@ export function registerProjectCommands(
     return { entries };
   });
 
-  register("get_projects", async (args, { storage }) => {
+  register(getProjectsCommand, async (args, { storage }) => {
     // Periodic node-summary reads have a shared icon budget; ordinary project reads stay full.
-    const summaryIcons =
-      args.summaryIcons === undefined
-        ? false
-        : asRequiredBoolean(args.summaryIcons, "summaryIcons");
-    const includeDefaultBranch =
-      args.includeDefaultBranch === undefined
-        ? false
-        : asRequiredBoolean(args.includeDefaultBranch, "includeDefaultBranch");
+    const summaryIcons = args.summaryIcons ?? false;
+    const includeDefaultBranch = args.includeDefaultBranch ?? false;
     if (!includeDefaultBranch && !summaryIcons) {
       return conditionalManifestSnapshot(args, storage, "project", () => storage.loadProjects());
     }
@@ -470,19 +520,18 @@ export function registerProjectCommands(
       return projects;
     }
   });
-  register("add_project", async ({ gitUrl, localPath, cloneOnly }, { storage }) => {
+  register(addProjectCommand, async ({ gitUrl, localPath, cloneOnly }, { storage }) => {
     const requestedLocalPath = asOptionalString(localPath);
     return addExistingProject(
-      asString(gitUrl, "gitUrl"),
+      gitUrl,
       requestedLocalPath,
       storage,
       runProjectCreationCommand,
       undefined,
-      cloneOnly === undefined ? false : asRequiredBoolean(cloneOnly, "cloneOnly"),
+      cloneOnly ?? false,
     );
   });
-  register("create_project_from_scratch", (args, { storage, runtime }) => {
-    assertOnlyKeys(args, ["localPath"], "arguments");
+  register(createProjectFromScratchCommand, (args, { storage, runtime }) => {
     return createProjectFromScratch(
       asNonBlankString(args.localPath, "localPath"),
       storage,
@@ -492,16 +541,14 @@ export function registerProjectCommands(
   });
   // Read-only listings for the "From GitHub" add-project picker. The clone
   // itself goes through `add_project`, which owns locking and rollback.
-  register("list_github_clone_accounts", (args, context) => {
-    assertOnlyKeys(args, [], "arguments");
+  register(listGitHubCloneAccountsCommand, (_args, context) => {
     return listGitHubCloneAccounts(
       context.storage,
       context.runtime.gitHubCli,
       runProjectCreationCommand,
     );
   });
-  register("list_github_clone_repositories", (args, context) => {
-    assertOnlyKeys(args, ["owner", "cursor"], "arguments");
+  register(listGitHubCloneRepositoriesCommand, (args, context) => {
     return listGitHubCloneRepositories(
       context.storage,
       context.runtime.gitHubCli,
@@ -510,15 +557,12 @@ export function registerProjectCommands(
       args.cursor === undefined ? undefined : asNonBlankString(args.cursor, "cursor"),
     );
   });
-  register("remove_project", async ({ projectId }, context) => {
-    const id = asString(projectId, "projectId");
+  register(removeProjectCommand, async ({ projectId: id }, context) => {
     await cleanupProjectForRemoval(id, context, commands);
     return context.storage.removeProject(id);
   });
-  register("get_project", ({ projectId }, { storage }) =>
-    storage.getProject(asString(projectId, "projectId")),
-  );
-  register("update_project", async ({ projectId, updates }, { storage }) => {
+  register(getProjectCommand, ({ projectId }, { storage }) => storage.getProject(projectId));
+  register(updateProjectCommand, async ({ projectId, updates }, { storage }) => {
     const parsedUpdates = parseUpdateObject(updates);
     if (
       parsedUpdates.gitUrl !== undefined &&
@@ -526,28 +570,26 @@ export function registerProjectCommands(
     ) {
       // Existing projects can use local-path remotes. An unrelated settings
       // change must not force the user to replace a previously accepted URL.
-      const existing = await storage.getProject(asString(projectId, "projectId"));
+      const existing = await storage.getProject(projectId);
       if (existing?.gitUrl !== String(parsedUpdates.gitUrl).trim()) {
         throw new Error("Git URL must be an HTTPS, SSH, or git@ remote URL");
       }
     }
-    return storage.updateProject(asString(projectId, "projectId"), parsedUpdates);
+    return storage.updateProject(projectId, parsedUpdates);
   });
-  register("reorder_projects", ({ projectIds }, { storage }) =>
+  register(reorderProjectsCommand, ({ projectIds }, { storage }) =>
     storage.reorderProjects(asStringArray(projectIds)),
   );
   // The gesture rather than its result: resolved against the current projects
   // under the store lock, so a client's stale copy cannot undo another's work.
-  register("arrange_projects_by_intent", async (args, { storage }) => {
-    assertOnlyKeys(args, ["intent"], "arrange_projects_by_intent argument");
+  register(arrangeProjectsByIntentCommand, async (args, { storage }) => {
     return storage.arrangeProjectsByIntent(parseProjectArrangementIntent(args.intent));
   });
   // Kept for older clients and nodes; current clients send the intent above.
   // One command rather than a reorder plus N updates: the sidebar derives a
   // folder's position from its first member, so a half-applied arrangement is
   // a visibly wrong tree rather than a slightly stale one.
-  register("arrange_projects", (args, { storage }) => {
-    assertOnlyKeys(args, ["projectIds", "folders"], "arguments");
+  register(arrangeProjectsCommand, (args, { storage }) => {
     const folders: Record<string, string | null> = {};
     if (args.folders !== undefined) {
       for (const [projectId, folder] of Object.entries(asRecord(args.folders, "folders"))) {
@@ -559,28 +601,26 @@ export function registerProjectCommands(
     }
     return storage.arrangeProjects(asStringArray(args.projectIds), folders);
   });
-  register("validate_git_url", ({ url }) => isGitRemoteUrl(asString(url, "url")));
-  register("get_git_remote_url", async ({ path: repoPath }) => {
+  register(validateGitUrlCommand, ({ url }) => isGitRemoteUrl(url));
+  register(getGitRemoteUrlCommand, async ({ path: repoPath }) => {
     // Reads the raw config value rather than `remote get-url`, which applies
     // `insteadOf` rewrites and can therefore hand back an embedded credential.
-    return (await readOriginUrl(asString(repoPath, "path"), runCommand)) || null;
+    return (await readOriginUrl(repoPath, runCommand)) || null;
   });
 
-  register("get_config", (args, { storage }) =>
+  register(getConfigCommand, (args, { storage }) =>
     conditionalManifestSnapshot(args, storage, "config", async () =>
       redactAppConfig(await storage.loadConfig()),
     ),
   );
-  register("ensure_host_pi_model_catalog", async (args, context) => {
-    assertOnlyKeys(args, [], "arguments");
+  register(ensureHostPiModelCatalogCommand, async (_args, context) => {
     const cached = (await context.storage.getAgentModelCatalogCache()).pi?.models;
     if (cached?.length) return cached;
     const models = await discoverHostPiModelCatalog(context);
     if (models.length > 0) await context.storage.cacheAgentModelCatalog("pi", models);
     return models;
   });
-  register("refresh_host_agent_model_catalog", async (args, context) => {
-    assertOnlyKeys(args, ["agent", "projectId"], "arguments");
+  register(refreshHostAgentModelCatalogCommand, async (args, context) => {
     const agent = asNonBlankString(args.agent, "agent");
     if (!isAgentPlatform(agent)) throw new Error(`Unknown agent platform: ${agent}`);
     const projectId =
@@ -593,8 +633,7 @@ export function registerProjectCommands(
 
     return { agent: catalog.agent, modelCount: catalog.models.length };
   });
-  register("get_agent_model_catalog_cache", async (args, context) => {
-    assertOnlyKeys(args, ["seed"], "arguments");
+  register(getAgentModelCatalogCacheCommand, async (args, context) => {
     // `seed: true` is asked only by the application's own startup, in the
     // background after the first render, so a first launch downloads every
     // enabled platform's list. `seed: false` is startup's read before that
@@ -624,8 +663,7 @@ export function registerProjectCommands(
     }
     return cache;
   });
-  register("get_native_agent_model_catalog", async (args, context) => {
-    assertOnlyKeys(args, ["environmentId", "ensureAgent"], "arguments");
+  register(getNativeAgentModelCatalogCommand, async (args, context) => {
     const { storage } = context;
     const id = asNonBlankString(args.environmentId, "environmentId");
     const ensureAgent = args.ensureAgent;
@@ -966,8 +1004,7 @@ export function registerProjectCommands(
           : ("failed" as const),
     };
   });
-  register("cache_agent_model_catalog", (args, { storage }) => {
-    assertOnlyKeys(args, ["agent", "models"], "arguments");
+  register(cacheAgentModelCatalogCommand, (args, { storage }) => {
     const agent = asNonBlankString(args.agent, "agent");
     if (agent === "claude") {
       const catalog = parseClaudeBridgeModelCatalog({
@@ -985,7 +1022,7 @@ export function registerProjectCommands(
     }
     throw new Error("Expected agent to be claude, codex, or pi");
   });
-  register("save_config", async ({ config }, context) => {
+  register(saveConfigCommand, async ({ config }, context) => {
     const { storage } = context;
     const candidate = asRecord(config, "config") as unknown as AppConfig;
     await context.runtime.prMonitor.viewerPermissions.rotateScope("local-gh", () =>
@@ -1011,20 +1048,31 @@ export function registerProjectCommands(
     // The experimental scheduling switch takes effect now, not at the next tick.
     context.scheduledJobs?.wake();
   });
-  register("get_desktop_connections", (_args, { storage }) => storage.getDesktopConnections());
-  register("save_desktop_connections", ({ desktopConnections }, { storage }) => {
+  register(getDesktopConnectionsCommand, (_args, { storage }) => storage.getDesktopConnections());
+  register(saveDesktopConnectionsCommand, ({ desktopConnections }, { storage }) => {
     return storage.saveDesktopConnections(parseStoredDesktopConnections(desktopConnections));
   });
-  register("get_global_config", async (_args, { storage }) =>
+  register(getGlobalConfigCommand, async (_args, { storage }) =>
     redactGlobalConfig((await storage.loadConfig()).global),
   );
-  register("get_plan_usage", async (args, context) => {
-    assertOnlyKeys(args, ["platform", "force"], "arguments");
-    const platform = asNonBlankString(args.platform, "platform");
+  // The platform is checked before the decode, so an unknown platform with a
+  // wrong `force` still reports the platform (plan item 7008).
+  const planUsagePlatform = (value: unknown) => {
+    const platform = asNonBlankString(value, "platform");
     if (!isAgentPlatform(platform)) throw new Error(`Unknown agent platform: ${platform}`);
-    const force = args.force === undefined ? false : asRequiredBoolean(args.force, "force");
-    return planUsageReader(context, platform, { force });
-  });
+    return platform;
+  };
+  register(
+    getPlanUsageCommand,
+    async (args, context) => {
+      const platform = planUsagePlatform(args.platform);
+      const force = args.force === undefined ? false : asRequiredBoolean(args.force, "force");
+      return planUsageReader(context, platform, { force });
+    },
+    asyncHandlerCheckingFirst((args) => {
+      planUsagePlatform(args.platform);
+    }),
+  );
   const afterGlobalConfigSaved = async (updated: AppConfig, context: CommandContext) => {
     context.runtime.terminals.history.configureRetention({
       enabled: updated.global.terminalHistoryEnabled,
@@ -1038,27 +1086,19 @@ export function registerProjectCommands(
   };
   // Whole-object replace: kept for older clients. Current clients send only
   // the fields they changed through `patch_global_config`.
-  register("update_global_config", async ({ global, preserveInheritedSettings }, context) => {
+  register(updateGlobalConfigCommand, async ({ global, preserveInheritedSettings }, context) => {
     const { storage } = context;
     const updated = await context.runtime.prMonitor.viewerPermissions.rotateScope("local-gh", () =>
       storage.updateGlobalConfig(stripRendererCredentials(asRecord(global, "global")), {
         preserveCredentials: true,
-        ...(preserveInheritedSettings === undefined
-          ? {}
-          : {
-              preserveInheritedSettings: asRequiredBoolean(
-                preserveInheritedSettings,
-                "preserveInheritedSettings",
-              ),
-            }),
+        ...(preserveInheritedSettings === undefined ? {} : { preserveInheritedSettings }),
       }),
     );
     return afterGlobalConfigSaved(updated, context);
   });
   // Merge the supplied top-level keys onto the stored global under the config
   // lock, so a save cannot replace what another client changed meanwhile.
-  register("patch_global_config", async (args, context) => {
-    assertOnlyKeys(args, ["patch", "unset"], "patch_global_config argument");
+  register(patchGlobalConfigCommand, async (args, context) => {
     const patch = stripRendererCredentials(asRecord(args.patch, "patch"));
     const unset = parseConfigUnsetKeys(args.unset);
     const updated = await context.runtime.prMonitor.viewerPermissions.rotateScope("local-gh", () =>
@@ -1066,16 +1106,13 @@ export function registerProjectCommands(
     );
     return afterGlobalConfigSaved(updated, context);
   });
-  register("update_notification_sound_settings", async ({ settings }, { storage }) =>
+  register(updateNotificationSoundSettingsCommand, async ({ settings }, { storage }) =>
     redactAppConfig(await storage.updateNotificationSoundSettings(settings)),
   );
-  register("set_github_cli_reminder_dismissed", async (args, { storage }) => {
-    assertOnlyKeys(args, ["dismissed"], "set_github_cli_reminder_dismissed argument");
-    return redactAppConfig(
-      await storage.setGitHubCliReminderDismissed(asRequiredBoolean(args.dismissed, "dismissed")),
-    );
-  });
-  register("set_github_token", async ({ token }, { storage, runtime }) => {
+  register(setGitHubCliReminderDismissedCommand, async ({ dismissed }, { storage }) =>
+    redactAppConfig(await storage.setGitHubCliReminderDismissed(dismissed)),
+  );
+  register(setGitHubTokenCommand, async ({ token }, { storage, runtime }) => {
     const nextToken = token === null ? null : asString(token, "token").trim();
     if (nextToken !== null && !nextToken) {
       throw new Error("GitHub token cannot be empty. Use null to clear it.");
@@ -1086,7 +1123,7 @@ export function registerProjectCommands(
       ),
     );
   });
-  register("set_cursor_api_key", async ({ apiKey }, { storage }) => {
+  register(setCursorApiKeyCommand, async ({ apiKey }, { storage }) => {
     const nextApiKey = apiKey === null ? null : asString(apiKey, "apiKey").trim();
     if (nextApiKey !== null && !nextApiKey) {
       throw new Error("Cursor API key cannot be empty. Use null to clear it.");
@@ -1102,55 +1139,68 @@ export function registerProjectCommands(
    * storing the credential, cancelling — stays here; the settings pane only
    * opens the returned URL and polls.
    */
-  register("cursor_sdk_login_start", async (payload, context) => {
-    return startCursorSdkLogin(context, {
-      bridgeEntrypoint: async () =>
-        nodePath.join(await prepareBridgePath(context, "cursor-bridge"), "dist", "index.js"),
-      runtime: resolveBunBinary(context),
-      // A client opens the link in its own browser, which may be on another
-      // machine. Without the flag (an older client) this machine's desktop
-      // opens it, as before.
-      openBrowser: payload.openBrowser !== false,
-    });
-  });
-  register("cursor_sdk_login_status", async (_payload, context) => {
-    const config = await context.storage.loadConfig();
-    // The stored key is read only to report *which* credential is in play; it
-    // is never returned.
-    return cursorSdkLoginProgress(context, config.global.cursorApiKey);
-  });
-  register("cursor_sdk_login_cancel", async (_payload, context) => {
-    cancelCursorSdkLogin(context);
-    return { cancelled: true };
-  });
-  register("cursor_sdk_logout", async (_payload, context) => {
-    cancelCursorSdkLogin(context);
-    await cursorSdkLogout(context);
-    const config = await context.storage.loadConfig();
-    return cursorSdkAuthStatus(context, config.global.cursorApiKey);
-  });
-  register("set_anthropic_api_key", async ({ apiKey }, { storage }) => {
+  register(
+    cursorSdkLoginStartCommand,
+    async (payload, context) => {
+      return startCursorSdkLogin(context, {
+        bridgeEntrypoint: async () =>
+          nodePath.join(await prepareBridgePath(context, "cursor-bridge"), "dist", "index.js"),
+        runtime: resolveBunBinary(context),
+        // A client opens the link in its own browser, which may be on another
+        // machine. Without the flag (an older client) this machine's desktop
+        // opens it, as before.
+        openBrowser: payload.openBrowser !== false,
+      });
+    },
+    ASYNC_HANDLER,
+  );
+  register(
+    cursorSdkLoginStatusCommand,
+    async (_payload, context) => {
+      const config = await context.storage.loadConfig();
+      // The stored key is read only to report *which* credential is in play; it
+      // is never returned.
+      return cursorSdkLoginProgress(context, config.global.cursorApiKey);
+    },
+    ASYNC_HANDLER,
+  );
+  register(
+    cursorSdkLoginCancelCommand,
+    async (_payload, context) => {
+      cancelCursorSdkLogin(context);
+      return { cancelled: true };
+    },
+    ASYNC_HANDLER,
+  );
+  register(
+    cursorSdkLogoutCommand,
+    async (_payload, context) => {
+      cancelCursorSdkLogin(context);
+      await cursorSdkLogout(context);
+      const config = await context.storage.loadConfig();
+      return cursorSdkAuthStatus(context, config.global.cursorApiKey);
+    },
+    ASYNC_HANDLER,
+  );
+  register(setAnthropicApiKeyCommand, async ({ apiKey }, { storage }) => {
     const nextApiKey = apiKey === null ? null : asString(apiKey, "apiKey").trim();
     if (nextApiKey !== null && !nextApiKey) {
       throw new Error("Anthropic API key cannot be empty. Use null to clear it.");
     }
     return redactAppConfig(await storage.setAnthropicApiKey(nextApiKey));
   });
-  register("set_opencode_zen_api_key", async ({ apiKey }, { storage }) => {
+  register(setOpenCodeZenApiKeyCommand, async ({ apiKey }, { storage }) => {
     const nextApiKey = apiKey === null ? null : asString(apiKey, "apiKey").trim();
     if (nextApiKey !== null && !nextApiKey) {
       throw new Error("OpenCode Zen API key cannot be empty. Use null to clear it.");
     }
     return redactAppConfig(await storage.setOpenCodeZenApiKey(nextApiKey));
   });
-  register("get_repository_config", ({ projectId }, { storage }) =>
-    storage.getRepositoryConfig(asString(projectId, "projectId")),
+  register(getRepositoryConfigCommand, ({ projectId }, { storage }) =>
+    storage.getRepositoryConfig(projectId),
   );
-  register("update_repository_config", async ({ projectId, repoConfig }, context) => {
-    const updated = await context.storage.updateRepositorySettings(
-      asString(projectId, "projectId"),
-      repoConfig as never,
-    );
+  register(updateRepositoryConfigCommand, async ({ projectId, repoConfig }, context) => {
+    const updated = await context.storage.updateRepositorySettings(projectId, repoConfig as never);
     // The PR base branch is the baseline the counts are measured against, so an
     // edit here retargets every environment in the project. Reconciling now
     // rather than waiting for the next environment poll means the badge follows
@@ -1158,10 +1208,9 @@ export function registerProjectCommands(
     void context.runtime.diffStats.sync(context).catch(() => undefined);
     return redactAppConfig(updated);
   });
-  register("patch_repository_settings", async (args, context) => {
-    assertOnlyKeys(args, ["projectId", "updates", "unset"], "patch_repository_settings argument");
+  register(patchRepositorySettingsCommand, async (args, context) => {
     const updated = await context.storage.patchRepositorySettings(
-      asString(args.projectId, "projectId"),
+      args.projectId,
       asRecord(args.updates ?? {}, "updates") as never,
       parseConfigUnsetKeys(args.unset),
     );
@@ -1175,7 +1224,7 @@ export function registerProjectCommands(
   // an old renderer carries its own copy of the client-side wrapper, so keeping
   // one here would have protected nothing.
   register(
-    "remember_environment_agent_selection",
+    rememberEnvironmentAgentSelectionCommand,
     async ({ projectId, platform, mode }, { storage }) => {
       if (!isAgentPlatform(platform)) {
         throw new Error("Expected platform to be a supported agent platform");

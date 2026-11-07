@@ -19,23 +19,17 @@
  * arbitrary sleep.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import {
-  act,
-  cleanup,
-  fireEvent,
-  render,
-  renderHook,
-  screen,
-  waitFor,
-} from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderHookInAppCommandScope, renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { nativeAgentCapabilities, type AgentModel } from "@orkestrator/protocol/native-agent";
 import * as realBackend from "@/lib/backend";
 import { createSessionKey } from "@/lib/utils";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { environmentStore } from "@/stores/environmentStore";
 import type { Environment } from "@/types";
-import { useConfigStore } from "@/stores/configStore";
+import { configStore, type ConfigState } from "@/stores/configStore";
 import { mockToastError as toastError } from "../../../../tests/mocks/sonner";
+import { appCommandStore } from "@/test/app-command-store";
 
 const realBackendSnapshot = { ...realBackend };
 const saveComposeDraft = mock(async (..._args: unknown[]): Promise<unknown> => undefined);
@@ -69,7 +63,7 @@ const { NATIVE_COMPOSE_DRAFT_SAVE_DEBOUNCE_MS, useNativeComposeDraftPersistence 
 const {
   nativeComposePersistenceStore,
   unassignedNativeComposePersistenceStore,
-  useNativeComposeStore,
+  nativeComposeStore,
 } = await import("../stores/nativeComposeStore");
 const { UnassignedNativeAgentComposer } =
   await import("../components/native-agent/AgentNativeTab.helpers");
@@ -142,7 +136,7 @@ function savedAttachments(call: unknown[] | undefined): unknown {
 }
 
 function draftAttachmentsOf(sessionKey: string) {
-  return useNativeComposeStore.getState().drafts.get(sessionKey)?.attachments;
+  return appCommandStore(nativeComposeStore).getState().drafts.get(sessionKey)?.attachments;
 }
 
 /**
@@ -207,11 +201,11 @@ function captureDraftSaveTimers() {
 }
 
 let saveTimers: ReturnType<typeof captureDraftSaveTimers> | undefined;
-let configSnapshot: ReturnType<typeof useConfigStore.getState>["config"];
+let configSnapshot: ConfigState["config"];
 
 beforeEach(() => {
   cleanup();
-  configSnapshot = useConfigStore.getState().config;
+  configSnapshot = appCommandStore(configStore).getState().config;
   for (const fn of [saveComposeDraft, deleteComposeDraft, getComposeDraft]) fn.mockReset();
   getNativeAgentModelCatalog.mockReset();
   getNativeAgentModelCatalog.mockImplementation(async () => []);
@@ -219,19 +213,19 @@ beforeEach(() => {
   saveComposeDraft.mockImplementation(async () => undefined);
   deleteComposeDraft.mockImplementation(async () => undefined);
   getComposeDraft.mockImplementation(async () => null);
-  useNativeComposeStore.setState({ drafts: new Map() });
+  appCommandStore(nativeComposeStore).setState({ drafts: new Map() });
 });
 
 afterEach(() => {
   cleanup();
   saveTimers?.restore();
   saveTimers = undefined;
-  useConfigStore.getState().setConfig(configSnapshot);
+  appCommandStore(configStore).getState().setConfig(configSnapshot);
 });
 
 afterAll(() => {
   cleanup();
-  useNativeComposeStore.setState({ drafts: new Map() });
+  appCommandStore(nativeComposeStore).setState({ drafts: new Map() });
   mock.module("@/lib/backend", () => realBackendSnapshot);
 });
 
@@ -398,7 +392,7 @@ describe("useNativeComposeDraftPersistence attachment restoration", () => {
           attachments: [file, image],
         }),
       });
-      const hook = renderHook(() =>
+      const hook = renderHookInAppCommandScope(() =>
         useNativeComposeDraftPersistence(
           platform,
           environmentId,
@@ -435,7 +429,7 @@ describe("useNativeComposeDraftPersistence attachment restoration", () => {
           metadata: { platform, fastMode: false, mode: "build" },
         }),
       });
-      const hook = renderHook(() =>
+      const hook = renderHookInAppCommandScope(() =>
         useNativeComposeDraftPersistence(
           "agent-native",
           environmentId,
@@ -446,7 +440,9 @@ describe("useNativeComposeDraftPersistence attachment restoration", () => {
 
       await waitFor(() => expect(saveCallsFor(key)).toHaveLength(1));
       expect(draftAttachmentsOf(sessionKey)).toEqual(expected);
-      expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.platform).toBe(platform);
+      expect(appCommandStore(nativeComposeStore).getState().drafts.get(sessionKey)?.platform).toBe(
+        platform,
+      );
       const [call] = saveCallsFor(key);
       expect(savedAttachments(call)).toEqual(expected);
       expect(call?.[3]).toMatchObject({ metadata: { platform } });
@@ -468,7 +464,7 @@ describe("useNativeComposeDraftPersistence attachment restoration", () => {
           metadata: { platform, fastMode: false, mode: "build" },
         }),
       });
-      const hook = renderHook(() =>
+      const hook = renderHookInAppCommandScope(() =>
         useNativeComposeDraftPersistence(
           platform,
           environmentId,
@@ -497,7 +493,7 @@ describe("useNativeComposeDraftPersistence attachment restoration", () => {
         attachments: [image],
       }),
     });
-    const hook = renderHook(() =>
+    const hook = renderHookInAppCommandScope(() =>
       useNativeComposeDraftPersistence(
         "cursor",
         environmentId,
@@ -523,7 +519,7 @@ describe("useNativeComposeDraftPersistence attachment restoration", () => {
     const fallbackKey = composeDraftKey("agent-native", environmentId, sessionKey);
     const fallback = deferred<StoredDraft>();
     serveDrafts({ [key]: null, [fallbackKey]: fallback.promise });
-    const hook = renderHook(() =>
+    const hook = renderHookInAppCommandScope(() =>
       useNativeComposeDraftPersistence(
         "grok",
         environmentId,
@@ -535,7 +531,9 @@ describe("useNativeComposeDraftPersistence attachment restoration", () => {
     await waitFor(() => expect(getComposeDraft).toHaveBeenCalledWith(fallbackKey));
 
     act(() =>
-      useNativeComposeStore.getState().updateDraft(sessionKey, { attachments: [secondImage] }),
+      appCommandStore(nativeComposeStore)
+        .getState()
+        .updateDraft(sessionKey, { attachments: [secondImage] }),
     );
     fallback.resolve(
       storedDraft("agent-native", environmentId, sessionKey, {
@@ -548,7 +546,7 @@ describe("useNativeComposeDraftPersistence attachment restoration", () => {
 
     await waitFor(() => expect(saveCallsFor(key)).toHaveLength(1));
     expect(draftAttachmentsOf(sessionKey)).toEqual([secondImage]);
-    expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.text).toBe("");
+    expect(appCommandStore(nativeComposeStore).getState().drafts.get(sessionKey)?.text).toBe("");
     expect(savedAttachments(saveCallsFor(key)[0])).toEqual([secondImage]);
     hook.unmount();
   });
@@ -568,7 +566,7 @@ describe("useNativeComposeDraftPersistence attachment restoration", () => {
     saveComposeDraft
       .mockRejectedValueOnce(new Error("Compose draft revision conflict"))
       .mockResolvedValueOnce({ ...stored, revision: 3 });
-    const hook = renderHook(() =>
+    const hook = renderHookInAppCommandScope(() =>
       useNativeComposeDraftPersistence(
         "cursor",
         environmentId,
@@ -606,7 +604,7 @@ describe("useNativeComposeDraftPersistence attachment restoration", () => {
         metadata: { platform: "gpt-9" },
       }),
     });
-    const hook = renderHook(() =>
+    const hook = renderHookInAppCommandScope(() =>
       useNativeComposeDraftPersistence(
         "agent-native",
         environmentId,
@@ -618,7 +616,9 @@ describe("useNativeComposeDraftPersistence attachment restoration", () => {
     await waitFor(() => expect(saveCallsFor(key)).toHaveLength(1));
     expect(draftAttachmentsOf(sessionKey)).toEqual([file, secondImage]);
     // The unknown platform is not adopted, so nothing claims a capability.
-    expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.platform).toBeUndefined();
+    expect(
+      appCommandStore(nativeComposeStore).getState().drafts.get(sessionKey)?.platform,
+    ).toBeUndefined();
     expect(savedAttachments(saveCallsFor(key)[0])).toEqual([file, secondImage]);
     hook.unmount();
   });
@@ -634,7 +634,7 @@ describe("useNativeComposeDraftPersistence attachment restoration", () => {
         attachments: [file, image],
       }),
     });
-    const hook = renderHook(() =>
+    const hook = renderHookInAppCommandScope(() =>
       useNativeComposeDraftPersistence(
         "claude-tmux",
         environmentId,
@@ -684,7 +684,7 @@ describe("UnassignedNativeAgentComposer draft restoration", () => {
    */
   function recordAttachmentHistory(sessionKey: string, restored: readonly unknown[]) {
     const history: unknown[][] = [];
-    const unsubscribe = useNativeComposeStore.subscribe((state, previous) => {
+    const unsubscribe = appCommandStore(nativeComposeStore).subscribe((state, previous) => {
       const current = state.drafts.get(sessionKey)?.attachments;
       if (current && current !== previous.drafts.get(sessionKey)?.attachments) {
         history.push(current);
@@ -702,7 +702,7 @@ describe("UnassignedNativeAgentComposer draft restoration", () => {
   }
 
   function renderComposer(tabId: string, onSend = mock((..._args: unknown[]) => undefined)) {
-    const view = render(
+    const view = renderInAppCommandScope(
       <UnassignedNativeAgentComposer
         tabId={tabId}
         environmentId={environmentId}
@@ -716,23 +716,27 @@ describe("UnassignedNativeAgentComposer draft restoration", () => {
   test.each(["provider", "container", "none"] as const)(
     "a restricted-network launch in a full-network container describes the provider sandbox (%s override)",
     async (sandbox) => {
-      const previous = useEnvironmentStore.getState().environments;
-      useEnvironmentStore.getState().setEnvironments([
-        {
-          id: environmentId,
-          projectId: "project-1",
-          name: "Container",
-          environmentType: "containerized",
-          networkAccessMode: "full",
-          agentSettings: {
-            executionPolicy: { approvals: "ask", sandbox, networkAccess: "restricted" },
-          },
-        } as Environment,
-      ]);
-      useConfigStore.getState().updateGlobalConfig({
-        enabledAgentPlatforms: ["codex"],
-        agentSettings: { defaultAgent: "codex" },
-      } as never);
+      const previous = appCommandStore(environmentStore).getState().environments;
+      appCommandStore(environmentStore)
+        .getState()
+        .setEnvironments([
+          {
+            id: environmentId,
+            projectId: "project-1",
+            name: "Container",
+            environmentType: "containerized",
+            networkAccessMode: "full",
+            agentSettings: {
+              executionPolicy: { approvals: "ask", sandbox, networkAccess: "restricted" },
+            },
+          } as Environment,
+        ]);
+      appCommandStore(configStore)
+        .getState()
+        .updateGlobalConfig({
+          enabledAgentPlatforms: ["codex"],
+          agentSettings: { defaultAgent: "codex" },
+        } as never);
       try {
         renderComposer(`tab-restricted-${sandbox}`);
         fireEvent.pointerDown(await screen.findByTestId("launch-approval-mode-picker"));
@@ -742,7 +746,7 @@ describe("UnassignedNativeAgentComposer draft restoration", () => {
         expect(Boolean(screen.queryByTitle(/like Untrusted/))).toBe(false);
       } finally {
         cleanup();
-        useEnvironmentStore.getState().setEnvironments(previous);
+        appCommandStore(environmentStore).getState().setEnvironments(previous);
       }
     },
   );
@@ -753,10 +757,12 @@ describe("UnassignedNativeAgentComposer draft restoration", () => {
   ] as const) {
     test(`an undecided draft with ${label} metadata is reconciled once for the default provider after hydration`, async () => {
       // Codex is image-only, so the restored file cannot be dispatched to it.
-      useConfigStore.getState().updateGlobalConfig({
-        enabledAgentPlatforms: ["claude", "codex", "pi"],
-        agentSettings: { defaultAgent: "codex" },
-      } as never);
+      appCommandStore(configStore)
+        .getState()
+        .updateGlobalConfig({
+          enabledAgentPlatforms: ["claude", "codex", "pi"],
+          agentSettings: { defaultAgent: "codex" },
+        } as never);
       const tabId = `tab-undecided-${label}`;
       const sessionKey = createSessionKey(environmentId, tabId);
       const key = composeDraftKey("agent-native", environmentId, sessionKey);
@@ -803,11 +809,13 @@ describe("UnassignedNativeAgentComposer draft restoration", () => {
   }
 
   test("a platform change after restore reconciles exactly once and writes once", async () => {
-    useConfigStore.getState().updateGlobalConfig({
-      enabledAgentPlatforms: ["claude", "codex", "pi"],
-      favoriteModels: [{ platform: "codex", modelId: codexModel.id }],
-      agentSettings: { defaultAgent: "claude" },
-    } as never);
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        enabledAgentPlatforms: ["claude", "codex", "pi"],
+        favoriteModels: [{ platform: "codex", modelId: codexModel.id }],
+        agentSettings: { defaultAgent: "claude" },
+      } as never);
     getNativeAgentModelCatalog.mockImplementation(async () => [codexModel, piModel]);
     const tabId = "tab-switch";
     const sessionKey = createSessionKey(environmentId, tabId);
@@ -842,7 +850,9 @@ describe("UnassignedNativeAgentComposer draft restoration", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Favorite models" }));
     fireEvent.click(await screen.findByRole("menuitemradio", { name: /GPT-5\.4/ }));
     await waitFor(() =>
-      expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.platform).toBe("codex"),
+      expect(appCommandStore(nativeComposeStore).getState().drafts.get(sessionKey)?.platform).toBe(
+        "codex",
+      ),
     );
 
     expect(draftAttachmentsOf(sessionKey)).toEqual([image]);
@@ -860,10 +870,12 @@ describe("UnassignedNativeAgentComposer draft restoration", () => {
   });
 
   test("an unavailable model catalogue neither destroys the image nor broadens dispatch", async () => {
-    useConfigStore.getState().updateGlobalConfig({
-      enabledAgentPlatforms: ["claude", "codex", "cursor"],
-      agentSettings: { defaultAgent: "claude" },
-    } as never);
+    appCommandStore(configStore)
+      .getState()
+      .updateGlobalConfig({
+        enabledAgentPlatforms: ["claude", "codex", "cursor"],
+        agentSettings: { defaultAgent: "claude" },
+      } as never);
     getNativeAgentModelCatalog.mockImplementation(async () => {
       throw new Error("bridge unavailable");
     });

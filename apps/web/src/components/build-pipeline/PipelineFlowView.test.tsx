@@ -1,8 +1,7 @@
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { act } from "react";
-import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { environmentStore } from "@/stores/environmentStore";
 import { useFlowGraphViewStore } from "@/stores/flowGraphViewStore";
 import { keyInformation } from "./key-information-test-fixture";
 import { PipelineReviewTab } from "./PipelineReviewTab";
@@ -28,12 +27,17 @@ import {
   restartStepMock,
   restoreBuildChatTabMocks,
   selectNode,
+  buildChatScope,
+  cleanupBuildChatScope,
+  pipelineStore,
+  renderInBuildChat,
 } from "./build-chat-tab-test-support";
 
 afterAll(restoreBuildChatTabMocks);
+afterEach(cleanupBuildChatScope);
 afterEach(() => {
   cleanup();
-  useEnvironmentStore.setState({ environments: [] });
+  buildChatScope().store(environmentStore).setState({ environments: [] });
   useFlowGraphViewStore.setState({
     views: new Map(),
     collapsed: new Set(),
@@ -354,7 +358,7 @@ describe("pipeline inspector controls", () => {
       ],
       currentSessionIndex: 1,
     });
-    useBuildPipelineStore.setState({
+    pipelineStore().setState({
       pipelines: new Map([[pipeline.id, pipeline]]),
       viewedSessionIds: new Map(),
     });
@@ -389,46 +393,42 @@ describe("pipeline inspector controls", () => {
         </section>
       </>
     );
-    const { rerender } = render(<Views active="build" />);
+    const { rerender } = renderInBuildChat(<Views active="build" />);
     fireEvent.click(
       within(screen.getByRole("region", { name: "Build view" })).getByRole("tab", {
         name: /^Build,/,
       }),
     );
-    expect(useBuildPipelineStore.getState().viewedSessionIds.get(pipeline.id)).toBe(
-      "build-session",
-    );
+    expect(pipelineStore().getState().viewedSessionIds.get(pipeline.id)).toBe("build-session");
     // Hidden review follows progress but must not overwrite the visible selection.
     act(() =>
-      useBuildPipelineStore.getState().replacePipeline({
-        ...pipeline,
-        backendRevision: 2,
-        sessions: [
-          ...pipeline.sessions.map((entry) =>
-            entry.phase === "review"
-              ? { ...entry, status: "idle" as const, reviewerOutcome: "completed" as const }
-              : entry,
-          ),
-          session("review", "consolidation", 120, {
-            label: "Consolidation",
-            reviewPassId: "pass",
-            status: "running",
-          }),
-        ],
-        currentSessionIndex: 2,
-      }),
+      pipelineStore()
+        .getState()
+        .replacePipeline({
+          ...pipeline,
+          backendRevision: 2,
+          sessions: [
+            ...pipeline.sessions.map((entry) =>
+              entry.phase === "review"
+                ? { ...entry, status: "idle" as const, reviewerOutcome: "completed" as const }
+                : entry,
+            ),
+            session("review", "consolidation", 120, {
+              label: "Consolidation",
+              reviewPassId: "pass",
+              status: "running",
+            }),
+          ],
+          currentSessionIndex: 2,
+        }),
     );
-    expect(useBuildPipelineStore.getState().viewedSessionIds.get(pipeline.id)).toBe(
-      "build-session",
-    );
+    expect(pipelineStore().getState().viewedSessionIds.get(pipeline.id)).toBe("build-session");
     rerender(<Views active="review" />);
-    expect(useBuildPipelineStore.getState().viewedSessionIds.get(pipeline.id)).toBe(
+    expect(pipelineStore().getState().viewedSessionIds.get(pipeline.id)).toBe(
       "consolidation-session",
     );
     rerender(<Views active="build" />);
-    expect(useBuildPipelineStore.getState().viewedSessionIds.get(pipeline.id)).toBe(
-      "build-session",
-    );
+    expect(pipelineStore().getState().viewedSessionIds.get(pipeline.id)).toBe("build-session");
   });
 
   test.each(["pending", "running"] as const)(
@@ -560,7 +560,7 @@ describe("pipeline inspector controls", () => {
     selectNode("Prepare");
     expect(screen.getByTestId("pipeline-inspector-status").textContent).toBe("Running");
     act(() =>
-      useBuildPipelineStore.setState({
+      pipelineStore().setState({
         pipelines: new Map([[pipeline.id, { ...pipeline, validationRun: validationRun() }]]),
       }),
     );
@@ -695,9 +695,7 @@ describe("a pipeline a restart rewound", () => {
       const buttons = within(inspector()).getAllByRole("button", { name: "Review 1 · round 1" });
       fireEvent.click(buttons[index]!);
       await waitFor(() =>
-        expect(useBuildPipelineStore.getState().viewedSessionIds.get(pipeline.id)).toBe(
-          `${key}-session`,
-        ),
+        expect(pipelineStore().getState().viewedSessionIds.get(pipeline.id)).toBe(`${key}-session`),
       );
     }
   });
@@ -958,7 +956,7 @@ describe("Notes node labels and selection", () => {
     renderPipelineTab(pipeline);
     expect(graphNode("Notes").textContent).toContain("1 item to look at");
     act(() =>
-      useBuildPipelineStore.setState({
+      pipelineStore().setState({
         pipelines: new Map([[pipeline.id, { ...pipeline, keyInformation: undefined }]]),
       }),
     );
@@ -968,11 +966,13 @@ describe("Notes node labels and selection", () => {
   test.each(["open-pr", "push-no-pr", "commit-only"] as const)(
     "completed %s runs land on Notes rather than delivery",
     (policy) => {
-      useEnvironmentStore.setState({
-        environments: [
-          { id: "env-1", prUrl: "https://github.com/acme/widget/pull/7", prState: "open" },
-        ],
-      } as never);
+      buildChatScope()
+        .store(environmentStore)
+        .setState({
+          environments: [
+            { id: "env-1", prUrl: "https://github.com/acme/widget/pull/7", prState: "open" },
+          ],
+        } as never);
       renderPipelineTab(
         build({
           phase: "complete",
@@ -1003,7 +1003,7 @@ describe("Notes node labels and selection", () => {
     renderPipelineTab({ ...pipeline, phase: "building" });
     fireEvent.click(graphNode("Build"));
     act(() =>
-      useBuildPipelineStore.setState({
+      pipelineStore().setState({
         pipelines: new Map([[pipeline.id, { ...pipeline, phase: "complete" }]]),
       }),
     );

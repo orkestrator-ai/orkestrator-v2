@@ -4,12 +4,14 @@
  * re-rendered the whole tab: header, graph, inspector and transcripts.
  */
 import { afterEach, beforeEach, expect, mock, test } from "bun:test";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, screen } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
 import type { MultiReviewTabData } from "@/types/paneLayout";
 import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore";
-import { useMultiReviewStore } from "@/stores/multiReviewStore";
+import { multiReviewStore } from "@/stores/multiReviewStore";
 import { MultiReviewTab } from "./MultiReviewTab";
+import { appCommandStore } from "@/test/app-command-store";
 
 const startedAt = "2026-08-14T00:00:00.000Z";
 
@@ -69,7 +71,7 @@ let now = 0;
 let ticks: Array<() => void> = [];
 
 beforeEach(() => {
-  useMultiReviewStore.setState({ workflows: new Map() });
+  appCommandStore(multiReviewStore).setState({ workflows: new Map() });
   useMessagePartExpansionStore.getState().reset();
   originalNow = Date.now;
   originalSetInterval = window.setInterval;
@@ -101,9 +103,11 @@ function tick() {
 
 test("a running review's clock ticks without re-rendering the tab root", () => {
   const workflow = reviewingWorkflow();
-  useMultiReviewStore.getState().replaceWorkflow(workflow);
+  appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow);
   const { data, reads } = countedData(workflow.id);
-  render(<MultiReviewTab data={data} isActive hydrateWorkflow={mock(async () => workflow)} />);
+  renderInAppCommandScope(
+    <MultiReviewTab data={data} isActive hydrateWorkflow={mock(async () => workflow)} />,
+  );
 
   const headerElapsed = () => screen.getByTestId("multi-review-elapsed").textContent;
   const reviewerRuntime = () =>
@@ -132,7 +136,7 @@ test("a running review's clock ticks without re-rendering the tab root", () => {
   // The counter does see the root render: a new workflow snapshot renders it,
   // and the values it computes agree with the leaves' clock.
   act(() => {
-    useMultiReviewStore
+    appCommandStore(multiReviewStore)
       .getState()
       .replaceWorkflow({ ...workflow, backendRevision: 4, updatedAt: startedAt });
   });

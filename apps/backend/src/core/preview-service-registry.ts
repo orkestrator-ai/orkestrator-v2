@@ -1,10 +1,11 @@
+import { previewServicesChangedEvent } from "@orkestrator/protocol/contract/domains/events";
+import type { BackendEmit } from "./backend-emit.js";
 import { randomBytes } from "node:crypto";
 
 import {
   emptyPreviewReadiness,
   PREVIEW_DEFINITION_SCHEMA_VERSION,
   PREVIEW_LIMITS,
-  PREVIEW_SERVICES_CHANGED_EVENT,
   previewError,
   previewFailure,
   PreviewServiceError,
@@ -111,7 +112,7 @@ export type PreviewRevocationReason =
 
 export interface PreviewRegistryOptions {
   storage: PreviewRegistryStorage;
-  emit: (event: string, payload: unknown) => void;
+  emit: BackendEmit;
   resolver: PreviewTargetResolverPort;
   readiness?: PreviewReadinessPort;
   limits?: PreviewLimits;
@@ -1507,7 +1508,7 @@ export class PreviewServiceRegistry {
       revokedServiceIds: Array.from(pending.revoked).slice(0, 1_024),
     };
     try {
-      this.options.emit(PREVIEW_SERVICES_CHANGED_EVENT, payload);
+      this.options.emit(previewServicesChangedEvent, payload);
     } catch (error) {
       log.warn("registry.change-emit-failed", { error: formatLogError(error, { message: false }) });
     }

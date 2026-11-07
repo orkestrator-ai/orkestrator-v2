@@ -1,33 +1,66 @@
 import * as backend from "@/lib/backend";
+import { backendApiForScope } from "@/lib/backend/client";
+// The factory from its own module: suites replace the barrel with partial mocks.
+import { createWorkflowsApi } from "@/lib/backend/workflows";
 import {
   createDraftRevisionState,
   DraftRevisionConflictError,
   type DraftRevisionState,
   isDraftRevisionConflict,
 } from "@/lib/draft-conflict";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { appCommandScope, defineScopedSlot } from "@/lib/node-scope-slots";
 
-const writeChains = new Map<string, Promise<void>>();
-const defaultRevisionStates = new Map<string, DraftRevisionState>();
+/*
+ * Compose drafts live on the node that owns the environment, so the write
+ * chains and revision cursors are per node scope (plan item 3009): the same
+ * draft key on two nodes is two drafts, and one node's compare-and-swap
+ * cursor must never be replayed against another's. Every export takes an
+ * optional trailing `scope`, the app's command scope when omitted.
+ */
+
+interface ComposeDraftWrites {
+  readonly writeChains: Map<string, Promise<void>>;
+  readonly defaultRevisionStates: Map<string, DraftRevisionState>;
+  readonly api: Pick<
+    ReturnType<typeof createWorkflowsApi>,
+    "getComposeDraft" | "saveComposeDraft" | "deleteComposeDraft"
+  >;
+}
+
+const composeDraftWrites = defineScopedSlot<ComposeDraftWrites>(
+  "compose-draft-writes",
+  (scope) => ({
+    writeChains: new Map(),
+    defaultRevisionStates: new Map(),
+    api: backendApiForScope(scope, createWorkflowsApi, backend),
+  }),
+);
 
 export { createDraftRevisionState, DraftRevisionConflictError };
 export type { DraftRevisionState };
 
-function revisionStateFor(draftKey: string, state?: DraftRevisionState): DraftRevisionState {
+function revisionStateFor(
+  writes: ComposeDraftWrites,
+  draftKey: string,
+  state?: DraftRevisionState,
+): DraftRevisionState {
   if (state) return state;
-  const existing = defaultRevisionStates.get(draftKey);
+  const existing = writes.defaultRevisionStates.get(draftKey);
   if (existing) return existing;
   const created = createDraftRevisionState();
-  defaultRevisionStates.set(draftKey, created);
+  writes.defaultRevisionStates.set(draftKey, created);
   return created;
 }
 
 async function recordComposeConflict(
+  writes: ComposeDraftWrites,
   draftKey: string,
   state: DraftRevisionState,
   error: unknown,
 ): Promise<never> {
   if (!isDraftRevisionConflict(error)) throw error;
-  const current = await backend.getComposeDraft(draftKey);
+  const current = await writes.api.getComposeDraft(draftKey);
   state.conflictRevision = current?.revision ?? 0;
   throw new DraftRevisionConflictError(draftKey, state.conflictRevision, { cause: error });
 }
@@ -48,7 +81,12 @@ export function composeDraftKey(
  * interleaving on it produce a swap against a revision the backend has already
  * moved past.
  */
-function enqueue<TResult>(draftKey: string, operation: () => Promise<TResult>): Promise<TResult> {
+function enqueue<TResult>(
+  writes: ComposeDraftWrites,
+  draftKey: string,
+  operation: () => Promise<TResult>,
+): Promise<TResult> {
+  const { writeChains } = writes;
   const previous = writeChains.get(draftKey) ?? Promise.resolve();
   const result = previous.catch(() => undefined).then(operation);
   // The chain itself must never reject, or one failure would skip every
@@ -73,7 +111,11 @@ function enqueue<TResult>(draftKey: string, operation: () => Promise<TResult>): 
  * discarded. Do not call this from inside a queued operation — it waits on the
  * chain that operation is a member of.
  */
-export async function awaitComposeDraftWrites(draftKey: string): Promise<void> {
+export async function awaitComposeDraftWrites(
+  draftKey: string,
+  scope: NodeScope = appCommandScope(),
+): Promise<void> {
+  const { writeChains } = composeDraftWrites(scope);
   await (writeChains.get(draftKey) ?? Promise.resolve()).catch(() => undefined);
 }
 
@@ -91,10 +133,12 @@ export async function awaitComposeDraftWrites(draftKey: string): Promise<void> {
 export function loadComposeDraft<T>(
   draftKey: string,
   revisionState?: DraftRevisionState,
+  scope: NodeScope = appCommandScope(),
 ): Promise<Awaited<ReturnType<typeof backend.getComposeDraft<T>>>> {
-  return enqueue(draftKey, async () => {
-    const draft = await backend.getComposeDraft<T>(draftKey);
-    const state = revisionStateFor(draftKey, revisionState);
+  const writes = composeDraftWrites(scope);
+  return enqueue(writes, draftKey, async () => {
+    const draft = await writes.api.getComposeDraft<T>(draftKey);
+    const state = revisionStateFor(writes, draftKey, revisionState);
     state.revision = draft?.revision ?? 0;
     state.conflictRevision = null;
     return draft;
@@ -107,14 +151,16 @@ export function persistComposeDraft<T>(
   ownerId: string,
   value: T,
   revisionState?: DraftRevisionState,
+  scope: NodeScope = appCommandScope(),
 ): Promise<SavedComposeDraft<T> | undefined> {
-  const state = revisionStateFor(draftKey, revisionState);
-  return enqueue(draftKey, async () => {
+  const writes = composeDraftWrites(scope);
+  const state = revisionStateFor(writes, draftKey, revisionState);
+  return enqueue(writes, draftKey, async () => {
     if (state.conflictRevision !== null) {
       throw new DraftRevisionConflictError(draftKey, state.conflictRevision);
     }
     try {
-      const saved = await backend.saveComposeDraft(
+      const saved = await writes.api.saveComposeDraft(
         draftKey,
         ownerType,
         ownerId,
@@ -126,7 +172,7 @@ export function persistComposeDraft<T>(
       }
       return saved ?? undefined;
     } catch (error) {
-      return recordComposeConflict(draftKey, state, error);
+      return recordComposeConflict(writes, draftKey, state, error);
     }
   });
 }
@@ -137,17 +183,19 @@ export type SavedComposeDraft<T> = Awaited<ReturnType<typeof backend.saveCompose
 export function discardComposeDraft(
   draftKey: string,
   revisionState?: DraftRevisionState,
+  scope: NodeScope = appCommandScope(),
 ): Promise<void> {
-  const state = revisionStateFor(draftKey, revisionState);
-  return enqueue(draftKey, async () => {
+  const writes = composeDraftWrites(scope);
+  const state = revisionStateFor(writes, draftKey, revisionState);
+  return enqueue(writes, draftKey, async () => {
     if (state.conflictRevision !== null) {
       throw new DraftRevisionConflictError(draftKey, state.conflictRevision);
     }
     try {
-      await backend.deleteComposeDraft(draftKey, state.revision);
+      await writes.api.deleteComposeDraft(draftKey, state.revision);
       state.revision = 0;
     } catch (error) {
-      await recordComposeConflict(draftKey, state, error);
+      await recordComposeConflict(writes, draftKey, state, error);
     }
   });
 }
@@ -158,40 +206,44 @@ export function resolveComposeDraftSaveConflict<T>(
   ownerId: string,
   value: T,
   revisionState?: DraftRevisionState,
+  scope: NodeScope = appCommandScope(),
 ): Promise<SavedComposeDraft<T> | undefined> {
-  const state = revisionStateFor(draftKey, revisionState);
+  const state = revisionStateFor(composeDraftWrites(scope), draftKey, revisionState);
   if (state.conflictRevision !== null) {
     state.revision = state.conflictRevision;
     state.conflictRevision = null;
   }
-  return persistComposeDraft(draftKey, ownerType, ownerId, value, state);
+  return persistComposeDraft(draftKey, ownerType, ownerId, value, state, scope);
 }
 
 export function resolveComposeDraftDiscardConflict(
   draftKey: string,
   revisionState?: DraftRevisionState,
+  scope: NodeScope = appCommandScope(),
 ): Promise<void> {
-  const state = revisionStateFor(draftKey, revisionState);
+  const state = revisionStateFor(composeDraftWrites(scope), draftKey, revisionState);
   if (state.conflictRevision !== null) {
     state.revision = state.conflictRevision;
     state.conflictRevision = null;
   }
-  return discardComposeDraft(draftKey, state);
+  return discardComposeDraft(draftKey, state, scope);
 }
 
 /** Modify the latest saved value after pending hydration/unmount writes, using CAS. */
 export function updateSavedComposeDraft<T>(
   draftKey: string,
   update: (value: T) => T,
+  scope: NodeScope = appCommandScope(),
 ): Promise<void> {
-  return enqueue(draftKey, async () => {
-    const saved = await backend.getComposeDraft<T>(draftKey);
+  const writes = composeDraftWrites(scope);
+  return enqueue(writes, draftKey, async () => {
+    const saved = await writes.api.getComposeDraft<T>(draftKey);
     if (!saved) return;
     const value = update(saved.value);
     if (value === saved.value) return;
-    const state = revisionStateFor(draftKey);
+    const state = revisionStateFor(writes, draftKey);
     try {
-      const result = await backend.saveComposeDraft(
+      const result = await writes.api.saveComposeDraft(
         draftKey,
         saved.ownerType,
         saved.ownerId,
@@ -201,7 +253,7 @@ export function updateSavedComposeDraft<T>(
       state.revision = result?.revision ?? saved.revision;
       state.conflictRevision = null;
     } catch (error) {
-      await recordComposeConflict(draftKey, state, error);
+      await recordComposeConflict(writes, draftKey, state, error);
     }
   });
 }

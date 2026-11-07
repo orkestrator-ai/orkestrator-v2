@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { createContext, useContext } from "react";
 import * as realDialog from "@/components/ui/dialog";
 import * as realSelect from "@/components/ui/select";
@@ -81,7 +82,8 @@ import {
   type ReviewTabType,
 } from "./ReviewLaunchDialog";
 import { mergeReorderedFavoriteModels } from "@/hooks/useAgentModelFavorites";
-import { useConfigStore } from "@/stores/configStore";
+import { configStore } from "@/stores/configStore";
+import { appCommandStore } from "@/test/app-command-store";
 
 /**
  * The picker renders its three choice columns side by side on desktop and as
@@ -112,8 +114,8 @@ const originalMatchMedia = window.matchMedia;
 afterEach(cleanup);
 beforeEach(() => {
   setViewport(false);
-  const config = useConfigStore.getState().config;
-  useConfigStore.setState({
+  const config = appCommandStore(configStore).getState().config;
+  appCommandStore(configStore).setState({
     config: {
       ...config,
       global: {
@@ -242,13 +244,13 @@ function renderDialog(overrides: Partial<Parameters<typeof ReviewLaunchDialog>[0
     onConfirm,
     ...overrides,
   };
-  return { onConfirm, props, ...render(<ReviewLaunchDialog {...props} />) };
+  return { onConfirm, props, ...renderInAppCommandScope(<ReviewLaunchDialog {...props} />) };
 }
 
 describe("ReviewLaunchDialog", () => {
   test("offers every native provider in one picker and confirms a one-pass review", () => {
     const onConfirm = mock((_selection: ReviewLaunchSelection) => undefined);
-    render(
+    renderInAppCommandScope(
       <ReviewLaunchDialog
         open
         onOpenChange={() => undefined}
@@ -281,8 +283,8 @@ describe("ReviewLaunchDialog", () => {
   });
 
   test("hides disabled providers and falls back from a disabled default", () => {
-    const config = useConfigStore.getState().config;
-    useConfigStore.setState({
+    const config = appCommandStore(configStore).getState().config;
+    appCommandStore(configStore).setState({
       config: {
         ...config,
         global: {
@@ -314,8 +316,8 @@ describe("ReviewLaunchDialog", () => {
   });
 
   test("keeps only Claude when configuration enables no platform at all", () => {
-    const config = useConfigStore.getState().config;
-    useConfigStore.setState({
+    const config = appCommandStore(configStore).getState().config;
+    appCommandStore(configStore).setState({
       config: {
         ...config,
         global: { ...config.global, enabledAgentPlatforms: [] },
@@ -342,8 +344,8 @@ describe("ReviewLaunchDialog", () => {
   });
 
   test("keeps favourites from disabled providers out of the picker", () => {
-    const config = useConfigStore.getState().config;
-    useConfigStore.setState({
+    const config = appCommandStore(configStore).getState().config;
+    appCommandStore(configStore).setState({
       config: {
         ...config,
         global: {
@@ -587,7 +589,7 @@ describe("ReviewLaunchDialog", () => {
 
   test("changes provider, model, and compatible effort together", () => {
     const onConfirm = mock((_selection: ReviewLaunchSelection) => undefined);
-    render(
+    renderInAppCommandScope(
       <ReviewLaunchDialog
         open
         onOpenChange={() => undefined}
@@ -739,8 +741,8 @@ describe("ReviewLaunchDialog", () => {
   });
 
   test("orders stored favourite models first", () => {
-    const config = useConfigStore.getState().config;
-    useConfigStore.setState({
+    const config = appCommandStore(configStore).getState().config;
+    appCommandStore(configStore).setState({
       config: {
         ...config,
         global: {

@@ -33,8 +33,9 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
-import { launchGraphMockRun } from "@/lib/backend/graph-mock";
+import * as graphMock from "@/lib/backend/graph-mock";
 import { requestGraphRunView } from "@/lib/graph-run-navigation";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import {
   Dialog,
   DialogContent,
@@ -75,6 +76,7 @@ import { buildGraphCanvasModel, graphTemplateTypeLibrary } from "./graph-designe
 import { graphSubgraphChoices } from "./graph-designer-subgraphs";
 import { GraphEditorContext } from "./graph-editor-context";
 import { useGraphDesignerEditing } from "./useGraphDesignerEditing";
+import { useScopeApi } from "@/hooks/useScopeBackend";
 
 /**
  * The Graphs designer tab ("Graphs" in the UI): the template library, the
@@ -138,6 +140,9 @@ export function GraphDesignerTab({
   data: GraphDesignerTabData;
   isActive: boolean;
 }) {
+  const nodeGraphMock = useScopeApi(graphMock.createGraphMockApi, graphMock);
+  // The template's node: its runs open in its own pane layout (plan item 4007).
+  const graphScope = useScopesWithCommandFallback().scope;
   const projectId = useEnvironmentStore(
     (state) =>
       state.environments.find((environment) => environment.id === environmentId)?.projectId ?? null,
@@ -169,6 +174,7 @@ export function GraphDesignerTab({
   const undo = useGraphDesignerStore((state) => state.undo);
   const redo = useGraphDesignerStore((state) => state.redo);
   const acknowledge = useGraphDesignerStore((state) => state.acknowledge);
+  const edit = useGraphDesignerStore((state) => state.edit);
   const [jsonOpen, setJsonOpen] = useState(false);
   // Leaving unsaved edits asks first; this is what to do once confirmed.
   const [pendingDiscard, setPendingDiscard] = useState<{ label: string; run: () => void } | null>(
@@ -189,11 +195,13 @@ export function GraphDesignerTab({
   const [shown, setShown] = useState(isActive);
   if (isActive && !shown) setShown(true);
 
+  // This node's pane layout records the template shown (plan item 3013).
+  const updateTabGraphDesigner = usePaneLayoutStore((state) => state.updateTabGraphDesigner);
   const persistSelected = useCallback(
     (ref: GraphTemplateRef) => {
-      usePaneLayoutStore.getState().updateTabGraphDesigner(tabId, { selected: ref }, environmentId);
+      updateTabGraphDesigner(tabId, { selected: ref }, environmentId);
     },
-    [environmentId, tabId],
+    [environmentId, tabId, updateTabGraphDesigner],
   );
 
   // The library and the template shown are backend snapshots: read them on
@@ -241,7 +249,7 @@ export function GraphDesignerTab({
 
   const newGraph = () =>
     guardDiscard("start a new graph", () => {
-      usePaneLayoutStore.getState().updateTabGraphDesigner(tabId, {}, environmentId);
+      updateTabGraphDesigner(tabId, {}, environmentId);
       openDraft(tabId, blankGraphTemplate(), projectId);
       setJsonOpen(false);
     });
@@ -411,18 +419,21 @@ export function GraphDesignerTab({
       if (!projectId) return;
       const ref = await storedRef();
       if (!ref) return;
-      const result = await launchGraphMockRun({
+      const result = await nodeGraphMock.launchGraphMockRun({
         ref,
         projectId,
         stepMs: GRAPH_DESIGNER_MOCK_STEP_MS,
       });
-      const opened = requestGraphRunView({
-        runId: result.run.id,
-        projectId,
-        environmentId,
-        mock: true,
-        ...(summary?.name ? { title: summary.name } : {}),
-      });
+      const opened = requestGraphRunView(
+        {
+          runId: result.run.id,
+          projectId,
+          environmentId,
+          mock: true,
+          ...(summary?.name ? { title: summary.name } : {}),
+        },
+        graphScope,
+      );
       toast.success("Mock run started", {
         description: `${opened ? "" : `Run ${result.run.id.slice(0, 8)}. `}No provider sessions, no tokens, no pull requests or ticket changes.`,
       });
@@ -512,7 +523,7 @@ export function GraphDesignerTab({
             currentTemplate={shownTemplate}
             onOpenDraft={(template, opened) =>
               guardDiscard("open the described graph", () => {
-                usePaneLayoutStore.getState().updateTabGraphDesigner(tabId, {}, environmentId);
+                updateTabGraphDesigner(tabId, {}, environmentId);
                 openDraft(tabId, template, projectId);
                 setJsonOpen(false);
                 opened();
@@ -661,11 +672,7 @@ export function GraphDesignerTab({
           onSaveAsCopy={() => void saveAsCopy()}
           onReload={() => guardDiscard("reload the latest revision", () => void reloadDraft(tabId))}
           onToggleJson={() => setJsonOpen((value) => !value)}
-          onArrange={() =>
-            useGraphDesignerStore
-              .getState()
-              .edit(tabId, "Arrange automatically", arrangeGraphLayout)
-          }
+          onArrange={() => edit(tabId, "Arrange automatically", arrangeGraphLayout)}
           onClose={() =>
             guardDiscard("stop editing", () => {
               closeEditor(tabId);
@@ -741,9 +748,7 @@ export function GraphDesignerTab({
               <GraphJsonEditor
                 draft={editor.draft}
                 onChange={(template) =>
-                  useGraphDesignerStore
-                    .getState()
-                    .edit(tabId, "Edit JSON", () => template, { coalesce: "json" })
+                  edit(tabId, "Edit JSON", () => template, { coalesce: "json" })
                 }
                 onClose={() => setJsonOpen(false)}
               />
@@ -913,7 +918,9 @@ export function GraphDesignerTab({
           projectId={projectId}
           template={launchRef}
           environmentId={environmentId}
-          onLaunched={(result) => openLaunchedGraphRun({ result, environmentId })}
+          onLaunched={(result) =>
+            openLaunchedGraphRun({ result, environmentId, scope: graphScope })
+          }
         />
       )}
     </div>

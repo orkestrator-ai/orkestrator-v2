@@ -1,8 +1,9 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, screen } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import * as realUseProjects from "@/hooks/useProjects";
 import * as realCreateEnvironmentFlow from "@/components/environments/CreateEnvironmentFlowDialog";
-import { useUIStore } from "@/stores/uiStore";
+import { uiStore } from "@/stores/uiStore";
 import type { CreateEnvironmentFlowOperations } from "@/components/environments/CreateEnvironmentFlowDialog";
 import type { Project } from "@/types";
 
@@ -46,6 +47,7 @@ import {
   ProjectLauncherContent,
   resolveRecentProjects,
 } from "@/components/projects/ProjectLauncher";
+import { appCommandStore } from "../../../apps/web/src/test/app-command-store";
 
 function makeProject(
   index: number,
@@ -65,7 +67,7 @@ beforeEach(() => {
   projectsValue = [];
   isLoadingValue = false;
   flowProps = null;
-  useUIStore.setState({
+  appCommandStore(uiStore).setState({
     selectedProjectId: null,
     selectedEnvironmentId: null,
     recentProjectIds: [],
@@ -121,7 +123,7 @@ describe("ProjectLauncher", () => {
     const onCreateEnvironment = mock(() => {});
     const projects = [makeProject(1), makeProject(2)];
 
-    render(
+    renderInAppCommandScope(
       <ProjectLauncherContent
         projects={projects}
         isLoading={false}
@@ -150,16 +152,16 @@ describe("ProjectLauncher", () => {
       onCreateEnvironment: () => {},
     };
 
-    const loadingView = render(<ProjectLauncherContent {...props} isLoading />);
+    const loadingView = renderInAppCommandScope(<ProjectLauncherContent {...props} isLoading />);
     expect(screen.getByText("Loading projects...")).toBeTruthy();
     loadingView.unmount();
 
-    render(<ProjectLauncherContent {...props} isLoading={false} />);
+    renderInAppCommandScope(<ProjectLauncherContent {...props} isLoading={false} />);
     expect(screen.getByText("No projects yet")).toBeTruthy();
   });
 
   test("keeps available projects visible while a refresh is loading", () => {
-    render(
+    renderInAppCommandScope(
       <ProjectLauncherContent
         projects={[makeProject(1)]}
         isLoading
@@ -181,9 +183,9 @@ describe("ProjectLauncher", () => {
       startEnvironment: mock(async () => {}),
     } satisfies CreateEnvironmentFlowOperations;
     projectsValue = [makeProject(1), makeProject(2)];
-    useUIStore.setState({ recentProjectIds: ["project-2"] });
+    appCommandStore(uiStore).setState({ recentProjectIds: ["project-2"] });
 
-    render(<ProjectLauncher {...operations} />);
+    renderInAppCommandScope(<ProjectLauncher {...operations} />);
 
     const projectButtons = screen.getAllByRole("button", { name: /^Open Project/ });
     expect(projectButtons.map((button) => button.getAttribute("aria-label"))).toEqual([
@@ -192,8 +194,8 @@ describe("ProjectLauncher", () => {
     ]);
 
     fireEvent.click(screen.getByRole("button", { name: "Open Project 2" }));
-    expect(useUIStore.getState().selectedProjectId).toBe("project-2");
-    expect(useUIStore.getState().recentProjectIds[0]).toBe("project-2");
+    expect(appCommandStore(uiStore).getState().selectedProjectId).toBe("project-2");
+    expect(appCommandStore(uiStore).getState().recentProjectIds[0]).toBe("project-2");
 
     fireEvent.click(screen.getByRole("button", { name: "Create environment for Project 1" }));
     expect(screen.getByRole("button", { name: "Close create flow" })).toBeTruthy();

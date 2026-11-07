@@ -8,7 +8,8 @@
  * decide whether a read is still allowed to install anything.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, waitFor } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import type {
   NativeAgentMessagePage,
   NativeAgentProjectionUpdate,
@@ -17,9 +18,16 @@ import type {
 import * as realBackend from "@/lib/backend";
 import {
   evictNativeAgentHistoryCaches,
-  useNativeAgentProjectionStore,
+  nativeAgentProjectionStore,
 } from "@/stores/nativeAgentProjectionStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { appCommandScope } from "@/lib/node-scope-slots";
+
+/** Retained history the window's shared transcripts budget holds. */
+function windowHistoryBytes(): number {
+  return appCommandScope().budgets.transcripts.usedBytes;
+}
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
+import { appCommandStore } from "@/test/app-command-store";
 
 interface TestMessage {
   id: string;
@@ -175,7 +183,7 @@ function snapshot(
 }
 
 function renderSession(options: { environmentId?: string; tabId?: string } = {}) {
-  return renderHook(() =>
+  return renderHookInAppCommandScope(() =>
     useNativeAgentSession<TestMessage>({
       platform: "codex",
       environmentId: options.environmentId ?? "env-1",
@@ -210,17 +218,17 @@ beforeEach(() => {
   resumeNativeAgentSessionMock.mockClear();
   resumeNativeAgentSessionMock.mockImplementation(async () => null);
   getNativeAgentProjectionMock.mockClear();
-  usePaneLayoutStore.setState({
+  appCommandStore(paneLayoutStore).setState({
     environments: new Map(),
     hydration: new Map(),
     activeEnvironmentId: null,
   });
-  useNativeAgentProjectionStore.getState().reset();
+  appCommandStore(nativeAgentProjectionStore).getState().reset();
 });
 
 afterEach(() => {
   cleanup();
-  useNativeAgentProjectionStore.getState().reset();
+  appCommandStore(nativeAgentProjectionStore).getState().reset();
 });
 
 describe("useNativeAgentSession sync-v1 transport", () => {
@@ -231,7 +239,9 @@ describe("useNativeAgentSession sync-v1 transport", () => {
 
     expect(result.current.projection?.messages.map(({ id }) => id)).toEqual(["m1"]);
     expect(updateCalls[0]?.knownToken).toBeUndefined();
-    const cache = useNativeAgentProjectionStore.getState().syncCaches.get(SESSION_KEY);
+    const cache = appCommandStore(nativeAgentProjectionStore)
+      .getState()
+      .syncCaches.get(SESSION_KEY);
     expect(cache?.token).toBe("token-1");
     expect(cache?.historyMessages).toEqual([]);
   });
@@ -265,9 +275,9 @@ describe("useNativeAgentSession sync-v1 transport", () => {
 
     expect(updateCalls[1]?.knownToken).toBe("token-1");
     expect(result.current.projection?.messages.map(({ id }) => id)).toEqual(["m1", "m2"]);
-    expect(useNativeAgentProjectionStore.getState().syncCaches.get(SESSION_KEY)?.token).toBe(
-      "token-2",
-    );
+    expect(
+      appCommandStore(nativeAgentProjectionStore).getState().syncCaches.get(SESSION_KEY)?.token,
+    ).toBe("token-2");
   });
 
   test("an unchanged answer transfers nothing and keeps the installed projection", async () => {
@@ -329,7 +339,9 @@ describe("useNativeAgentSession sync-v1 transport", () => {
     });
 
     expect(result.current.projection).toBeNull();
-    expect(useNativeAgentProjectionStore.getState().syncCaches.has(SESSION_KEY)).toBe(false);
+    expect(appCommandStore(nativeAgentProjectionStore).getState().syncCaches.has(SESSION_KEY)).toBe(
+      false,
+    );
   });
 
   test("rejects a snapshot whose identity does not match the tab", async () => {
@@ -623,7 +635,8 @@ describe("useNativeAgentSession sync-v1 history paging", () => {
         "asst",
       ]);
       expect(
-        useNativeAgentProjectionStore.getState().syncCaches.get(SESSION_KEY)?.historyMessages,
+        appCommandStore(nativeAgentProjectionStore).getState().syncCaches.get(SESSION_KEY)
+          ?.historyMessages,
       ).toHaveLength(1);
 
       const incoming = { ...first, content: grows ? "first and more" : "first" };
@@ -650,7 +663,9 @@ describe("useNativeAgentSession sync-v1 history paging", () => {
       // would stitch them across that gap, even if the held head did not change.
       expect(result.current.projection?.messages.map(({ id }) => id)).toEqual(["asst"]);
       expect(result.current.projection?.messages[0]?.parts).toEqual([incoming, second]);
-      const cache = useNativeAgentProjectionStore.getState().syncCaches.get(SESSION_KEY);
+      const cache = appCommandStore(nativeAgentProjectionStore)
+        .getState()
+        .syncCaches.get(SESSION_KEY);
       expect(cache?.historyMessages).toEqual([]);
       expect(cache?.historyBytes).toBe(0);
     },
@@ -866,7 +881,9 @@ describe("useNativeAgentSession sync-v1 history paging", () => {
 
     expect(updateCalls.at(-1)?.forceSnapshot).toBe(true);
     expect(result.current.projection?.messages.map(({ id }) => id)).toEqual(["m3", "m4"]);
-    const cache = useNativeAgentProjectionStore.getState().syncCaches.get(SESSION_KEY);
+    const cache = appCommandStore(nativeAgentProjectionStore)
+      .getState()
+      .syncCaches.get(SESSION_KEY);
     expect(cache?.historyEpoch).toBe("epoch-2");
     expect(cache?.historyMessages).toEqual([]);
   });
@@ -890,7 +907,9 @@ describe("useNativeAgentSession sync-v1 history paging", () => {
       () => ({
         syncVersion: 1,
         status: "delta",
-        baseToken: useNativeAgentProjectionStore.getState().syncCaches.get(SESSION_KEY)!.token!,
+        baseToken: appCommandStore(nativeAgentProjectionStore)
+          .getState()
+          .syncCaches.get(SESSION_KEY)!.token!,
         token: "token-after-delete",
         delta: {
           messageUpserts: [],
@@ -997,14 +1016,16 @@ describe("useNativeAgentSession sync-v1 client budgets", () => {
     const messageBytes = new TextEncoder().encode(JSON.stringify(newer)).byteLength;
     act(() => {
       // Through the store action, so the running history total counts it.
-      useNativeAgentProjectionStore.getState().setProjection("other-session", projection([]), {
-        token: "other-token",
-        liveProjection: projection([]),
-        historyEpoch: "epoch-other",
-        historyComplete: true,
-        historyMessages: [],
-        historyBytes: CLIENT_HISTORY_TOTAL_MAX_BYTES - messageBytes - 20,
-      });
+      appCommandStore(nativeAgentProjectionStore)
+        .getState()
+        .setProjection("other-session", projection([]), {
+          token: "other-token",
+          liveProjection: projection([]),
+          historyEpoch: "epoch-other",
+          historyComplete: true,
+          historyMessages: [],
+          historyBytes: CLIENT_HISTORY_TOTAL_MAX_BYTES - messageBytes - 20,
+        });
     });
 
     messagePages = [
@@ -1065,15 +1086,18 @@ describe("useNativeAgentSession sync-v1 client budgets", () => {
       await result.current.loadEarlierMessages();
     });
     expect(
-      useNativeAgentProjectionStore.getState().syncCaches.get(SESSION_KEY)?.historyBytes,
+      appCommandStore(nativeAgentProjectionStore).getState().syncCaches.get(SESSION_KEY)
+        ?.historyBytes,
     ).toBeGreaterThan(0);
 
     // Another tab's eviction pass reclaims this session's history.
     act(() => {
       evictNativeAgentHistoryCaches("other-session", CLIENT_HISTORY_TOTAL_MAX_BYTES, 0);
     });
-    expect(useNativeAgentProjectionStore.getState().historyEvictions.get(SESSION_KEY)).toBe(1);
-    expect(useNativeAgentProjectionStore.getState().historyBytesTotal).toBe(0);
+    expect(
+      appCommandStore(nativeAgentProjectionStore).getState().historyEvictions.get(SESSION_KEY),
+    ).toBe(1);
+    expect(windowHistoryBytes()).toBe(0);
 
     projectionUpdates = [
       () =>
@@ -1087,7 +1111,9 @@ describe("useNativeAgentSession sync-v1 client budgets", () => {
       await result.current.refresh();
     });
 
-    const cache = useNativeAgentProjectionStore.getState().syncCaches.get(SESSION_KEY);
+    const cache = appCommandStore(nativeAgentProjectionStore)
+      .getState()
+      .syncCaches.get(SESSION_KEY);
     expect(cache?.historyMessages).toEqual([]);
     expect(result.current.projection?.messages.map(({ id }) => id)).toEqual(["m3"]);
     // Paging remains available from the boundary the server last reported.
@@ -1116,7 +1142,8 @@ describe("useNativeAgentSession sync-v1 client budgets", () => {
       await result.current.loadEarlierMessages();
     });
     expect(
-      useNativeAgentProjectionStore.getState().syncCaches.get(SESSION_KEY)?.historyComplete,
+      appCommandStore(nativeAgentProjectionStore).getState().syncCaches.get(SESSION_KEY)
+        ?.historyComplete,
     ).toBe(false);
 
     projectionUpdates = [
@@ -1131,12 +1158,13 @@ describe("useNativeAgentSession sync-v1 client budgets", () => {
     });
 
     expect(
-      useNativeAgentProjectionStore.getState().syncCaches.get(SESSION_KEY)?.historyComplete,
+      appCommandStore(nativeAgentProjectionStore).getState().syncCaches.get(SESSION_KEY)
+        ?.historyComplete,
     ).toBe(true);
   });
 
   test("clears transcriptRefreshing when an establishing read is skipped", async () => {
-    useNativeAgentProjectionStore
+    appCommandStore(nativeAgentProjectionStore)
       .getState()
       .setProjection(SESSION_KEY, projection([message("m1")]));
     let releaseAdopt: (() => void) | undefined;
@@ -1148,7 +1176,7 @@ describe("useNativeAgentSession sync-v1 client budgets", () => {
     );
     projectionUpdates = [() => ({ syncVersion: 1, status: "missing" })];
 
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useNativeAgentSession<TestMessage>({
         platform: "codex",
         environmentId: "env-1",

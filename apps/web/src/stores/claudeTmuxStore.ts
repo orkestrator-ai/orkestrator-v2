@@ -7,8 +7,10 @@
 // Keyed by an environment-scoped tab key (each tab owns its own claude
 // session); the underlying environmentId is recorded on each tab's state so
 // consumers don't need to thread it through separately.
+//
+// One instance per node scope (plan item 3010): a tab's tmux session, its
+// pending hooks and its prompt drafts are that node's.
 
-import { create } from "zustand";
 import type {
   TmuxAgentObservation,
   TmuxSelectionPrompt,
@@ -29,11 +31,15 @@ import type {
 import { ERROR_MESSAGE_PREFIX } from "@/lib/chat/client-only-messages";
 import type { FileMention } from "@/types";
 import { isRootAssistantRecord, normalizeBackendModelId } from "@orkestrator/protocol/model-id";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { defineScopedStore } from "@/lib/node-scope/scoped-store";
+import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
+import { appCommandScope } from "@/lib/node-scope-slots";
 import {
+  promptDraftStore,
   tmuxElicitationDraftKey,
   tmuxPlanDraftKey,
   tmuxQuestionDraftKey,
-  usePromptDraftStore,
 } from "./promptDraftStore";
 
 // Keep the transcript clock separate from the display fallback on waiting results.
@@ -230,7 +236,7 @@ const emptyTabState = (): TmuxTabState => ({
   },
 });
 
-interface ClaudeTmuxState {
+export interface ClaudeTmuxState {
   tabs: Map<string, TmuxTabState>;
   attachments: Map<string, TmuxAttachment[]>;
   draftText: Map<string, string>;
@@ -359,437 +365,456 @@ function tabPromptDraftKeys(tab: TmuxTabState | undefined, sessionKey: string): 
   ];
 }
 
-export const useClaudeTmuxStore = create<ClaudeTmuxState>()((set, get) => ({
-  tabs: new Map(),
-  attachments: new Map(),
-  draftText: new Map(),
-  draftMentions: new Map(),
-  messageQueue: new Map(),
-  effortLevels: new Map(),
+export const claudeTmuxStore = defineScopedStore<ClaudeTmuxState>(
+  "claude-tmux",
+  (scope) => (set, get) => {
+    /** This node's prompt drafts, which the tab's pending prompts own. */
+    const promptDrafts = () => scope.store(promptDraftStore).getState();
+    return {
+      tabs: new Map(),
+      attachments: new Map(),
+      draftText: new Map(),
+      draftMentions: new Map(),
+      messageQueue: new Map(),
+      effortLevels: new Map(),
 
-  setRunning: (tabId, running, info) =>
-    set((state) =>
-      patchTab(state, tabId, (s) => {
-        const generationChanged =
-          info?.observationGeneration !== undefined &&
-          info.observationGeneration !== s.observation.generation;
-        const stopped = !running && info?.observation === undefined;
-        return {
-          ...s,
-          running,
-          environmentId: info?.environmentId ?? s.environmentId,
-          sessionId: info?.sessionId === undefined ? s.sessionId : info.sessionId,
-          resumed: info?.resumed ?? s.resumed,
-          busy: info?.busy ?? s.busy,
-          busyStartedAt:
-            info?.busy === undefined
-              ? s.busyStartedAt
-              : info.busy
-                ? (info.busyStartedAt ?? null)
-                : null,
-          observation:
-            info?.observation ??
-            (generationChanged || stopped
-              ? {
-                  ...emptyTabState().observation,
-                  ...(info?.observationGeneration
-                    ? { generation: info.observationGeneration }
-                    : {}),
-                }
-              : s.observation),
-        };
-      }),
-    ),
-
-  resetTab: (tabId) => {
-    const stateKey = resolveStateKey(get().tabs, tabId);
-    // The tab's pending prompts are dropped below, so their in-progress input
-    // drafts must not resurface if an event id is ever seen again.
-    const sweptDraftKeys = tabPromptDraftKeys(get().tabs.get(stateKey), stateKey);
-    set((state) => {
-      const attachments = new Map(state.attachments);
-      const draftText = new Map(state.draftText);
-      const draftMentions = new Map(state.draftMentions);
-      const messageQueue = new Map(state.messageQueue);
-      attachments.delete(stateKey);
-      draftText.delete(stateKey);
-      draftMentions.delete(stateKey);
-      messageQueue.delete(stateKey);
-      return {
-        ...patchTab(state, stateKey, () => emptyTabState()),
-        attachments,
-        draftText,
-        draftMentions,
-        messageQueue,
-      };
-    });
-    usePromptDraftStore.getState().clearDrafts(sweptDraftKeys);
-  },
-
-  applyTranscriptLine: (tabId, line) =>
-    set((state) => patchTab(state, tabId, (s) => applyLine(s, line))),
-
-  replaceTranscript: (tabId, lines) =>
-    set((state) =>
-      patchTab(state, tabId, (current) => ({
-        ...lines.reduce(applyLine, { ...current, messages: [] }),
-        earlierCursor: undefined,
-      })),
-    ),
-
-  applyTailPage: (tabId, page, options) =>
-    set((state) =>
-      patchTab(state, tabId, (current) => {
-        const fresh = page.lines.reduce(applyLine, { ...current, messages: [] }).messages;
-        const retained =
-          options?.retainHistory !== false &&
-          page.earlierCursor !== null &&
-          current.earlierCursor !== undefined
-            ? rowsBeforeOverlap(current.messages, fresh)
-            : [];
-        return retained.length > 0
-          ? {
-              ...current,
-              messages: adoptToolResults([...retained, ...fresh], retained.length),
-            }
-          : { ...current, messages: fresh, earlierCursor: page.earlierCursor };
-      }),
-    ),
-
-  prependTranscriptPage: (tabId, before, page) =>
-    set((state) =>
-      patchTab(state, tabId, (current) => {
-        if (current.earlierCursor !== before) return current;
-        const loaded = new Set(current.messages.map((message) => message.id));
-        const older = page.lines
-          .reduce(applyLine, { ...current, messages: [] })
-          .messages.filter((message) => !loaded.has(message.id));
-        return {
-          ...current,
-          messages: adoptToolResults([...older, ...current.messages], older.length),
-          earlierCursor: page.earlierCursor,
-        };
-      }),
-    ),
-
-  addPendingApproval: (tabId, approval) =>
-    set((state) =>
-      patchTab(state, tabId, (s) => {
-        const pendingApprovals = upsertPrompt(s.pendingApprovals, approval);
-        return pendingApprovals === s.pendingApprovals ? s : { ...s, pendingApprovals };
-      }),
-    ),
-
-  removePendingApproval: (tabId, eventId) =>
-    set((state) =>
-      patchTab(state, tabId, (s) => ({
-        ...s,
-        pendingApprovals: s.pendingApprovals.filter((a) => a.eventId !== eventId),
-      })),
-    ),
-
-  addPendingQuestion: (tabId, question) =>
-    set((state) =>
-      patchTab(state, tabId, (s) => {
-        const pendingQuestions = upsertPrompt(s.pendingQuestions, question);
-        return pendingQuestions === s.pendingQuestions ? s : { ...s, pendingQuestions };
-      }),
-    ),
-
-  removePendingQuestion: (tabId, eventId) => {
-    set((state) =>
-      patchTab(state, tabId, (s) => ({
-        ...s,
-        pendingQuestions: s.pendingQuestions.filter((q) => q.eventId !== eventId),
-      })),
-    );
-    // The question is resolved (answered, rejected, or withdrawn), so its
-    // in-progress answer draft goes with it.
-    const stateKey = resolveStateKey(get().tabs, tabId);
-    usePromptDraftStore.getState().clearDraft(tmuxQuestionDraftKey(stateKey, eventId));
-  },
-
-  addPendingPlan: (tabId, plan) =>
-    set((state) =>
-      patchTab(state, tabId, (s) => {
-        const pendingPlans = upsertPrompt(s.pendingPlans, plan);
-        return pendingPlans === s.pendingPlans ? s : { ...s, pendingPlans };
-      }),
-    ),
-
-  removePendingPlan: (tabId, eventId) => {
-    set((state) =>
-      patchTab(state, tabId, (s) => ({
-        ...s,
-        pendingPlans: s.pendingPlans.filter((p) => p.eventId !== eventId),
-      })),
-    );
-    // The plan request is resolved, so its feedback draft goes with it.
-    const stateKey = resolveStateKey(get().tabs, tabId);
-    usePromptDraftStore.getState().clearDraft(tmuxPlanDraftKey(stateKey, eventId));
-  },
-
-  addPendingPermission: (tabId, permission) =>
-    set((state) =>
-      patchTab(state, tabId, (s) => {
-        const pendingPermissions = upsertPrompt(s.pendingPermissions, permission);
-        return pendingPermissions === s.pendingPermissions ? s : { ...s, pendingPermissions };
-      }),
-    ),
-
-  removePendingPermission: (tabId, eventId) =>
-    set((state) =>
-      patchTab(state, tabId, (s) => ({
-        ...s,
-        pendingPermissions: s.pendingPermissions.filter((p) => p.eventId !== eventId),
-      })),
-    ),
-
-  addPendingElicitation: (tabId, elicitation) =>
-    set((state) =>
-      patchTab(state, tabId, (s) => {
-        const pendingElicitations = upsertPrompt(s.pendingElicitations, elicitation);
-        return pendingElicitations === s.pendingElicitations ? s : { ...s, pendingElicitations };
-      }),
-    ),
-
-  removePendingElicitation: (tabId, eventId) => {
-    set((state) =>
-      patchTab(state, tabId, (s) => ({
-        ...s,
-        pendingElicitations: s.pendingElicitations.filter((e) => e.eventId !== eventId),
-      })),
-    );
-    // The elicitation is resolved, so its typed field values go with it.
-    const stateKey = resolveStateKey(get().tabs, tabId);
-    usePromptDraftStore.getState().clearDraft(tmuxElicitationDraftKey(stateKey, eventId));
-  },
-
-  updatePendingPromptTiming: (tabId, eventId, timing) =>
-    set((state) =>
-      patchTab(state, tabId, (s) => {
-        const update = <T extends { eventId: string } & TmuxPromptTiming>(list: T[]): T[] => {
-          const current = list.find((item) => item.eventId === eventId);
-          return current ? upsertPrompt(list, { ...current, ...timing, hold: timing.hold }) : list;
-        };
-        const next = {
-          ...s,
-          pendingApprovals: update(s.pendingApprovals),
-          pendingQuestions: update(s.pendingQuestions),
-          pendingPlans: update(s.pendingPlans),
-          pendingPermissions: update(s.pendingPermissions),
-          pendingElicitations: update(s.pendingElicitations),
-        };
-        return next.pendingApprovals === s.pendingApprovals &&
-          next.pendingQuestions === s.pendingQuestions &&
-          next.pendingPlans === s.pendingPlans &&
-          next.pendingPermissions === s.pendingPermissions &&
-          next.pendingElicitations === s.pendingElicitations
-          ? s
-          : next;
-      }),
-    ),
-
-  replacePendingHooks: (tabId, pending) => {
-    // This is the authoritative rehydration path: a prompt missing from the
-    // snapshot was resolved while this tab was not listening, so its draft is
-    // dropped. Prompts still present keep theirs.
-    const keptKeys = new Set(
-      tabPromptDraftKeys(
-        {
-          ...emptyTabState(),
-          pendingQuestions: pending.questions,
-          pendingPlans: pending.plans,
-          pendingElicitations: pending.elicitations,
-        },
-        resolveStateKey(get().tabs, tabId),
-      ),
-    );
-    const stateKey = resolveStateKey(get().tabs, tabId);
-    const withdrawnDraftKeys = tabPromptDraftKeys(get().tabs.get(stateKey), stateKey).filter(
-      (draftKey) => !keptKeys.has(draftKey),
-    );
-
-    set((state) =>
-      patchTab(state, tabId, (s) => ({
-        ...s,
-        pendingApprovals: pending.approvals,
-        pendingQuestions: pending.questions,
-        pendingPlans: pending.plans,
-        pendingPermissions: pending.permissions,
-        pendingElicitations: pending.elicitations,
-        infoEvents: (pending.infoEvents ?? s.infoEvents).filter(
-          (e) => !s.dismissedInfoEventIds.includes(e.id),
+      setRunning: (tabId, running, info) =>
+        set((state) =>
+          patchTab(state, tabId, (s) => {
+            const generationChanged =
+              info?.observationGeneration !== undefined &&
+              info.observationGeneration !== s.observation.generation;
+            const stopped = !running && info?.observation === undefined;
+            return {
+              ...s,
+              running,
+              environmentId: info?.environmentId ?? s.environmentId,
+              sessionId: info?.sessionId === undefined ? s.sessionId : info.sessionId,
+              resumed: info?.resumed ?? s.resumed,
+              busy: info?.busy ?? s.busy,
+              busyStartedAt:
+                info?.busy === undefined
+                  ? s.busyStartedAt
+                  : info.busy
+                    ? (info.busyStartedAt ?? null)
+                    : null,
+              observation:
+                info?.observation ??
+                (generationChanged || stopped
+                  ? {
+                      ...emptyTabState().observation,
+                      ...(info?.observationGeneration
+                        ? { generation: info.observationGeneration }
+                        : {}),
+                    }
+                  : s.observation),
+            };
+          }),
         ),
-      })),
-    );
-    usePromptDraftStore.getState().clearDrafts(withdrawnDraftKeys);
-  },
 
-  // The backend de-duplicates its retained snapshot by id+kind but still emits
-  // a hook frame for every re-delivery, so the live path has to apply the same
-  // rule or an event stacks a card per delivery. Dismissal is sticky for the
-  // same reason: dismissInfoEvent means "I have seen this", which a later
-  // re-delivery of the same id does not undo - and the id survives the
-  // authoritative snapshot in replacePendingHooks, so a rehydration cannot
-  // resurrect it either.
-  pushInfoEvent: (tabId, event) =>
-    set((state) =>
-      patchTab(state, tabId, (s) => {
-        if (s.dismissedInfoEventIds.includes(event.id)) return s;
-        const existing = s.infoEvents.findIndex((e) => e.id === event.id && e.kind === event.kind);
-        if (existing >= 0) {
-          const infoEvents = [...s.infoEvents];
-          infoEvents[existing] = event;
-          return { ...s, infoEvents };
-        }
-        return { ...s, infoEvents: [...s.infoEvents.slice(-19), event] };
-      }),
-    ),
+      resetTab: (tabId) => {
+        const stateKey = resolveStateKey(get().tabs, tabId);
+        // The tab's pending prompts are dropped below, so their in-progress input
+        // drafts must not resurface if an event id is ever seen again.
+        const sweptDraftKeys = tabPromptDraftKeys(get().tabs.get(stateKey), stateKey);
+        set((state) => {
+          const attachments = new Map(state.attachments);
+          const draftText = new Map(state.draftText);
+          const draftMentions = new Map(state.draftMentions);
+          const messageQueue = new Map(state.messageQueue);
+          attachments.delete(stateKey);
+          draftText.delete(stateKey);
+          draftMentions.delete(stateKey);
+          messageQueue.delete(stateKey);
+          return {
+            ...patchTab(state, stateKey, () => emptyTabState()),
+            attachments,
+            draftText,
+            draftMentions,
+            messageQueue,
+          };
+        });
+        promptDrafts().clearDrafts(sweptDraftKeys);
+      },
 
-  dismissInfoEvent: (tabId, id) =>
-    set((state) =>
-      patchTab(state, tabId, (s) => ({
-        ...s,
-        infoEvents: s.infoEvents.filter((e) => e.id !== id),
-        // Bounded to the same window as the events themselves: the backend
-        // retains 20, so an id that has aged out cannot be re-delivered.
-        dismissedInfoEventIds: [...s.dismissedInfoEventIds.filter((e) => e !== id).slice(-19), id],
-      })),
-    ),
+      applyTranscriptLine: (tabId, line) =>
+        set((state) => patchTab(state, tabId, (s) => applyLine(s, line))),
 
-  setBusy: (tabId, busy, startedAt) =>
-    set((state) =>
-      patchTab(state, tabId, (s) => {
-        if (s.busy === busy) return s;
-        return {
-          ...s,
-          busy,
-          busyStartedAt: busy ? (startedAt ?? null) : null,
-        };
-      }),
-    ),
+      replaceTranscript: (tabId, lines) =>
+        set((state) =>
+          patchTab(state, tabId, (current) => ({
+            ...lines.reduce(applyLine, { ...current, messages: [] }),
+            earlierCursor: undefined,
+          })),
+        ),
 
-  setObservation: (tabId, observation) =>
-    set((state) =>
-      patchTab(state, tabId, (current) => {
-        const currentGeneration = current.observation.generation;
-        const incomingGeneration = observation.generation;
-        if (currentGeneration && currentGeneration !== incomingGeneration) return current;
-        return observation.revision < current.observation.revision
-          ? current
-          : { ...current, observation };
-      }),
-    ),
+      applyTailPage: (tabId, page, options) =>
+        set((state) =>
+          patchTab(state, tabId, (current) => {
+            const fresh = page.lines.reduce(applyLine, { ...current, messages: [] }).messages;
+            const retained =
+              options?.retainHistory !== false &&
+              page.earlierCursor !== null &&
+              current.earlierCursor !== undefined
+                ? rowsBeforeOverlap(current.messages, fresh)
+                : [];
+            return retained.length > 0
+              ? {
+                  ...current,
+                  messages: adoptToolResults([...retained, ...fresh], retained.length),
+                }
+              : { ...current, messages: fresh, earlierCursor: page.earlierCursor };
+          }),
+        ),
 
-  clearSelectionPrompt: (tabId, expectedPrompt) =>
-    set((state) =>
-      patchTab(state, tabId, (current) =>
-        current.observation.prompt !== expectedPrompt
-          ? current
-          : {
+      prependTranscriptPage: (tabId, before, page) =>
+        set((state) =>
+          patchTab(state, tabId, (current) => {
+            if (current.earlierCursor !== before) return current;
+            const loaded = new Set(current.messages.map((message) => message.id));
+            const older = page.lines
+              .reduce(applyLine, { ...current, messages: [] })
+              .messages.filter((message) => !loaded.has(message.id));
+            return {
               ...current,
-              observation: { ...current.observation, prompt: null },
+              messages: adoptToolResults([...older, ...current.messages], older.length),
+              earlierCursor: page.earlierCursor,
+            };
+          }),
+        ),
+
+      addPendingApproval: (tabId, approval) =>
+        set((state) =>
+          patchTab(state, tabId, (s) => {
+            const pendingApprovals = upsertPrompt(s.pendingApprovals, approval);
+            return pendingApprovals === s.pendingApprovals ? s : { ...s, pendingApprovals };
+          }),
+        ),
+
+      removePendingApproval: (tabId, eventId) =>
+        set((state) =>
+          patchTab(state, tabId, (s) => ({
+            ...s,
+            pendingApprovals: s.pendingApprovals.filter((a) => a.eventId !== eventId),
+          })),
+        ),
+
+      addPendingQuestion: (tabId, question) =>
+        set((state) =>
+          patchTab(state, tabId, (s) => {
+            const pendingQuestions = upsertPrompt(s.pendingQuestions, question);
+            return pendingQuestions === s.pendingQuestions ? s : { ...s, pendingQuestions };
+          }),
+        ),
+
+      removePendingQuestion: (tabId, eventId) => {
+        set((state) =>
+          patchTab(state, tabId, (s) => ({
+            ...s,
+            pendingQuestions: s.pendingQuestions.filter((q) => q.eventId !== eventId),
+          })),
+        );
+        // The question is resolved (answered, rejected, or withdrawn), so its
+        // in-progress answer draft goes with it.
+        const stateKey = resolveStateKey(get().tabs, tabId);
+        promptDrafts().clearDraft(tmuxQuestionDraftKey(stateKey, eventId));
+      },
+
+      addPendingPlan: (tabId, plan) =>
+        set((state) =>
+          patchTab(state, tabId, (s) => {
+            const pendingPlans = upsertPrompt(s.pendingPlans, plan);
+            return pendingPlans === s.pendingPlans ? s : { ...s, pendingPlans };
+          }),
+        ),
+
+      removePendingPlan: (tabId, eventId) => {
+        set((state) =>
+          patchTab(state, tabId, (s) => ({
+            ...s,
+            pendingPlans: s.pendingPlans.filter((p) => p.eventId !== eventId),
+          })),
+        );
+        // The plan request is resolved, so its feedback draft goes with it.
+        const stateKey = resolveStateKey(get().tabs, tabId);
+        promptDrafts().clearDraft(tmuxPlanDraftKey(stateKey, eventId));
+      },
+
+      addPendingPermission: (tabId, permission) =>
+        set((state) =>
+          patchTab(state, tabId, (s) => {
+            const pendingPermissions = upsertPrompt(s.pendingPermissions, permission);
+            return pendingPermissions === s.pendingPermissions ? s : { ...s, pendingPermissions };
+          }),
+        ),
+
+      removePendingPermission: (tabId, eventId) =>
+        set((state) =>
+          patchTab(state, tabId, (s) => ({
+            ...s,
+            pendingPermissions: s.pendingPermissions.filter((p) => p.eventId !== eventId),
+          })),
+        ),
+
+      addPendingElicitation: (tabId, elicitation) =>
+        set((state) =>
+          patchTab(state, tabId, (s) => {
+            const pendingElicitations = upsertPrompt(s.pendingElicitations, elicitation);
+            return pendingElicitations === s.pendingElicitations
+              ? s
+              : { ...s, pendingElicitations };
+          }),
+        ),
+
+      removePendingElicitation: (tabId, eventId) => {
+        set((state) =>
+          patchTab(state, tabId, (s) => ({
+            ...s,
+            pendingElicitations: s.pendingElicitations.filter((e) => e.eventId !== eventId),
+          })),
+        );
+        // The elicitation is resolved, so its typed field values go with it.
+        const stateKey = resolveStateKey(get().tabs, tabId);
+        promptDrafts().clearDraft(tmuxElicitationDraftKey(stateKey, eventId));
+      },
+
+      updatePendingPromptTiming: (tabId, eventId, timing) =>
+        set((state) =>
+          patchTab(state, tabId, (s) => {
+            const update = <T extends { eventId: string } & TmuxPromptTiming>(list: T[]): T[] => {
+              const current = list.find((item) => item.eventId === eventId);
+              return current
+                ? upsertPrompt(list, { ...current, ...timing, hold: timing.hold })
+                : list;
+            };
+            const next = {
+              ...s,
+              pendingApprovals: update(s.pendingApprovals),
+              pendingQuestions: update(s.pendingQuestions),
+              pendingPlans: update(s.pendingPlans),
+              pendingPermissions: update(s.pendingPermissions),
+              pendingElicitations: update(s.pendingElicitations),
+            };
+            return next.pendingApprovals === s.pendingApprovals &&
+              next.pendingQuestions === s.pendingQuestions &&
+              next.pendingPlans === s.pendingPlans &&
+              next.pendingPermissions === s.pendingPermissions &&
+              next.pendingElicitations === s.pendingElicitations
+              ? s
+              : next;
+          }),
+        ),
+
+      replacePendingHooks: (tabId, pending) => {
+        // This is the authoritative rehydration path: a prompt missing from the
+        // snapshot was resolved while this tab was not listening, so its draft is
+        // dropped. Prompts still present keep theirs.
+        const keptKeys = new Set(
+          tabPromptDraftKeys(
+            {
+              ...emptyTabState(),
+              pendingQuestions: pending.questions,
+              pendingPlans: pending.plans,
+              pendingElicitations: pending.elicitations,
             },
-      ),
-    ),
+            resolveStateKey(get().tabs, tabId),
+          ),
+        );
+        const stateKey = resolveStateKey(get().tabs, tabId);
+        const withdrawnDraftKeys = tabPromptDraftKeys(get().tabs.get(stateKey), stateKey).filter(
+          (draftKey) => !keptKeys.has(draftKey),
+        );
 
-  addAttachment: (tabId, attachment) =>
-    set((state) => {
-      const stateKey = resolveStateKey(state.tabs, tabId);
-      const current = state.attachments.get(stateKey) ?? [];
-      const next = new Map(state.attachments);
-      next.set(stateKey, [...current, attachment]);
-      return { attachments: next };
-    }),
+        set((state) =>
+          patchTab(state, tabId, (s) => ({
+            ...s,
+            pendingApprovals: pending.approvals,
+            pendingQuestions: pending.questions,
+            pendingPlans: pending.plans,
+            pendingPermissions: pending.permissions,
+            pendingElicitations: pending.elicitations,
+            infoEvents: (pending.infoEvents ?? s.infoEvents).filter(
+              (e) => !s.dismissedInfoEventIds.includes(e.id),
+            ),
+          })),
+        );
+        promptDrafts().clearDrafts(withdrawnDraftKeys);
+      },
 
-  removeAttachment: (tabId, attachmentId) =>
-    set((state) => {
-      const stateKey = resolveStateKey(state.tabs, tabId);
-      const current = state.attachments.get(stateKey) ?? [];
-      const filtered = current.filter((a) => a.id !== attachmentId);
-      if (filtered.length === current.length) return state;
-      const next = new Map(state.attachments);
-      next.set(stateKey, filtered);
-      return { attachments: next };
-    }),
+      // The backend de-duplicates its retained snapshot by id+kind but still emits
+      // a hook frame for every re-delivery, so the live path has to apply the same
+      // rule or an event stacks a card per delivery. Dismissal is sticky for the
+      // same reason: dismissInfoEvent means "I have seen this", which a later
+      // re-delivery of the same id does not undo - and the id survives the
+      // authoritative snapshot in replacePendingHooks, so a rehydration cannot
+      // resurrect it either.
+      pushInfoEvent: (tabId, event) =>
+        set((state) =>
+          patchTab(state, tabId, (s) => {
+            if (s.dismissedInfoEventIds.includes(event.id)) return s;
+            const existing = s.infoEvents.findIndex(
+              (e) => e.id === event.id && e.kind === event.kind,
+            );
+            if (existing >= 0) {
+              const infoEvents = [...s.infoEvents];
+              infoEvents[existing] = event;
+              return { ...s, infoEvents };
+            }
+            return { ...s, infoEvents: [...s.infoEvents.slice(-19), event] };
+          }),
+        ),
 
-  clearAttachments: (tabId) =>
-    set((state) => {
-      const stateKey = resolveStateKey(state.tabs, tabId);
-      const next = new Map(state.attachments);
-      next.set(stateKey, []);
-      return { attachments: next };
-    }),
+      dismissInfoEvent: (tabId, id) =>
+        set((state) =>
+          patchTab(state, tabId, (s) => ({
+            ...s,
+            infoEvents: s.infoEvents.filter((e) => e.id !== id),
+            // Bounded to the same window as the events themselves: the backend
+            // retains 20, so an id that has aged out cannot be re-delivered.
+            dismissedInfoEventIds: [
+              ...s.dismissedInfoEventIds.filter((e) => e !== id).slice(-19),
+              id,
+            ],
+          })),
+        ),
 
-  getAttachments: (tabId) => {
-    const state = get();
-    return state.attachments.get(resolveStateKey(state.tabs, tabId)) ?? EMPTY_ATTACHMENTS;
+      setBusy: (tabId, busy, startedAt) =>
+        set((state) =>
+          patchTab(state, tabId, (s) => {
+            if (s.busy === busy) return s;
+            return {
+              ...s,
+              busy,
+              busyStartedAt: busy ? (startedAt ?? null) : null,
+            };
+          }),
+        ),
+
+      setObservation: (tabId, observation) =>
+        set((state) =>
+          patchTab(state, tabId, (current) => {
+            const currentGeneration = current.observation.generation;
+            const incomingGeneration = observation.generation;
+            if (currentGeneration && currentGeneration !== incomingGeneration) return current;
+            return observation.revision < current.observation.revision
+              ? current
+              : { ...current, observation };
+          }),
+        ),
+
+      clearSelectionPrompt: (tabId, expectedPrompt) =>
+        set((state) =>
+          patchTab(state, tabId, (current) =>
+            current.observation.prompt !== expectedPrompt
+              ? current
+              : {
+                  ...current,
+                  observation: { ...current.observation, prompt: null },
+                },
+          ),
+        ),
+
+      addAttachment: (tabId, attachment) =>
+        set((state) => {
+          const stateKey = resolveStateKey(state.tabs, tabId);
+          const current = state.attachments.get(stateKey) ?? [];
+          const next = new Map(state.attachments);
+          next.set(stateKey, [...current, attachment]);
+          return { attachments: next };
+        }),
+
+      removeAttachment: (tabId, attachmentId) =>
+        set((state) => {
+          const stateKey = resolveStateKey(state.tabs, tabId);
+          const current = state.attachments.get(stateKey) ?? [];
+          const filtered = current.filter((a) => a.id !== attachmentId);
+          if (filtered.length === current.length) return state;
+          const next = new Map(state.attachments);
+          next.set(stateKey, filtered);
+          return { attachments: next };
+        }),
+
+      clearAttachments: (tabId) =>
+        set((state) => {
+          const stateKey = resolveStateKey(state.tabs, tabId);
+          const next = new Map(state.attachments);
+          next.set(stateKey, []);
+          return { attachments: next };
+        }),
+
+      getAttachments: (tabId) => {
+        const state = get();
+        return state.attachments.get(resolveStateKey(state.tabs, tabId)) ?? EMPTY_ATTACHMENTS;
+      },
+
+      setDraftText: (tabId, text) =>
+        set((state) => {
+          const stateKey = resolveStateKey(state.tabs, tabId);
+          const next = new Map(state.draftText);
+          if (text.length > 0) {
+            next.set(stateKey, text);
+          } else {
+            next.delete(stateKey);
+          }
+          return { draftText: next };
+        }),
+
+      getDraftText: (tabId) => {
+        const state = get();
+        return state.draftText.get(resolveStateKey(state.tabs, tabId)) ?? "";
+      },
+
+      setDraftMentions: (tabId, mentions) =>
+        set((state) => {
+          const stateKey = resolveStateKey(state.tabs, tabId);
+          const next = new Map(state.draftMentions);
+          if (mentions.length > 0) {
+            next.set(stateKey, mentions);
+          } else {
+            next.delete(stateKey);
+          }
+          return { draftMentions: next };
+        }),
+
+      setEffortLevel: (tabId, effort) =>
+        set((state) => {
+          const stateKey = resolveStateKey(state.tabs, tabId);
+          const next = new Map(state.effortLevels);
+          next.set(stateKey, effort);
+          return { effortLevels: next };
+        }),
+
+      getDraftMentions: (tabId) => {
+        const state = get();
+        return state.draftMentions.get(resolveStateKey(state.tabs, tabId)) ?? EMPTY_MENTIONS;
+      },
+
+      setQueueProjection: (tabId, messages) =>
+        set((state) => {
+          const stateKey = resolveStateKey(state.tabs, tabId);
+          const next = new Map(state.messageQueue);
+          next.set(stateKey, messages);
+          return { messageQueue: next };
+        }),
+
+      getQueueLength: (tabId) => {
+        const state = get();
+        return state.messageQueue.get(resolveStateKey(state.tabs, tabId))?.length ?? 0;
+      },
+
+      getQueuedMessages: (tabId) => {
+        const state = get();
+        return state.messageQueue.get(resolveStateKey(state.tabs, tabId)) ?? EMPTY_QUEUE;
+      },
+
+      getTab: (tabId) =>
+        findScopedTabState(get().tabs, tabId) ?? get().tabs.get(tabId) ?? emptyTabState(),
+    };
   },
+);
 
-  setDraftText: (tabId, text) =>
-    set((state) => {
-      const stateKey = resolveStateKey(state.tabs, tabId);
-      const next = new Map(state.draftText);
-      if (text.length > 0) {
-        next.set(stateKey, text);
-      } else {
-        next.delete(stateKey);
-      }
-      return { draftText: next };
-    }),
-
-  getDraftText: (tabId) => {
-    const state = get();
-    return state.draftText.get(resolveStateKey(state.tabs, tabId)) ?? "";
-  },
-
-  setDraftMentions: (tabId, mentions) =>
-    set((state) => {
-      const stateKey = resolveStateKey(state.tabs, tabId);
-      const next = new Map(state.draftMentions);
-      if (mentions.length > 0) {
-        next.set(stateKey, mentions);
-      } else {
-        next.delete(stateKey);
-      }
-      return { draftMentions: next };
-    }),
-
-  setEffortLevel: (tabId, effort) =>
-    set((state) => {
-      const stateKey = resolveStateKey(state.tabs, tabId);
-      const next = new Map(state.effortLevels);
-      next.set(stateKey, effort);
-      return { effortLevels: next };
-    }),
-
-  getDraftMentions: (tabId) => {
-    const state = get();
-    return state.draftMentions.get(resolveStateKey(state.tabs, tabId)) ?? EMPTY_MENTIONS;
-  },
-
-  setQueueProjection: (tabId, messages) =>
-    set((state) => {
-      const stateKey = resolveStateKey(state.tabs, tabId);
-      const next = new Map(state.messageQueue);
-      next.set(stateKey, messages);
-      return { messageQueue: next };
-    }),
-
-  getQueueLength: (tabId) => {
-    const state = get();
-    return state.messageQueue.get(resolveStateKey(state.tabs, tabId))?.length ?? 0;
-  },
-
-  getQueuedMessages: (tabId) => {
-    const state = get();
-    return state.messageQueue.get(resolveStateKey(state.tabs, tabId)) ?? EMPTY_QUEUE;
-  },
-
-  getTab: (tabId) =>
-    findScopedTabState(get().tabs, tabId) ?? get().tabs.get(tabId) ?? emptyTabState(),
-}));
+/** Reads the nearest node scope's tmux tabs; other code uses `scope.store(claudeTmuxStore)`. */
+export const useClaudeTmuxStore = scopedStoreHook(claudeTmuxStore);
 
 /**
  * Move state persisted by older releases under a bare tab id to the
@@ -805,11 +830,12 @@ export function migrateLegacyClaudeTmuxState(
   legacyTabId: string,
   scopedStateKey: string,
   environmentId: string,
+  scope: NodeScope = appCommandScope(),
 ): boolean {
   if (legacyTabId === scopedStateKey) return false;
 
   let migrated = false;
-  useClaudeTmuxStore.setState((state) => {
+  scope.store(claudeTmuxStore).setState((state) => {
     const legacyTab = state.tabs.get(legacyTabId);
     if (!legacyTab || (legacyTab.environmentId && legacyTab.environmentId !== environmentId)) {
       return state;

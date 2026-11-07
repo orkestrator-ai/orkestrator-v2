@@ -1,3 +1,4 @@
+import { registrarFrom } from "./commands-registry-contracts.js";
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   WEB_ANNOTATION_COMMANDS,
@@ -26,7 +27,7 @@ afterEach(async () => {
 
 function registry() {
   const commands = new Map<string, CommandHandler>();
-  registerWebAnnotationCommands((name, handler) => commands.set(name, handler));
+  registerWebAnnotationCommands(registrarFrom((name, handler) => commands.set(name, handler)));
   return commands;
 }
 
@@ -207,7 +208,7 @@ describe("web annotation commands", () => {
     ).rejects.toThrow("Environment not found");
   });
 
-  test("rejects unbounded payloads, unknown fields, and declared provenance before the service runs", async () => {
+  test("rejects unbounded payloads and declared provenance before the service runs", async () => {
     let calls = 0;
     const spy = new Proxy({} as WebAnnotationService, {
       get: () => () => {
@@ -229,9 +230,6 @@ describe("web annotation commands", () => {
         body: "x".repeat(300 * 1024),
       }),
     ).rejects.toThrow("too large");
-    await expect(
-      call(commands, context, WEB_ANNOTATION_COMMANDS.create, { ...base, extra: true }),
-    ).rejects.toThrow("Invalid");
     await expect(
       call(commands, context, WEB_ANNOTATION_COMMANDS.create, { ...base, provenance: "host-user" }),
     ).rejects.toThrow("Provenance is assigned by the receiver");
@@ -263,5 +261,39 @@ describe("web annotation commands", () => {
       }),
     ).rejects.toThrow("Invalid");
     expect(calls).toBe(0);
+  });
+
+  // The strict schema refused unknown fields; the contract definition drops
+  // them (tolerant reader, plan item 7004), so a newer client's extra key
+  // never reaches the service.
+  test("drops unknown fields instead of refusing them", async () => {
+    const received: unknown[] = [];
+    const receipt = {
+      operationId: "op-1",
+      annotationId: "a-1",
+      captureId: "c-1",
+      entryId: "e-1",
+      contentRevision: 1,
+      metadataRevision: 1,
+      captureRevision: 1,
+      environmentRevision: 1,
+    };
+    const spy = {
+      create: async (input: unknown) => {
+        received.push(input);
+        return receipt;
+      },
+    } as unknown as WebAnnotationService;
+    const result = await call(registry(), contextFor(spy), WEB_ANNOTATION_COMMANDS.create, {
+      environmentId: ENV_A,
+      operationId: "op-1",
+      capture: fixtureCaptureInput(),
+      body: "ok",
+      extra: true,
+    });
+    expect(result).toEqual(receipt);
+    expect(received).toHaveLength(1);
+    expect(received[0]).not.toHaveProperty("extra");
+    expect(received[0]).toMatchObject({ environmentId: ENV_A, operationId: "op-1", body: "ok" });
   });
 });

@@ -5,7 +5,7 @@ import type {
 } from "@orkestrator/protocol/command-nodes";
 import type { ConnectionList, ConnectionSummary } from "@orkestrator/protocol/connections";
 import type { BackendId } from "@orkestrator/protocol/federation";
-import { portalInvoke } from "@/lib/portal/portal-transport";
+import { portalNodesApi } from "@/lib/node-scope/domains/nodes";
 
 /**
  * Making another machine the command node. The command node in charge hands
@@ -121,9 +121,7 @@ export async function loadHandoverPlan(target: HandoverTarget): Promise<Handover
     repairs = result.repairs ?? [];
     targetInspectionComplete = result.targetInspectionComplete !== false;
   } else if (target.nodeId) {
-    preview = await portalInvoke<CommandHandoverPreview>("preview_command_handover", {
-      nodeId: target.nodeId,
-    });
+    preview = await portalNodesApi().preview_command_handover({ nodeId: target.nodeId });
   } else {
     throw new Error("This client cannot make that machine the command node.");
   }
@@ -165,7 +163,7 @@ export async function runHandover(
       },
     });
   }
-  return portalInvoke<CommandHandoverResult>("hand_over_command", {
+  return portalNodesApi().hand_over_command({
     nodeId: plan.preview.targetNodeId,
     nodeIds,
     includeSelf: chosen.includeSelf,

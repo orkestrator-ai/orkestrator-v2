@@ -8,8 +8,9 @@ import { pathToFileURL } from "node:url";
 import { closeElectronWithin } from "./design-electron-cleanup";
 import { ELECTRON_TEST_SWITCHES } from "./electron-launch-switches";
 
-// No backend or production profile: only two isolated sessions using the real installer.
-test("real renderer and workspace sessions grant writes/fullscreen and deny other permissions and subframes", async () => {
+// No backend or production profile: two isolated renderer sessions (an in-memory
+// one and a window slot's persistent partition) using the real installer.
+test("real renderer sessions grant writes/fullscreen and deny other permissions and subframes", async () => {
   const root = path.resolve(import.meta.dirname, "../..");
   const scratch = await mkdtemp(path.join(os.tmpdir(), "ork-permissions-"));
   let app: Awaited<ReturnType<typeof electron.launch>> | undefined;
@@ -27,7 +28,7 @@ test("real renderer and workspace sessions grant writes/fullscreen and deny othe
       import { installRendererPermissionPolicy } from ${JSON.stringify(path.join(root, "apps/desktop/electron/renderer-permissions.ts"))};
       app.setPath("userData", ${JSON.stringify(path.join(scratch, "profile"))});
       app.whenReady().then(async () => {
-        for (const partition of ["renderer", "workspace-realm"]) {
+        for (const partition of ["renderer", "persist:orkestrator-renderer-2-0123456789abcdef"]) {
           const window = new BrowserWindow({ webPreferences: { partition, sandbox: true, contextIsolation: true, nodeIntegration: false } });
           installRendererPermissionPolicy(window.webContents.session, ${JSON.stringify(pathToFileURL(html).href)});
           await window.loadFile(${JSON.stringify(html)});

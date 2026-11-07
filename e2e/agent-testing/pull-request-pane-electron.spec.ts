@@ -142,6 +142,8 @@ async function seedPullRequests(window: Page): Promise<void> {
     // Vite serves the renderer's own modules, so these are the app's instances.
     const load = (url: string) => import(/* @vite-ignore */ url);
     const { usePullRequestsStore } = await load("/src/stores/pullRequestsStore.ts");
+    const { getWindowScope } = await load("/src/lib/node-scope/app-window-scope.ts");
+    const pullRequests = getWindowScope().commandScope().store(usePullRequestsStore.def);
     const { makeDetail } = await load(
       "/src/components/pull-requests/pull-request-test-fixtures.ts",
     );
@@ -151,10 +153,10 @@ async function seedPullRequests(window: Page): Promise<void> {
       Map<string, unknown>
     >;
     const key = (ref: Ref) => `${ref.owner.toLowerCase()}/${ref.repo.toLowerCase()}#${ref.number}`;
-    usePullRequestsStore.setState({
+    pullRequests.setState({
       loadDetail: async (ref: Ref) => {
         const id = key(ref);
-        usePullRequestsStore.setState((state: PullRequestMaps) =>
+        pullRequests.setState((state: PullRequestMaps) =>
           ref.number === 42
             ? {
                 details: new Map(state.details).set(id, makeDetail({ ref })),
@@ -165,7 +167,7 @@ async function seedPullRequests(window: Page): Promise<void> {
       },
       loadTimeline: async (ref: Ref) => {
         const id = key(ref);
-        usePullRequestsStore.setState((state: PullRequestMaps) => ({
+        pullRequests.setState((state: PullRequestMaps) => ({
           timelines: new Map(state.timelines).set(id, { ref, items: [], truncated: false }),
           loadedAt: new Map(state.loadedAt).set(`timeline:${id}`, Date.now()),
         }));
@@ -179,7 +181,10 @@ async function seedPullRequests(window: Page): Promise<void> {
 function mainViewState(window: Page) {
   return window.evaluate(async () => {
     const { useUIStore } = await import(/* @vite-ignore */ "/src/stores/uiStore.ts" as string);
-    const ui = useUIStore.getState();
+    const { getWindowScope } = await import(
+      /* @vite-ignore */ "/src/lib/node-scope/app-window-scope.ts" as string
+    );
+    const ui = getWindowScope().commandScope().store(useUIStore.def).getState();
     const board = document.querySelector("#project-panel-kanban");
     const scroll = board
       ? [board, ...board.querySelectorAll("*")]

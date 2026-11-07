@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { Archive, ArrowLeft, Crosshair, Loader2, MapPin } from "lucide-react";
 import {
   WEB_ANNOTATION_COMMANDS,
@@ -182,6 +183,8 @@ export function AnnotationThread({
   annotationId: string;
   onBack: () => void;
 }) {
+  // This node's annotations (plan item 4001); the command node outside a node scope.
+  const annotationScope = useScopesWithCommandFallback().scope;
   const panel = useAnnotationPanel();
   const { environmentId, features, capture, announce } = panel;
   const thread = useWebAnnotationThread(environmentId, annotationId);
@@ -216,7 +219,7 @@ export function AnnotationThread({
     setMessage(null);
     try {
       await action();
-      refreshWebAnnotations(environmentId, { annotationIds: [annotationId] });
+      refreshWebAnnotations(environmentId, { annotationIds: [annotationId] }, annotationScope);
       announce(label);
       return true;
     } catch (error) {
@@ -315,13 +318,18 @@ export function AnnotationThread({
               const title = editingTitle.trim();
               if (!title) return;
               void mutate("Title updated", () =>
-                webAnnotationCommand(WEB_ANNOTATION_COMMANDS.update, {
-                  environmentId,
-                  operationId: newWebAnnotationOperationId("title"),
-                  annotationId,
-                  expectedMetadataRevision: annotation.metadataRevision,
-                  title,
-                }),
+                webAnnotationCommand(
+                  WEB_ANNOTATION_COMMANDS.update,
+                  {
+                    environmentId,
+                    operationId: newWebAnnotationOperationId("title"),
+                    annotationId,
+                    expectedMetadataRevision: annotation.metadataRevision,
+                    title,
+                  },
+                  undefined,
+                  annotationScope,
+                ),
               ).then((ok) => {
                 if (ok) setEditingTitle(null);
               });
@@ -609,12 +617,17 @@ export function AnnotationThread({
               className="h-6 px-2 text-[11px]"
               onClick={() =>
                 void mutate("Reopened", () =>
-                  webAnnotationCommand(WEB_ANNOTATION_COMMANDS.reopen, {
-                    environmentId,
-                    operationId: newWebAnnotationOperationId("reopen"),
-                    annotationId,
-                    expectedMetadataRevision: annotation.metadataRevision,
-                  }),
+                  webAnnotationCommand(
+                    WEB_ANNOTATION_COMMANDS.reopen,
+                    {
+                      environmentId,
+                      operationId: newWebAnnotationOperationId("reopen"),
+                      annotationId,
+                      expectedMetadataRevision: annotation.metadataRevision,
+                    },
+                    undefined,
+                    annotationScope,
+                  ),
                 )
               }
             >
@@ -682,12 +695,17 @@ export function AnnotationThread({
                   className="h-6 px-2 text-[11px]"
                   onClick={() =>
                     void mutate("Note deleted", () =>
-                      webAnnotationCommand(WEB_ANNOTATION_COMMANDS.delete, {
-                        environmentId,
-                        operationId: newWebAnnotationOperationId("delete"),
-                        annotationId,
-                        expectedMetadataRevision: annotation.metadataRevision,
-                      }),
+                      webAnnotationCommand(
+                        WEB_ANNOTATION_COMMANDS.delete,
+                        {
+                          environmentId,
+                          operationId: newWebAnnotationOperationId("delete"),
+                          annotationId,
+                          expectedMetadataRevision: annotation.metadataRevision,
+                        },
+                        undefined,
+                        annotationScope,
+                      ),
                     ).then((ok) => {
                       setConfirmDelete(false);
                       if (ok) onBack();

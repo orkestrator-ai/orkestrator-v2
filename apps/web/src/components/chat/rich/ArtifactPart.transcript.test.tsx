@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import {
   artifactPartContent,
   type TranscriptArtifactRef,
@@ -57,14 +58,16 @@ afterEach(cleanup);
 
 describe("artifact parts in the transcript", () => {
   test("the native renderer dispatches an artifact part to its card", () => {
-    const { container } = render(<NativeMessage message={messageWithArtifact()} />);
+    const { container } = renderInAppCommandScope(
+      <NativeMessage message={messageWithArtifact()} />,
+    );
     expect(container.querySelector('[data-rich-block="artifact"]')).not.toBeNull();
     expect(screen.getByText("Outcomes")).toBeTruthy();
     expect(screen.getByText("Synthetic chart of test outcomes")).toBeTruthy();
   });
 
   test("Copy message includes the textual artifact summary, not icons or bodies", async () => {
-    render(<NativeMessage message={messageWithArtifact()} />);
+    renderInAppCommandScope(<NativeMessage message={messageWithArtifact()} />);
     fireEvent.click(screen.getByRole("button", { name: "Copy text" }));
     await waitFor(() =>
       expect(mockWriteText).toHaveBeenCalledWith(
@@ -75,7 +78,7 @@ describe("artifact parts in the transcript", () => {
 
   test("find indexes exactly the artifact summary its card renders as a search root", () => {
     const message = messageWithArtifact();
-    const { container } = render(<NativeMessage message={message} />);
+    const { container } = renderInAppCommandScope(<NativeMessage message={message} />);
     const artifactRoot = container.querySelector(
       '[data-rich-block="artifact"] [data-agent-chat-search-content]',
     );

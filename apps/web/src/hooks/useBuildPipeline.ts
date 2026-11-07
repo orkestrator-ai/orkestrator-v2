@@ -9,12 +9,16 @@ import {
   type BuildPipelineTicket,
   type GitHubIssueBuildInput,
 } from "@orkestrator/protocol/build-pipeline-tickets";
-import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
+import { useNodeScope } from "@/lib/node-scope/providers";
+import {
+  buildPipelineStore,
+  useBuildPipelineStore,
+  type BuildPipeline,
+} from "@/stores/buildPipelineStore";
 import { useConfigStore } from "@/stores";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import { useUIStore } from "@/stores/uiStore";
-import * as backend from "@/lib/backend";
-import { isUnsupportedBackendCommand } from "@/lib/backend/shared";
+import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import { scheduleBuildPipelineTabActivation } from "@/lib/feature-build-activation";
 import type { DeliveryPolicy } from "@orkestrator/protocol/ticket-sections";
 import { legacyBuildPipelineStartInput } from "@/lib/build-pipeline-launch-compat";
@@ -23,6 +27,7 @@ import type { KanbanTask } from "@/lib/backend";
 import type { PaneNode } from "@/types/paneLayout";
 import type { LinearIssueDetail } from "@/types/linear";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 const log = createLogger("web.build-pipeline");
 
@@ -61,8 +66,11 @@ function findBuildTabInTree(
 }
 
 export function useBuildPipeline() {
+  const nodeBackend = useScopeBackend();
   const config = useConfigStore((state) => state.config);
   const replacePipeline = useBuildPipelineStore((state) => state.replacePipeline);
+  // This node's pipelines (plan item 3011).
+  const scope = useNodeScope();
   const selectProjectAndEnvironment = useUIStore((state) => state.selectProjectAndEnvironment);
   const setProjectCollapsed = useUIStore((state) => state.setProjectCollapsed);
 
@@ -93,10 +101,13 @@ export function useBuildPipeline() {
           existingEnvironmentId: options.existingEnvironmentId ?? undefined,
           featurePlanId: options.featurePlanId,
         };
-        const authoritative = await backend.launchBuildPipeline(request).catch((error: unknown) => {
-          if (!isUnsupportedBackendCommand(error, "launch_build_pipeline")) throw error;
-          return backend.startBuildPipeline(legacyBuildPipelineStartInput(config, request));
-        });
+        const authoritative = await nodeBackend
+          .launchBuildPipeline(request)
+          .catch((error: unknown) => {
+            if (incompatibility(error, "launch_build_pipeline")?.code !== "unknown-command")
+              throw error;
+            return nodeBackend.startBuildPipeline(legacyBuildPipelineStartInput(config, request));
+          });
         const pipeline = authoritative as BuildPipeline;
         replacePipeline(pipeline);
         // An idempotent admission can return a pipeline whose environment is
@@ -106,6 +117,7 @@ export function useBuildPipeline() {
           ticket.projectId,
           pipeline.id,
           pipeline.environmentId || undefined,
+          scope,
         );
         toast.success("Build pipeline started");
         return pipeline.id;
@@ -121,7 +133,7 @@ export function useBuildPipeline() {
         return undefined;
       }
     },
-    [config, replacePipeline],
+    [config, replacePipeline, scope, nodeBackend],
   );
 
   const startBuild = useCallback(
@@ -136,7 +148,7 @@ export function useBuildPipeline() {
           try {
             return {
               filename: image.filename,
-              data: await backend.getKanbanImageData(image.id),
+              data: await nodeBackend.getKanbanImageData(image.id),
             };
           } catch {
             return null;
@@ -153,7 +165,7 @@ export function useBuildPipeline() {
         options,
       );
     },
-    [startBuildFromTicket],
+    [startBuildFromTicket, nodeBackend],
   );
 
   const navigateToPipeline = useCallback(
@@ -164,21 +176,22 @@ export function useBuildPipeline() {
       if (!pipeline.environmentId) return;
       setProjectCollapsed(pipeline.projectId, false);
       selectProjectAndEnvironment(pipeline.projectId, pipeline.environmentId);
-      const state = usePaneLayoutStore.getState().environments.get(pipeline.environmentId);
+      const panes = scope.store(paneLayoutStore).getState();
+      const state = panes.environments.get(pipeline.environmentId);
       const tab = state && findBuildTabInTree(state.root, pipeline.taskId);
       if (tab) {
-        usePaneLayoutStore.getState().setActiveTab(tab.paneId, tab.tabId, pipeline.environmentId);
+        panes.setActiveTab(tab.paneId, tab.tabId, pipeline.environmentId);
       }
     },
-    [selectProjectAndEnvironment, setProjectCollapsed],
+    [scope, selectProjectAndEnvironment, setProjectCollapsed],
   );
 
   const navigateToBuild = useCallback(
     async (task: KanbanTask) => {
-      const pipeline = useBuildPipelineStore.getState().getPipelineByTaskId(task.id);
+      const pipeline = scope.store(buildPipelineStore).getState().getPipelineByTaskId(task.id);
       if (pipeline) await navigateToPipeline(pipeline);
     },
-    [navigateToPipeline],
+    [navigateToPipeline, scope],
   );
 
   return {

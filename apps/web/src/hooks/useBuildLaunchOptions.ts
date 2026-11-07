@@ -9,12 +9,7 @@ import {
   includeMissingOpenCodeModels,
   includeOpenCodeDefaultModel,
 } from "@/lib/review-launch-options";
-import {
-  type CachedOpenCodeModel,
-  getCachedOpenCodeModelCatalog,
-  getOpencodeModelPreferences,
-  type OpenCodeModelPreferences,
-} from "@/lib/backend";
+import type { CachedOpenCodeModel, OpenCodeModelPreferences } from "@/lib/backend";
 import {
   EMPTY_OPENCODE_MODEL_PREFERENCES,
   openCodeModelRefToId,
@@ -26,6 +21,7 @@ import {
 import { useConfigStore, useProjectStore } from "@/stores";
 import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 const log = createLogger("web.build-pipeline");
 
@@ -56,6 +52,7 @@ function normalizeCachedOpenCodeModels(value: unknown): CachedOpenCodeModel[] | 
 
 /** Repository-scoped model catalog shared by launchers and repository settings. */
 export function useProjectModelCatalog(projectId: string, enabled: boolean) {
+  const nodeBackend = useScopeBackend();
   // These subscriptions keep the memoized catalog current when a native agent
   // publishes its models after the launcher has mounted.
   const claudeModels = useAgentModelCatalogStore((state) => state.claudeModels);
@@ -81,12 +78,15 @@ export function useProjectModelCatalog(projectId: string, enabled: boolean) {
 
   useEffect(() => {
     let cancelled = false;
+    // Drops the previous project's catalogue before this project's read lands.
+    // oxlint-disable-next-line react/set-state-in-effect
     setCachedOpenCodeCatalog(null);
     if (!enabled || !projectId)
       return () => {
         cancelled = true;
       };
-    void getCachedOpenCodeModelCatalog(projectId)
+    void nodeBackend
+      .getCachedOpenCodeModelCatalog(projectId)
       .then((snapshot) => {
         const models = normalizeCachedOpenCodeModels(snapshot?.models);
         if (!cancelled && snapshot?.projectId === projectId && models) {
@@ -99,7 +99,7 @@ export function useProjectModelCatalog(projectId: string, enabled: boolean) {
     return () => {
       cancelled = true;
     };
-  }, [catalogRefreshRevision, enabled, projectId]);
+  }, [catalogRefreshRevision, enabled, projectId, nodeBackend]);
 
   // OpenCode catalogs are repository-scoped and come from the backend's durable
   // per-project cache.
@@ -114,7 +114,13 @@ export function useProjectModelCatalog(projectId: string, enabled: boolean) {
 
   const catalog = useMemo(() => {
     // The standard Claude/Codex catalogs and the unpinned OpenCode placeholder.
-    const baseCatalog = buildReviewModelCatalog();
+    const baseCatalog = buildReviewModelCatalog({
+      claudeModels,
+      codexModels,
+      cursorModels,
+      grokModels,
+      piModels,
+    });
     const allowedProviders = normalizeOpenCodeModelProviders(openCodeModelProviders);
     const favoriteOpenCodeIds = (favoriteModels ?? [])
       .filter((favorite) => favorite.platform === "opencode")
@@ -134,11 +140,6 @@ export function useProjectModelCatalog(projectId: string, enabled: boolean) {
       ...baseCatalog,
       opencode: includeMissingOpenCodeModels(mapped, favoriteOpenCodeIds, allowedProviders),
     };
-    // buildReviewModelCatalog reads the Claude/Codex/Cursor/Grok/Pi stores through
-    // getState(), which does not subscribe. These selectors are the subscription:
-    // the rule sees them as unused because the body never names them, but dropping
-    // them freezes the catalog at whatever was loaded on first render.
-    // oxlint-disable-next-line react-hooks/exhaustive-deps
   }, [
     claudeModels,
     codexModels,
@@ -167,6 +168,7 @@ export function useReviewModelCatalog(projectId: string, enabled: boolean) {
 
 /** Shared defaults and repository-scoped model catalog for every build launcher. */
 export function useBuildLaunchOptions(projectId: string, enabled: boolean) {
+  const nodeBackend = useScopeBackend();
   const config = useConfigStore((state) => state.config);
   const projects = useProjectStore((state) => state.projects);
   const projectHasLocalPath = Boolean(
@@ -208,7 +210,8 @@ export function useBuildLaunchOptions(projectId: string, enabled: boolean) {
       return () => {
         cancelled = true;
       };
-    void getOpencodeModelPreferences()
+    void nodeBackend
+      .getOpencodeModelPreferences()
       .then((preferences) => {
         if (
           !cancelled &&
@@ -228,7 +231,7 @@ export function useBuildLaunchOptions(projectId: string, enabled: boolean) {
     return () => {
       cancelled = true;
     };
-  }, [enabled, projectId]);
+  }, [enabled, projectId, nodeBackend]);
 
   const favoriteOpenCodeModelIds = useMemo(() => {
     const ids: string[] = [];

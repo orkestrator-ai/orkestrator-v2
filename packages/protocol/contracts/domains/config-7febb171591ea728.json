@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "domain": "config",
+  "commands": {
+    "get_config": {
+      "untyped": true
+    },
+    "get_desktop_connections": {
+      "untyped": true
+    },
+    "get_global_config": {
+      "untyped": true
+    },
+    "get_repository_config": {
+      "untyped": true
+    },
+    "save_config": {
+      "untyped": true
+    },
+    "save_desktop_connections": {
+      "untyped": true
+    },
+    "set_anthropic_api_key": {
+      "untyped": true
+    },
+    "set_cursor_api_key": {
+      "untyped": true
+    },
+    "set_github_cli_reminder_dismissed": {
+      "untyped": true
+    },
+    "set_github_token": {
+      "untyped": true
+    },
+    "set_opencode_zen_api_key": {
+      "untyped": true
+    },
+    "update_global_config": {
+      "untyped": true
+    },
+    "update_notification_sound_settings": {
+      "untyped": true
+    },
+    "update_repository_config": {
+      "untyped": true
+    }
+  }
+}

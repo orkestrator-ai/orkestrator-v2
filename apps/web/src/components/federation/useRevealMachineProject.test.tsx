@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { useEffect } from "react";
-import { act, cleanup, render, waitFor } from "@testing-library/react";
+import { act, cleanup, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import {
   environmentKey,
   environmentRef,
@@ -20,7 +21,8 @@ import {
   uninstallDesktopFake,
 } from "@/test/federation-desktop-fake";
 import { sidebarFolderKey, useMachineViewStore } from "@/stores/machineViewStore";
-import { useUIStore } from "@/stores/uiStore";
+import { uiStore } from "@/stores/uiStore";
+import { useUIChromeStore } from "@/stores/uiChromeStore";
 import { MergedProjectList, RemoteMachineSection } from "./FederatedSidebarSections";
 import { isMachineShown } from "@/lib/federation/sidebar-layout";
 import { openMachineWorkspace } from "@/lib/federation/open-workspace";
@@ -29,6 +31,7 @@ import { FederationEffects } from "./FederationEffects";
 import { FederationProvider } from "./FederationProvider";
 import { useMachineViews } from "./useMachineViews";
 import { useRevealMachineProject } from "./useRevealMachineProject";
+import { appCommandStore } from "@/test/app-command-store";
 
 const INITIAL_REMOTE_STATE = useRemoteWorkspaceStore.getState();
 const INITIAL_MACHINE_VIEW_STATE = useMachineViewStore.getState();
@@ -51,7 +54,7 @@ function Harness() {
   const reveal = useRevealMachineProject();
   const machines = useMachineViews();
   const grouping = useMachineViewStore((state) => state.grouping);
-  const sort = useUIStore((state) => state.environmentSortMode);
+  const sort = useUIChromeStore((state) => state.environmentSortMode);
   useEffect(() => {
     captured.reveal = reveal;
     captured.machines = machines;
@@ -85,7 +88,7 @@ describe("useRevealMachineProject", () => {
     localStorage.removeItem("machine-view-storage");
     useRemoteWorkspaceStore.setState(INITIAL_REMOTE_STATE, true);
     useMachineViewStore.setState(INITIAL_MACHINE_VIEW_STATE, true);
-    useUIStore.setState({ environmentSortMode: "project" });
+    useUIChromeStore.setState({ environmentSortMode: "project" });
     resetSonnerMocks();
     installDesktopFake({
       list: connectionList([MBP3]),
@@ -103,14 +106,14 @@ describe("useRevealMachineProject", () => {
     uninstallDesktopFake();
     useRemoteWorkspaceStore.setState(INITIAL_REMOTE_STATE, true);
     useMachineViewStore.setState(INITIAL_MACHINE_VIEW_STATE, true);
-    useUIStore.setState({ environmentSortMode: "project" });
+    useUIChromeStore.setState({ environmentSortMode: "project" });
     localStorage.removeItem("machine-view-storage");
     captured.reveal = null;
     captured.machines = [];
   });
 
   function renderHarness() {
-    return render(
+    return renderInAppCommandScope(
       <FederationProvider>
         <Harness />
       </FederationProvider>,
@@ -154,14 +157,16 @@ describe("useRevealMachineProject", () => {
   });
 
   test("this window's own selections are recorded as recent and end the highlight", async () => {
-    render(
+    renderInAppCommandScope(
       <FederationProvider>
         <FederationEffects />
       </FederationProvider>,
     );
     await waitFor(() => expect(portalStore.getState().selfId).toBe(SELF_NODE_ID));
     act(() => useMachineViewStore.getState().revealProject(key));
-    act(() => useUIStore.getState().selectProjectAndEnvironment("p-local", "e-local"));
+    act(() =>
+      appCommandStore(uiStore).getState().selectProjectAndEnvironment("p-local", "e-local"),
+    );
     await waitFor(() =>
       expect(useMachineViewStore.getState().recentKeys.slice(0, 2)).toEqual([
         environmentKey(environmentRef(SELF_NODE_ID, "e-local")),
@@ -172,10 +177,10 @@ describe("useRevealMachineProject", () => {
   });
 
   test("reveals a compact project paired with activity sort in the machine list", async () => {
-    useUIStore.setState({ environmentSortMode: "activity" });
+    useUIChromeStore.setState({ environmentSortMode: "activity" });
     useMachineViewStore.setState({ grouping: "compact" });
     await revealIn();
-    expect(useUIStore.getState().environmentSortMode).toBe("project");
+    expect(useUIChromeStore.getState().environmentSortMode).toBe("project");
     expect(useMachineViewStore.getState().grouping).toBe("machine");
     expect(projectRow()?.querySelector("[aria-current]")?.getAttribute("aria-current")).toBe(
       "true",
@@ -232,7 +237,7 @@ describe("useRevealMachineProject", () => {
       expect(projectRow()?.querySelector("[aria-current]")?.getAttribute("aria-current")).toBe(
         "true",
       );
-      expect(useUIStore.getState().environmentSortMode).toBe("project");
+      expect(useUIChromeStore.getState().environmentSortMode).toBe("project");
       expect(mockToastInfo).not.toHaveBeenCalled();
     });
 
@@ -261,7 +266,7 @@ describe("useRevealMachineProject", () => {
   }
 
   test("another remote selection removes the row highlight with no local selection", async () => {
-    useUIStore.setState({ selectedProjectId: null, selectedEnvironmentId: null });
+    appCommandStore(uiStore).setState({ selectedProjectId: null, selectedEnvironmentId: null });
     openMachineWorkspace({ connectionId: "bk_other", projectId: "other", title: "Other" });
     await revealIn();
     const row = projectRow()!;

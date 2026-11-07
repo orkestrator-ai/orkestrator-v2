@@ -4,13 +4,15 @@ import {
   type EnvironmentHydrationBatch,
   type EnvironmentHydrationPart,
 } from "@orkestrator/protocol/environment-hydration";
-import * as backend from "@/lib/backend";
+import { backendForScope } from "@/lib/backend/scope-backend";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { appCommandScope, defineScopedSlot } from "@/lib/node-scope-slots";
 import { applyMultiReviewWorkflowsForEnvironment } from "@/lib/multi-review-persistence";
 import {
   applyPromptQueuesForEnvironment,
   type PromptQueueSource,
 } from "@/lib/prompt-queue-persistence";
-import { isUnknownCommandError } from "@orkestrator/protocol/unknown-command";
+import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import { hydrationActivity } from "@/lib/hydration-activity";
 import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
 import type { PersistedPromptQueue, PersistedWorkflowRecord } from "@/types";
@@ -115,7 +117,9 @@ export class EnvironmentHydrationBatcher {
         // A failed batch must not make an unrelated environment's lists fail.
         // Only an unsupported command disables batching for future requests;
         // transient transport/validation failures fall back for this chunk.
-        if (isUnknownCommandError(error, LIST_ENVIRONMENT_HYDRATION_COMMAND)) {
+        if (
+          incompatibility(error, LIST_ENVIRONMENT_HYDRATION_COMMAND)?.code === "unknown-command"
+        ) {
           this.batchSupported = false;
         }
         return this.sendSeparately(ids, batch);
@@ -179,18 +183,32 @@ async function forward<T>(waiters: Array<Waiter<T>>, load: () => Promise<T>): Pr
   }
 }
 
-/** The renderer's one batcher: per document, so per workspace realm. */
-export const environmentHydration = new EnvironmentHydrationBatcher({
-  listBatch: (environmentIds) => backend.listEnvironmentHydration(environmentIds),
-  listPromptQueues: (environmentId) => backend.listPromptQueues(environmentId),
-  listMultiReviewWorkflows: (environmentId) => backend.listMultiReviewWorkflows(environmentId),
+/**
+ * One batcher per node scope (plan item 4007): a node's boot restore reads
+ * its own node, and two nodes' environments never share a batch.
+ */
+const scopeHydration = defineScopedSlot("environment-hydration", (scope) => {
+  const node = () => backendForScope(scope);
+  return new EnvironmentHydrationBatcher({
+    listBatch: (environmentIds) => node().listEnvironmentHydration(environmentIds),
+    listPromptQueues: (environmentId) => node().listPromptQueues(environmentId),
+    listMultiReviewWorkflows: (environmentId) => node().listMultiReviewWorkflows(environmentId),
+  });
 });
 
-/** Boot restore of one environment's prompt queues, through the batcher. */
+/** `scope`'s batcher; the app's command scope when omitted. */
+export function environmentHydrationFor(scope: NodeScope = appCommandScope()) {
+  return scopeHydration(scope);
+}
+
+/**
+ * Boot restore of one environment's prompt queues, through its node's batcher,
+ * into `sources` (that node's: `createPromptQueueSources(scope)`).
+ */
 export async function hydrateBootPromptQueues(
   environmentId: string,
   sources: ReadonlyArray<PromptQueueSource>,
-  batcher: EnvironmentHydrationBatcher = environmentHydration,
+  batcher: EnvironmentHydrationBatcher = environmentHydrationFor(),
 ): Promise<void> {
   return hydrationActivity.track(async () => {
     applyPromptQueuesForEnvironment(
@@ -202,18 +220,21 @@ export async function hydrateBootPromptQueues(
 }
 
 /**
- * Boot restore of one environment's Multi Review workflows, through the
- * batcher. Same result as `hydrateMultiReviewWorkflowsForEnvironment`, which
- * stays the single read for callers that need one environment now.
+ * Boot restore of one environment's Multi Review workflows, through its
+ * node's batcher, into that node's store. Same result as
+ * `hydrateMultiReviewWorkflowsForEnvironment`, which stays the single read
+ * for callers that need one environment now.
  */
 export async function hydrateBootMultiReviewWorkflows(
   environmentId: string,
-  batcher: EnvironmentHydrationBatcher = environmentHydration,
+  batcher: EnvironmentHydrationBatcher = environmentHydrationFor(),
+  scope: NodeScope = appCommandScope(),
 ): Promise<MultiReviewWorkflow[]> {
   return hydrationActivity.track(async () =>
     applyMultiReviewWorkflowsForEnvironment(
       environmentId,
       await batcher.multiReviewWorkflows(environmentId),
+      scope,
     ),
   );
 }

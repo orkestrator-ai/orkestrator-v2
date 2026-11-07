@@ -41,7 +41,12 @@ import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { pipelineRestartSlot } from "@orkestrator/protocol/build-pipeline-restart-selection";
 import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
-import { flowAttemptKey, useFlowGraphViewStore } from "@/stores/flowGraphViewStore";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
+import {
+  flowAttemptKey,
+  flowGraphViewKey,
+  useFlowGraphViewStore,
+} from "@/stores/flowGraphViewStore";
 import { useOptionalTerminalContext, type CreateTabOptions } from "@/contexts/TerminalContext";
 import { useReviewModelCatalog } from "@/hooks/useBuildLaunchOptions";
 import { useScrollOffsetAcrossHide } from "@/hooks/useScrollOffsetAcrossHide";
@@ -215,7 +220,11 @@ export function PipelineFlowView({
   const pullRequest = usePipelinePullRequest(environmentId);
   const { viewPR } = usePullRequest({ environmentId });
   const viewKey = passKey ? `${pipeline.id}\u0000${passKey}` : pipeline.id;
-  const collapsed = useFlowGraphViewStore((state) => state.collapsed.has(viewKey));
+  // View state is remembered per node: pipeline ids are only unique on theirs.
+  const viewNodeId = useScopesWithCommandFallback().scope.nodeId;
+  const collapsedKey = flowGraphViewKey(viewNodeId, viewKey);
+  const attemptsKey = flowGraphViewKey(viewNodeId, pipeline.id);
+  const collapsed = useFlowGraphViewStore((state) => state.collapsed.has(collapsedKey));
   const setCollapsed = useFlowGraphViewStore((state) => state.setCollapsed);
   const expandedAttemptKeys = useFlowGraphViewStore((state) => state.expandedAttempts);
   const setAttemptExpanded = useFlowGraphViewStore((state) => state.setAttemptExpanded);
@@ -230,9 +239,9 @@ export function PipelineFlowView({
             session.supersededBy ? [session.supersededBy] : [],
           ),
           ...(pipeline.rewinds ?? []).map((rewind) => rewind.id),
-        ].filter((id) => expandedAttemptKeys.has(flowAttemptKey(pipeline.id, id))),
+        ].filter((id) => expandedAttemptKeys.has(flowAttemptKey(attemptsKey, id))),
       ),
-    [expandedAttemptKeys, pipeline.id, pipeline.sessions, pipeline.rewinds],
+    [attemptsKey, expandedAttemptKeys, pipeline.sessions, pipeline.rewinds],
   );
   const fullModel = useMemo(
     () => pipelineFlowModel(pipeline, pullRequest, { expandedAttempts }),
@@ -370,7 +379,7 @@ export function PipelineFlowView({
   );
 
   const toggleAttempt = (attemptId: string, expanded: boolean) =>
-    setAttemptExpanded(pipeline.id, attemptId, expanded);
+    setAttemptExpanded(attemptsKey, attemptId, expanded);
   /** Selects a step of a previous attempt, expanding the attempt to show it. */
   const showAttemptStep = (attemptId: string, sessionKey: string) => {
     toggleAttempt(attemptId, true);
@@ -677,7 +686,7 @@ export function PipelineFlowView({
           graphContainerRef.current?.closest<HTMLElement>('[data-testid="pipeline-flow-scroll"]')
             ?.scrollTop ?? null;
       }
-      setCollapsed(viewKey, !collapsed);
+      setCollapsed(collapsedKey, !collapsed);
     },
   } as const;
   const progress = (

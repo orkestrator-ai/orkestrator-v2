@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:e7b9e34e2d78451c0104e1fc7cb8308440627236eb99351a556a9cbe6b1f2626",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "body": {
+          "type": "string"
+        },
+        "comments": {},
+        "commitId": {},
+        "event": {
+          "enum": ["APPROVE", "REQUEST_CHANGES", "COMMENT"],
+          "type": "string"
+        },
+        "number": {
+          "type": "number"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "repo": {
+          "type": "string"
+        }
+      },
+      "required": ["body", "event", "number", "owner", "repo"],
+      "type": "object"
+    }
+  }
+}

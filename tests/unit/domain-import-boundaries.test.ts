@@ -138,6 +138,28 @@ describe("backend domain import boundaries", () => {
     lintImports("packages/protocol/src/graphs/boundary-probe.test.ts", ["bun:test"], []);
   });
 
+  test("protocol contract modules stay browser-safe", () => {
+    lintImports(
+      "packages/protocol/src/contract/boundary-probe.ts",
+      [
+        "effect/Schema",
+        "../unknown-command.js",
+        "./domain.js",
+        "node:fs",
+        "bun:sqlite",
+        "../testing/fake-pids.js",
+        "../node/build-commit.js",
+      ],
+      [4, 5, 6, 7],
+    );
+    lintImports(
+      "packages/protocol/src/contract/domains/boundary-probe.ts",
+      ["../domain.js", "node:path", "../../testing/fake-pids.js", "../../node/build-commit.js"],
+      [2, 3, 4],
+    );
+    lintImports("packages/protocol/src/contract/boundary-probe.test.ts", ["bun:test"], []);
+  });
+
   test("protocol change-tracking modules retain their backend exemption", () => {
     lintImports(
       "apps/backend/src/core/boundary-probe.ts",

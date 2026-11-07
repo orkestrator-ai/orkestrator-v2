@@ -11,6 +11,7 @@ import { useLocalEnvironmentAvailable } from "@/hooks/useLocalEnvironmentAvailab
 import { getEnvironmentPortAddress } from "@/lib/environment-address";
 import { isLocalDeletionRetryable } from "@/lib/federation/selected-environments";
 import { mergePrControl } from "@/lib/merge-pr-control";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { resolveEnvironmentAgentActivity } from "@/lib/environment-agent-activity";
 import { hydrationFreshnessNotice } from "@/lib/view-freshness";
 import { useBuildPipelineStore, useEnvironmentDiffStore, useEnvironmentStore } from "@/stores";
@@ -98,6 +99,8 @@ export const EnvironmentItem = memo(function EnvironmentItem({
 }: EnvironmentItemProps) {
   const dockerAvailable = useDockerAvailability();
   const localCheckoutAvailable = useLocalEnvironmentAvailable(environment.projectId);
+  // The row's environment is on the node of the scope it renders in.
+  const nodeId = useScopesWithCommandFallback().scope.nodeId;
   // The owning machine is named whenever this client can show several machines.
   const { boundMachine: windowMachine, supported: multiMachineClient } = useFederation();
   const boundMachine = multiMachineClient ? windowMachine : null;
@@ -175,7 +178,7 @@ export const EnvironmentItem = memo(function EnvironmentItem({
                 disabled: mergePr.disabled,
                 run: () => {
                   onSelect(environment.id);
-                  useMergePrRequestStore.getState().requestMergePr(environment.id);
+                  useMergePrRequestStore.getState().requestMergePr(nodeId, environment.id);
                 },
               },
             }
@@ -186,7 +189,7 @@ export const EnvironmentItem = memo(function EnvironmentItem({
         openSettings: () =>
           useAppDialogStore
             .getState()
-            .open({ kind: "environment-settings", environmentId: environment.id }),
+            .open({ kind: "environment-settings", nodeId, environmentId: environment.id }),
         ...(localAddress
           ? {
               copyAddress: () =>

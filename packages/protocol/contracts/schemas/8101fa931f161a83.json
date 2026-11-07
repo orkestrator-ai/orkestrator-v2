@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:8101fa931f161a839c64963b179b9c4ec09c9fcfe64c2cd7fe5fc6551d14b0a2",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "cursor": {},
+        "pageSize": {},
+        "resourceKey": {
+          "type": "string"
+        },
+        "snapshotToken": {
+          "type": "string"
+        }
+      },
+      "required": ["resourceKey", "snapshotToken"],
+      "type": "object"
+    }
+  }
+}

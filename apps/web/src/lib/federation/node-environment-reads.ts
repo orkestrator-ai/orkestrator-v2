@@ -5,7 +5,6 @@
  */
 
 import { useEffect, useState } from "react";
-import type { AgentRegistrySnapshot } from "@orkestrator/protocol/agent-registry";
 import type { BackendId, EnvironmentRef } from "@orkestrator/protocol/federation";
 import {
   NATIVE_AGENT_ACTIVITY_EVENT,
@@ -13,9 +12,13 @@ import {
 } from "@orkestrator/protocol/native-agent-observation";
 import { RESOURCE_CHANGED_EVENT } from "@orkestrator/protocol/resource-events";
 import type { AgentSummarySource } from "@/components/environments/EnvironmentAgentSummary";
+import { agentMailClient } from "@orkestrator/protocol/contract/domains/agent-mail";
+import { environmentsClient } from "@orkestrator/protocol/contract/domains/environments";
 import { portalStore } from "@/lib/portal/portal-store";
 import type { Environment } from "@/types";
 import { subscribeNodeEvents } from "./node-events";
+import { routedBackendClient } from "@/lib/portal/routed-backend-client";
+import { domainApi } from "@/lib/node-scope/domains/domain-api";
 
 /** Coalesces a burst of changes into one read. */
 const REFRESH_DEBOUNCE_MS = 250;
@@ -34,8 +37,9 @@ export function nodeAgentSummarySource(nodeId: BackendId): AgentSummarySource {
   if (!source) {
     source = {
       resyncOnSubscribe: true,
+      // Routed through the command node, so the `agent-mail` client's version 0 (today's call).
       read: (environmentId) =>
-        portalStore.invokeOnNode<AgentRegistrySnapshot>(nodeId, "get_agent_registry", {
+        domainApi(routedBackendClient(portalStore, nodeId), agentMailClient).get_agent_registry({
           environmentId,
         }),
       subscribe: (environmentId, refresh) =>
@@ -78,10 +82,12 @@ export function useNodeEnvironment(ref: EnvironmentRef, open: boolean): Environm
     let timer: ReturnType<typeof setTimeout> | undefined;
     const read = () => {
       const request = ++latest;
-      void portalStore
-        .invokeOnNode<Environment | null>(nodeId, "get_environment", { environmentId })
+      void domainApi(routedBackendClient(portalStore, nodeId), environmentsClient)
+        .getEnvironment({ environmentId })
         .then((value) => {
-          if (!cancelled && request === latest) setEnvironment(value ?? null);
+          // A final PR record answers only `includeFinalPrState`, which this read never sends.
+          const record = value === null || "finalPrState" in value ? null : value;
+          if (!cancelled && request === latest) setEnvironment(record);
         })
         .catch(() => undefined);
     };

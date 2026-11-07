@@ -1,3 +1,4 @@
+import { registrarFrom } from "./commands-registry-contracts.js";
 import { describe, expect, mock, test } from "bun:test";
 import type { CpuInfo } from "node:os";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
@@ -51,11 +52,12 @@ describe("system usage", () => {
 
   test("reports the sanitized running app version", () => {
     const commands = new Map<string, CommandHandler>();
-    registerSystemCommands((name, handler) => commands.set(name, handler));
+    registerSystemCommands(registrarFrom((name, handler) => commands.set(name, handler)));
     expect(createCommandRegistry().has("get_app_version")).toBe(true);
     expect(commands.get("get_app_version")!({}, {} as CommandContext)).toBe(APP_VERSION);
-    expect(() => commands.get("get_app_version")!({ extra: true }, {} as CommandContext)).toThrow(
-      /Unexpected arguments field: extra/,
+    // A defined command drops unknown keys (plan item 7009) rather than refusing them.
+    expect(commands.get("get_app_version")!({ extra: true }, {} as CommandContext)).toBe(
+      APP_VERSION,
     );
   });
 
@@ -68,7 +70,10 @@ describe("system usage", () => {
       diskPercent: 3,
       sampledAt: "2026-09-03T12:00:00.000Z",
     }));
-    registerSystemCommands((name, handler) => commands.set(name, handler), read);
+    registerSystemCommands(
+      registrarFrom((name, handler) => commands.set(name, handler)),
+      read,
+    );
 
     await commands.get("get_system_usage")!({}, {
       storage: { getDataDir: () => "/authoritative/data" },

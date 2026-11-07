@@ -2,7 +2,8 @@ import { useEffect, useRef } from "react";
 import { projectKey, projectRef, type BackendId } from "@orkestrator/protocol/federation";
 import { projectFolderKey } from "@/lib/project-folders";
 import { sidebarFolderKey, useMachineViewStore } from "@/stores/machineViewStore";
-import { useUIStore } from "@/stores/uiStore";
+import { useNodeScope } from "@/lib/node-scope/providers";
+import { uiStore } from "@/stores/uiStore";
 import type { Project } from "@/types";
 
 /**
@@ -19,6 +20,8 @@ export function useBoundCollapseSync(
   loaded: boolean,
 ): void {
   const adopted = useRef({ backendId, keys: new Set<string>() });
+  // The bound node's own UI state: the scope that lists `projects`.
+  const uiApi = useNodeScope().store(uiStore);
 
   useEffect(() => {
     if (!backendId || !loaded) return;
@@ -26,7 +29,7 @@ export function useBoundCollapseSync(
     const folderPrefix = sidebarFolderKey(backendId, "");
     const keyOf = (projectId: string) => projectKey(projectRef(backendId, projectId));
     const view = useMachineViewStore.getState();
-    const ui = useUIStore.getState();
+    const ui = uiApi.getState();
     const fresh = projects.filter((project) => !adopted.current.keys.has(keyOf(project.id)));
     const known = new Set([...view.knownProjectKeys, ...view.collapsedProjectKeys]);
     const adopting = fresh.filter((project) => known.has(keyOf(project.id)));
@@ -37,7 +40,7 @@ export function useBoundCollapseSync(
         .filter((key) => key.startsWith(folderPrefix))
         .map((key) => key.slice(folderPrefix.length)),
     );
-    useUIStore.setState({
+    uiApi.setState({
       projectCollapseChoices: Array.from(new Set([...ui.projectCollapseChoices, ...ids])),
       collapsedProjects: [
         ...ui.collapsedProjects.filter((id) => !ids.has(id)),
@@ -56,7 +59,7 @@ export function useBoundCollapseSync(
     });
 
     const record = () => {
-      const ui = useUIStore.getState();
+      const ui = uiApi.getState();
       const ids = new Set(
         projects
           .filter(
@@ -77,7 +80,7 @@ export function useBoundCollapseSync(
       });
     };
     record();
-    return useUIStore.subscribe((state, previous) => {
+    return uiApi.subscribe((state, previous) => {
       if (
         state.collapsedProjects !== previous.collapsedProjects ||
         state.projectCollapseChoices !== previous.projectCollapseChoices ||
@@ -85,5 +88,5 @@ export function useBoundCollapseSync(
       )
         record();
     });
-  }, [backendId, loaded, projects]);
+  }, [backendId, loaded, projects, uiApi]);
 }

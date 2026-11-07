@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:bed1412a2a674e1c7d3623194586dabc1858104d07cbc73e635f1cc4686be607",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "add": {},
+        "number": {
+          "type": "number"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "remove": {},
+        "repo": {
+          "type": "string"
+        }
+      },
+      "required": ["number", "owner", "repo"],
+      "type": "object"
+    }
+  }
+}

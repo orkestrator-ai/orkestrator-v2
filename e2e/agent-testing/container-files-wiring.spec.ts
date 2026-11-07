@@ -265,7 +265,16 @@ test("Docker fixture local Files panel shows a file whose announcement arrived w
       page.evaluate(async (environmentId) => {
         const modulePath = "/src/stores/worktreeSnapshotStore.ts";
         const { useWorktreeSnapshotStore } = await import(/* @vite-ignore */ modulePath);
-        return useWorktreeSnapshotStore.getState().entries.get(environmentId)?.treeRevision ?? 0;
+        const { getWindowScope } = await import(
+          /* @vite-ignore */ "/src/lib/node-scope/app-window-scope.ts" as string
+        );
+        return (
+          getWindowScope()
+            .commandScope()
+            .store(useWorktreeSnapshotStore.def)
+            .getState()
+            .entries.get(environmentId)?.treeRevision ?? 0
+        );
       }, local.id);
     await expect.poll(observedTreeRevision).toBeGreaterThan(0);
     const beforeRevision = await observedTreeRevision();

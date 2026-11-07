@@ -11,19 +11,16 @@ import type {
   ArtifactRepresentation,
   ArtifactRepresentationResponse,
 } from "@orkestrator/protocol/transcript-artifact-commands";
-import { FRONTEND_RENDER_POLICY } from "@orkestrator/protocol/rich-content-policy";
-import {
-  getTranscriptArtifactPublication,
-  listTranscriptArtifactPublications,
-  readTranscriptArtifactRepresentation,
-} from "@/lib/backend/transcript-artifacts";
+import type { ScopeBackend } from "@/lib/backend/scope-backend";
 import { encodeRichKey, type RichTranscriptScope } from "./rich-identity";
+import { NodeByteCache, richContentNodeId } from "./rich-byte-cache";
 import {
   clearRichConversationContent,
   decodeRichKey,
   registerProtectedRichCache,
   type RichConversationScope,
 } from "./rich-content-reset";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 /**
  * Scoped, bounded reads of published artifacts for the transcript.
@@ -33,9 +30,21 @@ import {
  *   whose generation is no longer the newest requested for that conversation
  *   is discarded: a late answer from a discarded session cannot populate the
  *   current one.
- * - Settled results are an LRU bounded by count and estimated bytes; in-flight
- *   reads are de-duplicated and counted separately. Failures are not cached.
+ * - Settled results are an LRU bounded by count, keyed by `(node, key)`, whose
+ *   estimated bytes are reserved from the window's shared `artifacts` budget
+ *   (plan item 3016), so several live nodes share one bound. The node is the
+ *   one the scope's `backendId` names (`richContentNodeId`). In-flight reads
+ *   are de-duplicated and counted separately. Failures are not cached.
  */
+
+/**
+ * The node an artifact is read from: the reading component's
+ * `useScopeBackend()`, so a leaf's transcript reads the leaf (plan item 4007).
+ */
+export type ArtifactReader = Pick<
+  ScopeBackend,
+  "readTranscriptArtifactRepresentation" | "listTranscriptArtifactPublications"
+>;
 
 export type ArtifactReadScope = Pick<
   RichTranscriptScope,
@@ -43,7 +52,6 @@ export type ArtifactReadScope = Pick<
 >;
 
 const MAX_ENTRIES = 64;
-const MAX_BYTES = FRONTEND_RENDER_POLICY.maxSettledCacheBytes;
 /** Larger single values (e.g. big captures) are served but not retained. */
 const MAX_RETAINED_VALUE_BYTES = 4 * 1024 * 1024;
 /** Upper bound for concatenating paged UTF-8 representations. */
@@ -51,11 +59,19 @@ export const MAX_TEXT_REPRESENTATION_BYTES = 2 * 1024 * 1024;
 
 interface Settled {
   value: unknown;
-  bytes: number;
 }
 
-const settled = new Map<string, Settled>();
-let settledBytes = 0;
+const settled = new NodeByteCache<Settled>({
+  name: "artifact-requests",
+  budget: "artifacts",
+  maxEntries: MAX_ENTRIES,
+  maxEntryBytes: MAX_RETAINED_VALUE_BYTES,
+});
+/** Read keys are `[kind, backend, environment, session, generation, …]`. */
+const readNode = (key: string): string => {
+  const backendId = decodeRichKey(key)?.[1];
+  return richContentNodeId(typeof backendId === "string" ? backendId : null);
+};
 const inflight = new Map<string, Promise<unknown>>();
 const latestGeneration = new Map<string, string>();
 
@@ -75,27 +91,11 @@ export function isCurrentArtifactScopeGeneration(scope: ArtifactReadScope): bool
 }
 
 function remember(key: string, value: unknown, bytes: number): void {
-  if (bytes > MAX_RETAINED_VALUE_BYTES) return;
-  const previous = settled.get(key);
-  if (previous) settledBytes -= previous.bytes;
-  settled.delete(key);
-  settled.set(key, { value, bytes });
-  settledBytes += bytes;
-  while (settled.size > MAX_ENTRIES || settledBytes > MAX_BYTES) {
-    const oldest = settled.keys().next().value;
-    if (oldest === undefined) break;
-    settledBytes -= settled.get(oldest)!.bytes;
-    settled.delete(oldest);
-  }
+  settled.set(readNode(key), key, { value }, bytes);
 }
 
 function recall(key: string): Settled | undefined {
-  const entry = settled.get(key);
-  if (entry) {
-    settled.delete(key);
-    settled.set(key, entry);
-  }
-  return entry;
+  return settled.get(readNode(key), key);
 }
 
 /**
@@ -121,7 +121,6 @@ const readEpoch = () => cacheEpoch;
 
 export function clearArtifactRequestCache(): void {
   settled.clear();
-  settledBytes = 0;
   inflight.clear();
   latestGeneration.clear();
   clearSearchBodiesWhere(() => true);
@@ -134,18 +133,16 @@ export function clearArtifactRequestCache(): void {
  * `[backend, environment, session]`.
  */
 function clearArtifactRequestsWhere(
-  readMatches: (parts: unknown[]) => boolean,
+  readMatches: (parts: unknown[], nodeId: string | null) => boolean,
   generationMatches: (parts: unknown[]) => boolean,
 ): void {
-  for (const [key, entry] of Array.from(settled.entries())) {
-    const parts = decodeRichKey(key);
-    if (!parts || !readMatches(parts)) continue;
-    settled.delete(key);
-    settledBytes -= entry.bytes;
-  }
+  settled.deleteWhere((entry) => {
+    const parts = decodeRichKey(entry.key);
+    return parts !== null && readMatches(parts, entry.nodeId);
+  });
   for (const key of Array.from(inflight.keys())) {
     const parts = decodeRichKey(key);
-    if (parts && readMatches(parts)) inflight.delete(key);
+    if (parts && readMatches(parts, null)) inflight.delete(key);
   }
   for (const key of Array.from(latestGeneration.keys())) {
     const parts = decodeRichKey(key);
@@ -181,8 +178,21 @@ export function clearArtifactRequestsForConversation(scope: RichConversationScop
   );
 }
 
+/**
+ * A node's credential, connection or identity changed: drop what it served,
+ * by the scope's `backendId` or by the node a read is accounted to.
+ */
+export function clearArtifactRequestsForBackend(backendId: string): void {
+  clearSearchBodiesWhere((held) => (held.backendId ?? "") === backendId);
+  clearArtifactRequestsWhere(
+    (parts, nodeId) => parts[1] === backendId || nodeId === backendId,
+    (parts) => parts[0] === backendId,
+  );
+}
+
 registerProtectedRichCache("artifact-requests", {
   clearAll: clearArtifactRequestCache,
+  clearBackend: clearArtifactRequestsForBackend,
   clearEnvironment: clearArtifactRequestsForEnvironment,
   clearConversation: clearArtifactRequestsForConversation,
 });
@@ -319,6 +329,7 @@ export function noteArtifactLedgerFailure(scope: RichConversationScope, error: u
  */
 export function verifyArtifactConversation(
   scope: RichConversationScope,
+  reader: Pick<ArtifactReader, "listTranscriptArtifactPublications">,
 ): Promise<ArtifactConversationVerification> {
   const key = conversationStatusKey(scope);
   const existing = verifying.get(key);
@@ -326,7 +337,7 @@ export function verifyArtifactConversation(
   artifactConversationRevocationCounters.verifications++;
   const promise = Promise.resolve()
     .then(() =>
-      listTranscriptArtifactPublications({
+      reader.listTranscriptArtifactPublications({
         environmentId: scope.environmentId,
         logicalSessionKey: scope.logicalSessionKey,
         limit: 1,
@@ -373,14 +384,18 @@ export function resetArtifactConversationRevocations(): void {
  * A scoped read failed with `not_found` or a permission failure: decide
  * through the conversation-level ledger whether the whole scope is gone.
  */
-function noteScopedReadFailure(scope: ArtifactReadScope, error: unknown): void {
+function noteScopedReadFailure(
+  scope: ArtifactReadScope,
+  error: unknown,
+  reader: Pick<ArtifactReader, "listTranscriptArtifactPublications">,
+): void {
   if (isArtifactPermissionError(error) || artifactErrorInfo(error).code === "not_found") {
-    void verifyArtifactConversation(scope);
+    void verifyArtifactConversation(scope, reader);
   }
 }
 
 export function artifactRequestCacheStats(): { entries: number; bytes: number; inflight: number } {
-  return { entries: settled.size, bytes: settledBytes, inflight: inflight.size };
+  return { entries: settled.size, bytes: settled.bytes, inflight: inflight.size };
 }
 
 export class StaleArtifactScopeError extends Error {
@@ -486,13 +501,16 @@ export function useScopedArtifactRead<T>(
   } | null>(null);
   const [attempt, setAttempt] = useState(0);
   const epoch = useSyncExternalStore(subscribeEpoch, readEpoch, readEpoch);
+  const reader = useScopeBackend();
   const runRef = useRef(run);
   const sizeRef = useRef(sizeOf);
   const scopeRef = useRef(scope);
+  const readerRef = useRef(reader);
   useLayoutEffect(() => {
     runRef.current = run;
     sizeRef.current = sizeOf;
     scopeRef.current = scope;
+    readerRef.current = reader;
   });
 
   useEffect(() => {
@@ -515,7 +533,7 @@ export function useScopedArtifactRead<T>(
         if (error instanceof StaleArtifactScopeError) return;
         // Even for an unmounted reader: deletion and revocation clear the
         // conversation's protected content wherever it is cached.
-        noteScopedReadFailure(scope, error);
+        noteScopedReadFailure(scope, error, readerRef.current);
         if (cancelled) return;
         setResult({
           key,
@@ -552,6 +570,7 @@ export function useArtifactPublication(
   scope: ArtifactReadScope | null,
   publicationId: string | null,
 ): ArtifactRequestState<ArtifactPublicationView> & { retry: () => void } {
+  const nodeBackend = useScopeBackend();
   const key =
     scope && publicationId
       ? encodeRichKey(["publication", ...artifactScopeKeyParts(scope), publicationId])
@@ -560,7 +579,7 @@ export function useArtifactPublication(
     key,
     scope,
     () =>
-      getTranscriptArtifactPublication({
+      nodeBackend.getTranscriptArtifactPublication({
         environmentId: scope!.environmentId,
         logicalSessionKey: scope!.logicalSessionKey,
         publicationId: publicationId!,
@@ -578,6 +597,7 @@ export function useArtifactPublication(
  * revision, representation and whole-document hash as the first.
  */
 export async function readWholeRepresentation(
+  reader: Pick<ArtifactReader, "readTranscriptArtifactRepresentation">,
   scope: ArtifactReadScope,
   publicationId: string,
   representation: ArtifactRepresentation,
@@ -592,7 +612,7 @@ export async function readWholeRepresentation(
     representation,
     ...(captureIndex !== undefined ? { captureIndex } : {}),
   };
-  const first = await readTranscriptArtifactRepresentation(
+  const first = await reader.readTranscriptArtifactRepresentation(
     options.maxBytes !== undefined
       ? { ...base, sourceRange: { offsetBytes: 0, limitBytes: maxBytes } }
       : base,
@@ -605,7 +625,7 @@ export async function readWholeRepresentation(
   let total = first.byteLength;
   while (next !== null && total < maxBytes) {
     const offset: number = next;
-    const page: ArtifactRepresentationResponse = await readTranscriptArtifactRepresentation({
+    const page: ArtifactRepresentationResponse = await reader.readTranscriptArtifactRepresentation({
       ...base,
       sourceRange: {
         offsetBytes: offset,
@@ -637,6 +657,7 @@ export function useArtifactRepresentation(
   representation: ArtifactRepresentation,
   options: { enabled?: boolean; captureIndex?: number } = {},
 ): ArtifactRequestState<ArtifactRepresentationResponse> & { retry: () => void } {
+  const nodeBackend = useScopeBackend();
   const enabled = options.enabled ?? true;
   const key =
     enabled && scope && publicationId
@@ -651,7 +672,14 @@ export function useArtifactRepresentation(
   return useScopedArtifactRead(
     key,
     scope,
-    () => readWholeRepresentation(scope!, publicationId!, representation, options.captureIndex),
+    () =>
+      readWholeRepresentation(
+        nodeBackend,
+        scope!,
+        publicationId!,
+        representation,
+        options.captureIndex,
+      ),
     (value) => value.data.length,
   );
 }

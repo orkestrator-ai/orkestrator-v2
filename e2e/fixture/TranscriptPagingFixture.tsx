@@ -9,6 +9,7 @@ import { MultiReviewReviewerTab } from "../../apps/web/src/components/review/Mul
 import { useNativeAgentProjectionStore } from "../../apps/web/src/stores/nativeAgentProjectionStore";
 import { useEnvironmentStore } from "../../apps/web/src/stores/environmentStore";
 import { disableAutoLoadEarlier } from "../../apps/web/src/components/native-agent/useAutoLoadEarlier";
+import { appCommandStore } from "../../apps/web/src/test/app-command-store";
 
 const identity: NativeAgentViewIdentity = {
   backendInstanceId: "paging-fixture",
@@ -158,15 +159,16 @@ const pageRequests: string[] = [];
 (window as unknown as { pagingFixtureRequests: string[] }).pagingFixtureRequests = pageRequests;
 /** How many rows the tab holds right now, for tests sampling every frame. */
 (window as unknown as { pagingFixtureRowCount: () => number }).pagingFixtureRowCount = () =>
-  useNativeAgentProjectionStore.getState().projections.get(identity.logicalSessionKey)?.messages
-    .length ?? 0;
+  appCommandStore(useNativeAgentProjectionStore.def)
+    .getState()
+    .projections.get(identity.logicalSessionKey)?.messages.length ?? 0;
 /** Starts revision overflow after the test has installed its frame probe. */
 (window as unknown as { startPagingFixtureChurn: () => void }).startPagingFixtureChurn = () => {
   churn = true;
 };
 /** Appends live rows without focusing a control or changing the reader's intent. */
 (window as unknown as { appendPagingFixtureRows: () => void }).appendPagingFixtureRows = () => {
-  const store = useNativeAgentProjectionStore.getState();
+  const store = appCommandStore(useNativeAgentProjectionStore.def).getState();
   const projection = store.projections.get(identity.logicalSessionKey);
   if (!projection) throw new Error("Paging transcript not ready");
   store.setProjection(identity.logicalSessionKey, {
@@ -184,7 +186,7 @@ const pageRequests: string[] = [];
   });
 };
 function installBackend() {
-  useEnvironmentStore.setState({
+  appCommandStore(useEnvironmentStore.def).setState({
     environments: [
       {
         id: identity.environmentId,

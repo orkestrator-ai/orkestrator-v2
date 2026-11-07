@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:f8631faf351e7ed8f42e9b5f8bbb56799981b6c52d9e8f4098c9fe133bfa301f",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "controllerId": {},
+        "coordinatorEnvironmentId": {},
+        "coordinatorTabId": {},
+        "environmentId": {}
+      },
+      "type": "object"
+    }
+  }
+}

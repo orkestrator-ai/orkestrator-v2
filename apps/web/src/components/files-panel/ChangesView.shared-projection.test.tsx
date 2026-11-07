@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import {
   CHANGE_PROJECTION_CHANGED_EVENT,
   type ChangeProjection,
@@ -9,7 +10,6 @@ import { EnvironmentItem } from "@/components/environments/EnvironmentItem";
 import { invoke } from "@/lib/native/backend";
 import { listen } from "@/lib/native/events";
 import { resetChangeSubscriptionsForTests } from "@/lib/changes/subscriptions";
-import { useFilesPanelStore } from "@/stores";
 import type { Environment } from "@/types";
 import { restoreMatchMedia, setMobileViewport } from "../../../../../tests/mocks/match-media";
 import {
@@ -20,6 +20,7 @@ import {
 } from "./change-projection-test-fixture";
 import { ChangesView } from "./ChangesView";
 import { FilesPanelHeader } from "./FilesPanelHeader";
+import { setFilesPanelTestState } from "@/test/files-panel-state";
 
 // `@/lib/native/backend` and `@/lib/native/events` are mocked in tests/setup.ts.
 const invokeMock = invoke as unknown as ReturnType<typeof mock>;
@@ -43,7 +44,7 @@ const environment = {
 
 function renderSurfaces() {
   const noop = () => undefined;
-  return render(
+  return renderInAppCommandScope(
     <TerminalProvider>
       <EnvironmentItem
         environment={environment}
@@ -81,7 +82,7 @@ describe("V01: one backend projection across the sidebar badge and Files → Cha
     resetChangeSubscriptionsForTests();
     resetChangeProjectionStore();
     setMobileViewport(false);
-    useFilesPanelStore.setState({
+    setFilesPanelTestState({
       isOpen: true,
       activeTab: "changes",
       changes: [],

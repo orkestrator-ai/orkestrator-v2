@@ -1,9 +1,10 @@
 import type { BugReportClientContext } from "@orkestrator/protocol/bug-report";
 import { hostUpdateChannelOfVersion } from "@orkestrator/protocol/host-maintenance";
 import { BUNDLED_APP_VERSION } from "@/lib/app-version";
-import { useEnvironmentStore } from "@/stores/environmentStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
-import { useUIStore } from "@/stores/uiStore";
+import { getWindowScope } from "@/lib/node-scope/app-window-scope";
+import { environmentStore } from "@/stores/environmentStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
+import { selectionOnScope } from "@/stores/windowSelectionStore";
 import type { PaneNode } from "@/types/paneLayout";
 import { recentRendererErrors } from "./renderer-errors";
 
@@ -29,12 +30,16 @@ export function collectBugReportClientContext(machine: {
   const desktop = Boolean(window.orkestrator);
   const electronVersion = /\bElectron\/([\d.]+)/.exec(navigator.userAgent)?.[1];
   const channel = hostUpdateChannelOfVersion(BUNDLED_APP_VERSION);
-  const { selectedProjectId, selectedEnvironmentId } = useUIStore.getState();
+  // What this window's own node shows: another node's view is its own report's.
+  const scope = getWindowScope().commandScope();
+  const selection = selectionOnScope(scope);
+  const selectedProjectId = selection?.projectId ?? null;
+  const selectedEnvironmentId = selection?.environmentId ?? null;
   const environment = selectedEnvironmentId
-    ? useEnvironmentStore.getState().getEnvironmentById(selectedEnvironmentId)
+    ? scope.store(environmentStore).getState().getEnvironmentById(selectedEnvironmentId)
     : undefined;
   const pane = selectedEnvironmentId
-    ? usePaneLayoutStore.getState().environments.get(selectedEnvironmentId)
+    ? scope.store(paneLayoutStore).getState().environments.get(selectedEnvironmentId)
     : undefined;
   const tabType = pane ? activeTabType(pane.root, pane.activePaneId) : undefined;
   return {

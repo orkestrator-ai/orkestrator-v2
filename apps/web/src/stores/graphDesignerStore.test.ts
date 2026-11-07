@@ -11,12 +11,13 @@ import type { GraphTemplateV1 } from "@orkestrator/protocol/graphs/template";
 import { addGraphNode, blankGraphTemplate } from "@/components/graph-designer/graph-designer-edits";
 import { GRAPH_DESIGNER_HISTORY_LIMIT } from "@/components/graph-designer/graph-designer-history";
 import {
+  graphDesignerStore,
   graphDesignerTab,
   graphDraftDirty,
   isGraphRevisionConflict,
   parseGraphDraft,
-  useGraphDesignerStore,
 } from "./graphDesignerStore";
+import { appCommandStore } from "@/test/app-command-store";
 
 const invokeMock = nativeInvoke as unknown as ReturnType<typeof mock>;
 type Handler = (args: Record<string, unknown>) => unknown;
@@ -40,7 +41,7 @@ function calls(command: string) {
 const pipeline = builtInDetail("build-pipeline");
 
 beforeEach(() => {
-  useGraphDesignerStore.setState({ libraries: new Map(), tabs: new Map() });
+  appCommandStore(graphDesignerStore).setState({ libraries: new Map(), tabs: new Map() });
 });
 
 afterEach(() => {
@@ -51,9 +52,9 @@ describe("graphDesignerStore", () => {
   test("loads the library per project and keeps the last result on a failed reload", async () => {
     const list = listResult([pipeline.summary]);
     install({ graph_templates_list: () => list });
-    await useGraphDesignerStore.getState().loadLibrary("project-1");
+    await appCommandStore(graphDesignerStore).getState().loadLibrary("project-1");
     expect(calls("graph_templates_list")).toEqual([{ projectId: "project-1" }]);
-    expect(useGraphDesignerStore.getState().libraries.get("project-1")).toEqual({
+    expect(appCommandStore(graphDesignerStore).getState().libraries.get("project-1")).toEqual({
       status: "ready",
       result: list,
       error: null,
@@ -63,8 +64,8 @@ describe("graphDesignerStore", () => {
         throw new Error("backend offline");
       },
     });
-    await useGraphDesignerStore.getState().loadLibrary("project-1");
-    expect(useGraphDesignerStore.getState().libraries.get("project-1")).toEqual({
+    await appCommandStore(graphDesignerStore).getState().loadLibrary("project-1");
+    expect(appCommandStore(graphDesignerStore).getState().libraries.get("project-1")).toEqual({
       status: "error",
       result: list,
       error: "backend offline",
@@ -76,7 +77,9 @@ describe("graphDesignerStore", () => {
       graph_template_get: () => pipeline,
       graph_template_compile: () => compileResponse(pipeline.template),
     });
-    await useGraphDesignerStore.getState().openTemplate("tab-1", pipeline.summary.ref, "project-1");
+    await appCommandStore(graphDesignerStore)
+      .getState()
+      .openTemplate("tab-1", pipeline.summary.ref, "project-1");
     expect(calls("graph_template_get")).toEqual([
       { ref: pipeline.summary.ref, projectId: "project-1" },
     ]);
@@ -106,7 +109,7 @@ describe("graphDesignerStore", () => {
           ((args.ref as { id: string }).id === "build-pipeline" ? pipeline : multi).template,
         ),
     });
-    const store = useGraphDesignerStore.getState();
+    const store = appCommandStore(graphDesignerStore).getState();
     const first = store.openTemplate("tab-1", pipeline.summary.ref, null);
     await store.openTemplate("tab-1", multi.summary.ref, null);
     releaseFirst();
@@ -123,7 +126,7 @@ describe("graphDesignerStore", () => {
         throw new Error("compile failed");
       },
     });
-    await useGraphDesignerStore
+    await appCommandStore(graphDesignerStore)
       .getState()
       .openTemplate("tab-1", { scope: "user", id: "gone" }, null);
     const tab = graphDesignerTab("tab-1");
@@ -147,7 +150,7 @@ describe("graphDesignerStore", () => {
       graph_template_get: () => imported,
       graph_template_compile: () => compileResponse(imported.template),
     });
-    const store = useGraphDesignerStore.getState();
+    const store = appCommandStore(graphDesignerStore).getState();
     const refused = await store.importTemplate("tab-1", "{", null);
     expect(refused).toMatchObject({ ok: false, errors: [{ code: "invalid_json" }] });
     expect(calls("graph_templates_list")).toHaveLength(0);
@@ -169,7 +172,7 @@ describe("graphDesignerStore", () => {
       graph_template_get: () => copy,
       graph_template_compile: () => compileResponse(copy.template),
     });
-    const store = useGraphDesignerStore.getState();
+    const store = appCommandStore(graphDesignerStore).getState();
     await store.duplicateTemplate("tab-1", pipeline.summary, "project-1");
     expect(calls("graph_template_duplicate")[0]).toEqual({
       ref: pipeline.summary.ref,
@@ -206,8 +209,8 @@ describe("graphDesignerStore", () => {
       trust: "untrusted" as const,
       digest: "abc",
     };
-    await useGraphDesignerStore.getState().setTrust(summary, "approve");
-    await useGraphDesignerStore.getState().setTrust(summary, "revoke");
+    await appCommandStore(graphDesignerStore).getState().setTrust(summary, "approve");
+    await appCommandStore(graphDesignerStore).getState().setTrust(summary, "revoke");
     expect(calls("graph_template_trust")).toEqual([
       {
         projectId: "p",
@@ -229,8 +232,10 @@ describe("graphDesignerStore", () => {
         graph_template_get: () => mine,
         graph_template_compile: () => compileResponse(mine.template),
       });
-      await useGraphDesignerStore.getState().openTemplate("tab-1", mine.summary.ref, null);
-      useGraphDesignerStore.getState().openEditor("tab-1");
+      await appCommandStore(graphDesignerStore)
+        .getState()
+        .openTemplate("tab-1", mine.summary.ref, null);
+      appCommandStore(graphDesignerStore).getState().openEditor("tab-1");
     }
 
     test("opens only for user templates, on the stored revision", async () => {
@@ -238,8 +243,10 @@ describe("graphDesignerStore", () => {
         graph_template_get: () => pipeline,
         graph_template_compile: () => compileResponse(pipeline.template),
       });
-      await useGraphDesignerStore.getState().openTemplate("tab-b", pipeline.summary.ref, null);
-      useGraphDesignerStore.getState().openEditor("tab-b");
+      await appCommandStore(graphDesignerStore)
+        .getState()
+        .openTemplate("tab-b", pipeline.summary.ref, null);
+      appCommandStore(graphDesignerStore).getState().openEditor("tab-b");
       expect(graphDesignerTab("tab-b").editor).toBeNull();
 
       await openMine();
@@ -251,7 +258,7 @@ describe("graphDesignerStore", () => {
 
     test("records each edit as an undo step, coalescing typing in one field", async () => {
       await openMine();
-      const store = useGraphDesignerStore.getState();
+      const store = appCommandStore(graphDesignerStore).getState();
       store.edit("tab-1", "Name", rename("M"), { coalesce: "name" });
       store.edit("tab-1", "Name", rename("Mi"), { coalesce: "name" });
       store.edit("tab-1", "Name", rename("Min"), { coalesce: "name" });
@@ -281,7 +288,7 @@ describe("graphDesignerStore", () => {
 
     test("bounds the undo history", async () => {
       await openMine();
-      const store = useGraphDesignerStore.getState();
+      const store = appCommandStore(graphDesignerStore).getState();
       for (let index = 0; index < GRAPH_DESIGNER_HISTORY_LIMIT + 25; index++) {
         store.edit("tab-1", `Edit ${index}`, rename(`Name ${index}`));
       }
@@ -292,7 +299,7 @@ describe("graphDesignerStore", () => {
 
     test("compiles the draft in the browser", async () => {
       await openMine();
-      const store = useGraphDesignerStore.getState();
+      const store = appCommandStore(graphDesignerStore).getState();
       store.edit("tab-1", "Bound", (template) => {
         const next = structuredClone(template);
         next.loops![0]!.maxIterations = 11;
@@ -322,7 +329,7 @@ describe("graphDesignerStore", () => {
         graph_template_save: () => saved,
         graph_templates_list: () => listResult([saved.summary]),
       });
-      const store = useGraphDesignerStore.getState();
+      const store = appCommandStore(graphDesignerStore).getState();
       store.edit("tab-1", "Name", rename("Renamed"));
       expect(await store.saveDraft("tab-1")).toEqual(saved);
       const save = calls("graph_template_save")[0]!;
@@ -346,7 +353,7 @@ describe("graphDesignerStore", () => {
         graph_template_import: () => ({ ok: true, detail: copy }),
         graph_templates_list: () => listResult([copy.summary]),
       });
-      const store = useGraphDesignerStore.getState();
+      const store = appCommandStore(graphDesignerStore).getState();
       store.edit("tab-1", "Name", rename("Ours"));
       expect(await store.saveDraft("tab-1")).toBeNull();
       let tab = graphDesignerTab("tab-1");
@@ -366,7 +373,7 @@ describe("graphDesignerStore", () => {
       await openMine();
       const latest = userDetail({ ...mine.template, name: "Theirs" }, 6);
       install({ graph_template_get: () => latest });
-      const store = useGraphDesignerStore.getState();
+      const store = appCommandStore(graphDesignerStore).getState();
       store.edit("tab-1", "Name", rename("Ours"));
       await store.reloadDraft("tab-1");
       const editor = graphDesignerTab("tab-1").editor!;
@@ -377,7 +384,7 @@ describe("graphDesignerStore", () => {
 
     test("a new draft saves as a new template, and refuses to save while incomplete", async () => {
       install({});
-      const store = useGraphDesignerStore.getState();
+      const store = appCommandStore(graphDesignerStore).getState();
       store.openDraft("tab-n", blankGraphTemplate({ id: "fresh", name: "Fresh" }), "project-1");
       let tab = graphDesignerTab("tab-n");
       expect(tab.selected).toBeNull();
@@ -416,7 +423,7 @@ describe("graphDesignerStore", () => {
           throw new Error("Template fresh is at revision 2, not 0; reload it before saving");
         },
       });
-      const store = useGraphDesignerStore.getState();
+      const store = appCommandStore(graphDesignerStore).getState();
       store.openDraft(
         "tab-n",
         addGraphNode(blankGraphTemplate({ id: "fresh" }), { kind: "agent" }, { x: 0, y: 0 })
@@ -430,7 +437,7 @@ describe("graphDesignerStore", () => {
 
     test("records an acknowledgement against the warning's digest as an undoable edit", async () => {
       await openMine();
-      const store = useGraphDesignerStore.getState();
+      const store = appCommandStore(graphDesignerStore).getState();
       const digest = "a".repeat(64);
       store.acknowledge("tab-1", {
         kind: "taint",

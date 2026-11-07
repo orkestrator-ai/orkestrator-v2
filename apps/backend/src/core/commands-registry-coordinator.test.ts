@@ -135,7 +135,8 @@ describe("coordinator command registry", () => {
     });
     await expect(run({ ...args, source: "typed" }, context)).rejects.toThrow("Expected source");
     await expect(run({ ...args, owner: ".." }, context)).rejects.toThrow("Expected owner");
-    await expect(run({ ...args, extra: true }, context)).rejects.toThrow("Unexpected arguments");
+    // A defined command drops an unknown key (tolerant reader), so the call is the plain watch.
+    expect(await run({ ...args, extra: true }, context)).toMatchObject({ watched: true });
     expect(
       storage.watchedPullRequests.listWatchedPullRequests(project.id).map((entry) => entry.key),
     ).toEqual(["acme/app#12"]);

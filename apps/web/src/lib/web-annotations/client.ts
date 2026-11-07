@@ -1,11 +1,21 @@
 /**
  * Typed renderer client for the backend web annotation service.
  *
- * Every call goes through the existing authenticated `invoke` transport. The
- * backend owns annotations; this module only shapes requests, classifies the
- * contract's typed errors, and derives stable operation identities so a
- * retry after a lost response can be recognized instead of repeated.
+ * Every call goes through the `web-annotations` domain client (plan item
+ * 7004, `@orkestrator/protocol/contract/domains/web-annotations`) over the
+ * existing authenticated `invoke` transport: a backend that advertises the
+ * domain gets the contract envelope and its results are decoded with the
+ * command's schema; a pre-contract backend (and another machine reached
+ * through the command node) gets today's call. The backend owns annotations;
+ * this module only shapes requests, classifies the contract's typed errors,
+ * and derives stable operation identities so a retry after a lost response
+ * can be recognized instead of repeated.
  */
+import {
+  webAnnotationsClient,
+  type WebAnnotationsApi,
+} from "@orkestrator/protocol/contract/domains/web-annotations";
+import { incompatibilityOfAnyCommand } from "@orkestrator/protocol/contract/errors";
 import {
   WEB_ANNOTATION_CAPACITY,
   WEB_ANNOTATION_COMMANDS,
@@ -23,21 +33,63 @@ import {
   type WebAnnotationErrorDetail,
   type WebAnnotationRolloutMode,
 } from "@orkestrator/protocol/web-annotations";
-import { machineInvoke, type AccountMachine } from "@/lib/backend/agent-accounts";
+import {
+  commandBackendClient,
+  scopeBackendClient,
+  type AccountMachine,
+  machineBackendClient,
+} from "@/lib/backend/client";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { defineScopedSlot, isAppCommandScope } from "@/lib/node-scope-slots";
+import { domainApi } from "@/lib/node-scope/domains/domain-api";
 
 export type WebAnnotationCommandName = keyof WebAnnotationCommandArgs;
 
-/** `machine` asks another machine through the command node, as Settings does. */
+type WebAnnotationsApiGetter = () => WebAnnotationsApi;
+
+/** This view's backend (the command scope's client). */
+const commandScopeApi: WebAnnotationsApiGetter = () =>
+  domainApi(commandBackendClient, webAnnotationsClient);
+
+/** Other machines Settings asks through the command node, by node (`null`: the command node). */
+const machineApis = new Map<string | null, WebAnnotationsApiGetter>();
+const MAX_MACHINE_APIS = 64;
+
+function apiFor(machine: AccountMachine): WebAnnotationsApiGetter {
+  if (machine === undefined) return commandScopeApi;
+  let api = machineApis.get(machine);
+  if (!api) {
+    if (machineApis.size >= MAX_MACHINE_APIS) machineApis.clear();
+    const machineClient = machineBackendClient(commandBackendClient, machine);
+    api = () => domainApi(machineClient, webAnnotationsClient);
+    machineApis.set(machine, api);
+  }
+  return api;
+}
+
+/** A node scope's own domain client (plan item 3012), made once per scope. */
+const scopeApis = defineScopedSlot<WebAnnotationsApiGetter>("web-annotations-domain", (scope) => {
+  const client = scopeBackendClient(scope);
+  return () => domainApi(client, webAnnotationsClient);
+});
+
+/**
+ * `machine` asks another machine through the command node, as Settings does.
+ * Without one, `scope` names the node whose annotations these are (plan item
+ * 3012): its own client; this view's backend when omitted or the app's
+ * command scope.
+ */
 export function webAnnotationCommand<K extends WebAnnotationCommandName>(
   command: K,
   args: WebAnnotationCommandArgs[K],
   machine?: AccountMachine,
+  scope?: NodeScope,
 ): Promise<WebAnnotationCommandResults[K]> {
-  return machineInvoke<WebAnnotationCommandResults[K]>(
-    machine,
-    command,
-    args as Record<string, unknown>,
-  );
+  const api =
+    machine === undefined && scope && !isAppCommandScope(scope)
+      ? scopeApis(scope)
+      : apiFor(machine);
+  return api().run(command, args);
 }
 
 export function errorMessage(error: unknown): string {
@@ -53,8 +105,9 @@ export function errorMessage(error: unknown): string {
 /** Typed codes from the error trailer, plus transport-level kinds. */
 export type WebAnnotationErrorKind = WebAnnotationErrorCode | "unsupported" | "other";
 
+/** Other wordings a non-Orkestrator or proxy answer may use; the backend's own is coded. */
 const UNSUPPORTED_COMMAND =
-  /unknown (backend )?command|unsupported command|command not found|no handler for|not a registered command/i;
+  /unsupported command|command not found|no handler for|not a registered command/i;
 
 /**
  * Typed detail of a failure (see `web-annotations-errors.ts`) and its human
@@ -83,7 +136,7 @@ export function webAnnotationErrorDetail(error: unknown): {
 export function classifyWebAnnotationError(error: unknown): WebAnnotationErrorKind {
   const { detail, message } = webAnnotationErrorDetail(error);
   if (detail) return detail.code;
-  if (UNSUPPORTED_COMMAND.test(message)) return "unsupported";
+  if (incompatibilityOfAnyCommand(error) || UNSUPPORTED_COMMAND.test(message)) return "unsupported";
   return "other";
 }
 
@@ -270,11 +323,15 @@ function isCapabilities(value: unknown): value is WebAnnotationCapabilities {
  */
 export async function fetchWebAnnotationCapabilities(
   environmentId?: string,
+  /** The node asked (plan item 3012); this view's backend when omitted. */
+  scope?: NodeScope,
 ): Promise<CapabilityFetch> {
   try {
     const result = await webAnnotationCommand(
       WEB_ANNOTATION_COMMANDS.capabilities,
       environmentId ? { environmentId } : {},
+      undefined,
+      scope,
     );
     if (!isCapabilities(result)) {
       return {

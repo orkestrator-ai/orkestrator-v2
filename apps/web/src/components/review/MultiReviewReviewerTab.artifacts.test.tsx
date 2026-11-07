@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { ReactNode } from "react";
 import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
 
@@ -49,8 +50,9 @@ import {
   workflowPublicationView,
   workflowPublishCall,
 } from "@/lib/chat/workflow-artifact-test-support";
-import { useMultiReviewStore } from "@/stores/multiReviewStore";
+import { multiReviewStore } from "@/stores/multiReviewStore";
 import { MultiReviewReviewerTab } from "./MultiReviewReviewerTab";
+import { appCommandStore } from "@/test/app-command-store";
 
 const invokeMock = invoke as unknown as ReturnType<typeof mock>;
 const STARTED_AT = "2026-10-20T10:00:00.000Z";
@@ -113,7 +115,7 @@ beforeEach(() => {
   clearArtifactRequestCache();
   clearArtifactPublicationCache();
   invokeMock.mockReset();
-  useMultiReviewStore.setState({ workflows: new Map() });
+  appCommandStore(multiReviewStore).setState({ workflows: new Map() });
 });
 
 afterEach(() => {
@@ -140,8 +142,8 @@ describe("published artifacts in a Multi Review reviewer tab", () => {
         publications: [workflowPublicationView(workflowArtifactRef("art_other0001", "Not mine"))],
       },
     ]);
-    useMultiReviewStore.getState().replaceWorkflow(workflow());
-    const { container } = render(
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow());
+    const { container } = renderInAppCommandScope(
       <MultiReviewReviewerTab
         data={{
           environmentId: "env-review",
@@ -176,8 +178,8 @@ describe("published artifacts in a Multi Review reviewer tab", () => {
     installWorkflowArtifactBackend(invokeMock, []);
     const pending = workflow();
     pending.reviewers = [{ ...pending.reviewers[0]!, sessionKey: undefined }];
-    useMultiReviewStore.getState().replaceWorkflow(pending);
-    render(
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(pending);
+    renderInAppCommandScope(
       <MultiReviewReviewerTab
         data={{
           environmentId: "env-review",

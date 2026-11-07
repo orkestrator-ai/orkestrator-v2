@@ -6,9 +6,10 @@ import { useAccountMachineStore } from "../../apps/web/src/components/settings/a
 import { useConfigStore } from "../../apps/web/src/stores/configStore";
 import { useRemoteWorkspaceStore } from "../../apps/web/src/stores/remoteWorkspaceStore";
 import type { AppConfig, GlobalConfig } from "../../apps/web/src/types";
+import { appCommandStore } from "../../apps/web/src/test/app-command-store";
 
 function install() {
-  const base = useConfigStore.getState().config;
+  const base = appCommandStore(useConfigStore.def).getState().config;
   const directLeaf = new URLSearchParams(window.location.search).has("direct-leaf");
   const read = (owner: string): AppConfig =>
     JSON.parse(
@@ -87,15 +88,16 @@ function install() {
         return saved;
       }
       case "get_backend_profile":
-        return { revision: 1, displayName: "Leaf", colorToken: "blue", updatedAt: "" };
+        return {
+          revision: 1,
+          displayName: owner === "command" ? "Command" : owner === "leaf" ? "Leaf" : "Other",
+          colorToken: "blue",
+          updatedAt: "",
+        };
       case "get_node_status":
         return { nodeId: "command" };
       case "get_node_summaries":
-        return {
-          selfId: "command",
-          nodes,
-          self: { nodeId: "command", displayName: "Command", projects: [], environments: [] },
-        };
+        return { selfId: "command", nodes };
       case "get_agent_model_catalog_cache":
         return { schemaVersion: 1 };
       case "get_log_directory":
@@ -105,34 +107,29 @@ function install() {
     }
   };
   const native = window.orkestrator!;
+  // A directly opened leaf is its own window's node; otherwise the window is
+  // the command node's, reaching the other machines through it, with the
+  // leaf's workspace shown in its tree.
   window.orkestrator = {
     ...native,
     listen: () => () => {},
     invoke: async <T,>(command: string, args?: Record<string, unknown>) =>
-      answer("leaf", command, args) as T,
+      (directLeaf
+        ? answer("leaf", command, args)
+        : command === "invoke_on_node"
+          ? {
+              outcome: "ok",
+              result: answer(
+                String(args?.nodeId),
+                String(args?.command),
+                args?.args as Record<string, unknown>,
+              ),
+            }
+          : answer("command", command, args)) as T,
   };
-  window.orkestratorPortal = {
-    ...native,
-    listen: () => () => {},
-    invoke: async <T,>(command: string, args?: Record<string, unknown>) =>
-      (command === "invoke_on_node"
-        ? {
-            outcome: "ok",
-            result: answer(
-              String(args?.nodeId),
-              String(args?.command),
-              args?.args as Record<string, unknown>,
-            ),
-          }
-        : answer("command", command, args)) as T,
-  };
-  if (directLeaf) {
-    delete window.orkestratorWorkspaceTarget;
-    delete window.orkestratorPortal;
-  } else {
-    window.orkestratorWorkspaceTarget = { nodeId: "leaf", nodeName: "Leaf", path: "direct" };
-  }
-  useRemoteWorkspaceStore.setState({ active: null });
+  useRemoteWorkspaceStore.setState({
+    active: directLeaf ? null : { nodeId: "leaf", projectId: null, environmentId: null },
+  });
   useAccountMachineStore.getState().choose(undefined);
   return true;
 }

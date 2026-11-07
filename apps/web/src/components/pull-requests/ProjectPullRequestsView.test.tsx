@@ -1,10 +1,14 @@
 import { afterEach, beforeEach, expect, mock, test } from "bun:test";
 import { useEffect } from "react";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { TerminalProvider, useTerminalContext } from "@/contexts/TerminalContext";
-import { useProjectPullRequestsStore } from "@/stores/projectPullRequestsStore";
-import { useFilesPanelStore } from "@/stores/filesPanelStore";
-import { useUIStore } from "@/stores/uiStore";
+import {
+  mergePersistedProjectPullRequests,
+  projectPullRequestsStore,
+} from "@/stores/projectPullRequestsStore";
+import { filesPanelStore, mergePersistedFilesPanelState } from "@/stores/filesPanelStore";
+import { uiStore } from "@/stores/uiStore";
 import { FilesPanelPullRequests } from "@/components/files-panel/FilesPanelPullRequests";
 import { FilesPanelHeader } from "@/components/files-panel/FilesPanelHeader";
 import { ProjectPullRequestsView } from "./ProjectPullRequestsView";
@@ -17,12 +21,13 @@ import {
   resetBackend,
   resetPullRequestsStore,
 } from "./pull-request-test-fixtures";
+import { appCommandStore } from "@/test/app-command-store";
 
 beforeEach(() => {
   resetPullRequestsStore();
-  useProjectPullRequestsStore.setState({ projects: {} });
-  useFilesPanelStore.setState({ pullRequestTabs: {}, activeTab: "pull-requests" });
-  useUIStore.setState({ selectedProjectId: "project", selectedEnvironmentId: "env" });
+  appCommandStore(projectPullRequestsStore).setState({ projects: {} });
+  appCommandStore(filesPanelStore).setState({ pullRequestTabs: {}, activeTab: "pull-requests" });
+  appCommandStore(uiStore).setState({ selectedProjectId: "project", selectedEnvironmentId: "env" });
   installBackend({
     list_github_pull_requests: () => ({
       repository: { owner: "acme", repo: "widget", fullName: "acme/widget", htmlUrl: "" },
@@ -46,22 +51,28 @@ afterEach(() => {
 });
 
 test("project host opens, focuses, closes and restores tabs across projects", async () => {
-  const { rerender } = render(<ProjectPullRequestsView projectId="project" />);
-  act(() => useProjectPullRequestsStore.getState().openPullRequest("project", prRef));
+  const { rerender } = renderInAppCommandScope(<ProjectPullRequestsView projectId="project" />);
+  act(() => appCommandStore(projectPullRequestsStore).getState().openPullRequest("project", prRef));
   expect(await screen.findByRole("heading", { name: "Detail 42" })).toBeTruthy();
   fireEvent.click(screen.getByRole("tab", { name: "Pull requests" }));
   act(() =>
-    useProjectPullRequestsStore.getState().openPullRequest("project", { ...prRef, number: 43 }),
+    appCommandStore(projectPullRequestsStore)
+      .getState()
+      .openPullRequest("project", { ...prRef, number: 43 }),
   );
   expect(await screen.findByRole("heading", { name: "Detail 43" })).toBeTruthy();
   fireEvent.click(screen.getByRole("tab", { name: /#42/ }));
   expect(await screen.findByRole("heading", { name: "Detail 42" })).toBeTruthy();
   // Reopening requests the code view without adding a duplicate project tab.
-  act(() => useProjectPullRequestsStore.getState().openPullRequest("project", prRef, "code"));
+  act(() =>
+    appCommandStore(projectPullRequestsStore).getState().openPullRequest("project", prRef, "code"),
+  );
   await waitFor(() =>
     expect(screen.getByRole("tab", { name: "Code" }).getAttribute("aria-selected")).toBe("true"),
   );
-  expect(useProjectPullRequestsStore.getState().projects.project?.tabs).toHaveLength(2);
+  expect(appCommandStore(projectPullRequestsStore).getState().projects.project?.tabs).toHaveLength(
+    2,
+  );
   rerender(<ProjectPullRequestsView projectId="other" />);
   expect(await screen.findByText("Pull request 42")).toBeTruthy();
   expect(screen.queryByRole("heading", { name: "Detail 42" }) === null).toBe(true);
@@ -70,12 +81,9 @@ test("project host opens, focuses, closes and restores tabs across projects", as
   fireEvent.click(screen.getByRole("button", { name: /Close acme\/widget #42/ }));
   expect(await screen.findByRole("heading", { name: "Detail 43" })).toBeTruthy();
   // Simulate persisted reload: the saved refs and summary survive, view requests reset.
-  const state = useProjectPullRequestsStore.getState();
-  const restored = useProjectPullRequestsStore.persist.getOptions().merge!(
-    { projects: state.projects },
-    state,
-  );
-  act(() => useProjectPullRequestsStore.setState(restored));
+  const state = appCommandStore(projectPullRequestsStore).getState();
+  const restored = mergePersistedProjectPullRequests({ projects: state.projects }, state);
+  act(() => appCommandStore(projectPullRequestsStore).setState(restored));
   rerender(<ProjectPullRequestsView projectId="project" />);
   expect(await screen.findByRole("heading", { name: "Detail 43" })).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: /Close acme\/widget #43/ }));
@@ -104,8 +112,8 @@ function Panel({ targetId }: { targetId: string }) {
 test("sidebar keeps targets separate, restores tabs, and expands only after main-tab creation succeeds", async () => {
   createTab.mockClear();
   createTab.mockReturnValue(false);
-  useFilesPanelStore.getState().openPullRequest("env-a", prRef, "code");
-  const { rerender } = render(
+  appCommandStore(filesPanelStore).getState().openPullRequest("env-a", prRef, "code");
+  const { rerender } = renderInAppCommandScope(
     <TerminalProvider>
       <RegisterTabs />
       <Panel targetId="env-a" />
@@ -113,7 +121,7 @@ test("sidebar keeps targets separate, restores tabs, and expands only after main
   );
   expect(await screen.findByRole("heading", { name: "Detail 42" })).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Open in main area" }));
-  expect(useFilesPanelStore.getState().pullRequestTabs["env-a"]).toHaveLength(1);
+  expect(appCommandStore(filesPanelStore).getState().pullRequestTabs["env-a"]).toHaveLength(1);
   rerender(
     <TerminalProvider>
       <RegisterTabs />
@@ -130,13 +138,10 @@ test("sidebar keeps targets separate, restores tabs, and expands only after main
   );
   expect(await screen.findByRole("heading", { name: "Detail 42" })).toBeTruthy();
   // Restoring resets the requested view but retains the PR identity.
-  const state = useFilesPanelStore.getState();
+  const state = appCommandStore(filesPanelStore).getState();
   act(() =>
-    useFilesPanelStore.setState(
-      useFilesPanelStore.persist.getOptions().merge!(
-        { pullRequestTabs: state.pullRequestTabs },
-        state,
-      ),
+    appCommandStore(filesPanelStore).setState(
+      mergePersistedFilesPanelState({ pullRequestTabs: state.pullRequestTabs }, state),
     ),
   );
   expect(await screen.findByRole("heading", { name: "Detail 42" })).toBeTruthy();
@@ -145,7 +150,7 @@ test("sidebar keeps targets separate, restores tabs, and expands only after main
   expect(createTab).toHaveBeenLastCalledWith("pull-request", {
     pullRequest: { ref: prRef, view: "summary" },
   });
-  expect(useFilesPanelStore.getState().pullRequestTabs["env-a"]).toBeUndefined();
+  expect(appCommandStore(filesPanelStore).getState().pullRequestTabs["env-a"]).toBeUndefined();
   expect(await screen.findByText("Pull request 42")).toBeTruthy();
 });
 
@@ -161,21 +166,28 @@ test("project list and nested links use the side pane without changing the proje
     get_github_pull_request: () =>
       makeDetail({ body: "See [linked PR](https://github.com/acme/api/pull/7)" }),
   });
-  render(<ProjectPullRequestsView projectId="project" />);
+  renderInAppCommandScope(<ProjectPullRequestsView projectId="project" />);
   fireEvent.click(await screen.findByText("Pull request 42"));
-  expect(useFilesPanelStore.getState().pullRequestTabs.env?.[0]?.ref).toEqual(prRef);
-  expect(useProjectPullRequestsStore.getState().projects.project?.activeKey).toBeUndefined();
-  act(() => useProjectPullRequestsStore.getState().openPullRequest("project", prRef));
-  const activeKey = useProjectPullRequestsStore.getState().projects.project?.activeKey;
+  expect(appCommandStore(filesPanelStore).getState().pullRequestTabs.env?.[0]?.ref).toEqual(prRef);
+  expect(
+    appCommandStore(projectPullRequestsStore).getState().projects.project?.activeKey,
+  ).toBeUndefined();
+  act(() => appCommandStore(projectPullRequestsStore).getState().openPullRequest("project", prRef));
+  const activeKey =
+    appCommandStore(projectPullRequestsStore).getState().projects.project?.activeKey;
   fireEvent.click(await screen.findByRole("link", { name: "linked PR" }));
-  expect(useFilesPanelStore.getState().activeTab).toBe("pull-request:acme/api#7");
-  expect(useProjectPullRequestsStore.getState().projects.project?.activeKey).toBe(activeKey);
+  expect(appCommandStore(filesPanelStore).getState().activeTab).toBe("pull-request:acme/api#7");
+  expect(appCommandStore(projectPullRequestsStore).getState().projects.project?.activeKey).toBe(
+    activeKey,
+  );
 });
 
 test("explicit main-area action opens the PR selected in the side pane", async () => {
-  render(<ProjectPullRequestsView projectId="project" />);
+  renderInAppCommandScope(<ProjectPullRequestsView projectId="project" />);
   fireEvent.click(await screen.findByText("Pull request 42"));
   fireEvent.click(await screen.findByRole("button", { name: "Open pane PR in main area" }));
   expect(await screen.findByRole("heading", { name: "Detail 42" })).toBeTruthy();
-  expect(useProjectPullRequestsStore.getState().projects.project?.tabs[0]?.ref).toEqual(prRef);
+  expect(
+    appCommandStore(projectPullRequestsStore).getState().projects.project?.tabs[0]?.ref,
+  ).toEqual(prRef);
 });

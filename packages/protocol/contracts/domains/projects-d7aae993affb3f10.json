@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "domain": "projects",
+  "commands": {
+    "add_project": {
+      "untyped": true
+    },
+    "arrange_projects": {
+      "untyped": true
+    },
+    "create_host_directory": {
+      "untyped": true
+    },
+    "create_project_from_scratch": {
+      "untyped": true
+    },
+    "get_git_remote_url": {
+      "untyped": true
+    },
+    "get_project": {
+      "untyped": true
+    },
+    "get_projects": {
+      "untyped": true
+    },
+    "list_github_clone_accounts": {
+      "untyped": true
+    },
+    "list_github_clone_repositories": {
+      "untyped": true
+    },
+    "list_host_directory": {
+      "untyped": true
+    },
+    "remember_environment_agent_selection": {
+      "untyped": true
+    },
+    "remove_project": {
+      "untyped": true
+    },
+    "reorder_projects": {
+      "untyped": true
+    },
+    "update_project": {
+      "untyped": true
+    },
+    "validate_git_url": {
+      "untyped": true
+    }
+  }
+}

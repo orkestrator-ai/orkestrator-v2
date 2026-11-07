@@ -3,13 +3,19 @@
  */
 
 import { readText } from "@/lib/native/clipboard";
-import { processClipboardPaste, processLocalClipboardPaste } from "@/hooks/useClipboardImagePaste";
+import {
+  processClipboardPaste,
+  processLocalClipboardPaste,
+  type ClipboardImageWriter,
+} from "@/hooks/useClipboardImagePaste";
 import { escapePathForTerminalInput } from "@orkestrator/protocol/tmux-prompt";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("terminal");
 
 export interface TerminalPasteOptions {
+  /** The terminal's node, where a pasted image is written (`useScopeBackend()`). */
+  writer: ClipboardImageWriter;
   /** Container ID for container environments, null/undefined for local */
   containerId: string | null | undefined;
   /** Worktree path for local environments */
@@ -37,6 +43,7 @@ export { escapePathForTerminalInput };
  * Falls back to text-only paste if neither container nor worktree is available.
  */
 export async function handleTerminalPaste({
+  writer,
   containerId,
   worktreePath,
   writeToTerminal,
@@ -46,6 +53,7 @@ export async function handleTerminalPaste({
   if (containerId) {
     // Container environment - supports both image and text paste
     await processClipboardPaste(
+      writer,
       containerId,
       async (filePath) => {
         await writeToTerminal(filePath + " ");
@@ -66,6 +74,7 @@ export async function handleTerminalPaste({
   } else if (worktreePath) {
     // Local environment - supports both image and text paste via worktree
     await processLocalClipboardPaste(
+      writer,
       worktreePath,
       async (filePath) => {
         await writeToTerminal(escapePathForTerminalInput(filePath) + " ");

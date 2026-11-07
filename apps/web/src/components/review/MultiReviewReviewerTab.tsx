@@ -46,11 +46,12 @@ import {
   hideMachineOutputText,
   showOnlyFinalStructuredReviewMessage,
 } from "@orkestrator/protocol/structured-review-transcript";
-import * as backend from "@/lib/backend";
+import type * as backend from "@/lib/backend";
 import { REVIEWER_DATA_SAVING_BACKOFF_MS } from "@/lib/data-saving-policy";
 import { toPipelineTranscriptRows } from "@/components/build-pipeline/pipeline-transcript";
 import { useWorkflowTranscriptArtifacts } from "@/hooks/useWorkflowTranscriptArtifacts";
 import { RichTranscriptScopeContext } from "@/lib/chat/rich-identity";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 /**
  * Backstop poll for the active tab. Each poll sends the previous source token,
@@ -372,14 +373,37 @@ export function toMultiReviewSessionMessages(
 export function MultiReviewReviewerTab({
   data,
   isActive,
-  loadTranscript = backend.getMultiReviewReviewerTranscript,
-  loadToolDetails = backend.getMultiReviewReviewerToolDetails,
-  loadHistoryPage = backend.getMultiReviewReviewerHistoryPage,
-  stopReviewer = backend.stopMultiReviewReviewer,
-  restartReviewer = backend.restartMultiReviewReviewer,
-  unstickReviewer = backend.unstickMultiReviewReviewer,
+  loadTranscript: loadTranscriptOverride,
+  loadToolDetails: loadToolDetailsOverride,
+  loadHistoryPage: loadHistoryPageOverride,
+  stopReviewer: stopReviewerOverride,
+  restartReviewer: restartReviewerOverride,
+  unstickReviewer: unstickReviewerOverride,
   refreshIntervalMs = REFRESH_INTERVAL_MS,
 }: MultiReviewReviewerTabProps) {
+  const nodeBackend = useScopeBackend();
+  const loadTranscript =
+    loadTranscriptOverride === undefined
+      ? nodeBackend.getMultiReviewReviewerTranscript
+      : loadTranscriptOverride;
+  const loadToolDetails =
+    loadToolDetailsOverride === undefined
+      ? nodeBackend.getMultiReviewReviewerToolDetails
+      : loadToolDetailsOverride;
+  const loadHistoryPage =
+    loadHistoryPageOverride === undefined
+      ? nodeBackend.getMultiReviewReviewerHistoryPage
+      : loadHistoryPageOverride;
+  const stopReviewer =
+    stopReviewerOverride === undefined ? nodeBackend.stopMultiReviewReviewer : stopReviewerOverride;
+  const restartReviewer =
+    restartReviewerOverride === undefined
+      ? nodeBackend.restartMultiReviewReviewer
+      : restartReviewerOverride;
+  const unstickReviewer =
+    unstickReviewerOverride === undefined
+      ? nodeBackend.unstickMultiReviewReviewer
+      : unstickReviewerOverride;
   const [snapshot, setSnapshot] = useState<MultiReviewReviewerTranscript | null>(null);
   const [transcriptError, setTranscriptError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);

@@ -7,10 +7,15 @@ import {
   FloatingNotice,
   type FloatingNoticeTone,
 } from "@/components/ui/floating-notice";
-import * as backend from "@/lib/backend";
+import type { AgentMailApi } from "@/lib/backend/agent-mail";
 import { useAgentMailStore } from "@/stores/agentMailStore";
 import { agentMailSenderLabel } from "@/lib/chat/client-only-messages";
-import { deliverNowNotice, formatAgentMailTime, openAgentMailForTab } from "./agent-mail-ui";
+import {
+  deliverNowNotice,
+  formatAgentMailTime,
+  openAgentMailForTab,
+  useAgentMailScope,
+} from "./agent-mail-ui";
 import {
   AGENT_MAIL_HOURLY_LIMIT_REASON,
   agentMailAwaitingAgent,
@@ -19,15 +24,19 @@ import {
 } from "@orkestrator/protocol/agent-mail";
 import { COORDINATOR_DELEGATION_HOLD_REASON } from "@orkestrator/protocol/coordinator";
 
-let summaryHydration: Promise<void> | null = null;
+/** One summary read in flight per node, keyed by that node's store action (plan item 3010). */
+const summaryHydrations = new WeakMap<() => Promise<void>, Promise<void>>();
 
 function ensureSummaryHydrated(refresh: () => Promise<void>): void {
-  if (summaryHydration) return;
-  summaryHydration = refresh()
-    .catch(() => undefined)
-    .finally(() => {
-      summaryHydration = null;
-    });
+  if (summaryHydrations.has(refresh)) return;
+  summaryHydrations.set(
+    refresh,
+    refresh()
+      .catch(() => undefined)
+      .finally(() => {
+        summaryHydrations.delete(refresh);
+      }),
+  );
 }
 
 export function AgentMailBanner({
@@ -47,6 +56,7 @@ export function AgentMailBanner({
   const mailbox = useAgentMailStore((state) => state.mailboxes.get(mailboxId));
   const refreshMailbox = useAgentMailStore((state) => state.refreshMailbox);
   const refreshSummary = useAgentMailStore((state) => state.refreshSummary);
+  const { scope, api } = useAgentMailScope();
   const [dismissedRevision, setDismissedRevision] = useState<number>();
   const [actionError, setActionError] = useState<string>();
 
@@ -117,7 +127,7 @@ export function AgentMailBanner({
   const retry = async (messageId: string) => {
     setActionError(undefined);
     try {
-      await backend.retryAgentMailInject(environmentId, tabId, messageId);
+      await api.retryAgentMailInject(environmentId, tabId, messageId);
       await refresh();
     } catch (error) {
       reportActionError("retry message delivery", error);
@@ -126,7 +136,7 @@ export function AgentMailBanner({
   const discard = async (messageId: string) => {
     setActionError(undefined);
     try {
-      await backend.discardAgentMailInject(environmentId, tabId, messageId);
+      await api.discardAgentMailInject(environmentId, tabId, messageId);
       await refresh();
     } catch (error) {
       reportActionError("discard message", error);
@@ -143,10 +153,10 @@ export function AgentMailBanner({
     if (deliverable.length === 0) return;
     setActionError(undefined);
     const failures: string[] = [];
-    let result: Awaited<ReturnType<typeof backend.deliverAgentMailNow>> | undefined;
+    let result: Awaited<ReturnType<AgentMailApi["deliverAgentMailNow"]>> | undefined;
     for (const message of deliverable) {
       try {
-        result = await backend.deliverAgentMailNow(environmentId, tabId, message.id);
+        result = await api.deliverAgentMailNow(environmentId, tabId, message.id);
       } catch (error) {
         failures.push(`${message.id}: ${error instanceof Error ? error.message : String(error)}`);
       }
@@ -268,7 +278,7 @@ export function AgentMailBanner({
         size="sm"
         variant="ghost"
         className={FLOATING_NOTICE_ACTION}
-        onClick={() => openAgentMailForTab(environmentId, tabId)}
+        onClick={() => openAgentMailForTab(environmentId, tabId, "inbox", scope)}
       >
         View
       </Button>

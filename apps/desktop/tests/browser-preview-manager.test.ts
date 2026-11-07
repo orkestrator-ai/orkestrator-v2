@@ -2,6 +2,7 @@ import { APP_SHORTCUTS, type AppShortcutId } from "@orkestrator/protocol/keyboar
 import { EventEmitter } from "node:events";
 import { describe, expect, mock, test } from "bun:test";
 import { BrowserPreviewManager } from "../electron/browser-preview-manager";
+import { nodePreviewUrl } from "../electron/node-previews";
 import type { ContextMenuParams, MenuItemConstructorOptions } from "electron";
 
 class FakeWebContents extends EventEmitter {
@@ -57,6 +58,7 @@ class FakeWebContents extends EventEmitter {
 function createHarness(
   options: {
     loadURLImplementation?: (url: string) => Promise<void>;
+    resolveAddress?: (url: string) => string;
   } = {},
 ) {
   const createHarnessOptions = options;
@@ -120,6 +122,7 @@ function createHarness(
     writeClipboardText,
     focusAddressBar,
     requestPreviewShortcut,
+    ...(options.resolveAddress ? { resolveAddress: options.resolveAddress } : {}),
   });
   return {
     manager,
@@ -889,6 +892,35 @@ describe("BrowserPreviewManager", () => {
       waitForBeforeUnload: false,
     });
     expect(view.webContents.destroyed).toBe(true);
+  });
+
+  test("another node's runtime loads every address-bar URL through that node's gateway (4006 Finding 1)", async () => {
+    let base: string | null = "https://leaf.example";
+    const harness = createHarness({ resolveAddress: (url) => nodePreviewUrl(base, url) });
+    await harness.manager.attach(input);
+    const view = harness.views[0]!;
+    expect(view.webContents.loadURL).toHaveBeenLastCalledWith(
+      "https://leaf.example/__orkestrator/browser/loopback/3000/",
+    );
+    // A re-attach with the same address loads nothing new.
+    await harness.manager.attach(input);
+    expect(view.webContents.loadURL).toHaveBeenCalledTimes(1);
+    await harness.manager.navigate(input.tabId, "http://localhost:3000/next?q=1#h");
+    expect(view.webContents.loadURL).toHaveBeenLastCalledWith(
+      "https://leaf.example/__orkestrator/browser/loopback/3000/next?q=1#h",
+    );
+    // The node scope moved to another route: the next attach follows it.
+    base = "https://leaf-direct.example";
+    await harness.manager.attach({ ...input, url: "http://localhost:3000/next?q=1#h" });
+    expect(view.webContents.loadURL).toHaveBeenLastCalledWith(
+      "https://leaf-direct.example/__orkestrator/browser/loopback/3000/next?q=1#h",
+    );
+    // No route while the scope is parked: refused, never this computer's page.
+    base = null;
+    await expect(harness.manager.navigate(input.tabId, "http://localhost:4000/")).rejects.toThrow(
+      "reconnecting",
+    );
+    expect(view.webContents.loadURL).toHaveBeenCalledTimes(3);
   });
 
   test("rejects invalid tab IDs, URLs, and non-finite bounds", async () => {

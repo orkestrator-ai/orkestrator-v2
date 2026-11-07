@@ -1,7 +1,19 @@
+import {
+  cancelHostUpdateCommand,
+  getFleetUpdatePolicyCommand,
+  getHostMaintenanceCommand,
+  getHostRestartImpactCommand,
+  requestHostUpdateCheckCommand,
+  requestHostUpdateCommand,
+  setFleetUpdatePolicyCommand,
+  setHostGhChannelCommand,
+  setHostUpdateChannelCommand,
+  startHostImageUpdateCommand,
+  startHostToolchainRepairCommand,
+} from "@orkestrator/protocol/contract/domains/system";
 import { isHostUpdateChannel } from "@orkestrator/protocol/host-maintenance";
 import type { CommandContext } from "./commands-context.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
-import { assertOnlyKeys } from "./commands-validation.js";
 import type { HostMaintenanceService } from "./host-maintenance.js";
 import { startGhUpdate, startImageUpdate, startToolchainRepair } from "./host-maintenance-tasks.js";
 
@@ -22,21 +34,26 @@ function optionalString(value: unknown, name: string): string | undefined {
  * executor's progress reports are deliberately not commands: they arrive only
  * on the loopback control listener (`/__orkestrator/host-updater`).
  */
+function fleetUpdates(context: CommandContext) {
+  if (!context.nodePortal) {
+    throw new Error("The command-node portal is not available in this backend.");
+  }
+  return context.nodePortal.fleetUpdates;
+}
+
 export function registerHostMaintenanceCommands(register: CommandRegistrar): void {
-  register("get_host_maintenance", (args, context) => {
-    assertOnlyKeys(args, ["detail"], "arguments");
+  // The command node's opt-in "keep leaves on this node's version" policy
+  // (plan item 5006), which asks leaves for updates through these same commands.
+  register(getFleetUpdatePolicyCommand, (_args, context) => fleetUpdates(context).policy());
+  register(setFleetUpdatePolicyCommand, (args, context) =>
+    fleetUpdates(context).setChannel(args.channel, args.enabled),
+  );
+  register(getHostMaintenanceCommand, (args, context) => {
     return args.detail === true ? service(context).detailedSnapshot() : service(context).snapshot();
   });
-  register("get_host_restart_impact", (args, context) => {
-    assertOnlyKeys(args, [], "arguments");
-    return service(context).impact();
-  });
-  register("request_host_update_check", (args, context) => {
-    assertOnlyKeys(args, [], "arguments");
-    return service(context).requestCheck();
-  });
-  register("request_host_update", (args, context) => {
-    assertOnlyKeys(args, ["version", "drain", "maxWaitSeconds"], "arguments");
+  register(getHostRestartImpactCommand, (_args, context) => service(context).impact());
+  register(requestHostUpdateCheckCommand, (_args, context) => service(context).requestCheck());
+  register(requestHostUpdateCommand, (args, context) => {
     const version = optionalString(args.version, "version");
     if (args.drain !== undefined && args.drain !== "now" && args.drain !== "when-idle") {
       throw new Error("drain must be now or when-idle");
@@ -52,29 +69,20 @@ export function registerHostMaintenanceCommands(register: CommandRegistrar): voi
     });
     return { job, snapshot: maintenance.snapshot() };
   });
-  register("cancel_host_update", (args, context) => {
-    assertOnlyKeys(args, ["jobId"], "arguments");
+  register(cancelHostUpdateCommand, (args, context) => {
     const maintenance = service(context);
     const job = maintenance.cancelUpdate(optionalString(args.jobId, "jobId"));
     return { job, snapshot: maintenance.snapshot() };
   });
-  register("start_host_toolchain_repair", (args, context) => {
-    assertOnlyKeys(args, [], "arguments");
-    return startToolchainRepair(context);
-  });
-  register("start_host_image_update", (args, context) => {
-    assertOnlyKeys(args, [], "arguments");
-    return startImageUpdate(context);
-  });
-  register("set_host_update_channel", (args, context) => {
-    assertOnlyKeys(args, ["channel"], "arguments");
+  register(startHostToolchainRepairCommand, (_args, context) => startToolchainRepair(context));
+  register(startHostImageUpdateCommand, (_args, context) => startImageUpdate(context));
+  register(setHostUpdateChannelCommand, (args, context) => {
     if (!isHostUpdateChannel(args.channel)) {
       throw new Error("channel must be stable, beta or unstable");
     }
     return service(context).setUpdateChannel(args.channel);
   });
-  register("set_host_gh_channel", (args, context) => {
-    assertOnlyKeys(args, ["channel"], "arguments");
+  register(setHostGhChannelCommand, (args, context) => {
     if (args.channel !== "pinned" && args.channel !== "latest") {
       throw new Error("channel must be pinned or latest");
     }

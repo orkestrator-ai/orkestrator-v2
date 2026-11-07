@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:8be8f219587b6294af0e3796193bb07a41f385d52feb365e035ed7b9b3fb5893",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "addressFindingsModel": {},
+        "autoAddressFindings": {},
+        "autoFix": {},
+        "autoPr": {},
+        "environmentId": {},
+        "fixModel": {},
+        "projectId": {},
+        "reviewInstruction": {},
+        "reviewModel": {},
+        "reviewers": {},
+        "targetBranch": {}
+      },
+      "type": "object"
+    }
+  }
+}

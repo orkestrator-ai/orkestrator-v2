@@ -1,0 +1,70 @@
+{
+  "schemaVersion": 1,
+  "domain": "transcripts",
+  "commands": {
+    "transcript_artifact_capabilities": {
+      "untyped": true,
+      "read": false
+    },
+    "transcript_artifact_close_live_session": {
+      "untyped": true,
+      "read": false
+    },
+    "transcript_artifact_get_publication": {
+      "untyped": true,
+      "read": false
+    },
+    "transcript_artifact_list_drafts": {
+      "untyped": true,
+      "read": false
+    },
+    "transcript_artifact_list_publications": {
+      "untyped": true,
+      "read": false
+    },
+    "transcript_artifact_open_live_session": {
+      "untyped": true,
+      "read": false
+    },
+    "transcript_artifact_prepare_worker": {
+      "untyped": true,
+      "read": false
+    },
+    "transcript_artifact_read_draft": {
+      "untyped": true,
+      "read": false
+    },
+    "transcript_artifact_read_representation": {
+      "untyped": true,
+      "read": false
+    },
+    "transcript_artifact_render_mermaid": {
+      "untyped": true,
+      "read": false
+    },
+    "transcript_artifact_stage_asset": {
+      "untyped": true,
+      "read": false
+    },
+    "transcript_artifact_workflow_live_snapshot": {
+      "untyped": true,
+      "read": false
+    },
+    "transcript_media_close_stream": {
+      "untyped": true,
+      "read": false
+    },
+    "transcript_media_open_stream": {
+      "untyped": true,
+      "read": false
+    },
+    "transcript_media_pdf_preview": {
+      "untyped": true,
+      "read": false
+    },
+    "transcript_media_pin": {
+      "untyped": true,
+      "read": false
+    }
+  }
+}

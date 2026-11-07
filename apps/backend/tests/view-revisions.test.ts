@@ -6,6 +6,7 @@
  * revision identifies exactly the captured state, and removals that advance
  * the revision so a conditional read can never answer `unchanged` wrongly.
  */
+import { eventSink } from "../src/core/backend-emit.js";
 import { describe, expect, test } from "bun:test";
 import {
   DIFF_STATS_CHANGED_EVENT,
@@ -42,7 +43,7 @@ function prHarness(generation = "pr-gen-1") {
   let detect: () => Promise<PrDetection | null> = async () => null;
   const service = new PrMonitorService({
     generation,
-    emit: (_event, payload) => emitted.push(payload),
+    emit: eventSink((_event, payload) => emitted.push(payload)),
     now: () => "2026-09-24T00:00:00.000Z",
     monotonicNow: () => 0,
     schedule: (callback) => {
@@ -207,9 +208,9 @@ function diffHarness(generation = "diff-gen-1") {
     scan: (target) => scan(target),
     // Worktree-snapshot events have their own revision stream (covered in
     // the backend's worktree snapshot tests); this harness orders diff stats.
-    emit: (event, payload) => {
+    emit: eventSink((event, payload) => {
       if (event === DIFF_STATS_CHANGED_EVENT) emitted.push(payload);
-    },
+    }),
     now: () => "2026-09-24T00:00:00.000Z",
     monotonicNow: () => 0,
     schedule: () => 1,

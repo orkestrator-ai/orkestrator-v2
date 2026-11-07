@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:0f7e51dd82dd9d66dd858765c0c356216538bd30b27959cd68abb475e9a72286",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "buildPipelineId": {},
+        "input": {},
+        "reservedId": {}
+      },
+      "type": "object"
+    }
+  }
+}

@@ -5,7 +5,9 @@ Checked against `main` at `9906db30` (2026-10-16); code items finished on
 
 ## Task analysis
 
-Analysed 2026-10-27 against `main` at `863b5782`.
+Analysed 2026-11-07 against unified-federation-b4c9ee65814d at `ae492c20c`. Task 1 still applies unchanged. Plan items 6002 and 6003 deleted workspace realms, so the done code item 1's remote path (a request to the owning machine's realm) now opens the node's workspace in the window's own tree; the text below says so where it named a realm.
+
+Previously analysed 2026-10-27 against `main` at `863b5782`.
 
 ### Tasks
 
@@ -177,7 +179,7 @@ are done (2026-10-26), and the specs pass in Playwright's WebKit, which has no
   - The drawer backdrop no longer has its own click handler. Radix closes the
     drawer on a press outside it, and only while the drawer is the top layer.
   - The SidebarBottomBar "Environment settings" button records the same request
-    for local selections (remote selections request the owning machine’s realm), so
+    for local selections (remote selections request the owning machine’s workspace, in the window's own tree since 6002), so
     `AppDialogHost` is the only renderer of the dialog opened from the
     drawer or the desktop sidebar. `ServiceBrowserTab` still renders its own copy
     for a preview tab's "configure mapping" recovery action; it is not in
@@ -185,7 +187,7 @@ are done (2026-10-26), and the specs pass in Playwright's WebKit, which has no
   - Covered by `AppDialogHost.test.tsx` (including a background rename of
     the requested environment and restart through the backend),
     `SidebarBottomBar.test.tsx` (local buttons record host requests; remote
-    selections route to their realm even with local selection cleared), `MobileAppShellLayout.test.tsx` (the
+    selections route to their node's workspace even with local selection cleared), `MobileAppShellLayout.test.tsx` (the
     drawer gives way to a requested dialog; a click on the backdrop that a
     press inside the drawer began does not close it; focus returns to the
     trigger past the real settings layer's trap),
@@ -219,7 +221,8 @@ are done (2026-10-26), and the specs pass in Playwright's WebKit, which has no
    Done 2026-10-26; entry points updated 2026-11-02. `SidebarBottomBar`
    records local repository and environment settings requests in
    `useAppDialogStore`, and sends remote requests to the active machine's
-   realm. `ActionBar` has no settings controls or dialogs.
+   workspace (`remoteWorkspaceStore.open`; a realm until 6002 and 6003,
+   now the node's in-tree workspace in the window's own renderer). `ActionBar` has no settings controls or dialogs.
    `SidebarBottomBar.test.tsx` covers routing and switching back to local;
    `MobileAppShellLayout.test.tsx` covers drawer dismissal for both remote
    settings buttons. `AppDialogHost.test.tsx` covers the dialog's pinning,
@@ -387,11 +390,12 @@ are done (2026-10-26), and the specs pass in Playwright's WebKit, which has no
   through `useAppDialogStore` for local repository and environment settings,
   rendered by `AppDialogHost`. Both buttons now live in `SidebarBottomBar`;
   `ActionBar` owns neither settings buttons nor a repository dialog. Remote
-  selections instead send the dialog request to the active machine's realm,
+  selections instead send the dialog request to the active machine's
+  workspace (its realm until 6002 and 6003 replaced realms with node scopes),
   preserving its environment selection. This reuses the mobile drawer's
   existing remote-request dismissal path. The alternative of toolbar-owned
   dialogs duplicates lifecycle and focus handling. The shared host keeps
-  requests pinned by id and drops deleted targets; the owning realm must be
+  requests pinned by id and drops deleted targets; the owning node must be
   reachable for remote dialogs. Covered by `SidebarBottomBar.test.tsx`, the
   host tests and browser settings flows.
 - **How to trap focus (2026-10-26).** Options: (a) Radix `FocusScope` around

@@ -11,7 +11,8 @@
  *   the projection and are rendered as frozen requests.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type {
   NativeAgentDispatchOutcome,
   NativeAgentSessionProjection,
@@ -24,11 +25,12 @@ import type { TranscriptAnnotation } from "@/lib/chat/transcript-annotations";
 import * as realBackend from "@/lib/backend";
 import * as realPaneLayoutPersistence from "@/lib/pane-layout-persistence";
 import * as realNativeComposeBarPaste from "@/hooks/useNativeComposeBarPaste";
-import { useEnvironmentStore } from "@/stores/environmentStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
-import { useNativeComposeStore, type NativeComposeDraft } from "@/stores/nativeComposeStore";
-import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
+import { environmentStore } from "@/stores/environmentStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
+import { type NativeComposeDraft, nativeComposeStore } from "@/stores/nativeComposeStore";
+import { nativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { createSessionKey } from "@/lib/utils";
+import { appCommandStore } from "@/test/app-command-store";
 
 const realBackendSnapshot = { ...realBackend };
 const realPaneLayoutPersistenceSnapshot = { ...realPaneLayoutPersistence };
@@ -188,15 +190,21 @@ function identity(platform: NativeAgentTabData["platform"]): NativeAgentTabData 
 }
 
 function draftFor(tabId: string) {
-  return useNativeComposeStore.getState().drafts.get(createSessionKey("env-1", tabId));
+  return appCommandStore(nativeComposeStore)
+    .getState()
+    .drafts.get(createSessionKey("env-1", tabId));
 }
 
 function seedDraft(tabId: string, update: Partial<NativeComposeDraft>) {
-  useNativeComposeStore.getState().updateDraft(createSessionKey("env-1", tabId), update);
+  appCommandStore(nativeComposeStore)
+    .getState()
+    .updateDraft(createSessionKey("env-1", tabId), update);
 }
 
 async function renderTab(tabId: string, platform: AgentPlatform = "codex") {
-  const view = render(<AgentNativeTab tabId={tabId} data={identity(platform)} isActive />);
+  const view = renderInAppCommandScope(
+    <AgentNativeTab tabId={tabId} data={identity(platform)} isActive />,
+  );
   const input = await screen.findByRole("textbox");
   await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
   await act(async () => {
@@ -207,7 +215,7 @@ async function renderTab(tabId: string, platform: AgentPlatform = "codex") {
 
 beforeEach(() => {
   projectionOptions = {};
-  useEnvironmentStore.setState({
+  appCommandStore(environmentStore).setState({
     environments: [
       {
         id: "env-1",
@@ -227,14 +235,14 @@ afterEach(() => {
   enqueuePromptQueueMessageMock.mockClear();
   removePromptQueueMessageMock.mockClear();
   performNativeAgentSessionActionMock.mockClear();
-  useEnvironmentStore.setState({ environments: [] });
-  usePaneLayoutStore.setState({
+  appCommandStore(environmentStore).setState({ environments: [] });
+  appCommandStore(paneLayoutStore).setState({
     environments: new Map(),
     hydration: new Map(),
     activeEnvironmentId: null,
   });
-  useNativeComposeStore.setState({ drafts: new Map() });
-  useNativeAgentProjectionStore.getState().reset();
+  appCommandStore(nativeComposeStore).setState({ drafts: new Map() });
+  appCommandStore(nativeAgentProjectionStore).getState().reset();
 });
 
 describe("AgentNativeTab migrated legacy annotation references", () => {

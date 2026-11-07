@@ -1,3 +1,4 @@
+import { eventSink } from "../src/core/backend-emit.js";
 import { spawnSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import os from "node:os";
@@ -90,7 +91,7 @@ export function memoryLifecycleContext(
     runtimeFlavor: "agent-test",
     credentialSources: new Set<string>(),
     storage,
-    emit: (event: string, payload: unknown) => events.push({ event, payload }),
+    emit: eventSink((event: string, payload: unknown) => events.push({ event, payload })),
     appRoot: dataDir,
     resourceRoot: dataDir,
     environmentLifecycleTasks: new EnvironmentLifecycleTaskTracker(),

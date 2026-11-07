@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:1d2b126c1590e9b5fae79d21b14251056704c2f8dc3bf5e791713af10ae81f8f",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "base64Data": {
+          "type": "string"
+        },
+        "destinationDirectory": {
+          "type": "string"
+        },
+        "environmentId": {
+          "type": "string"
+        },
+        "fileName": {
+          "type": "string"
+        }
+      },
+      "required": ["base64Data", "destinationDirectory", "environmentId", "fileName"],
+      "type": "object"
+    }
+  }
+}

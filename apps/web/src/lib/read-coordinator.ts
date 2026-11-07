@@ -15,8 +15,10 @@
  *   exactly one trailing read. An explicit `refresh()` always obtains a read
  *   that started after the call; joining an older read alone never satisfies it.
  * - **Visibility and connectivity.** Automatic reads (periodic, invalidation,
- *   mount, retry) pause while the document is hidden or a transport has
- *   declared itself disconnected (`setDisconnected`). Browser `offline` is not
+ *   mount, retry) pause while the document is hidden, while its host has said
+ *   it is hidden (`setHostHidden`: a page whose embedder hides it, which its
+ *   own Page Visibility does not report), or
+ *   while a transport has declared itself disconnected (`setDisconnected`). Browser `offline` is not
  *   treated as disconnected: a desktop Local backend stays reachable without
  *   internet access, so online/offline is only a hint and `online` merely
  *   triggers a reconcile. Visibility, focus, page-show, online and transport
@@ -69,7 +71,18 @@
  * in `view`, because a different subscriber's read would not be equivalent.
  */
 
+import { incompatibilityOfAnyCommand } from "@orkestrator/protocol/contract/errors";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { getWindowScope } from "@/lib/node-scope/app-window-scope";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { defineScopedStore } from "@/lib/node-scope/scoped-store";
+import {
+  createReadWindowPolicy,
+  getReadWindowPolicy,
+  resetReadWindowPolicyForTests,
+  type ReadWindowEvent,
+  type ReadWindowPolicy,
+} from "@/lib/read-window-policy";
 
 const log = createLogger("web.read-coordinator");
 
@@ -235,9 +248,16 @@ export interface ReadCoordinatorVisibilitySource extends EventSource {
 
 export interface ReadCoordinatorOptions {
   clock?: ReadCoordinatorClock;
-  /** Document-like visibility source; `null` disables visibility handling. */
+  /**
+   * The window's visibility, data-saving and return hints, shared with every
+   * other node's coordinator (`getReadWindowPolicy()`). Without one the
+   * coordinator builds a private policy from `document` and `window` and
+   * disposes it with itself.
+   */
+  policy?: ReadWindowPolicy;
+  /** Document-like visibility source; `null` disables visibility handling. Ignored with `policy`. */
   document?: ReadCoordinatorVisibilitySource | null;
-  /** Window-like source for the `focus`, `pageshow` and `online` hints. */
+  /** Window-like source for the `focus`, `pageshow` and `online` hints. Ignored with `policy`. */
   window?: EventSource | null;
   /** Returns [0, 1). Used for resume spreading and retry jitter. */
   random?: () => number;
@@ -251,7 +271,10 @@ export interface ReadCoordinatorOptions {
 export interface ReadCoordinatorDiagnostics {
   paused: boolean;
   dataSaving: boolean;
+  /** The document is hidden, or its host has said so, or this node's scope is hidden. */
   hidden: boolean;
+  hostHidden: boolean;
+  scopeHidden: boolean;
   disconnected: boolean;
   connectionId: string | null;
   connectionGeneration: number;
@@ -275,6 +298,8 @@ export interface ReadCoordinator {
    * or hung read still ages on the same timeline.
    */
   readonly clock: ReadCoordinatorClock;
+  /** The window policy this coordinator follows (shared, or its own private one). */
+  readonly policy: ReadWindowPolicy;
   subscribe<T>(options: ReadSubscriptionOptions<T>): ReadSubscription<T>;
   /**
    * Records the active backend connection. Changing from one known identity to
@@ -287,10 +312,26 @@ export interface ReadCoordinator {
   /**
    * This client's data-saving preference. Switching it re-establishes every
    * key's cadence from the matching demand variant and restarts quiet backoff.
+   * Window-wide: it is set on `policy`, so every coordinator sharing that
+   * policy follows it.
    */
   setDataSaving(enabled: boolean): void;
   /** Transport-declared connectivity. Browser `online` is only a hint. */
   setDisconnected(disconnected: boolean): void;
+  /**
+   * The host's word that this document is hidden although its own Page
+   * Visibility says visible: a page whose embedder hid its frame.
+   * It defers and resumes reads exactly as a hidden document does.
+   * Window-wide, like `setDataSaving`.
+   */
+  setHostHidden(hidden: boolean): void;
+  /**
+   * This node's scope is hidden in the window's own tree: not the shown node,
+   * or suspended (plan item 4002). Defers and resumes this coordinator's
+   * automatic reads exactly as a hidden document does, without touching the
+   * window policy or any other node's reads.
+   */
+  setScopeHidden(hidden: boolean): void;
   /** Invalidates every key matching the predicate. */
   invalidateMatching(predicate: (key: ReadKey) => boolean): void;
   getDiagnostics(): ReadCoordinatorDiagnostics;
@@ -339,8 +380,8 @@ export function classifyReadError(error: unknown): ReadErrorKind {
       ? (error as { status?: unknown }).status
       : undefined;
   if (status === 401 || status === 403) return "auth";
-  const message = error instanceof Error ? error.message : String(error);
-  if (message.includes("Unknown backend command")) return "unsupported";
+  // The command is not known here: read the code, or the backend's own direct answer.
+  if (incompatibilityOfAnyCommand(error)) return "unsupported";
   return "transient";
 }
 
@@ -430,8 +471,10 @@ function defaultClock(): ReadCoordinatorClock {
 
 export function createReadCoordinator(options: ReadCoordinatorOptions = {}): ReadCoordinator {
   const clock = options.clock ?? defaultClock();
-  const doc = options.document ?? null;
-  const win = options.window ?? null;
+  const ownsPolicy = options.policy === undefined;
+  const policy =
+    options.policy ??
+    createReadWindowPolicy({ document: options.document ?? null, window: options.window ?? null });
   const random = options.random ?? Math.random;
   const maxRetained = Math.max(0, options.maxRetainedEntries ?? READ_RETAINED_ENTRY_LIMIT);
   const coalesceMs = options.resumeCoalesceMs ?? READ_RESUME_COALESCE_MS;
@@ -443,7 +486,7 @@ export function createReadCoordinator(options: ReadCoordinatorOptions = {}): Rea
   let connectionId = options.connectionId ?? null;
   let connectionGeneration = 0;
   let disconnected = false;
-  let dataSaving = false;
+  let scopeHidden = false;
   let paused = false;
   let reconnectWhilePaused = false;
   let pendingReconcile: "resume" | "reconnect" | null = null;
@@ -453,7 +496,7 @@ export function createReadCoordinator(options: ReadCoordinatorOptions = {}): Rea
   let readsStarted = 0;
   let disposed = false;
 
-  const isHidden = () => doc?.visibilityState === "hidden";
+  const isHidden = () => scopeHidden || policy.isHidden();
   const computePaused = () => isHidden() || disconnected;
   paused = computePaused();
 
@@ -860,13 +903,14 @@ export function createReadCoordinator(options: ReadCoordinatorOptions = {}): Rea
     updatePaused();
     if (!isHidden()) requestReconcile("resume");
   };
-  const onFocus = () => requestReconcile("resume");
-  // A network path came back: retry failed reads now rather than at backoff.
-  const onOnline = () => requestReconcile("reconnect");
-  doc?.addEventListener("visibilitychange", onVisibilityChange);
-  win?.addEventListener("focus", onFocus);
-  win?.addEventListener("pageshow", onFocus);
-  win?.addEventListener("online", onOnline);
+  const onWindowEvent = (event: ReadWindowEvent): void => {
+    if (disposed) return;
+    if (event.kind === "visibility") onVisibilityChange();
+    else if (event.kind === "data-saving") applyDataSaving();
+    // `focus`/`pageshow` resume; `online` means a network path came back:
+    // retry failed reads now rather than at backoff.
+    else requestReconcile(event.hint);
+  };
 
   const subscribe = <T>(options: ReadSubscriptionOptions<T>): ReadSubscription<T> => {
     const id = readKeyId(options.key);
@@ -910,7 +954,7 @@ export function createReadCoordinator(options: ReadCoordinatorOptions = {}): Rea
       order: ++subscriberOrder,
       read: options.read,
       requested: options.demand,
-      demand: normalizeDemand(options.demand, dataSaving),
+      demand: normalizeDemand(options.demand, policy.dataSaving()),
       classifyError: options.classifyError,
       onState: options.onState,
       disposed: disposed,
@@ -982,7 +1026,7 @@ export function createReadCoordinator(options: ReadCoordinatorOptions = {}): Rea
         if (changes.onState) subscriber.onState = changes.onState;
         if (!changes.demand) return;
         const before = subscriber.demand;
-        const next = normalizeDemand(changes.demand, dataSaving);
+        const next = normalizeDemand(changes.demand, policy.dataSaving());
         subscriber.requested = changes.demand;
         subscriber.demand = next;
         const now = clock.now();
@@ -1069,9 +1113,8 @@ export function createReadCoordinator(options: ReadCoordinatorOptions = {}): Rea
     }
   };
 
-  const setDataSaving = (next: boolean): void => {
-    if (next === dataSaving || disposed) return;
-    dataSaving = next;
+  const applyDataSaving = (): void => {
+    const dataSaving = policy.dataSaving();
     const now = clock.now();
     for (const entry of Array.from(entries.values())) {
       for (const subscriber of entry.subscribers) {
@@ -1086,17 +1129,31 @@ export function createReadCoordinator(options: ReadCoordinatorOptions = {}): Rea
     }
   };
 
+  // Subscribed last, so no window event reaches a half-built coordinator.
+  const unsubscribePolicy = policy.subscribe(onWindowEvent);
+
   return {
     clock,
+    policy,
     subscribe,
     setConnection,
     notifyReconnected: () => requestReconcile("reconnect"),
-    setDataSaving,
+    setDataSaving(next) {
+      if (!disposed) policy.setDataSaving(next);
+    },
     setDisconnected(next) {
       if (disconnected === next) return;
       disconnected = next;
       updatePaused();
       if (!next) requestReconcile("reconnect");
+    },
+    setHostHidden(next) {
+      if (!disposed) policy.setHostHidden(next);
+    },
+    setScopeHidden(next) {
+      if (disposed || scopeHidden === next) return;
+      scopeHidden = next;
+      onVisibilityChange();
     },
     invalidateMatching(predicate) {
       for (const entry of Array.from(entries.values())) {
@@ -1106,8 +1163,10 @@ export function createReadCoordinator(options: ReadCoordinatorOptions = {}): Rea
     getDiagnostics() {
       return {
         paused,
-        dataSaving,
+        dataSaving: policy.dataSaving(),
         hidden: isHidden(),
+        hostHidden: policy.hostHidden(),
+        scopeHidden,
         disconnected,
         connectionId,
         connectionGeneration,
@@ -1129,58 +1188,133 @@ export function createReadCoordinator(options: ReadCoordinatorOptions = {}): Rea
       disposed = true;
       if (reconcileTimer !== null) clock.clearTimeout(reconcileTimer);
       reconcileTimer = null;
-      doc?.removeEventListener("visibilitychange", onVisibilityChange);
-      win?.removeEventListener("focus", onFocus);
-      win?.removeEventListener("pageshow", onFocus);
-      win?.removeEventListener("online", onOnline);
+      unsubscribePolicy();
+      if (ownsPolicy) policy.dispose();
       for (const entry of Array.from(entries.values())) evict(entry);
     },
   };
 }
 
-let sharedCoordinator: ReadCoordinator | null = null;
-let sharedCoordinatorFactory: (() => ReadCoordinator) | null = null;
+/*
+ * Per node (plan item 3014, report §7.4): each node scope owns one
+ * coordinator, so a node's connection identity, transport connectivity and
+ * reconnect reconciles touch only that node's reads. The window half
+ * (visibility, host-hidden, data saving, return hints) is the one
+ * `getReadWindowPolicy()` every coordinator follows.
+ */
+
+interface CoordinatorSlot {
+  coordinator: ReadCoordinator | null;
+  /** False for a test factory's coordinator, which its test disposes. */
+  owned: boolean;
+  /** `setReadCoordinatorScopeHidden`'s value, applied to a coordinator made later too. */
+  hidden: boolean;
+}
+
+const readCoordinatorSlot = defineScopedStore<CoordinatorSlot>("read-coordinator", (scope) => {
+  const slot: CoordinatorSlot = { coordinator: null, owned: true, hidden: false };
+  scope.onDispose("read-coordinator", () => {
+    if (slot.owned) slot.coordinator?.dispose();
+    slot.coordinator = null;
+  });
+  return () => slot;
+});
+
+let commandCoordinatorFactory: (() => ReadCoordinator) | null = null;
+
+function appCommandScope(): NodeScope {
+  return getWindowScope().commandScope();
+}
+
+function slotOf(scope: NodeScope): CoordinatorSlot {
+  return scope.store(readCoordinatorSlot).getState();
+}
 
 /**
- * The renderer's shared coordinator, bound to the real document, window and
- * monotonic clock on first use.
+ * `scope`'s coordinator, created on first use over the window policy and
+ * disposed with the scope. Throws for a disposed scope.
+ */
+export function readCoordinatorFor(scope: NodeScope): ReadCoordinator {
+  // Checked first: a closing scope still answers `store()` from its cache
+  // until its stores are dropped, and a coordinator made then would leak.
+  if (scope.disposed) {
+    throw new Error(`The ${scope.role} scope is disposed; its read coordinator is gone.`);
+  }
+  const slot = slotOf(scope);
+  if (slot.coordinator) return slot.coordinator;
+  if (commandCoordinatorFactory && scope === appCommandScope()) {
+    slot.coordinator = commandCoordinatorFactory();
+    slot.owned = false;
+  } else {
+    slot.coordinator = createReadCoordinator({ policy: getReadWindowPolicy() });
+    slot.owned = true;
+  }
+  if (slot.hidden) slot.coordinator.setScopeHidden(true);
+  return slot.coordinator;
+}
+
+/**
+ * Tells `scope`'s reads that its scope is hidden in the window (plan item
+ * 4002: not shown, or suspended) or shown again. Kept for a coordinator
+ * created later. Does nothing for a disposed scope.
+ */
+export function setReadCoordinatorScopeHidden(scope: NodeScope, hidden: boolean): void {
+  if (scope.disposed) return;
+  const slot = slotOf(scope);
+  slot.hidden = hidden;
+  slot.coordinator?.setScopeHidden(hidden);
+}
+
+/**
+ * The command scope's coordinator: what every read that names no node
+ * schedules through. Code holding a scope uses `readCoordinatorFor(scope)`.
  */
 export function getReadCoordinator(): ReadCoordinator {
-  sharedCoordinator ??= sharedCoordinatorFactory
-    ? sharedCoordinatorFactory()
-    : createReadCoordinator({
-        document: typeof document === "undefined" ? null : document,
-        window: typeof window === "undefined" ? null : window,
-      });
-  return sharedCoordinator;
+  return readCoordinatorFor(appCommandScope());
 }
 
 /**
  * Forwards a confirmed transport reconnect (fresh stream, replay miss or
- * generation change, as announced through `resource-sync`) to the shared
- * coordinator. It never creates one: without subscribers there is nothing to
- * reconcile.
+ * generation change, as announced through `resource-sync`) to `scope`'s
+ * coordinator, by default the command scope's. It never creates one: without
+ * subscribers there is nothing to reconcile.
  */
-export function notifyReadCoordinatorReconnected(): void {
-  sharedCoordinator?.notifyReconnected();
+export function notifyReadCoordinatorReconnected(scope: NodeScope = appCommandScope()): void {
+  if (scope.disposed) return;
+  slotOf(scope).coordinator?.notifyReconnected();
 }
 
-/** Applies this client's data-saving preference (see `ReadCoordinator.setDataSaving`). */
+/** Applies this client's data-saving preference to every node's reads (window policy). */
 export function setReadCoordinatorDataSaving(enabled: boolean): void {
-  getReadCoordinator().setDataSaving(enabled);
-}
-
-/** Records the active server connection (see `ReadCoordinator.setConnection`). */
-export function setReadCoordinatorConnection(connectionId: string | null): void {
-  getReadCoordinator().setConnection(connectionId);
+  getReadWindowPolicy().setDataSaving(enabled);
 }
 
 /**
- * Test seam: disposes the shared coordinator. The next `getReadCoordinator()`
- * builds a new one from `factory` (or the default real-environment one).
+ * Records `scope`'s active server connection (see
+ * `ReadCoordinator.setConnection`), by default the command scope's.
  */
-export function resetReadCoordinatorForTests(factory?: () => ReadCoordinator): void {
-  sharedCoordinator?.dispose();
-  sharedCoordinator = null;
-  sharedCoordinatorFactory = factory ?? null;
+export function setReadCoordinatorConnection(
+  connectionId: string | null,
+  scope: NodeScope = appCommandScope(),
+): void {
+  readCoordinatorFor(scope).setConnection(connectionId);
+}
+
+/**
+ * Test seam: disposes the command scope's coordinator and the window policy.
+ * The next `getReadCoordinator()` builds a new one from `factory` (or the
+ * default real-environment one). With `policy`, that becomes the window policy
+ * (`installFakeReadCoordinator` passes its fake's, so window-level setters
+ * reach the fake).
+ */
+export function resetReadCoordinatorForTests(
+  factory?: () => ReadCoordinator,
+  policy?: ReadWindowPolicy,
+): void {
+  const slot = slotOf(appCommandScope());
+  slot.coordinator?.dispose();
+  slot.coordinator = null;
+  slot.owned = true;
+  commandCoordinatorFactory = factory ?? null;
+  resetReadWindowPolicyForTests(policy);
 }

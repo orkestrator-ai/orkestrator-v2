@@ -822,6 +822,8 @@ export async function startDevelopment(
         VITE_DEV_HOST: profile.rendererHost,
         VITE_DEV_PORT: String(profile.rendererPort),
         VITE_ORKESTRATOR_PROFILE: profile.id,
+        // Lets an agent-test renderer install its test-only harnesses (plan item 2013).
+        VITE_ORKESTRATOR_PROFILE_FLAVOR: profile.flavor,
       },
     });
     attachLog(vite, path.join(profile.logDir, "vite.log"));

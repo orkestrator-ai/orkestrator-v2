@@ -7,7 +7,11 @@ import {
   type AgentHandoffSnapshot,
   type AgentProvider,
 } from "@/lib/agent-handoff";
-import { getAgentHandoffCapabilities } from "@/lib/backend";
+import * as backend from "@/lib/backend";
+import { createAgentHandoffsApi } from "@/lib/backend/agent-handoffs";
+import { backendApiForScope } from "@/lib/backend/client";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { isClientOnlyNativeMessage } from "@/lib/chat/client-only-messages";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 
@@ -63,9 +67,11 @@ function pendingHandoffState(
  * recognises the carrier and does not add a second one, so the wrong guess costs
  * nothing, where assuming "yes" could drop the history.
  */
-async function backendDeliversHandoffs(): Promise<boolean> {
+async function backendDeliversHandoffs(scope: NodeScope): Promise<boolean> {
   try {
-    return (await getAgentHandoffCapabilities()).delivery;
+    return (
+      await backendApiForScope(scope, createAgentHandoffsApi, backend).getAgentHandoffCapabilities()
+    ).delivery;
   } catch {
     return false;
   }
@@ -93,6 +99,8 @@ export function useAgentHandoff(
   pendingHistory?: string;
   displayMessages: NativeMessage[];
 } {
+  // The node this tab's session (and so its handoff) lives on.
+  const scope = useNodeScope();
   const requestKey = handoffId
     ? JSON.stringify([handoffId, destinationProvider, environmentId])
     : null;
@@ -124,7 +132,7 @@ export function useAgentHandoff(
         backendDelivers: false,
       });
     };
-    void Promise.all([loadAgentHandoff(handoffId), backendDeliversHandoffs()])
+    void Promise.all([loadAgentHandoff(handoffId, scope), backendDeliversHandoffs(scope)])
       .then(([handoff, backendDelivers]) => {
         if (cancelled) return;
         if (!handoff) {
@@ -160,7 +168,7 @@ export function useAgentHandoff(
     return () => {
       cancelled = true;
     };
-  }, [destinationProvider, environmentId, handoffId, requestKey]);
+  }, [destinationProvider, environmentId, handoffId, requestKey, scope]);
 
   const ready = !handoffId || !state.loading;
 

@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:4976e34109e9db313148117d3869b53059368eec8542513f2654e008757e3125",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "checks": {},
+        "taskId": {
+          "type": "string"
+        }
+      },
+      "required": ["taskId"],
+      "type": "object"
+    }
+  }
+}

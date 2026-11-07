@@ -7,6 +7,19 @@ import type {
   BrowserPreviewState,
 } from "@orkestrator/protocol/browser-preview";
 
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { isAppCommandScope } from "@/lib/node-scope-slots";
+
+/**
+ * The `nodeId` an attach names for a tab of `scope`: none for this window's
+ * own node, whose runtime is the
+ * window's, and the scope's node for another node shown in the window's tree
+ * (plan item 4001), so main shows it with that node's preview runtime.
+ */
+export function previewNodeFor(scope: NodeScope): { nodeId?: string } {
+  return isAppCommandScope(scope) ? {} : { nodeId: scope.nodeId };
+}
+
 function api() {
   return window.orkestrator?.browserPreview;
 }

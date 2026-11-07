@@ -12,20 +12,20 @@ function harness(platform: NodeJS.Platform = "linux") {
     focus: mock(() => {}),
     send: mock(() => {}),
   });
+  // Three windows; the first owns a native preview (42) and artifact view (43).
   const shell = contents(1);
-  const realm = contents(2);
+  const second = contents(2);
   const otherWindow = contents(3);
-  const window = { webContents: shell, isFocused: () => true };
-  const owners = [shell, realm, otherWindow].map((contents) => ({
+  const owners = [shell, second, otherWindow].map((contents) => ({
     contents,
-    window: contents === otherWindow ? { webContents: otherWindow, isFocused: () => true } : window,
+    window: { webContents: contents, isFocused: () => true },
     browserPreviewManager: {
-      ownsWebContents: (id: number) => contents === realm && id === 42,
+      ownsWebContents: (id: number) => contents === shell && id === 42,
       focusWebContents: mock(() => true),
     },
     artifactHosts: {
       activeHost: () =>
-        contents === realm
+        contents === shell
           ? { webContents: () => ({ id: 43 }), focusIfVisible: mock(() => true) }
           : null,
     },
@@ -37,7 +37,7 @@ function harness(platform: NodeJS.Platform = "linux") {
     routing.register(source);
     return source;
   };
-  return { shell, realm, otherWindow, owners, controller, routing, register };
+  return { shell, second, otherWindow, owners, controller, routing, register };
 }
 
 // ⌘⇧/ as macOS reports it. Ctrl+Shift+/ may report the shifted "?".
@@ -53,37 +53,37 @@ const chord = {
 
 describe("native shortcut routing", () => {
   test.each([42, 43])(
-    "Close Tab and shortcuts follow realm child %s, even after menu activation clears focus",
+    "Close Tab and shortcuts follow native child %s to its window, even after menu activation clears focus",
     (child) => {
-      const { routing, register, shell, realm, otherWindow } = harness();
+      const { routing, register, shell, second, otherWindow } = harness();
       const source = register(child);
       source.emit("focus");
       for (const focusedId of [child, undefined]) {
-        const target = routing.focusedTarget(focusedId, shell.id, shell);
-        expect(target.renderer).toBe(realm);
+        const target = routing.focusedTarget(focusedId, shell.id, second);
+        expect(target.renderer).toBe(shell);
         emitToContents(target.renderer, "menu-close-tab", undefined);
-        expect(realm.send).toHaveBeenLastCalledWith(
+        expect(shell.send).toHaveBeenLastCalledWith(
           "orkestrator:event",
           "menu-close-tab",
           undefined,
         );
-        expect(shell.send).not.toHaveBeenCalled();
+        expect(second.send).not.toHaveBeenCalled();
       }
       // The remembered child belongs to one physical window only.
       expect(routing.focusedTarget(undefined, otherWindow.id, otherWindow).renderer).toBe(
         otherWindow,
       );
       // A live focused renderer wins over a remembered child.
-      expect(routing.focusedTarget(shell.id, shell.id, realm).renderer).toBe(shell);
+      expect(routing.focusedTarget(second.id, shell.id, shell).renderer).toBe(second);
       source.emit("destroyed");
-      expect(routing.focusedTarget(undefined, shell.id, shell).renderer).toBe(shell);
+      expect(routing.focusedTarget(undefined, shell.id, second).renderer).toBe(second);
     },
   );
 
   test.each(["darwin", "linux"] as const)(
-    "workspace new tab from native child reaches its realm on %s",
+    "workspace new tab from native child reaches its window on %s",
     (platform) => {
-      const { register, realm, shell } = harness(platform);
+      const { register, second, shell } = harness(platform);
       const event = { preventDefault: mock(() => {}) };
       register(43).emit("before-input-event", event, {
         ...chord,
@@ -94,35 +94,28 @@ describe("native shortcut routing", () => {
         control: platform !== "darwin",
       });
       expect(event.preventDefault).toHaveBeenCalledTimes(1);
-      expect(realm.send).toHaveBeenCalledWith("orkestrator:event", "app-shortcut", "new-agent-tab");
-      expect(shell.send).not.toHaveBeenCalled();
+      expect(shell.send).toHaveBeenCalledWith("orkestrator:event", "app-shortcut", "new-agent-tab");
+      expect(second.send).not.toHaveBeenCalled();
     },
   );
 
   test("ignores stale ownership and clears a destroyed window's remembered child", () => {
-    const { routing, register, owners, shell, realm } = harness();
+    const { routing, register, owners, shell, second } = harness();
     register(42).emit("focus");
-    owners.splice(1, 1);
-    expect(routing.focusedTarget(undefined, shell.id, shell).renderer).toBe(shell);
-    owners.push({
-      ...owners[0]!,
-      contents: realm,
-      browserPreviewManager: {
-        ownsWebContents: (id) => id === 42,
-        focusWebContents: mock(() => true),
-      },
-    });
+    const [shellOwner] = owners.splice(0, 1);
+    expect(routing.focusedTarget(undefined, shell.id, second).renderer).toBe(second);
+    owners.push(shellOwner!);
     register(shell.id).emit("destroyed");
-    expect(routing.focusedTarget(undefined, shell.id, shell).renderer).toBe(shell);
+    expect(routing.focusedTarget(undefined, shell.id, second).renderer).toBe(second);
   });
 
   test.each([1, 2, 43])(
-    "registered app/realm/artifact %s consumes each chord and repeats without duplicate toggles",
+    "registered app/window/artifact %s consumes each chord and repeats without duplicate toggles",
     (id) => {
-      const { register, shell, realm, controller } = harness();
+      const { register, shell, second, controller } = harness();
       const source = register(id);
       const event = { preventDefault: mock(() => {}) };
-      const owner = id === 1 ? shell : realm;
+      const owner = id === 2 ? second : shell;
       source.emit("before-input-event", event, chord);
       expect(event.preventDefault).toHaveBeenCalledTimes(1);
       expect(owner.send).toHaveBeenCalledTimes(1);
@@ -167,12 +160,12 @@ describe("native shortcut routing", () => {
   test.each([42, 999])(
     "preview-owned or unknown contents %s leave input to their own hook",
     (id) => {
-      const { register, shell, realm } = harness();
+      const { register, shell, second } = harness();
       const event = { preventDefault: mock(() => {}) };
       register(id).emit("before-input-event", event, chord);
       expect(event.preventDefault).not.toHaveBeenCalled();
       expect(shell.send).not.toHaveBeenCalled();
-      expect(realm.send).not.toHaveBeenCalled();
+      expect(second.send).not.toHaveBeenCalled();
     },
   );
 
@@ -180,20 +173,20 @@ describe("native shortcut routing", () => {
     ["⌘K", { meta: true, control: false }],
     ["Ctrl+K", { meta: false, control: true }],
   ])("%s in a native artifact view opens the window's search, once per press", (_, mods) => {
-    const { register, shell, realm } = harness();
+    const { register, shell, second } = harness();
     const search = { ...chord, ...mods, key: "k", code: "KeyK", shift: false };
     const source = register(43);
     const event = { preventDefault: mock(() => {}) };
     source.emit("before-input-event", event, search);
     expect(event.preventDefault).toHaveBeenCalledTimes(1);
-    // The realm owns the artifact, but the search belongs to its window.
+    // The window owns the artifact view; the search belongs to the window's shell.
     expect(shell.focus).toHaveBeenCalledTimes(1);
     expect(shell.send).toHaveBeenLastCalledWith(
       "orkestrator:event",
       "app-shortcut",
       "search-projects",
     );
-    expect(realm.send).not.toHaveBeenCalled();
+    expect(second.send).not.toHaveBeenCalled();
     source.emit("before-input-event", event, { ...search, isAutoRepeat: true });
     expect(event.preventDefault).toHaveBeenCalledTimes(2);
     expect(shell.send).toHaveBeenCalledTimes(1);
@@ -202,7 +195,7 @@ describe("native shortcut routing", () => {
   test.each(["darwin", "linux"] as const)(
     "%s: ⌘, and Ctrl+, in a native artifact view open the window's settings; app documents route their own",
     (platform) => {
-      const { register, shell, realm } = harness(platform);
+      const { register, shell, second } = harness(platform);
       const settings = { ...chord, key: ",", code: "Comma", shift: false };
       const artifact = register(43);
       const event = { preventDefault: mock(() => {}) };
@@ -218,7 +211,7 @@ describe("native shortcut routing", () => {
           "app-shortcut",
           "open-settings",
         );
-      expect(realm.send).not.toHaveBeenCalled();
+      expect(second.send).not.toHaveBeenCalled();
 
       const documentEvent = { preventDefault: mock(() => {}) };
       for (const id of [1, 2]) register(id).emit("before-input-event", documentEvent, settings);
@@ -245,7 +238,7 @@ describe("native shortcut routing", () => {
     (id) => {
       // An app document's own router knows whether a terminal or text field
       // there owns Ctrl+K; a previewed page owns ⌘K as a real browser's would.
-      const { register, shell, realm, otherWindow } = harness();
+      const { register, shell, second, otherWindow } = harness();
       const source = register(id);
       const event = { preventDefault: mock(() => {}) };
       for (const mods of [{ meta: true }, { meta: false, control: true }])
@@ -257,15 +250,15 @@ describe("native shortcut routing", () => {
           shift: false,
         });
       expect(event.preventDefault).not.toHaveBeenCalled();
-      for (const contents of [shell, realm, otherWindow]) {
+      for (const contents of [shell, second, otherWindow]) {
         expect(contents.send).not.toHaveBeenCalled();
         expect(contents.focus).not.toHaveBeenCalled();
       }
     },
   );
 
-  test.each([1, 2, 43])("Ctrl+Shift+/ in app/realm/artifact %s toggles like ⌘⇧/", (id) => {
-    const { register, shell, realm, controller } = harness();
+  test.each([1, 2, 43])("Ctrl+Shift+/ in app/window/artifact %s toggles like ⌘⇧/", (id) => {
+    const { register, shell, second, controller } = harness();
     const event = { preventDefault: mock(() => {}) };
     register(id).emit("before-input-event", event, {
       ...chord,
@@ -274,35 +267,35 @@ describe("native shortcut routing", () => {
       control: true,
     });
     expect(event.preventDefault).toHaveBeenCalledTimes(1);
-    expect((id === 1 ? shell : realm).send).toHaveBeenLastCalledWith(
+    expect((id === 2 ? second : shell).send).toHaveBeenLastCalledWith(
       "orkestrator:event",
       "menu-keyboard-shortcuts",
       "toggle",
     );
-    controller.forget(id === 1 ? shell.id : realm.id);
+    controller.forget(id === 2 ? second.id : shell.id);
   });
 
-  test("closed IPC accepts only live app renderers and realms", async () => {
-    const { controller, routing, owners, shell, realm } = harness();
+  test("closed IPC accepts only live app renderers", async () => {
+    const { controller, routing, owners, shell, second } = harness();
     const restoreShell = mock(() => true);
-    const restoreRealm = mock(() => true);
+    const restoreSecond = mock(() => true);
     controller.request({ renderer: shell, restoreFocus: restoreShell }, "open");
-    controller.request({ renderer: realm, restoreFocus: restoreRealm }, "open");
+    controller.request({ renderer: second, restoreFocus: restoreSecond }, "open");
     for (const id of [42, 43, 999]) routing.closed(id);
     await Bun.sleep(10);
     expect(restoreShell).not.toHaveBeenCalled();
-    expect(restoreRealm).not.toHaveBeenCalled();
+    expect(restoreSecond).not.toHaveBeenCalled();
     routing.closed(shell.id);
-    routing.closed(realm.id);
+    routing.closed(second.id);
     await Bun.sleep(10);
     expect(restoreShell).toHaveBeenCalledTimes(1);
-    expect(restoreRealm).toHaveBeenCalledTimes(1);
-    controller.request({ renderer: realm, restoreFocus: restoreRealm }, "open");
+    expect(restoreSecond).toHaveBeenCalledTimes(1);
+    controller.request({ renderer: second, restoreFocus: restoreSecond }, "open");
     owners[1]!.contents.isDestroyed = () => true;
-    routing.closed(realm.id);
+    routing.closed(second.id);
     await Bun.sleep(10);
-    expect(restoreRealm).toHaveBeenCalledTimes(1);
-    controller.forget(realm.id);
+    expect(restoreSecond).toHaveBeenCalledTimes(1);
+    controller.forget(second.id);
   });
 
   test.each(["destroyed", "did-navigate"])("%s invalidates pending restoration", async (event) => {

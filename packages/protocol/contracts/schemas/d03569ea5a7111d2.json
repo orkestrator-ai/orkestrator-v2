@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:d03569ea5a7111d215409a59972af631ea94f4714d84c4c79302dd6828676d5b",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "actor": {},
+        "files": {},
+        "from": {},
+        "overwrite": {},
+        "to": {},
+        "toDirectory": {}
+      },
+      "type": "object"
+    }
+  }
+}

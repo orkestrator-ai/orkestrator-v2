@@ -1,5 +1,6 @@
 import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, screen } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { useState } from "react";
 import * as realAgentModelPicker from "@/components/chat/AgentModelPicker";
 import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
@@ -154,7 +155,7 @@ function SettingsHarness({
 describe("AgentDefaultsPane action default layout", () => {
   test("renders one card per action default in a container-query grid", () => {
     const onChange = mock((_tier: AgentSettingsTier) => {});
-    render(<SettingsHarness scope="global" onChange={onChange} />);
+    renderInAppCommandScope(<SettingsHarness scope="global" onChange={onChange} />);
 
     const grid = screen.getByRole("group", { name: "Action defaults" });
     expect(grid.className).toContain("grid-cols-1");
@@ -166,7 +167,7 @@ describe("AgentDefaultsPane action default layout", () => {
 
   test("gives every card a full-height column so the grid row can align", () => {
     const onChange = mock((_tier: AgentSettingsTier) => {});
-    render(<SettingsHarness scope="global" onChange={onChange} />);
+    renderInAppCommandScope(<SettingsHarness scope="global" onChange={onChange} />);
 
     const grid = screen.getByRole("group", { name: "Action defaults" });
     for (const card of Array.from(grid.children)) {
@@ -177,7 +178,7 @@ describe("AgentDefaultsPane action default layout", () => {
 
   test("pins each card's picker to the card foot without letting it stretch", () => {
     const onChange = mock((_tier: AgentSettingsTier) => {});
-    render(<SettingsHarness scope="global" onChange={onChange} />);
+    renderInAppCommandScope(<SettingsHarness scope="global" onChange={onChange} />);
 
     for (const key of ACTION_DEFAULT_KEYS) {
       const picker = screen.getByTestId(`picker-action-default-${key}`);
@@ -199,7 +200,7 @@ describe("AgentDefaultsPane create-script defaults", () => {
     "shows the %s icon for action defaults inherited from %s",
     (inheritedPlatform, _label) => {
       const repository: AgentSettingsTier = { defaultAgent: "codex" };
-      render(
+      renderInAppCommandScope(
         <AgentDefaultsPane
           tier={repository}
           onChange={() => {}}
@@ -232,7 +233,7 @@ describe("AgentDefaultsPane create-script defaults", () => {
 
   test("falls back to the effective agent when the inherited provider is disabled", () => {
     const repository: AgentSettingsTier = { defaultAgent: "codex" };
-    render(
+    renderInAppCommandScope(
       <AgentDefaultsPane
         tier={repository}
         onChange={() => {}}
@@ -265,7 +266,7 @@ describe("AgentDefaultsPane create-script defaults", () => {
 
   test("uses the effective agent when there is no inherited action entry", () => {
     const repository: AgentSettingsTier = { defaultAgent: "codex" };
-    render(
+    renderInAppCommandScope(
       <AgentDefaultsPane
         tier={repository}
         onChange={() => {}}
@@ -290,7 +291,7 @@ describe("AgentDefaultsPane create-script defaults", () => {
   test("renders and persists provider, model, and reasoning changes at every settings tier", () => {
     for (const scope of ["global", "repository", "environment"] as const) {
       const onChange = mock((_tier: AgentSettingsTier) => undefined);
-      const view = render(<SettingsHarness scope={scope} onChange={onChange} />);
+      const view = renderInAppCommandScope(<SettingsHarness scope={scope} onChange={onChange} />);
 
       expect(
         screen.getByRole("combobox", {
@@ -323,7 +324,7 @@ describe("AgentDefaultsPane create-script defaults", () => {
 
   test("shows and persists the review preparation and consolidation default separately", () => {
     const onChange = mock((_tier: AgentSettingsTier) => undefined);
-    render(<SettingsHarness scope="global" onChange={onChange} />);
+    renderInAppCommandScope(<SettingsHarness scope="global" onChange={onChange} />);
 
     expect(
       screen.getByRole("combobox", {
@@ -355,7 +356,7 @@ describe("AgentDefaultsPane create-script defaults", () => {
 
 describe("AgentDefaultsPane speed defaults", () => {
   test("keeps OpenCode provider captions in every Defaults picker", () => {
-    render(<SettingsHarness scope="global" onChange={() => {}} />);
+    renderInAppCommandScope(<SettingsHarness scope="global" onChange={() => {}} />);
 
     expect(screen.getByTestId("agent-default-model provider-labels").textContent).toContain(
       "opencode-go",
@@ -367,7 +368,7 @@ describe("AgentDefaultsPane speed defaults", () => {
 
   test("checks an inherited action model even when its platform differs from the tier default", () => {
     const repository: AgentSettingsTier = { defaultAgent: "codex" };
-    render(
+    renderInAppCommandScope(
       <AgentDefaultsPane
         tier={repository}
         onChange={() => {}}
@@ -393,7 +394,7 @@ describe("AgentDefaultsPane speed defaults", () => {
 
   test("writes Fast and clears it back to provider default", () => {
     const onChange = mock((_tier: AgentSettingsTier) => undefined);
-    render(<SettingsHarness scope="global" onChange={onChange} />);
+    renderInAppCommandScope(<SettingsHarness scope="global" onChange={onChange} />);
 
     expect(screen.getByTestId("agent-default-model speed-value").textContent).toBe("null");
     expect(screen.getByTestId("agent-default-model speed-inherit").textContent).toBe("true");
@@ -411,7 +412,7 @@ describe("AgentDefaultsPane speed defaults", () => {
 
   test("clears Fast when the selected model does not support speed", () => {
     const onChange = mock((_tier: AgentSettingsTier) => undefined);
-    render(<SettingsHarness scope="global" onChange={onChange} />);
+    renderInAppCommandScope(<SettingsHarness scope="global" onChange={onChange} />);
 
     fireEvent.click(screen.getByRole("button", { name: "agent-default-model choose Fast" }));
     fireEvent.click(screen.getByRole("button", { name: "agent-default-model choose Claude Slow" }));
@@ -424,7 +425,7 @@ describe("AgentDefaultsPane speed defaults", () => {
 
   test("writes Fast onto that action default only", () => {
     const onChange = mock((_tier: AgentSettingsTier) => undefined);
-    render(<SettingsHarness scope="global" onChange={onChange} />);
+    renderInAppCommandScope(<SettingsHarness scope="global" onChange={onChange} />);
 
     fireEvent.click(
       screen.getByRole("button", { name: "action-default-createScript choose Codex A" }),
@@ -454,7 +455,7 @@ describe("AgentDefaultsPane speed defaults", () => {
 
   test("keeps Fast independent across action defaults that share a model", () => {
     const onChange = mock((_tier: AgentSettingsTier) => undefined);
-    render(<SettingsHarness scope="global" onChange={onChange} />);
+    renderInAppCommandScope(<SettingsHarness scope="global" onChange={onChange} />);
 
     fireEvent.click(screen.getByRole("button", { name: "action-default-pr choose Codex A" }));
     fireEvent.click(screen.getByRole("button", { name: "action-default-pr choose Fast" }));
@@ -503,7 +504,7 @@ describe("AgentDefaultsPane speed defaults", () => {
       );
     }
 
-    render(<Harness />);
+    renderInAppCommandScope(<Harness />);
     // A narrower tier's entry replaces the parent's whole, so a speed-only
     // toggle has to carry the inherited model and reasoning level with it.
     fireEvent.click(screen.getByRole("button", { name: "action-default-pr choose Fast" }));
@@ -524,7 +525,7 @@ describe("AgentDefaultsPane speed defaults", () => {
       },
     };
     const repository: AgentSettingsTier = {};
-    render(
+    renderInAppCommandScope(
       <AgentDefaultsPane
         tier={repository}
         onChange={() => {}}
@@ -547,7 +548,7 @@ describe("AgentDefaultsPane speed defaults", () => {
       defaultAgent: "claude",
       platforms: { claude: { model: "claude-slow" } },
     };
-    render(
+    renderInAppCommandScope(
       <AgentDefaultsPane
         tier={global}
         onChange={() => {}}
@@ -582,7 +583,7 @@ describe("AgentDefaultsPane speed defaults", () => {
       platforms: { codex: { model: "codex-slow" } },
       actionDefaults: { createScript: { platform: "codex" } },
     };
-    render(
+    renderInAppCommandScope(
       <AgentDefaultsPane
         tier={global}
         onChange={() => {}}
@@ -611,7 +612,7 @@ describe("AgentDefaultsPane speed defaults", () => {
       defaultAgent: "claude",
       actionDefaults: { createScript: { platform: "cursor", model: "cursor-a" } },
     };
-    render(
+    renderInAppCommandScope(
       <AgentDefaultsPane
         tier={repository}
         onChange={() => {}}

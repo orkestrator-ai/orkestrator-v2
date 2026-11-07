@@ -1,3 +1,4 @@
+import { registrarFrom } from "./commands-registry-contracts.js";
 import { registerTranscriptArtifactCommands } from "./transcript-artifacts/commands.js";
 import type { CommandHandler } from "./commands-context.js";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -189,7 +190,7 @@ describe("readable host file roots", () => {
 
 test("registered environment-less stream command uses the current readable host roots", async () => {
   const commands = new Map<string, CommandHandler>();
-  registerTranscriptArtifactCommands((name, handler) => commands.set(name, handler));
+  registerTranscriptArtifactCommands(registrarFrom((name, handler) => commands.set(name, handler)));
   const ctx = {
     ...context(),
     transcriptArtifacts: { runtime: () => ({ contentServer: server }) },

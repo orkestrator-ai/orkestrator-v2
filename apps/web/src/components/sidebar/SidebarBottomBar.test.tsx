@@ -1,32 +1,42 @@
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { hostMaintenanceSnapshotFixture } from "@orkestrator/protocol/testing/host-maintenance-fixtures";
 import * as backend from "@/lib/backend";
 import { onGlobalSettingsRequest, type GlobalSettingsSection } from "@/lib/settings-navigation";
 import { useAppDialogStore } from "@/stores/appDialogStore";
 import { useBugReportStore } from "@/stores/bugReportStore";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { environmentStore } from "@/stores/environmentStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
-import { useProjectStore } from "@/stores/projectStore";
-import { useUIStore } from "@/stores/uiStore";
+import { projectStore } from "@/stores/projectStore";
+import { uiStore } from "@/stores/uiStore";
 import type { Environment, Project } from "@/types";
 import { SidebarBottomBar } from "./SidebarBottomBar";
+import { getWindowScope } from "@/lib/node-scope/app-window-scope";
+import { selectOnNode } from "@/test/node-selection";
+import { appCommandStore } from "@/test/app-command-store";
+
+/** Outside a node scope provider, components act for the app's command node. */
+const commandNodeId = () => getWindowScope().commandScope().nodeId;
 
 const originalGateway = window.orkestratorGateway;
 const originalOrkestrator = window.orkestrator;
-const initialProjects = useProjectStore.getState();
-const initialEnvironments = useEnvironmentStore.getState();
+const initialProjects = appCommandStore(projectStore).getState();
+const initialEnvironments = appCommandStore(environmentStore).getState();
 const initialRemote = useRemoteWorkspaceStore.getState();
-const initialUI = useUIStore.getState();
+const initialUI = appCommandStore(uiStore).getState();
 
 function selectEnvironment() {
-  useProjectStore.setState({
+  appCommandStore(projectStore).setState({
     projects: [{ id: "project-1", name: "repo", order: 0 } as Project],
   });
-  useEnvironmentStore.setState({
+  appCommandStore(environmentStore).setState({
     environments: [{ id: "env-1", projectId: "project-1", name: "feature" } as Environment],
   });
-  useUIStore.setState({ selectedProjectId: "project-1", selectedEnvironmentId: "env-1" });
+  appCommandStore(uiStore).setState({
+    selectedProjectId: "project-1",
+    selectedEnvironmentId: "env-1",
+  });
 }
 
 function hostUpdate(updateAvailable: boolean | null) {
@@ -43,7 +53,7 @@ function hostUpdate(updateAvailable: boolean | null) {
 
 /** Let the host maintenance snapshot the bar reads arrive. */
 async function renderBar() {
-  const view = render(<SidebarBottomBar />);
+  const view = renderInAppCommandScope(<SidebarBottomBar />);
   await waitFor(() => expect(backend.getHostMaintenance).toHaveBeenCalled());
   await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -61,9 +71,9 @@ afterEach(() => {
   mock.restore();
   useBugReportStore.setState({ sheetOpen: false, draftInProgress: false });
   useAppDialogStore.setState({ request: null });
-  useProjectStore.setState(initialProjects, true);
-  useEnvironmentStore.setState(initialEnvironments, true);
-  useUIStore.setState(initialUI, true);
+  appCommandStore(projectStore).setState(initialProjects, true);
+  appCommandStore(environmentStore).setState(initialEnvironments, true);
+  appCommandStore(uiStore).setState(initialUI, true);
   useRemoteWorkspaceStore.setState(initialRemote, true);
   window.orkestrator = originalOrkestrator;
   window.orkestratorGateway = originalGateway;
@@ -107,6 +117,7 @@ describe("SidebarBottomBar", () => {
     expect(repository.getAttribute("title")).toBe("Repository settings");
     fireEvent.click(repository);
     expect(useAppDialogStore.getState().request).toEqual({
+      nodeId: commandNodeId(),
       kind: "repository-settings",
       projectId: "project-1",
     });
@@ -115,20 +126,21 @@ describe("SidebarBottomBar", () => {
     expect(environment.getAttribute("title")).toBe("Environment settings");
     fireEvent.click(environment);
     expect(useAppDialogStore.getState().request).toEqual({
+      nodeId: commandNodeId(),
       kind: "environment-settings",
       environmentId: "env-1",
     });
   });
 
-  test("routes remote settings to the active realm with local selection cleared, then returns to the local host", async () => {
+  test("routes remote settings to the shown node with local selection cleared, then returns to the local host", async () => {
     hostUpdate(false);
     selectEnvironment();
     useRemoteWorkspaceStore.getState().open("remote-node", {
       projectId: "remote-project",
       environmentId: "remote-env",
     });
-    expect(useUIStore.getState().selectedProjectId).toBeNull();
-    expect(useUIStore.getState().selectedEnvironmentId).toBeNull();
+    expect(appCommandStore(uiStore).getState().selectedProjectId).toBeNull();
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBeNull();
     await renderBar();
 
     for (const [label, dialog] of [
@@ -142,7 +154,6 @@ describe("SidebarBottomBar", () => {
       const request = useRemoteWorkspaceStore.getState().requests["remote-node"]!;
       expect(request.seq).toBeGreaterThan(previousSeq);
       expect(request.request).toEqual({
-        type: "select",
         projectId: "remote-project",
         environmentId: "remote-env",
         dialog,
@@ -151,17 +162,13 @@ describe("SidebarBottomBar", () => {
     }
 
     act(() => {
-      useRemoteWorkspaceStore.getState().noteRealmSelection("remote-node", {
-        projectId: "remote-project-2",
-        environmentId: null,
-      });
+      selectOnNode("remote-node", { projectId: "remote-project-2", environmentId: null });
     });
     expect(
       screen.getByRole("button", { name: "Environment settings" }).hasAttribute("disabled"),
     ).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Repository settings" }));
     expect(useRemoteWorkspaceStore.getState().requests["remote-node"]!.request).toEqual({
-      type: "select",
       projectId: "remote-project-2",
       dialog: "repository-settings",
     });
@@ -172,11 +179,13 @@ describe("SidebarBottomBar", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Environment settings" }));
     expect(useAppDialogStore.getState().request).toEqual({
+      nodeId: commandNodeId(),
       kind: "environment-settings",
       environmentId: "env-1",
     });
     fireEvent.click(screen.getByRole("button", { name: "Repository settings" }));
     expect(useAppDialogStore.getState().request).toEqual({
+      nodeId: commandNodeId(),
       kind: "repository-settings",
       projectId: "project-1",
     });
@@ -196,7 +205,7 @@ describe("SidebarBottomBar", () => {
     // A selection whose environment was removed does not open a dead dialog.
     act(() => {
       selectEnvironment();
-      useEnvironmentStore.setState({ environments: [] });
+      appCommandStore(environmentStore).setState({ environments: [] });
     });
     expect(
       screen.getByRole("button", { name: "Repository settings" }).hasAttribute("disabled"),
@@ -248,7 +257,7 @@ describe("SidebarBottomBar", () => {
 });
 
 test("stacked for the compact sidebar: every action, in a column", () => {
-  render(<SidebarBottomBar stacked />);
+  renderInAppCommandScope(<SidebarBottomBar stacked />);
   const bar = document.querySelector("[data-sidebar-bottom-bar]")!;
   expect(bar.className).toContain("flex-col");
   for (const name of [

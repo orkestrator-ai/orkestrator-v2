@@ -11,16 +11,23 @@ import {
   LIVE_HOSTS_PER_WINDOW,
   liveHostScopeInvalidation,
   useArtifactLiveHostStore,
-  type LiveArtifactTarget,
+  type LiveArtifactRequest,
 } from "@/stores/artifactLiveHostStore";
-import { useEnvironmentStore } from "@/stores/environmentStore";
-import { useUIStore } from "@/stores/uiStore";
+import { getWindowScope } from "@/lib/node-scope/app-window-scope";
+import { FakeNodeClient } from "@/test/render-in-node-scope";
+import type { BackendId } from "@orkestrator/protocol/federation";
+import { environmentStore } from "@/stores/environmentStore";
+import { uiStore } from "@/stores/uiStore";
 import type { Environment } from "@/types";
 import { ArtifactLiveHost, ArtifactLivePlaceholder } from "./ArtifactLiveHost";
+import { appCommandStore } from "@/test/app-command-store";
 
 const invokeMock = invoke as unknown as ReturnType<typeof mock>;
 
-function target(id: string, overrides: Partial<LiveArtifactTarget> = {}): LiveArtifactTarget {
+/** The scope every request here comes from: the app's command scope. */
+const owner = () => getWindowScope().commandScope();
+
+function target(id: string, overrides: Partial<LiveArtifactRequest> = {}): LiveArtifactRequest {
   return {
     occurrenceKey: `occurrence-${id}`,
     publicationId: `pub_${id}abcdefgh`,
@@ -120,7 +127,7 @@ async function startA() {
     </>,
   );
   act(() => {
-    useArtifactLiveHostStore.getState().request(target("a"));
+    useArtifactLiveHostStore.getState().request(owner(), target("a"));
   });
   await waitFor(() =>
     expect(document.querySelector("iframe[data-artifact-live-frame]")).not.toBeNull(),
@@ -152,7 +159,7 @@ describe("ArtifactLiveHost (browser mode)", () => {
     await startA();
     let result: string | undefined;
     act(() => {
-      result = useArtifactLiveHostStore.getState().request(target("b"));
+      result = useArtifactLiveHostStore.getState().request(owner(), target("b"));
     });
     expect(result).toBe("switch-pending");
     expect(useArtifactLiveHostStore.getState().active?.target.title).toBe("Calculator a");
@@ -168,10 +175,63 @@ describe("ArtifactLiveHost (browser mode)", () => {
     });
   });
 
+  test("a leaf node's view runs on that node and reads that node's capabilities", async () => {
+    const leafClient = new FakeNodeClient({
+      nodeId: "bk_live-leaf" as BackendId,
+      invoke: {
+        [TRANSCRIPT_ARTIFACT_COMMANDS.capabilities]: {
+          backendId: "backend-leaf",
+          liveInteractive: true,
+          rolloutFlags: { liveInteractive: true },
+        },
+        [TRANSCRIPT_ARTIFACT_COMMANDS.openLiveSession]: liveSessionFor,
+        [TRANSCRIPT_ARTIFACT_COMMANDS.closeLiveSession]: undefined,
+      },
+    });
+    const leaf = getWindowScope().open({ role: "leaf", client: leafClient });
+    try {
+      render(<ArtifactLiveHost />);
+      act(() => {
+        useArtifactLiveHostStore.getState().request(
+          leaf,
+          target("a", {
+            scope: {
+              backendId: "backend-leaf",
+              environmentId: "env-1",
+              logicalSessionKey: "s1",
+              generation: "g1",
+            },
+          }),
+        );
+      });
+      await waitFor(() =>
+        expect(frame().getAttribute("src")).toBe(`${CONTENT_ORIGIN}/shell/a?cap=1`),
+      );
+      expect(leafClient.calls(TRANSCRIPT_ARTIFACT_COMMANDS.openLiveSession)).toHaveLength(1);
+      expect(calls(TRANSCRIPT_ARTIFACT_COMMANDS.openLiveSession)).toHaveLength(0);
+      // The command node reports backend-1; the leaf's own answer keeps the view.
+      await waitFor(() =>
+        expect(leafClient.calls(TRANSCRIPT_ARTIFACT_COMMANDS.capabilities)).toHaveLength(1),
+      );
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(useArtifactLiveHostStore.getState().active?.target.nodeId).toBe(leaf.nodeId);
+      expect(useArtifactLiveHostStore.getState().ended).toBeNull();
+
+      act(() => leaf.dispose());
+      expect(useArtifactLiveHostStore.getState().active).toBeNull();
+      expect(document.querySelector("[data-artifact-live-host]") === null).toBe(true);
+      expect(leafClient.calls(TRANSCRIPT_ARTIFACT_COMMANDS.closeLiveSession)).toHaveLength(1);
+    } finally {
+      leaf.dispose();
+    }
+  });
+
   test("cancelling the switch keeps the running view", async () => {
     await startA();
     act(() => {
-      useArtifactLiveHostStore.getState().request(target("b"));
+      useArtifactLiveHostStore.getState().request(owner(), target("b"));
     });
     fireEvent.click(await screen.findByRole("button", { name: "Keep current" }));
     expect(useArtifactLiveHostStore.getState().pendingSwitch).toBeNull();
@@ -338,7 +398,7 @@ describe("ArtifactLiveHost (browser mode)", () => {
       });
       render(<ArtifactLiveHost />);
       act(() => {
-        useArtifactLiveHostStore.getState().request(target("a"));
+        useArtifactLiveHostStore.getState().request(owner(), target("a"));
       });
       await waitFor(() => expect(useArtifactLiveHostStore.getState().active?.phase).toBe("error"));
       expect(useArtifactLiveHostStore.getState().active?.message).toContain("viewer shell");
@@ -368,7 +428,7 @@ describe("ArtifactLiveHost (browser mode)", () => {
     });
     render(<ArtifactLiveHost />);
     act(() => {
-      useArtifactLiveHostStore.getState().request(target("a"));
+      useArtifactLiveHostStore.getState().request(owner(), target("a"));
     });
     act(() => useArtifactLiveHostStore.getState().stop());
     await act(async () => resolveOpen(undefined));
@@ -398,7 +458,7 @@ describe("ArtifactLiveHost (desktop host)", () => {
     (window as { orkestrator?: unknown }).orkestrator = { artifactHost: api };
     render(<ArtifactLiveHost />);
     act(() => {
-      useArtifactLiveHostStore.getState().request(target("a"));
+      useArtifactLiveHostStore.getState().request(owner(), target("a"));
     });
     await waitFor(() => expect(api.open).toHaveBeenCalled());
     expect(document.querySelector("iframe") === null).toBe(true);
@@ -443,20 +503,29 @@ describe("ArtifactLiveHost scope invalidation", () => {
 
   afterEach(() => {
     act(() => {
-      useEnvironmentStore.setState({ environments: [], deletingEnvironments: new Set() });
-      useUIStore.setState({ selectedEnvironmentId: null, selectedEnvironmentIds: [] });
+      appCommandStore(environmentStore).setState({
+        environments: [],
+        deletingEnvironments: new Set(),
+      });
+      appCommandStore(uiStore).setState({
+        selectedEnvironmentId: null,
+        selectedEnvironmentIds: [],
+      });
     });
   });
 
   test("deleting the conversation's environment disposes the live view with a reason", async () => {
     act(() => {
-      useEnvironmentStore.setState({ environments: [environment("env-1"), environment("env-2")] });
-      useUIStore.setState({ selectedEnvironmentId: "env-1" });
+      appCommandStore(environmentStore).setState({
+        environments: [environment("env-1"), environment("env-2")],
+      });
+      appCommandStore(uiStore).setState({ selectedEnvironmentId: "env-1" });
     });
     await startA();
-    act(() => useEnvironmentStore.getState().removeEnvironment("env-1"));
+    act(() => appCommandStore(environmentStore).getState().removeEnvironment("env-1"));
     expect(useArtifactLiveHostStore.getState().active).toBeNull();
     expect(useArtifactLiveHostStore.getState().ended).toEqual({
+      nodeId: owner().nodeId,
       occurrenceKey: "occurrence-a",
       environmentId: "env-1",
       reason: LIVE_HOST_INVALIDATION_REASONS.environmentDeleted,
@@ -471,21 +540,25 @@ describe("ArtifactLiveHost scope invalidation", () => {
 
   test("switching the active environment disposes it; unrelated changes do not", async () => {
     act(() => {
-      useEnvironmentStore.setState({ environments: [environment("env-1"), environment("env-2")] });
-      useUIStore.setState({ selectedEnvironmentId: "env-1" });
+      appCommandStore(environmentStore).setState({
+        environments: [environment("env-1"), environment("env-2")],
+      });
+      appCommandStore(uiStore).setState({ selectedEnvironmentId: "env-1" });
     });
     await startA();
     // An unrelated environment update keeps the view.
-    act(() => useEnvironmentStore.getState().updateEnvironment("env-2", { name: "renamed" }));
+    act(() =>
+      appCommandStore(environmentStore).getState().updateEnvironment("env-2", { name: "renamed" }),
+    );
     expect(useArtifactLiveHostStore.getState().active).not.toBeNull();
-    act(() => useUIStore.setState({ selectedEnvironmentId: "env-2" }));
+    act(() => appCommandStore(uiStore).setState({ selectedEnvironmentId: "env-2" }));
     expect(useArtifactLiveHostStore.getState().active).toBeNull();
     expect(useArtifactLiveHostStore.getState().ended?.reason).toBe(
       LIVE_HOST_INVALIDATION_REASONS.environmentChanged,
     );
     // Running again clears the recorded reason.
     act(() => {
-      useArtifactLiveHostStore.getState().request(target("a"));
+      useArtifactLiveHostStore.getState().request(owner(), target("a"));
     });
     expect(useArtifactLiveHostStore.getState().ended).toBeNull();
   });
@@ -557,9 +630,9 @@ test.each(["logout", "credentials", "conversation"])(
     const { clearProtectedRichContent, clearRichConversationContent } =
       await import("@/lib/chat/rich-content-reset");
     const store = useArtifactLiveHostStore.getState();
-    store.request(target("a", { previewDataUrl: "data:image/png;base64,old" }));
+    store.request(owner(), target("a", { previewDataUrl: "data:image/png;base64,old" }));
     await waitFor(() => expect(useArtifactLiveHostStore.getState().active?.session).not.toBeNull());
-    store.request(target("b", { previewDataUrl: "data:image/png;base64,also-old" }));
+    store.request(owner(), target("b", { previewDataUrl: "data:image/png;base64,also-old" }));
     if (reason === "conversation") clearRichConversationContent(target("a").scope);
     else clearProtectedRichContent(reason);
     expect(useArtifactLiveHostStore.getState().active).toBeNull();
@@ -580,7 +653,7 @@ test("a session opened after credentials reset is released without being attache
   );
   useArtifactLiveHostStore
     .getState()
-    .request(target("a", { previewDataUrl: "data:image/png;base64,old" }));
+    .request(owner(), target("a", { previewDataUrl: "data:image/png;base64,old" }));
   clearProtectedRichContent("credentials");
   await act(async () => {
     finish(liveSessionFor({ publicationId: target("a").publicationId }));

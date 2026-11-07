@@ -2,7 +2,12 @@ import { memo, useLayoutEffect, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { usePaneLayoutStore, getAllLeaves } from "@/stores/paneLayoutStore";
 import { useConfigStore } from "@/stores";
-import { createPortalTargetKey, useTerminalPortalStore } from "@/stores/terminalPortalStore";
+import {
+  createPortalTargetKey,
+  createTerminalKey,
+  useTerminalPortalNodeId,
+  useTerminalPortalStore,
+} from "@/stores/terminalPortalStore";
 import { createXtermTerminal } from "@/lib/terminal-xterm";
 import { PersistentTerminal } from "./PersistentTerminal";
 import { isTerminalTab } from "./terminal-tab-types";
@@ -41,6 +46,8 @@ export const TerminalPortalHost = memo(function TerminalPortalHost({
   containerId,
   environmentId,
 }: TerminalPortalHostProps) {
+  // Terminal keys are node-qualified: this host's terminals belong to its node scope.
+  const nodeId = useTerminalPortalNodeId();
   // Get pane layout state for THIS environment (not the globally active one)
   // This is critical: each TerminalPortalHost must use its own environment's tabs,
   // otherwise all environments would share the same terminal tab structure.
@@ -111,10 +118,11 @@ export const TerminalPortalHost = memo(function TerminalPortalHost({
 
     // Create terminals for new tabs
     for (const [tabId] of terminalTabsMap) {
-      if (!store.hasTerminal(environmentId, tabId)) {
+      if (!store.hasTerminal(nodeId, environmentId, tabId)) {
         log.debug("portal.terminal-created", () => ({ tabId, environmentId }));
         store.createTerminal(
           {
+            nodeId,
             tabId,
             containerId,
             environmentId,
@@ -126,18 +134,19 @@ export const TerminalPortalHost = memo(function TerminalPortalHost({
       }
     }
 
-    // Dispose terminals for removed tabs (only check terminals in this environment)
+    // Dispose terminals for removed tabs (only check terminals in this node's environment)
     for (const [, terminalData] of store.terminals) {
       // Only consider terminals belonging to this environment
-      if (terminalData.environmentId !== environmentId) continue;
+      if (terminalData.nodeId !== nodeId || terminalData.environmentId !== environmentId) continue;
 
       if (!terminalTabsMap.has(terminalData.tabId)) {
         log.debug("portal.terminal-disposed", () => ({ tabId: terminalData.tabId, environmentId }));
-        store.disposeTerminal(environmentId, terminalData.tabId);
+        store.disposeTerminal(nodeId, environmentId, terminalData.tabId);
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- terminalTabsMap is derived 1:1 from terminalTabsKey
   }, [
+    nodeId,
     containerId,
     environmentId,
     terminalTabsKey, // Stable key stands in for terminalTabsMap
@@ -149,17 +158,18 @@ export const TerminalPortalHost = memo(function TerminalPortalHost({
   const portalElements: React.ReactNode[] = [];
 
   for (const [, terminalData] of terminals) {
-    // Only render terminals belonging to this environment
-    if (terminalData.environmentId !== environmentId) continue;
+    // Only render terminals belonging to this node's environment
+    if (terminalData.nodeId !== nodeId || terminalData.environmentId !== environmentId) continue;
 
     const tabId = terminalData.tabId;
+    const terminalKey = createTerminalKey(nodeId, environmentId, tabId);
     const tabInfo = terminalTabsMap.get(tabId);
     if (!tabInfo) {
       continue;
     }
 
     const { tab, paneId } = tabInfo;
-    const portalTarget = paneHosts.get(createPortalTargetKey(environmentId, paneId));
+    const portalTarget = paneHosts.get(createPortalTargetKey(nodeId, environmentId, paneId));
     if (!portalTarget) {
       continue;
     }
@@ -177,7 +187,7 @@ export const TerminalPortalHost = memo(function TerminalPortalHost({
           className={`absolute inset-0 ${isActive ? "pointer-events-auto" : "pointer-events-none"}`}
         >
           <PersistentTerminal
-            key={`${environmentId}::${tabId}`}
+            key={terminalKey}
             terminalData={terminalData}
             tabId={tabId}
             tabType={tab.type}
@@ -200,7 +210,7 @@ export const TerminalPortalHost = memo(function TerminalPortalHost({
           />
         </div>,
         portalTarget,
-        `terminal-portal-${environmentId}::${tabId}`,
+        `terminal-portal-${terminalKey}`,
       ),
     );
   }

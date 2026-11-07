@@ -4,7 +4,8 @@
  * conversation other than the focused one.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import {
   coordinatorRuntimeId,
   type CoordinatorConversation,
@@ -27,10 +28,10 @@ import { resetUpstreamCheckForTests } from "@/lib/coordinator-upstream-check";
 import { installFakeReadCoordinator } from "@/lib/testing/read-coordinator";
 import { dispatchResourceChange } from "@/lib/resource-sync";
 import { createSessionKey } from "@/lib/utils";
-import { useCoordinatorPaneLayoutStore } from "@/stores/coordinatorPaneLayoutStore";
-import { useEnvironmentStore } from "@/stores/environmentStore";
-import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
-import { useProjectStore } from "@/stores/projectStore";
+import { coordinatorPaneLayoutStore } from "@/stores/coordinatorPaneLayoutStore";
+import { environmentStore } from "@/stores/environmentStore";
+import { nativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
+import { projectStore } from "@/stores/projectStore";
 
 const observationSnapshot = { ...realObservation };
 const observationListeners = new Set<(hint: NativeObservationInvalidation) => void>();
@@ -154,7 +155,7 @@ function setPhase(
   messages: unknown[] = [],
 ) {
   act(() => {
-    useNativeAgentProjectionStore
+    appCommandStore(nativeAgentProjectionStore)
       .getState()
       .setProjection(sessionKeyOf(conversation), projectionOf(conversation, phase, messages));
   });
@@ -242,11 +243,12 @@ mock.module("@/components/native-agent", () => ({
 
 import { CoordinatorPanel } from "./CoordinatorPanel";
 import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
+import { appCommandStore } from "@/test/app-command-store";
 
 /** Two tab groups, each showing one of `first` and `second`. */
 function showInTwoGroups(first: CoordinatorConversation, second: CoordinatorConversation) {
   const single = reconcileCoordinatorLayout(null, [first.id, second.id]);
-  useCoordinatorPaneLayoutStore
+  appCommandStore(coordinatorPaneLayoutStore)
     .getState()
     .setLayout(
       "project-1",
@@ -277,8 +279,8 @@ beforeEach(() => {
   prepareSwitch.mockClear();
   getCheckoutTurn.mockReset();
   getCheckoutTurn.mockImplementation(async () => null);
-  useEnvironmentStore.setState({ environments: [] });
-  useProjectStore.setState({
+  appCommandStore(environmentStore).setState({ environments: [] });
+  appCommandStore(projectStore).setState({
     projects: [
       {
         id: "project-1",
@@ -290,8 +292,8 @@ beforeEach(() => {
       },
     ],
   });
-  useNativeAgentProjectionStore.getState().reset();
-  useCoordinatorPaneLayoutStore.getState().reset();
+  appCommandStore(nativeAgentProjectionStore).getState().reset();
+  appCommandStore(coordinatorPaneLayoutStore).getState().reset();
   resetUpstreamCheckForTests();
   resetClientStateCapabilitiesForTests();
 });
@@ -318,7 +320,7 @@ describe("first sends in two tab groups", () => {
 
   test("each keeps its own prompt until its own turn is observed", async () => {
     const { first, second } = unassignedSides();
-    render(<CoordinatorPanel projectId="project-1" />);
+    renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
     await screen.findByRole("button", { name: "Send in tab-side-1" });
 
     // The second send lands before the first conversation's first projection.
@@ -338,7 +340,7 @@ describe("first sends in two tab groups", () => {
 
   test("both observed in one update release together", async () => {
     const { first, second } = unassignedSides();
-    render(<CoordinatorPanel projectId="project-1" />);
+    renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
     await screen.findByRole("button", { name: "Send in tab-side-1" });
     fireEvent.click(screen.getByRole("button", { name: "Send in tab-side-1" }));
     fireEvent.click(screen.getByRole("button", { name: "Send in tab-side-2" }));
@@ -346,7 +348,7 @@ describe("first sends in two tab groups", () => {
     await waitFor(() => expect(promptOf(first.tabId)).toBe("First prompt for tab-side-1"));
 
     act(() => {
-      const store = useNativeAgentProjectionStore.getState();
+      const store = appCommandStore(nativeAgentProjectionStore).getState();
       store.setProjection(sessionKeyOf(first), projectionOf(first, "running"));
       store.setProjection(sessionKeyOf(second), projectionOf(second, "running"));
     });
@@ -358,7 +360,7 @@ describe("first sends in two tab groups", () => {
 
   test("closing a conversation lets go of the prompt its turn can no longer consume", async () => {
     const { first, second } = unassignedSides();
-    render(<CoordinatorPanel projectId="project-1" />);
+    renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
     await screen.findByRole("button", { name: "Send in tab-side-1" });
     fireEvent.click(screen.getByRole("button", { name: "Send in tab-side-1" }));
     fireEvent.click(screen.getByRole("button", { name: "Send in tab-side-2" }));
@@ -402,7 +404,7 @@ describe("Git and conversation actions", () => {
   }
 
   async function renderSettled() {
-    render(<CoordinatorPanel projectId="project-1" />);
+    renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
     await screen.findByTestId("native-agent");
     await waitFor(() => expect(fetchGit).toHaveBeenCalled());
     await waitFor(() => expect(refresh().hasAttribute("disabled")).toBe(false));
@@ -486,7 +488,7 @@ describe("branch switch and Sync while any turn runs", () => {
   /** The side agent in front; the main conversation's tab is behind it, so it is not mounted. */
   async function renderSideFocused() {
     ensuredSnapshot = snapshotOf([mainConversation, side], side.id);
-    useCoordinatorPaneLayoutStore
+    appCommandStore(coordinatorPaneLayoutStore)
       .getState()
       .setLayout(
         "project-1",
@@ -495,7 +497,7 @@ describe("branch switch and Sync while any turn runs", () => {
           side.id,
         ),
       );
-    render(<CoordinatorPanel projectId="project-1" />);
+    renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
     await waitFor(() =>
       expect(screen.getByTestId("native-agent").getAttribute("data-tab-id")).toBe(side.tabId),
     );
@@ -612,7 +614,7 @@ describe("branch switch and Sync while any turn runs", () => {
   test.each(["observation", "session"] as const)(
     "%s hints filter by Home and workspace runtime IDs",
     async (source) => {
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [
           { id: "home-1", projectId: "project-1", projectHome: true },
           { id: "other-home", projectId: "other-project", projectHome: true },
@@ -665,7 +667,7 @@ describe("branch switch and Sync while any turn runs", () => {
   });
 
   test("coming back to the panel sees a turn that started while it was away", async () => {
-    const away = render(<CoordinatorPanel projectId="project-1" />);
+    const away = renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
     await waitFor(() => expect(getCheckoutTurn).toHaveBeenCalled());
     await screen.findByTestId("native-agent");
     await waitFor(() => expect(gated()).toBe(false));
@@ -673,7 +675,7 @@ describe("branch switch and Sync while any turn runs", () => {
 
     // Started from the project home's own tab: nothing hints a panel that is not there.
     getCheckoutTurn.mockImplementation(async () => ({ kind: "project-home" }));
-    render(<CoordinatorPanel projectId="project-1" />);
+    renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
     await waitFor(() => expect(gated()).toBe(true));
     expect(branchPicker().getAttribute("title")).toStartWith("Home is running a turn.");
   });
@@ -681,7 +683,7 @@ describe("branch switch and Sync while any turn runs", () => {
   test("a turn that ended behind another tab does not hold the controls", async () => {
     // Nothing rewrites this projection while its tab is not mounted, so it still
     // says running. The backend is the one that knows the turn is over.
-    useNativeAgentProjectionStore
+    appCommandStore(nativeAgentProjectionStore)
       .getState()
       .setProjection(sessionKeyOf(mainConversation), projectionOf(mainConversation, "running"));
     await renderSideFocused();
@@ -691,7 +693,7 @@ describe("branch switch and Sync while any turn runs", () => {
   test("a mounted conversation counts before the backend has observed its turn", async () => {
     ensuredSnapshot = snapshotOf([mainConversation, side], side.id);
     showInTwoGroups(mainConversation, side);
-    render(<CoordinatorPanel projectId="project-1" />);
+    renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
     await waitFor(() => expect(screen.getAllByTestId("native-agent")).toHaveLength(2));
     await waitFor(() => expect(getCheckoutTurn).toHaveBeenCalled());
     await waitFor(() => expect(gated()).toBe(false));
@@ -709,10 +711,10 @@ describe("branch switch and Sync while any turn runs", () => {
     ["has not answered yet", () => new Promise<null>(() => undefined)],
   ])("a backend that %s leaves every projection to go on", async (_name, answer) => {
     getCheckoutTurn.mockImplementation(answer);
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [{ id: "home-1", projectId: "project-1", projectHome: true } as never],
     });
-    useNativeAgentProjectionStore
+    appCommandStore(nativeAgentProjectionStore)
       .getState()
       .setProjection(sessionKeyOf(mainConversation), projectionOf(mainConversation, "running"));
     await renderSideFocused();
@@ -722,10 +724,12 @@ describe("branch switch and Sync while any turn runs", () => {
     setPhase(mainConversation, "idle");
     await waitFor(() => expect(gated()).toBe(false));
     act(() => {
-      useNativeAgentProjectionStore.getState().setProjection("home-session", {
-        ...projectionOf(mainConversation, "running"),
-        environmentId: "home-1",
-      });
+      appCommandStore(nativeAgentProjectionStore)
+        .getState()
+        .setProjection("home-session", {
+          ...projectionOf(mainConversation, "running"),
+          environmentId: "home-1",
+        });
     });
     await waitFor(() => expect(gated()).toBe(true));
     expect(branchPicker().getAttribute("title")).toStartWith("Home is running a turn.");

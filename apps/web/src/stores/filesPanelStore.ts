@@ -1,7 +1,10 @@
-import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import type { StateCreator } from "zustand/vanilla";
 import type { GitFileChange, FileNode, FileSubtree } from "@/lib/backend";
-import { desktopConnectionStorageKey } from "@/lib/desktop-storage-key";
+import { nodeStorageKey } from "@/lib/persistence-keys";
+import { defineScopedStore } from "@/lib/node-scope/scoped-store";
+import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
+import { useFilesPanelChromeStore } from "./filesPanelChromeStore";
 import type { CreateFileTabOptions } from "@/contexts/TerminalContext";
 import {
   gitHubPullRequestKey,
@@ -61,13 +64,11 @@ export interface PendingFileOpen {
   options?: CreateFileTabOptions;
 }
 
-interface FilesPanelState {
-  // Panel visibility
-  isOpen: boolean;
-
-  // Panel width (persisted)
-  panelWidth: number;
-
+/**
+ * What the files panel shows for one node. Whether the panel is open, and
+ * its width, are the window's (`filesPanelChromeStore`).
+ */
+export interface FilesPanelState {
   // Active tab
   activeTab: FilesPanelTab;
 
@@ -102,13 +103,9 @@ interface FilesPanelState {
   pullRequestTabs: Record<string, FilesPanelPullRequestTab[]>;
 
   // Actions
-  togglePanel: () => void;
-  /** Opens the panel on "All files", for a target with nothing to review yet. */
+  /** Opens the window's panel on "All files", for a target with nothing to review yet. */
   openPanelOnAllFiles: () => void;
-  openPanel: () => void;
-  closePanel: () => void;
   setActiveTab: (tab: FilesPanelTab) => void;
-  setPanelWidth: (width: number) => void;
   setFolderExpanded: (path: string, expanded: boolean) => void;
   setChanges: (changes: GitFileChange[]) => void;
   setFileTree: (tree: FileNode[]) => void;
@@ -137,7 +134,7 @@ interface FilesPanelState {
   requestFileOpen: (request: PendingFileOpen) => void;
   /** Clears the pending open, but only if it is still `request`. */
   clearPendingFileOpen: (request: PendingFileOpen) => void;
-  /** Opens (or focuses) a pull request tab for `targetId` and shows the panel. */
+  /** Opens (or focuses) a pull request tab for `targetId` and shows the window's panel. */
   openPullRequest: (
     targetId: string,
     ref: GitHubPullRequestRef,
@@ -165,7 +162,7 @@ function boundedTargets(
   return Object.fromEntries(entries.slice(-MAX_PULL_REQUEST_TAB_TARGETS));
 }
 
-function sanitizePersistedPullRequestTabs(
+export function sanitizePersistedPullRequestTabs(
   value: unknown,
 ): Record<string, FilesPanelPullRequestTab[]> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
@@ -195,12 +192,52 @@ function sanitizePersistedPullRequestTabs(
   return result;
 }
 
-export const useFilesPanelStore = create<FilesPanelState>()(
-  persist(
+const MAX_PERSISTED_EXPANDED_FOLDERS = 10_000;
+
+function sanitizePersistedExpandedFolders(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((path): path is string => typeof path === "string" && path.length <= 4096)
+    .slice(0, MAX_PERSISTED_EXPANDED_FOLDERS);
+}
+
+/** What one node's panel keeps across reloads. */
+export type PersistedFilesPanelState = Pick<FilesPanelState, "expandedFolders" | "pullRequestTabs">;
+
+/**
+ * Applies a node's stored panel state to `current`. Only the persisted fields
+ * are read, each sanitized; anything else in the stored value (an earlier
+ * release's `panelWidth`, now the window's) is ignored.
+ */
+export function mergePersistedFilesPanelState(
+  persisted: unknown,
+  current: FilesPanelState,
+): FilesPanelState {
+  const stored = (typeof persisted === "object" && persisted !== null ? persisted : {}) as Partial<
+    Record<keyof PersistedFilesPanelState, unknown>
+  >;
+  return {
+    ...current,
+    expandedFolders: sanitizePersistedExpandedFolders(stored.expandedFolders),
+    pullRequestTabs: sanitizePersistedPullRequestTabs(stored.pullRequestTabs),
+  };
+}
+
+/**
+ * The files panel's state per node (report §7.1 class (d), plan item 3007):
+ * active tab, expanded folders, pull request tabs and the loaded files of the
+ * target the panel shows. Folder paths and pull request targets are node-local
+ * ids, so each node keeps its own, persisted under that node's key
+ * (`nodeStorageKey("files-panel-storage", scope)`).
+ */
+export const filesPanelStore = defineScopedStore<FilesPanelState>("files-panel", (scope) => {
+  const creator: StateCreator<
+    FilesPanelState,
+    [],
+    [["zustand/persist", PersistedFilesPanelState]]
+  > = persist(
     (set, get) => ({
       // Initial state
-      isOpen: false,
-      panelWidth: 320,
       activeTab: "changes",
       expandedFolders: [],
       changes: [],
@@ -218,12 +255,11 @@ export const useFilesPanelStore = create<FilesPanelState>()(
       pullRequestTabs: {},
 
       // Actions
-      togglePanel: () => set((state) => ({ isOpen: !state.isOpen })),
-      openPanelOnAllFiles: () => set({ isOpen: true, activeTab: "all-files" }),
-      openPanel: () => set({ isOpen: true }),
-      closePanel: () => set({ isOpen: false }),
+      openPanelOnAllFiles: () => {
+        set({ activeTab: "all-files" });
+        useFilesPanelChromeStore.getState().openPanel();
+      },
       setActiveTab: (tab) => set({ activeTab: tab }),
-      setPanelWidth: (width) => set({ panelWidth: width }),
       setFolderExpanded: (path, expanded) =>
         set((state) => {
           if (expanded) {
@@ -344,7 +380,7 @@ export const useFilesPanelStore = create<FilesPanelState>()(
         set((state) => ({
           pendingFileOpens: state.pendingFileOpens.filter((pending) => pending !== request),
         })),
-      openPullRequest: (targetId, ref, view = "summary") =>
+      openPullRequest: (targetId, ref, view = "summary") => {
         set((state) => {
           const key = gitHubPullRequestKey(ref);
           const current = state.pullRequestTabs[targetId] ?? [];
@@ -363,11 +399,12 @@ export const useFilesPanelStore = create<FilesPanelState>()(
           // Past the bound the oldest tab that is not this one closes.
           if (next.length > MAX_PULL_REQUEST_TABS_PER_TARGET) next = next.slice(1);
           return {
-            isOpen: true,
             activeTab: `pull-request:${key}`,
             pullRequestTabs: boundedTargets(state.pullRequestTabs, targetId, next),
           };
-        }),
+        });
+        useFilesPanelChromeStore.getState().openPanel();
+      },
       // Project-home activation changes the panel identity without changing
       // the checkout the reader sees. Carry its PR tabs across that transition.
       movePullRequestTabs: (from, to) =>
@@ -426,20 +463,20 @@ export const useFilesPanelStore = create<FilesPanelState>()(
         }),
     }),
     {
-      name: desktopConnectionStorageKey("files-panel-storage"),
+      name: nodeStorageKey("files-panel-storage", scope),
       partialize: (state) => ({
-        panelWidth: state.panelWidth,
         expandedFolders: state.expandedFolders,
         pullRequestTabs: state.pullRequestTabs,
       }),
-      merge: (persisted, current) => {
-        const stored = (persisted ?? {}) as Partial<FilesPanelState>;
-        return {
-          ...current,
-          ...stored,
-          pullRequestTabs: sanitizePersistedPullRequestTabs(stored.pullRequestTabs),
-        };
-      },
+      merge: mergePersistedFilesPanelState,
     },
-  ),
-);
+  );
+  // `persist` adds its `persist` API to the store; nothing here reads it.
+  return creator as StateCreator<FilesPanelState>;
+});
+
+/**
+ * Reads the nearest node scope's files panel state; other code uses
+ * `scope.store(filesPanelStore)`.
+ */
+export const useFilesPanelStore = scopedStoreHook(filesPanelStore);

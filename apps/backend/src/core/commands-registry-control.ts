@@ -1,8 +1,18 @@
+import {
+  createControlMcpCredentialCommand,
+  getControlMcpSettingsCommand,
+  launchControlJobCommand,
+  launchNativeAgentJobCommand,
+  revokeControlMcpCredentialCommand,
+  rotateControlMcpCredentialCommand,
+  rotateControlMcpTokenCommand,
+} from "@orkestrator/protocol/contract/domains/coordinator";
 import { controlJobId as jobIdFor, savedControlJobAgent } from "./control-job-identity.js";
 import { isEnvironmentReadyForAgents } from "@orkestrator/protocol/environment-readiness";
 import { normalizeAgentPlatforms, isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { resolveAgentPlatformSettings } from "@orkestrator/protocol/agent-settings";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
+import type { ResultOf } from "@orkestrator/protocol/contract/command";
 import type { CommandContext } from "./commands-context.js";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import { BUILD_PIPELINE_AGENTS } from "@orkestrator/protocol/build-pipeline";
@@ -11,7 +21,11 @@ import {
   isTrustedUserPromptPresentation,
   parseCoordinatorDelegatedPrompt,
 } from "@orkestrator/protocol/review-evidence-frames";
-import { coordinatorDelegationPresentationFrom } from "./coordinator-delegation-authority.js";
+import {
+  carryCoordinatorDelegationPresentation,
+  coordinatorDelegationPresentationFrom,
+  restoreCoordinatorDelegationPresentation,
+} from "./coordinator-delegation-authority.js";
 import {
   createAgentModelCatalogReader,
   resolveFastMode,
@@ -413,19 +427,19 @@ export function registerControlCommands(
   register: CommandRegistrar,
   dependencies: RegistryDependencies,
 ): void {
-  register("get_control_mcp_settings", (_args, context) => {
+  register(getControlMcpSettingsCommand, (_args, context) => {
     if (!context.controlMcp) throw new Error("Orkestrator control MCP is unavailable");
     return context.controlMcp.getSettings();
   });
 
-  register("rotate_control_mcp_token", async (_args, context) => {
+  register(rotateControlMcpTokenCommand, async (_args, context) => {
     if (!context.controlMcp) throw new Error("Orkestrator control MCP is unavailable");
     return context.controlMcp.rotateToken();
   });
 
   // Named operator credentials (Settings → MCP). Tokens are returned to the
   // renderer so Copy setup works, exactly as the single token always was.
-  register("create_control_mcp_credential", async (args, context) => {
+  register(createControlMcpCredentialCommand, async (args, context) => {
     if (!context.controlMcp) throw new Error("Orkestrator control MCP is unavailable");
     return context.controlMcp.createCredential({
       label: args.label,
@@ -435,36 +449,51 @@ export function registerControlCommands(
     });
   });
 
-  register("rotate_control_mcp_credential", async (args, context) => {
+  register(rotateControlMcpCredentialCommand, async (args, context) => {
     if (!context.controlMcp) throw new Error("Orkestrator control MCP is unavailable");
     if (typeof args.credentialId !== "string") throw new Error("credentialId is required");
     return context.controlMcp.rotateCredential(args.credentialId);
   });
 
-  register("revoke_control_mcp_credential", async (args, context) => {
+  register(revokeControlMcpCredentialCommand, async (args, context) => {
     if (!context.controlMcp) throw new Error("Orkestrator control MCP is unavailable");
     if (typeof args.credentialId !== "string") throw new Error("credentialId is required");
     return context.controlMcp.revokeCredential(args.credentialId);
   });
 
-  register("launch_control_job", (args, context) =>
-    launchNativeAgentJob(args, context, dependencies, {
-      validateModelCatalog: true,
-      allowCompletionAction: false,
-    }),
+  // A coordinator's delegated prompt carries its trusted presentation in a
+  // symbol key, which argument decoding would drop: it rides on the invocation.
+  register(
+    launchControlJobCommand,
+    (args, context, invocation) =>
+      launchNativeAgentJob(
+        restoreCoordinatorDelegationPresentation(args, invocation),
+        context,
+        dependencies,
+        { validateModelCatalog: true, allowCompletionAction: false },
+      ) as Promise<ResultOf<typeof launchControlJobCommand>>,
+    { beforeDecode: carryCoordinatorDelegationPresentation },
   );
 
   // Renderer actions use the same durable job machinery as Control MCP jobs.
   // The backend creates the pane tab, attaches the provider session and sends
   // the prompt before returning; mounting the tab is only a projection step.
-  register("launch_native_agent_job", (args, context) =>
-    launchNativeAgentJob(args, context, dependencies, {
-      // UI launchers already choose from the authoritative model catalogue.
-      // Settings may hold a provider's resolved model id rather than its picker
-      // alias, so validating against the picker key here would reject a valid
-      // configured default.
-      validateModelCatalog: false,
-      allowCompletionAction: true,
-    }),
+  register(
+    launchNativeAgentJobCommand,
+    (args, context, invocation) =>
+      launchNativeAgentJob(
+        restoreCoordinatorDelegationPresentation(args, invocation),
+        context,
+        dependencies,
+        {
+          // UI launchers already choose from the authoritative model catalogue.
+          // Settings may hold a provider's resolved model id rather than its picker
+          // alias, so validating against the picker key here would reject a valid
+          // configured default.
+          validateModelCatalog: false,
+          allowCompletionAction: true,
+        },
+      ) as Promise<ResultOf<typeof launchNativeAgentJobCommand>>,
+    { beforeDecode: carryCoordinatorDelegationPresentation },
   );
 }

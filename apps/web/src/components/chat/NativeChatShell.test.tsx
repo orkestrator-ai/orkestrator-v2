@@ -1,7 +1,8 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { TranscriptScrollController } from "@/lib/transcript-scroll/transcript-scroll-controller";
 import { createRef } from "react";
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { VirtuosoHandle } from "react-virtuoso";
 import type {
   NativeAgentActivityPart,
@@ -108,7 +109,9 @@ describe("NativeChatShell", () => {
     const messages: NativeMessage[] = [
       { id: "prompt", role: "user", content: "Hello", parts: [], createdAt: "2026-11-05" },
     ];
-    const { rerender } = render(<NativeChatShell {...props} messages={messages} />);
+    const { rerender } = renderInAppCommandScope(
+      <NativeChatShell {...props} messages={messages} />,
+    );
     expect(screen.queryByTestId("transcript-prompt-navigator") === null).toBe(true);
     rerender(
       <NativeChatShell
@@ -134,7 +137,7 @@ describe("NativeChatShell", () => {
   });
 
   test("reserves the measured dock height for pinned content and tracks growth", () => {
-    render(
+    renderInAppCommandScope(
       <NativeChatShell
         {...shellProps()}
         blockingCards={<div>Approval with a long explanation</div>}
@@ -159,7 +162,7 @@ describe("NativeChatShell", () => {
   });
 
   test("tracks composer growth even when the dock has no pinned content", () => {
-    render(<NativeChatShell {...shellProps()} />);
+    renderInAppCommandScope(<NativeChatShell {...shellProps()} />);
 
     const dock = screen.getByTestId("compose-dock");
     const spacer = screen.getByTestId("transcript-bottom-spacer");
@@ -181,13 +184,13 @@ describe("NativeChatShell", () => {
   });
 
   test("enables live arrivals on the production transcript", () => {
-    render(<NativeChatShell {...shellProps()} />);
+    renderInAppCommandScope(<NativeChatShell {...shellProps()} />);
     expect(lastVirtualizedMessageListProps?.animateArrivals).toBe(true);
   });
 
   test("keeps the list's inputs across a render that changes nothing they show", () => {
     const props = shellProps();
-    const { rerender } = render(<NativeChatShell {...props} />);
+    const { rerender } = renderInAppCommandScope(<NativeChatShell {...props} />);
     const first = lastVirtualizedMessageListProps!;
 
     rerender(<NativeChatShell {...props} isAtBottom={false} composer={<textarea />} />);
@@ -201,7 +204,7 @@ describe("NativeChatShell", () => {
 
   test("the footer shows a turn running on its own, with no clock or status label", () => {
     const props = shellProps();
-    const { rerender } = render(<NativeChatShell {...props} />);
+    const { rerender } = renderInAppCommandScope(<NativeChatShell {...props} />);
     expect(screen.queryByText(/is thinking/) === null).toBe(true);
 
     rerender(<NativeChatShell {...props} isLoading />);
@@ -212,13 +215,13 @@ describe("NativeChatShell", () => {
   });
 
   test("shows a desync warning while already at the bottom without another accessory", () => {
-    render(<NativeChatShell {...shellProps()} desynced />);
+    renderInAppCommandScope(<NativeChatShell {...shellProps()} desynced />);
 
     expect(screen.getByText(/Live updates disconnected/)).toBeTruthy();
   });
 
   test("exposes agent lifecycle announcements outside interactive transcript cards", () => {
-    render(
+    renderInAppCommandScope(
       <NativeChatShell
         {...shellProps()}
         agentActivityAnnouncement={{ text: "1 sub-agent working: Reviewer.", seq: 1 }}
@@ -240,7 +243,7 @@ describe("NativeChatShell", () => {
      * the region must be re-created from `seq` or the second one is never spoken.
      */
     const announcement = { text: "Sub-agent finished.", seq: 4 };
-    const view = render(
+    const view = renderInAppCommandScope(
       <NativeChatShell {...shellProps()} agentActivityAnnouncement={announcement} />,
     );
 
@@ -263,7 +266,7 @@ describe("NativeChatShell", () => {
     // The region must already be in the accessibility tree before the first
     // message: a live region created at the same moment its text appears is
     // unreliable across screen readers.
-    const { container } = render(<NativeChatShell {...shellProps()} />);
+    const { container } = renderInAppCommandScope(<NativeChatShell {...shellProps()} />);
 
     const region = container.firstElementChild?.firstElementChild;
     expect(region?.getAttribute("aria-live")).toBe("polite");
@@ -279,7 +282,7 @@ describe("NativeChatShell", () => {
      * banner exists for. Routing it through `topAccessory` hid it here, because
      * the dock suppresses that strip while centered.
      */
-    render(<NativeChatShell {...shellProps()} centerCompose desynced />);
+    renderInAppCommandScope(<NativeChatShell {...shellProps()} centerCompose desynced />);
 
     expect(screen.getByText(/Live updates disconnected/)).toBeTruthy();
   });
@@ -287,7 +290,9 @@ describe("NativeChatShell", () => {
   test("keeps the scroll affordance out of the centered layout while desynced", () => {
     // The banner is unconditional; the scroll-down button still belongs only to
     // a scrolled transcript, so the two must not have been merged into one row.
-    render(<NativeChatShell {...shellProps()} centerCompose desynced isAtBottom={false} />);
+    renderInAppCommandScope(
+      <NativeChatShell {...shellProps()} centerCompose desynced isAtBottom={false} />,
+    );
 
     expect(screen.getByText(/Live updates disconnected/)).toBeTruthy();
     expect(
@@ -306,7 +311,7 @@ describe("NativeChatShell", () => {
       modelId: "provider/model-id",
     };
 
-    render(
+    renderInAppCommandScope(
       <NativeChatShell
         {...shellProps()}
         messages={[message]}
@@ -346,7 +351,7 @@ describe("NativeChatShell", () => {
     const pinnedMessages = (parts: NativeMessagePart[]) =>
       pinNativeAgentParts([{ ...source, parts }]);
 
-    const view = render(
+    const view = renderInAppCommandScope(
       <NativeChatShell {...shellProps()} messages={pinnedMessages([firstAgent])} />,
     );
 
@@ -464,7 +469,7 @@ describe("NativeChatShell", () => {
           stopBackgroundTask={stopBackgroundTask}
         />
       );
-      const view = render(content(transcript()));
+      const view = renderInAppCommandScope(content(transcript()));
       fireEvent.click(screen.getByRole("button", { name: /^(agent|task).*tester/i }));
       const expectExpanded = (label: string) => {
         expect(
@@ -516,13 +521,13 @@ describe("NativeChatShell", () => {
       expect(screen.getByRole("region", { name: "2 agents" })).toBeTruthy();
 
       view.unmount();
-      const remounted = render(content(finished));
+      const remounted = renderInAppCommandScope(content(finished));
       expectExpanded("Reviewer");
       expectExpanded("Tester");
       expect(screen.queryAllByRole("button", { name: /^Stop / })).toHaveLength(0);
 
       remounted.unmount();
-      render(content(finished, true, `other-transcript-${kind}`));
+      renderInAppCommandScope(content(finished, true, `other-transcript-${kind}`));
       for (const label of ["Reviewer", "Tester"]) {
         expect(
           screen
@@ -534,7 +539,9 @@ describe("NativeChatShell", () => {
   );
 
   test("remeasures pinned clearance when the viewport changes", () => {
-    render(<NativeChatShell {...shellProps()} pinnedAccessory={<div>Plan details</div>} />);
+    renderInAppCommandScope(
+      <NativeChatShell {...shellProps()} pinnedAccessory={<div>Plan details</div>} />,
+    );
 
     const dock = screen.getByTestId("compose-dock");
     const spacer = screen.getByTestId("transcript-bottom-spacer");
@@ -547,7 +554,7 @@ describe("NativeChatShell", () => {
   });
 
   test("uses the configured spacer before an unpinned dock can be measured", () => {
-    render(<NativeChatShell {...shellProps()} bottomSpacerClassName="h-48" />);
+    renderInAppCommandScope(<NativeChatShell {...shellProps()} bottomSpacerClassName="h-48" />);
 
     const spacer = screen.getByTestId("transcript-bottom-spacer");
     expect(spacer.className).toContain("h-48");
@@ -562,7 +569,7 @@ describe("NativeChatShell", () => {
      * permanently switch the spacer to dock-height mode on a tab with no
      * blocking prompt at all.
      */
-    render(<NativeChatShell {...shellProps()} blockingCards={[]} />);
+    renderInAppCommandScope(<NativeChatShell {...shellProps()} blockingCards={[]} />);
 
     const dock = screen.getByTestId("compose-dock");
     const spacer = screen.getByTestId("transcript-bottom-spacer");
@@ -579,7 +586,9 @@ describe("NativeChatShell", () => {
   test("reserves a conservative spacer for pinned content before the dock is measured", () => {
     // The dock has no laid-out height yet, so reserving its measurement would
     // clear nothing and the prompt would sit on top of the transcript.
-    render(<NativeChatShell {...shellProps()} blockingCards={<div>Approve this command</div>} />);
+    renderInAppCommandScope(
+      <NativeChatShell {...shellProps()} blockingCards={<div>Approve this command</div>} />,
+    );
 
     const spacer = screen.getByTestId("transcript-bottom-spacer");
     expect(spacer.className).toContain("h-80");
@@ -594,7 +603,9 @@ describe("NativeChatShell", () => {
     delete globalThis.ResizeObserver;
 
     try {
-      render(<NativeChatShell {...shellProps()} blockingCards={<div>Approve this command</div>} />);
+      renderInAppCommandScope(
+        <NativeChatShell {...shellProps()} blockingCards={<div>Approve this command</div>} />,
+      );
 
       const dock = screen.getByTestId("compose-dock");
       const spacer = screen.getByTestId("transcript-bottom-spacer");
@@ -610,7 +621,7 @@ describe("NativeChatShell", () => {
   });
 
   test("renders blocking cards before the pinned accessory in one pinned region", () => {
-    render(
+    renderInAppCommandScope(
       <NativeChatShell
         {...shellProps()}
         blockingCards={<div>Answer the blocking question</div>}
@@ -627,7 +638,9 @@ describe("NativeChatShell", () => {
   });
 
   test("renders transcript cards inside the transcript, not the pinned dock", () => {
-    render(<NativeChatShell {...shellProps()} transcriptCards={<div>Which approach?</div>} />);
+    renderInAppCommandScope(
+      <NativeChatShell {...shellProps()} transcriptCards={<div>Which approach?</div>} />,
+    );
 
     const card = screen.getByText("Which approach?");
     expect(screen.getByTestId("compose-dock").contains(card)).toBe(false);
@@ -641,13 +654,17 @@ describe("NativeChatShell", () => {
   test("leaves the spacer alone for transcript cards, which take their own space", () => {
     // Unlike a pinned card, a transcript card is part of the scrolled content.
     // Widening the spacer for it would open a gap below the conversation.
-    render(<NativeChatShell {...shellProps()} transcriptCards={<div>Which approach?</div>} />);
+    renderInAppCommandScope(
+      <NativeChatShell {...shellProps()} transcriptCards={<div>Which approach?</div>} />,
+    );
 
     expect(screen.getByTestId("transcript-bottom-spacer").className).toContain("h-32");
   });
 
   test("treats an empty transcriptCards array as no transcript card", () => {
-    render(<NativeChatShell {...shellProps()} transcriptCards={[]} centerCompose />);
+    renderInAppCommandScope(
+      <NativeChatShell {...shellProps()} transcriptCards={[]} centerCompose />,
+    );
 
     expect(screen.queryByTestId("transcript-cards") === null).toBe(true);
     expect(screen.getByTestId("compose-dock").className).toContain("top-1/2");
@@ -659,7 +676,7 @@ describe("NativeChatShell", () => {
      * arrives with no messages yet would otherwise block the turn behind an
      * invisible card the user cannot answer.
      */
-    render(
+    renderInAppCommandScope(
       <NativeChatShell
         {...shellProps()}
         centerCompose
@@ -691,7 +708,7 @@ describe("NativeChatShell", () => {
     };
     const messageActions = mock(() => <button type="button">Fork</button>);
 
-    const view = render(
+    const view = renderInAppCommandScope(
       <NativeChatShell
         {...shellProps()}
         isActive={false}
@@ -717,7 +734,7 @@ describe("NativeChatShell", () => {
 
   describe("connection states", () => {
     test("keeps cached transcript and composer visible while reconnecting", () => {
-      render(
+      renderInAppCommandScope(
         <NativeChatShell
           {...shellProps()}
           agentLabel="Codex"
@@ -751,7 +768,7 @@ describe("NativeChatShell", () => {
       // authoritatively returned empty. That is a brand-new conversation, not
       // missing transcript history, so the dock must stay clean even though the
       // refresh flag is set.
-      const { rerender } = render(
+      const { rerender } = renderInAppCommandScope(
         <NativeChatShell
           {...shellProps()}
           agentLabel="Codex"
@@ -809,7 +826,7 @@ describe("NativeChatShell", () => {
     });
 
     test("does not add and remove the refresh live region across successive background refreshes", () => {
-      const { rerender, container } = render(
+      const { rerender, container } = renderInAppCommandScope(
         <NativeChatShell
           {...shellProps()}
           agentLabel="Codex"
@@ -857,7 +874,7 @@ describe("NativeChatShell", () => {
     });
 
     test("pins the shimmer to the dock when the centered layout hides the transcript", () => {
-      render(
+      renderInAppCommandScope(
         <NativeChatShell
           {...shellProps()}
           agentLabel="Codex"
@@ -878,7 +895,7 @@ describe("NativeChatShell", () => {
     });
 
     test("pins the shimmer to the dock when the reader has scrolled away from the bottom", () => {
-      const { rerender } = render(
+      const { rerender } = renderInAppCommandScope(
         <NativeChatShell
           {...shellProps()}
           agentLabel="Codex"
@@ -911,7 +928,7 @@ describe("NativeChatShell", () => {
     });
 
     test("prefers the refresh shimmer over the desync banner it is already resolving", () => {
-      const { rerender } = render(
+      const { rerender } = renderInAppCommandScope(
         <NativeChatShell {...shellProps()} agentLabel="Codex" centerCompose desynced />,
       );
 
@@ -934,7 +951,7 @@ describe("NativeChatShell", () => {
     });
 
     test("keeps the refresh live region mounted before the refresh begins", () => {
-      const { container, rerender } = render(
+      const { container, rerender } = renderInAppCommandScope(
         <NativeChatShell {...shellProps()} agentLabel="Codex" displayAvailable />,
       );
 
@@ -964,7 +981,7 @@ describe("NativeChatShell", () => {
       // `displayAvailable` is set, but there is nothing established behind it.
       // A composer that cannot send yet would present the tab as idle and
       // ready, and reconnect copy would name a session that never existed.
-      const { container } = render(
+      const { container } = renderInAppCommandScope(
         <NativeChatShell
           {...shellProps()}
           agentLabel="Cursor Agent"
@@ -982,7 +999,7 @@ describe("NativeChatShell", () => {
     });
 
     test("shows an establishing tab's own messages instead of the connecting logo", () => {
-      render(
+      renderInAppCommandScope(
         <NativeChatShell
           {...shellProps()}
           agentLabel="Cursor Agent"
@@ -1012,7 +1029,7 @@ describe("NativeChatShell", () => {
 
     test("keeps cached transcript readable and exposes compact retry after an error", () => {
       const onRetry = mock(() => {});
-      const { container } = render(
+      const { container } = renderInAppCommandScope(
         <NativeChatShell
           {...shellProps()}
           connectionState="error"
@@ -1034,7 +1051,7 @@ describe("NativeChatShell", () => {
     });
 
     test("shows a connecting screen instead of the transcript", () => {
-      const { container } = render(
+      const { container } = renderInAppCommandScope(
         <NativeChatShell
           {...shellProps()}
           agentLabel="Codex"
@@ -1055,7 +1072,7 @@ describe("NativeChatShell", () => {
     });
 
     test("uses the selected platform logo while connecting", () => {
-      const { container, rerender } = render(
+      const { container, rerender } = renderInAppCommandScope(
         <NativeChatShell
           {...shellProps()}
           agentLabel="Grok Build"
@@ -1083,7 +1100,7 @@ describe("NativeChatShell", () => {
 
     test("reports the failure reason and retries on demand", () => {
       const onRetry = mock(() => {});
-      render(
+      renderInAppCommandScope(
         <NativeChatShell
           {...shellProps()}
           connectionState="error"
@@ -1101,7 +1118,7 @@ describe("NativeChatShell", () => {
     });
 
     test("falls back to a generic message when the error has no detail", () => {
-      render(
+      renderInAppCommandScope(
         <NativeChatShell
           {...shellProps()}
           agentLabel="OpenCode"
@@ -1115,7 +1132,7 @@ describe("NativeChatShell", () => {
     });
 
     test("toggles the server log on and off", () => {
-      render(
+      renderInAppCommandScope(
         <NativeChatShell
           {...shellProps()}
           connectionState="error"
@@ -1135,7 +1152,9 @@ describe("NativeChatShell", () => {
     test("says so rather than opening an empty log box", () => {
       // A whitespace-only log is truthy, so the toggle is offered; showing a
       // blank pane would read as a broken UI rather than an empty log.
-      render(<NativeChatShell {...shellProps()} connectionState="error" serverLog={"   \n  "} />);
+      renderInAppCommandScope(
+        <NativeChatShell {...shellProps()} connectionState="error" serverLog={"   \n  "} />,
+      );
 
       fireEvent.click(screen.getByRole("button", { name: "Show Log" }));
       expect(screen.getByText("(empty log)")).toBeTruthy();
@@ -1144,12 +1163,12 @@ describe("NativeChatShell", () => {
 
   describe("empty state", () => {
     test("uses the agent-specific default copy", () => {
-      render(<NativeChatShell {...shellProps()} agentLabel="Claude" />);
+      renderInAppCommandScope(<NativeChatShell {...shellProps()} agentLabel="Claude" />);
       expect(screen.getByText("No messages yet. Start a conversation with Claude!")).toBeTruthy();
     });
 
     test("prefers an explicit empty-state message", () => {
-      render(
+      renderInAppCommandScope(
         <NativeChatShell {...shellProps()} emptyStateMessage="Pick a session to get going." />,
       );
 
@@ -1160,13 +1179,13 @@ describe("NativeChatShell", () => {
     test("suppresses the empty state while the composer is centered", () => {
       // The centered composer already is the empty state; a second one below it
       // would be duplicate copy.
-      render(<NativeChatShell {...shellProps()} centerCompose />);
+      renderInAppCommandScope(<NativeChatShell {...shellProps()} centerCompose />);
       expect(screen.queryByText(/No messages yet/) === null).toBe(true);
     });
 
     test("offers Resume Session from the empty transcript", () => {
       const onResumeClick = mock(() => {});
-      render(<NativeChatShell {...shellProps()} onResumeClick={onResumeClick} />);
+      renderInAppCommandScope(<NativeChatShell {...shellProps()} onResumeClick={onResumeClick} />);
 
       // The dock's copy is aria-hidden while docked, so this is the empty
       // state's button.
@@ -1175,7 +1194,7 @@ describe("NativeChatShell", () => {
     });
 
     test("omits Resume Session when there is nothing to resume", () => {
-      render(<NativeChatShell {...shellProps()} />);
+      renderInAppCommandScope(<NativeChatShell {...shellProps()} />);
       expect(screen.queryByText("Resume Session") === null).toBe(true);
     });
   });
@@ -1183,7 +1202,7 @@ describe("NativeChatShell", () => {
   describe("dock actions", () => {
     test("exposes Resume Session only while the composer is centered", () => {
       const onResumeClick = mock(() => {});
-      const { rerender } = render(
+      const { rerender } = renderInAppCommandScope(
         <NativeChatShell {...shellProps()} centerCompose onResumeClick={onResumeClick} />,
       );
 
@@ -1206,7 +1225,7 @@ describe("NativeChatShell", () => {
     });
 
     test("renders the resume dialog outside the dock so its portal is not clipped", () => {
-      render(
+      renderInAppCommandScope(
         <NativeChatShell {...shellProps()} resumeDialog={<div data-testid="resume-dialog" />} />,
       );
 
@@ -1217,7 +1236,7 @@ describe("NativeChatShell", () => {
 
   describe("transcript footer", () => {
     test("shows the thinking indicator and the running elapsed time", () => {
-      render(
+      renderInAppCommandScope(
         <NativeChatShell {...shellProps()} agentLabel="Codex" isLoading elapsedSeconds={95} />,
       );
 
@@ -1226,7 +1245,7 @@ describe("NativeChatShell", () => {
     });
 
     test("prefers an explicit status label over the thinking indicator", () => {
-      render(
+      renderInAppCommandScope(
         <NativeChatShell
           {...shellProps()}
           isLoading
@@ -1242,7 +1261,7 @@ describe("NativeChatShell", () => {
     });
 
     test("reports the completed duration once the turn ends", () => {
-      const { rerender } = render(
+      const { rerender } = renderInAppCommandScope(
         <NativeChatShell
           {...shellProps()}
           isLoading
@@ -1285,7 +1304,7 @@ describe("NativeChatShell", () => {
         );
       }
 
-      render(<FollowingShell />);
+      renderInAppCommandScope(<FollowingShell />);
       const scroller = screen.getByTestId("follow-scroller");
       Object.defineProperty(scroller, "scrollHeight", { value: 1000 });
       Object.defineProperty(scroller, "clientHeight", { value: 300 });
@@ -1309,7 +1328,7 @@ describe("NativeChatShell", () => {
 
     test("offers a scroll-down shortcut only when scrolled away from the bottom", () => {
       const scrollToBottom = mock(() => {});
-      const { rerender } = render(
+      const { rerender } = renderInAppCommandScope(
         <NativeChatShell {...shellProps()} isAtBottom scrollToBottom={scrollToBottom} />,
       );
 
@@ -1354,7 +1373,7 @@ describe("NativeChatShell", () => {
           modelId: "gpt-5.6-sol",
         },
       ];
-      render(
+      renderInAppCommandScope(
         <NativeChatShell
           {...shellProps()}
           messages={messages}
@@ -1398,7 +1417,7 @@ describe("NativeChatShell", () => {
         ],
       };
 
-      const { rerender } = render(
+      const { rerender } = renderInAppCommandScope(
         <NativeChatShell {...shellProps()} platform="cursor" messages={[message]} />,
       );
       expect(screen.getByText("Summarize two docs (explore)")).toBeTruthy();
@@ -1410,7 +1429,7 @@ describe("NativeChatShell", () => {
     });
 
     test("passes the resolver through to the list", () => {
-      render(<NativeChatShell {...shellProps()} messages={[]} />);
+      renderInAppCommandScope(<NativeChatShell {...shellProps()} messages={[]} />);
 
       expect(lastVirtualizedMessageListProps?.resolvePreviousMessage).toBe(
         findPreviousNativeMessage,

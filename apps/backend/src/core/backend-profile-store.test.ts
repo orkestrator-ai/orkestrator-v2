@@ -1,3 +1,4 @@
+import { eventSink } from "./backend-emit.js";
 import { afterEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
@@ -217,7 +218,7 @@ describe("backend profile commands", () => {
     const emitted: Array<{ event: string; payload: unknown }> = [];
     const context = {
       storage,
-      emit: (event: string, payload: unknown) => emitted.push({ event, payload }),
+      emit: eventSink((event: string, payload: unknown) => emitted.push({ event, payload })),
     } as unknown as CommandContext;
     const commands = createCommandRegistry();
     const invoke = (name: string, args: Record<string, unknown> = {}) =>
@@ -225,7 +226,8 @@ describe("backend profile commands", () => {
 
     const initial = (await invoke("get_backend_profile")) as BackendProfile;
     expect(initial.revision).toBe(1);
-    await expect(invoke("get_backend_profile", { extra: true })).rejects.toThrow();
+    // A defined command drops unknown keys (plan item 7009) rather than refusing them.
+    expect(await invoke("get_backend_profile", { extra: true })).toEqual(initial);
     expect(emitted).toEqual([]);
 
     const updated = (await invoke("update_backend_profile", {

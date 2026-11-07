@@ -1,17 +1,19 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { GraphDescribeJobView } from "@orkestrator/protocol/graphs/describe";
 import { graphTemplateExample } from "@orkestrator/protocol/graphs/examples";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
 import { dispatchResourceChange } from "@/lib/resource-sync";
-import { useEnvironmentStore } from "@/stores/environmentStore";
-import { useGraphDescribeStore } from "@/stores/graphDescribeStore";
-import { useGraphDesignerStore } from "@/stores/graphDesignerStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { environmentStore } from "@/stores/environmentStore";
+import { graphDescribeStore } from "@/stores/graphDescribeStore";
+import { graphDesignerStore } from "@/stores/graphDesignerStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import type { Environment } from "@/types";
 import { GraphDesignerTab } from "./GraphDesignerTab";
 import { builtInDetail, listResult } from "./graph-designer.test-fixtures";
 import { installReactFlowDomStubs } from "./react-flow.test-support";
+import { appCommandStore } from "@/test/app-command-store";
 
 const invokeMock = nativeInvoke as unknown as ReturnType<typeof mock>;
 
@@ -78,12 +80,12 @@ function installBackend() {
 }
 
 function seedStores() {
-  useGraphDesignerStore.setState({ libraries: new Map(), tabs: new Map() });
-  useGraphDescribeStore.setState({ entries: new Map() });
-  useEnvironmentStore.setState({
+  appCommandStore(graphDesignerStore).setState({ libraries: new Map(), tabs: new Map() });
+  appCommandStore(graphDescribeStore).setState({ entries: new Map() });
+  appCommandStore(environmentStore).setState({
     environments: [{ id: ENVIRONMENT_ID, projectId: "project-1" } as Environment],
   });
-  usePaneLayoutStore.setState({
+  appCommandStore(paneLayoutStore).setState({
     environments: new Map([
       [
         ENVIRONMENT_ID,
@@ -103,7 +105,7 @@ function seedStores() {
 }
 
 function renderTab(isActive = true) {
-  return render(
+  return renderInAppCommandScope(
     <div style={{ width: 1600, height: 1000, position: "relative" }}>
       <GraphDesignerTab
         tabId={TAB_ID}
@@ -164,7 +166,7 @@ describe("Describe a graph in the designer", () => {
     expect(screen.getByText("Correcting the draft the compiler refused…")).toBeDefined();
     view.unmount();
     // A fresh client (a reload) has no local state at all.
-    useGraphDescribeStore.setState({ entries: new Map() });
+    appCommandStore(graphDescribeStore).setState({ entries: new Map() });
     const before = statusCalls();
     renderTab();
     await waitFor(() => expect(statusCalls()).toBeGreaterThan(before));
@@ -190,7 +192,7 @@ describe("Describe a graph in the designer", () => {
       await new Promise((resolve) => setTimeout(resolve, 80));
     });
     await waitFor(() => {
-      const editor = useGraphDesignerStore.getState().tabs.get(TAB_ID)?.editor;
+      const editor = appCommandStore(graphDesignerStore).getState().tabs.get(TAB_ID)?.editor;
       expect(editor?.isNew).toBe(true);
       expect(editor?.draft.id).toBe("described-review");
       expect(editor?.saved).toBeNull();
@@ -211,16 +213,18 @@ describe("Describe a graph in the designer", () => {
     const view = renderTab(false);
     await waitFor(() => expect(statusCalls()).toBeGreaterThan(0));
     await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(useGraphDesignerStore.getState().tabs.get(TAB_ID)?.editor ?? null).toBeNull();
+    expect(
+      appCommandStore(graphDesignerStore).getState().tabs.get(TAB_ID)?.editor ?? null,
+    ).toBeNull();
     view.rerender(
       <div style={{ width: 1600, height: 1000, position: "relative" }}>
         <GraphDesignerTab tabId={TAB_ID} environmentId={ENVIRONMENT_ID} data={{}} isActive />
       </div>,
     );
     await waitFor(() =>
-      expect(useGraphDesignerStore.getState().tabs.get(TAB_ID)?.editor?.draft.id).toBe(
-        "described-review",
-      ),
+      expect(
+        appCommandStore(graphDesignerStore).getState().tabs.get(TAB_ID)?.editor?.draft.id,
+      ).toBe("described-review"),
     );
   });
 

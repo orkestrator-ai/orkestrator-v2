@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:79d41484112827ce8e672be4b97c21e63d4bc8293f455e1c0864bd5c8b0ccdcf",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "model": {},
+        "reviewerId": {
+          "type": "string"
+        },
+        "workflowId": {
+          "type": "string"
+        }
+      },
+      "required": ["reviewerId", "workflowId"],
+      "type": "object"
+    }
+  }
+}

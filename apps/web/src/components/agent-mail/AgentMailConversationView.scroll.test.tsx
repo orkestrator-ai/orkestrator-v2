@@ -1,5 +1,6 @@
 import { afterAll, afterEach, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, screen } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import * as backend from "@/lib/backend";
 import * as markdown from "./AgentMailMarkdown";
 import { Sheet } from "@/components/ui/sheet";
@@ -53,7 +54,7 @@ afterAll(() => {
 });
 afterEach(cleanup);
 test("follows delayed Markdown height while at bottom and respects scrolling away", async () => {
-  const { container } = render(
+  const { container } = renderInAppCommandScope(
     <Sheet>
       <AgentMailConversationView a="user" b="env\0tab" onBack={() => {}} />
     </Sheet>,

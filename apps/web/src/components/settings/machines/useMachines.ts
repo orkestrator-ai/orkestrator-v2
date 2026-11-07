@@ -14,7 +14,8 @@ import type { ConnectionList } from "@orkestrator/protocol/connections";
 import { getNodeStatus, listNodes, nodeErrorText } from "@/lib/backend/command-nodes";
 import { subscribeToConnections } from "@/lib/connections";
 import { usePortalLayout } from "@/lib/portal/portal-layout";
-import { portalInvoke, portalListen, workspaceTarget } from "@/lib/portal/portal-transport";
+import { NO_ARGS, portalNodesApi } from "@/lib/node-scope/domains/nodes";
+import { commandScopeListen } from "@/lib/portal/command-scope";
 import { buildMachineList, type MachineEntry } from "./machine-list";
 
 export type ConnectionsApi = NonNullable<NonNullable<Window["orkestrator"]>["connections"]>;
@@ -66,7 +67,7 @@ export function useMachines() {
       Promise.allSettled([
         getNodeStatus(),
         listNodes(),
-        portalInvoke<unknown>("get_backend_profile"),
+        portalNodesApi().get_backend_profile(NO_ARGS),
       ]).then(([nextStatus, nextNodes, profile]) => {
         if (nextStatus.status === "fulfilled") setStatus(nextStatus.value);
         if (nextNodes.status === "fulfilled") setNodes(nextNodes.value);
@@ -107,9 +108,9 @@ export function useMachines() {
       else unlisten.push(stop);
     };
     for (const event of [NODES_CHANGED_EVENT, NODE_STATUS_CHANGED_EVENT]) {
-      void portalListen(event, () => void loadNodes()).then(keep);
+      void commandScopeListen(event, () => void loadNodes()).then(keep);
     }
-    void portalListen<unknown>(BACKEND_PROFILE_CHANGED_EVENT, ({ payload }) => {
+    void commandScopeListen<unknown>(BACKEND_PROFILE_CHANGED_EVENT, ({ payload }) => {
       try {
         const next = parseBackendProfile(payload);
         setSelfProfile((current) => (current && current.revision > next.revision ? current : next));
@@ -124,7 +125,6 @@ export function useMachines() {
   }, [loadNodes]);
 
   const layout = usePortalLayout();
-  const workspaceNodeId = workspaceTarget()?.nodeId ?? null;
   const entries = useMemo<MachineEntry[]>(
     () =>
       buildMachineList({
@@ -132,11 +132,12 @@ export function useMachines() {
         nodes,
         connections,
         selfProfile,
-        workspaceNodeId,
+        // The window is always on its command node.
+        workspaceNodeId: null,
         selfAddress: api ? null : browserAddress(),
         machineOrder: layout.machineOrder,
       }),
-    [api, connections, layout.machineOrder, nodes, selfProfile, status, workspaceNodeId],
+    [api, connections, layout.machineOrder, nodes, selfProfile, status],
   );
 
   return {

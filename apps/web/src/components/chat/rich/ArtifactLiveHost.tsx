@@ -23,14 +23,27 @@ import { ARTIFACT_FRAME_CHANNEL } from "@orkestrator/protocol/artifact-frame-cha
 import { useTranscriptArtifactCapabilities } from "@/hooks/useTranscriptArtifactCapabilities";
 import { useBlockingOverlay } from "@/components/browser/browser-tab-hooks";
 import {
+  artifactLiveHostOwner,
+  isLiveOccurrence,
   LIVE_HOST_INVALIDATION_REASONS,
+  liveAnchorKey,
   liveHostScopeInvalidation,
   useArtifactLiveHostStore,
   type LiveHostSession,
   type LivePlacement,
 } from "@/stores/artifactLiveHostStore";
-import { useEnvironmentStore } from "@/stores/environmentStore";
-import { useUIStore } from "@/stores/uiStore";
+import {
+  NodeScopeProvider,
+  useScopesWithCommandFallback,
+  WindowScopeProvider,
+} from "@/lib/node-scope/providers";
+import type { StoreApi } from "zustand";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { environmentStore, type EnvironmentState } from "@/stores/environmentStore";
+import { uiStore, type UIState } from "@/stores/uiStore";
+import { selectionOnScope } from "@/stores/windowSelectionStore";
+import { windowScopeOf } from "@/lib/node-scope/window-scope";
+import { environmentKey, environmentRef } from "@orkestrator/protocol/federation";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -178,27 +191,51 @@ const PHASE_TEXT: Record<LiveHostSession["phase"], string> = {
   error: "Could not start",
 };
 
-function environmentScopeSnapshot() {
-  const environments = useEnvironmentStore.getState();
-  const ui = useUIStore.getState();
+/**
+ * The owner node's environments and the window's selection as the guard
+ * compares them. The selection is node-qualified (plan item 3006): an
+ * environment selected on another node is named by its node-qualified key,
+ * which never equals one of the owner's environment ids, so moving to it is
+ * a switch away, while selecting only another node's project is not.
+ */
+function environmentScopeSnapshot(
+  owner: NodeScope,
+  environmentsStore: StoreApi<EnvironmentState>,
+  ui: StoreApi<UIState>,
+) {
+  const environments = environmentsStore.getState();
+  const selection = windowScopeOf(owner)?.selection.get() ?? null;
+  const onOwner = selectionOnScope(owner, selection) !== null;
+  const selectedEnvironmentId =
+    selection?.environmentId == null
+      ? null
+      : onOwner
+        ? selection.environmentId
+        : environmentKey(environmentRef(selection.nodeId, selection.environmentId));
   return {
     environmentIds: new Set(environments.environments.map((environment) => environment.id)),
     deletingIds: environments.deletingEnvironments,
-    selectedEnvironmentId: ui.selectedEnvironmentId,
-    selectedEnvironmentIds: ui.selectedEnvironmentIds,
+    selectedEnvironmentId,
+    selectedEnvironmentIds: ui.getState().selectedEnvironmentIds,
   };
 }
 
 /**
  * Dispose the live view when its conversation's environment is deleted or
- * the user switches the active environment away from it. The saved preview
- * is shown in the transcript card with the reason.
+ * the user switches the active environment away from it, on its node or to
+ * another node's. The saved preview
+ * is shown in the transcript card with the reason. The environment is the
+ * live target's node's: environment ids are node-local (plan item 3004).
  */
-function useLiveHostScopeGuard(): void {
+function useLiveHostScopeGuard(owner: NodeScope | null): void {
   useEffect(() => {
-    let previous = environmentScopeSnapshot();
+    if (!owner) return;
+    const environments = owner.store(environmentStore);
+    const ui = owner.store(uiStore);
+    const windowScope = windowScopeOf(owner);
+    let previous = environmentScopeSnapshot(owner, environments, ui);
     const check = () => {
-      const next = environmentScopeSnapshot();
+      const next = environmentScopeSnapshot(owner, environments, ui);
       const active = useArtifactLiveHostStore.getState().active;
       const reason = active
         ? liveHostScopeInvalidation(active.target.scope.environmentId, previous, next)
@@ -206,25 +243,37 @@ function useLiveHostScopeGuard(): void {
       previous = next;
       if (reason) useArtifactLiveHostStore.getState().invalidate(reason);
     };
-    const offEnvironments = useEnvironmentStore.subscribe(check);
-    const offUi = useUIStore.subscribe(check);
+    const offEnvironments = environments.subscribe(check);
+    const offUi = ui.subscribe(check);
+    const offSelection = windowScope?.selection.subscribe(check);
     return () => {
       offEnvironments();
       offUi();
+      offSelection?.();
     };
-  }, []);
+  }, [owner]);
 }
 
 export function ArtifactLiveHost() {
-  useLiveHostScopeGuard();
   const active = useArtifactLiveHostStore((state) => state.active);
   const pendingSwitch = useArtifactLiveHostStore((state) => state.pendingSwitch);
   const confirmSwitch = useArtifactLiveHostStore((state) => state.confirmSwitch);
   const cancelSwitch = useArtifactLiveHostStore((state) => state.cancelSwitch);
+  const { windowScope } = useScopesWithCommandFallback();
+  // The surface renders inside its target's node scope, so what it reads
+  // (capabilities, the backend identity) is that node's, not the command node's.
+  const owner = active ? artifactLiveHostOwner(active.target.nodeId) : null;
+  useLiveHostScopeGuard(owner);
 
   return (
     <>
-      {active ? <LiveHostSurface key={active.hostId} active={active} /> : null}
+      {active && owner ? (
+        <WindowScopeProvider windowScope={windowScope}>
+          <NodeScopeProvider key={owner.nodeId} scope={owner}>
+            <LiveHostSurface key={active.hostId} active={active} />
+          </NodeScopeProvider>
+        </WindowScopeProvider>
+      ) : null}
       {pendingSwitch && active ? (
         <Dialog open onOpenChange={(open) => (open ? undefined : cancelSwitch())}>
           <DialogContent size="md" data-artifact-live-switch="true">
@@ -249,7 +298,7 @@ export function ArtifactLiveHost() {
 function LiveHostSurface({ active }: { active: LiveHostSession }) {
   const { hostId, target, phase, session, placement, linkRequest } = active;
   const anchor = useArtifactLiveHostStore(
-    (state) => state.anchors.get(target.occurrenceKey) ?? null,
+    (state) => state.anchors.get(liveAnchorKey(target.nodeId, target.occurrenceKey)) ?? null,
   );
   const setPlacement = useArtifactLiveHostStore((state) => state.setPlacement);
   const stop = useArtifactLiveHostStore((state) => state.stop);
@@ -591,19 +640,26 @@ function PlacementButton({
  * draws the document over it. It never owns the document.
  */
 export function ArtifactLivePlaceholder({ occurrenceKey }: { occurrenceKey: string }) {
+  // Anchors are keyed by node: the same occurrence key on another node is another anchor.
+  const { scope } = useScopesWithCommandFallback();
+  const nodeId = scope.nodeId;
   const registerAnchor = useArtifactLiveHostStore((state) => state.registerAnchor);
   const placement = useArtifactLiveHostStore((state) =>
-    state.active?.target.occurrenceKey === occurrenceKey ? state.active.placement : null,
+    state.active && isLiveOccurrence(state.active.target, nodeId, occurrenceKey)
+      ? state.active.placement
+      : null,
   );
   const frameHeight = useArtifactLiveHostStore((state) =>
-    state.active?.target.occurrenceKey === occurrenceKey ? state.active.frameHeight : null,
+    state.active && isLiveOccurrence(state.active.target, nodeId, occurrenceKey)
+      ? state.active.frameHeight
+      : null,
   );
   const setPlacement = useArtifactLiveHostStore((state) => state.setPlacement);
   const [element, setElement] = useState<HTMLDivElement | null>(null);
   useLayoutEffect(() => {
     if (!element) return;
-    return registerAnchor(occurrenceKey, element);
-  }, [element, occurrenceKey, registerAnchor]);
+    return registerAnchor(scope, occurrenceKey, element);
+  }, [element, scope, occurrenceKey, registerAnchor]);
   const detached = placement !== null && placement !== "inline";
   return (
     <div

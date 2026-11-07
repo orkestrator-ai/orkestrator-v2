@@ -1,6 +1,8 @@
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { backendForScope } from "@/lib/backend/scope-backend";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
-import { getFileTree, getLocalFileTree, type FileNode } from "@/lib/backend";
+import { type FileNode } from "@/lib/backend";
 import type { FileCandidate } from "@/types";
 
 const log = createLogger("web.files");
@@ -14,6 +16,8 @@ export function useFileSearch(
   worktreePath: string | undefined,
   enabled = true,
 ) {
+  // This node's backend (plan item 4001); the command node outside a node scope.
+  const backendScope = useScopesWithCommandFallback().scope;
   // Determine if environment is available
   const isAvailable = !!(containerId || worktreePath);
 
@@ -45,10 +49,10 @@ export function useFileSearch(
         let tree: FileNode[] = [];
         if (worktreePath) {
           // Local environment - use local file tree command
-          tree = await getLocalFileTree(worktreePath);
+          tree = await backendForScope(backendScope).getLocalFileTree(worktreePath);
         } else if (containerId) {
           // Container environment - use container file tree command
-          tree = await getFileTree(containerId);
+          tree = await backendForScope(backendScope).getFileTree(containerId);
         }
 
         if (requestGenerationRef.current === requestGeneration) {
@@ -76,7 +80,7 @@ export function useFileSearch(
       promise,
     };
     return promise;
-  }, [containerId, worktreePath]);
+  }, [backendScope, containerId, worktreePath]);
 
   // Load file tree from environment (explicit refresh)
   const loadFileTree = useCallback((): Promise<void> => {

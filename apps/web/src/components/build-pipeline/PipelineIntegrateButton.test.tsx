@@ -1,13 +1,15 @@
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { afterEach, beforeEach, describe, expect, type Mock, spyOn, test } from "bun:test";
 import { toast } from "sonner";
 import { invoke } from "@/lib/native/backend";
 import type { PrMonitorEnvironmentState } from "@orkestrator/protocol/pr-monitor";
-import { useEnvironmentStore } from "@/stores";
-import { usePrMonitorStore } from "@/stores/prMonitorStore";
+import { environmentStore } from "@/stores";
+import { prMonitorStore } from "@/stores/prMonitorStore";
 import type { Environment } from "@/types";
 import { PipelineIntegrateButton } from "./PipelineIntegrateButton";
 import { PipelineKeyInformationButton } from "./PipelineKeyInformation";
+import { appCommandStore } from "@/test/app-command-store";
 
 const invokeMock = invoke as unknown as Mock<(...args: unknown[]) => Promise<unknown>>;
 
@@ -56,15 +58,15 @@ async function openConfirmation() {
 
 beforeEach(() => {
   invokeMock.mockReset();
-  useEnvironmentStore.getState().setEnvironments([environment()]);
+  appCommandStore(environmentStore).getState().setEnvironments([environment()]);
 });
 
 afterEach(() => {
   cleanup();
   invokeMock.mockReset();
   invokeMock.mockImplementation(() => Promise.resolve());
-  useEnvironmentStore.getState().setEnvironments([]);
-  usePrMonitorStore.setState({ states: new Map(), syncStatus: "idle" });
+  appCommandStore(environmentStore).getState().setEnvironments([]);
+  appCommandStore(prMonitorStore).setState({ states: new Map(), syncStatus: "idle" });
 });
 
 /** A current monitor reading for env-1's pull request. */
@@ -84,13 +86,16 @@ function monitorReading(overrides: Partial<PrMonitorEnvironmentState> = {}) {
     mergeability: "clean",
     ...overrides,
   };
-  usePrMonitorStore.setState({ states: new Map([["env-1", state]]), syncStatus: "current" });
+  appCommandStore(prMonitorStore).setState({
+    states: new Map([["env-1", state]]),
+    syncStatus: "current",
+  });
 }
 
 describe("PipelineIntegrateButton", () => {
   test("confirms before turning on auto-merge, offering Auto-merge, Auto-merge & Cleanup and Cancel", async () => {
     answerAutoMerge();
-    render(<PipelineIntegrateButton environmentId="env-1" />);
+    renderInAppCommandScope(<PipelineIntegrateButton environmentId="env-1" />);
     expect(integrateButton().textContent).toBe("AIntegrate");
 
     const dialog = await openConfirmation();
@@ -109,7 +114,7 @@ describe("PipelineIntegrateButton", () => {
       enabled: true,
       cleanupAfterMerge: false,
     });
-    expect(useEnvironmentStore.getState().environments[0]).toMatchObject({
+    expect(appCommandStore(environmentStore).getState().environments[0]).toMatchObject({
       autoMerge: true,
       autoMergeCleanup: false,
     });
@@ -119,7 +124,7 @@ describe("PipelineIntegrateButton", () => {
 
   test("Auto-merge & Cleanup asks the backend to delete the environment after the merge", async () => {
     answerAutoMerge();
-    render(<PipelineIntegrateButton environmentId="env-1" />);
+    renderInAppCommandScope(<PipelineIntegrateButton environmentId="env-1" />);
     const dialog = await openConfirmation();
 
     await act(async () => {
@@ -131,14 +136,14 @@ describe("PipelineIntegrateButton", () => {
       enabled: true,
       cleanupAfterMerge: true,
     });
-    expect(useEnvironmentStore.getState().environments[0]).toMatchObject({
+    expect(appCommandStore(environmentStore).getState().environments[0]).toMatchObject({
       autoMerge: true,
       autoMergeCleanup: true,
     });
   });
 
   test("Cancel changes nothing", async () => {
-    render(<PipelineIntegrateButton environmentId="env-1" />);
+    renderInAppCommandScope(<PipelineIntegrateButton environmentId="env-1" />);
     const dialog = await openConfirmation();
     await act(async () => {
       fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
@@ -149,10 +154,10 @@ describe("PipelineIntegrateButton", () => {
 
   test("an armed integration can be turned off from the confirmation", async () => {
     answerAutoMerge();
-    useEnvironmentStore
+    appCommandStore(environmentStore)
       .getState()
       .setEnvironments([environment({ autoMerge: true, autoMergeCleanup: true })]);
-    render(<PipelineIntegrateButton environmentId="env-1" />);
+    renderInAppCommandScope(<PipelineIntegrateButton environmentId="env-1" />);
     const dialog = await openConfirmation();
     expect(within(dialog).getByText(/Auto-merge & Cleanup is already on/)).toBeTruthy();
 
@@ -164,7 +169,7 @@ describe("PipelineIntegrateButton", () => {
       environmentId: "env-1",
       enabled: false,
     });
-    expect(useEnvironmentStore.getState().environments[0]).toMatchObject({
+    expect(appCommandStore(environmentStore).getState().environments[0]).toMatchObject({
       autoMerge: false,
       autoMergeCleanup: false,
     });
@@ -175,14 +180,18 @@ describe("PipelineIntegrateButton", () => {
     [{ prState: "merged" as const }],
     [{ prState: "closed" as const }],
   ])("is disabled without an open pull request (%j)", (overrides) => {
-    useEnvironmentStore.getState().setEnvironments([environment(overrides)]);
-    render(<PipelineIntegrateButton environmentId="env-1" />);
+    appCommandStore(environmentStore)
+      .getState()
+      .setEnvironments([environment(overrides)]);
+    renderInAppCommandScope(<PipelineIntegrateButton environmentId="env-1" />);
     expect(integrateButton().hasAttribute("disabled")).toBe(true);
   });
 
   test("a project's home checkout is offered Auto-merge without cleanup", async () => {
-    useEnvironmentStore.getState().setEnvironments([environment({ projectHome: true })]);
-    render(<PipelineIntegrateButton environmentId="env-1" />);
+    appCommandStore(environmentStore)
+      .getState()
+      .setEnvironments([environment({ projectHome: true })]);
+    renderInAppCommandScope(<PipelineIntegrateButton environmentId="env-1" />);
     const dialog = await openConfirmation();
     expect(within(dialog).getByRole("button", { name: "Auto-merge" })).toBeTruthy();
     expect(within(dialog).queryByRole("button", { name: "Auto-merge & Cleanup" }) === null).toBe(
@@ -193,16 +202,20 @@ describe("PipelineIntegrateButton", () => {
 
 describe("PipelineIntegrateButton waiting states", () => {
   test("a ready pull request gets no waiting note", async () => {
-    useEnvironmentStore.getState().setEnvironments([environment({ prMergeability: "clean" })]);
+    appCommandStore(environmentStore)
+      .getState()
+      .setEnvironments([environment({ prMergeability: "clean" })]);
     monitorReading();
-    render(<PipelineIntegrateButton environmentId="env-1" />);
+    renderInAppCommandScope(<PipelineIntegrateButton environmentId="env-1" />);
     const dialog = await openConfirmation();
     expect(within(dialog).queryByRole("note") === null).toBe(true);
   });
 
   test("failed checks that hold auto-merge back are named before and after turning it on", async () => {
     answerAutoMerge();
-    useEnvironmentStore.getState().setEnvironments([environment({ prMergeability: "unstable" })]);
+    appCommandStore(environmentStore)
+      .getState()
+      .setEnvironments([environment({ prMergeability: "unstable" })]);
     monitorReading({
       mergeability: "unstable",
       checkSummary: { passed: 18, total: 20, pending: 0 },
@@ -210,7 +223,7 @@ describe("PipelineIntegrateButton waiting states", () => {
     const warning = spyOn(toast, "warning");
     const success = spyOn(toast, "success");
     try {
-      render(<PipelineIntegrateButton environmentId="env-1" />);
+      renderInAppCommandScope(<PipelineIntegrateButton environmentId="env-1" />);
       const dialog = await openConfirmation();
       expect(within(dialog).getByRole("note").textContent).toContain(
         "Auto-merge will wait: 2 checks failed, ",
@@ -236,12 +249,14 @@ describe("PipelineIntegrateButton waiting states", () => {
 
   test("running checks are a wait that needs nobody, so no warning is shown", async () => {
     answerAutoMerge();
-    useEnvironmentStore.getState().setEnvironments([environment({ prMergeability: "unstable" })]);
+    appCommandStore(environmentStore)
+      .getState()
+      .setEnvironments([environment({ prMergeability: "unstable" })]);
     monitorReading({
       mergeability: "unstable",
       checkSummary: { passed: 18, total: 20, pending: 2 },
     });
-    render(<PipelineIntegrateButton environmentId="env-1" />);
+    renderInAppCommandScope(<PipelineIntegrateButton environmentId="env-1" />);
     const dialog = await openConfirmation();
     expect(within(dialog).queryByRole("note") === null).toBe(true);
     await act(async () => {
@@ -255,7 +270,9 @@ describe("PipelineIntegrateButton waiting states", () => {
 
 describe("Key information panel", () => {
   test("shows Integrate in its header, and the confirmation does not close the panel", async () => {
-    render(<PipelineKeyInformationButton keyInformation={undefined} environmentId="env-1" />);
+    renderInAppCommandScope(
+      <PipelineKeyInformationButton keyInformation={undefined} environmentId="env-1" />,
+    );
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Key information" }));
     });
@@ -271,7 +288,7 @@ describe("Key information panel", () => {
   });
 
   test("leaves Integrate out without an environment", async () => {
-    render(<PipelineKeyInformationButton keyInformation={undefined} />);
+    renderInAppCommandScope(<PipelineKeyInformationButton keyInformation={undefined} />);
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Key information" }));
     });
@@ -281,20 +298,24 @@ describe("Key information panel", () => {
 
 for (const rejected of [true, false]) {
   test(`failed option save emits no success, rejection=${rejected}`, async () => {
-    useEnvironmentStore.getState().setEnvironments([environment({ autoMerge: true })]);
+    appCommandStore(environmentStore)
+      .getState()
+      .setEnvironments([environment({ autoMerge: true })]);
     invokeMock.mockImplementation(async () => {
       if (rejected) throw new Error("save rejected");
       return environment({ autoMerge: false });
     });
     const success = spyOn(toast, "success");
-    render(<PipelineIntegrateButton environmentId="env-1" />);
+    renderInAppCommandScope(<PipelineIntegrateButton environmentId="env-1" />);
     try {
       const dialog = await openConfirmation();
       await act(async () =>
         fireEvent.click(within(dialog).getByRole("button", { name: "Auto-merge & Cleanup" })),
       );
       expect(success).not.toHaveBeenCalled();
-      expect(useEnvironmentStore.getState().environments[0]?.autoMergeCleanup).not.toBe(true);
+      expect(
+        appCommandStore(environmentStore).getState().environments[0]?.autoMergeCleanup,
+      ).not.toBe(true);
     } finally {
       success.mockRestore();
     }

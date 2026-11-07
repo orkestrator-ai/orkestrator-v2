@@ -1,3 +1,4 @@
+import { eventSink } from "../backend-emit.js";
 import { afterEach, describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import {
@@ -100,7 +101,7 @@ function reopen(h: Harness, policy: Partial<ChangeTrackingPolicy> = {}) {
   const service = new ChangeTrackingService({
     dataDir: h.dataDir,
     database: () => (database ??= openChangeLedgerDatabase(h.dataDir)),
-    emit: (event, payload) => events.push({ event, payload }),
+    emit: eventSink((event, payload) => events.push({ event, payload })),
     environmentTarget: async (environmentId) =>
       environmentId === "env-1" ? { kind: "local", worktreePath: h.repo } : null,
     durable: false,

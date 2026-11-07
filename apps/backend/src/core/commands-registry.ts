@@ -1,3 +1,12 @@
+/**
+ * The backend command registry (`createCommandRegistry`).
+ *
+ * New commands are defined with `defineCommand` in `packages/protocol` and
+ * registered as `register(def, handler)`; the number of string-registered
+ * commands only falls (`mise run contract:check`). Rules for domains,
+ * versions, critical fields and the manifest:
+ * docs/architecture/version-compatibility.md#domain-contracts.
+ */
 import { registerChangeCommands } from "./commands-registry-changes.js";
 import { registerDiffBaseCommands } from "./commands-registry-diff-base.js";
 import { registerGraphTemplateCommands } from "./commands-registry-graphs.js";
@@ -44,11 +53,12 @@ import {
 } from "./pending-rename-failure-log.js";
 import { assertRuntimeGeneration } from "./container-lifecycle-service.js";
 import type { CommandContext, CommandHandler } from "./commands-context.js";
-import type {
-  CommandRegistrar,
-  CommandRegistryOptions,
-  RegistryDependencies,
-} from "./commands-registry-types.js";
+import type { CommandRegistryOptions, RegistryDependencies } from "./commands-registry-types.js";
+import {
+  CommandRegistry,
+  contractResultValidationDefault,
+  createRegistryRegistrar,
+} from "./commands-registry-contracts.js";
 import { registerPermissionRuleCommands } from "./commands-registry-permission-rules.js";
 import { registerBackendProfileCommands } from "./commands-registry-backend-profile.js";
 import { registerNodeCommands } from "./commands-registry-nodes.js";
@@ -99,29 +109,30 @@ import { refreshHostModelCatalog } from "./host-model-catalog-refresh.js";
 import { commandTimings } from "./command-timing.js";
 
 export type { CommandRegistryOptions } from "./commands-registry-types.js";
+export { CommandRegistry } from "./commands-registry-contracts.js";
 
-export function createCommandRegistry(
-  options: CommandRegistryOptions = {},
-): Map<string, CommandHandler> {
-  const commands = new Map<string, CommandHandler>();
+export function createCommandRegistry(options: CommandRegistryOptions = {}): CommandRegistry {
+  const commands = new CommandRegistry();
   // Commands that resolve container ownership themselves because their rule
   // differs from the generic one (adoption accepts a reviewed pre-label
   // container that no environment references yet).
   const selfVerifyingContainerCommands = new Set(["reattach_container"]);
-  // Every command is timed, whoever calls it (`command-timing.ts`).
-  const register: CommandRegistrar = (name, handler) => {
-    const guarded = selfVerifyingContainerCommands.has(name)
-      ? handler
-      : guardContainerCommand(handler);
-    commands.set(name, (args, context) => commandTimings.time(name, () => guarded(args, context)));
-  };
+  // Every command is timed, whoever calls it (`command-timing.ts`). A command
+  // registered with its definition decodes its arguments before the container
+  // guard reads them (`commands-registry-contracts.ts`).
+  const register = createRegistryRegistrar(commands, {
+    validateResults: options.validateContractResults ?? contractResultValidationDefault(),
+    guard: (name, handler) =>
+      selfVerifyingContainerCommands.has(name) ? handler : guardContainerCommand(handler),
+    time: (name, run) => commandTimings.time(name, run),
+  });
   function guardContainerCommand(handler: CommandHandler): CommandHandler {
-    return (args, context) => {
+    return (args, context, invocation) => {
       const containerId = args.containerId;
       const namesContainer = typeof containerId === "string" && containerId.trim().length > 0;
       const bindsGeneration = args.expectedRuntimeGeneration !== undefined;
       // Commands that name no container stay synchronous.
-      if (!namesContainer && !bindsGeneration) return handler(args, context);
+      if (!namesContainer && !bindsGeneration) return handler(args, context, invocation);
       return (async () => {
         // A handle minted for one runtime generation must not be connected to
         // a replacement: callers that bind to a generation send it back and
@@ -136,7 +147,7 @@ export function createCommandRegistry(
             trustExactAssociation: true,
           });
         }
-        return handler(args, context);
+        return handler(args, context, invocation);
       })();
     };
   }

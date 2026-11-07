@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:3576b4142c833df64f049cd2edf63e9686e4373962904a67a6c61655f4f3b35a",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "agent": {
+          "type": "string"
+        },
+        "environmentId": {
+          "type": "string"
+        },
+        "executionProfileId": {},
+        "fastMode": {},
+        "interactionPolicy": {},
+        "logicalSessionKey": {
+          "type": "string"
+        },
+        "model": {},
+        "modelSource": {},
+        "origin": {},
+        "parameterValues": {},
+        "phase": {},
+        "reasoningEffort": {},
+        "sessionMode": {},
+        "title": {}
+      },
+      "required": ["agent", "environmentId", "logicalSessionKey"],
+      "type": "object"
+    }
+  }
+}

@@ -20,10 +20,21 @@ import { useOptionalTerminalContext } from "@/contexts/TerminalContext";
 import { createSessionKey } from "@/lib/utils";
 import { findNativeAgentAdapter } from "@/components/native-agent/adapter";
 import type { DesignProjection } from "@/stores/designStore";
-import { nativeComposeDraft, useNativeComposeStore } from "@/stores/nativeComposeStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import {
+  nativeComposeDraft,
+  nativeComposeStore,
+  useNativeComposeStore,
+} from "@/stores/nativeComposeStore";
+import { useNodeScope } from "@/lib/node-scope/providers";
+import {
+  paneLayoutStore,
+  usePaneLayoutStore,
+  type PaneLayoutState,
+} from "@/stores/paneLayoutStore";
+import type { StoreApi } from "zustand/vanilla";
 import type { TabInfo } from "@/types/paneLayout";
-import { designApi, designBackendKey, failureOf } from "@/lib/design-client";
+import { designBackendKeyFor, failureOf } from "@/lib/design-client";
+import { useDesignApi, useDesignScope } from "./design-scope";
 import {
   boundDesignContextReference,
   buildDesignContextAnnotation,
@@ -106,8 +117,8 @@ function linkTitle(link: DesignSessionLink, tab: TabInfo | undefined): string {
   );
 }
 
-function focusTab(environmentId: string, tabId: string): boolean {
-  const store = usePaneLayoutStore.getState();
+function focusTab(layouts: StoreApi<PaneLayoutState>, environmentId: string, tabId: string) {
+  const store = layouts.getState();
   const pane = store.findPaneWithTab(tabId, environmentId);
   if (!pane) return false;
   store.setActivePane(pane.id, environmentId);
@@ -138,11 +149,13 @@ export function DesignAgentDialog({
   onOpenChange,
   onLinksChanged,
 }: DesignAgentDialogProps) {
+  // The canvas's node (plan item 4007).
+  const designScope = useDesignScope();
   return (
     <Dialog open={context !== null} onOpenChange={onOpenChange}>
       {context ? (
         <DesignAgentDialogBody
-          key={`${designBackendKey()}:${context.environmentId}:${context.canvasId}:${context.frameId ?? ""}:${context.scope}:${context.checkpointId ?? ""}:${context.canvasRevision}`}
+          key={`${designBackendKeyFor(designScope)}:${context.environmentId}:${context.canvasId}:${context.frameId ?? ""}:${context.scope}:${context.checkpointId ?? ""}:${context.canvasRevision}`}
           context={context}
           projection={projection}
           onClose={() => onOpenChange(false)}
@@ -165,9 +178,15 @@ function DesignAgentDialogBody({
   onLinksChanged?: () => void;
 }) {
   const environmentId = context.environmentId;
+  // The canvas's node: links, history and resumes go there (plan item 4007).
+  const designScope = useDesignScope();
+  const nodeDesign = useDesignApi();
   const terminal = useOptionalTerminalContext();
   const createTab = terminal?.createTab ?? null;
   const updateDraft = useNativeComposeStore((state) => state.updateDraft);
+  const composeDrafts = useNodeScope().store(nativeComposeStore);
+  // This node's pane layouts (plan item 3013).
+  const paneLayouts = useNodeScope().store(paneLayoutStore);
   const paneEnvironment = usePaneLayoutStore((state) => state.environments.get(environmentId));
   const hydrated = usePaneLayoutStore((state) => state.hydration.get(environmentId) === "done");
 
@@ -198,7 +217,7 @@ function DesignAgentDialogBody({
   const imagePaste = useDesignPromptImagePaste({
     containerRef: promptRef,
     environmentId,
-    scopeKey: designBackendKey(),
+    scopeKey: designBackendKeyFor(designScope),
     enabled: !pending,
     images,
     onImagesChange: setImages,
@@ -210,7 +229,7 @@ function DesignAgentDialogBody({
     const checkpointId = context.checkpointId;
     if (!checkpointId) return;
     let cancelled = false;
-    designApi
+    nodeDesign
       .history(environmentId, context.canvasId, 0, 50)
       .then((page) => {
         const entry = page?.entries?.find((candidate) => candidate.id === checkpointId);
@@ -222,14 +241,14 @@ function DesignAgentDialogBody({
     return () => {
       cancelled = true;
     };
-  }, [context.canvasId, context.checkpointId, environmentId]);
+  }, [context.canvasId, context.checkpointId, environmentId, nodeDesign]);
 
   const tabs = useMemo(() => {
     const map = new Map<string, TabInfo>();
     if (!paneEnvironment) return map;
-    for (const tab of usePaneLayoutStore.getState().getAllTabs(environmentId)) map.set(tab.id, tab);
+    for (const tab of paneLayouts.getState().getAllTabs(environmentId)) map.set(tab.id, tab);
     return map;
-  }, [environmentId, paneEnvironment]);
+  }, [environmentId, paneEnvironment, paneLayouts]);
 
   // Session identities the backend recorded during this dialog's check, ahead
   // of the projection's status sync. Each applies only while the link still
@@ -271,7 +290,7 @@ function DesignAgentDialogBody({
     const deadline = setTimeout(() => {
       if (!cancelled) setCheck(DESIGN_LINK_CHECK_TIMED_OUT);
     }, DESIGN_LINK_CHECK_DEADLINE_MS);
-    designApi
+    nodeDesign
       .sessionLinkStates(environmentId, context.canvasId)
       .then((result) => {
         if (cancelled) return;
@@ -294,7 +313,7 @@ function DesignAgentDialogBody({
       cancelled = true;
       clearTimeout(deadline);
     };
-  }, [checkGeneration, context.canvasId, environmentId, hasLinks]);
+  }, [checkGeneration, context.canvasId, environmentId, hasLinks, nodeDesign]);
 
   const statusOf = (link: DesignSessionLink): DesignLinkStatus =>
     designLinkStatus(link, {
@@ -378,10 +397,10 @@ function DesignAgentDialogBody({
   /** Returns false when the draft could not be changed. */
   const applyDraft = (tabId: string, addition: DesignDraftAddition): boolean => {
     const sessionKey = createSessionKey(environmentId, tabId);
-    const current = nativeComposeDraft(useNativeComposeStore.getState(), sessionKey);
+    const current = nativeComposeDraft(composeDrafts.getState(), sessionKey);
     const plan = planDesignDraft(current, addition);
     // Both checks run before either change, so a refusal leaves the draft as it was.
-    if (!plan.ok || !addDesignImagesToDraft(sessionKey, images)) {
+    if (!plan.ok || !addDesignImagesToDraft(sessionKey, images, composeDrafts)) {
       setError(
         "That conversation's composer already has the maximum number of attachments. Send or remove some first.",
       );
@@ -392,7 +411,7 @@ function DesignAgentDialogBody({
   };
 
   const hasAgentTab = (tabId: string) =>
-    usePaneLayoutStore
+    paneLayouts
       .getState()
       .getAllTabs(environmentId)
       .some((candidate) => candidate.id === tabId && candidate.type === "agent-native");
@@ -418,10 +437,10 @@ function DesignAgentDialogBody({
           ]);
           onLinksChanged?.();
         },
-        claim: (input) => designApi.resumeSessionLink(environmentId, context.canvasId, input),
+        claim: (input) => nodeDesign.resumeSessionLink(environmentId, context.canvasId, input),
         hasTab: hasAgentTab,
         createTab,
-        focus: (tabId) => focusTab(environmentId, tabId),
+        focus: (tabId) => focusTab(paneLayouts, environmentId, tabId),
       });
       return resumed.tabId;
     } catch (reason) {
@@ -461,7 +480,7 @@ function DesignAgentDialogBody({
       if (!tabId) return;
     }
     if (!applyDraft(tabId, buildAddition())) return;
-    focusTab(environmentId, tabId);
+    focusTab(paneLayouts, environmentId, tabId);
     toast.success(
       handoff
         ? "Handoff draft added — review it before sending"
@@ -481,13 +500,13 @@ function DesignAgentDialogBody({
     const title = role === "implementation" ? "Implement design" : "Design chat";
     // No initial prompt: the design context becomes a reviewable draft.
     const created = createTab(agent, { tabId, agentLaunchMode: "native", displayTitle: title });
-    if (!created || !usePaneLayoutStore.getState().findPaneWithTab(tabId, environmentId)) {
+    if (!created || !paneLayouts.getState().findPaneWithTab(tabId, environmentId)) {
       setError("Could not open a new conversation. Close a tab or pane and try again.");
       return;
     }
     if (!applyDraft(tabId, addition)) return;
     try {
-      const link = await designApi.linkSession(
+      const link = await nodeDesign.linkSession(
         environmentId,
         context.canvasId,
         {
@@ -515,7 +534,7 @@ function DesignAgentDialogBody({
         description: messageOf(reason),
       });
     }
-    focusTab(environmentId, tabId);
+    focusTab(paneLayouts, environmentId, tabId);
     onClose();
   };
 
@@ -543,7 +562,7 @@ function DesignAgentDialogBody({
     setPending(true);
     setError(null);
     try {
-      await designApi.unlinkSession(environmentId, context.canvasId, link.id);
+      await nodeDesign.unlinkSession(environmentId, context.canvasId, link.id);
       setRemovedLinks((current) => new Set([...current, link.id]));
       onLinksChanged?.();
     } catch (reason) {
@@ -760,7 +779,7 @@ function DesignAgentDialogBody({
                       size="sm"
                       disabled={pending}
                       onClick={() => {
-                        if (focusTab(environmentId, link.tabId)) onClose();
+                        if (focusTab(paneLayouts, environmentId, link.tabId)) onClose();
                       }}
                     >
                       Open

@@ -9,8 +9,10 @@ import {
   readWholeRepresentation,
   useScopedArtifactRead,
   type ArtifactReadScope,
+  type ArtifactReader,
   type ArtifactRequestState,
 } from "./artifact-requests";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 import { encodeRichKey } from "./rich-identity";
 
 /**
@@ -59,12 +61,14 @@ export async function sha256HexOfBytes(bytes: Uint8Array): Promise<string> {
 }
 
 export async function readVerifiedEffectiveHtml(
+  reader: ArtifactReader,
   scope: ArtifactReadScope,
   artifactRef: Pick<TranscriptArtifactRef, "artifactId" | "revision" | "publicationId">,
   expectedSha256: string,
 ): Promise<VerifiedStaticDocument> {
   const budget = STATIC_PRESENTATION_POLICY.maxDocumentBytes;
   const result = await readWholeRepresentation(
+    reader,
     scope,
     artifactRef.publicationId,
     "effective-html",
@@ -128,6 +132,7 @@ export function useVerifiedEffectiveHtml(
   expectedSha256: string,
   enabled: boolean,
 ): ArtifactRequestState<VerifiedStaticDocument> & { retry: () => void } {
+  const nodeBackend = useScopeBackend();
   const key =
     enabled && scope
       ? encodeRichKey([
@@ -142,7 +147,7 @@ export function useVerifiedEffectiveHtml(
   return useScopedArtifactRead(
     key,
     scope,
-    () => readVerifiedEffectiveHtml(scope!, artifactRef, expectedSha256),
+    () => readVerifiedEffectiveHtml(nodeBackend, scope!, artifactRef, expectedSha256),
     (value) => value.byteLength,
   );
 }

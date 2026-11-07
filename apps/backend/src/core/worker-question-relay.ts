@@ -1,3 +1,8 @@
+import {
+  answerControllerWorkerQuestionCommand,
+  answerProjectWorkerQuestionCommand,
+  requestCoordinatorWorkerAnswerCommand,
+} from "@orkestrator/protocol/contract/domains/coordinator";
 import { createHash } from "node:crypto";
 import {
   AGENT_INTERACTION_CONTRACT_VERSION,
@@ -210,7 +215,7 @@ export function registerWorkerQuestionRelayCommands(
     return (await handler(args, context)) as T;
   };
 
-  register("request_coordinator_worker_answer", async (args, context) => {
+  register(requestCoordinatorWorkerAnswerCommand, async (args, context) => {
     const caller = await coordinatorCaller(args.scope, context);
     const input = surfaceRecord(args.input, "the proposed answer");
     const requestId = asNonBlankString(input.requestId, "requestId");
@@ -318,16 +323,16 @@ export function registerWorkerQuestionRelayCommands(
   });
 
   /** Runs only from an approved `answer-worker-question` request for a worker here. */
-  register("answer_project_worker_question", (args, context) =>
+  register(answerProjectWorkerQuestionCommand, (args, context) =>
     answerWorkerQuestion(context, run, args),
   );
 
   /**
    * The same, for a command node's approved request: reachable only through
-   * the node link (`isWorkspaceExcludedCommand`), and the request's own
+   * the node link (`access: "internal"`), and the request's own
    * node checks the worker's project here again.
    */
-  register("answer_controller_worker_question", (args, context) =>
+  register(answerControllerWorkerQuestionCommand, (args, context) =>
     answerWorkerQuestion(context, run, args),
   );
 }

@@ -1,5 +1,6 @@
 import { afterAll, afterEach, describe, expect, mock, spyOn, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import * as scrollState from "@/hooks/useVirtuosoScrollState";
 import { HeldTranscriptPlace } from "@/hooks/useHeldTranscriptPlace";
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
@@ -180,7 +181,7 @@ describe("MultiReviewReviewerTab message containment", () => {
     }));
 
     await withSilencedReactErrors(async () => {
-      render(
+      renderInAppCommandScope(
         <MultiReviewReviewerTab
           data={{
             environmentId: "env-1",
@@ -246,7 +247,7 @@ describe("MultiReviewReviewerTab message containment", () => {
     });
 
     await withSilencedReactErrors(async () => {
-      render(
+      renderInAppCommandScope(
         <MultiReviewReviewerTab
           data={{
             environmentId: "env-1",
@@ -368,7 +369,7 @@ describe("toMultiReviewReviewerMessages machine output", () => {
       ]),
     );
 
-    render(
+    renderInAppCommandScope(
       <MultiReviewReviewerTab
         data={{
           environmentId: "env-1",
@@ -411,7 +412,7 @@ describe("MultiReviewReviewerTab deferred tool details", () => {
       detailRef: ref,
       toolOutput: "the deferred body",
     }));
-    render(
+    renderInAppCommandScope(
       <MultiReviewReviewerTab
         data={{
           environmentId: "env-1",
@@ -503,7 +504,7 @@ describe("MultiReviewReviewerTab earlier history", () => {
             : {},
         );
       try {
-        render(
+        renderInAppCommandScope(
           <MultiReviewReviewerTab
             data={data}
             isActive
@@ -558,7 +559,7 @@ describe("MultiReviewReviewerTab earlier history", () => {
       detailRef: ref,
       toolOutput: "the earlier body",
     }));
-    render(
+    renderInAppCommandScope(
       <MultiReviewReviewerTab
         data={data}
         isActive
@@ -612,7 +613,7 @@ describe("MultiReviewReviewerTab earlier history", () => {
       status: "expired" as const,
       reason: "history-changed" as const,
     }));
-    render(
+    renderInAppCommandScope(
       <MultiReviewReviewerTab
         data={data}
         isActive
@@ -654,7 +655,7 @@ describe("MultiReviewReviewerTab earlier history", () => {
       complete: false,
       truncated: true,
     }));
-    const view = render(
+    const view = renderInAppCommandScope(
       <MultiReviewReviewerTab
         data={data}
         isActive
@@ -714,7 +715,7 @@ describe("MultiReviewReviewerTab earlier history", () => {
       complete: false,
       truncated: true,
     }));
-    render(
+    renderInAppCommandScope(
       <MultiReviewReviewerTab
         data={data}
         isActive

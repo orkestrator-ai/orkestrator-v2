@@ -1,8 +1,10 @@
 import type { EnvironmentAttentionReason } from "@orkestrator/protocol/environment-attention";
-import { useEnvironmentStore } from "@/stores/environmentStore";
-import { useProjectStore } from "@/stores/projectStore";
-import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
-import { useUIStore } from "@/stores/uiStore";
+import { environmentStore } from "@/stores/environmentStore";
+import { projectStore } from "@/stores/projectStore";
+import { uiStore } from "@/stores/uiStore";
+import { openMachineWorkspace } from "@/lib/federation/open-workspace";
+import { appCommandScope } from "@/lib/node-scope-slots";
+import { portalStore } from "@/lib/portal/portal-store";
 
 /** What this client may do with desktop notifications. */
 export type DesktopNotificationPermission = NotificationPermission | "unsupported";
@@ -41,11 +43,15 @@ const COPY: Partial<Record<EnvironmentAttentionReason, string>> = {
   agent_waiting: "Agent needs your input",
 };
 
+/** A local notification is this window's own node's: its environments and projects. */
 function environmentLabel(environmentId: string, projectId: string): string | null {
-  const environment = useEnvironmentStore
+  const scope = appCommandScope();
+  const environment = scope
+    .store(environmentStore)
     .getState()
     .environments.find((candidate) => candidate.id === environmentId);
-  const project = useProjectStore
+  const project = scope
+    .store(projectStore)
     .getState()
     .projects.find((candidate) => candidate.id === projectId);
   const name =
@@ -55,18 +61,27 @@ function environmentLabel(environmentId: string, projectId: string): string | nu
   return [project?.name, name].filter(Boolean).join(" · ") || null;
 }
 
-function openEnvironment(projectId: string, environmentId: string): void {
-  useRemoteWorkspaceStore.getState().showLocal();
-  const ui = useUIStore.getState();
+/**
+ * Opens one of this renderer's own node's environments the way every entry
+ * point opens a node (`openMachineWorkspace`, plan item 5001): an ordinary
+ * selection of the window's own node.
+ */
+function openEnvironment(projectId: string, environmentId: string, label: string | null): void {
+  // A local notification is this renderer's own node's.
+  const scope = appCommandScope();
+  const ui = scope.store(uiStore).getState();
   ui.setProjectCollapsed(projectId, false);
-  ui.selectProjectAndEnvironment(projectId, environmentId);
-  if (
-    useEnvironmentStore
-      .getState()
-      .environments.some((env) => env.id === environmentId && env.projectHome)
-  ) {
-    ui.setProjectBoardTab("home");
-  }
+  const projectHome = scope
+    .store(environmentStore)
+    .getState()
+    .environments.some((env) => env.id === environmentId && env.projectHome);
+  openMachineWorkspace({
+    connectionId: portalStore.getState().selfId ?? scope.nodeId,
+    projectId,
+    environmentId,
+    ...(projectHome ? { boardTab: "home" as const } : {}),
+    title: label ?? "Environment",
+  });
 }
 
 /**
@@ -75,6 +90,10 @@ function openEnvironment(projectId: string, environmentId: string): void {
  * notification is too. Clicking it brings the window forward and opens the
  * environment. One notification per environment: a newer one (or the same one
  * from another window) replaces it rather than stacking.
+ *
+ * Another node's environment is not in this window's stores, so `remote` names
+ * it and opens it instead. Either way the click goes through
+ * `openMachineWorkspace` with the node, project and environment.
  */
 export function showQuestionDesktopNotification(input: {
   environmentId: string;
@@ -82,15 +101,19 @@ export function showQuestionDesktopNotification(input: {
   reason: EnvironmentAttentionReason;
   /** True when the app plays its own cue, so the OS need not add one. */
   silent: boolean;
+  remote?: { nodeId: string; label: string | null; open: () => void };
 }): boolean {
   const api = notificationApi();
   if (!api || api.permission !== "granted") return false;
   const title = COPY[input.reason] ?? "Agent needs your input";
-  const label = environmentLabel(input.environmentId, input.projectId);
+  const remote = input.remote;
+  const label = remote ? remote.label : environmentLabel(input.environmentId, input.projectId);
   try {
     const notification = new api(title, {
       body: label ? `${label}: waiting for your answer.` : "An agent is waiting for your answer.",
-      tag: `orkestrator-question:${input.environmentId}`,
+      tag: remote
+        ? `orkestrator-question:${remote.nodeId}:${input.environmentId}`
+        : `orkestrator-question:${input.environmentId}`,
       silent: input.silent,
     });
     if (open.size >= MAX_OPEN_NOTIFICATIONS) {
@@ -107,7 +130,8 @@ export function showQuestionDesktopNotification(input: {
     notification.addEventListener("click", () => {
       release();
       window.focus();
-      openEnvironment(input.projectId, input.environmentId);
+      if (remote) remote.open();
+      else openEnvironment(input.projectId, input.environmentId, label);
       notification.close();
     });
     return true;

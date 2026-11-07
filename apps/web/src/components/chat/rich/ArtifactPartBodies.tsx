@@ -30,8 +30,10 @@ import {
   useArtifactRepresentation,
   useCachedArtifactSearchBody,
   type ArtifactReadScope,
+  type ArtifactReader,
   type ArtifactRequestState,
 } from "@/lib/chat/artifact-requests";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 import {
   artifactFilename,
   defaultPrintPaper,
@@ -42,9 +44,11 @@ import {
 import { sanitizeSvg } from "@/lib/chat/svg-sanitize";
 import { artifactBodySearchText } from "@/lib/chat/rich-search-text";
 import { useTranscriptArtifactCapabilities } from "@/hooks/useTranscriptArtifactCapabilities";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { useRichViewField, type RichViewChoice } from "@/stores/richContentViewStore";
 import {
   LIVE_HOST_INVALIDATION_REASONS,
+  isLiveOccurrence,
   useArtifactLiveHostStore,
 } from "@/stores/artifactLiveHostStore";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
@@ -57,7 +61,6 @@ import { WorkflowSnapshotCard } from "./WorkflowSnapshotCard";
 import { ArtifactLivePlaceholder } from "./ArtifactLiveHost";
 import { RichSearchMirror } from "./RichMarkdownBlocks.shared";
 import { ArtifactWorkerPrepareAction } from "./ArtifactWorkerPrepareAction";
-import { readTranscriptArtifactRepresentation } from "@/lib/backend/transcript-artifacts";
 import { artifactErrorInfo } from "@/lib/chat/artifact-requests";
 
 /**
@@ -199,13 +202,14 @@ function ToolbarAction({
 }
 
 function downloadRepresentation(
+  reader: ArtifactReader,
   scope: ArtifactReadScope,
   artifactRef: TranscriptArtifactRef,
   representation: "source" | "rendered-svg",
   extension: string,
   mimeType: string,
 ): void {
-  void readWholeRepresentation(scope, artifactRef.publicationId, representation)
+  void readWholeRepresentation(reader, scope, artifactRef.publicationId, representation)
     .then((response) => {
       if (!isCurrentArtifactScopeGeneration(scope) || !sameRevision(response, artifactRef)) return;
       if (response.encoding !== "utf8") throw new Error("not text");
@@ -222,19 +226,21 @@ function downloadRepresentation(
  * stored. Always saved as an attachment; never opened or printed in-page.
  */
 function downloadPdfRepresentation(
+  reader: ArtifactReader,
   scope: ArtifactReadScope,
   artifactRef: TranscriptArtifactRef,
   onSettled: () => void,
 ): void {
   const paper = defaultPrintPaper();
   const pending = toast.loading("Preparing PDF…");
-  void readTranscriptArtifactRepresentation({
-    environmentId: scope.environmentId,
-    logicalSessionKey: scope.logicalSessionKey,
-    publicationId: artifactRef.publicationId,
-    representation: "pdf",
-    paper,
-  })
+  void reader
+    .readTranscriptArtifactRepresentation({
+      environmentId: scope.environmentId,
+      logicalSessionKey: scope.logicalSessionKey,
+      publicationId: artifactRef.publicationId,
+      representation: "pdf",
+      paper,
+    })
     .then((response) => {
       if (!isCurrentArtifactScopeGeneration(scope) || !sameRevision(response, artifactRef)) {
         toast.dismiss(pending);
@@ -360,6 +366,7 @@ export function ChartArtifactBody({ artifactRef, scope, occurrenceKey }: BodyPro
 }
 
 export function MermaidArtifactBody({ artifactRef, scope, occurrenceKey }: BodyProps) {
+  const nodeBackend = useScopeBackend();
   const [view, setView] = useRichViewField(occurrenceKey, "view", "preview" as RichViewChoice);
   const showSource = view === "source";
   const svg = useArtifactRepresentation(scope, artifactRef.publicationId, "rendered-svg", {
@@ -405,14 +412,28 @@ export function MermaidArtifactBody({ artifactRef, scope, occurrenceKey }: BodyP
         <ToolbarAction
           label="Download SVG"
           onClick={() =>
-            downloadRepresentation(scope, artifactRef, "rendered-svg", "svg", "image/svg+xml")
+            downloadRepresentation(
+              nodeBackend,
+              scope,
+              artifactRef,
+              "rendered-svg",
+              "svg",
+              "image/svg+xml",
+            )
           }
           icon={<Download aria-hidden="true" />}
         />
         <ToolbarAction
           label="Download source"
           onClick={() =>
-            downloadRepresentation(scope, artifactRef, "source", "mmd", "text/plain;charset=utf-8")
+            downloadRepresentation(
+              nodeBackend,
+              scope,
+              artifactRef,
+              "source",
+              "mmd",
+              "text/plain;charset=utf-8",
+            )
           }
           icon={<Download aria-hidden="true" />}
         />
@@ -508,6 +529,7 @@ export function HtmlArtifactBody({
   scope,
   occurrenceKey,
 }: BodyProps & { view: ArtifactPublicationView }) {
+  const nodeBackend = useScopeBackend();
   const capabilities = useTranscriptArtifactCapabilities();
   const interactive = artifactRef.kind === "html-interactive";
   // Replay needs only stored bytes: not the preview worker or `liveInteractive`.
@@ -560,11 +582,14 @@ export function HtmlArtifactBody({
   const liveEnabled = Boolean(
     capabilities?.liveInteractive && capabilities.rolloutFlags.liveInteractive,
   );
+  // The live host is window-owned; this occurrence is keyed by its node scope's id.
+  const { scope: nodeScope } = useScopesWithCommandFallback();
+  const nodeId = nodeScope.nodeId;
   const live = useArtifactLiveHostStore((state) =>
-    state.active?.target.occurrenceKey === occurrenceKey ? state.active : null,
+    isLiveOccurrence(state.active?.target, nodeId, occurrenceKey) ? state.active : null,
   );
   const ended = useArtifactLiveHostStore((state) =>
-    state.ended?.occurrenceKey === occurrenceKey ? state.ended : null,
+    isLiveOccurrence(state.ended, nodeId, occurrenceKey) ? state.ended : null,
   );
   const request = useArtifactLiveHostStore((state) => state.request);
   const stop = useArtifactLiveHostStore((state) => state.stop);
@@ -579,7 +604,7 @@ export function HtmlArtifactBody({
   }, [invalidate, live, scope.generation]);
 
   const runInteractive = () => {
-    request({
+    request(nodeScope, {
       occurrenceKey,
       publicationId: artifactRef.publicationId,
       artifactId: artifactRef.artifactId,
@@ -700,7 +725,7 @@ export function HtmlArtifactBody({
           disabled={pdfBusy}
           onClick={() => {
             setPdfBusy(true);
-            downloadPdfRepresentation(scope, artifactRef, () => setPdfBusy(false));
+            downloadPdfRepresentation(nodeBackend, scope, artifactRef, () => setPdfBusy(false));
           }}
           icon={<Download aria-hidden="true" />}
         />
@@ -708,7 +733,14 @@ export function HtmlArtifactBody({
           label="Download HTML source — runs outside Orkestrator's isolation"
           title="HTML source — runs outside Orkestrator's isolation once saved"
           onClick={() =>
-            downloadRepresentation(scope, artifactRef, "source", "html", "application/octet-stream")
+            downloadRepresentation(
+              nodeBackend,
+              scope,
+              artifactRef,
+              "source",
+              "html",
+              "application/octet-stream",
+            )
           }
           icon={<Download aria-hidden="true" />}
         >
@@ -764,7 +796,7 @@ export function HtmlArtifactBody({
                 <button
                   type="button"
                   className="underline"
-                  onClick={() => clearEnded(occurrenceKey)}
+                  onClick={() => clearEnded(nodeId, occurrenceKey)}
                 >
                   Dismiss
                 </button>

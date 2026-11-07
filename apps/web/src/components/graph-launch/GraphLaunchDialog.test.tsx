@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type {
   GraphLaunchOptions,
   GraphLaunchProviderOption,
@@ -7,12 +8,13 @@ import type {
 } from "@orkestrator/protocol/graphs/launch";
 import type { GraphTemplateRef } from "@orkestrator/protocol/graphs/library";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
-import { useEnvironmentStore } from "@/stores/environmentStore";
-import { useKanbanStore } from "@/stores/kanbanStore";
+import { environmentStore } from "@/stores/environmentStore";
+import { kanbanStore } from "@/stores/kanbanStore";
 import type { Environment } from "@/types";
 import type { KanbanTask } from "@/stores/kanbanStore";
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 import { GraphLaunchDialog } from "./GraphLaunchDialog";
+import { appCommandStore } from "@/test/app-command-store";
 
 const invokeMock = nativeInvoke as unknown as ReturnType<typeof mock>;
 
@@ -178,13 +180,13 @@ function installBackend() {
 }
 
 function seedStores() {
-  useEnvironmentStore.setState({
+  appCommandStore(environmentStore).setState({
     environments: [
       { id: ENVIRONMENT, projectId: PROJECT, name: "feature-login" } as Environment,
       { id: "env-other", projectId: "project-2", name: "elsewhere" } as Environment,
     ],
   });
-  useKanbanStore.setState({
+  appCommandStore(kanbanStore).setState({
     tasks: [{ id: "task-1", projectId: PROJECT, title: "Fix login" } as KanbanTask],
   });
 }
@@ -192,7 +194,7 @@ function seedStores() {
 function renderDialog(props: Partial<Parameters<typeof GraphLaunchDialog>[0]> = {}) {
   const onLaunched = mock(() => undefined);
   const onOpenChange = mock(() => undefined);
-  render(
+  renderInAppCommandScope(
     <GraphLaunchDialog
       open
       onOpenChange={onOpenChange}

@@ -25,13 +25,14 @@ import { WORKSPACE_BAR_HEIGHT_CLASS } from "@/components/pane-layout/TabShell";
 import { projectKey, projectRef } from "@orkestrator/protocol/federation";
 import { useConfigStore } from "@/stores/configStore";
 import { useMachineViewStore } from "@/stores/machineViewStore";
+import { useUIChromeStore } from "@/stores/uiChromeStore";
 import { useUIStore } from "@/stores/uiStore";
 import { MOBILE_SHELL_MEDIA_QUERY } from "@/lib/mobile-shell";
 import { onAppShortcut } from "@/lib/app-shortcuts";
 import { formatCompactRelativeTime } from "@/lib/format-relative-time";
 import { ALL_MACHINES, type MachineView } from "@/lib/federation/aggregate";
 import { openMachineWorkspace } from "@/lib/federation/open-workspace";
-import { projectLandingBoardTab, realmGroupingFor } from "@/lib/federation/workspace-realm";
+import { projectLandingBoardTab, windowGroupingFor } from "@/lib/federation/window-grouping";
 import {
   flattenProjectSearchResults,
   localSearchSource,
@@ -376,7 +377,7 @@ export function ProjectSearchBar({
   };
 
   // ⌘K / Ctrl+K toggles the search from anywhere in the window, the
-  // composer, terminals and workspace realms included (see `app-shortcuts.ts`).
+  // composer, terminals and other nodes' workspaces included (see `app-shortcuts.ts`).
   const openRef = useRef(open);
   useEffect(() => {
     openRef.current = open;
@@ -386,9 +387,9 @@ export function ProjectSearchBar({
       onAppShortcut("search-projects", () => {
         // Closing content remains mounted until motion settles. Reopen its
         // desktop panel before the search can be unmounted by that timer.
-        const ui = useUIStore.getState();
-        if (!window.matchMedia(MOBILE_SHELL_MEDIA_QUERY).matches && !ui.sidebarOpen) {
-          ui.toggleSidebar();
+        const chrome = useUIChromeStore.getState();
+        if (!window.matchMedia(MOBILE_SHELL_MEDIA_QUERY).matches && !chrome.sidebarOpen) {
+          chrome.toggleSidebar();
           openRef.current = false;
         }
         if (!openRef.current) setNow(new Date());
@@ -453,8 +454,8 @@ export function ProjectSearchBar({
         // and opened there as its sidebar row opens it.
         onSelectMachineProject?.(other, hit.project.id);
         // Read after the reveal, which can switch the sidebar's grouping.
-        const grouping = realmGroupingFor(
-          useUIStore.getState().environmentSortMode,
+        const grouping = windowGroupingFor(
+          useUIChromeStore.getState().environmentSortMode,
           useMachineViewStore.getState().grouping,
           window.matchMedia(MOBILE_SHELL_MEDIA_QUERY).matches,
         );

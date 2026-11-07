@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { StrictMode } from "react";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { BrowserPreviewState } from "@orkestrator/protocol/browser-preview";
 import {
   FIXTURE_BACKEND_INSTANCE_ID,
@@ -18,12 +19,12 @@ import {
 } from "@orkestrator/protocol/preview-services";
 
 import { invoke as nativeInvoke } from "@/lib/native/backend";
-import { useEnvironmentStore } from "@/stores/environmentStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { environmentStore } from "@/stores/environmentStore";
+import { paneLayoutStore, usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import {
   ensurePreviewServiceSync,
+  previewServiceStore,
   resetPreviewServiceSyncForTests,
-  usePreviewServiceStore,
 } from "@/stores/previewServiceStore";
 import { resetWebAnnotationSyncForTests } from "@/lib/web-annotations/sync";
 import { FakeWebAnnotationBackend } from "@/test/web-annotation-fakes";
@@ -31,6 +32,7 @@ import type { BrowserTabData } from "@/types/paneLayout";
 import { BrowserTab } from "./BrowserTab";
 import { createPersistedPaneLayoutInput } from "@/lib/pane-layout-persistence";
 import { reconcilePersistedLayout } from "@/lib/pane-layout-restore";
+import { appCommandStore } from "@/test/app-command-store";
 
 const invokeMock = nativeInvoke as unknown as ReturnType<typeof mock>;
 const originalOrkestrator = window.orkestrator;
@@ -39,13 +41,15 @@ const originalCancelRaf = window.cancelAnimationFrame;
 const API_SERVICE_ID = "svc_fixture_api_0002";
 
 function tabUrl(): string {
-  const layout = usePaneLayoutStore.getState().environments.get(FIXTURE_ENVIRONMENT_ID)!;
+  const layout = appCommandStore(paneLayoutStore)
+    .getState()
+    .environments.get(FIXTURE_ENVIRONMENT_ID)!;
   return (layout.root as { tabs: Array<{ browserData?: { url: string } }> }).tabs[0]!.browserData!
     .url;
 }
 
 function seedTab(url: string) {
-  usePaneLayoutStore.setState({
+  appCommandStore(paneLayoutStore).setState({
     activeEnvironmentId: FIXTURE_ENVIRONMENT_ID,
     hydration: new Map([[FIXTURE_ENVIRONMENT_ID, "done"]]),
     environments: new Map([
@@ -83,7 +87,7 @@ function TabHarness({ isActive }: { isActive: boolean }) {
 }
 
 function renderTab(isActive = true) {
-  return render(<TabHarness isActive={isActive} />);
+  return renderInAppCommandScope(<TabHarness isActive={isActive} />);
 }
 
 interface Backend {
@@ -278,7 +282,7 @@ describe("service browser tabs", () => {
   beforeEach(() => {
     resetPreviewServiceSyncForTests();
     resetWebAnnotationSyncForTests();
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [
         {
           id: FIXTURE_ENVIRONMENT_ID,
@@ -430,7 +434,7 @@ describe("service browser tabs", () => {
 
   function savedLayout() {
     return createPersistedPaneLayoutInput(
-      usePaneLayoutStore.getState().environments.get(FIXTURE_ENVIRONMENT_ID)!,
+      appCommandStore(paneLayoutStore).getState().environments.get(FIXTURE_ENVIRONMENT_ID)!,
     );
   }
 
@@ -441,7 +445,9 @@ describe("service browser tabs", () => {
       { environmentId: FIXTURE_ENVIRONMENT_ID, containerId: "container-1", isLocal: false },
     )!;
     act(() =>
-      usePaneLayoutStore.getState().applyAuthoritativeLayout(FIXTURE_ENVIRONMENT_ID, restored),
+      appCommandStore(paneLayoutStore)
+        .getState()
+        .applyAuthoritativeLayout(FIXTURE_ENVIRONMENT_ID, restored),
     );
   }
 
@@ -830,7 +836,7 @@ describe("service browser tabs", () => {
     renderTab();
     await waitFor(() => expect(browserPreview.attach).toHaveBeenCalled());
     act(() =>
-      usePaneLayoutStore
+      appCommandStore(paneLayoutStore)
         .getState()
         .updateTabBrowserUrl(
           "browser-1",
@@ -1143,7 +1149,7 @@ describe("service browser tabs", () => {
   );
 
   test("an unregistered host terminal port offers a temporary backend host port and opens the original URL", async () => {
-    useEnvironmentStore.setState((state) => ({
+    appCommandStore(environmentStore).setState((state) => ({
       environments: state.environments.map((environment) => ({
         ...environment,
         environmentType: "local",
@@ -1182,7 +1188,7 @@ describe("service browser tabs", () => {
   });
 
   test("a dev server on the next free port is offered as a move of its service, never moved on its own", async () => {
-    useEnvironmentStore.setState((state) => ({
+    appCommandStore(environmentStore).setState((state) => ({
       environments: state.environments.map((environment) => ({
         ...environment,
         environmentType: "local",
@@ -1323,7 +1329,7 @@ describe("service browser tabs", () => {
       seedTab("http://localhost:3000/");
       renderTab();
       await act(async () => {
-        await usePreviewServiceStore.getState().loadCapabilities();
+        await appCommandStore(previewServiceStore).getState().loadCapabilities();
       });
       expect(tabUrl()).toBe("http://localhost:3000/");
     });
@@ -1337,12 +1343,14 @@ describe("service browser tabs", () => {
       seedTab(legacyUrl);
       await act(async () => {
         ensurePreviewServiceSync();
-        await usePreviewServiceStore.getState().loadCapabilities();
-        await usePreviewServiceStore.getState().refreshEnvironment(FIXTURE_ENVIRONMENT_ID);
+        await appCommandStore(previewServiceStore).getState().loadCapabilities();
+        await appCommandStore(previewServiceStore)
+          .getState()
+          .refreshEnvironment(FIXTURE_ENVIRONMENT_ID);
       });
       const pending: Array<(snapshot: ReturnType<typeof fixturePreviewSnapshot>) => void> = [];
       backend.snapshot = () => new Promise((done) => pending.push(done));
-      render(
+      renderInAppCommandScope(
         <StrictMode>
           <TabHarness isActive />
         </StrictMode>,
@@ -1422,8 +1430,10 @@ describe("service browser tabs", () => {
       // Load the snapshot the tab would match against, as another tab would.
       await act(async () => {
         ensurePreviewServiceSync();
-        await usePreviewServiceStore.getState().loadCapabilities();
-        await usePreviewServiceStore.getState().refreshEnvironment(FIXTURE_ENVIRONMENT_ID);
+        await appCommandStore(previewServiceStore).getState().loadCapabilities();
+        await appCommandStore(previewServiceStore)
+          .getState()
+          .refreshEnvironment(FIXTURE_ENVIRONMENT_ID);
       });
       expect(tabUrl()).toBe(legacyUrl);
 
@@ -1519,7 +1529,7 @@ describe("service browser tabs", () => {
           view.unmount();
         } else {
           act(() =>
-            usePaneLayoutStore
+            appCommandStore(paneLayoutStore)
               .getState()
               .updateTabBrowserUrl("browser-1", next, FIXTURE_ENVIRONMENT_ID),
           );
@@ -1549,12 +1559,12 @@ describe("service browser tabs", () => {
       fireEvent.click(open);
       await waitFor(() => expect(resolveOld).toBeDefined());
       act(() =>
-        usePaneLayoutStore
+        appCommandStore(paneLayoutStore)
           .getState()
           .updateTabBrowserUrl("browser-1", "http://127.0.0.1:49152/other", FIXTURE_ENVIRONMENT_ID),
       );
       act(() =>
-        usePaneLayoutStore
+        appCommandStore(paneLayoutStore)
           .getState()
           .updateTabBrowserUrl("browser-1", legacyUrl, FIXTURE_ENVIRONMENT_ID),
       );
@@ -1593,7 +1603,7 @@ describe("service browser tabs", () => {
       await waitFor(() => expect(resolveOld).toBeDefined());
       const next = "http://127.0.0.1:49152/new-attempt";
       act(() =>
-        usePaneLayoutStore
+        appCommandStore(paneLayoutStore)
           .getState()
           .updateTabBrowserUrl("browser-1", next, FIXTURE_ENVIRONMENT_ID),
       );
@@ -1653,7 +1663,9 @@ describe("service browser tabs", () => {
         new Promise((done) => {
           resolveOld = done;
         });
-      const pending = usePreviewServiceStore.getState().refreshEnvironment(FIXTURE_ENVIRONMENT_ID);
+      const pending = appCommandStore(previewServiceStore)
+        .getState()
+        .refreshEnvironment(FIXTURE_ENVIRONMENT_ID);
       await waitFor(() => expect(resolveOld).toBeDefined());
       fireEvent.click(open);
       const rebound = fixturePreviewService();

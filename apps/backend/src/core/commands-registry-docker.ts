@@ -12,6 +12,37 @@ import {
 import { executeDockerCleanup, previewDockerCleanup } from "./docker-cleanup-preview.js";
 import { dockerCapacity, sampleContainerUsage } from "./container-resources.js";
 import { createLogger, type LogFields } from "@orkestrator/protocol/logger";
+import {
+  checkBaseImageCommand,
+  checkContainerHostReachabilityCommand,
+  checkDockerCommand,
+  cleanupOrphanedContainersCommand,
+  closeContainerLogsCommand,
+  dockerCleanupExecuteCommand,
+  dockerCleanupPreviewCommand,
+  dockerContainerStatusCommand,
+  dockerRemoveContainerCommand,
+  dockerStartContainerCommand,
+  dockerStopContainerCommand,
+  dockerSystemPruneCommand,
+  dockerVersionCommand,
+  getContainerHostPortCommand,
+  getContainerHostReachabilityCommand,
+  getContainerLogsCommand,
+  getContainerUsageCommand,
+  getDockerCapacityCommand,
+  getDockerImageStatusCommand,
+  getDockerSystemStatsCommand,
+  getDockerTopologyCommand,
+  getOrkestratorContainersCommand,
+  listDockerContainersCommand,
+  openContainerLogsCommand,
+  propagateGithubTokenToContainersCommand,
+  provisionEnvironmentCommand,
+  readContainerLogsCommand,
+  reattachContainerCommand,
+  streamContainerLogsCommand,
+} from "@orkestrator/protocol/contract/domains/docker";
 
 const log = createLogger("docker");
 
@@ -166,39 +197,39 @@ export function registerDockerCommands(
   dependencies: RegistryDependencies,
 ): void {
   void dependencies;
-  register("check_docker", async (_args, context) => {
+  register(checkDockerCommand, async (_args, context) => {
     const availability = await checkDockerAvailability();
     // Node summaries relay the answer this machine's own window last saw.
     context.runtime.dockerAvailability.record(availability);
     return availability;
   });
-  register("docker_version", async () =>
+  register(dockerVersionCommand, async () =>
     (
       await runCommand("docker", ["version", "--format", "{{.Server.Version}}"], {
         timeoutMs: 10_000,
       })
     ).stdout.trim(),
   );
-  register("get_docker_image_status", (_args, context) => getImageStatus(context));
+  register(getDockerImageStatusCommand, (_args, context) => getImageStatus(context));
   // Can agents in containers reach the agent tools server? The startup check
   // result, or a fresh check on request ("Check again").
   register(
-    "get_container_host_reachability",
+    getContainerHostReachabilityCommand,
     (_args, context) =>
       context.containerHostReachability?.snapshot() ?? initialContainerHostReachability(),
   );
   register(
-    "check_container_host_reachability",
+    checkContainerHostReachabilityCommand,
     async (_args, context) =>
       (await context.containerHostReachability?.check("manual")) ??
       initialContainerHostReachability(),
   );
-  register("get_docker_topology", ({ refresh }) =>
+  register(getDockerTopologyCommand, ({ refresh }) =>
     detectDockerTopology({ refresh: refresh === true }),
   );
   // Legacy boolean adapter: presence only. It never implies compatibility;
   // capability gates use `get_docker_image_status`.
-  register("check_base_image", (_args, context) =>
+  register(checkBaseImageCommand, (_args, context) =>
     runCommand("docker", ["image", "inspect", context.dockerImage ?? DOCKER_IMAGE], {
       timeoutMs: 10_000,
     }).then(
@@ -206,7 +237,7 @@ export function registerDockerCommands(
       () => false,
     ),
   );
-  register("provision_environment", async (args, context) => {
+  register(provisionEnvironmentCommand, async (args, context) => {
     const id = asString(args.environmentId, "environmentId");
     const identity = parseContainerMutationIdentity(args);
     // Idempotent and serialized: a repeated or concurrent request returns the
@@ -251,7 +282,7 @@ export function registerDockerCommands(
       return (await context.storage.getEnvironment(id))?.containerId ?? null;
     });
   });
-  register("docker_start_container", async ({ containerId }, context) => {
+  register(dockerStartContainerCommand, async ({ containerId }, context) => {
     const { storage } = context;
     const id = asString(containerId, "containerId");
     const assigned = findEnvironmentByContainerId(await storage.loadEnvironments(), id);
@@ -273,7 +304,7 @@ export function registerDockerCommands(
     }
     await syncContainerAgentAccountsOnStart(context, assigned ?? null, id, config.global);
   });
-  register("docker_stop_container", async ({ containerId }, context) => {
+  register(dockerStopContainerCommand, async ({ containerId }, context) => {
     const id = asString(containerId, "containerId");
     const assigned = findEnvironmentByContainerId(await context.storage.loadEnvironments(), id);
     if (assigned) {
@@ -283,7 +314,7 @@ export function registerDockerCommands(
     }
     await stopRuntimeContainer(id);
   });
-  register("docker_remove_container", async ({ containerId }, context) => {
+  register(dockerRemoveContainerCommand, async ({ containerId }, context) => {
     // A supplied id is not a request to discard an environment's workspace.
     // Raw removal is limited to containers nothing claims; an assigned runtime
     // is reset only through `recreate_environment` with an explicit discard,
@@ -306,11 +337,11 @@ export function registerDockerCommands(
       );
     }
   });
-  register("docker_container_status", async ({ containerId }) => {
+  register(dockerContainerStatusCommand, async ({ containerId }) => {
     const id = asString(containerId, "containerId");
     return getDockerStatus(id);
   });
-  register("list_docker_containers", async (_args, context) => {
+  register(listDockerContainersCommand, async (_args, context) => {
     const { storage } = context;
     const dockerOwner = dockerOwnerNamespace(storage.getDataDir());
     // Ownership is filtered here rather than by a second `--filter label=` so an
@@ -334,10 +365,10 @@ export function registerDockerCommands(
       .flatMap((line) => {
         const [id = "", name = "", labels = ""] = line.split("\t");
         if (!dockerOwnerMatches(labels, dockerOwner, context.strictDockerOwner)) return [];
-        return [[id, name]];
+        return [[id, name] as [string, string]];
       });
   });
-  register("get_container_host_port", ({ containerId, containerPort }) =>
+  register(getContainerHostPortCommand, ({ containerId, containerPort }) =>
     getHostPort(asString(containerId, "containerId"), asNumber(containerPort, "containerPort")),
   );
   // Initialization views in every client poll this once a second; equivalent
@@ -347,7 +378,7 @@ export function registerDockerCommands(
       (await runCommand("docker", ["logs", "--tail", tail, containerId], { timeoutMs: 30_000 }))
         .stdout,
   });
-  register("get_container_logs", async ({ containerId, tail }) => {
+  register(getContainerLogsCommand, async ({ containerId, tail }) => {
     // Bounded at the source (line count) and again on the result (bytes), so
     // one enormous line cannot defeat a line-only limit.
     const requested = Number.parseInt(asOptionalString(tail) ?? "200", 10);
@@ -357,23 +388,23 @@ export function registerDockerCommands(
   });
   // Follow subscriptions: one shared `docker logs -f` per container, a bounded
   // replay ring, leases and an explicit gap when a client falls behind.
-  register("open_container_logs", ({ containerId }, context) =>
+  register(openContainerLogsCommand, ({ containerId }, context) =>
     context.runtime.containerLogs.open(asString(containerId, "containerId")),
   );
-  register("read_container_logs", ({ subscriptionId, sourceId, cursor }, context) =>
+  register(readContainerLogsCommand, ({ subscriptionId, sourceId, cursor }, context) =>
     context.runtime.containerLogs.read(
       asString(subscriptionId, "subscriptionId"),
       asString(sourceId, "sourceId"),
       asNumber(cursor, "cursor"),
     ),
   );
-  register("close_container_logs", ({ subscriptionId }, context) => {
+  register(closeContainerLogsCommand, ({ subscriptionId }, context) => {
     // Releases the observer only; the container and its processes continue.
     context.runtime.containerLogs.close(asString(subscriptionId, "subscriptionId"));
   });
   // Legacy adapter: an older client that never closes gets a lease that
   // lapses, so its follower stops instead of living forever.
-  register("stream_container_logs", ({ containerId }, context) => {
+  register(streamContainerLogsCommand, ({ containerId }, context) => {
     const { subscriptionId, sourceId } = context.runtime.containerLogs.open(
       asString(containerId, "containerId"),
     );
@@ -391,8 +422,8 @@ export function registerDockerCommands(
       ),
     );
   };
-  register("docker_system_prune", reviewedCleanupRequired);
-  register("get_docker_system_stats", async (_args, context) => {
+  register(dockerSystemPruneCommand, reviewedCleanupRequired);
+  register(getDockerSystemStatsCommand, async (_args, context) => {
     // Capacity is the daemon's (on Docker Desktop, its VM), usage is the sum
     // over this installation's containers, and anything Docker would not say
     // is reported unknown — not as the backend host's values or zero.
@@ -444,7 +475,7 @@ export function registerDockerCommands(
       containersTotal: usage.containers.length,
       imagesTotal: images,
       // Additive, scoped fields. Older renderers ignore them.
-      scope: { capacity: "docker-daemon", usage: "installation", disk: "docker-daemon" },
+      scope: { capacity: "docker-daemon", usage: "installation", disk: "docker-daemon" } as const,
       sampledAt: usage.sampledAt,
       stale: usage.stale,
       cpuCoresUsed:
@@ -458,9 +489,11 @@ export function registerDockerCommands(
       diskBreakdown: capacity.disk,
     };
   });
-  register("get_docker_capacity", ({ refresh }) => dockerCapacity({ refresh: refresh === true }));
-  register("get_container_usage", (_args, context) => sampleContainerUsage(context));
-  register("get_orkestrator_containers", async (_args, context) => {
+  register(getDockerCapacityCommand, ({ refresh }) =>
+    dockerCapacity({ refresh: refresh === true }),
+  );
+  register(getContainerUsageCommand, (_args, context) => sampleContainerUsage(context));
+  register(getOrkestratorContainersCommand, async (_args, context) => {
     const { storage } = context;
     const protection = await loadProtection(context);
     const environments = protection.environments;
@@ -558,8 +591,8 @@ export function registerDockerCommands(
       ];
     });
   });
-  register("docker_cleanup_preview", (_args, context) => previewDockerCleanup(context));
-  register("docker_cleanup_execute", async (args, context) => {
+  register(dockerCleanupPreviewCommand, (_args, context) => previewDockerCleanup(context));
+  register(dockerCleanupExecuteCommand, async (args, context) => {
     const strings = (value: unknown, name: string): string[] => {
       if (value === undefined) return [];
       if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string")) {
@@ -578,8 +611,8 @@ export function registerDockerCommands(
       context,
     );
   });
-  register("cleanup_orphaned_containers", reviewedCleanupRequired);
-  register("reattach_container", async ({ projectId, containerId, name }, context) => {
+  register(cleanupOrphanedContainersCommand, reviewedCleanupRequired);
+  register(reattachContainerCommand, async ({ projectId, containerId, name }, context) => {
     const { storage } = context;
     const id = asString(containerId, "containerId");
     const project = asString(projectId, "projectId");
@@ -657,7 +690,7 @@ export function registerDockerCommands(
     };
     return toClientEnvironment(await storage.addEnvironment(env));
   });
-  register("propagate_github_token_to_containers", async (_args, context) => {
+  register(propagateGithubTokenToContainersCommand, async (_args, context) => {
     const { storage, runtime } = context;
     const config = await storage.loadConfig();
     const githubToken = await resolveContainerGitHubToken(config.global, runtime.gitHubCli);

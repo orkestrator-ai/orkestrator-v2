@@ -2,8 +2,15 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
+import type { BackendId } from "@orkestrator/protocol/federation";
+import { WindowScope } from "@/lib/node-scope/window-scope";
+import { FakeNodeClient } from "@/test/render-in-node-scope";
 import { startCoordinatedPoll } from "./coordinated-poll";
-import { resetReadCoordinatorForTests, READ_RESUME_COALESCE_MS } from "./read-coordinator";
+import {
+  readCoordinatorFor,
+  resetReadCoordinatorForTests,
+  READ_RESUME_COALESCE_MS,
+} from "./read-coordinator";
 import { flushMicrotasks, installFakeReadCoordinator } from "./testing/read-coordinator";
 
 afterEach(() => resetReadCoordinatorForTests());
@@ -203,5 +210,31 @@ describe("the polls WEB-18 names", () => {
     );
     expect(source.match(/\bsetInterval\(/g)).toHaveLength(1);
     expect(source).toMatch(/setInterval\(\s*\(\) => void resumeRef/);
+  });
+});
+
+describe("startCoordinatedPoll per scope", () => {
+  test("schedules on the named scope's coordinator, so that node's outage pauses it", () => {
+    const windowScope = new WindowScope();
+    try {
+      const leaf = windowScope.open({
+        role: "leaf",
+        client: new FakeNodeClient({ nodeId: "bk_leaf" as BackendId }),
+      });
+      const stop = startCoordinatedPoll({
+        resource: "leaf-poll",
+        intervalMs: 60_000,
+        read: () => undefined,
+        scope: leaf,
+      });
+      const diagnostics = readCoordinatorFor(leaf).getDiagnostics();
+      expect(diagnostics.entries.map((entry) => entry.id)).toEqual([
+        expect.stringContaining("leaf-poll"),
+      ]);
+      stop();
+      expect(readCoordinatorFor(leaf).getDiagnostics().entries).toEqual([]);
+    } finally {
+      windowScope.dispose();
+    }
   });
 });

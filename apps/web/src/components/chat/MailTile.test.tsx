@@ -1,16 +1,18 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { AgentMailNotice } from "@orkestrator/protocol/agent-mail";
 import type { PeerMailPresentation } from "@/lib/chat/native-message-types";
 import { portalStore } from "@/lib/portal/portal-store";
 import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
-import { useUIStore } from "@/stores/uiStore";
-import { useAgentMailStore } from "@/stores/agentMailStore";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
+import { uiStore } from "@/stores/uiStore";
+import { agentMailStore } from "@/stores/agentMailStore";
+import { environmentStore } from "@/stores/environmentStore";
 import type { Environment } from "@/types";
 import { ChatFindActiveContext } from "./chat-find-context";
 import { MailTile, mailTileTone } from "./MailTile";
+import { appCommandStore } from "@/test/app-command-store";
 
 const LONG_REPORT = Array.from(
   { length: 12 },
@@ -42,13 +44,13 @@ function tile(container: HTMLElement): HTMLElement {
 }
 
 describe("the Open action on a notice about a worker", () => {
-  const initialEnvironments = useEnvironmentStore.getState();
+  const initialEnvironments = appCommandStore(environmentStore).getState();
   const initialPortal = portalStore.store.getState();
 
   afterEach(() => {
     cleanup();
     useMessagePartExpansionStore.getState().reset();
-    useEnvironmentStore.setState(initialEnvironments, true);
+    appCommandStore(environmentStore).setState(initialEnvironments, true);
     portalStore.store.setState(initialPortal, true);
   });
 
@@ -71,11 +73,11 @@ describe("the Open action on a notice about a worker", () => {
   const openButton = () => screen.queryByRole("button", { name: /Open worker/ });
 
   test("opens that worker's tab, beside the conversation button", () => {
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [{ id: "worker-env", projectId: "project-1", name: "api-fix" } as Environment],
     });
-    usePaneLayoutStore.getState().hydration.set("worker-env", "done");
-    render(
+    appCommandStore(paneLayoutStore).getState().hydration.set("worker-env", "done");
+    renderInAppCommandScope(
       <MailTile
         mail={{ ...noticeMail(workerNotice()), participants: ["a", "b"] }}
         expansionKey="k"
@@ -86,24 +88,26 @@ describe("the Open action on a notice about a worker", () => {
     expect(button.closest("button[aria-expanded]") === null).toBe(true);
     expect(screen.getByRole("button", { name: "Open conversation" })).toBeTruthy();
     fireEvent.click(button);
-    expect(useUIStore.getState().selectedEnvironmentId).toBe("worker-env");
-    expect(useUIStore.getState().selectedProjectId).toBe("project-1");
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("worker-env");
+    expect(appCommandStore(uiStore).getState().selectedProjectId).toBe("project-1");
   });
 
   test("opening does not expand the tile", () => {
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [{ id: "worker-env", projectId: "project-1" } as Environment],
     });
-    const { container } = render(<MailTile mail={noticeMail(workerNotice())} expansionKey="k" />);
+    const { container } = renderInAppCommandScope(
+      <MailTile mail={noticeMail(workerNotice())} expansionKey="k" />,
+    );
     fireEvent.click(openButton()!);
     expect(tile(container).dataset.expanded).toBe("false");
   });
 
   test("an environment notice opens the environment, with no tab to aim for", () => {
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [{ id: "worker-env", projectId: "project-1" } as Environment],
     });
-    render(
+    renderInAppCommandScope(
       <MailTile
         mail={noticeMail({
           resource: { kind: "environment", id: "worker-env", label: "api-fix" },
@@ -114,7 +118,7 @@ describe("the Open action on a notice about a worker", () => {
       />,
     );
     fireEvent.click(openButton()!);
-    expect(useUIStore.getState().selectedEnvironmentId).toBe("worker-env");
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("worker-env");
   });
 
   test("a worker on another node opens through that node", () => {
@@ -133,61 +137,67 @@ describe("the Open action on a notice about a worker", () => {
         },
       ] as never,
     });
-    render(<MailTile mail={noticeMail(workerNotice({ nodeId: "bk_leaf" }))} expansionKey="k" />);
+    renderInAppCommandScope(
+      <MailTile mail={noticeMail(workerNotice({ nodeId: "bk_leaf" }))} expansionKey="k" />,
+    );
     expect(openButton()).toBeTruthy();
   });
 
   test("a notice with no worker it can reach offers no Open", () => {
     // An environment this client does not know: deleted, or an older notice
     // about another node's worker that names no node.
-    const unknown = render(<MailTile mail={noticeMail(workerNotice())} expansionKey="a" />);
+    const unknown = renderInAppCommandScope(
+      <MailTile mail={noticeMail(workerNotice())} expansionKey="a" />,
+    );
     expect(openButton()).toBeNull();
     unknown.unmount();
 
     // A node this client has no link to.
-    const noNode = render(
+    const noNode = renderInAppCommandScope(
       <MailTile mail={noticeMail(workerNotice({ nodeId: "bk_gone" }))} expansionKey="b" />,
     );
     expect(openButton()).toBeNull();
     noNode.unmount();
 
     // A notice about something else, even in a known environment.
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [{ id: "env-1", projectId: "project-1" } as Environment],
     });
-    const other = render(
+    const other = renderInAppCommandScope(
       <MailTile mail={noticeMail(notice("completed", "success"))} expansionKey="c" />,
     );
     expect(openButton()).toBeNull();
     other.unmount();
 
     // No structured facts at all.
-    const bare = render(<MailTile mail={noticeMail(undefined)} expansionKey="d" />);
+    const bare = renderInAppCommandScope(
+      <MailTile mail={noticeMail(undefined)} expansionKey="d" />,
+    );
     expect(openButton()).toBeNull();
     bare.unmount();
 
     // Mail that is not a notice never has one, whatever it carries.
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [{ id: "worker-env", projectId: "project-1" } as Environment],
     });
-    render(<MailTile mail={mail({ notice: workerNotice() })} expansionKey="e" />);
+    renderInAppCommandScope(<MailTile mail={mail({ notice: workerNotice() })} expansionKey="e" />);
     expect(openButton()).toBeNull();
   });
 });
 
 describe("MailTile", () => {
-  const initialMail = useAgentMailStore.getState();
-  const initialEnvironments = useEnvironmentStore.getState();
+  const initialMail = appCommandStore(agentMailStore).getState();
+  const initialEnvironments = appCommandStore(environmentStore).getState();
 
   afterEach(() => {
     cleanup();
     useMessagePartExpansionStore.getState().reset();
-    useAgentMailStore.setState(initialMail, true);
-    useEnvironmentStore.setState(initialEnvironments, true);
+    appCommandStore(agentMailStore).setState(initialMail, true);
+    appCommandStore(environmentStore).setState(initialEnvironments, true);
   });
 
   test("shows attached images by name and size, collapsed and open, without a path", () => {
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <MailTile
         mail={mail({
           attachments: [{ name: "shot.png", bytes: 2048 }, { name: "second.png" }],
@@ -209,12 +219,12 @@ describe("MailTile", () => {
   });
 
   test("a message with no images draws no attachment row", () => {
-    const { container } = render(<MailTile mail={mail()} expansionKey="k" />);
+    const { container } = renderInAppCommandScope(<MailTile mail={mail()} expansionKey="k" />);
     expect(container.querySelector("[data-mail-attachments]") === null).toBe(true);
   });
 
   test("starts collapsed with the body clamped to a few lines", () => {
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <MailTile mail={mail()} expansionKey="k" timestampLabel="10:04" />,
     );
 
@@ -235,7 +245,7 @@ describe("MailTile", () => {
   test("opens while transcript find's current match is in its row, then closes again", () => {
     // Find counts matches in the whole body, but only three lines show while
     // collapsed: the row holding the current match reveals every tile in it.
-    const { container, rerender } = render(
+    const { container, rerender } = renderInAppCommandScope(
       <ChatFindActiveContext value={true}>
         <MailTile mail={mail()} expansionKey="k" />
       </ChatFindActiveContext>,
@@ -258,7 +268,7 @@ describe("MailTile", () => {
   });
 
   test("the header is a real button that controls the body", () => {
-    const { container } = render(<MailTile mail={mail()} expansionKey="k" />);
+    const { container } = renderInAppCommandScope(<MailTile mail={mail()} expansionKey="k" />);
     const button = screen.getByRole("button", { name: /Claude 2 · worker/ });
 
     // A native button gives Enter and Space activation and a tab stop; the
@@ -272,7 +282,7 @@ describe("MailTile", () => {
   });
 
   test("expands on click, shows the trust line, and collapses on a second click", () => {
-    const { container } = render(<MailTile mail={mail()} expansionKey="k" />);
+    const { container } = renderInAppCommandScope(<MailTile mail={mail()} expansionKey="k" />);
     const button = screen.getByRole("button", { name: /Claude 2 · worker/ });
 
     fireEvent.click(button);
@@ -292,7 +302,7 @@ describe("MailTile", () => {
   });
 
   test("clicking the clipped preview expands it, but does not collapse an open tile", () => {
-    const { container } = render(<MailTile mail={mail()} expansionKey="k" />);
+    const { container } = renderInAppCommandScope(<MailTile mail={mail()} expansionKey="k" />);
     const preview = container.querySelector<HTMLElement>("[data-mail-body]")!.parentElement!;
 
     fireEvent.click(preview);
@@ -303,16 +313,16 @@ describe("MailTile", () => {
   });
 
   test("remembers an expanded tile across remounts under the same key", () => {
-    const first = render(<MailTile mail={mail()} expansionKey="scope:mail-1" />);
+    const first = renderInAppCommandScope(<MailTile mail={mail()} expansionKey="scope:mail-1" />);
     fireEvent.click(screen.getByRole("button", { name: /Claude 2 · worker/ }));
     first.unmount();
 
-    const second = render(<MailTile mail={mail()} expansionKey="scope:mail-1" />);
+    const second = renderInAppCommandScope(<MailTile mail={mail()} expansionKey="scope:mail-1" />);
     expect(tile(second.container).dataset.expanded).toBe("true");
     second.unmount();
 
     // A different transcript is its own scope.
-    const other = render(<MailTile mail={mail()} expansionKey="other:mail-1" />);
+    const other = renderInAppCommandScope(<MailTile mail={mail()} expansionKey="other:mail-1" />);
     expect(tile(other.container).dataset.expanded).toBe("false");
   });
 
@@ -326,7 +336,7 @@ describe("MailTile", () => {
     ["notice", notice("waiting", "attention"), "attention", "Status: needs attention"],
     ["notice", notice("ready", "info"), "info", "Status update"],
   ] as const)("styles %s mail (%#) by its kind and tone", (kind, structured, tone, label) => {
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <MailTile
         mail={mail({ kind, ...(structured ? { notice: structured } : {}) })}
         expansionKey={`tone-${tone}`}
@@ -341,12 +351,12 @@ describe("MailTile", () => {
   });
 
   test("tells notices apart from peer mail at a glance", () => {
-    const worker = render(<MailTile mail={mail()} expansionKey="a" />);
+    const worker = renderInAppCommandScope(<MailTile mail={mail()} expansionKey="a" />);
     const workerFrame = tile(worker.container).firstElementChild!.className;
     const workerIcon = tile(worker.container).querySelector("svg")!.getAttribute("class");
     worker.unmount();
 
-    const failed = render(
+    const failed = renderInAppCommandScope(
       <MailTile
         mail={mail({ kind: "notice", notice: notice("failed", "failure") })}
         expansionKey="b"
@@ -359,7 +369,7 @@ describe("MailTile", () => {
 
   test("a notice without structured facts reads as neutral news", () => {
     expect(mailTileTone({ kind: "notice" })).toBe("info");
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <MailTile mail={mail({ kind: "notice" })} expansionKey="legacy" />,
     );
     expect(tile(container).dataset.mailTone).toBe("info");
@@ -367,7 +377,7 @@ describe("MailTile", () => {
   });
 
   test("lays out for narrow widths without fixed sizes", () => {
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <MailTile
         mail={mail({
           sender: "A very long worker name that would never fit on a phone",
@@ -389,7 +399,7 @@ describe("MailTile", () => {
   });
 
   test("draws mail this agent sent with its delivery state", () => {
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <MailTile
         mail={mail({
           direction: "out",
@@ -406,8 +416,8 @@ describe("MailTile", () => {
   });
 
   test("names a recipient tab with its environment, giving way on the environment first", () => {
-    useEnvironmentStore.setState({ environments: [] });
-    const { container } = render(
+    appCommandStore(environmentStore).setState({ environments: [] });
+    const { container } = renderInAppCommandScope(
       <MailTile
         mail={mail({
           direction: "out",
@@ -421,7 +431,7 @@ describe("MailTile", () => {
     const sender = tile(container).querySelector<HTMLElement>("[data-mail-sender]")!;
     expect(sender.textContent).toBe("To env-1 · Claude 2");
     act(() =>
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [
           {
             id: "env-1",
@@ -447,10 +457,10 @@ describe("MailTile", () => {
   test.each(["Claude 2", undefined])(
     "updates a received sender's environment name with tab %s",
     (tabName) => {
-      useEnvironmentStore.setState({ environments: [] });
-      useAgentMailStore.setState({ mailboxes: new Map() });
+      appCommandStore(environmentStore).setState({ environments: [] });
+      appCommandStore(agentMailStore).setState({ mailboxes: new Map() });
       const environmentId = "acf90d0f-8be8-45ba-b87b-745b54a007e0";
-      const { container } = render(
+      const { container } = renderInAppCommandScope(
         <MailTile
           mail={mail({
             sender: `acf90d0f · ${tabName ?? "startup-agent"}`,
@@ -462,7 +472,7 @@ describe("MailTile", () => {
       const sender = tile(container).querySelector<HTMLElement>("[data-mail-sender]")!;
       expect(sender.textContent).toBe(`acf90d0f · ${tabName ?? "startup-agent"}`);
       act(() =>
-        useEnvironmentStore.setState({
+        appCommandStore(environmentStore).setState({
           environments: [{ id: environmentId, name: "worker", order: 0 } as Environment],
         }),
       );
@@ -473,10 +483,10 @@ describe("MailTile", () => {
   );
 
   test("renders a received environment-only address without a tab suffix", () => {
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [{ id: "env-1", name: "worker", order: 0 } as Environment],
     });
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <MailTile
         mail={mail({
           sender: "env-1 · worker",
@@ -493,19 +503,19 @@ describe("MailTile", () => {
   });
 
   test("opens the conversation between sender and recipient", () => {
-    useAgentMailStore.setState({ panel: null });
-    render(
+    appCommandStore(agentMailStore).setState({ panel: null });
+    renderInAppCommandScope(
       <MailTile mail={mail({ participants: ["env-2\0tab-2", "env-1\0tab-1"] })} expansionKey="c" />,
     );
     fireEvent.click(screen.getByRole("button", { name: "Open conversation" }));
-    expect(useAgentMailStore.getState().panel).toEqual({
+    expect(appCommandStore(agentMailStore).getState().panel).toEqual({
       conversation: ["env-2\0tab-2", "env-1\0tab-1"],
     });
-    useAgentMailStore.setState({ panel: null });
+    appCommandStore(agentMailStore).setState({ panel: null });
   });
 
   test("offers no conversation without both participants", () => {
-    render(<MailTile mail={mail()} expansionKey="none" />);
+    renderInAppCommandScope(<MailTile mail={mail()} expansionKey="none" />);
     expect(screen.queryByRole("button", { name: "Open conversation" }) === null).toBe(true);
   });
 });

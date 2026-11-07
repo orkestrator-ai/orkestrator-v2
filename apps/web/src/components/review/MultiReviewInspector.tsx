@@ -25,7 +25,7 @@ import { useCoordinatedRead } from "@/hooks/useCoordinatedRead";
 import { useScrollOffsetAcrossHide } from "@/hooks/useScrollOffsetAcrossHide";
 import { findPreviousNativeMessage } from "@/lib/chat/native-message-adapters";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
-import * as backend from "@/lib/backend";
+import type * as backend from "@/lib/backend";
 import { hideReviewPackagePlanText } from "@orkestrator/protocol/structured-review-transcript";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import { cn } from "@/lib/utils";
@@ -39,6 +39,7 @@ import { FlowInspectorHeader } from "@/components/flow-graph/FlowInspector";
 import { withIdleIcon, type MultiReviewFlowNodeModel } from "./MultiReviewFlowGraph";
 import { reviewSeverityStyles } from "./StructuredReviewReportView";
 import { provisionalFindingLabel, type MultiReviewMergedFinding } from "./multi-review-flow";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 /** Icon, name, status pill and token count of the selected node, with its actions. */
 export function MultiReviewInspectorHeader({
@@ -300,8 +301,8 @@ export function ReviewerTranscriptTail({
   isActive,
   assistantLabel,
   containerId,
-  loadTranscript = backend.getMultiReviewReviewerTranscript,
-  loadToolDetails = backend.getMultiReviewReviewerToolDetails,
+  loadTranscript: loadTranscriptOverride,
+  loadToolDetails: loadToolDetailsOverride,
 }: {
   workflowId: string;
   reviewerId: string;
@@ -313,6 +314,15 @@ export function ReviewerTranscriptTail({
   loadTranscript?: typeof backend.getMultiReviewReviewerTranscript;
   loadToolDetails?: typeof backend.getMultiReviewReviewerToolDetails;
 }) {
+  const nodeBackend = useScopeBackend();
+  const loadTranscript =
+    loadTranscriptOverride === undefined
+      ? nodeBackend.getMultiReviewReviewerTranscript
+      : loadTranscriptOverride;
+  const loadToolDetails =
+    loadToolDetailsOverride === undefined
+      ? nodeBackend.getMultiReviewReviewerToolDetails
+      : loadToolDetailsOverride;
   const read = useCallback(
     (workflow: string, reviewer: string, knownSourceToken?: string) =>
       loadTranscript(workflow, reviewer, { knownSourceToken }),
@@ -408,8 +418,8 @@ export function StepTranscriptTail({
   isActive,
   assistantLabel,
   containerId,
-  loadTranscript = backend.getMultiReviewStepTranscript,
-  loadToolDetails = backend.getMultiReviewStepToolDetails,
+  loadTranscript: loadTranscriptOverride,
+  loadToolDetails: loadToolDetailsOverride,
 }: {
   workflowId: string;
   step: MultiReviewStepKind;
@@ -425,6 +435,15 @@ export function StepTranscriptTail({
   loadTranscript?: typeof backend.getMultiReviewStepTranscript;
   loadToolDetails?: typeof backend.getMultiReviewStepToolDetails;
 }) {
+  const nodeBackend = useScopeBackend();
+  const loadTranscript =
+    loadTranscriptOverride === undefined
+      ? nodeBackend.getMultiReviewStepTranscript
+      : loadTranscriptOverride;
+  const loadToolDetails =
+    loadToolDetailsOverride === undefined
+      ? nodeBackend.getMultiReviewStepToolDetails
+      : loadToolDetailsOverride;
   const read = useCallback(
     (workflow: string, target: string, knownSourceToken?: string) =>
       loadTranscript(workflow, target as MultiReviewStepKind, { knownSourceToken }),

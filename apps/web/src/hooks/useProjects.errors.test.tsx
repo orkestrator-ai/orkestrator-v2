@@ -1,8 +1,10 @@
 import { afterAll, afterEach, beforeEach, expect, mock, test } from "bun:test";
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, waitFor } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import * as realBackend from "@/lib/backend";
-import { useProjectStore } from "@/stores/projectStore";
+import { projectStore } from "@/stores/projectStore";
 import { mockToastError } from "../../../../tests/mocks/sonner";
+import { appCommandStore } from "@/test/app-command-store";
 
 const originalBackend = { ...realBackend };
 const addProject = mock(realBackend.addProject);
@@ -19,7 +21,7 @@ beforeEach(() => {
   addProject.mockReset();
   createProjectFromScratch.mockReset();
   mockToastError.mockClear();
-  useProjectStore.setState({ projects: [], error: null, isLoading: false });
+  appCommandStore(projectStore).setState({ projects: [], error: null, isLoading: false });
 });
 afterEach(cleanup);
 afterAll(() => mock.module("@/lib/backend", () => originalBackend));
@@ -33,7 +35,7 @@ test.each(["add", "create"] as const)(
     );
     addProject.mockRejectedValueOnce(failure);
     createProjectFromScratch.mockRejectedValueOnce(failure);
-    const { result } = renderHook(() => useProjects());
+    const { result } = renderHookInAppCommandScope(() => useProjects());
     await waitFor(() => expect(result.current.isLoading).toBe(false));
     await act(async () => {
       const request =
@@ -44,9 +46,9 @@ test.each(["add", "create"] as const)(
       const error = await request.catch((error: Error) => error);
       expect((error as Error).message).toBe(reason);
     });
-    expect(useProjectStore.getState().error).toBe(reason);
-    expect(useProjectStore.getState().isLoading).toBe(false);
-    expect(useProjectStore.getState().projects).toEqual([]);
+    expect(appCommandStore(projectStore).getState().error).toBe(reason);
+    expect(appCommandStore(projectStore).getState().isLoading).toBe(false);
+    expect(appCommandStore(projectStore).getState().projects).toEqual([]);
     expect(mockToastError).toHaveBeenCalledWith(
       operation === "add" ? "Failed to add project" : "Failed to create project",
       { description: reason },

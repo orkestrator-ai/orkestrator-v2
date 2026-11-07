@@ -1,17 +1,18 @@
 import { createSessionKey } from "@/lib/utils";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import * as realSortable from "@dnd-kit/sortable";
 import type { TabInfo } from "@/types/paneLayout";
 import { createDraggableTabId } from "@/types/paneLayout";
-import { useSessionStore } from "@/stores/sessionStore";
-import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
-import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
-import { useFileDirtyStore } from "@/stores";
-import { useMultiReviewStore } from "@/stores/multiReviewStore";
-import { useConfigStore } from "@/stores/configStore";
-import { useAgentMailStore } from "@/stores/agentMailStore";
-import { usePreviewServiceStore } from "@/stores/previewServiceStore";
+import { sessionStore } from "@/stores/sessionStore";
+import { nativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
+import { buildPipelineStore } from "@/stores/buildPipelineStore";
+import { fileDirtyStore } from "@/stores";
+import { multiReviewStore } from "@/stores/multiReviewStore";
+import { configStore } from "@/stores/configStore";
+import { agentMailStore } from "@/stores/agentMailStore";
+import { previewServiceStore } from "@/stores/previewServiceStore";
 import {
   formatPreviewServiceUri,
   type PreviewRegistrySnapshot,
@@ -21,6 +22,7 @@ import {
   MULTI_REVIEW_LEGACY_FIX_TAB_TITLE,
   type MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
+import { appCommandStore } from "@/test/app-command-store";
 
 const realSortableSnapshot = { ...realSortable };
 
@@ -67,7 +69,7 @@ afterAll(() => {
 });
 
 function renderTab(tab: TabInfo, index = 0) {
-  return render(
+  return renderInAppCommandScope(
     <DraggableTab
       tab={tab}
       paneId="pane-1"
@@ -81,7 +83,7 @@ function renderTab(tab: TabInfo, index = 0) {
 
 /** Seed a build pipeline whose only field the tab reads is taskTitle. */
 function seedPipeline(pipelineId: string, taskTitle: string) {
-  useBuildPipelineStore.setState({
+  appCommandStore(buildPipelineStore).setState({
     pipelines: new Map([[pipelineId, { id: pipelineId, taskTitle } as never]]),
   });
 }
@@ -90,11 +92,11 @@ describe("DraggableTab title precedence", () => {
   beforeEach(() => {
     cleanup();
     resetSortableMock();
-    useSessionStore.setState({ sessions: new Map() });
-    useNativeAgentProjectionStore.setState({ projections: new Map() });
-    useBuildPipelineStore.setState({ pipelines: new Map() });
-    useFileDirtyStore.setState({ dirtyFiles: new Map() });
-    useMultiReviewStore.setState({ workflows: new Map() });
+    appCommandStore(sessionStore).setState({ sessions: new Map() });
+    appCommandStore(nativeAgentProjectionStore).setState({ projections: new Map() });
+    appCommandStore(buildPipelineStore).setState({ pipelines: new Map() });
+    appCommandStore(fileDirtyStore).setState({ dirtyFiles: new Map() });
+    appCommandStore(multiReviewStore).setState({ workflows: new Map() });
   });
 
   afterEach(() => {
@@ -115,7 +117,7 @@ describe("DraggableTab title precedence", () => {
     expect(screen.getByText("Key info: Review the brief")).toBeTruthy();
     expect(container.querySelector("svg.lucide-file-text.text-amber-400")).toBeTruthy();
     cleanup();
-    useBuildPipelineStore.setState({ pipelines: new Map() });
+    appCommandStore(buildPipelineStore).setState({ pipelines: new Map() });
     renderTab(tab);
     expect(screen.getByText("Key information 1")).toBeTruthy();
   });
@@ -135,7 +137,7 @@ describe("DraggableTab title precedence", () => {
     expect(screen.getByText("Notes: Review the brief")).toBeTruthy();
     expect(container.querySelector("svg.lucide-sticky-note.text-amber-400")).toBeTruthy();
     cleanup();
-    useBuildPipelineStore.setState({ pipelines: new Map() });
+    appCommandStore(buildPipelineStore).setState({ pipelines: new Map() });
     renderTab(tab);
     expect(screen.getByText("Notes 1")).toBeTruthy();
   });
@@ -148,7 +150,7 @@ describe("DraggableTab title precedence", () => {
       nativeAgentData: { platform: "claude", environmentId: "env-1" },
     };
 
-    useSessionStore.setState({
+    appCommandStore(sessionStore).setState({
       sessions: new Map([
         [
           "sess-1",
@@ -167,7 +169,7 @@ describe("DraggableTab title precedence", () => {
         ],
       ]),
     });
-    useNativeAgentProjectionStore.setState({
+    appCommandStore(nativeAgentProjectionStore).setState({
       projections: new Map([
         [createSessionKey("env-1", "tab-a"), { title: "Auto Title" } as never],
       ]),
@@ -187,7 +189,7 @@ describe("DraggableTab title precedence", () => {
       nativeAgentData: { platform: "claude", environmentId: "env-1" },
     };
 
-    useNativeAgentProjectionStore.setState({
+    appCommandStore(nativeAgentProjectionStore).setState({
       projections: new Map([
         [createSessionKey("env-1", "tab-a"), { title: "Auto Title" } as never],
       ]),
@@ -208,7 +210,7 @@ describe("DraggableTab title precedence", () => {
       nativeAgentData: { platform: "codex", environmentId: "env-1" },
     };
 
-    useNativeAgentProjectionStore.setState({
+    appCommandStore(nativeAgentProjectionStore).setState({
       projections: new Map([
         [createSessionKey("env-1", "tab-fix"), { title: "Generated review title" } as never],
       ]),
@@ -259,7 +261,7 @@ describe("DraggableTab title precedence", () => {
       isReviewTab: true,
       nativeAgentData: { platform: "claude", environmentId: "env-1" },
     };
-    useSessionStore.setState({
+    appCommandStore(sessionStore).setState({
       sessions: new Map([
         [
           "session-review",
@@ -278,7 +280,7 @@ describe("DraggableTab title precedence", () => {
         ],
       ]),
     });
-    useNativeAgentProjectionStore.setState({
+    appCommandStore(nativeAgentProjectionStore).setState({
       projections: new Map([
         [createSessionKey("env-1", "tab-review"), { title: "Generated review title" } as never],
       ]),
@@ -304,7 +306,7 @@ describe("DraggableTab title precedence", () => {
       displayTitle: "PR",
       nativeAgentData: { platform: "codex", environmentId: "env-1" },
     };
-    useNativeAgentProjectionStore.setState({
+    appCommandStore(nativeAgentProjectionStore).setState({
       projections: new Map([
         [createSessionKey("env-1", "tab-pr"), { title: "Prepare release pull request" } as never],
       ]),
@@ -327,7 +329,7 @@ describe("DraggableTab title precedence", () => {
       displayTitle: "PR",
       nativeAgentData: { platform: "codex", environmentId: "env-1" },
     };
-    useNativeAgentProjectionStore.setState({
+    appCommandStore(nativeAgentProjectionStore).setState({
       projections: new Map([
         [createSessionKey("env-2", "tab-codex"), { title: "Wrong environment" } as never],
         [createSessionKey("env-1", "other-tab"), { title: "Wrong tab" } as never],
@@ -348,7 +350,7 @@ describe("DraggableTab title precedence", () => {
       displayTitle: "Resolve",
       nativeAgentData: { platform: "opencode", environmentId: "env-1" },
     };
-    useNativeAgentProjectionStore.setState({
+    appCommandStore(nativeAgentProjectionStore).setState({
       projections: new Map([
         [createSessionKey("env-1", "tab-opencode"), { title: "OpenCode title" } as never],
       ]),
@@ -367,7 +369,7 @@ describe("DraggableTab title precedence", () => {
       displayTitle: "Conflict",
       nativeAgentData: { platform: "codex", environmentId: "env-1" },
     };
-    useNativeAgentProjectionStore.setState({
+    appCommandStore(nativeAgentProjectionStore).setState({
       projections: new Map([
         [createSessionKey("env-1", "tab-codex"), { title: "Codex title" } as never],
       ]),
@@ -386,7 +388,7 @@ describe("DraggableTab title precedence", () => {
       displayTitle: "Implementation",
       nativeAgentData: { platform: "opencode", environmentId: "env-1" },
     };
-    useNativeAgentProjectionStore.setState({
+    appCommandStore(nativeAgentProjectionStore).setState({
       projections: new Map([
         [createSessionKey("env-1", "tab-opencode"), { title: "OpenCode title" } as never],
       ]),
@@ -404,7 +406,7 @@ describe("DraggableTab title precedence", () => {
       type: "agent-native",
       nativeAgentData: { platform: "codex", environmentId: "env-1" },
     };
-    useSessionStore.setState({
+    appCommandStore(sessionStore).setState({
       sessions: new Map([
         [
           "terminal-session",
@@ -423,7 +425,7 @@ describe("DraggableTab title precedence", () => {
         ],
       ]),
     });
-    useNativeAgentProjectionStore.setState({
+    appCommandStore(nativeAgentProjectionStore).setState({
       projections: new Map([
         [createSessionKey("env-1", "tab-codex"), { title: "Codex title" } as never],
       ]),
@@ -513,7 +515,7 @@ describe("DraggableTab title precedence", () => {
       expect(screen.getByText("Browser 1")).toBeDefined();
       cleanup();
 
-      usePreviewServiceStore.setState({
+      appCommandStore(previewServiceStore).setState({
         environments: {
           "env-1": {
             loading: false,
@@ -537,7 +539,7 @@ describe("DraggableTab title precedence", () => {
       );
       expect(screen.getByText("Browser 2")).toBeDefined();
     } finally {
-      usePreviewServiceStore.getState().reset();
+      appCommandStore(previewServiceStore).getState().reset();
     }
   });
 
@@ -570,7 +572,9 @@ describe("DraggableTab title precedence", () => {
       | "updatedAt"
       | "backendRevision"
     >;
-    useMultiReviewStore.getState().replaceWorkflow(workflow as MultiReviewWorkflow);
+    appCommandStore(multiReviewStore)
+      .getState()
+      .replaceWorkflow(workflow as MultiReviewWorkflow);
 
     renderTab({
       id: "multi-interactive",
@@ -685,11 +689,11 @@ describe("DraggableTab icons", () => {
   beforeEach(() => {
     cleanup();
     resetSortableMock();
-    useSessionStore.setState({ sessions: new Map() });
-    useNativeAgentProjectionStore.setState({ projections: new Map() });
-    useBuildPipelineStore.setState({ pipelines: new Map() });
-    useFileDirtyStore.setState({ dirtyFiles: new Map() });
-    useMultiReviewStore.setState({ workflows: new Map() });
+    appCommandStore(sessionStore).setState({ sessions: new Map() });
+    appCommandStore(nativeAgentProjectionStore).setState({ projections: new Map() });
+    appCommandStore(buildPipelineStore).setState({ pipelines: new Map() });
+    appCommandStore(fileDirtyStore).setState({ dirtyFiles: new Map() });
+    appCommandStore(multiReviewStore).setState({ workflows: new Map() });
   });
 
   afterEach(() => {
@@ -803,10 +807,10 @@ describe("DraggableTab tooltip and context menu structure", () => {
   beforeEach(() => {
     cleanup();
     resetSortableMock();
-    useSessionStore.setState({ sessions: new Map() });
-    useNativeAgentProjectionStore.setState({ projections: new Map() });
-    useBuildPipelineStore.setState({ pipelines: new Map() });
-    useFileDirtyStore.setState({ dirtyFiles: new Map() });
+    appCommandStore(sessionStore).setState({ sessions: new Map() });
+    appCommandStore(nativeAgentProjectionStore).setState({ projections: new Map() });
+    appCommandStore(buildPipelineStore).setState({ pipelines: new Map() });
+    appCommandStore(fileDirtyStore).setState({ dirtyFiles: new Map() });
   });
 
   afterEach(() => {
@@ -843,7 +847,7 @@ describe("DraggableTab tooltip and context menu structure", () => {
   });
 
   test("marks an active tab with an accent even when its pane is not focused", () => {
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <DraggableTab
         tab={{ id: "tab-terminal", type: "plain" }}
         paneId="pane-1"
@@ -864,7 +868,7 @@ describe("DraggableTab tooltip and context menu structure", () => {
     const onClose = mock(() => {});
     const onSelect = mock(() => {});
 
-    render(
+    renderInAppCommandScope(
       <DraggableTab
         tab={{ id: "tab-terminal", type: "plain" }}
         paneId="pane-1"
@@ -884,7 +888,7 @@ describe("DraggableTab tooltip and context menu structure", () => {
   });
 
   test("does not render a close button when canClose is false", () => {
-    render(
+    renderInAppCommandScope(
       <DraggableTab
         tab={{ id: "tab-terminal", type: "plain" }}
         paneId="pane-1"
@@ -902,7 +906,7 @@ describe("DraggableTab tooltip and context menu structure", () => {
   test("exposes the close actions through the context menu", () => {
     const onClose = mock(() => {});
 
-    render(
+    renderInAppCommandScope(
       <DraggableTab
         tab={{ id: "tab-terminal", type: "plain" }}
         paneId="pane-1"
@@ -929,7 +933,7 @@ describe("DraggableTab tooltip and context menu structure", () => {
   test("exposes Refresh for server-backed agent tabs", () => {
     const onRefresh = mock(() => {});
 
-    render(
+    renderInAppCommandScope(
       <DraggableTab
         tab={{
           id: "tab-claude",
@@ -952,21 +956,21 @@ describe("DraggableTab tooltip and context menu structure", () => {
   });
 
   test("shows the mail context action only while agent messaging is enabled", () => {
-    useAgentMailStore.setState(useAgentMailStore.getInitialState());
+    appCommandStore(agentMailStore).setState(appCommandStore(agentMailStore).getInitialState());
     const tab: TabInfo = {
       id: "tab-claude",
       type: "agent-native",
       nativeAgentData: { platform: "claude", environmentId: "env-1" },
     };
-    const config = structuredClone(useConfigStore.getInitialState().config);
+    const config = structuredClone(appCommandStore(configStore).getInitialState().config);
     config.global.agentMessaging = { ...config.global.agentMessaging!, enabled: false };
-    useConfigStore.setState({ config });
+    appCommandStore(configStore).setState({ config });
     const view = renderTab(tab);
     fireEvent.contextMenu(screen.getByText("Claude 1"));
     expect(screen.queryByText("Messages…") === null).toBe(true);
 
     config.global.agentMessaging.enabled = true;
-    useConfigStore.setState({ config: structuredClone(config) });
+    appCommandStore(configStore).setState({ config: structuredClone(config) });
     view.rerender(
       <DraggableTab
         tab={tab}
@@ -980,7 +984,9 @@ describe("DraggableTab tooltip and context menu structure", () => {
     fireEvent.contextMenu(screen.getByText("Claude 1"));
     fireEvent.click(screen.getByText("Messages…"));
     // The panel opens on this tab's conversations.
-    expect(useAgentMailStore.getState().panel).toEqual({ focus: "env-1\0tab-claude" });
+    expect(appCommandStore(agentMailStore).getState().panel).toEqual({
+      focus: "env-1\0tab-claude",
+    });
   });
 
   test("hides the file tooltip again on mouse leave", async () => {
@@ -1036,7 +1042,7 @@ describe("DraggableTab tooltip and context menu structure", () => {
   }, 20_000);
 
   test("marks a focused active tab with a full-opacity accent", () => {
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <DraggableTab
         tab={{ id: "tab-terminal", type: "plain" }}
         paneId="pane-1"
@@ -1089,7 +1095,7 @@ describe("DraggableTab tooltip and context menu structure", () => {
   });
 
   test("renders an unsaved-changes dot for a dirty file tab", () => {
-    useFileDirtyStore.setState({
+    appCommandStore(fileDirtyStore).setState({
       dirtyFiles: new Map([["tab-file", { content: "edited", originalContent: "on disk" }]]),
     });
 
@@ -1106,7 +1112,7 @@ describe("DraggableTab tooltip and context menu structure", () => {
   });
 
   test("renders no dot when the file tab content matches disk", () => {
-    useFileDirtyStore.setState({
+    appCommandStore(fileDirtyStore).setState({
       dirtyFiles: new Map([["tab-file", { content: "same", originalContent: "same" }]]),
     });
 
@@ -1123,7 +1129,7 @@ describe("DraggableTab tooltip and context menu structure", () => {
   });
 
   test("never renders the dot for a non-file tab sharing the dirty tab id", () => {
-    useFileDirtyStore.setState({
+    appCommandStore(fileDirtyStore).setState({
       dirtyFiles: new Map([["tab-terminal", { content: "edited", originalContent: "on disk" }]]),
     });
 
@@ -1137,7 +1143,7 @@ describe("DraggableTab tooltip and context menu structure", () => {
     const onCloseOthers = mock(() => {});
     const onCloseToRight = mock(() => {});
 
-    render(
+    renderInAppCommandScope(
       <DraggableTab
         tab={{ id: "tab-terminal", type: "plain" }}
         paneId="pane-1"
@@ -1167,7 +1173,7 @@ describe("DraggableTab tooltip and context menu structure", () => {
   });
 
   test("disables the bulk close items when the pane says they are unavailable", () => {
-    render(
+    renderInAppCommandScope(
       <DraggableTab
         tab={{ id: "tab-terminal", type: "plain" }}
         paneId="pane-1"
@@ -1192,7 +1198,7 @@ describe("DraggableTab tooltip and context menu structure", () => {
   });
 
   test("disables bulk close items when their handlers are absent", () => {
-    render(
+    renderInAppCommandScope(
       <DraggableTab
         tab={{ id: "tab-terminal", type: "plain" }}
         paneId="pane-1"
@@ -1212,7 +1218,7 @@ describe("DraggableTab tooltip and context menu structure", () => {
   });
 
   test("disables Close when the tab cannot be closed", () => {
-    render(
+    renderInAppCommandScope(
       <DraggableTab
         tab={{ id: "tab-terminal", type: "plain" }}
         paneId="pane-1"
@@ -1230,7 +1236,7 @@ describe("DraggableTab tooltip and context menu structure", () => {
   });
 
   test("disables Close when no onClose handler was supplied", () => {
-    render(
+    renderInAppCommandScope(
       <DraggableTab
         tab={{ id: "tab-terminal", type: "plain" }}
         paneId="pane-1"
@@ -1251,8 +1257,8 @@ describe("DraggableTab tab semantics", () => {
   beforeEach(() => {
     cleanup();
     resetSortableMock();
-    useSessionStore.setState({ sessions: new Map() });
-    useFileDirtyStore.setState({ dirtyFiles: new Map() });
+    appCommandStore(sessionStore).setState({ sessions: new Map() });
+    appCommandStore(fileDirtyStore).setState({ dirtyFiles: new Map() });
   });
 
   afterEach(() => {
@@ -1263,7 +1269,7 @@ describe("DraggableTab tab semantics", () => {
     props: Partial<Parameters<typeof DraggableTab>[0]> = {},
     tab: TabInfo = { id: "tab-terminal", type: "plain" },
   ) {
-    render(
+    renderInAppCommandScope(
       <DraggableTab
         tab={tab}
         paneId="pane-1"
@@ -1306,10 +1312,10 @@ describe("DraggableTab tab semantics", () => {
   });
 
   test("names unsaved changes, which the label would otherwise hide", () => {
-    useFileDirtyStore.setState({
+    appCommandStore(fileDirtyStore).setState({
       dirtyFiles: new Map([["tab-file", { content: "edited", originalContent: "on disk" }]]),
     });
-    render(
+    renderInAppCommandScope(
       <DraggableTab
         tab={{ id: "tab-file", type: "file", fileData: { filePath: "src/Bar.tsx" } }}
         paneId="pane-1"
@@ -1377,7 +1383,7 @@ describe("DraggableTab tab semantics", () => {
     const onPaneClick = mock(() => {});
     const onKeyDown = mock((_event: unknown) => {});
     sortableListeners = { onKeyDown };
-    render(
+    renderInAppCommandScope(
       <div onClick={onPaneClick}>
         <DraggableTab
           tab={{ id: "tab-terminal", type: "plain" }}
@@ -1471,7 +1477,7 @@ describe("DraggableTab tab semantics", () => {
   });
 
   test("the file tooltip still shows when the tab takes focus", async () => {
-    render(
+    renderInAppCommandScope(
       <DraggableTab
         tab={{ id: "tab-file", type: "file", fileData: { filePath: "src/lib/Bar.tsx" } }}
         paneId="pane-1"
@@ -1494,8 +1500,8 @@ describe("DraggableTab active state", () => {
   beforeEach(() => {
     cleanup();
     resetSortableMock();
-    useSessionStore.setState({ sessions: new Map() });
-    useFileDirtyStore.setState({ dirtyFiles: new Map() });
+    appCommandStore(sessionStore).setState({ sessions: new Map() });
+    appCommandStore(fileDirtyStore).setState({ dirtyFiles: new Map() });
   });
 
   afterEach(() => {
@@ -1503,7 +1509,7 @@ describe("DraggableTab active state", () => {
   });
 
   function renderPlainTab(isActive: boolean, isFocused?: boolean) {
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <DraggableTab
         tab={{ id: "tab-a", type: "plain" }}
         paneId="pane-1"

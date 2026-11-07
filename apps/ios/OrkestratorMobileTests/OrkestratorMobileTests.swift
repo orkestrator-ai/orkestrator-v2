@@ -1590,6 +1590,30 @@ final class RemoteWebViewPolicyTests: XCTestCase {
         )
     }
 
+    func testMemoryWarningIsForwardedToThePageUntilTeardown() async {
+        var state = WebViewState.ready
+        let binding = Binding(get: { state }, set: { state = $0 })
+        let model = ConnectionModel(credentialStore: MemoryCredentialStore(), validator: MockValidator())
+        let coordinator = RemoteWebView.Coordinator(model: model, state: binding)
+        var scripts: [String] = []
+        let forwarded = expectation(description: "memory warning forwarded")
+        coordinator.javaScriptEvaluator = { script in
+            scripts.append(script)
+            forwarded.fulfill()
+            return nil
+        }
+
+        NotificationCenter.default.post(name: UIApplication.didReceiveMemoryWarningNotification, object: nil)
+        await fulfillment(of: [forwarded], timeout: 2)
+        XCTAssertEqual(scripts, [RemoteWebView.Coordinator.memoryWarningScript])
+        XCTAssertTrue(RemoteWebView.Coordinator.memoryWarningScript.contains("orkestrator:memory-warning"))
+
+        coordinator.teardown()
+        NotificationCenter.default.post(name: UIApplication.didReceiveMemoryWarningNotification, object: nil)
+        try? await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(scripts.count, 1)
+    }
+
     func testTeardownCancelsAuthenticationAndClearsCoordinatorState() {
         var state = WebViewState.loading
         let binding = Binding(get: { state }, set: { state = $0 })

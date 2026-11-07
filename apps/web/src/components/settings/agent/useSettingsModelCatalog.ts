@@ -30,15 +30,12 @@ export function useSettingsModelCatalog() {
   const selectedProjectId = own ? ownSelected : null;
   const projects = useMemo(() => {
     if (own) return ownProjects;
-    const summary =
-      machine === null || machine === portalState.selfId
-        ? portalState.self
-        : portalState.nodes.find((node) => node.nodeId === machine);
+    const summary = portalState.nodes.find((node) => node.nodeId === machine);
     return (summary?.projects ?? []).map((project) => ({
       id: project.ref.projectId,
       name: project.name,
     }));
-  }, [machine, own, ownProjects, portalState.nodes, portalState.self, portalState.selfId]);
+  }, [machine, own, ownProjects, portalState.nodes]);
   const catalogProjectId = resolveSettingsCatalogProjectId(
     selectedProjectId,
     projects.map((project) => project.id),

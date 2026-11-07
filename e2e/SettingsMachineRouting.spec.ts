@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-test("leaf-bound Settings preserves ownership across selection, save and reload", async ({
+test("Settings for the shown leaf preserves ownership across selection, save and reload", async ({
   page,
 }) => {
   const errors: string[] = [];
@@ -8,11 +8,12 @@ test("leaf-bound Settings preserves ownership across selection, save and reload"
   await page.goto("/settings-machines");
   const path = page.getByRole("textbox", { name: "Default projects folder", exact: true });
   const browse = page.getByRole("button", { name: "Browse for the default projects folder" });
+  // The shown leaf is reached through the command node: its folders are not this window's.
   await expect(path).toHaveValue("/leaf/projects");
-  await expect(browse).toBeEnabled();
+  await expect(browse).toBeDisabled();
   await page.getByRole("button", { name: /^Command.*command node/ }).click();
   await expect(path).toHaveValue("/command/projects");
-  await expect(browse).toBeDisabled();
+  await expect(browse).toBeEnabled();
   await path.fill("/command/changed");
   await expect
     .poll(() =>
@@ -35,7 +36,7 @@ test("leaf-bound Settings preserves ownership across selection, save and reload"
   await expect(path).toHaveValue("/leaf/projects");
   await page.getByRole("button", { name: /^Command.*command node/ }).click();
   await expect(path).toHaveValue("/command/changed");
-  await expect(browse).toBeDisabled();
+  await expect(browse).toBeEnabled();
   expect(errors).toEqual([]);
 });
 

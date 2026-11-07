@@ -1,13 +1,15 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { webAnnotationRequestMarker } from "@orkestrator/protocol/web-annotations";
 import { fixtureRequest } from "@orkestrator/protocol/testing/web-annotations-fixtures";
 import { buildPromptWithTranscriptAnnotations } from "@/lib/chat/transcript-annotations";
 import { normalizeNativeMessage } from "@/lib/chat/native-message-adapters";
-import { useNativeComposeStore } from "@/stores/nativeComposeStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { nativeComposeStore } from "@/stores/nativeComposeStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import { FakeWebAnnotationBackend, invokeMock } from "@/test/web-annotation-fakes";
 import { NativeMessage } from "./NativeMessage";
+import { appCommandStore } from "@/test/app-command-store";
 
 function userMessage(content: string) {
   return {
@@ -25,7 +27,7 @@ describe("web annotation request chip", () => {
     backend = new FakeWebAnnotationBackend("env-1").install();
     const request = fixtureRequest("running", { id: "req-abc" });
     backend.requests.set(request.id, request);
-    usePaneLayoutStore.setState({
+    appCommandStore(paneLayoutStore).setState({
       activeEnvironmentId: "env-1",
       environments: new Map([
         [
@@ -49,7 +51,7 @@ describe("web annotation request chip", () => {
         ],
       ]),
     });
-    useNativeComposeStore.setState({ drafts: new Map() });
+    appCommandStore(nativeComposeStore).setState({ drafts: new Map() });
   });
   afterEach(() => {
     cleanup();
@@ -58,20 +60,22 @@ describe("web annotation request chip", () => {
 
   test("links a browser-originated turn to its thread without copying text into a draft", async () => {
     const content = `${webAnnotationRequestMarker("req-abc", "implement", 1)}\n\nBrief body`;
-    render(<NativeMessage message={userMessage(content)} assistantLabel="Claude" />);
+    renderInAppCommandScope(
+      <NativeMessage message={userMessage(content)} assistantLabel="Claude" />,
+    );
     expect(screen.getByText(/Web annotation request · change request · 1 note/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Open annotation" }));
     await waitFor(() => {
-      const tabs = usePaneLayoutStore.getState().getAllTabs("env-1");
+      const tabs = appCommandStore(paneLayoutStore).getState().getAllTabs("env-1");
       const browser = tabs.find((tab) => tab.type === "browser");
       expect(browser?.browserData?.annotationPanel).toMatchObject({
         open: true,
         selectedAnnotationId: "annotation-1",
       });
     });
-    const layout = usePaneLayoutStore.getState().environments.get("env-1")!;
+    const layout = appCommandStore(paneLayoutStore).getState().environments.get("env-1")!;
     expect((layout.root as { activeTabId: string }).activeTabId).toMatch(/^browser-/);
-    expect(useNativeComposeStore.getState().drafts.size).toBe(0);
+    expect(appCommandStore(nativeComposeStore).getState().drafts.size).toBe(0);
   });
 
   test("ordinary and legacy transcript annotation messages render unchanged, without a chip", () => {
@@ -79,7 +83,7 @@ describe("web annotation request chip", () => {
       { id: "a", text: "button#save", comment: "Too cramped", source: "browser" },
     ]);
     const message = normalizeNativeMessage(userMessage(legacy));
-    render(<NativeMessage message={message} assistantLabel="Claude" />);
+    renderInAppCommandScope(<NativeMessage message={message} assistantLabel="Claude" />);
     expect(screen.queryByRole("button", { name: "Open annotation" }) === null).toBe(true);
     const card = screen.getByTestId("transcript-reference-part");
     expect(card.textContent).toContain("button#save");
@@ -88,7 +92,9 @@ describe("web annotation request chip", () => {
 
   test("a marker-like line that is not the first line is not a request link", () => {
     const content = `Hello\n${webAnnotationRequestMarker("req-abc", "discuss", 1)}`;
-    render(<NativeMessage message={userMessage(content)} assistantLabel="Claude" />);
+    renderInAppCommandScope(
+      <NativeMessage message={userMessage(content)} assistantLabel="Claude" />,
+    );
     expect(screen.queryByRole("button", { name: "Open annotation" }) === null).toBe(true);
   });
 });

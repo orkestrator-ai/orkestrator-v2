@@ -3,25 +3,29 @@ import { isNodeReadCommand } from "@orkestrator/protocol/command-nodes";
 
 import type { BackendId } from "@orkestrator/protocol/federation";
 
-import { NodeOutcomeUnknownError, NodeUnavailableError } from "./node-link.js";
-import { WORKSPACE_ADMINISTRATION_COMMANDS } from "./workspace-grant-scope.js";
+import {
+  NodeOutcomeUnknownError,
+  NodeUnavailableError,
+  type ContractEnvelope,
+} from "./node-link.js";
 
 /**
  * Node-qualified command routing for the portal: a client names the node and
  * the command node forwards the command to its owner over the node link.
  *
- * Administrative commands never cross: they belong to the node's own user
- * (token rotation, attachment, grants) or would let one node reach past
- * another (registry commands of a node in leaf mode). The same list applies
- * to client grants and to the relay, which also refuse the commands below
- * (`isWorkspaceExcludedCommand`) and the machine's own administration
- * (`WORKSPACE_ADMINISTRATION_COMMANDS`).
+ * Commands in {@link NODE_ROUTING_EXCLUDED_COMMANDS} are never routed: they
+ * belong to the node's own user (token rotation, attachment, grants) or would
+ * let one node reach past another (registry commands of a node in leaf mode).
+ * The routed call runs with the link's full credential, so this list is not
+ * the workspace grant scope: grants and the relay admit only `access:
+ * "workspace"` definitions (`admitsWorkspaceCommand`,
+ * `workspace-grant-scope.ts`, plan item 7012).
  *
  * A write whose answer was lost is recorded as outcome-unknown against the
  * node and never resubmitted automatically.
  */
 
-export const NODE_EXCLUDED_COMMANDS: ReadonlySet<string> = new Set([
+export const NODE_ROUTING_EXCLUDED_COMMANDS: ReadonlySet<string> = new Set([
   // Attachment and grants belong to the node and its controllers.
   "attach_controller",
   "detach_controller",
@@ -130,10 +134,14 @@ export const NODE_EXCLUDED_COMMANDS: ReadonlySet<string> = new Set([
   "unwatch_node_events",
   "get_portal_layout",
   "update_portal_layout",
+  // The command node's own policy for its leaves (plan item 5006).
+  "get_fleet_update_policy",
+  "set_fleet_update_policy",
   "open_node_workspace",
   "renew_node_workspace",
   "close_node_workspace",
-  // Secrets of the node itself.
+  // Secrets of the node itself. The two gateway token names are routes, not
+  // registered commands; kept so no node ever registers one to be routed.
   "get_gateway_token_settings",
   "set_gateway_token",
   "rotate_control_mcp_token",
@@ -143,63 +151,9 @@ export const NODE_EXCLUDED_COMMANDS: ReadonlySet<string> = new Set([
   "get_control_mcp_settings",
 ]);
 
-/**
- * Commands a workspace client (a client grant, or the relay) never runs: the
- * node-excluded commands, the node-link plumbing below and the machine's own
- * administration. Everything else a workspace uses stays open, terminals
- * included.
- */
-export function isWorkspaceExcludedCommand(command: string): boolean {
-  return (
-    // A workspace user may stop a worker on this coordinator. The handler
-    // revalidates the coordinator scope and worker; peer-node routing remains excluded.
-    (isNodeExcludedCommand(command) && command !== "stop_coordinator_worker_turn") ||
-    WORKSPACE_ADMINISTRATION_COMMANDS.has(command) ||
-    [
-      "deliver_node_mail",
-      "get_node_project_coordinator",
-      "record_node_environment_origin",
-      "stat_node_file",
-      "read_node_file",
-      "begin_node_file_write",
-      "append_node_file_write",
-      "commit_node_file_write",
-      "abort_node_file_write",
-      // The receiving end of a coordinator's mailed images.
-      "prepare_node_mail_attachments",
-      "place_node_mail_attachments",
-      "read_env_values",
-      "apply_env_keys",
-      "fingerprint_project_files",
-      "get_project_seed_files",
-      // Written only by the command node's "approve on every machine".
-      "approve_project_setup_commands",
-      // A command node's coordinator acts through these: a delegation's
-      // framing and presentation are its to give, not a workspace client's.
-      "create_controller_environment",
-      "start_controller_build_pipeline",
-      "create_controller_pr",
-      "resolve_controller_conflicts",
-      "launch_controller_terminal",
-      "open_controller_browser",
-      "edit_controller_worker_tab",
-      "stop_controller_worker_turn",
-      "restart_controller_build_pipeline_step",
-      "list_controller_worker_commands",
-      "run_controller_worker_command",
-      "launch_controller_multi_review",
-      "controller_multi_review_surface",
-      "start_controller_multi_review",
-      "answer_controller_worker_question",
-      "get_worker_request_state",
-      "fork_controller_environment",
-      "get_controller_worker_changes",
-    ].includes(command)
-  );
-}
-
-export function isNodeExcludedCommand(command: string): boolean {
-  return NODE_EXCLUDED_COMMANDS.has(command);
+/** Whether `command` is never routed to another node (`invoke_on_node`, the portal). */
+export function isNodeRoutingExcludedCommand(command: string): boolean {
+  return NODE_ROUTING_EXCLUDED_COMMANDS.has(command);
 }
 
 /** Reads safe to repeat while reconnecting, shared with summary invalidation. */
@@ -284,7 +238,11 @@ export class NodeOutcomeLedger {
 
 export interface RoutableLink {
   readonly connected: boolean;
-  invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
+  invoke<T>(
+    command: string,
+    args?: Record<string, unknown>,
+    options?: { envelope?: ContractEnvelope },
+  ): Promise<T>;
 }
 
 export type RoutedResult<T> =
@@ -304,8 +262,10 @@ export async function routeToNode<T>(input: {
   outcomes: NodeOutcomeLedger;
   /** Overrides the command-name classification (a routed `public_action` read). */
   read?: boolean;
+  /** The contract envelope a domain client picked for this peer (plan item 1010). */
+  envelope?: ContractEnvelope;
 }): Promise<RoutedResult<T>> {
-  if (isNodeExcludedCommand(input.command)) {
+  if (isNodeRoutingExcludedCommand(input.command)) {
     throw new Error(`${input.command} cannot be run on another node from here.`);
   }
   const read = input.read ?? isNodeReadCommand(input.command);
@@ -317,7 +277,10 @@ export async function routeToNode<T>(input: {
     );
   }
   try {
-    return { outcome: "ok", result: await input.link.invoke<T>(input.command, input.args) };
+    const result = input.envelope
+      ? await input.link.invoke<T>(input.command, input.args, { envelope: input.envelope })
+      : await input.link.invoke<T>(input.command, input.args);
+    return { outcome: "ok", result };
   } catch (error) {
     if (error instanceof NodeOutcomeUnknownError && !read) {
       const requestKey = input.requestKey ?? randomUUID();

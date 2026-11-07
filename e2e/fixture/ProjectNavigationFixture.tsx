@@ -5,6 +5,7 @@ import { TerminalProvider } from "../../apps/web/src/contexts/TerminalContext";
 import { DockerAvailabilityProvider } from "../../apps/web/src/contexts/DockerAvailabilityContext";
 import { useProjectStore, useUIStore } from "../../apps/web/src/stores";
 import type { Project } from "../../apps/web/src/types";
+import { appCommandStore } from "../../apps/web/src/test/app-command-store";
 
 const project: Project = {
   id: "navigation-project",
@@ -37,8 +38,8 @@ function installFixture() {
       }
     },
   };
-  useProjectStore.setState({ projects: [project] });
-  useUIStore.setState({
+  appCommandStore(useProjectStore.def).setState({ projects: [project] });
+  appCommandStore(useUIStore.def).setState({
     selectedProjectId: project.id,
     selectedEnvironmentId: null,
     projectBoardTab: "kanban",

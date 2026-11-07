@@ -1,9 +1,10 @@
 import { invoke } from "@/lib/native/backend";
 import { resetTranscriptArtifactCapabilities } from "@/hooks/useTranscriptArtifactCapabilities";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { useFileDirtyStore } from "@/stores/fileDirtyStore";
-import { useChangeProjectionStore } from "@/stores/changeProjectionStore";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
+import { fileDirtyStore } from "@/stores/fileDirtyStore";
+import { changeProjectionStore } from "@/stores/changeProjectionStore";
 import { resetChangeSubscriptionsForTests } from "@/lib/changes/subscriptions";
 import * as realBackend from "@/lib/backend";
 import * as realMarkdownEditorTab from "@/components/markdown/MarkdownEditorTab";
@@ -12,6 +13,7 @@ import * as realMonacoFileEditor from "./MonacoFileEditor";
 import { mockToastError } from "../../../../../tests/mocks/sonner";
 import type { ChangeDiffTarget } from "@/types/paneLayout";
 import { FILE_WRITE_CONFLICT_MESSAGE } from "@orkestrator/protocol/file-write-precondition";
+import { appCommandStore } from "@/test/app-command-store";
 
 const realBackendSnapshot = { ...realBackend };
 const realMarkdownEditorTabSnapshot = { ...realMarkdownEditorTab };
@@ -149,7 +151,7 @@ const liveImageProps = {
 
 function invalidateImage(generation: number, ownerGeneration?: string) {
   act(() => {
-    useChangeProjectionStore
+    appCommandStore(changeProjectionStore)
       .getState()
       .applyContentInvalidation(RESOURCE_KEY, generation, null, ownerGeneration);
   });
@@ -157,7 +159,7 @@ function invalidateImage(generation: number, ownerGeneration?: string) {
 
 beforeEach(() => {
   resetChangeSubscriptionsForTests();
-  useChangeProjectionStore.setState({
+  appCommandStore(changeProjectionStore).setState({
     projections: new Map(),
     retiredOwners: new Map(),
     transportRevision: 0,
@@ -165,7 +167,7 @@ beforeEach(() => {
     contentGenerations: new Map(),
     toolPresentations: new Map(),
   });
-  useFileDirtyStore.setState({ dirtyFiles: new Map() });
+  appCommandStore(fileDirtyStore).setState({ dirtyFiles: new Map() });
   readLocalFileMock.mockClear();
   readContainerFileMock.mockClear();
   readEnvironmentFileBase64Mock.mockClear();
@@ -191,7 +193,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   resetChangeSubscriptionsForTests();
-  useFileDirtyStore.setState({ dirtyFiles: new Map() });
+  appCommandStore(fileDirtyStore).setState({ dirtyFiles: new Map() });
 });
 
 afterAll(() => {
@@ -272,7 +274,7 @@ describe("FileViewerTab routing", () => {
 
 describe("FileViewerTab component", () => {
   test("loads a local Markdown file into the rich editor and dirty store", async () => {
-    render(
+    renderInAppCommandScope(
       <FileViewerTab
         tabId="markdown-tab"
         filePath="README.md"
@@ -286,7 +288,9 @@ describe("FileViewerTab component", () => {
     expect(await screen.findByTestId("markdown-file-editor")).toBeTruthy();
     expect(screen.getByText("# Loaded Markdown")).toBeTruthy();
     expect(readLocalFileMock).toHaveBeenCalledWith("/repo", "README.md");
-    expect(useFileDirtyStore.getState().getContent("markdown-tab")).toBe("# Loaded Markdown");
+    expect(appCommandStore(fileDirtyStore).getState().getContent("markdown-tab")).toBe(
+      "# Loaded Markdown",
+    );
   });
 
   test("opens a local HTML file on its rendered view, with Raw one click away", async () => {
@@ -294,7 +298,7 @@ describe("FileViewerTab component", () => {
       content: "<h1>Report</h1>",
       language: "html",
     }));
-    render(
+    renderInAppCommandScope(
       <FileViewerTab
         tabId="html-tab"
         filePath="docs/report.html"
@@ -308,7 +312,9 @@ describe("FileViewerTab component", () => {
     expect(frame.getAttribute("sandbox")).toBe("");
     expect(frame.getAttribute("srcdoc")).toContain("<h1>Report</h1>");
     expect(readLocalFileMock).toHaveBeenCalledWith("/repo", "docs/report.html");
-    expect(useFileDirtyStore.getState().getContent("html-tab")).toBe("<h1>Report</h1>");
+    expect(appCommandStore(fileDirtyStore).getState().getContent("html-tab")).toBe(
+      "<h1>Report</h1>",
+    );
 
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Raw" }), { button: 0 });
     const editor = await screen.findByRole("textbox", { name: "Monaco html" });
@@ -320,7 +326,7 @@ describe("FileViewerTab component", () => {
       content: "<h1>Report</h1>",
       language: "html",
     }));
-    render(
+    renderInAppCommandScope(
       <FileViewerTab
         tabId="html-diff-tab"
         filePath="docs/report.html"
@@ -339,19 +345,19 @@ describe("FileViewerTab component", () => {
   });
 
   test("loads container text into Monaco and tracks changes", async () => {
-    render(
+    renderInAppCommandScope(
       <FileViewerTab tabId="text-tab" filePath="notes.txt" containerId="container-1" isActive />,
     );
 
     const editor = await screen.findByRole("textbox", { name: "Monaco plaintext" });
     expect((editor as HTMLTextAreaElement).value).toBe("container text");
     fireEvent.change(editor, { target: { value: "updated text" } });
-    expect(useFileDirtyStore.getState().getContent("text-tab")).toBe("updated text");
+    expect(appCommandStore(fileDirtyStore).getState().getContent("text-tab")).toBe("updated text");
   });
 
   test("shows backend read errors", async () => {
     readLocalFileMock.mockRejectedValueOnce(new Error("read unavailable"));
-    render(
+    renderInAppCommandScope(
       <FileViewerTab
         tabId="error-tab"
         filePath="README.md"
@@ -366,7 +372,7 @@ describe("FileViewerTab component", () => {
   });
 
   test("loads local images as data URLs", async () => {
-    render(
+    renderInAppCommandScope(
       <FileViewerTab
         tabId="image-tab"
         environmentId="environment-1"
@@ -383,7 +389,7 @@ describe("FileViewerTab component", () => {
   });
 
   test("loads AVIF images with the correct MIME type", async () => {
-    render(
+    renderInAppCommandScope(
       <FileViewerTab
         tabId="avif-image-tab"
         environmentId="environment-1"
@@ -403,7 +409,7 @@ describe("FileViewerTab component", () => {
   });
 
   test("loads container images through the container backend", async () => {
-    render(
+    renderInAppCommandScope(
       <FileViewerTab
         tabId="container-image-tab"
         filePath="assets/logo.webp"
@@ -418,7 +424,7 @@ describe("FileViewerTab component", () => {
   });
 
   test("reports an image load error when no environment path is available", async () => {
-    render(
+    renderInAppCommandScope(
       <FileViewerTab tabId="missing-image-environment-tab" filePath="assets/logo.png" isActive />,
     );
 
@@ -429,7 +435,7 @@ describe("FileViewerTab component", () => {
   });
 
   test("switches from a Markdown diff to the loaded rich editor", async () => {
-    render(
+    renderInAppCommandScope(
       <FileViewerTab
         tabId="diff-tab"
         filePath="README.md"
@@ -454,7 +460,7 @@ describe("FileViewerTab component", () => {
       diffIdentityId: "diff-1",
       title: "logo.png",
     };
-    render(
+    renderInAppCommandScope(
       <FileViewerTab
         tabId="image-diff-tab"
         environmentId="env-1"
@@ -473,7 +479,7 @@ describe("FileViewerTab component", () => {
   });
 
   test("previews a live image target instead of its binary diff", async () => {
-    render(<FileViewerTab {...liveImageProps} />);
+    renderInAppCommandScope(<FileViewerTab {...liveImageProps} />);
 
     const image = await screen.findByRole("img", { name: "assets/logo.png" });
     expect(image.getAttribute("src")).toBe(`data:image/png;base64,${RED_PNG}`);
@@ -491,7 +497,7 @@ describe("FileViewerTab component", () => {
       path: "assets/deleted.png",
       title: "deleted.png",
     };
-    render(
+    renderInAppCommandScope(
       <FileViewerTab
         tabId="deleted-image-diff-tab"
         environmentId="env-1"
@@ -509,7 +515,7 @@ describe("FileViewerTab component", () => {
   });
 
   test("refreshes live container images after content invalidation", async () => {
-    render(
+    renderInAppCommandScope(
       <FileViewerTab {...liveImageProps} isLocalEnvironment={false} containerId="container-1" />,
     );
     await screen.findByRole("img", { name: "assets/logo.png" });
@@ -526,7 +532,7 @@ describe("FileViewerTab component", () => {
   });
 
   test("falls back on deletion and recovers when the same live image is restored", async () => {
-    render(<FileViewerTab {...liveImageProps} />);
+    renderInAppCommandScope(<FileViewerTab {...liveImageProps} />);
     await screen.findByRole("img");
     readEnvironmentFileBase64Mock.mockRejectedValueOnce(new Error("No such file"));
 
@@ -543,13 +549,13 @@ describe("FileViewerTab component", () => {
   });
 
   test("refreshes on reconnect and retries a failed preview", async () => {
-    render(<FileViewerTab {...liveImageProps} />);
+    renderInAppCommandScope(<FileViewerTab {...liveImageProps} />);
     await screen.findByRole("img");
     readEnvironmentFileBase64Mock.mockRejectedValueOnce(new Error("Connection lost"));
 
-    act(() => useChangeProjectionStore.getState().resync());
+    act(() => appCommandStore(changeProjectionStore).getState().resync());
     await screen.findByTestId("diff-viewer");
-    act(() => useChangeProjectionStore.getState().resync());
+    act(() => appCommandStore(changeProjectionStore).getState().resync());
 
     await screen.findByRole("img");
     expect(readEnvironmentFileBase64Mock).toHaveBeenCalledTimes(3);
@@ -557,7 +563,7 @@ describe("FileViewerTab component", () => {
 
   test("refreshes when the resource owner changes even if its generation does not advance", async () => {
     invalidateImage(5, "owner-a");
-    render(<FileViewerTab {...liveImageProps} />);
+    renderInAppCommandScope(<FileViewerTab {...liveImageProps} />);
     await screen.findByRole("img");
     readEnvironmentFileBase64Mock.mockResolvedValueOnce(BLUE_PNG);
 
@@ -570,7 +576,7 @@ describe("FileViewerTab component", () => {
   });
 
   test("refreshes on reactivation after a missed event and resets failure state", async () => {
-    const view = render(<FileViewerTab {...liveImageProps} />);
+    const view = renderInAppCommandScope(<FileViewerTab {...liveImageProps} />);
     await screen.findByRole("img");
     view.rerender(<FileViewerTab {...liveImageProps} isActive={false} />);
     readEnvironmentFileBase64Mock.mockRejectedValueOnce(new Error("Deleted while away"));
@@ -587,7 +593,7 @@ describe("FileViewerTab component", () => {
   });
 
   test("does not read an initially inactive preview until it becomes active", async () => {
-    const view = render(<FileViewerTab {...liveImageProps} isActive={false} />);
+    const view = renderInAppCommandScope(<FileViewerTab {...liveImageProps} isActive={false} />);
     expect(readEnvironmentFileBase64Mock).not.toHaveBeenCalled();
     view.rerender(<FileViewerTab {...liveImageProps} />);
     await screen.findByRole("img");
@@ -596,7 +602,7 @@ describe("FileViewerTab component", () => {
 
   test("falls back after image decode failure and retries on invalidation", async () => {
     readEnvironmentFileBase64Mock.mockResolvedValueOnce("bm90IGFuIGltYWdl");
-    render(<FileViewerTab {...liveImageProps} />);
+    renderInAppCommandScope(<FileViewerTab {...liveImageProps} />);
     fireEvent.error(await screen.findByRole("img"));
     await screen.findByTestId("diff-viewer");
 
@@ -607,7 +613,7 @@ describe("FileViewerTab component", () => {
 
   test("ignores decode errors from an inactive preview while its replacement loads", async () => {
     let resolveRead!: (value: string) => void;
-    const view = render(<FileViewerTab {...liveImageProps} />);
+    const view = renderInAppCommandScope(<FileViewerTab {...liveImageProps} />);
     const oldImage = await screen.findByRole("img");
     view.rerender(<FileViewerTab {...liveImageProps} isActive={false} />);
     readEnvironmentFileBase64Mock.mockImplementationOnce(
@@ -629,7 +635,9 @@ describe("FileViewerTab component", () => {
 
   test("keeps live SVG source hunks accessible through the backend diff", async () => {
     const target: ChangeDiffTarget = { ...liveImageTarget, path: "assets/logo.svg" };
-    render(<FileViewerTab {...liveImageProps} filePath="assets/logo.svg" changeDiff={target} />);
+    renderInAppCommandScope(
+      <FileViewerTab {...liveImageProps} filePath="assets/logo.svg" changeDiff={target} />,
+    );
     const viewer = await screen.findByTestId("diff-viewer");
     expect(JSON.parse(viewer.dataset.target ?? "null")).toEqual(target);
     expect(readEnvironmentFileBase64Mock).not.toHaveBeenCalled();
@@ -640,7 +648,7 @@ describe("FileViewerTab component", () => {
 
   test("retries when a different target owns the same image path", async () => {
     readEnvironmentFileBase64Mock.mockRejectedValueOnce(new Error("No such file"));
-    const view = render(<FileViewerTab {...liveImageProps} />);
+    const view = renderInAppCommandScope(<FileViewerTab {...liveImageProps} />);
     await screen.findByTestId("diff-viewer");
     view.rerender(
       <FileViewerTab
@@ -656,7 +664,7 @@ describe("FileViewerTab component", () => {
   test("ignores superseded image reads, rejections, and decode errors", async () => {
     let resolveOldRead!: (value: string) => void;
     let rejectOldRead!: (error: Error) => void;
-    const view = render(<FileViewerTab {...liveImageProps} />);
+    const view = renderInAppCommandScope(<FileViewerTab {...liveImageProps} />);
     const oldImage = await screen.findByRole("img");
     readEnvironmentFileBase64Mock.mockImplementationOnce(
       () =>
@@ -695,7 +703,7 @@ describe("FileViewerTab component", () => {
   });
 
   test("keeps per-tab dirty state when the file tab temporarily unmounts", async () => {
-    const view = render(
+    const view = renderInAppCommandScope(
       <FileViewerTab
         tabId="closing-tab"
         filePath="README.md"
@@ -706,16 +714,18 @@ describe("FileViewerTab component", () => {
     );
     await screen.findByTestId("markdown-file-editor");
     act(() => {
-      useFileDirtyStore.getState().setContent("closing-tab", "unsaved");
+      appCommandStore(fileDirtyStore).getState().setContent("closing-tab", "unsaved");
     });
 
     view.unmount();
 
-    expect(useFileDirtyStore.getState().getContent("closing-tab")).toBe("unsaved");
+    expect(appCommandStore(fileDirtyStore).getState().getContent("closing-tab")).toBe("unsaved");
   });
 
   test("prefers a newer in-memory buffer over an older backend draft on remount", async () => {
-    useFileDirtyStore.getState().hydrateDraft("remount-tab", "newer unsaved buffer", "older disk");
+    appCommandStore(fileDirtyStore)
+      .getState()
+      .hydrateDraft("remount-tab", "newer unsaved buffer", "older disk");
     getFileDraftMock.mockResolvedValueOnce({
       draftKey: "file:env-1:notes.txt",
       environmentId: "env-1",
@@ -726,7 +736,7 @@ describe("FileViewerTab component", () => {
       revision: 1,
     });
 
-    render(
+    renderInAppCommandScope(
       <FileViewerTab
         tabId="remount-tab"
         environmentId="env-1"
@@ -739,7 +749,7 @@ describe("FileViewerTab component", () => {
     const editor = await screen.findByRole("textbox", { name: "Monaco plaintext" });
     expect((editor as HTMLTextAreaElement).value).toBe("newer unsaved buffer");
     expect(getFileDraftMock).not.toHaveBeenCalled();
-    expect(useFileDirtyStore.getState().dirtyFiles.get("remount-tab")).toEqual({
+    expect(appCommandStore(fileDirtyStore).getState().dirtyFiles.get("remount-tab")).toEqual({
       content: "newer unsaved buffer",
       originalContent: "container text",
       // A save still checks what the buffer was edited from, not the newer read.
@@ -758,7 +768,7 @@ describe("FileViewerTab component", () => {
       revision: 1,
     });
 
-    render(
+    renderInAppCommandScope(
       <FileViewerTab
         tabId="restore-tab"
         environmentId="env-restore"
@@ -771,7 +781,7 @@ describe("FileViewerTab component", () => {
     const editor = await screen.findByRole("textbox", { name: "Monaco plaintext" });
     expect((editor as HTMLTextAreaElement).value).toBe("restored buffer");
     expect(getFileDraftMock).toHaveBeenCalledWith("file:env-restore:notes.txt");
-    expect(useFileDirtyStore.getState().dirtyFiles.get("restore-tab")).toEqual({
+    expect(appCommandStore(fileDirtyStore).getState().dirtyFiles.get("restore-tab")).toEqual({
       content: "restored buffer",
       originalContent: "container text",
       baseContent: "old disk",
@@ -781,7 +791,7 @@ describe("FileViewerTab component", () => {
   test("reloading after a save conflict drops the edits and the saved draft", async () => {
     writeContainerFileMock.mockRejectedValueOnce(new Error(FILE_WRITE_CONFLICT_MESSAGE));
     mockToastError.mockClear();
-    render(
+    renderInAppCommandScope(
       <FileViewerTab
         tabId="conflict-tab"
         environmentId="env-conflict"
@@ -794,7 +804,7 @@ describe("FileViewerTab component", () => {
     fireEvent.change(editor, { target: { value: "mine" } });
     fireEvent.keyDown(editor, { key: "s", ctrlKey: true });
     await waitFor(() => expect(mockToastError).toHaveBeenCalled());
-    expect(useFileDirtyStore.getState().isDirty("conflict-tab")).toBe(true);
+    expect(appCommandStore(fileDirtyStore).getState().isDirty("conflict-tab")).toBe(true);
 
     readContainerFileMock.mockImplementation(async () => ({
       content: "newer on disk",
@@ -813,14 +823,14 @@ describe("FileViewerTab component", () => {
       ).toBe("newer on disk"),
     );
     expect(deleteFileDraftMock).toHaveBeenCalled();
-    expect(useFileDirtyStore.getState().dirtyFiles.get("conflict-tab")).toEqual({
+    expect(appCommandStore(fileDirtyStore).getState().dirtyFiles.get("conflict-tab")).toEqual({
       content: "newer on disk",
       originalContent: "newer on disk",
     });
   });
 
   test("persists edits through the environment-scoped file draft path", async () => {
-    render(
+    renderInAppCommandScope(
       <FileViewerTab
         tabId="persist-tab"
         environmentId="env-persist"
@@ -847,7 +857,7 @@ describe("FileViewerTab component", () => {
   });
 
   test("flushes an edit when the tab unmounts before the debounce expires", async () => {
-    const view = render(
+    const view = renderInAppCommandScope(
       <FileViewerTab
         tabId="unmount-flush-tab"
         environmentId="env-unmount"
@@ -874,7 +884,7 @@ describe("FileViewerTab component", () => {
   });
 
   test("flushes the current edit on pagehide", async () => {
-    render(
+    renderInAppCommandScope(
       <FileViewerTab
         tabId="pagehide-flush-tab"
         environmentId="env-pagehide"
@@ -901,7 +911,7 @@ describe("FileViewerTab component", () => {
   });
 
   test("flushes draft deletion after a successful save and immediate unmount", async () => {
-    const view = render(
+    const view = renderInAppCommandScope(
       <FileViewerTab
         tabId="save-unmount-tab"
         environmentId="env-save"
@@ -914,7 +924,7 @@ describe("FileViewerTab component", () => {
     fireEvent.change(editor, { target: { value: "saved text" } });
     fireEvent.keyDown(editor, { key: "s", ctrlKey: true });
     await waitFor(() =>
-      expect(useFileDirtyStore.getState().isDirty("save-unmount-tab")).toBe(false),
+      expect(appCommandStore(fileDirtyStore).getState().isDirty("save-unmount-tab")).toBe(false),
     );
 
     view.unmount();
@@ -927,7 +937,7 @@ describe("FileViewerTab component", () => {
   test("continues with the disk buffer when backend draft restore fails", async () => {
     getFileDraftMock.mockRejectedValueOnce(new Error("draft store unavailable"));
 
-    render(
+    renderInAppCommandScope(
       <FileViewerTab
         tabId="draft-error-tab"
         environmentId="env-error"
@@ -939,7 +949,7 @@ describe("FileViewerTab component", () => {
 
     const editor = await screen.findByRole("textbox", { name: "Monaco plaintext" });
     expect((editor as HTMLTextAreaElement).value).toBe("container text");
-    expect(useFileDirtyStore.getState().isDirty("draft-error-tab")).toBe(false);
+    expect(appCommandStore(fileDirtyStore).getState().isDirty("draft-error-tab")).toBe(false);
   });
 
   test("offers to save the local buffer after a draft revision conflict", async () => {
@@ -955,7 +965,7 @@ describe("FileViewerTab component", () => {
     saveFileDraftMock
       .mockRejectedValueOnce(new Error("revision conflict"))
       .mockResolvedValueOnce(undefined);
-    render(
+    renderInAppCommandScope(
       <FileViewerTab
         tabId="save-conflict-tab"
         environmentId="env-conflict"
@@ -984,7 +994,9 @@ describe("FileViewerTab component", () => {
         4,
       ),
     );
-    expect(useFileDirtyStore.getState().getContent("save-conflict-tab")).toBe("my unsaved text");
+    expect(appCommandStore(fileDirtyStore).getState().getContent("save-conflict-tab")).toBe(
+      "my unsaved text",
+    );
   });
 
   test("offers to finish discarding after a draft deletion conflict", async () => {
@@ -1000,7 +1012,7 @@ describe("FileViewerTab component", () => {
     deleteFileDraftMock
       .mockRejectedValueOnce(new Error("revision conflict"))
       .mockResolvedValueOnce(undefined);
-    render(
+    renderInAppCommandScope(
       <FileViewerTab
         tabId="discard-conflict-tab"
         environmentId="env-discard"
@@ -1033,7 +1045,7 @@ describe("FileViewerTab component", () => {
           resolveOldRead = resolve;
         }),
     );
-    const view = render(
+    const view = renderInAppCommandScope(
       <FileViewerTab
         tabId="stale-read-tab"
         filePath="old.txt"
@@ -1065,7 +1077,9 @@ describe("FileViewerTab component", () => {
       await Promise.resolve();
     });
     expect((editor as HTMLTextAreaElement).value).toBe("container text");
-    expect(useFileDirtyStore.getState().getContent("stale-read-tab")).toBe("container text");
+    expect(appCommandStore(fileDirtyStore).getState().getContent("stale-read-tab")).toBe(
+      "container text",
+    );
   });
 
   test("ignores an older file-read rejection after its props change", async () => {
@@ -1074,7 +1088,7 @@ describe("FileViewerTab component", () => {
       rejectOldRead = reject;
     });
     readContainerFileMock.mockImplementationOnce(() => oldRead);
-    const view = render(
+    const view = renderInAppCommandScope(
       <FileViewerTab
         tabId="stale-read-error-tab"
         filePath="old.txt"
@@ -1117,7 +1131,7 @@ describe("FileViewerTab component", () => {
           resolveOldDraft = resolve;
         }),
     );
-    const view = render(
+    const view = renderInAppCommandScope(
       <FileViewerTab
         tabId="stale-draft-tab"
         environmentId="env-stale"
@@ -1153,7 +1167,9 @@ describe("FileViewerTab component", () => {
       await Promise.resolve();
     });
     expect((editor as HTMLTextAreaElement).value).toBe("container text");
-    expect(useFileDirtyStore.getState().getContent("stale-draft-tab")).toBe("container text");
+    expect(appCommandStore(fileDirtyStore).getState().getContent("stale-draft-tab")).toBe(
+      "container text",
+    );
   });
 
   test("ignores a file read that finishes after unmount", async () => {
@@ -1164,7 +1180,7 @@ describe("FileViewerTab component", () => {
           resolveRead = resolve;
         }),
     );
-    const view = render(
+    const view = renderInAppCommandScope(
       <FileViewerTab
         tabId="unmounted-read-tab"
         filePath="notes.txt"
@@ -1182,7 +1198,7 @@ describe("FileViewerTab component", () => {
     });
     await Promise.resolve();
 
-    expect(useFileDirtyStore.getState().getContent("unmounted-read-tab")).toBeNull();
+    expect(appCommandStore(fileDirtyStore).getState().getContent("unmounted-read-tab")).toBeNull();
   });
 });
 
@@ -1215,7 +1231,7 @@ for (const diff of [false, true]) {
       return img;
     } as unknown as typeof Image;
     try {
-      const view = render(
+      const view = renderInAppCommandScope(
         <FileViewerTab {...liveImageProps} changeDiff={diff ? liveImageTarget : undefined} />,
       );
       await waitFor(() =>
@@ -1261,7 +1277,7 @@ for (const diff of [false, true]) {
       return document.createElement("img");
     } as unknown as typeof Image;
     try {
-      const view = render(
+      const view = renderInAppCommandScope(
         <FileViewerTab {...liveImageProps} changeDiff={diff ? liveImageTarget : undefined} />,
       );
       await waitFor(() => expect(opened).toBe(1));

@@ -1,3 +1,4 @@
+import { registrarFrom } from "./commands-registry-contracts.js";
 import { describe, expect, test } from "bun:test";
 import type { CoordinatorSnapshot } from "@orkestrator/protocol/coordinator";
 import { isViewSnapshotOutcome } from "@orkestrator/protocol/view-sync";
@@ -92,7 +93,7 @@ describe("CoordinatorViewRevisions", () => {
   test("the command answers conditional reads and rejects a blank project", async () => {
     const commands = new Map<string, CommandHandler>();
     registerCoordinatorCommands(
-      (name, handler) => commands.set(name, handler),
+      registrarFrom((name, handler) => commands.set(name, handler)),
       {} as RegistryDependencies,
     );
     let reads = 0;

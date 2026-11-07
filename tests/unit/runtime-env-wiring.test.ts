@@ -2413,8 +2413,13 @@ eval "$opencode_setup"
 
     for (const command of commands) {
       // Bridge-backed starts register through `registerBridgeStart`, which
-      // wraps `register` with the bridge's start lifecycle.
-      const start = backend.search(new RegExp(`\\bregister(?:BridgeStart)?\\("${command}"`));
+      // wraps `register` with the bridge's start lifecycle. Each registers
+      // with its contract definition (`startOpencodeServerCommand`, plan
+      // item 7009) or, before it had one, by name.
+      const definition = `${command.replace(/_(\w)/g, (_, letter: string) => letter.toUpperCase())}Command`;
+      const start = backend.search(
+        new RegExp(`\\bregister(?:BridgeStart)?\\((?:"${command}"|${definition}\\b)`),
+      );
       expect(start).toBeGreaterThan(0);
       // Bound the block at the next register(...) call, regardless of its
       // indentation, so these assertions can only be satisfied by THIS

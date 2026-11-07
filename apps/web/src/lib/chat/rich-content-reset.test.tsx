@@ -21,21 +21,32 @@ import "@/lib/chat/rich-markdown/media-resolver";
 import { richBlockViewKey, richCacheKey, type RichTranscriptScope } from "@/lib/chat/rich-identity";
 import { richRenderScheduler } from "@/lib/chat/rich-render-cache";
 import { useRichContentViewStore } from "@/stores/richContentViewStore";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { environmentStore } from "@/stores/environmentStore";
 import { createBrowserGatewayApi, installBrowserGatewayApi } from "@/lib/native/web-gateway";
+import type { BackendId } from "@orkestrator/protocol/federation";
+import { getWindowScope } from "@/lib/node-scope/app-window-scope";
+import { FakeNodeClient } from "@/test/render-in-node-scope";
 import {
   clearProtectedRichContent,
   clearRichConversationContent,
+  noteRichBackendIdentity,
   noteRichContentConnection,
+  registerProtectedRichCache,
   registeredProtectedRichCaches,
   resetRichContentResetTracking,
+  richBackendIdentityOf,
   richContentResetCounters,
 } from "./rich-content-reset";
+import { appCommandStore } from "@/test/app-command-store";
 
 const invokeMock = invoke as unknown as ReturnType<typeof mock>;
 
-function scope(environmentId: string, logicalSessionKey = "session-1"): RichTranscriptScope {
-  return { backendId: "backend-A", environmentId, logicalSessionKey, generation: "g1" };
+function scope(
+  environmentId: string,
+  logicalSessionKey = "session-1",
+  backendId = "backend-A",
+): RichTranscriptScope {
+  return { backendId, environmentId, logicalSessionKey, generation: "g1" };
 }
 
 let capabilitiesBackendId = "backend-A";
@@ -174,7 +185,7 @@ describe("protected rich content clearing", () => {
     await waitFor(() => expect(artifactRequestCacheStats().entries).toBe(2));
     await waitFor(() => expect(artifactPublicationCacheSize()).toBe(2));
 
-    act(() => useEnvironmentStore.getState().removeEnvironment("env-deleted"));
+    act(() => appCommandStore(environmentStore).getState().removeEnvironment("env-deleted"));
 
     expect(richRenderScheduler.peek(renderKey(deleted))).toBeNull();
     expect(richRenderScheduler.peek(renderKey(kept))?.ok).toBe(true);
@@ -250,6 +261,149 @@ describe("protected rich content clearing", () => {
     } as unknown as Pick<Window, "location" | "orkestrator" | "orkestratorGateway">;
     installBrowserGatewayApi(fakeWindow, { replaceExisting: true });
     expect(richContentResetCounters.all).toBe(2);
+  });
+});
+
+describe("protected rich content per node", () => {
+  /** Render, view state, an artifact read and a ledger for each scope. */
+  async function populate(targets: RichTranscriptScope[]): Promise<void> {
+    for (const target of targets) {
+      renderHook(() => useArtifactPublication(target, "pub-1"));
+      renderHook(() => useArtifactPublications(target, []));
+      await settleRender(renderKey(target));
+      useRichContentViewStore
+        .getState()
+        .update(richBlockViewKey(target, "m1", "p1", "details:0"), { open: true });
+    }
+    await waitFor(() => expect(artifactRequestCacheStats().entries).toBe(targets.length));
+    await waitFor(() => expect(artifactPublicationCacheSize()).toBe(targets.length));
+  }
+
+  test("a clear by node leaves the other node's entries", async () => {
+    const nodeA = scope("env-1", "session-1", "backend-A");
+    const nodeB = scope("env-1", "session-1", "backend-B");
+    await populate([nodeA, nodeB]);
+
+    act(() => clearProtectedRichContent("credentials", { nodeId: "backend-A" }));
+
+    expect(richRenderScheduler.peek(renderKey(nodeA))).toBeNull();
+    expect(richRenderScheduler.peek(renderKey(nodeB))?.ok).toBe(true);
+    expect(Array.from(useRichContentViewStore.getState().entries.keys())).toEqual([
+      richBlockViewKey(nodeB, "m1", "p1", "details:0"),
+    ]);
+    expect(artifactRequestCacheStats().entries).toBe(1);
+    expect(richContentResetCounters).toMatchObject({ all: 0, node: 1 });
+    // B's ledger survived the clear (A's mounted reader may read its own again).
+    expect(artifactPublicationCacheSize()).toBeGreaterThanOrEqual(1);
+  });
+
+  test("a cache without a per-node clear is cleared entirely by a node clear", () => {
+    const cleared: string[] = [];
+    const unregister = registerProtectedRichCache("test-only", {
+      clearAll: (reason) => cleared.push(`all:${reason}`),
+    });
+    try {
+      clearProtectedRichContent("connection", { nodeId: "backend-A" });
+    } finally {
+      unregister();
+    }
+    expect(cleared).toEqual(["all:connection"]);
+  });
+
+  test("identities and connections are tracked per node scope, so live nodes do not thrash", async () => {
+    const nodeA = scope("env-1", "session-1", "backend-A");
+    const nodeB = scope("env-1", "session-1", "backend-B");
+    const windowScope = getWindowScope();
+    const leafA = windowScope.open({
+      role: "leaf",
+      client: new FakeNodeClient({ nodeId: "backend-A" as BackendId }),
+    });
+    const leafB = windowScope.open({
+      role: "leaf",
+      client: new FakeNodeClient({ nodeId: "backend-B" as BackendId }),
+    });
+    try {
+      await settleRender(renderKey(nodeA));
+      await settleRender(renderKey(nodeB));
+
+      // Two live nodes, each reporting its own identity: nothing is cleared.
+      noteRichBackendIdentity("backend-A", leafA);
+      noteRichBackendIdentity("backend-B", leafB);
+      noteRichBackendIdentity("backend-A", leafA);
+      noteRichContentConnection("route-a", leafA);
+      noteRichContentConnection("route-b", leafB);
+      // The command scope's notes are separate from every leaf's.
+      noteRichBackendIdentity("backend-B");
+      noteRichContentConnection("local");
+      expect(richContentResetCounters).toMatchObject({ all: 0, node: 0 });
+      expect(richBackendIdentityOf(leafA)).toBe("backend-A");
+      expect(richBackendIdentityOf()).toBe("backend-B");
+
+      // B's connection moves: only B's content goes.
+      noteRichContentConnection("route-b2", leafB);
+      expect(richContentResetCounters).toMatchObject({ all: 0, node: 1 });
+      expect(richRenderScheduler.peek(renderKey(nodeB))).toBeNull();
+      expect(richRenderScheduler.peek(renderKey(nodeA))?.ok).toBe(true);
+
+      // A leaf now answers as another backend: what the old identity served
+      // goes, nothing else.
+      await settleRender(renderKey(nodeB));
+      noteRichBackendIdentity("backend-C", leafA);
+      expect(richContentResetCounters).toMatchObject({ all: 0, node: 2 });
+      expect(richRenderScheduler.peek(renderKey(nodeA))).toBeNull();
+      expect(richRenderScheduler.peek(renderKey(nodeB))?.ok).toBe(true);
+
+      // The command scope keeps today's behaviour: a new identity clears everything.
+      noteRichBackendIdentity("backend-D");
+      expect(richContentResetCounters.all).toBe(1);
+      expect(richRenderScheduler.stats().settled).toBe(0);
+    } finally {
+      leafA.dispose();
+      leafB.dispose();
+    }
+  });
+
+  test("a disposed scope's notes go with it; a reopened scope starts fresh", () => {
+    const windowScope = getWindowScope();
+    const open = () =>
+      windowScope.open({
+        role: "leaf",
+        client: new FakeNodeClient({ nodeId: "backend-A" as BackendId }),
+      });
+    const first = open();
+    noteRichContentConnection("route-a", first);
+    first.dispose();
+    const second = open();
+    try {
+      // The first report on the new scope only records it.
+      noteRichContentConnection("route-other", second);
+      expect(richContentResetCounters).toMatchObject({ all: 0, node: 0 });
+    } finally {
+      second.dispose();
+    }
+  });
+
+  test("a node clear reaches content keyed by the identity a scope reported", async () => {
+    // The command scope runs under a provisional id in tests; its content is
+    // keyed by the identity its capabilities answered.
+    const command = scope("env-1", "session-1", "backend-A");
+    const other = scope("env-1", "session-1", "backend-B");
+    await settleRender(renderKey(command));
+    await settleRender(renderKey(other));
+    noteRichBackendIdentity("backend-A");
+    const cleared: string[] = [];
+    const unregister = registerProtectedRichCache("test-only", {
+      clearAll: () => cleared.push("all"),
+      clearBackend: (nodeId) => cleared.push(nodeId),
+    });
+    try {
+      clearProtectedRichContent("credentials", { nodeId: getWindowScope().commandScope().nodeId });
+    } finally {
+      unregister();
+    }
+    expect(cleared.sort()).toEqual([getWindowScope().commandScope().nodeId, "backend-A"].sort());
+    expect(richRenderScheduler.peek(renderKey(command))).toBeNull();
+    expect(richRenderScheduler.peek(renderKey(other))?.ok).toBe(true);
   });
 });
 

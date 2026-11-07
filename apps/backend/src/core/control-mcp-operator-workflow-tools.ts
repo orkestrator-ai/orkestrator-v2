@@ -1,7 +1,8 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import { AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
 import { PUBLIC_PR_MERGE_METHODS } from "@orkestrator/protocol/public-api-inputs-pr";
-import { z } from "zod";
+import { Schema } from "effect";
+import { describe, list, str, strictObject, toolInput } from "./tool-schema.js";
 import { onNode, type ControlMcpCaller } from "./control-mcp-caller.js";
 import { operatorAction, operatorListNodes } from "./control-mcp-operator-tools.js";
 import {
@@ -21,33 +22,29 @@ import { nodeIdField, readAnnotations } from "./control-mcp-tool-support.js";
  * lists each one only when the credential may call its action.
  */
 
-const requestId = z
-  .string()
-  .trim()
-  .min(1)
-  .max(256)
-  .describe("Idempotency key: new for each request, reused only to retry the same one.");
-const workflowId = z
-  .string()
-  .trim()
-  .min(1)
-  .max(200)
-  .describe("Multi Review workflow ID, from list_multi_reviews or a launch result.");
-const selection = z
-  .object({
-    agent: z.enum(AGENT_PLATFORMS),
-    model: z.string().trim().min(1).max(512),
-    reasoningEffort: z.string().trim().min(1).max(128).optional(),
-  })
-  .strict();
+const requestId = describe(
+  str({ trim: true, min: 1, max: 256 }),
+  "Idempotency key: new for each request, reused only to retry the same one.",
+);
+const workflowId = describe(
+  str({ trim: true, min: 1, max: 200 }),
+  "Multi Review workflow ID, from list_multi_reviews or a launch result.",
+);
+const selection = strictObject({
+  agent: Schema.Literals(AGENT_PLATFORMS),
+  model: str({ trim: true, min: 1, max: 512 }),
+  reasoningEffort: Schema.optionalKey(str({ trim: true, min: 1, max: 128 })),
+});
 const agentFields = {
-  agent: z
-    .enum(AGENT_PLATFORMS)
-    .optional()
-    .describe("Omit to use the action's configured default agent, as the button does."),
-  model: z.string().trim().min(1).max(500).optional().describe("Requires agent."),
-  reasoning: z.string().trim().min(1).max(100).optional().describe("Requires model."),
-  fastMode: z.boolean().optional(),
+  agent: Schema.optionalKey(
+    describe(
+      Schema.Literals(AGENT_PLATFORMS),
+      "Omit to use the action's configured default agent, as the button does.",
+    ),
+  ),
+  model: Schema.optionalKey(describe(str({ trim: true, min: 1, max: 500 }), "Requires agent.")),
+  reasoning: Schema.optionalKey(describe(str({ trim: true, min: 1, max: 100 }), "Requires model.")),
+  fastMode: Schema.optionalKey(Schema.Boolean),
 };
 
 const WRITE = {
@@ -64,7 +61,7 @@ export function registerOperatorWorkflowTools(server: McpServer, caller: Control
       title: "List machines",
       description:
         "This machine and the leaf nodes it controls, with whether each is connected and can run actions. Pass a nodeId to any other tool to act on that machine.",
-      inputSchema: z.object({}),
+      inputSchema: toolInput(Schema.Struct({})),
       annotations: readAnnotations(),
     },
     async () => operatorListNodes(caller),
@@ -84,25 +81,28 @@ export function registerOperatorWorkflowTools(server: McpServer, caller: Control
             : "") +
           "The complete Multi Review button: reviewers, preparation/consolidation, then the optional Address Findings and PR, using saved defaults for what you omit; an active review is reused. Its root tab is created in the environment. Follow it with get_multi_review; reuse requestId only to retry. " +
           MULTI_REVIEW_AUTOMATION_DESCRIPTION,
-        inputSchema: z
-          .object({
+        inputSchema: toolInput(
+          strictObject({
             requestId,
-            environmentId: z.string().trim().min(1).max(200),
-            reviewers: z
-              .array(selection)
-              .min(1)
-              .max(32)
-              .optional()
-              .describe("Omit for the saved reviewer rows."),
-            reviewModel: selection.optional().describe("Omit for the saved consolidation model."),
-            fixModel: selection.optional().describe("Omit for the saved Address Findings model."),
-            autoFix: z.boolean().optional().describe(AUTO_ADDRESS_FINDINGS_FIELD_DESCRIPTION),
-            autoPr: z.boolean().optional().describe(AUTO_PR_FIELD_DESCRIPTION),
-            targetBranch: z.string().trim().min(1).max(500).optional(),
-            reviewInstruction: z.string().max(100_000).optional(),
+            environmentId: str({ trim: true, min: 1, max: 200 }),
+            reviewers: Schema.optionalKey(
+              describe(list(selection, { min: 1, max: 32 }), "Omit for the saved reviewer rows."),
+            ),
+            reviewModel: Schema.optionalKey(
+              describe(selection, "Omit for the saved consolidation model."),
+            ),
+            fixModel: Schema.optionalKey(
+              describe(selection, "Omit for the saved Address Findings model."),
+            ),
+            autoFix: Schema.optionalKey(
+              describe(Schema.Boolean, AUTO_ADDRESS_FINDINGS_FIELD_DESCRIPTION),
+            ),
+            autoPr: Schema.optionalKey(describe(Schema.Boolean, AUTO_PR_FIELD_DESCRIPTION)),
+            targetBranch: Schema.optionalKey(str({ trim: true, min: 1, max: 500 })),
+            reviewInstruction: Schema.optionalKey(str({ max: 100_000 })),
             nodeId: nodeIdField,
-          })
-          .strict(),
+          }),
+        ),
         annotations: WRITE,
       },
       async ({ requestId: key, nodeId, ...input }) =>
@@ -116,10 +116,12 @@ export function registerOperatorWorkflowTools(server: McpServer, caller: Control
     {
       title: "List an environment's Multi Reviews",
       description: "Multi Reviews of one environment, newest first, with their phase.",
-      inputSchema: z.object({
-        environmentId: z.string().trim().min(1).max(200),
-        nodeId: nodeIdField,
-      }),
+      inputSchema: toolInput(
+        Schema.Struct({
+          environmentId: str({ trim: true, min: 1, max: 200 }),
+          nodeId: nodeIdField,
+        }),
+      ),
       annotations: readAnnotations(),
     },
     async ({ environmentId, nodeId }) =>
@@ -132,7 +134,7 @@ export function registerOperatorWorkflowTools(server: McpServer, caller: Control
       title: "Read a Multi Review",
       description:
         "One Multi Review's phase, error, Address Findings handoff and auto-address findings/auto-PR state. Check back with it rather than polling.",
-      inputSchema: z.object({ workflowId, nodeId: nodeIdField }),
+      inputSchema: toolInput(Schema.Struct({ workflowId, nodeId: nodeIdField })),
       annotations: readAnnotations(),
     },
     async ({ workflowId: id, nodeId }) =>
@@ -148,7 +150,7 @@ export function registerOperatorWorkflowTools(server: McpServer, caller: Control
       {
         title,
         description: `${title}. Starts no work.`,
-        inputSchema: z.object({ requestId, workflowId, nodeId: nodeIdField }),
+        inputSchema: toolInput(Schema.Struct({ requestId, workflowId, nodeId: nodeIdField })),
         annotations: { ...WRITE, destructiveHint: false, openWorldHint: false },
       },
       async ({ requestId: key, workflowId: id, nodeId }) =>
@@ -162,7 +164,7 @@ export function registerOperatorWorkflowTools(server: McpServer, caller: Control
       title: "Address Multi Review findings",
       description:
         "The Address findings button: hand the consolidated findings to the review's Address Findings session. A pending result means queued; check get_multi_review.",
-      inputSchema: z.object({ requestId, workflowId, nodeId: nodeIdField }),
+      inputSchema: toolInput(Schema.Struct({ requestId, workflowId, nodeId: nodeIdField })),
       annotations: WRITE,
     },
     async ({ requestId: key, workflowId: id, nodeId }) =>
@@ -174,7 +176,7 @@ export function registerOperatorWorkflowTools(server: McpServer, caller: Control
     {
       title: "Cancel a Multi Review",
       description: "Cancel a running Multi Review. Its record and tabs are kept.",
-      inputSchema: z.object({ requestId, workflowId, nodeId: nodeIdField }),
+      inputSchema: toolInput(Schema.Struct({ requestId, workflowId, nodeId: nodeIdField })),
       annotations: WRITE,
     },
     async ({ requestId: key, workflowId: id, nodeId }) =>
@@ -200,22 +202,21 @@ export function registerOperatorWorkflowTools(server: McpServer, caller: Control
       {
         title,
         description: `${description} Returns a run; follow it with run_status.`,
-        inputSchema: z
-          .object({
+        inputSchema: toolInput(
+          strictObject({
             requestId,
-            environmentId: z.string().trim().min(1).max(200),
-            targetBranch: z.string().trim().min(1).max(500).optional(),
+            environmentId: str({ trim: true, min: 1, max: 200 }),
+            targetBranch: Schema.optionalKey(str({ trim: true, min: 1, max: 500 })),
             ...agentFields,
-            confirmToken: z
-              .string()
-              .trim()
-              .min(1)
-              .max(200)
-              .optional()
-              .describe("confirmToken from a confirmation-required result (voice credentials)."),
+            confirmToken: Schema.optionalKey(
+              describe(
+                str({ trim: true, min: 1, max: 200 }),
+                "confirmToken from a confirmation-required result (voice credentials).",
+              ),
+            ),
             nodeId: nodeIdField,
-          })
-          .strict(),
+          }),
+        ),
         annotations: WRITE,
       },
       async ({ requestId: key, nodeId, confirmToken, ...input }) =>
@@ -229,40 +230,40 @@ export function registerOperatorWorkflowTools(server: McpServer, caller: Control
       title: "Merge a pull request",
       description:
         "The Merge and Merge and Cleanup buttons (merge_environment_pr): merge the environment's pull request into its target branch. It cannot be undone, so the first call returns confirmation-required with a description: show it to the user, then repeat the call with confirmToken. A merge GitHub has accepted but not finished is a running receipt; follow it with run_status.",
-      inputSchema: z
-        .object({
+      inputSchema: toolInput(
+        strictObject({
           requestId,
-          environmentId: z.string().trim().min(1).max(200),
-          method: z
-            .enum(PUBLIC_PR_MERGE_METHODS)
-            .optional()
-            .describe("How to merge (default squash, as on the button)."),
-          deleteBranch: z
-            .boolean()
-            .optional()
-            .describe("Delete the head branch after merging (default true)."),
-          cleanup: z
-            .boolean()
-            .optional()
-            .describe(
+          environmentId: str({ trim: true, min: 1, max: 200 }),
+          method: Schema.optionalKey(
+            describe(
+              Schema.Literals(PUBLIC_PR_MERGE_METHODS),
+              "How to merge (default squash, as on the button).",
+            ),
+          ),
+          deleteBranch: Schema.optionalKey(
+            describe(Schema.Boolean, "Delete the head branch after merging (default true)."),
+          ),
+          cleanup: Schema.optionalKey(
+            describe(
+              Schema.Boolean,
               "Merge and Cleanup: also delete this environment and its worktree once the merge is confirmed. Cannot be combined with deleteBranch false.",
             ),
-          expectedHeadSha: z
-            .string()
-            .trim()
-            .length(40)
-            .optional()
-            .describe("headSha from pr_get. The merge is refused if the branch has moved since."),
-          confirmToken: z
-            .string()
-            .trim()
-            .min(1)
-            .max(200)
-            .optional()
-            .describe("confirmToken from a confirmation-required result, after the user agreed."),
+          ),
+          expectedHeadSha: Schema.optionalKey(
+            describe(
+              str({ trim: true, length: 40 }),
+              "headSha from pr_get. The merge is refused if the branch has moved since.",
+            ),
+          ),
+          confirmToken: Schema.optionalKey(
+            describe(
+              str({ trim: true, min: 1, max: 200 }),
+              "confirmToken from a confirmation-required result, after the user agreed.",
+            ),
+          ),
           nodeId: nodeIdField,
-        })
-        .strict(),
+        }),
+      ),
       annotations: { ...WRITE, destructiveHint: true },
     },
     async ({ requestId: key, nodeId, confirmToken, ...input }) =>

@@ -26,8 +26,10 @@ Code loads them automatically when it reads a file there, other agents may not.
 | Slash-command discovery or dispatch | [`docs/architecture/native-agent-commands.md`](docs/architecture/native-agent-commands.md) |
 | Agent SDK/CLI version bumps | [`docs/development/upgrade-agents.md`](docs/development/upgrade-agents.md) |
 | How projects or environments are listed or displayed (`components/sidebar/`, `EnvironmentItem*`, `components/federation/RemoteMachineTree.tsx`, `FederatedSidebarSections.tsx`, `lib/federation/aggregate.ts`, `node-summaries.ts`) | [`docs/architecture/federation.md`](docs/architecture/federation.md#one-presentation-for-both-paths) |
+| Another node's workspace in the window, node scopes, their tiers, budgets and snapshots (`lib/node-scope/`, `InTreeWorkspace`, `RemoteWorkspaceRegion`, `lib/federation/in-tree-scopes.ts`) | [`docs/architecture/federation.md`](docs/architecture/federation.md#node-scopes-one-scope-per-node-in-the-windows-tree); store recipe in [`docs/development/node-scopes.md`](docs/development/node-scopes.md) |
 | Rendered UI or browser-visible behavior | [`docs/development/agent-testing.md`](docs/development/agent-testing.md) |
-| The renderer's Content Security Policy, the preload sandbox, renderer and realm permissions | [`docs/architecture/renderer-security.md`](docs/architecture/renderer-security.md) |
+| The renderer's Content Security Policy, the preload sandbox, renderer permissions | [`docs/architecture/renderer-security.md`](docs/architecture/renderer-security.md) |
+| Backend commands (`commands-registry*.ts`, `packages/protocol/src/contract/**`): adding, converting or changing a command or domain | [`docs/architecture/version-compatibility.md`](docs/architecture/version-compatibility.md#domain-contracts) |
 | Logging, `createLogger`, log areas and events, the Electron relay, live logging settings | [`docs/architecture/logging.md`](docs/architecture/logging.md) |
 | Writing or debugging tests, `mock.module()` | [`docs/development/testing-guide.md`](docs/development/testing-guide.md) |
 | Lint findings and disable directives | [`docs/development/linting.md`](docs/development/linting.md) |
@@ -498,6 +500,11 @@ described in **Updating Bun and lockfiles**:
 - `packages/cli/package.json`
 - `packages/protocol/package.json`
 - `packages/toolchain/package.json`
+
+It also refuses to start when the contract manifest has drifted, and writes
+the release's contract snapshot under `packages/protocol/contracts/releases/`
+(see `docs/architecture/version-compatibility.md`, "The manifest, the ratchet
+and CI"); commit it with the bump.
 
 A new versioned manifest must be added to this list and to
 `VERSIONED_MANIFESTS` in that script; `tests/unit/release/set-version.test.ts`
@@ -1905,6 +1912,13 @@ This project uses **shadcn/ui** components. When adding new UI:
 - **Zustand** for global state (`apps/web/src/stores/`)
 - **React Context** for component-tree state (`apps/web/src/contexts/`)
 - Stores use `Map<string, T>` pattern for per-environment/per-session state
+- Per-node stores are node-scope instances (`defineScopedStore`,
+  `scopedStoreHook`), one per node the window works with; window stores stay
+  ordinary zustand stores (listed in `tests/source-guards/window-stores.ts`).
+  A scoped store's hook has no `getState`/`setState`/`subscribe` statics and
+  throws outside a `NodeScopeProvider` in development and tests: name the
+  scope (`scope.store(def)`, `useNodeScope()`) instead. Follow
+  [`docs/development/node-scopes.md`](docs/development/node-scopes.md).
 
 # Code review
 

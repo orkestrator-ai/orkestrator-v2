@@ -1,3 +1,4 @@
+import { eventSink } from "./backend-emit.js";
 import { describe, expect, test } from "bun:test";
 import { WORKTREE_SNAPSHOT_CHANGED_EVENT } from "@orkestrator/protocol/worktree-snapshots";
 import type { WorktreeSignalReason } from "./agent-tools.js";
@@ -74,10 +75,10 @@ function harness(admission?: WorkAdmissionPool) {
       walks += 1;
       return [{ name: file, path: file, isDirectory: false }];
     },
-    emit: (event, payload) => {
+    emit: eventSink((event, payload) => {
       if (event === WORKTREE_SNAPSHOT_CHANGED_EVENT)
         snapshots.push(payload as { watched: boolean });
-    },
+    }),
     fileListMaxAgeMs: DIFF_CACHE_MAX_AGE_MS,
     containerTreeMaxAgeMs: CONTAINER_TREE_MAX_AGE_MS,
     startContainerWatcher: (watch) => signals.start(watch),

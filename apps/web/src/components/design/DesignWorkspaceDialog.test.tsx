@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test, type Mock } from "bun:test";
-import { act, cleanup, fireEvent, render, renderHook, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen } from "@testing-library/react";
+import { renderInAppCommandScope, renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import type { DesignCapabilities } from "@orkestrator/protocol/design-operations";
 import type { DesignCanvas } from "@orkestrator/protocol/design-canvas";
 import { toast } from "sonner";
@@ -10,13 +11,13 @@ import { useNativeComposeDraftPersistence } from "@/hooks/useNativeComposeDraftP
 import { awaitComposeDraftWrites, composeDraftKey } from "@/lib/compose-draft-persistence";
 import { nativeComposePersistenceStore } from "@/stores/nativeComposeStore";
 import { createSessionKey } from "@/lib/utils";
-import { useConfigStore } from "@/stores";
-import { useEnvironmentStore } from "@/stores/environmentStore";
-import { nativeComposeDraft, useNativeComposeStore } from "@/stores/nativeComposeStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { configStore } from "@/stores";
+import { environmentStore } from "@/stores/environmentStore";
+import { nativeComposeDraft, nativeComposeStore } from "@/stores/nativeComposeStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import type { Environment } from "@/types";
 import type { CreatableTabType, CreateTabOptions } from "@/contexts/TerminalContext";
-import { loadDesignReadiness, type DesignReadinessView } from "./design-launch";
+import type { DesignReadinessView } from "./design-launch";
 import { DesignWorkspaceDialog } from "./DesignWorkspaceDialog";
 import {
   deferred,
@@ -25,6 +26,7 @@ import {
   pasteImage,
   settlePaste,
 } from "./design-paste-test-support";
+import { appCommandStore } from "@/test/app-command-store";
 
 // `@/lib/native/backend` is mocked once in tests/setup.ts; vary its behavior here.
 const invokeMock = invoke as unknown as Mock<(command: string, args?: unknown) => Promise<unknown>>;
@@ -83,12 +85,12 @@ function commandNames(): string[] {
   );
 }
 
-const originalConfig = useConfigStore.getState().config;
+const originalConfig = appCommandStore(configStore).getState().config;
 
 beforeEach(() => {
   resetCapabilities();
   useHostPathPickerStore.getState().settle(null);
-  usePaneLayoutStore.setState({
+  appCommandStore(paneLayoutStore).setState({
     environments: new Map([
       [
         "env-1",
@@ -101,7 +103,7 @@ beforeEach(() => {
     ]),
     hydration: new Map([["env-1", "done"]]),
   });
-  useNativeComposeStore.setState({ drafts: new Map() });
+  appCommandStore(nativeComposeStore).setState({ drafts: new Map() });
   invokeMock.mockClear();
   invokeMock.mockImplementation(async (command: string, args?: unknown) => {
     if (command === "enqueue_prompt_queue_message") return {};
@@ -118,15 +120,15 @@ afterEach(() => {
   cleanup();
   resetCapabilities();
   // After unmount, so the reset does not re-render a mounted dialog outside act().
-  useEnvironmentStore.setState({ environments: [] });
+  appCommandStore(environmentStore).setState({ environments: [] });
   invokeMock.mockImplementation(() => Promise.resolve());
-  useConfigStore.setState({ config: originalConfig });
+  appCommandStore(configStore).setState({ config: originalConfig });
 });
 
 function mount(createTab: (type: CreatableTabType, options?: CreateTabOptions) => boolean) {
   const onOpenChange = mock((_open: boolean) => {});
   const loadReadiness = mock(async (_probe: boolean) => ready);
-  render(
+  renderInAppCommandScope(
     <DesignWorkspaceDialog
       open
       onOpenChange={onOpenChange}
@@ -154,7 +156,7 @@ const brief = () => screen.getByRole("textbox", { name: "Design brief" }) as HTM
 describe("DesignWorkspaceDialog", () => {
   function supportPaste(write?: Promise<string>) {
     const restore = installImagePasteSupport();
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [
         {
           id: "env-1",
@@ -192,10 +194,10 @@ describe("DesignWorkspaceDialog", () => {
     const createTab = mock((type: CreatableTabType, options?: CreateTabOptions) => {
       if (type === "claude")
         attachments = nativeComposeDraft(
-          useNativeComposeStore.getState(),
+          appCommandStore(nativeComposeStore).getState(),
           createSessionKey("env-1", options!.tabId!),
         ).attachments;
-      usePaneLayoutStore
+      appCommandStore(paneLayoutStore)
         .getState()
         .addTab("pane-1", { id: options!.tabId!, type: "plain" }, "env-1");
       return true;
@@ -237,12 +239,12 @@ describe("DesignWorkspaceDialog", () => {
         if (type === "claude") {
           key = createSessionKey("env-1", options!.tabId!);
           expect(
-            nativeComposeDraft(useNativeComposeStore.getState(), key).attachments,
+            nativeComposeDraft(appCommandStore(nativeComposeStore).getState(), key).attachments,
           ).toHaveLength(1);
           if (failure === "throw") throw new Error("tab creation failed");
           return false;
         }
-        usePaneLayoutStore
+        appCommandStore(paneLayoutStore)
           .getState()
           .addTab("pane-1", { id: options!.tabId!, type: "plain" }, "env-1");
         return true;
@@ -254,7 +256,7 @@ describe("DesignWorkspaceDialog", () => {
         fireEvent.click(screen.getByRole("button", { name: "Create design workspace" }));
         await flush();
         expect(key).not.toBe("");
-        expect(useNativeComposeStore.getState().drafts.has(key)).toBe(false);
+        expect(appCommandStore(nativeComposeStore).getState().drafts.has(key)).toBe(false);
         expect(onOpenChange).not.toHaveBeenCalled();
         expect(screen.getByRole("alert")).toBeTruthy();
         expect(
@@ -272,7 +274,7 @@ describe("DesignWorkspaceDialog", () => {
     const module = await import("./design-prompt-images");
     const merge = spyOn(module, "addDesignImagesToDraft").mockReturnValue(false);
     const createTab = mock((_type: CreatableTabType, options?: CreateTabOptions) => {
-      usePaneLayoutStore
+      appCommandStore(paneLayoutStore)
         .getState()
         .addTab("pane-1", { id: options!.tabId!, type: "plain" }, "env-1");
       return true;
@@ -302,7 +304,9 @@ describe("DesignWorkspaceDialog", () => {
       createTab: () => true,
       loadReadiness,
     };
-    const view = render(<DesignWorkspaceDialog {...props} environmentId="env-1" />);
+    const view = renderInAppCommandScope(
+      <DesignWorkspaceDialog {...props} environmentId="env-1" />,
+    );
     try {
       await flush();
       await pasteImage(brief());
@@ -445,7 +449,9 @@ describe("DesignWorkspaceDialog", () => {
           createTab,
           loadReadiness: async () => ready,
         };
-        const rendered = render(<DesignWorkspaceDialog {...props} environmentId="env-1" />);
+        const rendered = renderInAppCommandScope(
+          <DesignWorkspaceDialog {...props} environmentId="env-1" />,
+        );
         await flush();
         await switchTo("Open design");
         fireEvent.click(screen.getByRole("button", { name: "Choose .orkdes file…" }));
@@ -555,7 +561,7 @@ describe("DesignWorkspaceDialog", () => {
   test("failure after the agent tab exists offers to open the kept design", async () => {
     const createTab = mock((type: CreatableTabType, options?: CreateTabOptions) => {
       if (type === "design-canvas") return true;
-      usePaneLayoutStore
+      appCommandStore(paneLayoutStore)
         .getState()
         .addTab("pane-1", { id: options!.tabId!, type: "plain" }, "env-1");
       throw new Error("agent mount failed");
@@ -582,7 +588,7 @@ describe("DesignWorkspaceDialog", () => {
 
   test("a pasted image is attached to the agent's initial prompt", async () => {
     const restorePaste = installImagePasteSupport();
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [
         {
           id: "env-1",
@@ -593,7 +599,7 @@ describe("DesignWorkspaceDialog", () => {
         } as Environment,
       ],
     });
-    useNativeComposeStore.setState({ drafts: new Map() });
+    appCommandStore(nativeComposeStore).setState({ drafts: new Map() });
     invokeMock.mockImplementation(async (command: string, args?: unknown) => {
       const request = args as {
         action?: string;
@@ -611,10 +617,10 @@ describe("DesignWorkspaceDialog", () => {
     const createTab = mock((type: CreatableTabType, options?: CreateTabOptions) => {
       if (type === "claude")
         draftAtLaunch = nativeComposeDraft(
-          useNativeComposeStore.getState(),
+          appCommandStore(nativeComposeStore).getState(),
           createSessionKey("env-1", options!.tabId!),
         );
-      usePaneLayoutStore
+      appCommandStore(paneLayoutStore)
         .getState()
         .addTab("pane-1", { id: options!.tabId!, type: "plain" }, "env-1");
       return true;
@@ -662,13 +668,13 @@ describe("DesignWorkspaceDialog", () => {
       });
       // Until the queue write lands, the draft is the renderer fallback.
       expect(
-        nativeComposeDraft(useNativeComposeStore.getState(), sessionKey).attachments,
+        nativeComposeDraft(appCommandStore(nativeComposeStore).getState(), sessionKey).attachments,
       ).toHaveLength(1);
       queueWrite.resolve({});
       await flush();
-      expect(nativeComposeDraft(useNativeComposeStore.getState(), sessionKey).attachments).toEqual(
-        [],
-      );
+      expect(
+        nativeComposeDraft(appCommandStore(nativeComposeStore).getState(), sessionKey).attachments,
+      ).toEqual([]);
     } finally {
       restorePaste();
     }
@@ -716,7 +722,7 @@ describe("DesignWorkspaceDialog", () => {
         });
         const error = spyOn(toast, "error");
         const createTab = mock((_type: CreatableTabType, options?: CreateTabOptions) => {
-          usePaneLayoutStore.getState().addTab(
+          appCommandStore(paneLayoutStore).getState().addTab(
             "pane-1",
             {
               id: options!.tabId!,
@@ -738,7 +744,7 @@ describe("DesignWorkspaceDialog", () => {
           const sessionKey = createSessionKey("env-1", options.tabId!);
           const key = composeDraftKey("claude", "env-1", sessionKey);
           const images = nativeComposeDraft(
-            useNativeComposeStore.getState(),
+            appCommandStore(nativeComposeStore).getState(),
             sessionKey,
           ).attachments;
           expect(images).toHaveLength(1);
@@ -748,16 +754,17 @@ describe("DesignWorkspaceDialog", () => {
               description: "Queue offline",
             });
             expect(
-              usePaneLayoutStore
+              appCommandStore(paneLayoutStore)
                 .getState()
                 .getAllTabs("env-1")
                 .find((tab) => tab.id === options.tabId)?.initialPrompt,
             ).toBe(options.initialPrompt);
             expect(
-              nativeComposeDraft(useNativeComposeStore.getState(), sessionKey).attachments,
+              nativeComposeDraft(appCommandStore(nativeComposeStore).getState(), sessionKey)
+                .attachments,
             ).toEqual(images);
           } else {
-            const hook = renderHook(() =>
+            const hook = renderHookInAppCommandScope(() =>
               useNativeComposeDraftPersistence(
                 "claude",
                 "env-1",
@@ -773,8 +780,8 @@ describe("DesignWorkspaceDialog", () => {
             await awaitComposeDraftWrites(key);
             expect(saved!.value).toMatchObject({ text: "", attachments: [] });
             // A hidden tab can now remount without resurrecting queue-owned images.
-            useNativeComposeStore.getState().clearDraft(sessionKey);
-            renderHook(() =>
+            appCommandStore(nativeComposeStore).getState().clearDraft(sessionKey);
+            renderHookInAppCommandScope(() =>
               useNativeComposeDraftPersistence(
                 "claude",
                 "env-1",
@@ -784,7 +791,8 @@ describe("DesignWorkspaceDialog", () => {
             );
             await flush();
             expect(
-              nativeComposeDraft(useNativeComposeStore.getState(), sessionKey).attachments,
+              nativeComposeDraft(appCommandStore(nativeComposeStore).getState(), sessionKey)
+                .attachments,
             ).toEqual([]);
             expect(error).not.toHaveBeenCalled();
           }
@@ -799,7 +807,7 @@ describe("DesignWorkspaceDialog", () => {
 
   test("a pasted image can be removed before launch", async () => {
     const restorePaste = installImagePasteSupport();
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [
         {
           id: "env-1",
@@ -830,7 +838,7 @@ describe("DesignWorkspaceDialog", () => {
   });
 
   test("a blank canvas needs no agent and closes when opened", async () => {
-    useConfigStore.setState({
+    appCommandStore(configStore).setState({
       config: {
         ...originalConfig,
         global: { ...originalConfig.global, enabledAgentPlatforms: [] },
@@ -869,21 +877,23 @@ describe("DesignWorkspaceDialog", () => {
     test(`capability fallback ${outcome} creates once with the intended session support`, async () => {
       const pending = deferred<unknown>();
       installLaunchCommands(() => pending.promise);
-      useConfigStore.getState().updateGlobalConfig({
-        agentSettings: {
-          platforms: {
-            claude: { model: "claude-sonnet-5", reasoningEffort: "high", fastMode: true },
+      appCommandStore(configStore)
+        .getState()
+        .updateGlobalConfig({
+          agentSettings: {
+            platforms: {
+              claude: { model: "claude-sonnet-5", reasoningEffort: "high", fastMode: true },
+            },
           },
-        },
-      });
+        });
       const createTab = mock((_type: CreatableTabType, options?: CreateTabOptions) => {
-        usePaneLayoutStore
+        appCommandStore(paneLayoutStore)
           .getState()
           .addTab("pane-1", { id: options!.tabId!, type: "plain" }, "env-1");
         return true;
       });
       const onOpenChange = mock();
-      render(
+      renderInAppCommandScope(
         <DesignWorkspaceDialog
           open
           onOpenChange={onOpenChange}
@@ -967,7 +977,9 @@ describe("DesignWorkspaceDialog", () => {
           createTab,
           loadReadiness: () => new Promise<DesignReadinessView>(() => {}),
         };
-        const rendered = render(<DesignWorkspaceDialog {...props} environmentId="env-1" />);
+        const rendered = renderInAppCommandScope(
+          <DesignWorkspaceDialog {...props} environmentId="env-1" />,
+        );
         await flush();
         fireEvent.click(screen.getByRole("button", { name: "Create design workspace" }));
         await flush();
@@ -993,7 +1005,7 @@ describe("DesignWorkspaceDialog", () => {
           ]);
           expect(createTab).not.toHaveBeenCalled();
           expect(onOpenChange).not.toHaveBeenCalled();
-          expect(useNativeComposeStore.getState().drafts.size).toBe(0);
+          expect(appCommandStore(nativeComposeStore).getState().drafts.size).toBe(0);
           expect(screen.queryByRole("alert") === null).toBe(true);
           if (scopeChange === "backend")
             expect(
@@ -1030,13 +1042,13 @@ describe("DesignWorkspaceDialog", () => {
         throw new Error(`Unexpected command: ${command}`);
       });
       const createTab = mock((_type: CreatableTabType, options?: CreateTabOptions) => {
-        usePaneLayoutStore
+        appCommandStore(paneLayoutStore)
           .getState()
           .addTab("pane-1", { id: options!.tabId!, type: "plain" }, "env-1");
         return true;
       });
       try {
-        render(
+        renderInAppCommandScope(
           <DesignWorkspaceDialog
             open
             onOpenChange={() => {}}
@@ -1096,13 +1108,12 @@ describe("DesignWorkspaceDialog", () => {
         };
       throw new Error(`Unexpected command: ${command}`);
     });
-    render(
+    renderInAppCommandScope(
       <DesignWorkspaceDialog
         open
         onOpenChange={() => {}}
         environmentId="env-1"
         createTab={() => true}
-        loadReadiness={loadDesignReadiness}
       />,
     );
     await flush();
@@ -1128,7 +1139,7 @@ describe("DesignWorkspaceDialog", () => {
 
   test("an unavailable renderer blocks creation but not opening", async () => {
     const onOpenChange = mock(() => {});
-    render(
+    renderInAppCommandScope(
       <DesignWorkspaceDialog
         open
         onOpenChange={onOpenChange}

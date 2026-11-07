@@ -2,6 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { parseSync, Visitor, type VisitorObject } from "oxc-parser";
 import type { AnyNode } from "./ast";
+import { directTransportImport } from "./direct-transport-import";
 import {
   GUARD_IDS,
   type GuardId,
@@ -9,16 +10,26 @@ import {
   type ScannedFile,
   type SourceGuard,
 } from "./guard";
+import { isTestSource } from "./paths";
+import { libBackendCommandDefault } from "./lib-backend-command-default";
 import { releasedPortRebind } from "./released-port-rebind";
 import { sleepBeforeNegativeAssertion } from "./sleep-before-negative-assertion";
 import { smallFakePid } from "./small-fake-pid";
 import { subprocessWithoutBudget } from "./subprocess-without-budget";
+import { windowOrkestratorDirect } from "./window-orkestrator-direct";
+import { windowOrkestratorPortal } from "./window-orkestrator-portal";
+import { workspaceCommandBoundCall } from "./workspace-command-bound-call";
 
 export const SOURCE_GUARDS: readonly SourceGuard[] = [
   sleepBeforeNegativeAssertion,
   releasedPortRebind,
   subprocessWithoutBudget,
   smallFakePid,
+  windowOrkestratorDirect,
+  directTransportImport,
+  libBackendCommandDefault,
+  windowOrkestratorPortal,
+  workspaceCommandBoundCall,
 ];
 
 export const SCANNED_ROOTS = ["tests", "apps", "bridges", "packages", "scripts", "e2e"] as const;
@@ -33,24 +44,27 @@ const EXCLUDED_DIRECTORIES: ReadonlySet<string> = new Set(["node_modules", "dist
 const EXCLUDED_PATHS: ReadonlySet<string> = new Set(["tests/source-guards/fixtures"]);
 
 const SCRIPT_FILE = /\.[cm]?[jt]sx?$/;
-const TEST_FILE = /\.(?:test|spec)\.[cm]?[jt]sx?$/;
 const BUN_TEST_FILE = /\.test\.[cm]?[jt]sx?$/;
-const SUPPORT_NAME = /test-harness|test-support|fixture/i;
-const SUPPORT_DIRECTORY = /(?:^|\/)(?:tests|testing|__tests__)\//;
 
-/** Test files plus the modules that support them. */
-export function isTestSource(relativePath: string): boolean {
-  const name = path.posix.basename(relativePath);
-  if (!SCRIPT_FILE.test(name) || name.endsWith(".d.ts")) return false;
-  return TEST_FILE.test(name) || SUPPORT_NAME.test(name) || SUPPORT_DIRECTORY.test(relativePath);
-}
+export { isTestSource };
 
 export interface Finding {
   guard: GuardId;
   file: string;
   line: number;
+  /** Set by guards that count per subject (see `SubjectFinding`). */
+  subject?: string;
 }
 
+/**
+ * The baseline entry a finding counts against: its file, or
+ * `[subject] file` for a guard that counts per subject.
+ */
+export function baselineKey(finding: Pick<Finding, "file" | "subject">): string {
+  return finding.subject ? `[${finding.subject}] ${finding.file}` : finding.file;
+}
+
+/** Per guard, findings grouped by baseline key (`baselineKey`). */
 export type Findings = Record<GuardId, Record<string, Finding[]>>;
 
 export function emptyFindings(): Findings {
@@ -107,8 +121,16 @@ export function scanSource(
   );
   const findings: Finding[] = [];
   candidates.forEach((guard, index) => {
-    for (const offset of visitors[index]!.finish())
-      findings.push({ guard: guard.id, file: file.path, line: lineAt(file.source, offset) });
+    for (const found of visitors[index]!.finish()) {
+      const offset = typeof found === "number" ? found : found.offset;
+      const finding: Finding = {
+        guard: guard.id,
+        file: file.path,
+        line: lineAt(file.source, offset),
+      };
+      if (typeof found !== "number") finding.subject = found.subject;
+      findings.push(finding);
+    }
   });
   return findings;
 }
@@ -138,20 +160,67 @@ export function listTestSources(root: string): string[] {
   return files.sort();
 }
 
-/** Walks the repository's test sources once and runs every guard over them. */
+/**
+ * Production sources under `roots`: script files that are neither test
+ * sources nor declarations, repository-relative and sorted.
+ */
+export function listProductionSources(root: string, roots: readonly string[]): string[] {
+  const files: string[] = [];
+  const visit = (relativeDirectory: string): void => {
+    let entries;
+    try {
+      entries = readdirSync(path.join(root, relativeDirectory), { withFileTypes: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw error;
+    }
+    for (const entry of entries) {
+      const relative = `${relativeDirectory}/${entry.name}`;
+      if (entry.isDirectory()) {
+        if (!EXCLUDED_DIRECTORIES.has(entry.name)) visit(relative);
+      } else if (
+        entry.isFile() &&
+        SCRIPT_FILE.test(entry.name) &&
+        !entry.name.endsWith(".d.ts") &&
+        !isTestSource(relative)
+      ) {
+        files.push(relative);
+      }
+    }
+  };
+  for (const sourceRoot of new Set(roots)) visit(sourceRoot);
+  return [...new Set(files)].sort();
+}
+
+/**
+ * Walks the repository's test sources once and runs every test-source guard
+ * over them, then the production sources of guards that read those instead.
+ */
 export function scanRepository(
   root: string,
   guards: readonly SourceGuard[] = SOURCE_GUARDS,
 ): Findings {
   const findings = emptyFindings();
-  for (const relative of listTestSources(root)) {
+  const scanFile = (relative: string, fileGuards: readonly SourceGuard[]) => {
+    if (fileGuards.length === 0) return;
     const file: ScannedFile = {
       path: relative,
       source: readFileSync(path.join(root, relative), "utf8"),
       isBunTest: BUN_TEST_FILE.test(relative),
     };
-    for (const finding of scanSource(file, guards))
-      (findings[finding.guard][finding.file] ??= []).push(finding);
+    for (const finding of scanSource(file, fileGuards))
+      (findings[finding.guard][baselineKey(finding)] ??= []).push(finding);
+  };
+  const testGuards = guards.filter((guard) => !guard.productionRoots);
+  for (const relative of listTestSources(root)) scanFile(relative, testGuards);
+  const productionGuards = guards.filter((guard) => guard.productionRoots);
+  const roots = productionGuards.flatMap((guard) => guard.productionRoots ?? []);
+  for (const relative of listProductionSources(root, roots)) {
+    const under = (sourceRoot: string) => relative.startsWith(`${sourceRoot}/`);
+    scanFile(
+      relative,
+      productionGuards.filter((guard) => guard.productionRoots?.some(under)),
+    );
   }
   return findings;
 }

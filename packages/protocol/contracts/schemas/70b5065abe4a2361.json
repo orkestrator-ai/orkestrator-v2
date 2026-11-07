@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:70b5065abe4a2361b551c88a52219926b38766c8bc9ba8088b40e04b2269966f",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "controllerId": {},
+        "epoch": {},
+        "upTo": {}
+      },
+      "type": "object"
+    }
+  }
+}

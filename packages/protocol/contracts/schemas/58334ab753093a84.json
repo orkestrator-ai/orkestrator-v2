@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:58334ab753093a843de5b71e043b3146e560fdd75338be8a6bc356405b69f6c0",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "acceptanceCriteria": {},
+        "description": {},
+        "kind": {},
+        "labels": {},
+        "markdown": {},
+        "projectId": {
+          "type": "string"
+        },
+        "requestId": {},
+        "sections": {},
+        "status": {},
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": ["projectId", "title"],
+      "type": "object"
+    }
+  }
+}

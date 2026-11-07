@@ -39,6 +39,7 @@ import type { GatewayTokenSettings, WebClientStatus } from "@orkestrator/protoco
 import { BackendHttpClient, type BackendStreamState } from "./backend-process.js";
 import { savedMachineImportEntry } from "./command-node-migration.js";
 import { checkBackendRoute, connectionCheckError, type HelloOutcome } from "./backend-hello.js";
+import { readNodeHelloAt } from "./scope-hello.js";
 import {
   backendAddress,
   newRouteId,
@@ -73,6 +74,9 @@ import {
 import { createLogger } from "@orkestrator/protocol/logger";
 
 const log = createLogger("connections");
+
+/** An invoke's optional envelope, forwarded to the backend client. */
+type InvokeEnvelopeOptions = { envelope?: Record<string, unknown> };
 
 type LocalBackend = Pick<
   BackendHttpClient,
@@ -128,6 +132,8 @@ const MAX_BACKGROUND_ATTEMPTS = 4;
 const STREAM_FAILURES_BEFORE_FALLBACK = 3;
 const DEFAULT_RECONNECT_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 30_000, 60_000];
 const LOCAL_HELLO_TIMEOUT_MS = 3_000;
+/** A workspace scope's hello read gives up after this long; the next ask reads again. */
+const WORKSPACE_HELLO_TIMEOUT_MS = 10_000;
 /**
  * `isAsyncEncryptionAvailable()` can wait on a keychain access prompt (macOS
  * asks when the "<app name> Safe Storage" item's access list does not name
@@ -174,10 +180,10 @@ export type SavedMachineExport = { backend: SavedBackend; token: string | null }
  * A window *binds* to one target: normally this computer's own backend, the
  * desktop's command node, which itself connects to the other nodes and
  * serves the multi-machine views (docs/architecture/command-nodes.md). A
- * saved machine can still be bound directly. A window's scope can be
+ * saved machine can still be bound directly. A window's node scope is
  * pointed at another node's workspace with a client grant
- * (`retargetScopeToWorkspace`) and back (`restoreScopeFrom`). Nothing here
- * starts, stops or moves work.
+ * (`retargetScopeToWorkspace`, `node-scopes.ts`). Nothing here starts, stops
+ * or moves work.
  */
 export class ConnectionManager {
   private readonly localBackend: LocalBackend;
@@ -204,6 +210,11 @@ export class ConnectionManager {
   private secureStorageAvailable = false;
   private localBackendAvailable: boolean;
   private localHello: BackendHello | null = null;
+  /** Each workspace connection's hello, read once per connection epoch (plan item 2011). */
+  private readonly workspaceHellos = new WeakMap<
+    RemoteConnection,
+    { epoch: number; hello: Promise<BackendHello | null> }
+  >();
   /** Gateway tokens accepted during this process, per route. Never persisted. */
   private readonly sessionTokens = new Map<string, string>();
   private readonly scopeQueues = new Map<string, Promise<unknown>>();
@@ -943,20 +954,27 @@ export class ConnectionManager {
     }
   }
 
+  /** `options.envelope`: the renderer's invoke envelope (plan item 1003), when it sent one. */
   invoke<T>(
     command: string,
     args: Record<string, unknown> = {},
     scope = DEFAULT_CONNECTION_SCOPE,
+    options?: InvokeEnvelopeOptions,
   ): Promise<T> {
     const connectionId = this.connectionIdForScope(scope);
-    if (connectionId === LOCAL_CONNECTION_ID) return this.localBackend.invoke<T>(command, args);
-    return this.invokeRemote<T>(connectionId, command, args);
+    if (connectionId === LOCAL_CONNECTION_ID) {
+      return options?.envelope
+        ? this.localBackend.invoke<T>(command, args, options)
+        : this.localBackend.invoke<T>(command, args);
+    }
+    return this.invokeRemote<T>(connectionId, command, args, options);
   }
 
   private async invokeRemote<T>(
     connectionId: string,
     command: string,
     args: Record<string, unknown>,
+    options?: InvokeEnvelopeOptions,
   ): Promise<T> {
     let remote = this.remoteConnections.get(connectionId);
     if (!remote) throw new Error("The selected remote connection is not available.");
@@ -967,7 +985,9 @@ export class ConnectionManager {
       remote = this.remoteConnections.get(connectionId);
       if (!remote) throw new Error("The selected remote connection is not available.");
     }
-    return remote.client.invoke<T>(command, args);
+    return options?.envelope
+      ? remote.client.invoke<T>(command, args, options)
+      : remote.client.invoke<T>(command, args);
   }
 
   /** Connection epoch of a machine, for fencing late renderer work. */
@@ -1167,12 +1187,46 @@ export class ConnectionManager {
   }
 
   /**
+   * The hello of a scope's machine for its current connection (plan item
+   * 2011), which the renderer's node clients read their negotiated domains
+   * from: the local backend's, a saved machine's last hello, or, for a
+   * workspace scope (another node through a grant), its own, read from the
+   * scope's base once per connection epoch. `null` when the machine answered
+   * none (it predates the hello). Rejects when a workspace read cannot tell;
+   * the next ask reads again.
+   */
+  async scopeHello(scope = DEFAULT_CONNECTION_SCOPE): Promise<BackendHello | null> {
+    const connectionId = this.connectionIdForScope(scope);
+    if (connectionId === LOCAL_CONNECTION_ID) return this.localHello;
+    const remote = this.remoteConnections.get(connectionId);
+    if (!remote?.connectionId.startsWith(WORKSPACE_CONNECTION_PREFIX)) {
+      return this.statuses.get(connectionId)?.hello ?? null;
+    }
+    const cached = this.workspaceHellos.get(remote);
+    if (cached && cached.epoch === remote.epoch) return cached.hello;
+    const hello = readNodeHelloAt(remote.transport.baseUrl, remote.token, {
+      timeoutMs: WORKSPACE_HELLO_TIMEOUT_MS,
+    });
+    const entry = { epoch: remote.epoch, hello };
+    this.workspaceHellos.set(remote, entry);
+    hello.catch(() => {
+      if (this.workspaceHellos.get(remote) === entry) this.workspaceHellos.delete(remote);
+    });
+    return hello;
+  }
+
+  /** This computer's own backend installation, once its hello answered; else null. */
+  localInstallationId(): BackendId | null {
+    return this.localHello?.installationId ?? null;
+  }
+
+  /**
    * Whether a scope's bound machine is this computer's own backend, even when
    * it is reached over a route (a command node's window showing this computer
    * as a leaf). Unproved identities answer false.
    */
   isScopeOnThisDevice(scope = DEFAULT_CONNECTION_SCOPE): boolean {
-    const localId = this.localHello?.installationId;
+    const localId = this.localInstallationId();
     return Boolean(localId) && this.getBackendIdentity(scope).backendId === localId;
   }
 
@@ -1206,12 +1260,11 @@ export class ConnectionManager {
   }
 
   /**
-   * Point a window's live scope at another node's workspace, reached with a
-   * client grant the command node obtained (directly, or over the command
-   * node's own route to it): the window becomes that node's client. The
-   * grant is held for this scope only, never saved, and released when the
-   * scope is pointed back or closed. The caller keeps the window's command
-   * connection bound to a portal scope, so pointing back needs no reconnect.
+   * Point a live scope (a window's node scope) at another node's workspace,
+   * reached with a client grant the command node obtained (directly, or over
+   * the command node's own route to it): the scope becomes that node's client.
+   * The grant is held for this scope only, never saved, and released when the
+   * scope is released. The window's own scope stays on its command node.
    */
   retargetScopeToWorkspace(scope: string, input: WorkspaceScopeInput): void {
     this.captureScopeGeneration(scope);
@@ -1225,17 +1278,12 @@ export class ConnectionManager {
     this.installWorkspace(scope, connectionId, input);
   }
 
-  /** Point a scope back at the machine another scope is bound to (the window's command node). */
-  restoreScopeFrom(scope: string, sourceScope: string): void {
-    this.captureScopeGeneration(scope);
-    const connectionId = this.connectionIdForScope(sourceScope);
-    this.scopeGenerations.set(scope, ++this.nextScopeGeneration);
-    if (connectionId === LOCAL_CONNECTION_ID) this.setScopeLocal(scope);
-    else this.bindScope(scope, connectionId);
-  }
-
   private installWorkspace(scope: string, connectionId: string, input: WorkspaceScopeInput): void {
-    const client = new BackendHttpClient(input.baseUrl, input.token);
+    const client: BackendHttpClient = new BackendHttpClient(input.baseUrl, input.token, {
+      // The leaf refused the grant (revoked or expired): open a new one now,
+      // as a dropped stream does, rather than at the next renewal tick.
+      onCredentialRefused: () => this.workspaceUnavailable(connectionId, client),
+    });
     const remote: RemoteConnection = {
       connectionId,
       ...(input.nodeId ? { workspaceNodeId: input.nodeId } : {}),
@@ -1556,6 +1604,20 @@ export class ConnectionManager {
     );
   }
 
+  /**
+   * A workspace connection lost its grant or its route: park the client (no
+   * request reaches an unverified route; terminal input waits for the new
+   * credential) and have its owner reopen the grant, which retargets it. Once
+   * per lapse: a client already parked is waiting for that reopen.
+   */
+  private workspaceUnavailable(connectionId: string, client: BackendHttpClient): void {
+    const remote = this.remoteConnections.get(connectionId);
+    if (!remote || remote.client !== client || !remote.onWorkspaceUnavailable) return;
+    if (client.isSuspended) return;
+    client.suspend();
+    remote.onWorkspaceUnavailable();
+  }
+
   private handleStreamState(
     connectionId: string,
     client: BackendHttpClient,
@@ -1569,6 +1631,11 @@ export class ConnectionManager {
       this.setStatus(connectionId, { transport: "connected", detail: undefined });
       return;
     }
+    if (state === "unauthorized" && remote.onWorkspaceUnavailable) {
+      // A refused grant is reopened, never re-entered by the user.
+      this.workspaceUnavailable(connectionId, client);
+      return;
+    }
     if (state === "unauthorized") {
       remote.streamFailures = 0;
       this.setStatus(connectionId, {
@@ -1579,8 +1646,7 @@ export class ConnectionManager {
     }
     remote.streamFailures += 1;
     if (remote.onWorkspaceUnavailable) {
-      remote.client.suspend();
-      remote.onWorkspaceUnavailable();
+      this.workspaceUnavailable(connectionId, client);
       return;
     }
     this.setStatus(connectionId, {

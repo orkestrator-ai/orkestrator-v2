@@ -1,0 +1,87 @@
+{
+  "schemaVersion": 1,
+  "domain": "claude-tmux",
+  "commands": {
+    "claude_tmux_answer_pre_tool_use": {
+      "untyped": true
+    },
+    "claude_tmux_answer_selection_prompt": {
+      "untyped": true
+    },
+    "claude_tmux_create_interactive_terminal": {
+      "untyped": true
+    },
+    "claude_tmux_detach_interactive_terminal": {
+      "untyped": true
+    },
+    "claude_tmux_interrupt": {
+      "untyped": true
+    },
+    "claude_tmux_list_previous_sessions": {
+      "untyped": true
+    },
+    "claude_tmux_pending_hooks": {
+      "untyped": true
+    },
+    "claude_tmux_reconcile_orphans": {
+      "untyped": true
+    },
+    "claude_tmux_reply_hook": {
+      "untyped": true
+    },
+    "claude_tmux_resize": {
+      "untyped": true
+    },
+    "claude_tmux_resize_interactive_terminal": {
+      "untyped": true
+    },
+    "claude_tmux_send_keys": {
+      "untyped": true
+    },
+    "claude_tmux_send_text": {
+      "untyped": true
+    },
+    "claude_tmux_start": {
+      "untyped": true
+    },
+    "claude_tmux_start_interactive_terminal": {
+      "untyped": true
+    },
+    "claude_tmux_status": {
+      "untyped": true
+    },
+    "claude_tmux_stop": {
+      "untyped": true
+    },
+    "claude_tmux_submit": {
+      "untyped": true
+    },
+    "claude_tmux_submit_queued": {
+      "untyped": true
+    },
+    "claude_tmux_switch_effort": {
+      "untyped": true
+    },
+    "claude_tmux_switch_fast_mode": {
+      "untyped": true
+    },
+    "claude_tmux_switch_model": {
+      "untyped": true
+    },
+    "claude_tmux_switch_plan_mode": {
+      "untyped": true
+    },
+    "claude_tmux_tasks": {
+      "untyped": true
+    },
+    "claude_tmux_transcript": {
+      "untyped": true
+    },
+    "claude_tmux_write_interactive_terminal": {
+      "untyped": true
+    },
+    "reconcile_claude_state_polling": {
+      "untyped": true
+    }
+  }
+}

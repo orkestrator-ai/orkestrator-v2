@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:8e62468a61a7e70d0ff330810b5b33e3a84f2be80e46898bcaf226a035a27d1e",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "actionToken": {
+          "type": "string"
+        },
+        "idempotencyKey": {
+          "type": "string"
+        }
+      },
+      "required": ["actionToken", "idempotencyKey"],
+      "type": "object"
+    }
+  }
+}

@@ -1,6 +1,21 @@
 import { defineLogAreas } from "./define.js";
 
 export const WEB_SYNC_LOG_AREAS = defineLogAreas({
+  "web.node-snapshot": {
+    description: "Bounded local snapshots of each node's light stores, for snapshot-first paint.",
+    events: {
+      "read-failed": "Reading a node's snapshot failed; the node opens without one.",
+      "write-failed": "Writing a node's snapshot failed; the next interval tries again.",
+      refused:
+        "A snapshot broke the content rules or the per-node byte bound; nothing was written.",
+      evicted: "Least recently used snapshots were dropped to keep the total bounds.",
+      "clear-failed": "Dropping one or every snapshot failed.",
+      "command-hydrated":
+        "The window's command scope was filled from its snapshot before its services started.",
+      "command-discarded":
+        "The command node proved another id than its snapshot's; the snapshot's data was taken back.",
+    },
+  },
   "web.resource-sync": {
     description: "Keeping renderer stores current with backend resources.",
     events: {
@@ -56,6 +71,17 @@ export const WEB_SYNC_LOG_AREAS = defineLogAreas({
       "resync-handler.failed": "A node resync handler failed.",
       "event-handler.failed": "A handler for an event relayed from a node failed.",
       "environment.start-failed": "Starting an environment opened in a workspace window failed.",
+    },
+  },
+  "web.node-scope": {
+    description: "Per-node renderer scopes: their services, stores and cleanup.",
+    events: {
+      "service.failed": "A scoped service threw; only it stopped and its scope is marked failed.",
+      "finalizer.failed": "A cleanup step of a scope, service or store threw; the rest still ran.",
+      "workspace.render-failed":
+        "A node's workspace in the window's tree failed to render; only it shows an error.",
+      "lifecycle.pressure":
+        "Memory pressure moved hidden node scopes down a tier (heavy data dropped, suspended or disposed); counts only.",
     },
   },
 });

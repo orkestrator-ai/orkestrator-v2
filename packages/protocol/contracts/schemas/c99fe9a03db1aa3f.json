@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:c99fe9a03db1aa3faa77ee9360bcc419f263a5edfee53afc9136cecb935e05a0",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "destination": {},
+        "sshPort": {}
+      },
+      "type": "object"
+    }
+  }
+}

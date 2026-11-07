@@ -61,13 +61,35 @@ import type { CommandContext, Environment, RepositoryConfig } from "./command-fi
 // explicit operation deadlines and shorter test budgets remain unchanged.
 setDefaultTimeout(30_000);
 
+/** The settings a stored global config always holds: config results are validated in tests. */
+const REQUIRED_GLOBAL_CONFIG = {
+  containerResources: { cpuCores: 2, memoryGb: 4 },
+  envFilePatterns: [],
+  codexMaxConcurrentThreads: 4,
+  terminalAppearance: { fontFamily: "Menlo", fontSize: 13, backgroundColor: "#000" },
+  terminalScrollback: 1000,
+};
+
 describe("storage-backed command delegation", () => {
   test("validates and delegates project and configuration commands", async () => {
     const { worktree, remote } = await createGitWorktreeWithOrigin();
-    const project = { id: "project-1", name: "repo", localPath: null };
+    // Real records: results are validated against their schemas in tests.
+    const project = {
+      id: "project-1",
+      name: "repo",
+      gitUrl: "https://github.com/acme/existing.git",
+      localPath: null,
+      addedAt: "2026-11-07T00:00:00.000Z",
+      order: 0,
+    };
     let config: {
       version: string;
       global: {
+        containerResources: { cpuCores: number; memoryGb: number };
+        envFilePatterns: string[];
+        codexMaxConcurrentThreads: number;
+        terminalAppearance: { fontFamily: string; fontSize: number; backgroundColor: string };
+        terminalScrollback: number;
         allowedDomains: string[];
         githubToken?: string;
         anthropicApiKey?: string;
@@ -79,6 +101,7 @@ describe("storage-backed command delegation", () => {
     } = {
       version: "1.0.0",
       global: {
+        ...REQUIRED_GLOBAL_CONFIG,
         allowedDomains: [],
         githubToken: "github_secret_token",
         anthropicApiKey: "anthropic_secret_key",
@@ -97,8 +120,15 @@ describe("storage-backed command delegation", () => {
       addProject: mock(async (value: Record<string, unknown>) => value),
       removeProject: mock(async (id: string) => id),
       getProject: mock(async () => project),
-      updateProject: mock(async (_id: string, updates: Record<string, unknown>) => updates),
-      reorderProjects: mock(async (ids: string[]) => ids),
+      // The stored project with the updates applied, as storage answers.
+      updateProject: mock(async (_id: string, updates: Record<string, unknown>) => ({
+        ...project,
+        ...updates,
+      })),
+      // Storage answers the projects in their new order.
+      reorderProjects: mock(async (ids: string[]) =>
+        ids.map((id, order) => ({ ...project, id, order })),
+      ),
       loadConfig: mock(async () => config),
       saveConfig: mock(
         async (value: typeof config, options?: { preserveCredentials?: boolean }) => {
@@ -214,13 +244,13 @@ describe("storage-backed command delegation", () => {
         { projectId: "project-1", updates: { name: "renamed" } },
         context,
       ),
-    ).resolves.toEqual({ name: "renamed" });
+    ).resolves.toEqual({ ...project, name: "renamed" });
     await expect(
       commands.get("update_project")?.(
         { projectId: "project-1", updates: { gitUrl: "git@github.com:acme/moved.git" } },
         context,
       ),
-    ).resolves.toEqual({ gitUrl: "git@github.com:acme/moved.git" });
+    ).resolves.toEqual({ ...project, gitUrl: "git@github.com:acme/moved.git" });
     await expect(
       commands.get("update_project")?.(
         { projectId: "project-1", updates: { gitUrl: "/tmp/repo" } },
@@ -235,7 +265,11 @@ describe("storage-backed command delegation", () => {
         },
         context,
       ),
-    ).resolves.toEqual({ name: "renamed", gitUrl: "  git@github.com:acme/moved.git  " });
+    ).resolves.toEqual({
+      ...project,
+      name: "renamed",
+      gitUrl: "  git@github.com:acme/moved.git  ",
+    });
     const legacyProject = { ...project, gitUrl: "/tmp/origin.git" };
     storage.getProject.mockResolvedValueOnce(legacyProject);
     await expect(
@@ -243,7 +277,7 @@ describe("storage-backed command delegation", () => {
         { projectId: "project-1", updates: { name: "legacy renamed", gitUrl: "/tmp/origin.git" } },
         context,
       ),
-    ).resolves.toEqual({ name: "legacy renamed", gitUrl: "/tmp/origin.git" });
+    ).resolves.toEqual({ ...project, name: "legacy renamed", gitUrl: "/tmp/origin.git" });
     await expect(
       commands.get("update_project")?.(
         { projectId: "project-1", updates: { gitUrl: 42 } },
@@ -259,7 +293,10 @@ describe("storage-backed command delegation", () => {
     ).rejects.toThrow("Duplicate project URL");
     await expect(
       commands.get("reorder_projects")?.({ projectIds: ["project-2", "project-1"] }, context),
-    ).resolves.toEqual(["project-2", "project-1"]);
+    ).resolves.toEqual([
+      { ...project, id: "project-2", order: 0 },
+      { ...project, id: "project-1", order: 1 },
+    ]);
     expect(
       commands.get("validate_git_url")?.({ url: " https://github.com/acme/repo.git " }, context),
     ).toBe(true);
@@ -277,6 +314,7 @@ describe("storage-backed command delegation", () => {
     await expect(commands.get("get_config")?.({}, context)).resolves.toEqual({
       version: "1.0.0",
       global: {
+        ...REQUIRED_GLOBAL_CONFIG,
         allowedDomains: [],
         githubTokenConfigured: true,
         anthropicApiKeyConfigured: true,
@@ -289,6 +327,7 @@ describe("storage-backed command delegation", () => {
       repositories: {},
     });
     await expect(commands.get("get_global_config")?.({}, context)).resolves.toEqual({
+      ...REQUIRED_GLOBAL_CONFIG,
       allowedDomains: [],
       githubTokenConfigured: true,
       anthropicApiKeyConfigured: true,
@@ -302,9 +341,11 @@ describe("storage-backed command delegation", () => {
     await expect(
       commands.get("save_config")?.(
         {
+          // The renderer writes the whole record back.
           config: {
             version: "1.0.0",
             global: {
+              ...REQUIRED_GLOBAL_CONFIG,
               allowedDomains: ["api.example.com"],
               githubToken: "renderer_attempted_secret",
               githubTokenConfigured: false,
@@ -325,6 +366,7 @@ describe("storage-backed command delegation", () => {
       {
         version: "1.0.0",
         global: {
+          ...REQUIRED_GLOBAL_CONFIG,
           allowedDomains: ["api.example.com"],
         },
         repositories: {},
@@ -336,6 +378,7 @@ describe("storage-backed command delegation", () => {
       commands.get("update_global_config")?.(
         {
           global: {
+            ...REQUIRED_GLOBAL_CONFIG,
             allowedDomains: ["github.com"],
             githubToken: "renderer_attempted_secret",
             githubTokenConfigured: false,
@@ -352,6 +395,7 @@ describe("storage-backed command delegation", () => {
     ).resolves.toEqual({
       version: "1.0.0",
       global: {
+        ...REQUIRED_GLOBAL_CONFIG,
         allowedDomains: ["github.com"],
         githubTokenConfigured: true,
         anthropicApiKeyConfigured: true,
@@ -365,6 +409,7 @@ describe("storage-backed command delegation", () => {
     });
     expect(storage.updateGlobalConfig).toHaveBeenLastCalledWith(
       {
+        ...REQUIRED_GLOBAL_CONFIG,
         allowedDomains: ["github.com"],
       },
       { preserveCredentials: true },
@@ -499,9 +544,15 @@ describe("storage-backed command delegation", () => {
     await expect(
       commands.get("get_plan_usage")?.({ platform: "blackberry" }, context),
     ).rejects.toThrow("Unknown agent platform");
+    // Two wrong fields: the platform is reported first, as before the definition.
+    await expect(
+      commands.get("get_plan_usage")?.({ platform: "blackberry", force: "yes" }, context),
+    ).rejects.toThrow("Unknown agent platform: blackberry");
+    // An unknown key is dropped now (§11.4, plan item 7008), not refused.
     await expect(
       commands.get("get_plan_usage")?.({ platform: "opencode", extra: true }, context),
-    ).rejects.toThrow();
+    ).resolves.toMatchObject({ platform: "opencode" });
+    expect(planUsageReader).toHaveBeenLastCalledWith(context, "opencode", { force: false });
     await expect(commands.get("get_plan_usage")?.({ platform: "   " }, context)).rejects.toThrow();
     await expect(
       commands.get("get_plan_usage")?.({ platform: "opencode", force: "yes" }, context),
@@ -519,7 +570,17 @@ describe("storage-backed command delegation", () => {
   });
 
   test("delegates session lifecycle, synchronization, and buffer commands", async () => {
-    const session = { id: "session-1", environmentId: "env-1" };
+    const session = {
+      id: "session-1",
+      environmentId: "env-1",
+      containerId: "container-1",
+      tabId: "tab-1",
+      sessionType: "plain" as const,
+      status: "connected" as const,
+      createdAt: "2026-07-23T11:00:00.000Z",
+      lastActivityAt: "2026-07-23T11:00:00.000Z",
+      order: 0,
+    };
     const sessions = [session];
     const disconnected = [{ ...session, status: "disconnected" }];
     const storage = {
@@ -531,12 +592,12 @@ describe("storage-backed command delegation", () => {
         ...update,
       })),
       removeSession: mock(async () => undefined),
-      removeSessionsByEnvironment: mock(async () => undefined),
+      removeSessionsByEnvironment: mock(async () => ["session-1"]),
       disconnectEnvironmentSessions: mock(async () => disconnected),
       saveSessionBuffer: mock(async () => undefined),
       loadSessionBuffer: mock(async () => "saved output"),
       reorderSessions: mock(async () => sessions),
-      cleanupOrphanedBuffers: mock(async () => 3),
+      cleanupOrphanedBuffers: mock(async () => ["orphan-1", "orphan-2", "orphan-3"]),
       // The session names the environment's own container, which the registry
       // accepts as an exact persisted association without probing Docker.
       getDataDir: () => "/tmp/orkestrator-session-delegation",
@@ -551,12 +612,12 @@ describe("storage-backed command delegation", () => {
           environmentId: "env-1",
           containerId: "container-1",
           tabId: "tab-1",
-          sessionType: "terminal",
+          sessionType: "plain",
         },
         context,
       ),
     ).resolves.toEqual(session);
-    expect(storage.createSession).toHaveBeenCalledWith("env-1", "container-1", "tab-1", "terminal");
+    expect(storage.createSession).toHaveBeenCalledWith("env-1", "container-1", "tab-1", "plain");
     await expect(
       commands.get("get_session")?.({ sessionId: "session-1" }, context),
     ).resolves.toEqual(session);
@@ -564,10 +625,12 @@ describe("storage-backed command delegation", () => {
       commands.get("get_sessions_by_environment")?.({ environmentId: "env-1" }, context),
     ).resolves.toEqual(sessions);
     await commands.get("update_session_status")?.(
-      { sessionId: "session-1", status: "running" },
+      { sessionId: "session-1", status: "disconnected" },
       context,
     );
-    expect(storage.updateSession).toHaveBeenLastCalledWith("session-1", { status: "running" });
+    expect(storage.updateSession).toHaveBeenLastCalledWith("session-1", {
+      status: "disconnected",
+    });
     await withFixedDate("2026-07-23T12:00:00.000Z", async () => {
       await commands.get("update_session_activity")?.({ sessionId: "session-1" }, context);
     });
@@ -607,7 +670,11 @@ describe("storage-backed command delegation", () => {
       context,
     );
     expect(storage.reorderSessions).toHaveBeenCalledWith("env-1", ["session-2", "session-1"]);
-    await expect(commands.get("cleanup_orphaned_buffers")?.({}, context)).resolves.toBe(3);
+    await expect(commands.get("cleanup_orphaned_buffers")?.({}, context)).resolves.toEqual([
+      "orphan-1",
+      "orphan-2",
+      "orphan-3",
+    ]);
     await commands.get("delete_session")?.({ sessionId: "session-1" }, context);
     expect(storage.removeSession).toHaveBeenCalledWith("session-1");
     await commands.get("delete_sessions_by_environment")?.({ environmentId: "env-1" }, context);
@@ -725,7 +792,11 @@ describe("storage-backed command delegation", () => {
     const feature = { id: "feature-1", projectId: "project-1" };
     const storage = {
       getLogDirectory: mock(() => "/data/logs"),
-      reorderEnvironments: mock(async () => [{ id: "env-2" }, { id: "env-1" }]),
+      // Whole records: a defined command's result is validated in tests (plan item 7003).
+      reorderEnvironments: mock(async () => [
+        createEnvironment({ id: "env-2" }),
+        createEnvironment({ id: "env-1" }),
+      ]),
       kanban: {
         deleteKanbanTask: mock(async () => undefined),
         addKanbanComment: mock(async () => ({ ...task, comments: [{ id: "comment-1" }] })),
@@ -752,7 +823,7 @@ describe("storage-backed command delegation", () => {
         },
         context,
       ),
-    ).resolves.toEqual([
+    ).resolves.toMatchObject([
       { id: "env-2", hasInitialPromptAttachments: false },
       { id: "env-1", hasInitialPromptAttachments: false },
     ]);
@@ -1473,7 +1544,7 @@ exit 0
     Object.assign(context.storage, {
       loadConfig: mock(async () => ({
         version: "1.0.0",
-        global: { useHostGitHubCredentials: false },
+        global: { ...REQUIRED_GLOBAL_CONFIG, allowedDomains: [], useHostGitHubCredentials: false },
         repositories: {
           "project-1": { defaultBranch: "main", prBaseBranch: "main" },
         },
@@ -1584,6 +1655,8 @@ exit 0
     const { context } = createContext(environment);
     // Cursor is enabled: credentials reach a container only for enabled providers.
     let global: Record<string, unknown> = {
+      ...REQUIRED_GLOBAL_CONFIG,
+      allowedDomains: [],
       useHostGitHubCredentials: false,
       enabledAgentPlatforms: ["claude", "cursor"],
     };
@@ -1742,7 +1815,12 @@ exit 0
         environmentType: "local",
         worktreePath: worktree,
       });
-      return { environment, ...createContext(environment) };
+      return {
+        environment,
+        ...createContext(environment, {
+          globalConfig: { ...REQUIRED_GLOBAL_CONFIG, allowedDomains: [] },
+        }),
+      };
     }
 
     test("computes counts for a tracked local environment and announces them", async () => {

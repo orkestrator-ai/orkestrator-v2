@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:079b8898d504246ade15f9dbe94f2c425b698ecdba2ac140cf800e3783e50013",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "agent": {
+          "type": "string"
+        },
+        "approvalMode": {},
+        "attachments": {},
+        "clientTimeZone": {},
+        "command": {},
+        "environmentId": {
+          "type": "string"
+        },
+        "executionAgent": {},
+        "executionProfileId": {},
+        "fastMode": {},
+        "images": {},
+        "includeLocalSettings": {},
+        "interactionPolicy": {},
+        "logicalSessionKey": {
+          "type": "string"
+        },
+        "mode": {},
+        "model": {},
+        "modelSource": {},
+        "origin": {},
+        "parameterValues": {},
+        "phase": {},
+        "prompt": {},
+        "promptSuggestions": {},
+        "reasoningEffort": {},
+        "requestId": {},
+        "schema": {},
+        "sessionMode": {},
+        "subAgent": {},
+        "title": {}
+      },
+      "required": ["agent", "environmentId", "logicalSessionKey"],
+      "type": "object"
+    }
+  }
+}

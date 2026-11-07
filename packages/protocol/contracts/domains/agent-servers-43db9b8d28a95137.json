@@ -1,0 +1,234 @@
+{
+  "schemaVersion": 1,
+  "domain": "agent-servers",
+  "commands": {
+    "await_bridge_ready": {
+      "untyped": true
+    },
+    "cache_agent_model_catalog": {
+      "untyped": true
+    },
+    "cache_opencode_model_catalog": {
+      "untyped": true
+    },
+    "cancel_github_cli_login": {
+      "untyped": true
+    },
+    "check_any_ai_cli": {
+      "untyped": true
+    },
+    "check_claude_cli": {
+      "untyped": true
+    },
+    "check_claude_config": {
+      "untyped": true
+    },
+    "check_codex_cli": {
+      "untyped": true
+    },
+    "check_cursor_cli": {
+      "untyped": true
+    },
+    "check_github_cli": {
+      "untyped": true
+    },
+    "check_grok_cli": {
+      "untyped": true
+    },
+    "check_opencode_cli": {
+      "untyped": true
+    },
+    "check_pi_cli": {
+      "untyped": true
+    },
+    "cleanup_stale_local_servers_cmd": {
+      "untyped": true
+    },
+    "ensure_host_pi_model_catalog": {
+      "untyped": true
+    },
+    "get_agent_model_catalog_cache": {
+      "untyped": true
+    },
+    "get_available_ai_cli": {
+      "untyped": true
+    },
+    "get_claude_model_catalog": {
+      "untyped": true
+    },
+    "get_claude_server_log": {
+      "untyped": true
+    },
+    "get_claude_server_status": {
+      "untyped": true
+    },
+    "get_codex_server_log": {
+      "untyped": true
+    },
+    "get_codex_server_status": {
+      "untyped": true
+    },
+    "get_container_github_credential_status": {
+      "untyped": true
+    },
+    "get_credential_status": {
+      "untyped": true
+    },
+    "get_cursor_server_log": {
+      "untyped": true
+    },
+    "get_cursor_server_status": {
+      "untyped": true
+    },
+    "get_github_cli_login": {
+      "untyped": true
+    },
+    "get_github_cli_status": {
+      "untyped": true
+    },
+    "get_grok_server_log": {
+      "untyped": true
+    },
+    "get_grok_server_status": {
+      "untyped": true
+    },
+    "get_local_claude_server_status": {
+      "untyped": true
+    },
+    "get_local_codex_server_status": {
+      "untyped": true
+    },
+    "get_local_cursor_server_status": {
+      "untyped": true
+    },
+    "get_local_grok_server_status": {
+      "untyped": true
+    },
+    "get_local_opencode_server_status": {
+      "untyped": true
+    },
+    "get_local_pi_server_status": {
+      "untyped": true
+    },
+    "get_native_agent_model_catalog": {
+      "untyped": true
+    },
+    "get_opencode_model_catalog_cache": {
+      "untyped": true
+    },
+    "get_opencode_model_preferences": {
+      "untyped": true
+    },
+    "get_opencode_server_log": {
+      "untyped": true
+    },
+    "get_opencode_server_status": {
+      "untyped": true
+    },
+    "get_pi_server_log": {
+      "untyped": true
+    },
+    "get_pi_server_status": {
+      "untyped": true
+    },
+    "has_claude_credentials": {
+      "untyped": true
+    },
+    "list_agent_skills": {
+      "untyped": true
+    },
+    "list_environment_agent_skills": {
+      "untyped": true
+    },
+    "peek_container_agent_bridge": {
+      "untyped": true
+    },
+    "peek_local_agent_bridge": {
+      "untyped": true
+    },
+    "read_agent_skill": {
+      "untyped": true
+    },
+    "read_environment_agent_skill": {
+      "untyped": true
+    },
+    "refresh_host_agent_model_catalog": {
+      "untyped": true
+    },
+    "start_claude_server": {
+      "untyped": true
+    },
+    "start_codex_server": {
+      "untyped": true
+    },
+    "start_cursor_server": {
+      "untyped": true
+    },
+    "start_github_cli_login": {
+      "untyped": true
+    },
+    "start_grok_server": {
+      "untyped": true
+    },
+    "start_local_claude_server_cmd": {
+      "untyped": true
+    },
+    "start_local_codex_server_cmd": {
+      "untyped": true
+    },
+    "start_local_cursor_server_cmd": {
+      "untyped": true
+    },
+    "start_local_grok_server_cmd": {
+      "untyped": true
+    },
+    "start_local_opencode_server_cmd": {
+      "untyped": true
+    },
+    "start_local_pi_server_cmd": {
+      "untyped": true
+    },
+    "start_opencode_server": {
+      "untyped": true
+    },
+    "start_pi_server": {
+      "untyped": true
+    },
+    "stop_claude_server": {
+      "untyped": true
+    },
+    "stop_codex_server": {
+      "untyped": true
+    },
+    "stop_cursor_server": {
+      "untyped": true
+    },
+    "stop_grok_server": {
+      "untyped": true
+    },
+    "stop_local_claude_server_cmd": {
+      "untyped": true
+    },
+    "stop_local_codex_server_cmd": {
+      "untyped": true
+    },
+    "stop_local_cursor_server_cmd": {
+      "untyped": true
+    },
+    "stop_local_grok_server_cmd": {
+      "untyped": true
+    },
+    "stop_local_opencode_server_cmd": {
+      "untyped": true
+    },
+    "stop_local_pi_server_cmd": {
+      "untyped": true
+    },
+    "stop_opencode_server": {
+      "untyped": true
+    },
+    "stop_pi_server": {
+      "untyped": true
+    }
+  }
+}

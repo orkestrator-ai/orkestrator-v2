@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, screen } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { NativeMessagePart } from "@/lib/chat/native-message-types";
 import { NativeMessage } from "./NativeMessage";
 
@@ -44,7 +45,7 @@ function renderUsage(
             ...fields,
           },
         };
-  return render(
+  return renderInAppCommandScope(
     <NativeMessage
       platform={platform}
       message={{
@@ -158,7 +159,7 @@ for (const path of ["subagent", "task-group"] as const) {
 describe("subagent runtime without spawn args", () => {
   // A Codex child has no spawn-tool args; the bridge stamps its run instead.
   function renderCodexChild(fields: Partial<Extract<NativeMessagePart, { type: "subagent" }>>) {
-    return render(
+    return renderInAppCommandScope(
       <NativeMessage
         platform="codex"
         message={{

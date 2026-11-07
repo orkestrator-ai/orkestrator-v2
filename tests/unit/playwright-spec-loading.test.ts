@@ -28,6 +28,8 @@ describe("Playwright suites", () => {
     "e2e/agent-testing/playwright.paused-interactions.config.ts",
     "e2e/agent-testing/playwright.electron.config.ts",
     "e2e/agent-testing/playwright.packaged-electron.config.ts",
+    "e2e/agent-testing/playwright.scope-proof.config.ts",
+    "e2e/agent-testing/playwright.multi-node.config.ts",
   ])(
     "%s loads every spec under Node",
     (config) => {

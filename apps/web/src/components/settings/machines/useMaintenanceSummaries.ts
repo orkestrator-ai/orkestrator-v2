@@ -5,7 +5,7 @@ import {
   type HostMaintenanceSnapshot,
 } from "@orkestrator/protocol/host-maintenance";
 import { useMachineBulkUpdateStore } from "@/stores/machineBulkUpdateStore";
-import { portalListen } from "@/lib/portal/portal-transport";
+import { commandScopeListen } from "@/lib/portal/command-scope";
 import { machineMaintenanceClient } from "./machine-access";
 import type { MachineEntry } from "./machine-list";
 import { mergeMaintenanceSnapshot } from "./useMachineMaintenance";
@@ -135,7 +135,7 @@ export function useMaintenanceSummaries(entries: MachineEntry[]) {
     if (!selfKey) return;
     let stop: (() => void) | null = null;
     let cancelled = false;
-    void portalListen<HostMaintenanceSnapshot>(HOST_MAINTENANCE_EVENT, ({ payload }) =>
+    void commandScopeListen<HostMaintenanceSnapshot>(HOST_MAINTENANCE_EVENT, ({ payload }) =>
       record(selfKey, payload),
     ).then((unlisten) => {
       if (cancelled) unlisten();

@@ -1,10 +1,12 @@
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { ClaudeQuestionCard } from "./ClaudeQuestionCard";
 import type { ClaudeQuestionRequest } from "@/lib/claude-types";
 import type { SubmitAnswersHandler } from "@/components/chat/QuestionCard";
-import { usePromptDraftStore } from "@/stores/promptDraftStore";
+import { promptDraftStore } from "@/stores/promptDraftStore";
+import { appCommandStore } from "@/test/app-command-store";
 
 const onSubmitAnswers = mock<SubmitAnswersHandler>(async () => true);
 
@@ -83,12 +85,12 @@ afterEach(() => {
   onSubmitAnswers.mockReset();
   onSubmitAnswers.mockImplementation(async () => true);
   // Cards with a draft key persist drafts, and this suite reuses ids.
-  usePromptDraftStore.getState().reset();
+  appCommandStore(promptDraftStore).getState().reset();
 });
 
 describe("ClaudeQuestionCard", () => {
   test("Submit button enables when only a custom answer is typed (no option selected)", () => {
-    render(
+    renderInAppCommandScope(
       <ClaudeQuestionCard
         question={singleQuestionWithOptions()}
         onSubmitAnswers={onSubmitAnswers}
@@ -105,7 +107,7 @@ describe("ClaudeQuestionCard", () => {
   });
 
   test("Submit button enables for a no-options question when text is typed", () => {
-    render(
+    renderInAppCommandScope(
       <ClaudeQuestionCard question={singleQuestionNoOptions()} onSubmitAnswers={onSubmitAnswers} />,
     );
 
@@ -119,7 +121,7 @@ describe("ClaudeQuestionCard", () => {
   });
 
   test("submits the typed custom answer even without pressing Enter", async () => {
-    render(
+    renderInAppCommandScope(
       <ClaudeQuestionCard
         question={singleQuestionWithOptions()}
         onSubmitAnswers={onSubmitAnswers}
@@ -139,7 +141,9 @@ describe("ClaudeQuestionCard", () => {
   });
 
   test("submits every answer of a multi-question card through the callback", async () => {
-    render(<ClaudeQuestionCard question={twoQuestions()} onSubmitAnswers={onSubmitAnswers} />);
+    renderInAppCommandScope(
+      <ClaudeQuestionCard question={twoQuestions()} onSubmitAnswers={onSubmitAnswers} />,
+    );
 
     fireEvent.click(screen.getByRole("button", { name: /Red/ }));
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
@@ -156,7 +160,7 @@ describe("ClaudeQuestionCard", () => {
   test("treats false as a failed submit and re-enables the button", async () => {
     const onSubmitAnswers = mock(async () => false);
 
-    render(
+    renderInAppCommandScope(
       <ClaudeQuestionCard
         question={singleQuestionWithOptions()}
         onSubmitAnswers={onSubmitAnswers}
@@ -178,7 +182,7 @@ describe("ClaudeQuestionCard", () => {
   test("initial answers can preselect an option without custom input and submit on re-click", async () => {
     const onSubmitAnswers = mock(async () => true);
 
-    render(
+    renderInAppCommandScope(
       <ClaudeQuestionCard
         question={singleQuestionWithOptions()}
         initialAnswers={[["Red"]]}
@@ -204,7 +208,7 @@ describe("ClaudeQuestionCard", () => {
   test("submit-on-option-select treats false as a failed submit and re-enables controls", async () => {
     const onSubmitAnswers = mock(async () => false);
 
-    render(
+    renderInAppCommandScope(
       <ClaudeQuestionCard
         question={singleQuestionWithOptions()}
         allowCustomAnswer={false}
@@ -226,7 +230,7 @@ describe("ClaudeQuestionCard", () => {
   test("submit-on-option-select does not auto-submit multi-question cards", () => {
     const onSubmitAnswers = mock(async () => true);
 
-    render(
+    renderInAppCommandScope(
       <ClaudeQuestionCard
         question={twoQuestions()}
         submitOnOptionSelect
@@ -241,7 +245,9 @@ describe("ClaudeQuestionCard", () => {
   });
 
   test("custom typed answer persists when navigating between questions", () => {
-    render(<ClaudeQuestionCard question={twoQuestions()} onSubmitAnswers={onSubmitAnswers} />);
+    renderInAppCommandScope(
+      <ClaudeQuestionCard question={twoQuestions()} onSubmitAnswers={onSubmitAnswers} />,
+    );
 
     // On Q1: type a custom answer
     const inputQ1 = screen.getByPlaceholderText(/Type your own answer/i) as HTMLInputElement;
@@ -263,7 +269,7 @@ describe("ClaudeQuestionCard", () => {
   });
 
   test("Enter commits custom answer into a removable chip", () => {
-    render(
+    renderInAppCommandScope(
       <ClaudeQuestionCard
         question={singleQuestionWithOptions()}
         onSubmitAnswers={onSubmitAnswers}
@@ -286,7 +292,7 @@ describe("ClaudeQuestionCard", () => {
   });
 
   test("clicking the chip's X removes the committed custom answer", async () => {
-    render(
+    renderInAppCommandScope(
       <ClaudeQuestionCard
         question={singleQuestionWithOptions()}
         onSubmitAnswers={onSubmitAnswers}
@@ -312,7 +318,7 @@ describe("ClaudeQuestionCard", () => {
   });
 
   test("multi-select allows a chip and a selected option to coexist", async () => {
-    render(
+    renderInAppCommandScope(
       <ClaudeQuestionCard
         question={singleQuestionMultiSelect()}
         onSubmitAnswers={onSubmitAnswers}
@@ -338,7 +344,7 @@ describe("ClaudeQuestionCard", () => {
   });
 
   test("single-select Enter replaces the previous custom chip (only one chip allowed)", async () => {
-    render(
+    renderInAppCommandScope(
       <ClaudeQuestionCard
         question={singleQuestionWithOptions()}
         onSubmitAnswers={onSubmitAnswers}
@@ -366,7 +372,7 @@ describe("ClaudeQuestionCard", () => {
   });
 
   test("single-select Enter keeps a selected option alongside the chip", async () => {
-    render(
+    renderInAppCommandScope(
       <ClaudeQuestionCard
         question={singleQuestionWithOptions()}
         onSubmitAnswers={onSubmitAnswers}
@@ -398,7 +404,7 @@ describe("ClaudeQuestionCard", () => {
     const logs = captureLogs();
 
     try {
-      render(
+      renderInAppCommandScope(
         <ClaudeQuestionCard
           question={singleQuestionWithOptions()}
           onSubmitAnswers={onSubmitAnswers}
@@ -435,7 +441,7 @@ describe("ClaudeQuestionCard", () => {
       retryable: false,
       message: "The response outcome is unknown. Reconnect or refresh Claude before trying again.",
     }));
-    render(
+    renderInAppCommandScope(
       <ClaudeQuestionCard
         question={singleQuestionWithOptions()}
         onSubmitAnswers={onSubmitAnswers}
@@ -462,7 +468,7 @@ describe("ClaudeQuestionCard", () => {
           resolveDismiss = resolve;
         }),
     );
-    render(
+    renderInAppCommandScope(
       <ClaudeQuestionCard
         question={singleQuestionWithOptions()}
         onSubmitAnswers={onSubmitAnswers}
@@ -484,7 +490,7 @@ describe("ClaudeQuestionCard", () => {
   test("cards with a draft key persist in-progress answers across remounts", () => {
     // The tmux tab keys drafts by its pending request, so answers survive the
     // tab unmounting and its store knows which draft to clear on resolution.
-    const { unmount } = render(
+    const { unmount } = renderInAppCommandScope(
       <ClaudeQuestionCard
         question={singleQuestionWithOptions()}
         onSubmitAnswers={onSubmitAnswers}
@@ -495,10 +501,12 @@ describe("ClaudeQuestionCard", () => {
     fireEvent.change(screen.getByPlaceholderText(/Type your own answer/i), {
       target: { value: "half-typed" },
     });
-    expect(usePromptDraftStore.getState().drafts.has("tmux-question-draft")).toBe(true);
+    expect(appCommandStore(promptDraftStore).getState().drafts.has("tmux-question-draft")).toBe(
+      true,
+    );
 
     unmount();
-    render(
+    renderInAppCommandScope(
       <ClaudeQuestionCard
         question={singleQuestionWithOptions()}
         onSubmitAnswers={onSubmitAnswers}
@@ -513,7 +521,7 @@ describe("ClaudeQuestionCard", () => {
   test("a card without a draftKey does not write to the draft store", () => {
     // The tmux selection prompt reuses this wrapper with a content-derived
     // question id; persisting that would resurrect stale selections.
-    render(
+    renderInAppCommandScope(
       <ClaudeQuestionCard
         question={singleQuestionWithOptions()}
         onSubmitAnswers={onSubmitAnswers}
@@ -523,13 +531,13 @@ describe("ClaudeQuestionCard", () => {
     fireEvent.change(screen.getByPlaceholderText(/Type your own answer/i), {
       target: { value: "ephemeral" },
     });
-    expect(usePromptDraftStore.getState().drafts.size).toBe(0);
+    expect(appCommandStore(promptDraftStore).getState().drafts.size).toBe(0);
   });
 
   test("dismiss delegates to the callback when provided", async () => {
     const onDismiss = mock(() => {});
 
-    render(
+    renderInAppCommandScope(
       <ClaudeQuestionCard
         question={singleQuestionWithOptions()}
         onSubmitAnswers={onSubmitAnswers}
@@ -547,7 +555,7 @@ describe("ClaudeQuestionCard", () => {
 
 describe("ClaudeQuestionCard countdown in terminal mode", () => {
   test("a prompt from a hook that predates pausing explains why it cannot pause", () => {
-    render(
+    renderInAppCommandScope(
       <ClaudeQuestionCard
         question={{
           ...singleQuestionWithOptions(),
@@ -572,7 +580,7 @@ describe("ClaudeQuestionCard countdown in terminal mode", () => {
       sessionId: "s-1",
       revision: 0,
     }));
-    render(
+    renderInAppCommandScope(
       <ClaudeQuestionCard
         question={{
           ...singleQuestionWithOptions(),
@@ -598,7 +606,7 @@ describe("ClaudeQuestionCard countdown in terminal mode", () => {
       revision: 0,
     }));
     const heldAt = Date.now();
-    render(
+    renderInAppCommandScope(
       <ClaudeQuestionCard
         question={{
           ...singleQuestionWithOptions(),

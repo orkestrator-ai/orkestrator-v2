@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 
 import { mcpFailure } from "@orkestrator/protocol/mcp-management";
 
@@ -59,7 +60,7 @@ describe("MCP editor: preview intent", () => {
         entryId: "x",
       }),
     });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     await openAdd();
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "files" } });
     fireEvent.change(screen.getByLabelText("Executable"), { target: { value: "files" } });
@@ -82,7 +83,7 @@ describe("MCP editor: preview intent", () => {
       ...baseHandlers,
       validate_mcp_mutation: () => ({ valid: true, fieldErrors: [], preview }),
     });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     fireEvent.click(await screen.findByRole("button", { name: "Remove docs" }));
     await screen.findByLabelText("Change preview");
     expect(callsOf("validate_mcp_mutation")[0]!.mutation.applyIntent).toBe("save-and-apply");
@@ -95,7 +96,7 @@ describe("MCP editor: local validation", () => {
       ...baseHandlers,
       validate_mcp_mutation: () => ({ valid: true, fieldErrors: [], preview }),
     });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     await openAdd();
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "bad name!" } });
     fireEvent.click(screen.getByRole("button", { name: /Add variable/ }));
@@ -130,7 +131,7 @@ describe("MCP editor: local validation", () => {
       ...baseHandlers,
       validate_mcp_mutation: () => ({ valid: true, fieldErrors: [], preview }),
     });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     await openAdd();
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "remote" } });
     fireEvent.click(screen.getByRole("button", { name: "HTTP" }));
@@ -153,7 +154,7 @@ describe("MCP editor: error notices", () => {
         throw new Error(`${TRANSPORT_FAILURE}: proxy rejected API_KEY=${SECRET}`);
       },
     });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     await openAdd();
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "files" } });
     fireEvent.change(screen.getByLabelText("Executable"), { target: { value: "files" } });
@@ -178,7 +179,7 @@ describe("MCP editor: error notices", () => {
         throw mcpFailure("internal", { correlationId: "corr-7f3a" });
       },
     });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     await openAdd();
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "files" } });
     fireEvent.change(screen.getByLabelText("Executable"), { target: { value: "files" } });
@@ -198,7 +199,7 @@ describe("MCP editor: error notices", () => {
         throw mcpFailure("target-offline", { correlationId: "corr-snap" });
       },
     });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     expect(await screen.findByText("corr-snap")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
   });
@@ -224,7 +225,7 @@ describe("MCP editor: switching target with a draft", () => {
 
   test("asks before discarding, and keeping leaves the draft and target alone", async () => {
     installTwoContexts();
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     await openAdd();
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "half-typed" } });
 
@@ -247,7 +248,7 @@ describe("MCP editor: switching target with a draft", () => {
 
   test("an untouched editor switches without asking", async () => {
     installTwoContexts();
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     await openAdd();
     act(() => requestMcpServerSettings({ provider: "pi", environmentId: "e1" }));
     expect(await screen.findByText("docs-e1")).toBeTruthy();
@@ -258,7 +259,7 @@ describe("MCP editor: switching target with a draft", () => {
 describe("MCP editor: closing with a draft", () => {
   test("Escape and Cancel ask before discarding; an untouched editor closes at once", async () => {
     install(baseHandlers);
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     await openAdd();
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "half-typed" } });
 
@@ -287,7 +288,7 @@ describe("MCP dialogs: layering above fullscreen settings", () => {
   // render behind it while Radix disables pointer events on the page.
   test("the editor, its select and the discard prompt use the fullscreen dialog layers", async () => {
     install(baseHandlers);
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     await openAdd();
     const editor = await screen.findByRole("dialog");
     expect(editor.className).toContain("z-[80]");
@@ -300,7 +301,7 @@ describe("MCP dialogs: layering above fullscreen settings", () => {
 
   test("row action dialogs use the fullscreen dialog layer", async () => {
     install(baseHandlers);
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     fireEvent.click(await screen.findByRole("button", { name: "Remove docs" }));
     const dialog = await screen.findByRole("dialog");
     expect(dialog.className).toContain("z-[80]");

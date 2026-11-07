@@ -1,3 +1,9 @@
+import {
+  cancelCoordinatorGraphRunCommand,
+  getCoordinatorGraphRunCommand,
+  listCoordinatorGraphTemplatesCommand,
+  startCoordinatorGraphRunCommand,
+} from "@orkestrator/protocol/contract/domains/coordinator";
 import { randomUUID } from "node:crypto";
 import {
   GRAPH_LAUNCH_ERROR_CODES,
@@ -163,9 +169,9 @@ async function projectRun(
 }
 
 export function registerCoordinatorGraphActions(register: CommandRegistrar): void {
-  const starts = new Map<string, Promise<unknown>>();
+  const starts = new Map<string, Promise<{ launch: GraphLaunchResult; associationId: string }>>();
 
-  register("list_coordinator_graph_templates", async ({ scope, ref, environmentId }, context) => {
+  register(listCoordinatorGraphTemplatesCommand, async ({ scope, ref, environmentId }, context) => {
     const caller = await coordinatorCaller(scope, context);
     if (ref !== undefined && ref !== null) {
       const parsed = parseGraphTemplateRef(ref);
@@ -187,7 +193,7 @@ export function registerCoordinatorGraphActions(register: CommandRegistrar): voi
     };
   });
 
-  register("start_coordinator_graph_run", async ({ scope, requestId, request }, context) => {
+  register(startCoordinatorGraphRunCommand, async ({ scope, requestId, request }, context) => {
     const caller = await coordinatorCaller(scope, context);
     if (typeof requestId !== "string" || !requestId.trim() || requestId.length > 256) {
       throw new GraphLaunchError("invalid-request", "requestId must be 1 to 256 characters");
@@ -281,12 +287,12 @@ export function registerCoordinatorGraphActions(register: CommandRegistrar): voi
     return started;
   });
 
-  register("get_coordinator_graph_run", async ({ scope, runId }, context) => {
+  register(getCoordinatorGraphRunCommand, async ({ scope, runId }, context) => {
     const caller = await coordinatorCaller(scope, context);
     return coordinatorGraphRunView(await projectRun(context, caller, runId));
   });
 
-  register("cancel_coordinator_graph_run", async ({ scope, runId }, context) => {
+  register(cancelCoordinatorGraphRunCommand, async ({ scope, runId }, context) => {
     const caller = await coordinatorCaller(scope, context);
     const run = await projectRun(context, caller, runId);
     await assertCoordinatorMayControlWorkflow(context, caller, {

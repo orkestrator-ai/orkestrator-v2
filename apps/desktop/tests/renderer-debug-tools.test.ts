@@ -44,12 +44,12 @@ describe("renderer debug tools", () => {
 
   test("opens the focused renderer only if it turned debug on, else its window's", () => {
     const tools = new RendererDebugTools(() => undefined);
-    const realm = renderer(7);
+    const focused = renderer(7);
     const shell = renderer(3);
-    tools.report(realm.contents, false);
+    tools.report(focused.contents, false);
     tools.report(shell.contents, true);
-    expect(tools.open([realm.contents, shell.contents])).toBe(true);
-    expect(realm.opened).toHaveLength(0);
+    expect(tools.open([focused.contents, shell.contents])).toBe(true);
+    expect(focused.opened).toHaveLength(0);
     expect(shell.opened).toEqual([{ mode: "detach" }]);
   });
 

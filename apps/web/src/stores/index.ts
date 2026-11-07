@@ -1,21 +1,35 @@
-export { useUIStore } from "./uiStore";
+export { uiStore, useUIStore } from "./uiStore";
 export type { ProjectBoardTab } from "./uiStore";
-export { useProjectStore } from "./projectStore";
-export { useEnvironmentStore } from "./environmentStore";
-export { useConfigStore } from "./configStore";
-export { useClaudeOptionsStore } from "./claudeOptionsStore";
+export { useUIChromeStore } from "./uiChromeStore";
+export { projectStore, useProjectStore } from "./projectStore";
+export { environmentStore, useEnvironmentStore } from "./environmentStore";
+export { configStore, useConfigStore } from "./configStore";
+export { claudeOptionsStore, useClaudeOptionsStore } from "./claudeOptionsStore";
 export type { ClaudeOptions, AgentType } from "./claudeOptionsStore";
-export { useAgentActivityStore } from "./agentActivityStore";
+export { agentActivityStore, useAgentActivityStore } from "./agentActivityStore";
 export type { AgentActivityState } from "./agentActivityStore";
-export { syncCachedAcpModels, useAgentModelCatalogStore } from "./agentModelCatalogStore";
-export { useFilesPanelStore } from "./filesPanelStore";
+export {
+  agentModelCatalogStore,
+  syncCachedAcpModels,
+  useAgentModelCatalogStore,
+} from "./agentModelCatalogStore";
+export { filesPanelStore, useFilesPanelStore } from "./filesPanelStore";
+export { useFilesPanelChromeStore } from "./filesPanelChromeStore";
 export type { FilesPanelTab } from "./filesPanelStore";
-export { usePaneLayoutStore, getAllLeaves } from "./paneLayoutStore";
-export { useTerminalSessionStore, createSessionKey } from "./terminalSessionStore";
+export { projectPullRequestsStore, useProjectPullRequestsStore } from "./projectPullRequestsStore";
+export { paneLayoutStore, usePaneLayoutStore, getAllLeaves } from "./paneLayoutStore";
+export {
+  createSessionKey,
+  terminalSessionStore,
+  useTerminalSessionStore,
+} from "./terminalSessionStore";
+export { sessionStore, useSessionStore } from "./sessionStore";
+export { claudeTmuxStore, useClaudeTmuxStore } from "./claudeTmuxStore";
 export { formatErrorContext, useErrorDialogStore } from "./errorDialogStore";
 export type { ErrorContext, ErrorDetails } from "./errorDialogStore";
-export { useFileDirtyStore } from "./fileDirtyStore";
+export { fileDirtyStore, useFileDirtyStore } from "./fileDirtyStore";
 export {
+  kanbanStore,
   useKanbanStore,
   type KanbanTask,
   type KanbanStatus,
@@ -23,16 +37,29 @@ export {
   type ProjectNotes,
 } from "./kanbanStore";
 export {
+  featurePlanStore,
   useFeaturePlanStore,
   type FeaturePlan,
   type FeaturePlanMessage,
   type FeaturePlanStatus,
   type FeatureStoryCard,
 } from "./featurePlanStore";
-export { useGitHubIssuesStore, githubIssueDetailKey } from "./githubIssuesStore";
-export { usePrMonitorStore } from "./prMonitorStore";
-export { useBuildPipelineStore } from "./buildPipelineStore";
-export { useMultiReviewStore } from "./multiReviewStore";
+export { githubIssuesStore, useGitHubIssuesStore, githubIssueDetailKey } from "./githubIssuesStore";
+export { prMonitorStore, usePrMonitorStore } from "./prMonitorStore";
+export { buildPipelineStore, useBuildPipelineStore } from "./buildPipelineStore";
+export { coordinatorActivityStore, useCoordinatorActivityStore } from "./coordinatorActivityStore";
+export {
+  coordinatorLaunchOverrideStore,
+  useCoordinatorLaunchOverrideStore,
+} from "./coordinatorLaunchOverrideStore";
+export {
+  coordinatorPaneLayoutStore,
+  useCoordinatorPaneLayoutStore,
+} from "./coordinatorPaneLayoutStore";
+export { graphDesignerStore, useGraphDesignerStore } from "./graphDesignerStore";
+export { graphRunStore, useGraphRunStore } from "./graphRunStore";
+export { graphDescribeStore, useGraphDescribeStore } from "./graphDescribeStore";
+export { multiReviewStore, useMultiReviewStore } from "./multiReviewStore";
 export type {
   BuildPipeline,
   BuildPhase,
@@ -42,6 +69,24 @@ export type {
   PipelineSessionPhase,
 } from "./buildPipelineStore";
 export type { PrMonitorEnvironmentState } from "./prMonitorStore";
-export { useEnvironmentDiffStore } from "./environmentDiffStore";
-export { useAgentMailStore } from "./agentMailStore";
+export { environmentDiffStore, useEnvironmentDiffStore } from "./environmentDiffStore";
+export { agentMailStore, useAgentMailStore } from "./agentMailStore";
 export type { EnvironmentDiffStats } from "./environmentDiffStore";
+export { tabLaunchStore, useTabLaunchStore } from "./tabLaunchStore";
+export type { TabLaunch, TabLaunchSurface } from "./tabLaunchStore";
+export { useWorktreeSnapshotStore, worktreeSnapshotStore } from "./worktreeSnapshotStore";
+export {
+  nativeAgentProjectionStore,
+  useNativeAgentProjectionStore,
+} from "./nativeAgentProjectionStore";
+export { nativeComposeStore, useNativeComposeStore } from "./nativeComposeStore";
+export { promptDraftStore, usePromptDraftStore } from "./promptDraftStore";
+export { changeProjectionStore, useChangeProjectionStore } from "./changeProjectionStore";
+export { designStore, useDesignStore } from "./designStore";
+export { previewServiceStore, usePreviewServiceStore } from "./previewServiceStore";
+export { pullRequestsStore, usePullRequestsStore } from "./pullRequestsStore";
+export { useWebAnnotationStore, webAnnotationStore } from "./webAnnotationStore";
+export {
+  useWebAnnotationPreferencesStore,
+  webAnnotationPreferencesStore,
+} from "./webAnnotationPreferencesStore";

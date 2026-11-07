@@ -1,3 +1,5 @@
+import type { PreviewPublicationDetail } from "@orkestrator/protocol/contract/domains/previews";
+import type { BackendEmit } from "./backend-emit.js";
 import { readFile } from "node:fs/promises";
 import type { Duplex } from "node:stream";
 
@@ -50,7 +52,7 @@ export interface PreviewRuntimeStorage extends PreviewRegistryStorage {
 
 export interface PreviewRuntimeOptions {
   storage: PreviewRuntimeStorage;
-  emit: (event: string, payload: unknown) => void;
+  emit: BackendEmit;
   strictDockerOwner?: boolean;
   runDocker?: DockerRunner;
   env?: Record<string, string | undefined>;
@@ -378,7 +380,7 @@ export class PreviewRuntime {
     reason: "No private preview domain is configured.",
   });
   /** Operator-facing publication detail (domain, listener, certificate expiry). */
-  publicationDetail: () => unknown = () => null;
+  publicationDetail: () => PreviewPublicationDetail | null = () => null;
   relayStatus: () => { available: boolean; reason?: string } = () =>
     this.effectiveSettings().relay
       ? { available: true }

@@ -4,6 +4,7 @@
  * reads or writes the operator's real configuration.
  */
 
+import { eventSink } from "../backend-emit.js";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -183,7 +184,7 @@ export function createFixture(
           getPreviewBackendIdentity: async () => ({ instanceId: "backend-1", created: false }),
         },
       },
-      emit: (event, payload) => events.push([event, payload]),
+      emit: eventSink((event, payload) => events.push([event, payload])),
       probe,
       loadRollout: async () => rollout.value,
       claudeAccountHomes: options.claudeAccountHomes,

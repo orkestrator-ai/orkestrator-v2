@@ -393,10 +393,12 @@ export class NodeFiles {
     environmentId: string;
     include: Array<"diff" | "file" | "tests">;
     path?: string;
-  }): Promise<Record<string, unknown>> {
+  }): Promise<{ environmentId: string } & Record<string, unknown>> {
     const environment = await this.storage.getEnvironment(input.environmentId);
     if (!environment) throw new Error("That environment does not exist on this node.");
-    const details: Record<string, unknown> = { environmentId: input.environmentId };
+    const details: { environmentId: string } & Record<string, unknown> = {
+      environmentId: input.environmentId,
+    };
     if (input.include.includes("diff")) {
       const root = await this.root({ environmentId: input.environmentId });
       // Each read scans the working tree, so each retries without the fsmonitor daemon.

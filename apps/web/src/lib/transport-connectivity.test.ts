@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { LOCAL_CONNECTION_ID, type ConnectionList } from "@orkestrator/protocol/connections";
-import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
+import { getWindowScope, resetWindowScopeForTests } from "@/lib/node-scope/app-window-scope";
+import { readCoordinatorFor, resetReadCoordinatorForTests } from "@/lib/read-coordinator";
+import { FakeNodeClient } from "@/test/render-in-node-scope";
+import type { BackendId } from "@orkestrator/protocol/federation";
 import {
   installFakeReadCoordinator,
   type FakeReadEnvironment,
@@ -8,6 +11,7 @@ import {
 import type { GatewayEventStreamConnectionState } from "@/lib/native/web-gateway";
 import {
   connectionListDisconnected,
+  getNodeConnectivity,
   getTransportConnectivity,
   resetTransportConnectivityForTests,
   setTransportDisconnected,
@@ -113,6 +117,46 @@ describe("transport connectivity", () => {
     const stop = startTransportConnectivity({});
     expect(getTransportConnectivity().disconnected).toBe(false);
     stop();
+  });
+});
+
+describe("per node and the window aggregate", () => {
+  afterEach(() => resetWindowScopeForTests());
+
+  test("a leaf's outage is its own, and the window aggregate shows it", () => {
+    const client = new FakeNodeClient({ nodeId: "bk_leaf" as BackendId });
+    const leaf = getWindowScope().open({ role: "leaf", client });
+    const command = getWindowScope().commandScope();
+    let notifications = 0;
+    const unsubscribe = subscribeTransportConnectivity(() => {
+      notifications += 1;
+    });
+
+    const stop = startTransportConnectivity(undefined, leaf);
+    client.connection.set("connecting");
+    expect(getNodeConnectivity(leaf).disconnected).toBe(false);
+    client.connection.set("lapsed");
+    expect(getNodeConnectivity(leaf)).toEqual({ disconnected: true, since: 1_000 });
+    expect(getNodeConnectivity(command).disconnected).toBe(false);
+    expect(readCoordinatorFor(leaf).getDiagnostics().disconnected).toBe(true);
+    // The command scope's (fake) coordinator keeps reading.
+    expect(reads.coordinator.getDiagnostics().disconnected).toBe(false);
+    expect(getTransportConnectivity()).toEqual({ disconnected: true, since: 1_000 });
+
+    clock = 3_000;
+    setTransportDisconnected("desktop-connection", true);
+    // The aggregate's outage began with the earliest node's.
+    expect(getTransportConnectivity()).toEqual({ disconnected: true, since: 1_000 });
+    expect(notifications).toBe(1);
+
+    // A closing node no longer counts.
+    leaf.dispose();
+    expect(getTransportConnectivity()).toEqual({ disconnected: true, since: 3_000 });
+    setTransportDisconnected("desktop-connection", false);
+    expect(getTransportConnectivity()).toEqual({ disconnected: false, since: null });
+    expect(notifications).toBe(3);
+    stop();
+    unsubscribe();
   });
 });
 

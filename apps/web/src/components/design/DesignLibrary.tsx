@@ -17,7 +17,9 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import { designAction, designApi, failureOf } from "@/lib/design-client";
+import { designAction, designApiFor, failureOf } from "@/lib/design-client";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { useDesignScope } from "./design-scope";
 import {
   runDesignLifecycle,
   validateDesignName,
@@ -40,14 +42,16 @@ export interface DesignLibraryClient {
   exportDocument: (environmentId: string, canvasId: string) => Promise<DesignCanvas>;
 }
 
-export function designLibraryClient(): DesignLibraryClient {
+/** The library of `scope`'s node: the one whose canvases it lists (plan item 4007). */
+export function designLibraryClient(scope: NodeScope): DesignLibraryClient {
+  const api = designApiFor(scope);
   return {
-    list: (environmentId, query) => designApi.library(environmentId, query),
+    list: (environmentId, query) => api.library(environmentId, query),
     lifecycle: (environmentId, canvasId, input, preconditions) =>
-      runDesignLifecycle(environmentId, canvasId, input, preconditions),
-    purge: (environmentId, canvasId) => designApi.purge(environmentId, canvasId),
+      runDesignLifecycle(environmentId, canvasId, input, preconditions, api),
+    purge: (environmentId, canvasId) => api.purge(environmentId, canvasId),
     exportDocument: (environmentId, canvasId) =>
-      designAction<DesignCanvas>(environmentId, "export_canvas", { canvasId }),
+      designAction<DesignCanvas>(environmentId, "export_canvas", { canvasId }, scope),
   };
 }
 
@@ -113,7 +117,8 @@ export function DesignLibrary({
   /** Bump to reload the first page (e.g. after an import). */
   refreshToken?: number;
 }) {
-  const api = useMemo(() => client ?? designLibraryClient(), [client]);
+  const designScope = useDesignScope();
+  const api = useMemo(() => client ?? designLibraryClient(designScope), [client, designScope]);
   const scopeKey = `${backendKey}\u0000${environmentId}`;
   const [search, setSearch] = useState("");
   const [query, setQuery] = useState("");

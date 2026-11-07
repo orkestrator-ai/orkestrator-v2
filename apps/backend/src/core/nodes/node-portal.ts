@@ -1,16 +1,17 @@
+import { nodeOutcomesChangedEvent } from "@orkestrator/protocol/contract/domains/events";
+import type { BackendEmit } from "../backend-emit.js";
 import { randomUUID } from "node:crypto";
 
 import { parseBackendProfile } from "@orkestrator/protocol/backend-profile";
 import type { NodeView } from "@orkestrator/protocol/command-nodes";
 import { isBackendId, type BackendId } from "@orkestrator/protocol/federation";
-import {
-  NODE_OUTCOMES_CHANGED_EVENT,
-  type NodeSummariesResult,
-} from "@orkestrator/protocol/node-summaries";
+import type { NodeSummariesResult } from "@orkestrator/protocol/node-summaries";
+import type { NegotiatedDomains } from "@orkestrator/protocol/node-client";
 
 import { ClientGrantService, MAX_GRANT_TTL_MS, type ClientGrant } from "./client-grants.js";
+import { FleetUpdatePolicyRunner, type FleetUpdatePolicyStore } from "./fleet-update-policy.js";
 import { NodeEventRelay } from "./node-event-relay.js";
-import { NodeUnavailableError } from "./node-link.js";
+import { NodeUnavailableError, type ContractEnvelope } from "./node-link.js";
 import {
   NodeReadModel,
   type ReadModelLocal,
@@ -71,6 +72,8 @@ export class NodePortal {
   readonly events: NodeEventRelay;
   readonly outcomes: NodeOutcomeLedger;
   readonly grants: ClientGrantService;
+  /** The opt-in "keep leaves on this node's version" policy (plan item 5006). */
+  readonly fleetUpdates: FleetUpdatePolicyRunner;
   private readonly workspaces = new Map<string, NodeWorkspace>();
   /** Runs after a routed command succeeded (environment seed files after create_environment). */
   afterRouted:
@@ -85,10 +88,13 @@ export class NodePortal {
   constructor(
     private readonly options: {
       nodes: NodeService;
-      emit: (event: string, payload: unknown) => void;
+      emit: BackendEmit;
       summaries?: ReadModelPersistence;
       /** This node's own commands, for its self summary. */
       local?: ReadModelLocal;
+      /** This node's own version and hello domains (the hello identity). */
+      selfHello?: () => Promise<{ appVersion: string; domains: NegotiatedDomains }>;
+      fleetUpdatePolicy?: FleetUpdatePolicyStore;
       outcomes?: { load(): Promise<unknown>; save(value: unknown): Promise<void> };
       fetchImpl?: typeof fetch;
       now?: () => number;
@@ -99,7 +105,15 @@ export class NodePortal {
       emit: options.emit,
       ...(options.summaries ? { persistence: options.summaries } : {}),
       ...(options.local ? { local: options.local } : {}),
+      ...(options.selfHello ? { selfHello: options.selfHello } : {}),
       ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
+      ...(options.now ? { now: options.now } : {}),
+    });
+    const selfHello = options.selfHello;
+    this.fleetUpdates = new FleetUpdatePolicyRunner({
+      nodes: options.nodes,
+      ...(options.fleetUpdatePolicy ? { store: options.fleetUpdatePolicy } : {}),
+      selfVersion: async () => (selfHello ? (await selfHello()).appVersion : ""),
       ...(options.now ? { now: options.now } : {}),
     });
     this.events = new NodeEventRelay({
@@ -109,7 +123,7 @@ export class NodePortal {
       ...(options.now ? { now: options.now } : {}),
     });
     this.outcomes = new NodeOutcomeLedger(options.outcomes, (nodeId) => {
-      options.emit(NODE_OUTCOMES_CHANGED_EVENT, { nodeId });
+      options.emit(nodeOutcomesChangedEvent, { nodeId });
     });
     this.grants = new ClientGrantService(options.now);
     options.nodes.onControllerDetached((controllerId) => {
@@ -121,11 +135,13 @@ export class NodePortal {
     await this.outcomes.restore();
     await this.readModel.start();
     this.events.start();
+    await this.fleetUpdates.start();
   }
 
   stop(): void {
     this.readModel.stop();
     this.events.stop();
+    this.fleetUpdates.stop();
     this.grants.revokeAll();
     this.workspaces.clear();
   }
@@ -146,7 +162,15 @@ export class NodePortal {
     });
   }
 
-  async invokeOnNode(args: Record<string, unknown>): Promise<RoutedResult<unknown>> {
+  /**
+   * Route one command to a node. `options.envelope` is for this backend's own
+   * domain clients (plan item 1010): the contract envelope they picked for that
+   * node, sent with the command. A client's `invoke_on_node` never sets it.
+   */
+  async invokeOnNode(
+    args: Record<string, unknown>,
+    options: { envelope?: ContractEnvelope } = {},
+  ): Promise<RoutedResult<unknown>> {
     const nodeId = args.nodeId;
     if (!isBackendId(nodeId)) throw new Error("Expected nodeId to be a node identity.");
     if (typeof args.command !== "string" || !args.command) throw new Error("Expected command.");
@@ -160,6 +184,7 @@ export class NodePortal {
       command: args.command,
       args: commandArgs,
       ...(typeof args.requestKey === "string" ? { requestKey: args.requestKey.slice(0, 128) } : {}),
+      ...(options.envelope ? { envelope: options.envelope } : {}),
       outcomes: this.outcomes,
     });
     if (result.outcome === "ok") {
@@ -305,6 +330,17 @@ export class NodePortal {
         .catch(() => undefined);
     }
     return { closed: true };
+  }
+
+  /**
+   * Whether `workspaceId` is open on this command node for `nodeId` and not
+   * past its grant's expiry: the multiplexed relay stream carries a node only
+   * for a client that opened its workspace (plan item 5005).
+   */
+  workspaceOpenFor(workspaceId: string, nodeId: BackendId): boolean {
+    const workspace = this.workspaces.get(workspaceId);
+    if (!workspace || workspace.nodeId !== nodeId) return false;
+    return workspace.expiresAt > (this.options.now ?? Date.now)();
   }
 
   private pruneWorkspaces(): void {

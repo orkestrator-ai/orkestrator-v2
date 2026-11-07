@@ -1,15 +1,17 @@
-import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { buildPipelineStore } from "@/stores/buildPipelineStore";
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 import type { Environment, Project } from "@/types";
-import { useConfigStore } from "@/stores/configStore";
-import { useEnvironmentStore } from "@/stores";
-import { usePrMonitorStore } from "@/stores/prMonitorStore";
+import { configStore } from "@/stores/configStore";
+import { environmentStore } from "@/stores";
+import { prMonitorStore } from "@/stores/prMonitorStore";
 import { useMachineViewStore } from "@/stores/machineViewStore";
-import { useUIStore } from "@/stores/uiStore";
+import { uiStore } from "@/stores/uiStore";
 import { TAB_STRIP_CLASS, WORKSPACE_BAR_HEIGHT_CLASS } from "@/components/pane-layout/TabShell";
 import { ProjectSearchBar, searchShortcutLabel } from "./ProjectSearchBar";
+import { appCommandStore } from "@/test/app-command-store";
 
 const initialMachineView = useMachineViewStore.getState();
 
@@ -73,7 +75,7 @@ function renderSearchBar(
     onSelectProject,
     onSelectEnvironment,
   };
-  const view = render(<ProjectSearchBar {...props} />);
+  const view = renderInAppCommandScope(<ProjectSearchBar {...props} />);
   return {
     onSelectProject,
     onSelectEnvironment,
@@ -108,8 +110,8 @@ describe("ProjectSearchBar", () => {
       HTMLElement.prototype.scrollIntoView = () => {};
     }
     useMachineViewStore.setState(initialMachineView, true);
-    useUIStore.setState({ recentProjectIds: ["project-1"] });
-    useConfigStore.setState((state) => ({
+    appCommandStore(uiStore).setState({ recentProjectIds: ["project-1"] });
+    appCommandStore(configStore).setState((state) => ({
       config: {
         ...state.config,
         repositories: {
@@ -134,7 +136,7 @@ describe("ProjectSearchBar", () => {
       name: id,
       order,
     }));
-    useUIStore.setState({ recentProjectIds: ["legacy", "overlap"] });
+    appCommandStore(uiStore).setState({ recentProjectIds: ["legacy", "overlap"] });
     useMachineViewStore.setState({ recentKeys: ["modern", "overlap"] });
     renderSearchBar({ projects, environments: [] });
     await openSearch();
@@ -233,11 +235,11 @@ describe("ProjectSearchBar", () => {
       hasMergeConflicts: false,
       prMergeability: "clean",
     };
-    const initialEnvironments = useEnvironmentStore.getState().environments;
-    const initialMonitor = usePrMonitorStore.getState();
+    const initialEnvironments = appCommandStore(environmentStore).getState().environments;
+    const initialMonitor = appCommandStore(prMonitorStore).getState();
     try {
-      useEnvironmentStore.setState({ environments: [ready, containerEnvironment] });
-      usePrMonitorStore.setState({
+      appCommandStore(environmentStore).setState({ environments: [ready, containerEnvironment] });
+      appCommandStore(prMonitorStore).setState({
         syncStatus: "current",
         states: new Map([
           [
@@ -276,7 +278,7 @@ describe("ProjectSearchBar", () => {
       ).toBe(true);
 
       act(() =>
-        useEnvironmentStore.setState({
+        appCommandStore(environmentStore).setState({
           environments: [{ ...ready, prState: "merged" }, containerEnvironment],
         }),
       );
@@ -287,8 +289,8 @@ describe("ProjectSearchBar", () => {
     } finally {
       // Unmount first so restoring the shared stores does not re-render the bar.
       cleanup();
-      useEnvironmentStore.setState({ environments: initialEnvironments });
-      usePrMonitorStore.setState(initialMonitor, true);
+      appCommandStore(environmentStore).setState({ environments: initialEnvironments });
+      appCommandStore(prMonitorStore).setState(initialMonitor, true);
     }
   });
 
@@ -302,14 +304,16 @@ describe("ProjectSearchBar", () => {
       hasMergeConflicts: false,
       prMergeability: "unstable",
     };
-    const initialEnvironments = useEnvironmentStore.getState().environments;
-    const initialMonitor = usePrMonitorStore.getState();
-    const initialConfig = useConfigStore.getState().config;
+    const initialEnvironments = appCommandStore(environmentStore).getState().environments;
+    const initialMonitor = appCommandStore(prMonitorStore).getState();
+    const initialConfig = appCommandStore(configStore).getState().config;
     const readyName = () =>
       screen.getByTestId("project-search-item-env-local").querySelector("[data-merge-ready]");
     try {
-      useEnvironmentStore.setState({ environments: [unstable, containerEnvironment] });
-      usePrMonitorStore.setState({
+      appCommandStore(environmentStore).setState({
+        environments: [unstable, containerEnvironment],
+      });
+      appCommandStore(prMonitorStore).setState({
         syncStatus: "current",
         states: new Map([
           [
@@ -334,16 +338,24 @@ describe("ProjectSearchBar", () => {
       // Require checks to pass is on when absent.
       expect(readyName() === null).toBe(true);
 
-      act(() => useConfigStore.getState().updateGlobalConfig({ autoMergeRequireChecks: false }));
+      act(() =>
+        appCommandStore(configStore)
+          .getState()
+          .updateGlobalConfig({ autoMergeRequireChecks: false }),
+      );
       expect(readyName()?.classList).toContain("text-shimmer");
 
-      act(() => useConfigStore.getState().updateGlobalConfig({ autoMergeRequireChecks: true }));
+      act(() =>
+        appCommandStore(configStore)
+          .getState()
+          .updateGlobalConfig({ autoMergeRequireChecks: true }),
+      );
       expect(readyName() === null).toBe(true);
     } finally {
       cleanup();
-      useEnvironmentStore.setState({ environments: initialEnvironments });
-      usePrMonitorStore.setState(initialMonitor, true);
-      useConfigStore.setState({ config: initialConfig });
+      appCommandStore(environmentStore).setState({ environments: initialEnvironments });
+      appCommandStore(prMonitorStore).setState(initialMonitor, true);
+      appCommandStore(configStore).setState({ config: initialConfig });
     }
   });
 
@@ -352,9 +364,9 @@ describe("ProjectSearchBar", () => {
     ["merge-conflicts", "Merge conflicts to resolve"],
     ["merge-ready", "Ready to merge"],
   ])("search describes %s and clears it when deletion starts", async (signal, label) => {
-    const initialEnvironments = useEnvironmentStore.getState();
-    const initialMonitor = usePrMonitorStore.getState();
-    const initialBuild = useBuildPipelineStore.getState();
+    const initialEnvironments = appCommandStore(environmentStore).getState();
+    const initialMonitor = appCommandStore(prMonitorStore).getState();
+    const initialBuild = appCommandStore(buildPipelineStore).getState();
     const environment: Environment = {
       ...localEnvironment,
       agentActivityState: signal === "needs-answer" ? "waiting" : "idle",
@@ -365,11 +377,11 @@ describe("ProjectSearchBar", () => {
       prMergeability: signal === "merge-conflicts" ? "dirty" : "clean",
     };
     try {
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [environment],
         deletingEnvironments: new Set(),
       });
-      usePrMonitorStore.setState({
+      appCommandStore(prMonitorStore).setState({
         syncStatus: "current",
         states: new Map([
           [
@@ -398,20 +410,24 @@ describe("ProjectSearchBar", () => {
       );
       if (signal === "needs-answer") {
         act(() =>
-          useBuildPipelineStore.setState({ activeBuildEnvironmentIds: new Set([environment.id]) }),
+          appCommandStore(buildPipelineStore).setState({
+            activeBuildEnvironmentIds: new Set([environment.id]),
+          }),
         );
         expect(row.querySelector('[data-name-signal="merge-ready"]')).toBeTruthy();
-        act(() => useBuildPipelineStore.setState({ activeBuildEnvironmentIds: new Set() }));
+        act(() =>
+          appCommandStore(buildPipelineStore).setState({ activeBuildEnvironmentIds: new Set() }),
+        );
         expect(row.querySelector('[data-name-signal="needs-answer"]')).toBeTruthy();
       }
-      act(() => useEnvironmentStore.getState().setDeleting(environment.id, true));
+      act(() => appCommandStore(environmentStore).getState().setDeleting(environment.id, true));
       expect(row.querySelector(".text-shimmer") === null).toBe(true);
       expect(row.hasAttribute("aria-describedby")).toBe(false);
     } finally {
       cleanup();
-      useBuildPipelineStore.setState(initialBuild, true);
-      useEnvironmentStore.setState(initialEnvironments, true);
-      usePrMonitorStore.setState(initialMonitor, true);
+      appCommandStore(buildPipelineStore).setState(initialBuild, true);
+      appCommandStore(environmentStore).setState(initialEnvironments, true);
+      appCommandStore(prMonitorStore).setState(initialMonitor, true);
     }
   });
 

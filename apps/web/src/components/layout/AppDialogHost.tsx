@@ -7,7 +7,14 @@ import {
 } from "@/components/sidebar/HierarchicalSidebar";
 import { useEnvironments } from "@/hooks";
 import { useProjects } from "@/hooks/useProjects";
-import * as backend from "@/lib/backend";
+import { backendForScope } from "@/lib/backend/scope-backend";
+import {
+  NodeScopeProvider,
+  useNodeScope,
+  useScopesWithCommandFallback,
+  useSignal,
+  WindowScopeProvider,
+} from "@/lib/node-scope/providers";
 import { useAppDialogStore } from "@/stores/appDialogStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
@@ -25,8 +32,36 @@ const LazyRepositorySettings = lazy(async () => ({
   default: (await import("@/components/settings/RepositorySettings")).RepositorySettings,
 }));
 
-/** Renders the dialog `useAppDialogStore` holds, outside every drawer and row. */
+/**
+ * Renders the dialog `useAppDialogStore` holds, outside every drawer and row,
+ * inside the scope of the node the request names. A request for a node this
+ * window has no scope for is dropped rather than shown against another
+ * node's data.
+ */
 export function AppDialogHost() {
+  const request = useAppDialogStore((state) => state.request);
+  const close = useAppDialogStore((state) => state.close);
+  const { windowScope } = useScopesWithCommandFallback();
+  // Re-resolve when scopes open or close, so a closed node's request is dropped.
+  useSignal(windowScope.nodeScopes);
+  const scope = request ? windowScope.get(request.nodeId) : null;
+  const unresolved = request !== null && scope === null;
+  useEffect(() => {
+    if (unresolved) close();
+  }, [close, unresolved]);
+
+  if (!scope) return null;
+  // Keyed by node: the same id on another node is another dialog.
+  return (
+    <WindowScopeProvider windowScope={windowScope}>
+      <NodeScopeProvider key={scope.nodeId} scope={scope}>
+        <AppDialogContent />
+      </NodeScopeProvider>
+    </WindowScopeProvider>
+  );
+}
+
+function AppDialogContent() {
   const request = useAppDialogStore((state) => state.request);
   const requestSequence = useAppDialogStore((state) => state.requestSequence);
   switch (request?.kind) {
@@ -57,6 +92,8 @@ function EnvironmentSettingsHost({
   section?: "container";
   sectionRequest: number;
 }) {
+  // This node's backend (plan item 4001); the command node outside a node scope.
+  const backendScope = useScopesWithCommandFallback().scope;
   const close = useAppDialogStore((state) => state.close);
   const environment = useEnvironmentStore(
     (state) => state.environments.find((candidate) => candidate.id === environmentId) ?? null,
@@ -86,21 +123,29 @@ function EnvironmentSettingsHost({
         initialSection={section}
         sectionRequest={sectionRequest}
         onUpdate={(updated) => updateEnvironment(updated.id, updated)}
-        onRestart={backend.recreateEnvironment}
+        onRestart={backendForScope(backendScope).recreateEnvironment}
       />
     </LazyLoadBoundary>
   );
 }
 
-/** The request's project, dropping the request once the project is gone. */
+/**
+ * The request's project, dropping the request once the project is gone.
+ *
+ * A hydration check (plan item 5003): a node opened in the window's tree a
+ * moment ago may not have read its projects yet, so the request waits for
+ * the node's first project list (and any read in flight) before it decides
+ * the project is gone.
+ */
 function useRequestedProject(projectId: string) {
   const close = useAppDialogStore((state) => state.close);
   const project = useProjectStore(
     (state) => state.projects.find((candidate) => candidate.id === projectId) ?? null,
   );
+  const projectsLoaded = useProjectStore((state) => state.hasLoaded && !state.isLoading);
   useEffect(() => {
-    if (!project) close();
-  }, [close, project]);
+    if (!project && projectsLoaded) close();
+  }, [close, project, projectsLoaded]);
   return { project, close };
 }
 
@@ -130,6 +175,7 @@ function DeleteProjectHost({ projectId }: { projectId: string }) {
   const { project, close } = useRequestedProject(projectId);
   const { removeProject } = useProjects();
   const { deleteEnvironment } = useEnvironments(null);
+  const scope = useNodeScope();
   // Includes the project home, which has no sidebar row and is not counted.
   const environments = useEnvironmentStore((state) => state.environments);
   const projectEnvironments = environments.filter(
@@ -149,13 +195,14 @@ function DeleteProjectHost({ projectId }: { projectId: string }) {
       }
       onConfirm={async () => {
         try {
-          // A cold realm or a missed update can leave the renderer list empty.
+          // A cold node scope or a missed update can leave the renderer list empty.
           // A failed owner read must retain the project and allow a retry.
           await deleteProjectAndEnvironments(
             projectId,
-            await backend.getEnvironmentSnapshots(projectId),
+            await backendForScope(scope).getEnvironmentSnapshots(projectId),
             deleteEnvironment,
             removeProject,
+            scope,
           );
         } catch (error) {
           log.error("project.delete-failed", { projectId, error: formatLogError(error) });

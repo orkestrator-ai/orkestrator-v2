@@ -13,7 +13,12 @@
  * metadata: never data paths, auth-file locations or credentials.
  */
 
+import { isDomainNameShape, MAX_DOMAIN_VERSION } from "./contract/domain.js";
 import { isBackendId, type BackendId } from "./federation.js";
+import { createLogger } from "./logger.js";
+import type { NegotiatedDomainRange, NegotiatedDomains } from "./node-client.js";
+
+const contractLog = createLogger("contract");
 
 export const MACHINE_COLOR_TOKENS = [
   "violet",
@@ -274,6 +279,60 @@ export interface BackendHello {
   authorizationScopeId?: string;
   /** Command-node role; absent from backends that predate command nodes. */
   nodeMode?: "standalone" | "command" | "leaf";
+  /**
+   * The contract domains this backend accepts, each as the version range
+   * `{ min, max }` (docs/reports/unified-federation.md §11.2 "Negotiation",
+   * plan item 1004). A top-level field, never part of `capabilities`, and the
+   * schema version stays 1: older parsers rebuild the hello field by field, so
+   * they drop it unseen. Absent from a pre-contract backend (every release
+   * before this field, §11.4) and from a hello whose `domains` was malformed;
+   * see {@link isPreContract}. Domain names this build does not know are kept.
+   */
+  domains?: NegotiatedDomains;
+}
+
+/** The most domains a hello may advertise, the same bound as its capabilities. */
+export const MAX_HELLO_DOMAINS = 64;
+
+/** Why a hello's `domains` was dropped; logged as `reason`, never the names or values. */
+export type HelloDomainsProblem = "not-object" | "too-many" | "invalid-name" | "invalid-range";
+
+function isHelloDomainVersion(value: unknown): value is number {
+  return (
+    Number.isSafeInteger(value) && (value as number) >= 0 && (value as number) <= MAX_DOMAIN_VERSION
+  );
+}
+
+/**
+ * Parses a hello's `domains` field, all or nothing: at most
+ * {@link MAX_HELLO_DOMAINS} entries, each name in the capability name shape
+ * (`isDomainNameShape`), each range a pair of integers with
+ * `0 <= min <= max <= 1000`. Unknown names are kept (a newer peer may speak a
+ * newer domain) and unknown keys inside a range are dropped. Anything else is
+ * a problem, and the caller drops the whole field rather than keep part of a
+ * list it cannot trust.
+ */
+export function parseHelloDomains(
+  value: unknown,
+): { ok: true; domains: NegotiatedDomains } | { ok: false; problem: HelloDomainsProblem } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { ok: false, problem: "not-object" };
+  }
+  const entries = Object.entries(value as Record<string, unknown>);
+  if (entries.length > MAX_HELLO_DOMAINS) return { ok: false, problem: "too-many" };
+  const domains: Record<string, NegotiatedDomainRange> = {};
+  for (const [name, range] of entries) {
+    if (!isDomainNameShape(name)) return { ok: false, problem: "invalid-name" };
+    if (!range || typeof range !== "object" || Array.isArray(range)) {
+      return { ok: false, problem: "invalid-range" };
+    }
+    const { min, max } = range as { min?: unknown; max?: unknown };
+    if (!isHelloDomainVersion(min) || !isHelloDomainVersion(max) || min > max) {
+      return { ok: false, problem: "invalid-range" };
+    }
+    domains[name] = { min, max };
+  }
+  return { ok: true, domains };
 }
 
 export function parseBackendHello(value: unknown): BackendHello {
@@ -347,7 +406,38 @@ export function parseBackendHello(value: unknown): BackendHello {
       128,
     );
   }
+  if (record.domains !== undefined) {
+    // A malformed `domains` never refuses the hello: the peer is treated as
+    // pre-contract and keeps the legacy path (§11.4).
+    const parsed = parseHelloDomains(record.domains);
+    if (parsed.ok) hello.domains = parsed.domains;
+    else contractLog.warn("hello.domains-malformed", { reason: parsed.problem });
+  }
   return hello;
+}
+
+/**
+ * The version range a hello advertises for one domain, or `undefined` when it
+ * advertises none: a pre-contract node, or a domain it has no defined
+ * commands in yet. Both mean the legacy version 0 (`pickVersion`).
+ */
+export function domainRange(
+  hello: Pick<BackendHello, "domains"> | null | undefined,
+  name: string,
+): NegotiatedDomainRange | undefined {
+  const domains = hello?.domains;
+  // Own keys only: a name such as `constructor` must not read the prototype.
+  return domains && Object.hasOwn(domains, name) ? domains[name] : undefined;
+}
+
+/**
+ * Whether a backend predates contract domains (§11.4): its hello has no
+ * `domains` (or had a malformed one), or it answered no hello at all. Such a
+ * node gets today's capability-gated behaviour through each domain's legacy
+ * adapter.
+ */
+export function isPreContract(hello: Pick<BackendHello, "domains"> | null | undefined): boolean {
+  return hello?.domains === undefined;
 }
 
 export function isClientApiCompatible(hello: Pick<BackendHello, "clientApi">): boolean {

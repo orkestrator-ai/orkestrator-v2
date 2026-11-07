@@ -1,3 +1,4 @@
+import { registrarFrom } from "./commands-registry-contracts.js";
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
@@ -86,9 +87,12 @@ describe("defaultProjectLocation", () => {
 describe("project clone jobs", () => {
   function commands(run: () => Promise<{ stdout: string; stderr: string }>) {
     const registry = new Map<string, CommandHandler>();
-    registerProjectCopyCommands((name, handler) => registry.set(name, handler), {
-      runProjectCreationCommand: run as never,
-    });
+    registerProjectCopyCommands(
+      registrarFrom((name, handler) => registry.set(name, handler)),
+      {
+        runProjectCreationCommand: run as never,
+      },
+    );
     const context = {
       storage: {
         loadProjects: async () => [],

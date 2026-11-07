@@ -10,7 +10,8 @@ import {
   COMMAND_NODE_COORDINATOR_MAIL_ADDRESS,
   coordinatorRuntimeId,
 } from "@orkestrator/protocol/coordinator";
-import { z } from "zod";
+import { Schema } from "effect";
+import { describe, int, list, refine, str, toolInput, withDefault } from "./tool-schema.js";
 import { mailboxFingerprint, pollKey } from "./control-mcp-poll-guard.js";
 import { onNode as callerOnNode } from "./control-mcp-caller.js";
 import {
@@ -89,25 +90,24 @@ export function registerMailTools(
         description: coordinatorScope
           ? "List durable agent-message destinations without transcript or filesystem content. With environmentId, lists that environment's mailboxes; for a pipeline environment that is one mailbox per build pipeline worker (build, each reviewer, preparation, consolidation, address, verify, fix, PR, conflict resolution, every round), each with its address (tabId), pipelineWorker step, round, slot, label, agent, model and status (running, idle, finished, failed, cancelled). With nodeId and environmentId, lists that node's environment the same way; with nodeId alone, says whether that node's copy of this project has a coordinator you can reach with send_message, nodeId and toEnvironmentId \"coordinator\"."
           : "List durable agent-message destinations without transcript or filesystem content.",
-        inputSchema: z.object({
-          q: z.string().trim().max(200).optional(),
-          ...(coordinatorScope
-            ? {
-                environmentId: z
-                  .string()
-                  .trim()
-                  .min(1)
-                  .max(200)
-                  .optional()
-                  .describe(
-                    "Only this environment's mailboxes, including its build pipeline workers.",
+        inputSchema: toolInput(
+          Schema.Struct({
+            q: Schema.optionalKey(str({ trim: true, max: 200 })),
+            ...(coordinatorScope
+              ? {
+                  environmentId: Schema.optionalKey(
+                    describe(
+                      str({ trim: true, min: 1, max: 200 }),
+                      "Only this environment's mailboxes, including its build pipeline workers.",
+                    ),
                   ),
-              }
-            : {}),
-          offset: z.number().int().min(0).default(0),
-          limit: z.number().int().min(1).max(200).default(100),
-          nodeId: nodeIdField,
-        }),
+                }
+              : {}),
+            offset: withDefault(int({ min: 0 }), 0),
+            limit: withDefault(int({ min: 1, max: 200 }), 100),
+            nodeId: nodeIdField,
+          }),
+        ),
         annotations: readAnnotations(),
       },
       async ({ q, offset, limit, nodeId, ...filters }) => {
@@ -163,57 +163,55 @@ export function registerMailTools(
         description: coordinatorScope
           ? 'Durably send an authenticated same-project delegation or reply from this coordinator conversation. toTabId may be omitted: an environment resolves to the tab you are waiting on or its only agent tab. A pipeline environment never resolves that way: name one build pipeline worker with toTabId set to its address from list_mailboxes (with environmentId) or get_build_pipeline. The message goes to that worker only and is never re-routed; a worker that has finished, failed or been cancelled refuses it, and mail still queued when its worker ends expires and you are told. Queued mail reaches the worker as its next turn when its current turn ends, before the pipeline moves on; deliverNow steers it into the running turn. Side agents and the main coordinator reach each other through toEnvironmentId "coordinator" (to the main) or the side agent\'s environment id from list_mailboxes. To pass on an image the user pasted to you, do not describe it in words: name it in attachments; the backend copies it, you need no file access, and the recipient gets a path it can open. On a command node, nodeId with toEnvironmentId "coordinator" asks that node\'s main coordinator for this project (list_mailboxes with nodeId says whether it has one); its answer arrives as mail. On a node in leaf mode, toEnvironmentId "command-node-coordinator" starts a message to the controlling command node\'s coordinator, and replyToMessageId answers its mail; that is the only cross-node send there. A busy worker normally receives mail when its turn ends. Set deliverNow only for a course correction the worker must see mid-turn ("add this to your task", "stop, the requirement changed"), not for routine follow-ups or replies: if the worker\'s agent can steer, the message is steered into its running turn. The result\'s deliverNow says what happened: steered, delivered (worker was idle), queued until idle, unsupported, queued (agent cannot take mail mid-turn), verifying (steer handed off, being confirmed; never sent twice), or not queued. The project home (the user\'s own checkout) is for exceptional circumstances only: a message to it needs projectHomeReason, and is held for the user\'s approval unless you messaged it in the last 3 hours. Messages with images always need their own approval; their files are kept outside the user\'s checkout.'
           : "Durably place text in one Orkestrator tab inbox. External messages are never auto-injected into an agent turn.",
-        inputSchema: z.object({
-          requestId: z.string().trim().min(1).max(256),
-          toEnvironmentId: z.string().trim().min(1).max(200),
-          toTabId: coordinatorScope
-            ? z.string().trim().min(1).max(200).optional()
-            : z.string().trim().min(1).max(200),
-          subject: z.string().trim().max(200).optional(),
-          body: z
-            .string()
-            .min(1)
-            .refine(
-              (value) => Buffer.byteLength(value, "utf8") <= 32 * 1024,
-              "body must be at most 32 KiB UTF-8",
+        inputSchema: toolInput(
+          Schema.Struct({
+            requestId: str({ trim: true, min: 1, max: 256 }),
+            toEnvironmentId: str({ trim: true, min: 1, max: 200 }),
+            toTabId: coordinatorScope
+              ? Schema.optionalKey(str({ trim: true, min: 1, max: 200 }))
+              : str({ trim: true, min: 1, max: 200 }),
+            subject: Schema.optionalKey(str({ trim: true, max: 200 })),
+            body: str({ min: 1 }).check(
+              refine(
+                (value) => Buffer.byteLength(value, "utf8") <= 32 * 1024,
+                "body must be at most 32 KiB UTF-8",
+              ),
             ),
-          replyToMessageId: z.string().trim().min(1).max(300).optional(),
-          ...(coordinatorScope
-            ? {
-                attachments: z
-                  .array(z.string().trim().min(1).max(1024))
-                  .min(1)
-                  .max(
-                    AGENT_MAIL_MAX_ATTACHMENTS,
-                    `A message can carry at most ${AGENT_MAIL_MAX_ATTACHMENTS} images.`,
-                  )
-                  .optional()
-                  .describe(
-                    `Images the user pasted into this conversation, by the path you were given with each one. They reach the recipient wherever it is: an agent tab, build pipeline worker, container, side agent or coordinator, on this node or another. PNG, JPEG, GIF or WebP, at most ${AGENT_MAIL_MAX_ATTACHMENT_BYTES / (1024 * 1024)} MiB each. Copied before sending: if a copy fails, no message is sent and you are told why; retry with the same requestId.`,
+            replyToMessageId: Schema.optionalKey(str({ trim: true, min: 1, max: 300 })),
+            ...(coordinatorScope
+              ? {
+                  attachments: Schema.optionalKey(
+                    describe(
+                      list(str({ trim: true, min: 1, max: 1024 }), {
+                        min: 1,
+                        max: AGENT_MAIL_MAX_ATTACHMENTS,
+                        maxMessage: `A message can carry at most ${AGENT_MAIL_MAX_ATTACHMENTS} images.`,
+                      }),
+                      `Images the user pasted into this conversation, by the path you were given with each one. They reach the recipient wherever it is: an agent tab, build pipeline worker, container, side agent or coordinator, on this node or another. PNG, JPEG, GIF or WebP, at most ${AGENT_MAIL_MAX_ATTACHMENT_BYTES / (1024 * 1024)} MiB each. Copied before sending: if a copy fails, no message is sent and you are told why; retry with the same requestId.`,
+                    ),
                   ),
-                deliverNow: z
-                  .boolean()
-                  .optional()
-                  .describe(
-                    "Steer this message into the worker's running turn instead of waiting for it to end. For course corrections only. Default false.",
+                  deliverNow: Schema.optionalKey(
+                    describe(
+                      Schema.Boolean,
+                      "Steer this message into the worker's running turn instead of waiting for it to end. For course corrections only. Default false.",
+                    ),
                   ),
-                projectHomeReason: z
-                  .string()
-                  .trim()
-                  .min(1)
-                  .max(500)
-                  .optional()
-                  .describe(
-                    "Required only when toEnvironmentId is the project home: why an isolated environment will not do. Shown to the user if the message needs their approval.",
+                  projectHomeReason: Schema.optionalKey(
+                    describe(
+                      str({ trim: true, min: 1, max: 500 }),
+                      "Required only when toEnvironmentId is the project home: why an isolated environment will not do. Shown to the user if the message needs their approval.",
+                    ),
                   ),
-              }
-            : {}),
-          nodeId: nodeIdField.describe(
-            coordinatorScope
-              ? 'Message an agent on that node (a nodeId from list_nodes); toEnvironmentId is that node\'s environment, or "coordinator" for its main coordinator. A reply to mail from another node goes back to it without nodeId.'
-              : "Message an agent on that machine (a nodeId from list_nodes); toEnvironmentId is that machine's environment. Omit for this machine.",
-          ),
-        }),
+                }
+              : {}),
+            nodeId: describe(
+              nodeIdField,
+              coordinatorScope
+                ? 'Message an agent on that node (a nodeId from list_nodes); toEnvironmentId is that node\'s environment, or "coordinator" for its main coordinator. A reply to mail from another node goes back to it without nodeId.'
+                : "Message an agent on that machine (a nodeId from list_nodes); toEnvironmentId is that machine's environment. Omit for this machine.",
+            ),
+          }),
+        ),
         annotations: {
           readOnlyHint: false,
           destructiveHint: true,
@@ -366,13 +364,15 @@ export function registerMailTools(
           title: "Read mailbox messages",
           description:
             "Read a bounded mailbox page. Coordinator credentials may only read their own conversation mailbox.",
-          inputSchema: z.object({
-            environmentId: z.string().trim().min(1).max(200),
-            tabId: z.string().trim().min(1).max(200),
-            unreadOnly: z.boolean().default(false),
-            offset: z.number().int().min(0).default(0),
-            limit: z.number().int().min(1).max(200).default(100),
-          }),
+          inputSchema: toolInput(
+            Schema.Struct({
+              environmentId: str({ trim: true, min: 1, max: 200 }),
+              tabId: str({ trim: true, min: 1, max: 200 }),
+              unreadOnly: withDefault(Schema.Boolean, false),
+              offset: withDefault(int({ min: 0 }), 0),
+              limit: withDefault(int({ min: 1, max: 200 }), 100),
+            }),
+          ),
           annotations: readAnnotations(),
         },
         async (input) => {
@@ -394,11 +394,13 @@ export function registerMailTools(
         {
           title: "Get a mailbox message",
           description: "Read one message body from this coordinator conversation's own mailbox.",
-          inputSchema: z.object({
-            environmentId: z.string().trim().min(1).max(200),
-            tabId: z.string().trim().min(1).max(200),
-            messageId: z.string().trim().min(1).max(300),
-          }),
+          inputSchema: toolInput(
+            Schema.Struct({
+              environmentId: str({ trim: true, min: 1, max: 200 }),
+              tabId: str({ trim: true, min: 1, max: 200 }),
+              messageId: str({ trim: true, min: 1, max: 300 }),
+            }),
+          ),
           annotations: readAnnotations(),
         },
         async (input) => {
@@ -416,7 +418,9 @@ export function registerMailTools(
           title: "Get message delivery status",
           description:
             "Inspect durable stored, pending, injected, acknowledged, and seen state without returning the message body.",
-          inputSchema: z.object({ messageId: z.string().trim().min(1).max(300) }),
+          inputSchema: toolInput(
+            Schema.Struct({ messageId: str({ trim: true, min: 1, max: 300 }) }),
+          ),
           annotations: readAnnotations(),
         },
         async ({ messageId }) => {
@@ -459,11 +463,13 @@ export function registerMailTools(
         {
           title: "Acknowledge a mailbox message",
           description: "Mark a message handled without claiming that its task succeeded.",
-          inputSchema: z.object({
-            environmentId: z.string().trim().min(1).max(200),
-            tabId: z.string().trim().min(1).max(200),
-            messageId: z.string().trim().min(1).max(300),
-          }),
+          inputSchema: toolInput(
+            Schema.Struct({
+              environmentId: str({ trim: true, min: 1, max: 200 }),
+              tabId: str({ trim: true, min: 1, max: 200 }),
+              messageId: str({ trim: true, min: 1, max: 300 }),
+            }),
+          ),
           annotations: {
             readOnlyHint: false,
             destructiveHint: false,

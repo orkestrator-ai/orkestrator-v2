@@ -1,0 +1,115 @@
+/**
+ * nodes across versions (plan item 7009): a current renderer's `nodes` client
+ * against each node of the pair, reading the registry, the attachment and the
+ * portal, routing one read through the command node to the leaf, and reading
+ * the leaf-side details a command node's coordinator asks for. Nothing
+ * attaches, detaches, forgets or hands over: the pair's link is the runner's.
+ *
+ * - The command node reports `command` mode and lists the leaf; its portal
+ *   summaries name the leaf; `invoke_on_node` routes `get_node_status` to the
+ *   leaf and answers the leaf's own identity.
+ * - The leaf lists the command node among its controllers and answers a
+ *   worker's details and its project's seed files.
+ * - Both answer their machine profile.
+ *
+ * Version 1 decodes each answer with the definitions' schemas (a node that
+ * advertises `nodes`); version 0 sends today's untyped calls.
+ */
+import { nodesClient } from "@orkestrator/protocol/contract/domains/nodes";
+import { defineScenario } from "../scenario.ts";
+import { expectedRendererAdapter, pairNodes, rendererClient } from "./renderer-client.ts";
+
+const NO_ARGS = undefined as never;
+
+const BOTH = ["get_node_status", "get_backend_profile"];
+const COMMAND = [...BOTH, "list_nodes", "get_node_summaries", "invoke_on_node"];
+const LEAF = [...BOTH, "list_controllers", "read_environment_details", "get_project_seed_files"];
+
+export default defineScenario({
+  domain: "nodes",
+  title: "Registry, attachment, portal and routed reads, from a current renderer",
+  requires: { command: COMMAND, leaf: LEAF },
+  async run(ctx) {
+    for (const node of pairNodes(ctx.command, ctx.leaf)) {
+      const tag = node.role === "command" ? "C" : "L";
+      const { client, version } = rendererClient(node, nodesClient);
+      const nodes = client.api();
+      ctx.check(
+        `NO-${tag}1`,
+        `the renderer picks the adapter ${node.label}'s hello implies`,
+        version === expectedRendererAdapter(node, "nodes"),
+        `picked ${version}`,
+      );
+
+      const status = await nodes.get_node_status(NO_ARGS);
+      const profile = await nodes.get_backend_profile(NO_ARGS);
+      ctx.check(
+        `NO-${tag}2`,
+        "the node reports its identity, mode and machine profile",
+        status.nodeId === node.id &&
+          status.mode === (node.role === "command" ? "command" : "leaf") &&
+          typeof profile.displayName === "string" &&
+          Number.isInteger(profile.revision),
+        `mode ${String(status.mode)}`,
+      );
+
+      if (node.role === "command") {
+        const listed = await nodes.list_nodes(NO_ARGS);
+        const summaries = await nodes.get_node_summaries({});
+        ctx.check(
+          "NO-C3",
+          "the command node lists the leaf and its portal summaries name it",
+          listed.nodes.some((entry) => entry.nodeId === ctx.leaf.id) &&
+            summaries.selfId === node.id &&
+            summaries.nodes.some((entry) => entry.nodeId === ctx.leaf.id),
+          `${listed.nodes.length} nodes, ${summaries.nodes.length} summaries`,
+        );
+        const routed = await nodes.invoke_on_node({
+          nodeId: ctx.leaf.id,
+          command: "get_node_status",
+          args: {},
+          requestKey: `qualification-nodes-${Date.now()}`,
+        });
+        ctx.check(
+          "NO-C4",
+          "invoke_on_node routes a read to the leaf and answers the leaf's own status",
+          routed.outcome === "ok" &&
+            (routed.result as { nodeId?: unknown } | null)?.nodeId === ctx.leaf.id,
+          `outcome ${routed.outcome}`,
+        );
+        if (node.has("get_portal_layout")) {
+          const layout = await nodes.get_portal_layout(NO_ARGS);
+          ctx.check(
+            "NO-C5",
+            "the portal layout reads",
+            Number.isInteger(layout.revision) && Array.isArray(layout.machineOrder),
+          );
+        }
+      } else {
+        const controllers = await nodes.list_controllers(NO_ARGS);
+        ctx.check(
+          "NO-L3",
+          "the leaf lists the command node among its controllers",
+          controllers.some((entry) => entry.controllerId === ctx.command.id),
+          `${controllers.length} controllers`,
+        );
+        const worker = await ctx.fixtures.worker(node);
+        const project = await ctx.fixtures.project(node);
+        const details = await nodes.read_environment_details({
+          environmentId: worker.environmentId,
+          include: [],
+        });
+        const seeds = await nodes.get_project_seed_files({ projectId: project.projectId });
+        ctx.check(
+          "NO-L4",
+          "the leaf answers a worker's details and its project's seed files",
+          details.environmentId === worker.environmentId &&
+            Array.isArray(seeds) &&
+            seeds.every((entry) => typeof entry.path === "string"),
+          `${Array.isArray(seeds) ? seeds.length : 0} seed files`,
+        );
+      }
+      ctx.note(`${node.label} nodes reads`, { adapter: version });
+    }
+  },
+});

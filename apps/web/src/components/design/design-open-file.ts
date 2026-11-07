@@ -1,7 +1,7 @@
 import { DESIGN_EXPORT_NAME, DESIGN_EXPORT_PATH_MAX } from "./design-export-path";
 import { toast } from "sonner";
 import type { CreatableTabType, CreateTabOptions } from "@/contexts/TerminalContext";
-import { designApi, failureOf } from "@/lib/design-client";
+import { failureOf, type DesignV2Api } from "@/lib/design-client";
 
 export const isDesignFilePath = (filePath: string) =>
   filePath.length <= DESIGN_EXPORT_PATH_MAX && DESIGN_EXPORT_NAME.test(filePath);
@@ -16,18 +16,19 @@ export async function openDesignFile(
   relativePath: string,
   createTab: (type: CreatableTabType, options?: CreateTabOptions) => boolean,
   deps: {
-    openFile: typeof designApi.openFile;
-    reportError: (message: string) => void;
-  } = {
-    openFile: designApi.openFile,
-    reportError: (message) => toast.error("Could not open design", { description: message }),
+    /** The environment's node's `openFile` (`designApiFor(scope).openFile`, plan item 4007). */
+    openFile: DesignV2Api["openFile"];
+    reportError?: (message: string) => void;
   },
 ): Promise<void> {
+  const reportError =
+    deps.reportError ??
+    ((message: string) => toast.error("Could not open design", { description: message }));
   try {
     const { canvasId } = await deps.openFile(environmentId, relativePath);
     if (!createTab("design-canvas", { canvasId, designPlacement: "current" }))
-      deps.reportError("The design could not be opened in this layout. Close a tab and try again.");
+      reportError("The design could not be opened in this layout. Close a tab and try again.");
   } catch (error) {
-    deps.reportError(failureOf(error).message);
+    reportError(failureOf(error).message);
   }
 }

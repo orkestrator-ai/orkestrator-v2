@@ -1,4 +1,5 @@
-import { z } from "zod";
+import { Schema } from "effect";
+import { schemaErrorIssues } from "../tool-schema.js";
 import { DESIGN_CONFLICT } from "@orkestrator/protocol/design-canvas";
 import type {
   DesignFailure,
@@ -82,9 +83,13 @@ const SAFE_RUNTIME_MESSAGES = [
 /** Maps any thrown value to a failure without leaking content or paths. */
 export function toDesignFailure(error: unknown): DesignFailure {
   if (error instanceof DesignError) return error.failure;
-  if (error instanceof z.ZodError) {
+  if (Schema.isSchemaError(error)) {
     const fields = Array.from(
-      new Set(error.issues.map((issue) => issue.path.join(".")).filter(Boolean)),
+      new Set(
+        schemaErrorIssues(error)
+          .map((issue) => issue.path.map(String).join("."))
+          .filter(Boolean),
+      ),
     ).slice(0, 8);
     return {
       code: "invalid-input",

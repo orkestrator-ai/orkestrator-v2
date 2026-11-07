@@ -12,14 +12,16 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useOpenCodeProviderLogin } from "@/hooks/useOpenCodeProviderLogin";
 import { isRemoteGatewayConnection } from "@/lib/gateway-url";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { writeText } from "@/lib/native/clipboard";
-import { openInBrowser, setOpenCodeProviderApiKey } from "@/lib/backend";
+import { openInBrowser } from "@/lib/backend";
 import { useAccountMachine } from "@/components/settings/account-machine";
 import type {
   OpenCodeProviderAuthEntry,
   OpenCodeProviderAuthMethod,
   OpenCodeProviderAuthPrompt,
 } from "@orkestrator/protocol/opencode-provider-auth";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 function messageOf(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
@@ -85,7 +87,10 @@ export function OpenCodeProviderSignIn({
   onSignedIn: () => void;
   onCancel?: () => void;
 }) {
-  const remote = isRemoteGatewayConnection();
+  const nodeBackend = useScopeBackend();
+  // The node whose OpenCode signs in (the command node until the account
+  // stores are scoped).
+  const remote = isRemoteGatewayConnection(useScopesWithCommandFallback().scope);
   const [methodIndex, setMethodIndex] = useState(
     () =>
       (remote
@@ -143,7 +148,7 @@ export function OpenCodeProviderSignIn({
     setSaving(true);
     setFormError(null);
     try {
-      await setOpenCodeProviderApiKey(provider.id, apiKey, answers, machine);
+      await nodeBackend.setOpenCodeProviderApiKey(provider.id, apiKey, answers, machine);
       setApiKey("");
       onSignedIn();
     } catch (cause) {

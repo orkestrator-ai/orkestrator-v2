@@ -4,15 +4,16 @@ import { unknownBackendCommandMessage } from "@orkestrator/protocol/unknown-comm
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { listen } from "@/lib/native/events";
-import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
-import { useClaudeOptionsStore } from "@/stores/claudeOptionsStore";
-import { createClaudeTmuxStateKey, useClaudeTmuxStore } from "@/stores/claudeTmuxStore";
-import { useConfigStore } from "@/stores/configStore";
-import { useEnvironmentStore } from "@/stores/environmentStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
-import { useProjectStore } from "@/stores/projectStore";
-import { useUIStore } from "@/stores/uiStore";
-import { useMultiReviewStore } from "@/stores/multiReviewStore";
+import { buildPipelineStore } from "@/stores/buildPipelineStore";
+import { claudeOptionsStore } from "@/stores/claudeOptionsStore";
+import { claudeTmuxStore, createClaudeTmuxStateKey } from "@/stores/claudeTmuxStore";
+import { configStore } from "@/stores/configStore";
+import { environmentStore } from "@/stores/environmentStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
+import { projectStore } from "@/stores/projectStore";
+import { uiStore } from "@/stores/uiStore";
+import { useUIChromeStore } from "@/stores/uiChromeStore";
+import { multiReviewStore } from "@/stores/multiReviewStore";
 import type { AppConfig, Environment } from "@/types";
 import type { DockerAvailability } from "@orkestrator/protocol/docker-availability";
 import { PANE_LAYOUT_VERSION } from "@/types/paneLayout";
@@ -303,14 +304,14 @@ const mockGetScopedResourceRevisionManifest = mock(async () => {
 const mockGetScopedResourceSnapshots = mock(async () => ({ entries: [] }));
 const mockGetEnvironment = mock(
   async (environmentId: string): Promise<Environment | null> =>
-    useEnvironmentStore.getState().getEnvironmentById(environmentId) ?? null,
+    appCommandStore(environmentStore).getState().getEnvironmentById(environmentId) ?? null,
 );
 const mockPrepareEnvironmentAgentLaunch = mock(
   async (
     environmentId: string,
     input: Parameters<typeof realBackend.prepareEnvironmentAgentLaunch>[1],
   ): Promise<Environment> => ({
-    ...(useEnvironmentStore.getState().getEnvironmentById(environmentId) ??
+    ...(appCommandStore(environmentStore).getState().getEnvironmentById(environmentId) ??
       makeEnvironment(environmentId, "project-1")),
     pendingAgentLaunch: true,
     initialAgentPlatform: input.agent,
@@ -411,6 +412,7 @@ import App, {
   HOST_TOOL_STARTUP_CONFIRMATION_DELAY_MS,
 } from "./App";
 import { activateFeatureBuildEnvironment } from "@/lib/feature-build-activation";
+import { appCommandStore } from "@/test/app-command-store";
 
 function deferDockerStartupConfirmation() {
   const originalSetTimeout = window.setTimeout;
@@ -512,53 +514,55 @@ function resetStores({
 }) {
   localStorage.clear();
 
-  useEnvironmentStore.setState({
+  appCommandStore(environmentStore).setState({
     environments,
     isLoading: false,
     error: null,
     deletingEnvironments: new Set(),
   });
 
-  useUIStore.setState({
+  appCommandStore(uiStore).setState({
     selectedProjectId,
     selectedEnvironmentId,
     projectBoardTab: "coordinator",
     recentProjectIds: [],
-    sidebarWidth: 280,
     collapsedProjects: [],
     selectedEnvironmentIds: [],
     expandedSessionsEnvironments: [],
+  });
+  useUIChromeStore.setState({
+    sidebarWidth: 280,
     zoomLevel: 100,
   });
 
-  useBuildPipelineStore.setState({
+  appCommandStore(buildPipelineStore).setState({
     pipelines: new Map(),
     buildEnvironmentIds: new Set(),
   });
 
-  useProjectStore.setState({
+  appCommandStore(projectStore).setState({
     projects: [],
     isLoading: false,
     error: null,
   });
 
-  useConfigStore.setState({
+  appCommandStore(configStore).setState({
     config: mockConfig,
     isLoading: false,
     error: null,
   });
 
-  useClaudeOptionsStore.setState({
+  appCommandStore(claudeOptionsStore).setState({
     options: {},
   });
 
-  usePaneLayoutStore.setState({
+  appCommandStore(paneLayoutStore).setState({
     environments: new Map(),
     hydration: new Map(),
     activeEnvironmentId: null,
   });
 
-  useClaudeTmuxStore.setState({
+  appCommandStore(claudeTmuxStore).setState({
     tabs: new Map(),
     attachments: new Map(),
     draftText: new Map(),
@@ -566,7 +570,7 @@ function resetStores({
     messageQueue: new Map(),
   });
 
-  useMultiReviewStore.setState({ workflows: new Map() });
+  appCommandStore(multiReviewStore).setState({ workflows: new Map() });
 }
 
 function resetAppMocks() {
@@ -613,7 +617,7 @@ function resetAppMocks() {
   mockPrepareEnvironmentAgentLaunch.mockClear();
   mockGetEnvironment.mockImplementation(
     async (environmentId: string) =>
-      useEnvironmentStore.getState().getEnvironmentById(environmentId) ?? null,
+      appCommandStore(environmentStore).getState().getEnvironmentById(environmentId) ?? null,
   );
   mockSavePaneLayout.mockClear();
   mockApplyPaneLayoutIntent.mockClear();
@@ -724,7 +728,7 @@ describe("App background processing mounts", () => {
       selectedProjectId: "project-1",
       selectedEnvironmentId: home.id,
     });
-    useProjectStore.setState({
+    appCommandStore(projectStore).setState({
       projects: [
         {
           id: "project-1",
@@ -736,7 +740,7 @@ describe("App background processing mounts", () => {
         },
       ],
     });
-    useUIStore.setState({ projectBoardTab: "kanban" });
+    appCommandStore(uiStore).setState({ projectBoardTab: "kanban" });
     render(<App />);
     const terminal = screen.getByTestId("terminal-home");
     const panel = terminal.closest('[role="tabpanel"]');
@@ -745,7 +749,7 @@ describe("App background processing mounts", () => {
     expect(terminal.getAttribute("data-active")).toBe("true");
     expect(terminal.getAttribute("data-obscured")).toBe("true");
     fireEvent.click(screen.getByRole("button", { name: "Reveal Home", hidden: true }));
-    expect(useUIStore.getState().projectBoardTab).toBe("home");
+    expect(appCommandStore(uiStore).getState().projectBoardTab).toBe("home");
     expect(screen.getByTestId("terminal-home")).toBe(terminal);
     expect(terminal.getAttribute("data-obscured")).toBe("false");
     expect(panel?.getAttribute("aria-hidden")).toBe("false");
@@ -842,7 +846,7 @@ describe("App background processing mounts", () => {
       selectedProjectId: "project-1",
       selectedEnvironmentId: "env-a",
     });
-    expect(useMultiReviewStore.getState().workflows.size).toBe(0);
+    expect(appCommandStore(multiReviewStore).getState().workflows.size).toBe(0);
 
     render(<App />);
 
@@ -884,7 +888,7 @@ describe("App background processing mounts", () => {
       selectedProjectId: null,
       selectedEnvironmentId: null,
     });
-    useProjectStore.setState({
+    appCommandStore(projectStore).setState({
       projects: [
         {
           id: "project-one",
@@ -1058,7 +1062,7 @@ describe("App background processing mounts", () => {
       });
     });
 
-    expect(useUIStore.getState().selectedEnvironmentId).toBe(featureEnvironment.id);
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe(featureEnvironment.id);
     expect(screen.getByTestId("project-workspace").textContent).toBe("project-1");
 
     await act(async () => {
@@ -1079,7 +1083,7 @@ describe("App background processing mounts", () => {
     const { unmount } = render(<App />);
 
     act(() => {
-      const store = usePaneLayoutStore.getState();
+      const store = appCommandStore(paneLayoutStore).getState();
       store.initialize("container-1", "env-1");
       store.beginHydration("env-1");
       store.finishHydration("env-1");
@@ -1108,7 +1112,7 @@ describe("App background processing mounts", () => {
       selectedProjectId: "project-1",
       selectedEnvironmentId: "env-visible",
     });
-    useEnvironmentStore.getState().updateEnvironment("env-pending-setup", {
+    appCommandStore(environmentStore).getState().updateEnvironment("env-pending-setup", {
       setupPhase: "pending",
     });
 
@@ -1162,7 +1166,7 @@ describe("App background processing mounts", () => {
       selectedEnvironmentId: "env-visible",
     });
 
-    useBuildPipelineStore.setState({
+    appCommandStore(buildPipelineStore).setState({
       pipelines: new Map([
         [
           "pipeline-sibling",
@@ -1316,7 +1320,7 @@ describe("App background processing mounts", () => {
       selectedEnvironmentId: "env-visible",
     });
 
-    usePaneLayoutStore.setState({
+    appCommandStore(paneLayoutStore).setState({
       environments: new Map([
         [
           "env-pending-prompt",
@@ -1363,7 +1367,7 @@ describe("App background processing mounts", () => {
     });
 
     const tmuxStateKey = createClaudeTmuxStateKey("env-queued-tmux", "tab-1");
-    useClaudeTmuxStore.setState({
+    appCommandStore(claudeTmuxStore).setState({
       messageQueue: new Map([
         [tmuxStateKey, [{ id: "queue-tmux", text: "Run queued tmux work", attachments: [] }]],
       ]),
@@ -1392,11 +1396,11 @@ describe("App background processing mounts", () => {
     });
 
     const stateKey = createClaudeTmuxStateKey("env-busy-tmux", "tab-1");
-    useClaudeTmuxStore.getState().setRunning(stateKey, true, {
+    appCommandStore(claudeTmuxStore).getState().setRunning(stateKey, true, {
       environmentId: "env-busy-tmux",
       sessionId: "session-tmux",
     });
-    useClaudeTmuxStore.getState().setBusy(stateKey, true);
+    appCommandStore(claudeTmuxStore).getState().setBusy(stateKey, true);
 
     render(<App />);
 
@@ -1415,11 +1419,11 @@ describe("App background processing mounts", () => {
     });
 
     const stateKey = createClaudeTmuxStateKey("env-waiting-tmux", "tab-1");
-    useClaudeTmuxStore.getState().setRunning(stateKey, true, {
+    appCommandStore(claudeTmuxStore).getState().setRunning(stateKey, true, {
       environmentId: "env-waiting-tmux",
       sessionId: "session-tmux",
     });
-    useClaudeTmuxStore.getState().addPendingQuestion(stateKey, {
+    appCommandStore(claudeTmuxStore).getState().addPendingQuestion(stateKey, {
       eventId: "question-1",
       questions: [],
       toolInput: {},
@@ -1750,64 +1754,6 @@ describe("App Docker availability", () => {
       window.orkestrator = originalOrkestrator;
     }
   });
-
-  test.each([false, true])(
-    "a leaf from Local bypasses missing or failed host permissions (probe error: %s)",
-    async (probeError) => {
-      const originalOrkestrator = window.orkestrator;
-      const getMacOsStatus = mock(async () => ({
-        ...(probeError ? { error: "probe failed" } : {}),
-        supported: true,
-        missing: [
-          {
-            id: "documents" as const,
-            label: "Documents folder",
-            settingsPane: "files-and-folders" as const,
-            required: true,
-          },
-        ],
-      }));
-      window.orkestrator = {
-        permissions: { getMacOsStatus, openMacOsSettings: async () => undefined },
-        listen: () => () => undefined,
-        connections: {
-          list: async () => ({
-            activeConnectionId: "local",
-            localAvailable: true,
-            connections: [
-              {
-                id: "local",
-                name: "Remote",
-                address: "https://gateway.example",
-                kind: "remote",
-                active: true,
-                requiresToken: false,
-              },
-            ],
-          }),
-        } as NonNullable<Window["orkestrator"]>["connections"],
-        window: {
-          startDragging: async () => undefined,
-          setZoomFactor: async () => false,
-        },
-      } as unknown as NonNullable<Window["orkestrator"]>;
-
-      try {
-        window.orkestratorWorkspaceTarget = { nodeId: "bk_leaf", nodeName: "Leaf", path: "relay" };
-        resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
-        render(<App />);
-
-        await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(1));
-        expect(getMacOsStatus).not.toHaveBeenCalled();
-        expect(screen.queryByText("macOS File Access") === null).toBe(true);
-        expect(screen.getByTestId("app-shell")).toBeTruthy();
-      } finally {
-        cleanup();
-        window.orkestrator = originalOrkestrator;
-        delete window.orkestratorWorkspaceTarget;
-      }
-    },
-  );
 
   test.each([
     { nickname: "Studio", displayName: "Studio" },
@@ -3452,7 +3398,7 @@ describe("App startup checks and global events", () => {
     await waitFor(() => expect(appEventCallbacks.has("menu-zoom")).toBe(true));
 
     act(() => appEventCallbacks.get("menu-zoom")?.({ payload: "out" }));
-    expect(useUIStore.getState().zoomLevel).toBe(90);
+    expect(useUIChromeStore.getState().zoomLevel).toBe(90);
 
     const keydown = (key: string, modifiers: KeyboardEventInit) => {
       const event = new KeyboardEvent("keydown", { key, cancelable: true, ...modifiers });
@@ -3469,7 +3415,7 @@ describe("App startup checks and global events", () => {
       expect(keydown("=", { ctrlKey: true, altKey: true }).defaultPrevented).toBe(false);
       expect(keydown("=", {}).defaultPrevented).toBe(false);
     });
-    expect(useUIStore.getState().zoomLevel).toBe(100);
+    expect(useUIChromeStore.getState().zoomLevel).toBe(100);
 
     // A key a focused surface already claimed (the design canvas's Ctrl/⌘+0)
     // is left to it.
@@ -3489,14 +3435,14 @@ describe("App startup checks and global events", () => {
           }),
         );
       });
-      expect(useUIStore.getState().zoomLevel).toBe(110);
+      expect(useUIChromeStore.getState().zoomLevel).toBe(110);
     } finally {
       window.removeEventListener("keydown", claim, { capture: true });
     }
     act(() => {
       keydown("0", { metaKey: true });
     });
-    expect(useUIStore.getState().zoomLevel).toBe(100);
+    expect(useUIChromeStore.getState().zoomLevel).toBe(100);
 
     act(() => {
       appEventCallbacks.get("claude-credentials-error")?.({
@@ -3549,7 +3495,9 @@ describe("App terminal overlay actions", () => {
         "env-visible",
         "Stand up the Codex session",
       );
-      expect(useClaudeOptionsStore.getState().getOptions("env-visible")).toMatchObject({
+      expect(
+        appCommandStore(claudeOptionsStore).getState().getOptions("env-visible"),
+      ).toMatchObject({
         launchAgent: true,
         agentType: "codex",
         initialPrompt: "Stand up the Codex session",
@@ -3584,7 +3532,9 @@ describe("App terminal overlay actions", () => {
       await Promise.resolve();
     });
     expect(mockStartEnvironment).not.toHaveBeenCalled();
-    expect(useClaudeOptionsStore.getState().getOptions("env-visible")).toBeUndefined();
+    expect(
+      appCommandStore(claudeOptionsStore).getState().getOptions("env-visible"),
+    ).toBeUndefined();
   });
 
   test("still starts a local environment while Docker is unavailable", async () => {
@@ -3629,7 +3579,7 @@ describe("App terminal overlay actions", () => {
     await waitFor(() => {
       expect(mockStartEnvironment).toHaveBeenCalledWith("env-visible", "Prompt from terminal");
     });
-    expect(useClaudeOptionsStore.getState().getOptions("env-visible")).toMatchObject({
+    expect(appCommandStore(claudeOptionsStore).getState().getOptions("env-visible")).toMatchObject({
       initialPrompt: "Prompt from terminal",
     });
   });
@@ -3677,7 +3627,8 @@ describe("App terminal overlay actions", () => {
     });
     expect(mockGetEnvironment).toHaveBeenCalledWith("env-visible");
     expect(
-      useClaudeOptionsStore.getState().getOptions("env-visible")?.initialPromptAttachments,
+      appCommandStore(claudeOptionsStore).getState().getOptions("env-visible")
+        ?.initialPromptAttachments,
     ).toEqual([
       {
         id: "saved-image",
@@ -3719,7 +3670,7 @@ describe("App terminal overlay actions", () => {
         base64Data: "U1RBR0VE",
       },
     ];
-    useClaudeOptionsStore.getState().setOptions("env-visible", {
+    appCommandStore(claudeOptionsStore).getState().setOptions("env-visible", {
       launchAgent: false,
       agentType: "opencode",
       initialPrompt: "",
@@ -3734,7 +3685,8 @@ describe("App terminal overlay actions", () => {
     });
     expect(mockGetEnvironment).not.toHaveBeenCalled();
     expect(
-      useClaudeOptionsStore.getState().getOptions("env-visible")?.initialPromptAttachments,
+      appCommandStore(claudeOptionsStore).getState().getOptions("env-visible")
+        ?.initialPromptAttachments,
     ).toEqual(stagedAttachments);
   });
 
@@ -3764,7 +3716,9 @@ describe("App terminal overlay actions", () => {
         });
       });
       expect(mockStartEnvironment).not.toHaveBeenCalled();
-      expect(useClaudeOptionsStore.getState().getOptions("env-visible")).toBeUndefined();
+      expect(
+        appCommandStore(claudeOptionsStore).getState().getOptions("env-visible"),
+      ).toBeUndefined();
 
       act(() => screen.getByTestId("start-env-visible").click());
       await waitFor(() => {
@@ -3852,7 +3806,7 @@ describe("App terminal overlay actions", () => {
     });
     // Existing options carry an agentType but no initialPrompt, so the stored
     // prompt is rehydrated while the prior agentType wins over defaultAgent.
-    useClaudeOptionsStore.getState().setOptions("env-visible", {
+    appCommandStore(claudeOptionsStore).getState().setOptions("env-visible", {
       launchAgent: false,
       agentType: "opencode",
       initialPrompt: "",
@@ -3866,7 +3820,9 @@ describe("App terminal overlay actions", () => {
 
     await waitFor(() => {
       expect(mockStartEnvironment).toHaveBeenCalledWith("env-visible", "Resume the prior task");
-      expect(useClaudeOptionsStore.getState().getOptions("env-visible")).toMatchObject({
+      expect(
+        appCommandStore(claudeOptionsStore).getState().getOptions("env-visible"),
+      ).toMatchObject({
         launchAgent: true,
         agentType: "opencode",
         initialPrompt: "Resume the prior task",
@@ -3896,7 +3852,9 @@ describe("App terminal overlay actions", () => {
       expect(mockStartEnvironment).toHaveBeenCalledWith("env-visible", "Boot the default agent");
       // No existing options and no environment defaultAgent, so the agentType
       // falls back to config.global.defaultAgent ("claude").
-      expect(useClaudeOptionsStore.getState().getOptions("env-visible")).toMatchObject({
+      expect(
+        appCommandStore(claudeOptionsStore).getState().getOptions("env-visible"),
+      ).toMatchObject({
         launchAgent: true,
         agentType: "claude",
         initialPrompt: "Boot the default agent",
@@ -3927,7 +3885,9 @@ describe("App terminal overlay actions", () => {
     await waitFor(() => {
       expect(mockStartEnvironment).toHaveBeenCalledWith("env-visible", undefined);
     });
-    expect(useClaudeOptionsStore.getState().getOptions("env-visible")).toBeUndefined();
+    expect(
+      appCommandStore(claudeOptionsStore).getState().getOptions("env-visible"),
+    ).toBeUndefined();
   });
 
   test("normal overlay starts clear stale Claude options before starting", async () => {
@@ -3936,7 +3896,7 @@ describe("App terminal overlay actions", () => {
       selectedProjectId: "project-1",
       selectedEnvironmentId: "env-visible",
     });
-    useClaudeOptionsStore.getState().setOptions("env-visible", {
+    appCommandStore(claudeOptionsStore).getState().setOptions("env-visible", {
       launchAgent: true,
       agentType: "claude",
       initialPrompt: "stale",
@@ -3950,7 +3910,9 @@ describe("App terminal overlay actions", () => {
 
     await waitFor(() => {
       expect(mockStartEnvironment).toHaveBeenCalledWith("env-visible", undefined);
-      expect(useClaudeOptionsStore.getState().getOptions("env-visible")).toBeUndefined();
+      expect(
+        appCommandStore(claudeOptionsStore).getState().getOptions("env-visible"),
+      ).toBeUndefined();
     });
   });
 
@@ -3974,7 +3936,9 @@ describe("App terminal overlay actions", () => {
 
       await waitFor(() => {
         expect(mockStartEnvironment).toHaveBeenCalledWith("env-visible", "Create setup script");
-        expect(useClaudeOptionsStore.getState().getOptions("env-visible")).toBeUndefined();
+        expect(
+          appCommandStore(claudeOptionsStore).getState().getOptions("env-visible"),
+        ).toBeUndefined();
       });
     } finally {
       logs.restore();
@@ -3994,7 +3958,7 @@ describe("App terminal overlay actions", () => {
     await waitFor(() => {
       expect(mockStartEnvironment).toHaveBeenCalledWith("env-visible", "Create setup script");
     });
-    expect(useClaudeOptionsStore.getState().getOptions("env-visible")).toMatchObject({
+    expect(appCommandStore(claudeOptionsStore).getState().getOptions("env-visible")).toMatchObject({
       launchAgent: true,
       initialPrompt: "Create setup script",
     });
@@ -4028,7 +3992,7 @@ describe("App terminal overlay actions", () => {
     await waitFor(() => {
       expect(mockStartEnvironment).toHaveBeenCalledWith("env-visible", "Create setup script");
     });
-    expect(useClaudeOptionsStore.getState().getOptions("env-visible")).toMatchObject({
+    expect(appCommandStore(claudeOptionsStore).getState().getOptions("env-visible")).toMatchObject({
       launchAgent: true,
       agentType: "codex",
       initialPrompt: "Create setup script",

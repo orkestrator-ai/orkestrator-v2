@@ -4,9 +4,10 @@
  * committed body on demand and reports a stored transcript it cannot read.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
-import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
+import { type BuildPipeline, buildPipelineStore } from "@/stores/buildPipelineStore";
 import * as realBackend from "@/lib/backend";
 import {
   buildPipelineChangeReadOptions,
@@ -14,8 +15,9 @@ import {
 } from "@/lib/build-pipeline-persistence";
 import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
 
-import { useGraphRunStore, graphRunCacheKey } from "@/stores/graphRunStore";
+import { graphRunCacheKey, graphRunStore } from "@/stores/graphRunStore";
 import { act as activationOf, agentSession } from "@/components/graph-run/graph-run.test-fixtures";
+import { appCommandStore } from "@/test/app-command-store";
 
 const realBackendSnapshot = { ...realBackend };
 const realVirtualizedMessageListSnapshot = { ...realVirtualizedMessageList };
@@ -159,7 +161,7 @@ function renderTab() {
       }}
     />
   );
-  const view = render(element(true));
+  const view = renderInAppCommandScope(element(true));
   fireEvent.click(screen.getByRole("tab", { name: /^Verify,/ }));
   return { rerender: (isActive = true) => view.rerender(element(isActive)) };
 }
@@ -170,7 +172,7 @@ describe("BuildChatTab referenced transcripts", () => {
     getBuildPipelineConditionalMock.mockClear();
     getBuildPipelineControlMock.mockClear();
     pauseBuildPipelineMock.mockClear();
-    useBuildPipelineStore.setState({
+    appCommandStore(buildPipelineStore).setState({
       pipelines: new Map([[pipeline.id, pipeline]]),
       buildEnvironmentIds: new Set([pipeline.environmentId]),
       viewedSessionIds: new Map(),
@@ -290,11 +292,13 @@ describe("BuildChatTab referenced transcripts", () => {
     }));
     renderTab();
     expect(await screen.findByText("All criteria pass")).toBeTruthy();
-    act(() => useBuildPipelineStore.getState().replacePipeline(active));
+    act(() => appCommandStore(buildPipelineStore).getState().replacePipeline(active));
     await waitFor(() => expect(screen.getByRole("button", { name: "Pause" })).toBeTruthy());
     fireEvent.click(screen.getByRole("button", { name: "Pause" }));
     await waitFor(() =>
-      expect(useBuildPipelineStore.getState().pipelines.get(pipeline.id)?.phase).toBe("paused"),
+      expect(appCommandStore(buildPipelineStore).getState().pipelines.get(pipeline.id)?.phase).toBe(
+        "paused",
+      ),
     );
     expect(screen.getByText("All criteria pass")).toBeTruthy();
   });
@@ -316,7 +320,7 @@ describe("BuildChatTab referenced transcripts", () => {
         composer={false}
       />
     );
-    const view = render(element(true, true));
+    const view = renderInAppCommandScope(element(true, true));
     expect(buildPipelineChangeReadOptions(pipeline.id)).toEqual({
       transcripts: true,
       prioritySessionKey: "build-key",
@@ -413,7 +417,7 @@ test("graph activation reads retain the merged row through singleton trimming an
   const entries = [adjacentTool("a"), adjacentTool("b"), adjacentTool("c")];
   const publish = (messages: unknown[], revision: number) =>
     act(() => {
-      useGraphRunStore.setState({
+      appCommandStore(graphRunStore).setState({
         transcripts: new Map([
           [
             graphRunCacheKey("run-alias", activation.key),
@@ -445,7 +449,7 @@ test("graph activation reads retain the merged row through singleton trimming an
       ownsGlobalShortcuts={false}
     />
   );
-  const view = render(element);
+  const view = renderInAppCommandScope(element);
   const original = screen.getByTestId("transcript-row");
   expect(original.getAttribute("data-row-id")).toBe("a");
   expect(original.textContent).toContain("3");
@@ -460,7 +464,7 @@ test("graph activation reads retain the merged row through singleton trimming an
     expect(original.getAttribute("data-row-id")).toBe("a");
   }
   view.unmount();
-  useGraphRunStore.setState({ transcripts: new Map() });
+  appCommandStore(graphRunStore).setState({ transcripts: new Map() });
 });
 
 test("pipeline row aliases survive acceptance revealing and hiding a document", () => {
@@ -496,7 +500,7 @@ test("pipeline row aliases survive acceptance revealing and hiding a document", 
       />
     );
   };
-  const view = render(element(false));
+  const view = renderInAppCommandScope(element(false));
   const original = screen.getByTestId("transcript-row");
   expect(original.getAttribute("data-row-id")).toBe("a");
   view.rerender(element(true));

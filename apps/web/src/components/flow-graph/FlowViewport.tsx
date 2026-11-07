@@ -9,7 +9,8 @@ import {
 import { Maximize, Minimize, Minus, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { useFlowGraphViewStore } from "@/stores/flowGraphViewStore";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
+import { flowGraphViewKey, useFlowGraphViewStore } from "@/stores/flowGraphViewStore";
 import type { FlowRect } from "./flow-graph-model";
 import {
   DEFAULT_FLOW_VIEW,
@@ -72,7 +73,7 @@ function touchMidpoint(touches: TouchList): { clientX: number; clientY: number }
  * the divider.
  */
 export function useFlowViewport({
-  viewKey,
+  viewKey: unqualifiedViewKey,
   measuredWidth,
   content,
   layout = "graph",
@@ -90,6 +91,8 @@ export function useFlowViewport({
   /** For the stacked column: the height the page shows it in, which Fit fits it to. */
   fitHeight?: () => number | null;
 }) {
+  // A view is remembered per node: the same workflow id on another node is another graph.
+  const viewKey = flowGraphViewKey(useScopesWithCommandFallback().scope.nodeId, unqualifiedViewKey);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const [viewportElement, setViewportElement] = useState<HTMLDivElement | null>(null);
   const stacked = layout === "stacked";

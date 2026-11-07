@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:fbc344e2e462e38ac2a7916f4560e1468168c2d00e0334704ae9e823a4b79b5f",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "cleanupAfterMerge": {},
+        "enabled": {
+          "type": "boolean"
+        },
+        "environmentId": {
+          "type": "string"
+        }
+      },
+      "required": ["enabled", "environmentId"],
+      "type": "object"
+    }
+  }
+}

@@ -12,7 +12,8 @@ import {
 } from "@orkestrator/protocol/workflow-results";
 import type { JsonSchema } from "@orkestrator/protocol/structured-output";
 import { STRUCTURED_REVIEW_REPORT_JSON_SCHEMA } from "@orkestrator/protocol/structured-review";
-import { z } from "zod";
+import { Schema } from "effect";
+import { jsonSchemaField, str, strictObject, toolInput } from "./tool-schema.js";
 import { workflowResultJsonSchema } from "./workflow-result-contracts.js";
 import { graphOutputContext } from "./workflow-result-graph-output.js";
 import {
@@ -112,7 +113,7 @@ function resultKeysMismatch(expected: readonly string[]): WorkflowResultSubmissi
   };
 }
 
-const validatedDigestSchema = z.string().regex(/^[a-f0-9]{64}$/);
+const validatedDigestSchema = str({ pattern: /^[a-f0-9]{64}$/ });
 
 function submissionDescription(
   label: string,
@@ -286,7 +287,7 @@ export function registerWorkflowResultSlotTools(
     return { scope, view, definition, tools };
   });
   for (const { scope, view, definition, tools } of slots) {
-    const resultSchema = z.fromJSONSchema(workflowResultProviderSchema(scope.kind, view));
+    const resultSchema = jsonSchemaField(workflowResultProviderSchema(scope.kind, view));
     const graphPort = graphOutputContext(view);
     const port = portDescription(scope);
     server.registerTool(
@@ -296,12 +297,12 @@ export function registerWorkflowResultSlotTools(
         description: graphPort
           ? `Validate one complete ${definition.label(view)} without accepting it, consuming a correction attempt, or changing workflow state. Use this instead of probing ${tools.submit}. A valid result returns a validatedDigest that ${tools.submit} can commit without re-sending the result.${port}`
           : VALIDATION_DESCRIPTION,
-        inputSchema: z
-          .object({
-            resultKey: z.string().uuid(),
+        inputSchema: toolInput(
+          strictObject({
+            resultKey: str({ uuid: true }),
             result: resultSchema,
-          })
-          .strict(),
+          }),
+        ),
         annotations: {
           readOnlyHint: true,
           destructiveHint: false,
@@ -325,13 +326,13 @@ export function registerWorkflowResultSlotTools(
       {
         title: graphPort ? `Submit ${graphPort.port}` : "Submit workflow result",
         description: `${submissionDescription(definition.label(view), false, tools.validate)}${port}`,
-        inputSchema: z
-          .object({
-            resultKey: z.string().uuid(),
-            result: resultSchema.optional(),
-            validatedDigest: validatedDigestSchema.optional(),
-          })
-          .strict(),
+        inputSchema: toolInput(
+          strictObject({
+            resultKey: str({ uuid: true }),
+            result: Schema.optionalKey(resultSchema),
+            validatedDigest: Schema.optionalKey(validatedDigestSchema),
+          }),
+        ),
         annotations: {
           readOnlyHint: false,
           destructiveHint: false,
@@ -361,7 +362,7 @@ export function registerWorkflowResultSlotTools(
       title: "Get workflow result status",
       description:
         "Check whether this workflow result was accepted before retrying. For an open result it also reports which validation and submission calls actually reached the backend.",
-      inputSchema: z.object({ resultKey: z.string().uuid() }).strict(),
+      inputSchema: toolInput(strictObject({ resultKey: str({ uuid: true }) })),
       annotations: {
         readOnlyHint: true,
         destructiveHint: false,
@@ -423,12 +424,12 @@ function registerReportFindingTool(
     {
       title: "Report a finding",
       description: REPORT_FINDING_DESCRIPTION,
-      inputSchema: z
-        .object({
-          resultKey: z.string().uuid(),
-          finding: z.fromJSONSchema(provisionalFindingJsonSchema()),
-        })
-        .strict(),
+      inputSchema: toolInput(
+        strictObject({
+          resultKey: str({ uuid: true }),
+          finding: jsonSchemaField(provisionalFindingJsonSchema()),
+        }),
+      ),
       annotations: REPORT_FINDING_ANNOTATIONS,
     },
     async ({ resultKey, finding }) => {
@@ -511,13 +512,13 @@ export function registerWorkflowResultBrokerTools(
       {
         title: "Report a finding",
         description: REPORT_FINDING_DESCRIPTION,
-        inputSchema: z
-          .object({
-            resultKey: z.string().uuid(),
-            capability: z.string().min(32).max(2_048),
-            finding: z.fromJSONSchema(provisionalFindingJsonSchema()),
-          })
-          .strict(),
+        inputSchema: toolInput(
+          strictObject({
+            resultKey: str({ uuid: true }),
+            capability: str({ min: 32, max: 2_048 }),
+            finding: jsonSchemaField(provisionalFindingJsonSchema()),
+          }),
+        ),
         annotations: REPORT_FINDING_ANNOTATIONS,
       },
       async ({ resultKey, capability, finding }) => {
@@ -546,14 +547,14 @@ export function registerWorkflowResultBrokerTools(
       {
         title: `Submit ${kind.replaceAll("-", " ")}`,
         description: submissionDescription(kind.replaceAll("-", " "), true),
-        inputSchema: z
-          .object({
-            resultKey: z.string().uuid(),
-            capability: z.string().min(32).max(2_048),
-            result: z.fromJSONSchema(workflowResultJsonSchema(kind)).optional(),
-            validatedDigest: validatedDigestSchema.optional(),
-          })
-          .strict(),
+        inputSchema: toolInput(
+          strictObject({
+            resultKey: str({ uuid: true }),
+            capability: str({ min: 32, max: 2_048 }),
+            result: Schema.optionalKey(jsonSchemaField(workflowResultJsonSchema(kind))),
+            validatedDigest: Schema.optionalKey(validatedDigestSchema),
+          }),
+        ),
         annotations: {
           readOnlyHint: false,
           destructiveHint: false,
@@ -588,15 +589,15 @@ export function registerWorkflowResultBrokerTools(
       title: "Validate workflow result",
       description:
         "Validate one complete authorized workflow result without accepting it, consuming a correction attempt, or changing workflow state. Use this instead of probing a submission tool. A valid result returns a validatedDigest that a submission tool can commit without re-sending the result.",
-      inputSchema: z
-        .object({
-          resultKey: z.string().uuid(),
-          capability: z.string().min(32).max(2_048),
+      inputSchema: toolInput(
+        strictObject({
+          resultKey: str({ uuid: true }),
+          capability: str({ min: 32, max: 2_048 }),
           // Every result kind is an object; the service validates the contract.
           // z.json() would publish a recursive $ref that some providers reject.
-          result: z.record(z.string(), z.unknown()),
-        })
-        .strict(),
+          result: Schema.Record(Schema.String, Schema.Unknown),
+        }),
+      ),
       annotations: {
         readOnlyHint: true,
         destructiveHint: false,
@@ -627,12 +628,12 @@ export function registerWorkflowResultBrokerTools(
     {
       title: "Get workflow result status",
       description: "Check whether the authorized workflow result was accepted before retrying.",
-      inputSchema: z
-        .object({
-          resultKey: z.string().uuid(),
-          capability: z.string().min(32).max(2_048),
-        })
-        .strict(),
+      inputSchema: toolInput(
+        strictObject({
+          resultKey: str({ uuid: true }),
+          capability: str({ min: 32, max: 2_048 }),
+        }),
+      ),
       annotations: {
         readOnlyHint: true,
         destructiveHint: false,

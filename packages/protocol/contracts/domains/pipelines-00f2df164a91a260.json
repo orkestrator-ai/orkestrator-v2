@@ -1,0 +1,78 @@
+{
+  "schemaVersion": 1,
+  "domain": "pipelines",
+  "commands": {
+    "cancel_build_pipeline": {
+      "untyped": true
+    },
+    "clear_task_build_status": {
+      "untyped": true
+    },
+    "create_feature_build": {
+      "untyped": true
+    },
+    "delete_build_pipeline": {
+      "untyped": true
+    },
+    "get_build_pipeline": {
+      "untyped": true
+    },
+    "get_build_pipeline_session_projection": {
+      "untyped": true
+    },
+    "get_workflow_result_metrics": {
+      "untyped": true
+    },
+    "get_workflow_result_tools_rollout": {
+      "untyped": true
+    },
+    "import_legacy_build_pipelines": {
+      "untyped": true
+    },
+    "list_build_pipelines": {
+      "untyped": true
+    },
+    "pause_build_pipeline": {
+      "untyped": true
+    },
+    "restart_build_pipeline_current_step": {
+      "untyped": true
+    },
+    "restart_build_pipeline_step": {
+      "untyped": true
+    },
+    "resume_build_pipeline": {
+      "untyped": true
+    },
+    "retry_build_pipeline_completion_comment": {
+      "untyped": true
+    },
+    "retry_build_pipeline_interaction_failure": {
+      "untyped": true
+    },
+    "retry_build_pipeline_review": {
+      "untyped": true
+    },
+    "retry_build_pipeline_stage": {
+      "untyped": true
+    },
+    "save_build_pipeline": {
+      "untyped": true
+    },
+    "send_build_pipeline_message": {
+      "untyped": true
+    },
+    "set_environment_unread": {
+      "untyped": true
+    },
+    "set_workflow_result_tools_rollout": {
+      "untyped": true
+    },
+    "start_build_pipeline": {
+      "untyped": true
+    },
+    "steer_build_pipeline": {
+      "untyped": true
+    }
+  }
+}

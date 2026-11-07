@@ -1,7 +1,12 @@
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import {
+  nativeAgentSuborkTranscriptCommand,
+  stopNativeAgentSuborksCommand,
+} from "@orkestrator/protocol/contract/domains/native-sessions";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
-import { assertOnlyKeys, asNonBlankString } from "./commands-validation.js";
+import { asNonBlankString } from "./commands-validation.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
+import { withAsyncArgumentFailures } from "./commands-registry-async-args.js";
 import { nativeAgentSessionStorageKey } from "./native-agent-service-shared.js";
 
 /** The transcript one read returns, like a graph run's. */
@@ -16,10 +21,14 @@ function agentOf(value: unknown): AgentPlatform {
  * The transcript's subork group: the person stopping a session's running calls,
  * and reading one subork's stored transcript. Reading never touches the provider,
  * so it neither keeps an idle session alive nor re-attaches one.
+ *
+ * Both are defined commands (`native-sessions`, plan item 7001): unknown keys
+ * are dropped rather than refused, and `batchId` is critical on the stop.
  */
-export function registerSuborkCommands(register: CommandRegistrar): void {
-  register("stop_native_agent_suborks", async (args, context) => {
-    assertOnlyKeys(args, ["environmentId", "agent", "logicalSessionKey", "batchId"], "arguments");
+export function registerSuborkCommands(registerCommand: CommandRegistrar): void {
+  // `async` handlers keep rejecting on bad arguments (`commands-registry-async-args.ts`).
+  const register = withAsyncArgumentFailures(registerCommand);
+  register(stopNativeAgentSuborksCommand, async (args, context) => {
     const sessionKey = nativeAgentSessionStorageKey(
       asNonBlankString(args.environmentId, "environmentId"),
       agentOf(args.agent),
@@ -32,8 +41,7 @@ export function registerSuborkCommands(register: CommandRegistrar): void {
     return null;
   });
 
-  register("native_agent_subork_transcript", async (args, context) => {
-    assertOnlyKeys(args, ["environmentId", "batchId", "suborkId", "fromIndex"], "arguments");
+  register(nativeAgentSuborkTranscriptCommand, async (args, context) => {
     if (!context.suborks) throw new Error("Suborks are unavailable on this backend");
     if (
       args.fromIndex !== undefined &&

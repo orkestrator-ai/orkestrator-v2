@@ -1,3 +1,4 @@
+import { eventSink } from "./backend-emit.js";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { resetLogger } from "@orkestrator/protocol/logger";
 import { describe, expect, spyOn, test, afterEach } from "bun:test";
@@ -527,11 +528,11 @@ function service(
         : path === "/etc/default/ufw"
           ? 'DEFAULT_INPUT_POLICY="DROP"\n'
           : null,
-    emit: (event, payload) => {
+    emit: eventSink((event, payload) => {
       if (event === CONTAINER_HOST_REACHABILITY_CHANGED_EVENT) {
         events.push(payload as ContainerHostReachability);
       }
-    },
+    }),
     now: () => now,
     ...overrides,
     run: overrides.run ?? runner.run,

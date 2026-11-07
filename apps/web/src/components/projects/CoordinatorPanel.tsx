@@ -11,7 +11,7 @@ import { useCoordinatorPanelData } from "./useCoordinatorPanelData";
 import { CoordinatorConversationPane } from "./CoordinatorConversationPane";
 import { CoordinatorToolbar } from "./CoordinatorToolbar";
 import { CoordinatorWorkerPrompts } from "./CoordinatorWorkerPrompts";
-import { useCoordinatorPaneLayoutStore } from "@/stores/coordinatorPaneLayoutStore";
+import { coordinatorPaneLayoutStore } from "@/stores/coordinatorPaneLayoutStore";
 import {
   COORDINATOR_SIDE_AGENT_EXPLANATION,
   COORDINATOR_TIER_LABELS,
@@ -46,21 +46,29 @@ import {
   FloatingNoticeAnchor,
   FloatingNoticeLayer,
 } from "@/components/ui/floating-notice";
-import * as backend from "@/lib/backend";
+import { useNodeScope, useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { useAppDialogStore } from "@/stores/appDialogStore";
 import { createSessionKey } from "@/lib/utils";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
-import { useNativeComposeStore } from "@/stores/nativeComposeStore";
+import { nativeComposeStore } from "@/stores/nativeComposeStore";
 import { useActiveCoordinatorConversationStore } from "@/stores/activeCoordinatorConversationStore";
 import { unusedCoordinatorConversationIds } from "@/lib/coordinator-unused-conversations";
 import { useProjectStore } from "@/stores/projectStore";
 import { CoordinatorPullRequestWatchProvider } from "@/lib/coordinator-pull-request-watch";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 interface CoordinatorPanelProps {
   projectId: string;
 }
 
 export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
+  const nodeBackend = useScopeBackend();
+  // The project is on the node of the scope this page renders in.
+  const nodeId = useScopesWithCommandFallback().scope.nodeId;
+  // This node's coordinator tab groups (plan item 3011).
+  const paneLayouts = useNodeScope().store(coordinatorPaneLayoutStore);
+  // The same node's compose drafts (plan item 3013).
+  const composeDrafts = useNodeScope().store(nativeComposeStore);
   const project = useProjectStore((state) => state.projects.find((item) => item.id === projectId));
   const {
     snapshot,
@@ -191,6 +199,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
     if (!workspaceId || !selectedId || !selectedTabId) return;
     const store = useActiveCoordinatorConversationStore.getState();
     store.publish({
+      nodeId,
       projectId,
       tabId: selectedTabId,
       data: {
@@ -200,8 +209,16 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
         sessionId: selectedProviderSessionId,
       },
     });
-    return () => store.clear(projectId, selectedTabId);
-  }, [projectId, selectedAgent, selectedId, selectedProviderSessionId, selectedTabId, workspaceId]);
+    return () => store.clear(nodeId, projectId, selectedTabId);
+  }, [
+    nodeId,
+    projectId,
+    selectedAgent,
+    selectedId,
+    selectedProviderSessionId,
+    selectedTabId,
+    workspaceId,
+  ]);
   const selectedSessionKey =
     snapshot && selected
       ? createSessionKey(coordinatorRuntimeId(snapshot.workspace.id, selected.id), selected.tabId)
@@ -251,7 +268,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
             className="mt-4"
             variant="outline"
             onClick={() =>
-              useAppDialogStore.getState().open({ kind: "repository-settings", projectId })
+              useAppDialogStore.getState().open({ kind: "repository-settings", nodeId, projectId })
             }
           >
             Repository settings
@@ -307,7 +324,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
     // composers cannot use up the open-conversation limit.
     const closeUnused = unusedCoordinatorConversationIds(
       snapshot.workspace,
-      useNativeComposeStore.getState().drafts,
+      composeDrafts.getState().drafts,
       pendingLaunches,
     );
     void runAction(
@@ -325,9 +342,9 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
         setReplacement(replacingMain ? { projectId, id: replacingMain } : null);
         try {
           closedSnapshot = replacingMain
-            ? await backend.closeCoordinatorConversation(projectId, replacingMain)
+            ? await nodeBackend.closeCoordinatorConversation(projectId, replacingMain)
             : null;
-          createdSnapshot = await backend.createCoordinatorConversation(
+          createdSnapshot = await nodeBackend.createCoordinatorConversation(
             projectId,
             undefined,
             closeUnused,
@@ -359,7 +376,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
         // Read after the requests, before publishing the new open set can
         // reconcile away the placeholder. Keep moves and divider edits made
         // while the backend was busy.
-        const latestLayout = useCoordinatorPaneLayoutStore.getState().entries[projectId]?.layout;
+        const latestLayout = paneLayouts.getState().entries[projectId]?.layout;
         const replacementLayout =
           replacingMain && latestLayout ? structuredClone(latestLayout) : null;
         const replacementId = createdSnapshot.workspace.selectedConversationId;
@@ -394,7 +411,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
           setReplacement(null);
         });
         if (replacementLayout && replacementId) {
-          useCoordinatorPaneLayoutStore.getState().setLayout(projectId, replacementLayout);
+          paneLayouts.getState().setLayout(projectId, replacementLayout);
         }
         const createdId = createdSnapshot.workspace.selectedConversationId;
         if (createdId && (replacingMain || selectionPending())) selectConversation(createdId);
@@ -408,7 +425,9 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
   };
   const paused = snapshot.workspace.lifecycleState === "paused";
   const setPaused = (pause: boolean) => {
-    const action = pause ? backend.pauseProjectCoordinator : backend.resumeProjectCoordinator;
+    const action = pause
+      ? nodeBackend.pauseProjectCoordinator
+      : nodeBackend.resumeProjectCoordinator;
     void runAction("conversation", async () => setSnapshot(await action(projectId)), {
       failureMessage: "Could not update Coordinator",
     });
@@ -417,7 +436,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
     void runAction(
       "conversation",
       async () =>
-        setSnapshot(await backend.closeCoordinatorConversation(projectId, conversationId)),
+        setSnapshot(await nodeBackend.closeCoordinatorConversation(projectId, conversationId)),
       { failureMessage: "Could not close conversation" },
     );
   };
@@ -425,7 +444,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
     void runAction(
       "conversation",
       async () =>
-        setSnapshot(await backend.retryCoordinatorConversation(projectId, conversationId)),
+        setSnapshot(await nodeBackend.retryCoordinatorConversation(projectId, conversationId)),
       { failureMessage: "Could not retry conversation" },
     );
   };

@@ -27,7 +27,8 @@ import {
   type DesignFrameAction,
   type GeometryPatch,
 } from "./design-canvas-context";
-import { designApi, failureOf, importDesignDocument } from "@/lib/design-client";
+import { failureOf, importDesignDocument } from "@/lib/design-client";
+import { useDesignApi, useDesignScope } from "./design-scope";
 import { useDesignCanvas } from "./design-controller";
 import { selectionValidity, type DesignSelection } from "./design-selection";
 import { loadViewPrefs, saveViewPrefs } from "./design-view-prefs";
@@ -101,6 +102,9 @@ export function DesignCanvasTab({
   onClose?: () => void;
 }) {
   const { controller, projection } = useDesignCanvas(environmentId, canvasId, isActive);
+  // The canvas's node: every call this tab makes goes there (plan item 4007).
+  const designScope = useDesignScope();
+  const nodeDesign = useDesignApi();
   const prefs = useMemo(() => loadViewPrefs(controller.key), [controller.key]);
   const [viewport, setViewport] = useState<DesignViewport>(prefs.viewport ?? DEFAULT_VIEWPORT);
   const viewportRef = useRef(viewport);
@@ -487,7 +491,7 @@ export function DesignCanvasTab({
           );
           break;
         case "retry-validation":
-          void designApi
+          void nodeDesign
             .validate(environmentId, canvasId, frameId)
             .then(() => controller.refresh(), reportError);
           break;
@@ -505,7 +509,7 @@ export function DesignCanvasTab({
           break;
       }
     },
-    [canvasId, controller, environmentId, fitFrame, narrow, openAgent, reportError],
+    [canvasId, controller, environmentId, fitFrame, narrow, openAgent, reportError, nodeDesign],
   );
 
   const frameActionRef = useRef(frameAction);
@@ -814,18 +818,18 @@ export function DesignCanvasTab({
     const tombstone = projectionRef.current?.tombstone;
     if (!tombstone) return;
     try {
-      const prepared = await designApi.prepare(environmentId, {
+      const prepared = await nodeDesign.prepare(environmentId, {
         canvasId,
         input: { kind: "restore_canvas" },
         preconditions: { tombstoneRevision: tombstone.revision },
       });
-      const status = await designApi.execute(environmentId, canvasId, prepared.token);
+      const status = await nodeDesign.execute(environmentId, canvasId, prepared.token);
       if (status.failure) setLocalError(status.failure.message);
       await controller.refresh();
     } catch (reason) {
       reportError(reason);
     }
-  }, [canvasId, controller, environmentId, reportError]);
+  }, [canvasId, controller, environmentId, reportError, nodeDesign]);
   const recoveryCopy = useCallback(async () => {
     const last = projectionRef.current?.canvas;
     if (!last) return;
@@ -836,12 +840,13 @@ export function DesignCanvasTab({
           ...last,
           name: `${last.name} (recovered r${last.revision})`.slice(0, 120),
         }),
+        designScope,
       );
       setAnnouncement(`Saved a recovery copy as “${copy.name}”`);
     } catch (reason) {
       reportError(reason);
     }
-  }, [environmentId, reportError]);
+  }, [environmentId, reportError, designScope]);
 
   const notice = projection?.notice;
   // Starts unset so a notice already present on mount is announced too.

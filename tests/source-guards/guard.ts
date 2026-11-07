@@ -5,6 +5,11 @@ export const GUARD_IDS = [
   "released-port-rebind",
   "subprocess-without-budget",
   "small-fake-pid",
+  "window-orkestrator-direct",
+  "direct-transport-import",
+  "lib-backend-command-default",
+  "window-orkestrator-portal",
+  "workspace-command-bound-call",
 ] as const;
 
 export type GuardId = (typeof GUARD_IDS)[number];
@@ -21,6 +26,11 @@ export interface SourceGuard {
   id: GuardId;
   /** What to do instead; printed under every new finding. */
   advice: string;
+  /**
+   * Repository-relative roots whose production (non-test) sources the guard
+   * reads instead of the test sources. Absent for a test-source guard.
+   */
+  productionRoots?: readonly string[];
   appliesTo(file: ScannedFile): boolean;
   /** A cheap text test: `false` means the file cannot offend and is not parsed for this guard. */
   mayOffend(source: string): boolean;
@@ -34,8 +44,18 @@ export interface SourceGuard {
 /** Handlers keyed by ESTree node type, as oxc-parser's `Visitor` takes them. */
 export type NodeHandlers = Record<string, (node: AnyNode) => void>;
 
+/**
+ * A finding counted under a subject within its file (for example, the store
+ * a shim call is made on), so the baseline holds one entry per subject and
+ * file instead of one per file.
+ */
+export interface SubjectFinding {
+  offset: number;
+  subject: string;
+}
+
 export interface GuardVisitor {
   handlers: NodeHandlers;
-  /** Source offsets of each finding, once the walk is over. */
-  finish(): number[];
+  /** Source offsets of each finding (or offset and subject), once the walk is over. */
+  finish(): Array<number | SubjectFinding>;
 }

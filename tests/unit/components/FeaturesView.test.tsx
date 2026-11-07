@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { ReactNode } from "react";
 import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
 import * as realNativeComposeDock from "@/components/chat/NativeComposeDock";
@@ -13,16 +14,17 @@ import {
   stripStoryRefinementStateBlocks,
 } from "@/lib/feature-planner";
 import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
-import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
-import { useConfigStore } from "@/stores/configStore";
-import { useEnvironmentStore } from "@/stores/environmentStore";
-import { useFeaturePlanStore } from "@/stores/featurePlanStore";
-import { useKanbanStore } from "@/stores/kanbanStore";
-import { useProjectStore } from "@/stores/projectStore";
+import { buildPipelineStore } from "@/stores/buildPipelineStore";
+import { configStore } from "@/stores/configStore";
+import { environmentStore } from "@/stores/environmentStore";
+import { featurePlanStore, type FeaturePlanState } from "@/stores/featurePlanStore";
+import { kanbanStore, type KanbanState } from "@/stores/kanbanStore";
+import { projectStore } from "@/stores/projectStore";
 import type { FeaturePlan, FeaturePlanMessage, FeatureStoryCard } from "@/lib/backend";
 import type { KanbanTask } from "@/stores/kanbanStore";
 import type { Environment } from "@/types";
 import { mockToastError, mockToastWarning } from "../../mocks/sonner";
+import { appCommandStore } from "../../../apps/web/src/test/app-command-store";
 
 const realVirtualizedMessageListSnapshot = { ...realVirtualizedMessageList };
 const realNativeComposeDockSnapshot = { ...realNativeComposeDock };
@@ -31,7 +33,7 @@ const realHooksSnapshot = { ...realHooks };
 const realUseBuildPipelineSnapshot = { ...realUseBuildPipeline };
 const realUseEnvironmentsSnapshot = { ...realUseEnvironments };
 const realBackendSnapshot = { ...realBackend };
-const defaultConfigSnapshot = structuredClone(useConfigStore.getState().config);
+const defaultConfigSnapshot = structuredClone(appCommandStore(configStore).getState().config);
 
 const startBuildMock = mock(async () => undefined);
 // Most Build tests below drive the renderer sequence an older backend needs.
@@ -334,7 +336,7 @@ function makeEnvironment(overrides: Partial<Environment> = {}): Environment {
 }
 
 function seedExistingCodexEnvironment(environment: Environment = makeEnvironment()) {
-  useEnvironmentStore.setState({ environments: [environment] });
+  appCommandStore(environmentStore).setState({ environments: [environment] });
 }
 
 function chatFeature(overrides: Partial<FeaturePlan> = {}): FeaturePlan {
@@ -377,12 +379,12 @@ function updateFeatureInStore(
   featureId: string,
   updates: Partial<FeaturePlan>,
 ): FeaturePlan | undefined {
-  const feature = useFeaturePlanStore
+  const feature = appCommandStore(featurePlanStore)
     .getState()
     .features.find((candidate) => candidate.id === featureId);
   if (!feature) return undefined;
   const updated = { ...feature, ...updates };
-  useFeaturePlanStore.setState((state) => ({
+  appCommandStore(featurePlanStore).setState((state) => ({
     features: state.features.map((candidate) => (candidate.id === featureId ? updated : candidate)),
   }));
   return updated;
@@ -395,7 +397,7 @@ function appendFeatureMessageInStore(
   stateApplication?: FeaturePlanMessage["stateApplication"],
   modelId?: string,
 ): FeaturePlan | undefined {
-  const feature = useFeaturePlanStore
+  const feature = appCommandStore(featurePlanStore)
     .getState()
     .features.find((candidate) => candidate.id === featureId);
   if (!feature) return undefined;
@@ -422,7 +424,7 @@ function appendStoryMessageInStore(
   stateApplication?: FeaturePlanMessage["stateApplication"],
   modelId?: string,
 ): FeaturePlan | undefined {
-  const feature = useFeaturePlanStore
+  const feature = appCommandStore(featurePlanStore)
     .getState()
     .features.find((candidate) => candidate.id === featureId);
   if (!feature) return undefined;
@@ -450,7 +452,7 @@ function appendStoryMessageInStore(
 
 function seedStores(featureOrFeatures: FeaturePlan | FeaturePlan[]) {
   const features = Array.isArray(featureOrFeatures) ? featureOrFeatures : [featureOrFeatures];
-  useProjectStore.setState({
+  appCommandStore(projectStore).setState({
     projects: [
       {
         id: "project-1",
@@ -464,47 +466,25 @@ function seedStores(featureOrFeatures: FeaturePlan | FeaturePlan[]) {
     isLoading: false,
     error: null,
   });
-  useFeaturePlanStore.setState({
+  appCommandStore(featurePlanStore).setState({
     features,
     isLoading: false,
     currentProjectId: "project-1",
-    loadFeatures: loadFeaturesMock as unknown as ReturnType<
-      typeof useFeaturePlanStore.getState
-    >["loadFeatures"],
-    createFeature: createFeatureMock as unknown as ReturnType<
-      typeof useFeaturePlanStore.getState
-    >["createFeature"],
-    updateFeature: updateFeatureMock as unknown as ReturnType<
-      typeof useFeaturePlanStore.getState
-    >["updateFeature"],
-    claimFeatureBuild: claimFeatureBuildMock as unknown as ReturnType<
-      typeof useFeaturePlanStore.getState
-    >["claimFeatureBuild"],
-    appendMessage: appendMessageMock as unknown as ReturnType<
-      typeof useFeaturePlanStore.getState
-    >["appendMessage"],
-    appendStoryMessage: appendStoryMessageMock as unknown as ReturnType<
-      typeof useFeaturePlanStore.getState
-    >["appendStoryMessage"],
-    startPlanning: startPlanningMock as unknown as ReturnType<
-      typeof useFeaturePlanStore.getState
-    >["startPlanning"],
-    retryPlanning: retryPlanningMock as unknown as ReturnType<
-      typeof useFeaturePlanStore.getState
-    >["retryPlanning"],
-    cancelPlanning: cancelPlanningMock as unknown as ReturnType<
-      typeof useFeaturePlanStore.getState
-    >["cancelPlanning"],
+    loadFeatures: loadFeaturesMock as unknown as FeaturePlanState["loadFeatures"],
+    createFeature: createFeatureMock as unknown as FeaturePlanState["createFeature"],
+    updateFeature: updateFeatureMock as unknown as FeaturePlanState["updateFeature"],
+    claimFeatureBuild: claimFeatureBuildMock as unknown as FeaturePlanState["claimFeatureBuild"],
+    appendMessage: appendMessageMock as unknown as FeaturePlanState["appendMessage"],
+    appendStoryMessage: appendStoryMessageMock as unknown as FeaturePlanState["appendStoryMessage"],
+    startPlanning: startPlanningMock as unknown as FeaturePlanState["startPlanning"],
+    retryPlanning: retryPlanningMock as unknown as FeaturePlanState["retryPlanning"],
+    cancelPlanning: cancelPlanningMock as unknown as FeaturePlanState["cancelPlanning"],
   });
-  useKanbanStore.setState({
+  appCommandStore(kanbanStore).setState({
     tasks: [makeTask()],
-    addTask: addTaskMock as unknown as ReturnType<typeof useKanbanStore.getState>["addTask"],
-    deleteTask: deleteTaskMock as unknown as ReturnType<
-      typeof useKanbanStore.getState
-    >["deleteTask"],
-    updateTask: updateTaskMock as unknown as ReturnType<
-      typeof useKanbanStore.getState
-    >["updateTask"],
+    addTask: addTaskMock as unknown as KanbanState["addTask"],
+    deleteTask: deleteTaskMock as unknown as KanbanState["deleteTask"],
+    updateTask: updateTaskMock as unknown as KanbanState["updateTask"],
   });
 }
 
@@ -514,32 +494,34 @@ function seedPipeline({
   failed = false,
 }: { taskId?: string; environmentId?: string; failed?: boolean } = {}): string {
   const id = `pipeline-${taskId}`;
-  useBuildPipelineStore.getState().replacePipeline({
-    id,
-    taskId,
-    projectId: "project-1",
-    environmentId: environmentId ?? "",
-    environmentType: "containerized",
-    agentType: "codex",
-    phase: failed ? "failed" : "building",
-    sessions: [],
-    currentSessionIndex: -1,
-    iteration: 0,
-    maxIterations: 3,
-    createdAt: NOW,
-    taskTitle: "Task",
-    taskSnapshot: {
-      title: "Task",
-      description: "",
-      acceptanceCriteria: "",
-      comments: [],
-      images: [],
-    },
-    source: { type: "kanban", taskId },
-    ...(failed ? { error: "failed to start environment" } : {}),
-    backendRevision: 1,
-    controller: "backend",
-  });
+  appCommandStore(buildPipelineStore)
+    .getState()
+    .replacePipeline({
+      id,
+      taskId,
+      projectId: "project-1",
+      environmentId: environmentId ?? "",
+      environmentType: "containerized",
+      agentType: "codex",
+      phase: failed ? "failed" : "building",
+      sessions: [],
+      currentSessionIndex: -1,
+      iteration: 0,
+      maxIterations: 3,
+      createdAt: NOW,
+      taskTitle: "Task",
+      taskSnapshot: {
+        title: "Task",
+        description: "",
+        acceptanceCriteria: "",
+        comments: [],
+        images: [],
+      },
+      source: { type: "kanban", taskId },
+      ...(failed ? { error: "failed to start environment" } : {}),
+      backendRevision: 1,
+      controller: "backend",
+    });
   return id;
 }
 
@@ -587,9 +569,11 @@ beforeEach(() => {
       title: "",
       status: "collecting",
       stories: [],
-      order: useFeaturePlanStore.getState().features.length,
+      order: appCommandStore(featurePlanStore).getState().features.length,
     });
-    useFeaturePlanStore.setState((state) => ({ features: [...state.features, created] }));
+    appCommandStore(featurePlanStore).setState((state) => ({
+      features: [...state.features, created],
+    }));
     return created.id;
   });
   appendMessageMock.mockClear();
@@ -680,19 +664,22 @@ beforeEach(() => {
     virtuosoRef: { current: null },
     scrollProps: {},
   }));
-  useConfigStore.setState({
+  appCommandStore(configStore).setState({
     config: structuredClone(defaultConfigSnapshot),
     isLoading: false,
     error: null,
   });
-  useEnvironmentStore.setState({
+  appCommandStore(environmentStore).setState({
     environments: [],
     isLoading: false,
     error: null,
     deletingEnvironments: new Set(),
   });
-  useFeaturePlanStore.setState({ chatDrafts: new Map() });
-  useBuildPipelineStore.setState({ pipelines: new Map(), buildEnvironmentIds: new Set() });
+  appCommandStore(featurePlanStore).setState({ chatDrafts: new Map() });
+  appCommandStore(buildPipelineStore).setState({
+    pipelines: new Map(),
+    buildEnvironmentIds: new Set(),
+  });
 });
 
 describe("FeaturesView message drafts", () => {
@@ -708,7 +695,7 @@ describe("FeaturesView message drafts", () => {
     });
     seedStores([]);
 
-    render(<FeaturesView projectId="project-1" />);
+    renderInAppCommandScope(<FeaturesView projectId="project-1" />);
 
     await waitFor(() => expect(getComposeDraftMock).toHaveBeenCalled());
     await new Promise((resolve) => setTimeout(resolve, 450));
@@ -729,7 +716,7 @@ describe("FeaturesView message drafts", () => {
     });
     seedStores(chatFeature());
 
-    render(<FeaturesView projectId="project-1" />);
+    renderInAppCommandScope(<FeaturesView projectId="project-1" />);
     await waitFor(() => expect(getComposeDraftMock).toHaveBeenCalled());
     await new Promise((resolve) => setTimeout(resolve, 450));
     expect(deleteComposeDraftMock).not.toHaveBeenCalled();
@@ -757,7 +744,7 @@ describe("FeaturesView message drafts", () => {
     });
     seedStores(chatFeature());
 
-    render(<FeaturesView projectId="project-1" />);
+    renderInAppCommandScope(<FeaturesView projectId="project-1" />);
 
     await waitFor(() =>
       expect(
@@ -772,7 +759,7 @@ describe("FeaturesView message drafts", () => {
 
   test("flushes a changed feature chat draft when the view unmounts before debounce", async () => {
     seedStores(chatFeature());
-    const view = render(<FeaturesView projectId="project-1" />);
+    const view = renderInAppCommandScope(<FeaturesView projectId="project-1" />);
     const composer = screen.getByPlaceholderText("Describe the feature or answer Codex...");
 
     fireEvent.change(composer, { target: { value: "Persist before unmount" } });
@@ -794,12 +781,12 @@ describe("FeaturesView message drafts", () => {
 
   test("restores an unfinished feature message after remounting", () => {
     seedStores(chatFeature());
-    const view = render(<FeaturesView projectId="project-1" />);
+    const view = renderInAppCommandScope(<FeaturesView projectId="project-1" />);
     const composer = screen.getByPlaceholderText("Describe the feature or answer Codex...");
 
     fireEvent.change(composer, { target: { value: "A half-finished feature message" } });
     view.unmount();
-    render(<FeaturesView projectId="project-1" />);
+    renderInAppCommandScope(<FeaturesView projectId="project-1" />);
 
     expect(
       (
@@ -812,7 +799,7 @@ describe("FeaturesView message drafts", () => {
 
   test("restores an unfinished story message after remounting and reopening the story", () => {
     seedStores(featureWithStories());
-    const view = render(<FeaturesView projectId="project-1" />);
+    const view = renderInAppCommandScope(<FeaturesView projectId="project-1" />);
     openStory();
     const composer = screen.getByPlaceholderText(
       "Refine the story, description, or acceptance criteria...",
@@ -820,7 +807,7 @@ describe("FeaturesView message drafts", () => {
 
     fireEvent.change(composer, { target: { value: "Keep this story thought" } });
     view.unmount();
-    render(<FeaturesView projectId="project-1" />);
+    renderInAppCommandScope(<FeaturesView projectId="project-1" />);
     openStory();
 
     expect(
@@ -837,13 +824,13 @@ describe("FeaturesView message drafts", () => {
       chatFeature({ id: "feature-1", title: "First Feature", order: 0 }),
       chatFeature({ id: "feature-2", title: "Second Feature", order: 1 }),
     ]);
-    useFeaturePlanStore.setState({
+    appCommandStore(featurePlanStore).setState({
       chatDrafts: new Map([
         ["feature:feature-1", "first feature draft"],
         ["feature:feature-2", "second feature draft"],
       ]),
     });
-    render(<FeaturesView projectId="project-1" />);
+    renderInAppCommandScope(<FeaturesView projectId="project-1" />);
 
     expect(
       (
@@ -877,20 +864,22 @@ describe("FeaturesView message drafts", () => {
   test("clears only the submitted feature and story drafts", async () => {
     seedStores(chatFeature());
     seedExistingCodexEnvironment();
-    useFeaturePlanStore.setState({
+    appCommandStore(featurePlanStore).setState({
       chatDrafts: new Map([
         ["feature:feature-1", "send feature"],
         ["feature:other", "leave feature"],
       ]),
     });
-    const first = render(<FeaturesView projectId="project-1" />);
+    const first = renderInAppCommandScope(<FeaturesView projectId="project-1" />);
 
     fireEvent.click(screen.getByTitle("Send message"));
     await waitFor(() =>
       expect(startPlanningMock).toHaveBeenCalledWith("feature-1", "feature", "send feature"),
     );
-    expect(useFeaturePlanStore.getState().getChatDraft("feature:feature-1")).toBe("");
-    expect(useFeaturePlanStore.getState().getChatDraft("feature:other")).toBe("leave feature");
+    expect(appCommandStore(featurePlanStore).getState().getChatDraft("feature:feature-1")).toBe("");
+    expect(appCommandStore(featurePlanStore).getState().getChatDraft("feature:other")).toBe(
+      "leave feature",
+    );
     first.unmount();
 
     seedStores(
@@ -900,30 +889,34 @@ describe("FeaturesView message drafts", () => {
       }),
     );
     seedExistingCodexEnvironment();
-    useFeaturePlanStore.setState({
+    appCommandStore(featurePlanStore).setState({
       chatDrafts: new Map([
         ["feature:feature-1:story:story-1", "send story"],
         ["feature:feature-1", "leave chat"],
       ]),
     });
-    render(<FeaturesView projectId="project-1" />);
+    renderInAppCommandScope(<FeaturesView projectId="project-1" />);
     openStory();
     fireEvent.click(screen.getByTitle("Send message"));
 
     await waitFor(() =>
       expect(startPlanningMock).toHaveBeenCalledWith("feature-1", "story", "send story", "story-1"),
     );
-    expect(useFeaturePlanStore.getState().getChatDraft("feature:feature-1:story:story-1")).toBe("");
-    expect(useFeaturePlanStore.getState().getChatDraft("feature:feature-1")).toBe("leave chat");
+    expect(
+      appCommandStore(featurePlanStore).getState().getChatDraft("feature:feature-1:story:story-1"),
+    ).toBe("");
+    expect(appCommandStore(featurePlanStore).getState().getChatDraft("feature:feature-1")).toBe(
+      "leave chat",
+    );
   });
 
   test("restores the exact feature draft and reports a rejected planning start", async () => {
     startPlanningMock.mockResolvedValueOnce(undefined as never);
     seedStores(chatFeature());
-    useFeaturePlanStore.setState({
+    appCommandStore(featurePlanStore).setState({
       chatDrafts: new Map([["feature:feature-1", "  keep my exact wording  "]]),
     });
-    render(<FeaturesView projectId="project-1" />);
+    renderInAppCommandScope(<FeaturesView projectId="project-1" />);
 
     fireEvent.click(screen.getByTitle("Send message"));
 
@@ -951,10 +944,10 @@ describe("FeaturesView message drafts", () => {
   test("restores the exact story draft and reports a rejected refinement start", async () => {
     startPlanningMock.mockResolvedValueOnce(undefined as never);
     seedStores(featureWithStories());
-    useFeaturePlanStore.setState({
+    appCommandStore(featurePlanStore).setState({
       chatDrafts: new Map([["feature:feature-1:story:story-1", "  preserve story spacing  "]]),
     });
-    render(<FeaturesView projectId="project-1" />);
+    renderInAppCommandScope(<FeaturesView projectId="project-1" />);
     openStory();
 
     fireEvent.click(screen.getByTitle("Send message"));
@@ -986,7 +979,7 @@ describe("FeaturesView backend-owned planning controls", () => {
   test("projects active planning as working and blocks compose and refresh", () => {
     seedStores(chatFeature({ planning: planningRecord() }));
 
-    render(<FeaturesView projectId="project-1" />);
+    renderInAppCommandScope(<FeaturesView projectId="project-1" />);
 
     expect(screen.getByText("Codex is working...")).toBeTruthy();
     expect(screen.getByTitle("Send message").hasAttribute("disabled")).toBe(true);
@@ -1013,7 +1006,7 @@ describe("FeaturesView backend-owned planning controls", () => {
       }),
     );
 
-    render(<FeaturesView projectId="project-1" />);
+    renderInAppCommandScope(<FeaturesView projectId="project-1" />);
 
     expect(screen.getByRole("alert").textContent).toContain(
       "Search feature: Codex bridge disconnected",
@@ -1040,7 +1033,7 @@ describe("FeaturesView backend-owned planning controls", () => {
         }),
       }),
     );
-    render(<FeaturesView projectId="project-1" />);
+    renderInAppCommandScope(<FeaturesView projectId="project-1" />);
 
     fireEvent.click(screen.getByRole("button", { name: "Check again" }));
     await waitFor(() =>
@@ -1060,7 +1053,7 @@ describe("FeaturesView backend-owned planning controls", () => {
   test("refreshes idle planning state and reports refresh failure", async () => {
     seedStores(chatFeature());
     loadFeaturesMock.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
-    render(<FeaturesView projectId="project-1" />);
+    renderInAppCommandScope(<FeaturesView projectId="project-1" />);
 
     fireEvent.click(screen.getByTitle("Refresh Codex status"));
 
@@ -1108,7 +1101,7 @@ describe("FeaturesView conversation ordering", () => {
       }),
     ]);
 
-    render(<FeaturesView projectId="project-1" />);
+    renderInAppCommandScope(<FeaturesView projectId="project-1" />);
 
     const featureButtons = screen
       .getAllByRole("button")
@@ -1141,7 +1134,7 @@ describe("FeaturesView conversation ordering", () => {
       }),
     ]);
 
-    render(<FeaturesView projectId="project-1" />);
+    renderInAppCommandScope(<FeaturesView projectId="project-1" />);
 
     const buttons = screen
       .getAllByRole("button")
@@ -1184,7 +1177,7 @@ describe("FeaturesView conversation ordering", () => {
       }),
     ]);
 
-    render(<FeaturesView projectId="project-1" />);
+    renderInAppCommandScope(<FeaturesView projectId="project-1" />);
 
     const titles = [
       "Valid earlier order",
@@ -1239,7 +1232,7 @@ describe("FeaturesView conversation ordering", () => {
       }),
     ]);
 
-    render(<FeaturesView projectId="project-1" />);
+    renderInAppCommandScope(<FeaturesView projectId="project-1" />);
 
     expect(screen.queryByText("Other project feature") === null).toBe(true);
     const buttons = screen
@@ -1268,7 +1261,7 @@ describe("FeaturesView conversation ordering", () => {
       ],
     });
     seedStores([featureA, featureB]);
-    render(<FeaturesView projectId="project-1" />);
+    renderInAppCommandScope(<FeaturesView projectId="project-1" />);
 
     fireEvent.click(screen.getByText("Feature B").closest("button")!);
     await waitFor(() => {
@@ -1278,7 +1271,7 @@ describe("FeaturesView conversation ordering", () => {
     });
 
     act(() => {
-      useFeaturePlanStore.setState({
+      appCommandStore(featurePlanStore).setState({
         features: [
           {
             ...featureA,
@@ -1307,14 +1300,14 @@ describe("FeaturesView conversation ordering", () => {
 describe("FeaturesView lifecycle and navigation", () => {
   test("shows loading state instead of a false empty state while feature loading is pending", async () => {
     seedStores([]);
-    useFeaturePlanStore.setState({ isLoading: true });
-    render(<FeaturesView projectId="project-1" />);
+    appCommandStore(featurePlanStore).setState({ isLoading: true });
+    renderInAppCommandScope(<FeaturesView projectId="project-1" />);
 
     expect(screen.getAllByText("Loading features...")).toHaveLength(2);
     expect(screen.queryByText("Create a feature to start discovery.") === null).toBe(true);
     expect(screen.queryByText("Select or create a feature.") === null).toBe(true);
 
-    act(() => useFeaturePlanStore.setState({ isLoading: false }));
+    act(() => appCommandStore(featurePlanStore).setState({ isLoading: false }));
     await waitFor(() =>
       expect(screen.getByText("Create a feature to start discovery.")).toBeTruthy(),
     );
@@ -1323,7 +1316,7 @@ describe("FeaturesView lifecycle and navigation", () => {
 
   test("loads each project, filters the rerendered project, and renders the empty state", async () => {
     seedStores([]);
-    const view = render(<FeaturesView projectId="project-1" />);
+    const view = renderInAppCommandScope(<FeaturesView projectId="project-1" />);
 
     expect(screen.getByText("Create a feature to start discovery.")).toBeTruthy();
     expect(screen.getByText("Select or create a feature.")).toBeTruthy();
@@ -1331,7 +1324,7 @@ describe("FeaturesView lifecycle and navigation", () => {
     await waitFor(() => expect(loadFeaturesMock).toHaveBeenCalledWith("project-1"));
 
     act(() => {
-      useFeaturePlanStore.setState({
+      appCommandStore(featurePlanStore).setState({
         features: [
           featureWithStories({
             id: "project-1-feature",
@@ -1355,7 +1348,7 @@ describe("FeaturesView lifecycle and navigation", () => {
 
   test("creates and selects a new feature while preserving the chat default", async () => {
     seedStores([]);
-    render(<FeaturesView projectId="project-1" />);
+    renderInAppCommandScope(<FeaturesView projectId="project-1" />);
 
     fireEvent.click(screen.getByRole("button", { name: "New feature" }));
 
@@ -1368,7 +1361,7 @@ describe("FeaturesView lifecycle and navigation", () => {
   test("leaves the current selection unchanged when feature creation returns no id", async () => {
     createFeatureMock.mockImplementationOnce(async () => undefined);
     seedStores(featureWithStories({ title: "Existing feature" }));
-    render(<FeaturesView projectId="project-1" />);
+    renderInAppCommandScope(<FeaturesView projectId="project-1" />);
 
     fireEvent.click(screen.getByRole("button", { name: "New feature" }));
 
@@ -1388,7 +1381,7 @@ describe("FeaturesView lifecycle and navigation", () => {
       }),
       featureWithStories({ id: "with", title: "With stories", order: 1 }),
     ]);
-    render(<FeaturesView projectId="project-1" />);
+    renderInAppCommandScope(<FeaturesView projectId="project-1" />);
 
     expect(screen.getByRole("tab", { name: "Chat" }).getAttribute("aria-selected")).toBe("true");
     fireEvent.click(screen.getByText("With stories").closest("button")!);
@@ -1412,7 +1405,7 @@ describe("FeaturesView lifecycle and navigation", () => {
         ],
       }),
     );
-    render(<FeaturesView projectId="project-1" />);
+    renderInAppCommandScope(<FeaturesView projectId="project-1" />);
 
     fireEvent.click(
       screen.getByRole("button", {
@@ -1460,11 +1453,13 @@ describe("FeaturesView lifecycle and navigation", () => {
       ],
     });
     seedStores(feature);
-    render(<FeaturesView projectId="project-1" />);
+    renderInAppCommandScope(<FeaturesView projectId="project-1" />);
     fireEvent.click(screen.getByRole("button", { name: /Story One/ }));
 
     act(() => {
-      useFeaturePlanStore.setState({ features: [{ ...feature, stories: [feature.stories[1]!] }] });
+      appCommandStore(featurePlanStore).setState({
+        features: [{ ...feature, stories: [feature.stories[1]!] }],
+      });
     });
 
     await waitFor(() =>
@@ -1477,11 +1472,11 @@ describe("FeaturesView lifecycle and navigation", () => {
   test("falls back to Chat when the selected feature loses its final story", async () => {
     const feature = featureWithStories();
     seedStores(feature);
-    render(<FeaturesView projectId="project-1" />);
+    renderInAppCommandScope(<FeaturesView projectId="project-1" />);
     expect(screen.getByRole("tab", { name: "Stories" }).getAttribute("aria-selected")).toBe("true");
 
     act(() => {
-      useFeaturePlanStore.setState({
+      appCommandStore(featurePlanStore).setState({
         features: [{ ...feature, stories: [], status: "collecting" }],
       });
     });
@@ -1508,7 +1503,7 @@ describe("FeaturesView lifecycle and navigation", () => {
         order: 2,
       }),
     ]);
-    render(<FeaturesView projectId="project-1" />);
+    renderInAppCommandScope(<FeaturesView projectId="project-1" />);
 
     const blankButton = screen.getByText("new feature").closest("button")!;
     expect(blankButton.textContent).not.toContain("0 stor");
@@ -1528,7 +1523,7 @@ describe("FeaturesView lifecycle and navigation", () => {
         stories: [makeStory({ id: "exact", title: exact }), makeStory({ id: "long", title: long })],
       }),
     );
-    render(<FeaturesView projectId="project-1" />);
+    renderInAppCommandScope(<FeaturesView projectId="project-1" />);
 
     fireEvent.click(
       screen.getByRole("button", {
@@ -1563,7 +1558,7 @@ describe("NativeStyleChatPanel", () => {
       onSend: mock(() => undefined),
       ...overrides,
     };
-    return { ...render(<NativeStyleChatPanel {...props} />), props };
+    return { ...renderInAppCommandScope(<NativeStyleChatPanel {...props} />), props };
   }
 
   test("strips planner state, drops empty messages, and wires normalized message metadata", () => {
@@ -1727,14 +1722,16 @@ describe("FeaturesView build action", () => {
       startFeaturePlanBuildMock.mockImplementation(async () => started);
       seedStores(featureWithStories({ codexEnvironmentId: "env-feature" }));
 
-      render(<FeaturesView projectId="project-1" />);
+      renderInAppCommandScope(<FeaturesView projectId="project-1" />);
       fireEvent.click(screen.getByRole("button", { name: "Build" }));
 
       await waitFor(() =>
         expect(startFeaturePlanBuildMock).toHaveBeenCalledWith({ featureId: "feature-1" }),
       );
       await waitFor(() =>
-        expect(useBuildPipelineStore.getState().pipelines.get("pipeline-backend")).toBeTruthy(),
+        expect(
+          appCommandStore(buildPipelineStore).getState().pipelines.get("pipeline-backend"),
+        ).toBeTruthy(),
       );
       // Nothing of the renderer sequence runs: no ticket, claim, start or link.
       expect(addTaskMock).not.toHaveBeenCalled();
@@ -1749,7 +1746,7 @@ describe("FeaturesView build action", () => {
       });
       seedStores(featureWithStories());
 
-      render(<FeaturesView projectId="project-1" />);
+      renderInAppCommandScope(<FeaturesView projectId="project-1" />);
       fireEvent.click(screen.getByRole("button", { name: "Build" }));
 
       await waitFor(() =>
@@ -1768,7 +1765,7 @@ describe("FeaturesView build action", () => {
       });
       seedStores(featureWithStories());
 
-      render(<FeaturesView projectId="project-1" />);
+      renderInAppCommandScope(<FeaturesView projectId="project-1" />);
       fireEvent.click(screen.getByRole("button", { name: "Build" }));
 
       await waitFor(() =>
@@ -1780,7 +1777,7 @@ describe("FeaturesView build action", () => {
   test("renders the Build button in the tab header when the feature has stories", () => {
     seedStores(featureWithStories());
 
-    render(<FeaturesView projectId="project-1" />);
+    renderInAppCommandScope(<FeaturesView projectId="project-1" />);
 
     expect(screen.getByRole("button", { name: "Build" })).toBeTruthy();
   });
@@ -1800,7 +1797,7 @@ describe("FeaturesView build action", () => {
     startFeaturePlanBuildMock.mockImplementation(async () => started);
     seedStores(featureWithStories({ status: "building", buildTaskId: "task-existing" }));
 
-    render(<FeaturesView projectId="project-1" />);
+    renderInAppCommandScope(<FeaturesView projectId="project-1" />);
     const resume = screen.getByRole("button", { name: "Resume build" });
     expect(resume.hasAttribute("disabled")).toBe(false);
     fireEvent.click(resume);
@@ -1815,7 +1812,7 @@ describe("FeaturesView build action", () => {
   test("keeps Build disabled while a plan is building without a claimed ticket", () => {
     seedStores(featureWithStories({ status: "building" }));
 
-    render(<FeaturesView projectId="project-1" />);
+    renderInAppCommandScope(<FeaturesView projectId="project-1" />);
 
     expect(screen.getByRole("button", { name: "Build" }).hasAttribute("disabled")).toBe(true);
   });
@@ -1829,11 +1826,11 @@ describe("FeaturesView build action", () => {
       }),
     );
 
-    const first = render(<FeaturesView projectId="project-1" />);
+    const first = renderInAppCommandScope(<FeaturesView projectId="project-1" />);
     expect(screen.getByRole("button", { name: "Build" }).hasAttribute("disabled")).toBe(true);
     first.unmount();
 
-    render(<FeaturesView projectId="project-1" />);
+    renderInAppCommandScope(<FeaturesView projectId="project-1" />);
     const build = screen.getByRole("button", { name: "Build" });
     expect(build.hasAttribute("disabled")).toBe(true);
     fireEvent.click(build);
@@ -1852,7 +1849,7 @@ describe("FeaturesView build action", () => {
     });
     seedStores(featureWithStories());
 
-    render(<FeaturesView projectId="project-1" />);
+    renderInAppCommandScope(<FeaturesView projectId="project-1" />);
     fireEvent.click(screen.getByRole("button", { name: "Build" }));
 
     await waitFor(() => expect(claimFeatureBuildMock).toHaveBeenCalledWith("feature-1", "task-1"));
@@ -1890,7 +1887,7 @@ describe("FeaturesView build action", () => {
       }),
     ]);
 
-    render(<FeaturesView projectId="project-1" />);
+    renderInAppCommandScope(<FeaturesView projectId="project-1" />);
 
     fireEvent.click(screen.getByText("Feature A").closest("button")!);
     const build = await screen.findByRole("button", { name: "Build" });
@@ -1903,7 +1900,7 @@ describe("FeaturesView build action", () => {
   test("hides the Build button when the feature has no stories", () => {
     seedStores(featureWithStories({ status: "collecting", stories: [] }));
 
-    render(<FeaturesView projectId="project-1" />);
+    renderInAppCommandScope(<FeaturesView projectId="project-1" />);
 
     expect(screen.queryByRole("button", { name: "Build" }) === null).toBe(true);
   });
@@ -1912,7 +1909,7 @@ describe("FeaturesView build action", () => {
     seedStores(featureWithStories({ codexEnvironmentId: "env-feature" }));
     const pipelineId = seedPipeline({ taskId: "task-1", environmentId: "env-feature" });
 
-    render(<FeaturesView projectId="project-1" />);
+    renderInAppCommandScope(<FeaturesView projectId="project-1" />);
 
     fireEvent.click(screen.getByRole("button", { name: "Build" }));
 
@@ -1948,7 +1945,7 @@ describe("FeaturesView build action", () => {
     seedStores(featureWithStories({ codexEnvironmentId: "env-feature" }));
     seedPipeline({ taskId: "task-1", environmentId: "env-feature", failed: true });
 
-    render(<FeaturesView projectId="project-1" />);
+    renderInAppCommandScope(<FeaturesView projectId="project-1" />);
 
     fireEvent.click(screen.getByRole("button", { name: "Build" }));
 
@@ -1958,7 +1955,7 @@ describe("FeaturesView build action", () => {
     // The pre-launch reservation is durable, but a failed launch must restore
     // the original feature state.
     await waitFor(() => {
-      expect(useFeaturePlanStore.getState().features[0]?.status).toBe("stories");
+      expect(appCommandStore(featurePlanStore).getState().features[0]?.status).toBe("stories");
     });
     expect(updateFeatureMock.mock.calls.at(-1)?.[1]).toMatchObject({
       status: "stories",
@@ -1989,7 +1986,7 @@ describe("FeaturesView build action", () => {
       }),
     );
     seedPipeline({ environmentId: "env-build" });
-    render(<FeaturesView projectId="project-1" />);
+    renderInAppCommandScope(<FeaturesView projectId="project-1" />);
 
     fireEvent.click(screen.getByRole("button", { name: "Build" }));
 
@@ -2007,7 +2004,7 @@ describe("FeaturesView build action", () => {
   test("reports a missing task id and does not start a build", async () => {
     addTaskMock.mockImplementationOnce(async () => null as unknown as string);
     seedStores(featureWithStories());
-    render(<FeaturesView projectId="project-1" />);
+    renderInAppCommandScope(<FeaturesView projectId="project-1" />);
 
     fireEvent.click(screen.getByRole("button", { name: "Build" }));
 
@@ -2024,7 +2021,7 @@ describe("FeaturesView build action", () => {
       throw new Error("task persistence failed");
     });
     seedStores(featureWithStories());
-    render(<FeaturesView projectId="project-1" />);
+    renderInAppCommandScope(<FeaturesView projectId="project-1" />);
 
     fireEvent.click(screen.getByRole("button", { name: "Build" }));
 
@@ -2039,8 +2036,8 @@ describe("FeaturesView build action", () => {
 
   test("reports when the created task is absent from the store", async () => {
     seedStores(featureWithStories());
-    useKanbanStore.setState({ tasks: [] });
-    render(<FeaturesView projectId="project-1" />);
+    appCommandStore(kanbanStore).setState({ tasks: [] });
+    renderInAppCommandScope(<FeaturesView projectId="project-1" />);
 
     fireEvent.click(screen.getByRole("button", { name: "Build" }));
 
@@ -2058,7 +2055,7 @@ describe("FeaturesView build action", () => {
       throw new Error("build launch failed");
     });
     seedStores(featureWithStories());
-    render(<FeaturesView projectId="project-1" />);
+    renderInAppCommandScope(<FeaturesView projectId="project-1" />);
 
     fireEvent.click(screen.getByRole("button", { name: "Build" }));
 
@@ -2067,7 +2064,7 @@ describe("FeaturesView build action", () => {
         description: "build launch failed",
       }),
     );
-    expect(useFeaturePlanStore.getState().features[0]?.status).toBe("stories");
+    expect(appCommandStore(featurePlanStore).getState().features[0]?.status).toBe("stories");
     expect(updateFeatureMock.mock.calls.at(-1)?.[1]).toMatchObject({
       status: "stories",
     });
@@ -2075,13 +2072,13 @@ describe("FeaturesView build action", () => {
 
   test("leaves the feature unchanged when startBuild creates no pipeline", async () => {
     seedStores(featureWithStories());
-    render(<FeaturesView projectId="project-1" />);
+    renderInAppCommandScope(<FeaturesView projectId="project-1" />);
 
     fireEvent.click(screen.getByRole("button", { name: "Build" }));
 
     await waitFor(() => expect(startBuildMock).toHaveBeenCalledTimes(1));
     await waitFor(() => {
-      expect(useFeaturePlanStore.getState().features[0]?.status).toBe("stories");
+      expect(appCommandStore(featurePlanStore).getState().features[0]?.status).toBe("stories");
     });
     expect(updateFeatureMock.mock.calls.at(-1)?.[1]).toMatchObject({
       status: "stories",
@@ -2091,7 +2088,7 @@ describe("FeaturesView build action", () => {
   test("omits the environment update when the pipeline has no environment id", async () => {
     seedStores(featureWithStories({ codexEnvironmentId: undefined }));
     const pipelineId = seedPipeline();
-    render(<FeaturesView projectId="project-1" />);
+    renderInAppCommandScope(<FeaturesView projectId="project-1" />);
 
     fireEvent.click(screen.getByRole("button", { name: "Build" }));
 
@@ -2112,11 +2109,11 @@ describe("FeaturesView build action", () => {
 
   test("uses the local environment preference for local projects", async () => {
     seedStores(featureWithStories({ codexEnvironmentId: undefined }));
-    useProjectStore.setState((state) => ({
+    appCommandStore(projectStore).setState((state) => ({
       projects: state.projects.map((project) => ({ ...project, localPath: "/repo" })),
     }));
     seedPipeline();
-    render(<FeaturesView projectId="project-1" />);
+    renderInAppCommandScope(<FeaturesView projectId="project-1" />);
 
     fireEvent.click(screen.getByRole("button", { name: "Build" }));
 
@@ -2135,10 +2132,10 @@ describe("FeaturesView build action", () => {
 
   test("uses the configured environment type before the project-path fallback", async () => {
     seedStores(featureWithStories({ codexEnvironmentId: undefined }));
-    useProjectStore.setState((state) => ({
+    appCommandStore(projectStore).setState((state) => ({
       projects: state.projects.map((project) => ({ ...project, localPath: "/repo" })),
     }));
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       config: {
         ...state.config,
         repositories: {
@@ -2154,7 +2151,7 @@ describe("FeaturesView build action", () => {
       },
     }));
     seedPipeline();
-    render(<FeaturesView projectId="project-1" />);
+    renderInAppCommandScope(<FeaturesView projectId="project-1" />);
 
     fireEvent.click(screen.getByRole("button", { name: "Build" }));
 
@@ -2181,7 +2178,7 @@ describe("FeaturesView build action", () => {
     );
     seedStores(featureWithStories());
     seedPipeline();
-    render(<FeaturesView projectId="project-1" />);
+    renderInAppCommandScope(<FeaturesView projectId="project-1" />);
 
     const build = screen.getByRole("button", { name: "Build" });
     fireEvent.click(build);
@@ -2197,7 +2194,7 @@ describe("FeaturesView build action", () => {
     seedStores(featureWithStories());
     seedPipeline();
     updateFeatureMock.mockImplementationOnce(async () => undefined);
-    render(<FeaturesView projectId="project-1" />);
+    renderInAppCommandScope(<FeaturesView projectId="project-1" />);
 
     fireEvent.click(screen.getByRole("button", { name: "Build" }));
 

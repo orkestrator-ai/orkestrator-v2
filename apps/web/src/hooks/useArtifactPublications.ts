@@ -1,6 +1,8 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { ArtifactPublicationView } from "@orkestrator/protocol/transcript-artifact-commands";
-import { listTranscriptArtifactPublications } from "@/lib/backend/transcript-artifacts";
+import type { ScopeBackend } from "@/lib/backend/scope-backend";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import {
   encodeRichKey,
   type RichKeyPart,
@@ -22,6 +24,7 @@ import {
   revokeArtifactConversation,
 } from "@/lib/chat/artifact-requests";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
+import { NodeByteCache, richContentNodeId } from "@/lib/chat/rich-byte-cache";
 import { onResourceChanged, onResourceResync } from "@/lib/resource-sync";
 
 /**
@@ -60,8 +63,36 @@ export const MAX_LEDGER_PAGES = 50;
 const MAX_CACHED_CONVERSATIONS = 20;
 const RETRY_DELAYS_MS = [500, 1_500, 4_000, 10_000];
 
-const cache = new Map<string, ArtifactPublicationLedger>();
+/**
+ * Ledgers by `(node, [backend, environment, session, epoch])`, bounded by
+ * count and by the window's shared `artifacts` byte budget (plan item 3016),
+ * so ledgers of several live nodes share one bound. A ledger the budget
+ * evicts is read again by its next mount; a mounted hook keeps showing the
+ * copy in its own state.
+ */
+const cache = new NodeByteCache<ArtifactPublicationLedger>({
+  name: "artifact-publications",
+  budget: "artifacts",
+  maxEntries: MAX_CACHED_CONVERSATIONS,
+});
 const EMPTY_PUBLICATIONS: ArtifactPublicationLedger = [];
+
+const ledgerNode = (parts: readonly unknown[] | null): string =>
+  richContentNodeId(typeof parts?.[0] === "string" ? parts[0] : null);
+
+/** Estimated retained size: the ledger as the JSON it was read from. */
+function ledgerBytes(publications: ArtifactPublicationLedger): number {
+  try {
+    return JSON.stringify(publications).length;
+  } catch {
+    return publications.length * 2_048;
+  }
+}
+
+function cachedLedger(key: string): ArtifactPublicationLedger | undefined {
+  // A render-time read: no recency change (remember marks a fresh read used).
+  return key ? cache.peek(ledgerNode(decodeRichKey(key)), key) : undefined;
+}
 
 /**
  * Bumped by every clear. Cache keys carry the epoch they were read under
@@ -83,14 +114,9 @@ function subscribeEpoch(listener: () => void): () => void {
 const readEpoch = () => cacheEpoch;
 
 function remember(key: string, publications: ArtifactPublicationLedger) {
-  if (decodeRichKey(key)?.[3] !== cacheEpoch) return;
-  cache.delete(key);
-  cache.set(key, publications);
-  while (cache.size > MAX_CACHED_CONVERSATIONS) {
-    const oldest = cache.keys().next().value;
-    if (oldest === undefined) break;
-    cache.delete(oldest);
-  }
+  const parts = decodeRichKey(key);
+  if (parts?.[3] !== cacheEpoch) return;
+  cache.set(ledgerNode(parts), key, publications, ledgerBytes(publications));
 }
 
 /**
@@ -99,16 +125,28 @@ function remember(key: string, publications: ArtifactPublicationLedger) {
  * conversation would leave every other mounted ledger with no cache entry
  * under its new key: it would show nothing until its re-read answered.
  */
-function clearWhere(matches: (parts: unknown[]) => boolean): void {
-  const kept: [RichKeyPart[], ArtifactPublicationLedger][] = [];
-  for (const [key, publications] of Array.from(cache.entries())) {
-    const parts = decodeRichKey(key);
-    if (parts && !matches(parts)) kept.push([parts.slice(0, 3) as RichKeyPart[], publications]);
+function clearWhere(matches: (parts: unknown[], nodeId: string) => boolean): void {
+  const kept: {
+    nodeId: string;
+    conversation: RichKeyPart[];
+    value: ArtifactPublicationLedger;
+    bytes: number;
+  }[] = [];
+  for (const entry of cache.values()) {
+    const parts = decodeRichKey(entry.key);
+    if (parts && !matches(parts, entry.nodeId)) {
+      kept.push({
+        nodeId: entry.nodeId,
+        conversation: parts.slice(0, 3) as RichKeyPart[],
+        value: entry.value,
+        bytes: entry.bytes,
+      });
+    }
   }
   cache.clear();
   cacheEpoch++;
-  for (const [conversation, publications] of kept) {
-    cache.set(encodeRichKey([...conversation, cacheEpoch]), publications);
+  for (const { nodeId, conversation, value, bytes } of kept) {
+    cache.set(nodeId, encodeRichKey([...conversation, cacheEpoch]), value, bytes);
   }
   for (const listener of Array.from(epochListeners)) listener();
 }
@@ -131,12 +169,18 @@ export function clearArtifactPublicationsForConversation(scope: RichConversation
   );
 }
 
+/** A node's credential, connection or identity changed: drop its ledgers. */
+export function clearArtifactPublicationsForBackend(backendId: string): void {
+  clearWhere((parts, nodeId) => parts[0] === backendId || nodeId === backendId);
+}
+
 export function artifactPublicationCacheSize(): number {
   return cache.size;
 }
 
 registerProtectedRichCache("artifact-publications", {
   clearAll: clearArtifactPublicationCache,
+  clearBackend: clearArtifactPublicationsForBackend,
   clearEnvironment: clearArtifactPublicationsForEnvironment,
   clearConversation: clearArtifactPublicationsForConversation,
 });
@@ -147,6 +191,8 @@ registerProtectedRichCache("artifact-publications", {
  */
 export async function readArtifactLedger(
   scope: Pick<RichTranscriptScope, "environmentId" | "logicalSessionKey">,
+  /** The conversation's node (`useScopeBackend()`, plan item 4007). */
+  reader: Pick<ScopeBackend, "listTranscriptArtifactPublications">,
 ): Promise<ArtifactPublicationLedger> {
   let publications: ArtifactPublicationView[] = [];
   let omittedOlder = 0;
@@ -157,7 +203,7 @@ export async function readArtifactLedger(
       incomplete = true;
       break;
     }
-    const result = await listTranscriptArtifactPublications({
+    const result = await reader.listTranscriptArtifactPublications({
       environmentId: scope.environmentId,
       logicalSessionKey: scope.logicalSessionKey,
       ...(afterSequence !== undefined ? { afterSequence } : {}),
@@ -205,6 +251,8 @@ export function useArtifactPublications(
   scope: RichTranscriptScope | null,
   messages: readonly NativeMessage[],
 ): ArtifactPublicationLedger {
+  const nodeBackend = useScopeBackend();
+  const nodeScope = useScopesWithCommandFallback().scope;
   const epoch = useSyncExternalStore(subscribeEpoch, readEpoch, readEpoch);
   const key = scope
     ? encodeRichKey([scope.backendId, scope.environmentId, scope.logicalSessionKey, epoch])
@@ -212,7 +260,7 @@ export function useArtifactPublications(
   const [state, setState] = useState<{ key: string; publications: ArtifactPublicationLedger }>(
     () => ({
       key,
-      publications: cache.get(key) ?? [],
+      publications: cachedLedger(key) ?? [],
     }),
   );
   const publications = useMemo(
@@ -221,7 +269,7 @@ export function useArtifactPublications(
         ? EMPTY_PUBLICATIONS
         : state.key === key
           ? state.publications
-          : (cache.get(key) ?? EMPTY_PUBLICATIONS),
+          : (cachedLedger(key) ?? EMPTY_PUBLICATIONS),
     [key, state],
   );
   const unresolved = useMemo(
@@ -240,7 +288,7 @@ export function useArtifactPublications(
     if (!scope) return;
     const request = ++requestRef.current;
     let cancelled = false;
-    readArtifactLedger(scope)
+    readArtifactLedger(scope, nodeBackend)
       .then((loaded) => {
         if (cancelled || request !== requestRef.current) return;
         if (!acceptLedger(scope, shownRef.current, loaded)) return;
@@ -255,7 +303,7 @@ export function useArtifactPublications(
     return () => {
       cancelled = true;
     };
-  }, [key, scope]);
+  }, [key, scope, nodeBackend]);
 
   // A publish call the ledger does not show yet: re-read with bounded backoff.
   useEffect(() => {
@@ -267,7 +315,7 @@ export function useArtifactPublications(
       if (cancelled || attempt >= RETRY_DELAYS_MS.length) return;
       timer = setTimeout(() => {
         const request = ++requestRef.current;
-        readArtifactLedger(scope)
+        readArtifactLedger(scope, nodeBackend)
           .then((loaded) => {
             if (cancelled || request !== requestRef.current) return;
             if (!acceptLedger(scope, shownRef.current, loaded)) return;
@@ -286,7 +334,7 @@ export function useArtifactPublications(
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [key, scope, unresolved]);
+  }, [key, scope, unresolved, nodeBackend]);
 
   // Live hint: the backend announces ledger/draft changes per conversation.
   const scopeRef = useRef(scope);
@@ -301,7 +349,7 @@ export function useArtifactPublications(
       const current = scopeRef.current;
       if (!current) return;
       const request = ++requestRef.current;
-      readArtifactLedger(current)
+      readArtifactLedger(current, nodeBackend)
         .then((loaded) => {
           if (disposed || request !== requestRef.current) return;
           if (!acceptLedger(current, shownRef.current, loaded)) return;
@@ -316,19 +364,24 @@ export function useArtifactPublications(
     };
     // The id is the conversation key; a deletion of this conversation is
     // announced the same way and recognised by the re-read (acceptLedger).
-    const offChange = onResourceChanged("transcript-artifact", (change) => {
-      if (change.id === logicalSessionKey) reread();
-    });
+    // On the conversation's node's change feed (plan item 4007).
+    const offChange = onResourceChanged(
+      "transcript-artifact",
+      (change) => {
+        if (change.id === logicalSessionKey) reread();
+      },
+      nodeScope,
+    );
     // A full resync (sequence gap, reset) may have hidden an event.
     const offResync = onResourceResync((request) => {
       if (request.resources === null) reread();
-    });
+    }, nodeScope);
     return () => {
       disposed = true;
       offChange();
       offResync();
     };
-  }, [key, logicalSessionKey]);
+  }, [key, logicalSessionKey, nodeBackend, nodeScope]);
 
   return publications;
 }

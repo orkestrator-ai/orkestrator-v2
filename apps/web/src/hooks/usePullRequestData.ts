@@ -10,8 +10,11 @@ import {
   type GitHubPullRequestListFilter,
   type GitHubPullRequestRef,
 } from "@orkestrator/protocol/github-pull-requests";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import {
   pullRequestListKey,
+  pullRequestsStore,
   resourceKey,
   startPullRequestDetailPolling,
   startPullRequestListPolling,
@@ -21,9 +24,14 @@ import {
 /** A visible view re-reads on activation unless its snapshot is this fresh. */
 const ACTIVATION_FRESHNESS_MS = 15_000;
 
-function isFresh(loadKey: string): boolean {
-  const loadedAt = usePullRequestsStore.getState().loadedAt.get(loadKey);
+function isFresh(scope: NodeScope, loadKey: string): boolean {
+  const loadedAt = scope.store(pullRequestsStore).getState().loadedAt.get(loadKey);
   return loadedAt !== undefined && Date.now() - loadedAt < ACTIVATION_FRESHNESS_MS;
+}
+
+/** The node scope this view's pull requests are read from (the nearest provider). */
+function usePullRequestScope(): NodeScope {
+  return useNodeScope();
 }
 
 /** Stable ref object keyed by value, so effects do not re-run on every render. */
@@ -44,13 +52,14 @@ export function usePullRequestDetail(pullRequest: GitHubPullRequestRef, active: 
   const loading = usePullRequestsStore((state) => state.loading.has(loadKey));
   const error = usePullRequestsStore((state) => state.errors.get(loadKey));
   const loadDetail = usePullRequestsStore((state) => state.loadDetail);
+  const scope = usePullRequestScope();
 
   useEffect(() => {
     if (!active) return;
-    const state = usePullRequestsStore.getState();
-    if (!state.loading.has(loadKey) && !isFresh(loadKey)) void loadDetail(ref);
-    return startPullRequestDetailPolling(ref);
-  }, [active, loadDetail, loadKey, ref]);
+    const state = scope.store(pullRequestsStore).getState();
+    if (!state.loading.has(loadKey) && !isFresh(scope, loadKey)) void loadDetail(ref);
+    return startPullRequestDetailPolling(ref, scope);
+  }, [active, loadDetail, loadKey, ref, scope]);
 
   const reload = useCallback(() => loadDetail(ref), [loadDetail, ref]);
   return { detail, loading, error, reload };
@@ -65,12 +74,13 @@ export function usePullRequestTimeline(pullRequest: GitHubPullRequestRef, enable
   const loading = usePullRequestsStore((state) => state.loading.has(loadKey));
   const error = usePullRequestsStore((state) => state.errors.get(loadKey));
   const loadTimeline = usePullRequestsStore((state) => state.loadTimeline);
+  const scope = usePullRequestScope();
 
   useEffect(() => {
     if (!enabled) return;
-    const state = usePullRequestsStore.getState();
+    const state = scope.store(pullRequestsStore).getState();
     if (!state.timelines.has(key) && !state.loading.has(loadKey)) void loadTimeline(ref);
-  }, [enabled, key, loadKey, loadTimeline, ref]);
+  }, [enabled, key, loadKey, loadTimeline, ref, scope]);
 
   const reload = useCallback(() => loadTimeline(ref), [loadTimeline, ref]);
   return { timeline, loading, error, reload };
@@ -85,12 +95,13 @@ export function usePullRequestFiles(pullRequest: GitHubPullRequestRef, enabled: 
   const loading = usePullRequestsStore((state) => state.loading.has(loadKey));
   const error = usePullRequestsStore((state) => state.errors.get(loadKey));
   const loadFiles = usePullRequestsStore((state) => state.loadFiles);
+  const scope = usePullRequestScope();
 
   useEffect(() => {
     if (!enabled) return;
-    const state = usePullRequestsStore.getState();
+    const state = scope.store(pullRequestsStore).getState();
     if (!state.files.has(key) && !state.loading.has(loadKey)) void loadFiles(ref);
-  }, [enabled, key, loadKey, loadFiles, ref]);
+  }, [enabled, key, loadKey, loadFiles, ref, scope]);
 
   const reload = useCallback(() => loadFiles(ref), [loadFiles, ref]);
   return { files, loading, error, reload };
@@ -110,15 +121,16 @@ export function usePullRequestList(
   const loading = usePullRequestsStore((state) => state.loading.has(loadKey));
   const error = usePullRequestsStore((state) => state.errors.get(loadKey));
   const loadList = usePullRequestsStore((state) => state.loadList);
+  const scope = usePullRequestScope();
 
   useEffect(() => {
     if (!active) return;
-    const state = usePullRequestsStore.getState();
-    if (!state.loading.has(loadKey) && !isFresh(loadKey)) {
+    const state = scope.store(pullRequestsStore).getState();
+    if (!state.loading.has(loadKey) && !isFresh(scope, loadKey)) {
       void loadList(projectId, filter, trimmed);
     }
-    return startPullRequestListPolling(projectId, filter, trimmed);
-  }, [active, filter, loadKey, loadList, projectId, trimmed]);
+    return startPullRequestListPolling(projectId, filter, trimmed, scope);
+  }, [active, filter, loadKey, loadList, projectId, scope, trimmed]);
 
   const reload = useCallback(
     () => loadList(projectId, filter, trimmed),

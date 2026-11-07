@@ -1,32 +1,25 @@
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
-import { useRealmFanOutTiming } from "@/components/federation/useRealmBootTiming";
-import { resetRealmBootTimingForTests } from "./realm-boot-timing";
-import { afterEach, expect, mock, spyOn, test } from "bun:test";
+import { act, cleanup } from "@testing-library/react";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import * as native from "@/lib/native/backend";
 import * as backend from "@/lib/backend";
 import { hydrateBootPromptQueues, hydrateBootMultiReviewWorkflows } from "./boot-hydration";
 import { createPromptQueueSources } from "./prompt-queue-sources";
 import { promptQueueKey, resetPromptQueueRevisions } from "./prompt-queue-persistence";
 import { hydrateBuildPipelinesForProject } from "./build-pipeline-persistence";
-import { useClaudeTmuxStore } from "@/stores/claudeTmuxStore";
-import { useMultiReviewStore } from "@/stores/multiReviewStore";
-import { BUILD_PIPELINE_VERSION, useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { claudeTmuxStore } from "@/stores/claudeTmuxStore";
+import { multiReviewStore } from "@/stores/multiReviewStore";
+import { BUILD_PIPELINE_VERSION, buildPipelineStore } from "@/stores/buildPipelineStore";
 import { workflowVocabularyFixtures } from "./workflow-vocabulary.test-support";
 import { environmentRequests, hydrationRequests } from "./hydration-request-limiter";
+import { appCommandStore } from "@/test/app-command-store";
 
-const originalUrl = window.location.href;
-const originalApi = window.orkestrator;
-const dom = (window as unknown as { happyDOM: { setURL(url: string): void } }).happyDOM;
 const nextTask = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 afterEach(() => {
   cleanup();
-  dom.setURL(originalUrl);
-  window.orkestrator = originalApi;
-  resetRealmBootTimingForTests();
   resetPromptQueueRevisions();
-  useClaudeTmuxStore.setState({ messageQueue: new Map() });
-  useMultiReviewStore.setState({ workflows: new Map() });
-  useBuildPipelineStore.setState({ pipelines: new Map() });
+  appCommandStore(claudeTmuxStore).setState({ messageQueue: new Map() });
+  appCommandStore(multiReviewStore).setState({ workflows: new Map() });
+  appCommandStore(buildPipelineStore).setState({ pipelines: new Map() });
 });
 
 test("six pending environment loads leave shared slots for snapshots and pipelines", async () => {
@@ -57,16 +50,6 @@ test("six pending environment loads leave shared slots for snapshots and pipelin
 
 for (const failedPart of ["promptQueues", "multiReviewWorkflows"] as const) {
   test(`cold hydration reports a failed ${failedPart} part and preserves unaffected projections`, async () => {
-    const post = mock((_message: unknown) => {});
-    dom.setURL("https://command.test/?realm=workspace");
-    window.orkestrator = {
-      ...originalApi,
-      workspaceRealm: { post, onMessage: () => () => {} },
-    } as typeof window.orkestrator;
-    const { rerender } = renderHook(
-      ({ settled }) => useRealmFanOutTiming(settled, { current: 0 }),
-      { initialProps: { settled: false } },
-    );
     const ids = Array.from({ length: 120 }, (_, i) => `e${i}`);
     const { review, pipeline } = workflowVocabularyFixtures();
     const timestamp = "2026-11-06T00:00:00.000Z";
@@ -146,7 +129,7 @@ for (const failedPart of ["promptQueues", "multiReviewWorkflows"] as const) {
     );
     try {
       // Keep an existing queue when its authoritative list is unavailable.
-      useClaudeTmuxStore.setState({
+      appCommandStore(claudeTmuxStore).setState({
         messageQueue: new Map([
           ["env:e0:tab:t", [{ id: "retained", text: "fixture", attachments: [] }]],
         ]),
@@ -166,20 +149,14 @@ for (const failedPart of ["promptQueues", "multiReviewWorkflows"] as const) {
       await act(async () => {
         await Promise.all(environmentLoads);
       });
-      rerender({ settled: true });
       const results = await completing;
       await hydrationRequests.whenIdle();
-      await waitFor(() => expect(post).toHaveBeenCalledTimes(1));
-      expect(post.mock.calls[0]?.[0]).toMatchObject({
-        step: "fan-out-complete",
-        outcome: "failed",
-      });
       expect(results.filter((r) => r.status === "rejected")).toHaveLength(1);
       expect(peak).toBe(6);
       expect(calls.filter((c) => c === "list_environment_hydration")).toHaveLength(2);
       expect(calls).not.toContain("list_prompt_queues");
       expect(calls).not.toContain("list_multi_review_workflows");
-      expect(useClaudeTmuxStore.getState().messageQueue.get("env:e0:tab:t")).toEqual([
+      expect(appCommandStore(claudeTmuxStore).getState().messageQueue.get("env:e0:tab:t")).toEqual([
         {
           id: failedPart === "promptQueues" ? "retained" : "message-e0",
           text: "fixture",
@@ -187,23 +164,23 @@ for (const failedPart of ["promptQueues", "multiReviewWorkflows"] as const) {
         },
       ]);
       for (const id of ids.slice(1)) {
-        expect(useClaudeTmuxStore.getState().messageQueue.get(`env:${id}:tab:t`)).toEqual([
-          { id: `message-${id}`, text: "fixture", attachments: [] },
-        ]);
+        expect(
+          appCommandStore(claudeTmuxStore).getState().messageQueue.get(`env:${id}:tab:t`),
+        ).toEqual([{ id: `message-${id}`, text: "fixture", attachments: [] }]);
       }
-      expect(useMultiReviewStore.getState().workflows.size).toBe(
+      expect(appCommandStore(multiReviewStore).getState().workflows.size).toBe(
         failedPart === "multiReviewWorkflows" ? 119 : 120,
       );
       for (const id of failedPart === "multiReviewWorkflows" ? ids.slice(1) : ids) {
-        expect(useMultiReviewStore.getState().workflows.get(`review-${id}`)).toEqual({
+        expect(appCommandStore(multiReviewStore).getState().workflows.get(`review-${id}`)).toEqual({
           ...review,
           id: `review-${id}`,
           environmentId: id,
           backendRevision: 5,
         });
       }
-      expect(useBuildPipelineStore.getState().pipelines.size).toBe(10);
-      expect(useBuildPipelineStore.getState().pipelines.get("pipeline-p0")).toEqual({
+      expect(appCommandStore(buildPipelineStore).getState().pipelines.size).toBe(10);
+      expect(appCommandStore(buildPipelineStore).getState().pipelines.get("pipeline-p0")).toEqual({
         ...pipeline,
         id: "pipeline-p0",
         projectId: "p0",
@@ -216,15 +193,9 @@ for (const failedPart of ["promptQueues", "multiReviewWorkflows"] as const) {
   });
 }
 
-test("successful older-backend fallback restores do not mark fan-out failed", async () => {
+test("older-backend fallback restores succeed", async () => {
   const { EnvironmentHydrationBatcher } = await import("./boot-hydration");
   const { unknownBackendCommandMessage } = await import("@orkestrator/protocol/unknown-command");
-  const post = mock((_message: unknown) => {});
-  dom.setURL("https://command.test/?realm=workspace");
-  window.orkestrator = {
-    ...originalApi,
-    workspaceRealm: { post, onMessage: () => () => {} },
-  } as typeof window.orkestrator;
   const batcher = new EnvironmentHydrationBatcher({
     listBatch: async () => {
       throw new Error(unknownBackendCommandMessage("list_environment_hydration"));
@@ -236,8 +207,5 @@ test("successful older-backend fallback restores do not mark fan-out failed", as
     hydrateBootPromptQueues("fallback", createPromptQueueSources(), batcher),
     hydrateBootMultiReviewWorkflows("fallback", batcher),
   ]);
-  renderHook(() => useRealmFanOutTiming(true, { current: 0 }));
-  await restores;
-  await waitFor(() => expect(post).toHaveBeenCalledTimes(1));
-  expect(post.mock.calls[0]?.[0]).toMatchObject({ step: "fan-out-complete", outcome: "ok" });
+  expect(await restores).toHaveLength(2);
 });

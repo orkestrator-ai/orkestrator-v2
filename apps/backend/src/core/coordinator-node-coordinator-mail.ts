@@ -3,6 +3,7 @@ import {
   type AgentMailAttachment,
 } from "@orkestrator/protocol/agent-mail";
 import { BACKEND_CAPABILITIES } from "@orkestrator/protocol/backend-profile";
+import { sendCoordinatorCommandNodeMailCommand } from "@orkestrator/protocol/contract/domains/node-mail";
 import {
   COMMAND_NODE_COORDINATOR_MAIL_ADDRESS,
   COORDINATOR_MAIL_ADDRESS,
@@ -10,6 +11,7 @@ import {
 } from "@orkestrator/protocol/coordinator";
 
 import type { CommandContext } from "./commands-context.js";
+import { ASYNC_HANDLER } from "./commands-registry-async-decode.js";
 import type { CoordinatorNodeTarget } from "./commands-registry-coordinator-nodes.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
 import { compatibilityPathUsage } from "./compatibility-path-usage.js";
@@ -42,7 +44,11 @@ function nonBlank(value: unknown, name: string): string {
   return value;
 }
 
-/** Counted: the leaf predates `node-coordinator-mail` (version-compatibility.md, Register). */
+/**
+ * Counted: a pre-contract leaf that predates `node-coordinator-mail`
+ * (version-compatibility.md, Register). A leaf with the `node-mail` domain
+ * always takes the address (the node-mail client's version 1).
+ */
 function olderNodeRefusal(nodeName: string): string {
   compatibilityPathUsage.record("node-coordinator-mail.older-node");
   return `${nodeName} runs an older Orkestrator whose coordinator cannot take mail from this one; update that machine, then retry. Its workers can still be messaged by environment id.`;
@@ -60,37 +66,26 @@ export async function sendToNodeCoordinator(
     nodeParent?: { id: string; threadId: string; hopCount: number };
     /** Already in that node's spool, for its `deliver_node_mail` to place. */
     attachments?: MailAttachmentBatch;
-    /** Sent only to a leaf that advertises `node-mail-turn-origin`. */
+    /** Left out by the node-mail client for a pre-contract leaf without `node-mail-turn-origin`. */
     turnOrigin?: "mail";
   },
 ): Promise<JsonRecord> {
-  if (!target.supports(BACKEND_CAPABILITIES.nodeCoordinatorMail)) {
+  const mail = target.nodeMail(`mail:${input.coordinatorId}:${input.requestId}`);
+  if (!mail.supports(BACKEND_CAPABILITIES.nodeCoordinatorMail)) {
     throw new Error(olderNodeRefusal(target.nodeName));
   }
-  const delivered = await target.call<{
-    messageId?: string;
-    toEnvironmentId?: string;
-    toTabId?: string;
-    toTabName?: string;
-    placement?: string;
-    placementReason?: string;
-    attachments?: AgentMailAttachment[];
-  }>(
-    "deliver_node_mail",
-    {
-      controllerId: target.selfId,
-      ...input.mailbox,
-      requestId: input.requestId,
-      toEnvironmentId: COORDINATOR_MAIL_ADDRESS,
-      projectId: target.projectId,
-      ...(input.subject ? { subject: input.subject } : {}),
-      ...(input.turnOrigin ? { turnOrigin: input.turnOrigin } : {}),
-      body: input.body,
-      ...(input.nodeParent ? { nodeParent: input.nodeParent } : {}),
-      ...(input.attachments ? { attachments: input.attachments } : {}),
-    },
-    `mail:${input.coordinatorId}:${input.requestId}`,
-  );
+  const delivered = await mail.deliver({
+    controllerId: target.selfId,
+    ...input.mailbox,
+    requestId: input.requestId,
+    toEnvironmentId: COORDINATOR_MAIL_ADDRESS,
+    projectId: target.projectId,
+    ...(input.subject ? { subject: input.subject } : {}),
+    ...(input.turnOrigin ? { turnOrigin: input.turnOrigin } : {}),
+    body: input.body,
+    ...(input.nodeParent ? { nodeParent: input.nodeParent } : {}),
+    ...(input.attachments ? { attachments: input.attachments } : {}),
+  });
   const scheduled =
     delivered?.placement === "pending-inject" || delivered?.placement === "injected";
   return {
@@ -103,7 +98,9 @@ export async function sendToNodeCoordinator(
     ...(delivered?.toTabName ? { toTabName: delivered.toTabName } : {}),
     ...(delivered?.placement ? { placement: delivered.placement } : {}),
     ...(delivered?.placementReason ? { placementReason: delivered.placementReason } : {}),
-    ...(delivered?.attachments?.length ? { attachments: delivered.attachments } : {}),
+    ...(delivered?.attachments?.length
+      ? { attachments: delivered.attachments as AgentMailAttachment[] }
+      : {}),
     // Not a worker: nothing to wait on but its answer.
     coordinatorDelegationOpened: false,
     ...(scheduled
@@ -122,17 +119,15 @@ export async function sendToNodeCoordinator(
 export async function nodeCoordinatorMailbox(target: CoordinatorNodeTarget): Promise<JsonRecord> {
   const node = { nodeId: target.nodeId, node: target.nodeName, projectId: target.projectId };
   const workers = `Workers on ${target.nodeName} are reached by environment id from list_environments with nodeId "${target.nodeId}".`;
-  if (!target.supports(BACKEND_CAPABILITIES.nodeCoordinatorMail)) {
+  const mail = target.nodeMail();
+  if (!mail.supports(BACKEND_CAPABILITIES.nodeCoordinatorMail)) {
     return {
       ...node,
       coordinator: { reachable: false, reason: olderNodeRefusal(target.nodeName) },
       workers,
     };
   }
-  const answer = await target.call<{
-    hasCoordinator?: boolean;
-    main?: { title?: string; agent?: string | null } | null;
-  }>("get_node_project_coordinator", { projectId: target.projectId });
+  const answer = await mail.projectCoordinator({ projectId: target.projectId });
   if (!answer?.hasCoordinator) {
     return {
       ...node,
@@ -164,93 +159,100 @@ export async function nodeCoordinatorMailbox(target: CoordinatorNodeTarget): Pro
  * controls this one.
  */
 export function registerCoordinatorCommandNodeMail(register: CommandRegistrar): void {
-  register("send_coordinator_command_node_mail", async (args, context: CommandContext) => {
-    const caller = await coordinatorCaller(args.scope, context);
-    const workspace = await context.storage.coordinators.getCoordinatorWorkspaceById(
-      caller.coordinatorId,
-    );
-    const conversation = workspace?.conversations.find(
-      (item) => item.id === caller.conversationId && !item.closedAt,
-    );
-    if (!conversation) throw new Error("This coordinator conversation has no mailbox.");
-    if (conversation.role === "side") {
-      throw new Error('A side agent can only message the main coordinator. Send to "coordinator".');
-    }
-    if (!context.nodeCoordination) {
-      throw new Error("Cross-node coordination is not available in this backend.");
-    }
-    const own = {
-      environmentId: coordinatorRuntimeId(caller.coordinatorId, caller.conversationId),
-      tabId: conversation.tabId,
-    };
-    const requestId = nonBlank(args.requestId, "requestId");
-    const body = nonBlank(args.body, "body");
-    if (Buffer.byteLength(body, "utf8") > AGENT_MAIL_MAX_BODY_BYTES) {
-      throw new Error("body must be at most 32 KiB UTF-8");
-    }
-    const subject =
-      typeof args.subject === "string" && args.subject.trim()
-        ? args.subject.trim().slice(0, 200)
-        : undefined;
-    const replyToMessageId =
-      typeof args.replyToMessageId === "string" && args.replyToMessageId.trim()
-        ? args.replyToMessageId.trim()
-        : undefined;
-    if (replyToMessageId) {
-      const parent = await context.storage.getAgentMailMessage(
-        own.environmentId,
-        own.tabId,
-        replyToMessageId,
+  // Lenient keys (`node-mail` domain): `coordinatorCaller` and `nonBlank` check them.
+  register(
+    sendCoordinatorCommandNodeMailCommand,
+    async (args, context: CommandContext) => {
+      const caller = await coordinatorCaller(args.scope, context);
+      const workspace = await context.storage.coordinators.getCoordinatorWorkspaceById(
+        caller.coordinatorId,
       );
-      if (parent.from.kind !== "node" || parent.from.role !== "coordinator") {
-        throw new Error("That message did not come from a command node's coordinator.");
+      const conversation = workspace?.conversations.find(
+        (item) => item.id === caller.conversationId && !item.closedAt,
+      );
+      if (!conversation) throw new Error("This coordinator conversation has no mailbox.");
+      if (conversation.role === "side") {
+        throw new Error(
+          'A side agent can only message the main coordinator. Send to "coordinator".',
+        );
       }
-    }
-    // Kept in this node's spool until the command node has collected the mail,
-    // so a later deletion or a closed conversation cannot leave it hanging.
-    const images = await readCallerAttachments(
-      context,
-      caller,
-      attachmentReferences(args.attachments),
-    );
-    const sent = await context.nodeCoordination.sendFromCoordinator({
-      ...(images.length
-        ? {
-            attachments: {
-              batch: mailAttachmentBatchId([
-                caller.coordinatorId,
-                caller.conversationId,
-                requestId,
-              ]),
-              files: mailAttachmentFiles(images),
-            },
-            own: images,
-          }
-        : {}),
-      projectId: caller.projectId,
-      coordinatorEnvironmentId: own.environmentId,
-      coordinatorTabId: own.tabId,
-      requestId,
-      ...(subject ? { subject } : {}),
-      body,
-      ...(replyToMessageId ? { replyToMessageId } : {}),
-    });
-    // Answered: the request leaves the inbox, as a worker's reply does.
-    if (replyToMessageId) {
-      await context.storage
-        .ackAgentMail(own.environmentId, own.tabId, replyToMessageId)
-        .catch(() => undefined);
-    }
-    const name = sent.controllerName ?? "the command node";
-    return {
-      outboxSeq: sent.item.seq,
-      toEnvironmentId: COMMAND_NODE_COORDINATOR_MAIL_ADDRESS,
-      ...(replyToMessageId ? { replyToMessageId } : {}),
-      ...(images.length ? { attachments: images.map((file) => file.name) } : {}),
-      placement: "node-outbox",
-      coordinator: `command node ${name}`,
-      deliveryHint: `queued for the coordinator on ${name}; delivered when it collects its mail with coordinator-mail support. Older command nodes leave it queued until updated.`,
-      coordinatorDelegationOpened: false,
-    };
-  });
+      if (!context.nodeCoordination) {
+        throw new Error("Cross-node coordination is not available in this backend.");
+      }
+      const own = {
+        environmentId: coordinatorRuntimeId(caller.coordinatorId, caller.conversationId),
+        tabId: conversation.tabId,
+      };
+      const requestId = nonBlank(args.requestId, "requestId");
+      const body = nonBlank(args.body, "body");
+      if (Buffer.byteLength(body, "utf8") > AGENT_MAIL_MAX_BODY_BYTES) {
+        throw new Error("body must be at most 32 KiB UTF-8");
+      }
+      const subject =
+        typeof args.subject === "string" && args.subject.trim()
+          ? args.subject.trim().slice(0, 200)
+          : undefined;
+      const replyToMessageId =
+        typeof args.replyToMessageId === "string" && args.replyToMessageId.trim()
+          ? args.replyToMessageId.trim()
+          : undefined;
+      if (replyToMessageId) {
+        const parent = await context.storage.getAgentMailMessage(
+          own.environmentId,
+          own.tabId,
+          replyToMessageId,
+        );
+        if (parent.from.kind !== "node" || parent.from.role !== "coordinator") {
+          throw new Error("That message did not come from a command node's coordinator.");
+        }
+      }
+      // Kept in this node's spool until the command node has collected the mail,
+      // so a later deletion or a closed conversation cannot leave it hanging.
+      const images = await readCallerAttachments(
+        context,
+        caller,
+        attachmentReferences(args.attachments),
+      );
+      const sent = await context.nodeCoordination.sendFromCoordinator({
+        ...(images.length
+          ? {
+              attachments: {
+                batch: mailAttachmentBatchId([
+                  caller.coordinatorId,
+                  caller.conversationId,
+                  requestId,
+                ]),
+                files: mailAttachmentFiles(images),
+              },
+              own: images,
+            }
+          : {}),
+        projectId: caller.projectId,
+        coordinatorEnvironmentId: own.environmentId,
+        coordinatorTabId: own.tabId,
+        requestId,
+        ...(subject ? { subject } : {}),
+        body,
+        ...(replyToMessageId ? { replyToMessageId } : {}),
+      });
+      // Answered: the request leaves the inbox, as a worker's reply does.
+      if (replyToMessageId) {
+        await context.storage
+          .ackAgentMail(own.environmentId, own.tabId, replyToMessageId)
+          .catch(() => undefined);
+      }
+      const name = sent.controllerName ?? "the command node";
+      return {
+        outboxSeq: sent.item.seq,
+        toEnvironmentId: COMMAND_NODE_COORDINATOR_MAIL_ADDRESS,
+        ...(replyToMessageId ? { replyToMessageId } : {}),
+        ...(images.length ? { attachments: images.map((file) => file.name) } : {}),
+        placement: "node-outbox",
+        coordinator: `command node ${name}`,
+        deliveryHint: `queued for the coordinator on ${name}; delivered when it collects its mail with coordinator-mail support. Older command nodes leave it queued until updated.`,
+        coordinatorDelegationOpened: false,
+      };
+    },
+    ASYNC_HANDLER,
+  );
 }

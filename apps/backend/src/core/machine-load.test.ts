@@ -1,3 +1,4 @@
+import { registrarFrom } from "./commands-registry-contracts.js";
 import { describe, expect, test } from "bun:test";
 import type { CpuInfo } from "node:os";
 import { parseMachineLoadReport } from "@orkestrator/protocol/machine-load";
@@ -569,7 +570,7 @@ describe("what the machine reports about itself", () => {
 describe("the get_machine_load command", () => {
   function command(): CommandHandler {
     const commands = new Map<string, CommandHandler>();
-    registerSystemCommands((name, handler) => commands.set(name, handler));
+    registerSystemCommands(registrarFrom((name, handler) => commands.set(name, handler)));
     return commands.get("get_machine_load")!;
   }
 
@@ -577,7 +578,8 @@ describe("the get_machine_load command", () => {
     expect(createCommandRegistry().has("get_machine_load")).toBe(true);
     const handler = command();
     expect(() => handler({}, {} as CommandContext)).toThrow("not running");
-    expect(() => handler({ path: "/" }, {} as CommandContext)).toThrow(/Unexpected arguments/);
+    // A defined command drops unknown keys (plan item 7009): the sampler is still needed.
+    expect(() => handler({ path: "/" }, {} as CommandContext)).toThrow("not running");
   });
 
   test("answers from the sampler without taking a reading", async () => {

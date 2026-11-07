@@ -1,4 +1,10 @@
+import {
+  reconcileOrphanedTabResourcesCommand,
+  reconcileTabTeardownsCommand,
+  teardownTabCommand,
+} from "@orkestrator/protocol/contract/domains/environments";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
+import { withAsyncArgumentFailures } from "./commands-registry-async-args.js";
 import { nativeAgentSessionStorageKey } from "./native-agent-service.js";
 import { registerTmuxBackendCommands } from "./tmux.js";
 import {
@@ -8,7 +14,6 @@ import {
   type PersistedNativeAgentSession,
 } from "./models.js";
 import {
-  assertOnlyKeys,
   asNonBlankString,
   stableTerminalKey,
   peekLocalAgentBridge,
@@ -34,11 +39,13 @@ import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 const log = createLogger("environment");
 
 export function registerTeardownCommands(
-  register: CommandRegistrar,
+  registerCommand: CommandRegistrar,
   dependencies: RegistryDependencies,
 ): void {
+  // `async` handlers keep rejecting on bad arguments (`commands-registry-async-args.ts`).
+  const register = withAsyncArgumentFailures(registerCommand);
   const { commands, options, prepareEnvironmentFirstPrompt } = dependencies;
-  registerTmuxBackendCommands(register, { prepareEnvironmentFirstPrompt });
+  registerTmuxBackendCommands(registerCommand, { prepareEnvironmentFirstPrompt });
 
   type TabTeardownIntent = NonNullable<Environment["tabTeardownIntents"]>[string];
   const tabTeardownFetch = options.tabTeardown?.fetch ?? fetch;
@@ -395,12 +402,7 @@ export function registerTeardownCommands(
     await context.storage.clearTabTeardownIntent(environmentId, intent.tabId, intent.createdAt);
   };
 
-  register("teardown_tab", async (args, context) => {
-    assertOnlyKeys(
-      args,
-      ["environmentId", "tabId", "kind", "sessionId", "persistentSessionId"],
-      "arguments",
-    );
+  register(teardownTabCommand, async (args, context) => {
     const environmentId = asNonBlankString(args.environmentId, "environmentId");
     const tabId = asNonBlankString(args.tabId, "tabId");
     // Those keys carry a backend-written session id that replay trusts; a
@@ -434,7 +436,7 @@ export function registerTeardownCommands(
     return { completed: true };
   });
 
-  register("reconcile_tab_teardowns", async (_args, context) => {
+  register(reconcileTabTeardownsCommand, async (_args, context) => {
     const environments = await context.storage.loadEnvironments();
     const pending = environments.flatMap((environment) =>
       Object.values(environment.tabTeardownIntents ?? {}).map((intent) => ({
@@ -495,7 +497,7 @@ export function registerTeardownCommands(
     return { completed };
   });
 
-  register("reconcile_orphaned_tab_resources", async (_args, context) => {
+  register(reconcileOrphanedTabResourcesCommand, async (_args, context) => {
     const graceMs = 60 * 60 * 1_000;
     const now = Date.now();
     const environments = await context.storage.loadEnvironments();

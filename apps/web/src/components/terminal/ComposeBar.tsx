@@ -4,7 +4,8 @@ import { Button } from "@/components/ui/button";
 import { MODAL_OVERLAY_CLASS_NAME } from "@/components/ui/modal-theme";
 import { cn } from "@/lib/utils";
 import { readImage } from "@/lib/native/clipboard";
-import { writeContainerFile, writeLocalFile } from "@/lib/backend";
+import { backendForScope } from "@/lib/backend/scope-backend";
+import { useNodeScope, useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import {
   encodeCanvasAsPngWithinSize,
   MAX_IMAGE_DIMENSION,
@@ -12,7 +13,7 @@ import {
   resizeCanvasToMaxDimension,
 } from "@/lib/canvas-utils";
 import { toast } from "sonner";
-import { useTerminalSessionStore } from "@/stores/terminalSessionStore";
+import { terminalSessionStore, useTerminalSessionStore } from "@/stores/terminalSessionStore";
 import { getPastedImageBlob } from "@/lib/clipboard-event";
 import {
   composeDraftKey,
@@ -74,6 +75,10 @@ export function ComposeBar({
   onAddressAll,
   className,
 }: ComposeBarProps) {
+  // This node's backend (plan item 4001); the command node outside a node scope.
+  const backendScope = useScopesWithCommandFallback().scope;
+  // This node's terminal drafts (plan item 3010).
+  const terminalSessions = useNodeScope().store(terminalSessionStore);
   const text = useTerminalSessionStore((state) => state.composeDraftText.get(sessionKey) ?? "");
   const images = useTerminalSessionStore(
     (state) => state.composeDraftImages.get(sessionKey) ?? EMPTY_IMAGES,
@@ -128,7 +133,7 @@ export function ComposeBar({
     let applyingHydration = false;
     if (!environmentId) return;
     const key = composeDraftKey("terminal", environmentId, sessionKey);
-    const unsubscribe = useTerminalSessionStore.subscribe((state, previous) => {
+    const unsubscribe = terminalSessions.subscribe((state, previous) => {
       if (applyingHydration) return;
       const currentText = state.composeDraftText.get(sessionKey) ?? "";
       const previousText = previous.composeDraftText.get(sessionKey) ?? "";
@@ -151,7 +156,7 @@ export function ComposeBar({
         )
           return;
         const value = draft.value as { text?: unknown; images?: unknown };
-        const store = useTerminalSessionStore.getState();
+        const store = terminalSessions.getState();
         // Local typing that happened while the read was in flight wins.
         if (
           store.getComposeDraftText(sessionKey) === "" &&
@@ -192,7 +197,7 @@ export function ComposeBar({
     return () => {
       cancelled = true;
       unsubscribe();
-      const store = useTerminalSessionStore.getState();
+      const store = terminalSessions.getState();
       const currentText = store.getComposeDraftText(sessionKey);
       const currentImages = store.getComposeDraftImages(sessionKey);
       if (!hydrated && !locallyChanged) {
@@ -213,7 +218,7 @@ export function ComposeBar({
         });
       });
     };
-  }, [environmentId, sessionKey]);
+  }, [environmentId, sessionKey, terminalSessions]);
 
   useEffect(() => {
     if (!environmentId || !backendDraftHydrated) return;
@@ -401,7 +406,7 @@ export function ComposeBar({
   const handleSend = async () => {
     if (isSendingRef.current) return;
 
-    const initialDraft = useTerminalSessionStore.getState();
+    const initialDraft = terminalSessions.getState();
     if (
       initialDraft.getComposeDraftImages(sessionKey).length === 0 &&
       !initialDraft.getComposeDraftText(sessionKey).trim() &&
@@ -421,7 +426,7 @@ export function ComposeBar({
         return;
       }
 
-      const currentDraft = useTerminalSessionStore.getState();
+      const currentDraft = terminalSessions.getState();
       const draftImages = currentDraft.getComposeDraftImages(sessionKey);
       const draftText = currentDraft.getComposeDraftText(sessionKey).trim();
       if (draftImages.length === 0 && !draftText) return;
@@ -437,10 +442,18 @@ export function ComposeBar({
             const filePath = `.orkestrator/clipboard/${filename}`;
             let fullPath: string;
             if (containerId) {
-              await writeContainerFile(containerId, filePath, img.base64Data);
+              await backendForScope(backendScope).writeContainerFile(
+                containerId,
+                filePath,
+                img.base64Data,
+              );
               fullPath = `/workspace/${filePath}`;
             } else {
-              fullPath = await writeLocalFile(worktreePath!, filePath, img.base64Data);
+              fullPath = await backendForScope(backendScope).writeLocalFile(
+                worktreePath!,
+                filePath,
+                img.base64Data,
+              );
             }
             savedImages.push({ ...img, id: fullPath });
           } catch (imgError) {

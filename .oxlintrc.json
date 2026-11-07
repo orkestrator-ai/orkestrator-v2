@@ -156,6 +156,60 @@
       }
     },
     {
+      "files": [
+        "apps/web/src/components/chat/**",
+        "apps/web/src/components/native-agent/**",
+        "apps/web/src/components/pane-layout/**",
+        "apps/web/src/components/projects/**",
+        "apps/web/src/components/sidebar/**",
+        "apps/web/src/contexts/**"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "@/lib/native/backend",
+                "allowTypeImports": true,
+                "message": "Code here reaches a backend only through a node scope: useNodeScope() and scope.client, a scoped store or service, or a typed client in lib/backend (docs/development/linting.md, Transports only through a scope)."
+              },
+              {
+                "name": "@/lib/native/events",
+                "allowTypeImports": true,
+                "message": "Code here reaches a backend only through a node scope: useNodeScope() and scope.client, a scoped store or service, or a typed client in lib/backend (docs/development/linting.md, Transports only through a scope)."
+              },
+              {
+                "name": "@/lib/native/authoritative-events",
+                "allowTypeImports": true,
+                "message": "Code here reaches a backend only through a node scope: useNodeScope() and scope.client, a scoped store or service, or a typed client in lib/backend (docs/development/linting.md, Transports only through a scope)."
+              },
+              {
+                "name": "@/lib/native/node-transport",
+                "allowTypeImports": true,
+                "message": "Code here reaches a backend only through a node scope: useNodeScope() and scope.client, a scoped store or service, or a typed client in lib/backend (docs/development/linting.md, Transports only through a scope)."
+              }
+            ],
+            "patterns": [
+              {
+                "group": ["node:*", "bun:*"],
+                "message": "The renderer runs in a browser; keep Node and Bun APIs out of its bundle."
+              },
+              {
+                "group": ["@orkestrator/protocol/node/*"],
+                "allowTypeImports": true,
+                "message": "Node-only protocol module; the renderer may import its types only."
+              },
+              {
+                "group": ["@orkestrator/protocol/testing/*"],
+                "message": "Test fixtures and fakes are for tests only."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
       "files": ["packages/protocol/src/*.ts"],
       "rules": {
         "no-restricted-imports": [
@@ -198,6 +252,31 @@
               },
               {
                 "group": ["../testing/*"],
+                "message": "Test fixtures and fakes are for tests only."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["packages/protocol/src/contract/**/*.ts"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["node:*", "bun:*"],
+                "message": "Contract definitions are shared with the browser renderer. Put Node- or Bun-dependent code in src/node/."
+              },
+              {
+                "group": ["../node/*", "../../node/*"],
+                "allowTypeImports": true,
+                "message": "Contract definitions are shared with the browser renderer and may import only types from src/node/."
+              },
+              {
+                "group": ["../testing/*", "../../testing/*"],
                 "message": "Test fixtures and fakes are for tests only."
               }
             ]

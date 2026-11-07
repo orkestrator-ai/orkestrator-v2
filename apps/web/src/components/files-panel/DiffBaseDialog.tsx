@@ -20,9 +20,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import * as backend from "@/lib/backend";
+import { backendForScope } from "@/lib/backend/scope-backend";
 import { formatRelativeTime } from "@/lib/format-relative-time";
-import { useConfigStore, useEnvironmentStore } from "@/stores";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { useNodeScope } from "@/lib/node-scope/providers";
+import { environmentStore, useConfigStore, useEnvironmentStore } from "@/stores";
 import type { Environment } from "@/types";
 
 interface DiffBaseDialogProps {
@@ -42,6 +44,7 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** In-flight saves by node and environment: environment ids are node-local. */
 const pendingSaves = new Map<string, Promise<boolean>>();
 
 /**
@@ -52,14 +55,17 @@ const pendingSaves = new Map<string, Promise<boolean>>();
 export function saveDiffBase(
   environmentId: string,
   base: { ref: string; commit: string } | null,
+  scope: NodeScope,
 ): Promise<boolean> {
-  const previous = pendingSaves.get(environmentId);
+  const key = `${scope.nodeId}\0${environmentId}`;
+  const environments = scope.store(environmentStore);
+  const previous = pendingSaves.get(key);
   const save = async (): Promise<boolean> => {
     try {
-      const updated = await backend.setEnvironmentDiffBase(environmentId, base);
+      const updated = await backendForScope(scope).setEnvironmentDiffBase(environmentId, base);
       // Requests and response updates run in order, across every entry point.
       // Apply successful earlier saves even if a later queued save might fail.
-      useEnvironmentStore.getState().updateEnvironment(environmentId, {
+      environments.getState().updateEnvironment(environmentId, {
         diffBaseOverride: updated.diffBaseOverride ?? null,
       });
       return true;
@@ -69,9 +75,9 @@ export function saveDiffBase(
     }
   };
   const task = (previous ?? Promise.resolve(true)).then(save);
-  pendingSaves.set(environmentId, task);
+  pendingSaves.set(key, task);
   void task.finally(() => {
-    if (pendingSaves.get(environmentId) === task) pendingSaves.delete(environmentId);
+    if (pendingSaves.get(key) === task) pendingSaves.delete(key);
   });
   return task;
 }
@@ -126,6 +132,7 @@ export function DiffBaseDialog({ environmentId, open, onOpenChange }: DiffBaseDi
 }
 
 function DiffBaseForm({ environment, onDone }: { environment: Environment; onDone: () => void }) {
+  const scope = useNodeScope();
   const mounted = useRef(false);
   useEffect(() => {
     mounted.current = true;
@@ -143,14 +150,17 @@ function DiffBaseForm({ environment, onDone }: { environment: Environment; onDon
   const [branches, setBranches] = useState<Loaded<DiffBaseBranch[]> | null>(null);
   useEffect(() => {
     let live = true;
-    backend.listEnvironmentDiffBaseBranches(environment.id).then(
-      (value) => live && setBranches({ key: environment.id, value }),
-      (error: unknown) => live && setBranches({ key: environment.id, error: errorMessage(error) }),
-    );
+    backendForScope(scope)
+      .listEnvironmentDiffBaseBranches(environment.id)
+      .then(
+        (value) => live && setBranches({ key: environment.id, value }),
+        (error: unknown) =>
+          live && setBranches({ key: environment.id, error: errorMessage(error) }),
+      );
     return () => {
       live = false;
     };
-  }, [environment.id]);
+  }, [scope, environment.id]);
   const branchLoad = branches?.key === environment.id ? branches : null;
   const branchList = branchLoad?.value ?? [];
 
@@ -161,15 +171,18 @@ function DiffBaseForm({ environment, onDone }: { environment: Environment; onDon
   useEffect(() => {
     if (!selectedRef) return;
     let live = true;
-    backend.listEnvironmentDiffBaseCommits(environment.id, selectedRef).then(
-      (value) => live && setCommits({ key: `${environment.id}:${selectedRef}`, value }),
-      (error: unknown) =>
-        live && setCommits({ key: `${environment.id}:${selectedRef}`, error: errorMessage(error) }),
-    );
+    backendForScope(scope)
+      .listEnvironmentDiffBaseCommits(environment.id, selectedRef)
+      .then(
+        (value) => live && setCommits({ key: `${environment.id}:${selectedRef}`, value }),
+        (error: unknown) =>
+          live &&
+          setCommits({ key: `${environment.id}:${selectedRef}`, error: errorMessage(error) }),
+      );
     return () => {
       live = false;
     };
-  }, [environment.id, selectedRef]);
+  }, [scope, environment.id, selectedRef]);
   // An answer for a different branch is still loading as far as this one goes.
   const commitLoad = commits && commits.key === `${environment.id}:${selectedRef}` ? commits : null;
   const fetchedCommits = commitLoad?.value ?? [];
@@ -201,7 +214,7 @@ function DiffBaseForm({ environment, onDone }: { environment: Environment; onDon
   const [saving, setSaving] = useState(false);
   const save = async (base: { ref: string; commit: string } | null) => {
     setSaving(true);
-    const saved = await saveDiffBase(environment.id, base);
+    const saved = await saveDiffBase(environment.id, base, scope);
     if (mounted.current) {
       setSaving(false);
       if (saved) onDone();

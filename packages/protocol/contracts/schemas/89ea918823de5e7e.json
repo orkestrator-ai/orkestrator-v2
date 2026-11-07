@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:89ea918823de5e7ef81ba2ab9dd58ffdbae39c1a489e2c4aaa0d88221d094366",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "destinationProvider": {},
+        "environmentId": {},
+        "handoffId": {},
+        "logicalSessionKey": {},
+        "priorHandoffId": {},
+        "sourceAgent": {},
+        "sourceModel": {},
+        "sourceSessionId": {},
+        "sourceTitle": {}
+      },
+      "type": "object"
+    }
+  }
+}

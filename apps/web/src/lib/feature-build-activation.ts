@@ -1,9 +1,13 @@
 import type { CreateFeatureBuildResult } from "@orkestrator/protocol/feature-build";
-import { getEnvironment } from "@/lib/backend";
+import * as backend from "@/lib/backend";
+import { backendApiForScope } from "@/lib/backend/client";
+import { createProjectsEnvironmentsApi } from "@/lib/backend/projects-environments";
 import { hydrateBuildPipeline } from "@/lib/build-pipeline-persistence";
-import { isActiveBuildPhase, useBuildPipelineStore } from "@/stores/buildPipelineStore";
-import { useEnvironmentStore } from "@/stores/environmentStore";
-import { useUIStore } from "@/stores/uiStore";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { appCommandScope, defineScopedSlot } from "@/lib/node-scope-slots";
+import { buildPipelineStore, isActiveBuildPhase } from "@/stores/buildPipelineStore";
+import { environmentStore } from "@/stores/environmentStore";
+import { uiStore } from "@/stores/uiStore";
 import { armBuildPipelineTabActivation } from "@/lib/pane-layout-authoritative";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
@@ -14,18 +18,50 @@ interface PendingFeatureBuildActivation {
 }
 
 const MAX_PENDING_FEATURE_BUILD_ACTIVATIONS = 128;
-const pendingActivations = new Map<string, PendingFeatureBuildActivation>();
-let unsubscribe: (() => void) | null = null;
 
-function stopListeningWhenIdle(): void {
-  if (pendingActivations.size > 0 || !unsubscribe) return;
-  unsubscribe();
-  unsubscribe = null;
+/**
+ * One node's pending activations, by pipeline, and its pipeline-store
+ * subscription while any is pending. A pipeline id belongs to one node, so
+ * each scope keeps its own (plan item 3011); every function takes an optional
+ * trailing `scope`, the app's command scope when omitted.
+ */
+interface FeatureBuildActivationState {
+  readonly scope: NodeScope;
+  readonly pendingActivations: Map<string, PendingFeatureBuildActivation>;
+  unsubscribe: (() => void) | null;
 }
 
-function activate(projectId: string, environmentId: string, pipelineId: string): void {
-  armBuildPipelineTabActivation(environmentId, pipelineId);
-  const ui = useUIStore.getState();
+const activationState = defineScopedSlot<FeatureBuildActivationState>(
+  "feature-build-activation",
+  (scope) => {
+    const state: FeatureBuildActivationState = {
+      scope,
+      pendingActivations: new Map(),
+      unsubscribe: null,
+    };
+    scope.onDispose("feature-build-activation", () => {
+      state.unsubscribe?.();
+      state.unsubscribe = null;
+      state.pendingActivations.clear();
+    });
+    return state;
+  },
+);
+
+function stopListeningWhenIdle(state: FeatureBuildActivationState): void {
+  if (state.pendingActivations.size > 0 || !state.unsubscribe) return;
+  state.unsubscribe();
+  state.unsubscribe = null;
+}
+
+function activate(
+  scope: NodeScope,
+  projectId: string,
+  environmentId: string,
+  pipelineId: string,
+): void {
+  armBuildPipelineTabActivation(environmentId, pipelineId, scope);
+  const ui = scope.store(uiStore).getState();
   ui.setProjectCollapsed(projectId, false);
   ui.selectProjectAndEnvironment(projectId, environmentId);
 
@@ -35,8 +71,12 @@ function activate(projectId: string, environmentId: string, pipelineId: string):
   // project board until a separate environment-list announcement happens to
   // arrive. Hydrate the targeted record directly so activation also works
   // while the sidebar is unmounted or after its live event was missed.
-  if (useEnvironmentStore.getState().getEnvironmentById(environmentId)) return;
-  void getEnvironment(environmentId)
+  const environments = scope.store(environmentStore);
+  if (environments.getState().getEnvironmentById(environmentId)) return;
+  void backendApiForScope(scope, createProjectsEnvironmentsApi, {
+    getEnvironment: backend.getEnvironment,
+  })
+    .getEnvironment(environmentId)
     .then((environment) => {
       if (!environment) {
         log.warn("environment.not-found", { environmentId, projectId, pipelineId });
@@ -51,7 +91,7 @@ function activate(projectId: string, environmentId: string, pipelineId: string):
         });
         return;
       }
-      const store = useEnvironmentStore.getState();
+      const store = environments.getState();
       if (!store.getEnvironmentById(environmentId)) store.addEnvironment(environment);
     })
     .catch((error) => {
@@ -67,10 +107,11 @@ function activate(projectId: string, environmentId: string, pipelineId: string):
     });
 }
 
-function reconcilePendingActivation(pipelineId: string): void {
+function reconcilePendingActivation(state: FeatureBuildActivationState, pipelineId: string): void {
+  const { pendingActivations, scope } = state;
   const pending = pendingActivations.get(pipelineId);
   if (!pending) return;
-  const pipeline = useBuildPipelineStore.getState().pipelines.get(pipelineId);
+  const pipeline = scope.store(buildPipelineStore).getState().pipelines.get(pipelineId);
   if (!pipeline) return;
 
   if (pipeline.projectId !== pending.projectId) {
@@ -82,20 +123,20 @@ function reconcilePendingActivation(pipelineId: string): void {
     });
   } else if (pipeline.environmentId) {
     pendingActivations.delete(pipelineId);
-    activate(pending.projectId, pipeline.environmentId, pipelineId);
+    activate(scope, pending.projectId, pipeline.environmentId, pipelineId);
   } else if (!isActiveBuildPhase(pipeline.phase)) {
     // A terminal pipeline without an environment can never satisfy this intent.
     pendingActivations.delete(pipelineId);
   }
-  stopListeningWhenIdle();
+  stopListeningWhenIdle(state);
 }
 
-function startListening(): void {
-  if (unsubscribe) return;
-  unsubscribe = useBuildPipelineStore.subscribe((state, previous) => {
-    for (const pipelineId of Array.from(pendingActivations.keys())) {
-      if (state.pipelines.get(pipelineId) !== previous.pipelines.get(pipelineId)) {
-        reconcilePendingActivation(pipelineId);
+function startListening(state: FeatureBuildActivationState): void {
+  if (state.unsubscribe) return;
+  state.unsubscribe = state.scope.store(buildPipelineStore).subscribe((next, previous) => {
+    for (const pipelineId of Array.from(state.pendingActivations.keys())) {
+      if (next.pipelines.get(pipelineId) !== previous.pipelines.get(pipelineId)) {
+        reconcilePendingActivation(state, pipelineId);
       }
     }
   });
@@ -110,11 +151,14 @@ export function scheduleBuildPipelineTabActivation(
   projectId: string,
   pipelineId: string,
   environmentId?: string,
+  scope: NodeScope = appCommandScope(),
 ): void {
+  const state = activationState(scope);
+  const { pendingActivations } = state;
   if (environmentId) {
     pendingActivations.delete(pipelineId);
-    activate(projectId, environmentId, pipelineId);
-    stopListeningWhenIdle();
+    activate(scope, projectId, environmentId, pipelineId);
+    stopListeningWhenIdle(state);
     return;
   }
 
@@ -126,12 +170,12 @@ export function scheduleBuildPipelineTabActivation(
     pendingActivations.delete(oldest);
   }
 
-  startListening();
-  reconcilePendingActivation(pipelineId);
+  startListening(state);
+  reconcilePendingActivation(state, pipelineId);
   if (!pendingActivations.has(pipelineId)) return;
 
-  void hydrateBuildPipeline(pipelineId)
-    .then(() => reconcilePendingActivation(pipelineId))
+  void hydrateBuildPipeline(pipelineId, undefined, undefined, scope)
+    .then(() => reconcilePendingActivation(state, pipelineId))
     .catch((error) => {
       // Live resource synchronization remains subscribed and can still resolve
       // the intent after a transient point-read failure.
@@ -154,6 +198,7 @@ export function scheduleBuildPipelineTabActivation(
 export function activateFeatureBuildEnvironment(
   projectId: string,
   result: CreateFeatureBuildResult,
+  scope: NodeScope = appCommandScope(),
 ): void {
-  scheduleBuildPipelineTabActivation(projectId, result.pipelineId, result.environmentId);
+  scheduleBuildPipelineTabActivation(projectId, result.pipelineId, result.environmentId, scope);
 }

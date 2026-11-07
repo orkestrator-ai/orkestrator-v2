@@ -2,6 +2,7 @@ import { afterEach, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { useStore } from "zustand";
 import { projectKey, projectRef } from "@orkestrator/protocol/federation";
+import { unknownBackendCommandMessage } from "@orkestrator/protocol/unknown-command";
 import { PortalStore, OutcomeUnknownError } from "@/lib/portal/portal-store";
 import type { FederatedProject } from "./summaries";
 import { createRemoteProjectWrites, withArrangement } from "./remote-project-writes";
@@ -54,11 +55,10 @@ function setup() {
   const onError = mock((_error: unknown) => {});
   const snapshot = (projects: FederatedProject[] | null, truncated = false) => {
     portal.store.setState({
-      selfId: nodeId,
-      self:
+      nodes:
         projects === null
-          ? null
-          : { nodeId, displayName: "Owner", loadedAt: 1, truncated, projects, environments: [] },
+          ? []
+          : ([{ nodeId, loadedAt: 1, truncated, projects, environments: [] }] as never),
     });
   };
   return { portal, writes, calls, onError, snapshot };
@@ -211,7 +211,7 @@ test("an owner that predates intents gets the latest arrangement, covering the q
   const { writes, calls, onError } = setupByCommand();
   writes.submit(nodeId, { projectIds: ["b", "a"], folders: { a: "Work" } }, onError, moveA);
   writes.submit(nodeId, { projectIds: ["a", "b"], folders: {} }, onError, sortWork);
-  calls[0]!.reject(new Error("Unknown command: arrange_projects_by_intent"));
+  calls[0]!.reject(new Error(unknownBackendCommandMessage("arrange_projects_by_intent")));
   await flush();
   expect(calls).toHaveLength(2);
   expect(calls[1]!.command).toBe("arrange_projects");

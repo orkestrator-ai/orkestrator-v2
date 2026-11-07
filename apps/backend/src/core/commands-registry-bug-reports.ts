@@ -1,5 +1,14 @@
+import {
+  assignBugReportAgentCommand,
+  createBugReportCommand,
+  discardBugReportCommand,
+  fileBugReportCommand,
+  getBugReportCommand,
+  markBugReportFiledCommand,
+  saveBugReportScreenshotCommand,
+  writeBugReportAttachmentCommand,
+} from "@orkestrator/protocol/contract/domains/system";
 import type { CommandRegistrar } from "./commands-registry-types.js";
-import { asString, assertOnlyKeys } from "./commands-validation.js";
 import {
   assignBugReportAgent,
   createBugReport,
@@ -11,51 +20,27 @@ import {
   writeBugReportAttachment,
 } from "./bug-report-service.js";
 
-/** The Report a bug sheet (`bug-report-service.ts`). */
+/**
+ * The Report a bug sheet (`bug-report-service.ts`). The definitions decode the
+ * arguments (unknown keys are dropped); the service validates the values.
+ */
 export function registerBugReportCommands(register: CommandRegistrar): void {
-  register("get_bug_report", (args, context) => {
-    assertOnlyKeys(args, [], "get_bug_report argument");
-    return getBugReportSnapshot(context);
-  });
-  register("create_bug_report", (args, context) => {
-    assertOnlyKeys(args, ["clientContext"], "create_bug_report argument");
-    return createBugReport(context, args.clientContext);
-  });
-  register("assign_bug_report_agent", (args, context) => {
-    assertOnlyKeys(args, ["reportId", "agent"], "assign_bug_report_agent argument");
-    return assignBugReportAgent(context, asString(args.reportId, "reportId"), args.agent);
-  });
-  register("save_bug_report_screenshot", async (args, context) => {
-    assertOnlyKeys(args, ["reportId", "base64Data"], "save_bug_report_screenshot argument");
-    return saveBugReportScreenshot(context, asString(args.reportId, "reportId"), args.base64Data);
-  });
-  register("write_bug_report_attachment", async (args, context) => {
-    assertOnlyKeys(
-      args,
-      ["reportId", "filename", "base64Data"],
-      "write_bug_report_attachment argument",
-    );
-    return writeBugReportAttachment(
-      context,
-      asString(args.reportId, "reportId"),
-      asString(args.filename, "filename"),
-      asString(args.base64Data, "base64Data"),
-    );
-  });
-  register("file_bug_report", (args, context) => {
-    assertOnlyKeys(args, ["reportId", "title", "body", "via"], "file_bug_report argument");
-    return fileBugReport(context, asString(args.reportId, "reportId"), {
-      title: args.title,
-      body: args.body,
-      via: args.via,
-    });
-  });
-  register("mark_bug_report_filed", (args, context) => {
-    assertOnlyKeys(args, ["reportId", "url"], "mark_bug_report_filed argument");
-    return markBugReportFiled(context, asString(args.reportId, "reportId"), args.url);
-  });
-  register("discard_bug_report", (args, context) => {
-    assertOnlyKeys(args, ["reportId"], "discard_bug_report argument");
-    return discardBugReport(context, asString(args.reportId, "reportId"));
-  });
+  register(getBugReportCommand, (_args, context) => getBugReportSnapshot(context));
+  register(createBugReportCommand, (args, context) => createBugReport(context, args.clientContext));
+  register(assignBugReportAgentCommand, (args, context) =>
+    assignBugReportAgent(context, args.reportId, args.agent),
+  );
+  register(saveBugReportScreenshotCommand, (args, context) =>
+    saveBugReportScreenshot(context, args.reportId, args.base64Data),
+  );
+  register(writeBugReportAttachmentCommand, (args, context) =>
+    writeBugReportAttachment(context, args.reportId, args.filename, args.base64Data),
+  );
+  register(fileBugReportCommand, (args, context) =>
+    fileBugReport(context, args.reportId, { title: args.title, body: args.body, via: args.via }),
+  );
+  register(markBugReportFiledCommand, (args, context) =>
+    markBugReportFiled(context, args.reportId, args.url),
+  );
+  register(discardBugReportCommand, (args, context) => discardBugReport(context, args.reportId));
 }

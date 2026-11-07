@@ -1,25 +1,27 @@
 import { afterEach, expect, test } from "bun:test";
-import { act, cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import { projectKey, projectRef, type BackendId } from "@orkestrator/protocol/federation";
 import { sidebarFolderKey, useMachineViewStore } from "@/stores/machineViewStore";
-import { useUIStore } from "@/stores/uiStore";
+import { uiStore } from "@/stores/uiStore";
 import type { Project } from "@/types";
 import { useBoundCollapseSync } from "./useBoundCollapseSync";
+import { appCommandStore } from "@/test/app-command-store";
 
-const initialUI = useUIStore.getState();
+const initialUI = appCommandStore(uiStore).getState();
 const initialView = useMachineViewStore.getState();
 const machine = "bk_leaf" as BackendId;
 const key = (id: string) => projectKey(projectRef(machine, id));
 const projects = [{ id: "p", folder: "Work" }] as Project[];
 afterEach(() => {
   cleanup();
-  useUIStore.setState(initialUI, true);
+  appCommandStore(uiStore).setState(initialUI, true);
   useMachineViewStore.setState(initialView, true);
 });
 
 test("does not adopt or record before projects have actually loaded", () => {
   useMachineViewStore.getState().setProjectKeyCollapsed(key("p"), true);
-  const { rerender } = renderHook(
+  const { rerender } = renderHookInAppCommandScope(
     ({ items, loaded }) => useBoundCollapseSync(machine, items, loaded),
     {
       initialProps: { items: [] as Project[], loaded: false },
@@ -27,7 +29,7 @@ test("does not adopt or record before projects have actually loaded", () => {
   );
   expect(useMachineViewStore.getState().seededMachines).not.toContain(machine);
   rerender({ items: projects, loaded: true });
-  expect(useUIStore.getState().collapsedProjects).toContain("p");
+  expect(appCommandStore(uiStore).getState().collapsedProjects).toContain("p");
   expect(useMachineViewStore.getState().collapsedProjectKeys).toContain(key("p"));
 });
 
@@ -36,33 +38,38 @@ test("first binding adopts remote collapsed and explicitly expanded choices and 
   view.setProjectKeyCollapsed(key("p"), true);
   view.setProjectKeyCollapsed(key("expanded"), false);
   view.setFolderKeyCollapsed(sidebarFolderKey(machine, "work"), true);
-  useUIStore.setState({ collapsedProjects: ["expanded"] });
-  renderHook(() =>
+  appCommandStore(uiStore).setState({ collapsedProjects: ["expanded"] });
+  renderHookInAppCommandScope(() =>
     useBoundCollapseSync(machine, [...projects, { id: "expanded" } as Project], true),
   );
-  expect(useUIStore.getState().collapsedProjects).toEqual(["p"]);
-  expect(useUIStore.getState().collapsedProjectFolders).toEqual(["work"]);
+  expect(appCommandStore(uiStore).getState().collapsedProjects).toEqual(["p"]);
+  expect(appCommandStore(uiStore).getState().collapsedProjectFolders).toEqual(["work"]);
 });
 
 test("projects appearing later adopt once and bound edits remain recorded", () => {
   useMachineViewStore.getState().setProjectKeyCollapsed(key("p"), true);
-  const { rerender } = renderHook(({ items }) => useBoundCollapseSync(machine, items, true), {
-    initialProps: { items: [] as Project[] },
-  });
+  const { rerender } = renderHookInAppCommandScope(
+    ({ items }) => useBoundCollapseSync(machine, items, true),
+    {
+      initialProps: { items: [] as Project[] },
+    },
+  );
   rerender({ items: projects });
-  act(() => useUIStore.getState().setProjectCollapsed("p", false));
+  act(() => appCommandStore(uiStore).getState().setProjectCollapsed("p", false));
   rerender({ items: [...projects] });
-  expect(useUIStore.getState().collapsedProjects).not.toContain("p");
+  expect(appCommandStore(uiStore).getState().collapsedProjects).not.toContain("p");
   expect(useMachineViewStore.getState().collapsedProjectKeys).not.toContain(key("p"));
 });
 
 test("remount preserves choices and leaves new empty projects eligible for defaults", () => {
-  const first = renderHook(() => useBoundCollapseSync(machine, projects, true));
-  act(() => useUIStore.getState().setProjectCollapsed("p", false));
+  const first = renderHookInAppCommandScope(() => useBoundCollapseSync(machine, projects, true));
+  act(() => appCommandStore(uiStore).getState().setProjectCollapsed("p", false));
   first.unmount();
-  renderHook(() => useBoundCollapseSync(machine, [...projects, { id: "new" } as Project], true));
-  act(() => useUIStore.getState().collapseEmptyProjects(["p", "new"], new Set()));
-  expect(useUIStore.getState().collapsedProjects).toEqual(["new"]);
+  renderHookInAppCommandScope(() =>
+    useBoundCollapseSync(machine, [...projects, { id: "new" } as Project], true),
+  );
+  act(() => appCommandStore(uiStore).getState().collapseEmptyProjects(["p", "new"], new Set()));
+  expect(appCommandStore(uiStore).getState().collapsedProjects).toEqual(["new"]);
   expect(useMachineViewStore.getState().collapsedProjectKeys).toContain(key("new"));
 });
 
@@ -71,14 +78,17 @@ test("returning to a prior binding adopts its choices rather than the machine ju
   const view = useMachineViewStore.getState();
   view.setProjectKeyCollapsed(key("p"), true);
   view.setProjectKeyCollapsed(projectKey(projectRef(other, "p")), false);
-  const { rerender } = renderHook(({ backend }) => useBoundCollapseSync(backend, projects, true), {
-    initialProps: { backend: machine },
-  });
-  expect(useUIStore.getState().collapsedProjects).toContain("p");
+  const { rerender } = renderHookInAppCommandScope(
+    ({ backend }) => useBoundCollapseSync(backend, projects, true),
+    {
+      initialProps: { backend: machine },
+    },
+  );
+  expect(appCommandStore(uiStore).getState().collapsedProjects).toContain("p");
   rerender({ backend: other });
-  expect(useUIStore.getState().collapsedProjects).not.toContain("p");
-  act(() => useUIStore.getState().setProjectFolderCollapsed("Work", true));
+  expect(appCommandStore(uiStore).getState().collapsedProjects).not.toContain("p");
+  act(() => appCommandStore(uiStore).getState().setProjectFolderCollapsed("Work", true));
   rerender({ backend: machine });
-  expect(useUIStore.getState().collapsedProjects).toContain("p");
-  expect(useUIStore.getState().collapsedProjectFolders).not.toContain("Work");
+  expect(appCommandStore(uiStore).getState().collapsedProjects).toContain("p");
+  expect(appCommandStore(uiStore).getState().collapsedProjectFolders).not.toContain("Work");
 });

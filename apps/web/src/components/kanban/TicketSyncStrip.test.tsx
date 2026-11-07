@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test, spyOn, mock } from "bun:test";
-import { cleanup, render, screen, renderHook, waitFor } from "@testing-library/react";
+import { cleanup, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope, renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import { DndContext } from "@dnd-kit/core";
 import type { TicketSyncStatusResult } from "@orkestrator/protocol/ticket-sync";
 import type { KanbanTask } from "@/stores/kanbanStore";
@@ -21,14 +22,14 @@ function status(
 
 describe("TicketSyncStrip", () => {
   test("shows nothing for a board no other machine shares, or an older backend", () => {
-    const { container } = render(<TicketSyncStrip status={null} />);
+    const { container } = renderInAppCommandScope(<TicketSyncStrip status={null} />);
     expect(container.textContent).toBe("");
-    render(<TicketSyncStrip status={status([])} />);
+    renderInAppCommandScope(<TicketSyncStrip status={status([])} />);
     expect(screen.queryByTestId("ticket-sync-strip") === null).toBe(true);
   });
 
   test("names each machine with its state, and counts conflicts", () => {
-    render(
+    renderInAppCommandScope(
       <TicketSyncStrip
         status={status(
           [
@@ -92,7 +93,7 @@ describe("KanbanCard on another machine", () => {
   };
 
   test("says which machine its build runs on", () => {
-    render(
+    renderInAppCommandScope(
       <DndContext>
         <KanbanCard
           task={{
@@ -118,7 +119,7 @@ describe("KanbanCard on another machine", () => {
   });
 
   test("shows no machine for local work", () => {
-    render(
+    renderInAppCommandScope(
       <DndContext>
         <KanbanCard task={task} onClick={() => {}} />
       </DndContext>,
@@ -128,7 +129,7 @@ describe("KanbanCard on another machine", () => {
 });
 
 test("status failure is visible while the last machine state remains readable", () => {
-  render(
+  renderInAppCommandScope(
     <TicketSyncStrip
       status={{
         ...status([{ nodeId: "a", nodeName: "Mini", state: "in-sync", latestSeq: 4, cursor: 4 }]),
@@ -145,7 +146,7 @@ for (const missing of [false, true]) {
     spyOn(backend, "getTicketSyncStatus").mockRejectedValue(
       new Error(missing ? "Unknown backend command: get_ticket_sync_status" : "disk failure"),
     );
-    const { result } = renderHook(() => useTicketSyncStatus("p1", 1));
+    const { result } = renderHookInAppCommandScope(() => useTicketSyncStatus("p1", 1));
     if (missing) {
       await new Promise((resolve) => setTimeout(resolve, 10));
       expect(result.current).toBeNull();
@@ -157,9 +158,12 @@ test("a status refresh failure retains the last nodes and recovery clears the er
   const read = spyOn(backend, "getTicketSyncStatus").mockResolvedValue(
     status([{ nodeId: "a", nodeName: "Mini", state: "in-sync", latestSeq: 4, cursor: 4 }]),
   );
-  const { result, rerender } = renderHook(({ revision }) => useTicketSyncStatus("p1", revision), {
-    initialProps: { revision: 1 },
-  });
+  const { result, rerender } = renderHookInAppCommandScope(
+    ({ revision }) => useTicketSyncStatus("p1", revision),
+    {
+      initialProps: { revision: 1 },
+    },
+  );
   await waitFor(() => expect(result.current?.nodes).toHaveLength(1));
   read.mockRejectedValue(new Error("offline"));
   rerender({ revision: 2 });

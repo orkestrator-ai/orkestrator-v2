@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:86467cb3814f70d7c3e91c7e242dca0a1e71ee213fd7e1cdac2aaa23bfcde75f",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "offset": {},
+        "planId": {
+          "type": "string"
+        }
+      },
+      "required": ["planId"],
+      "type": "object"
+    }
+  }
+}

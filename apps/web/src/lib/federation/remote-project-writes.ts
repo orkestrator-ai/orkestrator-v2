@@ -7,8 +7,10 @@ import {
   type ProjectArrangement,
   type ProjectArrangementIntent,
 } from "@/lib/project-folders";
-import { isUnknownBackendCommand } from "@/lib/portal/unknown-command";
+import { incompatibility } from "@orkestrator/protocol/contract/errors";
+import { projects } from "@/lib/node-scope/domains/projects";
 import type { FederatedProject } from "./summaries";
+import { routedBackendClient } from "@/lib/portal/routed-backend-client";
 
 const OPTIMISTIC_ARRANGEMENT_MS = 10_000;
 
@@ -102,9 +104,6 @@ export function createRemoteProjectWrites(portal: PortalStore) {
   };
 
   const projectsOf = (nodeId: BackendId): FederatedProject[] | null => {
-    const state = portal.getState();
-    if (nodeId === state.selfId)
-      return state.self && !state.self.truncated ? state.self.projects : null;
     const node = portal.node(nodeId);
     return node && !node.truncated ? node.projects : null;
   };
@@ -126,20 +125,22 @@ export function createRemoteProjectWrites(portal: PortalStore) {
 
   const send = (entry: Pending, write: Write) => {
     entry.writing = true;
+    // The `projects` domain client over the routed call (plan item 7005): a
+    // routed call carries no negotiated range, so it is today's call (version 0).
+    const node = projects(routedBackendClient(portal, write.nodeId))();
     const whole = (): Promise<unknown> =>
-      portal.invokeOnNode(write.nodeId, "arrange_projects", {
+      node.arrange_projects({
         projectIds: [...write.arrangement.projectIds],
         folders: { ...write.arrangement.folders },
       });
     const intent = entry.intents.shift();
     const request: Promise<unknown> = intent
-      ? portal
-          .invokeOnNode(write.nodeId, "arrange_projects_by_intent", { intent })
-          .catch((error: unknown) => {
-            if (!isUnknownBackendCommand(error, "arrange_projects_by_intent")) throw error;
-            entry.intents.length = 0;
-            return whole();
-          })
+      ? node.arrange_projects_by_intent({ intent }).catch((error: unknown) => {
+          if (incompatibility(error, "arrange_projects_by_intent")?.code !== "unknown-command")
+            throw error;
+          entry.intents.length = 0;
+          return whole();
+        })
       : whole();
     void request.then(
       (result) => {

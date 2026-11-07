@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:bb4d035bdf37bf11a943e3161b909fc5982c935bc87c1e154389a6e4723700c5",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "input": {},
+        "requestId": {
+          "type": "string"
+        },
+        "scope": {}
+      },
+      "required": ["requestId"],
+      "type": "object"
+    }
+  }
+}

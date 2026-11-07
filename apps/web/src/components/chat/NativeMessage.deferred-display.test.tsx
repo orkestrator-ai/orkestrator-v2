@@ -3,7 +3,8 @@
  * of finished reasoning; the whole value is fetched only when it is expanded.
  */
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { NativeAgentToolDetails } from "@orkestrator/protocol/native-agent";
 import type { NativeMessagePart } from "@/lib/chat/native-message-types";
 import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore";
@@ -34,7 +35,7 @@ describe("deferred tool input", () => {
       detailRef,
       toolArgs: { file_path: "/w/src/answer.ts", content: FULL_CONTENT },
     }));
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <NativeMessage
         message={message([
           {
@@ -70,7 +71,7 @@ describe("deferred tool input", () => {
         ? { detailRef, toolOutput: "wrote 80 lines" }
         : { detailRef, toolArgs: { file_path: "/w/src/answer.ts", content: FULL_CONTENT } },
     );
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <NativeMessage
         message={message([
           {
@@ -97,7 +98,7 @@ describe("deferred tool input", () => {
     const loadToolDetails = mock(async (): Promise<NativeAgentToolDetails> => {
       throw new Error("Native agent tool details are no longer available");
     });
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <NativeMessage
         message={message([
           {
@@ -126,7 +127,7 @@ describe("deferred reasoning", () => {
       detailRef,
       thinking: whole,
     }));
-    render(
+    renderInAppCommandScope(
       <NativeMessage
         message={message([
           {

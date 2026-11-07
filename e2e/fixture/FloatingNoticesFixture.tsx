@@ -30,6 +30,7 @@ import {
 } from "../../apps/web/src/components/ui/floating-notice";
 import type { NativeMessage as Message } from "../../apps/web/src/lib/chat/native-message-types";
 import { useAgentMailStore } from "../../apps/web/src/stores/agentMailStore";
+import { appCommandStore } from "../../apps/web/src/test/app-command-store";
 
 const ENVIRONMENT = "env-floating";
 const TAB = "tab-floating";
@@ -96,7 +97,7 @@ function seedMail() {
     limit: 100,
     revision: 1,
   } as AgentMailMailboxSnapshot;
-  useAgentMailStore.setState({
+  appCommandStore(useAgentMailStore.def).setState({
     revision: 1,
     summary: new Map([
       [

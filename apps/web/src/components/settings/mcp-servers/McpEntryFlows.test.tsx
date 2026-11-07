@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 
 import {
   TRANSPORT_FAILURE,
@@ -40,7 +41,7 @@ describe("enable/disable goes through a review", () => {
       }),
       mutate_mcp_definition: () => saved,
     });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     fireEvent.click(await screen.findByRole("button", { name: "Disable docs" }));
     expect(await screen.findByText("Disable docs?")).toBeTruthy();
     expect(
@@ -75,7 +76,7 @@ describe("enable/disable goes through a review", () => {
       validate_mcp_mutation: () => ({ valid: true, fieldErrors: [], preview }),
       mutate_mcp_definition: () => saved,
     });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     fireEvent.click(await screen.findByRole("button", { name: "Enable docs" }));
     fireEvent.click(await screen.findByRole("button", { name: "Enable and apply" }));
     await waitFor(() => expect(callsOf("mutate_mcp_definition").length).toBe(1));
@@ -97,7 +98,7 @@ describe("enable/disable goes through a review", () => {
         return saved;
       },
     });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     fireEvent.click(await screen.findByRole("button", { name: "Disable docs" }));
     fireEvent.click(await screen.findByRole("button", { name: "Disable" }));
     expect(await screen.findByText(TRANSPORT_FAILURE)).toBeTruthy();
@@ -126,7 +127,7 @@ describe("rename and remove recover from a conflict", () => {
         return saved;
       },
     });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     fireEvent.click(await screen.findByRole("button", { name: "Rename docs" }));
     fireEvent.change(await screen.findByLabelText("New name"), { target: { value: "docs2" } });
     fireEvent.click(screen.getByRole("button", { name: "Review change" }));
@@ -166,7 +167,7 @@ describe("rename and remove recover from a conflict", () => {
         return saved;
       },
     });
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     fireEvent.click(await screen.findByRole("button", { name: "Remove docs" }));
     fireEvent.click(await screen.findByRole("button", { name: "Remove" }));
     fireEvent.click(await screen.findByRole("button", { name: "Reload latest and review again" }));
@@ -195,7 +196,7 @@ describe("focus returns to the row that opened a dialog", () => {
   ] as const) {
     test(`keyboard only: ${action}, then Escape`, async () => {
       install(handlers);
-      render(<ProviderMcpSettings />);
+      renderInAppCommandScope(<ProviderMcpSettings />);
       const trigger = await screen.findByRole("button", { name: action });
       pressEnter(trigger, fireEvent);
       await screen.findByRole("heading", { name: opened });
@@ -215,7 +216,7 @@ describe("focus returns to the row that opened a dialog", () => {
 
   test("the Add server button gets focus back after the add dialog closes", async () => {
     install(handlers);
-    render(<ProviderMcpSettings />);
+    renderInAppCommandScope(<ProviderMcpSettings />);
     const add = await screen.findByRole("button", { name: /Add server/ });
     pressEnter(add, fireEvent);
     await screen.findByRole("heading", { name: /Add Claude Code server/ });

@@ -3,11 +3,11 @@ id: 0005
 title: "Correct the federation and compatibility docs"
 phase: 0
 plan: "§12 Phase 0.5"
-status: not-started
+status: done
 depends_on: []
 blocked_by: ""
-owner: ""
-branch: ""
+owner: claude-worker
+branch: unified-federation-b4c9ee65814d
 pr: ""
 updated: 2026-11-07
 ---
@@ -41,12 +41,26 @@ The living docs describe the code as it is today, so later items start from corr
 
 ## Work
 
-- [ ] Rewrite the renderer-runtime part of `federation.md` to describe realms, summaries and relayed events as they are. Keep `useBoundMachineView`, and make clear the backend `BackendRuntime` is unrelated.
-- [ ] `version-compatibility.md`:
+- [x] Rewrite the renderer-runtime part of `federation.md` to describe realms, summaries and relayed events as they are. Keep `useBoundMachineView`, and make clear the backend `BackendRuntime` is unrelated.
+- [x] `version-compatibility.md`:
   - say the renderer has no handshake, while backends exchange the hello;
   - update the floor sentence at :31 to today's computed floor, or reword it so it does not go stale.
-- [ ] Add a "Planned: unified federation" pointer in `federation.md` to the report and to this plan folder.
+- [x] Add a "Planned: unified federation" pointer in `federation.md` to the report and to this plan folder.
 
 ## Done when
 
-- [ ] `mise run format:check` passes, and a reviewer can find no mention of a removed symbol.
+- [x] `mise run format:check` passes, and a reviewer can find no mention of a removed symbol.
+
+## Notes
+
+- `federation.md` now has "Renderer: summaries, relayed events and realms" (portal channel, summaries, relayed events, explicit-owner actions and outcomes) and "Workspace realms: one realm per other node" in place of the old renderer-runtime and machine-panel sections. An `<a id="machine-panels-one-realm-per-machine">` anchor keeps the one inbound link (`docs/todo/coordinator-and-multi-review/6580-…`) working.
+- The removed-symbol sweep went past the listed lines. Also corrected, each checked against the code: the status paragraph (realms exist again; saved machines are imported once by `importSavedMachinesOnce`), the Ownership and Components tables (`backend-panel-views.ts`, "registry, runtimes"), the hello capability list (now the ten node-mode capabilities and `nodeMode`; only backend code acts on them), the machine-profile bullet (no renderer runtime; `duplicateMachineColors` exists but no page calls it), the hosted-browser machine list in `localStorage` (gone), ConnectionManager "Bind and observe" (no `observe`/`unobserve`, no `panel:<uuid>` scope; realms use `realm:<viewId>` and `retargetScopeToWorkspace`), Events (`orkestrator:backend-event` is gone; realms' portal channel uses `orkestrator:portal-event`), the Freshness owner, the `federation` flag row, and Known limitations (realms have native previews and artifact hosts; iOS uses frame realms; no phone new-tab path; summaries persist on the command node, not the client).
+- Found while checking, not fixed here (outside this item): the `federation` device flag is saved and shown ("Show all machines together") but nothing reads it; `apps/web/src/lib/federation/operation-recovery.ts` has no importers (outcomes are recorded by the command node now); `duplicateMachineColors` has no caller.
+- The Acceptance-ID map still names `federation-runtime.test.ts` and `scripts/benchmark-federation.ts`; they are left as they were because the paragraph above the table already marks that map as historical.
+- Floor: on 2026-11-07 no Stable release is 60 days old (the first, v2.21.0, is from 2026-10-16), so the floor is v2.21.0. The sentence now says "Until 2026-12-15 the floor is v2.21.0" plus how to compute it, so it does not go stale.
+- `mise run format:check` passes (7518 files). An earlier run failed only on other agents' untracked, in-progress files under `apps/web/src/lib/node-scope/`, which are not part of this change.
+- Effect: not used; documentation only.
+
+## Work log
+
+- 2026-11-07 (claude-worker): rewrote the renderer and realm sections of `docs/architecture/federation.md`, removed every mention of removed renderer symbols, added the "Planned: unified federation" section, and corrected the handshake paragraph and floor sentence in `docs/architecture/version-compatibility.md`. Validation: `mise run format:check` (pass).

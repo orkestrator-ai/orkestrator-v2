@@ -1,27 +1,28 @@
 import { beginTabLaunch, resetTabLaunches } from "@/lib/tab-launch";
-import { useTabLaunchStore } from "@/stores/tabLaunchStore";
+import { tabLaunchStore } from "@/stores/tabLaunchStore";
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 
 import { useEffect, useRef, type ReactNode } from "react";
 
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 
 import { MAX_TABS, TerminalProvider, useTerminalContext } from "@/contexts";
 
-import { useClaudeOptionsStore } from "@/stores/claudeOptionsStore";
+import { claudeOptionsStore } from "@/stores/claudeOptionsStore";
 
-import { useConfigStore } from "@/stores/configStore";
+import { configStore } from "@/stores/configStore";
 
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { environmentStore } from "@/stores/environmentStore";
 
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 
-import { useNativeComposeStore } from "@/stores/nativeComposeStore";
+import { nativeComposeStore } from "@/stores/nativeComposeStore";
 
-import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
-import { useMultiReviewStore } from "@/stores/multiReviewStore";
-import { useFilesPanelStore } from "@/stores/filesPanelStore";
+import { buildPipelineStore } from "@/stores/buildPipelineStore";
+import { multiReviewStore } from "@/stores/multiReviewStore";
+import { filesPanelStore } from "@/stores/filesPanelStore";
 
 import {
   armWindowStartupAgentActivation,
@@ -31,7 +32,7 @@ import {
 
 import { startPaneLayoutPersistence } from "@/lib/pane-layout-persistence";
 
-import { createSessionKey, useTerminalSessionStore } from "@/stores/terminalSessionStore";
+import { createSessionKey, terminalSessionStore } from "@/stores/terminalSessionStore";
 
 import {
   LEGACY_PANE_LAYOUT_VERSION,
@@ -58,6 +59,7 @@ import * as realNativeEvents from "@/lib/native/events";
 import { listen, NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
 
 import { MessageMarkdown } from "@/components/chat/MessageMarkdown";
+import { appCommandStore } from "@/test/app-command-store";
 
 const LEGACY_SELECTION_STORAGE_KEY = "orkestrator.pane-selection.v1";
 
@@ -187,7 +189,9 @@ const getSetupCommandsMock = mock(async (): Promise<string[] | null> => null);
 
 const ensureEnvironmentSetupMock = mock(
   async (environmentId: string): Promise<EnsureEnvironmentSetupResult> => {
-    const environment = useEnvironmentStore.getState().getEnvironmentById(environmentId)!;
+    const environment = appCommandStore(environmentStore)
+      .getState()
+      .getEnvironmentById(environmentId)!;
     return {
       setupStarted: false,
       environment: {
@@ -199,7 +203,7 @@ const ensureEnvironmentSetupMock = mock(
 );
 
 const runEnvironmentSetupMock = mock(async (environmentId: string) => ({
-  ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
+  ...appCommandStore(environmentStore).getState().getEnvironmentById(environmentId)!,
   setupScriptsComplete: true,
 }));
 
@@ -226,7 +230,7 @@ const getTerminalOutputSnapshotMock = mock(async (_sessionId: string) => ({
 
 const setEnvironmentPendingAgentLaunchMock = mock(
   async (environmentId: string, pending: boolean) => ({
-    ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
+    ...appCommandStore(environmentStore).getState().getEnvironmentById(environmentId)!,
     pendingAgentLaunch: pending,
     ...(pending
       ? {}
@@ -238,13 +242,13 @@ const setEnvironmentPendingAgentLaunchMock = mock(
 );
 
 const acknowledgeStartupAgentSessionMock = mock(async (environmentId: string) => ({
-  ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
+  ...appCommandStore(environmentStore).getState().getEnvironmentById(environmentId)!,
   startupAgentSession: undefined,
 }));
 
 const setEnvironmentInitialPromptMock = mock(
   async (environmentId: string, initialPrompt: string) => ({
-    ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
+    ...appCommandStore(environmentStore).getState().getEnvironmentById(environmentId)!,
     initialPrompt,
   }),
 );
@@ -289,7 +293,9 @@ const writeInitialPromptAttachmentsMock = mock(
     environmentId: string,
     attachments: Parameters<typeof realBackend.writeInitialPromptAttachments>[1],
   ) => {
-    const environment = useEnvironmentStore.getState().getEnvironmentById(environmentId);
+    const environment = appCommandStore(environmentStore)
+      .getState()
+      .getEnvironmentById(environmentId);
     if (!environment) throw new Error(`Environment not found: ${environmentId}`);
     const usedNames = new Set<string>();
     return Promise.all(
@@ -344,13 +350,13 @@ const publishSetupTab = (
   } as PersistedPaneLayout);
 
 const seedContainerSetupCommands = (environmentId = "env-hidden") => {
-  useEnvironmentStore.getState().updateEnvironment(environmentId, {
+  appCommandStore(environmentStore).getState().updateEnvironment(environmentId, {
     setupPhase: "running",
   });
 };
 
 const seedUnboundSetupTabFor = (environmentId: string, containerId: string) => {
-  usePaneLayoutStore.setState((state) => ({
+  appCommandStore(paneLayoutStore).setState((state) => ({
     environments: new Map(state.environments).set(environmentId, {
       root: {
         kind: "leaf",
@@ -471,7 +477,7 @@ describe("TerminalContainer", () => {
     listenMock.mockReset();
     listenMock.mockResolvedValue(() => undefined);
 
-    usePaneLayoutStore.setState({
+    appCommandStore(paneLayoutStore).setState({
       environments: new Map([
         [
           "env-visible",
@@ -491,7 +497,7 @@ describe("TerminalContainer", () => {
       activeEnvironmentId: "env-visible",
     });
 
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [
         {
           id: "env-visible",
@@ -530,13 +536,13 @@ describe("TerminalContainer", () => {
       error: null,
       deletingEnvironments: new Set(),
     });
-    useTerminalSessionStore.setState({
+    appCommandStore(terminalSessionStore).setState({
       sessions: new Map(),
       composeDraftText: new Map(),
       composeDraftImages: new Map(),
     });
-    useNativeComposeStore.setState({ drafts: new Map() });
-    useBuildPipelineStore.setState({
+    appCommandStore(nativeComposeStore).setState({ drafts: new Map() });
+    appCommandStore(buildPipelineStore).setState({
       pipelines: new Map(),
       buildEnvironmentIds: new Set(),
     });
@@ -546,7 +552,9 @@ describe("TerminalContainer", () => {
     getSetupCommandsMock.mockResolvedValue(null);
     ensureEnvironmentSetupMock.mockReset();
     ensureEnvironmentSetupMock.mockImplementation(async (environmentId: string) => {
-      const environment = useEnvironmentStore.getState().getEnvironmentById(environmentId)!;
+      const environment = appCommandStore(environmentStore)
+        .getState()
+        .getEnvironmentById(environmentId)!;
       return {
         setupStarted: false,
         environment: {
@@ -557,7 +565,7 @@ describe("TerminalContainer", () => {
     });
     runEnvironmentSetupMock.mockReset();
     runEnvironmentSetupMock.mockImplementation(async (environmentId: string) => ({
-      ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
+      ...appCommandStore(environmentStore).getState().getEnvironmentById(environmentId)!,
       setupScriptsComplete: true,
     }));
     getEnvironmentSetupSessionMock.mockReset();
@@ -578,7 +586,7 @@ describe("TerminalContainer", () => {
     setEnvironmentPendingAgentLaunchMock.mockReset();
     setEnvironmentPendingAgentLaunchMock.mockImplementation(
       async (environmentId: string, pending: boolean) => ({
-        ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
+        ...appCommandStore(environmentStore).getState().getEnvironmentById(environmentId)!,
         pendingAgentLaunch: pending,
         ...(pending
           ? {}
@@ -590,13 +598,13 @@ describe("TerminalContainer", () => {
     );
     acknowledgeStartupAgentSessionMock.mockReset();
     acknowledgeStartupAgentSessionMock.mockImplementation(async (environmentId: string) => ({
-      ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
+      ...appCommandStore(environmentStore).getState().getEnvironmentById(environmentId)!,
       startupAgentSession: undefined,
     }));
     setEnvironmentInitialPromptMock.mockReset();
     setEnvironmentInitialPromptMock.mockImplementation(
       async (environmentId: string, initialPrompt: string) => ({
-        ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
+        ...appCommandStore(environmentStore).getState().getEnvironmentById(environmentId)!,
         initialPrompt,
       }),
     );
@@ -607,7 +615,7 @@ describe("TerminalContainer", () => {
     listMultiReviewWorkflowsMock.mockResolvedValue([]);
     getMultiReviewWorkflowMock.mockReset();
     getMultiReviewWorkflowMock.mockResolvedValue(null);
-    useMultiReviewStore.setState({ workflows: new Map() });
+    appCommandStore(multiReviewStore).setState({ workflows: new Map() });
     deletePaneLayoutMock.mockReset();
     deletePaneLayoutMock.mockResolvedValue(undefined);
     teardownTabMock.mockReset();
@@ -623,7 +631,7 @@ describe("TerminalContainer", () => {
       async (worktreePath: string, filePath: string) => `${worktreePath}/${filePath}`,
     );
 
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,
@@ -643,7 +651,7 @@ describe("TerminalContainer", () => {
       },
     }));
 
-    useClaudeOptionsStore.setState({
+    appCommandStore(claudeOptionsStore).setState({
       options: {},
     });
   });
@@ -670,7 +678,7 @@ describe("TerminalContainer", () => {
       updatedAt: "2026-01-01T00:00:00.000Z",
       revision: 1,
     });
-    useEnvironmentStore.setState((state) => ({
+    appCommandStore(environmentStore).setState((state) => ({
       ...state,
       environments: state.environments.map((environment) =>
         environment.id === "env-hidden"
@@ -686,7 +694,7 @@ describe("TerminalContainer", () => {
       ),
     }));
 
-    return render(
+    return renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer environmentId="env-hidden" containerId={null} isActive={false} />
       </TerminalProvider>,
@@ -694,7 +702,7 @@ describe("TerminalContainer", () => {
   };
 
   const setupTabIds = () =>
-    usePaneLayoutStore
+    appCommandStore(paneLayoutStore)
       .getState()
       .getAllTabs("env-hidden")
       .filter((tab) => tab.isSetupTab)
@@ -727,7 +735,7 @@ describe("TerminalContainer", () => {
             },
           }
         : { id: "startup-agent", type: agent };
-    usePaneLayoutStore.setState({
+    appCommandStore(paneLayoutStore).setState({
       environments: new Map([
         [
           "env-hidden",
@@ -749,7 +757,7 @@ describe("TerminalContainer", () => {
       hydration: new Map([["env-hidden", "done"]]),
       activeEnvironmentId: null,
     } as never);
-    useEnvironmentStore.setState((state) => ({
+    appCommandStore(environmentStore).setState((state) => ({
       ...state,
       environments: state.environments.map((environment) =>
         environment.id === "env-hidden"
@@ -766,11 +774,11 @@ describe("TerminalContainer", () => {
           : environment,
       ),
     }));
-    useClaudeOptionsStore.setState({ options: {} });
+    appCommandStore(claudeOptionsStore).setState({ options: {} });
   }
 
   const renderHiddenTerminal = () =>
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -788,7 +796,7 @@ describe("TerminalContainer", () => {
   const waitForDurableAgentTab = async (type = "agent-native") => {
     let tabId: string | undefined;
     await waitFor(() => {
-      const agentTab = usePaneLayoutStore
+      const agentTab = appCommandStore(paneLayoutStore)
         .getState()
         .getAllTabs("env-hidden")
         .find((tab) => tab.type === type);
@@ -804,7 +812,7 @@ describe("TerminalContainer", () => {
   // environment whose backend-published agent tab already exists while the
   // setup terminal is still the surface the renderer keeps selected.
   function seedStartupFocusHandoffConfig(): void {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,
@@ -833,7 +841,7 @@ describe("TerminalContainer", () => {
     environmentId: string,
     options: { setupReady: boolean },
   ): void {
-    useEnvironmentStore.setState((state) => ({
+    appCommandStore(environmentStore).setState((state) => ({
       ...state,
       environments: state.environments.map((environment) =>
         environment.id === environmentId
@@ -882,7 +890,7 @@ describe("TerminalContainer", () => {
       });
 
       expect(
-        usePaneLayoutStore
+        appCommandStore(paneLayoutStore)
           .getState()
           .getAllTabs("env-hidden")
           .some((tab) => tab.id === "startup-agent"),
@@ -890,7 +898,8 @@ describe("TerminalContainer", () => {
       expect(setEnvironmentPendingAgentLaunchMock).not.toHaveBeenCalled();
       expect(acknowledgeStartupAgentSessionMock).not.toHaveBeenCalled();
       expect(
-        useEnvironmentStore.getState().getEnvironmentById("env-hidden")?.pendingAgentLaunch,
+        appCommandStore(environmentStore).getState().getEnvironmentById("env-hidden")
+          ?.pendingAgentLaunch,
       ).toBe(true);
     },
   );
@@ -931,7 +940,7 @@ describe("TerminalContainer", () => {
       renderHiddenTerminal();
 
       await waitFor(() => {
-        const agentTab = usePaneLayoutStore
+        const agentTab = appCommandStore(paneLayoutStore)
           .getState()
           .getAllTabs("env-hidden")
           .find((tab) => tab.type === expectedType);
@@ -953,7 +962,7 @@ describe("TerminalContainer", () => {
       } else {
         getPaneLayoutMock.mockResolvedValue(firstResult);
       }
-      useEnvironmentStore.setState((state) => ({
+      appCommandStore(environmentStore).setState((state) => ({
         ...state,
         environments: state.environments.map((environment) =>
           environment.id === "env-hidden"
@@ -970,37 +979,43 @@ describe("TerminalContainer", () => {
       renderHiddenTerminal();
 
       await waitFor(() => {
-        expect(usePaneLayoutStore.getState().hydration.get("env-hidden")).toBe("done");
-        expect(usePaneLayoutStore.getState().environments.has("env-hidden")).toBe(true);
+        expect(appCommandStore(paneLayoutStore).getState().hydration.get("env-hidden")).toBe(
+          "done",
+        );
+        expect(appCommandStore(paneLayoutStore).getState().environments.has("env-hidden")).toBe(
+          true,
+        );
       });
 
       act(() => {
-        usePaneLayoutStore.getState().applyAuthoritativeLayout("env-hidden", {
-          containerId: "container-hidden",
-          activePaneId: "default",
-          backendRevision: 2,
-          root: {
-            kind: "leaf",
-            id: "default",
-            tabs: [
-              { id: "default", type: "plain", isSetupTab: true },
-              {
-                id: "startup-agent",
-                type: "agent-native",
-                nativeAgentData: {
-                  platform: "codex",
-                  environmentId: "env-hidden",
-                  containerId: "container-hidden",
-                  sessionId: "late-session",
+        appCommandStore(paneLayoutStore)
+          .getState()
+          .applyAuthoritativeLayout("env-hidden", {
+            containerId: "container-hidden",
+            activePaneId: "default",
+            backendRevision: 2,
+            root: {
+              kind: "leaf",
+              id: "default",
+              tabs: [
+                { id: "default", type: "plain", isSetupTab: true },
+                {
+                  id: "startup-agent",
+                  type: "agent-native",
+                  nativeAgentData: {
+                    platform: "codex",
+                    environmentId: "env-hidden",
+                    containerId: "container-hidden",
+                    sessionId: "late-session",
+                  },
                 },
-              },
-            ],
-            activeTabId: "startup-agent",
-          },
-        });
+              ],
+              activeTabId: "startup-agent",
+            },
+          });
       });
 
-      const startupTab = usePaneLayoutStore
+      const startupTab = appCommandStore(paneLayoutStore)
         .getState()
         .getAllTabs("env-hidden")
         .find((tab) => tab.id === "startup-agent");
@@ -1013,7 +1028,7 @@ describe("TerminalContainer", () => {
   );
 
   test("initializes a hidden environment without changing the active pane-layout environment", async () => {
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -1025,7 +1040,7 @@ describe("TerminalContainer", () => {
     );
 
     await waitFor(() => {
-      const envHidden = usePaneLayoutStore.getState().environments.get("env-hidden");
+      const envHidden = appCommandStore(paneLayoutStore).getState().environments.get("env-hidden");
       expect(envHidden).toBeDefined();
       expect(envHidden?.containerId).toBe("container-hidden");
       expect(envHidden?.root.kind).toBe("leaf");
@@ -1035,7 +1050,7 @@ describe("TerminalContainer", () => {
       }
     });
 
-    expect(usePaneLayoutStore.getState().activeEnvironmentId).toBe("env-visible");
+    expect(appCommandStore(paneLayoutStore).getState().activeEnvironmentId).toBe("env-visible");
   });
 
   test("restores a backend pane layout before default tab seeding", async () => {
@@ -1054,7 +1069,7 @@ describe("TerminalContainer", () => {
       revision: 1,
     });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -1066,8 +1081,8 @@ describe("TerminalContainer", () => {
     );
 
     await waitFor(() => {
-      const restored = usePaneLayoutStore.getState().environments.get("env-hidden");
-      expect(usePaneLayoutStore.getState().hydration.get("env-hidden")).toBe("done");
+      const restored = appCommandStore(paneLayoutStore).getState().environments.get("env-hidden");
+      expect(appCommandStore(paneLayoutStore).getState().hydration.get("env-hidden")).toBe("done");
       expect(restored?.activePaneId).toBe("restored-pane");
       expect(restored?.root).toMatchObject({
         kind: "leaf",
@@ -1129,7 +1144,7 @@ describe("TerminalContainer", () => {
           ],
         },
       });
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-hidden"
@@ -1140,13 +1155,17 @@ describe("TerminalContainer", () => {
         </TerminalProvider>,
       );
       await waitFor(() => {
-        expect(usePaneLayoutStore.getState().hydration.get("env-hidden")).toBe("done");
-        expect(usePaneLayoutStore.getState().environments.get("env-hidden")?.root).toMatchObject({
+        expect(appCommandStore(paneLayoutStore).getState().hydration.get("env-hidden")).toBe(
+          "done",
+        );
+        expect(
+          appCommandStore(paneLayoutStore).getState().environments.get("env-hidden")?.root,
+        ).toMatchObject({
           activeTabId: "multi-review:late-review",
           tabs: [{ id: "multi-review:late-review" }],
         });
       });
-      expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toHaveLength(1);
+      expect(appCommandStore(paneLayoutStore).getState().getAllTabs("env-hidden")).toHaveLength(1);
       expect(getMultiReviewWorkflowMock).toHaveBeenCalledWith("late-review");
       expect(deletePaneLayoutMock).not.toHaveBeenCalled();
     },
@@ -1181,10 +1200,10 @@ describe("TerminalContainer", () => {
         />
       </TerminalProvider>
     );
-    const view = render(renderTerminal(true));
+    const view = renderInAppCommandScope(renderTerminal(true));
 
     await waitFor(() => {
-      const restored = usePaneLayoutStore.getState().environments.get("env-hidden");
+      const restored = appCommandStore(paneLayoutStore).getState().environments.get("env-hidden");
       expect(restored?.root).toMatchObject({
         kind: "leaf",
         tabs: [{ id: "restored-tab" }, { id: "second-tab" }],
@@ -1199,7 +1218,7 @@ describe("TerminalContainer", () => {
     // why App.tsx feeds this from the environment's own status rather than
     // from the Docker daemon probe.
     await waitFor(() => {
-      const afterStop = usePaneLayoutStore.getState().environments.get("env-hidden");
+      const afterStop = appCommandStore(paneLayoutStore).getState().environments.get("env-hidden");
       expect(afterStop?.root).toMatchObject({ kind: "leaf", id: "default", tabs: [] });
       expect(afterStop?.activePaneId).toBe("default");
     });
@@ -1230,9 +1249,9 @@ describe("TerminalContainer", () => {
         />
       </TerminalProvider>
     );
-    const view = render(renderTerminal(true));
+    const view = renderInAppCommandScope(renderTerminal(true));
     await waitFor(() => {
-      expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toMatchObject([
+      expect(appCommandStore(paneLayoutStore).getState().getAllTabs("env-hidden")).toMatchObject([
         { id: "agent-tab" },
       ]);
     });
@@ -1240,19 +1259,19 @@ describe("TerminalContainer", () => {
     // Viewed while stopped, then started from that view.
     view.rerender(renderTerminal(false));
     await waitFor(() => {
-      expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toEqual([]);
+      expect(appCommandStore(paneLayoutStore).getState().getAllTabs("env-hidden")).toEqual([]);
     });
     view.rerender(renderTerminal(true));
 
     await waitFor(() => {
       expect(getPaneLayoutMock).toHaveBeenCalledTimes(2);
-      expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toMatchObject([
+      expect(appCommandStore(paneLayoutStore).getState().getAllTabs("env-hidden")).toMatchObject([
         { id: "agent-tab" },
       ]);
     });
-    expect(usePaneLayoutStore.getState().environments.get("env-hidden")?.activePaneId).toBe(
-      "restored-pane",
-    );
+    expect(
+      appCommandStore(paneLayoutStore).getState().environments.get("env-hidden")?.activePaneId,
+    ).toBe("restored-pane");
   });
 
   test.each(["container-hidden", "container-replacement"])(
@@ -1293,9 +1312,9 @@ describe("TerminalContainer", () => {
           />
         </TerminalProvider>
       );
-      const view = render(renderTerminal(true));
+      const view = renderInAppCommandScope(renderTerminal(true));
       await waitFor(() =>
-        expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toMatchObject([
+        expect(appCommandStore(paneLayoutStore).getState().getAllTabs("env-hidden")).toMatchObject([
           { id: "native-tab" },
         ]),
       );
@@ -1304,11 +1323,11 @@ describe("TerminalContainer", () => {
       teardownTabMock.mockRejectedValue(new Error("bridge unavailable"));
       view.rerender(renderTerminal(false));
       await waitFor(() =>
-        expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toEqual([]),
+        expect(appCommandStore(paneLayoutStore).getState().getAllTabs("env-hidden")).toEqual([]),
       );
       expect(teardownTabMock).not.toHaveBeenCalled();
 
-      useEnvironmentStore
+      appCommandStore(environmentStore)
         .getState()
         .updateEnvironment("env-hidden", { containerId: nextContainerId });
       getPaneLayoutMock.mockResolvedValue({
@@ -1318,8 +1337,10 @@ describe("TerminalContainer", () => {
       });
       view.rerender(renderTerminal(true, nextContainerId));
       await waitFor(() => {
-        expect(usePaneLayoutStore.getState().hydration.get("env-hidden")).toBe("done");
-        expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toMatchObject([
+        expect(appCommandStore(paneLayoutStore).getState().hydration.get("env-hidden")).toBe(
+          "done",
+        );
+        expect(appCommandStore(paneLayoutStore).getState().getAllTabs("env-hidden")).toMatchObject([
           {
             id: "native-tab",
             nativeAgentData: { sessionId: "retained-session", containerId: nextContainerId },
@@ -1356,17 +1377,17 @@ describe("TerminalContainer", () => {
         />
       </TerminalProvider>
     );
-    const view = render(renderTerminal(true));
+    const view = renderInAppCommandScope(renderTerminal(true));
     await waitFor(() => expect(getPaneLayoutMock).toHaveBeenCalledTimes(1));
     view.rerender(renderTerminal(false));
-    expect(usePaneLayoutStore.getState().hydration.has("env-hidden")).toBe(false);
+    expect(appCommandStore(paneLayoutStore).getState().hydration.has("env-hidden")).toBe(false);
     view.rerender(renderTerminal(true));
     await waitFor(() => expect(getPaneLayoutMock).toHaveBeenCalledTimes(2));
     await act(async () => {
       resolveOld(null);
     });
-    expect(usePaneLayoutStore.getState().hydration.get("env-hidden")).toBe("pending");
-    expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toEqual([]);
+    expect(appCommandStore(paneLayoutStore).getState().hydration.get("env-hidden")).toBe("pending");
+    expect(appCommandStore(paneLayoutStore).getState().getAllTabs("env-hidden")).toEqual([]);
     await act(async () => {
       resolveNew({
         version: PANE_LAYOUT_VERSION,
@@ -1384,7 +1405,7 @@ describe("TerminalContainer", () => {
       });
     });
     await waitFor(() =>
-      expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toMatchObject([
+      expect(appCommandStore(paneLayoutStore).getState().getAllTabs("env-hidden")).toMatchObject([
         { id: "survivor" },
       ]),
     );
@@ -1417,7 +1438,7 @@ describe("TerminalContainer", () => {
       revision: 7,
     });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -1473,7 +1494,7 @@ describe("TerminalContainer", () => {
       revision: 9,
     });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -1488,13 +1509,13 @@ describe("TerminalContainer", () => {
       expect(deletePaneLayoutMock).toHaveBeenCalledWith("env-hidden", 9);
     });
     expect(savePaneLayoutMock).not.toHaveBeenCalled();
-    expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).not.toEqual(
+    expect(appCommandStore(paneLayoutStore).getState().getAllTabs("env-hidden")).not.toEqual(
       expect.arrayContaining([expect.objectContaining({ id: "browser" })]),
     );
   });
 
   test("hydrates a failed local setup and renders retry and skip recovery actions", async () => {
-    useEnvironmentStore.getState().updateEnvironment("env-hidden", {
+    appCommandStore(environmentStore).getState().updateEnvironment("env-hidden", {
       environmentType: "local",
       containerId: null,
       worktreePath: "/tmp/failed-local-worktree",
@@ -1503,7 +1524,7 @@ describe("TerminalContainer", () => {
       setupPhase: "failed",
     });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -1516,7 +1537,7 @@ describe("TerminalContainer", () => {
 
     await waitFor(() => {
       expect(getPaneLayoutMock).toHaveBeenCalledWith("env-hidden");
-      expect(usePaneLayoutStore.getState().hydration.get("env-hidden")).toBe("done");
+      expect(appCommandStore(paneLayoutStore).getState().hydration.get("env-hidden")).toBe("done");
     });
     expect(await screen.findByText("Environment setup failed.")).toBeTruthy();
     expect(screen.getByRole("button", { name: /retry setup/i })).toBeTruthy();
@@ -1524,13 +1545,13 @@ describe("TerminalContainer", () => {
   });
 
   test("keeps setup recovery visible for a live container reported as errored", async () => {
-    useEnvironmentStore.getState().updateEnvironment("env-hidden", {
+    appCommandStore(environmentStore).getState().updateEnvironment("env-hidden", {
       status: "error",
       setupScriptsComplete: false,
       setupPhase: "failed",
     });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -1543,7 +1564,7 @@ describe("TerminalContainer", () => {
 
     await waitFor(() => {
       expect(getPaneLayoutMock).toHaveBeenCalledWith("env-hidden");
-      expect(usePaneLayoutStore.getState().hydration.get("env-hidden")).toBe("done");
+      expect(appCommandStore(paneLayoutStore).getState().hydration.get("env-hidden")).toBe("done");
     });
     expect(screen.getByText("Environment setup failed.")).toBeTruthy();
     expect(screen.getByRole("button", { name: /retry setup/i })).toBeTruthy();
@@ -1562,23 +1583,25 @@ describe("TerminalContainer", () => {
       environmentId: "env-hidden",
       environmentType: "containerized",
     });
-    useBuildPipelineStore.getState().replacePipeline(pipeline);
-    usePaneLayoutStore.getState().initialize("container-hidden", "env-hidden");
-    usePaneLayoutStore.getState().addTab(
-      "default",
-      {
-        id: "build-pipeline-pre-mount",
-        type: "claude-build",
-        buildTabData: {
-          pipelineId: pipeline.id,
-          environmentId: "env-hidden",
-          taskId: pipeline.taskId,
-          isLocal: false,
+    appCommandStore(buildPipelineStore).getState().replacePipeline(pipeline);
+    appCommandStore(paneLayoutStore).getState().initialize("container-hidden", "env-hidden");
+    appCommandStore(paneLayoutStore)
+      .getState()
+      .addTab(
+        "default",
+        {
+          id: "build-pipeline-pre-mount",
+          type: "claude-build",
+          buildTabData: {
+            pipelineId: pipeline.id,
+            environmentId: "env-hidden",
+            taskId: pipeline.taskId,
+            isLocal: false,
+          },
         },
-      },
-      "env-hidden",
-    );
-    expect(usePaneLayoutStore.getState().hydration.get("env-hidden")).toBeUndefined();
+        "env-hidden",
+      );
+    expect(appCommandStore(paneLayoutStore).getState().hydration.get("env-hidden")).toBeUndefined();
     getPaneLayoutMock.mockResolvedValue({
       version: PANE_LAYOUT_VERSION,
       environmentId: "env-hidden",
@@ -1594,7 +1617,7 @@ describe("TerminalContainer", () => {
       revision: 1,
     });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -1607,9 +1630,9 @@ describe("TerminalContainer", () => {
 
     await waitFor(() => {
       expect(getPaneLayoutMock).toHaveBeenCalledWith("env-hidden");
-      expect(usePaneLayoutStore.getState().hydration.get("env-hidden")).toBe("done");
+      expect(appCommandStore(paneLayoutStore).getState().hydration.get("env-hidden")).toBe("done");
     });
-    const hydrated = usePaneLayoutStore.getState().environments.get("env-hidden");
+    const hydrated = appCommandStore(paneLayoutStore).getState().environments.get("env-hidden");
     expect(
       hydrated && hydrated.root.kind === "leaf" ? hydrated.root.tabs.map((tab) => tab.id) : [],
     ).toEqual(["restored-tab", "build-pipeline-pre-mount"]);
@@ -1632,7 +1655,7 @@ describe("TerminalContainer", () => {
       environmentId: "env-hidden",
       environmentType: "containerized",
     });
-    useBuildPipelineStore.getState().replacePipeline(pipeline);
+    appCommandStore(buildPipelineStore).getState().replacePipeline(pipeline);
     getPaneLayoutMock.mockResolvedValue({
       version: PANE_LAYOUT_VERSION,
       environmentId: "env-hidden",
@@ -1659,7 +1682,7 @@ describe("TerminalContainer", () => {
       revision: 1,
     });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -1671,11 +1694,11 @@ describe("TerminalContainer", () => {
     );
 
     await waitFor(() => {
-      const state = usePaneLayoutStore.getState().environments.get("env-hidden");
+      const state = appCommandStore(paneLayoutStore).getState().environments.get("env-hidden");
       const tabs = state && state.root.kind === "leaf" ? state.root.tabs : [];
       expect(tabs.map((tab) => tab.id)).toEqual(["build-pipeline-existing", "default"]);
     });
-    const seeded = usePaneLayoutStore.getState().environments.get("env-hidden")!;
+    const seeded = appCommandStore(paneLayoutStore).getState().environments.get("env-hidden")!;
     expect(seeded.root.kind === "leaf" ? seeded.root.activeTabId : null).toBe(
       "build-pipeline-existing",
     );
@@ -1695,28 +1718,30 @@ describe("TerminalContainer", () => {
       environmentId: "env-hidden",
       environmentType: "containerized",
     });
-    useBuildPipelineStore.getState().replacePipeline(pipeline);
+    appCommandStore(buildPipelineStore).getState().replacePipeline(pipeline);
     // Exactly what ensureBuildTab does: create the pane state, then add the tab.
     // No initialize(), because no container has mounted for this environment.
-    usePaneLayoutStore.getState().setActiveEnvironment("env-hidden");
-    usePaneLayoutStore.getState().addTab(
-      "default",
-      {
-        id: "build-pipeline-fresh",
-        type: "claude-build",
-        buildTabData: {
-          pipelineId: pipeline.id,
-          environmentId: "env-hidden",
-          taskId: pipeline.taskId,
-          isLocal: false,
+    appCommandStore(paneLayoutStore).getState().setActiveEnvironment("env-hidden");
+    appCommandStore(paneLayoutStore)
+      .getState()
+      .addTab(
+        "default",
+        {
+          id: "build-pipeline-fresh",
+          type: "claude-build",
+          buildTabData: {
+            pipelineId: pipeline.id,
+            environmentId: "env-hidden",
+            taskId: pipeline.taskId,
+            isLocal: false,
+          },
         },
-      },
-      "env-hidden",
-    );
+        "env-hidden",
+      );
     // A brand new environment has no persisted layout to restore.
     getPaneLayoutMock.mockResolvedValue(null);
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -1728,12 +1753,12 @@ describe("TerminalContainer", () => {
     );
 
     await waitFor(() => {
-      const state = usePaneLayoutStore.getState().environments.get("env-hidden");
+      const state = appCommandStore(paneLayoutStore).getState().environments.get("env-hidden");
       const tabs = state && state.root.kind === "leaf" ? state.root.tabs : [];
       expect(tabs.some((tab) => tab.type !== "claude-build")).toBe(true);
     });
 
-    const seeded = usePaneLayoutStore.getState().environments.get("env-hidden")!;
+    const seeded = appCommandStore(paneLayoutStore).getState().environments.get("env-hidden")!;
     const tabIds = seeded.root.kind === "leaf" ? seeded.root.tabs.map((tab) => tab.id) : [];
     // The build tab survives the seeding rather than being replaced by it.
     expect(tabIds).toContain("build-pipeline-fresh");
@@ -1742,25 +1767,27 @@ describe("TerminalContainer", () => {
   });
 
   test("initialize keeps tabs added before the container mounted", () => {
-    usePaneLayoutStore.getState().setActiveEnvironment("env-hidden");
-    usePaneLayoutStore.getState().addTab(
-      "default",
-      {
-        id: "build-early",
-        type: "claude-build",
-        buildTabData: {
-          pipelineId: "pipeline-early",
-          environmentId: "env-hidden",
-          taskId: "task-1",
-          isLocal: false,
+    appCommandStore(paneLayoutStore).getState().setActiveEnvironment("env-hidden");
+    appCommandStore(paneLayoutStore)
+      .getState()
+      .addTab(
+        "default",
+        {
+          id: "build-early",
+          type: "claude-build",
+          buildTabData: {
+            pipelineId: "pipeline-early",
+            environmentId: "env-hidden",
+            taskId: "task-1",
+            isLocal: false,
+          },
         },
-      },
-      "env-hidden",
-    );
+        "env-hidden",
+      );
 
-    usePaneLayoutStore.getState().initialize("container-hidden", "env-hidden");
+    appCommandStore(paneLayoutStore).getState().initialize("container-hidden", "env-hidden");
 
-    const state = usePaneLayoutStore.getState().environments.get("env-hidden")!;
+    const state = appCommandStore(paneLayoutStore).getState().environments.get("env-hidden")!;
     const tabIds = state.root.kind === "leaf" ? state.root.tabs.map((tab) => tab.id) : [];
     // Replacing the root wholesale would drop the tab, and nothing re-adds it.
     expect(tabIds).toEqual(["build-early"]);
@@ -1768,9 +1795,9 @@ describe("TerminalContainer", () => {
   });
 
   test("initialize still resets an environment that has no tabs", () => {
-    usePaneLayoutStore.getState().initialize("container-hidden", "env-fresh");
+    appCommandStore(paneLayoutStore).getState().initialize("container-hidden", "env-fresh");
 
-    const state = usePaneLayoutStore.getState().environments.get("env-fresh")!;
+    const state = appCommandStore(paneLayoutStore).getState().environments.get("env-fresh")!;
     expect(state.root.kind === "leaf" ? state.root.tabs : null).toEqual([]);
     expect(state.activePaneId).toBe("default");
     expect(state.containerId).toBe("container-hidden");
@@ -1819,7 +1846,7 @@ describe("TerminalContainer", () => {
       activeTabIds: { left: "left-a", right: "right-a" },
     });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -1831,8 +1858,8 @@ describe("TerminalContainer", () => {
     );
 
     await waitFor(() => {
-      const restored = usePaneLayoutStore.getState().environments.get("env-hidden");
-      expect(usePaneLayoutStore.getState().hydration.get("env-hidden")).toBe("done");
+      const restored = appCommandStore(paneLayoutStore).getState().environments.get("env-hidden");
+      expect(appCommandStore(paneLayoutStore).getState().hydration.get("env-hidden")).toBe("done");
       expect(restored?.activePaneId).toBe("right");
       expect(restored?.root).toMatchObject({
         children: [
@@ -1896,7 +1923,7 @@ describe("TerminalContainer", () => {
     });
 
     try {
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-hidden"
@@ -1908,7 +1935,7 @@ describe("TerminalContainer", () => {
       );
 
       await waitFor(() => {
-        const restored = usePaneLayoutStore.getState().environments.get("env-hidden");
+        const restored = appCommandStore(paneLayoutStore).getState().environments.get("env-hidden");
         expect(restored?.activePaneId).toBe("right");
         expect(restored?.root).toMatchObject({
           children: [
@@ -1966,7 +1993,7 @@ describe("TerminalContainer", () => {
     });
 
     try {
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-hidden"
@@ -1984,9 +2011,9 @@ describe("TerminalContainer", () => {
           activeTabIds: { default: "remembered" },
         });
       });
-      expect(usePaneLayoutStore.getState().getPane("default", "env-hidden")?.activeTabId).toBe(
-        "remembered",
-      );
+      expect(
+        appCommandStore(paneLayoutStore).getState().getPane("default", "env-hidden")?.activeTabId,
+      ).toBe("remembered");
     } finally {
       stopPersistence();
     }
@@ -2011,7 +2038,7 @@ describe("TerminalContainer", () => {
       revision: 1,
     });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -2023,8 +2050,8 @@ describe("TerminalContainer", () => {
     );
 
     await waitFor(() => {
-      const restored = usePaneLayoutStore.getState().environments.get("env-hidden");
-      expect(usePaneLayoutStore.getState().hydration.get("env-hidden")).toBe("done");
+      const restored = appCommandStore(paneLayoutStore).getState().environments.get("env-hidden");
+      expect(appCommandStore(paneLayoutStore).getState().hydration.get("env-hidden")).toBe("done");
       expect(restored?.activePaneId).toBe("restored-pane");
       expect(restored?.root).toMatchObject({ activeTabId: "restored-tab" });
     });
@@ -2058,7 +2085,7 @@ describe("TerminalContainer", () => {
       updatedAt: "2026-01-01T00:00:00.000Z",
       revision: 1,
     });
-    useEnvironmentStore.setState((state) => ({
+    appCommandStore(environmentStore).setState((state) => ({
       ...state,
       environments: state.environments.map((environment) =>
         environment.id === "env-hidden"
@@ -2073,7 +2100,7 @@ describe("TerminalContainer", () => {
       ),
     }));
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer environmentId="env-hidden" containerId={null} isActive={false} />
       </TerminalProvider>,
@@ -2082,7 +2109,7 @@ describe("TerminalContainer", () => {
     await waitFor(() => {
       expect(getEnvironmentSetupSessionMock).toHaveBeenCalledWith("env-hidden");
     });
-    expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toEqual([
+    expect(appCommandStore(paneLayoutStore).getState().getAllTabs("env-hidden")).toEqual([
       { id: "default", type: "plain", isSetupTab: true },
     ]);
 
@@ -2100,12 +2127,12 @@ describe("TerminalContainer", () => {
 
     await waitFor(() => {
       expect(
-        useTerminalSessionStore
+        appCommandStore(terminalSessionStore)
           .getState()
           .sessions.get(createSessionKey(null, "default", "env-hidden"))?.sessionId,
       ).toBe("env-hidden:setup");
     });
-    expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toEqual([
+    expect(appCommandStore(paneLayoutStore).getState().getAllTabs("env-hidden")).toEqual([
       { id: "default", type: "plain", isSetupTab: true },
     ]);
   });
@@ -2128,7 +2155,7 @@ describe("TerminalContainer", () => {
       expect(getEnvironmentSetupSessionMock).toHaveBeenCalledWith("env-hidden");
     });
     await waitFor(() => {
-      expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toEqual([
+      expect(appCommandStore(paneLayoutStore).getState().getAllTabs("env-hidden")).toEqual([
         { id: "default", type: "plain" },
       ]);
     });
@@ -2162,14 +2189,14 @@ describe("TerminalContainer", () => {
 
     await waitFor(() => {
       expect(
-        useTerminalSessionStore
+        appCommandStore(terminalSessionStore)
           .getState()
           .sessions.get(createSessionKey(null, "default", "env-hidden"))?.sessionId,
       ).toBe("env-hidden:setup");
     });
 
     act(() => {
-      useEnvironmentStore.getState().updateEnvironment("env-hidden", {
+      appCommandStore(environmentStore).getState().updateEnvironment("env-hidden", {
         setupPhase: "ready",
         setupScriptsComplete: true,
       });
@@ -2178,7 +2205,7 @@ describe("TerminalContainer", () => {
     await waitFor(() => {
       expect(getEnvironmentSetupSessionMock).toHaveBeenCalledTimes(2);
       expect(setupTabIds()).toEqual([]);
-      expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toEqual([
+      expect(appCommandStore(paneLayoutStore).getState().getAllTabs("env-hidden")).toEqual([
         { id: "default", type: "plain" },
       ]);
     });
@@ -2210,7 +2237,7 @@ describe("TerminalContainer", () => {
       expect(setupTabIds()).toEqual([]);
     });
     expect(
-      useTerminalSessionStore
+      appCommandStore(terminalSessionStore)
         .getState()
         .sessions.get(createSessionKey(null, "default", "env-hidden")),
     ).toEqual({ serializedBuffer: "cloning repository...\r\nsetup complete\r\n" });
@@ -2234,7 +2261,7 @@ describe("TerminalContainer", () => {
 
     await waitFor(() => {
       expect(
-        useTerminalSessionStore
+        appCommandStore(terminalSessionStore)
           .getState()
           .sessions.get(createSessionKey(null, "default", "env-hidden"))?.sessionId,
       ).toBe("env-hidden:setup");
@@ -2247,10 +2274,12 @@ describe("TerminalContainer", () => {
     // `hasOutput` goes false while PersistentTerminal can still paint the
     // transcript from `serializedBuffer`. Demotion must keep that buffer while
     // removing the dead setup-session id.
-    useTerminalSessionStore.getState().setSession(createSessionKey(null, "default", "env-hidden"), {
-      sessionId: "env-hidden:setup",
-      serializedBuffer: "cloning repository...\r\nsetup complete\r\n",
-    });
+    appCommandStore(terminalSessionStore)
+      .getState()
+      .setSession(createSessionKey(null, "default", "env-hidden"), {
+        sessionId: "env-hidden:setup",
+        serializedBuffer: "cloning repository...\r\nsetup complete\r\n",
+      });
     getEnvironmentSetupSessionMock.mockResolvedValue({
       environmentId: "env-hidden",
       sessionId: "env-hidden:setup",
@@ -2271,7 +2300,7 @@ describe("TerminalContainer", () => {
       expect(setupTabIds()).toEqual([]);
     });
     expect(
-      useTerminalSessionStore
+      appCommandStore(terminalSessionStore)
         .getState()
         .sessions.get(createSessionKey(null, "default", "env-hidden")),
     ).toEqual({ serializedBuffer: "cloning repository...\r\nsetup complete\r\n" });
@@ -2326,7 +2355,7 @@ describe("TerminalContainer", () => {
 
     await waitFor(() => {
       expect(
-        useTerminalSessionStore
+        appCommandStore(terminalSessionStore)
           .getState()
           .sessions.get(createSessionKey(null, "default", "env-hidden")),
       ).toMatchObject({
@@ -2378,10 +2407,12 @@ describe("TerminalContainer", () => {
     // A restarted backend can lose the session record for an environment whose
     // `setupSessionId` was never persisted. That is not evidence the transcript
     // this renderer already holds is worthless.
-    useTerminalSessionStore.getState().setSession(createSessionKey(null, "default", "env-hidden"), {
-      sessionId: "env-hidden:setup",
-      serializedBuffer: "setup complete\r\n",
-    });
+    appCommandStore(terminalSessionStore)
+      .getState()
+      .setSession(createSessionKey(null, "default", "env-hidden"), {
+        sessionId: "env-hidden:setup",
+        serializedBuffer: "setup complete\r\n",
+      });
     getEnvironmentSetupSessionMock.mockResolvedValue(null);
 
     restoreBackendSetupTabLayout();
@@ -2393,7 +2424,7 @@ describe("TerminalContainer", () => {
       expect(setupTabIds()).toEqual([]);
     });
     expect(
-      useTerminalSessionStore
+      appCommandStore(terminalSessionStore)
         .getState()
         .sessions.get(createSessionKey(null, "default", "env-hidden")),
     ).toEqual({ serializedBuffer: "setup complete\r\n" });
@@ -2443,7 +2474,7 @@ describe("TerminalContainer", () => {
     });
 
     act(() => {
-      useEnvironmentStore.getState().updateEnvironment("env-hidden", {
+      appCommandStore(environmentStore).getState().updateEnvironment("env-hidden", {
         setupPhase: "ready",
         setupScriptsComplete: true,
       });
@@ -2458,7 +2489,7 @@ describe("TerminalContainer", () => {
       expect(getEnvironmentSetupSessionMock).toHaveBeenCalledTimes(2);
       expect(setupTabIds()).toEqual([]);
     });
-    expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toEqual([
+    expect(appCommandStore(paneLayoutStore).getState().getAllTabs("env-hidden")).toEqual([
       { id: "default", type: "plain" },
     ]);
   });
@@ -2483,7 +2514,7 @@ describe("TerminalContainer", () => {
     await waitFor(() => {
       for (const tabId of ["default", "setup-2"]) {
         expect(
-          useTerminalSessionStore
+          appCommandStore(terminalSessionStore)
             .getState()
             .sessions.get(createSessionKey(null, tabId, "env-hidden"))?.sessionId,
         ).toBe("env-hidden:setup");
@@ -2529,7 +2560,7 @@ describe("TerminalContainer", () => {
     expect(setEnvironmentPendingAgentLaunchMock).not.toHaveBeenCalled();
 
     await act(async () => {
-      useEnvironmentStore.getState().updateEnvironment("env-hidden", {
+      appCommandStore(environmentStore).getState().updateEnvironment("env-hidden", {
         pendingAgentLaunch: false,
       });
       await Promise.resolve();
@@ -2541,7 +2572,7 @@ describe("TerminalContainer", () => {
     // Cleanup must retire only the dead setup placeholder, never the agent tab
     // the launch just reconstructed.
     expect(
-      usePaneLayoutStore
+      appCommandStore(paneLayoutStore)
         .getState()
         .getAllTabs("env-hidden")
         .map((tab) => tab.id),
@@ -2555,7 +2586,7 @@ describe("TerminalContainer", () => {
       environmentType: "containerized",
       taskId: "task-restored",
     });
-    useBuildPipelineStore.getState().replacePipeline(pipeline);
+    appCommandStore(buildPipelineStore).getState().replacePipeline(pipeline);
     getPaneLayoutMock.mockResolvedValue({
       version: PANE_LAYOUT_VERSION,
       environmentId: "env-hidden",
@@ -2582,7 +2613,7 @@ describe("TerminalContainer", () => {
       revision: 3,
     });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -2594,7 +2625,7 @@ describe("TerminalContainer", () => {
     );
 
     await waitFor(() => {
-      const tabs = usePaneLayoutStore.getState().getAllTabs("env-hidden");
+      const tabs = appCommandStore(paneLayoutStore).getState().getAllTabs("env-hidden");
       expect(tabs).toHaveLength(2);
       expect(tabs).toContainEqual(
         expect.objectContaining({
@@ -2614,7 +2645,9 @@ describe("TerminalContainer", () => {
           type: "plain",
         }),
       );
-      expect(usePaneLayoutStore.getState().getPane("restored-pane", "env-hidden")).not.toBeNull();
+      expect(
+        appCommandStore(paneLayoutStore).getState().getPane("restored-pane", "env-hidden"),
+      ).not.toBeNull();
     });
   });
 
@@ -2645,7 +2678,7 @@ describe("TerminalContainer", () => {
       revision: 3,
     });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -2657,7 +2690,7 @@ describe("TerminalContainer", () => {
     );
 
     await waitFor(() => {
-      const tabs = usePaneLayoutStore.getState().getAllTabs("env-hidden");
+      const tabs = appCommandStore(paneLayoutStore).getState().getAllTabs("env-hidden");
       expect(tabs.some((tab) => tab.type === "claude-build")).toBe(false);
       expect(tabs).toContainEqual(expect.objectContaining({ type: "plain" }));
     });
@@ -2699,7 +2732,7 @@ describe("TerminalContainer", () => {
       revision: 1,
     });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -2711,8 +2744,8 @@ describe("TerminalContainer", () => {
     );
 
     await waitFor(() => {
-      expect(usePaneLayoutStore.getState().hydration.get("env-hidden")).toBe("done");
-      expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toMatchObject([
+      expect(appCommandStore(paneLayoutStore).getState().hydration.get("env-hidden")).toBe("done");
+      expect(appCommandStore(paneLayoutStore).getState().getAllTabs("env-hidden")).toMatchObject([
         { id: "restored-file", type: "file", displayTitle: "README" },
       ]);
     });
@@ -2754,7 +2787,7 @@ describe("TerminalContainer", () => {
         updatedAt: "2026-01-01T00:00:00.000Z",
         revision: 1,
       });
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-hidden"
@@ -2765,7 +2798,7 @@ describe("TerminalContainer", () => {
         </TerminalProvider>,
       );
       await waitFor(() => {
-        const state = usePaneLayoutStore.getState();
+        const state = appCommandStore(paneLayoutStore).getState();
         expect(state.hydration.get("env-hidden")).toBe("done");
         const tabs = state.getAllTabs("env-hidden");
         expect(tabs.some((tab) => tab.id.startsWith("retired-"))).toBe(false);
@@ -2814,7 +2847,7 @@ describe("TerminalContainer", () => {
       revision: 1,
     });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -2826,8 +2859,8 @@ describe("TerminalContainer", () => {
     );
 
     await waitFor(() => {
-      expect(usePaneLayoutStore.getState().hydration.get("env-hidden")).toBe("done");
-      expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toMatchObject([
+      expect(appCommandStore(paneLayoutStore).getState().hydration.get("env-hidden")).toBe("done");
+      expect(appCommandStore(paneLayoutStore).getState().getAllTabs("env-hidden")).toMatchObject([
         { id: "restored-file", type: "file", displayTitle: "README" },
         {
           id: "restored-review",
@@ -2841,7 +2874,7 @@ describe("TerminalContainer", () => {
   test("completes hydration with a default layout when restore rejects", async () => {
     getPaneLayoutMock.mockRejectedValue(new Error("backend unavailable"));
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -2853,8 +2886,8 @@ describe("TerminalContainer", () => {
     );
 
     await waitFor(() => {
-      expect(usePaneLayoutStore.getState().hydration.get("env-hidden")).toBe("done");
-      expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toMatchObject([
+      expect(appCommandStore(paneLayoutStore).getState().hydration.get("env-hidden")).toBe("done");
+      expect(appCommandStore(paneLayoutStore).getState().getAllTabs("env-hidden")).toMatchObject([
         { id: "default", type: "plain" },
       ]);
     });
@@ -2871,7 +2904,7 @@ describe("TerminalContainer", () => {
       revision: 1,
     });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -2883,8 +2916,10 @@ describe("TerminalContainer", () => {
     );
 
     await waitFor(() => {
-      expect(usePaneLayoutStore.getState().hydration.get("env-hidden")).toBe("done");
-      expect(usePaneLayoutStore.getState().getActivePane("env-hidden")?.id).toBe("default");
+      expect(appCommandStore(paneLayoutStore).getState().hydration.get("env-hidden")).toBe("done");
+      expect(appCommandStore(paneLayoutStore).getState().getActivePane("env-hidden")?.id).toBe(
+        "default",
+      );
     });
   });
 
@@ -2904,7 +2939,7 @@ describe("TerminalContainer", () => {
       revision: 1,
     });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -2916,19 +2951,21 @@ describe("TerminalContainer", () => {
     );
 
     await waitFor(() => {
-      expect(usePaneLayoutStore.getState().hydration.get("env-hidden")).toBe("done");
+      expect(appCommandStore(paneLayoutStore).getState().hydration.get("env-hidden")).toBe("done");
       expect(
-        usePaneLayoutStore
+        appCommandStore(paneLayoutStore)
           .getState()
           .getAllTabs("env-hidden")
           .map((tab) => tab.id),
       ).toEqual(["default"]);
-      expect(usePaneLayoutStore.getState().getContainerId("env-hidden")).toBe("container-hidden");
+      expect(appCommandStore(paneLayoutStore).getState().getContainerId("env-hidden")).toBe(
+        "container-hidden",
+      );
     });
   });
 
   test("does not start a duplicate restore while hydration is pending", async () => {
-    usePaneLayoutStore.setState((state) => ({
+    appCommandStore(paneLayoutStore).setState((state) => ({
       ...state,
       environments: new Map(state.environments).set("env-hidden", {
         root: { kind: "leaf", id: "default", tabs: [], activeTabId: null },
@@ -2938,7 +2975,7 @@ describe("TerminalContainer", () => {
       hydration: new Map(state.hydration).set("env-hidden", "pending"),
     }));
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -2951,7 +2988,7 @@ describe("TerminalContainer", () => {
 
     await act(async () => {});
     expect(getPaneLayoutMock).not.toHaveBeenCalled();
-    expect(usePaneLayoutStore.getState().hydration.get("env-hidden")).toBe("pending");
+    expect(appCommandStore(paneLayoutStore).getState().hydration.get("env-hidden")).toBe("pending");
   });
 
   test("finishes an in-flight hydration if the environment is deleted", async () => {
@@ -2963,7 +3000,7 @@ describe("TerminalContainer", () => {
         }),
     );
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -2974,19 +3011,19 @@ describe("TerminalContainer", () => {
       </TerminalProvider>,
     );
     await waitFor(() => expect(getPaneLayoutMock).toHaveBeenCalledWith("env-hidden"));
-    useEnvironmentStore.setState((state) => ({
+    appCommandStore(environmentStore).setState((state) => ({
       ...state,
       environments: state.environments.filter((environment) => environment.id !== "env-hidden"),
     }));
     resolveLayout(null);
 
     await waitFor(() => {
-      expect(usePaneLayoutStore.getState().hydration.get("env-hidden")).toBe("done");
+      expect(appCommandStore(paneLayoutStore).getState().hydration.get("env-hidden")).toBe("done");
     });
   });
 
   test("does not create a Codex terminal tab when the backend owns startup", async () => {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,
@@ -3004,7 +3041,7 @@ describe("TerminalContainer", () => {
       },
     }));
 
-    useClaudeOptionsStore.setState({
+    appCommandStore(claudeOptionsStore).setState({
       options: {
         "env-hidden": {
           launchAgent: true,
@@ -3014,7 +3051,7 @@ describe("TerminalContainer", () => {
       },
     });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -3028,11 +3065,11 @@ describe("TerminalContainer", () => {
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 10));
     });
-    expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toEqual([]);
+    expect(appCommandStore(paneLayoutStore).getState().getAllTabs("env-hidden")).toEqual([]);
   });
 
   test("leaves container initial prompt attachments for the backend", async () => {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,
@@ -3050,7 +3087,7 @@ describe("TerminalContainer", () => {
       },
     }));
 
-    useClaudeOptionsStore.setState({
+    appCommandStore(claudeOptionsStore).setState({
       options: {
         "env-hidden": {
           launchAgent: true,
@@ -3068,7 +3105,7 @@ describe("TerminalContainer", () => {
       },
     });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -3084,11 +3121,11 @@ describe("TerminalContainer", () => {
     });
     expect(writeContainerFileMock).not.toHaveBeenCalled();
     expect(setEnvironmentInitialPromptMock).not.toHaveBeenCalled();
-    expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toEqual([]);
+    expect(appCommandStore(paneLayoutStore).getState().getAllTabs("env-hidden")).toEqual([]);
   });
 
   test("does not persist a prompt that attachment saving left unchanged", async () => {
-    useClaudeOptionsStore.setState({
+    appCommandStore(claudeOptionsStore).setState({
       options: {
         "env-hidden": {
           launchAgent: true,
@@ -3099,7 +3136,7 @@ describe("TerminalContainer", () => {
       },
     });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -3113,12 +3150,12 @@ describe("TerminalContainer", () => {
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 10));
     });
-    expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toEqual([]);
+    expect(appCommandStore(paneLayoutStore).getState().getAllTabs("env-hidden")).toEqual([]);
     expect(setEnvironmentInitialPromptMock).not.toHaveBeenCalled();
   });
 
   test("does not enter renderer attachment persistence when the backend owns startup", async () => {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,
@@ -3136,7 +3173,7 @@ describe("TerminalContainer", () => {
       },
     }));
     setEnvironmentInitialPromptMock.mockRejectedValueOnce(new Error("offline"));
-    useClaudeOptionsStore.setState({
+    appCommandStore(claudeOptionsStore).setState({
       options: {
         "env-hidden": {
           launchAgent: true,
@@ -3156,7 +3193,7 @@ describe("TerminalContainer", () => {
     const logs = captureLogs();
 
     try {
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-hidden"
@@ -3172,14 +3209,14 @@ describe("TerminalContainer", () => {
       });
       expect(setEnvironmentInitialPromptMock).not.toHaveBeenCalled();
       expect(writeContainerFileMock).not.toHaveBeenCalled();
-      expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toEqual([]);
+      expect(appCommandStore(paneLayoutStore).getState().getAllTabs("env-hidden")).toEqual([]);
     } finally {
       logs.restore();
     }
   });
 
   test("leaves local initial prompt attachments for the backend", async () => {
-    useEnvironmentStore.setState((state) => ({
+    appCommandStore(environmentStore).setState((state) => ({
       ...state,
       environments: state.environments.map((env) =>
         env.id === "env-hidden"
@@ -3193,7 +3230,7 @@ describe("TerminalContainer", () => {
       ),
     }));
 
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,
@@ -3211,7 +3248,7 @@ describe("TerminalContainer", () => {
       },
     }));
 
-    useClaudeOptionsStore.setState({
+    appCommandStore(claudeOptionsStore).setState({
       options: {
         "env-hidden": {
           launchAgent: true,
@@ -3229,7 +3266,7 @@ describe("TerminalContainer", () => {
       },
     });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer environmentId="env-hidden" containerId={null} isActive={false} />
       </TerminalProvider>,
@@ -3240,11 +3277,11 @@ describe("TerminalContainer", () => {
     });
     expect(writeLocalFileMock).not.toHaveBeenCalled();
     expect(setEnvironmentInitialPromptMock).not.toHaveBeenCalled();
-    expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toEqual([]);
+    expect(appCommandStore(paneLayoutStore).getState().getAllTabs("env-hidden")).toEqual([]);
   });
 
   test("leaves initial prompt images to the backend when it owns the native launch", async () => {
-    useEnvironmentStore.setState((state) => ({
+    appCommandStore(environmentStore).setState((state) => ({
       ...state,
       environments: state.environments.map((env) =>
         env.id === "env-hidden"
@@ -3270,7 +3307,7 @@ describe("TerminalContainer", () => {
         base64Data: "UkFDRQ==",
       },
     ];
-    useClaudeOptionsStore.setState({
+    appCommandStore(claudeOptionsStore).setState({
       options: {
         "env-hidden": {
           launchAgent: true,
@@ -3281,7 +3318,7 @@ describe("TerminalContainer", () => {
       },
     });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer environmentId="env-hidden" containerId={null} isActive={false} />
       </TerminalProvider>,
@@ -3300,10 +3337,10 @@ describe("TerminalContainer", () => {
     // Optimistic projection may drop the renderer copy; the backend still owns
     // the attachments. The rewrite path would empty them and also persist paths.
     expect(
-      useClaudeOptionsStore.getState().getOptions("env-hidden")?.initialPromptAttachments ??
-        attachments,
+      appCommandStore(claudeOptionsStore).getState().getOptions("env-hidden")
+        ?.initialPromptAttachments ?? attachments,
     ).toEqual(attachments);
-    expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).not.toContainEqual(
+    expect(appCommandStore(paneLayoutStore).getState().getAllTabs("env-hidden")).not.toContainEqual(
       expect.objectContaining({
         initialPrompt: expect.stringContaining(".orkestrator/initial-prompt"),
       }),
@@ -3311,7 +3348,7 @@ describe("TerminalContainer", () => {
   });
 
   test("leaves an attachment-only native launch to the backend", async () => {
-    useEnvironmentStore.setState((state) => ({
+    appCommandStore(environmentStore).setState((state) => ({
       ...state,
       environments: state.environments.map((env) =>
         env.id === "env-hidden"
@@ -3337,7 +3374,7 @@ describe("TerminalContainer", () => {
         base64Data: "SU1BR0U=",
       },
     ];
-    useClaudeOptionsStore.setState({
+    appCommandStore(claudeOptionsStore).setState({
       options: {
         "env-hidden": {
           launchAgent: true,
@@ -3348,7 +3385,7 @@ describe("TerminalContainer", () => {
       },
     });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer environmentId="env-hidden" containerId={null} isActive={false} />
       </TerminalProvider>,
@@ -3363,8 +3400,8 @@ describe("TerminalContainer", () => {
     // Optimistic projection may drop the renderer copy; the backend still owns
     // the attachments. The rewrite path would empty them and also persist paths.
     expect(
-      useClaudeOptionsStore.getState().getOptions("env-hidden")?.initialPromptAttachments ??
-        attachments,
+      appCommandStore(claudeOptionsStore).getState().getOptions("env-hidden")
+        ?.initialPromptAttachments ?? attachments,
     ).toEqual(attachments);
   });
 
@@ -3372,7 +3409,7 @@ describe("TerminalContainer", () => {
     // The backend resolves the Claude style through the repository tier as
     // well. The renderer has to reach the same verdict from the same tier, or
     // it rewrites a prompt the backend is about to dispatch with real images.
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,
@@ -3397,7 +3434,7 @@ describe("TerminalContainer", () => {
         },
       },
     }));
-    useEnvironmentStore.setState((state) => ({
+    appCommandStore(environmentStore).setState((state) => ({
       ...state,
       environments: state.environments.map((env) =>
         env.id === "env-hidden"
@@ -3419,7 +3456,7 @@ describe("TerminalContainer", () => {
           : env,
       ),
     }));
-    useClaudeOptionsStore.setState({
+    appCommandStore(claudeOptionsStore).setState({
       options: {
         "env-hidden": {
           launchAgent: true,
@@ -3437,7 +3474,7 @@ describe("TerminalContainer", () => {
       },
     });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer environmentId="env-hidden" containerId={null} isActive={false} />
       </TerminalProvider>,
@@ -3451,7 +3488,7 @@ describe("TerminalContainer", () => {
   });
 
   test("creates a regular terminal for a ready local environment when no agent is requested", async () => {
-    useEnvironmentStore.setState((state) => ({
+    appCommandStore(environmentStore).setState((state) => ({
       ...state,
       environments: state.environments.map((environment) =>
         environment.id === "env-hidden"
@@ -3465,14 +3502,14 @@ describe("TerminalContainer", () => {
       ),
     }));
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer environmentId="env-hidden" containerId={null} isActive={false} />
       </TerminalProvider>,
     );
 
     await waitFor(() => {
-      expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toEqual([
+      expect(appCommandStore(paneLayoutStore).getState().getAllTabs("env-hidden")).toEqual([
         {
           id: "default",
           type: "plain",
@@ -3499,7 +3536,7 @@ describe("TerminalContainer", () => {
         startedAt: "2026-07-29T12:00:00.000Z",
       },
     });
-    usePaneLayoutStore.setState((state) => ({
+    appCommandStore(paneLayoutStore).setState((state) => ({
       environments: new Map(state.environments).set("env-hidden", {
         root: {
           kind: "leaf",
@@ -3529,7 +3566,7 @@ describe("TerminalContainer", () => {
     renderHiddenTerminal();
 
     await waitFor(() => {
-      const tabs = usePaneLayoutStore.getState().getAllTabs("env-hidden");
+      const tabs = appCommandStore(paneLayoutStore).getState().getAllTabs("env-hidden");
       expect(tabs.filter((tab) => tab.id === "startup-agent")).toHaveLength(1);
       expect(tabs.find((tab) => tab.id === "startup-agent")).toMatchObject({
         type: "agent-native",
@@ -3544,7 +3581,7 @@ describe("TerminalContainer", () => {
 
   test("activates the backend-created agent tab when local setup finishes", async () => {
     seedStartupFocusHandoffConfig();
-    usePaneLayoutStore.setState({
+    appCommandStore(paneLayoutStore).setState({
       environments: new Map([
         [
           "env-hidden",
@@ -3567,20 +3604,20 @@ describe("TerminalContainer", () => {
       activeEnvironmentId: "env-hidden",
     } as never);
     seedStartupFocusHandoffEnvironment("env-hidden", { setupReady: false });
-    useClaudeOptionsStore.setState({ options: {} });
+    appCommandStore(claudeOptionsStore).setState({ options: {} });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer environmentId="env-hidden" containerId={null} isActive />
       </TerminalProvider>,
     );
 
     await waitFor(() => {
-      expect(usePaneLayoutStore.getState().getPane("default", "env-hidden")?.activeTabId).toBe(
-        "default",
-      );
       expect(
-        usePaneLayoutStore
+        appCommandStore(paneLayoutStore).getState().getPane("default", "env-hidden")?.activeTabId,
+      ).toBe("default");
+      expect(
+        appCommandStore(paneLayoutStore)
           .getState()
           .getAllTabs("env-hidden")
           .some((tab) => tab.id === "startup-agent"),
@@ -3588,16 +3625,16 @@ describe("TerminalContainer", () => {
     });
 
     await act(async () => {
-      useEnvironmentStore.getState().updateEnvironment("env-hidden", {
+      appCommandStore(environmentStore).getState().updateEnvironment("env-hidden", {
         setupPhase: "ready",
         setupScriptsComplete: true,
       });
     });
 
     await waitFor(() => {
-      expect(usePaneLayoutStore.getState().getPane("default", "env-hidden")?.activeTabId).toBe(
-        "startup-agent",
-      );
+      expect(
+        appCommandStore(paneLayoutStore).getState().getPane("default", "env-hidden")?.activeTabId,
+      ).toBe("startup-agent");
     });
   });
 
@@ -3606,7 +3643,7 @@ describe("TerminalContainer", () => {
     // consumes `pendingAgentLaunch` before emitting setup-complete. The owed
     // handoff is the one-shot window activation armed at create time.
     seedStartupFocusHandoffConfig();
-    usePaneLayoutStore.setState({
+    appCommandStore(paneLayoutStore).setState({
       environments: new Map([
         [
           "env-hidden",
@@ -3637,22 +3674,22 @@ describe("TerminalContainer", () => {
       terminalRunning: true,
       startedAt: "2026-09-14T00:00:00.000Z",
     });
-    useClaudeOptionsStore.setState({ options: {} });
+    appCommandStore(claudeOptionsStore).setState({ options: {} });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer environmentId="env-hidden" containerId={null} isActive />
       </TerminalProvider>,
     );
 
     await waitFor(() => {
-      expect(usePaneLayoutStore.getState().getPane("default", "env-hidden")?.activeTabId).toBe(
-        "default",
-      );
+      expect(
+        appCommandStore(paneLayoutStore).getState().getPane("default", "env-hidden")?.activeTabId,
+      ).toBe("default");
     });
 
     await act(async () => {
-      useEnvironmentStore.getState().updateEnvironment("env-hidden", {
+      appCommandStore(environmentStore).getState().updateEnvironment("env-hidden", {
         setupPhase: "ready",
         setupScriptsComplete: true,
         pendingAgentLaunch: false,
@@ -3661,7 +3698,7 @@ describe("TerminalContainer", () => {
     });
 
     await waitFor(() => {
-      const pane = usePaneLayoutStore.getState().getPane("default", "env-hidden");
+      const pane = appCommandStore(paneLayoutStore).getState().getPane("default", "env-hidden");
       expect(pane?.tabs.map((tab) => tab.id)).toEqual(["default", "startup-agent"]);
       expect(pane?.activeTabId).toBe("startup-agent");
     });
@@ -3670,7 +3707,7 @@ describe("TerminalContainer", () => {
 
   test("leaves a deliberately selected tab alone when local setup finishes", async () => {
     seedStartupFocusHandoffConfig();
-    usePaneLayoutStore.setState({
+    appCommandStore(paneLayoutStore).setState({
       environments: new Map([
         [
           "env-hidden",
@@ -3695,16 +3732,16 @@ describe("TerminalContainer", () => {
       activeEnvironmentId: "env-hidden",
     } as never);
     seedStartupFocusHandoffEnvironment("env-hidden", { setupReady: false });
-    useClaudeOptionsStore.setState({ options: {} });
+    appCommandStore(claudeOptionsStore).setState({ options: {} });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer environmentId="env-hidden" containerId={null} isActive />
       </TerminalProvider>,
     );
 
     await act(async () => {
-      useEnvironmentStore.getState().updateEnvironment("env-hidden", {
+      appCommandStore(environmentStore).getState().updateEnvironment("env-hidden", {
         setupPhase: "ready",
         setupScriptsComplete: true,
       });
@@ -3715,14 +3752,14 @@ describe("TerminalContainer", () => {
     await act(async () => {
       await Promise.resolve();
     });
-    expect(usePaneLayoutStore.getState().getPane("default", "env-hidden")?.activeTabId).toBe(
-      "shell-2",
-    );
+    expect(
+      appCommandStore(paneLayoutStore).getState().getPane("default", "env-hidden")?.activeTabId,
+    ).toBe("shell-2");
   });
 
   test("consumes a prompt-less activation without stealing a deliberate non-setup tab", async () => {
     seedStartupFocusHandoffConfig();
-    usePaneLayoutStore.setState({
+    appCommandStore(paneLayoutStore).setState({
       environments: new Map([
         [
           "env-hidden",
@@ -3747,16 +3784,16 @@ describe("TerminalContainer", () => {
     } as never);
     seedStartupFocusHandoffEnvironment("env-hidden", { setupReady: false });
     armWindowStartupAgentActivation("env-hidden");
-    useClaudeOptionsStore.setState({ options: {} });
+    appCommandStore(claudeOptionsStore).setState({ options: {} });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer environmentId="env-hidden" containerId={null} isActive />
       </TerminalProvider>,
     );
 
     await act(async () => {
-      useEnvironmentStore.getState().updateEnvironment("env-hidden", {
+      appCommandStore(environmentStore).getState().updateEnvironment("env-hidden", {
         setupPhase: "ready",
         setupScriptsComplete: true,
         pendingAgentLaunch: false,
@@ -3767,15 +3804,15 @@ describe("TerminalContainer", () => {
       await Promise.resolve();
     });
 
-    expect(usePaneLayoutStore.getState().getPane("default", "env-hidden")?.activeTabId).toBe(
-      "shell-2",
-    );
+    expect(
+      appCommandStore(paneLayoutStore).getState().getPane("default", "env-hidden")?.activeTabId,
+    ).toBe("shell-2");
     expect(hasWindowStartupAgentActivation("env-hidden")).toBe(false);
   });
 
   test("does not replay a consumed prompt-less handoff after remounting the same environment", async () => {
     seedStartupFocusHandoffConfig();
-    usePaneLayoutStore.setState({
+    appCommandStore(paneLayoutStore).setState({
       environments: new Map([
         [
           "env-hidden",
@@ -3797,7 +3834,7 @@ describe("TerminalContainer", () => {
       hydration: new Map([["env-hidden", "done"]]),
       activeEnvironmentId: "env-hidden",
     } as never);
-    useEnvironmentStore.setState((state) => ({
+    appCommandStore(environmentStore).setState((state) => ({
       ...state,
       environments: state.environments.map((environment) =>
         environment.id === "env-hidden"
@@ -3823,40 +3860,42 @@ describe("TerminalContainer", () => {
       terminalRunning: true,
       startedAt: "2026-09-14T00:00:00.000Z",
     });
-    useClaudeOptionsStore.setState({ options: {} });
+    appCommandStore(claudeOptionsStore).setState({ options: {} });
 
-    const firstMount = render(
+    const firstMount = renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer environmentId="env-hidden" containerId={null} isActive />
       </TerminalProvider>,
     );
 
     await waitFor(() => {
-      expect(usePaneLayoutStore.getState().getPane("default", "env-hidden")?.activeTabId).toBe(
-        "startup-agent",
-      );
+      expect(
+        appCommandStore(paneLayoutStore).getState().getPane("default", "env-hidden")?.activeTabId,
+      ).toBe("startup-agent");
     });
     expect(hasWindowStartupAgentActivation("env-hidden")).toBe(false);
     expect(
-      useEnvironmentStore.getState().getEnvironmentById("env-hidden")?.pendingAgentLaunch,
+      appCommandStore(environmentStore).getState().getEnvironmentById("env-hidden")
+        ?.pendingAgentLaunch,
     ).toBeFalsy();
 
     await act(async () => {
-      usePaneLayoutStore.getState().setActiveTab("default", "default", "env-hidden");
+      appCommandStore(paneLayoutStore).getState().setActiveTab("default", "default", "env-hidden");
     });
-    expect(usePaneLayoutStore.getState().getPane("default", "env-hidden")?.activeTabId).toBe(
-      "default",
-    );
+    expect(
+      appCommandStore(paneLayoutStore).getState().getPane("default", "env-hidden")?.activeTabId,
+    ).toBe("default");
     firstMount.unmount();
-    expect(usePaneLayoutStore.getState().getPane("default", "env-hidden")?.activeTabId).toBe(
-      "default",
-    );
+    expect(
+      appCommandStore(paneLayoutStore).getState().getPane("default", "env-hidden")?.activeTabId,
+    ).toBe("default");
     expect(hasWindowStartupAgentActivation("env-hidden")).toBe(false);
     expect(
-      useEnvironmentStore.getState().getEnvironmentById("env-hidden")?.pendingAgentLaunch,
+      appCommandStore(environmentStore).getState().getEnvironmentById("env-hidden")
+        ?.pendingAgentLaunch,
     ).toBeFalsy();
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer environmentId="env-hidden" containerId={null} isActive />
       </TerminalProvider>,
@@ -3865,15 +3904,15 @@ describe("TerminalContainer", () => {
       await Promise.resolve();
     });
 
-    expect(usePaneLayoutStore.getState().getPane("default", "env-hidden")?.activeTabId).toBe(
-      "default",
-    );
+    expect(
+      appCommandStore(paneLayoutStore).getState().getPane("default", "env-hidden")?.activeTabId,
+    ).toBe("default");
     expect(hasWindowStartupAgentActivation("env-hidden")).toBe(false);
   });
 
   test("hands off again after a re-arm that passes through a not-ready pending state", async () => {
     seedStartupFocusHandoffConfig();
-    usePaneLayoutStore.setState({
+    appCommandStore(paneLayoutStore).setState({
       environments: new Map([
         [
           "env-hidden",
@@ -3896,51 +3935,51 @@ describe("TerminalContainer", () => {
       activeEnvironmentId: "env-hidden",
     } as never);
     seedStartupFocusHandoffEnvironment("env-hidden", { setupReady: true });
-    useClaudeOptionsStore.setState({ options: {} });
+    appCommandStore(claudeOptionsStore).setState({ options: {} });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer environmentId="env-hidden" containerId={null} isActive />
       </TerminalProvider>,
     );
 
     await waitFor(() => {
-      expect(usePaneLayoutStore.getState().getPane("default", "env-hidden")?.activeTabId).toBe(
-        "startup-agent",
-      );
+      expect(
+        appCommandStore(paneLayoutStore).getState().getPane("default", "env-hidden")?.activeTabId,
+      ).toBe("startup-agent");
     });
 
     await act(async () => {
-      usePaneLayoutStore.getState().setActiveTab("default", "default", "env-hidden");
-      useEnvironmentStore.getState().updateEnvironment("env-hidden", {
+      appCommandStore(paneLayoutStore).getState().setActiveTab("default", "default", "env-hidden");
+      appCommandStore(environmentStore).getState().updateEnvironment("env-hidden", {
         setupPhase: "running",
         setupScriptsComplete: false,
         pendingAgentLaunch: true,
       });
       armWindowStartupAgentActivation("env-hidden");
     });
-    expect(usePaneLayoutStore.getState().getPane("default", "env-hidden")?.activeTabId).toBe(
-      "default",
-    );
+    expect(
+      appCommandStore(paneLayoutStore).getState().getPane("default", "env-hidden")?.activeTabId,
+    ).toBe("default");
 
     await act(async () => {
-      useEnvironmentStore.getState().updateEnvironment("env-hidden", {
+      appCommandStore(environmentStore).getState().updateEnvironment("env-hidden", {
         setupPhase: "ready",
         setupScriptsComplete: true,
       });
     });
 
     await waitFor(() => {
-      expect(usePaneLayoutStore.getState().getPane("default", "env-hidden")?.activeTabId).toBe(
-        "startup-agent",
-      );
+      expect(
+        appCommandStore(paneLayoutStore).getState().getPane("default", "env-hidden")?.activeTabId,
+      ).toBe("startup-agent");
     });
     expect(hasWindowStartupAgentActivation("env-hidden")).toBe(false);
   });
 
   test("does not hand off setup focus again when the environment is reselected", async () => {
     seedStartupFocusHandoffConfig();
-    usePaneLayoutStore.setState({
+    appCommandStore(paneLayoutStore).setState({
       environments: new Map([
         [
           "env-hidden",
@@ -3981,7 +4020,7 @@ describe("TerminalContainer", () => {
       activeEnvironmentId: "env-hidden",
     } as never);
     seedStartupFocusHandoffEnvironment("env-hidden", { setupReady: true });
-    useEnvironmentStore.setState((state) => ({
+    appCommandStore(environmentStore).setState((state) => ({
       ...state,
       environments: [
         ...state.environments,
@@ -3997,24 +4036,24 @@ describe("TerminalContainer", () => {
         },
       ],
     }));
-    useClaudeOptionsStore.setState({ options: {} });
+    appCommandStore(claudeOptionsStore).setState({ options: {} });
 
-    const { rerender } = render(
+    const { rerender } = renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer environmentId="env-hidden" containerId={null} isActive />
       </TerminalProvider>,
     );
 
     await waitFor(() => {
-      expect(usePaneLayoutStore.getState().getPane("default", "env-hidden")?.activeTabId).toBe(
-        "startup-agent",
-      );
+      expect(
+        appCommandStore(paneLayoutStore).getState().getPane("default", "env-hidden")?.activeTabId,
+      ).toBe("startup-agent");
     });
 
     // The user goes back to the setup terminal, which keeps `isSetupTab` for
     // the life of the environment, then visits another environment and returns.
     await act(async () => {
-      usePaneLayoutStore.getState().setActiveTab("default", "default", "env-hidden");
+      appCommandStore(paneLayoutStore).getState().setActiveTab("default", "default", "env-hidden");
     });
     rerender(
       <TerminalProvider>
@@ -4033,9 +4072,9 @@ describe("TerminalContainer", () => {
       await Promise.resolve();
     });
 
-    expect(usePaneLayoutStore.getState().getPane("default", "env-hidden")?.activeTabId).toBe(
-      "default",
-    );
+    expect(
+      appCommandStore(paneLayoutStore).getState().getPane("default", "env-hidden")?.activeTabId,
+    ).toBe("default");
   });
 
   test("keeps a single startup tab for the backend running session", async () => {
@@ -4053,7 +4092,7 @@ describe("TerminalContainer", () => {
         startedAt: "2026-07-29T12:00:00.000Z",
       },
     });
-    usePaneLayoutStore.setState((state) => ({
+    appCommandStore(paneLayoutStore).setState((state) => ({
       environments: new Map(state.environments).set("env-hidden", {
         root: {
           kind: "leaf",
@@ -4083,7 +4122,7 @@ describe("TerminalContainer", () => {
     renderHiddenTerminal();
 
     await waitFor(() => {
-      const startupTabs = usePaneLayoutStore
+      const startupTabs = appCommandStore(paneLayoutStore)
         .getState()
         .getAllTabs("env-hidden")
         .filter((tab) => tab.id === "startup-agent");
@@ -4097,7 +4136,7 @@ describe("TerminalContainer", () => {
       expect(startupTabs[0]?.initialPrompt).toBeUndefined();
     });
     expect(
-      usePaneLayoutStore
+      appCommandStore(paneLayoutStore)
         .getState()
         .getAllTabs("env-hidden")
         .some((tab) => tab.id !== "startup-agent" && tab.type.endsWith("native")),
@@ -4126,67 +4165,77 @@ describe("TerminalContainer", () => {
     expect(mockToastError).toHaveBeenCalledTimes(1);
 
     act(() => {
-      useEnvironmentStore.getState().updateEnvironment("env-hidden", {
+      appCommandStore(environmentStore).getState().updateEnvironment("env-hidden", {
         branch: "unrelated-render",
       });
     });
     expect(mockToastError).toHaveBeenCalledTimes(1);
 
     act(() => {
-      useEnvironmentStore.getState().updateEnvironment("env-hidden", {
-        startupAgentSession: {
-          tabId: "startup-agent",
-          agent: "codex",
-          style: "native",
-          status: "error",
-          error: "Session handshake timed out",
-        },
-      });
+      appCommandStore(environmentStore)
+        .getState()
+        .updateEnvironment("env-hidden", {
+          startupAgentSession: {
+            tabId: "startup-agent",
+            agent: "codex",
+            style: "native",
+            status: "error",
+            error: "Session handshake timed out",
+          },
+        });
     });
     await waitFor(() => expect(mockToastError).toHaveBeenCalledTimes(2));
 
     act(() => {
-      useEnvironmentStore.getState().updateEnvironment("env-hidden", {
-        startupAgentSession: {
-          tabId: "startup-agent",
-          agent: "codex",
-          style: "native",
-          status: "starting",
-        },
-      });
+      appCommandStore(environmentStore)
+        .getState()
+        .updateEnvironment("env-hidden", {
+          startupAgentSession: {
+            tabId: "startup-agent",
+            agent: "codex",
+            style: "native",
+            status: "starting",
+          },
+        });
     });
     act(() => {
-      useEnvironmentStore.getState().updateEnvironment("env-hidden", {
-        startupAgentSession: {
-          tabId: "startup-agent",
-          agent: "codex",
-          style: "native",
-          status: "error",
-          error: "Session handshake timed out",
-        },
-      });
+      appCommandStore(environmentStore)
+        .getState()
+        .updateEnvironment("env-hidden", {
+          startupAgentSession: {
+            tabId: "startup-agent",
+            agent: "codex",
+            style: "native",
+            status: "error",
+            error: "Session handshake timed out",
+          },
+        });
     });
     await waitFor(() => expect(mockToastError).toHaveBeenCalledTimes(3));
 
     act(() => {
-      useEnvironmentStore.getState().updateEnvironment("env-hidden", {
-        startupAgentSession: {
-          tabId: "startup-agent",
-          agent: "codex",
-          style: "native",
-          status: "starting",
-        },
-      });
+      appCommandStore(environmentStore)
+        .getState()
+        .updateEnvironment("env-hidden", {
+          startupAgentSession: {
+            tabId: "startup-agent",
+            agent: "codex",
+            style: "native",
+            status: "starting",
+          },
+        });
     });
     act(() => {
-      useEnvironmentStore.getState().updateEnvironment("env-hidden", {
-        startupAgentSession: {
-          tabId: "startup-agent",
-          agent: "codex",
-          style: "native",
-          status: "error",
-        },
-      });
+      appCommandStore(environmentStore)
+        .getState()
+        .updateEnvironment("env-hidden", {
+          startupAgentSession: {
+            tabId: "startup-agent",
+            agent: "codex",
+            style: "native",
+            status: "error",
+          },
+        });
     });
     await waitFor(() => {
       expect(mockToastError).toHaveBeenCalledTimes(4);
@@ -4205,11 +4254,11 @@ describe("TerminalContainer", () => {
     const tabId = await waitForDurableAgentTab();
 
     await act(async () => {
-      usePaneLayoutStore.getState().clearTabInitialAgentOptions(tabId, "env-hidden");
+      appCommandStore(paneLayoutStore).getState().clearTabInitialAgentOptions(tabId, "env-hidden");
       await Promise.resolve();
     });
 
-    const agentTab = usePaneLayoutStore
+    const agentTab = appCommandStore(paneLayoutStore)
       .getState()
       .getAllTabs("env-hidden")
       .find((tab) => tab.id === tabId);
@@ -4227,7 +4276,8 @@ describe("TerminalContainer", () => {
     expect(savePaneLayoutMock).not.toHaveBeenCalled();
     expect(setEnvironmentPendingAgentLaunchMock).not.toHaveBeenCalled();
     expect(
-      useEnvironmentStore.getState().getEnvironmentById("env-hidden")?.pendingAgentLaunch,
+      appCommandStore(environmentStore).getState().getEnvironmentById("env-hidden")
+        ?.pendingAgentLaunch,
     ).toBe(true);
   });
 
@@ -4238,13 +4288,16 @@ describe("TerminalContainer", () => {
     renderHiddenTerminal();
     await waitForDurableAgentTab();
     await act(async () => {
-      useEnvironmentStore.getState().updateEnvironment("env-hidden", { branch: "rerender" });
+      appCommandStore(environmentStore)
+        .getState()
+        .updateEnvironment("env-hidden", { branch: "rerender" });
       await Promise.resolve();
     });
 
     expect(setEnvironmentPendingAgentLaunchMock).not.toHaveBeenCalled();
     expect(
-      useEnvironmentStore.getState().getEnvironmentById("env-hidden")?.pendingAgentLaunch,
+      appCommandStore(environmentStore).getState().getEnvironmentById("env-hidden")
+        ?.pendingAgentLaunch,
     ).toBe(true);
   });
 
@@ -4256,7 +4309,9 @@ describe("TerminalContainer", () => {
     renderHiddenTerminal();
     await waitForDurableAgentTab();
 
-    const environment = useEnvironmentStore.getState().getEnvironmentById("env-hidden");
+    const environment = appCommandStore(environmentStore)
+      .getState()
+      .getEnvironmentById("env-hidden");
     expect(environment?.pendingAgentLaunch).toBe(true);
     expect(environment?.setupPhase).toBe("ready");
     expect(setEnvironmentPendingAgentLaunchMock).not.toHaveBeenCalled();
@@ -4285,12 +4340,14 @@ describe("TerminalContainer", () => {
     });
     // A rerender must not find a second chance to re-project it either.
     await act(async () => {
-      useEnvironmentStore.getState().updateEnvironment("env-hidden", { branch: "rerender" });
+      appCommandStore(environmentStore)
+        .getState()
+        .updateEnvironment("env-hidden", { branch: "rerender" });
       await Promise.resolve();
     });
 
     expect(
-      usePaneLayoutStore
+      appCommandStore(paneLayoutStore)
         .getState()
         .getAllTabs("env-hidden")
         .find((tab) => tab.id === "startup-agent"),
@@ -4312,7 +4369,7 @@ describe("TerminalContainer", () => {
         startedAt: "2026-07-29T12:00:00.000Z",
       },
     });
-    usePaneLayoutStore.setState((state) => ({
+    appCommandStore(paneLayoutStore).setState((state) => ({
       environments: new Map(state.environments).set("env-hidden", {
         root: {
           kind: "leaf",
@@ -4339,7 +4396,7 @@ describe("TerminalContainer", () => {
     renderHiddenTerminal();
 
     await waitFor(() => {
-      const startupTab = usePaneLayoutStore
+      const startupTab = appCommandStore(paneLayoutStore)
         .getState()
         .getAllTabs("env-hidden")
         .find((tab) => tab.id === "startup-agent");
@@ -4376,7 +4433,7 @@ describe("TerminalContainer", () => {
       updatedAt: "2026-07-29T12:00:00.000Z",
       revision: 3,
     });
-    useEnvironmentStore.setState((state) => ({
+    appCommandStore(environmentStore).setState((state) => ({
       ...state,
       environments: state.environments.map((environment) =>
         environment.id === "env-hidden"
@@ -4395,7 +4452,7 @@ describe("TerminalContainer", () => {
     renderHiddenTerminal();
 
     await waitFor(() => {
-      const tabs = usePaneLayoutStore.getState().getAllTabs("env-hidden");
+      const tabs = appCommandStore(paneLayoutStore).getState().getAllTabs("env-hidden");
       expect(tabs.filter((tab) => tab.id === "startup-agent")).toHaveLength(1);
       expect(tabs.find((tab) => tab.id === "startup-agent")).toMatchObject({
         type: "agent-native",
@@ -4414,7 +4471,7 @@ describe("TerminalContainer", () => {
       agentSettings: { defaultAgent: "codex", platforms: { codex: { mode: "native" } } },
     });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -4435,7 +4492,7 @@ describe("TerminalContainer", () => {
     setupDurableLaunchEnvironment({
       agentSettings: { platforms: { opencode: { mode: "native" } } },
     });
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       config: {
         ...state.config,
         global: {
@@ -4449,7 +4506,7 @@ describe("TerminalContainer", () => {
 
     await waitFor(() => {
       expect(
-        usePaneLayoutStore
+        appCommandStore(paneLayoutStore)
           .getState()
           .getAllTabs("env-hidden")
           .some((tab) => tab.type === "agent-native"),
@@ -4466,7 +4523,7 @@ describe("TerminalContainer", () => {
     renderHiddenTerminal();
 
     await waitFor(() => {
-      const agentTab = usePaneLayoutStore
+      const agentTab = appCommandStore(paneLayoutStore)
         .getState()
         .getAllTabs("env-hidden")
         .find((tab) => tab.type === "agent-native");
@@ -4482,7 +4539,7 @@ describe("TerminalContainer", () => {
     });
     // The agent lives in the second leaf of a split, so the check must walk the
     // whole tree rather than only the root leaf.
-    usePaneLayoutStore.setState({
+    appCommandStore(paneLayoutStore).setState({
       environments: new Map([
         [
           "env-hidden",
@@ -4530,7 +4587,7 @@ describe("TerminalContainer", () => {
     // containerId together. That is an environment switch, not a container
     // restart: the environment being switched *to* has been working in the
     // background and must not be reset out from under the user.
-    usePaneLayoutStore.setState((state) => ({
+    appCommandStore(paneLayoutStore).setState((state) => ({
       environments: new Map(state.environments)
         .set("env-hidden", {
           root: {
@@ -4557,7 +4614,7 @@ describe("TerminalContainer", () => {
         }),
     }));
 
-    const { rerender } = render(
+    const { rerender } = renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -4569,7 +4626,7 @@ describe("TerminalContainer", () => {
     );
 
     await waitFor(() => {
-      expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toHaveLength(1);
+      expect(appCommandStore(paneLayoutStore).getState().getAllTabs("env-hidden")).toHaveLength(1);
     });
 
     rerender(
@@ -4584,18 +4641,18 @@ describe("TerminalContainer", () => {
     );
 
     expect(
-      usePaneLayoutStore
+      appCommandStore(paneLayoutStore)
         .getState()
         .getAllTabs("env-visible")
         .map((tab) => tab.id),
     ).toEqual(["visible-tab", "visible-agent-tab"]);
-    expect(usePaneLayoutStore.getState().environments.get("env-visible")?.containerId).toBe(
-      "container-visible",
-    );
+    expect(
+      appCommandStore(paneLayoutStore).getState().environments.get("env-visible")?.containerId,
+    ).toBe("container-visible");
   });
 
   test("resets panes when the container id changes within one environment", async () => {
-    usePaneLayoutStore.setState((state) => ({
+    appCommandStore(paneLayoutStore).setState((state) => ({
       environments: new Map(state.environments).set("env-hidden", {
         root: {
           kind: "leaf",
@@ -4611,7 +4668,7 @@ describe("TerminalContainer", () => {
       }),
     }));
 
-    const { rerender } = render(
+    const { rerender } = renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -4623,7 +4680,7 @@ describe("TerminalContainer", () => {
     );
 
     await waitFor(() => {
-      expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toHaveLength(2);
+      expect(appCommandStore(paneLayoutStore).getState().getAllTabs("env-hidden")).toHaveLength(2);
     });
 
     // A genuine restart: same environment, new container. The old tabs point at
@@ -4640,7 +4697,7 @@ describe("TerminalContainer", () => {
     );
 
     expect(
-      usePaneLayoutStore
+      appCommandStore(paneLayoutStore)
         .getState()
         .getAllTabs("env-hidden")
         .map((tab) => tab.id),
@@ -4657,11 +4714,11 @@ describe("TerminalContainer", () => {
       startedAt: "2024-01-01T00:00:00.000Z",
       terminalRunning: true,
     });
-    useClaudeOptionsStore.setState({
+    appCommandStore(claudeOptionsStore).setState({
       options: {},
     });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -4673,7 +4730,7 @@ describe("TerminalContainer", () => {
     );
 
     await waitFor(() => {
-      const envHidden = usePaneLayoutStore.getState().environments.get("env-hidden");
+      const envHidden = appCommandStore(paneLayoutStore).getState().environments.get("env-hidden");
       expect(envHidden?.root.kind).toBe("leaf");
       if (!envHidden || envHidden.root.kind !== "leaf") {
         throw new Error("env-hidden root should be a leaf");
@@ -4686,14 +4743,17 @@ describe("TerminalContainer", () => {
     });
 
     expect(
-      useEnvironmentStore.getState().getEnvironmentById("env-hidden")?.setupPhase === "running",
+      appCommandStore(environmentStore).getState().getEnvironmentById("env-hidden")?.setupPhase ===
+        "running",
     ).toBe(true);
   });
 
   test("waits for the backend to publish the setup tab rather than adding one", async () => {
-    useEnvironmentStore.getState().updateEnvironment("env-hidden", { setupPhase: "running" });
+    appCommandStore(environmentStore)
+      .getState()
+      .updateEnvironment("env-hidden", { setupPhase: "running" });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -4705,15 +4765,17 @@ describe("TerminalContainer", () => {
     );
 
     await waitFor(() => {
-      expect(usePaneLayoutStore.getState().hydration.get("env-hidden")).toBe("done");
+      expect(appCommandStore(paneLayoutStore).getState().hydration.get("env-hidden")).toBe("done");
     });
-    const root = usePaneLayoutStore.getState().environments.get("env-hidden")?.root;
+    const root = appCommandStore(paneLayoutStore).getState().environments.get("env-hidden")?.root;
     expect(root?.kind === "leaf" ? root.tabs : []).toEqual([]);
     expect(screen.getByTestId("environment-tabs-shimmer")).toBeTruthy();
   });
 
   test("attaches a setup tab to a backend-owned setup session", async () => {
-    useEnvironmentStore.getState().updateEnvironment("env-hidden", { setupPhase: "running" });
+    appCommandStore(environmentStore)
+      .getState()
+      .updateEnvironment("env-hidden", { setupPhase: "running" });
     publishSetupTab();
     getEnvironmentSetupSessionMock.mockResolvedValue({
       environmentId: "env-hidden",
@@ -4722,15 +4784,15 @@ describe("TerminalContainer", () => {
       startedAt: "2024-01-01T00:00:00.000Z",
       terminalRunning: true,
     });
-    useEnvironmentStore.setState((state) => ({
+    appCommandStore(environmentStore).setState((state) => ({
       ...state,
     }));
 
-    useClaudeOptionsStore.setState({
+    appCommandStore(claudeOptionsStore).setState({
       options: {},
     });
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -4746,11 +4808,11 @@ describe("TerminalContainer", () => {
     });
 
     await waitFor(() => {
-      expect(usePaneLayoutStore.getState().hydration.get("env-hidden")).toBe("done");
+      expect(appCommandStore(paneLayoutStore).getState().hydration.get("env-hidden")).toBe("done");
     });
 
     await waitFor(() => {
-      const envHidden = usePaneLayoutStore.getState().environments.get("env-hidden");
+      const envHidden = appCommandStore(paneLayoutStore).getState().environments.get("env-hidden");
       expect(envHidden?.root.kind).toBe("leaf");
       if (!envHidden || envHidden.root.kind !== "leaf") {
         throw new Error("env-hidden root should be a leaf");
@@ -4761,7 +4823,7 @@ describe("TerminalContainer", () => {
       expect(envHidden.root.tabs[0]?.isSetupTab).toBe(true);
       expect(envHidden.root.tabs[0]?.initialCommands).toBeUndefined();
       expect(
-        useTerminalSessionStore
+        appCommandStore(terminalSessionStore)
           .getState()
           .sessions.get(createSessionKey("container-hidden", "default", "env-hidden"))?.sessionId,
       ).toBe("env-hidden:setup");
@@ -4773,11 +4835,11 @@ describe("TerminalContainer", () => {
       .mockRejectedValueOnce(new Error("bind unavailable"))
       .mockImplementationOnce(() => new Promise(() => {}));
     seedUnboundSetupTab();
-    useEnvironmentStore.setState((state) => ({
+    appCommandStore(environmentStore).setState((state) => ({
       ...state,
     }));
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -4795,11 +4857,11 @@ describe("TerminalContainer", () => {
       { timeout: 2_000 },
     );
     expect(
-      useTerminalSessionStore
+      appCommandStore(terminalSessionStore)
         .getState()
         .sessions.get(createSessionKey("container-hidden", "default", "env-hidden")),
     ).toBeUndefined();
-    expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toEqual([
+    expect(appCommandStore(paneLayoutStore).getState().getAllTabs("env-hidden")).toEqual([
       { id: "default", type: "plain", isSetupTab: true },
     ]);
   });
@@ -4816,7 +4878,7 @@ describe("TerminalContainer", () => {
       });
     seedUnboundSetupTab();
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -4831,7 +4893,7 @@ describe("TerminalContainer", () => {
       () => {
         expect(awaitEnvironmentSetupSessionMock).toHaveBeenCalledTimes(2);
         expect(
-          useTerminalSessionStore
+          appCommandStore(terminalSessionStore)
             .getState()
             .sessions.get(createSessionKey("container-hidden", "default", "env-hidden"))?.sessionId,
         ).toBe("env-hidden:setup");
@@ -4847,7 +4909,7 @@ describe("TerminalContainer", () => {
       .mockRejectedValueOnce(new Error("bridge unavailable 3"));
     seedUnboundSetupTab();
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -4862,7 +4924,7 @@ describe("TerminalContainer", () => {
       () => {
         expect(awaitEnvironmentSetupSessionMock).toHaveBeenCalledTimes(3);
         expect(
-          usePaneLayoutStore
+          appCommandStore(paneLayoutStore)
             .getState()
             .getAllTabs("env-hidden")
             .some((tab) => tab.isSetupTab),
@@ -4881,7 +4943,7 @@ describe("TerminalContainer", () => {
     // lifecycle cleanup cancelled it. Assert on the scheduled handle instead.
     const timers = installTimerProbe([SETUP_SESSION_BIND_RETRY_DELAY_MS]);
     try {
-      const rendered = render(
+      const rendered = renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-hidden"
@@ -4929,7 +4991,7 @@ describe("TerminalContainer", () => {
     // even with the whole reconnect listener deleted.
     const timers = installTimerProbe([SETUP_SESSION_BIND_RETRY_DELAY_MS]);
     try {
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-hidden"
@@ -4950,7 +5012,7 @@ describe("TerminalContainer", () => {
         () => {
           expect(awaitEnvironmentSetupSessionMock).toHaveBeenCalledTimes(2);
           expect(
-            useTerminalSessionStore
+            appCommandStore(terminalSessionStore)
               .getState()
               .sessions.get(createSessionKey("container-hidden", "default", "env-hidden"))
               ?.sessionId,
@@ -4986,7 +5048,7 @@ describe("TerminalContainer", () => {
       });
     seedUnboundSetupTab();
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -5024,7 +5086,7 @@ describe("TerminalContainer", () => {
       () => {
         expect(awaitEnvironmentSetupSessionMock).toHaveBeenCalledTimes(2);
         expect(
-          useTerminalSessionStore
+          appCommandStore(terminalSessionStore)
             .getState()
             .sessions.get(createSessionKey("container-hidden", "default", "env-hidden"))?.sessionId,
         ).toBe("env-hidden:setup");
@@ -5044,7 +5106,7 @@ describe("TerminalContainer", () => {
     });
     seedUnboundSetupTab();
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -5061,7 +5123,7 @@ describe("TerminalContainer", () => {
         expect.any(Function),
       );
       expect(
-        useTerminalSessionStore
+        appCommandStore(terminalSessionStore)
           .getState()
           .sessions.get(createSessionKey("container-hidden", "default", "env-hidden"))?.sessionId,
       ).toBe("env-hidden:setup");
@@ -5078,7 +5140,7 @@ describe("TerminalContainer", () => {
         }),
     );
 
-    const rendered = render(
+    const rendered = renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -5119,7 +5181,7 @@ describe("TerminalContainer", () => {
 
     const timers = installTimerProbe([SETUP_SESSION_BIND_RETRY_DELAY_MS]);
     try {
-      const { rerender } = render(
+      const { rerender } = renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-hidden"
@@ -5153,14 +5215,14 @@ describe("TerminalContainer", () => {
 
       await waitFor(() => {
         expect(
-          useTerminalSessionStore
+          appCommandStore(terminalSessionStore)
             .getState()
             .sessions.get(createSessionKey("container-visible", "default", "env-visible"))
             ?.sessionId,
         ).toBe("env-visible:setup");
       });
       expect(
-        useTerminalSessionStore
+        appCommandStore(terminalSessionStore)
           .getState()
           .sessions.get(createSessionKey("container-hidden", "default", "env-hidden")),
       ).toBeUndefined();
@@ -5181,7 +5243,7 @@ describe("TerminalContainer", () => {
     );
     seedUnboundSetupTab();
 
-    const { rerender } = render(
+    const { rerender } = renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -5222,7 +5284,7 @@ describe("TerminalContainer", () => {
     // its result would resurrect a session key for an environment this container
     // no longer renders.
     expect(
-      useTerminalSessionStore
+      appCommandStore(terminalSessionStore)
         .getState()
         .sessions.get(createSessionKey("container-hidden", "default", "env-hidden")),
     ).toBeUndefined();
@@ -5239,7 +5301,7 @@ describe("TerminalContainer", () => {
     );
     seedUnboundSetupTab();
 
-    const { rerender } = render(
+    const { rerender } = renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -5280,7 +5342,7 @@ describe("TerminalContainer", () => {
     expect(awaitEnvironmentSetupSessionMock).toHaveBeenCalledTimes(1);
     // The stale failure must not settle the old environment's tab either: a
     // settled tab with no session is what stale-tab cleanup retires.
-    expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toEqual([
+    expect(appCommandStore(paneLayoutStore).getState().getAllTabs("env-hidden")).toEqual([
       { id: "default", type: "plain", isSetupTab: true },
     ]);
   });
@@ -5302,12 +5364,16 @@ describe("TerminalContainer", () => {
       .mockImplementationOnce(() => new Promise<EnvironmentSetupSession>(() => {}));
     // Setup is running for both environments, so pane-layout hydration leaves
     // the seeded setup tabs alone and the second bind stays genuinely unbound.
-    useEnvironmentStore.getState().updateEnvironment("env-hidden", { setupPhase: "running" });
-    useEnvironmentStore.getState().updateEnvironment("env-visible", { setupPhase: "running" });
+    appCommandStore(environmentStore)
+      .getState()
+      .updateEnvironment("env-hidden", { setupPhase: "running" });
+    appCommandStore(environmentStore)
+      .getState()
+      .updateEnvironment("env-visible", { setupPhase: "running" });
     seedUnboundSetupTab();
     seedUnboundSetupTabFor("env-visible", "container-visible");
 
-    const { rerender } = render(
+    const { rerender } = renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
@@ -5357,7 +5423,9 @@ describe("TerminalContainer", () => {
   test("grants a fresh setup-session retry budget when a reconnect follows an exhausted one", async () => {
     // Setup is still running, so stale-tab cleanup leaves the unbound setup tab
     // in place after the first budget is exhausted and a reconnect can reach it.
-    useEnvironmentStore.getState().updateEnvironment("env-hidden", { setupPhase: "running" });
+    appCommandStore(environmentStore)
+      .getState()
+      .updateEnvironment("env-hidden", { setupPhase: "running" });
     let reconnect: (() => void) | undefined;
     listenMock.mockImplementation(async (event: string, handler: () => void) => {
       if (event === NATIVE_EVENT_STREAM_CONNECTED_EVENT) reconnect = handler;
@@ -5382,7 +5450,7 @@ describe("TerminalContainer", () => {
     };
 
     try {
-      render(
+      renderInAppCommandScope(
         <TerminalProvider>
           <TerminalContainer
             environmentId="env-hidden"
@@ -5439,7 +5507,7 @@ describe("TerminalContainer", () => {
       terminalRunning: true,
     });
 
-    useEnvironmentStore.setState((state) => ({
+    appCommandStore(environmentStore).setState((state) => ({
       ...state,
       environments: state.environments.map((env) =>
         env.id === "env-hidden"
@@ -5455,14 +5523,14 @@ describe("TerminalContainer", () => {
       ),
     }));
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer environmentId="env-hidden" containerId={null} isActive={false} />
       </TerminalProvider>,
     );
 
     await waitFor(() => {
-      const envHidden = usePaneLayoutStore.getState().environments.get("env-hidden");
+      const envHidden = appCommandStore(paneLayoutStore).getState().environments.get("env-hidden");
       expect(envHidden?.root.kind).toBe("leaf");
       if (!envHidden || envHidden.root.kind !== "leaf") {
         throw new Error("env-hidden root should be a leaf");
@@ -5474,17 +5542,18 @@ describe("TerminalContainer", () => {
     });
 
     expect(
-      useTerminalSessionStore
+      appCommandStore(terminalSessionStore)
         .getState()
         .sessions.get(createSessionKey(null, "default", "env-hidden"))?.sessionId,
     ).toBe("env-hidden:setup");
     expect(
-      useEnvironmentStore.getState().getEnvironmentById("env-hidden")?.setupPhase === "running",
+      appCommandStore(environmentStore).getState().getEnvironmentById("env-hidden")?.setupPhase ===
+        "running",
     ).toBe(true);
   });
 
   test("auto-resolves a ready local environment whose setup completed in a prior session", async () => {
-    useEnvironmentStore.setState((state) => ({
+    appCommandStore(environmentStore).setState((state) => ({
       ...state,
       environments: state.environments.map((environment) =>
         environment.id === "env-hidden"
@@ -5499,7 +5568,7 @@ describe("TerminalContainer", () => {
       ),
     }));
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer environmentId="env-hidden" containerId={null} isActive={false} />
       </TerminalProvider>,
@@ -5507,9 +5576,10 @@ describe("TerminalContainer", () => {
 
     await waitFor(() => {
       expect(
-        useEnvironmentStore.getState().getEnvironmentById("env-hidden")?.setupPhase !== "pending",
+        appCommandStore(environmentStore).getState().getEnvironmentById("env-hidden")
+          ?.setupPhase !== "pending",
       ).toBe(true);
-      expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toMatchObject([
+      expect(appCommandStore(paneLayoutStore).getState().getAllTabs("env-hidden")).toMatchObject([
         { type: "plain" },
       ]);
     });
@@ -5518,7 +5588,7 @@ describe("TerminalContainer", () => {
   });
 
   test("removes a stale blank setup placeholder after setup has completed", async () => {
-    usePaneLayoutStore.setState((state) => {
+    appCommandStore(paneLayoutStore).setState((state) => {
       const environments = new Map(state.environments);
       environments.set("env-hidden", {
         root: {
@@ -5539,7 +5609,7 @@ describe("TerminalContainer", () => {
       });
       return { ...state, environments };
     });
-    useEnvironmentStore.setState((state) => ({
+    appCommandStore(environmentStore).setState((state) => ({
       ...state,
       environments: state.environments.map((env) =>
         env.id === "env-hidden"
@@ -5554,14 +5624,14 @@ describe("TerminalContainer", () => {
       ),
     }));
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer environmentId="env-hidden" containerId={null} isActive={false} />
       </TerminalProvider>,
     );
 
     await waitFor(() => {
-      const envHidden = usePaneLayoutStore.getState().environments.get("env-hidden");
+      const envHidden = appCommandStore(paneLayoutStore).getState().environments.get("env-hidden");
       expect(envHidden?.root.kind).toBe("leaf");
       if (!envHidden || envHidden.root.kind !== "leaf") {
         throw new Error("env-hidden root should be a leaf");
@@ -5577,7 +5647,7 @@ describe("TerminalContainer", () => {
   test("does not persist completion when backend setup re-run fails", async () => {
     ensureEnvironmentSetupMock.mockRejectedValue(new Error("unavailable"));
 
-    useEnvironmentStore.setState((state) => ({
+    appCommandStore(environmentStore).setState((state) => ({
       ...state,
       environments: state.environments.map((env) =>
         env.id === "env-hidden"
@@ -5592,14 +5662,14 @@ describe("TerminalContainer", () => {
       ),
     }));
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer environmentId="env-hidden" containerId={null} isActive={false} />
       </TerminalProvider>,
     );
 
     await waitFor(() => {
-      const envHidden = usePaneLayoutStore.getState().environments.get("env-hidden");
+      const envHidden = appCommandStore(paneLayoutStore).getState().environments.get("env-hidden");
       expect(envHidden?.root.kind).toBe("leaf");
       if (!envHidden || envHidden.root.kind !== "leaf") {
         throw new Error("env-hidden root should be a leaf");
@@ -5628,7 +5698,7 @@ describe("TerminalContainer", () => {
       return null;
     }
 
-    usePaneLayoutStore.setState((state) => ({
+    appCommandStore(paneLayoutStore).setState((state) => ({
       environments: new Map(state.environments).set("env-visible", {
         root: {
           kind: "split",
@@ -5659,7 +5729,7 @@ describe("TerminalContainer", () => {
       }),
     }));
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-visible"
@@ -5673,20 +5743,20 @@ describe("TerminalContainer", () => {
 
     await waitFor(() => {
       expect(
-        usePaneLayoutStore
+        appCommandStore(paneLayoutStore)
           .getState()
           .getPane("left", "env-visible")
           ?.tabs.map((tab) => tab.id),
       ).toEqual(["left-only"]);
       expect(
-        usePaneLayoutStore
+        appCommandStore(paneLayoutStore)
           .getState()
           .getPane("right", "env-visible")
           ?.tabs.map((tab) => tab.id),
       ).toEqual(["right-second"]);
-      expect(usePaneLayoutStore.getState().getPane("right", "env-visible")?.activeTabId).toBe(
-        "right-second",
-      );
+      expect(
+        appCommandStore(paneLayoutStore).getState().getPane("right", "env-visible")?.activeTabId,
+      ).toBe("right-second");
     });
   });
 
@@ -5732,7 +5802,7 @@ describe("TerminalContainer", () => {
         </>
       );
     }
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-visible"
@@ -5744,15 +5814,15 @@ describe("TerminalContainer", () => {
       </TerminalProvider>,
     );
     await waitFor(() =>
-      expect(usePaneLayoutStore.getState().getAllTabs("env-visible")).toHaveLength(1),
+      expect(appCommandStore(paneLayoutStore).getState().getAllTabs("env-visible")).toHaveLength(1),
     );
     fireEvent.click(screen.getByText("Invalid PR"));
     expect(results).toEqual([false]);
     fireEvent.click(screen.getByText("Open PR"));
     await waitFor(() =>
-      expect(usePaneLayoutStore.getState().getAllTabs("env-visible")).toHaveLength(2),
+      expect(appCommandStore(paneLayoutStore).getState().getAllTabs("env-visible")).toHaveLength(2),
     );
-    const store = usePaneLayoutStore.getState();
+    const store = appCommandStore(paneLayoutStore).getState();
     const tab = store.getAllTabs("env-visible").find((t) => t.type === "pull-request")!;
     expect(tab.pullRequestData).toMatchObject({ ref, view: "code" });
     const pane = store.findPaneWithTab(tab.id, "env-visible")!;
@@ -5764,13 +5834,15 @@ describe("TerminalContainer", () => {
     expect(results.at(-1)).toBe(false);
     fireEvent.click(screen.getByText("Reopen PR"));
     await waitFor(() =>
-      expect(usePaneLayoutStore.getState().getPane(pane.id, "env-visible")?.activeTabId).toBe(
-        tab.id,
-      ),
+      expect(
+        appCommandStore(paneLayoutStore).getState().getPane(pane.id, "env-visible")?.activeTabId,
+      ).toBe(tab.id),
     );
-    expect(usePaneLayoutStore.getState().getAllTabs("env-visible")).toHaveLength(MAX_TABS);
+    expect(appCommandStore(paneLayoutStore).getState().getAllTabs("env-visible")).toHaveLength(
+      MAX_TABS,
+    );
     expect(
-      usePaneLayoutStore
+      appCommandStore(paneLayoutStore)
         .getState()
         .getAllTabs("env-visible")
         .find((t) => t.id === tab.id)?.pullRequestData,
@@ -5791,7 +5863,7 @@ describe("TerminalContainer", () => {
       );
     }
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-visible"
@@ -5832,7 +5904,7 @@ describe("TerminalContainer", () => {
       );
     }
 
-    const view = render(
+    const view = renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-visible"
@@ -5861,9 +5933,11 @@ describe("TerminalContainer", () => {
     const menuClose = listenMock.mock.calls.find(([event]) => event === "menu-close-tab")?.[1] as
       (() => void) | undefined;
     expect(menuClose).toBeDefined();
-    const count = usePaneLayoutStore.getState().getAllTabs("env-visible").length;
+    const count = appCommandStore(paneLayoutStore).getState().getAllTabs("env-visible").length;
     act(() => menuClose?.());
-    expect(usePaneLayoutStore.getState().getAllTabs("env-visible")).toHaveLength(count);
+    expect(appCommandStore(paneLayoutStore).getState().getAllTabs("env-visible")).toHaveLength(
+      count,
+    );
     view.rerender(
       <TerminalProvider>
         <TerminalContainer
@@ -5877,11 +5951,13 @@ describe("TerminalContainer", () => {
       </TerminalProvider>,
     );
     expect(screen.getByTestId("pane-tree-active").textContent).toBe("true");
-    expect(usePaneLayoutStore.getState().getAllTabs("env-visible")).toHaveLength(count);
+    expect(appCommandStore(paneLayoutStore).getState().getAllTabs("env-visible")).toHaveLength(
+      count,
+    );
   });
 
   test("normalizes an absolute container path before creating a file tab", async () => {
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-visible"
@@ -5895,11 +5971,13 @@ describe("TerminalContainer", () => {
 
     beginTabLaunch("env-visible", { tabId: "delayed-agent", title: "Run", surface: "agent" });
     fireEvent.click(screen.getByRole("link", { name: "Open file" }));
-    expect(useTabLaunchStore.getState().launches.get("env-visible")?.[0]?.focused).toBe(false);
+    expect(
+      appCommandStore(tabLaunchStore).getState().launches.get("env-visible")?.[0]?.focused,
+    ).toBe(false);
     resetTabLaunches();
 
     await waitFor(() => {
-      expect(usePaneLayoutStore.getState().getAllTabs("env-visible")).toContainEqual(
+      expect(appCommandStore(paneLayoutStore).getState().getAllTabs("env-visible")).toContainEqual(
         expect.objectContaining({
           type: "file",
           fileData: expect.objectContaining({
@@ -5912,7 +5990,7 @@ describe("TerminalContainer", () => {
   });
 
   test("normalizes an absolute local worktree path before creating a file tab", async () => {
-    useEnvironmentStore.getState().updateEnvironment("env-visible", {
+    appCommandStore(environmentStore).getState().updateEnvironment("env-visible", {
       containerId: null,
       environmentType: "local",
       worktreePath: "/tmp/env-visible-worktree",
@@ -5929,7 +6007,7 @@ describe("TerminalContainer", () => {
       return null;
     }
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer environmentId="env-visible" containerId={null} isActive />
         <OpenFileHarness />
@@ -5937,7 +6015,7 @@ describe("TerminalContainer", () => {
     );
 
     await waitFor(() => {
-      expect(usePaneLayoutStore.getState().getAllTabs("env-visible")).toContainEqual(
+      expect(appCommandStore(paneLayoutStore).getState().getAllTabs("env-visible")).toContainEqual(
         expect.objectContaining({
           type: "file",
           fileData: expect.objectContaining({
@@ -5951,28 +6029,30 @@ describe("TerminalContainer", () => {
   });
 
   test("opens a file requested from the project board once its environment is active", async () => {
-    useEnvironmentStore.getState().updateEnvironment("env-visible", {
+    appCommandStore(environmentStore).getState().updateEnvironment("env-visible", {
       containerId: null,
       environmentType: "local",
       worktreePath: "/tmp/env-visible-worktree",
     });
-    useFilesPanelStore.getState().requestFileOpen({
-      environmentId: "env-visible",
-      filePath: "src/App.tsx",
-      options: { isDiff: true, gitStatus: "?" },
-    });
+    appCommandStore(filesPanelStore)
+      .getState()
+      .requestFileOpen({
+        environmentId: "env-visible",
+        filePath: "src/App.tsx",
+        options: { isDiff: true, gitStatus: "?" },
+      });
 
-    useFilesPanelStore
+    appCommandStore(filesPanelStore)
       .getState()
       .requestFileOpen({ environmentId: "env-visible", filePath: "README.md" });
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer environmentId="env-visible" containerId={null} isActive />
       </TerminalProvider>,
     );
 
     await waitFor(() => {
-      expect(usePaneLayoutStore.getState().getAllTabs("env-visible")).toContainEqual(
+      expect(appCommandStore(paneLayoutStore).getState().getAllTabs("env-visible")).toContainEqual(
         expect.objectContaining({
           type: "file",
           fileData: expect.objectContaining({ filePath: "src/App.tsx", isDiff: true }),
@@ -5980,9 +6060,9 @@ describe("TerminalContainer", () => {
       );
     });
     await waitFor(() => {
-      expect(useFilesPanelStore.getState().pendingFileOpens).toEqual([]);
+      expect(appCommandStore(filesPanelStore).getState().pendingFileOpens).toEqual([]);
       expect(
-        usePaneLayoutStore
+        appCommandStore(paneLayoutStore)
           .getState()
           .getAllTabs("env-visible")
           .filter((tab) => tab.type === "file")
@@ -5992,32 +6072,34 @@ describe("TerminalContainer", () => {
   });
 
   test("leaves a file requested for another environment pending", async () => {
-    useEnvironmentStore.getState().updateEnvironment("env-visible", {
+    appCommandStore(environmentStore).getState().updateEnvironment("env-visible", {
       containerId: null,
       environmentType: "local",
       worktreePath: "/tmp/env-visible-worktree",
     });
     const request = { environmentId: "env-other", filePath: "README.md" };
-    useFilesPanelStore.getState().requestFileOpen(request);
+    appCommandStore(filesPanelStore).getState().requestFileOpen(request);
 
-    const view = render(
+    const view = renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer environmentId="env-visible" containerId={null} isActive />
       </TerminalProvider>,
     );
 
     await waitFor(() => {
-      expect(usePaneLayoutStore.getState().getAllTabs("env-visible").length).toBeGreaterThan(0);
+      expect(
+        appCommandStore(paneLayoutStore).getState().getAllTabs("env-visible").length,
+      ).toBeGreaterThan(0);
     });
-    expect(useFilesPanelStore.getState().pendingFileOpens).toEqual([request]);
+    expect(appCommandStore(filesPanelStore).getState().pendingFileOpens).toEqual([request]);
     expect(
-      usePaneLayoutStore
+      appCommandStore(paneLayoutStore)
         .getState()
         .getAllTabs("env-visible")
         .some((tab) => tab.type === "file"),
     ).toBe(false);
     act(() => view.unmount());
-    useFilesPanelStore.getState().clearPendingFileOpen(request);
+    appCommandStore(filesPanelStore).getState().clearPendingFileOpen(request);
   });
 
   test("rejects a file tab path outside the active workspace", async () => {
@@ -6033,7 +6115,7 @@ describe("TerminalContainer", () => {
     }
 
     mockToastError.mockClear();
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-visible"
@@ -6050,7 +6132,7 @@ describe("TerminalContainer", () => {
         description: "The link does not point to a file inside this workspace.",
       });
     });
-    expect(usePaneLayoutStore.getState().getAllTabs("env-visible")).toHaveLength(1);
+    expect(appCommandStore(paneLayoutStore).getState().getAllTabs("env-visible")).toHaveLength(1);
   });
 
   /**
@@ -6080,7 +6162,7 @@ describe("TerminalContainer", () => {
       return null;
     }
 
-    usePaneLayoutStore.setState((state) => ({
+    appCommandStore(paneLayoutStore).setState((state) => ({
       environments: new Map(state.environments).set("env-visible", {
         root: {
           kind: "split",
@@ -6114,7 +6196,7 @@ describe("TerminalContainer", () => {
       }),
     }));
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-visible"
@@ -6127,7 +6209,7 @@ describe("TerminalContainer", () => {
     );
 
     await waitFor(() => expect(results).toEqual([true, true]));
-    const layout = usePaneLayoutStore.getState();
+    const layout = appCommandStore(paneLayoutStore).getState();
     // The overview request reused the open tab and focused its pane; only the
     // reviewer transcript was actually added.
     expect(layout.getPane("left", "env-visible")?.tabs.map((tab) => tab.id)).toEqual([
@@ -6168,7 +6250,7 @@ describe("TerminalContainer", () => {
       id: `filler-${index}`,
       type: "plain" as const,
     }));
-    usePaneLayoutStore.setState((state) => ({
+    appCommandStore(paneLayoutStore).setState((state) => ({
       environments: new Map(state.environments).set("env-full", {
         root: {
           kind: "leaf",
@@ -6194,7 +6276,7 @@ describe("TerminalContainer", () => {
     }));
     mockToastError.mockClear();
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-full"
@@ -6207,7 +6289,7 @@ describe("TerminalContainer", () => {
     );
 
     await waitFor(() => expect(results).toEqual([true, true]));
-    const pane = usePaneLayoutStore.getState().getPane("only", "env-full");
+    const pane = appCommandStore(paneLayoutStore).getState().getPane("only", "env-full");
     expect(pane?.tabs).toHaveLength(MAX_TABS);
     expect(pane?.tabs.filter((tab) => tab.id === "multi-review-fix:workflow-1")).toHaveLength(1);
     expect(pane?.activeTabId).toBe("multi-review-fix:workflow-1");
@@ -6233,7 +6315,7 @@ describe("TerminalContainer", () => {
       return null;
     }
 
-    usePaneLayoutStore.setState((state) => ({
+    appCommandStore(paneLayoutStore).setState((state) => ({
       environments: new Map(state.environments).set("env-visible", {
         root: {
           kind: "leaf",
@@ -6249,7 +6331,7 @@ describe("TerminalContainer", () => {
       }),
     }));
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-visible"
@@ -6262,7 +6344,7 @@ describe("TerminalContainer", () => {
     );
 
     await waitFor(() => expect(results).toEqual([false]));
-    const pane = usePaneLayoutStore.getState().getPane("default", "env-visible");
+    const pane = appCommandStore(paneLayoutStore).getState().getPane("default", "env-visible");
     expect(pane?.tabs.filter((tab) => tab.id === "existing-agent")).toHaveLength(1);
     expect(pane?.activeTabId).toBe("visible-tab");
   });
@@ -6275,8 +6357,8 @@ describe("TerminalContainer", () => {
       useEffect(() => {
         if (!createTab || didRunRef.current) return;
         didRunRef.current = true;
-        const originalFindPaneWithTab = usePaneLayoutStore.getState().findPaneWithTab;
-        usePaneLayoutStore.setState({ findPaneWithTab: () => null });
+        const originalFindPaneWithTab = appCommandStore(paneLayoutStore).getState().findPaneWithTab;
+        appCommandStore(paneLayoutStore).setState({ findPaneWithTab: () => null });
         results.push(
           createTab("codex", {
             tabId: "existing-agent",
@@ -6285,12 +6367,12 @@ describe("TerminalContainer", () => {
             resumeSessionId: "provider-fix",
           }),
         );
-        usePaneLayoutStore.setState({ findPaneWithTab: originalFindPaneWithTab });
+        appCommandStore(paneLayoutStore).setState({ findPaneWithTab: originalFindPaneWithTab });
       }, [createTab]);
       return null;
     }
 
-    usePaneLayoutStore.setState((state) => ({
+    appCommandStore(paneLayoutStore).setState((state) => ({
       environments: new Map(state.environments).set("env-visible", {
         root: {
           kind: "leaf",
@@ -6306,7 +6388,7 @@ describe("TerminalContainer", () => {
       }),
     }));
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-visible"
@@ -6319,9 +6401,9 @@ describe("TerminalContainer", () => {
     );
 
     await waitFor(() => expect(results).toEqual([false]));
-    expect(usePaneLayoutStore.getState().getPane("default", "env-visible")?.activeTabId).toBe(
-      "visible-tab",
-    );
+    expect(
+      appCommandStore(paneLayoutStore).getState().getPane("default", "env-visible")?.activeTabId,
+    ).toBe("visible-tab");
   });
 
   /**
@@ -6349,7 +6431,7 @@ describe("TerminalContainer", () => {
       id: `filler-${index}`,
       type: "plain" as const,
     }));
-    usePaneLayoutStore.setState((state) => ({
+    appCommandStore(paneLayoutStore).setState((state) => ({
       environments: new Map(state.environments).set("env-full", {
         root: {
           kind: "leaf",
@@ -6370,7 +6452,7 @@ describe("TerminalContainer", () => {
     }));
     mockToastError.mockClear();
 
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-full"
@@ -6383,7 +6465,7 @@ describe("TerminalContainer", () => {
     );
 
     await waitFor(() => expect(results).toEqual([true, false]));
-    const layout = usePaneLayoutStore.getState();
+    const layout = appCommandStore(paneLayoutStore).getState();
     const pane = layout.getPane("only", "env-full");
     // Nothing was added: the reuse focused the existing tab and the second
     // request was rejected by the limit.

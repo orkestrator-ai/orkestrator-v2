@@ -16,6 +16,7 @@ import { GatewayCredentialThrottle } from "./gateway-credential-throttle.js";
 import { GatewayHostPolicy } from "./gateway-host-policy.js";
 import { GatewayTrafficSummary } from "./gateway-traffic-summary.js";
 import { BrowserSessionStore, gatewayRequestCredential } from "./gateway-sessions.js";
+import { NodeEventMultiplexer } from "./core/nodes/index.js";
 import {
   KEEPALIVE_MS,
   BUFFERED_PROXY_BODY_IDLE_TIMEOUT_MS,
@@ -79,6 +80,11 @@ export class GatewayContext {
   readonly credentialThrottle = new GatewayCredentialThrottle();
   readonly compression: GatewayCompressionMode;
   readonly keepaliveMs: number;
+  /**
+   * `/__orkestrator/nodes/events` (plan item 5005); `null` without the relay
+   * and workspace hooks, so the route answers 404 as on an older command node.
+   */
+  readonly nodeEventMultiplexer: NodeEventMultiplexer | null;
   readonly proxyBodyIdleTimeoutMs: number;
   readonly eventReplay: GatewayEventReplay;
   /** Relayed node events only, with its own generation and revisions. */
@@ -159,6 +165,17 @@ export class GatewayContext {
     this.hostUpdaterControl = options.hostUpdaterControl;
     this.compression = resolveGatewayCompressionMode(options.compression, this.env);
     this.keepaliveMs = options.keepaliveMs ?? KEEPALIVE_MS;
+    const nodeHooks = options.nodeHooks;
+    this.nodeEventMultiplexer =
+      nodeHooks?.relayTarget && nodeHooks.relayWorkspaceOpen
+        ? new NodeEventMultiplexer({
+            relayTarget: (nodeId) => nodeHooks.relayTarget?.(nodeId) ?? null,
+            workspaceOpen: (workspaceId, nodeId) =>
+              nodeHooks.relayWorkspaceOpen?.(workspaceId, nodeId) ?? false,
+            keepaliveMs: this.keepaliveMs,
+            ...options.nodeEventMultiplexer,
+          })
+        : null;
     this.proxyBodyIdleTimeoutMs =
       options.proxyBodyIdleTimeoutMs ?? BUFFERED_PROXY_BODY_IDLE_TIMEOUT_MS;
     this.browserPreviewHeadersTimeoutMs = options.browserPreviewHeadersTimeoutMs ?? 30_000;

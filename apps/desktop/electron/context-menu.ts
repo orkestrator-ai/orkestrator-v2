@@ -116,7 +116,7 @@ export function createContextMenuTemplate(
   return [];
 }
 
-/** `contents`: the window's own renderer, or a workspace realm inside it. */
+/** `contents`: the window's own renderer, by default. */
 export function installDefaultContextMenu(
   window: BrowserWindow & { webContents: ContextMenuWebContents },
   menu: MenuLike,

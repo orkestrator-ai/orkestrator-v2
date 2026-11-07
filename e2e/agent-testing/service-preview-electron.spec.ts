@@ -401,10 +401,27 @@ async function uiStore(action: string, ...args: unknown[]): Promise<void> {
     async ({ action, args }) => {
       const modulePath = "/src/stores/uiStore.ts";
       const { useUIStore } = await import(modulePath);
-      (useUIStore.getState() as Record<string, (...values: unknown[]) => void>)[action]!(...args);
+      const { getWindowScope } = await import(
+        /* @vite-ignore */ "/src/lib/node-scope/app-window-scope.ts" as string
+      );
+      (
+        getWindowScope().commandScope().store(useUIStore.def).getState() as Record<
+          string,
+          (...values: unknown[]) => void
+        >
+      )[action]!(...args);
     },
     { action, args },
   );
+}
+
+/** App zoom lives in the window's chrome store, shared by every node it shows. */
+async function setZoomLevel(level: number): Promise<void> {
+  await s().window.evaluate(async (zoom) => {
+    const modulePath = "/src/stores/uiChromeStore.ts";
+    const { useUIChromeStore } = await import(modulePath);
+    useUIChromeStore.getState().setZoomLevel(zoom);
+  }, level);
 }
 
 const UI_TABS: Record<Name, string> = {
@@ -946,12 +963,12 @@ test("history, app zoom, DevTools, screenshots and capture work after reattach",
   // At every app zoom the native view sits on the renderer's preview host
   // (whose CSS rect main scales by the host zoom), and the page is kept.
   for (const level of [125, 80, 100]) {
-    await uiStore("setZoomLevel", level);
+    await setZoomLevel(level);
     try {
       await expectViewOnHost("a", tabId, testInfo, `zoom-${level}`);
       await waitForService("a", "/app/next");
     } finally {
-      if (level !== 100) await uiStore("setZoomLevel", 100).catch(() => undefined);
+      if (level !== 100) await setZoomLevel(100).catch(() => undefined);
     }
   }
 
@@ -1858,7 +1875,7 @@ test("the narrowest window keeps the picker, service dialog and diagnostics usab
   });
   try {
     for (const level of [100, 150]) {
-      await uiStore("setZoomLevel", level);
+      await setZoomLevel(level);
       try {
         const label = `zoom-${level}`;
         const trigger = page.getByRole("button", { name: "Preview service svc-a" });
@@ -1901,7 +1918,7 @@ test("the narrowest window keeps the picker, service dialog and diagnostics usab
         await expect(page.getByText("readiness", { exact: true })).toHaveCount(0);
         await expectVisibility("a", [true]);
       } finally {
-        if (level !== 100) await uiStore("setZoomLevel", 100).catch(() => undefined);
+        if (level !== 100) await setZoomLevel(100).catch(() => undefined);
       }
     }
   } finally {
@@ -1973,7 +1990,7 @@ test("at a 519 px pane the address takes its own full-width row in service and U
   const paneWidth = async () => (await toolbarLayout())?.pane ?? 0;
   try {
     await expect(uiTab("a")).toBeVisible({ timeout: 30_000 });
-    await uiStore("setZoomLevel", 100);
+    await setZoomLevel(100);
     await host.evaluate((window) => {
       const [width, height] = window.getMinimumSize();
       window.setSize(width!, height!);
@@ -2099,7 +2116,16 @@ function rendererLayoutRevision(): Promise<number | null> {
   return s().window.evaluate(async (environmentId) => {
     const modulePath = "/src/stores/paneLayoutStore.ts";
     const { usePaneLayoutStore } = await import(modulePath);
-    return usePaneLayoutStore.getState().environments.get(environmentId)?.backendRevision ?? null;
+    const { getWindowScope } = await import(
+      /* @vite-ignore */ "/src/lib/node-scope/app-window-scope.ts" as string
+    );
+    return (
+      getWindowScope()
+        .commandScope()
+        .store(usePaneLayoutStore.def)
+        .getState()
+        .environments.get(environmentId)?.backendRevision ?? null
+    );
   }, s().environmentId);
 }
 
@@ -3157,13 +3183,21 @@ test("a remote terminal link opens the native localhost forward in a separate br
           const { useTerminalPortalStore } = await import(terminalPath);
           const { useEnvironmentStore } = await import(environmentPath);
           const { usePreviewServiceStore } = await import(capabilitiesPath);
+          const { getWindowScope } = await import(
+            /* @vite-ignore */ "/src/lib/node-scope/app-window-scope.ts" as string
+          );
+          const environments = getWindowScope().commandScope().store(useEnvironmentStore.def);
           // Hydrate from the remote backend's authoritative environment record.
           const environment = await (globalThis as any).orkestrator.invoke("get_environment", {
             environmentId,
           });
-          if (!useEnvironmentStore.getState().getEnvironmentById(environmentId))
-            useEnvironmentStore.getState().addEnvironment(environment);
-          await usePreviewServiceStore.getState().loadCapabilities({ force: true });
+          if (!environments.getState().getEnvironmentById(environmentId))
+            environments.getState().addEnvironment(environment);
+          await getWindowScope()
+            .commandScope()
+            .store(usePreviewServiceStore.def)
+            .getState()
+            .loadCapabilities({ force: true });
           const host = document.createElement("div");
           host.id = "external-preview-terminal";
           Object.assign(host.style, {

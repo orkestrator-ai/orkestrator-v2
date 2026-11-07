@@ -1,42 +1,21 @@
 import { startCoordinatedPoll } from "@/lib/coordinated-poll";
-import {
-  agentSettingsTiers,
-  resolvedActionDefault,
-  resolvedDefaultAgent,
-} from "@/lib/agent-settings";
-import { lazy, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { listen } from "@/lib/native/events";
 import { exit, restart } from "@/lib/native/process";
 import { getCurrentWindow } from "@/lib/native/window";
 import { toast } from "sonner";
 import { AppShell } from "@/components/layout";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { TerminalContainer } from "@/components/terminal";
-import { LazyLoadBoundary, LazyLoadInlineErrorFallback } from "@/components/LazyLoadBoundary";
-import { ProjectLauncher } from "@/components/projects";
 import { TerminalProvider } from "@/contexts";
-import { useUIStore, useEnvironmentStore, useConfigStore, useClaudeOptionsStore } from "@/stores";
-import { useProjectStore } from "@/stores/projectStore";
-import { startPaneLayoutPersistence } from "@/lib/pane-layout-persistence";
+import { useConfigStore } from "@/stores";
+import { useUIChromeStore } from "@/stores/uiChromeStore";
 import { setReadCoordinatorConnection } from "@/lib/read-coordinator";
-import { startDataSavingReadPolicy } from "@/lib/data-saving";
-import {
-  connectionListDisconnected,
-  setTransportDisconnected,
-  startTransportConnectivity,
-} from "@/lib/transport-connectivity";
+import { connectionListDisconnected, setTransportDisconnected } from "@/lib/transport-connectivity";
 import { ConnectionStatusBanner } from "@/components/layout/ConnectionStatusBanner";
 import { noteRichContentConnection } from "@/lib/chat/rich-content-reset";
-import { startResourceSync } from "@/lib/resource-sync";
-import { startStoreResourceSync } from "@/lib/store-resource-sync";
-import { startBuildPipelineCompletionNotes } from "@/lib/build-pipeline-completion-notes";
-import { hydrateBootMultiReviewWorkflows, hydrateBootPromptQueues } from "@/lib/boot-hydration";
-import { recordRealmFirstRender } from "@/lib/realm-boot-timing";
-import {
-  hydrateBuildPipelinesForProject,
-  migrateLegacyBuildPipelines,
-} from "@/lib/build-pipeline-persistence";
-import { createPromptQueueSources } from "@/lib/prompt-queue-sources";
+import { COMMAND_SCOPE_SERVICES, startScopeServices } from "@/lib/scope-services";
+import { hydrateCommandScopeFromSnapshot } from "@/lib/node-snapshots";
+import { migrateLegacyBuildPipelines } from "@/lib/build-pipeline-persistence";
 import { Toaster } from "@/components/ui/sonner";
 import { ArtifactLiveHost } from "@/components/chat/rich/ArtifactLiveHost";
 import { ErrorDetailsDialog } from "@/components/errors";
@@ -55,21 +34,11 @@ import {
   getGitHubCliStatus,
   setGitHubCliReminderDismissed,
   getConfig,
-  getEnvironment,
-  getResourceRevisionManifest,
-  getScopedResourceRevisionManifest,
-  getScopedResourceSnapshots,
-  prepareEnvironmentAgentLaunch,
   syncAllEnvironmentsWithDocker,
   type GitHubCliStatus,
 } from "@/lib/backend";
-import { usePrMonitorService } from "@/hooks/usePrMonitorService";
-import { useGlobalActivityMonitor } from "@/hooks/useGlobalActivityMonitor";
-import { useHydrateOncePerEnvironment } from "@/hooks/useHydrateOncePerEnvironment";
-import { useUnreadEnvironmentSync } from "@/hooks/useUnreadEnvironmentSync";
 import { useNotificationSoundService } from "@/hooks/useNotificationSoundService";
 import { useProjectHomeActivation } from "@/hooks/useProjectHomeActivation";
-import { useEnvironments, useEnvironmentLifecycleService } from "@/hooks";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -84,7 +53,6 @@ import { MODAL_CONTENT_CLASS_NAME } from "@/components/ui/modal-theme";
 import { cn } from "@/lib/utils";
 import { useDialogFocusReturn, useDialogFocusReturnGroup } from "@/lib/dialog-focus";
 import { Loader2 } from "lucide-react";
-import type { Environment } from "@/types";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
 import type {
   DockerAvailability,
@@ -109,17 +77,23 @@ import { CoordinatorAccountSwitchNotices } from "@/components/federation/Coordin
 import { ProjectCopyDialog } from "@/components/federation/ProjectCopyDialog";
 import { CommandHandoverDialog } from "@/components/federation/CommandHandoverDialog";
 import { NodeSshPromptDialog } from "@/components/settings/machines/NodeSshPromptDialog";
-import { WorkspaceRealmHost } from "@/components/federation/WorkspaceRealmHost";
-import { isWorkspaceRealm } from "@/lib/federation/workspace-realm";
-import { readStoredWorkspace } from "@/lib/portal/workspace-target-storage";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import {
+  CommandNodeScopeProvider,
+  NodeScopeProvider,
+  useNodeScope,
+  WindowScopeProvider,
+} from "@/lib/node-scope/providers";
+import { NodeErrorBoundary } from "@/components/federation/NodeErrorBoundary";
+import { ScopeSnapshotGate } from "@/components/federation/ScopeSnapshotGate";
+import {
+  useNodeBootHydration,
+  useNodeWorkspaceServices,
+  WorkspaceContent,
+} from "@/components/layout/WorkspaceContent";
+import { commandClient, getWindowScope } from "@/lib/node-scope/app-window-scope";
 
 const log = createLogger("web.app");
-
-// Kanban, issues, pull requests and the coordinator: nothing there is needed until a project board opens.
-const LazyProjectWorkspace = lazy(async () => ({
-  default: (await import("@/components/projects/ProjectWorkspace")).ProjectWorkspace,
-}));
 
 export const DOCKER_AVAILABILITY_POLL_INTERVAL_MS = 60_000;
 export const DOCKER_STARTUP_CONFIRMATION_DELAY_MS = 1_500;
@@ -131,14 +105,6 @@ function desktopConnectionScopeSeed(): {
   activeConnectionId: string | null;
   resolved: boolean;
 } {
-  if (window.orkestratorWorkspaceTarget) {
-    return {
-      activeConnectionId:
-        window.orkestratorDesktopIdentity?.connectionId ??
-        `workspace:${window.orkestratorWorkspaceTarget.nodeId}`,
-      resolved: true,
-    };
-  }
   if (!window.orkestrator?.connections) {
     return { activeConnectionId: null, resolved: true };
   }
@@ -241,21 +207,8 @@ function dockerUnavailableMessage(reason: DockerUnavailableReason | null): {
   };
 }
 
-/**
- * Setup can fail after Docker has successfully created and started the
- * container. The backend reports that lifecycle outcome as `status: "error"`,
- * but the existing container is still the workspace in which retry/override
- * must run. Keep that surface live until setup is resolved.
- */
-export function isEnvironmentContainerAvailable(
-  environment: Pick<Environment, "containerId" | "environmentType" | "setupPhase" | "status">,
-): boolean {
-  if (environment.environmentType === "local" || !environment.containerId) return false;
-  return (
-    environment.status === "running" ||
-    (environment.status === "error" && environment.setupPhase === "failed")
-  );
-}
+// Moved with the workspace content; re-exported for its tests.
+export { isEnvironmentContainerAvailable } from "@/components/layout/WorkspaceContent";
 
 // The startup blocker is full-screen rather than a Radix dialog, but should
 // read as one: same outline, radius and shadow, lifted onto `card` because
@@ -266,50 +219,25 @@ const STARTUP_BLOCKER_PANEL_CLASS_NAME = cn(
   "bg-card",
 );
 
-function warnPromptQueueRestoreFailed(environmentId: string, error: unknown): void {
-  log.warn("prompt-queues.restore-failed", { environmentId, error: formatLogError(error) });
-}
-
-function warnMultiReviewRestoreFailed(environmentId: string, error: unknown): void {
-  log.warn("multi-reviews.restore-failed", { environmentId, error: formatLogError(error) });
-}
-
 function App() {
-  // A browser or iOS realm boots on the grant its window keeps for it.
-  if (isWorkspaceRealm() && !window.orkestrator?.isolatedViewState && !readStoredWorkspace()) {
-    return (
-      <div role="alert" className="flex h-screen items-center justify-center p-6 text-center">
-        This workspace connection is unavailable. Open the environment again from the sidebar to
-        reconnect.
-      </div>
-    );
-  }
-  return <ConnectedApp />;
+  // The window scope and its command scope are the root of every per-node
+  // store and service. Only the command scope exists yet, and nothing reads
+  // it until the stores convert, so this mount changes no behaviour.
+  return (
+    <WindowScopeProvider>
+      <CommandNodeScopeProvider>
+        <ConnectedApp />
+      </CommandNodeScopeProvider>
+    </WindowScopeProvider>
+  );
 }
 
 function ConnectedApp() {
-  const [workspaceRealm] = useState(isWorkspaceRealm);
-  // A realm reports its first committed render to the desktop's log; a no-op elsewhere.
-  useEffect(() => {
-    recordRealmFirstRender();
-  }, []);
-  const selectedEnvironmentId = useUIStore((state) => state.selectedEnvironmentId);
-  const selectedProjectId = useUIStore((state) => state.selectedProjectId);
-  const zoomLevel = useUIStore((state) => state.zoomLevel);
-  const zoomIn = useUIStore((state) => state.zoomIn);
-  const zoomOut = useUIStore((state) => state.zoomOut);
-  const resetZoom = useUIStore((state) => state.resetZoom);
-  const projectBoardTab = useUIStore((state) => state.projectBoardTab);
-  const setProjectBoardTab = useUIStore((state) => state.setProjectBoardTab);
-  const environments = useEnvironmentStore((state) => state.environments);
-  const getEnvironmentById = useEnvironmentStore((state) => state.getEnvironmentById);
+  const zoomLevel = useUIChromeStore((state) => state.zoomLevel);
+  const zoomIn = useUIChromeStore((state) => state.zoomIn);
+  const zoomOut = useUIChromeStore((state) => state.zoomOut);
+  const resetZoom = useUIChromeStore((state) => state.resetZoom);
   const setConfig = useConfigStore((state) => state.setConfig);
-  const config = useConfigStore((state) => state.config);
-  const setClaudeOptions = useClaudeOptionsStore((state) => state.setOptions);
-  const clearClaudeOptions = useClaudeOptionsStore((state) => state.clearOptions);
-  const { startEnvironment, createEnvironment, updateEnvironment } = useEnvironments(null, {
-    listenForRenameEvents: false,
-  });
   const [dockerAvailable, setDockerAvailable] = useState<boolean | null>(null);
   const [dockerUnavailableReason, setDockerUnavailableReason] =
     useState<DockerUnavailableReason | null>(null);
@@ -327,46 +255,32 @@ function ConnectedApp() {
   const [activeConnectionId, setActiveConnectionId] = useState<string | null>(
     () => desktopConnectionScopeSeed().activeConnectionId,
   );
-  const [activeConnectionName, setActiveConnectionName] = useState<string | null>(
-    () => window.orkestratorWorkspaceTarget?.nodeName ?? null,
-  );
+  const [activeConnectionName, setActiveConnectionName] = useState<string | null>(null);
   const [connectionScopeResolved, setConnectionScopeResolved] = useState(
     () => desktopConnectionScopeSeed().resolved,
   );
   const [macOsAdvisoryDismissed, setMacOsAdvisoryDismissed] = useState(false);
   const macOsRefreshGenerationRef = useRef(0);
 
-  // Initialize centralized PR monitoring service
-  usePrMonitorService();
-  // Monitor agent activity for ALL environments (regardless of selected project)
-  useGlobalActivityMonitor();
+  // The command node's workspace services (PR monitoring, activity, setup
+  // lifecycle, unread sync): the same list a node in the window's tree runs.
+  useNodeWorkspaceServices();
   // Sounds follow backend-owned unread transitions, even when an environment
   // or agent tab is not mounted in the foreground.
   useNotificationSoundService();
-  // Single registration for setup lifecycle events and resume/reconnect
-  // reconciliation (previously duplicated per useEnvironments call site).
-  useEnvironmentLifecycleService();
-  // Opening an environment clears its unread badge for every client.
-  useUnreadEnvironmentSync();
   // Selecting a project activates the environment working in its checkout.
   const projectHomeActivation = useProjectHomeActivation();
-  // The backend change feed must be attached before the store bindings that
-  // consume it, and both before anything that reads a backend snapshot.
-  useEffect(
-    () =>
-      startResourceSync({
-        loadManifest: getResourceRevisionManifest,
-        loadScopedManifest: getScopedResourceRevisionManifest,
-        loadScopedSnapshots: getScopedResourceSnapshots,
-      }),
-    [],
-  );
-  useEffect(() => startStoreResourceSync(), []);
-  useEffect(() => startTransportConnectivity(), []);
-  useEffect(() => startDataSavingReadPolicy(), []);
-  useEffect(() => startPaneLayoutPersistence(), []);
-  // A run that finishes while this window watches opens its notes in a tab.
-  useEffect(() => startBuildPipelineCompletionNotes(), []);
+  // The command scope's services (`scope-services.ts`), in order: the backend
+  // change feed before the store bindings that consume it, and both before
+  // anything that reads a backend snapshot; then connectivity, the window's
+  // data-saving policy, pane-layout persistence and build completion notes.
+  const commandScope = useNodeScope();
+  useEffect(() => {
+    // Plan item 4003: the command node's last snapshot, read before the first
+    // render, fills its stores before anything authoritative can land.
+    hydrateCommandScopeFromSnapshot(commandScope);
+    return startScopeServices(commandScope, COMMAND_SCOPE_SERVICES);
+  }, [commandScope]);
   useEffect(() => {
     void migrateLegacyBuildPipelines().catch((error) => {
       // Keep the legacy key intact so the next launch can retry after a
@@ -374,45 +288,9 @@ function ConnectedApp() {
       log.warn("build-pipelines.migrate-failed", { error: formatLogError(error) });
     });
   }, []);
-  // Renderer stores are projections of backend-owned queues. Both restores
-  // below go through one batcher (`boot-hydration.ts`): the environments a
-  // project load adds are read in one `list_environment_hydration` request
-  // rather than two requests each, within the renderer's hydration bound.
-  const promptQueueSources = useMemo(() => createPromptQueueSources(), []);
-  const hydratePromptQueues = useCallback(
-    (environmentId: string) => hydrateBootPromptQueues(environmentId, promptQueueSources),
-    [promptQueueSources],
-  );
-  useHydrateOncePerEnvironment(environments, hydratePromptQueues, warnPromptQueueRestoreFailed);
-
-  // The single renderer-side hydration pass for backend-owned reviews. Resource
-  // change events perform incremental refreshes; this closes the gap after a
-  // renderer exit/remount, when the store starts empty.
-  useHydrateOncePerEnvironment(
-    environments,
-    hydrateBootMultiReviewWorkflows,
-    warnMultiReviewRestoreFailed,
-  );
-
-  // Pipelines are stored per project, so restore once per project rather than
-  // once per environment: a pipeline still in "creating-environment" has no
-  // environment to key off yet, and that is exactly the state a crash used to
-  // strand. Driven by the project list rather than by the environments' project
-  // ids, because a project whose only pipeline never reached an environment has
-  // no environment to derive its id from either.
-  const projects = useProjectStore((state) => state.projects);
-  const pipelineProjectIds = useMemo(
-    () => [...new Set(projects.map((project) => project.id))].sort().join(","),
-    [projects],
-  );
-  useEffect(() => {
-    if (!pipelineProjectIds) return;
-    for (const projectId of pipelineProjectIds.split(",")) {
-      void hydrateBuildPipelinesForProject(projectId).catch((error) => {
-        log.warn("build-pipelines.restore-failed", { projectId, error: formatLogError(error) });
-      });
-    }
-  }, [pipelineProjectIds]);
+  // Renderer stores are projections of backend-owned queues and pipelines,
+  // restored after the services above (`useNodeBootHydration`).
+  useNodeBootHydration(commandScope);
   const [claudeCliAvailable, setClaudeCliAvailable] = useState<boolean | null>(null);
   const [claudeConfigAvailable, setClaudeConfigAvailable] = useState<boolean | null>(null);
   const [githubCliAvailable, setGithubCliAvailable] = useState<boolean | null>(null);
@@ -444,23 +322,23 @@ function ConnectedApp() {
     let active = true;
     const applyConnectionList = (list: ConnectionList) => {
       if (!active) return;
-      // Connection lists administer the command node; the gateway seed owns
-      // workspace identity while this window is on a leaf.
-      if (window.orkestratorWorkspaceTarget) {
-        setConnectionScopeResolved(true);
-        return;
-      }
       setActiveConnectionId(list.activeConnectionId);
       const activeConnection = list.connections.find(
         (connection) => connection.id === list.activeConnectionId,
       );
       setActiveConnectionName(activeConnection ? connectionDisplayName(activeConnection) : null);
-      // Presentation reads are keyed by server identity; a switch resets them.
-      setReadCoordinatorConnection(list.activeConnectionId);
+      // Presentation reads are keyed by server identity; a switch resets the
+      // command scope's (this list administers the command node)...
+      setReadCoordinatorConnection(list.activeConnectionId, getWindowScope().commandScope());
       // ...and pause while that connection is known to be down.
-      setTransportDisconnected("desktop-connection", connectionListDisconnected(list));
-      // So is protected rich transcript content (render caches, artifact reads).
-      noteRichContentConnection(list.activeConnectionId);
+      setTransportDisconnected(
+        "desktop-connection",
+        connectionListDisconnected(list),
+        getWindowScope().commandScope(),
+      );
+      // So is protected rich transcript content (render caches, artifact reads),
+      // noted on the command scope, whose connection this list administers.
+      noteRichContentConnection(list.activeConnectionId, getWindowScope().commandScope());
       setConnectionScopeResolved(true);
       setLocalBackendUnavailableMessage(
         list.activeConnectionId === LOCAL_CONNECTION_ID && list.localAvailable === false
@@ -473,40 +351,29 @@ function ConnectedApp() {
       .then(applyConnectionList)
       .catch(() => {
         if (!active) return;
-        if (!window.orkestratorWorkspaceTarget) setActiveConnectionId(LOCAL_CONNECTION_ID);
+        setActiveConnectionId(LOCAL_CONNECTION_ID);
         setConnectionScopeResolved(true);
       });
     const unsubscribeConnections = subscribeToConnections(applyConnectionList);
-    const listenDesktop = window.orkestrator?.listen;
-    const unsubscribeUnavailable =
-      typeof listenDesktop === "function"
-        ? listenDesktop<{ message?: string }>("local-backend-unavailable", (payload) => {
-            if (!active || window.orkestratorWorkspaceTarget) return;
-            setLocalBackendUnavailableMessage(
-              payload.message
-                ? `The Local backend stopped: ${payload.message}`
-                : "The Local backend stopped. Restart Orkestrator to recover local work.",
-            );
-          })
-        : undefined;
+    const unsubscribeUnavailable = commandClient().listenRaw<{ message?: string }>(
+      "local-backend-unavailable",
+      (payload) => {
+        if (!active) return;
+        setLocalBackendUnavailableMessage(
+          payload.message
+            ? `The Local backend stopped: ${payload.message}`
+            : "The Local backend stopped. Restart Orkestrator to recover local work.",
+        );
+      },
+    );
     return () => {
       active = false;
       unsubscribeConnections();
-      unsubscribeUnavailable?.();
+      unsubscribeUnavailable();
       setTransportDisconnected("desktop-connection", false);
     };
   }, []);
 
-  const selectedEnvironment = selectedEnvironmentId
-    ? (environments.find((env) => env.id === selectedEnvironmentId) ?? null)
-    : null;
-  const isProjectHomeSelected = selectedEnvironment?.projectHome === true;
-  // A project's page runs on its project home: the board panels cover the
-  // home's own tabs, which stay mounted so toolbar actions can open tabs there.
-  const showProjectBoard =
-    !!selectedProjectId &&
-    (!selectedEnvironment || (isProjectHomeSelected && projectBoardTab !== "home"));
-  const revealProjectHome = useCallback(() => setProjectBoardTab("home"), [setProjectBoardTab]);
   const refreshMacOsPermissions = useCallback(async () => {
     const permissionsApi = window.orkestrator?.permissions;
     if (!permissionsApi) {
@@ -536,10 +403,9 @@ function ConnectedApp() {
     }
   }, []);
   const isRemoteBackendWindow =
-    Boolean(window.orkestratorWorkspaceTarget) ||
-    (connectionScopeResolved &&
-      activeConnectionId !== null &&
-      activeConnectionId !== LOCAL_CONNECTION_ID);
+    connectionScopeResolved &&
+    activeConnectionId !== null &&
+    activeConnectionId !== LOCAL_CONNECTION_ID;
   const macOsProbeFailed = Boolean(macOsPermissions?.error);
   const macOsHasBlockingMissing =
     macOsPermissions !== null && hasBlockingMacOsPermissions(macOsPermissions);
@@ -703,8 +569,10 @@ function ConnectedApp() {
       intervalMs: DOCKER_AVAILABILITY_POLL_INTERVAL_MS,
       priority: "auxiliary",
       read: () => refreshDockerAvailability("poll"),
+      // Docker is the command node's; its outages and reconnects pace the poll.
+      scope: commandScope,
     });
-  }, [macOsPermissionsReady, refreshDockerAvailability]);
+  }, [macOsPermissionsReady, refreshDockerAvailability, commandScope]);
 
   // Host CLI availability is independent of Docker. Run it in parallel with
   // the daemon probe so local worktree workflows receive the same onboarding.
@@ -879,8 +747,6 @@ function ConnectedApp() {
   // clients fall back to CSS `zoom`, which sizes correctly as long as the shell
   // measures itself against its container instead of viewport units.
   useEffect(() => {
-    // A workspace realm is shown at its window's zoom.
-    if (workspaceRealm) return;
     let active = true;
     const rootStyle = document.documentElement.style;
     const applyCssFallback = () => {
@@ -905,7 +771,7 @@ function ConnectedApp() {
     return () => {
       active = false;
     };
-  }, [workspaceRealm, zoomLevel]);
+  }, [zoomLevel]);
 
   // Surface Claude credential refresh/push failures as a non-blocking toast.
   // The backend de-dupes (only emits after repeated failures or actual push
@@ -996,13 +862,10 @@ function ConnectedApp() {
   // Derived state for dialog visibility - makes conditions easier to read
   // When Docker is down, let its outage warning lead; host-tool onboarding is
   // shown after the user chooses to continue without containers.
-  // Host tool onboarding (missing CLIs, sign-ins) is about the machine's own
-  // setup; a workspace realm in another machine's window does not nag for it.
   const hostToolWarningsVisible =
-    !workspaceRealm &&
-    ((dockerCheckStatus === "error" && dockerAvailable === null) ||
-      dockerAvailable === true ||
-      (dockerAvailable === false && dockerWarningDismissed));
+    (dockerCheckStatus === "error" && dockerAvailable === null) ||
+    dockerAvailable === true ||
+    (dockerAvailable === false && dockerWarningDismissed);
 
   const isCheckingCliTools = hostToolWarningsVisible && hostToolCheckStatus === "checking";
 
@@ -1051,168 +914,6 @@ function ConnectedApp() {
     ? !githubCliSetupStatus.installed
     : githubCliAvailable === false;
 
-  const handleStartEnvironmentFromOverlay = useCallback(
-    async (environmentId: string, initialPrompt?: string): Promise<boolean> => {
-      if (!macOsPermissionsReady) return false;
-      const environment = getEnvironmentById(environmentId);
-      if (environment?.environmentType !== "local" && dockerAvailable === false) {
-        toast.warning("Docker is not running", {
-          description: "Container environments are disabled until Docker is available.",
-        });
-        return false;
-      }
-      const explicitPrompt = initialPrompt?.trim();
-      const storedPrompt =
-        !explicitPrompt && !environment?.setupScriptsComplete
-          ? environment?.initialPrompt?.trim()
-          : undefined;
-      const launchPrompt = explicitPrompt || storedPrompt || undefined;
-      const existingOptions = useClaudeOptionsStore.getState().getOptions(environmentId);
-
-      if (launchPrompt) {
-        // List hydration deliberately excludes attachment bodies. Read the
-        // targeted record only for the one launch that needs them — the listed
-        // record still says whether there is anything to read, so a prompt with
-        // no attachments costs no round trip and cannot be blocked by one.
-        let detailedEnvironment = environment;
-        /**
-         * `undefined` means the backend predates the flag, so the read still has
-         * to happen — but a failure then degrades to the listed record rather
-         * than refusing the launch, which is what that backend always did.
-         * Only a backend that positively says "there are attachments" earns a
-         * blocking failure, because that is the only case where starting anyway
-         * would run a prompt whose attachments are missing.
-         */
-        const attachmentState = environment?.hasInitialPromptAttachments;
-        if (existingOptions?.initialPromptAttachments === undefined && attachmentState !== false) {
-          try {
-            const loadedEnvironment = await getEnvironment(environmentId);
-            if (!loadedEnvironment) {
-              throw new Error(`Environment ${environmentId} was not found`);
-            }
-            detailedEnvironment = loadedEnvironment;
-          } catch (error) {
-            log.error("attachments.restore-failed", {
-              environmentId,
-              error: formatLogError(error),
-            });
-            if (attachmentState === true) {
-              toast.error("Could not restore saved prompt attachments", {
-                description:
-                  "The environment was not started. Try again to reload its saved prompt.",
-              });
-              return false;
-            }
-          }
-        }
-        const storedAttachments = detailedEnvironment?.initialPromptAttachments?.map(
-          (attachment) => ({
-            ...attachment,
-            ...(attachment.type === "file"
-              ? {}
-              : {
-                  previewUrl:
-                    attachment.previewUrl ?? `data:image/png;base64,${attachment.base64Data}`,
-                }),
-          }),
-        );
-        const launchOptions = {
-          launchAgent: true,
-          agentType:
-            existingOptions?.agentType ??
-            resolvedDefaultAgent(config, environment?.projectId, environment),
-          initialPrompt: launchPrompt,
-          initialPromptAttachments: existingOptions?.initialPromptAttachments ?? storedAttachments,
-          ...(existingOptions?.model ? { model: existingOptions.model } : {}),
-          ...(existingOptions?.reasoningEffort
-            ? { reasoningEffort: existingOptions.reasoningEffort }
-            : {}),
-          // Boolean check rather than truthiness: an explicit Normal is a
-          // choice the create dialog made, and `false` must survive it.
-          ...(typeof existingOptions?.fastMode === "boolean"
-            ? { fastMode: existingOptions.fastMode }
-            : {}),
-        };
-        setClaudeOptions(environmentId, launchOptions);
-        try {
-          const prepared = await prepareEnvironmentAgentLaunch(environmentId, {
-            agent: launchOptions.agentType,
-            initialPrompt: launchPrompt,
-            model: launchOptions.model,
-            reasoningEffort: launchOptions.reasoningEffort,
-            fastMode: launchOptions.fastMode,
-            attachments: launchOptions.initialPromptAttachments,
-          });
-          useEnvironmentStore.getState().updateEnvironment(environmentId, prepared);
-        } catch (error) {
-          log.error("startup-launch.persist-failed", {
-            environmentId,
-            error: formatLogError(error),
-          });
-          toast.error("Could not prepare the agent launch", {
-            description: "The environment was not started because its prompt could not be saved.",
-          });
-          return false;
-        }
-      } else if (existingOptions?.initialPrompt?.trim()) {
-        clearClaudeOptions(environmentId);
-      }
-
-      try {
-        // Setup command handling (blocking, placeholder, resolve) is centralized
-        // in useEnvironments.startEnvironment() for all code paths.
-        await startEnvironment(environmentId, launchPrompt);
-        return true;
-      } catch (error) {
-        log.error("environment.start-failed", { environmentId, error: formatLogError(error) });
-        return false;
-      }
-    },
-    [
-      clearClaudeOptions,
-      config,
-      dockerAvailable,
-      getEnvironmentById,
-      macOsPermissionsReady,
-      setClaudeOptions,
-      startEnvironment,
-    ],
-  );
-
-  const handleCreateScriptFromOverlay = useCallback(
-    async (environmentId: string, initialPrompt: string) => {
-      const environment = getEnvironmentById(environmentId);
-      const enabledAgents = config.global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"];
-      const actionDefault = resolvedActionDefault(
-        agentSettingsTiers(config, environment?.projectId, environment),
-        "createScript",
-        enabledAgents,
-      );
-
-      setClaudeOptions(environmentId, {
-        launchAgent: true,
-        agentType: actionDefault.agent,
-        initialPrompt,
-        ...(actionDefault.model ? { model: actionDefault.model } : {}),
-        ...(actionDefault.reasoningEffort
-          ? { reasoningEffort: actionDefault.reasoningEffort }
-          : {}),
-      });
-
-      const started = await handleStartEnvironmentFromOverlay(environmentId, initialPrompt);
-      if (!started) {
-        clearClaudeOptions(environmentId);
-      }
-    },
-    [
-      clearClaudeOptions,
-      config,
-      getEnvironmentById,
-      handleStartEnvironmentFromOverlay,
-      setClaudeOptions,
-    ],
-  );
-
   const dockerWarning = dockerUnavailableMessage(dockerUnavailableReason);
 
   return (
@@ -1223,8 +924,6 @@ function ConnectedApp() {
             available={dockerAvailable === true}
             ready={dockerAvailable !== null || dockerCheckStatus === "error"}
           >
-            {/* Another node's workspace in a command node's window. */}
-            {workspaceRealm && <WorkspaceRealmHost />}
             <AppShell>
               {!localBackendUnavailableMessage && <ConnectionStatusBanner />}
               {localBackendUnavailableMessage && (
@@ -1249,74 +948,19 @@ function ConnectedApp() {
                   </Button>
                 </div>
               )}
-              {selectedEnvironment || selectedProjectId ? (
-                <div className="relative h-full bg-background">
-                  {selectedEnvironment && (
-                    <div
-                      {...(isProjectHomeSelected
-                        ? {
-                            id: "project-panel-home",
-                            role: "tabpanel",
-                            "aria-hidden": showProjectBoard,
-                          }
-                        : {})}
-                      className={cn(
-                        "absolute inset-0 z-10 bg-background",
-                        showProjectBoard && "invisible",
-                      )}
-                    >
-                      {/*
-                    `isContainerRunning` is deliberately not gated on Docker
-                    availability. A false value means "this container stopped",
-                    and TerminalContainer answers it by disposing every terminal
-                    and resetting the pane layout, so feeding a daemon-wide probe
-                    into a per-environment fact would destroy the user's tabs on a
-                    transient outage. The daemon state gates *actions* instead:
-                    handleStartEnvironmentFromOverlay refuses to start a container
-                    while Docker is down.
-                  */}
-                      <TerminalContainer
-                        environmentId={selectedEnvironment.id}
-                        containerId={selectedEnvironment.containerId ?? null}
-                        isContainerRunning={isEnvironmentContainerAvailable(selectedEnvironment)}
-                        isContainerCreating={selectedEnvironment.status === "creating"}
-                        isActive
-                        className="h-full"
-                        onStartContainer={(initialPrompt) => {
-                          void handleStartEnvironmentFromOverlay(
-                            selectedEnvironment.id,
-                            initialPrompt,
-                          );
-                        }}
-                        onCreateScript={(initialPrompt) => {
-                          void handleCreateScriptFromOverlay(selectedEnvironment.id, initialPrompt);
-                        }}
-                        obscured={showProjectBoard}
-                        onReveal={isProjectHomeSelected ? revealProjectHome : undefined}
-                      />
-                    </div>
-                  )}
-                  {showProjectBoard && selectedProjectId && (
-                    <div className="absolute inset-0 z-20 bg-background">
-                      <LazyLoadBoundary
-                        renderError={(details) => <LazyLoadInlineErrorFallback {...details} />}
-                      >
-                        <LazyProjectWorkspace
-                          projectId={selectedProjectId}
-                          homeError={projectHomeActivation.error}
-                          onRetryHome={projectHomeActivation.retry}
-                        />
-                      </LazyLoadBoundary>
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <ProjectLauncher
-                  createEnvironment={createEnvironment}
-                  updateEnvironment={updateEnvironment}
-                  startEnvironment={startEnvironment}
-                />
-              )}
+              {/* The command node's own workspace: the same content a node in the
+                  window's tree renders, in its own scope (report §5.2). */}
+              <NodeScopeProvider scope={commandScope}>
+                <NodeErrorBoundary nodeId={commandScope.nodeId} machine="This machine">
+                  <ScopeSnapshotGate machine="This machine">
+                    <WorkspaceContent
+                      projectHomeActivation={projectHomeActivation}
+                      startAllowed={macOsPermissionsReady}
+                      dockerAvailable={dockerAvailable}
+                    />
+                  </ScopeSnapshotGate>
+                </NodeErrorBoundary>
+              </NodeScopeProvider>
             </AppShell>
           </DockerAvailabilityProvider>
           <Toaster />
@@ -1325,9 +969,8 @@ function ConnectedApp() {
           <ErrorDetailsDialog />
           <HostPathPickerDialog />
           <ContainerHostReachabilityNotice />
-          {/* The window around a realm shows its own command node's. */}
-          {!workspaceRealm && <BackendVersionReminder />}
-          {!workspaceRealm && <HostUpdateBanner />}
+          <BackendVersionReminder />
+          <HostUpdateBanner />
 
           {macOsPermissionsReady && dockerCheckStatus === "error" && dockerAvailable === null && (
             <div
@@ -1740,19 +1383,15 @@ function ConnectedApp() {
             </AlertDialogContent>
           </AlertDialog>
         </TerminalProvider>
-        {/* Multi-machine prompts and effects belong to the window, not its realms. */}
-        {!workspaceRealm && (
-          <>
-            <SshPromptDialog />
-            <FederationEffects />
-            <NodeActionRequestsDialog />
-            <CoordinatorAccountSwitchNotices />
-            <ProjectCopyDialog />
-            <CommandHandoverDialog />
-            {/* SSH prompts from this node's own tunnels to the nodes it commands. */}
-            <NodeSshPromptDialog />
-          </>
-        )}
+        {/* Multi-machine prompts and effects belong to the window. */}
+        <SshPromptDialog />
+        <FederationEffects />
+        <NodeActionRequestsDialog />
+        <CoordinatorAccountSwitchNotices />
+        <ProjectCopyDialog />
+        <CommandHandoverDialog />
+        {/* SSH prompts from this node's own tunnels to the nodes it commands. */}
+        <NodeSshPromptDialog />
       </TooltipProvider>
     </FederationProvider>
   );

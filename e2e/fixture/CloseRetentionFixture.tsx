@@ -20,6 +20,7 @@ import {
   usePaneLayoutStore,
   type EnvironmentPaneState,
 } from "../../apps/web/src/stores/paneLayoutStore";
+import { appCommandStore } from "../../apps/web/src/test/app-command-store";
 
 const PANE_ID = "close-retention-pane";
 
@@ -30,7 +31,7 @@ const PANE_ID = "close-retention-pane";
  * not serve fails visibly instead of being humoured.
  */
 function installBackend(environmentId: string, worktreePath: string) {
-  useEnvironmentStore.setState({
+  appCommandStore(useEnvironmentStore.def).setState({
     environments: [
       {
         id: environmentId,
@@ -45,7 +46,7 @@ function installBackend(environmentId: string, worktreePath: string) {
     ],
   });
   // The platforms under test are enabled, as a user who installed them has.
-  useConfigStore.setState((state) => ({
+  appCommandStore(useConfigStore.def).setState((state) => ({
     config: {
       ...state.config,
       global: {
@@ -76,7 +77,7 @@ function installBackend(environmentId: string, worktreePath: string) {
  * keeps it persisted with the app's own writer.
  */
 async function hydrate(environmentId: string, worktreePath: string, platform: AgentPlatform) {
-  const store = usePaneLayoutStore.getState();
+  const store = appCommandStore(usePaneLayoutStore.def).getState();
   store.setActiveEnvironment(environmentId);
   store.beginHydration(environmentId);
   const persisted = await getPaneLayout(environmentId);
@@ -88,7 +89,9 @@ async function hydrate(environmentId: string, worktreePath: string, platform: Ag
   });
   if (persisted) {
     // A layout whose last tab was closed is still this environment's layout.
-    usePaneLayoutStore.getState().finishHydration(environmentId, restored ?? emptyLayout());
+    appCommandStore(usePaneLayoutStore.def)
+      .getState()
+      .finishHydration(environmentId, restored ?? emptyLayout());
   } else {
     // First visit: one agent tab, saved before anything else happens, as a
     // launched tab is.
@@ -109,7 +112,7 @@ async function hydrate(environmentId: string, worktreePath: string, platform: Ag
       },
     };
     await flushPaneLayoutNow(environmentId, createPersistedPaneLayoutInput(seeded));
-    usePaneLayoutStore.getState().finishHydration(environmentId, seeded);
+    appCommandStore(usePaneLayoutStore.def).getState().finishHydration(environmentId, seeded);
   }
   // For the life of the page, as the app's own writer is.
   startPaneLayoutPersistence({ hydrateDependencies: async () => undefined });
@@ -172,7 +175,7 @@ export function CloseRetentionFixture() {
   }, [activePaneId, node]);
   const newTab = () => {
     opened += 1;
-    const store = usePaneLayoutStore.getState();
+    const store = appCommandStore(usePaneLayoutStore.def).getState();
     const paneId = store.environments.get(environmentId)?.activePaneId ?? PANE_ID;
     store.addTab(
       paneId,

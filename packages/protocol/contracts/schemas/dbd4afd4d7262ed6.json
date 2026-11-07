@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:dbd4afd4d7262ed6da83b1dab27fec5992d435fcecafc7450ded1dcd8800e79b",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "body": {
+          "type": "string"
+        },
+        "issueNumber": {
+          "type": "number"
+        },
+        "pipelineId": {
+          "type": "string"
+        },
+        "projectId": {
+          "type": "string"
+        },
+        "repositoryName": {
+          "type": "string"
+        },
+        "repositoryOwner": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "body",
+        "issueNumber",
+        "pipelineId",
+        "projectId",
+        "repositoryName",
+        "repositoryOwner"
+      ],
+      "type": "object"
+    }
+  }
+}

@@ -34,18 +34,23 @@ import {
 } from "@/contexts";
 import {
   createSessionKey,
+  environmentStore,
   useClaudeOptionsStore,
+  paneLayoutStore,
   usePaneLayoutStore,
   useEnvironmentStore,
   useConfigStore,
-  useTerminalSessionStore,
+  terminalSessionStore,
   useFilesPanelStore,
   getAllLeaves,
 } from "@/stores";
+import { filesPanelStore } from "@/stores/filesPanelStore";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { useShallow } from "zustand/react/shallow";
 import { toast } from "sonner";
 import { showTabLimitReachedToast } from "@/lib/tab-limit-toast";
 import { isDesignFilePath, openDesignFile } from "@/components/design/design-open-file";
+import { designApiFor } from "@/lib/design-client";
 import { openDesignCanvasTab } from "@/components/design/design-open-tab";
 import { openGraphDesignerTab } from "@/components/graph-designer/graph-designer-open-tab";
 import { openGraphRunTab } from "@/components/graph-run/graph-run-open-tab";
@@ -57,6 +62,9 @@ import {
 } from "@/lib/graph-run-navigation";
 import { cn } from "@/lib/utils";
 import * as backend from "@/lib/backend";
+import { backendForScope } from "@/lib/backend/scope-backend";
+import { backendApiForScope } from "@/lib/backend/client";
+import { createFilesSessionsApi } from "@/lib/backend/files-sessions";
 import { agentSettingsTiers } from "@/lib/agent-settings";
 import { resolveAgentPlatformSettings } from "@orkestrator/protocol/agent-settings";
 import { reconcilePersistedLayout } from "@/lib/pane-layout-restore";
@@ -74,11 +82,12 @@ import {
   readStoredPaneSelection,
 } from "@/lib/pane-selection-storage";
 import { listenForTerminalBrowserTabRequests } from "@/lib/terminal-links";
-import { listen, NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
+import { listen } from "@/lib/native/events";
+import { onReconnectInScope } from "@/lib/node-scope-slots";
 import { createOrkestratorScriptPrompt } from "@/prompts";
 import { isEnvironmentSetupSettled } from "@orkestrator/protocol/environment-readiness";
-import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
-import { useMultiReviewStore } from "@/stores/multiReviewStore";
+import { buildPipelineStore } from "@/stores/buildPipelineStore";
+import { multiReviewStore } from "@/stores/multiReviewStore";
 import { hydrateMultiReviewWorkflowsForEnvironment } from "@/lib/multi-review-persistence";
 import { PaneTree } from "@/components/pane-layout";
 import {
@@ -116,6 +125,7 @@ import {
   handoffSetupFocusToStartupAgent,
   seedDeferredNativePlatform,
 } from "./TerminalContainer.helpers";
+import { commandClient } from "@/lib/node-scope/app-window-scope";
 
 const log = createLogger("terminal");
 const setupLog = createLogger("terminal.setup");
@@ -132,6 +142,20 @@ export function TerminalContainer({
   obscured = false,
   onReveal,
 }: TerminalContainerProps) {
+  // This node's Multi Review workflows and tab launches (plan item 3003).
+  const multiReviewScope = useNodeScope();
+  const tabLaunchScope = useNodeScope();
+  // This node's environments (plan item 3004).
+  const environments = useNodeScope().store(environmentStore);
+  // This node's build pipelines (plan item 3011).
+  const buildPipelines = useNodeScope().store(buildPipelineStore);
+  // This node's terminal sessions (plan item 3010).
+  const terminalScope = useNodeScope();
+  const terminalSessions = terminalScope.store(terminalSessionStore);
+  const nativeComposeScope = useNodeScope();
+  // This node's pane layouts (plan item 3013).
+  const paneLayoutScope = useNodeScope();
+  const paneLayouts = paneLayoutScope.store(paneLayoutStore);
   const activeWriteRef = useRef<((data: string) => Promise<void>) | null>(null);
   const obscuredRef = useRef(obscured);
   const onRevealRef = useRef(onReveal);
@@ -335,8 +359,8 @@ export function TerminalContainer({
 
   const hasBoundSetupSession = useCallback(
     (tabId: string) =>
-      !!useTerminalSessionStore.getState().sessions.get(setupSessionKeyForTab(tabId))?.sessionId,
-    [setupSessionKeyForTab],
+      !!terminalSessions.getState().sessions.get(setupSessionKeyForTab(tabId))?.sessionId,
+    [setupSessionKeyForTab, terminalSessions],
   );
 
   /**
@@ -348,20 +372,21 @@ export function TerminalContainer({
   const loadReplayableSetupTranscript = useCallback(
     async (tabId: string) => {
       const key = setupSessionKeyForTab(tabId);
-      const local = useTerminalSessionStore.getState().sessions.get(key);
+      const local = terminalSessions.getState().sessions.get(key);
       if (local?.serializedBuffer) {
         return { buffer: local.serializedBuffer, persistentSessionId: local.persistentSessionId };
       }
 
-      const persistentSessions = await backend.getSessionsByEnvironment(environmentId);
+      const persistentSessions =
+        await backendForScope(terminalScope).getSessionsByEnvironment(environmentId);
       const persistentSession = persistentSessions.find((session) => session.tabId === tabId);
       if (!persistentSession) return null;
 
-      const buffer = await backend.loadSessionBuffer(persistentSession.id);
+      const buffer = await backendForScope(terminalScope).loadSessionBuffer(persistentSession.id);
       if (!buffer) return null;
       return { buffer, persistentSessionId: persistentSession.id };
     },
-    [environmentId, setupSessionKeyForTab],
+    [terminalScope, environmentId, setupSessionKeyForTab, terminalSessions],
   );
 
   /**
@@ -376,7 +401,7 @@ export function TerminalContainer({
   const retireDeadSetupTab = useCallback(
     (tabId: string) => {
       const key = setupSessionKeyForTab(tabId);
-      const terminalStore = useTerminalSessionStore.getState();
+      const terminalStore = terminalSessions.getState();
       const existing = terminalStore.sessions.get(key);
       if (existing?.sessionId === `${environmentId}:setup`) {
         const { sessionId: _deadSetupSession, ...preserved } = existing;
@@ -385,7 +410,7 @@ export function TerminalContainer({
       if (!retireSetupTabMarker(tabId, environmentId)) return;
       setupLog.info("tab.marker-retired", { environmentId, tabId });
     },
-    [environmentId, retireSetupTabMarker, setupSessionKeyForTab],
+    [environmentId, retireSetupTabMarker, setupSessionKeyForTab, terminalSessions],
   );
 
   const bindBackendSetupSession = useCallback(
@@ -424,7 +449,8 @@ export function TerminalContainer({
           tabId,
           sessionKey: setupSessionKeyForTab(tabId),
         }));
-        const setupSession = await backend.awaitEnvironmentSetupSession(environmentId);
+        const setupSession =
+          await backendForScope(terminalScope).awaitEnvironmentSetupSession(environmentId);
         if (setupSessionBindLifecycleGenerationRef.current !== lifecycleGeneration) {
           return false;
         }
@@ -444,7 +470,7 @@ export function TerminalContainer({
           const hasReplayableTranscript = replayableTranscript !== null;
           if (replayableTranscript) {
             const key = setupSessionKeyForTab(tabId);
-            const terminalStore = useTerminalSessionStore.getState();
+            const terminalStore = terminalSessions.getState();
             const existing = terminalStore.sessions.get(key);
             terminalStore.setSession(key, {
               ...existing,
@@ -472,7 +498,7 @@ export function TerminalContainer({
           return false;
         }
         const key = setupSessionKeyForTab(tabId);
-        const terminalStore = useTerminalSessionStore.getState();
+        const terminalStore = terminalSessions.getState();
         const existing = terminalStore.sessions.get(key);
         setupLog.info("session.bind-started", {
           environmentId,
@@ -502,7 +528,9 @@ export function TerminalContainer({
         if (!setupSession.running && !setupSession.terminalRunning) {
           let replayableTranscript = await loadReplayableSetupTranscript(tabId);
           if (!replayableTranscript && setupSession.hasOutput === true) {
-            const snapshot = await backend.getTerminalOutputSnapshot(setupSession.sessionId);
+            const snapshot = await backendForScope(terminalScope).getTerminalOutputSnapshot(
+              setupSession.sessionId,
+            );
             if (snapshot.output) {
               replayableTranscript = { buffer: snapshot.output, persistentSessionId: undefined };
             }
@@ -589,7 +617,7 @@ export function TerminalContainer({
           if (!setupSessionLookupSucceeded) {
             lookupSettled = true;
             if (
-              !useTerminalSessionStore.getState().sessions.get(setupSessionKeyForTab(tabId))
+              !terminalSessions.getState().sessions.get(setupSessionKeyForTab(tabId))
                 ?.serializedBuffer
             ) {
               setupSessionUnavailableTabsRef.current.add(tabId);
@@ -633,11 +661,13 @@ export function TerminalContainer({
       }
     },
     [
+      terminalScope,
       environmentId,
       hasBoundSetupSession,
       loadReplayableSetupTranscript,
       retireDeadSetupTab,
       setupSessionKeyForTab,
+      terminalSessions,
     ],
   );
 
@@ -704,7 +734,8 @@ export function TerminalContainer({
   useEffect(() => {
     let disposed = false;
     let unlisten: (() => void) | undefined;
-    void listen(NATIVE_EVENT_STREAM_CONNECTED_EVENT, () => {
+    // This node's stream coming back (plan item 3010).
+    void onReconnectInScope(terminalScope, () => {
       if (disposed) return;
       setupSessionReconnectGenerationRef.current += 1;
       setSetupSessionReconnectNonce((value) => value + 1);
@@ -724,7 +755,7 @@ export function TerminalContainer({
       disposed = true;
       unlisten?.();
     };
-  }, []);
+  }, [terminalScope]);
 
   useEffect(() => {
     if (!currentEnvState || pendingAgentLaunch || backendSetupRunning) {
@@ -806,12 +837,13 @@ export function TerminalContainer({
     const existingStartupTabId = findStartupAgentTabId(currentEnvState);
     if (!existingStartupTabId) return;
     if (startupProviderSessionId) {
-      usePaneLayoutStore
+      paneLayouts
         .getState()
         .updateTabNativeSessionId(existingStartupTabId, startupProviderSessionId, environmentId);
     }
     if (claudeOptions?.launchAgent) clearOptions(environmentId);
   }, [
+    paneLayouts,
     claudeOptions?.launchAgent,
     currentEnvState,
     environmentExists,
@@ -846,7 +878,7 @@ export function TerminalContainer({
     // An authoritative event can land after render but before this passive
     // effect. Default seeding must inspect the current store, not that render's
     // empty snapshot, or it can steal focus from a just-published action tab.
-    const latestPaneState = usePaneLayoutStore.getState().environments.get(environmentId);
+    const latestPaneState = paneLayouts.getState().environments.get(environmentId);
     const currentTabs = latestPaneState
       ? getAllLeaves(latestPaneState.root).flatMap((leaf) => leaf.tabs)
       : [];
@@ -867,9 +899,15 @@ export function TerminalContainer({
       const request = Symbol();
       paneHydrationRequestsRef.current.set(environmentId, request);
       beginHydration(environmentId);
+      // The layout commands go to this node (plan item 3013); on the app's
+      // command scope they are the `@/lib/backend` named exports.
+      const layoutBackend = backendApiForScope(paneLayoutScope, createFilesSessionsApi, {
+        getPaneLayout: backend.getPaneLayout,
+        deletePaneLayout: backend.deletePaneLayout,
+      });
       void Promise.allSettled([
-        backend.getPaneLayout(environmentId),
-        hydrateMultiReviewWorkflowsForEnvironment(environmentId),
+        layoutBackend.getPaneLayout(environmentId),
+        hydrateMultiReviewWorkflowsForEnvironment(environmentId, multiReviewScope),
       ]).then(async ([layoutResult, multiReviewResult]) => {
         // These independent snapshots need not describe the same instant.
         // A launch between the list read and the layout read must not make
@@ -877,14 +915,14 @@ export function TerminalContainer({
         let dependenciesUnknown = false;
         if (layoutResult.status === "fulfilled" && layoutResult.value) {
           try {
-            await hydratePaneLayoutDependencies(layoutResult.value.root);
+            await hydratePaneLayoutDependencies(layoutResult.value.root, paneLayoutScope);
           } catch {
             // A failed read is not evidence of deletion. The tab's own view
             // can retry; retaining it also preserves authoritative focus.
             dependenciesUnknown = true;
           }
         }
-        const paneStore = usePaneLayoutStore.getState();
+        const paneStore = paneLayouts.getState();
         // A stop/replacement can clear hydration and start another request
         // before this read settles. "pending" alone cannot identify it.
         if (paneHydrationRequestsRef.current.get(environmentId) !== request) return;
@@ -897,7 +935,7 @@ export function TerminalContainer({
             error: formatLogError(multiReviewResult.reason),
           });
         }
-        const latestEnvironment = useEnvironmentStore.getState().getEnvironmentById(environmentId);
+        const latestEnvironment = environments.getState().getEnvironmentById(environmentId);
         const latestContainerId = latestEnvironment
           ? latestEnvironment.environmentType === "local"
             ? null
@@ -934,21 +972,21 @@ export function TerminalContainer({
           isLocal: latestEnvironment.environmentType === "local",
           worktreePath: latestEnvironment.worktreePath,
           hasBuildPipeline: (pipelineId) =>
-            dependenciesUnknown || useBuildPipelineStore.getState().pipelines.has(pipelineId),
+            dependenciesUnknown || buildPipelines.getState().pipelines.has(pipelineId),
           hasMultiReview: (workflowId) =>
             // A failed workflow-list request means existence is unknown,
             // not that every persisted review was deleted. Preserve those
             // tabs so their own read-through view can retry hydration.
             dependenciesUnknown ||
             multiReviewResult.status === "rejected" ||
-            useMultiReviewStore.getState().workflows.has(workflowId),
+            multiReviewScope.store(multiReviewStore).getState().workflows.has(workflowId),
         });
         const restored =
           restoredSnapshot && persisted?.version === LEGACY_PANE_LAYOUT_VERSION
             ? applyStoredPaneSelection(
                 restoredSnapshot,
                 environmentId,
-                readStoredPaneSelection(environmentId),
+                readStoredPaneSelection(environmentId, paneLayoutScope),
               )
             : restoredSnapshot;
         if (!restored && !paneStore.environments.has(environmentId)) {
@@ -963,9 +1001,14 @@ export function TerminalContainer({
         // on an earlier launch or by another client. Once v2 is observed,
         // the renderer-local v1 selection can no longer be useful.
         if (persisted?.version === PANE_LAYOUT_VERSION) {
-          clearStoredPaneSelection(environmentId);
+          clearStoredPaneSelection(environmentId, paneLayoutScope);
           if (restored) {
-            void migratePaneLayoutBrowserHistory(environmentId, persisted).catch((error) => {
+            void migratePaneLayoutBrowserHistory(
+              environmentId,
+              persisted,
+              undefined,
+              paneLayoutScope,
+            ).catch((error) => {
               log.warn("pane-layout.history-migrate-failed", {
                 environmentId,
                 error: formatLogError(error),
@@ -976,12 +1019,14 @@ export function TerminalContainer({
             // cannot safely be rewritten as renderer state. Remove only
             // the exact revision we inspected; a concurrent newer layout
             // wins the CAS and is preserved for the next reconciliation.
-            void backend.deletePaneLayout(environmentId, persisted.revision).catch((error) => {
-              log.warn("pane-layout.snapshot-remove-failed", {
-                environmentId,
-                error: formatLogError(error),
+            void layoutBackend
+              .deletePaneLayout(environmentId, persisted.revision)
+              .catch((error) => {
+                log.warn("pane-layout.snapshot-remove-failed", {
+                  environmentId,
+                  error: formatLogError(error),
+                });
               });
-            });
           }
         }
 
@@ -990,12 +1035,18 @@ export function TerminalContainer({
           // provider-specific native tab records. Reconciliation has now
           // converted either schema to v3, so persist that exact snapshot
           // through the normal CAS chain before considering it migrated.
-          const migrated = usePaneLayoutStore.getState().environments.get(environmentId);
+          const migrated = paneLayouts.getState().environments.get(environmentId);
           if (migrated) {
-            void flushPaneLayoutNow(environmentId, createPersistedPaneLayoutInput(migrated))
+            void flushPaneLayoutNow(
+              environmentId,
+              createPersistedPaneLayoutInput(migrated),
+              undefined,
+              undefined,
+              paneLayoutScope,
+            )
               .then(() => {
                 if (persisted.version === LEGACY_PANE_LAYOUT_VERSION) {
-                  clearStoredPaneSelection(environmentId);
+                  clearStoredPaneSelection(environmentId, paneLayoutScope);
                 }
               })
               .catch((error) => {
@@ -1028,7 +1079,7 @@ export function TerminalContainer({
       // does not create a pane-store record, and later pane-layout events
       // cannot apply to an environment that was never registered.
       if (backendSetupRunning || pendingAgentLaunch || claudeOptions?.launchAgent === true) {
-        if (!usePaneLayoutStore.getState().environments.has(environmentId)) {
+        if (!paneLayouts.getState().environments.has(environmentId)) {
           initialize(containerId, environmentId);
         }
         // Record consumption with the initialization side effect so the later
@@ -1043,7 +1094,7 @@ export function TerminalContainer({
       // Seed the ordinary tab into the pane that actually survived hydration;
       // targeting the literal "default" would be a no-op and make this effect
       // initialize forever because build tabs are excluded from `seededTabs`.
-      const initialPaneState = usePaneLayoutStore.getState().environments.get(environmentId);
+      const initialPaneState = paneLayouts.getState().environments.get(environmentId);
       const initialPaneId = initialPaneState?.activePaneId ?? "default";
 
       // A build tab the backend selected (a pipeline started on an existing
@@ -1060,6 +1111,8 @@ export function TerminalContainer({
       });
     }
   }, [
+    paneLayouts,
+    paneLayoutScope,
     isEnvironmentRunning,
     containerId,
     isLocalEnvironmentReady,
@@ -1082,6 +1135,9 @@ export function TerminalContainer({
     codexMode,
     piMode,
     worktreePath,
+    multiReviewScope,
+    environments,
+    buildPipelines,
   ]);
 
   // Reset pane layout when container changes within the same environment
@@ -1133,7 +1189,7 @@ export function TerminalContainer({
   // Prompt-less launches clear `pendingAgentLaunch` before setup-complete is
   // emitted, so the persisted window activation is the remaining one-shot.
   useEffect(() => {
-    const windowHandoffOwed = hasWindowStartupAgentActivation(environmentId);
+    const windowHandoffOwed = hasWindowStartupAgentActivation(environmentId, paneLayoutScope);
     if (!setupReady || (!isStartupLaunchPending && !windowHandoffOwed)) {
       if (!setupReady && windowHandoffOwed) {
         // A one-shot armed (or re-armed) while setup is not ready must be
@@ -1149,10 +1205,10 @@ export function TerminalContainer({
     if (handedOffSetupFocusRef.current.has(environmentId)) return;
     const startupTabId = findStartupAgentTabId(currentEnvState);
     if (!startupTabId) return;
-    handoffSetupFocusToStartupAgent(environmentId, currentEnvState, startupTabId);
+    handoffSetupFocusToStartupAgent(environmentId, currentEnvState, startupTabId, paneLayoutScope);
     handedOffSetupFocusRef.current.add(environmentId);
-    consumeWindowStartupAgentActivation(environmentId);
-  }, [setupReady, isStartupLaunchPending, currentEnvState, environmentId]);
+    consumeWindowStartupAgentActivation(environmentId, paneLayoutScope);
+  }, [setupReady, isStartupLaunchPending, currentEnvState, environmentId, paneLayoutScope]);
 
   // Register terminal write function with context
   useEffect(() => {
@@ -1187,7 +1243,7 @@ export function TerminalContainer({
         return false;
       }
 
-      if (!usePaneLayoutStore.getState().getPane(targetPaneId, environmentId)) {
+      if (!paneLayouts.getState().getPane(targetPaneId, environmentId)) {
         return false;
       }
 
@@ -1203,6 +1259,7 @@ export function TerminalContainer({
       return true;
     },
     [
+      paneLayouts,
       activePaneId,
       addTab,
       containerId,
@@ -1218,23 +1275,22 @@ export function TerminalContainer({
       listenForTerminalBrowserTabRequests((request) => {
         if (request.environmentId !== environmentId) return;
 
-        const pane = usePaneLayoutStore
-          .getState()
-          .findPaneWithTab(request.sourceTabId, environmentId);
+        const pane = paneLayouts.getState().findPaneWithTab(request.sourceTabId, environmentId);
         if (!pane) return;
 
         // Loopback links are interpreted in this environment (a container's
         // localhost:3000 is its own port 3000), not as a backend host port.
         const target = linkBrowserTarget(
-          useEnvironmentStore.getState().getEnvironmentById(environmentId),
+          environments.getState().getEnvironmentById(environmentId),
           request.url,
           request.origin ?? "terminal",
+          tabLaunchScope,
         );
         if (createBrowserTab(target, pane.id)) {
-          usePaneLayoutStore.getState().setActivePane(pane.id, environmentId);
+          paneLayouts.getState().setActivePane(pane.id, environmentId);
         }
       }),
-    [createBrowserTab, environmentId],
+    [createBrowserTab, environmentId, environments, paneLayouts, tabLaunchScope],
   );
 
   // Handler for creating new terminal tabs
@@ -1243,7 +1299,7 @@ export function TerminalContainer({
       // For local environments, we don't need a containerId but do need worktreePath to be set
       if (!isEnvironmentRunning || (!containerId && !isLocalEnvironmentReady)) return false;
 
-      cancelTabLaunchFocus(environmentId);
+      cancelTabLaunchFocus(environmentId, tabLaunchScope);
       const allTabs = getAllTabs(environmentId);
       // A Multi Review workflow outlives the tab that launched it, so reopening
       // one is a normal request rather than a duplicate: the launcher reattaches
@@ -1259,10 +1315,10 @@ export function TerminalContainer({
             tab.multiReviewTabData?.pipelinePass === options.multiReviewPipelinePass,
         );
         if (openTab) {
-          const pane = usePaneLayoutStore.getState().findPaneWithTab(openTab.id, environmentId);
+          const pane = paneLayouts.getState().findPaneWithTab(openTab.id, environmentId);
           if (pane) {
-            usePaneLayoutStore.getState().setActivePane(pane.id, environmentId);
-            usePaneLayoutStore.getState().setActiveTab(pane.id, openTab.id, environmentId);
+            paneLayouts.getState().setActivePane(pane.id, environmentId);
+            paneLayouts.getState().setActiveTab(pane.id, openTab.id, environmentId);
           }
           return true;
         }
@@ -1270,6 +1326,7 @@ export function TerminalContainer({
 
       if (type === "design-canvas")
         return openDesignCanvasTab({
+          scope: paneLayoutScope,
           environmentId,
           canvasId: options?.canvasId,
           placement: options?.designPlacement,
@@ -1284,6 +1341,7 @@ export function TerminalContainer({
       if (type === "graph-run") {
         if (!options?.graphRun) return false;
         return openGraphRunTab({
+          scope: paneLayoutScope,
           environmentId,
           activePaneId,
           allTabs,
@@ -1297,6 +1355,7 @@ export function TerminalContainer({
       if (type === "key-information") {
         if (!options?.keyInformation) return false;
         return openKeyInformationTab({
+          scope: paneLayoutScope,
           environmentId,
           activePaneId,
           allTabs,
@@ -1309,6 +1368,7 @@ export function TerminalContainer({
 
       if (type === "graph-designer")
         return openGraphDesignerTab({
+          scope: paneLayoutScope,
           environmentId,
           activePaneId,
           allTabs,
@@ -1330,7 +1390,7 @@ export function TerminalContainer({
             tab.pullRequestData &&
             gitHubPullRequestKey(tab.pullRequestData.ref) === key,
         );
-        const store = usePaneLayoutStore.getState();
+        const store = paneLayouts.getState();
         if (openTab) {
           const pane = store.findPaneWithTab(openTab.id, environmentId);
           if (!pane) return false;
@@ -1377,10 +1437,10 @@ export function TerminalContainer({
             log.warn("tab.duplicate-refused", { environmentId, tabId: requestedTabId });
             return false;
           }
-          const pane = usePaneLayoutStore.getState().findPaneWithTab(openTab.id, environmentId);
+          const pane = paneLayouts.getState().findPaneWithTab(openTab.id, environmentId);
           if (!pane) return false;
-          usePaneLayoutStore.getState().setActivePane(pane.id, environmentId);
-          usePaneLayoutStore.getState().setActiveTab(pane.id, openTab.id, environmentId);
+          paneLayouts.getState().setActivePane(pane.id, environmentId);
+          paneLayouts.getState().setActiveTab(pane.id, openTab.id, environmentId);
           return true;
         }
       }
@@ -1493,7 +1553,7 @@ export function TerminalContainer({
           isLocal: isLocalEnvironment,
           hasInitialPrompt: !!options?.initialPrompt,
         }));
-        seedDeferredNativePlatform(newTab, "opencode");
+        seedDeferredNativePlatform(newTab, "opencode", nativeComposeScope);
         addTab(activePaneId, newTab, environmentId);
         return true;
       }
@@ -1534,7 +1594,7 @@ export function TerminalContainer({
           isLocal: isLocalEnvironment,
           hasInitialPrompt: !!options?.initialPrompt,
         }));
-        seedDeferredNativePlatform(newTab, "claude");
+        seedDeferredNativePlatform(newTab, "claude", nativeComposeScope);
         addTab(activePaneId, newTab, environmentId);
         return true;
       }
@@ -1564,7 +1624,7 @@ export function TerminalContainer({
           isLocal: isLocalEnvironment,
           hasInitialPrompt: !!options?.initialPrompt,
         }));
-        seedDeferredNativePlatform(newTab, "codex");
+        seedDeferredNativePlatform(newTab, "codex", nativeComposeScope);
         addTab(activePaneId, newTab, environmentId);
         return true;
       }
@@ -1588,7 +1648,7 @@ export function TerminalContainer({
           initialConversationMode: options?.initialConversationMode,
           initialFastMode: options?.initialFastMode,
         });
-        seedDeferredNativePlatform(newTab, provider);
+        seedDeferredNativePlatform(newTab, provider, nativeComposeScope);
         addTab(activePaneId, newTab, environmentId);
         return true;
       }
@@ -1620,6 +1680,8 @@ export function TerminalContainer({
       return true;
     },
     [
+      paneLayouts,
+      paneLayoutScope,
       containerId,
       isEnvironmentRunning,
       activePaneId,
@@ -1635,31 +1697,33 @@ export function TerminalContainer({
       piMode,
       isLocalEnvironmentReady,
       isLocalEnvironment,
+      tabLaunchScope,
+      nativeComposeScope,
       createBrowserTab,
     ],
   );
 
   useEffect(() => {
-    if (!isActive || !window.orkestrator) return;
+    if (!isActive) return;
 
-    return window.orkestrator.listen<BrowserPreviewOpenLinkEvent>(
+    return commandClient().listenRaw<BrowserPreviewOpenLinkEvent>(
       "browser-preview-open-link",
       ({ tabId, url, service }) => {
-        const sourcePane = usePaneLayoutStore.getState().findPaneWithTab(tabId, environmentId);
+        const sourcePane = paneLayouts.getState().findPaneWithTab(tabId, environmentId);
         const sourceTab = sourcePane?.tabs.find((tab) => tab.id === tabId);
         if (!sourcePane || sourceTab?.type !== "browser") return;
         // Same-service links from a service preview keep the service identity.
         if (createBrowserTab(service ? serviceLinkTarget(service) : url, sourcePane.id)) {
-          usePaneLayoutStore.getState().setActivePane(sourcePane.id, environmentId);
+          paneLayouts.getState().setActivePane(sourcePane.id, environmentId);
         }
       },
     );
-  }, [createBrowserTab, environmentId, isActive]);
+  }, [createBrowserTab, environmentId, isActive, paneLayouts]);
 
   // Handler for creating file viewer tabs
   const handleCreateFileTab = useCallback(
     (filePath: string, options?: CreateFileTabOptions) => {
-      cancelTabLaunchFocus(environmentId);
+      cancelTabLaunchFocus(environmentId, tabLaunchScope);
       const requestedDiff = options?.changeDiff;
       // For container environments, need containerId and running state
       // For local environments, need worktreePath
@@ -1694,7 +1758,9 @@ export function TerminalContainer({
 
       // Accepted design paths open in the canvas; other paths use the text editor.
       if (!changeDiff && isDesignFilePath(relativeFilePath)) {
-        void openDesignFile(environmentId, relativeFilePath, handleCreateTab);
+        void openDesignFile(environmentId, relativeFilePath, handleCreateTab, {
+          openFile: designApiFor(paneLayoutScope).openFile,
+        });
         return;
       }
 
@@ -1716,9 +1782,9 @@ export function TerminalContainer({
           clearFileTabNavigation(existingTab.id, environmentId);
         }
         // Activate the existing tab instead of creating a duplicate
-        const pane = usePaneLayoutStore.getState().findPaneWithTab(existingTab.id, environmentId);
+        const pane = paneLayouts.getState().findPaneWithTab(existingTab.id, environmentId);
         if (pane) {
-          usePaneLayoutStore.getState().setActiveTab(pane.id, existingTab.id, environmentId);
+          paneLayouts.getState().setActiveTab(pane.id, existingTab.id, environmentId);
           log.debug("tab.activated", () => ({ tabId: existingTab.id, paneId: pane.id }));
         }
         return;
@@ -1767,6 +1833,7 @@ export function TerminalContainer({
       addTab(activePaneId, newTab, environmentId);
     },
     [
+      paneLayouts,
       containerId,
       isContainerRunning,
       isLocalEnvironment,
@@ -1778,6 +1845,8 @@ export function TerminalContainer({
       getAllTabs,
       environmentId,
       handleCreateTab,
+      tabLaunchScope,
+      paneLayoutScope,
     ],
   );
 
@@ -1789,11 +1858,11 @@ export function TerminalContainer({
       if (activePane && index >= 0 && index < activePane.tabs.length) {
         const tab = activePane.tabs[index];
         if (tab) {
-          usePaneLayoutStore.getState().setActiveTab(activePaneId, tab.id, environmentId);
+          paneLayouts.getState().setActiveTab(activePaneId, tab.id, environmentId);
         }
       }
     },
-    [activePaneId, environmentId, getActivePane],
+    [activePaneId, environmentId, getActivePane, paneLayouts],
   );
 
   // Handler for closing the active tab
@@ -1803,11 +1872,14 @@ export function TerminalContainer({
       const activeTab = activePane.tabs.find((tab) => tab.id === activePane.activeTabId);
       const reviewData = activeTab?.multiReviewTabData;
       if (activeTab?.type === "multi-review" && reviewData && !reviewData.reviewerId) {
-        const phase = useMultiReviewStore.getState().workflows.get(reviewData.workflowId)?.phase;
+        const multiReviews = multiReviewScope.store(multiReviewStore);
+        const phase = multiReviews.getState().workflows.get(reviewData.workflowId)?.phase;
         if (phase && isMultiReviewTerminalPhase(phase)) {
           try {
-            await backend.deleteMultiReviewWorkflow(reviewData.workflowId);
-            useMultiReviewStore.getState().removeWorkflow(reviewData.workflowId);
+            await backendForScope(multiReviewScope).deleteMultiReviewWorkflow(
+              reviewData.workflowId,
+            );
+            multiReviews.getState().removeWorkflow(reviewData.workflowId);
           } catch (error) {
             toast.error("Could not close Multi Review", {
               description: error instanceof Error ? error.message : String(error),
@@ -1818,7 +1890,7 @@ export function TerminalContainer({
       }
       removeTab(activePane.id, activePane.activeTabId, environmentId);
     }
-  }, [environmentId, getActivePane, removeTab]);
+  }, [environmentId, getActivePane, multiReviewScope, removeTab]);
 
   // Electron owns Command+W as a native menu accelerator. Route its event to
   // the currently active environment and resolve the pane from live store
@@ -1890,21 +1962,21 @@ export function TerminalContainer({
     (type: CreatableTabType, options?: CreateTabOptions): boolean => {
       const created = handleCreateTab(type, options);
       if (created) {
-        cancelTabLaunchFocus(environmentId);
+        cancelTabLaunchFocus(environmentId, tabLaunchScope);
         revealIfObscured();
       }
       return created;
     },
-    [environmentId, handleCreateTab, revealIfObscured],
+    [environmentId, handleCreateTab, revealIfObscured, tabLaunchScope],
   );
   const selectTabFromContext = useCallback(
     (index: number) => {
-      cancelTabLaunchFocus(environmentId);
+      cancelTabLaunchFocus(environmentId, tabLaunchScope);
       handleSelectTab(index);
       const activePane = getActivePane(environmentId);
       if (activePane && index >= 0 && index < activePane.tabs.length) revealIfObscured();
     },
-    [environmentId, getActivePane, handleSelectTab, revealIfObscured],
+    [environmentId, getActivePane, handleSelectTab, revealIfObscured, tabLaunchScope],
   );
   const createFileTabFromContext = useCallback(
     (filePath: string, options?: CreateFileTabOptions) => {
@@ -1977,9 +2049,10 @@ export function TerminalContainer({
       handleCreateTab("graph-run", {
         graphRun: { runId: request.runId, ...(request.title ? { title: request.title } : {}) },
       });
-    const pending = takePendingGraphRunView(environmentId);
+    // This node's requests only (plan item 4007).
+    const pending = takePendingGraphRunView(environmentId, paneLayoutScope);
     if (pending) open(pending);
-    return onGraphRunViewRequested(open);
+    return onGraphRunViewRequested(open, paneLayoutScope);
   }, [
     isActive,
     isEnvironmentRunning,
@@ -1987,6 +2060,7 @@ export function TerminalContainer({
     isLocalEnvironmentReady,
     environmentId,
     handleCreateTab,
+    paneLayoutScope,
   ]);
 
   // A file opened from the project board's files panel names this
@@ -1995,12 +2069,14 @@ export function TerminalContainer({
   const pendingFileOpen = useFilesPanelStore((state) =>
     state.pendingFileOpens.find((request) => request.environmentId === environmentId),
   );
+  const filesPanel = useNodeScope().store(filesPanelStore);
   useEffect(() => {
     if (!pendingFileOpen || pendingFileOpen.environmentId !== environmentId) return;
     if (!isActive || !isEnvironmentRunning || !(containerId || isLocalEnvironmentReady)) return;
-    useFilesPanelStore.getState().clearPendingFileOpen(pendingFileOpen);
+    filesPanel.getState().clearPendingFileOpen(pendingFileOpen);
     handleCreateFileTab(pendingFileOpen.filePath, pendingFileOpen.options);
   }, [
+    filesPanel,
     pendingFileOpen,
     environmentId,
     isActive,

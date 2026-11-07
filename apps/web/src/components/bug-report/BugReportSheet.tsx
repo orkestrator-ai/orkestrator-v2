@@ -1,5 +1,5 @@
 import { startCoordinatedPoll } from "@/lib/coordinated-poll";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Bug,
   Camera,
@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import type { BackendId } from "@orkestrator/protocol/federation";
 import {
   BUG_REPORT_AGENTS,
   BUG_REPORT_ISSUE_REPOSITORY,
@@ -33,22 +34,20 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet";
-import {
-  assignBugReportAgent,
-  createBugReport,
-  discardBugReport,
-  fileBugReport,
-  getBugReport,
-  markBugReportFiled,
-  openInBrowser,
-  revealBugReportPath,
-  saveBugReportScreenshot,
-} from "@/lib/backend";
+import { openInBrowser } from "@/lib/backend";
+import { backendForScope } from "@/lib/backend/scope-backend";
 import { collectBugReportClientContext } from "@/lib/bug-report/client-context";
 import { openBugReport, ownBugReportMachineId } from "@/lib/bug-report/open-bug-report";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import {
+  NodeScopeProvider,
+  useScopesWithCommandFallback,
+  useSignal,
+} from "@/lib/node-scope/providers";
 import { createSessionKey } from "@/lib/utils";
 import { useBugReportStore } from "@/stores/bugReportStore";
-import { useNativeComposeStore } from "@/stores/nativeComposeStore";
+import { nativeComposeStore } from "@/stores/nativeComposeStore";
+import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 
 const DRAFT_POLL_MS = 3_000;
 
@@ -71,17 +70,64 @@ function nextFrame(): Promise<void> {
 }
 
 /**
+ * The window's Report a bug sheets: its own node's, and while the sheet is
+ * asked for another node shown in the window's own tree (plan item 5003),
+ * that node's, on its scope. A request for a node with no scope here, which
+ * is not opening one either, is closed rather than shown against another
+ * node's backend.
+ */
+export function BugReportSheetHost() {
+  const sheetNodeId = useBugReportStore((state) => state.sheetNodeId);
+  const { windowScope } = useScopesWithCommandFallback();
+  useSignal(windowScope.nodeScopes);
+  // Opening: the region holds the node (`openBugReport` opens it) in this
+  // window's tree, so its scope is on the way.
+  const opening = useRemoteWorkspaceStore((state) =>
+    sheetNodeId ? state.openNodes.includes(sheetNodeId) : false,
+  );
+  const scope = sheetNodeId ? windowScope.get(sheetNodeId as BackendId) : null;
+  const unresolved = sheetNodeId !== null && !scope && !opening;
+  useEffect(() => {
+    if (unresolved) useBugReportStore.setState({ sheetOpen: false, sheetNodeId: null });
+  }, [unresolved]);
+  return (
+    <>
+      <BugReportSheet />
+      {scope && scope.role !== "command" ? (
+        <BugReportSheet key={scope.nodeId} scope={scope} />
+      ) : null}
+    </>
+  );
+}
+
+/**
  * The Report a bug sheet.
  *
- * Hosted once per renderer (the window, and each machine's realm), so the
- * report's agent session always talks to this renderer's own backend; another
- * machine's report is shown by that machine's realm (`openBugReport`). The
- * report itself lives in the backend: closing the sheet only hides it.
+ * Hosted by the window for its own backend, and for another node shown in
+ * its own tree, on that node's `scope` (plan item 5003). The report is
+ * created, captured, filed and discarded through the scope's node, and its
+ * agent session renders inside that scope, so it talks to that node. The
+ * report itself lives in the
+ * backend: closing the sheet only hides it.
  */
-export function BugReportSheet() {
-  const open = useBugReportStore((state) => state.sheetOpen);
+export function BugReportSheet({ scope }: { scope?: NodeScope | null } = {}) {
+  const { scope: nearest } = useScopesWithCommandFallback();
+  const nodeScope = scope ?? nearest;
+  // `null`: this document's own backend; else the in-tree node the sheet is for.
+  const sheetNode = nodeScope.role === "command" ? null : nodeScope.nodeId;
+  const api = backendForScope(nodeScope);
+  const open = useBugReportStore((state) => state.sheetOpen && state.sheetNodeId === sheetNode);
   const closeSheet = useBugReportStore((state) => state.closeSheet);
-  const setDraftInProgress = useBugReportStore((state) => state.setDraftInProgress);
+  const storeDraftInProgress = useBugReportStore((state) => state.setDraftInProgress);
+  // The bottom bar's dot is this document's own node's report.
+  const setDraftInProgress = useCallback(
+    (inProgress: boolean) => {
+      if (sheetNode === null) storeDraftInProgress(inProgress);
+    },
+    [sheetNode, storeDraftInProgress],
+  );
+  // The captured window lands in the reported tab's draft, on this node.
+  const composeDrafts = useMemo(() => nodeScope.store(nativeComposeStore), [nodeScope]);
   const [snapshot, setSnapshot] = useState<BugReportSnapshot | null>(null);
   const readFence = useRef({ revision: 0, mutations: 0 });
   const [loadRevision, setLoadRevision] = useState(0);
@@ -123,16 +169,17 @@ export function BugReportSheet() {
     let current = true;
     const revision = readFence.current.revision;
     void (async () => {
-      const next = await getBugReport().catch(() => null);
+      const next = await api.getBugReport().catch(() => null);
       if (current && next && revision === readFence.current.revision) apply(next);
     })();
     return () => {
       current = false;
     };
-  }, [apply]);
+  }, [api, apply]);
 
   // Opening the sheet resumes the open report, or starts one.
-  const machineLabel = useMachineLabel();
+  const reportMachineId = sheetNode ?? ownBugReportMachineId();
+  const machineLabel = useMachineLabel(reportMachineId, sheetNode === null);
   useEffect(() => {
     if (!open) return;
     let current = true;
@@ -140,12 +187,12 @@ export function BugReportSheet() {
     const isCurrent = () => current && revision === readFence.current.revision;
     void (async () => {
       try {
-        let next = await getBugReport();
+        let next = await api.getBugReport();
         if (!isCurrent()) return;
         setLoadError(null);
         if (!next.report) {
-          next = await createBugReport(
-            collectBugReportClientContext({ id: ownBugReportMachineId(), label: machineLabel }),
+          next = await api.createBugReport(
+            collectBugReportClientContext({ id: reportMachineId, label: machineLabel }),
           );
         }
         if (isCurrent()) apply(next);
@@ -156,7 +203,7 @@ export function BugReportSheet() {
     return () => {
       current = false;
     };
-  }, [apply, machineLabel, open, loadRevision]);
+  }, [api, apply, machineLabel, open, loadRevision, reportMachineId]);
 
   // The agent rewrites its draft as the conversation goes; follow it while shown.
   useEffect(() => {
@@ -168,7 +215,7 @@ export function BugReportSheet() {
       reading = true;
       const revision = readFence.current.revision;
       try {
-        const next = await getBugReport();
+        const next = await api.getBugReport();
         if (
           current &&
           revision === readFence.current.revision &&
@@ -186,27 +233,29 @@ export function BugReportSheet() {
       resource: "bug-report-draft",
       intervalMs: DRAFT_POLL_MS,
       read: poll,
+      // Another node's poll runs on its own coordinator.
+      ...(sheetNode === null ? {} : { scope: nodeScope }),
     });
     return () => {
       current = false;
       stopPolling();
     };
-  }, [apply, open, report]);
+  }, [api, apply, nodeScope, open, report, sheetNode]);
 
   const assign = useCallback(
     async (platform: AgentPlatform, prompt: string, options: LaunchOptions) => {
       if (!report) throw new Error("The bug report is still starting");
       if (!isBugReportAgent(platform)) throw new Error("This agent cannot be used for bug reports");
-      const next = await mutate(() => assignBugReportAgent(report.id, platform));
+      const next = await mutate(() => api.assignBugReportAgent(report.id, platform));
       setPendingLaunch({ reportId: report.id, prompt, ...options });
       apply(next);
     },
-    [apply, mutate, report],
+    [api, apply, mutate, report],
   );
 
   const capture = useCallback(async () => {
-    const api = window.orkestrator?.bugReport;
-    if (!api || !report) return;
+    const capturer = window.orkestrator?.bugReport;
+    if (!capturer || !report) return;
     setCapturing(true);
     // Step the sheet aside so the capture shows what the user was looking at.
     closeSheet();
@@ -214,11 +263,11 @@ export function BugReportSheet() {
       await nextFrame();
       await nextFrame();
       await new Promise((resolve) => setTimeout(resolve, 250));
-      const base64 = await api.captureWindow();
-      const saved = await mutate(() => saveBugReportScreenshot(report.id, base64));
+      const base64 = await capturer.captureWindow();
+      const saved = await mutate(() => api.saveBugReportScreenshot(report.id, base64));
       apply(saved.snapshot);
       const sessionKey = createSessionKey(report.runtimeId, report.tabId);
-      const compose = useNativeComposeStore.getState();
+      const compose = composeDrafts.getState();
       const current = compose.drafts.get(sessionKey);
       compose.updateDraft(sessionKey, {
         attachments: [
@@ -238,10 +287,10 @@ export function BugReportSheet() {
     } catch (error) {
       toast.error("Could not capture the window", { description: errorText(error) });
     } finally {
-      useBugReportStore.getState().openSheet();
+      useBugReportStore.getState().openSheet(sheetNode);
       setCapturing(false);
     }
-  }, [apply, closeSheet, mutate, report]);
+  }, [api, apply, closeSheet, composeDrafts, mutate, report, sheetNode]);
 
   const file = useCallback(
     async (via?: "browser") => {
@@ -249,7 +298,7 @@ export function BugReportSheet() {
       setFiling(true);
       try {
         const result = await mutate(() =>
-          fileBugReport(report.id, {
+          api.fileBugReport(report.id, {
             title: draft.title,
             body: draft.body,
             ...(via ? { via } : {}),
@@ -257,7 +306,7 @@ export function BugReportSheet() {
         );
         if (result.kind === "filed") {
           toast.success("Issue filed", { description: result.url });
-          apply(await getBugReport());
+          apply(await api.getBugReport());
           return;
         }
         let bodyCopied = false;
@@ -288,13 +337,13 @@ export function BugReportSheet() {
         setFiling(false);
       }
     },
-    [apply, draft, mutate, report],
+    [api, apply, draft, mutate, report],
   );
 
   const discard = useCallback(async () => {
     if (!report) return;
     try {
-      apply(await mutate(() => discardBugReport(report.id)));
+      apply(await mutate(() => api.discardBugReport(report.id)));
       setBrowserHandoff(null);
       setIssueUrl("");
       setDraftExpanded(false);
@@ -302,17 +351,17 @@ export function BugReportSheet() {
     } catch (error) {
       toast.error("Could not discard the report", { description: errorText(error) });
     }
-  }, [apply, closeSheet, mutate, report]);
+  }, [api, apply, closeSheet, mutate, report]);
 
   const markFiled = useCallback(async () => {
     if (!report) return;
     try {
-      apply(await mutate(() => markBugReportFiled(report.id, issueUrl.trim())));
+      apply(await mutate(() => api.markBugReportFiled(report.id, issueUrl.trim())));
       setBrowserHandoff(null);
     } catch (error) {
       toast.error("Could not record the issue", { description: errorText(error) });
     }
-  }, [apply, issueUrl, mutate, report]);
+  }, [api, apply, issueUrl, mutate, report]);
 
   /*
    * The opening prompt is held until the session is observed, as the
@@ -341,7 +390,7 @@ export function BugReportSheet() {
           <div className="flex min-w-0 items-center gap-2">
             <Bug className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
             <SheetTitle className="text-sm font-semibold">Report a bug</SheetTitle>
-            <MachinePicker />
+            <MachinePicker own={reportMachineId} ownDocument={sheetNode === null} />
           </div>
           <SheetDescription className="mt-1 whitespace-normal">
             An agent asks what went wrong, reads this machine's logs and drafts a GitHub issue for
@@ -391,6 +440,7 @@ export function BugReportSheet() {
             url={report.filed.url}
             screenshots={report.screenshots}
             onDone={() => void discard()}
+            reveal={api.revealBugReportPath}
           />
         ) : browserHandoff ? (
           <div className="shrink-0 space-y-2 border-b border-border/70 bg-sky-500/5 px-4 py-3 text-sm">
@@ -551,33 +601,35 @@ export function BugReportSheet() {
               }
               renderError={(details) => <LazyLoadInlineErrorFallback {...details} />}
             >
-              <LazyAgentNativeTab
-                key={`${report.id}:${report.agent ?? "unassigned"}`}
-                tabId={report.tabId}
-                data={{
-                  platform: report.agent,
-                  environmentId: report.runtimeId,
-                  isLocal: true,
-                  ...(report.providerSessionId ? { sessionId: report.providerSessionId } : {}),
-                }}
-                isActive
-                ownsGlobalShortcuts={false}
-                coordinatorWorkspacePath={report.scratchDir}
-                availablePlatforms={BUG_REPORT_AGENTS}
-                unassignedPlaceholder="Describe what went wrong, and what you expected to happen…"
-                emptyPlatformsMessage="Bug reports use Claude Code, Codex or OpenCode. Enable one of them in Settings → Agents."
-                onAssignPlatform={report.agent ? undefined : assign}
-                {...(launch
-                  ? {
-                      initialPrompt: launch.prompt,
-                      initialAgentModel: launch.modelId,
-                      initialReasoningEffort: launch.reasoningId,
-                      initialConversationMode: launch.mode,
-                      initialFastMode: launch.fastMode,
-                      initialExecutionProfileId: launch.executionProfileId,
-                    }
-                  : {})}
-              />
+              <AgentSessionScope scope={sheetNode === null ? null : nodeScope}>
+                <LazyAgentNativeTab
+                  key={`${report.id}:${report.agent ?? "unassigned"}`}
+                  tabId={report.tabId}
+                  data={{
+                    platform: report.agent,
+                    environmentId: report.runtimeId,
+                    isLocal: true,
+                    ...(report.providerSessionId ? { sessionId: report.providerSessionId } : {}),
+                  }}
+                  isActive
+                  ownsGlobalShortcuts={false}
+                  coordinatorWorkspacePath={report.scratchDir}
+                  availablePlatforms={BUG_REPORT_AGENTS}
+                  unassignedPlaceholder="Describe what went wrong, and what you expected to happen…"
+                  emptyPlatformsMessage="Bug reports use Claude Code, Codex or OpenCode. Enable one of them in Settings → Agents."
+                  onAssignPlatform={report.agent ? undefined : assign}
+                  {...(launch
+                    ? {
+                        initialPrompt: launch.prompt,
+                        initialAgentModel: launch.modelId,
+                        initialReasoningEffort: launch.reasoningId,
+                        initialConversationMode: launch.mode,
+                        initialFastMode: launch.fastMode,
+                        initialExecutionProfileId: launch.executionProfileId,
+                      }
+                    : {})}
+                />
+              </AgentSessionScope>
             </LazyLoadBoundary>
           )}
         </div>
@@ -586,14 +638,22 @@ export function BugReportSheet() {
   );
 }
 
+/** The report's agent session inside its node's scope, when that is not this document's own. */
+function AgentSessionScope({ scope, children }: { scope: NodeScope | null; children: ReactNode }) {
+  return scope ? <NodeScopeProvider scope={scope}>{children}</NodeScopeProvider> : children;
+}
+
 function FiledNotice({
   url,
   screenshots,
   onDone,
+  reveal,
 }: {
   url: string;
   screenshots: readonly string[];
   onDone: () => void;
+  /** Shows a screenshot's folder, on the report's machine. */
+  reveal: (path: string) => Promise<void>;
 }) {
   return (
     <div className="shrink-0 space-y-2 border-b border-border/70 bg-emerald-500/5 px-4 py-3 text-sm">
@@ -630,7 +690,7 @@ function FiledNotice({
             variant="outline"
             className="h-7 gap-1.5 text-xs"
             onClick={() =>
-              void revealBugReportPath(screenshots[0]!).catch((error: unknown) =>
+              void reveal(screenshots[0]!).catch((error: unknown) =>
                 toast.error("Could not show the screenshots", { description: errorText(error) }),
               )
             }
@@ -650,14 +710,17 @@ function FiledNotice({
   );
 }
 
-/** The machines a report can run on, by the label each is shown with. */
-function useMachineLabel(): string {
+/**
+ * The label of the machine a report runs on: `own`, or with `ownDocument`
+ * this document's bound machine first.
+ */
+function useMachineLabel(own: string | null, ownDocument: boolean): string {
   const machines = useMachineViews();
-  const own = ownBugReportMachineId();
   const machine =
-    machines.find((candidate) => candidate.bound) ??
+    (ownDocument ? machines.find((candidate) => candidate.bound) : undefined) ??
     machines.find((candidate) => candidate.connectionId === own || candidate.backendId === own);
-  return machine?.name ?? "This machine";
+  // Another node with no view yet is never called this machine.
+  return machine?.name ?? (ownDocument ? "This machine" : "another machine");
 }
 
 /**
@@ -665,16 +728,15 @@ function useMachineLabel(): string {
  * hosted, so choosing another machine hands the report over to that
  * machine's own sheet.
  */
-function MachinePicker() {
+function MachinePicker({ own, ownDocument }: { own: string | null; ownDocument: boolean }) {
   const machines = useMachineViews();
-  const label = useMachineLabel();
-  const own = ownBugReportMachineId();
+  const label = useMachineLabel(own, ownDocument);
   const current = useMemo(
     () =>
-      machines.find((machine) => machine.bound) ??
+      (ownDocument ? machines.find((machine) => machine.bound) : undefined) ??
       machines.find((machine) => machine.connectionId === own || machine.backendId === own) ??
       null,
-    [machines, own],
+    [machines, own, ownDocument],
   );
   const triggerRef = useRef<HTMLButtonElement>(null);
   if (machines.length < 2) {

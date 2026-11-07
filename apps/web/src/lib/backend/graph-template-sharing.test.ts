@@ -21,7 +21,8 @@ const ref = { scope: "user" as const, id: "mine" };
 
 describe("graph sharing wrappers", () => {
   test("call the item 405 backend commands with their arguments", async () => {
-    const calls: [() => Promise<unknown>, string, Record<string, unknown>][] = [
+    // A call without arguments (`undefined`) is sent without an arguments object.
+    const calls: [() => Promise<unknown>, string, Record<string, unknown> | undefined][] = [
       [() => exportGraphTemplateBundle(ref), "graph_template_share_export", { ref }],
       [
         () => exportGraphTemplateBundle(ref, { sign: true, author: "Ada" }),
@@ -34,7 +35,7 @@ describe("graph sharing wrappers", () => {
         "graph_template_share_import",
         { text: "{}", projectId: "p1", confirmDigest: "d" },
       ],
-      [() => getGraphSharingKeys(), "graph_sharing_keys", {}],
+      [() => getGraphSharingKeys(), "graph_sharing_keys", undefined],
       [() => getGraphSharingKeys({ create: true }), "graph_sharing_keys", { create: true }],
       [
         () => setGraphSharingKeyTrust({ action: "add", publicKey: "k", label: "Ada" }),
@@ -61,7 +62,9 @@ describe("graph sharing wrappers", () => {
     for (const [call, command, args] of calls) {
       invokeMock.mockClear();
       await call();
-      expect(invokeMock).toHaveBeenCalledWith(command, args);
+      expect(invokeMock).toHaveBeenCalledWith(
+        ...(args === undefined ? [command] : [command, args]),
+      );
     }
   });
 });

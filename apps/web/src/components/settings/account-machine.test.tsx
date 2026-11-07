@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, mock, test } from "bun:test";
 import { useState } from "react";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { invoke } from "@/lib/native/backend";
 import { FederationProvider } from "@/components/federation/FederationProvider";
 import { portalStore } from "@/lib/portal/portal-store";
@@ -55,7 +56,7 @@ function Harness({ locked = false }: { locked?: boolean }) {
   );
 }
 function mount(locked = false) {
-  return render(
+  return renderInAppCommandScope(
     <FederationProvider>
       <Harness locked={locked} />
     </FederationProvider>,
@@ -171,24 +172,16 @@ test("single-machine settings hide the picker", async () => {
 });
 
 test("closing Settings resets its selection so the next visit follows the on-screen machine", () => {
-  render(<GlobalSettingsHost />);
+  renderInAppCommandScope(<GlobalSettingsHost />);
   act(() => useAccountMachineStore.getState().choose(null));
   expect(useAccountMachineStore.getState().chosen).toBeNull();
   act(() => requestCloseGlobalSettings());
   expect(useAccountMachineStore.getState().chosen).toBeUndefined();
 });
 
-test("window ownership follows the bound leaf, while undefined always follows the workspace", () => {
+test("the window's own machine is the command node, by null or its id, and undefined", () => {
+  expect(isWindowMachine(undefined)).toBe(true);
   expect(isWindowMachine(null)).toBe(true);
   expect(isWindowMachine("leaf")).toBe(false);
   expect(isWindowMachine("command")).toBe(true);
-  window.orkestratorWorkspaceTarget = { nodeId: "leaf", nodeName: "Leaf", path: "direct" };
-  try {
-    expect(isWindowMachine(undefined)).toBe(true);
-    expect(isWindowMachine(null)).toBe(false);
-    expect(isWindowMachine("leaf")).toBe(true);
-    expect(isWindowMachine("other")).toBe(false);
-  } finally {
-    delete window.orkestratorWorkspaceTarget;
-  }
 });

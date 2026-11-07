@@ -6,7 +6,7 @@
 import { AgentMailError } from "@orkestrator/protocol/agent-mail";
 import { SUBORK_TOOL_NAME } from "@orkestrator/protocol/suborks";
 import { McpServer } from "@modelcontextprotocol/server";
-import { z } from "zod";
+import { looseObject, toolInput } from "./tool-schema.js";
 import {
   SUBORK_TOOL_ANNOTATIONS,
   SUBORK_TOOL_DESCRIPTION,
@@ -50,7 +50,7 @@ export function registerSuborkTools(
     {
       title: "Ask other agents",
       description: SUBORK_TOOL_DESCRIPTION,
-      inputSchema: SUBORK_TOOL_INPUT_SCHEMA,
+      inputSchema: toolInput(SUBORK_TOOL_INPUT_SCHEMA),
       annotations: SUBORK_TOOL_ANNOTATIONS,
     },
     async ({ targets, prompt, requestId, tabId }) => {
@@ -101,7 +101,7 @@ export function registerSuborkRefusalTool(server: McpServer): void {
     {
       title: "Ask other agents",
       description: `Not available to you: you are a subork. ${REFUSAL}`,
-      inputSchema: z.object({}).passthrough(),
+      inputSchema: toolInput(looseObject({})),
       annotations: { ...SUBORK_TOOL_ANNOTATIONS, readOnlyHint: true, openWorldHint: false },
     },
     async () => {

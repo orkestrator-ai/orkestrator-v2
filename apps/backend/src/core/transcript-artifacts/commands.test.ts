@@ -1,3 +1,4 @@
+import { registrarFrom } from "../commands-registry-contracts.js";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { TRANSCRIPT_ARTIFACT_COMMANDS } from "@orkestrator/protocol/transcript-artifact-commands";
 import type { CommandContext, CommandHandler } from "../commands-context.js";
@@ -16,9 +17,9 @@ import {
 
 let h: Harness;
 const commands = new Map<string, CommandHandler>();
-registerTranscriptArtifactCommands((name, handler) => commands.set(name, handler));
+registerTranscriptArtifactCommands(registrarFrom((name, handler) => commands.set(name, handler)));
 registerTranscriptArtifactPdfCommands(
-  (name, handler) => commands.set(name, handler),
+  registrarFrom((name, handler) => commands.set(name, handler)),
   (name) => commands.get(name),
 );
 

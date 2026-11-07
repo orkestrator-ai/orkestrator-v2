@@ -1,7 +1,6 @@
 import {
   useCallback,
   useEffect,
-  useEffectEvent,
   useRef,
   useState,
   type ComponentType,
@@ -17,8 +16,10 @@ import {
   useEnvironmentProcessUsage,
   useSystemUsage,
 } from "@/hooks/useSystemUsage";
-import type { RealmPanelControl } from "@/lib/federation/workspace-realm";
-import { getReadCoordinator } from "@/lib/read-coordinator";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { useOptionalNodeScope } from "@/lib/node-scope/providers";
+import { isAppCommandScope } from "@/lib/node-scope-slots";
+import { getReadCoordinator, readCoordinatorFor } from "@/lib/read-coordinator";
 import { useProjectStore } from "@/stores";
 import { cn } from "@/lib/utils";
 import { SystemUsagePanel } from "./AgentInfoButton.panels";
@@ -264,41 +265,18 @@ export function SystemUsageMeters({
  * presented as current once its observation is old, and its backend sample
  * time is shown in the meter tooltips.
  */
-export function SystemUsageIndicator({
-  className,
-  remote,
-}: {
-  className?: string;
-  /**
-   * In a realm: the window's title bar shows the meters and asks for the
-   * popover, which opens here under it (see `RealmTitleBarPanels`).
-   */
-  remote?: RealmPanelControl;
-}) {
+export function SystemUsageIndicator({ className }: { className?: string }) {
+  // The nearest node's: this document's own, or another node shown in the
+  // window's tree, whose title bar this then is (plan item 5002).
+  const nodeScope = useOptionalNodeScope() ?? undefined;
   // One shared read with every other host-meter consumer; the coordinator
   // pauses it while the document is hidden and reconciles once on return.
-  const usageView = useSystemUsage({ intervalMs: SYSTEM_USAGE_POLL_INTERVAL_MS });
+  const usageView = useSystemUsage({ intervalMs: SYSTEM_USAGE_POLL_INTERVAL_MS, scope: nodeScope });
   const usage = usageView.sample;
-  const [open, setOpen] = useState(remote?.request?.open ?? false);
+  const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLElement>(null);
   const restoreFocusRef = useRef(false);
-
-  const remoteRequest = remote?.request ?? null;
-  const [appliedRequest, setAppliedRequest] = useState(remoteRequest);
-  if (appliedRequest !== remoteRequest) {
-    setAppliedRequest(remoteRequest);
-    if (remoteRequest) setOpen(remoteRequest.open);
-  }
-  const reportOpen = useEffectEvent((next: boolean) => remote?.onOpenChange(next));
-  useEffect(() => reportOpen(open), [open, remoteRequest?.seq]);
-
-  const reportDismiss = useEffectEvent(() => remote?.onDismiss?.());
-  useEffect(() => {
-    if (open && remoteRequest?.open) {
-      panelRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
-    }
-  }, [open, remoteRequest?.open, remoteRequest?.seq]);
 
   const close = useCallback(() => {
     restoreFocusRef.current = true;
@@ -308,7 +286,6 @@ export function SystemUsageIndicator({
   useEffect(() => {
     if (!open && restoreFocusRef.current) {
       restoreFocusRef.current = false;
-      reportDismiss();
       triggerRef.current?.focus();
     }
   }, [open]);
@@ -326,20 +303,18 @@ export function SystemUsageIndicator({
 
   return (
     <div
-      className={cn("relative flex items-center", remote && "h-0 w-0", className)}
-      data-testid={remote ? "realm-system-usage-panel" : "system-usage-indicator"}
+      className={cn("relative flex items-center", className)}
+      data-testid="system-usage-indicator"
       style={{ WebkitAppRegion: "no-drag" } as CSSProperties}
       onMouseDown={(event) => event.stopPropagation()}
     >
-      {remote ? null : (
-        <SystemUsageMeters
-          triggerRef={triggerRef}
-          usage={usage}
-          stale={usageView.stale}
-          open={open}
-          onToggle={() => (open ? close() : setOpen(true))}
-        />
-      )}
+      <SystemUsageMeters
+        triggerRef={triggerRef}
+        usage={usage}
+        stale={usageView.stale}
+        open={open}
+        onToggle={() => (open ? close() : setOpen(true))}
+      />
 
       {open ? (
         <button
@@ -394,24 +369,31 @@ export function SystemUsageIndicator({
           ) : null}
         </header>
         <div className="max-h-[min(76vh,42rem)] overflow-y-auto p-4">
-          {open ? <EnvironmentProcessPanel /> : null}
+          {open ? <EnvironmentProcessPanel scope={nodeScope} /> : null}
         </div>
       </section>
     </div>
   );
 }
 
-function EnvironmentProcessPanel() {
+function EnvironmentProcessPanel({ scope }: { scope?: NodeScope }) {
   // Mounted only while the popover is open: process enumeration stays demand
   // driven, joins other clients' concurrent reads at the backend, and pauses
   // with the document.
   const processView = useEnvironmentProcessUsage({
     intervalMs: ENVIRONMENT_PROCESS_POLL_INTERVAL_MS,
+    scope,
   });
   const snapshot = processView.sample;
   // A reopened panel may first show the list retained from its last opening.
   // Only a sample read while this panel is open decides the frozen ranking.
-  const [openedAt] = useState(() => getReadCoordinator().clock.now());
+  // `observedAt` is on the reading scope's coordinator clock.
+  const [openedAt] = useState(() =>
+    (scope && !isAppCommandScope(scope)
+      ? readCoordinatorFor(scope)
+      : getReadCoordinator()
+    ).clock.now(),
+  );
   const rankable = processView.observedAt !== null && processView.observedAt >= openedAt;
   const [frozenIds, setFrozenIds] = useState<string[]>([]);
   const projects = useProjectStore((state) => state.projects);

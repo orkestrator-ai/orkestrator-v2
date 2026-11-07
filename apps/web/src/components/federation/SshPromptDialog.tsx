@@ -9,6 +9,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { commandClient } from "@/lib/node-scope/app-window-scope";
 
 type Prompt = { promptId: string; kind: string; message: string };
 
@@ -23,9 +24,9 @@ export function SshPromptDialog() {
   const [answer, setAnswer] = useState("");
 
   useEffect(() => {
-    const listen = window.orkestrator?.listen;
-    if (typeof listen !== "function" || !window.orkestrator?.connections?.answerSshPrompt) return;
-    const stopPrompt = listen<Prompt>("ssh-auth-prompt", (payload) => {
+    if (!window.orkestrator?.connections?.answerSshPrompt) return;
+    const client = commandClient();
+    const stopPrompt = client.listenRaw<Prompt>("ssh-auth-prompt", (payload) => {
       if (!payload || typeof payload.promptId !== "string") return;
       setAnswer("");
       setPrompt({
@@ -34,10 +35,15 @@ export function SshPromptDialog() {
         message: typeof payload.message === "string" ? payload.message.slice(0, 512) : "",
       });
     });
-    const stopSettled = listen<{ promptId?: string }>("ssh-auth-prompt-settled", (payload) => {
-      setPrompt((current) => (current && current.promptId === payload?.promptId ? null : current));
-      setAnswer("");
-    });
+    const stopSettled = client.listenRaw<{ promptId?: string }>(
+      "ssh-auth-prompt-settled",
+      (payload) => {
+        setPrompt((current) =>
+          current && current.promptId === payload?.promptId ? null : current,
+        );
+        setAnswer("");
+      },
+    );
     return () => {
       stopPrompt();
       stopSettled();

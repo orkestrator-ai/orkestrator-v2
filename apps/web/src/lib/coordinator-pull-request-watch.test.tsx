@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test, spyOn } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { invoke } from "@/lib/native/backend";
 import { MarkdownLink } from "@/components/chat/MessageMarkdown";
 import { PullRequestOpenerProvider } from "@/lib/pull-request-opener";
@@ -31,7 +32,7 @@ describe("coordinator pull request watch", () => {
 
   test("a pull request link rendered in a coordinator is reported once, and again when opened", () => {
     const open = mock(() => true);
-    const { rerender } = render(
+    const { rerender } = renderInAppCommandScope(
       <PullRequestOpenerProvider open={open}>
         <CoordinatorPullRequestWatchProvider projectId="project-a">
           <MarkdownLink href={PR_URL}>#12</MarkdownLink>
@@ -62,7 +63,7 @@ describe("coordinator pull request watch", () => {
   });
 
   test("links outside a coordinator are not reported", () => {
-    render(<MarkdownLink href={PR_URL}>#12</MarkdownLink>);
+    renderInAppCommandScope(<MarkdownLink href={PR_URL}>#12</MarkdownLink>);
     expect(watchCalls()).toEqual([]);
   });
 
@@ -102,7 +103,7 @@ test("a failed mounted report retries and a failed remounted report is not cache
   }) as typeof setTimeout);
   try {
     nativeInvoke.mockRejectedValueOnce(new Error("offline"));
-    const view = render(
+    const view = renderInAppCommandScope(
       <CoordinatorPullRequestWatchProvider projectId="retry-project">
         <MarkdownLink href={PR_URL}>retry</MarkdownLink>
       </CoordinatorPullRequestWatchProvider>,
@@ -116,7 +117,7 @@ test("a failed mounted report retries and a failed remounted report is not cache
     resetCoordinatorPullRequestWatchReports();
     nativeInvoke.mockRejectedValueOnce(new Error("offline"));
     const mountAgain = () =>
-      render(
+      renderInAppCommandScope(
         <CoordinatorPullRequestWatchProvider projectId="remount">
           <MarkdownLink href={PR_URL}>remounted</MarkdownLink>
         </CoordinatorPullRequestWatchProvider>,

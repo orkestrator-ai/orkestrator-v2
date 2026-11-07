@@ -1,3 +1,4 @@
+import { registrarFrom } from "../commands-registry-contracts.js";
 import type { NodeRoute } from "@orkestrator/protocol/command-nodes";
 import type { RouteId } from "@orkestrator/protocol/federation";
 import {
@@ -57,7 +58,7 @@ export async function topology(options: { leafRelay?: boolean } = {}) {
   // The leaf answers its command node with its own registry; the node
   // commands stay the network's (bound to the leaf's node service).
   const nodeCommands = new Set<string>();
-  registerNodeCommands((name) => nodeCommands.add(name));
+  registerNodeCommands(registrarFrom((name) => nodeCommands.add(name)));
   for (const [name, handler] of leaf.harness.commands) {
     if (nodeCommands.has(name)) continue;
     leafNode.commands.set(name, (args) => handler(args, leaf.harness.context));

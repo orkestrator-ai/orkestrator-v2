@@ -1,18 +1,14 @@
 import type { ConnectSshRouteInput, ConnectionList } from "@orkestrator/protocol/connections";
 import type { FederationFeatureFlags } from "@orkestrator/protocol/device-catalogue";
 import { isTrustedRendererUrl } from "./window.js";
-import type { WorkspaceViewBounds, WorkspaceViewOpenInput } from "./workspace-views.js";
 
 /**
- * IPC for the multi-machine client: managed SSH routes, route management,
- * workspace realms (other nodes' workspaces in a window's central region) and
- * the portal channel of a realm to its window's command node. Every
+ * IPC for the multi-machine client: managed SSH routes, route management, the
+ * window's gateway snapshot and its per-node relayed listens. Every
  * destination is one the main process resolves for the requesting renderer;
  * the renderer never supplies a URL, a credential or an SSH command line.
+ * Other nodes' workspaces are node scopes (`node-ipc.ts`).
  */
-
-/** Events of a realm's command node (its window's own connection). */
-export const PORTAL_EVENT_CHANNEL = "orkestrator:portal-event";
 
 type IpcEventLike = {
   senderFrame?: { url: string } | null;
@@ -40,18 +36,14 @@ export type GatewaySnapshot = {
   legacyOrigin: string | null;
   /** The window's machine is this computer's own backend, whatever route reaches it. */
   backendOnThisDevice?: boolean;
+  /**
+   * This computer's own backend installation id, so the renderer can tell
+   * for any node whether it is on this device (`nodeId === localInstallationId`).
+   * Null until the local backend's hello answered. An identity, never a credential.
+   */
+  localInstallationId?: string | null;
   /** A local window on the direct gateway transport: its backend's origin. Never a credential. */
   localGatewayBaseUrl?: string;
-  /** A workspace realm's node. */
-  workspaceTarget?: {
-    nodeId: string;
-    nodeName: string;
-    path: "direct" | "relay";
-    routeKind?: "https" | "ssh";
-    via?: string;
-  };
-  /** A realm's window's own machine. */
-  portalIdentity?: { connectionId: string; backendId: string | null; legacyOrigin: string | null };
 };
 
 export type FederationIpcDependencies = {
@@ -86,24 +78,9 @@ export type FederationIpcDependencies = {
     event: IpcEventLike,
     features: Partial<FederationFeatureFlags>,
   ): Promise<ConnectionList>;
-  openWorkspaceView(
-    event: IpcEventLike,
-    input: WorkspaceViewOpenInput,
-  ): Promise<{ viewId: string }>;
-  setWorkspaceViewBounds(event: IpcEventLike, viewId: string, bounds: WorkspaceViewBounds): void;
-  setWorkspaceViewVisible(event: IpcEventLike, viewId: string, visible: boolean): void;
-  captureWorkspaceView(event: IpcEventLike, viewId: string): Promise<string | null>;
-  sendToWorkspaceView(event: IpcEventLike, viewId: string, message: Record<string, unknown>): void;
-  closeWorkspaceView(event: IpcEventLike, viewId: string): void;
-  postFromWorkspaceRealm(event: IpcEventLike, message: Record<string, unknown>): void;
-  portalInvoke(
-    event: IpcEventLike,
-    command: string,
-    args: Record<string, unknown>,
-  ): Promise<unknown>;
-  addRelayedListen(event: IpcEventLike, channel: unknown, name: unknown): Promise<void>;
-  removeRelayedListen(event: IpcEventLike, channel: unknown, name: unknown): void;
-  resetRelayedListens(event: IpcEventLike, channel: unknown): void;
+  addRelayedListen(event: IpcEventLike, name: unknown): Promise<void>;
+  removeRelayedListen(event: IpcEventLike, name: unknown): void;
+  resetRelayedListens(event: IpcEventLike): void;
 };
 
 const MAX_ID_LENGTH = 256;
@@ -135,60 +112,6 @@ export function withErrorCode<T>(operation: () => Promise<T>): Promise<T> {
     }
     throw error;
   });
-}
-
-/** What a realm opens on: only known selection fields ever reach its URL. */
-function realmSearch(request: Record<string, unknown>): Record<string, string> {
-  const search: Record<string, string> = {};
-  const optionalId = (value: unknown, label: string) =>
-    value === undefined ? undefined : id(value, label);
-  const projectId = optionalId(request.projectId, "a project ID");
-  const environmentId = optionalId(request.environmentId, "an environment ID");
-  const createEnvironment = optionalId(request.createEnvironmentProjectId, "a project ID");
-  if (projectId) search.project = projectId;
-  if (projectId && environmentId) search.environment = environmentId;
-  if (
-    projectId &&
-    (request.boardTab === "coordinator" ||
-      request.boardTab === "kanban" ||
-      request.boardTab === "github" ||
-      request.boardTab === "linear" ||
-      request.boardTab === "features")
-  )
-    search.boardTab = request.boardTab;
-  if (request.addProject === true) search.addProject = "1";
-  if (createEnvironment) search.createEnvironment = createEnvironment;
-  if (
-    projectId &&
-    (request.dialog === "repository-settings" ||
-      request.dialog === "delete-project" ||
-      (request.dialog === "environment-settings" && environmentId))
-  )
-    search.dialog = request.dialog;
-  return search;
-}
-
-function viewBounds(value: unknown): WorkspaceViewBounds {
-  const input = record(value, "bounds");
-  const coordinate = (field: unknown, label: string) => {
-    if (typeof field !== "number" || !Number.isFinite(field) || Math.abs(field) > 100_000) {
-      throw new Error(`Expected ${label} to be a number`);
-    }
-    return field;
-  };
-  return {
-    x: coordinate(input.x, "x"),
-    y: coordinate(input.y, "y"),
-    width: Math.max(0, coordinate(input.width, "width")),
-    height: Math.max(0, coordinate(input.height, "height")),
-  };
-}
-
-/** Messages between a window and its realms are small; each side parses its own. */
-function boundedMessage(value: unknown): Record<string, unknown> {
-  const message = record(value, "a message");
-  if (JSON.stringify(message).length > 4096) throw new Error("Message too large");
-  return message;
 }
 
 export function registerFederationIpc(deps: FederationIpcDependencies): void {
@@ -317,45 +240,9 @@ export function registerFederationIpc(deps: FederationIpcDependencies): void {
     return deps.setFeatures(event, features);
   });
 
-  handle("orkestrator:workspace-views:open", (event, value) => {
-    const input = record(value, "workspace details");
-    const request = input.request === undefined ? {} : record(input.request, "a selection");
-    return withErrorCode(() =>
-      deps.openWorkspaceView(event, {
-        nodeId: id(input.nodeId, "a node ID"),
-        search: realmSearch(request),
-      }),
-    );
-  });
-  handle("orkestrator:workspace-views:set-bounds", (event, viewId, bounds) =>
-    deps.setWorkspaceViewBounds(event, id(viewId, "a workspace view"), viewBounds(bounds)),
-  );
-  handle("orkestrator:workspace-views:set-visible", (event, viewId, visible) => {
-    if (typeof visible !== "boolean") throw new Error("Expected visible to be a boolean");
-    deps.setWorkspaceViewVisible(event, id(viewId, "a workspace view"), visible);
-  });
-  handle("orkestrator:workspace-views:capture", (event, viewId) =>
-    deps.captureWorkspaceView(event, id(viewId, "a workspace view")),
-  );
-  handle("orkestrator:workspace-views:send", (event, viewId, message) =>
-    deps.sendToWorkspaceView(event, id(viewId, "a workspace view"), boundedMessage(message)),
-  );
-  handle("orkestrator:workspace-views:close", (event, viewId) =>
-    deps.closeWorkspaceView(event, id(viewId, "a workspace view")),
-  );
-  handle("orkestrator:workspace-realm:post", (event, message) =>
-    deps.postFromWorkspaceRealm(event, boundedMessage(message)),
-  );
-  handle("orkestrator:portal:invoke", (event, command, args) => {
-    if (typeof command !== "string" || !command) throw new Error("Expected a command");
-    return deps.portalInvoke(event, command, args === undefined ? {} : record(args, "arguments"));
-  });
-
   // Which per-node relayed events a renderer listens to. Stopping needs no answer,
   // and a window that has gone is already out of the filter.
-  handle("orkestrator:relayed-events:listen", (event, channel, name) =>
-    deps.addRelayedListen(event, channel, name),
-  );
+  handle("orkestrator:relayed-events:listen", (event, name) => deps.addRelayedListen(event, name));
   const notify = (channel: string, listener: (event: IpcEventLike, ...args: unknown[]) => void) => {
     deps.ipc.on?.(channel, (event, ...args) => {
       if (!isTrustedSender(event)) return;
@@ -366,10 +253,8 @@ export function registerFederationIpc(deps: FederationIpcDependencies): void {
       }
     });
   };
-  notify("orkestrator:relayed-events:unlisten", (event, channel, name) =>
-    deps.removeRelayedListen(event, channel, name),
+  notify("orkestrator:relayed-events:unlisten", (event, name) =>
+    deps.removeRelayedListen(event, name),
   );
-  notify("orkestrator:relayed-events:reset", (event, channel) =>
-    deps.resetRelayedListens(event, channel),
-  );
+  notify("orkestrator:relayed-events:reset", (event) => deps.resetRelayedListens(event));
 }

@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { DeliveryPolicy } from "@orkestrator/protocol/ticket-sections";
 import { useState } from "react";
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { AgentModelCatalog } from "@/lib/agent-launch";
 import {
   defaultFeatureBuildModels,
@@ -95,7 +96,7 @@ function openBuildPicker() {
 
 describe("FeatureBuildFields intent guidance", () => {
   test("keeps the feature wording and says a feature makes a pipeline environment", () => {
-    render(<Harness onModels={() => undefined} />);
+    renderInAppCommandScope(<Harness onModels={() => undefined} />);
     expect(screen.getByRole("button", { name: "A feature" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "With a prompt" })).toBeTruthy();
     expect(screen.getByTestId("build-intent-guidance").textContent).toBe(
@@ -104,7 +105,7 @@ describe("FeatureBuildFields intent guidance", () => {
   });
 
   test("says a prompt makes a prompt environment whose review and PR are started separately", () => {
-    render(<Harness intent="prompt" onModels={() => undefined} />);
+    renderInAppCommandScope(<Harness intent="prompt" onModels={() => undefined} />);
     expect(screen.getByTestId("build-intent-guidance").textContent).toBe(
       "Creates a prompt environment: the agent runs one prompt; start review and the PR by hand or from a coordinator.",
     );
@@ -114,7 +115,7 @@ describe("FeatureBuildFields intent guidance", () => {
 describe("FeatureBuildFields When verified", () => {
   test("offers the same choices as the launch dialog and reports a change", () => {
     const changes: string[] = [];
-    render(
+    renderInAppCommandScope(
       <Harness
         onModels={() => undefined}
         deliveryPolicy="open-pr"
@@ -134,7 +135,7 @@ describe("FeatureBuildFields When verified", () => {
 describe("FeatureBuildFields build step speed", () => {
   test("switching to Pi selects its later session-default row and efforts", async () => {
     let latest: FeatureBuildModelState | undefined;
-    render(<Harness onModels={(models) => (latest = models)} />);
+    renderInAppCommandScope(<Harness onModels={(models) => (latest = models)} />);
     await openBuildPicker();
     fireEvent.click(screen.getByRole("button", { name: "pi models", hidden: true }));
     expect(latest?.build).toEqual({ agent: "pi", model: "openai/gpt-6.1-sol" });
@@ -149,7 +150,7 @@ describe("FeatureBuildFields build step speed", () => {
 
   test("keeps the Fast choice when the reasoning level changes afterwards", async () => {
     let latest: FeatureBuildModelState | undefined;
-    render(<Harness onModels={(models) => (latest = models)} />);
+    renderInAppCommandScope(<Harness onModels={(models) => (latest = models)} />);
 
     await openBuildPicker();
     const speed = screen.getByRole("group", { name: "Speed mode", hidden: true });
@@ -167,7 +168,7 @@ describe("FeatureBuildFields build step speed", () => {
 
   test("keeps the reasoning level when the speed changes afterwards", async () => {
     let latest: FeatureBuildModelState | undefined;
-    render(<Harness onModels={(models) => (latest = models)} />);
+    renderInAppCommandScope(<Harness onModels={(models) => (latest = models)} />);
 
     await openBuildPicker();
     const reasoning = screen.getByRole("group", { name: "Reasoning", hidden: true });
@@ -181,7 +182,7 @@ describe("FeatureBuildFields build step speed", () => {
 });
 
 test("customized Ship card describes the selected push-only delivery", () => {
-  render(<Harness onModels={() => undefined} deliveryPolicy="push-no-pr" />);
+  renderInAppCommandScope(<Harness onModels={() => undefined} deliveryPolicy="push-no-pr" />);
   expect(screen.getByText("Pushes the branch. No pull request is opened.")).toBeTruthy();
   expect(screen.queryByText("Pushes the branch and opens the pull request.") === null).toBe(true);
 });

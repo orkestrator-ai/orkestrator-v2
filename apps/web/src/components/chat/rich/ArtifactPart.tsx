@@ -27,6 +27,7 @@ import {
   WorkflowArtifactBody,
   artifactVerificationLabels,
 } from "./ArtifactPartBodies";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 /**
  * A published transcript artifact (F10). The part is only a reference; the
@@ -314,12 +315,13 @@ function CopySourceButton({
   artifactRef: TranscriptArtifactRef;
   scope: ArtifactReadScope;
 }) {
+  const nodeBackend = useScopeBackend();
   if (artifactRef.kind === "workflow-snapshot") return null;
   return (
     <RichToolbarButton
       label="Copy source"
       onClick={() => {
-        void readWholeRepresentation(scope, artifactRef.publicationId, "source")
+        void readWholeRepresentation(nodeBackend, scope, artifactRef.publicationId, "source")
           .then(async (response) => {
             if (!isCurrentArtifactScopeGeneration(scope)) return;
             if (response.encoding !== "utf8") throw new Error("not text");
@@ -372,6 +374,7 @@ export function ArtifactNotice({
 }) {
   const scope = useRichTranscriptScope();
   const capabilities = useTranscriptArtifactCapabilities();
+  const nodeBackend = useScopeBackend();
   return (
     <RichBlockFrame
       kind="artifact"
@@ -399,7 +402,7 @@ export function ArtifactNotice({
               label="Download source"
               onClick={() => {
                 const readScope = { ...scope, backendId: capabilities.backendId };
-                void readWholeRepresentation(readScope, sourcePublicationId, "source")
+                void readWholeRepresentation(nodeBackend, readScope, sourcePublicationId, "source")
                   .then((response) => {
                     if (response.encoding !== "utf8") throw new Error("not text");
                     downloadText(

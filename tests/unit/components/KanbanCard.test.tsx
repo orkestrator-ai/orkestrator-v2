@@ -1,8 +1,9 @@
-import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { buildPipelineStore } from "@/stores/buildPipelineStore";
 import type { BuildPipeline } from "@orkestrator/protocol/build-pipeline";
 import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
 import * as realDndCore from "@dnd-kit/core";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { KanbanTask } from "@/stores/kanbanStore";
 import type { ComponentProps } from "react";
 import { ticketContentFromSections } from "@orkestrator/protocol/ticket-sections";
@@ -65,6 +66,7 @@ mock.module("@/components/ui/context-menu", () => ({
 }));
 
 import { KanbanCard } from "@/components/kanban/KanbanCard";
+import { appCommandStore } from "../../../apps/web/src/test/app-command-store";
 
 const DndContext = realDndCoreSnapshot.DndContext;
 
@@ -85,7 +87,7 @@ function makeTask(overrides: Partial<KanbanTask> = {}): KanbanTask {
 }
 
 function renderCard(task: KanbanTask, props: Partial<ComponentProps<typeof KanbanCard>> = {}) {
-  return render(
+  return renderInAppCommandScope(
     <DndContext>
       <KanbanCard task={task} onClick={() => {}} {...props} />
     </DndContext>,
@@ -338,7 +340,7 @@ describe("KanbanCard", () => {
 test.each([undefined, "current"])(
   "the badge uses one current pipeline with link %s despite older runs",
   (buildPipelineId) => {
-    const previous = useBuildPipelineStore.getState().pipelines;
+    const previous = appCommandStore(buildPipelineStore).getState().pipelines;
     const older = {
       id: "old",
       taskId: "task-1",
@@ -354,7 +356,7 @@ test.each([undefined, "current"])(
       delivery: { policy: "open-pr" },
     } as BuildPipeline;
     try {
-      useBuildPipelineStore.setState({
+      appCommandStore(buildPipelineStore).setState({
         pipelines: new Map([
           [older.id, older],
           [current.id, current],
@@ -365,7 +367,7 @@ test.each([undefined, "current"])(
       expect(screen.queryByText("Pushing") === null).toBe(true);
     } finally {
       cleanup();
-      useBuildPipelineStore.setState({ pipelines: previous });
+      appCommandStore(buildPipelineStore).setState({ pipelines: previous });
     }
   },
 );

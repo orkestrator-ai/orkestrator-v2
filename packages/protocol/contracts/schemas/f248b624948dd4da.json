@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:f248b624948dd4da4c95bdfc5365dd6b82cd879ef3359b5a2114b6c645e2e739",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "containerId": {
+          "type": "string"
+        },
+        "filePath": {
+          "type": "string"
+        }
+      },
+      "required": ["containerId", "filePath"],
+      "type": "object"
+    }
+  }
+}

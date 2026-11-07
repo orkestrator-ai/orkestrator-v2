@@ -3,11 +3,14 @@ import { toast } from "sonner";
 
 import * as backend from "@/lib/backend";
 import { isRemoteGatewayConnection } from "@/lib/gateway-url";
+import { backendForScope } from "@/lib/backend/scope-backend";
 import { openServiceExternally } from "@/lib/preview-external";
 import { linkUrlSource } from "@/lib/preview-service-entry";
 import { isLoopbackUrl, requestTerminalBrowserTab } from "@/lib/terminal-links";
-import { useEnvironmentStore } from "@/stores/environmentStore";
-import { ensurePreviewServiceSync, usePreviewServiceStore } from "@/stores/previewServiceStore";
+import { environmentStore } from "@/stores/environmentStore";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { appCommandScope } from "@/lib/node-scope-slots";
+import { ensurePreviewServiceSync, previewServiceStore } from "@/stores/previewServiceStore";
 
 export interface ExternalLinkRequest {
   environmentId: string;
@@ -15,6 +18,8 @@ export interface ExternalLinkRequest {
   url: string;
   /** Who printed the link. Defaults to terminal. */
   origin?: "terminal" | "agent";
+  /** The environment's node; the app's command scope when omitted (no caller has one yet). */
+  scope?: NodeScope;
 }
 
 function failureMessage(error: unknown): string {
@@ -39,9 +44,10 @@ export async function openLinkExternally({
   sourceTabId,
   url,
   origin = "terminal",
+  scope = appCommandScope(),
 }: ExternalLinkRequest): Promise<void> {
   const environment = environmentId
-    ? useEnvironmentStore.getState().getEnvironmentById(environmentId)
+    ? scope.store(environmentStore).getState().getEnvironmentById(environmentId)
     : undefined;
   if (
     !environment ||
@@ -52,8 +58,9 @@ export async function openLinkExternally({
     return backend.openInBrowser(url);
   }
 
-  ensurePreviewServiceSync();
-  const capabilities = await usePreviewServiceStore
+  ensurePreviewServiceSync(scope);
+  const capabilities = await scope
+    .store(previewServiceStore)
     .getState()
     .loadCapabilities()
     .catch(() => null);
@@ -78,7 +85,7 @@ export async function openLinkExternally({
 
   let resolution: backend.PreviewTargetResolution;
   try {
-    resolution = await backend.resolvePreviewTarget({
+    resolution = await backendForScope(scope).resolvePreviewTarget({
       intent: { url: url.trim(), source: linkUrlSource(environment, origin), environmentId },
     });
   } catch (error) {
@@ -92,12 +99,15 @@ export async function openLinkExternally({
     return;
   }
   try {
-    await openServiceExternally({
-      backendInstanceId: capabilities.backendInstanceId,
-      environmentId,
-      serviceId: resolution.service.definition.serviceId,
-      path: resolution.path,
-    });
+    await openServiceExternally(
+      {
+        backendInstanceId: capabilities.backendInstanceId,
+        environmentId,
+        serviceId: resolution.service.definition.serviceId,
+        path: resolution.path,
+      },
+      { scope },
+    );
   } catch (error) {
     toast.error("Could not open the service at localhost", {
       description: `${failureMessage(error)} Opened through the gateway proxy instead.`,

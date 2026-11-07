@@ -1,4 +1,5 @@
-import { create } from "zustand";
+import { defineScopedStore } from "@/lib/node-scope/scoped-store";
+import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
 
 /**
  * Track dirty (unsaved) state for file editor tabs.
@@ -21,7 +22,7 @@ export function fileSaveBaseline(entry: FileDirtyEntry): string {
   return entry.baseContent ?? entry.originalContent;
 }
 
-interface FileDirtyState {
+export interface FileDirtyState {
   /** Map of tabId -> dirty entry */
   dirtyFiles: Map<string, FileDirtyEntry>;
 
@@ -73,7 +74,11 @@ interface FileDirtyState {
   clearDirty: (tabId: string) => void;
 }
 
-export const useFileDirtyStore = create<FileDirtyState>()((set, get) => ({
+/**
+ * Per node (plan item 3012): a file tab's buffer belongs to the node whose
+ * environment holds the file, and its drafts are kept there.
+ */
+export const fileDirtyStore = defineScopedStore<FileDirtyState>("file-dirty", () => (set, get) => ({
   dirtyFiles: new Map(),
 
   setOriginalContent: (tabId, content) => {
@@ -163,3 +168,6 @@ export const useFileDirtyStore = create<FileDirtyState>()((set, get) => ({
     });
   },
 }));
+
+/** Reads the nearest node scope's file buffers; other code uses `scope.store(fileDirtyStore)`. */
+export const useFileDirtyStore = scopedStoreHook(fileDirtyStore);

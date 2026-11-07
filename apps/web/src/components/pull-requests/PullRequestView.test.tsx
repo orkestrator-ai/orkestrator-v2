@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { GitHubPullRequestDetail } from "@orkestrator/protocol/github-pull-requests";
-import { useUIStore } from "@/stores/uiStore";
+import { uiStore } from "@/stores/uiStore";
 import { mockWriteText } from "../../../../../tests/mocks/clipboard";
 import { mockToastSuccess } from "../../../../../tests/mocks/sonner";
 import { PullRequestView } from "./PullRequestView";
@@ -15,6 +16,7 @@ import {
   resetBackend,
   resetPullRequestsStore,
 } from "./pull-request-test-fixtures";
+import { appCommandStore } from "@/test/app-command-store";
 
 function renderView(detail: GitHubPullRequestDetail, props: { onSummaryLoaded?: () => void } = {}) {
   installBackend({
@@ -27,7 +29,7 @@ function renderView(detail: GitHubPullRequestDetail, props: { onSummaryLoaded?: 
       branchDeleted: !detail.isCrossRepository,
     }),
   });
-  return render(
+  return renderInAppCommandScope(
     <PullRequestView
       pullRequest={prRef}
       layout="sidebar"
@@ -104,7 +106,7 @@ describe("PullRequestView", () => {
           ? Promise.reject(new Error("GitHub authentication failed. Check the GitHub credentials."))
           : makeDetail(),
     });
-    render(<PullRequestView pullRequest={prRef} layout="page" />);
+    renderInAppCommandScope(<PullRequestView pullRequest={prRef} layout="page" />);
     const alert = await screen.findByRole("alert");
     expect(within(alert).getByText(/Settings → Version control/)).toBeTruthy();
     fail = false;
@@ -202,7 +204,7 @@ test("fork merges keep the head branch and never report skipped deletion as a fa
 
 test("both checkout actions copy the viewed repository regardless of project selection", async () => {
   mockWriteText.mockClear();
-  useUIStore.setState({ selectedProjectId: "unrelated-project" });
+  appCommandStore(uiStore).setState({ selectedProjectId: "unrelated-project" });
   renderView(makeDetail());
   const command = "gh pr checkout 42 --repo acme/widget";
   fireEvent.click(await screen.findByTitle("Copy checkout command"));
@@ -240,7 +242,7 @@ test("the label picker sends one change from a stale detail without replacing ot
       return detail.labels;
     },
   });
-  render(<PullRequestView pullRequest={prRef} layout="page" />);
+  renderInAppCommandScope(<PullRequestView pullRequest={prRef} layout="page" />);
   await screen.findByText("feat: add usage history tab");
   fireEvent.pointerDown(screen.getByRole("button", { name: "Edit labels" }), {
     button: 0,

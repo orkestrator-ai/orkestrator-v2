@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:d4e9cdfebfee60a3d007d27a8137f3054227f69feacb24d051bcea955db73093",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "copyId": {
+          "type": "string"
+        },
+        "environmentId": {
+          "type": "string"
+        },
+        "expectedRevision": {},
+        "operationId": {}
+      },
+      "required": ["copyId", "environmentId"],
+      "type": "object"
+    }
+  }
+}

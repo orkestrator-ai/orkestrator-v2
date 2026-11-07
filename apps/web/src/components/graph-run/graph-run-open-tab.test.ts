@@ -1,12 +1,14 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { appCommandScope } from "@/lib/node-scope-slots";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import type { PaneLeaf, TabInfo } from "@/types/paneLayout";
 import { openGraphRunTab } from "./graph-run-open-tab";
+import { appCommandStore } from "@/test/app-command-store";
 
 const ENVIRONMENT_ID = "env-1";
 
 function seed(tabs: TabInfo[]) {
-  usePaneLayoutStore.setState({
+  appCommandStore(paneLayoutStore).setState({
     environments: new Map([
       [
         ENVIRONMENT_ID,
@@ -21,15 +23,17 @@ function seed(tabs: TabInfo[]) {
 }
 
 function leaf(): PaneLeaf {
-  return usePaneLayoutStore.getState().environments.get(ENVIRONMENT_ID)!.root as PaneLeaf;
+  return appCommandStore(paneLayoutStore).getState().environments.get(ENVIRONMENT_ID)!
+    .root as PaneLeaf;
 }
 
 function open(tabs: TabInfo[], runId: string, maxTabs = 9) {
   const addTab = mock((paneId: string, tab: TabInfo, environmentId: string) =>
-    usePaneLayoutStore.getState().addTab(paneId, tab, environmentId),
+    appCommandStore(paneLayoutStore).getState().addTab(paneId, tab, environmentId),
   );
   const onTabLimit = mock(() => {});
   const opened = openGraphRunTab({
+    scope: appCommandScope(),
     environmentId: ENVIRONMENT_ID,
     activePaneId: "pane-1",
     allTabs: tabs,

@@ -1,11 +1,11 @@
 import { useState } from "react";
 import { Wrench } from "lucide-react";
 import type { ArtifactPrepareWorkerResponse } from "@orkestrator/protocol/transcript-artifact-commands";
-import { prepareTranscriptArtifactWorker } from "@/lib/backend/transcript-artifacts";
 import {
   refreshTranscriptArtifactCapabilities,
   useTranscriptArtifactCapabilities,
 } from "@/hooks/useTranscriptArtifactCapabilities";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 type PrepareState =
   | { status: "idle" }
@@ -21,6 +21,7 @@ type PrepareState =
  * fixed arguments; this only asks it to and reports progress and the outcome.
  */
 export function ArtifactWorkerPrepareAction() {
+  const nodeBackend = useScopeBackend();
   const capabilities = useTranscriptArtifactCapabilities();
   const [state, setState] = useState<PrepareState>({ status: "idle" });
   const preparation = capabilities?.workerPreparation;
@@ -30,7 +31,8 @@ export function ArtifactWorkerPrepareAction() {
 
   const prepare = () => {
     setState({ status: "preparing" });
-    void prepareTranscriptArtifactWorker()
+    void nodeBackend
+      .prepareTranscriptArtifactWorker()
       .then((result) => {
         setState({ status: "done", result });
         return refreshTranscriptArtifactCapabilities();

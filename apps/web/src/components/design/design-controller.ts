@@ -1,9 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import {
-  DESIGN_EVENT,
-  type DesignChange,
-  type DesignFrame,
-} from "@orkestrator/protocol/design-canvas";
+import type { DesignFrame } from "@orkestrator/protocol/design-canvas";
+import { designCanvasChangedEvent } from "@orkestrator/protocol/contract/domains/events";
 import {
   DESIGN_INTENT_LIMITS,
   DESIGN_NOT_RUN_STATES,
@@ -20,21 +17,28 @@ import {
   type DesignSyncResult,
 } from "@orkestrator/protocol/design-operations";
 import { NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { useNodeScope } from "@/lib/node-scope/providers";
+import { appCommandScope, defineScopedSlot, isAppCommandScope } from "@/lib/node-scope-slots";
 import { createUuid } from "@/lib/uuid";
-import { getReadCoordinator, type ReadSubscription } from "@/lib/read-coordinator";
+import { readCoordinatorFor, type ReadSubscription } from "@/lib/read-coordinator";
+import type { StoreApi } from "zustand/vanilla";
 import {
+  designStore,
   emptyProjection,
   useDesignStore,
   type DesignIntent,
   type DesignProjection,
+  type DesignStoreState,
 } from "@/stores/designStore";
 import {
   DesignClientError,
   classifyTransportError,
-  designApi,
+  designApiFor,
   designBackendKey,
   failureOf,
   getCapabilities,
+  type DesignV2Api,
 } from "@/lib/design-client";
 import { clearLegacyDrafts, readLegacyDrafts } from "./design-drafts";
 import { fromStoredIntent, mergeIntents, settledOk, toIntentDraft } from "./design-intent-merge";
@@ -132,29 +136,36 @@ export class DesignCanvasController {
   private ownCommits: DesignOperationStatus[] = [];
   private ownCommitsGeneration: string | undefined;
   private capabilities: DesignCapabilities | undefined;
+  /** The scope's design store and commands, held so a late answer never reopens a disposed scope. */
+  private readonly store: StoreApi<DesignStoreState>;
+  private readonly api: DesignV2Api;
   lastUsed = Date.now();
 
   constructor(
+    /** The node the canvas lives on (plan item 3012). */
+    readonly scope: NodeScope,
     readonly backend: string,
     readonly environmentId: string,
     readonly canvasId: string,
   ) {
     this.key = `${backend}|${environmentId}|${canvasId}`;
-    const store = useDesignStore.getState();
+    this.store = scope.store(designStore);
+    this.api = designApiFor(scope);
+    const store = this.store.getState();
     if (!store.projections.has(this.key))
       store.put(emptyProjection(this.key, environmentId, canvasId));
   }
 
   get projection(): DesignProjection {
     return (
-      useDesignStore.getState().projections.get(this.key) ??
+      this.store.getState().projections.get(this.key) ??
       emptyProjection(this.key, this.environmentId, this.canvasId)
     );
   }
 
   private update(update: (projection: DesignProjection) => DesignProjection) {
     if (this.disposed) return;
-    useDesignStore.getState().update(this.key, update);
+    this.store.getState().update(this.key, update);
   }
 
   private notice(text: string, tone: "info" | "success" | "warning" = "info") {
@@ -184,7 +195,7 @@ export class DesignCanvasController {
       if (this.consumers === 0) {
         this.deactivate();
         // Deferred so a view switching canvases can acquire the next one first.
-        scheduleEviction();
+        scheduleEviction(this.scope);
       }
     };
   }
@@ -194,31 +205,29 @@ export class DesignCanvasController {
   }
 
   private activate() {
-    const listen = window.orkestrator?.listen;
-    if (typeof listen === "function") {
-      const hint = listen<DesignChange & { generation?: string }>(DESIGN_EVENT, (event) => {
-        if (event?.canvasId !== this.canvasId) return;
-        if (
-          event.generation &&
-          this.projection.generation &&
-          event.generation !== this.projection.generation
-        )
-          this.update((projection) => ({ ...projection, snapshot: "stale" }));
-        void this.refresh();
-      });
-      const reconnect = listen(NATIVE_EVENT_STREAM_CONNECTED_EVENT, () => {
-        this.capabilities = undefined;
-        this.update((projection) => ({ ...projection, generation: undefined }));
-        void this.refresh();
-        this.reconcilePending();
-        this.pump();
-      });
-      this.unlisten.push(hint, reconnect);
-    }
+    const client = this.scope.client;
+    const hint = client.listen(designCanvasChangedEvent, (event) => {
+      if (event.canvasId !== this.canvasId) return;
+      if (
+        event.generation &&
+        this.projection.generation &&
+        event.generation !== this.projection.generation
+      )
+        this.update((projection) => ({ ...projection, snapshot: "stale" }));
+      void this.refresh();
+    });
+    const reconnect = client.listenRaw(NATIVE_EVENT_STREAM_CONNECTED_EVENT, () => {
+      this.capabilities = undefined;
+      this.update((projection) => ({ ...projection, generation: undefined }));
+      void this.refresh();
+      this.reconcilePending();
+      this.pump();
+    });
+    this.unlisten.push(hint, reconnect);
     void this.refresh();
     // The coordinator pauses periodic reads while hidden and reconciles on return.
     // The activation read above still subscribes to hints before reading.
-    this.cursorCheck = getReadCoordinator().subscribe({
+    this.cursorCheck = readCoordinatorFor(this.scope).subscribe({
       key: { resource: "design-canvas-cursor", target: this.key },
       demand: { intervalMs: DESIGN_CANVAS_CURSOR_CHECK_MS, priority: "standard" },
       readOnSubscribe: false,
@@ -270,7 +279,7 @@ export class DesignCanvasController {
     this.pumpTimer = undefined;
     this.saveTimer = undefined;
     for (const waiter of this.waiters.splice(0)) waiter.resolve();
-    useDesignStore.getState().remove(this.key);
+    this.store.getState().remove(this.key);
   }
 
   // ---------------------------------------------------------------------------
@@ -308,7 +317,7 @@ export class DesignCanvasController {
   }
 
   private async caps(): Promise<DesignCapabilities> {
-    this.capabilities ??= await getCapabilities(this.backend);
+    this.capabilities ??= await getCapabilities(this.backend, this.scope);
     return this.capabilities;
   }
 
@@ -328,17 +337,17 @@ export class DesignCanvasController {
       const current = this.projection;
       const result: DesignSyncResult | DesignSnapshotResult =
         current.generation && current.canvas && current.snapshot !== "invalid"
-          ? await designApi.sync(
+          ? await this.api.sync(
               this.environmentId,
               this.canvasId,
               current.generation,
               current.revision,
               current.statusVersion >= 0 ? current.statusVersion : undefined,
             )
-          : await designApi.snapshot(this.environmentId, this.canvasId);
+          : await this.api.snapshot(this.environmentId, this.canvasId);
       if (epoch !== this.epoch) return;
       if (result.kind === "reset" || (result.kind === "delta" && !this.installDelta(result))) {
-        const snapshot = await designApi.snapshot(this.environmentId, this.canvasId);
+        const snapshot = await this.api.snapshot(this.environmentId, this.canvasId);
         if (epoch !== this.epoch) return;
         this.install(snapshot);
       } else if (result.kind !== "delta") {
@@ -493,7 +502,7 @@ export class DesignCanvasController {
     for (const id of delta.removed) delete metas[id];
     for (const patch of [...delta.added, ...delta.patched])
       if (patch.meta) metas[patch.id] = patch.meta;
-    useDesignStore.getState().update(this.key, (current) => ({
+    this.store.getState().update(this.key, (current) => ({
       ...current,
       snapshot: "current",
       canvas: {
@@ -546,7 +555,7 @@ export class DesignCanvasController {
     if (!this.migrated) await this.migrateLegacyDrafts();
     let listed: DesignIntentList;
     try {
-      listed = await designApi.intents(this.environmentId, this.canvasId);
+      listed = await this.api.intents(this.environmentId, this.canvasId);
     } catch (error) {
       if (error instanceof DesignClientError) return;
       throw error;
@@ -583,7 +592,7 @@ export class DesignCanvasController {
     const legacy = readLegacyDrafts(this.key);
     if (!legacy.intents.length) return;
     try {
-      const result = await designApi.importIntents(
+      const result = await this.api.importIntents(
         this.environmentId,
         this.canvasId,
         designClientId(),
@@ -632,7 +641,7 @@ export class DesignCanvasController {
     if (!drafts.length) return;
     const versions = new Map(drafts.map((intent) => [intent.id, this.unsaved.get(intent.id)]));
     try {
-      const { saved } = await designApi.saveIntents(
+      const { saved } = await this.api.saveIntents(
         this.environmentId,
         this.canvasId,
         designClientId(),
@@ -788,7 +797,7 @@ export class DesignCanvasController {
       let token = intent.token;
       if (!token) {
         this.patchIntent(id, { phase: "preparing" });
-        const prepared = await designApi.prepare(
+        const prepared = await this.api.prepare(
           this.environmentId,
           rebaseOverOwnCommits(intent.descriptor, this.ownCommits),
         );
@@ -799,7 +808,7 @@ export class DesignCanvasController {
       }
       if (epoch !== this.epoch) return;
       this.patchIntent(id, { phase: "submitting" });
-      const status = await designApi.execute(
+      const status = await this.api.execute(
         this.environmentId,
         this.canvasId,
         token,
@@ -855,7 +864,7 @@ export class DesignCanvasController {
    */
   private async runOnBackend(id: string, intent: DesignIntent) {
     this.patchIntent(id, { phase: "preparing" });
-    const result = await designApi.runIntent(
+    const result = await this.api.runIntent(
       this.environmentId,
       this.canvasId,
       toIntentDraft(intent),
@@ -900,7 +909,7 @@ export class DesignCanvasController {
     while (!TERMINAL.has(status.state)) {
       if (status.state === "prepared") {
         // An execute request that never arrived; resending the same token is idempotent.
-        status = await designApi.execute(
+        status = await this.api.execute(
           this.environmentId,
           this.canvasId,
           status.token,
@@ -911,7 +920,7 @@ export class DesignCanvasController {
       this.patchIntent(id, { phase: "admitted", outcome: "executing" });
       await new Promise((resolve) => setTimeout(resolve, delay));
       delay = Math.min(5000, delay * 2);
-      status = await designApi.status(this.environmentId, this.canvasId, status.token);
+      status = await this.api.status(this.environmentId, this.canvasId, status.token);
     }
     this.settleStatus(id, status);
   }
@@ -933,7 +942,7 @@ export class DesignCanvasController {
         if (!intent?.token || this.disposed || !this.visible) return;
         if (intent.phase === "settled" && intent.outcome !== "unknown") return;
         try {
-          const status = await designApi.status(this.environmentId, this.canvasId, intent.token);
+          const status = await this.api.status(this.environmentId, this.canvasId, intent.token);
           const current = this.intent(id);
           if (!current) return;
           if (status.state === "committed" || status.state === "no-op") {
@@ -946,7 +955,7 @@ export class DesignCanvasController {
             return this.settleStatus(id, status);
           if (status.state === "prepared") {
             if (current.restored) return;
-            const executed = await designApi.execute(
+            const executed = await this.api.execute(
               this.environmentId,
               this.canvasId,
               intent.token,
@@ -1087,7 +1096,7 @@ export class DesignCanvasController {
       this.discarded.add(id);
       this.unsaved.delete(id);
       try {
-        const result = await designApi.discardIntent(this.environmentId, this.canvasId, id);
+        const result = await this.api.discardIntent(this.environmentId, this.canvasId, id);
         if (result.discarded) mayStillFinish = result.mayStillFinish;
       } catch {
         // The backend still holds it, so the next listing shows it again.
@@ -1097,9 +1106,7 @@ export class DesignCanvasController {
       intent.token &&
       (intent.phase === "prepared" || (intent.restored && intent.outcome === undefined))
     ) {
-      await designApi
-        .cancel(this.environmentId, this.canvasId, intent.token)
-        .catch(() => undefined);
+      await this.api.cancel(this.environmentId, this.canvasId, intent.token).catch(() => undefined);
     }
     this.retryAt.delete(id);
     this.update((projection) => ({
@@ -1118,7 +1125,7 @@ export class DesignCanvasController {
     if (!intent) return;
     if (!intent.token || intent.phase === "draft") return this.discard(id);
     try {
-      const status = await designApi.cancel(this.environmentId, this.canvasId, intent.token);
+      const status = await this.api.cancel(this.environmentId, this.canvasId, intent.token);
       if (status.state === "canceled") return this.discard(id);
       this.settleStatus(id, status);
     } catch (error) {
@@ -1143,7 +1150,7 @@ export class DesignCanvasController {
     this.retryAt.delete(id);
     if (this.intentsEnabled && !this.unsaved.has(id)) {
       try {
-        const { intent: stored } = await designApi.resumeIntent(
+        const { intent: stored } = await this.api.resumeIntent(
           this.environmentId,
           this.canvasId,
           id,
@@ -1226,7 +1233,7 @@ export class DesignCanvasController {
   ): Promise<DesignExportReceipt> {
     this.update((projection) => ({ ...projection, busy: { ...projection.busy, export: true } }));
     try {
-      const receipt = await designApi.exportSave(
+      const receipt = await this.api.exportSave(
         this.environmentId,
         this.canvasId,
         relativePath,
@@ -1262,33 +1269,69 @@ export class DesignCanvasController {
 // Registry
 // -----------------------------------------------------------------------------
 
-const controllers = new Map<string, DesignCanvasController>();
+/**
+ * One node's controllers and its deferred eviction (plan item 3012). Disposing
+ * the scope disposes its controllers (each offers its unsaved drafts first)
+ * and clears the timer.
+ */
+interface DesignControllers {
+  controllers: Map<string, DesignCanvasController>;
+  evictionTimer: ReturnType<typeof setTimeout> | undefined;
+}
 
-export function designController(environmentId: string, canvasId: string): DesignCanvasController {
-  const backend = designBackendKey();
+function disposeAll(registry: DesignControllers) {
+  clearTimeout(registry.evictionTimer);
+  registry.evictionTimer = undefined;
+  for (const controller of Array.from(registry.controllers.values())) controller.dispose();
+  registry.controllers.clear();
+}
+
+const designControllers = defineScopedSlot<DesignControllers>("design-controllers", (scope) => {
+  const registry: DesignControllers = { controllers: new Map(), evictionTimer: undefined };
+  scope.onDispose("design-controllers", () => disposeAll(registry));
+  return registry;
+});
+
+/**
+ * Identity of `scope`'s backend in controller keys and the capability cache:
+ * the window gateway on the app's command scope (it moves with the window's
+ * connection), the node id elsewhere.
+ */
+function backendKeyOf(scope: NodeScope): string {
+  return isAppCommandScope(scope) ? designBackendKey() : scope.nodeId;
+}
+
+export function designController(
+  environmentId: string,
+  canvasId: string,
+  scope: NodeScope = appCommandScope(),
+): DesignCanvasController {
+  const { controllers } = designControllers(scope);
+  const backend = backendKeyOf(scope);
   const key = `${backend}|${environmentId}|${canvasId}`;
   let controller = controllers.get(key);
   if (!controller || controller.isDisposed) {
-    controller = new DesignCanvasController(backend, environmentId, canvasId);
+    controller = new DesignCanvasController(scope, backend, environmentId, canvasId);
     controllers.set(key, controller);
   }
   controller.lastUsed = Date.now();
   return controller;
 }
 
-let evictionTimer: ReturnType<typeof setTimeout> | undefined;
-
 /** Coalesced, deferred eviction: runs after the releasing render could acquire another view. */
-function scheduleEviction() {
-  if (evictionTimer !== undefined) return;
-  evictionTimer = setTimeout(() => {
-    evictionTimer = undefined;
-    evictInactive();
+function scheduleEviction(scope: NodeScope) {
+  if (scope.disposed) return;
+  const registry = designControllers(scope);
+  if (registry.evictionTimer !== undefined) return;
+  registry.evictionTimer = setTimeout(() => {
+    registry.evictionTimer = undefined;
+    if (!scope.disposed) evictInactive(scope);
   }, 0);
 }
 
-/** Evicts clean inactive projections by count and bytes; drafts are never evicted. */
-export function evictInactive() {
+/** Evicts `scope`'s clean inactive projections by count and bytes; drafts are never evicted. */
+export function evictInactive(scope: NodeScope = appCommandScope()) {
+  const { controllers } = designControllers(scope);
   const inactive = Array.from(controllers.values())
     .filter((controller) => !controller.visible)
     .sort((a, b) => a.lastUsed - b.lastUsed);
@@ -1304,23 +1347,22 @@ export function evictInactive() {
   }
 }
 
-/** Test helper: dispose every controller. */
-export function resetDesignControllers() {
-  clearTimeout(evictionTimer);
-  evictionTimer = undefined;
-  for (const controller of Array.from(controllers.values())) controller.dispose();
-  controllers.clear();
+/** Test helper: dispose every controller of `scope` (the app's command scope when omitted). */
+export function resetDesignControllers(scope: NodeScope = appCommandScope()) {
+  disposeAll(designControllers(scope));
 }
 
 export function useDesignCanvas(environmentId: string, canvasId: string, active: boolean) {
+  // The canvas's node: the nearest node scope (the command scope outside one).
+  const scope = useNodeScope();
   // Re-resolved on activation: an evicted (disposed) controller is replaced by
   // a fresh one. `active` is deliberately a dependency for that reason.
   // `renewal` re-resolves when the resolved controller was evicted meanwhile.
   const [renewal, setRenewal] = useState(0);
   /* oxlint-disable react-hooks/exhaustive-deps */
   const controller = useMemo(
-    () => designController(environmentId, canvasId),
-    [environmentId, canvasId, active, renewal],
+    () => designController(environmentId, canvasId, scope),
+    [environmentId, canvasId, scope, active, renewal],
   );
   /* oxlint-enable react-hooks/exhaustive-deps */
   useEffect(() => {

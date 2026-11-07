@@ -1,0 +1,238 @@
+{
+  "schemaVersion": 1,
+  "domain": "environments",
+  "commands": {
+    "acknowledge_startup_agent_session": {
+      "untyped": true,
+      "read": false
+    },
+    "add_environment_domains": {
+      "untyped": true,
+      "read": false
+    },
+    "apply_environment_allowed_domains": {
+      "untyped": true,
+      "read": false
+    },
+    "await_environment_setup_session": {
+      "untyped": true,
+      "read": false
+    },
+    "cancel_container_operation": {
+      "untyped": true,
+      "read": false
+    },
+    "cleanup_logs": {
+      "untyped": true,
+      "read": false
+    },
+    "clear_environment_pr": {
+      "untyped": true,
+      "read": false
+    },
+    "create_environment": {
+      "untyped": true,
+      "read": false
+    },
+    "delete_environment": {
+      "untyped": true,
+      "read": false
+    },
+    "discard_recovery_copy": {
+      "untyped": true,
+      "read": false
+    },
+    "ensure_environment_setup": {
+      "untyped": true,
+      "read": false
+    },
+    "ensure_project_home_environment": {
+      "untyped": true,
+      "read": false
+    },
+    "fork_environment": {
+      "untyped": true,
+      "read": false
+    },
+    "get_claude_terminal_state": {
+      "untyped": true,
+      "read": true
+    },
+    "get_container_lifecycle_snapshot": {
+      "untyped": true,
+      "read": true
+    },
+    "get_environment": {
+      "untyped": true,
+      "read": true
+    },
+    "get_environment_extensions": {
+      "untyped": true,
+      "read": true
+    },
+    "get_environment_inputs": {
+      "untyped": true,
+      "read": true
+    },
+    "get_environment_network_policy": {
+      "untyped": true,
+      "read": true
+    },
+    "get_environment_pr_url": {
+      "untyped": true,
+      "read": true
+    },
+    "get_environment_resources": {
+      "untyped": true,
+      "read": true
+    },
+    "get_environment_snapshots": {
+      "untyped": true,
+      "read": true
+    },
+    "get_environment_status": {
+      "untyped": true,
+      "read": true
+    },
+    "get_environments": {
+      "untyped": true,
+      "read": true
+    },
+    "get_log_directory": {
+      "untyped": true,
+      "read": true
+    },
+    "get_log_storage_stats": {
+      "untyped": true,
+      "read": true
+    },
+    "get_rebuild_preview": {
+      "untyped": true,
+      "read": true
+    },
+    "list_recovery_copies": {
+      "untyped": true,
+      "read": true
+    },
+    "move_environment": {
+      "untyped": true,
+      "read": false
+    },
+    "override_environment_setup": {
+      "untyped": true,
+      "read": false
+    },
+    "prepare_environment_first_prompt": {
+      "untyped": true,
+      "read": false
+    },
+    "reconcile_orphaned_tab_resources": {
+      "untyped": true,
+      "read": false
+    },
+    "reconcile_pending_environment_renames": {
+      "untyped": true,
+      "read": false
+    },
+    "reconcile_tab_teardowns": {
+      "untyped": true,
+      "read": false
+    },
+    "recreate_environment": {
+      "untyped": true,
+      "read": false
+    },
+    "remove_environment_domains": {
+      "untyped": true,
+      "read": false
+    },
+    "rename_environment": {
+      "untyped": true,
+      "read": false
+    },
+    "rename_environment_from_prompt": {
+      "untyped": true,
+      "read": false
+    },
+    "reorder_environments": {
+      "untyped": true,
+      "read": false
+    },
+    "resolve_container_operation": {
+      "untyped": true,
+      "read": false
+    },
+    "restore_provider_credentials": {
+      "untyped": true,
+      "read": false
+    },
+    "restore_recovery_copy": {
+      "untyped": true,
+      "read": false
+    },
+    "revoke_provider_credentials": {
+      "untyped": true,
+      "read": false
+    },
+    "run_environment_setup": {
+      "untyped": true,
+      "read": false
+    },
+    "set_container_resource_limits": {
+      "untyped": true,
+      "read": false
+    },
+    "set_environment_initial_prompt": {
+      "untyped": true,
+      "read": false
+    },
+    "set_environment_pending_agent_launch": {
+      "untyped": true,
+      "read": false
+    },
+    "set_environment_pr": {
+      "untyped": true,
+      "read": false
+    },
+    "start_environment": {
+      "untyped": true,
+      "read": false
+    },
+    "start_environment_background": {
+      "untyped": true,
+      "read": false
+    },
+    "stop_environment": {
+      "untyped": true,
+      "read": false
+    },
+    "sync_all_environments_with_docker": {
+      "untyped": true,
+      "read": false
+    },
+    "sync_environment_status": {
+      "untyped": true,
+      "read": false
+    },
+    "teardown_tab": {
+      "untyped": true,
+      "read": false
+    },
+    "update_environment_agent_settings": {
+      "untyped": true,
+      "read": false
+    },
+    "update_environment_allowed_domains": {
+      "untyped": true,
+      "read": false
+    },
+    "update_environment_resources": {
+      "untyped": true,
+      "read": false
+    },
+    "update_port_mappings": {
+      "untyped": true,
+      "read": false
+    }
+  }
+}

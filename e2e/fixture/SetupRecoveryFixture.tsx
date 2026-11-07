@@ -5,6 +5,7 @@ import { TerminalProvider } from "../../apps/web/src/contexts";
 import { useEnvironmentStore } from "../../apps/web/src/stores/environmentStore";
 import { usePaneLayoutStore } from "../../apps/web/src/stores/paneLayoutStore";
 import type { Environment } from "../../apps/web/src/types";
+import { appCommandStore } from "../../apps/web/src/test/app-command-store";
 
 const ENVIRONMENT_ID = "setup-recovery-environment";
 const CONTAINER_ID = "setup-recovery-container";
@@ -29,8 +30,8 @@ function installBackend(recordRequest: (request: RecoveryRequest) => void) {
     prState: null,
     hasMergeConflicts: null,
   };
-  useEnvironmentStore.setState({ environments: [environment] });
-  usePaneLayoutStore.setState({
+  appCommandStore(useEnvironmentStore.def).setState({ environments: [environment] });
+  appCommandStore(usePaneLayoutStore.def).setState({
     activeEnvironmentId: ENVIRONMENT_ID,
     hydration: new Map([[ENVIRONMENT_ID, "done"]]),
     environments: new Map([

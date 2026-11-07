@@ -13,10 +13,8 @@
  * outside-workspace, denied and too-large states it does for a direct read.
  */
 import { stat } from "node:fs/promises";
-import {
-  TRANSCRIPT_MEDIA_PIN_COMMAND,
-  type TranscriptMediaPinResponse,
-} from "@orkestrator/protocol/transcript-media-pins";
+import { transcriptMediaPinCommand } from "@orkestrator/protocol/contract/domains/transcripts";
+import type { TranscriptMediaPinResponse } from "@orkestrator/protocol/transcript-media-pins";
 import type { CommandContext } from "./commands-context.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
 import { containerRelativePath, type CommandLookup } from "./transcript-artifacts/index.js";
@@ -24,7 +22,6 @@ import { transcriptMediaPins, type TranscriptMediaFileRead } from "./transcript-
 
 const MAX_IDENTIFIER_LENGTH = 512;
 const MAX_PATH_LENGTH = 4_096;
-const ARGUMENTS = ["environmentId", "logicalSessionKey", "messageId", "path", "containerId"];
 
 function identifier(value: unknown, name: string): string {
   if (typeof value !== "string" || !value.trim() || value.length > MAX_IDENTIFIER_LENGTH) {
@@ -56,9 +53,9 @@ export function registerTranscriptMediaCommands(
   register: CommandRegistrar,
   lookup: CommandLookup,
 ): void {
-  register(TRANSCRIPT_MEDIA_PIN_COMMAND, async (args, context) => {
-    const unknown = Object.keys(args).filter((key) => !ARGUMENTS.includes(key));
-    if (unknown.length > 0) throw new Error(`Unknown arguments: ${unknown.slice(0, 5).join(", ")}`);
+  // Tolerant since plan item 7004: keys the definition does not declare are
+  // dropped before the handler runs, never refused.
+  register(transcriptMediaPinCommand, async (args, context) => {
     const environmentId = identifier(args.environmentId, "environmentId");
     const logicalSessionKey = identifier(args.logicalSessionKey, "logicalSessionKey");
     const messageId = identifier(args.messageId, "messageId");

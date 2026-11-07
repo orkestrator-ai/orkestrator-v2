@@ -20,7 +20,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { formatRelativeTime } from "@/lib/format-relative-time";
 import type { DesignProjection } from "@/stores/designStore";
-import { designApi, failureOf } from "@/lib/design-client";
+import { failureOf, type DesignV2Api } from "@/lib/design-client";
+import { useDesignApi } from "./design-scope";
 import type { DesignCanvasController } from "./design-controller";
 import { DesignCheckpointPreview } from "./DesignCheckpointPreview";
 
@@ -29,7 +30,7 @@ const PAGE_SIZE = 20;
 const MAX_REFRESH = 100;
 const MAX_PREVIEW_FRAMES = 4;
 
-export type DesignHistoryApi = Pick<typeof designApi, "history" | "checkpoint">;
+export type DesignHistoryApi = Pick<DesignV2Api, "history" | "checkpoint">;
 type Side = "before" | "after";
 
 const ACTORS: Record<DesignHistoryEntrySummary["actor"], string> = {
@@ -79,7 +80,7 @@ export function DesignHistoryPanel({
   focusFrameId,
   onClose,
   onUseAsReference,
-  api = designApi,
+  api: apiOverride,
 }: {
   controller: DesignCanvasController;
   projection: DesignProjection;
@@ -92,6 +93,9 @@ export function DesignHistoryPanel({
   /** Injected in tests (must be referentially stable); defaults to the design client. */
   api?: DesignHistoryApi;
 }) {
+  // The canvas's node (plan item 4007).
+  const nodeDesign = useDesignApi();
+  const api = apiOverride ?? nodeDesign;
   const [entries, setEntries] = useState<DesignHistoryEntrySummary[]>([]);
   const [page, setPage] = useState<Omit<DesignHistoryPage, "entries"> | null>(null);
   // The first page starts loading as soon as the panel mounts.

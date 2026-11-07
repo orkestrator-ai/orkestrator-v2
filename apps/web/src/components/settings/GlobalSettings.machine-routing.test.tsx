@@ -1,20 +1,21 @@
 import { afterEach, beforeEach, expect, mock, spyOn, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 import * as backend from "@/lib/backend";
-import { useConfigStore } from "@/stores/configStore";
+import { configStore } from "@/stores/configStore";
 import { AccountMachineProvider } from "./account-machine";
 import { MachineConfigProvider } from "./settings-config";
 import { GlobalSettings } from "./GlobalSettings";
 import type { GlobalSettingsSection } from "@/lib/settings-navigation";
+import { appCommandStore } from "@/test/app-command-store";
 
-const initial = useConfigStore.getState().config;
+const initial = appCommandStore(configStore).getState().config;
 let selected = structuredClone(initial);
 beforeEach(() => {
   selected = structuredClone(initial);
   selected.global.useHostGitHubCredentials = false;
   selected.global.allowedDomains = ["selected.test"];
-  window.orkestratorWorkspaceTarget = { nodeId: "leaf", nodeName: "Leaf", path: "direct" };
   spyOn(backend, "getConfig").mockImplementation(async (target) =>
     target === undefined ? initial : selected,
   );
@@ -24,11 +25,10 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   mock.restore();
-  useConfigStore.setState({ config: initial });
-  delete window.orkestratorWorkspaceTarget;
+  appCommandStore(configStore).setState({ config: initial });
 });
 function mount(section: GlobalSettingsSection, machine: string | null = "other") {
-  return render(
+  return renderInAppCommandScope(
     <AccountMachineProvider value={{ machine, name: "Selected" }}>
       <MachineConfigProvider machine={machine}>
         <GlobalSettings activeSection={section} />
@@ -36,8 +36,9 @@ function mount(section: GlobalSettingsSection, machine: string | null = "other")
     </AccountMachineProvider>,
   );
 }
-for (const machine of [null, "other"]) {
-  test(`${machine ?? "command node"} autosave, credential writes and GitHub propagation carry the selected target`, async () => {
+// The command node itself is this window's own machine (the window's suites).
+for (const machine of ["other"]) {
+  test(`${machine} autosave, credential writes and GitHub propagation carry the selected target`, async () => {
     const save = spyOn(backend, "patchGlobalConfig").mockImplementation(
       async (patch) => (selected = { ...selected, global: { ...selected.global, ...patch } }),
     );
@@ -89,8 +90,8 @@ test("remote DNS tests use the selected machine", async () => {
   await waitFor(() => expect(testDNS).toHaveBeenCalledWith(["selected.test"], "other"));
 });
 
-for (const machine of [null, "other"]) {
-  test(`${machine ?? "command node"} Debug probes its version, statistics and cleanup without revealing leaf files`, async () => {
+for (const machine of ["other"]) {
+  test(`${machine} Debug probes its version, statistics and cleanup without revealing leaf files`, async () => {
     const version = spyOn(backend, "getAppVersion").mockImplementation(async (target) =>
       target === machine ? "2.28.0" : "1.0.0",
     );
@@ -183,15 +184,14 @@ for (const machine of ["leaf", "other", null]) {
 
 for (const inherited of [false, true]) {
   test(`a direct leaf window adopts inherited Auto-steer ${inherited} after one masked save`, async () => {
-    delete window.orkestratorWorkspaceTarget;
-    useConfigStore.setState({
+    appCommandStore(configStore).setState({
       config: { ...initial, global: { ...initial.global, autoSteer: inherited } },
     });
     const save = spyOn(backend, "patchGlobalConfig").mockResolvedValue({
       ...initial,
       global: { ...initial.global, autoSteer: inherited },
     });
-    render(<GlobalSettings activeSection="general" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="general" />);
     const toggle = await screen.findByRole("switch", { name: "Auto-steer" });
     fireEvent.click(toggle);
     expect(toggle.getAttribute("aria-checked")).toBe(String(!inherited));
@@ -209,8 +209,7 @@ for (const inherited of [false, true]) {
 }
 
 test("an Auto-steer edit made during a save survives the earlier response", async () => {
-  delete window.orkestratorWorkspaceTarget;
-  useConfigStore.setState({
+  appCommandStore(configStore).setState({
     config: { ...initial, global: { ...initial.global, autoSteer: false } },
   });
   let finishSave!: (config: typeof initial) => void;
@@ -220,7 +219,7 @@ test("an Auto-steer edit made during a save survives the earlier response", asyn
   const save = spyOn(backend, "patchGlobalConfig")
     .mockImplementationOnce(() => pending)
     .mockResolvedValue({ ...initial, global: { ...initial.global, autoSteer: false } });
-  render(<GlobalSettings activeSection="general" />);
+  renderInAppCommandScope(<GlobalSettings activeSection="general" />);
   const toggle = await screen.findByRole("switch", { name: "Auto-steer" });
   fireEvent.click(toggle);
   await waitFor(() => expect(save).toHaveBeenCalledTimes(1));

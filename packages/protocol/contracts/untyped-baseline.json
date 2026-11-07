@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "description": "Untyped (string-registered) backend commands per contract domain. Shrink-only: see docs/architecture/version-compatibility.md#domain-contracts.",
+  "total": 0,
+  "untypedByDomain": {}
+}

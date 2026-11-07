@@ -1,14 +1,16 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { act, cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import type { AgentMailMailboxSnapshot } from "@orkestrator/protocol/agent-mail";
-import { useAgentMailStore } from "@/stores/agentMailStore";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { agentMailStore } from "@/stores/agentMailStore";
+import { environmentStore } from "@/stores/environmentStore";
 import type { Environment } from "@/types";
 import {
   agentMailParticipantLabel,
   agentMailStatus,
   useAgentMailEnvironmentName,
 } from "./agent-mail-ui";
+import { appCommandStore } from "@/test/app-command-store";
 
 describe("agentMailStatus", () => {
   const stored = { placement: "stored" as const, placementReason: "recipient-cannot-inject" };
@@ -64,18 +66,18 @@ describe("agentMailParticipantLabel", () => {
 });
 
 describe("useAgentMailEnvironmentName", () => {
-  const initialMail = useAgentMailStore.getState();
-  const initialEnvironments = useEnvironmentStore.getState();
+  const initialMail = appCommandStore(agentMailStore).getState();
+  const initialEnvironments = appCommandStore(environmentStore).getState();
 
   beforeEach(() => {
-    useAgentMailStore.setState({ mailboxes: new Map() });
-    useEnvironmentStore.setState({ environments: [] });
+    appCommandStore(agentMailStore).setState({ mailboxes: new Map() });
+    appCommandStore(environmentStore).setState({ environments: [] });
   });
 
   afterEach(() => {
     cleanup();
-    useAgentMailStore.setState(initialMail, true);
-    useEnvironmentStore.setState(initialEnvironments, true);
+    appCommandStore(agentMailStore).setState(initialMail, true);
+    appCommandStore(environmentStore).setState(initialEnvironments, true);
   });
 
   test("falls back to a loaded mailbox and prefers the live environment name", () => {
@@ -113,20 +115,20 @@ describe("useAgentMailEnvironmentName", () => {
       limit: 100,
       revision: 1,
     };
-    const { result, rerender } = renderHook(
+    const { result, rerender } = renderHookInAppCommandScope(
       ({ id }: { id: string | undefined }) => useAgentMailEnvironmentName(id),
       { initialProps: { id: "env-1" as string | undefined } },
     );
     expect(result.current).toBeUndefined();
-    act(() => useAgentMailStore.getState().setMailbox(mailbox));
+    act(() => appCommandStore(agentMailStore).getState().setMailbox(mailbox));
     expect(result.current).toBe("Mailbox name");
     act(() =>
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [{ id: "env-1", name: "Current name", order: 0 } as Environment],
       }),
     );
     expect(result.current).toBe("Current name");
-    act(() => useEnvironmentStore.setState({ environments: [] }));
+    act(() => appCommandStore(environmentStore).setState({ environments: [] }));
     expect(result.current).toBe("Mailbox name");
     rerender({ id: "missing" });
     expect(result.current).toBeUndefined();

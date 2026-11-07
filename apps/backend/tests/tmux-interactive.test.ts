@@ -1,3 +1,4 @@
+import { eventSink } from "../src/core/backend-emit.js";
 import { describe, expect, test } from "bun:test";
 import { BackendRuntime } from "../src/core/backend-runtime";
 import type { CommandContext } from "../src/core/commands";
@@ -131,7 +132,7 @@ describe("interactive tmux terminal snapshots", () => {
     });
     const id = manager.create(tmux as never, 120, 40);
     const context = {
-      emit: (event: string, payload: unknown) => emitted.push({ event, payload }),
+      emit: eventSink((event: string, payload: unknown) => emitted.push({ event, payload })),
       runtime: new BackendRuntime({ emit: () => undefined }),
     } as unknown as CommandContext;
     return {

@@ -1,51 +1,57 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-import { act, renderHook } from "@testing-library/react";
-import { useAgentActivityStore } from "@/stores/agentActivityStore";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { act } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
+import { agentActivityStore } from "@/stores/agentActivityStore";
+import { environmentStore } from "@/stores/environmentStore";
 import { useGlobalActivityMonitor } from "./useGlobalActivityMonitor";
+import { appCommandStore } from "@/test/app-command-store";
 
 describe("backend-owned activity projection", () => {
   beforeEach(() => {
-    useAgentActivityStore.setState({
+    appCommandStore(agentActivityStore).setState({
       tabStates: {},
       containerStates: {},
       containerStateUpdatedAt: {},
     });
-    useEnvironmentStore.setState({ environments: [] });
+    appCommandStore(environmentStore).setState({ environments: [] });
   });
 
   test("bulk replacement exactly projects the environment snapshot", () => {
-    useAgentActivityStore.getState().replaceActivitySnapshot([
-      {
-        id: "env-a",
-        agentActivityState: "working",
-        agentActivityUpdatedAt: "2026-08-04T10:00:00.000Z",
-      },
-      {
-        id: "env-b",
-        agentActivityState: "waiting",
-        agentActivityUpdatedAt: "2026-08-04T10:00:01.000Z",
-      },
-    ]);
-    expect(useAgentActivityStore.getState().containerStates).toEqual({
+    appCommandStore(agentActivityStore)
+      .getState()
+      .replaceActivitySnapshot([
+        {
+          id: "env-a",
+          agentActivityState: "working",
+          agentActivityUpdatedAt: "2026-08-04T10:00:00.000Z",
+        },
+        {
+          id: "env-b",
+          agentActivityState: "waiting",
+          agentActivityUpdatedAt: "2026-08-04T10:00:01.000Z",
+        },
+      ]);
+    expect(appCommandStore(agentActivityStore).getState().containerStates).toEqual({
       "env-a": "working",
       "env-b": "waiting",
     });
 
-    useAgentActivityStore.getState().replaceActivitySnapshot([
-      {
-        id: "env-a",
-        agentActivityState: "idle",
-        agentActivityUpdatedAt: "2026-08-04T10:00:02.000Z",
-      },
-    ]);
-    expect(useAgentActivityStore.getState().containerStates).toEqual({
+    appCommandStore(agentActivityStore)
+      .getState()
+      .replaceActivitySnapshot([
+        {
+          id: "env-a",
+          agentActivityState: "idle",
+          agentActivityUpdatedAt: "2026-08-04T10:00:02.000Z",
+        },
+      ]);
+    expect(appCommandStore(agentActivityStore).getState().containerStates).toEqual({
       "env-a": "idle",
     });
   });
 
   test("rehydrates the latest backend snapshot after the observer remounts", async () => {
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [
         {
           id: "env-a",
@@ -54,14 +60,14 @@ describe("backend-owned activity projection", () => {
         },
       ] as never,
     });
-    const first = renderHook(() => useGlobalActivityMonitor());
+    const first = renderHookInAppCommandScope(() => useGlobalActivityMonitor());
     await act(async () => undefined);
-    expect(useAgentActivityStore.getState().containerStates).toEqual({
+    expect(appCommandStore(agentActivityStore).getState().containerStates).toEqual({
       "env-a": "working",
     });
 
     first.unmount();
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [
         {
           id: "env-b",
@@ -70,20 +76,20 @@ describe("backend-owned activity projection", () => {
         },
       ] as never,
     });
-    expect(useAgentActivityStore.getState().containerStates).toEqual({
+    expect(appCommandStore(agentActivityStore).getState().containerStates).toEqual({
       "env-a": "working",
     });
 
-    const second = renderHook(() => useGlobalActivityMonitor());
+    const second = renderHookInAppCommandScope(() => useGlobalActivityMonitor());
     await act(async () => undefined);
-    expect(useAgentActivityStore.getState().containerStates).toEqual({
+    expect(appCommandStore(agentActivityStore).getState().containerStates).toEqual({
       "env-b": "waiting",
     });
     second.unmount();
   });
 
   test("projects environment-store updates while the observer stays mounted", async () => {
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [
         {
           id: "env-a",
@@ -92,14 +98,14 @@ describe("backend-owned activity projection", () => {
         },
       ] as never,
     });
-    const observer = renderHook(() => useGlobalActivityMonitor());
+    const observer = renderHookInAppCommandScope(() => useGlobalActivityMonitor());
     await act(async () => undefined);
-    expect(useAgentActivityStore.getState().containerStates).toEqual({
+    expect(appCommandStore(agentActivityStore).getState().containerStates).toEqual({
       "env-a": "working",
     });
 
     act(() => {
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [
           {
             id: "env-b",
@@ -110,7 +116,7 @@ describe("backend-owned activity projection", () => {
       });
     });
 
-    expect(useAgentActivityStore.getState().containerStates).toEqual({
+    expect(appCommandStore(agentActivityStore).getState().containerStates).toEqual({
       "env-b": "waiting",
     });
     observer.unmount();

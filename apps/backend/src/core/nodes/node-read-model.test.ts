@@ -1,3 +1,4 @@
+import { eventSink } from "../backend-emit.js";
 import { expect, test } from "bun:test";
 import type { NodeProjectSummary } from "@orkestrator/protocol/node-summaries";
 import type { BackendId } from "@orkestrator/protocol/federation";
@@ -20,9 +21,9 @@ function harness() {
       subscribe: () => () => undefined,
       recordProfile: async () => undefined,
     },
-    emit: (event) => {
+    emit: eventSink((event) => {
       events.push(event);
-    },
+    }),
     local: {
       invoke: async <T>(command: string, args?: Record<string, unknown>) => {
         if (command === "get_projects")
@@ -542,9 +543,9 @@ function changeHarness() {
       subscribe: () => () => undefined,
       recordProfile: async () => undefined,
     },
-    emit: (event, payload) => {
+    emit: eventSink((event, payload) => {
       if (event === "node-summary-changed") events.push((payload as { nodeId: string }).nodeId);
-    },
+    }),
     changeMinIntervalMs: 1_000,
   });
   return {

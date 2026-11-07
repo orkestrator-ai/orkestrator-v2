@@ -1,12 +1,22 @@
 import { randomBytes } from "node:crypto";
 
-import type { BackendId } from "@orkestrator/protocol/federation";
+import {
+  nodeFilesClient,
+  type NodeFilesApi,
+} from "@orkestrator/protocol/contract/domains/node-files";
+import { isBackendId, type BackendId } from "@orkestrator/protocol/federation";
 import { repositoryHint } from "@orkestrator/protocol/node-summaries";
 
 import { normalizeConfiguredProjectFiles } from "../commands-project-files.js";
 import type { StorageService } from "../storage.js";
 import type { NodeActionRequest } from "./node-action-requests.js";
-import { NodeFileTransfer, type NodeFileInvoker } from "./node-file-transfer.js";
+import { routedDomainApi } from "./node-domain-clients.js";
+import {
+  NodeFileTransfer,
+  nodeFilesOverInvoker,
+  type NodeFileInvoker,
+  type NodeFilesFor,
+} from "./node-file-transfer.js";
 import { NodeFiles } from "./node-files.js";
 import type { NodePortal } from "./node-portal.js";
 import type { NodeService } from "./node-service.js";
@@ -70,8 +80,48 @@ export class NodeProjectFiles {
       }): Promise<void>;
     },
   ) {
-    this.transfer = new NodeFileTransfer({ invokerFor: this.invokerFor });
+    this.transfer = new NodeFileTransfer({
+      invokerFor: this.invokerFor,
+      filesFor: this.filesFor,
+    });
   }
+
+  /**
+   * The file commands on a node: this node's own, or another's through its
+   * `node-files` domain client (plan item 1010), routed like
+   * {@link invokerFor} with the envelope the client picked.
+   */
+  readonly filesFor: NodeFilesFor = (nodeId) => {
+    const local = nodeFilesOverInvoker(this.options.localInvoke);
+    const remote = (): NodeFilesApi =>
+      routedDomainApi(
+        nodeFilesClient,
+        // No link (a node this one does not control) reads as pre-contract.
+        () => (isBackendId(nodeId) ? this.options.nodes.link?.(nodeId)?.hello : null),
+        async (command, args, envelope) => {
+          const routed = await this.options.portal.invokeOnNode(
+            { nodeId, command, args },
+            envelope ? { envelope } : {},
+          );
+          if (routed.outcome !== "ok") {
+            throw Object.assign(new Error("The connection was lost before the node answered."), {
+              code: "outcome-unknown",
+            });
+          }
+          return routed.result;
+        },
+      );
+    const on = async () =>
+      nodeId === (await this.options.nodes.selfIdentity()) ? local : remote();
+    return {
+      stat: async (args) => (await on()).stat(args),
+      read: async (args) => (await on()).read(args),
+      beginWrite: async (args) => (await on()).beginWrite(args),
+      appendWrite: async (args) => (await on()).appendWrite(args),
+      commitWrite: async (args) => (await on()).commitWrite(args),
+      abortWrite: async (args) => (await on()).abortWrite(args),
+    };
+  };
 
   /** This node directly; another through the command node's link. */
   readonly invokerFor: NodeFileInvoker = (nodeId) => {

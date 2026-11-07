@@ -1,3 +1,4 @@
+import { terminals } from "@/lib/node-scope/domains/terminals";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "zustand";
 
@@ -11,6 +12,7 @@ import { RESOURCE_CHANGED_EVENT } from "@orkestrator/protocol/resource-events";
 import { subscribeNodeEvents } from "@/lib/federation/node-events";
 import { portalStore } from "@/lib/portal/portal-store";
 import { onResourceResync, onViewSafetyCheck } from "@/lib/resource-sync";
+import { routedBackendClient } from "@/lib/portal/routed-backend-client";
 
 /** A waiting prompt of a worker on another node, and which node. */
 export type RemoteHumanPromptEntry = HumanPromptEntry & { nodeId: string };
@@ -88,11 +90,11 @@ export function useRemoteHumanPrompts(
       }
       const request = (sequence.get(nodeId) ?? 0) + 1;
       sequence.set(nodeId, request);
-      void portalStore
-        .invokeOnNode<{ prompts?: unknown }>(nodeId as BackendId, "list_human_prompts", {
-          environmentIds: Array.from(environmentIds),
-        })
-        .then((answer) => {
+      // The `terminals` domain client over the routed call (plan item 7002):
+      // no negotiated range, so today's call, its answer normalised below.
+      void terminals(routedBackendClient(portalStore, nodeId as BackendId))
+        .list_human_prompts({ environmentIds: Array.from(environmentIds) })
+        .then((answer: { prompts?: unknown } | undefined) => {
           if (disposed || sequence.get(nodeId) !== request) return;
           const prompts = (Array.isArray(answer?.prompts) ? answer.prompts : [])
             .map(normalizeRemoteHumanPromptEntry)

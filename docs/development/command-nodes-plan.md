@@ -286,7 +286,8 @@ Other behaviour:
   - credential kind `grant`;
   - the SSE stream closes when the grant expires (the existing deadline
     timer).
-- **Client.** The leaf workspace (the reworked panel realm):
+- **Client.** The leaf workspace (built as the reworked panel realm; since
+  plan items 6001-6003 the leaf's node scope in the window's tree):
   1. tries each `directOrigin` with the hello and the grant;
   2. otherwise uses `relayBase` on the command node with its normal
      command-node session.

@@ -1,20 +1,18 @@
-import {
-  notePrefetchedCommandInvocation,
-  readPrefetchedCommandResponse,
-} from "@/lib/prefetched-command-responses";
+import type { NodeInvokeOptions } from "@orkestrator/protocol/node-client";
+import { getWindowScope } from "@/lib/node-scope/app-window-scope";
+import { invokeInScope } from "@/lib/node-scope/scope-transport";
 
-export async function invoke<T = unknown>(
+/**
+ * `command` on the window's command node, through the command scope's client
+ * and its prefetched cache (`invokeInScope`). Behaviour is today's
+ * single-backend `invoke`; scoped code calls `invokeInScope` with its own
+ * scope instead. `options.envelope` carries a domain client's contract fields
+ * (`lib/node-scope/domains/domain-api.ts`); a call without it is today's.
+ */
+export function invoke<T = unknown>(
   command: string,
   args?: Record<string, unknown>,
+  options?: NodeInvokeOptions,
 ): Promise<T> {
-  const prefetched = readPrefetchedCommandResponse(command, args);
-  if (prefetched.found) return prefetched.value as T;
-  // A command no primed snapshot answered may be the write that invalidates
-  // them. Report it before the round trip so a mutation cannot be overtaken by
-  // a read that the batch primed earlier in the same reconciliation.
-  notePrefetchedCommandInvocation(command);
-  if (!window.orkestrator) {
-    throw new Error("Orkestrator native backend is not available");
-  }
-  return window.orkestrator.invoke<T>(command, args);
+  return invokeInScope<T>(getWindowScope().commandScope(), command, args, options);
 }

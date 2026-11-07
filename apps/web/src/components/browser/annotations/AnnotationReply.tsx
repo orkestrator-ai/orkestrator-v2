@@ -1,4 +1,5 @@
 import { useRef, useState, type RefObject } from "react";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { Archive, Loader2 } from "lucide-react";
 import {
   WEB_ANNOTATION_COMMANDS,
@@ -48,6 +49,8 @@ export function ArchiveAndContinue({
   onArchived: (continuationId: string, usedText: boolean) => void;
   reason: string;
 }) {
+  // This node's annotations (plan item 4001); the command node outside a node scope.
+  const annotationScope = useScopesWithCommandFallback().scope;
   const { environmentId, announce } = useAnnotationPanel();
   const [title, setTitle] = useState(`${annotationTitle(annotation)} (continued)`);
   const [busy, setBusy] = useState(false);
@@ -60,18 +63,27 @@ export function ArchiveAndContinue({
     operationRef.current ??= newWebAnnotationOperationId("archive");
     const body = pendingText.trim() ? pendingText : undefined;
     try {
-      const result = await webAnnotationCommand(WEB_ANNOTATION_COMMANDS.archive, {
-        environmentId,
-        operationId: operationRef.current,
-        annotationId: annotation.id,
-        expectedMetadataRevision: annotation.metadataRevision,
-        ...(title.trim() ? { title: title.trim() } : {}),
-        ...(body ? { body } : {}),
-      });
+      const result = await webAnnotationCommand(
+        WEB_ANNOTATION_COMMANDS.archive,
+        {
+          environmentId,
+          operationId: operationRef.current,
+          annotationId: annotation.id,
+          expectedMetadataRevision: annotation.metadataRevision,
+          ...(title.trim() ? { title: title.trim() } : {}),
+          ...(body ? { body } : {}),
+        },
+        undefined,
+        annotationScope,
+      );
       operationRef.current = null;
-      refreshWebAnnotations(environmentId, {
-        annotationIds: [annotation.id, result.continuation.annotationId],
-      });
+      refreshWebAnnotations(
+        environmentId,
+        {
+          annotationIds: [annotation.id, result.continuation.annotationId],
+        },
+        annotationScope,
+      );
       announce("Archived. The discussion continues in a new note.");
       onArchived(result.continuation.annotationId, Boolean(body));
     } catch (archiveError) {
@@ -132,6 +144,8 @@ export function ReplyEditor({
   annotation: WebAnnotation;
   inputRef: RefObject<HTMLTextAreaElement | null>;
 }) {
+  // This node's annotations (plan item 4001); the command node outside a node scope.
+  const annotationScope = useScopesWithCommandFallback().scope;
   const { environmentId, features, announce, selectAnnotation } = useAnnotationPanel();
   const draft = useAnnotationDraft({
     environmentId,
@@ -157,18 +171,23 @@ export function ReplyEditor({
     operationRef.current ??= newWebAnnotationOperationId("reply");
     try {
       await draft.flush();
-      await webAnnotationCommand(WEB_ANNOTATION_COMMANDS.entryAppend, {
-        environmentId,
-        operationId: operationRef.current,
-        annotationId: target.id,
-        expectedContentRevision: target.contentRevision,
-        body,
-        editorId: replyEditorId(annotation.id),
-      });
+      await webAnnotationCommand(
+        WEB_ANNOTATION_COMMANDS.entryAppend,
+        {
+          environmentId,
+          operationId: operationRef.current,
+          annotationId: target.id,
+          expectedContentRevision: target.contentRevision,
+          body,
+          editorId: replyEditorId(annotation.id),
+        },
+        undefined,
+        annotationScope,
+      );
       operationRef.current = null;
       // Only the published text is cleared; later keystrokes stay.
       void draft.clearSaved(body);
-      refreshWebAnnotations(environmentId, { annotationIds: [target.id] });
+      refreshWebAnnotations(environmentId, { annotationIds: [target.id] }, annotationScope);
       announce("Reply saved");
       if (target.id !== annotation.id) selectAnnotation(target.id);
     } catch (saveError) {
@@ -178,7 +197,7 @@ export function ReplyEditor({
       const { detail } = webAnnotationErrorDetail(saveError);
       setFailure(detail);
       if (detail?.code === "conflict") {
-        refreshWebAnnotations(environmentId, { annotationIds: [annotation.id] });
+        refreshWebAnnotations(environmentId, { annotationIds: [annotation.id] }, annotationScope);
       } else {
         const message = describeWebAnnotationError(saveError);
         setError(message);
@@ -192,11 +211,16 @@ export function ReplyEditor({
   /** The thread was archived elsewhere: post this reply in its continuation. */
   const publishInContinuation = async (continuationId: string) => {
     try {
-      const { annotation: continuation } = await webAnnotationCommand(WEB_ANNOTATION_COMMANDS.get, {
-        environmentId,
-        annotationId: continuationId,
-        entryLimit: 1,
-      });
+      const { annotation: continuation } = await webAnnotationCommand(
+        WEB_ANNOTATION_COMMANDS.get,
+        {
+          environmentId,
+          annotationId: continuationId,
+          entryLimit: 1,
+        },
+        undefined,
+        annotationScope,
+      );
       await publish({ id: continuation.id, contentRevision: continuation.contentRevision });
     } catch (loadError) {
       setError(describeWebAnnotationError(loadError));

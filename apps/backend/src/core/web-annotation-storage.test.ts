@@ -1,3 +1,4 @@
+import { eventSink } from "./backend-emit.js";
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { readdir, stat, utimes, writeFile } from "node:fs/promises";
@@ -352,7 +353,9 @@ describe("two backends sharing a data directory", () => {
   test("a read that observes the other backend's commit emits a change hint for it", async () => {
     harness = await createHarness();
     const peerEvents: unknown[] = [];
-    const peer = await harness.peer({ emit: (_event, payload) => peerEvents.push(payload) });
+    const peer = await harness.peer({
+      emit: eventSink((_event, payload) => peerEvents.push(payload)),
+    });
     await harness.service.list({ environmentId: ENV_A });
     const receipt = await createAnnotation(peer, ENV_A, "From the peer", "op-1");
     expect(peerEvents).toHaveLength(1);

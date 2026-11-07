@@ -1,59 +1,67 @@
 import { canonicalJson } from "@orkestrator/protocol/canonical-json";
+import type { CommandAccess } from "@orkestrator/protocol/contract/command";
 import { INHERITED_GLOBAL_SETTING_KEYS } from "@orkestrator/protocol/controller-settings";
 
 import { stripRendererCredentials } from "../commands-validation.js";
+import { crossCheckLegacyWorkspaceScope } from "./workspace-grant-legacy-check.js";
 
 /**
- * Machine administration a workspace client (a client grant or the relay)
- * never runs. A workspace is agent chat, terminals, previews, files and the
- * project boards; the machine's own settings, credentials and updates belong
- * to its user and are reached from Settings, which the window runs on its
- * command node and sends to another machine with `invoke_on_node`.
+ * The workspace grant allow-list (report §10.2, plan item 7012).
  *
- * This is a deny-list (security report I1): a new administration command
- * fails open until it is added here, so add it with the command.
+ * A workspace client (a client grant at this gateway, or the relay through
+ * this command node) runs exactly the commands whose definition declares
+ * `access: "workspace"`: agent chat, terminals, previews, files and the
+ * project boards. Everything else is refused, failing closed: an `admin`
+ * command (the machine's own settings, credentials and updates, which
+ * Settings runs on the command node and sends to another machine with
+ * `invoke_on_node`), an `internal` one (node-link and in-process plumbing), a
+ * command registered without a definition, and a name this backend does not
+ * know. A new command is refused through a grant until its definition says
+ * otherwise.
+ *
+ * The set is the registry's own definitions, which the committed manifest
+ * (`packages/protocol/contracts/manifest.json`) is generated from, so the two
+ * cannot differ while `mise run contract:check` passes.
  */
-export const WORKSPACE_ADMINISTRATION_COMMANDS: ReadonlySet<string> = new Set([
-  // Operator public API has no workspace renderer callers. Refuse the whole
-  // entrypoint, including indirect operation retries and node-targeted actions.
-  "public_action",
-  // Global settings. An older realm's no-op echo is still answered; see
-  // `isGlobalConfigEcho`.
-  "save_config",
-  "update_global_config",
-  "patch_global_config",
-  "update_notification_sound_settings",
-  "set_workflow_result_tools_rollout",
-  "web_annotations_rollout_set",
-  "save_desktop_connections",
-  // Installation-wide Docker budget and cleanup (including cleanup tokens).
-  "set_container_resource_limits",
-  "docker_cleanup_preview",
-  "docker_cleanup_execute",
-  // Machine credentials stored in the global settings.
-  "set_github_token",
-  "set_cursor_api_key",
-  "set_anthropic_api_key",
-  "set_opencode_zen_api_key",
-  // The machine's identity, storage, preview publication and logs.
-  "update_backend_profile",
-  "update_worktree_locations",
-  "update_preview_settings",
-  "cleanup_logs",
-  "get_database_stats",
-  "plan_diagnostics_bundle",
-  "read_diagnostics_bundle",
-  "record_renderer_errors",
-  "graph_capability_ceiling_set",
-  // Host updates and dependency maintenance.
-  "request_host_update_check",
-  "request_host_update",
-  "cancel_host_update",
-  "start_host_toolchain_repair",
-  "start_host_image_update",
-  "set_host_update_channel",
-  "set_host_gh_channel",
-]);
+
+/** A command's declared access, or `undefined` for one without a definition. */
+export type CommandAccessOf = (command: string) => CommandAccess | undefined;
+
+/** Which workspace path asked: a client grant here, or the relay to a leaf. */
+export type WorkspaceGrantPath = "grant" | "relay";
+
+/** Whether a workspace client may run `command`: only an `access: "workspace"` definition. */
+export function isWorkspaceGrantCommand(command: string, accessOf: CommandAccessOf): boolean {
+  return accessOf(command) === "workspace";
+}
+
+/** The allow-list of a registry's definitions: the manifest's `access: "workspace"` set. */
+export function workspaceAllowList(
+  contracts: ReadonlyMap<string, { readonly access: CommandAccess }>,
+): ReadonlySet<string> {
+  const names = new Set<string>();
+  for (const [name, def] of contracts) if (def.access === "workspace") names.add(name);
+  return names;
+}
+
+/**
+ * The gate the gateway and the relay call. `accessOf` and `isRegistered` read
+ * this backend's registry; without them every command is refused. While debug
+ * logging is on for `nodes`, each verdict is also checked against the old
+ * deny-lists' (`legacyWorkspaceAdmitted`), for one release.
+ */
+export function admitsWorkspaceCommand(
+  command: string,
+  path: WorkspaceGrantPath,
+  registry: {
+    readonly accessOf?: CommandAccessOf | undefined;
+    readonly isRegistered?: ((command: string) => boolean) | undefined;
+  },
+): boolean {
+  const admitted = registry.accessOf ? isWorkspaceGrantCommand(command, registry.accessOf) : false;
+  crossCheckLegacyWorkspaceScope(command, path, admitted, registry.isRegistered);
+  return admitted;
+}
 
 const GLOBAL_CONFIG_WRITES: ReadonlySet<string> = new Set([
   "update_global_config",

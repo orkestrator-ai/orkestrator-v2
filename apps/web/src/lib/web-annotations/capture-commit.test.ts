@@ -7,7 +7,7 @@ import {
   seedPending,
 } from "@/test/web-annotation-fakes";
 import type { WebAnnotationSourceHint } from "@orkestrator/protocol/web-annotations";
-import { useWebAnnotationStore } from "@/stores/webAnnotationStore";
+import { webAnnotationStore } from "@/stores/webAnnotationStore";
 import {
   commitPendingCapture,
   resultCaptureMetadata,
@@ -15,6 +15,7 @@ import {
   withAdvertisedSourceHints,
 } from "./capture-commit";
 import { forgetCaptureIntent, rememberCaptureIntent } from "./capture-intents";
+import { appCommandStore } from "@/test/app-command-store";
 
 let backend: FakeWebAnnotationBackend;
 
@@ -97,7 +98,7 @@ describe("source hint capability gate", () => {
     backend = new FakeWebAnnotationBackend("env-1").install();
   });
   afterEach(() => {
-    useWebAnnotationStore.getState().reset();
+    appCommandStore(webAnnotationStore).getState().reset();
     invokeMock.mockImplementation(() => Promise.resolve());
   });
 
@@ -112,10 +113,12 @@ describe("source hint capability gate", () => {
   }
 
   function advertise(sourceHints: boolean | undefined) {
-    useWebAnnotationStore.getState().update("env-1", () => ({
-      capabilities: fixtureCapabilities({ sourceHints }),
-      capabilityStatus: "available",
-    }));
+    appCommandStore(webAnnotationStore)
+      .getState()
+      .update("env-1", () => ({
+        capabilities: fixtureCapabilities({ sourceHints }),
+        capabilityStatus: "available",
+      }));
   }
 
   test("strips hints for a backend that does not advertise them", () => {
@@ -215,10 +218,12 @@ describe("shadow-root targets follow the backend's advertisement", () => {
     ],
   ] as const) {
     test(label, async () => {
-      useWebAnnotationStore.getState().update("env-1", () => ({
-        capabilities: fixtureCapabilities({ shadowTargets: advertised }),
-        capabilityStatus: "available",
-      }));
+      appCommandStore(webAnnotationStore)
+        .getState()
+        .update("env-1", () => ({
+          capabilities: fixtureCapabilities({ shadowTargets: advertised }),
+          capabilityStatus: "available",
+        }));
       const { fake, record } = shadowRecord(`cap-shadow-${String(advertised)}`);
       await commitPendingCapture({
         api: fake.api,

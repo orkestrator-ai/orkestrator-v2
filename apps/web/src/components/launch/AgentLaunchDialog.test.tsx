@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import * as realDialog from "@/components/ui/dialog";
 
 const realDialogSnapshot = { ...realDialog };
@@ -21,15 +22,16 @@ mock.module("@/components/ui/dialog", () => ({
 
 import { AgentLaunchDialog, type AgentLaunchSelection } from "./AgentLaunchDialog";
 import type { AgentModelCatalog } from "@/lib/agent-launch";
-import { useConfigStore } from "@/stores/configStore";
+import { configStore } from "@/stores/configStore";
+import { appCommandStore } from "@/test/app-command-store";
 
 afterEach(cleanup);
 afterAll(() => {
   mock.module("@/components/ui/dialog", () => realDialogSnapshot);
 });
 beforeEach(() => {
-  const config = useConfigStore.getState().config;
-  useConfigStore.setState({
+  const config = appCommandStore(configStore).getState().config;
+  appCommandStore(configStore).setState({
     config: {
       ...config,
       global: {
@@ -69,7 +71,7 @@ function renderDialog(overrides: Partial<Parameters<typeof AgentLaunchDialog>[0]
     onConfirm,
     ...overrides,
   } as Parameters<typeof AgentLaunchDialog>[0] & { onConfirm: typeof onConfirm };
-  return { onConfirm, props, ...render(<AgentLaunchDialog {...props} />) };
+  return { onConfirm, props, ...renderInAppCommandScope(<AgentLaunchDialog {...props} />) };
 }
 
 function picker() {

@@ -1,4 +1,39 @@
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
+import {
+  cancelBuildPipelineCommand,
+  clearTaskBuildStatusCommand,
+  createFeatureBuildCommand,
+  deleteBuildPipelineCommand,
+  getBuildPipelineCommand,
+  getBuildPipelineSessionProjectionCommand,
+  getBuildPipelineWorkerTranscriptCommand,
+  importLegacyBuildPipelinesCommand,
+  launchBuildPipelineCommand,
+  listBuildPipelinesCommand,
+  pauseBuildPipelineCommand,
+  previewBuildPipelineCodeRewindCommand,
+  removeQueuedBuildPipelineMessageCommand,
+  restartBuildPipelineCurrentStepCommand,
+  restartBuildPipelineReviewerCommand,
+  restartBuildPipelineStepCommand,
+  resumeBuildPipelineCommand,
+  retryBuildPipelineCompletionCommentCommand,
+  retryBuildPipelineInteractionFailureCommand,
+  retryBuildPipelineReviewCommand,
+  retryBuildPipelineReviewerCommand,
+  retryBuildPipelineStageCommand,
+  rewindBuildPipelineCodeCommand,
+  saveBuildPipelineCommand,
+  sendBuildPipelineMessageCommand,
+  setEnvironmentUnreadCommand,
+  skipBuildPipelineStepCommand,
+  startBuildPipelineCommand,
+  startFeaturePlanBuildCommand,
+  steerBuildPipelineCommand,
+  steerQueuedBuildPipelineMessageCommand,
+  stopBuildPipelineReviewerCommand,
+  type PipelineWorkerTranscript,
+} from "@orkestrator/protocol/contract/domains/pipelines";
 import { isBuildPipeline, isStartBuildPipelineInput } from "@orkestrator/protocol/build-pipeline";
 import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 import { canonicalBuildPipeline } from "@orkestrator/protocol/workflow-vocabulary";
@@ -25,7 +60,7 @@ export function registerBuildPipelineCommands(
   dependencies: RegistryDependencies,
 ): void {
   const { conditionalManifestSnapshot } = dependencies;
-  register("start_build_pipeline", (args, context) => {
+  register(startBuildPipelineCommand, (args, context) => {
     if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
     const input = canonicalBuildPipeline(args);
     if (!isStartBuildPipelineInput(input)) {
@@ -37,29 +72,29 @@ export function registerBuildPipelineCommands(
    * Creates the ticket and the build for it in one backend-owned step, so a
    * renderer that navigates away mid-flight cannot leave one without the other.
    */
-  register("create_feature_build", (args, context) => createFeatureBuild(args, context));
+  register(createFeatureBuildCommand, (args, context) => createFeatureBuild(args, context));
   /**
    * The Build button: a ticket plus only the choices the user made; every
    * omitted step, reviewer and model comes from the saved Build defaults here,
    * the same way the coordinator and the public `build.launch` fill them.
    * `start_build_pipeline` stays for callers that send a complete request.
    */
-  register("launch_build_pipeline", (args, context) => launchBuildPipeline(args, context));
+  register(launchBuildPipelineCommand, (args, context) => launchBuildPipeline(args, context));
   /** The Features view's Build: claim, ticket, pipeline and link, compensated here. */
-  register("start_feature_plan_build", (args, context) => startFeaturePlanBuild(args, context));
-  register("pause_build_pipeline", ({ pipelineId }, context) => {
+  register(startFeaturePlanBuildCommand, (args, context) => startFeaturePlanBuild(args, context));
+  register(pauseBuildPipelineCommand, ({ pipelineId }, context) => {
     if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
     return context.buildPipelines.pause(asNonBlankString(pipelineId, "pipelineId"));
   });
-  register("resume_build_pipeline", ({ pipelineId }, context) => {
+  register(resumeBuildPipelineCommand, ({ pipelineId }, context) => {
     if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
     return context.buildPipelines.resume(asNonBlankString(pipelineId, "pipelineId"));
   });
-  register("cancel_build_pipeline", ({ pipelineId }, context) => {
+  register(cancelBuildPipelineCommand, ({ pipelineId }, context) => {
     if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
     return context.buildPipelines.cancel(asNonBlankString(pipelineId, "pipelineId"));
   });
-  register("send_build_pipeline_message", ({ pipelineId, text }, context) => {
+  register(sendBuildPipelineMessageCommand, ({ pipelineId, text }, context) => {
     if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
     return context.buildPipelines.sendMessage(
       asNonBlankString(pipelineId, "pipelineId"),
@@ -68,7 +103,7 @@ export function registerBuildPipelineCommands(
   });
   // Unlike a message, this reaches the turn the agent is running now instead of
   // waiting for it to go idle — which, in a pipeline, means after the stage ends.
-  register("steer_build_pipeline", ({ pipelineId, text }, context) => {
+  register(steerBuildPipelineCommand, ({ pipelineId, text }, context) => {
     if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
     return context.buildPipelines.steerMessage(
       asNonBlankString(pipelineId, "pipelineId"),
@@ -76,14 +111,14 @@ export function registerBuildPipelineCommands(
     );
   });
   // The queue's Steer button: moves one queued message into the running turn.
-  register("steer_queued_build_pipeline_message", ({ pipelineId, messageId }, context) => {
+  register(steerQueuedBuildPipelineMessageCommand, ({ pipelineId, messageId }, context) => {
     if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
     return context.buildPipelines.steerQueuedMessage(
       asNonBlankString(pipelineId, "pipelineId"),
       asNonBlankString(messageId, "messageId"),
     );
   });
-  register("remove_queued_build_pipeline_message", ({ pipelineId, messageId }, context) => {
+  register(removeQueuedBuildPipelineMessageCommand, ({ pipelineId, messageId }, context) => {
     if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
     return context.buildPipelines.removeQueuedMessage(
       asNonBlankString(pipelineId, "pipelineId"),
@@ -92,29 +127,29 @@ export function registerBuildPipelineCommands(
   });
   // Retained for existing command clients that explicitly re-review a working
   // tree, including from a failed pipeline. The header uses current-step restart.
-  register("retry_build_pipeline_review", ({ pipelineId }, context) => {
+  register(retryBuildPipelineReviewCommand, ({ pipelineId }, context) => {
     if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
     return context.buildPipelines.retryReview(asNonBlankString(pipelineId, "pipelineId"));
   });
-  register("retry_build_pipeline_stage", ({ pipelineId }, context) => {
+  register(retryBuildPipelineStageCommand, ({ pipelineId }, context) => {
     if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
     return context.buildPipelines.retryStage(asNonBlankString(pipelineId, "pipelineId"));
   });
-  register("retry_build_pipeline_reviewer", ({ pipelineId, reviewerId }, context) => {
+  register(retryBuildPipelineReviewerCommand, ({ pipelineId, reviewerId }, context) => {
     if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
     return context.buildPipelines.retryReviewer(
       asNonBlankString(pipelineId, "pipelineId"),
       asNonBlankString(reviewerId, "reviewerId"),
     );
   });
-  register("restart_build_pipeline_reviewer", ({ pipelineId, reviewerId }, context) => {
+  register(restartBuildPipelineReviewerCommand, ({ pipelineId, reviewerId }, context) => {
     if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
     return context.buildPipelines.restartReviewer(
       asNonBlankString(pipelineId, "pipelineId"),
       asNonBlankString(reviewerId, "reviewerId"),
     );
   });
-  register("stop_build_pipeline_reviewer", ({ pipelineId, reviewerId }, context) => {
+  register(stopBuildPipelineReviewerCommand, ({ pipelineId, reviewerId }, context) => {
     if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
     return context.buildPipelines.stopReviewer(
       asNonBlankString(pipelineId, "pipelineId"),
@@ -122,7 +157,7 @@ export function registerBuildPipelineCommands(
     );
   });
   // `selection` is "Restart in…": the step reruns on another agent or model.
-  register("restart_build_pipeline_step", ({ pipelineId, stageId, selection }, context) => {
+  register(restartBuildPipelineStepCommand, ({ pipelineId, stageId, selection }, context) => {
     if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
     if (selection !== undefined && !isBuildPipelineRestartSelection(selection)) {
       throw new Error("Invalid build pipeline restart selection");
@@ -135,14 +170,14 @@ export function registerBuildPipelineCommands(
   });
   // "Rewind code to here": the preview names the commits a reset drops; the
   // confirmed request carries the HEAD that preview read.
-  register("preview_build_pipeline_code_rewind", ({ pipelineId, stageId }, context) => {
+  register(previewBuildPipelineCodeRewindCommand, ({ pipelineId, stageId }, context) => {
     if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
     return context.buildPipelines.previewCodeRewind(
       asNonBlankString(pipelineId, "pipelineId"),
       asNonBlankString(stageId, "stageId"),
     );
   });
-  register("rewind_build_pipeline_code", ({ pipelineId, stageId, expectedHead }, context) => {
+  register(rewindBuildPipelineCodeCommand, ({ pipelineId, stageId, expectedHead }, context) => {
     if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
     return context.buildPipelines.rewindCode(
       asNonBlankString(pipelineId, "pipelineId"),
@@ -150,30 +185,30 @@ export function registerBuildPipelineCommands(
       asNonBlankString(expectedHead, "expectedHead"),
     );
   });
-  register("skip_build_pipeline_step", ({ pipelineId, stageId }, context) => {
+  register(skipBuildPipelineStepCommand, ({ pipelineId, stageId }, context) => {
     if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
     return context.buildPipelines.skipStep(
       asNonBlankString(pipelineId, "pipelineId"),
       asNonBlankString(stageId, "stageId"),
     );
   });
-  register("restart_build_pipeline_current_step", ({ pipelineId }, context) => {
+  register(restartBuildPipelineCurrentStepCommand, ({ pipelineId }, context) => {
     if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
     return context.buildPipelines.restartCurrentStep(asNonBlankString(pipelineId, "pipelineId"));
   });
-  register("retry_build_pipeline_interaction_failure", ({ pipelineId }, context) => {
+  register(retryBuildPipelineInteractionFailureCommand, ({ pipelineId }, context) => {
     if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
     return context.buildPipelines.retryInteractionFailure(
       asNonBlankString(pipelineId, "pipelineId"),
     );
   });
-  register("retry_build_pipeline_completion_comment", ({ pipelineId }, context) => {
+  register(retryBuildPipelineCompletionCommentCommand, ({ pipelineId }, context) => {
     if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
     return context.buildPipelines.retryCompletionComment(
       asNonBlankString(pipelineId, "pipelineId"),
     );
   });
-  register("import_legacy_build_pipelines", ({ projectId, snapshots }, context) => {
+  register(importLegacyBuildPipelinesCommand, ({ projectId, snapshots }, context) => {
     if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
     const id = asNonBlankString(projectId, "projectId");
     if (!Array.isArray(snapshots)) {
@@ -191,7 +226,7 @@ export function registerBuildPipelineCommands(
    * from the referenced transcript records (plan step 16).
    */
   register(
-    "get_build_pipeline",
+    getBuildPipelineCommand,
     async ({ pipelineId, knownRevision, knownSessions, prioritySessionKey }, context) => {
       const { storage } = context;
       const record = await storage.getBuildPipeline(asNonBlankString(pipelineId, "pipelineId"));
@@ -215,13 +250,13 @@ export function registerBuildPipelineCommands(
         );
       }
       if (Number.isSafeInteger(knownRevision) && knownRevision === record.revision) {
-        return { unchanged: true, revision: record.revision };
+        return { unchanged: true as const, revision: record.revision };
       }
       return withoutTranscriptBodies(record);
     },
   );
   register(
-    "get_build_pipeline_session_projection",
+    getBuildPipelineSessionProjectionCommand,
     async ({ pipelineId, sessionKey, refreshUsage }, context) => {
       if (!context.nativeAgents) throw new Error("Native agent service is unavailable");
       const id = asNonBlankString(pipelineId, "pipelineId");
@@ -262,7 +297,7 @@ export function registerBuildPipelineCommands(
    * pipeline checkpoints while the turn runs and keeps after it ends.
    */
   register(
-    "get_build_pipeline_worker_transcript",
+    getBuildPipelineWorkerTranscriptCommand,
     async ({ environmentId, tabId, limit }, { storage, multiReviews }) => {
       const input = {
         environmentId: asNonBlankString(environmentId, "environmentId"),
@@ -271,10 +306,15 @@ export function registerBuildPipelineCommands(
       };
       // A Multi Review reviewer shares the worker address; its own read serves it.
       const reviewer = await multiReviews?.workerTranscript(input);
-      return reviewer ?? readPipelineWorkerTranscript(storage, input);
+      // Both reads build the shape `PipelineWorkerTranscript` describes, typed as a record.
+      return (reviewer ??
+        (await readPipelineWorkerTranscript(
+          storage,
+          input,
+        ))) as unknown as PipelineWorkerTranscript;
     },
   );
-  register("list_build_pipelines", async (args, { storage }) =>
+  register(listBuildPipelinesCommand, async (args, { storage }) =>
     conditionalManifestSnapshot(args, storage, "build-pipeline", async () => {
       const { projectId, knownRevisions } = args;
       // Summaries never reattach transcript bodies; an unmigrated legacy
@@ -292,16 +332,16 @@ export function registerBuildPipelineCommands(
       };
     }),
   );
-  register("save_build_pipeline", () => {
+  register(saveBuildPipelineCommand, () => {
     throw new Error("Build pipeline state is backend-owned");
   });
-  register("delete_build_pipeline", ({ pipelineId }, context) => {
+  register(deleteBuildPipelineCommand, ({ pipelineId }, context) => {
     const id = asNonBlankString(pipelineId, "pipelineId");
     return context.buildPipelines
       ? context.buildPipelines.remove(id)
       : context.storage.deleteBuildPipeline(id);
   });
-  register("clear_task_build_status", async ({ taskId }, context) => {
+  register(clearTaskBuildStatusCommand, async ({ taskId }, context) => {
     const id = asNonBlankString(taskId, "taskId");
     const task = await context.storage.kanban.getKanbanTask(id);
     if (!task) throw new Error(`Kanban task not found: ${id}`);
@@ -336,7 +376,7 @@ export function registerBuildPipelineCommands(
   });
 
   register(
-    "set_environment_unread",
+    setEnvironmentUnreadCommand,
     async ({ environmentId, unread, expectedLastActivityAt }, { storage }) =>
       toClientEnvironment(
         await storage.setEnvironmentUnread(

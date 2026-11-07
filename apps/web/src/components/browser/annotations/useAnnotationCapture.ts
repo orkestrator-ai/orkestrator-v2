@@ -16,6 +16,7 @@
  * validation) waits for the user instead of retrying.
  */
 import { startCoordinatedPoll } from "@/lib/coordinated-poll";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   BROWSER_PREVIEW_CAPTURE_EVENT,
@@ -59,6 +60,7 @@ import {
 } from "@/lib/web-annotations/client";
 import { redactPngDataUrl, type RedactionRect } from "@/lib/web-annotations/redaction";
 import { refreshWebAnnotations } from "@/lib/web-annotations/sync";
+import { commandClient } from "@/lib/node-scope/app-window-scope";
 
 const SELECTION_POLL_MS = 400;
 /** Bounded background retry for acknowledged-but-uncleared and interrupted saves. */
@@ -149,6 +151,8 @@ export function useAnnotationCapture({
   isActive: boolean;
   enabled: boolean;
 }) {
+  // This node's annotations (plan item 4001); the command node outside a node scope.
+  const annotationScope = useScopesWithCommandFallback().scope;
   const api: BrowserPreviewCaptureApi | null = enabled ? getBrowserPreviewCaptureApi() : null;
   const apiRef = useRef(api);
   useLayoutEffect(() => {
@@ -271,7 +275,8 @@ export function useAnnotationCapture({
       forgetSaveIntent(captureId);
       if (!ackPending) forgetCaptureIntent(captureId);
       redactionsRef.current.delete(captureId);
-      if (annotationId) refreshWebAnnotations(environmentId, { annotationIds: [annotationId] });
+      if (annotationId)
+        refreshWebAnnotations(environmentId, { annotationIds: [annotationId] }, annotationScope);
       setSaveState(captureId, {
         status: "saved",
         error: null,
@@ -293,7 +298,7 @@ export function useAnnotationCapture({
         });
       }
     },
-    [environmentId, setSaveState],
+    [annotationScope, environmentId, setSaveState],
   );
 
   const runSave = useCallback(
@@ -459,9 +464,8 @@ export function useAnnotationCapture({
 
   useEffect(() => {
     if (!api) return;
-    const listen = window.orkestrator?.listen;
-    if (typeof listen !== "function") return;
-    const unlistenCapture = listen<BrowserPreviewCaptureEvent>(
+    const client = commandClient();
+    const unlistenCapture = client.listenRaw<BrowserPreviewCaptureEvent>(
       BROWSER_PREVIEW_CAPTURE_EVENT,
       (event) => {
         if (!event) return;
@@ -477,12 +481,12 @@ export function useAnnotationCapture({
       },
     );
     // A reconnected gateway is the moment interrupted uploads can finish.
-    const unlistenReconnect = listen(NATIVE_EVENT_STREAM_CONNECTED_EVENT, () => {
+    const unlistenReconnect = client.listenRaw(NATIVE_EVENT_STREAM_CONNECTED_EVENT, () => {
       void resumeRef.current({ checkReceipts: true });
     });
     return () => {
-      unlistenCapture?.();
-      unlistenReconnect?.();
+      unlistenCapture();
+      unlistenReconnect();
     };
   }, [api, refreshExpired, refreshPending, refreshStatus, tabId]);
 

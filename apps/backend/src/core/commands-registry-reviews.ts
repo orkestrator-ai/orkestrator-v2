@@ -3,6 +3,39 @@ import {
   readReviewValidationOutput,
 } from "./review-validation-service.js";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
+import type { RendererWorkflowRecord } from "./commands-terminal.js";
+import {
+  addressMultiReviewCommand,
+  cancelMultiReviewCommand,
+  cancelReviewValidationCommand,
+  deleteMultiReviewWorkflowCommand,
+  getMultiReviewReviewerHistoryPageCommand,
+  getMultiReviewReviewerProjectionCommand,
+  getMultiReviewReviewerToolDetailsCommand,
+  getMultiReviewReviewerTranscriptCommand,
+  getMultiReviewStepToolDetailsCommand,
+  getMultiReviewStepTranscriptCommand,
+  getMultiReviewWorkflowCommand,
+  getReviewValidationOutputCommand,
+  listMultiReviewWorkflowsCommand,
+  pauseMultiReviewStepCommand,
+  previewMultiReviewCodeRewindCommand,
+  recoverMultiReviewFixSessionCommand,
+  restartMultiReviewReviewerCommand,
+  restartMultiReviewStepCommand,
+  resumeMultiReviewStepCommand,
+  retryMultiReviewCommand,
+  rewindMultiReviewCodeCommand,
+  skipMultiReviewStepCommand,
+  startMultiReviewCommand,
+  startMultiReviewCustomFixCommand,
+  startReviewValidationCommand,
+  statusReviewValidationCommand,
+  stopMultiReviewReviewerCommand,
+  stopMultiReviewValidationCommand,
+  stopReviewValidationCommandCommand,
+  unstickMultiReviewReviewerCommand,
+} from "@orkestrator/protocol/contract/domains/multi-review";
 import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 import { canonicalMultiReview } from "@orkestrator/protocol/workflow-vocabulary";
 import {
@@ -32,8 +65,12 @@ export function registerReviewWorkflowCommands(
   dependencies: RegistryDependencies,
 ): void {
   const { conditionalManifestSnapshot } = dependencies;
-  for (const action of ["start", "status", "cancel"] as const) {
-    register(`${action}_review_validation`, ({ environmentId, run }, context) =>
+  for (const [def, action] of [
+    [startReviewValidationCommand, "start"],
+    [statusReviewValidationCommand, "status"],
+    [cancelReviewValidationCommand, "cancel"],
+  ] as const) {
+    register(def, ({ environmentId, run }, context) =>
       controlReviewValidation(
         asNonBlankString(environmentId, "environmentId"),
         run,
@@ -42,7 +79,7 @@ export function registerReviewWorkflowCommands(
       ),
     );
   }
-  register("stop_review_validation_command", ({ environmentId, run, resultId }, context) =>
+  register(stopReviewValidationCommandCommand, ({ environmentId, run, resultId }, context) =>
     controlReviewValidation(
       asNonBlankString(environmentId, "environmentId"),
       run,
@@ -51,7 +88,7 @@ export function registerReviewWorkflowCommands(
       asNonBlankString(resultId, "resultId"),
     ),
   );
-  register("get_review_validation_output", ({ environmentId, runId, resultId, known }, context) =>
+  register(getReviewValidationOutputCommand, ({ environmentId, runId, resultId, known }, context) =>
     readReviewValidationOutput(
       asNonBlankString(environmentId, "environmentId"),
       asNonBlankString(runId, "runId"),
@@ -67,7 +104,7 @@ export function registerReviewWorkflowCommands(
    * instead of the whole record again. Every open window re-reads on each
    * change event, so the full answer would otherwise go out once per window.
    */
-  register("get_multi_review_workflow", ({ workflowId, knownRevision }, { storage }) =>
+  register(getMultiReviewWorkflowCommand, ({ workflowId, knownRevision }, { storage }) =>
     storage.getMultiReviewWorkflow(asNonBlankString(workflowId, "workflowId")).then((record) => {
       if (!record) return null;
       if (Number.isSafeInteger(knownRevision) && knownRevision === record.revision) {
@@ -76,15 +113,15 @@ export function registerReviewWorkflowCommands(
       return stripWorkflowRendererSecrets(record);
     }),
   );
-  register("list_multi_review_workflows", (args, { storage }) =>
-    conditionalManifestSnapshot(args, storage, "multi-review", () =>
+  register(listMultiReviewWorkflowsCommand, (args, { storage }) =>
+    conditionalManifestSnapshot<RendererWorkflowRecord[]>(args, storage, "multi-review", () =>
       storage
         .listMultiReviewWorkflows(asNonBlankString(args.environmentId, "environmentId"))
         .then((records) => records.map(stripWorkflowRendererSecrets)),
     ),
   );
   register(
-    "get_multi_review_reviewer_transcript",
+    getMultiReviewReviewerTranscriptCommand,
     ({ workflowId, reviewerId, knownSourceToken }, context) => {
       if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
       const request = {
@@ -110,7 +147,7 @@ export function registerReviewWorkflowCommands(
    * transiently rather than adopted as a native-agent session.
    */
   register(
-    "get_multi_review_reviewer_projection",
+    getMultiReviewReviewerProjectionCommand,
     async ({ workflowId, reviewerId, refreshUsage }, context) => {
       if (!context.nativeAgents) throw new Error("Native agent service is unavailable");
       const id = asNonBlankString(workflowId, "workflowId");
@@ -139,7 +176,7 @@ export function registerReviewWorkflowCommands(
     },
   );
   register(
-    "get_multi_review_step_transcript",
+    getMultiReviewStepTranscriptCommand,
     ({ workflowId, step, knownSourceToken }, context) => {
       if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
       const request = {
@@ -159,7 +196,7 @@ export function registerReviewWorkflowCommands(
       );
     },
   );
-  register("get_multi_review_step_tool_details", ({ workflowId, step, detailRef }, context) => {
+  register(getMultiReviewStepToolDetailsCommand, ({ workflowId, step, detailRef }, context) => {
     if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
     const request = { workflowId, step };
     if (
@@ -173,7 +210,7 @@ export function registerReviewWorkflowCommands(
     return context.multiReviews.stepToolDetails(request.workflowId, request.step, detailRef);
   });
   register(
-    "get_multi_review_reviewer_tool_details",
+    getMultiReviewReviewerToolDetailsCommand,
     ({ workflowId, reviewerId, detailRef }, context) => {
       if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
       // The reference is renderer-supplied; the service validates its shape
@@ -189,7 +226,7 @@ export function registerReviewWorkflowCommands(
     },
   );
   register(
-    "get_multi_review_reviewer_history_page",
+    getMultiReviewReviewerHistoryPageCommand,
     ({ workflowId, reviewerId, before, limit, targetBytes }, context) => {
       if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
       // The cursor and bounds are renderer-supplied: the cursor is length-
@@ -215,7 +252,7 @@ export function registerReviewWorkflowCommands(
       );
     },
   );
-  register("start_multi_review", (rawArgs, context) => {
+  register(startMultiReviewCommand, (rawArgs, context) => {
     if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
     const args = canonicalMultiReview(rawArgs);
     if (!isStartMultiReviewInput(args)) throw new Error("Invalid multi review start request");
@@ -223,12 +260,12 @@ export function registerReviewWorkflowCommands(
       .start(args as unknown as StartMultiReviewInput)
       .then(stripWorkflowSnapshotSecrets);
   });
-  register("address_multi_review", async ({ workflowId }, context) => {
+  register(addressMultiReviewCommand, async ({ workflowId }, context) => {
     if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
     const id = asNonBlankString(workflowId, "workflowId");
     return context.multiReviews.address(id).then(stripWorkflowSnapshotSecrets);
   });
-  register("start_multi_review_custom_fix", (rawArgs, context) => {
+  register(startMultiReviewCustomFixCommand, (rawArgs, context) => {
     if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
     const args = canonicalMultiReview(rawArgs);
     if (!isStartMultiReviewCustomAddressFindingsInput(args)) {
@@ -238,14 +275,14 @@ export function registerReviewWorkflowCommands(
       .customAddressFindings(args as unknown as StartMultiReviewCustomAddressFindingsInput)
       .then(stripWorkflowSnapshotSecrets);
   });
-  register("retry_multi_review", ({ workflowId }, context) => {
+  register(retryMultiReviewCommand, ({ workflowId }, context) => {
     if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
     return context.multiReviews
       .retry(asNonBlankString(workflowId, "workflowId"))
       .then(stripWorkflowSnapshotSecrets);
   });
   register(
-    "recover_multi_review_fix_session",
+    recoverMultiReviewFixSessionCommand,
     (
       { environmentId, tabId, expectedProviderSessionId, replacementProviderSessionId },
       context,
@@ -266,7 +303,7 @@ export function registerReviewWorkflowCommands(
         .then(stripWorkflowSnapshotSecrets);
     },
   );
-  register("stop_multi_review_reviewer", ({ workflowId, reviewerId }, context) => {
+  register(stopMultiReviewReviewerCommand, ({ workflowId, reviewerId }, context) => {
     if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
     return context.multiReviews
       .stopReviewer(
@@ -275,13 +312,13 @@ export function registerReviewWorkflowCommands(
       )
       .then(stripWorkflowSnapshotSecrets);
   });
-  register("stop_multi_review_validation", ({ workflowId }, context) => {
+  register(stopMultiReviewValidationCommand, ({ workflowId }, context) => {
     if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
     return context.multiReviews
       .stopValidation(asNonBlankString(workflowId, "workflowId"))
       .then(stripWorkflowSnapshotSecrets);
   });
-  register("restart_multi_review_reviewer", ({ workflowId, reviewerId, model }, context) => {
+  register(restartMultiReviewReviewerCommand, ({ workflowId, reviewerId, model }, context) => {
     if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
     if (model !== undefined && !isMultiReviewModelSelection(model)) {
       throw new Error("Invalid multi review reviewer model");
@@ -294,19 +331,19 @@ export function registerReviewWorkflowCommands(
       )
       .then(stripWorkflowSnapshotSecrets);
   });
-  register("skip_multi_review_step", ({ workflowId, step }, context) => {
+  register(skipMultiReviewStepCommand, ({ workflowId, step }, context) => {
     if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
     if (!isMultiReviewSkippableStep(step)) throw new Error("Invalid multi review step");
     return context.multiReviews
       .skipStep(asNonBlankString(workflowId, "workflowId"), step)
       .then(stripWorkflowSnapshotSecrets);
   });
-  register("preview_multi_review_code_rewind", ({ workflowId, step }, context) => {
+  register(previewMultiReviewCodeRewindCommand, ({ workflowId, step }, context) => {
     if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
     if (!isMultiReviewRewindStep(step)) throw new Error("Invalid multi review step");
     return context.multiReviews.previewCodeRewind(asNonBlankString(workflowId, "workflowId"), step);
   });
-  register("rewind_multi_review_code", ({ workflowId, step, expectedHead }, context) => {
+  register(rewindMultiReviewCodeCommand, ({ workflowId, step, expectedHead }, context) => {
     if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
     if (!isMultiReviewRewindStep(step)) throw new Error("Invalid multi review step");
     return context.multiReviews
@@ -317,7 +354,7 @@ export function registerReviewWorkflowCommands(
       )
       .then(stripWorkflowSnapshotSecrets);
   });
-  register("restart_multi_review_step", (args, context) => {
+  register(restartMultiReviewStepCommand, (args, context) => {
     if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
     if (!isRestartMultiReviewStepInput(args)) {
       throw new Error("Invalid multi review step restart request");
@@ -326,7 +363,7 @@ export function registerReviewWorkflowCommands(
       .restartStep(args.workflowId, args.kind, args.model)
       .then(stripWorkflowSnapshotSecrets);
   });
-  register("pause_multi_review_step", (args, context) => {
+  register(pauseMultiReviewStepCommand, (args, context) => {
     if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
     if (!isMultiReviewStepControlInput(args)) {
       throw new Error("Invalid multi review step pause request");
@@ -335,7 +372,7 @@ export function registerReviewWorkflowCommands(
       .pauseStep(args.workflowId, args.kind)
       .then(stripWorkflowSnapshotSecrets);
   });
-  register("resume_multi_review_step", (args, context) => {
+  register(resumeMultiReviewStepCommand, (args, context) => {
     if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
     if (!isMultiReviewStepControlInput(args)) {
       throw new Error("Invalid multi review step resume request");
@@ -344,7 +381,7 @@ export function registerReviewWorkflowCommands(
       .resumeStep(args.workflowId, args.kind)
       .then(stripWorkflowSnapshotSecrets);
   });
-  register("unstick_multi_review_reviewer", ({ workflowId, reviewerId }, context) => {
+  register(unstickMultiReviewReviewerCommand, ({ workflowId, reviewerId }, context) => {
     if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
     return context.multiReviews
       .unstickReviewer(
@@ -353,13 +390,13 @@ export function registerReviewWorkflowCommands(
       )
       .then(stripWorkflowSnapshotSecrets);
   });
-  register("cancel_multi_review", ({ workflowId }, context) => {
+  register(cancelMultiReviewCommand, ({ workflowId }, context) => {
     if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
     return context.multiReviews
       .cancel(asNonBlankString(workflowId, "workflowId"))
       .then(stripWorkflowSnapshotSecrets);
   });
-  register("delete_multi_review_workflow", ({ workflowId }, context) => {
+  register(deleteMultiReviewWorkflowCommand, ({ workflowId }, context) => {
     if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
     return context.multiReviews.close(asNonBlankString(workflowId, "workflowId"));
   });

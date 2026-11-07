@@ -1,16 +1,15 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, screen } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { fixturePreviewCapabilities } from "@orkestrator/protocol/testing/preview-contract-fixtures";
 
 import { invoke as nativeInvoke } from "@/lib/native/backend";
 import { portalStore } from "@/lib/portal/portal-store";
-import {
-  resetPreviewServiceSyncForTests,
-  usePreviewServiceStore,
-} from "@/stores/previewServiceStore";
+import { previewServiceStore, resetPreviewServiceSyncForTests } from "@/stores/previewServiceStore";
 import { AccountMachineProvider } from "./account-machine";
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 import { PreviewSettings } from "./PreviewSettings";
+import { appCommandStore } from "@/test/app-command-store";
 
 const invokeMock = nativeInvoke as unknown as ReturnType<typeof mock>;
 
@@ -72,7 +71,7 @@ describe("preview settings loading", () => {
       get_preview_settings: () => ({ stored: storedSettings, effective: storedSettings }),
       get_preview_diagnostics: () => diagnostics,
     });
-    render(<PreviewSettings />);
+    renderInAppCommandScope(<PreviewSettings />);
     expect(
       await screen.findByText(/Could not load preview settings: Preview services are unavailable/),
     ).toBeTruthy();
@@ -94,7 +93,7 @@ describe("preview settings loading", () => {
       },
       get_preview_diagnostics: () => diagnostics,
     });
-    render(<PreviewSettings />);
+    renderInAppCommandScope(<PreviewSettings />);
     expect(
       await screen.findByText(/Could not load preview settings: Settings are unavailable/),
     ).toBeTruthy();
@@ -117,7 +116,7 @@ describe("preview settings loading", () => {
       invoke_on_node: (args) => ({ outcome: "ok", result: answers[args.command as string] }),
     });
     try {
-      render(
+      renderInAppCommandScope(
         <AccountMachineProvider value={{ machine: "leaf", name: "Leaf" }}>
           <PreviewSettings />
         </AccountMachineProvider>,
@@ -137,45 +136,11 @@ describe("preview settings loading", () => {
       expect(
         invokeMock.mock.calls.some(([command]) => command === "get_preview_capabilities"),
       ).toBe(false);
-      expect(usePreviewServiceStore.getState().capabilities).toBeNull();
+      expect(appCommandStore(previewServiceStore).getState().capabilities).toBeNull();
     } finally {
       portalStore.store.setState(initialPortal);
     }
   });
-});
-
-test("a command node selected in a leaf window loads its capabilities without changing the leaf store", async () => {
-  resetPreviewServiceSyncForTests();
-  const leafCapabilities = fixturePreviewCapabilities({ backendInstanceId: "leaf-instance" });
-  usePreviewServiceStore.setState({ capabilities: leafCapabilities, status: "unsupported" });
-  window.orkestratorWorkspaceTarget = { nodeId: "leaf", nodeName: "Leaf", path: "direct" };
-  const portal = mock(async (command: string) => {
-    if (command === "get_preview_capabilities")
-      return fixturePreviewCapabilities({ backendInstanceId: "command-instance" });
-    if (command === "get_preview_settings")
-      return { stored: storedSettings, effective: storedSettings };
-    if (command === "get_preview_diagnostics") return diagnostics;
-    throw new Error(`Unexpected portal command: ${command}`);
-  });
-  window.orkestratorPortal = { invoke: portal, listen: () => () => {} } as never;
-  invokeMock.mockClear();
-  try {
-    render(
-      <AccountMachineProvider value={{ machine: null, name: "Command" }}>
-        <PreviewSettings />
-      </AccountMachineProvider>,
-    );
-    await screen.findByRole("switch", { name: "Issue new preview access" });
-    expect(portal).toHaveBeenCalledWith("get_preview_capabilities", {});
-    expect(invokeMock).not.toHaveBeenCalled();
-    expect(usePreviewServiceStore.getState().capabilities).toBe(leafCapabilities);
-    expect(usePreviewServiceStore.getState().status).toBe("unsupported");
-  } finally {
-    cleanup();
-    delete window.orkestratorPortal;
-    delete window.orkestratorWorkspaceTarget;
-    resetPreviewServiceSyncForTests();
-  }
 });
 
 test("a same-site preview domain warning is shown beside the publication status", async () => {
@@ -198,7 +163,7 @@ test("a same-site preview domain warning is shown beside the publication status"
     }),
   });
   try {
-    render(<PreviewSettings />);
+    renderInAppCommandScope(<PreviewSettings />);
     expect((await screen.findByRole("alert")).textContent).toContain(warning);
     expect(screen.getByText(/Listening on 127.0.0.1:8443/)).toBeTruthy();
   } finally {
@@ -215,7 +180,7 @@ test("no warning is shown when the backend reports none", async () => {
     get_preview_diagnostics: () => diagnostics,
   });
   try {
-    render(<PreviewSettings />);
+    renderInAppCommandScope(<PreviewSettings />);
     await screen.findByText("Private preview publication is disabled.");
     expectDomAbsent(screen.queryByRole("alert"), "same-site warning");
   } finally {

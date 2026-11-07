@@ -9,7 +9,8 @@
  * connection their turn runs on. They write only to the pipeline record.
  */
 import type { McpServer } from "@modelcontextprotocol/server";
-import { z } from "zod";
+import { Schema } from "effect";
+import { describe, list, str, toolInput } from "./tool-schema.js";
 import {
   KEY_INFORMATION_FRAMINGS,
   KEY_INFORMATION_ISSUE_STATUSES,
@@ -31,115 +32,127 @@ const INPUT_SLACK = 4;
 
 // Each use builds its own schema so the published JSON Schema inlines every
 // node rather than sharing one through `$ref`, which some providers reject.
-const text = (limit: number) => z.string().max(limit * INPUT_SLACK);
-const textList = (items: number, limit: number) => z.array(text(limit)).max(items * INPUT_SLACK);
+const text = (limit: number) => str({ max: limit * INPUT_SLACK });
+const textList = (items: number, limit: number) => list(text(limit), { max: items * INPUT_SLACK });
 
 function updateInputSchema() {
   const limits = KEY_INFORMATION_LIMITS;
-  return z.object({
-    framing: z
-      .enum(KEY_INFORMATION_FRAMINGS)
-      .optional()
-      .describe(
+  return Schema.Struct({
+    framing: Schema.optionalKey(
+      describe(
+        Schema.Literals(KEY_INFORMATION_FRAMINGS),
         "`problem` when the ticket fixes something wrong (the default); `objective` when it adds or changes something that was not broken.",
       ),
-    summary: text(limits.proseLength)
-      .optional()
-      .describe(
+    ),
+    summary: Schema.optionalKey(
+      describe(
+        text(limits.proseLength),
         "The change as a whole, in plain language for a reader who does not know the code: what changed and why it matters. No file names, identifiers or jargon. Two to four short paragraphs separated by a blank line, with `- ` bullet lines where the points are a list; never one long block.",
       ),
-    statement: text(limits.proseLength)
-      .optional()
-      .describe(
+    ),
+    statement: Schema.optionalKey(
+      describe(
+        text(limits.proseLength),
         "The problem being solved, or the objective being completed, in a few sentences. Separate paragraphs with a blank line; `- ` lines show as bullets.",
       ),
-    context: text(limits.proseLength)
-      .optional()
-      .describe(
+    ),
+    context: Schema.optionalKey(
+      describe(
+        text(limits.proseLength),
         "The situation around the work: where it lives, what it affects, constraints. Separate paragraphs with a blank line; `- ` lines show as bullets.",
       ),
-    solution: text(limits.proseLength)
-      .optional()
-      .describe(
+    ),
+    solution: Schema.optionalKey(
+      describe(
+        text(limits.proseLength),
         "The solution, as a reader would want it summarised. Separate paragraphs with a blank line; `- ` lines show as bullets.",
       ),
-    workDone: textList(limits.listItems, limits.itemLength)
-      .optional()
-      .describe("What the agents did, one entry per notable piece of work."),
-    decisions: z
-      .array(
-        z.object({
-          decision: text(limits.decisionLength).describe(
-            "The material technical choice the user should know about.",
-          ),
-          options: z
-            .array(
-              z.object({
+    ),
+    workDone: Schema.optionalKey(
+      describe(
+        textList(limits.listItems, limits.itemLength),
+        "What the agents did, one entry per notable piece of work.",
+      ),
+    ),
+    decisions: Schema.optionalKey(
+      describe(
+        list(
+          Schema.Struct({
+            decision: describe(
+              text(limits.decisionLength),
+              "The material technical choice the user should know about.",
+            ),
+            options: list(
+              Schema.Struct({
                 option: text(limits.optionLength),
                 pros: textList(limits.prosCons, limits.optionLength),
                 cons: textList(limits.prosCons, limits.optionLength),
               }),
-            )
-            .max(limits.options * INPUT_SLACK),
-          chosen: text(limits.optionLength).describe("The option implemented or selected."),
-          rationale: text(limits.rationaleLength)
-            .optional()
-            .describe(
-              "Brief engineering justification supported by requirements, code, constraints or tests; never private internal reasoning or chain of thought.",
+              { max: limits.options * INPUT_SLACK },
             ),
-        }),
-      )
-      .max(limits.decisions * INPUT_SLACK)
-      .optional()
-      .describe(
+            chosen: describe(text(limits.optionLength), "The option implemented or selected."),
+            rationale: Schema.optionalKey(
+              describe(
+                text(limits.rationaleLength),
+                "Brief engineering justification supported by requirements, code, constraints or tests; never private internal reasoning or chain of thought.",
+              ),
+            ),
+          }),
+          { max: limits.decisions * INPUT_SLACK },
+        ),
         "Concise records of material technical decisions: the chosen option and relevant alternatives with engineering pros and cons. Do not invent alternatives or claim an exhaustive record of options considered. Do not perform reasoning extraction or disclose or reconstruct private internal reasoning, hidden deliberations or chain of thought.",
       ),
-    notDone: textList(limits.listItems, limits.itemLength)
-      .optional()
-      .describe("What was not done or needs further work."),
-    tests: z
-      .array(
-        z.object({
-          name: text(limits.testNameLength).describe("The command or test that ran."),
-          result: z.enum(KEY_INFORMATION_TEST_RESULTS),
-          details: text(limits.itemLength).optional(),
-        }),
-      )
-      .max(limits.tests * INPUT_SLACK)
-      .optional()
-      .describe("The tests and checks that were run, with their result."),
-    issues: z
-      .array(
-        z.object({
-          issue: text(limits.issueLength),
-          severity: text(limits.severityLength).optional(),
-          resolution: text(limits.resolutionLength).describe("How it was solved, or why not."),
-          status: z.enum(KEY_INFORMATION_ISSUE_STATUSES),
-        }),
-      )
-      .max(limits.issues * INPUT_SLACK)
-      .optional()
-      .describe(
+    ),
+    notDone: Schema.optionalKey(
+      describe(
+        textList(limits.listItems, limits.itemLength),
+        "What was not done or needs further work.",
+      ),
+    ),
+    tests: Schema.optionalKey(
+      describe(
+        list(
+          Schema.Struct({
+            name: describe(text(limits.testNameLength), "The command or test that ran."),
+            result: Schema.Literals(KEY_INFORMATION_TEST_RESULTS),
+            details: Schema.optionalKey(text(limits.itemLength)),
+          }),
+          { max: limits.tests * INPUT_SLACK },
+        ),
+        "The tests and checks that were run, with their result.",
+      ),
+    ),
+    issues: Schema.optionalKey(
+      describe(
+        list(
+          Schema.Struct({
+            issue: text(limits.issueLength),
+            severity: Schema.optionalKey(text(limits.severityLength)),
+            resolution: describe(text(limits.resolutionLength), "How it was solved, or why not."),
+            status: Schema.Literals(KEY_INFORMATION_ISSUE_STATUSES),
+          }),
+          { max: limits.issues * INPUT_SLACK },
+        ),
         "The current round's review issues and how each was handled. Replaces this round's issues only; earlier rounds are kept.",
       ),
-    verification: z
-      .object({
-        passed: z.boolean().optional(),
-        summary: text(limits.summaryLength),
-        checks: z
-          .array(
-            z.object({
+    ),
+    verification: Schema.optionalKey(
+      describe(
+        Schema.Struct({
+          passed: Schema.optionalKey(Schema.Boolean),
+          summary: text(limits.summaryLength),
+          checks: list(
+            Schema.Struct({
               check: text(limits.checkLength),
-              passed: z.boolean(),
-              details: text(limits.itemLength).optional(),
+              passed: Schema.Boolean,
+              details: Schema.optionalKey(text(limits.itemLength)),
             }),
-          )
-          .max(limits.checks * INPUT_SLACK),
-      })
-      .optional()
-      .describe(
+            { max: limits.checks * INPUT_SLACK },
+          ),
+        }),
         "The current round's verification: each check and whether it passed, and what failed. Replaces this round's entry only.",
       ),
+    ),
   });
 }
 
@@ -168,7 +181,7 @@ export async function registerKeyInformationTools(
       title: "Read the pipeline's key information",
       description:
         "Read the key information of the build pipeline you are working in: the summary, the problem or objective, context, solution, work done, decisions, what was not done, tests, review issues and verification results recorded so far. Read it before updating so you keep what earlier stages wrote.",
-      inputSchema: z.object({}),
+      inputSchema: toolInput(Schema.Struct({})),
       annotations: {
         readOnlyHint: true,
         destructiveHint: false,
@@ -188,7 +201,7 @@ export async function registerKeyInformationTools(
       title: "Update the pipeline's key information",
       description:
         "Update the key information the user reads in the build pipeline header. Each field you pass replaces that whole section, so include the entries you want to keep; omitted fields are left unchanged. `issues` and `verification` apply to the current round only. Write for a reader who has not seen the transcript: short, specific and accurate. Record observable work and concise engineering decision summaries only. Do not perform reasoning extraction: do not disclose, reconstruct or request private internal reasoning, hidden deliberations or chain of thought.",
-      inputSchema: updateInputSchema(),
+      inputSchema: toolInput(updateInputSchema()),
       annotations: {
         readOnlyHint: false,
         destructiveHint: false,

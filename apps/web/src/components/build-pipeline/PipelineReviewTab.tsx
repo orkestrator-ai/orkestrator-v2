@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { hydrateBuildPipeline } from "@/lib/build-pipeline-persistence";
 import { StackedEyes } from "@/components/review/MultiReviewLaunchDialog";
 import { PipelineFlowView } from "./PipelineFlowView";
@@ -27,20 +28,21 @@ export function PipelineReviewTab({
   ownsGlobalShortcuts?: boolean;
 }) {
   const pipeline = useBuildPipelineStore((state) => state.pipelines.get(pipelineId));
+  const scope = useNodeScope();
   const [pinnedId, setPinnedId] = useState<string | null>(null);
   const controls = usePipelineControls(pipeline, () => setPinnedId(null));
   const hydrationAttemptedFor = useRef<string | null>(null);
   useEffect(() => {
     if (pipeline || hydrationAttemptedFor.current === pipelineId) return;
     hydrationAttemptedFor.current = pipelineId;
-    void hydrateBuildPipeline(pipelineId).catch((error) => {
+    void hydrateBuildPipeline(pipelineId, undefined, undefined, scope).catch((error) => {
       log.warn("pipeline.hydrate-failed", {
         source: "review-tab",
         pipelineId,
         error: formatLogError(error),
       });
     });
-  }, [pipeline, pipelineId]);
+  }, [pipeline, pipelineId, scope]);
 
   if (!pipeline) {
     return (

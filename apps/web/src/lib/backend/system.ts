@@ -1,12 +1,6 @@
-import { machineInvoke, type AccountMachine } from "./agent-accounts";
-import { invoke } from "@/lib/native/backend";
-
-/** Running Orkestrator version reported by the connected backend. */
-export async function getAppVersion(machine?: AccountMachine): Promise<string> {
-  return machine === undefined
-    ? invoke<string>("get_app_version")
-    : machineInvoke<string>(machine, "get_app_version");
-}
+import { asSystemModel, systemApi, systemApiOn } from "@/lib/node-scope/domains/system";
+import { type AccountMachine } from "./agent-accounts";
+import { commandBackendClient, type BackendClient } from "./client";
 
 /** Current resource use on the host running the Orkestrator backend. */
 export interface SystemUsageSnapshot {
@@ -15,10 +9,6 @@ export interface SystemUsageSnapshot {
   gpuPercent: number | null;
   diskPercent: number | null;
   sampledAt: string;
-}
-
-export async function getSystemUsage(): Promise<SystemUsageSnapshot> {
-  return invoke<SystemUsageSnapshot>("get_system_usage");
 }
 
 /** One process sampled inside a running environment. */
@@ -54,7 +44,39 @@ export interface EnvironmentProcessUsageSnapshot {
   truncated?: boolean;
 }
 
-/** Live CPU/RAM for child processes of every running environment. */
-export async function getEnvironmentProcessUsage(): Promise<EnvironmentProcessUsageSnapshot> {
-  return invoke<EnvironmentProcessUsageSnapshot>("get_environment_process_usage");
+/**
+ * This file's commands on `client`'s node (plan item 3002). A scoped store or
+ * service passes its own node's client; the named exports below are this
+ * over the window's command scope.
+ */
+export function createSystemApi(client: BackendClient) {
+  const system = () => systemApi(client);
+  /** Today's call without an arguments object (the version-0 adapter sends exactly that). */
+  const noArgs = undefined as never;
+
+  /** Running Orkestrator version reported by the connected backend. */
+  async function getAppVersion(machine?: AccountMachine): Promise<string> {
+    return machine === undefined
+      ? system().get_app_version(noArgs)
+      : systemApiOn(client, machine).get_app_version({});
+  }
+
+  async function getSystemUsage(): Promise<SystemUsageSnapshot> {
+    return system().get_system_usage(noArgs);
+  }
+
+  /** Live CPU/RAM for child processes of every running environment. */
+  async function getEnvironmentProcessUsage(): Promise<EnvironmentProcessUsageSnapshot> {
+    return asSystemModel<EnvironmentProcessUsageSnapshot>(
+      system().get_environment_process_usage(noArgs),
+    );
+  }
+
+  return { getAppVersion, getSystemUsage, getEnvironmentProcessUsage };
 }
+
+export type SystemApi = ReturnType<typeof createSystemApi>;
+
+/** The window's command-scope binding (the counted shim, plan item 3002). */
+export const { getAppVersion, getSystemUsage, getEnvironmentProcessUsage } =
+  createSystemApi(commandBackendClient);

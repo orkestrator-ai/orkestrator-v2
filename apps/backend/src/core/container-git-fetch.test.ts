@@ -1,3 +1,4 @@
+import { eventSink } from "./backend-emit.js";
 import { describe, expect, test } from "bun:test";
 import {
   WORKTREE_SNAPSHOT_CHANGED_EVENT,
@@ -596,9 +597,9 @@ describe("remote freshness in worktree snapshots", () => {
       delay: (callback, delayMs) => time.setTimeout(callback, delayMs),
       cancelDelay: (timer) => time.clear(timer),
       metrics: new RecurringWorkMetrics({ now: time.now }),
-      emit: (event, payload) => {
+      emit: eventSink((event, payload) => {
         if (event === WORKTREE_SNAPSHOT_CHANGED_EVENT) events.push(payload);
-      },
+      }),
       remoteFreshness: (target) => (target.kind === "container" ? freshness : undefined),
       scan: async () => ({
         stats: { additions: 0, deletions: 0, filesChanged: 0, truncated: false },

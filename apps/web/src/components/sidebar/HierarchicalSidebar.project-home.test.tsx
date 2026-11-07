@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { FederationEffects } from "@/components/federation/FederationEffects";
 import { useProjectHomeActivation } from "@/hooks/useProjectHomeActivation";
 import { FederationProvider } from "@/components/federation/FederationProvider";
@@ -8,7 +9,8 @@ import {
   startRemoteWorkspaceSelectionSync,
   useRemoteWorkspaceStore,
 } from "@/stores/remoteWorkspaceStore";
-import { useEnvironmentStore, useProjectStore, useUIStore } from "@/stores";
+import { environmentStore, projectStore, uiStore } from "@/stores";
+import { useUIChromeStore } from "@/stores/uiChromeStore";
 import {
   connectionList,
   installDesktopFake,
@@ -17,6 +19,8 @@ import {
 } from "@/test/federation-desktop-fake";
 import type { Environment, Project } from "@/types";
 import { HierarchicalSidebar } from "./HierarchicalSidebar";
+import { selectOnNode } from "@/test/node-selection";
+import { appCommandStore } from "@/test/app-command-store";
 
 /** A project's header button, found through its "+" button, which names project and machine. */
 async function findProjectHeading(project: string, machine: string): Promise<HTMLElement> {
@@ -27,9 +31,9 @@ async function findProjectHeading(project: string, machine: string): Promise<HTM
 }
 
 const initialView = useMachineViewStore.getState();
-const initialUI = useUIStore.getState();
-const initialProjects = useProjectStore.getState();
-const initialEnvironments = useEnvironmentStore.getState();
+const initialUI = appCommandStore(uiStore).getState();
+const initialProjects = appCommandStore(projectStore).getState();
+const initialEnvironments = appCommandStore(environmentStore).getState();
 const initialRemote = useRemoteWorkspaceStore.getState();
 
 const localProject = {
@@ -55,12 +59,14 @@ const localFeature = localEnvironment("local-feature", false);
 beforeEach(() => {
   if (!HTMLElement.prototype.scrollIntoView) HTMLElement.prototype.scrollIntoView = () => {};
   useRemoteWorkspaceStore.setState({ active: null });
-  useUIStore.setState({
+  appCommandStore(uiStore).setState({
     selectedProjectId: null,
     selectedEnvironmentId: null,
     recentProjectIds: [],
-    environmentSortMode: "project",
     collapsedProjects: [],
+  });
+  useUIChromeStore.setState({
+    environmentSortMode: "project",
   });
 });
 
@@ -68,9 +74,9 @@ afterEach(() => {
   cleanup();
   uninstallDesktopFake();
   useMachineViewStore.setState(initialView, true);
-  useUIStore.setState(initialUI, true);
-  useProjectStore.setState(initialProjects, true);
-  useEnvironmentStore.setState(initialEnvironments, true);
+  appCommandStore(uiStore).setState(initialUI, true);
+  appCommandStore(projectStore).setState(initialProjects, true);
+  appCommandStore(environmentStore).setState(initialEnvironments, true);
   useRemoteWorkspaceStore.setState(initialRemote, true);
 });
 
@@ -106,7 +112,7 @@ test("a project row stays highlighted while its home is shown, on the command no
   });
   const stopSync = startRemoteWorkspaceSelectionSync();
   try {
-    render(
+    renderInAppCommandScope(
       <FederationProvider>
         <HierarchicalSidebar />
       </FederationProvider>,
@@ -120,27 +126,23 @@ test("a project row stays highlighted while its home is shown, on the command no
     expect(highlighted()).toEqual({ local: false, leaf: false });
 
     // The command node's project, then its home.
-    act(() => useUIStore.getState().selectProject(localProject.id));
+    act(() => appCommandStore(uiStore).getState().selectProject(localProject.id));
     await waitFor(() => expect(highlighted()).toEqual({ local: true, leaf: false }));
-    act(() => useUIStore.getState().selectEnvironment(localHome.id));
+    act(() => appCommandStore(uiStore).getState().selectEnvironment(localHome.id));
     expect(highlighted()).toEqual({ local: true, leaf: false });
     // One of its environments.
-    act(() => useUIStore.getState().selectEnvironment(localFeature.id));
+    act(() => appCommandStore(uiStore).getState().selectEnvironment(localFeature.id));
     expect(highlighted()).toEqual({ local: false, leaf: false });
 
-    // The leaf's project, opened from its row, then its home as the realm reports it.
+    // The leaf's project, opened from its row, then its home as the leaf selects it.
     fireEvent.click(leafRow);
     await waitFor(() => expect(highlighted()).toEqual({ local: false, leaf: true }));
     const report = (projectId: string | null, environmentId: string | null) =>
-      act(() =>
-        useRemoteWorkspaceStore
-          .getState()
-          .noteRealmSelection("bk_leaf", { projectId, environmentId }),
-      );
+      act(() => selectOnNode("bk_leaf", { projectId, environmentId }));
     report("tg", "tg-home");
     expect(highlighted()).toEqual({ local: false, leaf: true });
     expect(leafRow.closest("[data-project]")?.getAttribute("data-selected")).toBe("true");
-    // One of the leaf's environments, chosen in its realm.
+    // One of the leaf's environments, chosen in its workspace.
     report("tg", "tg-feature");
     expect(highlighted()).toEqual({ local: false, leaf: false });
     expect(leafRow.closest("[data-project]")?.getAttribute("data-selected")).toBeNull();
@@ -148,7 +150,7 @@ test("a project row stays highlighted while its home is shown, on the command no
     expect(highlighted()).toEqual({ local: false, leaf: true });
 
     // Back to the command node's project: the leaf's row lets go.
-    act(() => useUIStore.getState().selectProject(localProject.id));
+    act(() => appCommandStore(uiStore).getState().selectProject(localProject.id));
     expect(useRemoteWorkspaceStore.getState().active).toBeNull();
     expect(highlighted()).toEqual({ local: true, leaf: false });
   } finally {
@@ -169,8 +171,10 @@ for (const grouping of ["machine", "repository"] as const) {
             ? []
             : undefined,
     });
-    useProjectStore.getState().setProjects([{ ...localProject, icon }]);
-    useEnvironmentStore.getState().setEnvironments([]);
+    appCommandStore(projectStore)
+      .getState()
+      .setProjects([{ ...localProject, icon }]);
+    appCommandStore(environmentStore).getState().setEnvironments([]);
     useMachineViewStore.setState({
       grouping,
       machineFilter: "all",
@@ -180,7 +184,7 @@ for (const grouping of ["machine", "repository"] as const) {
       revealedProject: null,
       recentKeys: [],
     });
-    render(
+    renderInAppCommandScope(
       <FederationProvider>
         <HierarchicalSidebar />
       </FederationProvider>,
@@ -210,8 +214,8 @@ for (const delayed of [false, true]) {
         return undefined;
       },
     });
-    useProjectStore.getState().setProjects([localProject]);
-    useEnvironmentStore
+    appCommandStore(projectStore).getState().setProjects([localProject]);
+    appCommandStore(environmentStore)
       .getState()
       .setEnvironments(delayed ? [localFeature] : [localHome, localFeature]);
     useMachineViewStore.setState({
@@ -225,7 +229,7 @@ for (const delayed of [false, true]) {
       useProjectHomeActivation();
       return null;
     }
-    render(
+    renderInAppCommandScope(
       <FederationProvider>
         <FederationEffects />
         <HierarchicalSidebar />
@@ -238,16 +242,18 @@ for (const delayed of [false, true]) {
       expect(heading.getAttribute("aria-current")).toBe("page");
       await act(async () => finish(localHome));
     }
-    await waitFor(() => expect(useUIStore.getState().selectedEnvironmentId).toBe(localHome.id));
+    await waitFor(() =>
+      expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe(localHome.id),
+    );
     expect(heading.getAttribute("aria-current")).toBe("page");
-    expect(useUIStore.getState().projectBoardTab).toBe("coordinator");
+    expect(appCommandStore(uiStore).getState().projectBoardTab).toBe("coordinator");
     expect(
       heading.closest("[data-project-folder]")!.querySelectorAll('[aria-current="page"]').length,
     ).toBe(1);
     const add = screen.getByRole("button", { name: /New environment in local-app/ });
     const member = add.parentElement!.querySelector("button")!;
     expect(member.getAttribute("aria-current")).toBeNull();
-    act(() => useUIStore.getState().selectEnvironment(localFeature.id));
+    act(() => appCommandStore(uiStore).getState().selectEnvironment(localFeature.id));
     expect(heading.getAttribute("aria-current")).toBeNull();
     expect(useMachineViewStore.getState().openedRepository).toBeNull();
     fireEvent.click(heading);

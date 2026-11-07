@@ -23,23 +23,31 @@ import {
 } from "@/components/ui/dialog";
 import { modelSupportsSpeed } from "@/lib/agent-launch";
 import { resolvedPlatformSettings } from "@/lib/agent-settings";
-import { pickHostPath } from "@/lib/host-path-picker";
-import { buildReviewModelCatalog } from "@/lib/review-launch-options";
+import { usePickHostPath } from "@/lib/host-path-picker";
+import { buildReviewModelCatalog, type ReviewCatalogModels } from "@/lib/review-launch-options";
+import { useNodeScope } from "@/lib/node-scope/providers";
+import { agentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 import {
   handTabInitialPromptToBackend,
   type TabInitialPromptOptions,
 } from "@/lib/tab-initial-prompt";
 import { createSessionKey } from "@/lib/utils";
-import { useConfigStore } from "@/stores";
-import { useEnvironmentStore } from "@/stores/environmentStore";
-import { useNativeComposeStore } from "@/stores/nativeComposeStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { configStore, useConfigStore } from "@/stores";
+import { environmentStore } from "@/stores/environmentStore";
+import type { AppConfig, Environment } from "@/types";
+import { nativeComposeStore } from "@/stores/nativeComposeStore";
+import {
+  paneLayoutStore,
+  usePaneLayoutStore,
+  type PaneLayoutState,
+} from "@/stores/paneLayoutStore";
+import type { StoreApi } from "zustand/vanilla";
 import { createUniqueTabId } from "@/components/terminal/TerminalContainer.helpers";
 import {
   classifyTransportError,
   designAction,
-  designApi,
-  designBackendKey,
+  designApiFor,
+  designBackendKeyFor,
   failureOf,
   getCapabilities,
   importDesignDocument,
@@ -55,6 +63,7 @@ import {
   DESIGN_NAME_MAX,
   DesignLaunchError,
   launchDesignWorkspace,
+  designReadinessDeps,
   loadDesignReadiness,
   rendererUnavailable,
   readDesignImport,
@@ -86,9 +95,12 @@ type CreateTab = (type: CreatableTabType, options?: CreateTabOptions) => boolean
 
 const DEFAULT_ENABLED_AGENTS: readonly string[] = ["claude", "codex", "opencode"];
 
-/** Current layout facts for one environment, read at decision time. */
-export function readDesignLayoutFacts(environmentId: string): DesignLayoutFacts {
-  const store = usePaneLayoutStore.getState();
+/** Current layout facts for one environment of `layouts`' node, read at decision time. */
+export function readDesignLayoutFacts(
+  layouts: StoreApi<PaneLayoutState>,
+  environmentId: string,
+): DesignLayoutFacts {
+  const store = layouts.getState();
   const state = store.environments.get(environmentId);
   const activePaneId = state?.activePaneId;
   return {
@@ -99,8 +111,8 @@ export function readDesignLayoutFacts(environmentId: string): DesignLayoutFacts 
   };
 }
 
-function focusTab(environmentId: string, tabId: string): boolean {
-  const store = usePaneLayoutStore.getState();
+function focusTab(layouts: StoreApi<PaneLayoutState>, environmentId: string, tabId: string) {
+  const store = layouts.getState();
   const pane = store.findPaneWithTab(tabId, environmentId);
   if (!pane) return false;
   store.setActivePane(pane.id, environmentId);
@@ -108,8 +120,8 @@ function focusTab(environmentId: string, tabId: string): boolean {
   return true;
 }
 
-function removeTab(environmentId: string, tabId: string) {
-  const store = usePaneLayoutStore.getState();
+function removeTab(layouts: StoreApi<PaneLayoutState>, environmentId: string, tabId: string) {
+  const store = layouts.getState();
   const pane = store.findPaneWithTab(tabId, environmentId);
   if (pane) store.removeTab(pane.id, tabId, environmentId);
 }
@@ -121,18 +133,19 @@ const errorText = (error: unknown) => failureOf(error).message;
  * backend queue and the renderer fallback start the same session.
  */
 function designInitialPromptOptions(
-  environmentId: string,
+  environment: Environment | undefined,
   platform: DesignAgent,
   images: readonly DesignPromptImage[],
+  models: ReviewCatalogModels,
+  config: AppConfig,
 ): TabInitialPromptOptions {
-  const environment = useEnvironmentStore.getState().getEnvironmentById(environmentId);
   const configured = resolvedPlatformSettings(
-    useConfigStore.getState().config,
+    config,
     environment?.projectId,
     environment,
     platform,
   );
-  const fastMode = modelSupportsSpeed(platform, buildReviewModelCatalog(), configured.model)
+  const fastMode = modelSupportsSpeed(platform, buildReviewModelCatalog(models), configured.model)
     ? configured.fastMode
     : undefined;
   return {
@@ -154,7 +167,7 @@ export function DesignWorkspaceDialog({
   onOpenChange,
   environmentId,
   createTab,
-  loadReadiness = loadDesignReadiness,
+  loadReadiness: loadReadinessOverride,
   initialMode = "new",
 }: {
   open: boolean;
@@ -165,7 +178,24 @@ export function DesignWorkspaceDialog({
   loadReadiness?: (probe: boolean) => Promise<DesignReadinessView>;
   initialMode?: DesignWorkspaceMode;
 }) {
-  const backendKey = designBackendKey();
+  // Browses the host of the node this component renders in.
+  const pickHostPath = usePickHostPath();
+  const modelCatalog = useNodeScope().store(agentModelCatalogStore);
+  const configs = useNodeScope().store(configStore);
+  const environments = useNodeScope().store(environmentStore);
+  const composeDrafts = useNodeScope().store(nativeComposeStore);
+  // This node's pane layouts (plan item 3013).
+  const nodeScope = useNodeScope();
+  const paneLayouts = nodeScope.store(paneLayoutStore);
+  // Every design call goes to this node, the one that holds the canvas (plan item 4007).
+  const nodeDesign = designApiFor(nodeScope);
+  const loadReadiness = useMemo(
+    () =>
+      loadReadinessOverride ??
+      ((probe: boolean) => loadDesignReadiness(probe, designReadinessDeps(nodeScope))),
+    [loadReadinessOverride, nodeScope],
+  );
+  const backendKey = designBackendKeyFor(nodeScope);
   const scope = `${backendKey}\u0000${environmentId}`;
   const scopeRef = useRef(scope);
   useLayoutEffect(() => {
@@ -269,7 +299,7 @@ export function DesignWorkspaceDialog({
   // the facts themselves are cheap to derive (at most MAX_TABS tabs).
   usePaneLayoutStore((state) => state.environments.get(environmentId));
   const hydrated = usePaneLayoutStore((state) => state.hydration.get(environmentId) === "done");
-  const facts = readDesignLayoutFacts(environmentId);
+  const facts = readDesignLayoutFacts(paneLayouts, environmentId);
   const environmentReady = Boolean(createTab) && hydrated;
   const withAgent = agent !== "none";
   const plan = planDesignLaunch({ environmentReady, withAgent, facts });
@@ -307,9 +337,13 @@ export function DesignWorkspaceDialog({
 
   const openDesign = useCallback(
     (canvasId: string, placement: DesignPlacement): string | null => {
-      const decision = decideDesignOpen(canvasId, placement, readDesignLayoutFacts(environmentId));
+      const decision = decideDesignOpen(
+        canvasId,
+        placement,
+        readDesignLayoutFacts(paneLayouts, environmentId),
+      );
       if (decision.kind === "focus") {
-        if (!focusTab(environmentId, decision.tabId))
+        if (!focusTab(paneLayouts, environmentId, decision.tabId))
           return "The open design tab could not be focused.";
         onOpenChange(false);
         return null;
@@ -326,7 +360,7 @@ export function DesignWorkspaceDialog({
       onOpenChange(false);
       return null;
     },
-    [createTab, environmentId, onOpenChange],
+    [createTab, environmentId, onOpenChange, paneLayouts],
   );
 
   const create = async () => {
@@ -341,9 +375,7 @@ export function DesignWorkspaceDialog({
     )
       return;
     const launchScope = scopeRef.current;
-    const originPaneId = usePaneLayoutStore
-      .getState()
-      .environments.get(environmentId)?.activePaneId;
+    const originPaneId = paneLayouts.getState().environments.get(environmentId)?.activePaneId;
     const images = withAgent ? briefImages : [];
     setBusy(true);
     setError(null);
@@ -355,7 +387,7 @@ export function DesignWorkspaceDialog({
       const sessions = view
         ? view.protocol === "v2" && Boolean(view.capabilities?.sessions)
         : withAgent &&
-          (await getCapabilities().then(
+          (await getCapabilities(backendKey, nodeScope).then(
             (capabilities) => Boolean(capabilities.sessions),
             () => false,
           ));
@@ -369,17 +401,19 @@ export function DesignWorkspaceDialog({
         canvasTabId: createUniqueTabId("design"),
         agentTabId: createUniqueTabId("design-agent"),
         createCanvas: (canvasName) =>
-          designAction<DesignCanvas>(environmentId, "create_canvas", {
-            name: canvasName,
-          }),
+          designAction<DesignCanvas>(
+            environmentId,
+            "create_canvas",
+            { name: canvasName },
+            nodeScope,
+          ),
         createFrame: (canvas, frame) =>
-          designAction<{ canvasRevision: number }>(environmentId, "create_frame", {
-            canvasId: canvas.id,
-            expectedRevision: canvas.revision,
-            x: 0,
-            y: 0,
-            ...frame,
-          }),
+          designAction<{ canvasRevision: number }>(
+            environmentId,
+            "create_frame",
+            { canvasId: canvas.id, expectedRevision: canvas.revision, x: 0, y: 0, ...frame },
+            nodeScope,
+          ),
         openCanvas: (canvasId, tabId, placement) =>
           createTab("design-canvas", {
             canvasId,
@@ -388,16 +422,21 @@ export function DesignWorkspaceDialog({
           }),
         createAgentTab: (platform, tabId, initialPrompt) => {
           // The agent sits beside the canvas in the pane the user started from.
-          if (originPaneId)
-            usePaneLayoutStore.getState().setActivePane(originPaneId, environmentId);
+          if (originPaneId) paneLayouts.getState().setActivePane(originPaneId, environmentId);
           // Seed the images before the tab mounts so the initial prompt,
           // which the tab sends from its draft, carries them.
           const sessionKey = createSessionKey(environmentId, tabId);
-          if (!addDesignImagesToDraft(sessionKey, images))
+          if (!addDesignImagesToDraft(sessionKey, images, composeDrafts))
             throw new Error(
               "Too many images for this conversation. Remove some images and try again.",
             );
-          const promptOptions = designInitialPromptOptions(environmentId, platform, images);
+          const promptOptions = designInitialPromptOptions(
+            environments.getState().getEnvironmentById(environmentId),
+            platform,
+            images,
+            modelCatalog.getState(),
+            configs.getState().config,
+          );
           let created = false;
           try {
             // The prompt stays on the tab as the renderer fallback until the
@@ -413,27 +452,30 @@ export function DesignWorkspaceDialog({
               initialConversationMode: "build",
             });
             if (created)
-              void handTabInitialPromptToBackend({
-                environmentId,
-                tabId,
-                agent: platform,
-                prompt: initialPrompt,
-                options: promptOptions,
-              }).catch((reason) => {
+              void handTabInitialPromptToBackend(
+                {
+                  environmentId,
+                  tabId,
+                  agent: platform,
+                  prompt: initialPrompt,
+                  options: promptOptions,
+                },
+                undefined,
+                nodeScope,
+              ).catch((reason) => {
                 toast.error("Could not send the design opening prompt", {
                   description: errorText(reason),
                 });
               });
             return created;
           } finally {
-            const store = usePaneLayoutStore.getState();
+            const store = paneLayouts.getState();
             if (!created && images.length > 0 && !store.findPaneWithTab(tabId, environmentId))
-              useNativeComposeStore.getState().clearDraft(sessionKey);
+              composeDrafts.getState().clearDraft(sessionKey);
           }
         },
-        hasTab: (tabId) =>
-          Boolean(usePaneLayoutStore.getState().findPaneWithTab(tabId, environmentId)),
-        removeTab: (tabId) => removeTab(environmentId, tabId),
+        hasTab: (tabId) => Boolean(paneLayouts.getState().findPaneWithTab(tabId, environmentId)),
+        removeTab: (tabId) => removeTab(paneLayouts, environmentId, tabId),
         deleteCanvas: (canvasId, revision) =>
           runDesignLifecycle(
             environmentId,
@@ -442,11 +484,12 @@ export function DesignWorkspaceDialog({
             {
               canvasRevision: revision,
             },
+            nodeDesign,
           ),
         ...(sessions
           ? {
               linkSession: (canvasId: string, tabId: string, platform: DesignAgent) =>
-                designApi.linkSession(environmentId, canvasId, {
+                nodeDesign.linkSession(environmentId, canvasId, {
                   tabId,
                   platform,
                   role: "design",
@@ -526,7 +569,11 @@ export function DesignWorkspaceDialog({
       setBusy(false);
       return;
     }
-    await importFile(() => importDesignHostFile(environmentId, path), epoch, importScope);
+    await importFile(
+      () => importDesignHostFile(environmentId, path, nodeScope),
+      epoch,
+      importScope,
+    );
   };
 
   const uploadFile = async (file: File) => {
@@ -539,7 +586,7 @@ export function DesignWorkspaceDialog({
         const document = await readDesignImport(file);
         if (epoch !== importEpoch.current || importScope !== scopeRef.current)
           throw new Error("Design workspace changed.");
-        return importDesignDocument(environmentId, document);
+        return importDesignDocument(environmentId, document, nodeScope);
       },
       epoch,
       importScope,

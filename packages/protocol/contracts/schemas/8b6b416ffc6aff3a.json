@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:8b6b416ffc6aff3adfc9c9091122793f03bbaf46fe6fb6fc4677a0de185ff15d",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "autoMergeEnabledAt": {},
+        "cleanupAfterMerge": {},
+        "deleteBranch": {},
+        "environmentId": {
+          "type": "string"
+        },
+        "expectedHeadSha": {},
+        "expectedPrUrl": {},
+        "method": {}
+      },
+      "required": ["environmentId"],
+      "type": "object"
+    }
+  }
+}

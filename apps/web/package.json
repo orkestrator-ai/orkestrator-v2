@@ -55,6 +55,7 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "dompurify": "3.4.17",
+    "effect": "4.1.2",
     "lucide-react": "^1.56.0",
     "marked": "17.0.6",
     "monaco-editor": "^0.57.0",

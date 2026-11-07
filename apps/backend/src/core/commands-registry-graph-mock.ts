@@ -2,6 +2,10 @@ import { parseGraphTemplateRef } from "@orkestrator/protocol/graphs/library";
 import { parseGraphMockPins } from "@orkestrator/protocol/graphs/mock";
 import { isGraphRunId, type GraphRunBindings } from "@orkestrator/protocol/graphs/run";
 import type { GraphScalarValue } from "@orkestrator/protocol/graphs/template";
+import {
+  graphRunEffectsCommand,
+  graphRunMockCommand,
+} from "@orkestrator/protocol/contract/domains/graphs";
 import type { CommandContext } from "./commands-context.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
 import type { GraphMockRuns } from "./graph-mock-launch.js";
@@ -25,7 +29,9 @@ import { GraphRunServiceError } from "./graph-run-service.js";
  *
  * Refusals throw `GraphRunServiceError` (`invalid-launch`, `not-found`,
  * `disabled`) or, for the template, `GraphTemplateError` (`not-found`,
- * `engine-template`, `invalid-template`); the gateway forwards `code`.
+ * `engine-template`, `invalid-template`); the gateway forwards `code`. Both
+ * are defined in the `graphs` contract domain (plan item 7007): unknown
+ * argument keys are dropped.
  */
 
 export const GRAPH_RUN_EFFECTS_LIMIT = 500;
@@ -37,11 +43,6 @@ function mockRuns(context: CommandContext): GraphMockRuns {
 
 function invalid(message: string): never {
   throw new GraphRunServiceError("invalid-launch", message);
-}
-
-function onlyKeys(args: Record<string, unknown>, allowed: readonly string[]): void {
-  const unknown = Object.keys(args).filter((key) => !allowed.includes(key));
-  if (unknown.length > 0) invalid(`Unknown arguments: ${unknown.slice(0, 5).join(", ")}`);
 }
 
 function idArg(value: unknown, name: string, required: true): string;
@@ -81,18 +82,7 @@ function paramsArg(value: unknown): Record<string, GraphScalarValue> | undefined
 }
 
 export function registerGraphMockCommands(register: CommandRegistrar): void {
-  register("graph_run_mock", async (args, context) => {
-    onlyKeys(args, [
-      "ref",
-      "projectId",
-      "environmentId",
-      "inputs",
-      "params",
-      "roles",
-      "pins",
-      "panel",
-      "stepMs",
-    ]);
+  register(graphRunMockCommand, async (args, context) => {
     const ref = parseGraphTemplateRef(args.ref);
     if ("error" in ref) invalid(ref.error);
     const projectId = idArg(args.projectId, "projectId", true);
@@ -133,8 +123,7 @@ export function registerGraphMockCommands(register: CommandRegistrar): void {
     });
   });
 
-  register("graph_run_effects", async (args, context) => {
-    onlyKeys(args, ["runId"]);
+  register(graphRunEffectsCommand, async (args, context) => {
     const runId = args.runId;
     if (!isGraphRunId(runId)) invalid("runId must be a run id");
     if (!(await context.storage.graphRuns.getGraphRun(runId))) {

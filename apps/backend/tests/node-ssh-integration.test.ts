@@ -5,6 +5,7 @@
  * through the command node, as the portal does it. Opt in with
  * ORKESTRATOR_SSH_INTEGRATION=1.
  */
+import { registrarFrom } from "../src/core/commands-registry-contracts.js";
 import { afterAll, beforeAll, describe, expect } from "bun:test";
 import { createServer, type Server } from "node:http";
 
@@ -58,7 +59,7 @@ describe("RG-04 SSH routes from the command node's backend", () => {
     });
     await leaf.start();
     const commands = new Map<string, CommandHandler>();
-    registerNodeCommands((name, handler) => commands.set(name, handler));
+    registerNodeCommands(registrarFrom((name, handler) => commands.set(name, handler)));
     leafServer = createServer(async (request, response) => {
       if (request.headers.authorization !== `Bearer ${LEAF_TOKEN}`) {
         response.writeHead(401).end();

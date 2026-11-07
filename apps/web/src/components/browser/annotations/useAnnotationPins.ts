@@ -27,9 +27,11 @@ import {
 } from "@orkestrator/protocol/web-annotations";
 import { getBrowserPreviewCaptureApi } from "@/lib/native/browser-preview";
 import { loadWebAnnotationCapture } from "@/lib/web-annotations/assets";
+import { useWebAnnotationScope } from "@/hooks/useWebAnnotations";
 import { describeWebAnnotationError } from "@/lib/web-annotations/client";
 import { anchorStateLabel, samePage, sameService, type CurrentAnnotationPage } from "./format";
 import type { ShowOnPageResult } from "./panel-context";
+import { commandClient } from "@/lib/node-scope/app-window-scope";
 
 const PIN_CAPTURE_CONCURRENCY = 4;
 const SHOW_ON_PAGE_TIMEOUT_MS = 10_000;
@@ -135,6 +137,7 @@ export function useAnnotationPins({
   currentPage: CurrentAnnotationPage | null;
   previewAttached: boolean;
 }) {
+  const annotationScope = useWebAnnotationScope();
   const [pinResults, setPinResults] = useState<ReadonlyMap<string, WebAnnotationAnchorResolution>>(
     new Map(),
   );
@@ -213,7 +216,7 @@ export function useAnnotationPins({
       .filter((item) => item.state === "open" && !item.hidden)
       .slice(0, WEB_ANNOTATION_LIMITS.visiblePins);
     const captures = await mapBounded(visible, PIN_CAPTURE_CONCURRENCY, (item) =>
-      loadWebAnnotationCapture(environmentId, item.currentCaptureId),
+      loadWebAnnotationCapture(environmentId, item.currentCaptureId, annotationScope),
     );
     const pins: BrowserPreviewAnchorQuery[] = [];
     visible.forEach((item, index) => {
@@ -222,7 +225,7 @@ export function useAnnotationPins({
       if (pin) pins.push(pin);
     });
     return pins;
-  }, [environmentId]);
+  }, [annotationScope, environmentId]);
 
   const send = useCallback(
     async (pins: BrowserPreviewAnchorQuery[]) => {
@@ -269,30 +272,31 @@ export function useAnnotationPins({
   // Main clears pins for every new document (reload, navigation, hot reload)
   // and says so; results that move afterwards are read back on request.
   useEffect(() => {
-    const listen = window.orkestrator?.listen;
-    if (typeof listen !== "function") return;
-    return listen<BrowserPreviewCaptureEvent>(BROWSER_PREVIEW_CAPTURE_EVENT, (event) => {
-      if (!event || event.tabId !== tabId || !wantedRef.current) return;
-      const api = getBrowserPreviewCaptureApi();
-      if (!api) return;
-      if (event.status === "pins-invalidated") {
-        // A new document: the previous page's results go now, not when the
-        // re-sent pins come back.
-        noteGeneration(event.documentGeneration);
-        applyResults((current) => currentDocumentResults(current, generationRef.current));
-        void send(lastPinsRef.current).catch(() => undefined);
-      } else if (event.status === "pins-changed" && api.getPinResults) {
-        noteGeneration(event.documentGeneration);
-        const view = viewRef.current;
-        void api
-          .getPinResults(tabId)
-          .then((snapshot) => {
-            if (!snapshot || !wantedRef.current) return;
-            applyResults(() => resultMap(snapshot.results), view, snapshot.documentGeneration);
-          })
-          .catch(() => undefined);
-      }
-    });
+    return commandClient().listenRaw<BrowserPreviewCaptureEvent>(
+      BROWSER_PREVIEW_CAPTURE_EVENT,
+      (event) => {
+        if (!event || event.tabId !== tabId || !wantedRef.current) return;
+        const api = getBrowserPreviewCaptureApi();
+        if (!api) return;
+        if (event.status === "pins-invalidated") {
+          // A new document: the previous page's results go now, not when the
+          // re-sent pins come back.
+          noteGeneration(event.documentGeneration);
+          applyResults((current) => currentDocumentResults(current, generationRef.current));
+          void send(lastPinsRef.current).catch(() => undefined);
+        } else if (event.status === "pins-changed" && api.getPinResults) {
+          noteGeneration(event.documentGeneration);
+          const view = viewRef.current;
+          void api
+            .getPinResults(tabId)
+            .then((snapshot) => {
+              if (!snapshot || !wantedRef.current) return;
+              applyResults(() => resultMap(snapshot.results), view, snapshot.documentGeneration);
+            })
+            .catch(() => undefined);
+        }
+      },
+    );
   }, [applyResults, noteGeneration, send, tabId]);
 
   useEffect(
@@ -324,7 +328,11 @@ export function useAnnotationPins({
         };
       }
       const view = viewRef.current;
-      const record = await loadWebAnnotationCapture(environmentId, annotation.currentCaptureId);
+      const record = await loadWebAnnotationCapture(
+        environmentId,
+        annotation.currentCaptureId,
+        annotationScope,
+      );
       const pin = record ? pinQuery(annotation, 1, record) : null;
       if (!record || !pin) {
         return { status: "not-found", reason: "this imported note has no live target" };
@@ -405,7 +413,7 @@ export function useAnnotationPins({
         };
       }
     },
-    [applyResults, currentPage, environmentId, previewAttached, tabId],
+    [annotationScope, applyResults, currentPage, environmentId, previewAttached, tabId],
   );
 
   return { pinResults, showOnPage };

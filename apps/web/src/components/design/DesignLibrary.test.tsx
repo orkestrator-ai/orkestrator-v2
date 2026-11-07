@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { DesignLibraryQuery } from "@orkestrator/protocol/design-operations";
 import { DesignClientError } from "@/lib/design-client";
 import type { DesignLibraryItem, DesignLibraryResult } from "./design-launch";
@@ -62,7 +63,7 @@ const closedChoices = (): DesignOpenChoices => ({ canOpen: true, besideFallsBack
 
 function mount(api: DesignLibraryClient, props: Partial<Parameters<typeof DesignLibrary>[0]> = {}) {
   const onOpen = mock((): string | null => null);
-  const view = render(
+  const view = renderInAppCommandScope(
     <DesignLibrary
       environmentId="env-a"
       backendKey="local"

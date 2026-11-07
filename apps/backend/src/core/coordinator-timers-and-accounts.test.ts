@@ -1,3 +1,5 @@
+import { eventSink } from "./backend-emit.js";
+import { registrarFrom } from "./commands-registry-contracts.js";
 import { afterEach, beforeEach, describe, expect, test, spyOn } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -281,9 +283,11 @@ beforeEach(async () => {
     string,
     (args: Record<string, unknown>, context: CommandContext) => unknown
   >();
-  registerScheduledJobCommands((name, handler) => {
-    commands.set(name, handler as never);
-  });
+  registerScheduledJobCommands(
+    registrarFrom((name, handler) => {
+      commands.set(name, handler as never);
+    }),
+  );
   const context = { storage } as CommandContext;
   invoke = async <T>(command: string, args: Record<string, unknown> = {}) => {
     const own = commands.get(command);
@@ -374,7 +378,7 @@ beforeEach(async () => {
             actions,
             loadGlobalConfig: async () => ({}),
             projectName: async () => "Project",
-            emit: (event, payload) => switchEvents.push({ event, payload }),
+            emit: eventSink((event, payload) => switchEvents.push({ event, payload })),
           },
           args,
         )) as T;

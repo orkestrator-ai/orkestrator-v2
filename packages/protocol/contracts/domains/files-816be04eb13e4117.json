@@ -1,0 +1,81 @@
+{
+  "schemaVersion": 1,
+  "domain": "files",
+  "commands": {
+    "copy_external_file": {
+      "untyped": true
+    },
+    "create_container_folder": {
+      "untyped": true
+    },
+    "create_local_folder": {
+      "untyped": true
+    },
+    "delete_container_annotation_evidence": {
+      "untyped": true
+    },
+    "delete_container_file": {
+      "untyped": true
+    },
+    "delete_local_file": {
+      "untyped": true
+    },
+    "get_file_tree": {
+      "untyped": true
+    },
+    "get_local_file_tree": {
+      "untyped": true
+    },
+    "get_worktree_snapshot_revisions": {
+      "untyped": true
+    },
+    "move_container_file": {
+      "untyped": true
+    },
+    "move_local_file": {
+      "untyped": true
+    },
+    "read_container_file": {
+      "untyped": true
+    },
+    "read_container_file_base64": {
+      "untyped": true
+    },
+    "read_environment_file_base64": {
+      "untyped": true
+    },
+    "read_file_at_branch": {
+      "untyped": true
+    },
+    "read_file_base64": {
+      "untyped": true
+    },
+    "read_local_file": {
+      "untyped": true
+    },
+    "read_local_file_at_branch": {
+      "untyped": true
+    },
+    "rename_container_file": {
+      "untyped": true
+    },
+    "rename_local_file": {
+      "untyped": true
+    },
+    "revert_container_file": {
+      "untyped": true
+    },
+    "revert_local_file": {
+      "untyped": true
+    },
+    "write_container_file": {
+      "untyped": true
+    },
+    "write_initial_prompt_attachments": {
+      "untyped": true
+    },
+    "write_local_file": {
+      "untyped": true
+    }
+  }
+}

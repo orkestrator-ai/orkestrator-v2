@@ -6,7 +6,6 @@ import { Readable } from "node:stream";
 import { isBackendId, type BackendId } from "@orkestrator/protocol/federation";
 
 import { compatibilityPathUsage } from "../compatibility-path-usage.js";
-import { isWorkspaceExcludedCommand } from "./node-routing.js";
 import { isGlobalConfigEcho, isGlobalConfigWriteCommand } from "./workspace-grant-scope.js";
 
 /**
@@ -16,16 +15,24 @@ import { isGlobalConfigEcho, isGlobalConfigWriteCommand } from "./workspace-gran
  * command-node credential. The command node forwards it over its own
  * verified link with the leaf's token, which the client never sees.
  *
- * Relayed paths are the client API only: hello, invoke, events, terminal
- * and the loopback preview proxies. Administrative commands are refused,
- * the same as for client grants (`isWorkspaceExcludedCommand`), terminals
- * excepted.
+ * Relayed paths are the client API only: hello, status, invoke, events,
+ * terminal and the loopback preview proxies. A relayed invoke runs only a
+ * command the caller's `admits` allows, the same allow-list as a client grant
+ * (`admitsWorkspaceCommand`: `access: "workspace"` definitions only, failing
+ * closed). The list is this command node's: a command a newer leaf added is
+ * refused through the relay until the command node knows it too.
+ *
+ * `/status` is relayed so a relayed client's credential probe gets the leaf's
+ * verdict on the forwarded credential (200 `{ ok: true }` or 401) instead of
+ * a 404; it says nothing the hello does not. `/session` is not relayed: it
+ * manages a cookie session, and a relayed client never holds the leaf's.
  */
 
 export const NODE_RELAY_PREFIX = "/__orkestrator/nodes/";
 
 const RELAYED_PATHS = [
   /^\/__orkestrator\/hello$/,
+  /^\/__orkestrator\/status$/,
   /^\/__orkestrator\/invoke$/,
   /^\/__orkestrator\/events$/,
   /^\/__orkestrator\/terminal$/,
@@ -180,6 +187,7 @@ export async function relayHttp(
   response: ServerResponse,
   url: URL,
   resolve: RelayResolver,
+  admits: (command: string) => boolean,
   fetchImpl: typeof fetch = fetch,
 ): Promise<boolean> {
   const parsed = parseRelayPath(url.pathname);
@@ -209,7 +217,7 @@ export async function relayHttp(
         json(response, 400, { error: "Expected a JSON command." });
         return true;
       }
-      if (typeof command !== "string" || isWorkspaceExcludedCommand(command)) {
+      if (typeof command !== "string" || !admits(command)) {
         if (
           typeof command === "string" &&
           isGlobalConfigWriteCommand(command) &&

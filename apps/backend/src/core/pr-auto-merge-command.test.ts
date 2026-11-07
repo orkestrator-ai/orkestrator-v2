@@ -77,9 +77,13 @@ test("set_environment_auto_merge persists the flag and waits for the requested m
     expect(evaluate).toHaveBeenCalledWith(environment.id);
 
     await expect(command!({ environmentId: environment.id }, context)).rejects.toThrow();
-    await expect(
-      command!({ environmentId: environment.id, enabled: true, extra: 1 }, context),
-    ).rejects.toThrow();
+    // Defined in the `pull-requests` domain (plan item 7006): unknown keys are
+    // dropped, not refused.
+    const tolerant = (await command!(
+      { environmentId: environment.id, enabled: true, extra: 1 },
+      context,
+    )) as { autoMerge?: boolean };
+    expect(tolerant.autoMerge).toBe(true);
   });
 });
 

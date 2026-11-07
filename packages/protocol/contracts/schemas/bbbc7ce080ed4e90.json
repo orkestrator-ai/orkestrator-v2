@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:bbbc7ce080ed4e90035c15d8572eab50fd91640401e66c57498e52c340f11567",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "includeDefaultBranch": {
+          "type": "boolean"
+        },
+        "knownManifestGeneration": {},
+        "knownResourceRevision": {},
+        "summaryIcons": {
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    }
+  }
+}

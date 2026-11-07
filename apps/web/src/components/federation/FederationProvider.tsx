@@ -13,7 +13,6 @@ import {
   type PortalState,
   type PortalStore,
 } from "@/lib/portal/portal-store";
-import { workspaceTarget } from "@/lib/portal/portal-transport";
 
 /**
  * The machine the window's workspace is on: the command node the client
@@ -37,7 +36,7 @@ export interface FederationContextValue {
   /** This client can show other machines at all. */
   supported: boolean;
   kind: "desktop" | "browser" | "none";
-  /** Name and colour of this realm's own machine, for its rows' dots. */
+  /** Name and colour of this window's own machine, for its rows' dots. */
   boundMachine: { name: string; colorToken: string } | null;
 }
 
@@ -86,7 +85,7 @@ export function FederationProvider({ children }: { children: ReactNode }) {
   }, [kind]);
 
   const value = useMemo<FederationContextValue>(() => {
-    const boundId = (workspaceTarget()?.nodeId as BackendId | undefined) ?? portalState.selfId;
+    const boundId = portalState.selfId;
     const bound: BoundMachine | null = boundId
       ? {
           connectionId: boundId,
@@ -100,7 +99,7 @@ export function FederationProvider({ children }: { children: ReactNode }) {
       portalState,
       bound,
       supported: kind !== "none",
-      enabled: kind !== "none" && (portalState.nodes.length > 0 || workspaceTarget() !== null),
+      enabled: kind !== "none" && portalState.nodes.length > 0,
       kind,
       boundMachine: bound
         ? { name: bound.name, colorToken: bound.colorToken ?? FALLBACK_MACHINE_COLOR }

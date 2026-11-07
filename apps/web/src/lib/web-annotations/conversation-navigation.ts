@@ -14,29 +14,37 @@
  * `turnBoundaries` entry's turn. See `resolveConversationScrollIndex` for the
  * full mapping.
  */
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { appCommandScope } from "@/lib/node-scope-slots";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import {
   useConversationScrollTargetStore,
   type ConversationScrollTarget,
+  type ConversationScrollTargetRef,
 } from "@/stores/conversationScrollTargetStore";
 
 /**
- * Activates `tabId` in its pane and requests a scroll to `target` there.
- * Returns false (and parks nothing) when the tab is not in this environment's
- * layout. With neither id the tab is still focused and any earlier pending
- * request for it is dropped.
+ * Activates the tab in its pane and requests a scroll to `target` there.
+ * Returns false (and parks nothing) when the tab is not in its environment's
+ * layout on `ref.nodeId`. With neither id the tab is still focused and any
+ * earlier pending request for it is dropped.
+ *
+ * The request is parked for `ref.nodeId`, so only that node's chat consumes
+ * it. The pane layout is `scope`'s, the node scope `ref.nodeId` names (the
+ * app's command scope when omitted).
  */
 export function openConversationAtMessage(
-  environmentId: string,
-  tabId: string,
+  ref: ConversationScrollTargetRef,
   target: ConversationScrollTarget,
+  scope: NodeScope = appCommandScope(),
 ): boolean {
-  const panes = usePaneLayoutStore.getState();
+  const { environmentId, tabId } = ref;
+  const panes = scope.store(paneLayoutStore).getState();
   const pane = panes.findPaneWithTab(tabId, environmentId);
   if (!pane) return false;
   // Park before activating so the chat sees the request in the same commit
   // that makes it active, and never performs a stale bottom-only activation.
-  useConversationScrollTargetStore.getState().request(environmentId, tabId, target);
+  useConversationScrollTargetStore.getState().request(ref, target);
   panes.setActiveTab(pane.id, tabId, environmentId);
   panes.setActivePane(pane.id, environmentId);
   return true;

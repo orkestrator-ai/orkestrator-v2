@@ -8,13 +8,13 @@ import type {
   EnvironmentResourcePolicy,
 } from "@orkestrator/protocol/container-resources";
 import { Button } from "@/components/ui/button";
-import * as backend from "@/lib/backend";
 import { formatBytes } from "@/components/docker/docker-stats-format";
 import {
   ResourceLimitFields,
   draftToLimits,
   limitsToDraft,
 } from "@/components/settings/ContainerResourceLimitsSettings";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 const AXIS_NAMES: Record<keyof ContainerResourceLimits, string> = {
   cpus: "CPU",
@@ -59,6 +59,7 @@ export function EnvironmentResourcesSection({
   containerId: string | null;
   dockerAvailable: boolean;
 }) {
+  const nodeBackend = useScopeBackend();
   const [policy, setPolicy] = useState<EnvironmentResourcePolicy | null>(null);
   const [usage, setUsage] = useState<{ sample?: ContainerUsageSample; stale: boolean } | null>(
     null,
@@ -74,9 +75,9 @@ export function EnvironmentResourcesSection({
   const load = useCallback(
     () =>
       Promise.all([
-        backend.getEnvironmentResources(environmentId),
-        backend.getContainerUsage(),
-        backend.getDockerCapacity(),
+        nodeBackend.getEnvironmentResources(environmentId),
+        nodeBackend.getContainerUsage(),
+        nodeBackend.getDockerCapacity(),
       ])
         .then(([nextPolicy, snapshot, nextCapacity]) => {
           setPolicy(nextPolicy);
@@ -91,7 +92,7 @@ export function EnvironmentResourcesSection({
           setCapacity(nextCapacity);
         })
         .catch(() => setPolicy(null)),
-    [environmentId, containerId],
+    [environmentId, containerId, nodeBackend],
   );
 
   useEffect(() => {
@@ -106,7 +107,7 @@ export function EnvironmentResourcesSection({
     // Kept as typed while the user decides; nothing was changed.
     let awaitingConfirmation = false;
     try {
-      const next = await backend.updateEnvironmentResources(environmentId, {
+      const next = await nodeBackend.updateEnvironmentResources(environmentId, {
         limits: custom ? draftToLimits(draft) : null,
         applyNow: applyNow && Boolean(containerId),
         ...(allowBelowUsage ? { allowBelowUsage: true } : {}),

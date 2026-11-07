@@ -1,9 +1,11 @@
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { usePromptDraftStore } from "@/stores/promptDraftStore";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
+import { promptDraftStore } from "@/stores/promptDraftStore";
 import { mockToastError } from "../../../../../tests/mocks/sonner";
 import { QuestionCard, type QuestionCardQuestion } from "./QuestionCard";
+import { appCommandStore } from "@/test/app-command-store";
 
 /**
  * Covers the shared card directly. `ClaudeQuestionCard.test.tsx` exercises it
@@ -16,7 +18,7 @@ function renderCard(
   props: Partial<React.ComponentProps<typeof QuestionCard>> = {},
 ) {
   const onSubmit = mock(async () => true);
-  render(
+  renderInAppCommandScope(
     <QuestionCard
       agentLabel="Test"
       title="Agent needs your input"
@@ -37,7 +39,7 @@ afterEach(() => {
   cleanup();
   // Drafts are keyed by request id and survive unmount by design, so tests
   // reusing an id would otherwise inherit the previous test's answers.
-  usePromptDraftStore.getState().reset();
+  appCommandStore(promptDraftStore).getState().reset();
 });
 
 function deferred<T>() {
@@ -273,7 +275,7 @@ describe("QuestionCard custom-answer overrides", () => {
   });
 
   test("renders nothing when handed an empty question list", () => {
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <QuestionCard
         agentLabel="Test"
         title="Agent needs your input"
@@ -651,7 +653,7 @@ describe("QuestionCard multi-question navigation", () => {
   });
 
   test("tracks the answered count and flags a complete card", () => {
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <QuestionCard
         agentLabel="Test"
         title="Agent needs your input"
@@ -682,7 +684,9 @@ describe("QuestionCard multi-question navigation", () => {
 
   test("falls back to the first question when a persisted index is out of range", () => {
     const draftKey = "test-question:out-of-range";
-    usePromptDraftStore.getState().setDraftValue(draftKey, "currentQuestionIndex", 99);
+    appCommandStore(promptDraftStore)
+      .getState()
+      .setDraftValue(draftKey, "currentQuestionIndex", 99);
 
     renderCard(TWO_QUESTIONS, { draftKey });
 
@@ -699,7 +703,7 @@ describe("QuestionCard multi-question navigation", () => {
       { id: "two", question: "Two?", header: "Two", options: [{ label: "2a" }] },
     ];
     const secondOrder = [firstOrder[1]!, firstOrder[0]!];
-    const rendered = render(
+    const rendered = renderInAppCommandScope(
       <QuestionCard
         agentLabel="Test"
         title="Agent needs your input"
@@ -777,7 +781,7 @@ describe("QuestionCard draft persistence", () => {
      * environments; the pending request rehydrates, so half-entered answers
      * must too. This is the whole point of the prompt-draft store.
      */
-    const { unmount } = render(
+    const { unmount } = renderInAppCommandScope(
       <QuestionCard
         agentLabel="Test"
         title="Agent needs your input"
@@ -796,7 +800,7 @@ describe("QuestionCard draft persistence", () => {
 
     unmount();
 
-    render(
+    renderInAppCommandScope(
       <QuestionCard
         agentLabel="Test"
         title="Agent needs your input"
@@ -818,7 +822,7 @@ describe("QuestionCard draft persistence", () => {
   test("clearing the draft key resets a remounted card", () => {
     // This is what the owning store does when the request resolves; a future
     // request reusing the id must start blank.
-    const { unmount } = render(
+    const { unmount } = renderInAppCommandScope(
       <QuestionCard
         agentLabel="Test"
         title="Agent needs your input"
@@ -830,9 +834,9 @@ describe("QuestionCard draft persistence", () => {
     fireEvent.click(screen.getByRole("button", { name: "1b" }));
     unmount();
 
-    usePromptDraftStore.getState().clearDraft(DRAFT_KEY);
+    appCommandStore(promptDraftStore).getState().clearDraft(DRAFT_KEY);
 
-    render(
+    renderInAppCommandScope(
       <QuestionCard
         agentLabel="Test"
         title="Agent needs your input"
@@ -847,7 +851,7 @@ describe("QuestionCard draft persistence", () => {
   test("without a draftKey the card keeps plain component state", () => {
     // Callers without a durable pending request (e.g. the tmux TUI selection
     // prompt) must not write into the shared draft store.
-    render(
+    renderInAppCommandScope(
       <QuestionCard
         agentLabel="Test"
         title="Agent needs your input"
@@ -856,7 +860,7 @@ describe("QuestionCard draft persistence", () => {
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: "1b" }));
-    expect(usePromptDraftStore.getState().drafts.size).toBe(0);
+    expect(appCommandStore(promptDraftStore).getState().drafts.size).toBe(0);
   });
 });
 
@@ -866,7 +870,7 @@ describe("QuestionCard secret handling", () => {
       { id: "token", question: "Token?", secret: true, allowCustomAnswer: true },
     ];
     const onSubmit = mock(async () => false);
-    const first = render(
+    const first = renderInAppCommandScope(
       <QuestionCard
         agentLabel="Test"
         title="Secret required"
@@ -879,7 +883,9 @@ describe("QuestionCard secret handling", () => {
     const input = screen.getByPlaceholderText("Type your answer") as HTMLInputElement;
     expect(input.type).toBe("password");
     fireEvent.change(input, { target: { value: "not-for-the-store" } });
-    expect(usePromptDraftStore.getState().drafts.has("provider:session:request:token")).toBe(false);
+    expect(
+      appCommandStore(promptDraftStore).getState().drafts.has("provider:session:request:token"),
+    ).toBe(false);
     fireEvent.click(screen.getByRole("button", { name: "Submit" }));
     await waitFor(() => expect(onSubmit).toHaveBeenCalledWith([["not-for-the-store"]]));
 
@@ -892,7 +898,7 @@ describe("QuestionCard secret handling", () => {
   test("never renders a committed secret value or puts it in an accessible label", async () => {
     const secret = "highly-distinct-secret-value";
     const onSubmit = mock(() => true);
-    const rendered = render(
+    const rendered = renderInAppCommandScope(
       <QuestionCard
         agentLabel="Test"
         title="Secret required"
@@ -937,7 +943,9 @@ describe("QuestionCard secret handling", () => {
       screen.getByRole("button", { name: "Secret option one" }).getAttribute("aria-pressed"),
     ).toBe("true");
     fireEvent.click(screen.getByRole("button", { name: "Secret option two" }));
-    expect(usePromptDraftStore.getState().drafts.get(draftKey)?.answersByQuestion).toBeUndefined();
+    expect(
+      appCommandStore(promptDraftStore).getState().drafts.get(draftKey)?.answersByQuestion,
+    ).toBeUndefined();
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
     fireEvent.click(screen.getByRole("button", { name: "Yes" }));
     fireEvent.click(screen.getByRole("button", { name: "Back" }));

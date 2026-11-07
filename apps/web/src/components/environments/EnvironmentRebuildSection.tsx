@@ -10,10 +10,11 @@ import {
   type RebuildPreview,
 } from "@orkestrator/protocol/container-lifecycle";
 import { Button } from "@/components/ui/button";
-import * as backend from "@/lib/backend";
 import { listenAuthoritative } from "@/lib/native/authoritative-events";
 import type { Environment } from "@/types";
 import { RebuildConfirmDialog, reportRebuildOutcome } from "./RebuildConfirmDialog";
+import type * as backend from "@/lib/backend";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 /** Progress reads while a rebuild runs and no event subscription is live. */
 export const REBUILD_POLL_MS = 2_000;
@@ -62,6 +63,7 @@ export function EnvironmentRebuildSection({
   onUpdate,
   onClose,
 }: EnvironmentRebuildSectionProps) {
+  const nodeBackend = useScopeBackend();
   const [preview, setPreview] = useState<RebuildPreview | null>(null);
   const [loadingPreview, setLoadingPreview] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
@@ -94,7 +96,7 @@ export function EnvironmentRebuildSection({
 
   const refreshSnapshot = useCallback(() => {
     const generation = readGeneration.current;
-    return backend.getContainerLifecycleSnapshot(environment.id).then(
+    return nodeBackend.getContainerLifecycleSnapshot(environment.id).then(
       (next) => {
         if (generation === readGeneration.current) applySnapshot(environment.id, next);
       },
@@ -102,7 +104,7 @@ export function EnvironmentRebuildSection({
         // The section stays usable; the backend re-checks everything anyway.
       },
     );
-  }, [applySnapshot, environment.id]);
+  }, [applySnapshot, environment.id, nodeBackend]);
 
   // The backend publishes every durable lifecycle write with its snapshot.
   // Subscribe before the first read, and read again whenever the transport
@@ -151,7 +153,7 @@ export function EnvironmentRebuildSection({
     setLoadingPreview(true);
     setAllowUnknownCapacity(false);
     try {
-      setPreview(await backend.getRebuildPreview(environment.id));
+      setPreview(await nodeBackend.getRebuildPreview(environment.id));
       setShowConfirm(true);
     } catch (err) {
       toast.error("Could not check whether this container can be rebuilt", {
@@ -175,9 +177,11 @@ export function EnvironmentRebuildSection({
       });
       void refreshSnapshot();
       await pending;
-      onUpdate(await backend.syncEnvironmentStatus(environment.id));
+      onUpdate(await nodeBackend.syncEnvironmentStatus(environment.id));
       // Reported from the backend's record, not from the call returning.
-      const after = await backend.getContainerLifecycleSnapshot(environment.id).catch(() => null);
+      const after = await nodeBackend
+        .getContainerLifecycleSnapshot(environment.id)
+        .catch(() => null);
       reportRebuildOutcome(after);
     } catch (err) {
       const lifecycle = parseContainerLifecycleError(err);
@@ -186,7 +190,7 @@ export function EnvironmentRebuildSection({
         // Everything is re-checked against the container as it is now.
       });
       try {
-        onUpdate(await backend.syncEnvironmentStatus(environment.id));
+        onUpdate(await nodeBackend.syncEnvironmentStatus(environment.id));
       } catch {
         // Ignore sync errors
       }
@@ -199,7 +203,10 @@ export function EnvironmentRebuildSection({
     if (!running) return;
     setCancelling(true);
     try {
-      const result = await backend.cancelContainerOperation(environment.id, running.operationId);
+      const result = await nodeBackend.cancelContainerOperation(
+        environment.id,
+        running.operationId,
+      );
       if (!result.cancelled) toast.info("The rebuild can no longer be cancelled.");
     } catch (err) {
       toast.error("Could not cancel the rebuild", {

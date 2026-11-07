@@ -50,6 +50,7 @@ import {
 } from "@orkestrator/protocol/terminal-websocket";
 
 import { type EventClientWriter, OrkestratorGateway } from "../src/gateway";
+import { registryCommandAccess } from "../src/core/nodes/workspace-grant-test-support.js";
 
 export const tempDirs: string[] = [];
 
@@ -293,7 +294,9 @@ export async function startGateway(
   const dataDir = options.dataDir ?? (await createTempDir("ork-gateway-"));
   const rendererRoot = options.rendererRoot ?? (await createRendererRoot(dataDir));
   const gateway = new OrkestratorGateway({
-    backend: { invoke: mock(async () => null) },
+    // The real registry's `access`, so a grant or the relay admits what
+    // production admits (plan item 7012).
+    backend: { invoke: mock(async () => null), commandAccess: registryCommandAccess },
     dataDir,
     rendererRoot,
     bindAddress: "127.0.0.1",

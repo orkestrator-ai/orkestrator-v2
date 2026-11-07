@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
-import * as backend from "@/lib/backend";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 /** Lines the view keeps; older ones scroll away. */
 const MAX_LINES = 2_000;
@@ -20,6 +20,7 @@ type FollowState =
  * as such, not as a complete log.
  */
 export function ContainerLogViewer({ containerId }: { containerId: string }) {
+  const nodeBackend = useScopeBackend();
   const [lines, setLines] = useState<string[]>([]);
   const [state, setState] = useState<FollowState>({ kind: "connecting" });
   const [gaps, setGaps] = useState(0);
@@ -51,7 +52,7 @@ export function ContainerLogViewer({ containerId }: { containerId: string }) {
     const poll = async (sourceId: string, cursor: number) => {
       if (cancelled || !subscriptionId) return;
       try {
-        const read = await backend.readContainerLogs(subscriptionId, sourceId, cursor);
+        const read = await nodeBackend.readContainerLogs(subscriptionId, sourceId, cursor);
         if (cancelled) return;
         if (read.kind === "gap") {
           setGaps((count) => count + 1);
@@ -76,9 +77,9 @@ export function ContainerLogViewer({ containerId }: { containerId: string }) {
 
     void (async () => {
       try {
-        const opened = await backend.openContainerLogs(containerId);
+        const opened = await nodeBackend.openContainerLogs(containerId);
         if (cancelled) {
-          void backend.closeContainerLogs(opened.subscriptionId).catch(() => undefined);
+          void nodeBackend.closeContainerLogs(opened.subscriptionId).catch(() => undefined);
           return;
         }
         subscriptionId = opened.subscriptionId;
@@ -97,9 +98,10 @@ export function ContainerLogViewer({ containerId }: { containerId: string }) {
       cancelled = true;
       if (timer) clearTimeout(timer);
       // Releases the observer only; the container keeps running.
-      if (subscriptionId) void backend.closeContainerLogs(subscriptionId).catch(() => undefined);
+      if (subscriptionId)
+        void nodeBackend.closeContainerLogs(subscriptionId).catch(() => undefined);
     };
-  }, [append, containerId, generation]);
+  }, [append, containerId, generation, nodeBackend]);
 
   useEffect(() => {
     const element = scroller.current;

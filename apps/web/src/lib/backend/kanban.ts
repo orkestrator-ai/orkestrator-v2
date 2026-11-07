@@ -1,4 +1,3 @@
-import { invoke } from "@/lib/native/backend";
 import type {
   FeaturePlanningKind,
   FeaturePlanningRecord,
@@ -10,27 +9,14 @@ import type {
   TicketSectionsPatch,
 } from "@orkestrator/protocol/ticket-sections";
 import type { TicketSyncMeta, TicketSyncStatusResult } from "@orkestrator/protocol/ticket-sync";
+import { files } from "@/lib/node-scope/domains/files";
+import { asKanbanModel, kanban } from "@/lib/node-scope/domains/kanban";
+import { ticketSyncClient } from "@orkestrator/protocol/contract/domains/ticket-sync";
+import { domainApi } from "@/lib/node-scope/domains/domain-api";
+import { commandBackendClient, type BackendClient } from "./client";
 /** PR detection result containing URL, state, and merge conflict status */
 
 // --- File System Utilities ---
-
-/** Read a binary file from the local filesystem as base64 */
-export async function readFileBase64(path: string): Promise<string> {
-  return invoke<string>("read_file_base64", { filePath: path });
-}
-
-/** Read a binary file from the local filesystem (deprecated: use readFileBase64 instead) */
-export async function readBinaryFile(path: string): Promise<Uint8Array> {
-  // Use our custom Electron command instead of the fs plugin (which has permission issues)
-  const base64 = await readFileBase64(path);
-  // Convert base64 to Uint8Array
-  const binaryString = atob(base64);
-  const bytes = new Uint8Array(binaryString.length);
-  for (let i = 0; i < binaryString.length; i++) {
-    bytes[i] = binaryString.charCodeAt(i);
-  }
-  return bytes;
-}
 
 // --- Kanban commands ---
 
@@ -84,15 +70,6 @@ export interface KanbanTask {
    * another machine (`work`). Absent from backends that predate sync.
    */
   sync?: TicketSyncMeta;
-}
-
-/**
- * Where each machine with a copy of this project stands in syncing its
- * tickets with this board. Empty on a backend without leaves, or one that
- * predates ticket sync.
- */
-export async function getTicketSyncStatus(projectId: string): Promise<TicketSyncStatusResult> {
-  return invoke<TicketSyncStatusResult>("get_ticket_sync_status", { projectId });
 }
 
 export interface ProjectNotes {
@@ -149,202 +126,322 @@ export interface FeaturePlan {
 }
 
 /**
- * Hand the user's message to the backend planning supervisor.
- *
- * Everything after this — environment, bridge, session, dispatch, reply, parse,
- * persist — happens backend-side, so closing the view or reloading the page
- * cannot abandon it.
+ * This file's commands on `client`'s node (plan item 3002). A scoped store or
+ * service passes its own node's client; the named exports below are this
+ * over the window's command scope.
  */
-export async function startFeaturePlanning(
-  featureId: string,
-  kind: FeaturePlanningKind,
-  userMessage: string,
-  storyId?: string,
-): Promise<FeaturePlanningRecord> {
-  return invoke<FeaturePlanningRecord>("start_feature_planning", {
-    featureId,
-    kind,
-    userMessage,
-    ...(storyId ? { storyId } : {}),
-  });
+export function createKanbanApi(client: BackendClient) {
+  // The two file reads are in the `files` domain (plan item 7002).
+  const filesDomain = () => files(client);
+  // Tickets, notes, feature plans and planning: the `kanban` domain (plan item
+  // 7008), picked per call so a reconnect to another build picks again.
+  const domain = () => kanban(client);
+
+  /** Read a binary file from the local filesystem as base64 */
+  async function readFileBase64(path: string): Promise<string> {
+    return filesDomain().read_file_base64({ filePath: path });
+  }
+
+  /** Read a binary file from the local filesystem (deprecated: use readFileBase64 instead) */
+  async function readBinaryFile(path: string): Promise<Uint8Array> {
+    // Use our custom Electron command instead of the fs plugin (which has permission issues)
+    const base64 = await readFileBase64(path);
+    // Convert base64 to Uint8Array
+    const binaryString = atob(base64);
+    const bytes = new Uint8Array(binaryString.length);
+    for (let i = 0; i < binaryString.length; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
+    return bytes;
+  }
+
+  /**
+   * Where each machine with a copy of this project stands in syncing its
+   * tickets with this board. Empty on a backend without leaves, or one that
+   * predates ticket sync.
+   */
+  async function getTicketSyncStatus(projectId: string): Promise<TicketSyncStatusResult> {
+    // The board's read in the `ticket-sync` domain (its nodes and conflicts
+    // decode as unknown; `TicketSyncStatusResult` is the shape they carry).
+    return asKanbanModel<TicketSyncStatusResult>(
+      domainApi(client, ticketSyncClient).status({ projectId }),
+    );
+  }
+
+  /**
+   * Hand the user's message to the backend planning supervisor.
+   *
+   * Everything after this — environment, bridge, session, dispatch, reply, parse,
+   * persist — happens backend-side, so closing the view or reloading the page
+   * cannot abandon it.
+   */
+  async function startFeaturePlanning(
+    featureId: string,
+    kind: FeaturePlanningKind,
+    userMessage: string,
+    storyId?: string,
+  ): Promise<FeaturePlanningRecord> {
+    return asKanbanModel<FeaturePlanningRecord>(
+      domain().start_feature_planning({
+        featureId,
+        kind,
+        userMessage,
+        ...(storyId ? { storyId } : {}),
+      }),
+    );
+  }
+
+  async function getFeaturePlanningSnapshot(projectId: string): Promise<FeaturePlanningRecord[]> {
+    return asKanbanModel<FeaturePlanningRecord[]>(
+      domain().get_feature_planning_snapshot({ projectId }),
+    );
+  }
+
+  async function retryFeaturePlanning(featureId: string): Promise<FeaturePlanningRecord> {
+    return asKanbanModel<FeaturePlanningRecord>(domain().retry_feature_planning({ featureId }));
+  }
+
+  async function cancelFeaturePlanning(featureId: string): Promise<void> {
+    await domain().cancel_feature_planning({ featureId });
+  }
+
+  async function getKanbanTasks(projectId: string): Promise<KanbanTask[]> {
+    return asKanbanModel<KanbanTask[]>(domain().get_kanban_tasks({ projectId }));
+  }
+
+  async function addKanbanTask(
+    projectId: string,
+    title: string,
+    description: string,
+  ): Promise<KanbanTask> {
+    return asKanbanModel<KanbanTask>(domain().add_kanban_task({ projectId, title, description }));
+  }
+
+  async function updateKanbanTask(
+    taskId: string,
+    title?: string,
+    description?: string,
+    acceptanceCriteria?: string,
+    status?: KanbanStatus,
+    environmentId?: string,
+    buildPipelineId?: string,
+    prUrl?: string,
+    prState?: PrState,
+    prMergeCommented?: boolean,
+  ): Promise<KanbanTask> {
+    return asKanbanModel<KanbanTask>(
+      domain().update_kanban_task({
+        taskId,
+        title,
+        description,
+        acceptanceCriteria,
+        status,
+        environmentId,
+        buildPipelineId,
+        prUrl,
+        prState,
+        prMergeCommented,
+      }),
+    );
+  }
+
+  /**
+   * Replace a ticket's content from edited markdown (every section, criteria
+   * included). Criteria whose text is unchanged keep their Verify results.
+   */
+  async function updateKanbanTaskContent(
+    taskId: string,
+    content: {
+      title?: string;
+      kind?: TicketKind;
+      markdown?: string;
+      sections?: TicketSectionsPatch;
+    },
+  ): Promise<KanbanTask> {
+    return asKanbanModel<KanbanTask>(domain().update_kanban_task({ taskId, ...content }));
+  }
+
+  async function deleteKanbanTask(taskId: string): Promise<void> {
+    await domain().delete_kanban_task({ taskId });
+  }
+
+  async function addKanbanComment(taskId: string, text: string): Promise<KanbanTask> {
+    return asKanbanModel<KanbanTask>(domain().add_kanban_comment({ taskId, text }));
+  }
+
+  async function deleteKanbanComment(taskId: string, commentId: string): Promise<KanbanTask> {
+    return asKanbanModel<KanbanTask>(domain().delete_kanban_comment({ taskId, commentId }));
+  }
+
+  async function addKanbanImage(
+    taskId: string,
+    filename: string,
+    data: string,
+  ): Promise<KanbanTask> {
+    return asKanbanModel<KanbanTask>(domain().add_kanban_image({ taskId, filename, data }));
+  }
+
+  async function deleteKanbanImage(taskId: string, imageId: string): Promise<KanbanTask> {
+    return asKanbanModel<KanbanTask>(domain().delete_kanban_image({ taskId, imageId }));
+  }
+
+  /** Load kanban image data on demand. Returns base64-encoded WebP data. */
+  async function getKanbanImageData(imageId: string): Promise<string> {
+    return domain().get_kanban_image_data({ imageId });
+  }
+
+  async function getProjectNotes(projectId: string): Promise<ProjectNotes> {
+    return asKanbanModel<ProjectNotes>(domain().get_project_notes({ projectId }));
+  }
+
+  async function saveProjectNotes(projectId: string, content: string): Promise<ProjectNotes> {
+    return asKanbanModel<ProjectNotes>(domain().save_project_notes({ projectId, content }));
+  }
+
+  async function getFeaturePlans(projectId: string): Promise<FeaturePlan[]> {
+    return asKanbanModel<FeaturePlan[]>(domain().get_feature_plans({ projectId }));
+  }
+
+  async function createFeaturePlan(projectId: string): Promise<FeaturePlan> {
+    return asKanbanModel<FeaturePlan>(domain().create_feature_plan({ projectId }));
+  }
+
+  async function updateFeaturePlan(
+    featureId: string,
+    updates: Partial<
+      Pick<
+        FeaturePlan,
+        | "title"
+        | "status"
+        | "summary"
+        | "messages"
+        | "stories"
+        | "codexEnvironmentId"
+        | "codexSessionId"
+        | "buildTaskId"
+        | "buildPipelineId"
+      >
+    >,
+  ): Promise<FeaturePlan> {
+    return asKanbanModel<FeaturePlan>(domain().update_feature_plan({ featureId, updates }));
+  }
+
+  async function claimFeaturePlanBuild(
+    featureId: string,
+    taskId: string,
+  ): Promise<{ claimed: boolean; feature: FeaturePlan }> {
+    return asKanbanModel<{ claimed: boolean; feature: FeaturePlan }>(
+      domain().claim_feature_plan_build({
+        featureId,
+        taskId,
+      }),
+    );
+  }
+
+  async function appendFeaturePlanMessage(
+    featureId: string,
+    role: FeaturePlanMessage["role"],
+    content: string,
+    stateApplication?: FeaturePlanMessage["stateApplication"],
+    modelId?: string,
+  ): Promise<FeaturePlan> {
+    return asKanbanModel<FeaturePlan>(
+      domain().append_feature_plan_message({
+        featureId,
+        role,
+        content,
+        stateApplication,
+        modelId,
+      }),
+    );
+  }
+
+  async function appendFeatureStoryMessage(
+    featureId: string,
+    storyId: string,
+    role: FeaturePlanMessage["role"],
+    content: string,
+    stateApplication?: FeaturePlanMessage["stateApplication"],
+    modelId?: string,
+  ): Promise<FeaturePlan> {
+    return asKanbanModel<FeaturePlan>(
+      domain().append_feature_story_message({
+        featureId,
+        storyId,
+        role,
+        content,
+        stateApplication,
+        modelId,
+      }),
+    );
+  }
+
+  /** Binary read confined to the named local environment's checkout. */
+  async function readEnvironmentFileBase64(
+    environmentId: string,
+    filePath: string,
+  ): Promise<string> {
+    return filesDomain().read_environment_file_base64({ environmentId, filePath });
+  }
+
+  return {
+    readFileBase64,
+    readBinaryFile,
+    getTicketSyncStatus,
+    startFeaturePlanning,
+    getFeaturePlanningSnapshot,
+    retryFeaturePlanning,
+    cancelFeaturePlanning,
+    getKanbanTasks,
+    addKanbanTask,
+    updateKanbanTask,
+    updateKanbanTaskContent,
+    deleteKanbanTask,
+    addKanbanComment,
+    deleteKanbanComment,
+    addKanbanImage,
+    deleteKanbanImage,
+    getKanbanImageData,
+    getProjectNotes,
+    saveProjectNotes,
+    getFeaturePlans,
+    createFeaturePlan,
+    updateFeaturePlan,
+    claimFeaturePlanBuild,
+    appendFeaturePlanMessage,
+    appendFeatureStoryMessage,
+    readEnvironmentFileBase64,
+  };
 }
 
-export async function getFeaturePlanningSnapshot(
-  projectId: string,
-): Promise<FeaturePlanningRecord[]> {
-  return invoke<FeaturePlanningRecord[]>("get_feature_planning_snapshot", { projectId });
-}
+export type KanbanApi = ReturnType<typeof createKanbanApi>;
 
-export async function retryFeaturePlanning(featureId: string): Promise<FeaturePlanningRecord> {
-  return invoke<FeaturePlanningRecord>("retry_feature_planning", { featureId });
-}
-
-export async function cancelFeaturePlanning(featureId: string): Promise<void> {
-  return invoke<void>("cancel_feature_planning", { featureId });
-}
-
-export async function getKanbanTasks(projectId: string): Promise<KanbanTask[]> {
-  return invoke<KanbanTask[]>("get_kanban_tasks", { projectId });
-}
-
-export async function addKanbanTask(
-  projectId: string,
-  title: string,
-  description: string,
-): Promise<KanbanTask> {
-  return invoke<KanbanTask>("add_kanban_task", { projectId, title, description });
-}
-
-export async function updateKanbanTask(
-  taskId: string,
-  title?: string,
-  description?: string,
-  acceptanceCriteria?: string,
-  status?: KanbanStatus,
-  environmentId?: string,
-  buildPipelineId?: string,
-  prUrl?: string,
-  prState?: PrState,
-  prMergeCommented?: boolean,
-): Promise<KanbanTask> {
-  return invoke<KanbanTask>("update_kanban_task", {
-    taskId,
-    title,
-    description,
-    acceptanceCriteria,
-    status,
-    environmentId,
-    buildPipelineId,
-    prUrl,
-    prState,
-    prMergeCommented,
-  });
-}
-
-/**
- * Replace a ticket's content from edited markdown (every section, criteria
- * included). Criteria whose text is unchanged keep their Verify results.
- */
-export async function updateKanbanTaskContent(
-  taskId: string,
-  content: { title?: string; kind?: TicketKind; markdown?: string; sections?: TicketSectionsPatch },
-): Promise<KanbanTask> {
-  return invoke<KanbanTask>("update_kanban_task", { taskId, ...content });
-}
-
-export async function deleteKanbanTask(taskId: string): Promise<void> {
-  return invoke<void>("delete_kanban_task", { taskId });
-}
-
-export async function addKanbanComment(taskId: string, text: string): Promise<KanbanTask> {
-  return invoke<KanbanTask>("add_kanban_comment", { taskId, text });
-}
-
-export async function deleteKanbanComment(taskId: string, commentId: string): Promise<KanbanTask> {
-  return invoke<KanbanTask>("delete_kanban_comment", { taskId, commentId });
-}
-
-export async function addKanbanImage(
-  taskId: string,
-  filename: string,
-  data: string,
-): Promise<KanbanTask> {
-  return invoke<KanbanTask>("add_kanban_image", { taskId, filename, data });
-}
-
-export async function deleteKanbanImage(taskId: string, imageId: string): Promise<KanbanTask> {
-  return invoke<KanbanTask>("delete_kanban_image", { taskId, imageId });
-}
-
-/** Load kanban image data on demand. Returns base64-encoded WebP data. */
-export async function getKanbanImageData(imageId: string): Promise<string> {
-  return invoke<string>("get_kanban_image_data", { imageId });
-}
-
-export async function getProjectNotes(projectId: string): Promise<ProjectNotes> {
-  return invoke<ProjectNotes>("get_project_notes", { projectId });
-}
-
-export async function saveProjectNotes(projectId: string, content: string): Promise<ProjectNotes> {
-  return invoke<ProjectNotes>("save_project_notes", { projectId, content });
-}
-
-export async function getFeaturePlans(projectId: string): Promise<FeaturePlan[]> {
-  return invoke<FeaturePlan[]>("get_feature_plans", { projectId });
-}
-
-export async function createFeaturePlan(projectId: string): Promise<FeaturePlan> {
-  return invoke<FeaturePlan>("create_feature_plan", { projectId });
-}
-
-export async function updateFeaturePlan(
-  featureId: string,
-  updates: Partial<
-    Pick<
-      FeaturePlan,
-      | "title"
-      | "status"
-      | "summary"
-      | "messages"
-      | "stories"
-      | "codexEnvironmentId"
-      | "codexSessionId"
-      | "buildTaskId"
-      | "buildPipelineId"
-    >
-  >,
-): Promise<FeaturePlan> {
-  return invoke<FeaturePlan>("update_feature_plan", { featureId, updates });
-}
-
-export async function claimFeaturePlanBuild(
-  featureId: string,
-  taskId: string,
-): Promise<{ claimed: boolean; feature: FeaturePlan }> {
-  return invoke<{ claimed: boolean; feature: FeaturePlan }>("claim_feature_plan_build", {
-    featureId,
-    taskId,
-  });
-}
-
-export async function appendFeaturePlanMessage(
-  featureId: string,
-  role: FeaturePlanMessage["role"],
-  content: string,
-  stateApplication?: FeaturePlanMessage["stateApplication"],
-  modelId?: string,
-): Promise<FeaturePlan> {
-  return invoke<FeaturePlan>("append_feature_plan_message", {
-    featureId,
-    role,
-    content,
-    stateApplication,
-    modelId,
-  });
-}
-
-export async function appendFeatureStoryMessage(
-  featureId: string,
-  storyId: string,
-  role: FeaturePlanMessage["role"],
-  content: string,
-  stateApplication?: FeaturePlanMessage["stateApplication"],
-  modelId?: string,
-): Promise<FeaturePlan> {
-  return invoke<FeaturePlan>("append_feature_story_message", {
-    featureId,
-    storyId,
-    role,
-    content,
-    stateApplication,
-    modelId,
-  });
-}
-
-/** Binary read confined to the named local environment's checkout. */
-export async function readEnvironmentFileBase64(
-  environmentId: string,
-  filePath: string,
-): Promise<string> {
-  return invoke<string>("read_environment_file_base64", { environmentId, filePath });
-}
+/** The window's command-scope binding (the counted shim, plan item 3002). */
+export const {
+  readFileBase64,
+  readBinaryFile,
+  getTicketSyncStatus,
+  startFeaturePlanning,
+  getFeaturePlanningSnapshot,
+  retryFeaturePlanning,
+  cancelFeaturePlanning,
+  getKanbanTasks,
+  addKanbanTask,
+  updateKanbanTask,
+  updateKanbanTaskContent,
+  deleteKanbanTask,
+  addKanbanComment,
+  deleteKanbanComment,
+  addKanbanImage,
+  deleteKanbanImage,
+  getKanbanImageData,
+  getProjectNotes,
+  saveProjectNotes,
+  getFeaturePlans,
+  createFeaturePlan,
+  updateFeaturePlan,
+  claimFeaturePlanBuild,
+  appendFeaturePlanMessage,
+  appendFeatureStoryMessage,
+  readEnvironmentFileBase64,
+} = createKanbanApi(commandBackendClient);

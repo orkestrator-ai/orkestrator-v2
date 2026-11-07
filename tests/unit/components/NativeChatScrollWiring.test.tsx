@@ -1,12 +1,14 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render } from "@testing-library/react";
+import { cleanup, fireEvent } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { BuildPipeline } from "@/stores/buildPipelineStore";
 import { TranscriptScrollController } from "@/lib/transcript-scroll/transcript-scroll-controller";
 import * as realHooks from "@/hooks";
-import { useEnvironmentStore } from "@/stores/environmentStore";
-import { useClaudeTmuxStore } from "@/stores/claudeTmuxStore";
-import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { environmentStore } from "@/stores/environmentStore";
+import { claudeTmuxStore } from "@/stores/claudeTmuxStore";
+import { buildPipelineStore } from "@/stores/buildPipelineStore";
 import * as realBackend from "@/lib/backend";
+import { appCommandStore } from "../../../apps/web/src/test/app-command-store";
 
 const realHooksSnapshot = { ...realHooks };
 const realBackendSnapshot = { ...realBackend };
@@ -135,14 +137,14 @@ describe("native chat scroll wiring", () => {
     scrollToBottomMock.mockClear();
     isAtBottom = true;
 
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [],
       isLoading: false,
       error: null,
       deletingEnvironments: new Set(),
     });
 
-    useClaudeTmuxStore.setState({
+    appCommandStore(claudeTmuxStore).setState({
       tabs: new Map(),
       attachments: new Map(),
       draftText: new Map(),
@@ -150,13 +152,13 @@ describe("native chat scroll wiring", () => {
       messageQueue: new Map(),
       effortLevels: new Map(),
     });
-    useBuildPipelineStore.setState({ pipelines: new Map() });
+    appCommandStore(buildPipelineStore).setState({ pipelines: new Map() });
   });
 
   test.each(["claude", "codex", "opencode", "cursor", "grok"] as const)(
     "%s native passes its environmentId to the shared Virtuoso scroll hook",
     (platform) => {
-      render(
+      renderInAppCommandScope(
         <AgentNativeTab
           tabId={`tab-${platform}`}
           data={{
@@ -180,7 +182,7 @@ describe("native chat scroll wiring", () => {
   );
 
   test("Claude tmux passes its environmentId to the Virtuoso scroll hook", () => {
-    render(
+    renderInAppCommandScope(
       <ClaudeTmuxChatTab tabId="tab-tmux" data={{ environmentId: "env-tmux" }} isActive={false} />,
     );
 
@@ -196,8 +198,10 @@ describe("native chat scroll wiring", () => {
   // native tabs, so it needs the same scroll wiring: a stage that streams while
   // the user is on another tab must be scrolled to its tail on return.
   test("the build transcript passes its environmentId to the Virtuoso scroll hook", () => {
-    useBuildPipelineStore.setState({ pipelines: new Map([[buildPipeline.id, buildPipeline]]) });
-    render(
+    appCommandStore(buildPipelineStore).setState({
+      pipelines: new Map([[buildPipeline.id, buildPipeline]]),
+    });
+    renderInAppCommandScope(
       <BuildChatTab
         data={{ environmentId: "env-build", pipelineId: "pipeline-1", taskId: "task-1" }}
         isActive={false}
@@ -213,12 +217,12 @@ describe("native chat scroll wiring", () => {
   });
 
   test("the build transcript offers a way back to the tail once scrolled away", () => {
-    useBuildPipelineStore.setState({
+    appCommandStore(buildPipelineStore).setState({
       pipelines: new Map([[buildPipeline.id, buildPipeline]]),
     });
 
     // Pinned to the tail there is nothing to return to, so no affordance.
-    const view = render(
+    const view = renderInAppCommandScope(
       <BuildChatTab
         data={{ environmentId: "env-build", pipelineId: buildPipeline.id, taskId: "task-1" }}
         isActive
@@ -228,7 +232,7 @@ describe("native chat scroll wiring", () => {
 
     cleanup();
     isAtBottom = false;
-    const scrolled = render(
+    const scrolled = renderInAppCommandScope(
       <BuildChatTab
         data={{ environmentId: "env-build", pipelineId: buildPipeline.id, taskId: "task-1" }}
         isActive
@@ -242,12 +246,12 @@ describe("native chat scroll wiring", () => {
   test("the build transcript keeps the way back after the composer is gone", () => {
     // A finished build has no compose box, and the button lives in the same
     // footer — losing it there would strand the user mid-transcript.
-    useBuildPipelineStore.setState({
+    appCommandStore(buildPipelineStore).setState({
       pipelines: new Map([[buildPipeline.id, { ...buildPipeline, phase: "complete" as const }]]),
     });
     isAtBottom = false;
 
-    const view = render(
+    const view = renderInAppCommandScope(
       <BuildChatTab
         data={{ environmentId: "env-build", pipelineId: buildPipeline.id, taskId: "task-1" }}
         isActive

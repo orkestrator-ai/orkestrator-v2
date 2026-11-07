@@ -6,15 +6,10 @@ import { listen, type UnlistenFn } from "@/lib/native/events";
 import { useClipboardImagePaste } from "@/hooks/useClipboardImagePaste";
 import { decodeTerminalOutputPayload, type TerminalOutputPayload } from "@/hooks/useTerminal";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
-import {
-  createInteractiveTerminal,
-  detachInteractiveTerminal,
-  resizeInteractiveTerminal,
-  startInteractiveTerminal,
-  writeInteractiveTerminal,
-} from "@/lib/claude-tmux-client";
 import { openLinkExternally } from "@/lib/preview-link-external";
 import { createTerminalLinkActivator } from "@/lib/terminal-links";
+import { useNodeScope } from "@/lib/node-scope/providers";
+import { backendForScope } from "@/lib/backend/scope-backend";
 import { escapePathForTerminalInput, handleTerminalPaste } from "@/lib/terminal-paste";
 import { cn } from "@/lib/utils";
 import { useConfigStore } from "@/stores";
@@ -27,6 +22,7 @@ import { MobileTerminalKeyBar } from "@/components/terminal/MobileTerminalKeyBar
 import { publishTerminalGeometryIfOwned } from "@/lib/terminal-geometry-owner";
 import { isKeyboardShortcutsShortcut } from "@/lib/keyboard-shortcuts";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { useClaudeTmuxClient } from "@/lib/claude-tmux-scope";
 
 const log = createLogger("web.claude-tmux");
 
@@ -49,7 +45,10 @@ export function ClaudeTmuxInteractiveTerminal({
   isActive,
   className,
 }: ClaudeTmuxInteractiveTerminalProps) {
+  const nodeTmux = useClaudeTmuxClient();
   const isMobile = useMediaQuery("(max-width: 767px)");
+  // The tab's node: its settings and files panel answer a link click.
+  const linkScope = useNodeScope();
   // Mirrored into a ref so neither the session-creating effect (whose cleanup
   // disposes the terminal and detaches the tmux session) nor the activation
   // effect has to depend on isMobile. Crossing the breakpoint must not tear
@@ -80,11 +79,14 @@ export function ClaudeTmuxInteractiveTerminal({
     terminalAppearance.backgroundColor,
   );
 
-  const writeToTerminal = useCallback(async (data: string) => {
-    const sessionId = sessionIdRef.current;
-    if (!sessionId) return;
-    await writeInteractiveTerminal(sessionId, data);
-  }, []);
+  const writeToTerminal = useCallback(
+    async (data: string) => {
+      const sessionId = sessionIdRef.current;
+      if (!sessionId) return;
+      await nodeTmux.writeInteractiveTerminal(sessionId, data);
+    },
+    [nodeTmux],
+  );
 
   const focusTerminal = useCallback(() => {
     terminalRef.current?.focus();
@@ -92,13 +94,14 @@ export function ClaudeTmuxInteractiveTerminal({
 
   const handlePaste = useCallback(async () => {
     await handleTerminalPaste({
+      writer: backendForScope(linkScope),
       containerId,
       worktreePath,
       writeToTerminal,
       focusTerminal,
       componentName: "ClaudeTmuxInteractiveTerminal",
     });
-  }, [containerId, worktreePath, writeToTerminal, focusTerminal]);
+  }, [containerId, worktreePath, writeToTerminal, focusTerminal, linkScope]);
 
   // Keep the latest paste handler in a ref so the terminal/tmux session
   // lifecycle does not depend on the handler's identity. Without this, a
@@ -139,8 +142,14 @@ export function ClaudeTmuxInteractiveTerminal({
         activate: createTerminalLinkActivator({
           environmentId: environmentId ?? "",
           sourceTabId: tabId,
+          scope: () => linkScope,
           openExternal: (url) =>
-            openLinkExternally({ environmentId: environmentId ?? "", sourceTabId: tabId, url }),
+            openLinkExternally({
+              environmentId: environmentId ?? "",
+              sourceTabId: tabId,
+              url,
+              scope: linkScope,
+            }),
         }),
       },
       cursorBlink: true,
@@ -200,7 +209,7 @@ export function ClaudeTmuxInteractiveTerminal({
           isActiveRef.current,
           terminal.cols,
           terminal.rows,
-          (cols, rows) => resizeInteractiveTerminal(sessionId, cols, rows),
+          (cols, rows) => nodeTmux.resizeInteractiveTerminal(sessionId, cols, rows),
         ).catch((resizeError) => {
           log.error("terminal.resize-failed", { sessionId, error: formatLogError(resizeError) });
         });
@@ -212,7 +221,7 @@ export function ClaudeTmuxInteractiveTerminal({
     const dataDisposable = terminal.onData((data) => {
       const sessionId = sessionIdRef.current;
       if (!sessionId) return;
-      void writeInteractiveTerminal(sessionId, data);
+      void nodeTmux.writeInteractiveTerminal(sessionId, data);
     });
 
     terminal.attachCustomKeyEventHandler((event) => {
@@ -260,7 +269,7 @@ export function ClaudeTmuxInteractiveTerminal({
       }
       if (createdSessionId && !detached) {
         detached = true;
-        void detachInteractiveTerminal(createdSessionId);
+        void nodeTmux.detachInteractiveTerminal(createdSessionId);
       }
       if (sessionIdRef.current === createdSessionId) {
         sessionIdRef.current = null;
@@ -273,7 +282,7 @@ export function ClaudeTmuxInteractiveTerminal({
           setError("No environment specified for interactive terminal");
           return;
         }
-        const sessionId = await createInteractiveTerminal(
+        const sessionId = await nodeTmux.createInteractiveTerminal(
           tabId,
           terminal.cols || 120,
           terminal.rows || 30,
@@ -281,7 +290,7 @@ export function ClaudeTmuxInteractiveTerminal({
         );
         createdSessionId = sessionId;
         if (cancelled) {
-          void detachInteractiveTerminal(sessionId);
+          void nodeTmux.detachInteractiveTerminal(sessionId);
           return;
         }
 
@@ -293,7 +302,7 @@ export function ClaudeTmuxInteractiveTerminal({
             let recoveryError: unknown;
             for (let attempt = 0; attempt < INTERACTIVE_RECOVERY_MAX_ATTEMPTS; attempt += 1) {
               try {
-                await startInteractiveTerminal(sessionId);
+                await nodeTmux.startInteractiveTerminal(sessionId);
                 if (!cancelled && sessionIdRef.current === sessionId) {
                   setError(null);
                 }
@@ -332,7 +341,7 @@ export function ClaudeTmuxInteractiveTerminal({
         }
         unlistenRef.current = activeUnlisten;
 
-        await startInteractiveTerminal(sessionId);
+        await nodeTmux.startInteractiveTerminal(sessionId);
         if (cancelled) return;
         setConnected(true);
         setError(null);
@@ -360,12 +369,14 @@ export function ClaudeTmuxInteractiveTerminal({
       fitAddonRef.current = null;
     };
   }, [
+    linkScope,
     tabId,
     environmentId,
     terminalAppearance.fontFamily,
     terminalAppearance.fontSize,
     terminalBackgroundColor,
     terminalScrollback,
+    nodeTmux,
   ]);
 
   useEffect(() => {
@@ -382,7 +393,7 @@ export function ClaudeTmuxInteractiveTerminal({
       const sessionId = sessionIdRef.current;
       if (sessionId) {
         void publishTerminalGeometryIfOwned(true, terminal.cols, terminal.rows, (cols, rows) =>
-          resizeInteractiveTerminal(sessionId, cols, rows),
+          nodeTmux.resizeInteractiveTerminal(sessionId, cols, rows),
         ).catch((resizeError) => {
           log.error("terminal.resize-failed", { sessionId, error: formatLogError(resizeError) });
         });
@@ -391,7 +402,7 @@ export function ClaudeTmuxInteractiveTerminal({
         terminal.focus();
       }
     });
-  }, [isActive]);
+  }, [isActive, nodeTmux]);
 
   return (
     <div

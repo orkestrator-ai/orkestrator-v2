@@ -2,12 +2,14 @@ import { afterEach, describe, expect, test } from "bun:test";
 import {
   clearImagePreviewCache,
   imagePreviewCacheKey,
+  imagePreviewCacheStats,
   readImagePreviewCache,
   readImagePreviewDimensions,
   readImagePreviewSnapshot,
   writeImagePreviewCache,
   writeImagePreviewDimensions,
 } from "./image-preview-cache";
+import { getWindowScope } from "@/lib/node-scope/app-window-scope";
 
 describe("image preview cache", () => {
   afterEach(() => {
@@ -113,18 +115,26 @@ describe("image preview cache", () => {
     expect(readImagePreviewCache(keys[32]!)).toBe("data:image/png;base64,x");
   });
 
-  test("evicts on the total size bound before the count bound is reached", () => {
+  test("evicts on the window's image byte budget before the count bound is reached", () => {
     const big = "d".repeat(7 * 1024 * 1024);
-    const keys = Array.from({ length: 4 }, (_, index) =>
+    const budget = getWindowScope().budgets.images;
+    // One more 7 MB preview than the shared budget holds, far below 32 entries.
+    const count = Math.floor(budget.totalBytes / big.length) + 1;
+    const keys = Array.from({ length: count }, (_, index) =>
       imagePreviewCacheKey(undefined, `/w/big-${index}.png`, undefined),
     );
     for (const key of keys) {
       writeImagePreviewCache(key, big);
     }
 
-    // Four 7 MB previews exceed the 24 MB budget at only four of 32 entries.
+    expect(count).toBeLessThan(32);
     expect(readImagePreviewCache(keys[0]!)).toBeNull();
-    expect(readImagePreviewCache(keys[3]!)).toBe(big);
+    expect(readImagePreviewCache(keys[count - 1]!)).toBe(big);
+    expect(budget.usedBytes).toBeLessThanOrEqual(budget.totalBytes);
+    expect(imagePreviewCacheStats()).toEqual({
+      entries: count - 1,
+      bytes: (count - 1) * big.length,
+    });
   });
 
   test("refuses to retain a single preview larger than the entry bound", () => {

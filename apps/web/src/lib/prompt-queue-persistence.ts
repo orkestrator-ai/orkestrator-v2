@@ -1,4 +1,3 @@
-import * as backend from "@/lib/backend";
 import type { PersistedPromptQueue } from "@/types";
 
 /**
@@ -110,7 +109,8 @@ export function applyPromptQueueSnapshot<TItem extends QueuedItem>(
 export async function retryPromptQueueDispatch<TItem extends QueuedItem>(
   source: PromptQueueSource<TItem>,
   sessionKey: string,
-  retry: PromptQueueRetrier = backend.retryPromptQueueDispatch,
+  /** The queue's node's retry (`backendForScope(scope).retryPromptQueueDispatch`). */
+  retry: PromptQueueRetrier,
 ): Promise<void> {
   const queueKey = promptQueueKey(source.agent, sessionKey);
   const persisted = await retry(queueKey);
@@ -129,7 +129,8 @@ export async function retryPromptQueueDispatch<TItem extends QueuedItem>(
 export async function hydratePromptQueuesForEnvironment(
   environmentId: string,
   sources: ReadonlyArray<PromptQueueSource>,
-  list: PromptQueueListLoader = backend.listPromptQueues,
+  /** The environment's node's list (`backendForScope(scope).listPromptQueues`). */
+  list: PromptQueueListLoader,
 ): Promise<void> {
   applyPromptQueuesForEnvironment(environmentId, await list(environmentId), sources);
 }
@@ -158,7 +159,8 @@ export function applyPromptQueuesForEnvironment(
 export async function hydratePromptQueue(
   queueKey: string,
   sources: ReadonlyArray<PromptQueueSource>,
-  load: PromptQueueLoader = backend.getPromptQueue,
+  /** The queue's node's read (`backendForScope(scope).getPromptQueue`). */
+  load: PromptQueueLoader,
 ): Promise<void> {
   const parsed = parsePromptQueueKey(queueKey);
   if (!parsed) return;

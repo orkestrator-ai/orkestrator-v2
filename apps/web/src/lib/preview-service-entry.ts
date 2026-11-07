@@ -11,21 +11,25 @@ import {
   type PreviewUrlSource,
 } from "@orkestrator/protocol/preview-services";
 
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { appCommandScope } from "@/lib/node-scope-slots";
 import { isLoopbackUrl } from "@/lib/terminal-links";
-import { ensurePreviewServiceSync, usePreviewServiceStore } from "@/stores/previewServiceStore";
+import { ensurePreviewServiceSync, previewServiceStore } from "@/stores/previewServiceStore";
 import type { Environment } from "@/types";
 
 /**
  * Target for the environment's browser button: the registered entry service
  * (resolved to a transport only when the tab attaches), falling back to the
- * legacy entry address when the backend predates preview services.
+ * legacy entry address when the backend predates preview services. `scope`
+ * is the environment's node (the app's command scope when omitted).
  */
 export async function environmentBrowserTarget(
   environment: Pick<Environment, "id">,
   legacyUrl: string | null,
+  scope: NodeScope = appCommandScope(),
 ): Promise<string | undefined> {
-  ensurePreviewServiceSync();
-  const store = usePreviewServiceStore.getState();
+  ensurePreviewServiceSync(scope);
+  const store = scope.store(previewServiceStore).getState();
   const capabilities = await store.loadCapabilities();
   if (!capabilities) return legacyUrl ?? undefined;
   const snapshot = await store.refreshEnvironment(environment.id);
@@ -51,16 +55,17 @@ export async function environmentBrowserTarget(
  * unresolved intent interpreted in its *source* environment, so a container's
  * `localhost:3000` means that container's port 3000 rather than whichever
  * backend process owns host port 3000. Non-loopback links and older backends
- * keep the previous behaviour.
+ * keep the previous behaviour. `scope` is the environment's node.
  */
 export function linkBrowserTarget(
   environment: Pick<Environment, "id" | "environmentType"> | null | undefined,
   url: string,
   origin: "terminal" | "agent" = "terminal",
+  scope: NodeScope = appCommandScope(),
 ): string {
   if (!environment || !isLoopbackUrl(url)) return url;
-  ensurePreviewServiceSync();
-  if (usePreviewServiceStore.getState().status === "unsupported") return url;
+  ensurePreviewServiceSync(scope);
+  if (scope.store(previewServiceStore).getState().status === "unsupported") return url;
   const source = linkUrlSource(environment, origin);
   return formatPreviewIntentUri({ environmentId: environment.id, source, url: url.trim() });
 }
@@ -199,20 +204,22 @@ export function sameLegacyUrlServiceBinding(
  * offer against a fresh snapshot first: the tab converts only if the same
  * service still holds the same binding (epoch and endpoint generation), so a
  * port reassigned since the offer was shown is never followed. Returns the
- * service tab target, or null when the offer no longer holds.
+ * service tab target, or null when the offer no longer holds. `scope` is the
+ * environment's node.
  */
 export async function confirmLegacyUrlServiceMatch(
   url: string,
   environmentId: string,
   offered: LegacyUrlServiceMatch,
+  scope: NodeScope = appCommandScope(),
 ): Promise<string | null> {
-  ensurePreviewServiceSync();
-  const store = usePreviewServiceStore.getState();
-  const snapshot = await store.confirmEnvironment(environmentId);
+  ensurePreviewServiceSync(scope);
+  const previews = scope.store(previewServiceStore);
+  const snapshot = await previews.getState().confirmEnvironment(environmentId);
   const current = legacyUrlServiceMatch(
     url,
     environmentId,
-    usePreviewServiceStore.getState().capabilities,
+    previews.getState().capabilities,
     snapshot,
   );
   if (!current || !sameLegacyUrlServiceBinding(current, offered)) return null;

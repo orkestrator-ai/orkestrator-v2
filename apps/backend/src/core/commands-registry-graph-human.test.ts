@@ -2,6 +2,8 @@
  * `graph_run_answer`'s human-node form and `graph_run_pending` (item 208),
  * over a real store, the real human executor and hand-driven passes.
  */
+import { decodeCommandArgs } from "@orkestrator/protocol/contract/command";
+import { graphRunAnswerCommand } from "@orkestrator/protocol/contract/domains/graphs";
 import { afterEach, describe, expect, test } from "bun:test";
 import type {
   GraphRunPendingInteraction,
@@ -145,8 +147,15 @@ describe("human node commands", () => {
     expect(await refused(h.context, { ...base, decision: "maybe" })).toMatchObject({
       code: "invalid-answer",
     });
-    expect(await refused(h.context, { ...base, decision: "approve", extra: 1 })).toMatchObject({
-      message: expect.stringContaining("Unknown arguments"),
+    // An unknown key is dropped, not refused (a defined command is tolerant).
+    const stripped = decodeCommandArgs(graphRunAnswerCommand, {
+      ...base,
+      decision: "approve",
+      extra: 1,
+    });
+    expect(stripped._tag === "Success" ? stripped.success : null).toEqual({
+      ...base,
+      decision: "approve",
     });
     expect(
       await refused(h.context, { ...base, decision: "approve", value: { text: "x", more: 1 } }),

@@ -18,11 +18,13 @@ import {
   newWebAnnotationOperationId,
   webAnnotationCommand,
 } from "@/lib/web-annotations/client";
+import { useNodeScope, useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { openConversationAtMessage } from "@/lib/web-annotations/conversation-navigation";
 import { openConversationTab, openWebAnnotationRequest } from "@/lib/web-annotations/navigation";
 import { refreshWebAnnotations } from "@/lib/web-annotations/sync";
 import { cn } from "@/lib/utils";
-import { useFilesPanelStore } from "@/stores/filesPanelStore";
+import { useFilesPanelChromeStore } from "@/stores/filesPanelChromeStore";
+import { filesPanelStore } from "@/stores/filesPanelStore";
 import { destinationName } from "./DestinationPicker";
 import { lastActivity } from "./format";
 import { useAnnotationPanel } from "./panel-context";
@@ -109,8 +111,13 @@ export function RequestCard({
   /** Prepare a follow-up request (`followUpOf`) for the chosen remaining notes. */
   onFollowUp: (items: ComposerItem[], followUpOf: string) => void;
 }) {
+  // This node's annotations (plan item 4001); the command node outside a node scope.
+  const annotationScope = useScopesWithCommandFallback().scope;
   const { environmentId, announce, navigateToPage, features } = useAnnotationPanel();
+  // The annotation's environment is on the node of the scope this card renders in.
+  const scopeNodeId = useScopesWithCommandFallback().scope.nodeId;
   const [busy, setBusy] = useState<string | null>(null);
+  const filesPanel = useNodeScope().store(filesPanelStore);
   const [message, setMessage] = useState<string | null>(null);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [response, setResponse] = useState<{
@@ -135,10 +142,15 @@ export function RequestCard({
     if (!terminal || request.state === "cancelled" || request.state === "abandoned-unconfirmed")
       return;
     let cancelled = false;
-    void webAnnotationCommand(WEB_ANNOTATION_COMMANDS.requestResponse, {
-      environmentId,
-      requestId: request.id,
-    })
+    void webAnnotationCommand(
+      WEB_ANNOTATION_COMMANDS.requestResponse,
+      {
+        environmentId,
+        requestId: request.id,
+      },
+      undefined,
+      annotationScope,
+    )
       .then((value) => {
         if (!cancelled)
           setResponse({ excerpt: value.response, sourceAvailable: value.sourceAvailable });
@@ -149,7 +161,7 @@ export function RequestCard({
     return () => {
       cancelled = true;
     };
-  }, [environmentId, request.id, request.response, request.state, terminal]);
+  }, [annotationScope, environmentId, request.id, request.response, request.state, terminal]);
 
   const run = async (key: string, action: () => Promise<string | null>) => {
     setBusy(key);
@@ -160,10 +172,14 @@ export function RequestCard({
         setMessage(outcome);
         announce(outcome);
       }
-      refreshWebAnnotations(environmentId, {
-        annotationIds: [annotation.id],
-        requestIds: [request.id],
-      });
+      refreshWebAnnotations(
+        environmentId,
+        {
+          annotationIds: [annotation.id],
+          requestIds: [request.id],
+        },
+        annotationScope,
+      );
     } catch (error) {
       const text = describeWebAnnotationError(error);
       setMessage(text);
@@ -189,7 +205,12 @@ export function RequestCard({
         : {}),
       ...(request.transcript.turnId ? { turnId: request.transcript.turnId } : {}),
     };
-    if (!openConversationAtMessage(environmentId, request.destination.tabId, target)) {
+    if (
+      !openConversationAtMessage(
+        { nodeId: scopeNodeId, environmentId, tabId: request.destination.tabId },
+        target,
+      )
+    ) {
       setMessage(
         "That chat tab is not open in this layout. The request continues in the background.",
       );
@@ -198,11 +219,16 @@ export function RequestCard({
 
   const stop = (queued = false) =>
     run(queued ? "cancel" : "stop", async () => {
-      const result = await webAnnotationCommand(WEB_ANNOTATION_COMMANDS.requestCancel, {
-        environmentId,
-        requestId: request.id,
-        expectedRevision: request.revision,
-      });
+      const result = await webAnnotationCommand(
+        WEB_ANNOTATION_COMMANDS.requestCancel,
+        {
+          environmentId,
+          requestId: request.id,
+          expectedRevision: request.revision,
+        },
+        undefined,
+        annotationScope,
+      );
       if (result.outcome === "cancelled")
         return queued ? "Request cancelled. It was never sent." : "Request stopped.";
       if (result.outcome === "cancelling")
@@ -212,11 +238,16 @@ export function RequestCard({
 
   const recover = (action: "retry" | "reconcile" | "discard") =>
     run(action, async () => {
-      await webAnnotationCommand(WEB_ANNOTATION_COMMANDS.requestRecover, {
-        environmentId,
-        requestId: request.id,
-        action,
-      });
+      await webAnnotationCommand(
+        WEB_ANNOTATION_COMMANDS.requestRecover,
+        {
+          environmentId,
+          requestId: request.id,
+          action,
+        },
+        undefined,
+        annotationScope,
+      );
       setConfirmDiscard(false);
       if (action === "retry") return "Retrying delivery with the same request.";
       if (action === "discard")
@@ -229,15 +260,20 @@ export function RequestCard({
     resolveOperationRef.current ??= newWebAnnotationOperationId("resolve");
     void run("accept", async () => {
       try {
-        await webAnnotationCommand(WEB_ANNOTATION_COMMANDS.resolve, {
-          environmentId,
-          operationId: resolveOperationRef.current!,
-          annotationId: annotation.id,
-          expectedContentRevision: selection.contentRevision,
-          expectedCaptureId: selection.captureId,
-          requestId: request.id,
-          ...(result ? { resultId: result.id, expectedResultRevision: result.revision } : {}),
-        });
+        await webAnnotationCommand(
+          WEB_ANNOTATION_COMMANDS.resolve,
+          {
+            environmentId,
+            operationId: resolveOperationRef.current!,
+            annotationId: annotation.id,
+            expectedContentRevision: selection.contentRevision,
+            expectedCaptureId: selection.captureId,
+            requestId: request.id,
+            ...(result ? { resultId: result.id, expectedResultRevision: result.revision } : {}),
+          },
+          undefined,
+          annotationScope,
+        );
         resolveOperationRef.current = null;
         setStaleAccept(null);
         return "Accepted and resolved.";
@@ -617,9 +653,8 @@ export function RequestCard({
               className="h-6 px-2 text-[11px]"
               title="Shows every change in this workspace, not only this request's"
               onClick={() => {
-                const files = useFilesPanelStore.getState();
-                files.setActiveTab("changes");
-                files.openPanel();
+                filesPanel.getState().setActiveTab("changes");
+                useFilesPanelChromeStore.getState().openPanel();
               }}
             >
               Open changes (current workspace diff)

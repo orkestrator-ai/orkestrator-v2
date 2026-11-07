@@ -7,6 +7,7 @@ import {
 } from "@orkestrator/protocol/native-agent";
 import { AgentNativeTab } from "../../apps/web/src/components/native-agent/AgentNativeTab";
 import { useEnvironmentStore } from "../../apps/web/src/stores/environmentStore";
+import { appCommandStore } from "../../apps/web/src/test/app-command-store";
 
 const identity: NativeAgentViewIdentity = {
   backendInstanceId: "held-send-fixture",
@@ -45,7 +46,7 @@ function installBackend() {
         : {}),
     },
   });
-  useEnvironmentStore.setState({
+  appCommandStore(useEnvironmentStore.def).setState({
     environments: [
       {
         id: identity.environmentId,

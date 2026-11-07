@@ -1,3 +1,5 @@
+import { nodeSummaryChangedEvent } from "@orkestrator/protocol/contract/domains/events";
+import type { BackendEmit } from "../backend-emit.js";
 import {
   BACKEND_PROFILE_CHANGED_EVENT,
   parseBackendProfile,
@@ -10,7 +12,6 @@ import { NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@orkestrator/protocol/gatew
 import {
   MAX_SUMMARY_ENVIRONMENTS_PER_PROJECT,
   MAX_SUMMARY_PROJECTS,
-  NODE_SUMMARY_CHANGED_EVENT,
   boundedText,
   NODE_SUMMARY_ENVIRONMENT_READ_ARGS,
   toNodeEnvironmentSummary,
@@ -23,6 +24,7 @@ import {
   type SummaryFreshness,
 } from "@orkestrator/protocol/node-summaries";
 import { RESOURCE_CHANGED_EVENT } from "@orkestrator/protocol/resource-events";
+import type { NegotiatedDomains } from "@orkestrator/protocol/node-client";
 
 import { boundSummaryIcons } from "./project-summary-icons.js";
 
@@ -53,7 +55,11 @@ export interface ReadModelLink {
   readonly connected: boolean;
   readonly view: { epoch: number };
   /** The hello of the active route, when connected. */
-  readonly hello?: { appVersion?: string; buildCommit?: string } | null;
+  readonly hello?: {
+    appVersion?: string;
+    buildCommit?: string;
+    domains?: NegotiatedDomains;
+  } | null;
   invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
   transport(): NodeEventTransport | null;
 }
@@ -134,6 +140,16 @@ function connectedBuildCommit(link: ReadModelLink | null): string | null {
   return parseBuildCommit(link.hello?.buildCommit);
 }
 
+/**
+ * The contract domains a node's current connection announced (plan item
+ * 5006); `null` for a dropped link and for a hello without them (a release
+ * from before domain contracts). The hello parser already bounds them.
+ */
+function connectedDomains(link: ReadModelLink | null): NegotiatedDomains | null {
+  if (!link?.connected) return null;
+  return link.hello?.domains ?? null;
+}
+
 /** What clients see of one node's summaries, to skip announcing an unchanged re-read. */
 function summaryFingerprint(state: NodeState): string {
   return JSON.stringify([
@@ -169,9 +185,11 @@ export class NodeReadModel {
   constructor(
     private readonly options: {
       nodes: ReadModelNodes;
-      emit: (event: string, payload: unknown) => void;
+      emit: BackendEmit;
       persistence?: ReadModelPersistence;
       local?: ReadModelLocal;
+      /** This node's own version and hello domains, reported beside every node's (5006). */
+      selfHello?: () => Promise<{ appVersion: string; domains: NegotiatedDomains }>;
       fetchImpl?: typeof fetch;
       now?: () => number;
       /** Test seam; production uses {@link SUMMARY_RECONCILE_MS}. */
@@ -261,6 +279,7 @@ export class NodeReadModel {
         available,
         version: connectedVersion(link),
         buildCommit: connectedBuildCommit(link),
+        domains: connectedDomains(link),
         freshness: state
           ? available
             ? state.freshness
@@ -276,7 +295,18 @@ export class NodeReadModel {
       });
     }
     const self = options.includeSelf ? await this.readSelf() : null;
-    return { selfId: await this.options.nodes.selfIdentity(), nodes, ...(self ? { self } : {}) };
+    const hello = await this.options.selfHello?.().catch(() => null);
+    return {
+      selfId: await this.options.nodes.selfIdentity(),
+      ...(hello
+        ? {
+            selfVersion: boundedText(hello.appVersion, MAX_NODE_VERSION_LENGTH),
+            selfDomains: hello.domains,
+          }
+        : {}),
+      nodes,
+      ...(self ? { self } : {}),
+    };
   }
 
   /**
@@ -711,7 +741,7 @@ export class NodeReadModel {
       }
       this.changed.delete(id);
       this.lastChangeEmittedAt.set(id, now);
-      this.options.emit(NODE_SUMMARY_CHANGED_EVENT, {
+      this.options.emit(nodeSummaryChangedEvent, {
         nodeId: id,
         epoch: this.states.get(id)?.epoch ?? 0,
       });

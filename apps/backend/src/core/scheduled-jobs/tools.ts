@@ -8,7 +8,8 @@ import {
   type ScheduledJob,
   type ScheduledJobSummary,
 } from "@orkestrator/protocol/scheduled-jobs";
-import { z } from "zod";
+import { Schema } from "effect";
+import { describe, int, list, str, strictObject, toolInput, type Infer } from "../tool-schema.js";
 import type { ScheduleCreateInput, ScheduleUpdateInput } from "./service.js";
 
 /**
@@ -73,142 +74,126 @@ const ACTION_TYPES = [
 
 function actionSchema(surface: ScheduleToolSurface) {
   const coordinator = surface === "coordinator";
-  return z
-    .object({
-      type: z
-        .enum(coordinator ? ACTION_TYPES : (["send_message", "tool"] as const))
-        .describe(
-          coordinator
-            ? "remind_me: a self-timer; body arrives in this conversation as a new turn when it fires. send_message: agent mail as you. send_prompt_to_tab: prompt an idle worker tab. launch_environment: launch a worker. tool: any other of your tools by name."
-            : "send_message: agent mail as you. tool: any other of your tools by name.",
-        ),
-      toEnvironmentId: z
-        .string()
-        .trim()
-        .min(1)
-        .max(256)
-        .optional()
-        .describe(
+  return describe(
+    Schema.Struct({
+      type: describe(
+        Schema.Literals(coordinator ? ACTION_TYPES : (["send_message", "tool"] as const)),
+        coordinator
+          ? "remind_me: a self-timer; body arrives in this conversation as a new turn when it fires. send_message: agent mail as you. send_prompt_to_tab: prompt an idle worker tab. launch_environment: launch a worker. tool: any other of your tools by name."
+          : "send_message: agent mail as you. tool: any other of your tools by name.",
+      ),
+      toEnvironmentId: Schema.optionalKey(
+        describe(
+          str({ trim: true, min: 1, max: 256 }),
           coordinator
             ? 'send_message: destination. "coordinator" (or your own environment id) is a reminder to yourself.'
             : 'send_message: destination. "coordinator" reaches your coordinator; your own environment id is a reminder to yourself.',
         ),
-      toTabId: z
-        .string()
-        .trim()
-        .min(1)
-        .max(256)
-        .optional()
-        .describe("send_message: destination tab."),
-      subject: z.string().trim().max(200).optional().describe("send_message: subject."),
-      body: z
-        .string()
-        .min(1)
-        .max(32 * 1024)
-        .optional()
-        .describe(
+      ),
+      toTabId: Schema.optionalKey(
+        describe(str({ trim: true, min: 1, max: 256 }), "send_message: destination tab."),
+      ),
+      subject: Schema.optionalKey(
+        describe(str({ trim: true, max: 200 }), "send_message: subject."),
+      ),
+      body: Schema.optionalKey(
+        describe(
+          str({ min: 1, max: 32 * 1024 }),
           coordinator
             ? "remind_me and send_message: the text delivered when the schedule fires. For remind_me write the full instruction you will need then; you will not remember this turn's context."
             : "send_message: the text delivered when the schedule fires.",
         ),
+      ),
       ...(coordinator
         ? {
-            authorizeAccountSwitch: z
-              .object({
-                platforms: z
-                  .array(z.enum(["claude", "codex"]))
-                  .min(1)
-                  .max(2)
-                  .describe("Providers whose active account the timer may switch."),
-                nodeIds: z
-                  .array(z.string().trim().min(1).max(200))
-                  .max(16)
-                  .optional()
-                  .describe(
-                    "Other machines it may switch on (from list_nodes); omit for this one.",
+            authorizeAccountSwitch: Schema.optionalKey(
+              describe(
+                Schema.Struct({
+                  platforms: describe(
+                    list(Schema.Literals(["claude", "codex"]), { min: 1, max: 2 }),
+                    "Providers whose active account the timer may switch.",
                   ),
-                userInstruction: z
-                  .string()
-                  .trim()
-                  .min(1)
-                  .max(500)
-                  .describe("What the user asked, in their words."),
-              })
-              .optional()
-              .describe(
+                  nodeIds: Schema.optionalKey(
+                    describe(
+                      list(str({ trim: true, min: 1, max: 200 }), { max: 16 }),
+                      "Other machines it may switch on (from list_nodes); omit for this one.",
+                    ),
+                  ),
+                  userInstruction: describe(
+                    str({ trim: true, min: 1, max: 500 }),
+                    "What the user asked, in their words.",
+                  ),
+                }),
                 "One-shot remind_me only, and only when the user's own message in this turn asked you to switch accounts at that time: lets switch_provider_account act when the timer fires without a second approval. Refused in a turn started by mail or another timer.",
               ),
-            environmentId: z
-              .string()
-              .trim()
-              .min(1)
-              .max(200)
-              .optional()
-              .describe("send_prompt_to_tab: worker environment."),
-            tabId: z
-              .string()
-              .trim()
-              .min(1)
-              .max(200)
-              .optional()
-              .describe("send_prompt_to_tab: worker tab."),
-            prompt: z
-              .string()
-              .min(1)
-              .max(100_000)
-              .optional()
-              .describe("send_prompt_to_tab and launch_environment: the prompt."),
-            conversationMode: z.enum(["plan", "build"]).optional(),
-            projectId: z
-              .string()
-              .trim()
-              .min(1)
-              .max(200)
-              .optional()
-              .describe("launch_environment: this project's id."),
-            agent: z
-              .enum(["claude", "codex", "cursor", "grok", "opencode", "pi"])
-              .optional()
-              .describe("launch_environment: agent platform."),
-            environmentType: z.enum(["local", "containerized"]).optional(),
-            name: z.string().trim().min(1).max(200).optional(),
-            modelId: z.string().trim().min(1).max(500).optional(),
-            reasoningId: z.string().trim().min(1).max(100).optional(),
-            baseBranch: z
-              .string()
-              .trim()
-              .min(1)
-              .max(500)
-              .optional()
-              .describe("launch_environment: base branch; default the repository's base branch."),
-            baseCommit: z
-              .string()
-              .regex(/^[0-9a-f]{40}$/i)
-              .optional()
-              .describe(
+            ),
+            environmentId: Schema.optionalKey(
+              describe(
+                str({ trim: true, min: 1, max: 200 }),
+                "send_prompt_to_tab: worker environment.",
+              ),
+            ),
+            tabId: Schema.optionalKey(
+              describe(str({ trim: true, min: 1, max: 200 }), "send_prompt_to_tab: worker tab."),
+            ),
+            prompt: Schema.optionalKey(
+              describe(
+                str({ min: 1, max: 100_000 }),
+                "send_prompt_to_tab and launch_environment: the prompt.",
+              ),
+            ),
+            conversationMode: Schema.optionalKey(Schema.Literals(["plan", "build"])),
+            projectId: Schema.optionalKey(
+              describe(
+                str({ trim: true, min: 1, max: 200 }),
+                "launch_environment: this project's id.",
+              ),
+            ),
+            agent: Schema.optionalKey(
+              describe(
+                Schema.Literals(["claude", "codex", "cursor", "grok", "opencode", "pi"]),
+                "launch_environment: agent platform.",
+              ),
+            ),
+            environmentType: Schema.optionalKey(Schema.Literals(["local", "containerized"])),
+            name: Schema.optionalKey(str({ trim: true, min: 1, max: 200 })),
+            modelId: Schema.optionalKey(str({ trim: true, min: 1, max: 500 })),
+            reasoningId: Schema.optionalKey(str({ trim: true, min: 1, max: 100 })),
+            baseBranch: Schema.optionalKey(
+              describe(
+                str({ trim: true, min: 1, max: 500 }),
+                "launch_environment: base branch; default the repository's base branch.",
+              ),
+            ),
+            baseCommit: Schema.optionalKey(
+              describe(
+                str({ pattern: /^[0-9a-f]{40}$/i }),
                 "launch_environment: pin this commit. Omit to use the newest commit of baseBranch when the schedule fires.",
               ),
-            nodeId: z
-              .string()
-              .trim()
-              .min(1)
-              .max(200)
-              .optional()
-              .describe("Act on that node's copy of the project, as the immediate tool would."),
+            ),
+            nodeId: Schema.optionalKey(
+              describe(
+                str({ trim: true, min: 1, max: 200 }),
+                "Act on that node's copy of the project, as the immediate tool would.",
+              ),
+            ),
           }
         : {}),
-      tool: z.string().trim().min(1).max(100).optional().describe("tool: the tool name."),
-      arguments: z
-        .record(z.string(), z.unknown())
-        .optional()
-        .describe(
+      tool: Schema.optionalKey(
+        describe(str({ trim: true, min: 1, max: 100 }), "tool: the tool name."),
+      ),
+      arguments: Schema.optionalKey(
+        describe(
+          Schema.Record(Schema.String, Schema.Unknown),
           "tool: that tool's arguments, without requestId (the schedule supplies one per fire).",
         ),
-    })
-    .describe("What runs when the schedule fires, as you, with your permissions at that time.");
+      ),
+    }),
+    "What runs when the schedule fires, as you, with your permissions at that time.",
+  );
 }
 
-type ActionInput = z.infer<ReturnType<typeof actionSchema>> & Record<string, unknown>;
+type ActionInput = Infer<ReturnType<typeof actionSchema>> & Record<string, unknown>;
 
 function required<T>(value: T | undefined, field: string, type: string): T {
   if (value === undefined || value === null || value === "") {
@@ -372,18 +357,15 @@ export function registerScheduleTools(
   backend: () => ScheduleToolBackend | null,
 ): void {
   const zone = hostTimeZone();
-  const caller: { tabId?: z.ZodOptional<z.ZodString> } =
+  const caller: { tabId?: Schema.optionalKey<Schema.Codec<string, string>> } =
     surface === "agent"
       ? {
-          tabId: z
-            .string()
-            .trim()
-            .min(1)
-            .max(256)
-            .optional()
-            .describe(
+          tabId: Schema.optionalKey(
+            describe(
+              str({ trim: true, min: 1, max: 256 }),
               "Your caller mailbox tab; required for an environment credential with multiple mailboxes.",
             ),
+          ),
         }
       : {};
   const available = () => {
@@ -392,39 +374,22 @@ export function registerScheduleTools(
     return resolved;
   };
   const timingFields = {
-    name: z.string().trim().min(1).max(120).optional(),
-    at: z.string().trim().min(1).max(64).optional(),
-    cron: z.string().trim().min(1).max(200).optional(),
-    everyMinutes: z
-      .number()
-      .int()
-      .min(1)
-      .max(366 * 24 * 60)
-      .optional(),
-    startAt: z
-      .string()
-      .trim()
-      .min(1)
-      .max(64)
-      .optional()
-      .describe("With everyMinutes: the first fire."),
-    timeZone: z
-      .string()
-      .trim()
-      .min(1)
-      .max(64)
-      .optional()
-      .describe(
+    name: Schema.optionalKey(str({ trim: true, min: 1, max: 120 })),
+    at: Schema.optionalKey(str({ trim: true, min: 1, max: 64 })),
+    cron: Schema.optionalKey(str({ trim: true, min: 1, max: 200 })),
+    everyMinutes: Schema.optionalKey(int({ min: 1, max: 366 * 24 * 60 })),
+    startAt: Schema.optionalKey(
+      describe(str({ trim: true, min: 1, max: 64 }), "With everyMinutes: the first fire."),
+    ),
+    timeZone: Schema.optionalKey(
+      describe(
+        str({ trim: true, min: 1, max: 64 }),
         surface === "coordinator"
           ? `IANA zone; default the user's zone (the device they last prompted you from), or ${zone} until they have.`
           : `IANA zone; default ${zone}.`,
       ),
-    catchUpMinutes: z
-      .number()
-      .int()
-      .min(0)
-      .max(7 * 24 * 60)
-      .optional(),
+    ),
+    catchUpMinutes: Schema.optionalKey(int({ min: 0, max: 7 * 24 * 60 })),
   };
   server.registerTool(
     "create_schedule",
@@ -437,12 +402,14 @@ export function registerScheduleTools(
           ? `To wake yourself later (a self-timer: "in 2 hours" is at "+2h", "at 14:30" is at "14:30"), use action type remind_me: its body arrives in this conversation as a reminder that starts a new turn, and one that fires while you are mid-turn is queued until the turn ends. Absolute times are read in the user's local time zone, the zone of the device the user last sent you a prompt from (this machine's, ${zone}, until they have), unless you pass timeZone; the result names the zone used and the local time. A self-timer is at most ${SCHEDULED_JOB_LIMITS.maxSelfTimerDelayMs / 86_400_000} days ahead and you may hold ${SCHEDULED_JOB_LIMITS.maxPendingSelfTimers} pending. `
           : 'To wake yourself later, send_message to your own environment id: it arrives as a reminder that starts a turn. To wake your coordinator, send to "coordinator". ') +
         "The action runs as you, with your permissions at fire time; anything you could not do directly is refused. A fire missed while the backend was down runs once on return if no more than catchUpMinutes late (default 15), otherwise it is skipped. Use a new requestId for each new schedule; reuse one only to retry the same call. Returns scheduleId and nextFireAt; then finish your turn.",
-      inputSchema: z.object({
-        ...caller,
-        requestId: z.string().trim().min(1).max(200),
-        ...timingFields,
-        action: actionSchema(surface),
-      }),
+      inputSchema: toolInput(
+        Schema.Struct({
+          ...caller,
+          requestId: str({ trim: true, min: 1, max: 200 }),
+          ...timingFields,
+          action: actionSchema(surface),
+        }),
+      ),
       annotations: {
         readOnlyHint: false,
         destructiveHint: false,
@@ -497,7 +464,7 @@ export function registerScheduleTools(
       title: "List your schedules",
       description:
         "List the schedules you created: when each fires next, its state and its last outcome.",
-      inputSchema: z.object({ ...caller }),
+      inputSchema: toolInput(Schema.Struct({ ...caller })),
       annotations: {
         readOnlyHint: true,
         destructiveHint: false,
@@ -516,7 +483,9 @@ export function registerScheduleTools(
       title: "Cancel a schedule",
       description:
         "Delete one of your schedules so it never fires again. A fire already running finishes.",
-      inputSchema: z.object({ ...caller, scheduleId: z.string().trim().min(1).max(100) }),
+      inputSchema: toolInput(
+        Schema.Struct({ ...caller, scheduleId: str({ trim: true, min: 1, max: 100 }) }),
+      ),
       annotations: {
         readOnlyHint: false,
         destructiveHint: true,
@@ -543,7 +512,7 @@ export function registerScheduleTools(
 function registerScheduleEditTools(
   server: McpServer,
   available: () => ScheduleToolBackend,
-  timingFields: Record<string, z.ZodType>,
+  timingFields: Schema.Struct.Fields,
 ): void {
   const edits = () => {
     const resolved = available();
@@ -551,7 +520,7 @@ function registerScheduleEditTools(
       throw new Error("Editing schedules is unavailable here");
     return resolved as Required<ScheduleToolBackend>;
   };
-  const scheduleId = z.string().trim().min(1).max(100);
+  const scheduleId = str({ trim: true, min: 1, max: 100 });
   const write = {
     readOnlyHint: false,
     destructiveHint: false,
@@ -564,7 +533,7 @@ function registerScheduleEditTools(
       title: "Pause a schedule",
       description:
         "Pause one of your schedules: it does not fire until resume_schedule. A fire already running finishes. Time spent paused is not caught up.",
-      inputSchema: z.object({ scheduleId }).strict(),
+      inputSchema: toolInput(strictObject({ scheduleId })),
       annotations: write,
     },
     async ({ scheduleId }) => textResult(scheduleView(await edits().pause(scheduleId))),
@@ -575,7 +544,7 @@ function registerScheduleEditTools(
       title: "Resume a schedule",
       description:
         "Resume one of your paused schedules, including one Orkestrator paused because its target was deleted or its authority was lost (it pauses again at the next fire if that is still so). It fires next at its next slot after now; missed slots are not replayed.",
-      inputSchema: z.object({ scheduleId }).strict(),
+      inputSchema: toolInput(strictObject({ scheduleId })),
       annotations: write,
     },
     async ({ scheduleId }) => textResult(scheduleView(await edits().resume(scheduleId))),
@@ -586,9 +555,13 @@ function registerScheduleEditTools(
       title: "Change a schedule",
       description:
         "Change one of your schedules: its name, its time (exactly one of at, cron or everyMinutes replaces the old one), timeZone, catchUpMinutes or its action. Fields you leave out keep their value. A new action is checked as create_schedule checks it: it runs as you, with your permissions at fire time, and anything you could not do directly is refused. Only the schedule's owner can change its action. A self-timer that carries the user's account-switch permission keeps it only for the time it was given for: to change its time, timeZone or catchUpMinutes, give the action again with authorizeAccountSwitch in a turn the user started, or cancel it and create a new one. Giving a finished one-shot a new time runs it again.",
-      inputSchema: z
-        .object({ scheduleId, ...timingFields, action: actionSchema("coordinator").optional() })
-        .strict(),
+      inputSchema: toolInput(
+        strictObject({
+          scheduleId,
+          ...timingFields,
+          action: Schema.optionalKey(actionSchema("coordinator")),
+        }),
+      ),
       annotations: { ...write, openWorldHint: true },
     },
     async (args) => {

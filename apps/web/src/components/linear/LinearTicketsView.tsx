@@ -42,17 +42,14 @@ import { useBuildLaunchOptions } from "@/hooks/useBuildLaunchOptions";
 import { useBuildPipeline } from "@/hooks/useBuildPipeline";
 import { useDurableComposeDraft } from "@/hooks/useDurableComposeDraft";
 import { composeDraftKey, discardComposeDraft } from "@/lib/compose-draft-persistence";
-import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
-import { useLocalEnvironmentAvailable } from "@/hooks/useLocalEnvironmentAvailable";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import {
-  connectLinear,
-  getLinearConnection,
-  getLinearIssue,
-  getLinearIssues,
-  openInBrowser,
-  postLinearIssueComment,
-  retryBuildPipelineCompletionComment,
-} from "@/lib/backend";
+  buildPipelineStore,
+  useBuildPipelineStore,
+  type BuildPipeline,
+} from "@/stores/buildPipelineStore";
+import { useLocalEnvironmentAvailable } from "@/hooks/useLocalEnvironmentAvailable";
+import { openInBrowser } from "@/lib/backend";
 import { cn } from "@/lib/utils";
 import type {
   LinearConnectionStatus,
@@ -60,6 +57,7 @@ import type {
   LinearIssueDetail,
   LinearIssueListItem,
 } from "@/types/linear";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 const log = createLogger("web.linear");
 
@@ -252,6 +250,7 @@ function LinearConnectDialog({
   onOpenChange: (open: boolean) => void;
   onConnected: (status: LinearConnectionStatus) => void;
 }) {
+  const nodeBackend = useScopeBackend();
   const [apiKey, setApiKey] = useState("");
   const [isConnecting, setIsConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -261,7 +260,7 @@ function LinearConnectDialog({
     setIsConnecting(true);
     setError(null);
     try {
-      const status = await connectLinear(apiKey.trim());
+      const status = await nodeBackend.connectLinear(apiKey.trim());
       onConnected(status);
       setApiKey("");
       onOpenChange(false);
@@ -333,6 +332,7 @@ export function LinearTicketsViewContent({
   projectId,
   buildPipeline,
 }: LinearTicketsViewContentProps) {
+  const nodeBackend = useScopeBackend();
   const [connection, setConnection] = useState<LinearConnectionStatus | null>(null);
   // Both start loading: the first load begins on mount.
   const [connectionState, setConnectionState] = useState<LoadState>("loading");
@@ -375,6 +375,7 @@ export function LinearTicketsViewContent({
   }, [selectedIssueId, commentBody]);
 
   const pipelines = useBuildPipelineStore((state) => state.pipelines);
+  const pipelineStore = useNodeScope().store(buildPipelineStore);
   const localEnvironmentAvailable = useLocalEnvironmentAvailable(projectId);
   const replacePipeline = useBuildPipelineStore((state) => state.replacePipeline);
   const { startBuildFromLinearIssue, navigateToPipeline } = buildPipeline;
@@ -387,7 +388,7 @@ export function LinearTicketsViewContent({
   const loadConnection = useCallback(() => {
     const requestId = connectionRequestRef.current + 1;
     connectionRequestRef.current = requestId;
-    return getLinearConnection().then(
+    return nodeBackend.getLinearConnection().then(
       (status) => {
         if (connectionRequestRef.current !== requestId) return null;
         setConnection(status);
@@ -405,7 +406,7 @@ export function LinearTicketsViewContent({
         return null;
       },
     );
-  }, []);
+  }, [nodeBackend]);
 
   /** Loads without marking the load as started; `loadIssues` does both. */
   const fetchIssues = useCallback(() => {
@@ -419,7 +420,7 @@ export function LinearTicketsViewContent({
           setIssuesState("loaded");
           return;
         }
-        const nextIssues = await getLinearIssues();
+        const nextIssues = await nodeBackend.getLinearIssues();
         if (issuesRequestRef.current !== requestId) return;
         setIssues(nextIssues);
         setIssuesState("loaded");
@@ -429,7 +430,7 @@ export function LinearTicketsViewContent({
         setIssuesError(error instanceof Error ? error.message : "Failed to load Linear tickets");
         setIssuesState("error");
       });
-  }, [loadConnection]);
+  }, [loadConnection, nodeBackend]);
 
   const loadIssues = useCallback(() => {
     setIssuesState("loading");
@@ -477,24 +478,27 @@ export function LinearTicketsViewContent({
     ? issues.find((issue) => issue.id === selectedIssueId)
     : undefined;
 
-  const loadDetail = useCallback(async (issueId: string) => {
-    const requestId = detailRequestRef.current + 1;
-    detailRequestRef.current = requestId;
-    setDetailState("loading");
-    setDetailError(null);
-    try {
-      const nextDetail = await getLinearIssue(issueId);
-      if (detailRequestRef.current !== requestId) return;
-      setDetail(nextDetail);
-      setDetailState("loaded");
-      setCommentError(null);
-    } catch (error) {
-      if (detailRequestRef.current !== requestId) return;
-      setDetail(null);
-      setDetailError(error instanceof Error ? error.message : "Failed to load Linear ticket");
-      setDetailState("error");
-    }
-  }, []);
+  const loadDetail = useCallback(
+    async (issueId: string) => {
+      const requestId = detailRequestRef.current + 1;
+      detailRequestRef.current = requestId;
+      setDetailState("loading");
+      setDetailError(null);
+      try {
+        const nextDetail = await nodeBackend.getLinearIssue(issueId);
+        if (detailRequestRef.current !== requestId) return;
+        setDetail(nextDetail);
+        setDetailState("loaded");
+        setCommentError(null);
+      } catch (error) {
+        if (detailRequestRef.current !== requestId) return;
+        setDetail(null);
+        setDetailError(error instanceof Error ? error.message : "Failed to load Linear ticket");
+        setDetailState("error");
+      }
+    },
+    [nodeBackend],
+  );
 
   const handleSelectIssue = (issueId: string) => {
     setSelectedIssueId(issueId);
@@ -531,7 +535,7 @@ export function LinearTicketsViewContent({
     // the authoritative store again at confirmation time so a stale render can
     // never submit configuration that the backend will discard in favour of the
     // already-active admission.
-    const activePipeline = getIssuePipeline(useBuildPipelineStore.getState().pipelines, detail.id);
+    const activePipeline = getIssuePipeline(pipelineStore.getState().pipelines, detail.id);
     if (activePipeline && isActivePipeline(activePipeline)) {
       setBuildDialogOpen(false);
       await navigateToPipeline(activePipeline);
@@ -562,7 +566,7 @@ export function LinearTicketsViewContent({
     setCommentState("loading");
     setCommentError(null);
     try {
-      const comment = await postLinearIssueComment(submittedIssueId, body);
+      const comment = await nodeBackend.postLinearIssueComment(submittedIssueId, body);
       setDetail((current) => {
         if (!current || current.id !== submittedIssueId) return current;
         return {
@@ -827,7 +831,9 @@ export function LinearTicketsViewContent({
                           setRetryingCompletionComment(true);
                           try {
                             replacePipeline(
-                              await retryBuildPipelineCompletionComment(selectedPipeline.id),
+                              await nodeBackend.retryBuildPipelineCompletionComment(
+                                selectedPipeline.id,
+                              ),
                             );
                           } catch (error) {
                             toast.error("Failed to retry Linear completion comment", {

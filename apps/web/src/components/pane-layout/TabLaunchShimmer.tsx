@@ -1,5 +1,6 @@
 import { useShallow } from "zustand/react/shallow";
 import { focusTabLaunch } from "@/lib/tab-launch";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { cn } from "@/lib/utils";
 import { createPaneTabElementId } from "@/types/paneLayout";
 import { useTabLaunchStore, type TabLaunch, type TabLaunchSurface } from "@/stores/tabLaunchStore";
@@ -62,6 +63,7 @@ export function TabLaunchPlaceholder({
   launch: TabLaunch;
   isPaneFocused: boolean;
 }) {
+  const launchScope = useNodeScope();
   return (
     <TabShell
       id={createPaneTabElementId(environmentId, paneId, launch.tabId)}
@@ -71,7 +73,7 @@ export function TabLaunchPlaceholder({
       isActive={launch.focused}
       isFocused={launch.focused && isPaneFocused}
       data-testid="tab-launch-placeholder"
-      onClick={() => focusTabLaunch(environmentId, launch.tabId)}
+      onClick={() => focusTabLaunch(environmentId, launch.tabId, launchScope)}
       onKeyDown={(event) => {
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();

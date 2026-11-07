@@ -1,3 +1,4 @@
+import { eventSink } from "./backend-emit.js";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
@@ -49,7 +50,7 @@ beforeEach(async () => {
     runtime: new BackendRuntime({ emit: () => undefined }),
     runtimeFlavor: "agent-test",
     credentialSources: new Set(),
-    emit: (event: string, payload: unknown) => emitted.push({ event, payload }),
+    emit: eventSink((event: string, payload: unknown) => emitted.push({ event, payload })),
   } as unknown as CommandContext;
   await storage.agentAccounts.mutateAgentAccounts((store) => ({
     store: {

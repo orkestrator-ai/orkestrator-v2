@@ -1,7 +1,8 @@
 // Hook for managing terminal sessions with Electron backend
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   listen,
+  listenOn,
   NATIVE_EVENT_STREAM_CONNECTED_EVENT,
   TERMINAL_EVENT_STREAM_CONNECTED_EVENT,
   UnlistenFn,
@@ -13,7 +14,14 @@ import {
   TERMINAL_INPUT_NOT_DELIVERED_MESSAGE,
 } from "@orkestrator/protocol/terminal-input-sequencer";
 import * as backend from "@/lib/backend";
+import { backendApiForScope } from "@/lib/backend/client";
+import { createTerminalsApi } from "@/lib/backend/terminals";
+import { createWorkflowsApi } from "@/lib/backend/workflows";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { useNodeScope } from "@/lib/node-scope/providers";
+import { isAppCommandScope, onReconnectInScope } from "@/lib/node-scope-slots";
 import { createTerminalTargetIdentity } from "./terminal-target-identity";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 // Reaches the browser console only: the desktop saves nothing from the renderer
 // but the allowlisted startup markers (docs/architecture/logging.md).
@@ -149,6 +157,98 @@ interface UseTerminalReturn {
   reconnect: () => Promise<void>;
 }
 
+/**
+ * The terminal commands of `scope`'s node (plan item 3010): the
+ * `@/lib/backend` named exports (which suites mock) on the app's command
+ * scope, otherwise the scope's own client. Input therefore goes through that
+ * node's transport, whose input sequencer orders it per node.
+ */
+export function terminalBackendForScope(scope: NodeScope) {
+  return {
+    ...backendApiForScope(scope, createTerminalsApi, {
+      acknowledgeTerminalSnapshot: backend.acknowledgeTerminalSnapshot,
+      createTerminalSession: backend.createTerminalSession,
+      detachTerminal: backend.detachTerminal,
+      getTerminalOutputSnapshot: backend.getTerminalOutputSnapshot,
+      getTerminalSession: backend.getTerminalSession,
+      getTerminalStateSnapshot: backend.getTerminalStateSnapshot,
+      rejectTerminalSnapshot: backend.rejectTerminalSnapshot,
+      resizeTerminal: backend.resizeTerminal,
+      resumeTerminalInput: backend.resumeTerminalInput,
+      startTerminalSession: backend.startTerminalSession,
+      writeTerminal: backend.writeTerminal,
+    }),
+    ...backendApiForScope(scope, createWorkflowsApi, {
+      closeLocalTerminalSession: backend.closeLocalTerminalSession,
+      createLocalTerminalSession: backend.createLocalTerminalSession,
+      resizeLocalTerminal: backend.resizeLocalTerminal,
+      startLocalTerminalSession: backend.startLocalTerminalSession,
+      writeLocalTerminal: backend.writeLocalTerminal,
+    }),
+  };
+}
+
+/**
+ * One session's output frames on `scope`'s node. The app's command scope keeps
+ * the window `listen` (what suites mock); any other scope reads its client's
+ * terminal transport (`scope.client.terminal`), with the same readiness wait
+ * and abort.
+ */
+function listenTerminalOutput(
+  scope: NodeScope,
+  sessionId: string,
+  handler: (payload: TerminalOutputPayload) => unknown,
+  signal: AbortSignal,
+): Promise<UnlistenFn> {
+  const event = `terminal-output-${sessionId}`;
+  if (isAppCommandScope(scope)) {
+    return listen<TerminalOutputPayload>(event, (message) => handler(message.payload), { signal });
+  }
+  const terminal = scope.client.terminal;
+  return listenOn<TerminalOutputPayload>(
+    {
+      listen: (_event, callback) =>
+        terminal.listenOutput(sessionId, callback as (payload: unknown) => void),
+      eventStreamReady: () => terminal.outputReady(sessionId),
+    },
+    event,
+    (message) => handler(message.payload),
+    { signal },
+  );
+}
+
+/**
+ * The stream-reconnected notices a replaying terminal re-reads on. The app's
+ * command scope keeps both window events; any other scope follows its
+ * client's connection (`onReconnectInScope`).
+ */
+async function listenTerminalReconnects(
+  scope: NodeScope,
+  handler: () => void,
+  signal: AbortSignal,
+  isDisposed: () => boolean,
+): Promise<UnlistenFn[]> {
+  const unlisteners: UnlistenFn[] = [];
+  if (!isAppCommandScope(scope)) {
+    const unlisten = await onReconnectInScope(scope, handler);
+    if (isDisposed() || signal.aborted) safelyUnlisten(unlisten);
+    else unlisteners.push(unlisten);
+    return unlisteners;
+  }
+  for (const event of [
+    NATIVE_EVENT_STREAM_CONNECTED_EVENT,
+    TERMINAL_EVENT_STREAM_CONNECTED_EVENT,
+  ]) {
+    const unlisten = await listen(event, handler, { signal });
+    if (isDisposed()) {
+      safelyUnlisten(unlisten);
+      break;
+    }
+    unlisteners.push(unlisten);
+  }
+  return unlisteners;
+}
+
 function safelyUnlisten(unlisten: UnlistenFn | null): void {
   if (!unlisten) return;
   try {
@@ -174,11 +274,15 @@ export function useTerminal({
   attachExistingOnly = false,
   trackEnvironmentActivity = false,
 }: UseTerminalOptions): UseTerminalReturn {
+  const nodeBackend = useScopeBackend();
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [bootstrapped, setBootstrapped] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The node this terminal's PTY lives on (plan item 3010).
+  const scope = useNodeScope();
+  const api = useMemo(() => terminalBackendForScope(scope), [scope]);
 
   const unlistenRef = useRef<UnlistenFn | null>(null);
   const listenAbortControllerRef = useRef<AbortController | null>(null);
@@ -273,9 +377,9 @@ export function useTerminal({
     const activeSessionId = sessionIdRef.current;
     if (activeSessionId && !persistSessionRef.current) {
       if (activeSessionLocalRef.current) {
-        void backend.closeLocalTerminalSession(activeSessionId).catch(() => {});
+        void api.closeLocalTerminalSession(activeSessionId).catch(() => {});
       } else {
-        void backend.detachTerminal(activeSessionId).catch(() => {});
+        void api.detachTerminal(activeSessionId).catch(() => {});
       }
     }
 
@@ -287,7 +391,7 @@ export function useTerminal({
     setIsConnected(false);
     setIsConnecting(false);
     setError(null);
-  }, [terminalTargetIdentity, existingSessionId, cleanupEventListener]);
+  }, [terminalTargetIdentity, existingSessionId, cleanupEventListener, api]);
 
   // Unmount means "not currently visible", not "stop the terminal". Always
   // release only renderer consumption here; explicit disconnect/tab-close
@@ -349,15 +453,15 @@ export function useTerminal({
       const backendOwnsStableSession = Boolean(terminalKey) && Boolean(environmentId);
       if (!id || !created || backendOwnsStableSession) return;
       if (isLocal) {
-        await backend.closeLocalTerminalSession(id).catch(() => {});
+        await api.closeLocalTerminalSession(id).catch(() => {});
       } else {
-        await backend.detachTerminal(id).catch(() => {});
+        await api.detachTerminal(id).catch(() => {});
       }
     };
 
     const createSession = async (): Promise<backend.TerminalSessionCreateResult> => {
       if (isLocal) {
-        return backend.createLocalTerminalSession(
+        return api.createLocalTerminalSession(
           environmentId!,
           cols,
           rows,
@@ -365,7 +469,7 @@ export function useTerminal({
           terminalKey,
         );
       }
-      return backend.createTerminalSession(
+      return api.createTerminalSession(
         containerId!,
         cols,
         rows,
@@ -391,7 +495,6 @@ export function useTerminal({
         generation: number | null;
       };
 
-      const eventName = `terminal-output-${id}`;
       const listenAbortController = new AbortController();
       listenAbortControllerRef.current = listenAbortController;
       const pendingLiveOutput: PendingOutput[] = [];
@@ -491,11 +594,11 @@ export function useTerminal({
               ? undefined
               : { revision: lastAppliedRevision, generation: activeGeneration };
           let snapshot: backend.TerminalOutputSnapshot | backend.TerminalStateSnapshot | null =
-            requestedCursor ? await backend.getTerminalOutputSnapshot(id, requestedCursor) : null;
+            requestedCursor ? await api.getTerminalOutputSnapshot(id, requestedCursor) : null;
           let stateSnapshot: Awaited<ReturnType<typeof backend.getTerminalStateSnapshot>> = null;
           if (!snapshot || snapshot.mode !== "delta") {
-            stateSnapshot = await backend.getTerminalStateSnapshot(id).catch(() => null);
-            if (!stateSnapshot && !snapshot) snapshot = await backend.getTerminalOutputSnapshot(id);
+            stateSnapshot = await api.getTerminalStateSnapshot(id).catch(() => null);
+            if (!stateSnapshot && !snapshot) snapshot = await api.getTerminalOutputSnapshot(id);
           }
           if (disposed || !isCurrentConnect()) return;
 
@@ -532,7 +635,7 @@ export function useTerminal({
           }
           if (disposed || !isCurrentConnect()) return;
           if (!snapshot) throw new Error("Backend returned no terminal recovery snapshot");
-          await backend.acknowledgeTerminalSnapshot(id, snapshot).catch(() => undefined);
+          await api.acknowledgeTerminalSnapshot(id, snapshot).catch(() => undefined);
           activeGeneration = snapshot.generation;
           lastAppliedRevision = snapshot.revision;
           lastReceivedRevision = snapshot.revision;
@@ -587,7 +690,7 @@ export function useTerminal({
           } catch {
             if (disposed || !isCurrentConnect()) return;
           }
-          void backend.rejectTerminalSnapshot(id).catch(() => undefined);
+          void api.rejectTerminalSnapshot(id).catch(() => undefined);
 
           // Keep the existing view. Live output should continue even though
           // history cannot be made authoritative until a later reconnect.
@@ -649,7 +752,7 @@ export function useTerminal({
       // shell. Attach-only sessions are backend-owned and never replaced here.
       const releaseIfSessionStopped = async (): Promise<void> => {
         if (attachExistingOnly || disposed || !isCurrentConnect()) return;
-        const status = await backend.getTerminalSession(id).catch(() => null);
+        const status = await api.getTerminalSession(id).catch(() => null);
         if (disposed || !isCurrentConnect() || !isConnectedRef.current) return;
         if (status?.id !== id || status.running !== false || sessionIdRef.current !== id) return;
         log.warn("session.stopped-while-disconnected", { sessionId: id });
@@ -664,10 +767,10 @@ export function useTerminal({
         setIsConnecting(false);
       };
 
-      const outputUnlisten = await listen<TerminalOutputPayload>(
-        eventName,
-        (event) => {
-          const payload = event.payload;
+      const outputUnlisten = await listenTerminalOutput(
+        scope,
+        id,
+        (payload) => {
           const data = decodeTerminalOutputPayload(payload);
           if (data === null) {
             void releaseIfSessionStopped();
@@ -704,7 +807,7 @@ export function useTerminal({
           lastReceivedRevision = pending.revision;
           return applyLiveOutput(pending);
         },
-        { signal: listenAbortController.signal },
+        listenAbortController.signal,
       );
 
       if (!isCurrentConnect()) {
@@ -735,24 +838,17 @@ export function useTerminal({
       unlistenRef.current = dispose;
       try {
         if (replayOutputBuffer) {
-          for (const event of [
-            NATIVE_EVENT_STREAM_CONNECTED_EVENT,
-            TERMINAL_EVENT_STREAM_CONNECTED_EVENT,
-          ]) {
-            const unlisten = await listen(
-              event,
+          reconnectUnlisteners.push(
+            ...(await listenTerminalReconnects(
+              scope,
               () => {
                 void reconcileSnapshot();
                 void releaseIfSessionStopped();
               },
-              { signal: listenAbortController.signal },
-            );
-            if (disposed) {
-              safelyUnlisten(unlisten);
-              break;
-            }
-            reconnectUnlisteners.push(unlisten);
-          }
+              listenAbortController.signal,
+              () => disposed,
+            )),
+          );
         }
       } catch (listenerError) {
         dispose();
@@ -814,16 +910,16 @@ export function useTerminal({
       }
       if (shouldStart) {
         if (isLocal) {
-          await backend.startLocalTerminalSession(id);
+          await api.startLocalTerminalSession(id);
         } else {
-          await backend.startTerminalSession(id);
+          await api.startTerminalSession(id);
         }
       }
     };
 
     try {
       if (existingSessionId) {
-        const existingStatus = await backend
+        const existingStatus = await nodeBackend
           .getTerminalSession(existingSessionId)
           .catch(() => null);
         if (!isCurrentConnect()) return;
@@ -956,6 +1052,9 @@ export function useTerminal({
     trackEnvironmentActivity,
     terminalKey,
     cleanupEventListener,
+    api,
+    scope,
+    nodeBackend,
   ]);
 
   const disconnect = useCallback(async () => {
@@ -978,9 +1077,9 @@ export function useTerminal({
     try {
       // Detach terminal (use appropriate method based on isLocal)
       if (activeSessionIsLocal) {
-        await backend.closeLocalTerminalSession(activeSessionId);
+        await api.closeLocalTerminalSession(activeSessionId);
       } else {
-        await backend.detachTerminal(activeSessionId);
+        await api.detachTerminal(activeSessionId);
       }
     } catch (err) {
       log.error("session.disconnect-failed", {
@@ -992,7 +1091,7 @@ export function useTerminal({
       // State was cleared before awaiting the close so stale writes and pending
       // connection phases are cancelled immediately.
     }
-  }, [cleanupEventListener]);
+  }, [api, cleanupEventListener]);
 
   const markBootstrapped = useCallback((targetSessionId: string): boolean => {
     if (
@@ -1043,9 +1142,9 @@ export function useTerminal({
 
       try {
         if (isLocalRef.current) {
-          await backend.resizeLocalTerminal(sessionId, newCols, newRows);
+          await api.resizeLocalTerminal(sessionId, newCols, newRows);
         } else {
-          await backend.resizeTerminal(sessionId, newCols, newRows);
+          await api.resizeTerminal(sessionId, newCols, newRows);
         }
       } catch (err) {
         // Session not found errors are expected during cleanup/tab switching
@@ -1055,7 +1154,7 @@ export function useTerminal({
         }
       }
     },
-    [sessionId],
+    [api, sessionId],
   );
 
   // Every way a keystroke can fail to reach a shell reports the same way. The
@@ -1088,7 +1187,7 @@ export function useTerminal({
             // Stay open until the queue is re-armed, so Reconnect remains
             // available if it was not.
             event.preventDefault();
-            void backend
+            void api
               .resumeTerminalInput(failedSessionId, { local })
               .then((resumed) => {
                 if (resumed) toast.dismiss(id);
@@ -1104,7 +1203,7 @@ export function useTerminal({
         cancel: reconnectAction,
       });
     },
-    [containerId, environmentId, terminalKey],
+    [api, containerId, environmentId, terminalKey],
   );
 
   // One terminal, across the sessions it holds, so a replacement shell clears it.
@@ -1129,8 +1228,8 @@ export function useTerminal({
 
       try {
         const delivered = isLocalRef.current
-          ? await backend.writeLocalTerminal(currentSessionId, data)
-          : await backend.writeTerminal(currentSessionId, data);
+          ? await api.writeLocalTerminal(currentSessionId, data)
+          : await api.writeTerminal(currentSessionId, data);
         // The backend refuses in band rather than throwing when the PTY is
         // gone, so a resolved promise is not proof the keystroke landed.
         if (delivered) {
@@ -1168,7 +1267,7 @@ export function useTerminal({
         });
       }
     },
-    [inputLogScope, reportInputFailure], // Otherwise refs, for sessionId and isLocal
+    [api, inputLogScope, reportInputFailure], // Otherwise refs, for sessionId and isLocal
   );
 
   // Auto-connect when containerId changes

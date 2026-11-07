@@ -1,7 +1,7 @@
 /**
  * The portal: what the command node this client is connected to knows about
- * its other nodes. Everything here goes over the portal channel, which stays
- * on the command node even while the window's workspace is on a leaf.
+ * its other nodes. Everything here is a call on the window's command scope
+ * (`./command-scope`, plan item 5004), whichever node the window shows.
  *
  * The command node keeps the registry, the links and a live read model of
  * every node's projects and environments; this client only reads that model
@@ -11,6 +11,7 @@
  * (`invoke_on_node`), which routes them to the owner.
  */
 
+import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import type { AgentsMdChange, AgentsMdSection } from "@orkestrator/protocol/agents-md-orkestrator";
 import type { RootChangeFile } from "@orkestrator/protocol/coordinator-surfaces";
 import type { AgentInteractionQuestionAnswer } from "@orkestrator/protocol/agent-interactions";
@@ -32,21 +33,29 @@ import {
 import {
   NODE_SUMMARY_CHANGED_EVENT,
   NODE_OUTCOMES_CHANGED_EVENT,
-  type NodeSummariesResult,
   type NodeSummary,
-  type SelfNodeSummary,
 } from "@orkestrator/protocol/node-summaries";
+import type { MachineRelease } from "@orkestrator/protocol/fleet-currency";
 import { invoke } from "@/lib/native/backend";
+import { coordinatorApi } from "@/lib/node-scope/domains/coordinator";
+import { backendClientOver } from "@/lib/node-scope/domains/invoke-over";
+import { domainApi } from "@/lib/node-scope/domains/domain-api";
+import { nodeMailClient } from "@orkestrator/protocol/contract/domains/node-mail";
+import { NO_ARGS, nodesApiOver, portalNodesApi } from "@/lib/node-scope/domains/nodes";
 import { listen, NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
-import { portalInvoke, portalListen, workspaceTarget } from "./portal-transport";
+import { commandScopeInvoke, commandScopeListen } from "./command-scope";
 
 export interface PortalState {
   /** This (command) node's identity, once known. */
   selfId: BackendId | null;
   status: NodeStatus | null;
   nodes: NodeSummary[];
-  /** The command node's own summary, while the workspace is on another node. */
-  self: SelfNodeSummary | null;
+  /**
+   * The command node's own version and hello domains, which every machine's
+   * is compared with (plan item 5006); null until read, or from a command
+   * node that predates them.
+   */
+  commandRelease: MachineRelease | null;
   loaded: boolean;
   /** The connected backend has no command-node support (an older backend). */
   unsupported: boolean;
@@ -75,7 +84,7 @@ export class PortalStore {
     selfId: null,
     status: null,
     nodes: [],
-    self: null,
+    commandRelease: null,
     loaded: false,
     unsupported: false,
     outcomesRevision: 0,
@@ -97,7 +106,7 @@ export class PortalStore {
         NODE_STATUS_CHANGED_EVENT,
         NATIVE_EVENT_STREAM_CONNECTED_EVENT,
       ]) {
-        void portalListen(event, () => this.scheduleRefresh()).then((stop) => {
+        void commandScopeListen(event, () => this.scheduleRefresh()).then((stop) => {
           if (this.started === 0) stop();
           else this.unlisteners.push(stop);
         });
@@ -151,13 +160,9 @@ export class PortalStore {
   private async read(): Promise<void> {
     // Status and summaries are read independently, so an older or
     // non-command backend still reports its status.
-    const includeSelf = workspaceTarget() !== null;
     const [status, summaries] = await Promise.allSettled([
-      portalInvoke<NodeStatus>("get_node_status"),
-      portalInvoke<NodeSummariesResult>(
-        "get_node_summaries",
-        includeSelf ? { includeSelf: true } : {},
-      ),
+      portalNodesApi().get_node_status(NO_ARGS),
+      portalNodesApi().get_node_summaries({}),
     ]);
     const statusValue = status.status === "fulfilled" ? status.value : null;
     const summariesValue =
@@ -170,9 +175,16 @@ export class PortalStore {
       selfId: summariesValue?.selfId ?? statusValue?.nodeId ?? state.selfId,
       status: statusValue ?? state.status,
       nodes: summariesValue?.nodes ?? state.nodes,
-      self: summariesValue ? (summariesValue.self ?? null) : state.self,
+      commandRelease: summariesValue
+        ? summariesValue.selfVersion
+          ? { version: summariesValue.selfVersion, domains: summariesValue.selfDomains ?? null }
+          : null
+        : state.commandRelease,
       loaded: true,
-      unsupported: /unknown command|not available in this backend/i.test(message),
+      // A backend older than the portal commands, or one without the portal.
+      unsupported:
+        incompatibility(failure, "get_node_status") !== null ||
+        /not available in this backend/i.test(message),
     }));
   }
 
@@ -186,22 +198,19 @@ export class PortalStore {
     args: Record<string, unknown> = {},
     requestKey: string = crypto.randomUUID(),
   ): Promise<T> {
-    // The command node's own resources (listed from its self summary while
-    // the workspace is elsewhere) are its ordinary commands.
+    // The command node's own resources are its ordinary commands.
     if (nodeId === this.store.getState().selfId) {
-      const result = await portalInvoke<T>(command, args);
+      const result = await commandScopeInvoke<T>(command, args);
       if (!isNodeReadCommand(command)) this.scheduleRefresh();
       return result;
     }
-    const routed = await portalInvoke<
-      { outcome: "ok"; result: T } | { outcome: "unknown"; requestKey: string; outcomeId: string }
-    >("invoke_on_node", { nodeId, command, args, requestKey });
+    const routed = await portalNodesApi().invoke_on_node({ nodeId, command, args, requestKey });
     if (routed.outcome === "unknown") {
       this.store.setState((state) => ({ outcomesRevision: state.outcomesRevision + 1 }));
       throw new OutcomeUnknownError(nodeId, command, routed.requestKey);
     }
     if (!isNodeReadCommand(command)) this.scheduleRefresh();
-    return routed.result;
+    return routed.result as T;
   }
 }
 
@@ -214,7 +223,7 @@ export interface NodeOutcomeRecord {
 
 /** The profile (name and colour) of the machine the window's workspace is on. */
 export async function getWorkspaceProfile(): Promise<BackendProfile> {
-  return parseBackendProfile(await invoke<unknown>("get_backend_profile"));
+  return parseBackendProfile(await nodesApiOver(invoke).get_backend_profile(NO_ARGS));
 }
 
 export function listenWorkspaceProfile(
@@ -231,7 +240,7 @@ export function listenWorkspaceProfile(
 
 /** Outcome-unknown records the command node keeps for a node. */
 export async function listNodeOutcomes(nodeId: string): Promise<NodeOutcomeRecord[]> {
-  const value = await portalInvoke<NodeOutcomeRecord[]>("list_node_outcomes", { nodeId });
+  const value = await portalNodesApi().list_node_outcomes({ nodeId });
   return Array.isArray(value) ? value : [];
 }
 
@@ -261,7 +270,7 @@ export class NodeOutcomesStore {
 
   constructor(
     private readonly read: (nodeId: string) => Promise<NodeOutcomeRecord[]> = listNodeOutcomes,
-    private readonly listenTo: typeof portalListen = portalListen,
+    private readonly listenTo: typeof commandScopeListen = commandScopeListen,
   ) {}
 
   /** Calls `listener` with the node's records now (when held) and on every change. */
@@ -376,7 +385,7 @@ export class NodeOutcomesStore {
 export const nodeOutcomesStore = new NodeOutcomesStore();
 
 export async function dismissNodeOutcome(outcomeId: string): Promise<void> {
-  await portalInvoke("dismiss_node_outcome", { outcomeId });
+  await portalNodesApi().dismiss_node_outcome({ outcomeId });
 }
 
 export interface NodeActionRequestView {
@@ -423,12 +432,15 @@ export interface NodeActionRequestView {
   result?: { code: string; message: string; url?: string };
 }
 
+/** The `node-mail` domain on the window's command node (version 0: today's calls). */
+function nodeMailOnCommandScope() {
+  return domainApi(backendClientOver(commandScopeInvoke), nodeMailClient);
+}
+
 /** Requests from coordinators that wait for this user's decision. */
 export async function listNodeActionRequests(): Promise<NodeActionRequestView[]> {
-  const value = await portalInvoke<NodeActionRequestView[]>("list_node_action_requests", {
-    pendingOnly: true,
-  });
-  return Array.isArray(value) ? value : [];
+  const value: unknown = await nodeMailOnCommandScope().actionRequests({ pendingOnly: true });
+  return Array.isArray(value) ? (value as NodeActionRequestView[]) : [];
 }
 
 export async function resolveNodeActionRequest(
@@ -446,11 +458,12 @@ export async function resolveNodeActionRequest(
     answers?: AgentInteractionQuestionAnswer[];
   },
 ): Promise<NodeActionRequestView> {
-  return portalInvoke<NodeActionRequestView>("resolve_node_action_request", {
+  // The request is an open record (every key kept); `NodeActionRequestView` is its shape.
+  return nodeMailOnCommandScope().resolveActionRequest({
     requestId,
     decision,
     ...(approval ? { approval } : {}),
-  });
+  }) as Promise<unknown> as Promise<NodeActionRequestView>;
 }
 
 /** The ## Orkestrator section on the latest base branch, for an AGENTS.md request's review. */
@@ -465,7 +478,8 @@ export interface AgentsMdPreview {
 }
 
 export async function previewAgentsMdUpdate(requestId: string): Promise<AgentsMdPreview> {
-  return portalInvoke<AgentsMdPreview>("preview_agents_md_update", { requestId });
+  // The section's own shape is the web's (`AgentsMdSection`); the definition keeps it open.
+  return portalNodesApi().preview_agents_md_update({ requestId }) as Promise<AgentsMdPreview>;
 }
 
 /**
@@ -473,7 +487,10 @@ export async function previewAgentsMdUpdate(requestId: string): Promise<AgentsMd
  * to a worker when approving an `apply-root-changes` request. Read-only.
  */
 export async function listProjectRootChanges(projectId: string): Promise<RootChangesListing> {
-  return portalInvoke<RootChangesListing>("list_project_root_changes", { projectId });
+  // The listing's own shape is the web's; the definition keeps its records open.
+  return coordinatorApi(backendClientOver(commandScopeInvoke)).list_project_root_changes({
+    projectId,
+  }) as Promise<RootChangesListing>;
 }
 
 export interface RootChangesListing {
@@ -483,5 +500,5 @@ export interface RootChangesListing {
   headCommit: string | null;
 }
 
-/** One portal per window: it reads the command node over the portal channel. */
+/** One portal per window: it reads the window's command scope. */
 export const portalStore = new PortalStore();

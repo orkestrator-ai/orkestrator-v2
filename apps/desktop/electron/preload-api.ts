@@ -29,6 +29,7 @@ import {
   type ArtifactHostApi,
   type ArtifactHostEvent,
 } from "@orkestrator/protocol/artifact-host-ipc";
+import { parseIpcIncompatibility } from "@orkestrator/protocol/contract/ipc-error";
 
 type EventCallback<T> = (payload: T) => void;
 
@@ -48,9 +49,17 @@ export type IpcRendererLike = {
 const REMOTE_METHOD_ERROR_PREFIX =
   /^Error invoking remote method '[^']*': (?:(?:[A-Za-z_$][\w$]*Error|Error): )?/;
 
+/**
+ * A coded refusal from main leads its message with `[code] ` (`node-ipc.ts`),
+ * because only the message crosses IPC. The code stays in the message, which
+ * is all that crosses the context bridge, and is also set as `error.code`.
+ */
+const REFUSAL_CODE_PREFIX = /^\[([a-z][a-z0-9-]{0,63})\] /;
+
 function readableInvokeError(error: unknown): unknown {
   if (!(error instanceof Error) || !REMOTE_METHOD_ERROR_PREFIX.test(error.message)) return error;
-  const readable = new Error(error.message.replace(REMOTE_METHOD_ERROR_PREFIX, ""), {
+  const message = error.message.replace(REMOTE_METHOD_ERROR_PREFIX, "");
+  const readable = new Error(message, {
     cause: error,
   });
   // Keep IPC diagnostics available locally. Electron/contextBridge may serialize
@@ -60,6 +69,14 @@ function readableInvokeError(error: unknown): unknown {
   delete diagnostics.stack;
   delete diagnostics.cause;
   Object.defineProperties(readable, diagnostics);
+  // A typed incompatibility (plan item 1005) carries bounded details in the
+  // brackets too; it keeps its message form, the only part the bridge passes.
+  const incompatible = parseIpcIncompatibility(message);
+  const code = incompatible?.code ?? REFUSAL_CODE_PREFIX.exec(message)?.[1];
+  if (code && !("code" in readable)) Object.defineProperty(readable, "code", { value: code });
+  if (incompatible && !("details" in readable)) {
+    Object.defineProperty(readable, "details", { value: incompatible.details });
+  }
   return readable;
 }
 
@@ -74,20 +91,6 @@ function withReadableInvokeErrors(ipcRenderer: IpcRendererLike): IpcRendererLike
   };
 }
 
-type WorkspaceTarget = {
-  nodeId: string;
-  nodeName: string;
-  path: "direct" | "relay";
-  routeKind?: "https" | "ssh";
-  via?: string;
-};
-
-type DesktopIdentity = {
-  connectionId: string;
-  backendId: string | null;
-  legacyOrigin: string | null;
-};
-
 /** Main-process snapshot of the window's machine; never contains a credential. */
 type DesktopGatewaySnapshot = {
   baseUrl: string | null;
@@ -95,38 +98,10 @@ type DesktopGatewaySnapshot = {
   backendId: string | null;
   legacyOrigin: string | null;
   backendOnThisDevice: boolean;
+  /** This computer's own backend installation id; null until known. */
+  localInstallationId: string | null;
   localGatewayBaseUrl: string | null;
-  workspaceTarget: WorkspaceTarget | null;
-  portalIdentity: DesktopIdentity | null;
 };
-
-function parseWorkspaceTarget(value: unknown): WorkspaceTarget | null {
-  if (!value || typeof value !== "object") return null;
-  const target = value as Record<string, unknown>;
-  if (typeof target.nodeId !== "string" || typeof target.nodeName !== "string") return null;
-  if (target.path !== "direct" && target.path !== "relay") return null;
-  return {
-    nodeId: target.nodeId,
-    nodeName: target.nodeName,
-    path: target.path,
-    ...(target.routeKind === "https" || target.routeKind === "ssh"
-      ? { routeKind: target.routeKind }
-      : {}),
-    ...(typeof target.via === "string" ? { via: target.via } : {}),
-  };
-}
-
-function parseIdentity(value: unknown): DesktopIdentity | null {
-  if (!value || typeof value !== "object") return null;
-  const identity = value as Record<string, unknown>;
-  if (typeof identity.connectionId !== "string") return null;
-  const text = (field: unknown) => (typeof field === "string" && field ? field : null);
-  return {
-    connectionId: identity.connectionId,
-    backendId: text(identity.backendId),
-    legacyOrigin: text(identity.legacyOrigin),
-  };
-}
 
 function readGatewaySnapshot(ipcRenderer: {
   sendSync(channel: string): unknown;
@@ -144,9 +119,8 @@ function readGatewaySnapshot(ipcRenderer: {
       backendId: text(value.backendId),
       legacyOrigin: text(value.legacyOrigin),
       backendOnThisDevice: value.backendOnThisDevice === true,
+      localInstallationId: text(value.localInstallationId),
       localGatewayBaseUrl: text(value.localGatewayBaseUrl),
-      workspaceTarget: parseWorkspaceTarget(value.workspaceTarget),
-      portalIdentity: parseIdentity(value.portalIdentity),
     };
   } catch {
     return null;
@@ -171,11 +145,9 @@ export function exposeActiveConnectionGateway(
       connectionId: snapshot.connectionId,
       backendId: snapshot.backendId,
       legacyOrigin: snapshot.legacyOrigin,
-      ...(snapshot.portalIdentity ? { portal: snapshot.portalIdentity } : {}),
+      // `backendOnThisDevice(nodeId)` in the renderer compares against this.
+      localInstallationId: snapshot.localInstallationId,
     });
-    if (snapshot.workspaceTarget) {
-      contextBridge.exposeInMainWorld("orkestratorWorkspaceTarget", snapshot.workspaceTarget);
-    }
   }
   const activeConnection = connectionList?.connections.find((connection) => connection.active);
   if (!snapshot?.baseUrl && activeConnection?.kind !== "remote") return false;
@@ -345,31 +317,26 @@ export function createArtifactHostApi(ipcRenderer: IpcRendererLike): ArtifactHos
 }
 
 /**
- * Tells main which per-node relayed events this document listens to on one
- * channel, because main takes only those from its backend. The listeners stay
- * here; main only learns the names. A new document starts by saying it has none,
- * since a reload leaves main with the previous document's.
+ * Tells main which per-node relayed events this document listens to, because
+ * main takes only those from its backend. The listeners stay here; main only
+ * learns the names. A new document starts by saying it has none, since a
+ * reload leaves main with the previous document's.
  */
-function createRelayedListenReporter(
-  ipcRenderer: IpcRendererLike,
-  channel: "workspace" | "portal",
-) {
+function createRelayedListenReporter(ipcRenderer: IpcRendererLike) {
   const ready = new Map<string, Promise<void>>();
-  ipcRenderer.send?.("orkestrator:relayed-events:reset", channel);
+  ipcRenderer.send?.("orkestrator:relayed-events:reset");
   return {
     started(event: string): void {
       if (!isPerNodeRelayedEvent(event)) return;
       ready.set(
         event,
-        ipcRenderer
-          .invoke<void>("orkestrator:relayed-events:listen", channel, event)
-          .catch(() => undefined),
+        ipcRenderer.invoke<void>("orkestrator:relayed-events:listen", event).catch(() => undefined),
       );
     },
     stopped(event: string): void {
       if (!isPerNodeRelayedEvent(event)) return;
       ready.delete(event);
-      ipcRenderer.send?.("orkestrator:relayed-events:unlisten", channel, event);
+      ipcRenderer.send?.("orkestrator:relayed-events:unlisten", event);
     },
     /** Settles once main's stream carrying this event is open. */
     eventStreamReady(event: string): Promise<void> {
@@ -378,100 +345,157 @@ function createRelayedListenReporter(
   };
 }
 
+/** `orkestrator:invoke`'s optional third argument; see `ipc.ts`. */
+export type InvokeOptions = { nodeId?: string; envelope?: Record<string, unknown> };
+
+/** Main's `(nodeId, event, payload)` channel; must match `NODE_EVENT_CHANNEL` in `node-ipc.ts`. */
+export const NODE_EVENT_CHANNEL = "orkestrator:node-event";
+/** Must match `NODE_SCOPE_RELEASED_EVENT` in `node-ipc.ts`. */
+const NODE_SCOPE_RELEASED_EVENT = "node-scope-released";
+const NATIVE_EVENT_STREAM_CONNECTED_EVENT = "native-event-stream-connected";
+
+export type NodeStreamConnectionState = "idle" | "connecting" | "connected" | "disconnected";
+
+/** One node, as `window.orkestrator.node(nodeId)` reaches it. */
+export type NodeApi = {
+  readonly nodeId: string;
+  invoke<T = unknown>(
+    command: string,
+    args?: Record<string, unknown>,
+    options?: { envelope?: Record<string, unknown> },
+  ): Promise<T>;
+  /** Opens the node's scope in this window if it is not open yet. */
+  listen<T = unknown>(event: string, callback: EventCallback<T>): () => void;
+  /** Settles once the node's scope (and so its event stream) is open. */
+  eventStreamReady(event: string): Promise<void>;
+  eventStreamConnection: {
+    state(): NodeStreamConnectionState;
+    subscribe(listener: (state: NodeStreamConnectionState) => void): () => void;
+  };
+};
+
 /**
- * `window.orkestratorPortal`: the window's own command node while its
- * workspace (`window.orkestrator`) is on another node.
+ * `node(nodeId)` for one renderer. Every node's events arrive on one IPC
+ * listener (registered on first use) and are passed on by `nodeId`; a node's
+ * scope is opened once, with one hold, and opened again after main released it.
  */
-export function createPortalApi(rawIpcRenderer: IpcRendererLike) {
-  const ipcRenderer = withReadableInvokeErrors(rawIpcRenderer);
-  const listeners = new Map<string, Set<EventCallback<unknown>>>();
-  const relayedListens = createRelayedListenReporter(ipcRenderer, "portal");
-  ipcRenderer.on("orkestrator:portal-event", (_event, name: string, payload: unknown) => {
-    const callbacks = listeners.get(name);
-    if (!callbacks) return;
-    for (const callback of callbacks) callback(payload);
-  });
-  return {
-    invoke<T = unknown>(command: string, args?: Record<string, unknown>): Promise<T> {
-      return ipcRenderer.invoke("orkestrator:portal:invoke", command, args ?? {});
-    },
-    listen<T = unknown>(event: string, callback: EventCallback<T>): () => void {
-      const callbackSet = listeners.get(event) ?? new Set<EventCallback<unknown>>();
-      if (callbackSet.size === 0) relayedListens.started(event);
-      listeners.set(event, callbackSet);
-      callbackSet.add(callback as EventCallback<unknown>);
-      return () => {
-        if (!callbackSet.delete(callback as EventCallback<unknown>)) return;
-        if (callbackSet.size === 0) {
-          listeners.delete(event);
-          relayedListens.stopped(event);
+export function createNodeApis(ipcRenderer: IpcRendererLike) {
+  type NodeEntry = {
+    api: NodeApi;
+    listeners: Map<string, Set<EventCallback<unknown>>>;
+    state: NodeStreamConnectionState;
+    stateListeners: Set<(state: NodeStreamConnectionState) => void>;
+    opening: Promise<void> | null;
+  };
+  const entries = new Map<string, NodeEntry>();
+  let subscribed = false;
+  const setState = (entry: NodeEntry, state: NodeStreamConnectionState) => {
+    if (entry.state === state) return;
+    entry.state = state;
+    for (const listener of entry.stateListeners) listener(state);
+  };
+  const subscribe = () => {
+    if (subscribed) return;
+    subscribed = true;
+    ipcRenderer.on(
+      NODE_EVENT_CHANNEL,
+      (_event, nodeId: unknown, name: unknown, payload: unknown) => {
+        if (typeof nodeId !== "string" || typeof name !== "string") return;
+        const entry = entries.get(nodeId);
+        if (!entry) return;
+        if (name === NATIVE_EVENT_STREAM_CONNECTED_EVENT) setState(entry, "connected");
+        if (name === NODE_SCOPE_RELEASED_EVENT) {
+          entry.opening = null;
+          setState(entry, "disconnected");
         }
-      };
-    },
-    eventStreamReady: relayedListens.eventStreamReady,
+        const callbacks = entry.listeners.get(name);
+        if (!callbacks) return;
+        for (const callback of Array.from(callbacks)) callback(payload);
+      },
+    );
   };
-}
-
-/** Expose the portal channel in a workspace realm: its window's command node. */
-export function exposePortal(
-  contextBridge: { exposeInMainWorld(key: string, value: unknown): void },
-  ipcRenderer: IpcRendererLike & { sendSync(channel: string): unknown },
-): boolean {
-  if (!readGatewaySnapshot(ipcRenderer)?.workspaceTarget) return false;
-  contextBridge.exposeInMainWorld("orkestratorPortal", createPortalApi(ipcRenderer));
-  return true;
-}
-
-type WorkspaceViewEvent =
-  | { viewId: string; type: "message"; message: unknown }
-  | { viewId: string; type: "closed" | "crashed" | "load-failed" };
-
-export function createWorkspaceViewsApi(ipcRenderer: IpcRendererLike) {
-  const listeners = new Set<(event: WorkspaceViewEvent) => void>();
-  ipcRenderer.on("orkestrator:workspace-views:event", (_event, payload: WorkspaceViewEvent) => {
-    for (const listener of listeners) listener(payload);
-  });
-  return {
-    open(input: { nodeId: string; request: Record<string, unknown> }): Promise<{ viewId: string }> {
-      return ipcRenderer.invoke("orkestrator:workspace-views:open", input);
-    },
-    setBounds(
-      viewId: string,
-      bounds: { x: number; y: number; width: number; height: number },
-    ): Promise<void> {
-      return ipcRenderer.invoke("orkestrator:workspace-views:set-bounds", viewId, bounds);
-    },
-    setVisible(viewId: string, visible: boolean): Promise<void> {
-      return ipcRenderer.invoke("orkestrator:workspace-views:set-visible", viewId, visible);
-    },
-    capture(viewId: string): Promise<string | null> {
-      return ipcRenderer.invoke("orkestrator:workspace-views:capture", viewId);
-    },
-    send(viewId: string, message: Record<string, unknown>): Promise<void> {
-      return ipcRenderer.invoke("orkestrator:workspace-views:send", viewId, message);
-    },
-    close(viewId: string): Promise<void> {
-      return ipcRenderer.invoke("orkestrator:workspace-views:close", viewId);
-    },
-    onEvent(callback: (event: WorkspaceViewEvent) => void): () => void {
-      listeners.add(callback);
-      return () => listeners.delete(callback);
-    },
+  const open = (entry: NodeEntry): Promise<void> => {
+    if (!entry.opening) {
+      if (entry.state !== "connected") setState(entry, "connecting");
+      const opening = ipcRenderer.invoke<unknown>("orkestrator:nodes:open", entry.api.nodeId).then(
+        () => undefined,
+        (error: unknown) => {
+          if (entry.opening === opening) entry.opening = null;
+          setState(entry, "disconnected");
+          throw error;
+        },
+      );
+      entry.opening = opening;
+    }
+    return entry.opening;
   };
-}
-
-export function createWorkspaceRealmApi(ipcRenderer: IpcRendererLike) {
-  const listeners = new Set<(message: unknown) => void>();
-  ipcRenderer.on("orkestrator:workspace-realm:message", (_event, message: unknown) => {
-    for (const listener of listeners) listener(message);
-  });
+  const node = (nodeId: string): NodeApi => {
+    if (typeof nodeId !== "string" || nodeId.length === 0 || nodeId.length > 256)
+      throw new Error("Expected a node identity");
+    const existing = entries.get(nodeId);
+    if (existing) return existing.api;
+    subscribe();
+    const entry: NodeEntry = {
+      listeners: new Map(),
+      state: "idle",
+      stateListeners: new Set(),
+      opening: null,
+      api: {
+        nodeId,
+        invoke<T = unknown>(
+          command: string,
+          args?: Record<string, unknown>,
+          options?: { envelope?: Record<string, unknown> },
+        ): Promise<T> {
+          return ipcRenderer.invoke("orkestrator:invoke", command, args ?? {}, {
+            nodeId,
+            ...(options?.envelope ? { envelope: options.envelope } : {}),
+          });
+        },
+        listen<T = unknown>(event: string, callback: EventCallback<T>): () => void {
+          const callbackSet = entry.listeners.get(event) ?? new Set<EventCallback<unknown>>();
+          entry.listeners.set(event, callbackSet);
+          callbackSet.add(callback as EventCallback<unknown>);
+          // A failed open is reported by `eventStreamConnection` and the next invoke.
+          void open(entry).catch(() => undefined);
+          return () => {
+            if (!callbackSet.delete(callback as EventCallback<unknown>)) return;
+            if (callbackSet.size === 0 && entry.listeners.get(event) === callbackSet)
+              entry.listeners.delete(event);
+          };
+        },
+        eventStreamReady: () => open(entry),
+        eventStreamConnection: {
+          state: () => entry.state,
+          subscribe(listener) {
+            entry.stateListeners.add(listener);
+            return () => {
+              entry.stateListeners.delete(listener);
+            };
+          },
+        },
+      },
+    };
+    entries.set(nodeId, entry);
+    return entry.api;
+  };
   return {
-    post(message: Record<string, unknown>): void {
-      void ipcRenderer.invoke("orkestrator:workspace-realm:post", message).catch(() => undefined);
-    },
-    onMessage(callback: (message: unknown) => void): () => void {
-      listeners.add(callback);
-      return () => listeners.delete(callback);
+    node,
+    nodes: {
+      /** Open the node's scope in this window (with a hold); answers its snapshot. */
+      open(nodeId: string): Promise<unknown> {
+        return ipcRenderer.invoke("orkestrator:nodes:open", nodeId);
+      },
+      /** Close the node's scope in this window now. */
+      release(nodeId: string): Promise<void> {
+        const entry = entries.get(nodeId);
+        if (entry) entry.opening = null;
+        return ipcRenderer.invoke("orkestrator:nodes:release", nodeId);
+      },
+      /** The node's snapshot (never a credential), or null while it is not open. */
+      gateway(nodeId: string): Promise<unknown> {
+        return ipcRenderer.invoke("orkestrator:nodes:gateway", nodeId);
+      },
     },
   };
 }
@@ -479,7 +503,8 @@ export function createWorkspaceRealmApi(ipcRenderer: IpcRendererLike) {
 export function createOrkestratorElectronApi(rawIpcRenderer: IpcRendererLike) {
   const ipcRenderer = withReadableInvokeErrors(rawIpcRenderer);
   const listeners = new Map<string, Set<EventCallback<unknown>>>();
-  const relayedListens = createRelayedListenReporter(ipcRenderer, "workspace");
+  const relayedListens = createRelayedListenReporter(ipcRenderer);
+  const nodeApis = createNodeApis(ipcRenderer);
 
   ipcRenderer.on("orkestrator:event", (_event, name: string, payload: unknown) => {
     const callbacks = listeners.get(name);
@@ -492,9 +517,20 @@ export function createOrkestratorElectronApi(rawIpcRenderer: IpcRendererLike) {
     keyboardShortcuts: {
       closed: (): Promise<void> => ipcRenderer.invoke("orkestrator:keyboard-shortcuts:closed"),
     },
-    invoke<T = unknown>(command: string, args?: Record<string, unknown>): Promise<T> {
-      return ipcRenderer.invoke("orkestrator:invoke", command, args ?? {});
+    /** `options.nodeId` names another node; absent means the command node. */
+    invoke<T = unknown>(
+      command: string,
+      args?: Record<string, unknown>,
+      options?: InvokeOptions,
+    ): Promise<T> {
+      return options
+        ? ipcRenderer.invoke("orkestrator:invoke", command, args ?? {}, options)
+        : ipcRenderer.invoke("orkestrator:invoke", command, args ?? {});
     },
+
+    /** Another node, through this window's scope on it (`node-ipc.ts`). */
+    node: nodeApis.node,
+    nodes: nodeApis.nodes,
 
     listen<T = unknown>(event: string, callback: EventCallback<T>): () => void {
       const callbackSet = listeners.get(event) ?? new Set<EventCallback<unknown>>();
@@ -549,21 +585,32 @@ export function createOrkestratorElectronApi(rawIpcRenderer: IpcRendererLike) {
       },
     },
 
+    // `options.nodeId` names the machine; main refuses a leaf (`node-admin-refused`).
     webClient: {
-      getStatus(): Promise<WebClientStatus> {
-        return ipcRenderer.invoke("orkestrator:web-client:get-status");
+      getStatus(options?: { nodeId?: string }): Promise<WebClientStatus> {
+        return options
+          ? ipcRenderer.invoke("orkestrator:web-client:get-status", options)
+          : ipcRenderer.invoke("orkestrator:web-client:get-status");
       },
-      setEnabled(enabled: boolean): Promise<WebClientStatus> {
-        return ipcRenderer.invoke("orkestrator:web-client:set-enabled", enabled);
+      setEnabled(enabled: boolean, options?: { nodeId?: string }): Promise<WebClientStatus> {
+        return options
+          ? ipcRenderer.invoke("orkestrator:web-client:set-enabled", enabled, options)
+          : ipcRenderer.invoke("orkestrator:web-client:set-enabled", enabled);
       },
-      resetServe(): Promise<WebClientStatus> {
-        return ipcRenderer.invoke("orkestrator:web-client:reset-serve");
+      resetServe(options?: { nodeId?: string }): Promise<WebClientStatus> {
+        return options
+          ? ipcRenderer.invoke("orkestrator:web-client:reset-serve", options)
+          : ipcRenderer.invoke("orkestrator:web-client:reset-serve");
       },
-      getTokenSettings(): Promise<GatewayTokenSettings> {
-        return ipcRenderer.invoke("orkestrator:web-client:get-token-settings");
+      getTokenSettings(options?: { nodeId?: string }): Promise<GatewayTokenSettings> {
+        return options
+          ? ipcRenderer.invoke("orkestrator:web-client:get-token-settings", options)
+          : ipcRenderer.invoke("orkestrator:web-client:get-token-settings");
       },
-      setToken(token: string): Promise<GatewayTokenSettings> {
-        return ipcRenderer.invoke("orkestrator:web-client:set-token", token);
+      setToken(token: string, options?: { nodeId?: string }): Promise<GatewayTokenSettings> {
+        return options
+          ? ipcRenderer.invoke("orkestrator:web-client:set-token", token, options)
+          : ipcRenderer.invoke("orkestrator:web-client:set-token", token);
       },
     },
 
@@ -664,16 +711,6 @@ export function createOrkestratorElectronApi(rawIpcRenderer: IpcRendererLike) {
       },
     },
 
-    /**
-     * Other nodes' workspaces in this window's central region. The main
-     * process binds each realm to its node; the window places it and passes
-     * messages, and never learns a route or a credential.
-     */
-    workspaceViews: createWorkspaceViewsApi(ipcRenderer),
-
-    /** In a workspace realm: messages to and from its window. */
-    workspaceRealm: createWorkspaceRealmApi(ipcRenderer),
-
     process: {
       exit(code?: number): Promise<void> {
         return ipcRenderer.invoke("orkestrator:process:exit", code);
@@ -697,6 +734,7 @@ export function createOrkestratorElectronApi(rawIpcRenderer: IpcRendererLike) {
     },
 
     browserPreview: {
+      /** `input.nodeId` names the node whose preview runtime shows the tab (default: the command node). */
       attach(input: BrowserPreviewAttachInput): Promise<BrowserPreviewState> {
         return ipcRenderer.invoke("orkestrator:browser-preview:attach", input);
       },
@@ -725,11 +763,26 @@ export function createOrkestratorElectronApi(rawIpcRenderer: IpcRendererLike) {
       destroy(tabId: string): Promise<void> {
         return ipcRenderer.invoke("orkestrator:browser-preview:destroy", tabId);
       },
-      resetServiceSiteData(target: BrowserPreviewServiceTarget): Promise<void> {
-        return ipcRenderer.invoke("orkestrator:browser-preview:reset-site-data", target);
+      /** `options.nodeId`: the node whose preview runtime owns the service (default: the command node). */
+      resetServiceSiteData(
+        target: BrowserPreviewServiceTarget,
+        options?: { nodeId?: string },
+      ): Promise<void> {
+        return options?.nodeId
+          ? ipcRenderer.invoke("orkestrator:browser-preview:reset-site-data", target, {
+              nodeId: options.nodeId,
+            })
+          : ipcRenderer.invoke("orkestrator:browser-preview:reset-site-data", target);
       },
-      openServiceExternally(target: BrowserPreviewServiceTarget): Promise<void> {
-        return ipcRenderer.invoke("orkestrator:browser-preview:open-external", target);
+      openServiceExternally(
+        target: BrowserPreviewServiceTarget,
+        options?: { nodeId?: string },
+      ): Promise<void> {
+        return options?.nodeId
+          ? ipcRenderer.invoke("orkestrator:browser-preview:open-external", target, {
+              nodeId: options.nodeId,
+            })
+          : ipcRenderer.invoke("orkestrator:browser-preview:open-external", target);
       },
       startSessionImport(tabId: string): Promise<BrowserPreviewState> {
         return ipcRenderer.invoke("orkestrator:browser-preview:session-import-start", tabId);

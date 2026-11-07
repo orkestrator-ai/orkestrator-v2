@@ -4,6 +4,32 @@ import {
   AgentMailError,
   normalizeAgentMessagingSettings,
 } from "@orkestrator/protocol/agent-mail";
+import {
+  ackAgentMailCommand,
+  discardAgentMailInjectCommand,
+  getAgentMailConversationCommand,
+  getAgentMailInboxSnapshotCommand,
+  getAgentMailMailboxCommand,
+  getAgentMailMailboxesCommand,
+  getAgentMailMessageCommand,
+  getAgentMailStatusCommand,
+  getAgentMailSummaryCommand,
+  getAgentMessagingSettingsCommand,
+  getAgentRegistryCommand,
+  listAgentMailConversationsCommand,
+  listAgentMailInboxCommand,
+  listAgentMailSentCommand,
+  listAgentMailboxesCommand,
+  markAgentMailConversationSeenCommand,
+  markAgentMailSeenCommand,
+  muteAgentMailCommand,
+  retryAgentMailInjectCommand,
+  sendAgentMailCommand,
+  sendExternalAgentMailCommand,
+  setAgentMessagingPausedCommand,
+  updateAgentMessagingSettingsCommand,
+} from "@orkestrator/protocol/contract/domains/agent-mail";
+import { withAsyncArgumentFailures } from "./commands-registry-async-args.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
 import type { StorageService } from "./storage.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
@@ -51,10 +77,17 @@ async function requireMessagingEnabled(storage: StorageService) {
   return settings;
 }
 
-export function registerAgentMailCommands(register: CommandRegistrar): void {
+/**
+ * Registered with their `agent-mail` definitions (plan item 7008). Every
+ * handler was lenient, so every argument is `optionalKey(Unknown)` and each
+ * handler keeps its own checks and messages; `async` handlers keep reporting
+ * a refused argument as a rejection (`withAsyncArgumentFailures`).
+ */
+export function registerAgentMailCommands(registrar: CommandRegistrar): void {
+  const register = withAsyncArgumentFailures(registrar);
   // Not mail, but read by the same audiences: the renderer, Control MCP, and
   // any service that needs to know which agents exist and which are busy.
-  register("get_agent_registry", async ({ projectId, environmentId }, context) => {
+  register(getAgentRegistryCommand, async ({ projectId, environmentId }, context) => {
     if (!context.agentRegistry) throw new Error("Agent registry is unavailable");
     return context.agentRegistry.snapshot({
       ...(typeof projectId === "string" && projectId ? { projectId } : {}),
@@ -63,7 +96,7 @@ export function registerAgentMailCommands(register: CommandRegistrar): void {
   });
 
   register(
-    "list_agent_mailboxes",
+    listAgentMailboxesCommand,
     async (
       { projectId, environmentId, q, offset, limit, includeTombstoned, strictProjectScope },
       { storage },
@@ -87,16 +120,16 @@ export function registerAgentMailCommands(register: CommandRegistrar): void {
       });
     },
   );
-  register("get_agent_mail_summary", async (_args, { storage }) => {
+  register(getAgentMailSummaryCommand, async (_args, { storage }) => {
     await requireMessagingEnabled(storage);
     return storage.getAgentMailSummary();
   });
-  register("get_agent_mail_inbox_snapshot", async (_args, { storage }) => {
+  register(getAgentMailInboxSnapshotCommand, async (_args, { storage }) => {
     await requireMessagingEnabled(storage);
     return storage.getAgentMailInboxSnapshot();
   });
   register(
-    "get_agent_mail_mailbox",
+    getAgentMailMailboxCommand,
     async ({ environmentId, tabId, unreadOnly, offset, limit }, { storage }) => {
       await requireMessagingEnabled(storage);
       return storage.getAgentMailMailbox(
@@ -110,7 +143,7 @@ export function registerAgentMailCommands(register: CommandRegistrar): void {
       );
     },
   );
-  register("get_agent_mail_mailboxes", async ({ addresses }, { storage }) => {
+  register(getAgentMailMailboxesCommand, async ({ addresses }, { storage }) => {
     await requireMessagingEnabled(storage);
     if (!Array.isArray(addresses) || addresses.length > AGENT_MAIL_MAX_MAILBOXES) {
       throw new Error(`addresses must be an array of at most ${AGENT_MAIL_MAX_MAILBOXES} items`);
@@ -129,7 +162,7 @@ export function registerAgentMailCommands(register: CommandRegistrar): void {
     );
   });
   register(
-    "list_agent_mail_inbox",
+    listAgentMailInboxCommand,
     async ({ environmentId, tabId, unreadOnly, offset, limit }, { storage }) => {
       await requireMessagingEnabled(storage);
       return storage.getAgentMailMailbox(
@@ -143,7 +176,7 @@ export function registerAgentMailCommands(register: CommandRegistrar): void {
       );
     },
   );
-  register("get_agent_mail_message", async ({ environmentId, tabId, messageId }, { storage }) => {
+  register(getAgentMailMessageCommand, async ({ environmentId, tabId, messageId }, { storage }) => {
     await requireMessagingEnabled(storage);
     return storage.getAgentMailMessage(
       required(environmentId, "environmentId"),
@@ -151,11 +184,11 @@ export function registerAgentMailCommands(register: CommandRegistrar): void {
       required(messageId, "messageId"),
     );
   });
-  register("get_agent_mail_status", async ({ messageId }, { storage }) => {
+  register(getAgentMailStatusCommand, async ({ messageId }, { storage }) => {
     await requireMessagingEnabled(storage);
     return storage.getAgentMailStatus(required(messageId, "messageId"));
   });
-  register("list_agent_mail_sent", async ({ environmentId, tabId }, { storage }) => {
+  register(listAgentMailSentCommand, async ({ environmentId, tabId }, { storage }) => {
     await requireMessagingEnabled(storage);
     if (environmentId === undefined && tabId === undefined) return storage.listUserSentAgentMail();
     return storage.listAgentMailSentByMailbox(
@@ -163,13 +196,13 @@ export function registerAgentMailCommands(register: CommandRegistrar): void {
       required(tabId, "tabId"),
     );
   });
-  register("list_agent_mail_conversations", async ({ participant }, { storage }) => {
+  register(listAgentMailConversationsCommand, async ({ participant }, { storage }) => {
     await requireMessagingEnabled(storage);
     return storage.listAgentMailConversations(
       typeof participant === "string" && participant ? { participant } : {},
     );
   });
-  register("get_agent_mail_conversation", async ({ a, b, limit }, { storage }) => {
+  register(getAgentMailConversationCommand, async ({ a, b, limit }, { storage }) => {
     await requireMessagingEnabled(storage);
     return storage.getAgentMailConversation(
       required(a, "a"),
@@ -177,7 +210,7 @@ export function registerAgentMailCommands(register: CommandRegistrar): void {
       typeof limit === "number" ? { limit } : {},
     );
   });
-  register("mark_agent_mail_conversation_seen", async ({ a, b, messageIds }, { storage }) => {
+  register(markAgentMailConversationSeenCommand, async ({ a, b, messageIds }, { storage }) => {
     await requireMessagingEnabled(storage);
     const first = required(a, "a");
     const second = required(b, "b");
@@ -189,7 +222,7 @@ export function registerAgentMailCommands(register: CommandRegistrar): void {
     };
   });
   register(
-    "send_agent_mail",
+    sendAgentMailCommand,
     ({ requestId, toEnvironmentId, toTabId, subject, body, replyToMessageId }, { storage }) =>
       storage.sendAgentMail(
         { kind: "user" },
@@ -204,7 +237,7 @@ export function registerAgentMailCommands(register: CommandRegistrar): void {
       ),
   );
   register(
-    "send_external_agent_mail",
+    sendExternalAgentMailCommand,
     ({ requestId, toEnvironmentId, toTabId, subject, body }, { storage }) =>
       storage.sendAgentMail(
         { kind: "external" },
@@ -217,14 +250,14 @@ export function registerAgentMailCommands(register: CommandRegistrar): void {
         },
       ),
   );
-  register("ack_agent_mail", ({ environmentId, tabId, messageId }, { storage }) =>
+  register(ackAgentMailCommand, ({ environmentId, tabId, messageId }, { storage }) =>
     storage.ackAgentMail(
       required(environmentId, "environmentId"),
       required(tabId, "tabId"),
       required(messageId, "messageId"),
     ),
   );
-  register("mark_agent_mail_seen", ({ environmentId, tabId, messageId }, { storage }) =>
+  register(markAgentMailSeenCommand, ({ environmentId, tabId, messageId }, { storage }) =>
     storage.markAgentMailSeen(
       required(environmentId, "environmentId"),
       required(tabId, "tabId"),
@@ -232,7 +265,7 @@ export function registerAgentMailCommands(register: CommandRegistrar): void {
     ),
   );
   register(
-    "mute_agent_mail",
+    muteAgentMailCommand,
     ({ environmentId, tabId, inject, mutedInbound, mutedOutbound }, { storage }) => {
       if (inject !== undefined && inject !== "inherit" && inject !== "off" && inject !== "idle")
         throw new Error("inject must be inherit, off, or idle");
@@ -252,7 +285,7 @@ export function registerAgentMailCommands(register: CommandRegistrar): void {
     },
   );
   register(
-    "retry_agent_mail_inject",
+    retryAgentMailInjectCommand,
     async ({ environmentId, tabId, messageId, now }, { storage, drainAgentMail }) => {
       const resolvedEnvironmentId = required(environmentId, "environmentId");
       const resolvedTabId = required(tabId, "tabId");
@@ -265,17 +298,17 @@ export function registerAgentMailCommands(register: CommandRegistrar): void {
       return storage.getAgentMailMessage(resolvedEnvironmentId, resolvedTabId, resolvedMessageId);
     },
   );
-  register("discard_agent_mail_inject", ({ environmentId, tabId, messageId }, { storage }) =>
+  register(discardAgentMailInjectCommand, ({ environmentId, tabId, messageId }, { storage }) =>
     storage.discardAgentMail(
       required(environmentId, "environmentId"),
       required(tabId, "tabId"),
       required(messageId, "messageId"),
     ),
   );
-  register("get_agent_messaging_settings", async (_args, { storage }) =>
+  register(getAgentMessagingSettingsCommand, async (_args, { storage }) =>
     normalizeAgentMessagingSettings((await storage.loadConfig()).global.agentMessaging),
   );
-  register("update_agent_messaging_settings", async ({ settings }, { storage }) => {
+  register(updateAgentMessagingSettingsCommand, async ({ settings }, { storage }) => {
     const current = await storage.loadConfig();
     const normalized = normalizeAgentMessagingSettings(
       settings,
@@ -286,7 +319,7 @@ export function registerAgentMailCommands(register: CommandRegistrar): void {
     const updated = await storage.patchGlobalConfig({ agentMessaging: normalized });
     return normalizeAgentMessagingSettings(updated.global.agentMessaging);
   });
-  register("set_agent_messaging_paused", async ({ paused }, { storage }) => {
+  register(setAgentMessagingPausedCommand, async ({ paused }, { storage }) => {
     if (typeof paused !== "boolean") throw new Error("paused must be a boolean");
     const current = await storage.loadConfig();
     const settings = normalizeAgentMessagingSettings(current.global.agentMessaging);

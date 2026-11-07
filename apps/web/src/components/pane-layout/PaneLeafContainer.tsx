@@ -10,9 +10,9 @@ import {
 } from "react";
 import { useDroppable } from "@dnd-kit/core";
 import { useShallow } from "zustand/react/shallow";
-import { usePaneLayoutStore } from "@/stores";
+import { paneLayoutStore, usePaneLayoutStore } from "@/stores";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
-import { useTerminalPortalStore } from "@/stores/terminalPortalStore";
+import { useTerminalPortalNodeId, useTerminalPortalStore } from "@/stores/terminalPortalStore";
 import type { MultiReviewTabData, PaneLeaf } from "@/types/paneLayout";
 import {
   createPaneTabElementId,
@@ -24,6 +24,7 @@ import { fileTabChangeDiffTarget } from "@/components/terminal/change-diff-targe
 import { multiReviewReviewerScrollKey } from "@/lib/multi-review-keys";
 import { clearPersistedVirtuosoState } from "@/hooks";
 import { cancelTabLaunchFocus } from "@/lib/tab-launch";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { DraggableTabBar } from "./DraggableTabBar";
 import { TabLaunchShimmer, useEnvironmentTabLaunches } from "./TabLaunchShimmer";
 import { DropZoneOverlay } from "./DropZoneOverlay";
@@ -196,6 +197,8 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
 
   // Pane host for terminal rendering (tab targets are moved here)
   const portalHostRef = useRef<HTMLDivElement>(null);
+  const terminalNodeId = useTerminalPortalNodeId();
+  const launchScope = useNodeScope();
   const { registerPaneHost, unregisterPaneHost } = useTerminalPortalStore(
     useShallow((state) => ({
       registerPaneHost: state.registerPaneHost,
@@ -208,28 +211,28 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
     const host = portalHostRef.current;
     if (!host) return;
 
-    registerPaneHost(environmentId, pane.id, host);
+    registerPaneHost(terminalNodeId, environmentId, pane.id, host);
 
     return () => {
-      unregisterPaneHost(environmentId, pane.id);
+      unregisterPaneHost(terminalNodeId, environmentId, pane.id);
     };
-  }, [environmentId, pane.id, registerPaneHost, unregisterPaneHost]);
+  }, [terminalNodeId, environmentId, pane.id, registerPaneHost, unregisterPaneHost]);
 
   // Handle clicking on the pane to focus it
   const handlePaneClick = useCallback(() => {
     if (activePaneId !== pane.id) {
-      cancelTabLaunchFocus(environmentId);
+      cancelTabLaunchFocus(environmentId, launchScope);
       setActivePane(pane.id, environmentId);
     }
-  }, [activePaneId, environmentId, pane.id, setActivePane]);
+  }, [activePaneId, environmentId, launchScope, pane.id, setActivePane]);
 
   // Handle tab selection
   const handleTabSelect = useCallback(
     (tabId: string) => {
-      cancelTabLaunchFocus(environmentId);
+      cancelTabLaunchFocus(environmentId, launchScope);
       setActiveTab(pane.id, tabId, environmentId);
     },
-    [environmentId, pane.id, setActiveTab],
+    [environmentId, launchScope, pane.id, setActiveTab],
   );
 
   const handleTabRefresh = useCallback((tabId: string) => {
@@ -346,7 +349,7 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                   ownsGlobalShortcuts={isTabActive && isActive && isPaneFocused}
                   onClose={() => {
                     // Closing the tab never deletes the design.
-                    const layoutStore = usePaneLayoutStore.getState();
+                    const layoutStore = launchScope.store(paneLayoutStore).getState();
                     const owner = layoutStore.findPaneWithTab(tab.id, environmentId);
                     if (owner) layoutStore.removeTab(owner.id, tab.id, environmentId);
                   }}

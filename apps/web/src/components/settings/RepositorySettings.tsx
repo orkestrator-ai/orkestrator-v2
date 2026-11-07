@@ -42,7 +42,7 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { FullscreenSettingsLayout, type SettingsMenuItem } from "./FullscreenSettingsLayout";
-import { pickHostPath } from "@/lib/host-path-picker";
+import { usePickHostPath } from "@/lib/host-path-picker";
 import { fileFromHostImage, projectIconFromFile } from "@/lib/project-icon-image";
 import { ProjectIconImage } from "@/components/federation/MachineDot";
 import type { Project, RepositoryConfig, PortMapping, PortProtocol } from "@/types";
@@ -80,6 +80,8 @@ export function RepositorySettings({
   onOpenChange,
   onUpdateProject,
 }: RepositorySettingsProps) {
+  // Browses the host of the node this component renders in.
+  const pickHostPath = usePickHostPath();
   const getRepositoryConfig = useConfigStore((state) => state.getRepositoryConfig);
   const setConfig = useConfigStore((state) => state.setConfig);
   const config = useConfigStore((state) => state.config);

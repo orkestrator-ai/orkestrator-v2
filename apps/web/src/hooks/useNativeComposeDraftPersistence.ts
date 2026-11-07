@@ -17,7 +17,12 @@ import {
   type TranscriptAnnotation,
 } from "@/lib/chat/transcript-annotations";
 import type { WebAnnotationMigratedReference } from "@orkestrator/protocol/web-annotations";
-import { getComposeDraft } from "@/lib/backend";
+import * as backend from "@/lib/backend";
+import { backendApiForScope } from "@/lib/backend/client";
+// The factory from its own module: suites replace the barrel with partial mocks.
+import { createWorkflowsApi } from "@/lib/backend/workflows";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { appCommandScope } from "@/lib/node-scope-slots";
 import { describeWebAnnotationError, webAnnotationErrorDetail } from "@/lib/web-annotations/client";
 import {
   applyMigratedReferences,
@@ -125,9 +130,13 @@ export function useNativeComposeDraftPersistence<TMention, TAttachment>(
   sessionKey: string,
   store: NativeComposeDraftStore<TMention, TAttachment>,
   fallbackNamespace?: NativeDraftNamespace,
+  /** The node the drafts live on (plan item 3009); the app's command scope when omitted. */
+  scope?: NodeScope,
 ): number {
   const [restoreGeneration, setRestoreGeneration] = useState(0);
   useEffect(() => {
+    const node = scope ?? appCommandScope();
+    const drafts = backendApiForScope(node, createWorkflowsApi, backend);
     let disposed = false;
     let hydrated = false;
     let restored = false;
@@ -186,8 +195,15 @@ export function useNativeComposeDraftPersistence<TMention, TAttachment>(
           onClick: () => {
             const current = readDraft(store.getState(), sessionKey);
             const operation = isEmptyDraft(current)
-              ? resolveComposeDraftDiscardConflict(key)
-              : resolveComposeDraftSaveConflict(key, "environment", environmentId, current);
+              ? resolveComposeDraftDiscardConflict(key, undefined, node)
+              : resolveComposeDraftSaveConflict(
+                  key,
+                  "environment",
+                  environmentId,
+                  current,
+                  undefined,
+                  node,
+                );
             void operation.catch(reportPersistenceError);
           },
         },
@@ -240,10 +256,12 @@ export function useNativeComposeDraftPersistence<TMention, TAttachment>(
     const persist = (state: NativeComposeDraftState<TMention, TAttachment>): Promise<void> => {
       const draft = readDraft(state, sessionKey);
       return isEmptyDraft(draft)
-        ? discardComposeDraft(key)
-        : persistComposeDraft(key, "environment", environmentId, draft).then((saved) => {
-            applyReferences(savedMigrationReferences(saved));
-          });
+        ? discardComposeDraft(key, undefined, node)
+        : persistComposeDraft(key, "environment", environmentId, draft, undefined, node).then(
+            (saved) => {
+              applyReferences(savedMigrationReferences(saved));
+            },
+          );
     };
 
     /**
@@ -266,12 +284,19 @@ export function useNativeComposeDraftPersistence<TMention, TAttachment>(
       if (hasUnmigratedBrowserNotes(server.annotations as TranscriptAnnotation[] | undefined)) {
         return false;
       }
-      await resolveComposeDraftSaveConflict(key, "environment", environmentId, current);
+      await resolveComposeDraftSaveConflict(
+        key,
+        "environment",
+        environmentId,
+        current,
+        undefined,
+        node,
+      );
       return true;
     };
     const loadServerValue = async (): Promise<PersistedNativeComposeDraft | null> => {
       try {
-        const persisted = await getComposeDraft<PersistedNativeComposeDraft>(key);
+        const persisted = await drafts.getComposeDraft<PersistedNativeComposeDraft>(key);
         return persisted?.value ?? null;
       } catch {
         return null;
@@ -315,11 +340,15 @@ export function useNativeComposeDraftPersistence<TMention, TAttachment>(
       schedule(state);
     });
 
-    void loadComposeDraft<PersistedNativeComposeDraft>(key)
+    void loadComposeDraft<PersistedNativeComposeDraft>(key, undefined, node)
       .then(async (primary) => {
         let persisted = primary;
         if (!persisted && fallbackKey) {
-          persisted = await loadComposeDraft<PersistedNativeComposeDraft>(fallbackKey);
+          persisted = await loadComposeDraft<PersistedNativeComposeDraft>(
+            fallbackKey,
+            undefined,
+            node,
+          );
         }
         readSucceeded = true;
         if (disposed || locallyChanged || !persisted) return;
@@ -401,6 +430,6 @@ export function useNativeComposeDraftPersistence<TMention, TAttachment>(
         });
       }
     };
-  }, [environmentId, fallbackNamespace, namespace, sessionKey, store]);
+  }, [environmentId, fallbackNamespace, namespace, scope, sessionKey, store]);
   return restoreGeneration;
 }

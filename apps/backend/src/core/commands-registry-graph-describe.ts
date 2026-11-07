@@ -1,3 +1,9 @@
+import {
+  graphDescribeCancelCommand,
+  graphDescribeDismissCommand,
+  graphDescribeStartCommand,
+  graphDescribeStatusCommand,
+} from "@orkestrator/protocol/contract/domains/graphs";
 import type { CommandContext } from "./commands-context.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
 import {
@@ -17,6 +23,9 @@ import {
  * - `graph_describe_status {environmentId}` → the latest job, or null.
  * - `graph_describe_cancel {environmentId}` → the job after cancelling.
  * - `graph_describe_dismiss {environmentId, jobId}` → `{dismissed}`.
+ *
+ * Defined in the `graphs` contract domain (plan item 7007): unknown argument
+ * keys are dropped before `parseGraphDescribeStartInput` sees them.
  */
 
 function service(context: CommandContext): GraphDescribeService {
@@ -24,16 +33,6 @@ function service(context: CommandContext): GraphDescribeService {
     throw new GraphDescribeError("unavailable", "Describe a graph is unavailable");
   }
   return context.graphDescribe;
-}
-
-function onlyKeys(args: Record<string, unknown>, allowed: readonly string[]): void {
-  const unknown = Object.keys(args).filter((key) => !allowed.includes(key));
-  if (unknown.length > 0) {
-    throw new GraphDescribeError(
-      "invalid-request",
-      `Unknown arguments: ${unknown.slice(0, 5).join(", ")}`,
-    );
-  }
 }
 
 function idArg(value: unknown, name: string): string {
@@ -44,22 +43,19 @@ function idArg(value: unknown, name: string): string {
 }
 
 export function registerGraphDescribeCommands(register: CommandRegistrar): void {
-  register("graph_describe_start", async (args, context) =>
+  register(graphDescribeStartCommand, async (args, context) =>
     service(context).start(parseGraphDescribeStartInput(args)),
   );
 
-  register("graph_describe_status", async (args, context) => {
-    onlyKeys(args, ["environmentId"]);
+  register(graphDescribeStatusCommand, async (args, context) => {
     return service(context).status(idArg(args.environmentId, "environmentId"));
   });
 
-  register("graph_describe_cancel", async (args, context) => {
-    onlyKeys(args, ["environmentId"]);
+  register(graphDescribeCancelCommand, async (args, context) => {
     return service(context).cancel(idArg(args.environmentId, "environmentId"));
   });
 
-  register("graph_describe_dismiss", async (args, context) => {
-    onlyKeys(args, ["environmentId", "jobId"]);
+  register(graphDescribeDismissCommand, async (args, context) => {
     return {
       dismissed: service(context).dismiss(
         idArg(args.environmentId, "environmentId"),

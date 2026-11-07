@@ -13,7 +13,8 @@ import { createLogger } from "@orkestrator/protocol/logger";
 import { dockerOwnerNamespace } from "./docker-ownership.js";
 import { toNodeHandler } from "@modelcontextprotocol/node";
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
-import { z } from "zod";
+import { Schema } from "effect";
+import { int, str, toolInput, withDefault } from "./tool-schema.js";
 import { parseTicketSectionsPatch } from "@orkestrator/protocol/ticket-sections";
 import {
   ticketKindField,
@@ -384,11 +385,15 @@ function registerKanbanTicketTools(
         title: "List Kanban tickets",
         description:
           "List summaries of Kanban tickets in the current project, optionally filtered by status.",
-        inputSchema: z.object({
-          status: z.enum(["backlog", "in-progress", "review", "done"]).optional(),
-          offset: z.number().int().min(0).default(0),
-          limit: z.number().int().min(1).max(MAX_LIST_LIMIT).default(DEFAULT_LIST_LIMIT),
-        }),
+        inputSchema: toolInput(
+          Schema.Struct({
+            status: Schema.optionalKey(
+              Schema.Literals(["backlog", "in-progress", "review", "done"]),
+            ),
+            offset: withDefault(int({ min: 0 }), 0),
+            limit: withDefault(int({ min: 1, max: MAX_LIST_LIMIT }), DEFAULT_LIST_LIMIT),
+          }),
+        ),
         annotations: {
           readOnlyHint: true,
           destructiveHint: false,
@@ -416,16 +421,16 @@ function registerKanbanTicketTools(
         title: "Read a Kanban ticket",
         description:
           "Read one Kanban ticket in the current project, including acceptance criteria and a paginated comment page.",
-        inputSchema: z.object({
-          ticketId: z.string().trim().min(1).max(200),
-          commentOffset: z.number().int().min(0).default(0),
-          commentLimit: z
-            .number()
-            .int()
-            .min(1)
-            .max(MAX_COMMENT_LIMIT)
-            .default(DEFAULT_COMMENT_LIMIT),
-        }),
+        inputSchema: toolInput(
+          Schema.Struct({
+            ticketId: str({ trim: true, min: 1, max: 200 }),
+            commentOffset: withDefault(int({ min: 0 }), 0),
+            commentLimit: withDefault(
+              int({ min: 1, max: MAX_COMMENT_LIMIT }),
+              DEFAULT_COMMENT_LIMIT,
+            ),
+          }),
+        ),
         annotations: {
           readOnlyHint: true,
           destructiveHint: false,
@@ -446,16 +451,21 @@ function registerKanbanTicketTools(
         title: "Create a Kanban ticket",
         description:
           "Create a Kanban ticket in the current project. New tickets default to backlog. Give either sections (structured) or description and acceptanceCriteria (plain text); both forms are kept in step.",
-        inputSchema: z.object({
-          requestId: z.string().trim().min(1).max(256).optional(),
-          title: z.string().trim().min(1).max(MAX_TITLE_LENGTH),
-          kind: ticketKindField,
-          sections: ticketSectionsField,
-          description: z.string().max(MAX_DESCRIPTION_LENGTH).default(""),
-          acceptanceCriteria: z.string().max(MAX_DESCRIPTION_LENGTH).default(""),
-          status: z.enum(["backlog", "in-progress", "review", "done"]).default("backlog"),
-          labels: ticketLabelsField,
-        }),
+        inputSchema: toolInput(
+          Schema.Struct({
+            requestId: Schema.optionalKey(str({ trim: true, min: 1, max: 256 })),
+            title: str({ trim: true, min: 1, max: MAX_TITLE_LENGTH }),
+            kind: ticketKindField,
+            sections: ticketSectionsField,
+            description: withDefault(str({ max: MAX_DESCRIPTION_LENGTH }), ""),
+            acceptanceCriteria: withDefault(str({ max: MAX_DESCRIPTION_LENGTH }), ""),
+            status: withDefault(
+              Schema.Literals(["backlog", "in-progress", "review", "done"]),
+              "backlog",
+            ),
+            labels: ticketLabelsField,
+          }),
+        ),
         annotations: {
           readOnlyHint: false,
           destructiveHint: false,
@@ -491,16 +501,20 @@ function registerKanbanTicketTools(
         title: "Update a Kanban ticket",
         description:
           "Update editable fields on a Kanban ticket in the current project. Omitted fields are unchanged; sections replaces only the sections it names.",
-        inputSchema: z.object({
-          ticketId: z.string().trim().min(1).max(200),
-          title: z.string().trim().min(1).max(MAX_TITLE_LENGTH).optional(),
-          kind: ticketKindField,
-          sections: ticketSectionsField,
-          description: z.string().max(MAX_DESCRIPTION_LENGTH).optional(),
-          acceptanceCriteria: z.string().max(MAX_DESCRIPTION_LENGTH).optional(),
-          status: z.enum(["backlog", "in-progress", "review", "done"]).optional(),
-          labels: ticketLabelsField,
-        }),
+        inputSchema: toolInput(
+          Schema.Struct({
+            ticketId: str({ trim: true, min: 1, max: 200 }),
+            title: Schema.optionalKey(str({ trim: true, min: 1, max: MAX_TITLE_LENGTH })),
+            kind: ticketKindField,
+            sections: ticketSectionsField,
+            description: Schema.optionalKey(str({ max: MAX_DESCRIPTION_LENGTH })),
+            acceptanceCriteria: Schema.optionalKey(str({ max: MAX_DESCRIPTION_LENGTH })),
+            status: Schema.optionalKey(
+              Schema.Literals(["backlog", "in-progress", "review", "done"]),
+            ),
+            labels: ticketLabelsField,
+          }),
+        ),
         annotations: {
           readOnlyHint: false,
           destructiveHint: true,
@@ -526,7 +540,7 @@ function registerKanbanTicketTools(
           ...(description !== undefined ? { description } : {}),
           ...(acceptanceCriteria !== undefined ? { acceptanceCriteria } : {}),
           ...(status !== undefined ? { status: status as KanbanStatus } : {}),
-          ...(labels !== undefined ? { labels } : {}),
+          ...(labels !== undefined ? { labels: [...labels] } : {}),
         };
         if (Object.keys(updates).length === 0) {
           throw new Error("Provide at least one ticket field to update");
@@ -541,11 +555,13 @@ function registerKanbanTicketTools(
       {
         title: "Comment on a Kanban ticket",
         description: "Add a durable comment to a Kanban ticket in the current project.",
-        inputSchema: z.object({
-          requestId: z.string().trim().min(1).max(256).optional(),
-          ticketId: z.string().trim().min(1).max(200),
-          text: z.string().trim().min(1).max(MAX_COMMENT_LENGTH),
-        }),
+        inputSchema: toolInput(
+          Schema.Struct({
+            requestId: Schema.optionalKey(str({ trim: true, min: 1, max: 256 })),
+            ticketId: str({ trim: true, min: 1, max: 200 }),
+            text: str({ trim: true, min: 1, max: MAX_COMMENT_LENGTH }),
+          }),
+        ),
         annotations: {
           readOnlyHint: false,
           destructiveHint: false,
@@ -633,11 +649,13 @@ function registerGoalTools(server: McpServer, goals: GoalToolHost, scope: AgentT
       title: "Report on your goal",
       description:
         "Use only when a goal turn asked you to. Say that the goal's objective is met (done), that you cannot continue without a person (blocked), or give a short progress note (progress). This cannot set or change a goal.",
-      inputSchema: z.object({
-        goalId: z.string().trim().min(1).max(200),
-        status: z.enum(GOAL_REPORT_STATUSES),
-        message: z.string().trim().min(1).max(NATIVE_AGENT_GOAL_LIMITS.reportMessageMaxBytes),
-      }),
+      inputSchema: toolInput(
+        Schema.Struct({
+          goalId: str({ trim: true, min: 1, max: 200 }),
+          status: Schema.Literals(GOAL_REPORT_STATUSES),
+          message: str({ trim: true, min: 1, max: NATIVE_AGENT_GOAL_LIMITS.reportMessageMaxBytes }),
+        }),
+      ),
       annotations: {
         readOnlyHint: false,
         destructiveHint: false,

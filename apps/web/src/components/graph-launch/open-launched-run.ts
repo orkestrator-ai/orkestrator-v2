@@ -1,6 +1,7 @@
 import type { GraphLaunchResult } from "@orkestrator/protocol/graphs/launch";
 import { toast } from "sonner";
 import { requestGraphRunView } from "@/lib/graph-run-navigation";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
 
 /**
  * Shows a run that was just launched (item 214): every launch surface in the
@@ -19,19 +20,24 @@ export function openLaunchedGraphRun(input: {
   environmentId?: string;
   /** The run's environment name, when it already has one. */
   environmentName?: string;
+  /** The node that launched it, whose pane opens the tab (plan item 4007). */
+  scope?: NodeScope;
 }): boolean {
   const { result } = input;
   const title = result.template.name;
   const target = input.environmentId ?? result.environmentId;
   if (
     target &&
-    requestGraphRunView({
-      runId: result.runId,
-      projectId: result.projectId,
-      environmentId: target,
-      mock: false,
-      title,
-    })
+    requestGraphRunView(
+      {
+        runId: result.runId,
+        projectId: result.projectId,
+        environmentId: target,
+        mock: false,
+        title,
+      },
+      input.scope,
+    )
   ) {
     return true;
   }

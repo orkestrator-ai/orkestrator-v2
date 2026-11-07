@@ -217,3 +217,25 @@ output was deleted by the logged runner, so individual rerun counts were not
 retained. This establishes intermittence, not its cause. No assertion, timeout
 or implementation was changed to hide the failure; the broad check remains
 non-green.
+
+## Unified federation PR validation — 2026-11-07
+
+`mise run test:logged -- --name federation-browser -- mise run test:browser`
+ran the component browser suite with its default worker count. It reported
+1,550 passed, 151 skipped and three failed in 993.8 seconds. This case again
+failed in mobile Chromium: after pressing End, the `plans (h2)` treeitem did
+not attach within the five-second assertion at line 613. The other two failures
+were in `SidebarCrossMachineSelect.spec.ts`; the component failure prevented
+the public-site stage from running. Evidence is in
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.B1KWJt/federation-browser.log.gz`.
+
+The complete unchanged owner passed alone in 22.0 seconds:
+
+```sh
+mise run test:logged -- --name design-canvas-accessibility-recheck -- env ORKESTRATOR_REVIEW_VALIDATION=1 bunx playwright test --config e2e/playwright.config.ts e2e/DesignCanvasAccessibility.spec.ts
+```
+
+The run was based on `main` at `7329d2490b05113bcc3c47fdb49812552b8bb4ea`;
+`mise run flaky:recurrence -- 1249 --base 7329d2490b05113bcc3c47fdb49812552b8bb4ea`
+reported the case open. No test or product source changed. This is another
+aggregate-only observation; the cause remains unestablished.

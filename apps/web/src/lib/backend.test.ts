@@ -5,6 +5,7 @@ import type { BackendId } from "@orkestrator/protocol/federation";
 import { portalStore } from "@/lib/portal/portal-store";
 import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
+import { unknownBackendCommandMessage } from "@orkestrator/protocol/unknown-command";
 
 const invokeMock = mock<(...args: unknown[]) => Promise<unknown>>(() => Promise.resolve());
 
@@ -1357,7 +1358,8 @@ describe("backend setup wrappers", () => {
     const result = { updated: ["env-1"], failed: [] };
     invokeMock.mockResolvedValueOnce(result);
 
-    await expect(propagateGithubCredentialsToContainers()).resolves.toBe(result);
+    // Decoded with the command's result schema (plan item 7003): equal, not the same object.
+    await expect(propagateGithubCredentialsToContainers()).resolves.toEqual(result);
     expect(invokeMock.mock.calls).toEqual([["propagate_github_token_to_containers", {}]]);
   });
 
@@ -2216,8 +2218,11 @@ describe("backend command wrapper coverage", () => {
       "getBackendProfile",
       "updateBackendProfile",
     ]);
+    // `createXApi(client)` factories (plan item 3002) are covered per client in
+    // `backend/factories.test.ts`; their named exports are the wrappers swept here.
+    const isFactory = (name: string) => /^create[A-Z]\w*Api$/.test(name);
     const commandWrappers = Object.entries(backendWrappers).flatMap(([name, value]) =>
-      typeof value === "function" && !specialWrappers.has(name)
+      typeof value === "function" && !specialWrappers.has(name) && !isFactory(name)
         ? [[name, value as (...args: unknown[]) => Promise<unknown>] as const]
         : [],
     );
@@ -2589,7 +2594,8 @@ describe("backend command wrapper coverage", () => {
   });
 
   describe("commands an older backend may not know", () => {
-    const unknown = (name: string) => new Error(`Unknown command: ${name}`);
+    // The backend's own wording, so a drift in it fails here.
+    const unknown = (name: string) => new Error(unknownBackendCommandMessage(name));
 
     test("arrangeProjectsByIntent sends the gesture, and the preview only to an older backend", async () => {
       const intent = { kind: "sort-folder", folder: "Work" } as const;

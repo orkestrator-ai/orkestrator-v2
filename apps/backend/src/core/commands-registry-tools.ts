@@ -13,10 +13,36 @@ import {
 } from "./github-cli-setup.js";
 import { checkHostTool } from "./host-tools.js";
 import { homePath, pathExists } from "./shell.js";
+import { compatibilityPathUsage } from "./compatibility-path-usage.js";
+import {
+  type EnvironmentAgentSkillFileSchema,
+  type EnvironmentAgentSkillScanSchema,
+  cancelGithubCliLoginCommand,
+  checkAnyAiCliCommand,
+  checkClaudeCliCommand,
+  checkClaudeConfigCommand,
+  checkCodexCliCommand,
+  checkCursorCliCommand,
+  checkGithubCliCommand,
+  checkGrokCliCommand,
+  checkOpencodeCliCommand,
+  checkPiCliCommand,
+  getAvailableAiCliCommand,
+  getContainerGithubCredentialStatusCommand,
+  getCredentialStatusCommand,
+  getGithubCliLoginCommand,
+  getGithubCliStatusCommand,
+  hasClaudeCredentialsCommand,
+  listAgentPluginsCommand,
+  listAgentSkillsCommand,
+  listEnvironmentAgentSkillsCommand,
+  readAgentSkillCommand,
+  readEnvironmentAgentSkillCommand,
+  startGithubCliLoginCommand,
+} from "@orkestrator/protocol/contract/domains/agent-servers";
 import {
   asString,
   asAgentSkillProvider,
-  assertOnlyKeys,
   runEnvironmentAgentSkills,
   hasCursorSdkBridge,
   hasManagedAcpBinary,
@@ -51,24 +77,21 @@ export function registerToolingCommands(
   dependencies: RegistryDependencies,
 ): void {
   const { commands } = dependencies;
-  register("list_agent_skills", async (args, context) => {
-    assertOnlyKeys(args, ["provider"], "list_agent_skills argument");
+  register(listAgentSkillsCommand, async (args, context) => {
     const provider = asAgentSkillProvider(args.provider);
     if (context.runtimeFlavor === "agent-test") {
       return { provider, roots: [], skills: [], errors: [] };
     }
     return scanAgentSkills(provider);
   });
-  register("list_agent_plugins", async (args, context) => {
-    assertOnlyKeys(args, ["provider"], "list_agent_plugins argument");
+  register(listAgentPluginsCommand, async (args, context) => {
     const provider = asAgentSkillProvider(args.provider);
     if (context.runtimeFlavor === "agent-test") {
       return { agent: provider, plugins: [] };
     }
     return discoverAgentPlugins(provider, createHostExtensionCommandRunner(context));
   });
-  register("read_agent_skill", async (args, context) => {
-    assertOnlyKeys(args, ["provider", "filePath"], "read_agent_skill argument");
+  register(readAgentSkillCommand, async (args, context) => {
     if (context.runtimeFlavor === "agent-test") {
       throw new Error("Host agent skills are unavailable in isolated agent-test profiles");
     }
@@ -77,8 +100,7 @@ export function registerToolingCommands(
       asString(args.filePath, "filePath"),
     );
   });
-  register("list_environment_agent_skills", async (args, context) => {
-    assertOnlyKeys(args, ["environmentId", "provider"], "list_environment_agent_skills argument");
+  register(listEnvironmentAgentSkillsCommand, async (args, context) => {
     const environmentId = asString(args.environmentId, "environmentId");
     const environment = await context.storage.getEnvironment(environmentId);
     if (!environment) throw new Error(`Environment not found: ${environmentId}`);
@@ -87,14 +109,9 @@ export function registerToolingCommands(
       context,
       asAgentSkillProvider(args.provider),
       "list",
-    );
+    ) as Promise<(typeof EnvironmentAgentSkillScanSchema)["Type"]>;
   });
-  register("read_environment_agent_skill", async (args, context) => {
-    assertOnlyKeys(
-      args,
-      ["environmentId", "provider", "filePath"],
-      "read_environment_agent_skill argument",
-    );
+  register(readEnvironmentAgentSkillCommand, async (args, context) => {
     const environmentId = asString(args.environmentId, "environmentId");
     const environment = await context.storage.getEnvironment(environmentId);
     if (!environment) throw new Error(`Environment not found: ${environmentId}`);
@@ -104,10 +121,10 @@ export function registerToolingCommands(
       asAgentSkillProvider(args.provider),
       "read",
       asString(args.filePath, "filePath"),
-    );
+    ) as Promise<(typeof EnvironmentAgentSkillFileSchema)["Type"]>;
   });
 
-  register("has_claude_credentials", (_args, context) => {
+  register(hasClaudeCredentialsCommand, (_args, context) => {
     const login = claudeLoginHome(context);
     if (!login) return false;
     return anyPathExists([
@@ -116,12 +133,12 @@ export function registerToolingCommands(
       path.join(login.home, ".claude.json"),
     ]);
   });
-  register("get_credential_status", async (_args, context) => ({
-    available: await commands.get("has_claude_credentials")?.({}, context),
+  register(getCredentialStatusCommand, async (_args, context) => ({
+    available: (await commands.get("has_claude_credentials")?.({}, context)) as boolean | undefined,
     expiresAt: null,
   }));
-  register("check_claude_cli", (_args, context) => checkHostTool(context, "claude"));
-  register("check_claude_config", (_args, context) => {
+  register(checkClaudeCliCommand, (_args, context) => checkHostTool(context, "claude"));
+  register(checkClaudeConfigCommand, (_args, context) => {
     const login = claudeLoginHome(context);
     if (!login) return false;
     // Claude Code keeps `.claude.json` inside CLAUDE_CONFIG_DIR when it is set.
@@ -130,45 +147,47 @@ export function registerToolingCommands(
       path.join(login.home, ".claude.json"),
     ]);
   });
-  register("check_opencode_cli", (_args, context) => checkHostTool(context, "opencode"));
-  register("check_codex_cli", (_args, context) => checkHostTool(context, "codex"));
+  register(checkOpencodeCliCommand, (_args, context) => {
+    compatibilityPathUsage.record("retired-command.provider-cli-check");
+    return checkHostTool(context, "opencode");
+  });
+  register(checkCodexCliCommand, (_args, context) => {
+    compatibilityPathUsage.record("retired-command.provider-cli-check");
+    return checkHostTool(context, "codex");
+  });
   // Kept under the existing command name for protocol compatibility. Cursor
   // no longer has a CLI; availability means the SDK bridge is packaged.
-  register("check_cursor_cli", (_args, context) => hasCursorSdkBridge(context));
-  register("check_grok_cli", (_args, context) => hasManagedAcpBinary(context, "grok"));
-  register("check_pi_cli", (_args, context) => checkHostTool(context, "pi"));
-  register("check_github_cli", (_args, context) => checkHostTool(context, "gh"));
-  register("get_github_cli_status", (args, context) => {
-    assertOnlyKeys(args, [], "get_github_cli_status argument");
-    return getGitHubCliStatus(context);
+  register(checkCursorCliCommand, (_args, context) => {
+    compatibilityPathUsage.record("retired-command.provider-cli-check");
+    return hasCursorSdkBridge(context);
   });
+  register(checkGrokCliCommand, (_args, context) => {
+    compatibilityPathUsage.record("retired-command.provider-cli-check");
+    return hasManagedAcpBinary(context, "grok");
+  });
+  register(checkPiCliCommand, (_args, context) => {
+    compatibilityPathUsage.record("retired-command.provider-cli-check");
+    return checkHostTool(context, "pi");
+  });
+  register(checkGithubCliCommand, (_args, context) => checkHostTool(context, "gh"));
+  register(getGithubCliStatusCommand, (_args, context) => getGitHubCliStatus(context));
   /**
    * Sign-in is split into start and poll like the agent account sign-in: it
    * waits on the user and must not hold a request open.
    */
-  register("start_github_cli_login", (args, context) => {
-    assertOnlyKeys(args, [], "start_github_cli_login argument");
-    return startGitHubCliLogin(context);
-  });
-  register("get_github_cli_login", (args, context) => {
-    assertOnlyKeys(args, [], "get_github_cli_login argument");
-    return gitHubCliLoginProgress(context);
-  });
-  register("cancel_github_cli_login", (args, context) => {
-    assertOnlyKeys(args, ["operationId"], "cancel_github_cli_login argument");
-    return cancelGitHubCliLogin(
-      context,
-      args.operationId === undefined ? undefined : asString(args.operationId, "operationId"),
-    );
-  });
-  register("get_container_github_credential_status", async (_args, context) =>
+  register(startGithubCliLoginCommand, (_args, context) => startGitHubCliLogin(context));
+  register(getGithubCliLoginCommand, (_args, context) => gitHubCliLoginProgress(context));
+  register(cancelGithubCliLoginCommand, (args, context) =>
+    cancelGitHubCliLogin(context, args.operationId),
+  );
+  register(getContainerGithubCredentialStatusCommand, async (_args, context) =>
     getContainerGitHubCredentialStatus(
       (await context.storage.loadConfig()).global,
       context.runtime.gitHubCli,
     ),
   );
   register(
-    "check_any_ai_cli",
+    checkAnyAiCliCommand,
     async (_args, context) =>
       (await checkHostTool(context, "claude")) ||
       (await checkHostTool(context, "opencode")) ||
@@ -177,7 +196,7 @@ export function registerToolingCommands(
       (await hasManagedAcpBinary(context, "grok")) ||
       (await checkHostTool(context, "pi")),
   );
-  register("get_available_ai_cli", async (_args, context) =>
+  register(getAvailableAiCliCommand, async (_args, context) =>
     (await checkHostTool(context, "claude"))
       ? "claude"
       : (await checkHostTool(context, "opencode"))

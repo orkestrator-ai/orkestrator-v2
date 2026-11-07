@@ -3,6 +3,7 @@ import { EnvironmentItem } from "../../apps/web/src/components/environments/Envi
 import { Toaster } from "../../apps/web/src/components/ui/sonner";
 import { useAgentActivityStore } from "../../apps/web/src/stores/agentActivityStore";
 import type { Environment } from "../../apps/web/src/types";
+import { appCommandStore } from "../../apps/web/src/test/app-command-store";
 
 const environment: Environment = {
   id: "sidebar-probe",
@@ -44,13 +45,15 @@ export function SidebarActivityProbeFixture() {
             key={activity}
             onClick={() => {
               setStatus("running");
-              useAgentActivityStore.getState().replaceActivitySnapshot([
-                {
-                  id: environment.id,
-                  agentActivityState: activity,
-                  agentActivityUpdatedAt: new Date().toISOString(),
-                },
-              ]);
+              appCommandStore(useAgentActivityStore.def)
+                .getState()
+                .replaceActivitySnapshot([
+                  {
+                    id: environment.id,
+                    agentActivityState: activity,
+                    agentActivityUpdatedAt: new Date().toISOString(),
+                  },
+                ]);
             }}
           >
             Set {activity}

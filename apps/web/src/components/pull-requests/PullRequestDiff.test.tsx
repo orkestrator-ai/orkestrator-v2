@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { GitHubPullRequestReviewThread } from "@orkestrator/protocol/github-pull-requests";
-import { usePullRequestsStore } from "@/stores/pullRequestsStore";
+import { pullRequestsStore } from "@/stores/pullRequestsStore";
 import { PullRequestDiff, anchorThreads, commentAnchorForLine } from "./PullRequestDiff";
 import {
   callsFor,
@@ -12,6 +13,7 @@ import {
   resetBackend,
   resetPullRequestsStore,
 } from "./pull-request-test-fixtures";
+import { appCommandStore } from "@/test/app-command-store";
 
 function thread(
   id: string,
@@ -92,7 +94,7 @@ describe("anchorThreads", () => {
 
 describe("PullRequestDiff", () => {
   test("renders gutters and places threads beneath their lines", () => {
-    render(
+    renderInAppCommandScope(
       <PullRequestDiff
         pullRequest={prRef}
         file={makeFile()}
@@ -119,7 +121,7 @@ describe("PullRequestDiff", () => {
   });
 
   test("resolved threads start collapsed", () => {
-    render(
+    renderInAppCommandScope(
       <PullRequestDiff
         pullRequest={prRef}
         file={makeFile()}
@@ -139,7 +141,7 @@ describe("PullRequestDiff", () => {
     ["Comment on new line 2", "RIGHT", 2],
     ["Comment on new line 3", "RIGHT", 3],
   ] as const)("%s posts a review comment with side %s line %d", async (label, side, line) => {
-    usePullRequestsStore.setState({
+    appCommandStore(pullRequestsStore).setState({
       files: new Map([["acme/widget#42", makeFiles()]]),
     });
     installBackend({
@@ -154,7 +156,7 @@ describe("PullRequestDiff", () => {
       }),
       get_github_pull_request_files: () => makeFiles(),
     });
-    render(
+    renderInAppCommandScope(
       <PullRequestDiff
         pullRequest={prRef}
         file={makeFile()}
@@ -186,7 +188,7 @@ describe("PullRequestDiff", () => {
   });
 
   test("hides the comment affordance when commenting is not allowed", () => {
-    render(
+    renderInAppCommandScope(
       <PullRequestDiff
         pullRequest={prRef}
         file={makeFile()}
@@ -206,7 +208,7 @@ test("an open draft keeps its captured commit and line when polling replaces the
   });
   const file = makeFile();
   const props = { pullRequest: prRef, file, threads: [], commitId: "old-head", canComment: true };
-  const { rerender } = render(<PullRequestDiff {...props} />);
+  const { rerender } = renderInAppCommandScope(<PullRequestDiff {...props} />);
   fireEvent.click(screen.getByRole("button", { name: "Comment on new line 2" }));
   fireEvent.change(screen.getByRole("textbox", { name: "Review comment" }), {
     target: { value: "original draft" },
@@ -233,7 +235,7 @@ test("an open draft keeps its captured commit and line when polling replaces the
 });
 
 test("truncated review conversations explicitly disclose omitted newer replies", () => {
-  render(
+  renderInAppCommandScope(
     <PullRequestDiff
       pullRequest={prRef}
       file={makeFile()}

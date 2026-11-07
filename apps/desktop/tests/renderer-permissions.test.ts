@@ -32,7 +32,7 @@ function install(trusted = RENDERER) {
   };
 }
 
-const mainFrame = { isMainFrame: true, requestingUrl: `${RENDERER}?realm=workspace` };
+const mainFrame = { isMainFrame: true, requestingUrl: `${RENDERER}?project=p` };
 
 describe("renderer permission policy", () => {
   test("grants the renderer's own document a clipboard write, fullscreen and notifications", () => {

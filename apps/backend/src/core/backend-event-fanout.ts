@@ -1,8 +1,9 @@
 import {
-  COORDINATOR_WAKE_ATTENTION_EVENT,
-  ENVIRONMENT_ATTENTION_EVENT,
-} from "@orkestrator/protocol/environment-attention";
-import { RESOURCE_CHANGED_EVENT, type ResourceChange } from "@orkestrator/protocol/resource-events";
+  coordinatorWakeAttentionEvent,
+  environmentAttentionEvent,
+  resourceChangedEvent,
+} from "@orkestrator/protocol/contract/domains/events";
+import { type ResourceChange } from "@orkestrator/protocol/resource-events";
 import type { BackendEmit } from "./commands-context.js";
 import type { StorageService } from "./storage.js";
 
@@ -28,9 +29,9 @@ export function installStorageEventFanout(
   onResourceChange: (change: ResourceChange) => void,
 ): void {
   storage.setResourceChangeListener((change) => {
-    emit(RESOURCE_CHANGED_EVENT, change);
+    emit(resourceChangedEvent, change);
     onResourceChange(change);
   });
-  storage.addEnvironmentAttentionListener((event) => emit(ENVIRONMENT_ATTENTION_EVENT, event));
-  storage.addCoordinatorWakeListener((event) => emit(COORDINATOR_WAKE_ATTENTION_EVENT, event));
+  storage.addEnvironmentAttentionListener((event) => emit(environmentAttentionEvent, event));
+  storage.addCoordinatorWakeListener((event) => emit(coordinatorWakeAttentionEvent, event));
 }

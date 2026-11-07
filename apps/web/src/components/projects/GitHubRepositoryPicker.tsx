@@ -32,7 +32,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SegmentedSelector } from "@/components/ui/segmented-selector";
 import { formatCompactRelativeTime } from "@/lib/format-relative-time";
-import { pickHostPath } from "@/lib/host-path-picker";
+import { usePickHostPath } from "@/lib/host-path-picker";
 import { joinHostPath, normalizeGitHubRemote, parentDirectory } from "@/lib/github-clone";
 import { cn } from "@/lib/utils";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
@@ -175,6 +175,8 @@ export function GitHubRepositoryPicker({
   defaultCloneDirectory,
   existingGitUrls = [],
 }: GitHubRepositoryPickerProps) {
+  // Browses the host of the node this component renders in.
+  const pickHostPath = usePickHostPath();
   const [step, setStep] = useState<PickerStep>({ kind: "account" });
   const [accounts, setAccounts] = useState<LoadState<GitHubCloneAccount[]>>({
     status: "loading",

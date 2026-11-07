@@ -1,7 +1,8 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
-import { githubIssueDetailKey, useGitHubIssuesStore } from "@/stores/githubIssuesStore";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
+import { buildPipelineStore } from "@/stores/buildPipelineStore";
+import { githubIssueDetailKey, githubIssuesStore } from "@/stores/githubIssuesStore";
 import type { GitHubIssueDetail, GitHubRepository } from "@/types/github";
 import type { EnvironmentType } from "@/types";
 import type { GitHubIssueBuildInput } from "@/hooks/useBuildPipeline";
@@ -9,7 +10,8 @@ import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
 import * as realBackend from "@/lib/backend";
 import { mockToastError } from "../../../../../tests/mocks/sonner";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
-import { useProjectStore } from "@/stores/projectStore";
+import { projectStore } from "@/stores/projectStore";
+import { appCommandStore } from "@/test/app-command-store";
 
 const realBackendSnapshot = { ...realBackend };
 const openInBrowserMock = mock(async () => undefined);
@@ -33,7 +35,7 @@ const saveComposeDraftMock = mock(
 );
 const deleteComposeDraftMock = mock(async (_draftKey: string) => undefined);
 const retryCompletionCommentMock = mock(async (pipelineId: string) => {
-  const current = useBuildPipelineStore.getState().pipelines.get(pipelineId)!;
+  const current = appCommandStore(buildPipelineStore).getState().pipelines.get(pipelineId)!;
   return {
     ...current,
     completionCommentStatus: undefined,
@@ -115,11 +117,11 @@ const startBuildMock = mock<
     "pipeline-new",
 );
 const navigateToPipelineMock = mock(async () => undefined);
-const originalGitHubStoreState = useGitHubIssuesStore.getState();
+const originalGitHubStoreState = appCommandStore(githubIssuesStore).getState();
 
 afterAll(() => {
   cleanup();
-  useGitHubIssuesStore.setState(originalGitHubStoreState, true);
+  appCommandStore(githubIssuesStore).setState(originalGitHubStoreState, true);
   mock.module("@/lib/backend", () => realBackendSnapshot);
 });
 
@@ -128,7 +130,7 @@ describe("GitHubIssueDetail", () => {
 
   beforeEach(() => {
     cleanup();
-    useProjectStore.setState({ projects: [] });
+    appCommandStore(projectStore).setState({ projects: [] });
     loadIssueMock.mockClear();
     saveIssueMock.mockReset();
     saveIssueMock.mockResolvedValue(detail);
@@ -159,11 +161,11 @@ describe("GitHubIssueDetail", () => {
     deleteComposeDraftMock.mockResolvedValue(undefined);
     retryCompletionCommentMock.mockClear();
     mockToastError.mockClear();
-    useBuildPipelineStore.setState({
+    appCommandStore(buildPipelineStore).setState({
       pipelines: new Map(),
       buildEnvironmentIds: new Set(),
     });
-    useGitHubIssuesStore.setState({
+    appCommandStore(githubIssuesStore).setState({
       ...originalGitHubStoreState,
       details: new Map([[githubIssueDetailKey("project-1", 42), detail]]),
       snapshots: new Map(),
@@ -189,7 +191,7 @@ describe("GitHubIssueDetail", () => {
     onBack?: () => void;
     onClosed?: () => void;
   } = {}) {
-    return render(
+    return renderInAppCommandScope(
       <GitHubIssueDetailContent
         projectId="project-1"
         repository={repository}
@@ -210,30 +212,32 @@ describe("GitHubIssueDetail", () => {
     environmentId?: string,
   ) {
     const pipelineId = `pipeline-${phase}-${environmentId ?? "pending"}`;
-    useBuildPipelineStore.getState().replacePipeline(
-      buildPipelineFixture({
-        id: pipelineId,
-        taskId: "github:acme/widget#42",
-        environmentId: environmentId ?? "",
-        phase,
-        taskTitle: "#42: Ship GitHub issues",
-        taskSnapshot: {
-          title: detail.title,
-          description: detail.body,
-          acceptanceCriteria: "",
-          comments: [],
-          images: [],
-        },
-        source: {
-          type: "github",
-          repositoryOwner: "acme",
-          repositoryName: "widget",
-          issueNumber: 42,
-          issueUrl: detail.htmlUrl,
-          status: "Todo",
-        },
-      }),
-    );
+    appCommandStore(buildPipelineStore)
+      .getState()
+      .replacePipeline(
+        buildPipelineFixture({
+          id: pipelineId,
+          taskId: "github:acme/widget#42",
+          environmentId: environmentId ?? "",
+          phase,
+          taskTitle: "#42: Ship GitHub issues",
+          taskSnapshot: {
+            title: detail.title,
+            description: detail.body,
+            acceptanceCriteria: "",
+            comments: [],
+            images: [],
+          },
+          source: {
+            type: "github",
+            repositoryOwner: "acme",
+            repositoryName: "widget",
+            issueNumber: 42,
+            issueUrl: detail.htmlUrl,
+            status: "Todo",
+          },
+        }),
+      );
     return pipelineId;
   }
 
@@ -269,7 +273,7 @@ describe("GitHubIssueDetail", () => {
   });
 
   test("initializes editing from fresh detail rather than a stale list summary", async () => {
-    render(
+    renderInAppCommandScope(
       <GitHubIssueDetailContent
         projectId="project-1"
         repository={repository}
@@ -509,7 +513,7 @@ describe("GitHubIssueDetail", () => {
         />
       </DockerAvailabilityProvider>
     );
-    const view = render(renderWithDocker(true));
+    const view = renderInAppCommandScope(renderWithDocker(true));
 
     expect(
       (screen.getByRole("button", { name: "Build Container" }) as HTMLButtonElement).disabled,
@@ -537,7 +541,7 @@ describe("GitHubIssueDetail", () => {
   });
 
   test("blocks local builds for a project with no host checkout", async () => {
-    useProjectStore.setState({
+    appCommandStore(projectStore).setState({
       projects: [
         {
           id: "project-1",
@@ -568,7 +572,7 @@ describe("GitHubIssueDetail", () => {
 
   test("keeps local builds available while the project store is still hydrating", async () => {
     // An id the store does not know yet means "not loaded", not "no checkout".
-    useProjectStore.setState({ projects: [] });
+    appCommandStore(projectStore).setState({ projects: [] });
     renderDetail();
 
     const localBuild = screen.getByRole("button", { name: "Build Local" });
@@ -598,22 +602,26 @@ describe("GitHubIssueDetail", () => {
 
   test("keeps retry controls visible for every failed completion comment", async () => {
     const olderId = seedIssuePipeline("failed", "env-old");
-    const older = useBuildPipelineStore.getState().pipelines.get(olderId)!;
-    useBuildPipelineStore.getState().replacePipeline({
-      ...older,
-      completionCommentStatus: "failed",
-      completionCommentError: "first failure",
-      backendRevision: older.backendRevision + 1,
-    });
+    const older = appCommandStore(buildPipelineStore).getState().pipelines.get(olderId)!;
+    appCommandStore(buildPipelineStore)
+      .getState()
+      .replacePipeline({
+        ...older,
+        completionCommentStatus: "failed",
+        completionCommentError: "first failure",
+        backendRevision: older.backendRevision + 1,
+      });
     await new Promise((resolve) => setTimeout(resolve, 2));
     const newerId = seedIssuePipeline("complete", "env-new");
-    const newer = useBuildPipelineStore.getState().pipelines.get(newerId)!;
-    useBuildPipelineStore.getState().replacePipeline({
-      ...newer,
-      completionCommentStatus: "failed",
-      completionCommentError: "second failure",
-      backendRevision: newer.backendRevision + 1,
-    });
+    const newer = appCommandStore(buildPipelineStore).getState().pipelines.get(newerId)!;
+    appCommandStore(buildPipelineStore)
+      .getState()
+      .replacePipeline({
+        ...newer,
+        completionCommentStatus: "failed",
+        completionCommentError: "second failure",
+        backendRevision: newer.backendRevision + 1,
+      });
 
     renderDetail();
 
@@ -637,23 +645,27 @@ describe("GitHubIssueDetail", () => {
     );
     await waitFor(() => {
       expect(
-        useBuildPipelineStore.getState().pipelines.get(olderId)?.completionCommentStatus,
+        appCommandStore(buildPipelineStore).getState().pipelines.get(olderId)
+          ?.completionCommentStatus,
       ).toBeUndefined();
-      expect(useBuildPipelineStore.getState().pipelines.get(newerId)?.completionCommentStatus).toBe(
-        "failed",
-      );
+      expect(
+        appCommandStore(buildPipelineStore).getState().pipelines.get(newerId)
+          ?.completionCommentStatus,
+      ).toBe("failed");
     });
   });
 
   test("keeps completion retries single-flight and recovers after rejection", async () => {
     const pipelineId = seedIssuePipeline("complete", "env-retry");
-    const pipeline = useBuildPipelineStore.getState().pipelines.get(pipelineId)!;
-    useBuildPipelineStore.getState().replacePipeline({
-      ...pipeline,
-      completionCommentStatus: "failed",
-      completionCommentError: "offline",
-      backendRevision: pipeline.backendRevision + 1,
-    });
+    const pipeline = appCommandStore(buildPipelineStore).getState().pipelines.get(pipelineId)!;
+    appCommandStore(buildPipelineStore)
+      .getState()
+      .replacePipeline({
+        ...pipeline,
+        completionCommentStatus: "failed",
+        completionCommentError: "offline",
+        backendRevision: pipeline.backendRevision + 1,
+      });
     let rejectRetry!: (reason?: unknown) => void;
     retryCompletionCommentMock.mockImplementationOnce(
       () =>

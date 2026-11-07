@@ -1,3 +1,5 @@
+import { relayedNodeEvents } from "@orkestrator/protocol/contract/domains/events";
+import type { BackendEmit } from "../backend-emit.js";
 import { randomUUID } from "node:crypto";
 
 import { CHANGE_PROJECTION_CHANGED_EVENT } from "@orkestrator/protocol/change-resources";
@@ -12,7 +14,6 @@ import {
   MAX_NODE_EVENT_PREFIXES,
   NODE_EVENT_WATCH_TTL_MS,
   parseNodeEventPrefixes,
-  relayedNodeEventName,
   type NodeEventWatchResult,
   type RelayedNodeEvent,
 } from "@orkestrator/protocol/node-events";
@@ -77,7 +78,7 @@ export class NodeEventRelay {
   constructor(
     private readonly options: {
       nodes: RelayNodes;
-      emit: (event: string, payload: unknown) => void;
+      emit: BackendEmit;
       fetchImpl?: typeof fetch;
       now?: () => number;
     },
@@ -245,7 +246,7 @@ export class NodeEventRelay {
             return;
           }
           const frame: RelayedNodeEvent = { nodeId, kind: "event", event, payload };
-          this.options.emit(relayedNodeEventName(nodeId), frame);
+          this.options.emit(relayedNodeEvents.at(nodeId), frame);
         },
       }),
     };
@@ -260,7 +261,7 @@ export class NodeEventRelay {
 
   private relayResync(nodeId: BackendId): void {
     const frame: RelayedNodeEvent = { nodeId, kind: "resync" };
-    this.options.emit(relayedNodeEventName(nodeId), frame);
+    this.options.emit(relayedNodeEvents.at(nodeId), frame);
   }
 
   /** Expired leases are swept while any exist, so a vanished client's stream closes. */

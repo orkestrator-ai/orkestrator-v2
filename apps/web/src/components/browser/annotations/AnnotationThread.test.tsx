@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { useAnnotationUiTestBudget } from "@/test/web-annotation-harness";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import {
   fixtureCapture,
   fixtureEntry,
@@ -86,7 +87,7 @@ describe("annotation threads and list", () => {
       }),
     ]);
     openThread("annotation-a");
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     const thread = await screen.findByRole("list", { name: "Discussion" });
     expect(within(thread).getByText("You")).toBeTruthy();
     expect(
@@ -100,7 +101,7 @@ describe("annotation threads and list", () => {
   test("edits one note, and a stale edit keeps the text with keep-as-reply or reload", async () => {
     backend.seed({ id: "annotation-a", title: "Header spacing" });
     openThread("annotation-a");
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     fireEvent.click(await screen.findByRole("button", { name: /Edit note from/ }));
     const editor = screen.getByRole("textbox", { name: "Edit note" });
     fireEvent.change(editor, { target: { value: "Tighten it by 4px" } });
@@ -123,7 +124,7 @@ describe("annotation threads and list", () => {
   test("a reply conflict preserves the local reply", async () => {
     backend.seed({ id: "annotation-a", title: "Header spacing" });
     openThread("annotation-a");
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     const reply = await screen.findByRole("textbox", { name: "Reply to Header spacing" });
     fireEvent.change(reply, { target: { value: "Also on mobile" } });
     backend.annotations.get("annotation-a")!.contentRevision = 9;
@@ -139,7 +140,7 @@ describe("annotation threads and list", () => {
     backend.seed({ id: "annotation-a", title: "Header spacing" });
     backend.seed({ id: "annotation-b", title: "Footer links" });
     openThread("annotation-a");
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     fireEvent.click(await screen.findByRole("button", { name: "Delete note…" }));
     fireEvent.click(screen.getByRole("button", { name: "Delete note" }));
     await waitFor(() => expect(panelState()?.selectedAnnotationId).toBeUndefined());
@@ -172,7 +173,7 @@ describe("annotation threads and list", () => {
         }),
       );
       openThread(annotation.id);
-      render(<AnnotationHarness />);
+      renderInAppCommandScope(<AnnotationHarness />);
       await screen.findByRole("region", { name: "Captured target" });
       await waitFor(() => expect(screen.getAllByRole("img")).toHaveLength(2));
       expect(screen.queryByRole("img", { name: /Selected region/ }) !== null).toBe(
@@ -194,7 +195,7 @@ describe("annotation threads and list", () => {
       producerSource: "backend",
     });
     openThread(annotation.id);
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     expect(await screen.findByText("After-capture for review")).toBeTruthy();
   });
 
@@ -222,7 +223,7 @@ describe("annotation threads and list", () => {
       },
     });
     openThread(annotation.id);
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     await screen.findByText(/^Source candidates from the page \(vite-plugin-example\)/);
     const rows = [...document.querySelectorAll("[data-source-candidates] li")];
     expect(rows.map((row) => row.textContent)).toEqual([
@@ -238,7 +239,7 @@ describe("annotation threads and list", () => {
   test("a capture without source hints shows no candidate list", async () => {
     const annotation = backend.seed({ id: "annotation-no-hints", title: "No hints" });
     openThread(annotation.id);
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     await screen.findByText("Page evidence (untrusted)");
     expect(document.querySelector("[data-source-candidates]") === null).toBe(true);
   });
@@ -253,7 +254,7 @@ describe("annotation threads and list", () => {
       stateReason: "the page reloaded",
     });
     openThread("annotation-a");
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     expect(await screen.findByText(/Stale capture: the page reloaded/)).toBeTruthy();
     await waitFor(() =>
       expect(document.querySelector('[data-image-state="missing"]')).not.toBeNull(),
@@ -264,7 +265,7 @@ describe("annotation threads and list", () => {
   test("shows an offline notice without changing note or request labels", async () => {
     backend.seed({ id: "annotation-a", title: "Header spacing" });
     seedBrowserLayout({ open: true });
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     const row = await screen.findByRole("button", { name: "Open note: Header spacing" });
     expect(within(row).getByText("Open")).toBeTruthy();
     backend.fail("web_annotations_changes", new Error("Gateway disconnected"), { times: 99 });
@@ -282,7 +283,7 @@ describe("annotation threads and list", () => {
     }
     backend.seed({ id: "annotation-resolved", title: "Old fix", state: "resolved" });
     seedBrowserLayout({ open: true });
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     fireEvent.click(await screen.findByRole("checkbox", { name: "Select note 1: Note 1" }));
     expect(screen.getByText("1–20 of 25")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Next page of notes" }));
@@ -312,7 +313,7 @@ describe("annotation threads and list", () => {
     for (let index = 1; index <= 3; index++)
       backend.seed({ id: `annotation-${index}`, title: `Note ${index}` });
     seedBrowserLayout({ open: true });
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     fireEvent.click(await screen.findByRole("checkbox", { name: "Select note 1: Note 1" }));
     fireEvent.click(screen.getByRole("checkbox", { name: "Select note 2: Note 2" }));
     fireEvent.click(screen.getByRole("checkbox", { name: "Select note 3: Note 3" }));
@@ -330,7 +331,7 @@ describe("annotation threads and list", () => {
       targetKind: "legacy-unresolved",
     });
     seedBrowserLayout({ open: true, filter: { scope: "all", state: "open" } });
-    render(<AnnotationHarness />);
+    renderInAppCommandScope(<AnnotationHarness />);
     await screen.findByRole("button", { name: "Open note: Fresh" });
     fireEvent.click(screen.getByRole("checkbox", { name: "Imported browser notes" }));
     await waitFor(() =>

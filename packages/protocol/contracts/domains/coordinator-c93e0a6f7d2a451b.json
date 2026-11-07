@@ -1,0 +1,406 @@
+{
+  "schemaVersion": 1,
+  "domain": "coordinator",
+  "commands": {
+    "address_coordinator_multi_review_action": {
+      "untyped": true,
+      "read": false
+    },
+    "adopt_coordinator_workflow": {
+      "untyped": true,
+      "read": false
+    },
+    "answer_controller_worker_question": {
+      "untyped": true,
+      "read": false
+    },
+    "answer_project_worker_question": {
+      "untyped": true,
+      "read": false
+    },
+    "apply_project_root_changes": {
+      "untyped": true,
+      "read": false
+    },
+    "ask_coordinator_suborks": {
+      "untyped": true,
+      "read": false
+    },
+    "assert_coordinator_delegation_available": {
+      "untyped": true,
+      "read": false
+    },
+    "assert_coordinator_node_delegation_available": {
+      "untyped": true,
+      "read": false
+    },
+    "assign_coordinator_conversation_agent": {
+      "untyped": true,
+      "read": false
+    },
+    "associate_coordinator_workflow": {
+      "untyped": true,
+      "read": false
+    },
+    "cancel_coordinator_graph_run": {
+      "untyped": true,
+      "read": false
+    },
+    "clear_coordinator_worker_goal": {
+      "untyped": true,
+      "read": false
+    },
+    "close_coordinator_conversation": {
+      "untyped": true,
+      "read": false
+    },
+    "controller_multi_review_surface": {
+      "untyped": true,
+      "read": false
+    },
+    "coordinator_node_multi_review_surface": {
+      "untyped": true,
+      "read": false
+    },
+    "create_control_mcp_credential": {
+      "untyped": true,
+      "read": false
+    },
+    "create_controller_environment": {
+      "untyped": true,
+      "read": false
+    },
+    "create_controller_pr": {
+      "untyped": true,
+      "read": false
+    },
+    "create_coordinator_conversation": {
+      "untyped": true,
+      "read": false
+    },
+    "create_coordinator_pr": {
+      "untyped": true,
+      "read": false
+    },
+    "custom_fix_coordinator_multi_review_action": {
+      "untyped": true,
+      "read": false
+    },
+    "edit_controller_worker_tab": {
+      "untyped": true,
+      "read": false
+    },
+    "edit_coordinator_worker_tab": {
+      "untyped": true,
+      "read": false
+    },
+    "ensure_project_coordinator": {
+      "untyped": true,
+      "read": false
+    },
+    "fetch_project_git": {
+      "untyped": true,
+      "read": false
+    },
+    "fork_controller_environment": {
+      "untyped": true,
+      "read": false
+    },
+    "fork_coordinator_worker": {
+      "untyped": true,
+      "read": false
+    },
+    "get_control_mcp_settings": {
+      "untyped": true,
+      "read": true
+    },
+    "get_controller_worker_changes": {
+      "untyped": true,
+      "read": true
+    },
+    "get_coordinator_checkout_turn": {
+      "untyped": true,
+      "read": true
+    },
+    "get_coordinator_feature_plan": {
+      "untyped": true,
+      "read": true
+    },
+    "get_coordinator_graph_run": {
+      "untyped": true,
+      "read": true
+    },
+    "get_coordinator_launch_environment": {
+      "untyped": true,
+      "read": true
+    },
+    "get_coordinator_node_launch_environment": {
+      "untyped": true,
+      "read": true
+    },
+    "get_coordinator_node_mailbox": {
+      "untyped": true,
+      "read": true
+    },
+    "get_coordinator_worker_changes": {
+      "untyped": true,
+      "read": true
+    },
+    "get_coordinator_worker_goal": {
+      "untyped": true,
+      "read": true
+    },
+    "get_project_base_branch_tip": {
+      "untyped": true,
+      "read": true
+    },
+    "get_project_coordinator": {
+      "untyped": true,
+      "read": true
+    },
+    "get_project_coordinator_view": {
+      "untyped": true,
+      "read": true
+    },
+    "get_project_git_status": {
+      "untyped": true,
+      "read": true
+    },
+    "hide_coordinator_work": {
+      "untyped": true,
+      "read": false
+    },
+    "launch_control_job": {
+      "untyped": true,
+      "read": false
+    },
+    "launch_controller_multi_review": {
+      "untyped": true,
+      "read": false
+    },
+    "launch_controller_terminal": {
+      "untyped": true,
+      "read": false
+    },
+    "launch_coordinator_environment": {
+      "untyped": true,
+      "read": false
+    },
+    "launch_coordinator_feature_plan": {
+      "untyped": true,
+      "read": false
+    },
+    "launch_coordinator_multi_review_action": {
+      "untyped": true,
+      "read": false
+    },
+    "launch_coordinator_node_environment": {
+      "untyped": true,
+      "read": false
+    },
+    "launch_coordinator_node_multi_review": {
+      "untyped": true,
+      "read": false
+    },
+    "launch_coordinator_terminal": {
+      "untyped": true,
+      "read": false
+    },
+    "launch_multi_review": {
+      "untyped": true,
+      "read": false
+    },
+    "launch_native_agent_job": {
+      "untyped": true,
+      "read": false
+    },
+    "list_controller_worker_commands": {
+      "untyped": true,
+      "read": true
+    },
+    "list_coordinator_activity": {
+      "untyped": true,
+      "read": true
+    },
+    "list_coordinator_graph_templates": {
+      "untyped": true,
+      "read": true
+    },
+    "list_coordinator_worker_commands": {
+      "untyped": true,
+      "read": true
+    },
+    "list_project_root_changes": {
+      "untyped": true,
+      "read": true
+    },
+    "open_controller_browser": {
+      "untyped": true,
+      "read": false
+    },
+    "open_coordinator_browser": {
+      "untyped": true,
+      "read": false
+    },
+    "open_coordinator_delegation": {
+      "untyped": true,
+      "read": false
+    },
+    "open_coordinator_multi_review": {
+      "untyped": true,
+      "read": false
+    },
+    "open_coordinator_multi_review_fix": {
+      "untyped": true,
+      "read": false
+    },
+    "open_coordinator_node_delegation": {
+      "untyped": true,
+      "read": false
+    },
+    "pause_coordinator_worker_goal": {
+      "untyped": true,
+      "read": false
+    },
+    "pause_project_coordinator": {
+      "untyped": true,
+      "read": false
+    },
+    "prepare_project_git_branch_switch": {
+      "untyped": true,
+      "read": false
+    },
+    "request_coordinator_root_changes": {
+      "untyped": true,
+      "read": false
+    },
+    "request_coordinator_worker_answer": {
+      "untyped": true,
+      "read": false
+    },
+    "resolve_controller_conflicts": {
+      "untyped": true,
+      "read": false
+    },
+    "resolve_coordinator_conflicts": {
+      "untyped": true,
+      "read": false
+    },
+    "restart_controller_build_pipeline_step": {
+      "untyped": true,
+      "read": false
+    },
+    "restart_coordinator_build_pipeline_step": {
+      "untyped": true,
+      "read": false
+    },
+    "resume_project_coordinator": {
+      "untyped": true,
+      "read": false
+    },
+    "retry_coordinator_conversation": {
+      "untyped": true,
+      "read": false
+    },
+    "revoke_control_mcp_credential": {
+      "untyped": true,
+      "read": false
+    },
+    "rotate_control_mcp_credential": {
+      "untyped": true,
+      "read": false
+    },
+    "rotate_control_mcp_token": {
+      "untyped": true,
+      "read": false
+    },
+    "run_controller_worker_command": {
+      "untyped": true,
+      "read": false
+    },
+    "run_coordinator_worker_command": {
+      "untyped": true,
+      "read": false
+    },
+    "select_coordinator_conversation": {
+      "untyped": true,
+      "read": false
+    },
+    "send_approved_project_home_message": {
+      "untyped": true,
+      "read": false
+    },
+    "send_coordinator_agent_mail": {
+      "untyped": true,
+      "read": false
+    },
+    "send_coordinator_node_mail": {
+      "untyped": true,
+      "read": false
+    },
+    "set_coordinator_worker_goal": {
+      "untyped": true,
+      "read": false
+    },
+    "start_controller_build_pipeline": {
+      "untyped": true,
+      "read": false
+    },
+    "start_controller_multi_review": {
+      "untyped": true,
+      "read": false
+    },
+    "start_coordinator_build_pipeline": {
+      "untyped": true,
+      "read": false
+    },
+    "start_coordinator_graph_run": {
+      "untyped": true,
+      "read": false
+    },
+    "start_coordinator_multi_review": {
+      "untyped": true,
+      "read": false
+    },
+    "start_coordinator_node_build_pipeline": {
+      "untyped": true,
+      "read": false
+    },
+    "start_coordinator_node_multi_review": {
+      "untyped": true,
+      "read": false
+    },
+    "stop_controller_worker_turn": {
+      "untyped": true,
+      "read": false
+    },
+    "stop_coordinator_worker_turn": {
+      "untyped": true,
+      "read": false
+    },
+    "switch_project_git_branch": {
+      "untyped": true,
+      "read": false
+    },
+    "sync_project_git": {
+      "untyped": true,
+      "read": false
+    },
+    "transfer_coordinator_attachments": {
+      "untyped": true,
+      "read": false
+    },
+    "verify_project_launch_base": {
+      "untyped": true,
+      "read": false
+    },
+    "watch_coordinator_pull_request": {
+      "untyped": true,
+      "read": false
+    },
+    "write_coordinator_attachment": {
+      "untyped": true,
+      "read": false
+    }
+  }
+}

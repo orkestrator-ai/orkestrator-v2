@@ -5,20 +5,28 @@ import {
   isCoordinatorWakeAttentionEvent,
   isEnvironmentAttentionEvent,
   isInputNeededAttentionReason,
+  type EnvironmentAttentionEvent,
   type EnvironmentAttentionReason,
 } from "@orkestrator/protocol/environment-attention";
 import { normalizeNotificationSoundSettings } from "@orkestrator/protocol/notification-sounds";
+import type { BackendId } from "@orkestrator/protocol/federation";
 import { BoundedKeySet } from "@/lib/bounded-hydration";
 import { clientStateCapabilities } from "@/lib/client-state-capabilities";
 import { listen, NATIVE_EVENT_STREAM_CONNECTED_EVENT, type UnlistenFn } from "@/lib/native/events";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { useEnvironmentStore } from "@/stores/environmentStore";
-import { useConfigStore } from "@/stores/configStore";
+import { configStore, useConfigStore } from "@/stores/configStore";
+import { appCommandScope } from "@/lib/node-scope-slots";
 import {
   coordinatorConversationTab,
   useActiveCoordinatorConversationStore,
 } from "@/stores/activeCoordinatorConversationStore";
+import { uiStore } from "@/stores/uiStore";
+import { selectionOnScope } from "@/stores/windowSelectionStore";
+import type { WindowScope } from "@/lib/node-scope/window-scope";
+import { shownEnvironmentOn } from "@/lib/federation/window-attention";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
-import { useUIStore } from "@/stores/uiStore";
+import { remoteAttentionTarget, useRemoteNodeAttention } from "./useRemoteNodeAttention";
 import { useVisibleEnvironmentId } from "./useVisibleEnvironmentId";
 import {
   playConfiguredNotificationSound,
@@ -32,16 +40,22 @@ export const ATTENTION_DEDUPE_LIMIT = 256;
 /** Several environments finishing together are one cue. */
 export const ATTENTION_COALESCE_MS = 500;
 
-/** This project's coordinator page is what the user is looking at right now. */
-function coordinatorOnScreen(projectId: string): boolean {
+/**
+ * This project (on `nodeId`) has its coordinator page on screen right now:
+ * the window's selection is that project on that node, and the node's board
+ * shows its coordinator.
+ */
+function coordinatorOnScreen(
+  windowScope: WindowScope,
+  nodeId: BackendId,
+  projectId: string,
+): boolean {
   if (typeof document !== "undefined" && document.visibilityState !== "visible") return false;
-  if (useRemoteWorkspaceStore.getState().active !== null) return false;
-  const { selectedProjectId, projectBoardTab } = useUIStore.getState();
+  const scope = windowScope.get(nodeId);
+  if (!scope || selectionOnScope(scope)?.projectId !== projectId) return false;
+  const { projectBoardTab } = scope.store(uiStore).getState();
   const conversation = useActiveCoordinatorConversationStore.getState().active;
-  return (
-    selectedProjectId === projectId &&
-    coordinatorConversationTab(conversation, selectedProjectId, projectBoardTab) !== null
-  );
+  return coordinatorConversationTab(conversation, { nodeId, projectId }, projectBoardTab) !== null;
 }
 
 interface LastCue {
@@ -70,9 +84,10 @@ function windowFocused(): boolean {
   return document.visibilityState === "visible" && document.hasFocus();
 }
 
+/** The window's sound settings: those of the node it is connected to. */
 function soundSettings() {
   return normalizeNotificationSoundSettings(
-    useConfigStore.getState().config.global.notificationSounds,
+    appCommandScope().store(configStore).getState().config.global.notificationSounds,
   );
 }
 
@@ -87,6 +102,7 @@ function alertInputNeeded(
   input: { environmentId: string; projectId: string; reason: EnvironmentAttentionReason },
   visibleEnvironmentId: string | null,
   lastCue: { current: LastCue },
+  remote?: ReturnType<typeof remoteAttentionTarget>,
 ): void {
   if (input.environmentId === visibleEnvironmentId && windowFocused()) return;
   const settings = soundSettings();
@@ -101,9 +117,37 @@ function alertInputNeeded(
   }
   if (settings.questionDesktopNotification) {
     void playback.then((played) => {
-      showQuestionDesktopNotification({ ...input, silent: played });
+      showQuestionDesktopNotification({ ...input, silent: played, ...(remote ? { remote } : {}) });
     });
   }
+}
+
+/**
+ * Attention from another node, under the same settings and coalescing as
+ * this window's own node. Only the node the window shows can have its
+ * environment on screen; that environment stays quiet as the window's own
+ * selected one does.
+ */
+function alertRemoteAttention(
+  windowScope: WindowScope,
+  nodeId: string,
+  { environmentId, projectId, reason }: EnvironmentAttentionEvent,
+  lastCue: { current: LastCue },
+): void {
+  const onScreen = shownEnvironmentOn(windowScope, nodeId);
+  if (isInputNeededAttentionReason(reason)) {
+    alertInputNeeded(
+      { environmentId, projectId, reason },
+      onScreen,
+      lastCue,
+      remoteAttentionTarget(nodeId, projectId, environmentId),
+    );
+    return;
+  }
+  if (environmentId === onScreen) return;
+  if (!soundSettings().agentStopped) return;
+  if (!claimCue(lastCue, "agent-stopped")) return;
+  void playConfiguredNotificationSound("agent-stopped");
 }
 
 /**
@@ -129,6 +173,11 @@ function alertInputNeeded(
  * An attention event whose reason means the agent needs input (a question, an
  * approval, a plan) gets the "agent question" cue and a desktop notification
  * instead; see {@link alertInputNeeded}.
+ *
+ * The window also alerts for every other node, through the window's
+ * attention service ({@link useRemoteNodeAttention}, plan item 5001). While
+ * another node is shown in the central region, none of this node's
+ * environments is on screen.
  */
 export function useNotificationSoundService(): void {
   const environments = useEnvironmentStore((state) => state.environments);
@@ -154,11 +203,26 @@ export function useNotificationSoundService(): void {
     kind: null,
   });
   const previousUnreadRef = useRef<Map<string, boolean> | null>(null);
-  const visibleEnvironmentRef = useRef(selectedEnvironmentId);
+  // Wake events arrive on the window's own stream, so they are its command node's.
+  const { windowScope } = useScopesWithCommandFallback();
+  const commandNodeId = windowScope.commandScope().nodeId;
+  const commandNodeIdRef = useRef(commandNodeId);
+  const windowScopeRef = useRef(windowScope);
   useEffect(() => {
-    visibleEnvironmentRef.current = selectedEnvironmentId;
-  }, [selectedEnvironmentId]);
+    commandNodeIdRef.current = commandNodeId;
+    windowScopeRef.current = windowScope;
+  }, [commandNodeId, windowScope]);
+  // Another node shown in the central region hides this node's selection.
+  const otherNodeShown = useRemoteWorkspaceStore((state) => state.active !== null);
+  const visibleEnvironmentId = otherNodeShown ? null : selectedEnvironmentId;
+  const visibleEnvironmentRef = useRef(visibleEnvironmentId);
+  useEffect(() => {
+    visibleEnvironmentRef.current = visibleEnvironmentId;
+  }, [visibleEnvironmentId]);
   const [eventDriven, setEventDriven] = useState(false);
+  useRemoteNodeAttention((nodeId, event) =>
+    alertRemoteAttention(windowScopeRef.current, nodeId, event, lastCueRef),
+  );
 
   useEffect(() => {
     let disposed = false;
@@ -226,7 +290,11 @@ export function useNotificationSoundService(): void {
     void listen<unknown>(COORDINATOR_WAKE_ATTENTION_EVENT, (event) => {
       if (!isCoordinatorWakeAttentionEvent(event.payload)) return;
       const { attentionId, projectId } = event.payload;
-      if (!seen.add(attentionId) || coordinatorOnScreen(projectId)) return;
+      if (
+        !seen.add(attentionId) ||
+        coordinatorOnScreen(windowScopeRef.current, commandNodeIdRef.current, projectId)
+      )
+        return;
       if (!soundSettings().coordinatorReport) return;
       if (!claimCue(lastCueRef, "coordinator-report")) return;
       void playConfiguredNotificationSound("coordinator-report");

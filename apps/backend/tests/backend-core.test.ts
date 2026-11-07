@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { OrkestratorBackend } from "../src/core/index";
 import { BackendRuntime } from "../src/core/backend-runtime";
+import { UnknownCommandError, incompatibility } from "@orkestrator/protocol/contract/errors";
 
 const tempDirs: string[] = [];
 
@@ -45,6 +46,16 @@ describe("OrkestratorBackend", () => {
       await expect(backend.invoke("unknown-command")).rejects.toThrow(
         "Unknown backend command: unknown-command",
       );
+      // Coded (plan item 1005), naming the envelope's domain when it has one.
+      const unknown = await backend
+        .invoke("get_missing_probe", {}, { domain: "system", version: 1 })
+        .catch((error: unknown) => error);
+      expect(unknown).toBeInstanceOf(UnknownCommandError);
+      expect(incompatibility(unknown, "get_missing_probe")).toEqual({
+        code: "unknown-command",
+        domain: "system",
+        command: "get_missing_probe",
+      });
     } finally {
       // Startup work (the design canvas sweep among it) still writes into the
       // data directory; shutting down settles it before the directory goes.

@@ -14,7 +14,7 @@ import * as backend from "@/lib/backend";
 import { subscribeNodeEvents } from "@/lib/federation/node-events";
 import { NATIVE_EVENT_STREAM_CONNECTED_EVENT, listen } from "@/lib/native/events";
 
-import { portalListen } from "@/lib/portal/portal-transport";
+import { commandScopeListen } from "@/lib/portal/command-scope";
 
 import { mcpErrorReference } from "./McpErrorNotice";
 
@@ -63,7 +63,7 @@ function useBackendInvalidation(refresh: () => void, machine: string | null | un
     let disposed = false;
     const unlisteners: Array<() => void> = [];
     for (const event of [MCP_MANAGEMENT_CHANGED_EVENT, NATIVE_EVENT_STREAM_CONNECTED_EVENT]) {
-      void (machine === null ? portalListen : listen)(event, () => refreshRef.current())
+      void (machine === null ? commandScopeListen : listen)(event, () => refreshRef.current())
         .then((unlisten) => {
           if (disposed) unlisten();
           else unlisteners.push(unlisten);

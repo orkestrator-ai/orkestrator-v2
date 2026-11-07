@@ -1,4 +1,5 @@
-import { create } from "zustand";
+import { defineScopedStore } from "@/lib/node-scope/scoped-store";
+import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
 
 export type TabLaunchSurface = "agent" | "terminal" | "page";
 
@@ -25,7 +26,7 @@ export interface TabLaunch {
 /** Bounds one environment's launches; each is a click, and they settle quickly. */
 const MAX_LAUNCHES_PER_ENVIRONMENT = 8;
 
-interface TabLaunchState {
+export interface TabLaunchState {
   launches: Map<string, readonly TabLaunch[]>;
   add: (environmentId: string, launch: Pick<TabLaunch, "tabId" | "title" | "surface">) => void;
   update: (environmentId: string, tabId: string, patch: Partial<TabLaunch>) => void;
@@ -45,7 +46,8 @@ function withLaunches(
   return updated;
 }
 
-export const useTabLaunchStore = create<TabLaunchState>((set) => ({
+/** Per node: environment and tab ids belong to one node (plan item 3003). */
+export const tabLaunchStore = defineScopedStore<TabLaunchState>("tab-launch", () => (set) => ({
   launches: new Map(),
   add: (environmentId, launch) =>
     set(({ launches }) => {
@@ -103,3 +105,6 @@ export const useTabLaunchStore = create<TabLaunchState>((set) => ({
       ),
     })),
 }));
+
+/** Reads the nearest node scope's launches; other code uses `scope.store(tabLaunchStore)`. */
+export const useTabLaunchStore = scopedStoreHook(tabLaunchStore);

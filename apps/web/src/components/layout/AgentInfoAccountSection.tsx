@@ -21,11 +21,8 @@ import { AutoSwitchBadge } from "@/components/settings/AutoSwitchBadge";
 import { accountOptionLabel } from "@/components/settings/machines/MachineAgentAccountsSection";
 import { useFederation } from "@/components/federation/FederationProvider";
 import { useAgentAccountsChanged } from "@/hooks/useAgentAccountsChanged";
-import {
-  getNativeAgentSessionAccount,
-  listAgentAccounts,
-  setActiveAgentAccount,
-} from "@/lib/backend";
+import { backendForScope } from "@/lib/backend/scope-backend";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { requestGlobalSettings } from "@/lib/settings-navigation";
 import {
   agentAccountLoginOf,
@@ -41,10 +38,20 @@ function messageOf(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
 }
 
-/** The machine this view's backend is, named only when the client shows more than one. */
+/**
+ * The machine this view's backend is, named only when the client shows more
+ * than one: the nearest node scope's (another node shown in the window's
+ * tree, plan item 5002), else the machine this document is bound to.
+ */
 export function useSessionMachineName(): string | null {
-  const { enabled, bound } = useFederation();
-  return enabled && bound ? bound.name : null;
+  const { enabled, bound, portalState } = useFederation();
+  const { scope } = useScopesWithCommandFallback();
+  if (!enabled) return null;
+  if (scope.role !== "command") {
+    const node = portalState.nodes.find((candidate) => candidate.nodeId === scope.nodeId);
+    return node?.view.displayName || null;
+  }
+  return bound ? bound.name : null;
 }
 
 export function AgentInfoAccountSection({
@@ -99,6 +106,8 @@ function AccountSection({
   }, [onSessionAccount]);
   const machineName = useSessionMachineName();
   const platformLabel = AGENT_PLATFORM_LABELS[platform];
+  // Accounts belong to the session's machine: this view's node scope.
+  const { scope } = useScopesWithCommandFallback();
 
   useEffect(() => {
     mounted.current = true;
@@ -113,8 +122,8 @@ function AccountSection({
     reportSession.current?.(null);
     try {
       const [nextSession, nextSnapshot] = await Promise.all([
-        getNativeAgentSessionAccount(environmentId, platform),
-        listAgentAccounts(),
+        backendForScope(scope).getNativeAgentSessionAccount(environmentId, platform),
+        backendForScope(scope).listAgentAccounts(),
       ]);
       if (!mounted.current || latest.current !== read) return;
       setSession(nextSession);
@@ -127,19 +136,19 @@ function AccountSection({
         setError(messageOf(cause));
       }
     }
-  }, [environmentId, platform]);
+  }, [environmentId, platform, scope]);
 
   useEffect(() => {
     void Promise.resolve().then(load);
   }, [load, open, refreshKey]);
   // A switch or sign-in elsewhere (Settings, another window) moves this too.
-  useAgentAccountsChanged(platform, () => void load());
+  useAgentAccountsChanged(platform, () => void load(), scope);
 
   const choose = async (accountId: string) => {
     setBusy(true);
     setError(null);
     try {
-      await setActiveAgentAccount(platform, accountId);
+      await backendForScope(scope).setActiveAgentAccount(platform, accountId);
       await load();
     } catch (cause) {
       if (mounted.current) setError(messageOf(cause));

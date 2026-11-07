@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:63df2bf9a9645b1991d1583ecec1c3fdb12e8b822924e599cb5bdf38605f2237",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "containerId": {
+          "type": "string"
+        },
+        "containerPort": {}
+      },
+      "required": ["containerId"],
+      "type": "object"
+    }
+  }
+}

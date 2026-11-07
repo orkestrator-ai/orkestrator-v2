@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type {
   MultiReviewReviewerTranscript,
   MultiReviewStepKind,
@@ -10,13 +11,14 @@ import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
 import { installFakeReadCoordinator } from "@/lib/testing/read-coordinator";
-import { useMultiReviewStore } from "@/stores/multiReviewStore";
+import { multiReviewStore } from "@/stores/multiReviewStore";
 import {
   MultiReviewFindingsBadge,
   ReviewerTranscriptTail,
   StepTranscriptTail,
 } from "./MultiReviewInspector";
 import { reviewSeverityStyles } from "./StructuredReviewReportView";
+import { appCommandStore } from "@/test/app-command-store";
 
 const CREATED_AT = "2026-08-14T00:00:00.000Z";
 
@@ -77,21 +79,21 @@ function workflowRevision(revision: number): MultiReviewWorkflow {
 }
 
 beforeEach(() => {
-  useMultiReviewStore.setState({ workflows: new Map() });
+  appCommandStore(multiReviewStore).setState({ workflows: new Map() });
   useMessagePartExpansionStore.getState().reset();
 });
 afterEach(cleanup);
 
 describe("ReviewerTranscriptTail", () => {
   test("reads the reviewer's tail and echoes its token on the next read", async () => {
-    useMultiReviewStore.getState().replaceWorkflow(workflowRevision(1));
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(workflowRevision(1));
     const loadTranscript = mock(
       async (_workflowId: string, _reviewerId: string, options?: { knownSourceToken?: string }) =>
         options?.knownSourceToken === "token-1"
           ? transcript({ transcript: "unchanged", messages: [] })
           : transcript(),
     );
-    render(
+    renderInAppCommandScope(
       <ReviewerTranscriptTail
         workflowId="multi-1"
         reviewerId="reviewer-1"
@@ -111,14 +113,14 @@ describe("ReviewerTranscriptTail", () => {
     ]);
 
     // A checkpoint reads again at once; an unchanged answer keeps the lines.
-    act(() => useMultiReviewStore.getState().replaceWorkflow(workflowRevision(2)));
+    act(() => appCommandStore(multiReviewStore).getState().replaceWorkflow(workflowRevision(2)));
     await waitFor(() => expect(loadTranscript).toHaveBeenCalledTimes(2));
     expect(loadTranscript.mock.calls[1]?.[2]).toEqual({ knownSourceToken: "token-1" });
     expect(tail.textContent).toContain("review.ts");
   });
 
   test("renders narrative and tool calls as the chat transcript does", async () => {
-    useMultiReviewStore.getState().replaceWorkflow(workflowRevision(1));
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(workflowRevision(1));
     const base = transcript();
     const loadTranscript = mock(async () =>
       transcript({
@@ -134,7 +136,7 @@ describe("ReviewerTranscriptTail", () => {
         ],
       }),
     );
-    render(
+    renderInAppCommandScope(
       <ReviewerTranscriptTail
         workflowId="multi-1"
         reviewerId="reviewer-1"
@@ -154,7 +156,7 @@ describe("ReviewerTranscriptTail", () => {
 
   test("does not read a reviewer that has no session yet, or while the tab is hidden", () => {
     const loadTranscript = mock(async () => transcript());
-    const view = render(
+    const view = renderInAppCommandScope(
       <ReviewerTranscriptTail
         workflowId="multi-1"
         reviewerId="reviewer-1"
@@ -179,7 +181,7 @@ describe("ReviewerTranscriptTail", () => {
   });
 
   test("shows a read failure in place of the tail", async () => {
-    render(
+    renderInAppCommandScope(
       <ReviewerTranscriptTail
         workflowId="multi-1"
         reviewerId="reviewer-1"
@@ -246,7 +248,7 @@ function renderStepTail(
   ) => Promise<MultiReviewStepTranscript>,
   props: Partial<Parameters<typeof StepTranscriptTail>[0]> = {},
 ) {
-  return render(
+  return renderInAppCommandScope(
     <StepTranscriptTail
       workflowId="multi-1"
       step="consolidate"
@@ -263,7 +265,7 @@ describe("StepTranscriptTail", () => {
   afterEach(() => resetReadCoordinatorForTests());
 
   test("reads the step's tail on selection and every checkpoint, echoing its token", async () => {
-    useMultiReviewStore.getState().replaceWorkflow(workflowRevision(1));
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(workflowRevision(1));
     const loadTranscript = mock(
       async (
         _workflowId: string,
@@ -286,7 +288,7 @@ describe("StepTranscriptTail", () => {
       { knownSourceToken: undefined },
     ]);
 
-    act(() => useMultiReviewStore.getState().replaceWorkflow(workflowRevision(2)));
+    act(() => appCommandStore(multiReviewStore).getState().replaceWorkflow(workflowRevision(2)));
     await waitFor(() => expect(loadTranscript).toHaveBeenCalledTimes(2));
     expect(loadTranscript.mock.calls[1]?.[2]).toEqual({ knownSourceToken: "step-token-1" });
     expect(tail.textContent).toContain("reviewer-1.json");
@@ -294,7 +296,7 @@ describe("StepTranscriptTail", () => {
 
   for (const trigger of ["completion", "reactivation"] as const) {
     test(`reads a fresh tail after ${trigger} during a pending read`, async () => {
-      useMultiReviewStore.getState().replaceWorkflow(workflowRevision(1));
+      appCommandStore(multiReviewStore).getState().replaceWorkflow(workflowRevision(1));
       let resolve!: (value: MultiReviewStepTranscript) => void;
       const pending = new Promise<MultiReviewStepTranscript>((done) => {
         resolve = done;
@@ -325,8 +327,8 @@ describe("StepTranscriptTail", () => {
         );
       if (trigger === "completion") {
         act(() => {
-          useMultiReviewStore.getState().replaceWorkflow(workflowRevision(2));
-          useMultiReviewStore.getState().replaceWorkflow(workflowRevision(3));
+          appCommandStore(multiReviewStore).getState().replaceWorkflow(workflowRevision(2));
+          appCommandStore(multiReviewStore).getState().replaceWorkflow(workflowRevision(3));
         });
         show(true);
       } else {
@@ -469,7 +471,7 @@ describe("transcript tail display bounds and activity", () => {
       ]).flat();
       if (kind === "step") renderStepTail(mock(async () => stepTranscript({ messages: rows })));
       else
-        render(
+        renderInAppCommandScope(
           <ReviewerTranscriptTail
             workflowId="multi-1"
             reviewerId="reviewer-1"
@@ -535,7 +537,7 @@ describe("deferred tail tool bodies", () => {
           return { detailRef: ref, toolOutput: "Deferred Bash output" };
         });
         if (kind === "reviewer")
-          render(
+          renderInAppCommandScope(
             <ReviewerTranscriptTail
               workflowId="workflow-tools"
               reviewerId="reviewer-tools"
@@ -567,7 +569,7 @@ describe("deferred tail tool bodies", () => {
   }
 
   test("removes a pending deferred body when the step session is handed on", async () => {
-    useMultiReviewStore.getState().replaceWorkflow(workflowRevision(1));
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(workflowRevision(1));
     let resolve!: (value: { detailRef: string; toolOutput: string }) => void;
     const detailRef = "inspector-handoff";
     const loadToolDetails = mock(
@@ -597,7 +599,7 @@ describe("deferred tail tool bodies", () => {
     renderStepTail(loadTranscript, { loadToolDetails });
     fireEvent.click(await screen.findByRole("button", { name: /pwd/ }));
     await waitFor(() => expect(loadToolDetails).toHaveBeenCalledTimes(1));
-    act(() => useMultiReviewStore.getState().replaceWorkflow(workflowRevision(2)));
+    act(() => appCommandStore(multiReviewStore).getState().replaceWorkflow(workflowRevision(2)));
     await screen.findByText(/This step's session is now running Address Findings/);
     await act(async () => resolve({ detailRef, toolOutput: "Old session output" }));
     expect(screen.queryByText("Old session output") === null).toBe(true);
@@ -606,7 +608,7 @@ describe("deferred tail tool bodies", () => {
 
 describe("MultiReviewFindingsBadge", () => {
   test("lists each finding with its severity, location and the reviewers that raised it", () => {
-    render(
+    renderInAppCommandScope(
       <MultiReviewFindingsBadge
         reviewerCount={2}
         findings={[
@@ -674,7 +676,7 @@ describe("MultiReviewFindingsBadge", () => {
   });
 
   test("marks rows no accepted report confirms yet", () => {
-    render(
+    renderInAppCommandScope(
       <MultiReviewFindingsBadge
         reviewerCount={1}
         provisionalCount={2}
@@ -726,7 +728,9 @@ describe("MultiReviewFindingsBadge", () => {
   });
 
   test("explains an empty list", () => {
-    const view = render(<MultiReviewFindingsBadge findings={[]} reviewerCount={0} />);
+    const view = renderInAppCommandScope(
+      <MultiReviewFindingsBadge findings={[]} reviewerCount={0} />,
+    );
     fireEvent.click(screen.getByTestId("multi-review-findings-badge"));
     expect(screen.getByText("Issues appear here as reviewers report them.")).toBeTruthy();
     view.rerender(<MultiReviewFindingsBadge findings={[]} reviewerCount={1} />);
@@ -737,7 +741,7 @@ describe("MultiReviewFindingsBadge", () => {
   });
 
   test("closes on a click outside or Escape, but not on a click inside", () => {
-    render(
+    renderInAppCommandScope(
       <div>
         <button type="button">Elsewhere</button>
         <MultiReviewFindingsBadge findings={[]} reviewerCount={1} />
@@ -759,7 +763,7 @@ describe("MultiReviewFindingsBadge", () => {
 });
 
 test("badge Escape is local to an active tab and respects another pane's fullscreen", () => {
-  const view = render(
+  const view = renderInAppCommandScope(
     <div>
       <button data-flow-fullscreen>Other fullscreen pane</button>
       <MultiReviewFindingsBadge findings={[]} reviewerCount={0} isActive />

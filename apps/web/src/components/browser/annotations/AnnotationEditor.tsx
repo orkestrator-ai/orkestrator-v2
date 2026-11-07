@@ -5,7 +5,7 @@ import { WEB_ANNOTATION_LIMITS } from "@orkestrator/protocol/web-annotations";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { useWebAnnotationCache } from "@/hooks/useWebAnnotations";
+import { useWebAnnotationCache, useWebAnnotationScope } from "@/hooks/useWebAnnotations";
 import {
   captureDraftScope,
   captureIntent,
@@ -61,6 +61,8 @@ export function AnnotationEditor({
 }) {
   const panel = useAnnotationPanel();
   const { capture, environmentId, features } = panel;
+  // The node the reply editor's local copy is kept for (`nodeStorageKey`).
+  const draftNode = useWebAnnotationScope();
   const captureId = descriptor.captureId;
   const record = capture.activeCaptureId === captureId ? capture.activeCapture : null;
   const intent = captureIntent(captureId);
@@ -143,7 +145,7 @@ export function AnnotationEditor({
     const remainder = unsavedRemainder(body, draft.readText());
     void draft.clear();
     if (remainder && outcome.annotationId && kind !== "result") {
-      writeLocalDraft(environmentId, replyEditorId(outcome.annotationId), remainder, 0);
+      writeLocalDraft(environmentId, replyEditorId(outcome.annotationId), remainder, 0, draftNode);
     }
     panel.announce(
       kind === "result"

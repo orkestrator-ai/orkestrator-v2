@@ -1,43 +1,45 @@
 import { afterEach, expect, mock, spyOn, test } from "bun:test";
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, waitFor } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import type { ReactNode } from "react";
 import * as federation from "@/components/federation/FederationProvider";
 import { invoke } from "@/lib/native/backend";
 import { portalStore } from "@/lib/portal/portal-store";
-import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
-import { useProjectStore, useUIStore } from "@/stores";
+import { agentModelCatalogStore } from "@/stores/agentModelCatalogStore";
+import { projectStore, uiStore } from "@/stores";
 import { getAppVersion } from "@/lib/backend";
 import { AccountMachineProvider } from "../account-machine";
 import { useSettingsModelCatalog } from "./useSettingsModelCatalog";
+import { appCommandStore } from "@/test/app-command-store";
 
 const workspace = invoke as unknown as ReturnType<typeof mock>;
-const initialModels = useAgentModelCatalogStore.getState();
-const initialProjects = useProjectStore.getState();
-const initialUI = useUIStore.getState();
+const initialModels = appCommandStore(agentModelCatalogStore).getState();
+const initialProjects = appCommandStore(projectStore).getState();
+const initialUI = appCommandStore(uiStore).getState();
 const initialPortal = portalStore.getState();
 afterEach(() => {
   cleanup();
   mock.restore();
   workspace.mockReset();
-  useAgentModelCatalogStore.setState(initialModels);
-  useProjectStore.setState(initialProjects);
-  useUIStore.setState(initialUI);
+  appCommandStore(agentModelCatalogStore).setState(initialModels);
+  appCommandStore(projectStore).setState(initialProjects);
+  appCommandStore(uiStore).setState(initialUI);
   portalStore.store.setState(initialPortal);
-  delete window.orkestratorPortal;
-  delete window.orkestratorWorkspaceTarget;
 });
-for (const machine of [null, "other"]) {
-  test(`catalogue reads and refresh use ${machine ?? "command node"} projects and preserve workspace models`, async () => {
-    window.orkestratorWorkspaceTarget = { nodeId: "leaf", nodeName: "Leaf", path: "direct" };
+{
+  const machine = "other";
+  test("another machine's catalogue reads and refresh use its projects and preserve workspace models", async () => {
     portalStore.store.setState({ selfId: "command" as never });
-    useAgentModelCatalogStore.setState({
+    appCommandStore(agentModelCatalogStore).setState({
       codexModels: [
         { id: "leaf-model", name: "Leaf model", description: "", reasoningEfforts: [] },
       ],
     });
-    useProjectStore.setState({ projects: [{ id: "leaf-project", name: "Leaf project" }] as never });
-    useUIStore.setState({ selectedProjectId: "leaf-project" });
-    const owner = machine ?? "command";
+    appCommandStore(projectStore).setState({
+      projects: [{ id: "leaf-project", name: "Leaf project" }] as never,
+    });
+    appCommandStore(uiStore).setState({ selectedProjectId: "leaf-project" });
+    const owner = machine;
     const project = { ref: { projectId: `${owner}-project` }, name: `${owner} project` };
     spyOn(federation, "useFederation").mockReturnValue({
       portalState: {
@@ -73,31 +75,26 @@ for (const machine of [null, "other"]) {
         revision += 1;
         return { agent: args.agent, modelCount: 1 };
       }
-      if (command === "get_app_version") return target === "leaf" ? "1.0.0" : "2.0.0";
+      if (command === "get_app_version") return target === "other" ? "3.0.0" : "2.0.0";
       throw new Error(`Unexpected command: ${command}`);
     };
+    // The command node's own window: its own answers, another node's through it.
     workspace.mockImplementation(async (command: string, args?: Record<string, unknown>) =>
-      response("leaf", command, args),
+      command === "invoke_on_node"
+        ? {
+            outcome: "ok",
+            result: response(
+              String(args?.nodeId),
+              String(args?.command),
+              args?.args as Record<string, unknown>,
+            ),
+          }
+        : response("command", command, args),
     );
-    window.orkestratorPortal = {
-      invoke: mock(async (command: string, args?: Record<string, unknown>) =>
-        command === "invoke_on_node"
-          ? {
-              outcome: "ok",
-              result: response(
-                String(args?.nodeId),
-                String(args?.command),
-                args?.args as Record<string, unknown>,
-              ),
-            }
-          : response("command", command, args),
-      ),
-      listen: () => () => {},
-    } as never;
     const wrapper = ({ children }: { children: ReactNode }) => (
       <AccountMachineProvider value={{ machine, name: owner }}>{children}</AccountMachineProvider>
     );
-    const { result } = renderHook(useSettingsModelCatalog, { wrapper });
+    const { result } = renderHookInAppCommandScope(useSettingsModelCatalog, { wrapper });
     await waitFor(() => expect(result.current.catalog.codex[0]?.id).toBe(`${owner}-model-1`));
     expect(result.current.catalogProjectId).toBe(`${owner}-project`);
     expect(result.current.selectedProjectId).toBeNull();
@@ -115,9 +112,12 @@ for (const machine of [null, "other"]) {
       await result.current.refresh("codex");
     });
     expect(result.current.catalog.codex[0]?.id).toBe(`${owner}-model-3`);
-    expect(useAgentModelCatalogStore.getState().codexModels[0]?.id).toBe("leaf-model");
-    expect(workspace).not.toHaveBeenCalled();
-    expect(await getAppVersion(machine)).toBe("2.0.0");
-    expect(await getAppVersion()).toBe("1.0.0");
+    expect(appCommandStore(agentModelCatalogStore).getState().codexModels[0]?.id).toBe(
+      "leaf-model",
+    );
+    // Everything of the other machine went through the command node.
+    expect(workspace.mock.calls.filter(([command]) => command !== "invoke_on_node")).toEqual([]);
+    expect(await getAppVersion(machine)).toBe("3.0.0");
+    expect(await getAppVersion()).toBe("2.0.0");
   });
 }

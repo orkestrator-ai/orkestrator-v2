@@ -48,12 +48,12 @@
         "chart.js": "4.5.1",
         "d3": "7.9.0",
         "dompurify": "3.4.17",
+        "effect": "4.1.2",
         "mermaid": "12.2.0",
         "pdfjs-dist": "6.4.299",
         "playwright-core": "1.64.0",
         "sharp": "^0.35.5",
         "ws": "8.22.0",
-        "zod": "4.6.7",
       },
       "devDependencies": {
         "@modelcontextprotocol/client": "2.3.1",
@@ -68,6 +68,7 @@
         "@orkestrator/protocol": "workspace:*",
         "@orkestrator/toolchain": "workspace:*",
         "@orkestrator/web": "workspace:*",
+        "effect": "4.1.2",
       },
       "devDependencies": {
         "@babel/core": "^8.0.10",
@@ -132,6 +133,7 @@
         "class-variance-authority": "^0.7.1",
         "clsx": "^2.1.1",
         "dompurify": "3.4.17",
+        "effect": "4.1.2",
         "lucide-react": "^1.56.0",
         "marked": "17.0.6",
         "monaco-editor": "^0.57.0",
@@ -271,6 +273,9 @@
     "packages/protocol": {
       "name": "@orkestrator/protocol",
       "version": "2.36.6-beta",
+      "dependencies": {
+        "effect": "4.1.2",
+      },
     },
     "packages/toolchain": {
       "name": "@orkestrator/toolchain",
@@ -1581,6 +1586,8 @@
     "ecdsa-sig-formatter": ["ecdsa-sig-formatter@1.0.11", "", { "dependencies": { "safe-buffer": "^5.0.1" } }, "sha512-nagl3RYrbNv6kQkeJIpt6NJZy8twLB/2vtz6yN9Z4vRKHN4/QZJIEbqohALSgwKdnksuY3k5Addp5lg8sVoVcQ=="],
 
     "ee-first": ["ee-first@1.1.1", "", {}, "sha512-WMwm9LhRUo+WUaRN+vRuETqG89IgZphVSNkdFgeb6sS/E4OrDIN7t48CAewSHXc6C8lefD8KKfr5vY61brQlow=="],
+
+    "effect": ["effect@4.1.2", "", {}, "sha512-d3Oah1WyKxFLFh19yWheS5IXIVaITzxZ71JkE1rkUozq/6EcJSU5nPk5bF2QrSygZ3SQoiNQB8TsxFriyMeMaQ=="],
 
     "ejs": ["ejs@3.1.10", "", { "dependencies": { "jake": "^10.8.5" }, "bin": { "ejs": "bin/cli.js" } }, "sha512-UeJmFfOrAQS8OJWPZ4qtgHyWExa088/MtK5UEyoJGFH67cDEXkZSviOiKRCZ4Xij0zxI3JECgYs3oKx+AizQBA=="],
 

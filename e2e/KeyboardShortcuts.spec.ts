@@ -241,21 +241,6 @@ test.describe("⌘K search works wherever focus is", () => {
       await expect(input).toHaveValue("kept");
     });
   }
-
-  test("from a workspace realm frame's composer, forwarded to its window", async ({ page }) => {
-    await page.goto("/keyboard-shortcuts");
-    const realm = page.frameLocator('iframe[title="Workspace realm"]');
-    const composer = realm.getByRole("textbox", { name: "Realm composer" });
-    await composer.fill("draft");
-    await page.keyboard.press("Meta+K");
-    await expect(requests(page)).toHaveText("1");
-    await expect(composer).toHaveValue("draft");
-    // ⌘⇧/ stays with the realm, which draws its own dialog.
-    await composer.focus();
-    await page.keyboard.press("Meta+Shift+Slash");
-    await expect(realm.getByRole("dialog", { name: "Keyboard shortcuts" })).toBeVisible();
-    await expect(page.getByRole("dialog", { name: "Keyboard shortcuts" })).toHaveCount(0);
-  });
 });
 
 for (const modifier of ["Meta", "Control"]) {
@@ -369,3 +354,53 @@ for (const modifier of ["Meta", "Control"]) {
     });
   }
 }
+
+test.describe("every app shortcut works with a leaf shown in the window's tree", () => {
+  for (const modifier of ["Meta", "Control"]) {
+    test(`${modifier} shortcuts from the leaf's composer reach this window's handlers`, async ({
+      page,
+    }) => {
+      await page.goto("/keyboard-shortcuts?in-tree");
+      const mac = await page.evaluate(() => /Mac/.test(navigator.platform));
+      const composer = page.getByRole("textbox", { name: "Leaf composer" });
+      await composer.fill("draft");
+
+      // ⌘K, ⌘, and ⌘⇧D are the window's, typed in the leaf's workspace in its tree.
+      // Ctrl+K in a macOS text field is kill-line, so it stays with the field.
+      await page.keyboard.press(`${modifier}+K`);
+      await expect(page.getByTestId("search-requests")).toHaveText(
+        modifier === "Control" && mac ? "0" : "1",
+      );
+      await page.keyboard.press(`${modifier}+Comma`);
+      await expect(page.getByTestId("settings-requests")).toHaveText("1");
+      await page.keyboard.press(`${modifier}+Shift+D`);
+      await expect(page.getByTestId("grouping-requests")).toHaveText("1");
+
+      // ⌘T opens a tab in the leaf's workspace only, not in the hidden one.
+      // Ctrl+T in a macOS text field is transpose, so it stays with the field.
+      await composer.focus();
+      await page.keyboard.press(`${modifier}+T`);
+      const tabTaken = !(modifier === "Control" && mac);
+      await expect(page.getByTestId("leaf-new-tabs")).toHaveText(tabTaken ? "1" : "0");
+      await expect(page.getByTestId("command-new-tabs")).toHaveText("0");
+
+      // ⌘⇧/ opens this document's one shortcuts dialog over the leaf.
+      await composer.focus();
+      await page.keyboard.press(`${modifier}+Shift+Slash`);
+      const dialog = page.getByRole("dialog", { name: "Keyboard shortcuts" });
+      await expect(dialog).toBeVisible();
+      await page.keyboard.press("Escape");
+      await expect(dialog).toHaveCount(0);
+      await expect(composer).toBeFocused();
+      // The draft is the leaf's own; Ctrl+T on macOS transposed its last letters.
+      await expect(composer).toHaveValue(tabTaken ? "draft" : "dratf");
+
+      // Back on this window's own node, ⌘T is its workspace's.
+      await page.getByRole("button", { name: "Show this machine" }).click();
+      await page.getByRole("textbox", { name: "Command composer" }).focus();
+      await page.keyboard.press(`${modifier}+T`);
+      await expect(page.getByTestId("command-new-tabs")).toHaveText(tabTaken ? "1" : "0");
+      await expect(page.getByTestId("leaf-new-tabs")).toHaveText(tabTaken ? "1" : "0");
+    });
+  }
+});

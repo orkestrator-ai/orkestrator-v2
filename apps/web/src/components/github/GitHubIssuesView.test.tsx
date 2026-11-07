@@ -1,8 +1,10 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { githubIssueDetailKey, useGitHubIssuesStore } from "@/stores/githubIssuesStore";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
+import { githubIssueDetailKey, githubIssuesStore } from "@/stores/githubIssuesStore";
 import type { GitHubIssue, GitHubIssueDetail, GitHubIssueStatus } from "@/types/github";
 import { GitHubIssuesView, resolveGitHubIssueDrop } from "./GitHubIssuesView";
+import { appCommandStore } from "@/test/app-command-store";
 
 const repository = {
   owner: "acme",
@@ -44,11 +46,11 @@ const issues = [
 const loadIssuesMock = mock(async () => undefined);
 const loadIssueMock = mock(async () => undefined);
 const changeStatusMock = mock(async () => undefined);
-const originalState = useGitHubIssuesStore.getState();
+const originalState = appCommandStore(githubIssuesStore).getState();
 
 afterAll(() => {
   cleanup();
-  useGitHubIssuesStore.setState(originalState, true);
+  appCommandStore(githubIssuesStore).setState(originalState, true);
 });
 
 describe("GitHubIssuesView", () => {
@@ -60,7 +62,7 @@ describe("GitHubIssuesView", () => {
     loadIssueMock.mockClear();
     changeStatusMock.mockReset();
     changeStatusMock.mockResolvedValue(undefined);
-    useGitHubIssuesStore.setState({
+    appCommandStore(githubIssuesStore).setState({
       ...originalState,
       snapshots: new Map([
         [
@@ -88,7 +90,7 @@ describe("GitHubIssuesView", () => {
   });
 
   test("loads the current project and groups every open issue with stage counts", async () => {
-    render(<GitHubIssuesView projectId="project-1" />);
+    renderInAppCommandScope(<GitHubIssuesView projectId="project-1" />);
 
     expect(screen.getByText("acme/widget")).toBeTruthy();
     expect(screen.getByText("5 open issues · signed in as @reviewer")).toBeTruthy();
@@ -123,7 +125,7 @@ describe("GitHubIssuesView", () => {
   });
 
   test("refreshes and changes status through the issue selector", async () => {
-    render(<GitHubIssuesView projectId="project-1" />);
+    renderInAppCommandScope(<GitHubIssuesView projectId="project-1" />);
 
     fireEvent.click(screen.getByRole("button", { name: /Refresh/ }));
     await waitFor(() => expect(loadIssuesMock).toHaveBeenCalledTimes(2));
@@ -148,11 +150,11 @@ describe("GitHubIssuesView", () => {
   });
 
   test("disables refresh while a status mutation is in progress", () => {
-    useGitHubIssuesStore.setState({
+    appCommandStore(githubIssuesStore).setState({
       mutations: new Set(["status:project-1:2"]),
     });
 
-    render(<GitHubIssuesView projectId="project-1" />);
+    renderInAppCommandScope(<GitHubIssuesView projectId="project-1" />);
 
     expect((screen.getByRole("button", { name: /Refresh/ }) as HTMLButtonElement).disabled).toBe(
       true,
@@ -160,7 +162,7 @@ describe("GitHubIssuesView", () => {
   });
 
   test("opens an issue in the in-app detail view and returns to the board", async () => {
-    render(<GitHubIssuesView projectId="project-1" />);
+    renderInAppCommandScope(<GitHubIssuesView projectId="project-1" />);
 
     fireEvent.click(screen.getByText("Ready to start"));
     expect(await screen.findByRole("button", { name: "Back to GitHub issues" })).toBeTruthy();
@@ -173,11 +175,11 @@ describe("GitHubIssuesView", () => {
   });
 
   test("shows an actionable load failure and retries loading", async () => {
-    useGitHubIssuesStore.setState({
+    appCommandStore(githubIssuesStore).setState({
       snapshots: new Map(),
       projectErrors: new Map([["project-1", "GitHub rate limit reached"]]),
     });
-    render(<GitHubIssuesView projectId="project-1" />);
+    renderInAppCommandScope(<GitHubIssuesView projectId="project-1" />);
 
     expect(screen.getByText("GitHub rate limit reached")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
@@ -185,25 +187,25 @@ describe("GitHubIssuesView", () => {
   });
 
   test("shows the authoritative status mutation failure on the board", () => {
-    useGitHubIssuesStore.setState({
+    appCommandStore(githubIssuesStore).setState({
       mutationErrors: new Map([["status:project-1:2", "Permission denied while moving issue"]]),
     });
 
-    render(<GitHubIssuesView projectId="project-1" />);
+    renderInAppCommandScope(<GitHubIssuesView projectId="project-1" />);
 
     expect(screen.getByText("Permission denied while moving issue")).toBeTruthy();
   });
 
   test("renders loading and empty repository states", () => {
-    useGitHubIssuesStore.setState({
+    appCommandStore(githubIssuesStore).setState({
       snapshots: new Map(),
       loadingProjects: new Set(["project-1"]),
     });
-    const { rerender } = render(<GitHubIssuesView projectId="project-1" />);
+    const { rerender } = renderInAppCommandScope(<GitHubIssuesView projectId="project-1" />);
     expect(screen.getByText("Loading open issues")).toBeTruthy();
 
     act(() => {
-      useGitHubIssuesStore.setState({
+      appCommandStore(githubIssuesStore).setState({
         snapshots: new Map([
           ["project-1", { repository, viewer: { login: "reviewer" }, issues: [] }],
         ]),

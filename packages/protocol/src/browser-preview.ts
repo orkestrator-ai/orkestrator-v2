@@ -62,6 +62,12 @@ export interface BrowserPreviewAttachInput {
   navigationBasis?: number;
   bounds: BrowserPreviewBounds;
   visible: boolean;
+  /**
+   * Desktop: the node whose preview runtime shows the tab (its partition and
+   * service transport). Absent means the window's command node; the tab's
+   * later calls go to the runtime its attach chose.
+   */
+  nodeId?: string;
 }
 
 /** Effective transport for a service preview, separate from page loading. */

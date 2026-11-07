@@ -1,10 +1,11 @@
-import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { buildPipelineStore } from "@/stores/buildPipelineStore";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { useEffect, useState } from "react";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import * as realResizable from "@/components/ui/resizable";
 import * as realFilesPanelComponents from "@/components/files-panel";
 import * as realStores from "@/stores";
+import * as realFilesPanelChrome from "@/stores/filesPanelChromeStore";
 import * as realHooks from "@/hooks";
 import * as realNativeWindow from "@/lib/native/window";
 import * as realActionBar from "./ActionBar";
@@ -12,14 +13,13 @@ import * as realSidebar from "./Sidebar";
 import * as realOpenFileDialog from "./OpenFileDialog";
 import * as realAgentInfoButton from "./AgentInfoButton";
 import * as realSystemUsageIndicator from "./SystemUsageIndicator";
-import * as realRealmTitleBar from "@/components/federation/RealmTitleBar";
 import * as realAgentMailPanel from "@/components/agent-mail/AgentMailPanel";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import { useActiveCoordinatorConversationStore } from "@/stores/activeCoordinatorConversationStore";
-import { useConfigStore } from "@/stores/configStore";
-import { usePrMonitorStore } from "@/stores/prMonitorStore";
+import { configStore } from "@/stores/configStore";
+import { prMonitorStore } from "@/stores/prMonitorStore";
 import { FederationProvider } from "@/components/federation/FederationProvider";
 import { portalStore } from "@/lib/portal/portal-store";
 import {
@@ -31,25 +31,37 @@ import {
 } from "@/test/federation-desktop-fake";
 import { ProjectSearchBar } from "@/components/sidebar/ProjectSearchBar";
 import { requestAppShortcut, onAppShortcut } from "@/lib/app-shortcuts";
-import { useUIStore as realUIStore } from "@/stores/uiStore";
+import { uiStore as uiStoreDef, useUIStore as realUIStore, type UIState } from "@/stores/uiStore";
+import { useUIChromeStore } from "@/stores/uiChromeStore";
 import type { TabInfo } from "@/types/paneLayout";
 
 import { invoke as nativeInvoke } from "@/lib/native/backend";
+import { getWindowScope } from "@/lib/node-scope/app-window-scope";
+import { useOptionalNodeScope } from "@/lib/node-scope/providers";
+import { FakeNodeClient, renderInAppCommandScope } from "@/test/render-in-node-scope";
+import type { BackendId } from "@orkestrator/protocol/federation";
+import { appCommandStore } from "@/test/app-command-store";
+
+/** Outside a node scope provider, components act for the app's command node. */
+const commandNodeId = () => getWindowScope().commandScope().nodeId;
 
 let realInfo = false;
 /** Renders of the stubbed button, which re-renders only when AppShell does. */
 const agentInfoRendered = mock(() => {});
-const uiStore = realUIStore;
-const INITIAL_PROJECT_BOARD_TAB = uiStore.getState().projectBoardTab;
+/** The app command scope's UI store, which the suite renders under. */
+const uiStore = () => appCommandStore(uiStoreDef);
+// Captured before `mock.module("@/stores")` below rebinds the import to the mock.
+const useRealUIStore = realUIStore;
+const INITIAL_PROJECT_BOARD_TAB = uiStore().getState().projectBoardTab;
 const realAgentInfoButtonSnapshot = { ...realAgentInfoButton };
 const realSystemUsageIndicatorSnapshot = { ...realSystemUsageIndicator };
-const realRealmTitleBarSnapshot = { ...realRealmTitleBar };
 const realAgentMailPanelSnapshot = { ...realAgentMailPanel };
 const INITIAL_PORTAL = portalStore.getState();
 const INITIAL_REMOTE = useRemoteWorkspaceStore.getState();
 const realResizableSnapshot = { ...realResizable };
 const realFilesPanelComponentsSnapshot = { ...realFilesPanelComponents };
 const realStoresSnapshot = { ...realStores };
+const realFilesPanelChromeSnapshot = { ...realFilesPanelChrome };
 const realHooksSnapshot = { ...realHooks };
 const realNativeWindowSnapshot = { ...realNativeWindow };
 const realActionBarSnapshot = { ...realActionBar };
@@ -121,6 +133,7 @@ mock.module("./AgentInfoButton", () => ({
     ) : (
       <div
         data-testid="agent-info-button"
+        data-node={useOptionalNodeScope()?.nodeId ?? "none"}
         data-active-tab-id={activeTab?.id ?? "none"}
         data-active-tab-type={activeTab?.type ?? "none"}
         data-mobile={String(mobile ?? false)}
@@ -131,19 +144,12 @@ mock.module("./AgentInfoButton", () => ({
 // The real poll is exercised in its own suite; here it only needs to be
 // observable as a slot so the desktop/mobile split can be asserted.
 mock.module("./SystemUsageIndicator", () => ({
-  SystemUsageIndicator: () => <div data-testid="system-usage-indicator" />,
-}));
-
-// Another node's title-bar controls, exercised in their own suite.
-mock.module("@/components/federation/RealmTitleBar", () => ({
-  RealmSystemUsageMeters: ({ nodeId }: { nodeId: string }) => (
-    <div data-testid="realm-system-usage-meters" data-node={nodeId} />
+  SystemUsageIndicator: () => (
+    <div
+      data-testid="system-usage-indicator"
+      data-node={useOptionalNodeScope()?.nodeId ?? "none"}
+    />
   ),
-  RealmAgentInfoTrigger: ({ nodeId }: { nodeId: string }) => (
-    <div data-testid="realm-agent-info-trigger" data-node={nodeId} />
-  ),
-  RealmTitleBarPanels: () => <div data-testid="realm-title-bar-panels" />,
-  useRealmPanelDismiss: () => undefined,
 }));
 
 // Observable as a slot: the banner's View opens it in whichever layout is shown.
@@ -158,15 +164,12 @@ mock.module("@/hooks", () => ({
 
 mock.module("@/stores", () => ({
   ...realStoresSnapshot,
-  useFilesPanelStore: <T,>(selector?: (state: { isOpen: boolean; activeTab: string }) => T) =>
-    selectState({ isOpen: filesPanelOpen, activeTab: "changes" }, selector),
-  useUIStore: Object.assign(
-    <T,>(selector?: (state: ReturnType<typeof uiStore.getState>) => T) =>
-      uiStore((state) =>
-        selectState({ ...state, selectedProjectId, selectedEnvironmentId }, selector),
-      ),
-    { getState: uiStore.getState, subscribe: uiStore.subscribe },
-  ),
+  useFilesPanelStore: <T,>(selector?: (state: { activeTab: string }) => T) =>
+    selectState({ activeTab: "changes" }, selector),
+  useUIStore: <T,>(selector?: (state: UIState) => T) =>
+    useRealUIStore((state) =>
+      selectState({ ...state, selectedProjectId, selectedEnvironmentId }, selector),
+    ),
   useProjectStore: <T,>(
     selector?: (state: { projects: Array<{ id: string; name: string }> }) => T,
   ) => selectState({ projects: [{ id: "project-1", name: "pgstack1" }] }, selector),
@@ -186,6 +189,12 @@ mock.module("@/stores", () => ({
   useConfigStore: realStoresSnapshot.useConfigStore,
 }));
 
+mock.module("@/stores/filesPanelChromeStore", () => ({
+  ...realFilesPanelChromeSnapshot,
+  useFilesPanelChromeStore: <T,>(selector?: (state: { isOpen: boolean }) => T) =>
+    selectState({ isOpen: filesPanelOpen }, selector),
+}));
+
 mock.module("@/lib/native/window", () => ({
   getCurrentWindow: () => ({ startDragging: startDraggingMock }),
 }));
@@ -196,6 +205,7 @@ afterAll(() => {
   mock.module("@/components/ui/resizable", () => realResizableSnapshot);
   mock.module("@/components/files-panel", () => realFilesPanelComponentsSnapshot);
   mock.module("@/stores", () => realStoresSnapshot);
+  mock.module("@/stores/filesPanelChromeStore", () => realFilesPanelChromeSnapshot);
   mock.module("@/hooks", () => realHooksSnapshot);
   mock.module("@/lib/native/window", () => realNativeWindowSnapshot);
   mock.module("./ActionBar", () => realActionBarSnapshot);
@@ -203,12 +213,11 @@ afterAll(() => {
   mock.module("./OpenFileDialog", () => realOpenFileDialogSnapshot);
   mock.module("./AgentInfoButton", () => realAgentInfoButtonSnapshot);
   mock.module("./SystemUsageIndicator", () => realSystemUsageIndicatorSnapshot);
-  mock.module("@/components/federation/RealmTitleBar", () => realRealmTitleBarSnapshot);
   mock.module("@/components/agent-mail/AgentMailPanel", () => realAgentMailPanelSnapshot);
 });
 
 function seedPaneLayout(tabs: TabInfo[], activeTabId: string | null, activePaneId = "pane-a") {
-  usePaneLayoutStore.setState({
+  appCommandStore(paneLayoutStore).setState({
     environments: new Map([
       [
         "environment-1",
@@ -248,13 +257,13 @@ beforeEach(() => {
   selectedEnvironmentId = "environment-1";
   filesPanelOpen = false;
   selectedEnvironmentPr = {};
-  useBuildPipelineStore.setState({ activeBuildEnvironmentIds: new Set() });
-  usePrMonitorStore.setState({ states: new Map(), syncStatus: "idle" });
-  uiStore.setState({ sidebarOpen: true });
+  appCommandStore(buildPipelineStore).setState({ activeBuildEnvironmentIds: new Set() });
+  appCommandStore(prMonitorStore).setState({ states: new Map(), syncStatus: "idle" });
+  useUIChromeStore.setState({ sidebarOpen: true });
   mountSearch = false;
   startDraggingMock.mockReset();
   document.title = "";
-  usePaneLayoutStore.setState({
+  appCommandStore(paneLayoutStore).setState({
     environments: new Map(),
     activeEnvironmentId: null,
   } as never);
@@ -264,9 +273,9 @@ afterEach(() => {
   cleanup();
   useMachineViewStore.setState({ grouping: "machine" });
   useActiveCoordinatorConversationStore.setState({ active: null });
-  uiStore.setState({ projectBoardTab: INITIAL_PROJECT_BOARD_TAB });
+  uiStore().setState({ projectBoardTab: INITIAL_PROJECT_BOARD_TAB });
   useRemoteWorkspaceStore.setState(INITIAL_REMOTE, true);
-  usePaneLayoutStore.setState({
+  appCommandStore(paneLayoutStore).setState({
     environments: new Map(),
     activeEnvironmentId: null,
   } as never);
@@ -277,7 +286,7 @@ describe("AppShell", () => {
     filesPanelOpen = true;
     isMobile = false;
     act(() => useRemoteWorkspaceStore.getState().open("bk_a", {}));
-    const view = render(<AppShell>Workspace</AppShell>);
+    const view = renderInAppCommandScope(<AppShell>Workspace</AppShell>);
     expect(screen.queryByText("Files panel") === null).toBe(true);
 
     isMobile = true;
@@ -293,7 +302,7 @@ describe("AppShell", () => {
   });
 
   test("derives the mobile title and uses the grid action presentation", () => {
-    const { container } = render(<AppShell>Workspace</AppShell>);
+    const { container } = renderInAppCommandScope(<AppShell>Workspace</AppShell>);
 
     expect(
       screen.getByRole("button", { name: "pgstack1 - feature-auth", hidden: true }),
@@ -316,7 +325,7 @@ describe("AppShell", () => {
       environmentType: "local",
       status: "stopped",
     };
-    usePrMonitorStore.setState({
+    appCommandStore(prMonitorStore).setState({
       syncStatus: "current",
       states: new Map([
         [
@@ -336,7 +345,7 @@ describe("AppShell", () => {
         ],
       ]),
     });
-    render(<AppShell>Workspace</AppShell>);
+    renderInAppCommandScope(<AppShell>Workspace</AppShell>);
 
     const title = screen.getByRole("button", { name: "pgstack1 - feature-auth", hidden: true });
     expect(title.querySelector("[data-merge-ready]")?.textContent).toBe("feature-auth");
@@ -344,7 +353,7 @@ describe("AppShell", () => {
     expect(document.title).toBe("pgstack1 - feature-auth");
 
     act(() =>
-      usePrMonitorStore.setState((state) => ({
+      appCommandStore(prMonitorStore).setState((state) => ({
         states: new Map(
           [...state.states].map(([id, reading]) => [id, { ...reading, hasMergeConflicts: true }]),
         ),
@@ -354,14 +363,14 @@ describe("AppShell", () => {
     // the still-clean environment snapshot on its own.
     expect(title.querySelector("[data-merge-ready]") === null).toBe(true);
     act(() =>
-      usePrMonitorStore.setState((state) => ({
+      appCommandStore(prMonitorStore).setState((state) => ({
         states: new Map(
           [...state.states].map(([id, reading]) => [id, { ...reading, hasMergeConflicts: false }]),
         ),
       })),
     );
     expect(title.querySelector("[data-merge-ready]")).toBeTruthy();
-    act(() => usePrMonitorStore.getState().setSyncStatus("stale"));
+    act(() => appCommandStore(prMonitorStore).getState().setSyncStatus("stale"));
     expect(
       screen
         .getByRole("button", { name: "pgstack1 - feature-auth", hidden: true })
@@ -384,7 +393,7 @@ describe("AppShell", () => {
       hasMergeConflicts: signal === "merge-conflicts",
       prMergeability: signal === "merge-conflicts" ? "dirty" : "clean",
     };
-    usePrMonitorStore.setState({
+    appCommandStore(prMonitorStore).setState({
       syncStatus: "current",
       states: new Map([
         [
@@ -404,7 +413,7 @@ describe("AppShell", () => {
         ],
       ]),
     });
-    const view = render(<AppShell>Workspace</AppShell>);
+    const view = renderInAppCommandScope(<AppShell>Workspace</AppShell>);
     const title = screen.getByRole("button", { name: "pgstack1 - feature-auth", hidden: true });
     expect(title.querySelector(`[data-name-signal="${signal}"]`)).toBeTruthy();
     expect(document.getElementById(title.getAttribute("aria-describedby")!)?.textContent).toBe(
@@ -412,10 +421,14 @@ describe("AppShell", () => {
     );
     if (signal === "needs-answer") {
       act(() =>
-        useBuildPipelineStore.setState({ activeBuildEnvironmentIds: new Set(["environment-1"]) }),
+        appCommandStore(buildPipelineStore).setState({
+          activeBuildEnvironmentIds: new Set(["environment-1"]),
+        }),
       );
       expect(title.querySelector('[data-name-signal="merge-ready"]')).toBeTruthy();
-      act(() => useBuildPipelineStore.setState({ activeBuildEnvironmentIds: new Set() }));
+      act(() =>
+        appCommandStore(buildPipelineStore).setState({ activeBuildEnvironmentIds: new Set() }),
+      );
       expect(title.querySelector('[data-name-signal="needs-answer"]')).toBeTruthy();
     }
     fireEvent.pointerDown(title, { pointerType: "touch" });
@@ -434,7 +447,7 @@ describe("AppShell", () => {
 
   for (const state of ["current", "stale", "blocked"] as const) {
     test(`selected remote title reacts to the checks setting with an unchanged ${state} PR summary`, async () => {
-      const initialConfig = useConfigStore.getState().config;
+      const initialConfig = appCommandStore(configStore).getState().config;
       const data = sharedIdDataset("idle");
       Object.assign(data.environments["project-1"]![0]!, {
         prUrl: "https://github.com/acme/repo/pull/4",
@@ -453,8 +466,10 @@ describe("AppShell", () => {
         active: { nodeId: "bk_leaf", projectId: "project-1", environmentId: "env-1" },
       });
       try {
-        useConfigStore.getState().updateGlobalConfig({ autoMergeRequireChecks: true });
-        render(
+        appCommandStore(configStore)
+          .getState()
+          .updateGlobalConfig({ autoMergeRequireChecks: true });
+        renderInAppCommandScope(
           <FederationProvider>
             <AppShell>Workspace</AppShell>
           </FederationProvider>,
@@ -473,7 +488,9 @@ describe("AppShell", () => {
         const title = screen.getByRole("button", { name: "app - feature", hidden: true });
         for (const requireChecks of [true, false, true]) {
           act(() =>
-            useConfigStore.getState().updateGlobalConfig({ autoMergeRequireChecks: requireChecks }),
+            appCommandStore(configStore)
+              .getState()
+              .updateGlobalConfig({ autoMergeRequireChecks: requireChecks }),
           );
           expect(title.querySelector("[data-merge-ready]") !== null).toBe(
             state === "current" && !requireChecks,
@@ -485,7 +502,7 @@ describe("AppShell", () => {
         cleanup();
         uninstallDesktopFake();
         portalStore.store.setState(INITIAL_PORTAL, true);
-        useConfigStore.setState({ config: initialConfig });
+        appCommandStore(configStore).setState({ config: initialConfig });
       }
     });
   }
@@ -507,7 +524,7 @@ describe("AppShell", () => {
       active: { nodeId: "bk_leaf", projectId: "project-1", environmentId: "env-1" },
     });
     try {
-      render(
+      renderInAppCommandScope(
         <FederationProvider>
           <AppShell>Workspace</AppShell>
         </FederationProvider>,
@@ -543,7 +560,7 @@ describe("AppShell", () => {
 
   test("derives the desktop title, uses the bar presentation, and starts window dragging", () => {
     isMobile = false;
-    const { container } = render(<AppShell>Workspace</AppShell>);
+    const { container } = renderInAppCommandScope(<AppShell>Workspace</AppShell>);
 
     expect(screen.getByText("Orkestrator AI - pgstack1")).toBeTruthy();
     expect(screen.getByTestId("action-bar").getAttribute("data-presentation")).toBe("bar");
@@ -566,17 +583,17 @@ describe("AppShell", () => {
 
   test("hides the left panel once the sidebar is toggled closed", async () => {
     isMobile = false;
-    const { rerender } = render(<AppShell>Workspace</AppShell>);
+    const { rerender } = renderInAppCommandScope(<AppShell>Workspace</AppShell>);
     expect(screen.getByText("Sidebar")).toBeTruthy();
 
     expect(screen.getByTestId("resize-handle")).toBeTruthy();
 
-    act(() => uiStore.setState({ sidebarOpen: false }));
+    act(() => useUIChromeStore.setState({ sidebarOpen: false }));
     rerender(<AppShell>Workspace</AppShell>);
     await waitFor(() => expect(screen.queryByText("Sidebar") === null).toBe(true));
     expect(screen.queryByTestId("resize-handle") === null).toBe(true);
 
-    act(() => uiStore.setState({ sidebarOpen: true }));
+    act(() => useUIChromeStore.setState({ sidebarOpen: true }));
     rerender(<AppShell>Workspace</AppShell>);
     expect(screen.getByText("Sidebar")).toBeTruthy();
     expect(screen.getByTestId("resize-handle")).toBeTruthy();
@@ -585,12 +602,12 @@ describe("AppShell", () => {
   test("search reveals the hidden desktop sidebar and delivers the pending request exactly once", async () => {
     isMobile = false;
     mountSearch = true;
-    uiStore.setState({ sidebarOpen: false });
-    const { rerender } = render(<AppShell>Workspace</AppShell>);
+    useUIChromeStore.setState({ sidebarOpen: false });
+    const { rerender } = renderInAppCommandScope(<AppShell>Workspace</AppShell>);
     expect(screen.queryByText("Sidebar") === null).toBe(true);
     fireEvent.keyDown(document.body, { key: "k", code: "KeyK", metaKey: true });
     await waitFor(() => expect(screen.getByTestId("project-search-dialog")).toBeTruthy());
-    expect(uiStore.getState().sidebarOpen).toBe(true);
+    expect(useUIChromeStore.getState().sidebarOpen).toBe(true);
     const input = screen.getByRole("combobox");
     await waitFor(() => expect(document.activeElement).toBe(input));
     // A second delivery would toggle the just-mounted search closed.
@@ -602,18 +619,18 @@ describe("AppShell", () => {
     await waitFor(() => expect(screen.queryByTestId("project-search-dialog") === null).toBe(true));
     // A later mount must not replay the consumed request.
     cleanup();
-    render(<AppShell>Workspace</AppShell>);
+    renderInAppCommandScope(<AppShell>Workspace</AppShell>);
     expect(screen.queryByTestId("project-search-dialog") === null).toBe(true);
   });
 
   test("search during closing reopens the sidebar and survives settling", async () => {
     isMobile = false;
     mountSearch = true;
-    render(<AppShell>Workspace</AppShell>);
-    act(() => uiStore.setState({ sidebarOpen: false }));
+    renderInAppCommandScope(<AppShell>Workspace</AppShell>);
+    act(() => useUIChromeStore.setState({ sidebarOpen: false }));
     expect(screen.getByText("Sidebar")).toBeTruthy();
     act(() => requestAppShortcut("search-projects"));
-    expect(uiStore.getState().sidebarOpen).toBe(true);
+    expect(useUIChromeStore.getState().sidebarOpen).toBe(true);
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 300));
     });
@@ -623,7 +640,7 @@ describe("AppShell", () => {
   test("compact disables the sidebar resize handle", () => {
     isMobile = false;
     useMachineViewStore.setState({ grouping: "compact" });
-    render(<AppShell>Workspace</AppShell>);
+    renderInAppCommandScope(<AppShell>Workspace</AppShell>);
     expect(screen.getByTestId("resize-handle").dataset.disabled).toBe("true");
     act(() => useMachineViewStore.setState({ grouping: "machine" }));
     expect(screen.getByTestId("resize-handle").dataset.disabled).toBe("false");
@@ -632,15 +649,15 @@ describe("AppShell", () => {
   test("in compact, search stays closed and is not delivered when compact is left", async () => {
     isMobile = false;
     mountSearch = true;
-    uiStore.setState({ sidebarOpen: false });
+    useUIChromeStore.setState({ sidebarOpen: false });
     useMachineViewStore.setState({ grouping: "compact" });
-    render(<AppShell>Workspace</AppShell>);
+    renderInAppCommandScope(<AppShell>Workspace</AppShell>);
     fireEvent.keyDown(document.body, { key: "k", code: "KeyK", metaKey: true });
-    expect(uiStore.getState().sidebarOpen).toBe(false);
+    expect(useUIChromeStore.getState().sidebarOpen).toBe(false);
 
     act(() => {
       useMachineViewStore.setState({ grouping: "machine" });
-      uiStore.setState({ sidebarOpen: true });
+      useUIChromeStore.setState({ sidebarOpen: true });
     });
     await waitFor(() => expect(screen.getByText("Sidebar")).toBeTruthy());
     expect(screen.queryByTestId("project-search-dialog") === null).toBe(true);
@@ -648,15 +665,15 @@ describe("AppShell", () => {
 
   test("the rotate shortcut shows a hidden sidebar and is delivered to it once", async () => {
     isMobile = false;
-    uiStore.setState({ sidebarOpen: false });
+    useUIChromeStore.setState({ sidebarOpen: false });
     let rotated = 0;
     function Rotator() {
       useEffect(() => onAppShortcut("rotate-sidebar-grouping", () => rotated++), []);
       return null;
     }
-    const { rerender } = render(<AppShell>Workspace</AppShell>);
+    const { rerender } = renderInAppCommandScope(<AppShell>Workspace</AppShell>);
     fireEvent.keyDown(document.body, { key: "D", code: "KeyD", metaKey: true, shiftKey: true });
-    expect(uiStore.getState().sidebarOpen).toBe(true);
+    expect(useUIChromeStore.getState().sidebarOpen).toBe(true);
     rerender(
       <AppShell>
         <Rotator />
@@ -667,7 +684,7 @@ describe("AppShell", () => {
 
   test("a closed mobile drawer drops search without opening or replaying it", () => {
     isMobile = false;
-    const { rerender } = render(<AppShell>Workspace</AppShell>);
+    const { rerender } = renderInAppCommandScope(<AppShell>Workspace</AppShell>);
     isMobile = true;
     rerender(<AppShell>Workspace</AppShell>);
     expect(screen.queryByRole("dialog", { name: "Projects and environments" }) === null).toBe(true);
@@ -681,34 +698,10 @@ describe("AppShell", () => {
     dispose();
   });
 
-  test("a realm skips the shell's hidden-sidebar fallback", () => {
-    isMobile = false;
-    uiStore.setState({ sidebarOpen: false });
-    const happyDOM = (window as unknown as { happyDOM: { setURL(url: string): void } }).happyDOM;
-    const href = window.location.href;
-    happyDOM.setURL("https://node.test/?realm=workspace&workspace=w1");
-    try {
-      render(<AppShell>Workspace</AppShell>);
-      act(() => {
-        requestAppShortcut("search-projects");
-      });
-      expect(uiStore.getState().sidebarOpen).toBe(false);
-      expect(screen.queryByText("Sidebar") === null).toBe(true);
-    } finally {
-      cleanup();
-      happyDOM.setURL(href);
-    }
-    // Neither realm routing nor its unmount queues work in this shell.
-    const delivered = mock(() => {});
-    const dispose = onAppShortcut("search-projects", delivered);
-    expect(delivered).not.toHaveBeenCalled();
-    dispose();
-  });
-
   test("mounts the agent-info button in the desktop title bar outside the drag region", () => {
     isMobile = false;
     seedPaneLayout([CLAUDE_TAB], "claude-tab");
-    const { container } = render(<AppShell>Workspace</AppShell>);
+    const { container } = renderInAppCommandScope(<AppShell>Workspace</AppShell>);
 
     const slot = screen.getByTestId("desktop-agent-info-slot");
     const titleBar = container.querySelector("div[data-backend-drag-region]")!;
@@ -732,7 +725,7 @@ describe("AppShell", () => {
 
   test("mounts the agent-info button in the mobile title bar in mobile form", () => {
     seedPaneLayout([CLAUDE_TAB], "claude-tab");
-    render(<AppShell>Workspace</AppShell>);
+    renderInAppCommandScope(<AppShell>Workspace</AppShell>);
 
     const slot = screen.getByTestId("mobile-agent-info-slot");
     expect(slot.contains(screen.getByTestId("agent-info-button"))).toBe(true);
@@ -745,8 +738,9 @@ describe("AppShell", () => {
     realInfo = true;
     const invokeMock = nativeInvoke as ReturnType<typeof mock>;
     invokeMock.mockImplementation(async () => null);
-    uiStore.setState({ projectBoardTab: "coordinator" });
+    uiStore().setState({ projectBoardTab: "coordinator" });
     useActiveCoordinatorConversationStore.getState().publish({
+      nodeId: commandNodeId(),
       projectId: "project-1",
       tabId: "coordinator-tab",
       data: {
@@ -756,7 +750,7 @@ describe("AppShell", () => {
       },
     });
     try {
-      render(<AppShell>Workspace</AppShell>);
+      renderInAppCommandScope(<AppShell>Workspace</AppShell>);
       fireEvent.click(screen.getByRole("button", { name: "Open agent information" }));
       const refreshes = () =>
         invokeMock.mock.calls.filter(
@@ -766,7 +760,9 @@ describe("AppShell", () => {
       await waitFor(() => expect(refreshes()).toBeGreaterThan(0));
       const before = refreshes();
       await act(async () => {
-        usePaneLayoutStore.setState((state) => ({ environments: new Map(state.environments) }));
+        appCommandStore(paneLayoutStore).setState((state) => ({
+          environments: new Map(state.environments),
+        }));
       });
       expect(refreshes()).toBe(before);
     } finally {
@@ -778,32 +774,35 @@ describe("AppShell", () => {
   test("describes the shown coordinator conversation instead of the project home's tab", () => {
     isMobile = false;
     seedPaneLayout([CLAUDE_TAB], "claude-tab");
-    uiStore.setState({ projectBoardTab: "coordinator" });
+    uiStore().setState({ projectBoardTab: "coordinator" });
     useActiveCoordinatorConversationStore.getState().publish({
+      nodeId: commandNodeId(),
       projectId: "project-1",
       tabId: "coordinator-tab",
       data: { platform: "claude", environmentId: "coordinator:workspace-1:conversation-1" },
     });
-    render(<AppShell>Workspace</AppShell>);
+    renderInAppCommandScope(<AppShell>Workspace</AppShell>);
 
     const button = screen.getByTestId("agent-info-button");
     expect(button.getAttribute("data-active-tab-id")).toBe("coordinator-tab");
     expect(button.getAttribute("data-active-tab-type")).toBe("agent-native");
 
     // Another board tab, or the page unmounting, returns to the environment's tab.
-    act(() => uiStore.setState({ projectBoardTab: "kanban" }));
+    act(() => uiStore().setState({ projectBoardTab: "kanban" }));
     expect(button.getAttribute("data-active-tab-id")).toBe("claude-tab");
-    act(() => uiStore.setState({ projectBoardTab: "coordinator" }));
+    act(() => uiStore().setState({ projectBoardTab: "coordinator" }));
     expect(button.getAttribute("data-active-tab-id")).toBe("coordinator-tab");
     act(() =>
-      useActiveCoordinatorConversationStore.getState().clear("project-1", "coordinator-tab"),
+      useActiveCoordinatorConversationStore
+        .getState()
+        .clear(commandNodeId(), "project-1", "coordinator-tab"),
     );
     expect(button.getAttribute("data-active-tab-id")).toBe("claude-tab");
   });
 
   test("mounts the system usage meters in the desktop title bar but not in mobile", () => {
     isMobile = false;
-    render(<AppShell>Workspace</AppShell>);
+    renderInAppCommandScope(<AppShell>Workspace</AppShell>);
     const slot = screen.getByTestId("desktop-agent-info-slot");
     const meters = screen.getByTestId("system-usage-indicator");
     const separator = screen.getByTestId("title-bar-usage-separator");
@@ -819,56 +818,58 @@ describe("AppShell", () => {
 
     cleanup();
     isMobile = true;
-    render(<AppShell>Workspace</AppShell>);
+    renderInAppCommandScope(<AppShell>Workspace</AppShell>);
     expect(screen.queryByTestId("system-usage-indicator") === null).toBe(true);
     expect(screen.queryByTestId("title-bar-usage-separator") === null).toBe(true);
   });
 
-  test("shows another node's meters and agent button in the same title-bar places", () => {
+  test("an in-tree node's meters and agent button are the window's own, on its scope, and switch with the shown node", async () => {
     isMobile = false;
-    act(() =>
-      useRemoteWorkspaceStore.setState({
-        active: { nodeId: "bk_a", projectId: "project-9", environmentId: "environment-9" },
-      }),
-    );
-    render(<AppShell>Workspace</AppShell>);
-    const slot = screen.getByTestId("desktop-agent-info-slot");
-    const meters = screen.getByTestId("realm-system-usage-meters");
-    const slotChildren = Array.from(slot.children);
-    expect(slotChildren[0]).toBe(meters);
-    expect(slotChildren[1]).toBe(screen.getByTestId("title-bar-usage-separator"));
-    expect(slotChildren[2]?.contains(screen.getByTestId("realm-agent-info-trigger"))).toBe(true);
-    expect(meters.getAttribute("data-node")).toBe("bk_a");
-    // This window's own node's controls are not shown for another node's workspace.
-    expect(screen.queryByTestId("system-usage-indicator") === null).toBe(true);
-    expect(screen.queryByTestId("agent-info-button") === null).toBe(true);
-  });
-
-  test("a realm draws the title bar's popovers instead of controls in its toolbar", () => {
-    isMobile = false;
-    const happyDOM = (window as unknown as { happyDOM: { setURL(url: string): void } }).happyDOM;
-    const originalHref = window.location.href;
-    happyDOM.setURL("https://node.test/?realm=workspace&workspace=w1");
+    const windowScope = getWindowScope();
+    const leafA = "bk_in-tree-a" as BackendId;
+    const leafB = "bk_in-tree-b" as BackendId;
+    const scopes = [] as Array<{ dispose(): void }>;
     try {
-      render(<AppShell>Workspace</AppShell>);
-      expect(screen.getByTestId("realm-title-bar-panels")).toBeTruthy();
-      expect(screen.queryByTestId("system-usage-indicator") === null).toBe(true);
-      expect(screen.queryByTestId("agent-info-button") === null).toBe(true);
-    } finally {
-      happyDOM.setURL(originalHref);
-    }
-  });
+      act(() =>
+        useRemoteWorkspaceStore.setState({
+          active: { nodeId: leafA, projectId: "project-9", environmentId: null },
+        }),
+      );
+      renderInAppCommandScope(<AppShell>Workspace</AppShell>);
+      // Its scope is still opening: empty meters.
+      expect(screen.getByTestId("node-system-usage-opening")).toBeTruthy();
 
-  test("a realm hosts the messages panel its tabs' mail banners open", () => {
-    isMobile = false;
-    const happyDOM = (window as unknown as { happyDOM: { setURL(url: string): void } }).happyDOM;
-    const originalHref = window.location.href;
-    happyDOM.setURL("https://node.test/?realm=workspace&workspace=w1");
-    try {
-      render(<AppShell>Workspace</AppShell>);
-      expect(screen.getByTestId("agent-mail-panel-host")).toBeTruthy();
+      act(() => {
+        scopes.push(
+          windowScope.open({ role: "leaf", client: new FakeNodeClient({ nodeId: leafA }) }),
+        );
+        scopes.push(
+          windowScope.open({ role: "leaf", client: new FakeNodeClient({ nodeId: leafB }) }),
+        );
+      });
+      const slot = screen.getByTestId("desktop-agent-info-slot");
+      await waitFor(() =>
+        expect(screen.getByTestId("system-usage-indicator").getAttribute("data-node")).toBe(leafA),
+      );
+      expect(slot.contains(screen.getByTestId("system-usage-indicator"))).toBe(true);
+      expect(screen.getByTestId("agent-info-button").getAttribute("data-node")).toBe(leafA);
+
+      act(() =>
+        useRemoteWorkspaceStore.setState({
+          active: { nodeId: leafB, projectId: "project-9", environmentId: null },
+        }),
+      );
+      expect(screen.getByTestId("system-usage-indicator").getAttribute("data-node")).toBe(leafB);
+      expect(screen.getByTestId("agent-info-button").getAttribute("data-node")).toBe(leafB);
+
+      // Back on this window's own node: its own controls, on the command scope as in the app.
+      act(() => useRemoteWorkspaceStore.setState({ active: null }));
+      expect(screen.getByTestId("system-usage-indicator").getAttribute("data-node")).toBe(
+        commandNodeId(),
+      );
     } finally {
-      happyDOM.setURL(originalHref);
+      cleanup();
+      for (const scope of scopes) scope.dispose();
     }
   });
 
@@ -876,7 +877,7 @@ describe("AppShell", () => {
     // The memo walks every leaf, picks the *active* pane, then that pane's
     // active tab: a pane-b tab must not be handed to the button.
     seedPaneLayout([CLAUDE_TAB], "claude-tab", "pane-a");
-    const { rerender } = render(<AppShell>Workspace</AppShell>);
+    const { rerender } = renderInAppCommandScope(<AppShell>Workspace</AppShell>);
     expect(screen.getByTestId("agent-info-button").getAttribute("data-active-tab-id")).toBe(
       "claude-tab",
     );
@@ -910,13 +911,13 @@ describe("AppShell", () => {
       containerId: "container-2",
     });
     const setOtherLayout = (activeTabId: string) =>
-      usePaneLayoutStore.setState((state) => {
+      appCommandStore(paneLayoutStore).setState((state) => {
         const environments = new Map(state.environments);
         environments.set("environment-2", otherLayout(activeTabId) as never);
         return { environments };
       });
     act(() => setOtherLayout("other-a"));
-    render(<AppShell>Workspace</AppShell>);
+    renderInAppCommandScope(<AppShell>Workspace</AppShell>);
     const button = screen.getByTestId("agent-info-button");
     expect(button.getAttribute("data-active-tab-id")).toBe("claude-tab");
 
@@ -942,7 +943,7 @@ describe("AppShell", () => {
     [
       "the environment has no pane state",
       () => {
-        usePaneLayoutStore.setState({
+        appCommandStore(paneLayoutStore).setState({
           environments: new Map(),
           activeEnvironmentId: null,
         } as never);
@@ -962,14 +963,14 @@ describe("AppShell", () => {
     ],
   ])("hands the button no tab when %s", (_label, seed) => {
     seed();
-    render(<AppShell>Workspace</AppShell>);
+    renderInAppCommandScope(<AppShell>Workspace</AppShell>);
     expect(screen.getByTestId("agent-info-button").getAttribute("data-active-tab-id")).toBe("none");
   });
 
   test("falls back to the product title when selection records are unavailable", () => {
     selectedProjectId = "missing-project";
     selectedEnvironmentId = "missing-environment";
-    render(<AppShell />);
+    renderInAppCommandScope(<AppShell />);
 
     expect(screen.getByRole("button", { name: "Orkestrator AI", hidden: true })).toBeTruthy();
     expect(document.title).toBe("Orkestrator AI");
@@ -985,7 +986,7 @@ describe("AppShell", () => {
       return <button onClick={() => setCount(count + 1)}>Count {count}</button>;
     }
     isMobile = false;
-    const { rerender } = render(
+    const { rerender } = renderInAppCommandScope(
       <AppShell>
         <Counter />
       </AppShell>,
@@ -1018,12 +1019,12 @@ describe("AppShell", () => {
   });
 
   test("opens the mobile drawer only on a phone-sized first load", () => {
-    render(<AppShell>Workspace</AppShell>);
+    renderInAppCommandScope(<AppShell>Workspace</AppShell>);
     expect(screen.getByRole("dialog", { name: "Projects and environments" })).toBeTruthy();
     cleanup();
 
     isMobile = false;
-    const { rerender } = render(<AppShell>Workspace</AppShell>);
+    const { rerender } = renderInAppCommandScope(<AppShell>Workspace</AppShell>);
     isMobile = true;
     rerender(<AppShell>Workspace</AppShell>);
     expect(screen.queryByRole("dialog", { name: "Projects and environments" }) === null).toBe(true);

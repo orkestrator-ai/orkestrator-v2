@@ -1,8 +1,9 @@
+import { containerHostReachabilityChangedEvent } from "@orkestrator/protocol/contract/domains/events";
+import type { BackendEmit } from "./backend-emit.js";
 import { randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { networkInterfaces } from "node:os";
 import {
-  CONTAINER_HOST_REACHABILITY_CHANGED_EVENT,
   ROOTLESSKIT_HOST_LOOPBACK_ADDRESS,
   initialContainerHostReachability,
   type ContainerHostProbe,
@@ -487,7 +488,7 @@ export type ContainerHostReachabilityDependencies = {
   ownerNamespace: string;
   /** Configured environment image, the fallback probe image. */
   fallbackImage: () => string;
-  emit?: (event: string, payload: unknown) => void;
+  emit?: BackendEmit;
   platform?: NodeJS.Platform;
   run?: typeof runCommand;
   detectTopology?: () => Promise<
@@ -1112,7 +1113,7 @@ export class ContainerHostReachabilityService {
     this.state = next;
     if (changed) {
       try {
-        this.deps.emit?.(CONTAINER_HOST_REACHABILITY_CHANGED_EVENT, this.snapshot());
+        this.deps.emit?.(containerHostReachabilityChangedEvent, this.snapshot());
       } catch (error) {
         log.warn("event.emit-failed", { error: formatLogError(error) });
       }

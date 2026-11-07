@@ -5,17 +5,47 @@ import {
 } from "@orkestrator/protocol/agent-accounts";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import {
-  GET_COORDINATOR_ACCOUNT_SWITCH_GRANT_COMMAND,
-  SET_COORDINATOR_ACCOUNT_SWITCH_GRANT_COMMAND,
-} from "@orkestrator/protocol/coordinator-account-switch-grant";
+  cancelAgentAccountLoginCommand,
+  cancelOpenCodeProviderLoginCommand,
+  getAgentAccountLoginCommand,
+  getAgentAccountUsageCommand,
+  getAgentSignInStatusCommand,
+  getCoordinatorAccountSwitchGrantCommand,
+  getNativeAgentSessionAccountCommand,
+  getOpenCodeProviderLoginCommand,
+  getProjectUsageLimitsCommand,
+  listAgentAccountsCommand,
+  listMachineAgentAccountsCommand,
+  listOpenCodeProviderAuthCommand,
+  openAgentSignInTerminalCommand,
+  readHostAgentSignInsCommand,
+  removeAgentAccountCommand,
+  removeOpenCodeProviderLoginCommand,
+  renameAgentAccountCommand,
+  resumeAgentAccountAutoSwitchCommand,
+  setActiveAgentAccountCommand,
+  setAgentAccountAutoSwitchCommand,
+  setCoordinatorAccountSwitchGrantCommand,
+  setOpenCodeProviderApiKeyCommand,
+  setPreferredAgentIdentityCommand,
+  startAgentAccountLoginCommand,
+  startOpenCodeProviderLoginCommand,
+  submitAgentAccountLoginCodeCommand,
+  submitOpenCodeProviderLoginCodeCommand,
+} from "@orkestrator/protocol/contract/domains/accounts";
 
-import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
+import type { AnyCommandDef } from "@orkestrator/protocol/contract/command";
+import { ASYNC_HANDLER, asyncHandlerCheckingFirst } from "./commands-registry-async-decode.js";
+import type {
+  CommandRegistrar,
+  DefinedCommandHandler,
+  RegistryDependencies,
+} from "./commands-registry-types.js";
 import {
   asNonBlankString,
   asOptionalString,
   asRecord,
   asRequiredBoolean,
-  assertOnlyKeys,
   asString,
 } from "./commands-helpers.js";
 import {
@@ -38,6 +68,16 @@ import { cachedPlanUsage, readProjectUsageLimits } from "./agent-usage-limits.js
 import { openAgentSignInTerminal, readHostAgentSignIns } from "./agent-sign-ins.js";
 import { openCodeProviderLogin, openCodeProviderLoginProgress } from "./opencode-provider-login.js";
 
+/**
+ * `register(def, handler)` for this file's `async` handlers: an argument the
+ * definition refuses is a rejection, as the handler's own checks were
+ * (`commands-registry-async-decode.ts`).
+ */
+function asyncRegistrar(register: CommandRegistrar, options = ASYNC_HANDLER) {
+  return <C extends AnyCommandDef>(def: C, handler: DefinedCommandHandler<C>): void =>
+    register(def, handler, options);
+}
+
 function asAccountPlatform(value: unknown): AgentAccountPlatform {
   const platform = asNonBlankString(value, "platform");
   if (!isAgentAccountPlatform(platform)) {
@@ -45,6 +85,16 @@ function asAccountPlatform(value: unknown): AgentAccountPlatform {
   }
   return platform;
 }
+
+/**
+ * For handlers that check the account platform before their other arguments:
+ * the platform check runs before the decode, so a call with an unsupported
+ * platform and another wrong field reports the platform, as it did before the
+ * definitions (plan item 7008).
+ */
+const ACCOUNT_PLATFORM_FIRST = asyncHandlerCheckingFirst((args) => {
+  asAccountPlatform(args.platform);
+});
 
 /**
  * Additional Claude and Codex logins. Nothing here returns a credential: the
@@ -55,13 +105,13 @@ export function registerAgentAccountCommands(
   register: CommandRegistrar,
   dependencies: RegistryDependencies,
 ): void {
-  register("list_agent_accounts", async (args, context) => {
-    assertOnlyKeys(args, [], "arguments");
+  const define = asyncRegistrar(register);
+  const definePlatformFirst = asyncRegistrar(register, ACCOUNT_PLATFORM_FIRST);
+  define(listAgentAccountsCommand, async (_args, context) => {
     return listAgentAccounts(context);
   });
   // Settings' per-platform sign-in card: read on the host, no session needed.
-  register("get_agent_sign_in_status", async (args, context) => {
-    assertOnlyKeys(args, ["platform"], "arguments");
+  define(getAgentSignInStatusCommand, async (args, context) => {
     const platform = asNonBlankString(args.platform, "platform");
     if (!isAgentPlatform(platform)) throw new Error("Agent platform is invalid");
     const { readAgentSignInStatus } = await import("./agent-sign-in-status.js");
@@ -75,13 +125,11 @@ export function registerAgentAccountCommands(
       },
     });
   });
-  register("list_machine_agent_accounts", async (args, context) => {
-    assertOnlyKeys(args, [], "arguments");
+  define(listMachineAgentAccountsCommand, async (_args, context) => {
     return listMachineAgentAccounts(context);
   });
   /** The login the overview flags each machine against; an email only, never switching anything. */
-  register("set_preferred_agent_identity", async (args, context) => {
-    assertOnlyKeys(args, ["platform", "email"], "arguments");
+  define(setPreferredAgentIdentityCommand, async (args, context) => {
     return setPreferredAgentIdentity(
       context,
       asAccountPlatform(args.platform),
@@ -89,13 +137,11 @@ export function registerAgentAccountCommands(
     );
   });
   /** Grok's and Pi's login on this machine, from files and variable names only. */
-  register("read_host_agent_sign_ins", async (args) => {
-    assertOnlyKeys(args, [], "arguments");
+  define(readHostAgentSignInsCommand, async () => {
     return readHostAgentSignIns();
   });
   /** A terminal tab on this machine running the platform's own fixed login command. */
-  register("open_agent_sign_in_terminal", async (args, context) => {
-    assertOnlyKeys(args, ["platform", "environmentId"], "arguments");
+  define(openAgentSignInTerminalCommand, async (args, context) => {
     const platform = asNonBlankString(args.platform, "platform");
     if (!isHostSignInPlatform(platform)) {
       throw new Error(`A terminal sign-in is not offered for ${platform}`);
@@ -109,16 +155,14 @@ export function registerAgentAccountCommands(
       },
     });
   });
-  register("get_native_agent_session_account", async (args, context) => {
-    assertOnlyKeys(args, ["environmentId", "agent"], "arguments");
+  define(getNativeAgentSessionAccountCommand, async (args, context) => {
     return readSessionAgentAccount(
       context,
       asNonBlankString(args.environmentId, "environmentId"),
       asNonBlankString(args.agent, "agent"),
     );
   });
-  register("set_active_agent_account", async (args, context) => {
-    assertOnlyKeys(args, ["platform", "accountId"], "arguments");
+  definePlatformFirst(setActiveAgentAccountCommand, async (args, context) => {
     return setActiveAgentAccount(
       context,
       asAccountPlatform(args.platform),
@@ -130,8 +174,7 @@ export function registerAgentAccountCommands(
    * never writes them, so a settings form holding an older config or a
    * coordinator's change cannot undo the other.
    */
-  register("set_agent_account_auto_switch", async (args, context) => {
-    assertOnlyKeys(args, ["platform", "enabled", "email", "accountId", "included"], "arguments");
+  definePlatformFirst(setAgentAccountAutoSwitchCommand, async (args, context) => {
     const platform = asAccountPlatform(args.platform);
     const enabled =
       args.enabled === undefined ? undefined : asRequiredBoolean(args.enabled, "enabled");
@@ -155,8 +198,7 @@ export function registerAgentAccountCommands(
     return snapshot;
   });
   /** Ends this machine's pin, and only this machine's. Its own copy of the ticks is left alone. */
-  register("resume_agent_account_auto_switch", async (args, context) => {
-    assertOnlyKeys(args, ["platform"], "arguments");
+  define(resumeAgentAccountAutoSwitchCommand, async (args, context) => {
     const platform = asAccountPlatform(args.platform);
     const snapshot = await resumeAgentAccountAutoSwitch(context, platform);
     context.accountAutoSwitch?.nudge(platform);
@@ -167,8 +209,7 @@ export function registerAgentAccountCommands(
    * without asking, and the switches it allowed. Separate from
    * `update_global_config`, which never writes it.
    */
-  register(GET_COORDINATOR_ACCOUNT_SWITCH_GRANT_COMMAND, async (args, context) => {
-    assertOnlyKeys(args, ["platform"], "arguments");
+  define(getCoordinatorAccountSwitchGrantCommand, async (args, context) => {
     return accountSwitchGrantState(
       {
         loadGlobalConfig: async () => (await context.storage.loadConfig()).global,
@@ -177,8 +218,7 @@ export function registerAgentAccountCommands(
       args.platform === undefined ? undefined : asAccountPlatform(args.platform),
     );
   });
-  register(SET_COORDINATOR_ACCOUNT_SWITCH_GRANT_COMMAND, async (args, context) => {
-    assertOnlyKeys(args, ["platform", "enabled"], "arguments");
+  definePlatformFirst(setCoordinatorAccountSwitchGrantCommand, async (args, context) => {
     const platform = asAccountPlatform(args.platform);
     await context.storage.setCoordinatorAccountSwitchGrant(
       platform,
@@ -192,8 +232,7 @@ export function registerAgentAccountCommands(
       platform,
     );
   });
-  register("rename_agent_account", async (args, context) => {
-    assertOnlyKeys(args, ["platform", "accountId", "label"], "arguments");
+  definePlatformFirst(renameAgentAccountCommand, async (args, context) => {
     return renameAgentAccount(
       context,
       asAccountPlatform(args.platform),
@@ -201,8 +240,7 @@ export function registerAgentAccountCommands(
       asNonBlankString(args.label, "label"),
     );
   });
-  register("remove_agent_account", async (args, context) => {
-    assertOnlyKeys(args, ["platform", "accountId"], "arguments");
+  definePlatformFirst(removeAgentAccountCommand, async (args, context) => {
     return removeAgentAccount(
       context,
       asAccountPlatform(args.platform),
@@ -213,8 +251,7 @@ export function registerAgentAccountCommands(
    * Which of a project's agent tabs stopped on a provider usage limit, and the
    * active accounts' cached quota windows. Cheap: storage and caches only.
    */
-  register("get_project_usage_limits", async (args, context) => {
-    assertOnlyKeys(args, ["projectId"], "arguments");
+  define(getProjectUsageLimitsCommand, async (args, context) => {
     return readProjectUsageLimits(
       {
         storage: context.storage,
@@ -223,8 +260,7 @@ export function registerAgentAccountCommands(
       asNonBlankString(args.projectId, "projectId"),
     );
   });
-  register("get_agent_account_usage", async (args, context) => {
-    assertOnlyKeys(args, ["platform", "accountId", "force"], "arguments");
+  definePlatformFirst(getAgentAccountUsageCommand, async (args, context) => {
     return readAgentAccountUsage(
       context,
       asAccountPlatform(args.platform),
@@ -239,8 +275,7 @@ export function registerAgentAccountCommands(
    * Split into start, poll, code and cancel like the Cursor sign-in: the flow
    * is human-paced and must not hold a request open.
    */
-  register("start_agent_account_login", async (args, context) => {
-    assertOnlyKeys(args, ["platform", "reauthenticate"], "arguments");
+  definePlatformFirst(startAgentAccountLoginCommand, async (args, context) => {
     return startAgentAccountLogin(context, asAccountPlatform(args.platform), {
       reauthenticate:
         args.reauthenticate === undefined
@@ -248,16 +283,13 @@ export function registerAgentAccountCommands(
           : asRequiredBoolean(args.reauthenticate, "reauthenticate"),
     });
   });
-  register("get_agent_account_login", async (args, context) => {
-    assertOnlyKeys(args, [], "arguments");
+  define(getAgentAccountLoginCommand, async (_args, context) => {
     return agentAccountLoginProgress(context);
   });
-  register("submit_agent_account_login_code", async (args, context) => {
-    assertOnlyKeys(args, ["code"], "arguments");
+  define(submitAgentAccountLoginCodeCommand, async (args, context) => {
     return submitAgentAccountLoginCode(context, asNonBlankString(args.code, "code"));
   });
-  register("cancel_agent_account_login", async (args, context) => {
-    assertOnlyKeys(args, ["operationId"], "arguments");
+  define(cancelAgentAccountLoginCommand, async (args, context) => {
     return cancelAgentAccountLogin(
       context,
       args.operationId === undefined
@@ -283,12 +315,11 @@ function asOpenCodeAuthInputs(value: unknown, name: string): Record<string, stri
  * an API key passes straight through to OpenCode.
  */
 export function registerOpenCodeProviderLoginCommands(register: CommandRegistrar): void {
-  register("list_opencode_provider_auth", async (args, context) => {
-    assertOnlyKeys(args, [], "arguments");
+  const define = asyncRegistrar(register);
+  define(listOpenCodeProviderAuthCommand, async (_args, context) => {
     return openCodeProviderLogin.listProviders(context);
   });
-  register("set_opencode_provider_api_key", async (args, context) => {
-    assertOnlyKeys(args, ["providerId", "key", "metadata"], "arguments");
+  define(setOpenCodeProviderApiKeyCommand, async (args, context) => {
     await openCodeProviderLogin.setApiKey(
       context,
       asNonBlankString(args.providerId, "providerId"),
@@ -296,13 +327,11 @@ export function registerOpenCodeProviderLoginCommands(register: CommandRegistrar
       asOpenCodeAuthInputs(args.metadata, "metadata"),
     );
   });
-  register("remove_opencode_provider_login", async (args, context) => {
-    assertOnlyKeys(args, ["providerId"], "arguments");
+  define(removeOpenCodeProviderLoginCommand, async (args, context) => {
     await openCodeProviderLogin.signOut(context, asNonBlankString(args.providerId, "providerId"));
   });
   /** Split into start, poll, code and cancel like the account sign-in. */
-  register("start_opencode_provider_login", async (args, context) => {
-    assertOnlyKeys(args, ["providerId", "providerLabel", "method", "inputs"], "arguments");
+  define(startOpenCodeProviderLoginCommand, async (args, context) => {
     if (typeof args.method !== "number") throw new Error("Expected method to be a number");
     return openCodeProviderLogin.startOAuth(context, {
       providerId: asNonBlankString(args.providerId, "providerId"),
@@ -311,16 +340,13 @@ export function registerOpenCodeProviderLoginCommands(register: CommandRegistrar
       inputs: asOpenCodeAuthInputs(args.inputs, "inputs"),
     });
   });
-  register("get_opencode_provider_login", async (args, context) => {
-    assertOnlyKeys(args, [], "arguments");
+  define(getOpenCodeProviderLoginCommand, async (_args, context) => {
     return openCodeProviderLoginProgress(context);
   });
-  register("submit_opencode_provider_login_code", async (args, context) => {
-    assertOnlyKeys(args, ["code"], "arguments");
+  define(submitOpenCodeProviderLoginCodeCommand, async (args, context) => {
     return openCodeProviderLogin.submitCode(context, asNonBlankString(args.code, "code"));
   });
-  register("cancel_opencode_provider_login", async (args, context) => {
-    assertOnlyKeys(args, ["operationId"], "arguments");
+  define(cancelOpenCodeProviderLoginCommand, async (args, context) => {
     return openCodeProviderLogin.cancel(
       context,
       args.operationId === undefined

@@ -7,7 +7,8 @@
  * never on the text barrier.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, waitFor } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import type {
   NativeAgentControlUpdate,
   NativeAgentDiscoveryUpdate,
@@ -23,8 +24,15 @@ import type {
 import { nativeAgentCapabilities } from "@orkestrator/protocol/native-agent";
 import { buildNativeAgentMessagePatch } from "@orkestrator/protocol/native-agent-transcript-patch";
 import * as realBackend from "@/lib/backend";
-import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { nativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
+import { appCommandScope } from "@/lib/node-scope-slots";
+
+/** Retained history the window's shared transcripts budget holds. */
+function windowHistoryBytes(): number {
+  return appCommandScope().budgets.transcripts.usedBytes;
+}
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
+import { appCommandStore } from "@/test/app-command-store";
 
 interface TestMessage {
   id: string;
@@ -336,7 +344,7 @@ function stateSnapshot(
 }
 
 function renderSession(isActive = true) {
-  return renderHook(
+  return renderHookInAppCommandScope(
     ({ isActive }) =>
       useNativeAgentSession<TestMessage>({
         platform: "codex",
@@ -371,17 +379,17 @@ beforeEach(() => {
   updateNativeAgentControlsMock.mockReset();
   ensureNativeAgentSessionMock.mockClear();
   adoptNativeAgentSessionMock.mockClear();
-  usePaneLayoutStore.setState({
+  appCommandStore(paneLayoutStore).setState({
     environments: new Map(),
     hydration: new Map(),
     activeEnvironmentId: null,
   });
-  useNativeAgentProjectionStore.getState().reset();
+  appCommandStore(nativeAgentProjectionStore).getState().reset();
 });
 
 afterEach(() => {
   cleanup();
-  useNativeAgentProjectionStore.getState().reset();
+  appCommandStore(nativeAgentProjectionStore).getState().reset();
 });
 
 describe("useNativeAgentSession progressive view", () => {
@@ -467,7 +475,7 @@ describe("useNativeAgentSession progressive view", () => {
 
   describe("while the owner holds sending", () => {
     const renderHeld = (sendingHeld: boolean, initialProviderSessionId?: string) =>
-      renderHook(
+      renderHookInAppCommandScope(
         ({ sendingHeld }) =>
           useNativeAgentSession<TestMessage>({
             platform: "codex",
@@ -700,8 +708,9 @@ describe("useNativeAgentSession progressive view", () => {
     expect(transcriptCalls[1]?.knownToken).toBe("transcript-1");
     expect(result.current.projection?.messages.map(({ id }) => id)).toEqual(["m1", "m2"]);
     expect(
-      useNativeAgentProjectionStore.getState().progressiveCaches.get("env-env-1:tab-1")
-        ?.transcriptToken,
+      appCommandStore(nativeAgentProjectionStore)
+        .getState()
+        .progressiveCaches.get("env-env-1:tab-1")?.transcriptToken,
     ).toBe("transcript-2");
   });
 
@@ -800,14 +809,16 @@ describe("useNativeAgentSession progressive view", () => {
   });
 
   test("recovers history when a progressive token outlives its projection body", async () => {
-    useNativeAgentProjectionStore.getState().setProgressiveCache(identity.logicalSessionKey, {
-      identity,
-      transcriptToken: "transcript-1",
-      transcriptHistoryEpoch: "epoch-1",
-      transcriptAvailability: "current",
-      transcriptRefreshing: false,
-      stateAvailability: "unavailable",
-    });
+    appCommandStore(nativeAgentProjectionStore)
+      .getState()
+      .setProgressiveCache(identity.logicalSessionKey, {
+        identity,
+        transcriptToken: "transcript-1",
+        transcriptHistoryEpoch: "epoch-1",
+        transcriptAvailability: "current",
+        transcriptRefreshing: false,
+        stateAvailability: "unavailable",
+      });
 
     transcriptUpdates = [
       () => {
@@ -961,7 +972,7 @@ describe("useNativeAgentSession progressive view", () => {
     stateUpdates = [() => stateSnapshot("state-1")];
 
     const seen: boolean[] = [];
-    const { result } = renderHook(() => {
+    const { result } = renderHookInAppCommandScope(() => {
       const session = useNativeAgentSession<TestMessage>({
         platform: "codex",
         environmentId: "env-1",
@@ -1017,7 +1028,7 @@ describe("useNativeAgentSession progressive view", () => {
   });
 
   test("clears transcriptRefreshing for an inactive tab that never read", async () => {
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useNativeAgentSession<TestMessage>({
         platform: "codex",
         environmentId: "env-1",
@@ -1096,14 +1107,16 @@ describe("useNativeAgentSession progressive view", () => {
   });
 
   test("clears a recovery notice when authoritative session state recovers", async () => {
-    useNativeAgentProjectionStore.getState().setProjection(
-      "env-env-1:tab-1",
-      projection([message("m1")], {
-        connection: "connecting",
-        turn: { phase: "recovering" },
-        notices: [{ kind: "recovery", message: "Reconnecting to the native agent runtime…" }],
-      }),
-    );
+    appCommandStore(nativeAgentProjectionStore)
+      .getState()
+      .setProjection(
+        "env-env-1:tab-1",
+        projection([message("m1")], {
+          connection: "connecting",
+          turn: { phase: "recovering" },
+          notices: [{ kind: "recovery", message: "Reconnecting to the native agent runtime…" }],
+        }),
+      );
     transcriptUpdates = [() => transcriptSnapshot("transcript-1", [message("m1")])];
     let releaseState!: () => void;
     const heldState = new Promise<NativeAgentSessionStateUpdate>((resolve) => {
@@ -1130,13 +1143,15 @@ describe("useNativeAgentSession progressive view", () => {
       severity: "error" as const,
       occurrenceId: "mcp:session-1:github",
     };
-    useNativeAgentProjectionStore.getState().setProjection(
-      "env-env-1:tab-1",
-      projection([message("m1")], {
-        notices: [advisory],
-        runtimeHealthAuthoritative: false,
-      }),
-    );
+    appCommandStore(nativeAgentProjectionStore)
+      .getState()
+      .setProjection(
+        "env-env-1:tab-1",
+        projection([message("m1")], {
+          notices: [advisory],
+          runtimeHealthAuthoritative: false,
+        }),
+      );
     transcriptUpdates = [() => transcriptSnapshot("transcript-1", [message("m1")])];
     stateUpdates = [
       () =>
@@ -1369,12 +1384,13 @@ describe("useNativeAgentSession progressive view", () => {
     first.unmount();
 
     expect(
-      useNativeAgentProjectionStore.getState().projections.get("env-env-1:tab-1")?.backgroundTasks,
+      appCommandStore(nativeAgentProjectionStore).getState().projections.get("env-env-1:tab-1")
+        ?.backgroundTasks,
     ).toEqual(backgroundTasks);
 
     // Progressive-cache eviction is independent of the projection ceiling.
     // Filling it drops this session's identity while the task snapshot stays.
-    const store = useNativeAgentProjectionStore.getState();
+    const store = appCommandStore(nativeAgentProjectionStore).getState();
     for (let index = 0; index < 128; index += 1) {
       store.setProgressiveCache(`filler-${index}`, {
         identity: { ...identity, logicalSessionKey: `filler-${index}` },
@@ -1383,11 +1399,14 @@ describe("useNativeAgentSession progressive view", () => {
         stateAvailability: "unavailable",
       });
     }
-    expect(useNativeAgentProjectionStore.getState().progressiveCaches.has("env-env-1:tab-1")).toBe(
-      false,
-    );
     expect(
-      useNativeAgentProjectionStore.getState().projections.get("env-env-1:tab-1")?.backgroundTasks,
+      appCommandStore(nativeAgentProjectionStore)
+        .getState()
+        .progressiveCaches.has("env-env-1:tab-1"),
+    ).toBe(false);
+    expect(
+      appCommandStore(nativeAgentProjectionStore).getState().projections.get("env-env-1:tab-1")
+        ?.backgroundTasks,
     ).toEqual(backgroundTasks);
 
     const restarted = { ...identity, sourceGeneration: "generation-2" };
@@ -1439,7 +1458,9 @@ describe("useNativeAgentSession progressive view", () => {
     expect(result.current.projection?.interactions).toHaveLength(1);
     expect(result.current.projection?.composerControls).toHaveLength(1);
     expect(
-      useNativeAgentProjectionStore.getState().progressiveCaches.get("env-env-1:tab-1")?.stateToken,
+      appCommandStore(nativeAgentProjectionStore)
+        .getState()
+        .progressiveCaches.get("env-env-1:tab-1")?.stateToken,
     ).toBe("state-1");
 
     transcriptUpdates = [];
@@ -1450,7 +1471,9 @@ describe("useNativeAgentSession progressive view", () => {
 
     expect(result.current.sessionStateAvailability).toBe("unavailable");
     expect(
-      useNativeAgentProjectionStore.getState().progressiveCaches.get("env-env-1:tab-1")?.stateToken,
+      appCommandStore(nativeAgentProjectionStore)
+        .getState()
+        .progressiveCaches.get("env-env-1:tab-1")?.stateToken,
     ).toBeUndefined();
 
     /*
@@ -2037,7 +2060,7 @@ describe("useNativeAgentSession progressive view", () => {
       expect(result.current.projection?.messages.map(({ id }) => id)).toEqual(["m1", "m2", "m3"]),
     );
 
-    useNativeAgentProjectionStore.setState({
+    appCommandStore(nativeAgentProjectionStore).setState({
       historyEvictions: new Map([["env-env-1:tab-1", 1]]),
     });
     transcriptUpdates = [
@@ -2566,8 +2589,9 @@ describe("useNativeAgentSession progressive view", () => {
     }
 
     function heldHistory() {
-      return useNativeAgentProjectionStore.getState().syncCaches.get("env-env-1:tab-1")
-        ?.historyMessages as TestMessage[] | undefined;
+      return appCommandStore(nativeAgentProjectionStore)
+        .getState()
+        .syncCaches.get("env-env-1:tab-1")?.historyMessages as TestMessage[] | undefined;
     }
 
     test("a snapshot replaces the retained copy of a revised row and inserts nothing", async () => {
@@ -2701,7 +2725,8 @@ describe("useNativeAgentSession progressive view", () => {
     expect(result.current.projection?.messageWindow?.truncated).toBe(true);
     expect(result.current.projection?.messageWindow?.canLoadEarlier).toBe(false);
     expect(
-      useNativeAgentProjectionStore.getState().syncCaches.get("env-env-1:tab-1")?.historyBootstrap,
+      appCommandStore(nativeAgentProjectionStore).getState().syncCaches.get("env-env-1:tab-1")
+        ?.historyBootstrap,
     ).toBeUndefined();
     expect(getNativeAgentProjectionUpdateMock).not.toHaveBeenCalled();
   });
@@ -2723,7 +2748,8 @@ describe("useNativeAgentSession progressive view", () => {
     await waitFor(() => expect(first.result.current.sessionStateAvailability).toBe("current"));
     expect(first.result.current.projection?.messageWindow?.canLoadEarlier).toBe(false);
     expect(
-      useNativeAgentProjectionStore.getState().syncCaches.get("env-env-1:tab-1")?.historyBootstrap,
+      appCommandStore(nativeAgentProjectionStore).getState().syncCaches.get("env-env-1:tab-1")
+        ?.historyBootstrap,
     ).toBeUndefined();
     first.unmount();
 
@@ -2734,7 +2760,8 @@ describe("useNativeAgentSession progressive view", () => {
 
     expect(remount.result.current.projection?.messageWindow?.canLoadEarlier).toBe(false);
     expect(
-      useNativeAgentProjectionStore.getState().syncCaches.get("env-env-1:tab-1")?.historyBootstrap,
+      appCommandStore(nativeAgentProjectionStore).getState().syncCaches.get("env-env-1:tab-1")
+        ?.historyBootstrap,
     ).toBeUndefined();
     expect(getNativeAgentProjectionUpdateMock).not.toHaveBeenCalled();
   });
@@ -2764,7 +2791,8 @@ describe("useNativeAgentSession progressive view", () => {
 
     expect(result.current.projection?.messageWindow?.canLoadEarlier).toBe(true);
     expect(
-      useNativeAgentProjectionStore.getState().syncCaches.get("env-env-1:tab-1")?.historyBootstrap,
+      appCommandStore(nativeAgentProjectionStore).getState().syncCaches.get("env-env-1:tab-1")
+        ?.historyBootstrap,
     ).toBe(true);
   });
 
@@ -3136,10 +3164,12 @@ describe("useNativeAgentSession progressive view", () => {
     await waitFor(() => expect(first.result.current.sessionStateAvailability).toBe("current"));
     expect(first.result.current.projection?.messageWindow?.canLoadEarlier).toBe(true);
     expect(
-      useNativeAgentProjectionStore.getState().syncCaches.get("env-env-1:tab-1")?.historyBootstrap,
+      appCommandStore(nativeAgentProjectionStore).getState().syncCaches.get("env-env-1:tab-1")
+        ?.historyBootstrap,
     ).toBe(true);
     expect(
-      useNativeAgentProjectionStore.getState().syncCaches.get("env-env-1:tab-1")?.historyCursor,
+      appCommandStore(nativeAgentProjectionStore).getState().syncCaches.get("env-env-1:tab-1")
+        ?.historyCursor,
     ).toBeUndefined();
     first.unmount();
 
@@ -3179,7 +3209,7 @@ test("revised-row overflow while inactive keeps held history on screen and re-re
   const tail = [message("live-a"), message("live-b")];
   transcriptUpdates = [() => transcriptSnapshot("initial", [...old, ...tail])];
   stateUpdates = [() => stateSnapshot("state-1")];
-  const session = renderHook(
+  const session = renderHookInAppCommandScope(
     ({ active }) =>
       useNativeAgentSession<TestMessage>({
         platform: "codex",
@@ -3313,7 +3343,7 @@ describe("a held row too large to travel as a revision keeps changing", () => {
   test("no poll takes the paged history off screen", async () => {
     const session = await startWithPagedHistory();
     const seen: number[] = [];
-    const unsubscribe = useNativeAgentProjectionStore.subscribe((state) => {
+    const unsubscribe = appCommandStore(nativeAgentProjectionStore).subscribe((state) => {
       const projection = [...state.projections.values()][0];
       if (projection) seen.push(projection.messages.length);
     });
@@ -3415,8 +3445,9 @@ describe("a held row too large to travel as a revision keeps changing", () => {
   });
 
   const debt = () =>
-    useNativeAgentProjectionStore.getState().progressiveCaches.get(identity.logicalSessionKey)
-      ?.heldHistoryReconcileOwed;
+    appCommandStore(nativeAgentProjectionStore)
+      .getState()
+      .progressiveCaches.get(identity.logicalSessionKey)?.heldHistoryReconcileOwed;
   const page = (rows: TestMessage[], nextCursor?: string) => ({
     ...historyPage(rows, { nextCursor }),
     historyEpoch: "epoch-1",
@@ -3560,7 +3591,7 @@ describe("a held row too large to travel as a revision keeps changing", () => {
       const heldRows = budget === "session" ? [...older, message("third-held-row")] : older;
       const session = await startWithPagedHistory(heldRows);
       if (budget === "shared") {
-        const store = useNativeAgentProjectionStore.getState();
+        const store = appCommandStore(nativeAgentProjectionStore).getState();
         for (let i = 0; i < 4; i++) {
           const other = [message(`other-${i}`, "x".repeat(7500 * 1024))];
           store.setProjection(`other-${i}`, projection(other), {
@@ -3582,11 +3613,11 @@ describe("a held row too large to travel as a revision keeps changing", () => {
         );
       await changeToken(session);
       await waitFor(() => expect(debt()).toBe(false));
-      const state = useNativeAgentProjectionStore.getState();
+      const state = appCommandStore(nativeAgentProjectionStore).getState();
       expect(state.syncCaches.get(identity.logicalSessionKey)?.historyBytes).toBeLessThanOrEqual(
         8 * 1024 * 1024,
       );
-      expect(state.historyBytesTotal).toBeLessThanOrEqual(32 * 1024 * 1024);
+      expect(windowHistoryBytes()).toBeLessThanOrEqual(32 * 1024 * 1024);
       expect(session.result.current.projection?.messages).toEqual(tail);
       expect(state.syncCaches.get(identity.logicalSessionKey)?.historyCursor).toBe("before-tail");
       await act(async () => {
@@ -3601,14 +3632,14 @@ describe("a held row too large to travel as a revision keeps changing", () => {
       });
       expect(messagePageCalls).toEqual([{ before: "before-tail" }]);
       expect(session.result.current.projection?.messages).toEqual([recovered, ...tail]);
-      const recoveredState = useNativeAgentProjectionStore.getState();
+      const recoveredState = appCommandStore(nativeAgentProjectionStore).getState();
       expect(recoveredState.syncCaches.get(identity.logicalSessionKey)?.historyCursor).toBe(
         "recover-older",
       );
       expect(
         recoveredState.syncCaches.get(identity.logicalSessionKey)?.historyBytes,
       ).toBeLessThanOrEqual(8 * 1024 * 1024);
-      expect(recoveredState.historyBytesTotal).toBeLessThanOrEqual(32 * 1024 * 1024);
+      expect(windowHistoryBytes()).toBeLessThanOrEqual(32 * 1024 * 1024);
     },
   );
 
@@ -3669,14 +3700,16 @@ describe("a held row too large to travel as a revision keeps changing", () => {
       await waitFor(() => expect(messagePageCalls).toHaveLength(1));
       if (stop === "unmount") session.unmount();
       else session.rerender({ isActive: false });
-      const held = useNativeAgentProjectionStore
+      const held = appCommandStore(nativeAgentProjectionStore)
         .getState()
         .projections.get(identity.logicalSessionKey);
       await act(async () => {
         deferred.resolve(page([message("launch", "late"), older[1]!]));
       });
       expect(
-        useNativeAgentProjectionStore.getState().projections.get(identity.logicalSessionKey),
+        appCommandStore(nativeAgentProjectionStore)
+          .getState()
+          .projections.get(identity.logicalSessionKey),
       ).toBe(held);
       expect(debt()).toBe(true);
     },
@@ -3713,7 +3746,7 @@ describe("a held row too large to travel as a revision keeps changing", () => {
     transcriptUpdates = [() => tailAt("t0")];
     messagePages = [() => page(older, "before-older")];
     session.unmount();
-    useNativeAgentProjectionStore.getState().reset();
+    appCommandStore(nativeAgentProjectionStore).getState().reset();
     stateUpdates = [() => stateSnapshot("state-1")];
     const active = renderSession();
     await waitFor(() => expect(active.result.current.sessionStateAvailability).toBe("current"));
@@ -3861,7 +3894,7 @@ describe("direct cursors a bounded view names", () => {
         historyEpoch: "epoch-1",
       }),
     ];
-    const { result } = renderHook(() =>
+    const { result } = renderHookInAppCommandScope(() =>
       useNativeAgentSession<TestMessage>({
         platform: "opencode",
         environmentId: "env-1",

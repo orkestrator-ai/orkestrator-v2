@@ -5,14 +5,16 @@
  * window's own project tree (to-do 2190, task 7).
  */
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { projectKey, projectRef } from "@orkestrator/protocol/federation";
 import type { PortalLayout } from "@orkestrator/protocol/portal-layout";
 import { FederationProvider } from "@/components/federation/FederationProvider";
 import { projectFolderKey } from "@/lib/project-folders";
 import { sidebarFolderKey, useMachineViewStore } from "@/stores/machineViewStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
-import { useEnvironmentStore, useProjectStore, useUIStore } from "@/stores";
+import { environmentStore, projectStore, uiStore } from "@/stores";
+import { useUIChromeStore } from "@/stores/uiChromeStore";
 import {
   connectionList,
   installDesktopFake,
@@ -22,11 +24,12 @@ import {
 } from "@/test/federation-desktop-fake";
 import type { Environment, Project } from "@/types";
 import { HierarchicalSidebar } from "./HierarchicalSidebar";
+import { appCommandStore } from "@/test/app-command-store";
 
 const initialView = useMachineViewStore.getState();
-const initialUI = useUIStore.getState();
-const initialProjects = useProjectStore.getState();
-const initialEnvironments = useEnvironmentStore.getState();
+const initialUI = appCommandStore(uiStore).getState();
+const initialProjects = appCommandStore(projectStore).getState();
+const initialEnvironments = appCommandStore(environmentStore).getState();
 const initialRemote = useRemoteWorkspaceStore.getState();
 
 const project = (id: string, order: number, repository: string): Project =>
@@ -77,8 +80,8 @@ function renderMerged(
           ? environments.filter((entry) => entry.projectId === args.projectId)
           : undefined,
   });
-  useProjectStore.getState().setProjects(projects);
-  useEnvironmentStore.getState().setEnvironments(environments);
+  appCommandStore(projectStore).getState().setProjects(projects);
+  appCommandStore(environmentStore).getState().setEnvironments(environments);
   useMachineViewStore.setState({
     grouping,
     machineFilter: "all",
@@ -88,7 +91,7 @@ function renderMerged(
     revealedProject: null,
     recentKeys: [],
   });
-  render(
+  renderInAppCommandScope(
     <FederationProvider>
       <HierarchicalSidebar />
     </FederationProvider>,
@@ -107,14 +110,16 @@ function rowsOnScreen(): string[] {
 beforeEach(() => {
   if (!HTMLElement.prototype.scrollIntoView) HTMLElement.prototype.scrollIntoView = () => {};
   useRemoteWorkspaceStore.setState({ active: null });
-  useUIStore.setState({
+  appCommandStore(uiStore).setState({
     selectedProjectId: null,
     selectedEnvironmentId: null,
     selectedEnvironmentIds: [],
     recentProjectIds: [],
-    environmentSortMode: "project",
     collapsedProjects: [],
     collapsedProjectFolders: [],
+  });
+  useUIChromeStore.setState({
+    environmentSortMode: "project",
   });
 });
 
@@ -122,9 +127,9 @@ afterEach(() => {
   cleanup();
   uninstallDesktopFake();
   useMachineViewStore.setState(initialView, true);
-  useUIStore.setState(initialUI, true);
-  useProjectStore.setState(initialProjects, true);
-  useEnvironmentStore.setState(initialEnvironments, true);
+  appCommandStore(uiStore).setState(initialUI, true);
+  appCommandStore(projectStore).setState(initialProjects, true);
+  appCommandStore(environmentStore).setState(initialEnvironments, true);
   useRemoteWorkspaceStore.setState(initialRemote, true);
 });
 
@@ -139,10 +144,10 @@ test("by project, a shift-click range follows the merged order, not this window'
   renderMerged("project", projects, environments, { projectOrder: [key("p2"), key("p1")] });
   await row("a2");
   await waitFor(() => expect(rowsOnScreen()).toEqual(["b1", "a1", "a2"]));
-  useUIStore.setState({ selectedProjectId: "p2", selectedEnvironmentId: "b1" });
+  appCommandStore(uiStore).setState({ selectedProjectId: "p2", selectedEnvironmentId: "b1" });
 
   fireEvent.click(await row("a1"), { shiftKey: true });
-  expect(useUIStore.getState().selectedEnvironmentIds).toEqual(["b1", "a1"]);
+  expect(appCommandStore(uiStore).getState().selectedEnvironmentIds).toEqual(["b1", "a1"]);
 });
 
 test("by project, a shift-click range skips a project inside a collapsed merged folder", async () => {
@@ -165,10 +170,10 @@ test("by project, a shift-click range skips a project inside a collapsed merged 
   );
   await row("c1");
   await waitFor(() => expect(rowsOnScreen()).toEqual(["a1", "c1"]));
-  useUIStore.setState({ selectedProjectId: "p1", selectedEnvironmentId: "a1" });
+  appCommandStore(uiStore).setState({ selectedProjectId: "p1", selectedEnvironmentId: "a1" });
 
   fireEvent.click(await row("c1"), { shiftKey: true });
-  expect(useUIStore.getState().selectedEnvironmentIds).toEqual(["a1", "c1"]);
+  expect(appCommandStore(uiStore).getState().selectedEnvironmentIds).toEqual(["a1", "c1"]);
 });
 
 test("by repository, a shift-click range follows the repository order", async () => {
@@ -183,8 +188,8 @@ test("by repository, a shift-click range follows the repository order", async ()
   });
   await row("c1");
   await waitFor(() => expect(rowsOnScreen()).toEqual(["c1", "a1", "b1"]));
-  useUIStore.setState({ selectedProjectId: "p3", selectedEnvironmentId: "c1" });
+  appCommandStore(uiStore).setState({ selectedProjectId: "p3", selectedEnvironmentId: "c1" });
 
   fireEvent.click(await row("a1"), { shiftKey: true });
-  expect(useUIStore.getState().selectedEnvironmentIds).toEqual(["c1", "a1"]);
+  expect(appCommandStore(uiStore).getState().selectedEnvironmentIds).toEqual(["c1", "a1"]);
 });

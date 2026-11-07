@@ -15,9 +15,10 @@ import {
 } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
-import { listPreviousSessions, type PreviousSession } from "@/lib/claude-tmux-client";
+import type { PreviousSession } from "@/lib/claude-tmux-client";
 import { formatRelativeTimeFromUnixSeconds } from "@/lib/format-relative-time";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { useClaudeTmuxClient } from "@/lib/claude-tmux-scope";
 
 const log = createLogger("web.claude-tmux");
 
@@ -35,6 +36,7 @@ export function ResumeTmuxSessionDialog({
   environmentId,
   onResume,
 }: ResumeTmuxSessionDialogProps) {
+  const nodeTmux = useClaudeTmuxClient();
   const [sessions, setSessions] = useState<PreviousSession[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -54,7 +56,8 @@ export function ResumeTmuxSessionDialog({
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    listPreviousSessions(environmentId)
+    nodeTmux
+      .listPreviousSessions(environmentId)
       .then(
         (sessions) => {
           if (!cancelled) setSessions(sessions);
@@ -71,7 +74,7 @@ export function ResumeTmuxSessionDialog({
     return () => {
       cancelled = true;
     };
-  }, [open, environmentId]);
+  }, [open, environmentId, nodeTmux]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

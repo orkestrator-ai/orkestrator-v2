@@ -1,11 +1,14 @@
+import {
+  nodeStatusChangedEvent,
+  nodesChangedEvent,
+} from "@orkestrator/protocol/contract/domains/events";
+import type { BackendEmit } from "../backend-emit.js";
 import type { BackendHello, BackendProfile } from "@orkestrator/protocol/backend-profile";
 import {
   deriveNodeMode,
   MAX_ATTACHED_CONTROLLERS,
   MAX_REGISTERED_NODES,
   NODE_REFUSAL_CODES,
-  NODE_STATUS_CHANGED_EVENT,
-  NODES_CHANGED_EVENT,
   NodeRefusalError,
   normalizeNodeDisplayName,
   normalizeRouteOrder,
@@ -36,7 +39,7 @@ import {
   type RouteId,
 } from "@orkestrator/protocol/federation";
 import { checkBackendRoute } from "@orkestrator/protocol/node/node-link/backend-hello";
-import { isUnknownCommandError } from "@orkestrator/protocol/unknown-command";
+import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import {
   classifyRouteFailure,
   openRoute,
@@ -92,7 +95,7 @@ export interface NodeServiceStorage extends ControllerSettingsStorage {
 
 export interface NodeServiceOptions {
   storage: NodeServiceStorage;
-  emit: (event: string, payload: unknown) => void;
+  emit: BackendEmit;
   /** `--command-node`: registration is always enabled (the desktop's local backend). */
   forceRegistration?: boolean;
   /** Origins clients load this node's portal from; registered on each leaf. */
@@ -135,7 +138,7 @@ const DETACH_RETRY_MS = 5 * 60_000;
 
 export class NodeService {
   private readonly storage: NodeServiceStorage;
-  private readonly emit: (event: string, payload: unknown) => void;
+  private readonly emit: BackendEmit;
   private readonly options: NodeServiceOptions;
   private readonly now: () => number;
   readonly prompts: NodeSshPrompts;
@@ -301,6 +304,18 @@ export class NodeService {
     return this.status();
   }
 
+  /**
+   * This node's portal origins changed (its gateway bound after the links
+   * connected, or on a new port after a restart): send them to every
+   * connected node again. A node admits a browser's direct requests only from
+   * the origins its command node sent on attach (`isPortalOriginAllowed`);
+   * without this a page loaded from the new origin fell back to the relay
+   * (4006 Finding 5). A link that is not connected sends them when it connects.
+   */
+  portalOriginsChanged(): void {
+    for (const link of this.links.values()) void link.reattach();
+  }
+
   /** Start or suspend links after any change to attachments or the registry. */
   private applyMode(): void {
     if (!this.started) return;
@@ -330,7 +345,7 @@ export class NodeService {
     const mode = this.mode();
     if (mode !== this.lastMode) {
       this.lastMode = mode;
-      void this.status().then((status) => this.emit(NODE_STATUS_CHANGED_EVENT, status));
+      void this.status().then((status) => this.emit(nodeStatusChangedEvent, status));
     }
   }
 
@@ -598,7 +613,7 @@ export class NodeService {
       } catch (error) {
         // A definitive capability refusal is distinct from delivery. Other
         // failures remain unsent, so the next sync can retry unchanged settings.
-        if (isUnknownCommandError(error, SYNC_CONTROLLER_SETTINGS_COMMAND)) {
+        if (incompatibility(error, SYNC_CONTROLLER_SETTINGS_COMMAND)?.code === "unknown-command") {
           this.unsupportedSettings.set(link, epoch);
         }
         log.warn("settings.send-failed", {
@@ -1708,7 +1723,7 @@ export class NodeService {
     this.changeQueued = true;
     queueMicrotask(() => {
       this.changeQueued = false;
-      this.emit(NODES_CHANGED_EVENT, { revision: this.registry?.revision ?? 0 });
+      this.emit(nodesChangedEvent, { revision: this.registry?.revision ?? 0 });
       for (const listener of this.changeListeners) {
         try {
           listener();
@@ -1720,7 +1735,7 @@ export class NodeService {
   }
 
   private emitStatus(): void {
-    void this.status().then((status) => this.emit(NODE_STATUS_CHANGED_EVENT, status));
+    void this.status().then((status) => this.emit(nodeStatusChangedEvent, status));
   }
 
   /** Confirm the detach of a forgotten node; keep its tombstone until it answers. */

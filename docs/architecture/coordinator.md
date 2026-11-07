@@ -541,8 +541,15 @@ repository exchange ordinary node mail
 - **Older nodes.** A leaf whose hello lacks `node-coordinator-mail` is sent
   nothing; the call is refused with "update that machine", and
   `list_mailboxes` with its `nodeId` reports it unreachable for the same
-  reason. A leaf coordinator's mail to an older command node arrives as an
-  ordinary worker report from the coordinator's runtime id.
+  reason. A leaf coordinator's mail to a command node that predates
+  `node-coordinator-mail` (one whose `collect_node_outbox` does not send
+  `coordinatorMail`) is held in the leaf's outbox, not delivered: such a node
+  would take it as a worker's report from a runtime id it has no environment
+  for, outside the pair budget. `send_coordinator_command_node_mail` still
+  answers `placement: "node-outbox"`, and its `deliveryHint` says older command
+  nodes keep it queued; the command node collects it once updated. Each
+  collect that holds one counts `node-coordinator-mail.older-command-node`
+  ([register](version-compatibility.md#register)).
 
 ### Choosing a machine
 
@@ -1645,7 +1652,7 @@ Summaries carry no prompts because every client receives them and the command
 node keeps them as last-known state; this read does neither, since the answer
 lives only in the banner's React state and `invoke_on_node` logs no arguments or
 results. It widens nothing: `list_human_prompts` is not in
-`NODE_EXCLUDED_COMMANDS` or `isWorkspaceExcludedCommand`, a window opened on that
+`NODE_ROUTING_EXCLUDED_COMMANDS` and is a `workspace` command, a window opened on that
 node already shows the same banner, and `get_native_agent_projection` crosses the
 same link with the tool output the prompt was detected in. A remote answer is
 still untrusted, so `normalizeRemoteHumanPromptEntry` bounds every field, drops
@@ -3068,8 +3075,8 @@ backend without the command nothing is shown. A delegation that retention has
 removed takes its marker with it.
 
 A worker on another node has no marker on its tab. Its delegation is kept on the
-command node, while its tab renders in that node's realm and reads that node's
-backend, which holds no such record. The gap is
+command node, while its tab renders in that node's workspace, on its node scope,
+and reads that node's backend, which holds no such record. The gap is
 [6580](../todo/coordinator-and-multi-review/6580-launch-override-marker-on-another-node.md).
 
 ## Complete application actions

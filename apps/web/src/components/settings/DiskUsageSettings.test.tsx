@@ -260,8 +260,7 @@ test("unmounting a pending measure generation stops its remaining queue", async 
 });
 
 for (const machine of [null, "leaf", "other"]) {
-  test(`leaf-window worktree browsing and disk measurements respect ${machine ?? "command node"}`, async () => {
-    window.orkestratorWorkspaceTarget = { nodeId: "leaf", nodeName: "Leaf", path: "direct" };
+  test(`worktree browsing and disk measurements respect ${machine ?? "command node"}`, async () => {
     const locations = snapshot();
     locations.environments.configured = "/selected/trees";
     const read = spyOn(backend, "getWorktreeLocations").mockResolvedValue(locations);
@@ -280,7 +279,8 @@ for (const machine of [null, "leaf", "other"]) {
         </AccountMachineProvider>,
       );
       const pick = await screen.findByRole("button", { name: "Choose new environment worktrees" });
-      expect((pick as HTMLButtonElement).disabled).toBe(machine !== "leaf");
+      // Only this window's own machine can browse its folders.
+      expect((pick as HTMLButtonElement).disabled).toBe(machine !== null);
       expect(read).toHaveBeenCalledWith(machine);
       expect(list).toHaveBeenCalledWith(machine);
       expect(mirrors).toHaveBeenCalledWith(machine);
@@ -293,7 +293,6 @@ for (const machine of [null, "leaf", "other"]) {
       await waitFor(() => expect(measure).toHaveBeenCalledWith("selected-env", false, machine));
     } finally {
       cleanup();
-      delete window.orkestratorWorkspaceTarget;
     }
   });
 }

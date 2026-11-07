@@ -1,45 +1,51 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { useAgentActivityStore } from "../../../apps/web/src/stores/agentActivityStore";
+import { agentActivityStore } from "../../../apps/web/src/stores/agentActivityStore";
 import { useErrorDialogStore } from "../../../apps/web/src/stores/errorDialogStore";
-import { useFileDirtyStore } from "../../../apps/web/src/stores/fileDirtyStore";
-import { usePrMonitorStore } from "../../../apps/web/src/stores/prMonitorStore";
-import { useSessionStore } from "../../../apps/web/src/stores/sessionStore";
+import { fileDirtyStore } from "../../../apps/web/src/stores/fileDirtyStore";
+import { prMonitorStore } from "../../../apps/web/src/stores/prMonitorStore";
+import { sessionStore } from "../../../apps/web/src/stores/sessionStore";
 import {
   createPortalTargetKey,
   createTerminalKey,
   useTerminalPortalStore,
 } from "../../../apps/web/src/stores/terminalPortalStore";
+import type { BackendId } from "@orkestrator/protocol/federation";
+import { appCommandStore } from "../../../apps/web/src/test/app-command-store";
 
 afterEach(() => {
-  useAgentActivityStore.setState({
+  appCommandStore(agentActivityStore).setState({
     tabStates: {},
     containerStates: {},
     containerStateUpdatedAt: {},
   });
   useErrorDialogStore.setState({ error: null });
-  useFileDirtyStore.setState({ dirtyFiles: new Map() });
-  usePrMonitorStore.setState({ states: new Map() });
-  useSessionStore.setState({ sessions: new Map(), loadingEnvironments: new Set(), error: null });
+  appCommandStore(fileDirtyStore).setState({ dirtyFiles: new Map() });
+  appCommandStore(prMonitorStore).setState({ states: new Map() });
+  appCommandStore(sessionStore).setState({
+    sessions: new Map(),
+    loadingEnvironments: new Set(),
+    error: null,
+  });
   useTerminalPortalStore.setState({ paneHosts: new Map(), terminals: new Map() });
 });
 
 describe("agentActivityStore", () => {
   test("tracks per-tab presentation state", () => {
-    const store = useAgentActivityStore.getState();
+    const store = appCommandStore(agentActivityStore).getState();
 
     expect(store.getTabState("missing")).toBe("idle");
     expect(store.getContainerState("missing")).toBe("idle");
 
     store.setTabState("tab-1", "working");
 
-    expect(useAgentActivityStore.getState().getTabState("tab-1")).toBe("working");
+    expect(appCommandStore(agentActivityStore).getState().getTabState("tab-1")).toBe("working");
 
     store.removeTabState("tab-1");
-    expect(useAgentActivityStore.getState().getTabState("tab-1")).toBe("idle");
+    expect(appCommandStore(agentActivityStore).getState().getTabState("tab-1")).toBe("idle");
   });
 
   test("replaces the projection from complete backend-owned snapshots", () => {
-    const store = useAgentActivityStore.getState();
+    const store = appCommandStore(agentActivityStore).getState();
     store.replaceActivitySnapshot([
       {
         id: "env-1",
@@ -53,10 +59,10 @@ describe("agentActivityStore", () => {
       },
     ]);
 
-    expect(useAgentActivityStore.getState().containerStates).toEqual({
+    expect(appCommandStore(agentActivityStore).getState().containerStates).toEqual({
       "env-1": "working",
     });
-    expect(useAgentActivityStore.getState().containerStateUpdatedAt).toEqual({
+    expect(appCommandStore(agentActivityStore).getState().containerStateUpdatedAt).toEqual({
       "env-1": "2026-07-27T12:00:00.000Z",
     });
 
@@ -67,14 +73,14 @@ describe("agentActivityStore", () => {
         agentActivityUpdatedAt: "2026-07-27T12:00:01.000Z",
       },
     ]);
-    expect(useAgentActivityStore.getState().containerStates).toEqual({
+    expect(appCommandStore(agentActivityStore).getState().containerStates).toEqual({
       "env-2": "idle",
     });
-    expect(useAgentActivityStore.getState().getContainerState("env-1")).toBe("idle");
+    expect(appCommandStore(agentActivityStore).getState().getContainerState("env-1")).toBe("idle");
   });
 
   test("removes projected state without disturbing other environments", () => {
-    const store = useAgentActivityStore.getState();
+    const store = appCommandStore(agentActivityStore).getState();
     store.replaceActivitySnapshot([
       {
         id: "env-1",
@@ -90,10 +96,12 @@ describe("agentActivityStore", () => {
 
     store.removeContainerState("env-1");
 
-    expect(useAgentActivityStore.getState().containerStates).toEqual({
+    expect(appCommandStore(agentActivityStore).getState().containerStates).toEqual({
       "env-2": "waiting",
     });
-    expect(useAgentActivityStore.getState().containerStateUpdatedAt["env-1"]).toBeUndefined();
+    expect(
+      appCommandStore(agentActivityStore).getState().containerStateUpdatedAt["env-1"],
+    ).toBeUndefined();
   });
 });
 describe("errorDialogStore and fileDirtyStore", () => {
@@ -110,7 +118,7 @@ describe("errorDialogStore and fileDirtyStore", () => {
   });
 
   test("tracks dirty content through load, edit, save, and close", () => {
-    const state = useFileDirtyStore.getState();
+    const state = appCommandStore(fileDirtyStore).getState();
     state.setOriginalContent("tab-1", "original");
     expect(state.isDirty("tab-1")).toBe(false);
     state.setContent("tab-1", "changed");
@@ -138,13 +146,13 @@ describe("prMonitorStore", () => {
   });
 
   test("mirrors backend snapshots and incremental events", () => {
-    const state = usePrMonitorStore.getState();
+    const state = appCommandStore(prMonitorStore).getState();
 
     state.applySnapshot([
       monitorEntry("env-1", { mode: "merge-pending", consecutiveErrors: 1 }),
       monitorEntry("env-2"),
     ]);
-    expect(usePrMonitorStore.getState().getMonitoringState("env-1")).toMatchObject({
+    expect(appCommandStore(prMonitorStore).getState().getMonitoringState("env-1")).toMatchObject({
       mode: "merge-pending",
       checkInProgress: false,
       checkSummary: null,
@@ -158,35 +166,37 @@ describe("prMonitorStore", () => {
         prUrl: "https://github.com/org/repo/pull/1",
       }),
     });
-    expect(usePrMonitorStore.getState().getMonitoringState("env-1")?.prState).toBe("merged");
+    expect(appCommandStore(prMonitorStore).getState().getMonitoringState("env-1")?.prState).toBe(
+      "merged",
+    );
 
     state.applyEvent({ environmentId: "env-1", removed: true });
-    expect(usePrMonitorStore.getState().getMonitoringState("env-1")).toBeNull();
+    expect(appCommandStore(prMonitorStore).getState().getMonitoringState("env-1")).toBeNull();
 
     // The snapshot is the complete truth: an entry absent from it is dropped.
     state.applySnapshot([]);
-    expect(usePrMonitorStore.getState().getMonitoringState("env-2")).toBeNull();
+    expect(appCommandStore(prMonitorStore).getState().getMonitoringState("env-2")).toBeNull();
   });
 
   test("skips updates when the payload matches what is already held", () => {
-    const state = usePrMonitorStore.getState();
+    const state = appCommandStore(prMonitorStore).getState();
     state.applySnapshot([monitorEntry("env-1")]);
-    const before = usePrMonitorStore.getState().states;
+    const before = appCommandStore(prMonitorStore).getState().states;
 
     state.applySnapshot([monitorEntry("env-1")]);
-    expect(usePrMonitorStore.getState().states).toBe(before);
+    expect(appCommandStore(prMonitorStore).getState().states).toBe(before);
 
     state.applyEvent({ environmentId: "env-1", state: monitorEntry("env-1") });
-    expect(usePrMonitorStore.getState().states).toBe(before);
+    expect(appCommandStore(prMonitorStore).getState().states).toBe(before);
 
     state.applyEvent({ environmentId: "env-9", removed: true });
-    expect(usePrMonitorStore.getState().states).toBe(before);
+    expect(appCommandStore(prMonitorStore).getState().states).toBe(before);
   });
 
   test("publishes null-to-populated and populated-to-changed CI summaries", () => {
-    const state = usePrMonitorStore.getState();
+    const state = appCommandStore(prMonitorStore).getState();
     state.applySnapshot([monitorEntry("env-1")]);
-    const emptyMap = usePrMonitorStore.getState().states;
+    const emptyMap = appCommandStore(prMonitorStore).getState().states;
 
     state.applyEvent({
       environmentId: "env-1",
@@ -194,7 +204,7 @@ describe("prMonitorStore", () => {
         checkSummary: { passed: 1, total: 2, pending: 1 },
       }),
     });
-    const runningMap = usePrMonitorStore.getState().states;
+    const runningMap = appCommandStore(prMonitorStore).getState().states;
     expect(runningMap).not.toBe(emptyMap);
     expect(runningMap.get("env-1")?.checkSummary).toEqual({ passed: 1, total: 2, pending: 1 });
 
@@ -204,20 +214,22 @@ describe("prMonitorStore", () => {
         checkSummary: { passed: 1, total: 2, pending: 0 },
       }),
     });
-    const completeMap = usePrMonitorStore.getState().states;
+    const completeMap = appCommandStore(prMonitorStore).getState().states;
     expect(completeMap).not.toBe(runningMap);
     expect(completeMap.get("env-1")?.checkSummary).toEqual({ passed: 1, total: 2, pending: 0 });
   });
 
   test("rehydrates a populated CI summary from an authoritative snapshot", () => {
-    const state = usePrMonitorStore.getState();
+    const state = appCommandStore(prMonitorStore).getState();
     state.applySnapshot([
       monitorEntry("env-1", {
         checkSummary: { passed: 3, total: 4, pending: 1 },
       }),
     ]);
 
-    expect(usePrMonitorStore.getState().getMonitoringState("env-1")?.checkSummary).toEqual({
+    expect(
+      appCommandStore(prMonitorStore).getState().getMonitoringState("env-1")?.checkSummary,
+    ).toEqual({
       passed: 3,
       total: 4,
       pending: 1,
@@ -229,7 +241,7 @@ describe("local session and terminal portal state", () => {
   test("supports all local session selectors and mutations", () => {
     const session = { id: "session-1", environmentId: "env-1", order: 2, name: "Old" } as never;
     const earlier = { id: "session-2", environmentId: "env-1", order: 1 } as never;
-    const state = useSessionStore.getState();
+    const state = appCommandStore(sessionStore).getState();
     state.addSession(session);
     state.addSession(earlier);
     state.updateSession("session-1", { name: "New" });
@@ -239,19 +251,24 @@ describe("local session and terminal portal state", () => {
       "session-1",
     ]);
     state.setError("failed");
-    expect(useSessionStore.getState().error).toBe("failed");
+    expect(appCommandStore(sessionStore).getState().error).toBe("failed");
     state.removeSession("session-1");
     state.clearAllSessions();
-    expect(useSessionStore.getState().sessions.size).toBe(0);
+    expect(appCommandStore(sessionStore).getState().sessions.size).toBe(0);
   });
 
-  test("keys and manages environment-scoped pane hosts", () => {
-    expect(createPortalTargetKey("env", "pane")).toBe("env::pane");
-    expect(createTerminalKey("env", "tab")).toBe("env::tab");
+  test("keys and manages node- and environment-scoped pane hosts", () => {
+    // Keys are node-qualified (3008): the same environment and pane on two nodes differ.
+    const node = "bk_node-a" as BackendId;
+    expect(createPortalTargetKey(node, "env", "pane")).toBe("bk_node-a\u0000env::pane");
+    expect(createTerminalKey(node, "env", "tab")).toBe("bk_node-a\u0000env::tab");
     const element = document.createElement("div");
-    useTerminalPortalStore.getState().registerPaneHost("env", "pane", element);
-    expect(useTerminalPortalStore.getState().getPaneHost("env", "pane")).toBe(element);
-    useTerminalPortalStore.getState().unregisterPaneHost("env", "pane");
-    expect(useTerminalPortalStore.getState().getPaneHost("env", "pane")).toBeUndefined();
+    useTerminalPortalStore.getState().registerPaneHost(node, "env", "pane", element);
+    expect(useTerminalPortalStore.getState().getPaneHost(node, "env", "pane")).toBe(element);
+    expect(
+      useTerminalPortalStore.getState().getPaneHost("bk_node-b" as BackendId, "env", "pane"),
+    ).toBeUndefined();
+    useTerminalPortalStore.getState().unregisterPaneHost(node, "env", "pane");
+    expect(useTerminalPortalStore.getState().getPaneHost(node, "env", "pane")).toBeUndefined();
   });
 });

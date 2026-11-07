@@ -4,8 +4,9 @@ import { PullRequestView } from "@/components/pull-requests";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import { useFilesPanelStore } from "@/stores/filesPanelStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { useNodeScope } from "@/lib/node-scope/providers";
+import { filesPanelStore } from "@/stores/filesPanelStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import type { PullRequestTabData } from "@/types/paneLayout";
 
 interface PullRequestPaneTabProps {
@@ -22,16 +23,20 @@ export function PullRequestPaneTab({
   data,
   isActive,
 }: PullRequestPaneTabProps) {
+  // The environment's node keeps its pane layout (plan item 3013).
+  const paneLayouts = useNodeScope().store(paneLayoutStore);
   const closeTab = useCallback(() => {
-    const layout = usePaneLayoutStore.getState();
+    const layout = paneLayouts.getState();
     const owner = layout.findPaneWithTab(tabId, environmentId);
     if (owner) layout.removeTab(owner.id, tabId, environmentId);
-  }, [environmentId, tabId]);
+  }, [environmentId, paneLayouts, tabId]);
 
+  // The environment's node keeps its files panel tabs.
+  const filesPanel = useNodeScope().store(filesPanelStore);
   const moveToSidebar = useCallback(() => {
-    useFilesPanelStore.getState().openPullRequest(environmentId, data.ref, data.view);
+    filesPanel.getState().openPullRequest(environmentId, data.ref, data.view);
     closeTab();
-  }, [closeTab, data.ref, data.view, environmentId]);
+  }, [closeTab, data.ref, data.view, environmentId, filesPanel]);
 
   return (
     <div
@@ -50,7 +55,7 @@ export function PullRequestPaneTab({
         layout="page"
         active={isActive}
         onSummaryLoaded={(summary) =>
-          usePaneLayoutStore
+          paneLayouts
             .getState()
             .updateTabPullRequest(tabId, { title: summary.title }, environmentId)
         }

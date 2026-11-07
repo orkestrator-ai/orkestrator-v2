@@ -1,3 +1,17 @@
+import {
+  assertCoordinatorEnvironmentScopeCommand,
+  assertCoordinatorNodeDelegationAvailableCommand,
+  coordinatorNodeMultiReviewSurfaceCommand,
+  getCoordinatorNodeLaunchEnvironmentCommand,
+  getCoordinatorNodeMailboxCommand,
+  launchCoordinatorNodeEnvironmentCommand,
+  launchCoordinatorNodeMultiReviewCommand,
+  openCoordinatorNodeDelegationCommand,
+  sendCoordinatorNodeMailCommand,
+  startCoordinatorNodeBuildPipelineCommand,
+  startCoordinatorNodeMultiReviewCommand,
+  transferCoordinatorAttachmentsCommand,
+} from "@orkestrator/protocol/contract/domains/coordinator";
 import { createLogger } from "@orkestrator/protocol/logger";
 import {
   coordinatorDelegationNotOpenedNote,
@@ -29,7 +43,15 @@ import { repositoryHint } from "@orkestrator/protocol/node-summaries";
 import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import { BACKEND_CAPABILITIES, hasBackendCapability } from "@orkestrator/protocol/backend-profile";
 import { isBackendId } from "@orkestrator/protocol/federation";
-import { isUnknownCommandError } from "@orkestrator/protocol/unknown-command";
+import { incompatibility } from "@orkestrator/protocol/contract/errors";
+import type { ResultOf } from "@orkestrator/protocol/contract/command";
+import {
+  nodeMailClient,
+  type deliverNodeMailCommand,
+  type NodeMailApi,
+} from "@orkestrator/protocol/contract/domains/node-mail";
+import { ticketSyncClient } from "@orkestrator/protocol/contract/domains/ticket-sync";
+import { routedDomainApi, type ContractEnvelope } from "./nodes/index.js";
 import {
   COORDINATOR_DELEGATION_PRESENTATION,
   COORDINATOR_ENVIRONMENT_DELEGATION_INSTRUCTION,
@@ -98,6 +120,11 @@ async function identity(scope: unknown, context: CommandContext): Promise<Caller
   return { projectId, coordinatorId, conversationId };
 }
 
+/** A leaf's `deliver_node_mail` answer, with its images in the agent-mail shape. */
+type DeliveredNodeMail = Omit<ResultOf<typeof deliverNodeMailCommand>, "attachments"> & {
+  readonly attachments?: AgentMailAttachment[];
+};
+
 /** One node this coordinator acts on: its copy of the project and a routed invoker. */
 export interface CoordinatorNodeTarget {
   selfId: string;
@@ -108,6 +135,14 @@ export interface CoordinatorNodeTarget {
   call<T>(command: string, args?: JsonRecord, requestKey?: string): Promise<T>;
   /** Whether that node's hello advertises the capability (`BACKEND_CAPABILITIES`). */
   supports(capability: string): boolean;
+  /**
+   * That node's `node-mail` domain client (plan item 1010): version 1 when its
+   * hello advertises the domain, else today's capability gating. Calls are
+   * routed like {@link call}, with `requestKey` for the outcome ledger.
+   */
+  nodeMail(requestKey?: string): NodeMailApi;
+  /** Whether that node syncs tickets with this one (the `ticket-sync` domain client). */
+  syncsTickets(): boolean;
   /** One of this project's worker environments there, or an error naming why not. */
   environment(environmentId: string): Promise<JsonRecord>;
 }
@@ -143,17 +178,25 @@ export async function coordinatorNodeTarget(
       `${node.view.displayName} has no copy of this project. Ask the user to copy it there first (request_project_on_node).`,
     );
   }
-  const call = async <T>(command: string, args: JsonRecord = {}, requestKey?: string) => {
+  const route = async <T>(
+    command: string,
+    args: JsonRecord,
+    requestKey: string | undefined,
+    envelope: ContractEnvelope | undefined,
+  ) => {
     const routed = await portal
-      .invokeOnNode({
-        nodeId,
-        command,
-        args,
-        ...(requestKey ? { requestKey } : {}),
-      })
+      .invokeOnNode(
+        {
+          nodeId,
+          command,
+          args,
+          ...(requestKey ? { requestKey } : {}),
+        },
+        envelope ? { envelope } : {},
+      )
       .catch((error: unknown) => {
         // An older node does not know the controller commands yet.
-        if (isUnknownCommandError(error, command)) {
+        if (incompatibility(error, command)?.code === "unknown-command") {
           throw new Error(
             `${node.view.displayName} runs an older Orkestrator that cannot do this yet; update it, then retry.`,
           );
@@ -170,6 +213,9 @@ export async function coordinatorNodeTarget(
     }
     return routed.result as T;
   };
+  const call = <T>(command: string, args: JsonRecord = {}, requestKey?: string) =>
+    route<T>(command, args, requestKey, undefined);
+  const hello = () => (isBackendId(nodeId) ? context.nodes?.link(nodeId)?.hello : null);
   return {
     selfId: status.nodeId,
     nodeId,
@@ -178,6 +224,19 @@ export async function coordinatorNodeTarget(
     call,
     supports: (capability: string) =>
       isBackendId(nodeId) && hasBackendCapability(context.nodes?.link(nodeId)?.hello, capability),
+    nodeMail: (requestKey?: string) =>
+      routedDomainApi(nodeMailClient, hello, (command, args, envelope) =>
+        route(command, args, requestKey, envelope),
+      ),
+    syncsTickets: () => {
+      try {
+        return routedDomainApi(ticketSyncClient, hello, (command, args, envelope) =>
+          route(command, args, undefined, envelope),
+        ).syncs;
+      } catch {
+        return false;
+      }
+    },
     environment: async (environmentId: string) => {
       const value = await call<unknown>("get_environment", { environmentId });
       if (!record(value) || value.projectId !== project.ref.projectId) {
@@ -333,7 +392,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
   };
 
   register(
-    "get_coordinator_node_launch_environment",
+    getCoordinatorNodeLaunchEnvironmentCommand,
     async ({ scope, requestId, nodeId }, context) => {
       const caller = await identity(scope, context);
       const target = await coordinatorNodeTarget(
@@ -358,7 +417,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
     },
   );
   register(
-    "launch_coordinator_node_environment",
+    launchCoordinatorNodeEnvironmentCommand,
     async ({ scope, requestId, nodeId, input, agentDefaulted }, context) => {
       const caller = await identity(scope, context);
       const stableRequestId = asNonBlankString(requestId, "requestId");
@@ -492,7 +551,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
   );
 
   register(
-    "assert_coordinator_node_delegation_available",
+    assertCoordinatorNodeDelegationAvailableCommand,
     async ({ scope, nodeId, environmentId, tabId, requestId }, context) => {
       const caller = await identity(scope, context);
       const target = await coordinatorNodeTarget(
@@ -514,7 +573,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
   );
 
   register(
-    "open_coordinator_node_delegation",
+    openCoordinatorNodeDelegationCommand,
     async ({ scope, nodeId, environmentId, tabId, requestId, request }, context) => {
       const caller = await identity(scope, context);
       const target = await coordinatorNodeTarget(
@@ -555,7 +614,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
    * ends, and its report is held until then.
    */
   // The origin check for a coordinator tool; see `coordinator-environment-scope.ts`.
-  register("assert_coordinator_environment_scope", async (args, context) => {
+  register(assertCoordinatorEnvironmentScopeCommand, async (args, context) => {
     const caller = await identity(args.scope, context);
     const named = record(args.target) ? args.target : {};
     let environmentId = typeof named.environmentId === "string" ? named.environmentId : undefined;
@@ -621,7 +680,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
     await assertCoordinatorMayActOnEnvironment(context, caller, environmentId, target ?? undefined);
     return { allowed: true };
   });
-  register("send_coordinator_node_mail", async (args, context) => {
+  register(sendCoordinatorNodeMailCommand, async (args, context) => {
     const caller = await identity(args.scope, context);
     const workspace = await context.storage.coordinators.getCoordinatorWorkspaceById(
       caller.coordinatorId,
@@ -630,12 +689,10 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
     if (conversation?.role === "side") {
       throw new Error('A side agent can only message the main coordinator. Send to "coordinator".');
     }
-    // An older leaf refuses the unknown key, so only one that says it reads it gets it.
-    const turnOrigin = (target: CoordinatorNodeTarget) =>
-      conversation?.lastTurnOrigin !== "user" &&
-      target.supports(BACKEND_CAPABILITIES.nodeMailTurnOrigin)
-        ? { turnOrigin: "mail" as const }
-        : {};
+    // The node-mail client leaves it out for a pre-contract leaf that does not
+    // advertise `node-mail-turn-origin` (it would refuse the unknown key).
+    const turnOrigin =
+      conversation?.lastTurnOrigin !== "user" ? { turnOrigin: "mail" as const } : {};
     const toEnvironmentId = asNonBlankString(args.toEnvironmentId, "toEnvironmentId");
     // Checked before anything happens, then copied to the node before the
     // message exists; a failure on either side means there is no message.
@@ -687,9 +744,9 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
       if (parent && (parent.from.kind !== "node" || parent.from.nodeId !== target.nodeId))
         throw new Error("Reply parent is not from that node");
       return sendToNodeCoordinator(target, {
-        ...turnOrigin(target),
+        ...turnOrigin,
         // An older node is refused below, naming the address it does not know.
-        ...(target.supports(BACKEND_CAPABILITIES.nodeCoordinatorMail)
+        ...(target.nodeMail().supports(BACKEND_CAPABILITIES.nodeCoordinatorMail)
           ? await pushImages(target, { projectId: target.projectId })
           : {}),
         coordinatorId: caller.coordinatorId,
@@ -747,9 +804,10 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
         )
           throw new Error(COORDINATOR_REQUEST_ID_REUSED_ERROR);
         // deliverNow reaches the worker only through a leaf that knows `steer`;
-        // an older one would refuse the whole message over the unknown field.
-        const steer =
-          args.deliverNow === true && target.supports(BACKEND_CAPABILITIES.nodeMailSteer);
+        // a pre-contract one would refuse the whole message over the unknown
+        // field. A leaf with the node-mail domain gets it as a critical field.
+        const mail = target.nodeMail(`mail:${caller.coordinatorId}:${requestId}`);
+        const steer = args.deliverNow === true && mail.supports(BACKEND_CAPABILITIES.nodeMailSteer);
         const recipient = await target.environment(toEnvironmentId);
         const requestedTab = typeof args.toTabId === "string" ? args.toTabId.trim() : "";
         const release = context.runtime.coordinatorRequests.workerTabs.beginDelegation(
@@ -770,33 +828,18 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
               association.requestId !== `delegation:${requestId}`,
           );
           if (joining) context.coordinators?.noteRemoteRequest(joining.id);
-          const delivered = await target.call<{
-            messageId?: string;
-            toTabId?: string;
-            toEnvironmentName?: string;
-            toTabName?: string;
-            placement?: string;
-            placementReason?: string;
-            injectedVia?: string;
-            deliverNow?: string;
-            deliverNowNote?: string;
-            attachments?: AgentMailAttachment[];
-          }>(
-            "deliver_node_mail",
-            {
-              controllerId: target.selfId,
-              ...(await mailbox(context, caller)),
-              requestId,
-              toEnvironmentId,
-              ...(requestedTab ? { toTabId: requestedTab } : {}),
-              ...(typeof args.subject === "string" ? { subject: args.subject } : {}),
-              body: asNonBlankString(args.body, "body"),
-              ...(steer ? { steer: true } : {}),
-              ...turnOrigin(target),
-              ...pushed,
-            },
-            `mail:${caller.coordinatorId}:${requestId}`,
-          );
+          const delivered = (await mail.deliver({
+            controllerId: target.selfId,
+            ...(await mailbox(context, caller)),
+            requestId,
+            toEnvironmentId,
+            ...(requestedTab ? { toTabId: requestedTab } : {}),
+            ...(typeof args.subject === "string" ? { subject: args.subject } : {}),
+            body: asNonBlankString(args.body, "body"),
+            ...(steer ? { steer: true } : {}),
+            ...turnOrigin,
+            ...pushed,
+          })) as DeliveredNodeMail;
           const workerTab = requestedTab || delivered?.toTabId || joining?.delegation?.workerTabId;
           const toEnvironmentName =
             delivered?.toEnvironmentName ??
@@ -873,7 +916,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
    * Nothing is delivered, and the destination is always the Git-excluded place,
    * so a copied image can reach a commit only if an agent moves it there.
    */
-  register("transfer_coordinator_attachments", async (args, context) => {
+  register(transferCoordinatorAttachmentsCommand, async (args, context) => {
     const caller = await identity(args.scope, context);
     const coordination = context.nodeCoordination;
     if (!coordination || !context.nodes) {
@@ -938,18 +981,20 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
   });
 
   /** Whether that node's copy of this project has a coordinator to mail. */
-  register("get_coordinator_node_mailbox", async (args, context) => {
+  register(getCoordinatorNodeMailboxCommand, async (args, context) => {
     const caller = await identity(args.scope, context);
     const target = await coordinatorNodeTarget(
       context,
       caller.projectId,
       asNonBlankString(args.nodeId, "nodeId"),
     );
-    return nodeCoordinatorMailbox(target);
+    return nodeCoordinatorMailbox(target) as Promise<
+      ResultOf<typeof getCoordinatorNodeMailboxCommand>
+    >;
   });
 
   register(
-    "start_coordinator_node_build_pipeline",
+    startCoordinatorNodeBuildPipelineCommand,
     async ({ scope, requestId, nodeId, input }, context) => {
       const caller = await identity(scope, context);
       const stableRequestId = asNonBlankString(requestId, "requestId");
@@ -1007,8 +1052,10 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
           });
           if (!record(existing)) throw new Error("Associated build pipeline was not found");
           return record(existing.snapshot)
-            ? { ...existing.snapshot, replayed: true }
-            : existing.snapshot;
+            ? ({ ...existing.snapshot, replayed: true } as ResultOf<
+                typeof startCoordinatorNodeBuildPipelineCommand
+              >)
+            : (existing.snapshot as ResultOf<typeof startCoordinatorNodeBuildPipelineCommand>);
         }
         if (!receipt.claimed) {
           throw new Error("Build pipeline creation is already in progress; retry this requestId");
@@ -1080,12 +1127,12 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
                 "The build started, but its work location could not be saved on the ticket.";
             });
         }
-        return workflow;
+        return workflow as ResultOf<typeof startCoordinatorNodeBuildPipelineCommand>;
       });
     },
   );
 
-  register("launch_coordinator_node_multi_review", async ({ scope, nodeId, input }, context) => {
+  register(launchCoordinatorNodeMultiReviewCommand, async ({ scope, nodeId, input }, context) => {
     const caller = await identity(scope, context);
     if (!isLaunchMultiReviewActionInput(input)) {
       throw new Error("Invalid Multi Review button action");
@@ -1226,7 +1273,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
     );
   });
 
-  register("coordinator_node_multi_review_surface", async (args, context) => {
+  register(coordinatorNodeMultiReviewSurfaceCommand, async (args, context) => {
     const caller = await identity(args.scope, context);
     const surface = args.surface;
     if (
@@ -1369,8 +1416,12 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
   });
 
   register(
-    "start_coordinator_node_multi_review",
+    startCoordinatorNodeMultiReviewCommand,
+    // Retired (plan item 7009): Control MCP's `launch_multi_review` moved to
+    // `launch_coordinator_node_multi_review` in v2.36.4-beta. Kept, counted,
+    // until its register row retires.
     async ({ scope, requestId, nodeId, buildPipelineId, input }, context) => {
+      compatibilityPathUsage.record("retired-command.start-coordinator-node-multi-review");
       const caller = await identity(scope, context);
       const stableRequestId = asNonBlankString(requestId, "requestId");
       const pipelineId = asNonBlankString(buildPipelineId, "buildPipelineId");
@@ -1417,7 +1468,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
             workflow.id,
           );
         }
-        return workflow;
+        return workflow as ResultOf<typeof startCoordinatorNodeMultiReviewCommand>;
       });
     },
   );

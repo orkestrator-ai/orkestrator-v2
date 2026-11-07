@@ -11,7 +11,7 @@ import {
 } from "@orkestrator/protocol/web-annotations";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { useWebAnnotationCache } from "@/hooks/useWebAnnotations";
+import { useWebAnnotationCache, useWebAnnotationScope } from "@/hooks/useWebAnnotations";
 import { loadWebAnnotationCapture } from "@/lib/web-annotations/assets";
 import { annotationTitle, formatBytes, pageLabel, viewportLabel } from "./format";
 import { useAnnotationPanel } from "./panel-context";
@@ -122,6 +122,7 @@ export function BatchReviewTray({
 }) {
   const { environmentId, features } = useAnnotationPanel();
   const cache = useWebAnnotationCache(environmentId);
+  const annotationScope = useWebAnnotationScope();
   const [excluded, setExcluded] = useState<Set<string>>(new Set());
   const [outcomes, setOutcomes] = useState<Map<string, string>>(new Map());
   const [composer, setComposer] = useState<WebAnnotationRequestOperation | null>(null);
@@ -138,9 +139,9 @@ export function BatchReviewTray({
   useEffect(() => {
     // Small capture records only; images are never fetched for the tray.
     for (const item of itemsRef.current) {
-      void loadWebAnnotationCapture(environmentId, item.currentCaptureId);
+      void loadWebAnnotationCapture(environmentId, item.currentCaptureId, annotationScope);
     }
-  }, [captureKey, environmentId]);
+  }, [annotationScope, captureKey, environmentId]);
   const budget = batchEvidenceBudget(
     included.map((item) => ({
       id: item.id,

@@ -1,14 +1,19 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
-import { useUIStore } from "@/stores/uiStore";
+import type { BackendId } from "@orkestrator/protocol/federation";
+import { appCommandScope } from "@/lib/node-scope-slots";
+import { WindowScope } from "@/lib/node-scope/window-scope";
+import { FakeNodeClient } from "@/test/render-in-node-scope";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
+import { uiStore } from "@/stores/uiStore";
 import { onGraphRunViewRequested, takePendingGraphRunView } from "./graph-run-navigation";
 import {
   openCoordinatorWorkTarget,
   type CoordinatorWorkNavigation,
 } from "./coordinator-work-navigation";
+import { appCommandStore } from "@/test/app-command-store";
 
 function seedLayout() {
-  usePaneLayoutStore.setState({
+  appCommandStore(paneLayoutStore).setState({
     activeEnvironmentId: "env-1",
     hydration: new Map([["env-1", "done"]]),
     environments: new Map([
@@ -74,19 +79,21 @@ function navigation(): CoordinatorWorkNavigation & {
 }
 
 const activeTab = (paneId: string) =>
-  usePaneLayoutStore
+  appCommandStore(paneLayoutStore)
     .getState()
     .getAllTabs("env-1")
     .find(
       (tab) =>
-        usePaneLayoutStore.getState().findPaneWithTab(tab.id, "env-1")?.id === paneId &&
-        usePaneLayoutStore.getState().findPaneWithTab(tab.id, "env-1")?.activeTabId === tab.id,
+        appCommandStore(paneLayoutStore).getState().findPaneWithTab(tab.id, "env-1")?.id ===
+          paneId &&
+        appCommandStore(paneLayoutStore).getState().findPaneWithTab(tab.id, "env-1")
+          ?.activeTabId === tab.id,
     )?.id;
 
 describe("openCoordinatorWorkTarget", () => {
   beforeEach(() => {
     seedLayout();
-    useUIStore.setState({ selectedProjectId: null, selectedEnvironmentId: null });
+    appCommandStore(uiStore).setState({ selectedProjectId: null, selectedEnvironmentId: null });
   });
   afterEach(() => {
     takePendingGraphRunView();
@@ -97,10 +104,10 @@ describe("openCoordinatorWorkTarget", () => {
       { type: "worker-tab", projectId: "project-1", environmentId: "env-1", tabId: "worker-tab" },
       navigation(),
     );
-    expect(useUIStore.getState().selectedProjectId).toBe("project-1");
-    expect(useUIStore.getState().selectedEnvironmentId).toBe("env-1");
+    expect(appCommandStore(uiStore).getState().selectedProjectId).toBe("project-1");
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("env-1");
     expect(activeTab("pane-2")).toBe("worker-tab");
-    expect(usePaneLayoutStore.getState().getActivePaneId("env-1")).toBe("pane-2");
+    expect(appCommandStore(paneLayoutStore).getState().getActivePaneId("env-1")).toBe("pane-2");
   });
 
   test("a Multi Review row focuses the review's own tab, not a reviewer's", () => {
@@ -108,23 +115,24 @@ describe("openCoordinatorWorkTarget", () => {
       { type: "review", projectId: "project-1", environmentId: "env-1", workflowId: "review-1" },
       navigation(),
     );
-    expect(useUIStore.getState().selectedEnvironmentId).toBe("env-1");
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("env-1");
     expect(activeTab("pane-2")).toBe("review-main");
   });
 
   test.each([false, true])(
     "restores a closed review tab after hydration (delayed=%s)",
     (delayed) => {
-      const store = usePaneLayoutStore.getState();
+      const store = appCommandStore(paneLayoutStore).getState();
       store.removeTab("pane-2", "review-main", "env-1");
-      if (delayed) usePaneLayoutStore.setState({ hydration: new Map([["env-1", "pending"]]) });
+      if (delayed)
+        appCommandStore(paneLayoutStore).setState({ hydration: new Map([["env-1", "pending"]]) });
       openCoordinatorWorkTarget(
         { type: "review", projectId: "project-1", environmentId: "env-1", workflowId: "review-1" },
         navigation(),
       );
       if (delayed) {
         expect(store.getAllTabs("env-1").some((t) => t.id === "multi-review:review-1")).toBe(false);
-        usePaneLayoutStore.getState().finishHydration("env-1");
+        appCommandStore(paneLayoutStore).getState().finishHydration("env-1");
       }
       expect(activeTab("pane-1")).toBe("multi-review:review-1");
       expect(
@@ -144,7 +152,26 @@ describe("openCoordinatorWorkTarget", () => {
       { type: "build", projectId: "project-1", pipelineId: "pipe-1", environmentId: "env-9" },
       nav,
     );
-    expect(nav.openBuild).toHaveBeenCalledWith("project-1", "pipe-1", "env-9");
+    expect(nav.openBuild).toHaveBeenCalledWith("project-1", "pipe-1", "env-9", appCommandScope());
+  });
+
+  test("a build row opens on the scope it names", () => {
+    const windowScope = new WindowScope();
+    try {
+      const leaf = windowScope.open({
+        role: "leaf",
+        client: new FakeNodeClient({ nodeId: "bk_leaf-node" as BackendId }),
+      });
+      const nav = navigation();
+      openCoordinatorWorkTarget(
+        { type: "build", projectId: "project-1", pipelineId: "pipe-1" },
+        nav,
+        leaf,
+      );
+      expect(nav.openBuild).toHaveBeenCalledWith("project-1", "pipe-1", undefined, leaf);
+    } finally {
+      windowScope.dispose();
+    }
   });
 
   test("a graph run row selects its environment and asks the run view to open it", () => {
@@ -167,7 +194,7 @@ describe("openCoordinatorWorkTarget", () => {
     } finally {
       off();
     }
-    expect(useUIStore.getState().selectedEnvironmentId).toBe("env-1");
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("env-1");
     expect(seen).toEqual([
       {
         runId: "run-1",
@@ -183,7 +210,7 @@ describe("openCoordinatorWorkTarget", () => {
     const nav = navigation();
     openCoordinatorWorkTarget({ type: "pull-request", url: "https://github.com/o/r/pull/4" }, nav);
     expect(nav.openPullRequest).toHaveBeenCalledWith("https://github.com/o/r/pull/4");
-    expect(useUIStore.getState().selectedEnvironmentId).toBeNull();
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBeNull();
   });
 
   test("work on another node opens through that node's workspace", () => {
@@ -197,21 +224,17 @@ describe("openCoordinatorWorkTarget", () => {
     };
     openCoordinatorWorkTarget(target, nav);
     expect(nav.openRemote).toHaveBeenCalledWith(target);
-    expect(useUIStore.getState().selectedEnvironmentId).toBeNull();
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBeNull();
   });
 });
 
 test.each(["worker-tab", "build", "review", "graph-run"] as const)(
-  "remote %s retains its surface across workspace transport and reload",
+  "remote %s keeps its surface in the window's request for that node",
   async (type) => {
     const { portalStore } = await import("@/lib/portal/portal-store");
     const { useRemoteWorkspaceStore } = await import("@/stores/remoteWorkspaceStore");
-    const { parseShellMessage, realmSearchParams, realmInitialRequest } =
-      await import("@/lib/federation/workspace-realm");
     const originalPortal = portalStore.getState();
     const originalRemote = useRemoteWorkspaceStore.getState();
-    const happyDOM = (window as unknown as { happyDOM: { setURL(url: string): void } }).happyDOM;
-    const originalHref = window.location.href;
     const base = { projectId: "p", environmentId: "e" };
     const workTarget =
       type === "worker-tab"
@@ -231,18 +254,15 @@ test.each(["worker-tab", "build", "review", "graph-run"] as const)(
         workTarget,
       });
       const request = useRemoteWorkspaceStore.getState().requests.remote!.request;
-      expect(parseShellMessage(request)).toHaveProperty("workTarget", workTarget);
-      happyDOM.setURL(`http://localhost/?${realmSearchParams(request)}`);
-      expect(realmInitialRequest()).toHaveProperty("workTarget", workTarget);
+      expect(request).toHaveProperty("workTarget", workTarget);
     } finally {
-      happyDOM.setURL(originalHref);
       portalStore.store.setState(originalPortal, true);
       useRemoteWorkspaceStore.setState(originalRemote, true);
     }
   },
 );
 
-test("a realm's work selection back to the command node activates its surface locally", async () => {
+test("a work selection back to the command node activates its surface locally", async () => {
   const { portalStore } = await import("@/lib/portal/portal-store");
   const original = portalStore.getState();
   try {
@@ -261,8 +281,10 @@ test("a realm's work selection back to the command node activates its surface lo
         tabId: "worker-tab",
       },
     });
-    expect(useUIStore.getState().selectedEnvironmentId).toBe("env-1");
-    expect(usePaneLayoutStore.getState().environments.get("env-1")?.activePaneId).toBe("pane-2");
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("env-1");
+    expect(
+      appCommandStore(paneLayoutStore).getState().environments.get("env-1")?.activePaneId,
+    ).toBe("pane-2");
   } finally {
     portalStore.store.setState(original, true);
   }

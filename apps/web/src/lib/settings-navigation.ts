@@ -1,5 +1,3 @@
-import { isWorkspaceRealm, postToShell } from "@/lib/federation/workspace-realm";
-
 /** Cross-tree navigation into the global settings surface. */
 export const GLOBAL_SETTINGS_REQUEST_EVENT = "orkestrator:open-global-settings";
 
@@ -42,13 +40,14 @@ export function isGlobalSettingsSection(value: unknown): value is GlobalSettings
   return GLOBAL_SETTINGS_SECTIONS.includes(value as GlobalSettingsSection);
 }
 
+/**
+ * Opens the window's Settings on `section`. Settings belong to the command
+ * node, so this is always the window's own surface (`GlobalSettingsHost`).
+ * Another node shown in the window's own tree runs in this document and
+ * calls it directly (plan item 5003).
+ */
 export function requestGlobalSettings(section: GlobalSettingsSection): void {
   if (typeof window === "undefined") return;
-  // Settings belong to the command node: a realm asks its window.
-  if (isWorkspaceRealm()) {
-    postToShell({ type: "settings", section });
-    return;
-  }
   window.dispatchEvent(
     new CustomEvent<GlobalSettingsSection>(GLOBAL_SETTINGS_REQUEST_EVENT, { detail: section }),
   );
@@ -102,4 +101,34 @@ export function onMachineUpdatesRequest(listener: () => void): () => void {
   if (typeof window === "undefined") return () => undefined;
   window.addEventListener(MACHINE_UPDATES_REQUEST_EVENT, listener);
   return () => window.removeEventListener(MACHINE_UPDATES_REQUEST_EVENT, listener);
+}
+
+const MACHINE_UPDATE_REQUEST_EVENT = "orkestrator:update-machine";
+let machineUpdatePending: string | null = null;
+
+/**
+ * Opens Settings → Machines with "Update to the latest Orkestrator" for one
+ * machine (its node identity; the command node's own for itself): the
+ * action a version-skewed machine header and a typed incompatibility error
+ * lead to (plan item 5006). A machine Settings cannot update from here opens
+ * its updates instead, which say why.
+ */
+export function requestMachineUpdate(nodeId: string): void {
+  if (typeof window === "undefined" || !nodeId) return;
+  machineUpdatePending = nodeId;
+  window.dispatchEvent(new Event(MACHINE_UPDATE_REQUEST_EVENT));
+  requestGlobalSettings("machines");
+}
+
+/** The machine a request is waiting for; reading it clears it. */
+export function takeMachineUpdateRequest(): string | null {
+  const pending = machineUpdatePending;
+  machineUpdatePending = null;
+  return pending;
+}
+
+export function onMachineUpdateRequest(listener: () => void): () => void {
+  if (typeof window === "undefined") return () => undefined;
+  window.addEventListener(MACHINE_UPDATE_REQUEST_EVENT, listener);
+  return () => window.removeEventListener(MACHINE_UPDATE_REQUEST_EVENT, listener);
 }

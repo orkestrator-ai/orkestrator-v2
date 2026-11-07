@@ -1,23 +1,13 @@
-import { create } from "zustand";
+import * as backend from "@/lib/backend";
+import { backendApiForScope } from "@/lib/backend/client";
 import {
-  addGitHubPullRequestComment,
-  addGitHubPullRequestReviewComment,
-  getGitHubPullRequest,
-  getGitHubPullRequestFiles,
-  getGitHubPullRequestTimeline,
-  listGitHubPullRequests,
-  mergeGitHubPullRequest,
-  replyGitHubPullRequestReviewThread,
-  setGitHubPullRequestFileViewed,
-  setGitHubPullRequestLabels,
-  changeGitHubPullRequestLabel,
-  setGitHubPullRequestReviewers,
-  setGitHubPullRequestThreadResolved,
-  submitGitHubPullRequestReview,
-  updateGitHubPullRequestComment,
-  updateGitHubPullRequestState,
+  createGithubPullRequestsApi,
   type GitHubPullRequestStateAction,
-} from "@/lib/backend";
+} from "@/lib/backend/github-pull-requests";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { appCommandScope } from "@/lib/node-scope-slots";
+import { defineScopedStore } from "@/lib/node-scope/scoped-store";
+import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
 import {
   gitHubPullRequestKey,
   type GitHubPullRequestComment,
@@ -101,10 +91,13 @@ function mapWithout<T>(map: Map<string, T>, key: string): Map<string, T> {
   return next;
 }
 
-/** Request sequence per resource: a response only lands if no newer read started. */
-const requestSequence = new Map<string, number>();
+/**
+ * Request sequence per resource: a response only lands if no newer read
+ * started. One per store instance, so per node.
+ */
+type RequestSequence = Map<string, number>;
 
-function nextRequest(key: string): number {
+function nextRequest(requestSequence: RequestSequence, key: string): number {
   const id = (requestSequence.get(key) ?? 0) + 1;
   requestSequence.set(key, id);
   return id;
@@ -184,12 +177,13 @@ type SetState = (
 
 async function runLoad<T>(
   set: SetState,
+  requestSequence: RequestSequence,
   loadKey: string,
   fetcher: () => Promise<T>,
   apply: (state: PullRequestsState, data: T) => Partial<PullRequestsState>,
   fallback: string,
 ): Promise<void> {
-  const requestId = nextRequest(loadKey);
+  const requestId = nextRequest(requestSequence, loadKey);
   set((state) => ({ loading: withAdded(state.loading, loadKey) }));
   try {
     const data = await fetcher();
@@ -246,258 +240,296 @@ function patchFiles(
   return { files: new Map(state.files).set(key, patch(files)) };
 }
 
-export const usePullRequestsStore = create<PullRequestsState>()((set, get) => {
-  const reloadDetail = (ref: GitHubPullRequestRef) => get().loadDetail(ref);
-  const reloadTimelineIfLoaded = (ref: GitHubPullRequestRef) =>
-    get().timelines.has(gitHubPullRequestKey(ref)) ? get().loadTimeline(ref) : Promise.resolve();
-  const reloadFilesIfLoaded = (ref: GitHubPullRequestRef) =>
-    get().files.has(gitHubPullRequestKey(ref)) ? get().loadFiles(ref) : Promise.resolve();
+/**
+ * Per node (plan item 3012): a pull request's project belongs to one node, and
+ * its GitHub calls go there.
+ */
+export const pullRequestsStore = defineScopedStore<PullRequestsState>(
+  "pull-requests",
+  (scope) => (set, get) => {
+    const requestSequence: RequestSequence = new Map();
+    /** The scope's node's GitHub commands (the named exports on the app's command scope). */
+    const api = () => backendApiForScope(scope, createGithubPullRequestsApi, backend);
+    const reloadDetail = (ref: GitHubPullRequestRef) => get().loadDetail(ref);
+    const reloadTimelineIfLoaded = (ref: GitHubPullRequestRef) =>
+      get().timelines.has(gitHubPullRequestKey(ref)) ? get().loadTimeline(ref) : Promise.resolve();
+    const reloadFilesIfLoaded = (ref: GitHubPullRequestRef) =>
+      get().files.has(gitHubPullRequestKey(ref)) ? get().loadFiles(ref) : Promise.resolve();
 
-  return {
-    details: new Map(),
-    timelines: new Map(),
-    files: new Map(),
-    lists: new Map(),
-    loading: new Set(),
-    errors: new Map(),
-    loadedAt: new Map(),
-    mutations: new Set(),
+    return {
+      details: new Map(),
+      timelines: new Map(),
+      files: new Map(),
+      lists: new Map(),
+      loading: new Set(),
+      errors: new Map(),
+      loadedAt: new Map(),
+      mutations: new Set(),
 
-    loadDetail: (ref) => {
-      const key = gitHubPullRequestKey(ref);
-      return runLoad(
-        set,
-        resourceKey("detail", key),
-        () => getGitHubPullRequest(ref),
-        (state, detail) => ({
-          details: setCapped(state.details, key, detail, MAX_CACHED_PULL_REQUESTS),
-        }),
-        "Could not load this pull request.",
-      );
-    },
-
-    loadTimeline: (ref) => {
-      const key = gitHubPullRequestKey(ref);
-      return runLoad(
-        set,
-        resourceKey("timeline", key),
-        () => getGitHubPullRequestTimeline(ref),
-        (state, timeline) => ({
-          timelines: setCapped(state.timelines, key, timeline, MAX_CACHED_PULL_REQUESTS),
-        }),
-        "Could not load the pull request timeline.",
-      );
-    },
-
-    loadFiles: (ref) => {
-      const key = gitHubPullRequestKey(ref);
-      return runLoad(
-        set,
-        resourceKey("files", key),
-        () => getGitHubPullRequestFiles(ref),
-        (state, files) => ({
-          files: setCapped(state.files, key, files, MAX_CACHED_PULL_REQUESTS),
-        }),
-        "Could not load the changed files.",
-      );
-    },
-
-    loadList: (projectId, filter, query = "") => {
-      const key = pullRequestListKey(projectId, filter, query);
-      return runLoad(
-        set,
-        resourceKey("list", key),
-        () => listGitHubPullRequests(projectId, filter, query),
-        (state, list) => ({
-          lists: setCapped(state.lists, key, list, MAX_CACHED_PULL_REQUEST_LISTS),
-        }),
-        "Could not load pull requests.",
-      );
-    },
-
-    refreshAll: async (ref) => {
-      await Promise.all([reloadDetail(ref), reloadTimelineIfLoaded(ref), reloadFilesIfLoaded(ref)]);
-    },
-
-    merge: (ref, options) =>
-      runMutation(set, get, `merge:${gitHubPullRequestKey(ref)}`, async () => {
-        const result = await mergeGitHubPullRequest(ref, options);
-        void Promise.all([reloadDetail(ref), reloadTimelineIfLoaded(ref)]);
-        return result;
-      }),
-
-    updateState: (ref, action) =>
-      runMutation(set, get, `state:${gitHubPullRequestKey(ref)}`, async () => {
-        const detail = await updateGitHubPullRequestState(ref, action);
+      loadDetail: (ref) => {
         const key = gitHubPullRequestKey(ref);
-        // Invalidate overlapping reads so a stale poll cannot overwrite this.
-        nextRequest(resourceKey("detail", key));
-        set((state) => ({
-          details: setCapped(state.details, key, detail, MAX_CACHED_PULL_REQUESTS),
-          loading: without(state.loading, resourceKey("detail", key)),
-        }));
-        void reloadTimelineIfLoaded(ref);
-      }),
-
-    addComment: (ref, body) =>
-      runMutation(set, get, `comment-add:${gitHubPullRequestKey(ref)}`, async () => {
-        const comment = await addGitHubPullRequestComment(ref, body);
-        const key = gitHubPullRequestKey(ref);
-        set((state) =>
-          patchDetail(state, key, (detail) =>
-            detail.comments.some((candidate) => candidate.id === comment.id)
-              ? detail
-              : {
-                  ...detail,
-                  comments: [...detail.comments, comment],
-                  commentsCount: detail.commentsCount + 1,
-                },
-          ),
+        return runLoad(
+          set,
+          requestSequence,
+          resourceKey("detail", key),
+          () => api().getGitHubPullRequest(ref),
+          (state, detail) => ({
+            details: setCapped(state.details, key, detail, MAX_CACHED_PULL_REQUESTS),
+          }),
+          "Could not load this pull request.",
         );
-        void Promise.all([reloadDetail(ref), reloadTimelineIfLoaded(ref)]);
-        return comment;
-      }),
+      },
 
-    editComment: (ref, commentId, body) =>
-      runMutation(set, get, `comment-edit:${gitHubPullRequestKey(ref)}:${commentId}`, async () => {
-        const comment = await updateGitHubPullRequestComment(ref, commentId, body);
+      loadTimeline: (ref) => {
         const key = gitHubPullRequestKey(ref);
-        set((state) =>
-          patchDetail(state, key, (detail) => ({
-            ...detail,
-            comments: detail.comments.map((candidate) =>
-              candidate.id === comment.id ? comment : candidate,
+        return runLoad(
+          set,
+          requestSequence,
+          resourceKey("timeline", key),
+          () => api().getGitHubPullRequestTimeline(ref),
+          (state, timeline) => ({
+            timelines: setCapped(state.timelines, key, timeline, MAX_CACHED_PULL_REQUESTS),
+          }),
+          "Could not load the pull request timeline.",
+        );
+      },
+
+      loadFiles: (ref) => {
+        const key = gitHubPullRequestKey(ref);
+        return runLoad(
+          set,
+          requestSequence,
+          resourceKey("files", key),
+          () => api().getGitHubPullRequestFiles(ref),
+          (state, files) => ({
+            files: setCapped(state.files, key, files, MAX_CACHED_PULL_REQUESTS),
+          }),
+          "Could not load the changed files.",
+        );
+      },
+
+      loadList: (projectId, filter, query = "") => {
+        const key = pullRequestListKey(projectId, filter, query);
+        return runLoad(
+          set,
+          requestSequence,
+          resourceKey("list", key),
+          () => api().listGitHubPullRequests(projectId, filter, query),
+          (state, list) => ({
+            lists: setCapped(state.lists, key, list, MAX_CACHED_PULL_REQUEST_LISTS),
+          }),
+          "Could not load pull requests.",
+        );
+      },
+
+      refreshAll: async (ref) => {
+        await Promise.all([
+          reloadDetail(ref),
+          reloadTimelineIfLoaded(ref),
+          reloadFilesIfLoaded(ref),
+        ]);
+      },
+
+      merge: (ref, options) =>
+        runMutation(set, get, `merge:${gitHubPullRequestKey(ref)}`, async () => {
+          const result = await api().mergeGitHubPullRequest(ref, options);
+          void Promise.all([reloadDetail(ref), reloadTimelineIfLoaded(ref)]);
+          return result;
+        }),
+
+      updateState: (ref, action) =>
+        runMutation(set, get, `state:${gitHubPullRequestKey(ref)}`, async () => {
+          const detail = await api().updateGitHubPullRequestState(ref, action);
+          const key = gitHubPullRequestKey(ref);
+          // Invalidate overlapping reads so a stale poll cannot overwrite this.
+          nextRequest(requestSequence, resourceKey("detail", key));
+          set((state) => ({
+            details: setCapped(state.details, key, detail, MAX_CACHED_PULL_REQUESTS),
+            loading: without(state.loading, resourceKey("detail", key)),
+          }));
+          void reloadTimelineIfLoaded(ref);
+        }),
+
+      addComment: (ref, body) =>
+        runMutation(set, get, `comment-add:${gitHubPullRequestKey(ref)}`, async () => {
+          const comment = await api().addGitHubPullRequestComment(ref, body);
+          const key = gitHubPullRequestKey(ref);
+          set((state) =>
+            patchDetail(state, key, (detail) =>
+              detail.comments.some((candidate) => candidate.id === comment.id)
+                ? detail
+                : {
+                    ...detail,
+                    comments: [...detail.comments, comment],
+                    commentsCount: detail.commentsCount + 1,
+                  },
             ),
-          })),
-        );
-        void Promise.all([reloadDetail(ref), reloadTimelineIfLoaded(ref)]);
-        return comment;
-      }),
+          );
+          void Promise.all([reloadDetail(ref), reloadTimelineIfLoaded(ref)]);
+          return comment;
+        }),
 
-    submitReview: (ref, review) =>
-      runMutation(set, get, `review:${gitHubPullRequestKey(ref)}`, async () => {
-        await submitGitHubPullRequestReview(ref, review);
-        void get().refreshAll(ref);
-      }),
+      editComment: (ref, commentId, body) =>
+        runMutation(
+          set,
+          get,
+          `comment-edit:${gitHubPullRequestKey(ref)}:${commentId}`,
+          async () => {
+            const comment = await api().updateGitHubPullRequestComment(ref, commentId, body);
+            const key = gitHubPullRequestKey(ref);
+            set((state) =>
+              patchDetail(state, key, (detail) => ({
+                ...detail,
+                comments: detail.comments.map((candidate) =>
+                  candidate.id === comment.id ? comment : candidate,
+                ),
+              })),
+            );
+            void Promise.all([reloadDetail(ref), reloadTimelineIfLoaded(ref)]);
+            return comment;
+          },
+        ),
 
-    addReviewComment: (ref, commitId, comment) =>
-      runMutation(
-        set,
-        get,
-        `review-comment:${gitHubPullRequestKey(ref)}:${comment.side}:${comment.path}:${comment.line}`,
-        async () => {
-          const created = await addGitHubPullRequestReviewComment(ref, commitId, comment);
-          void Promise.all([get().loadFiles(ref), reloadTimelineIfLoaded(ref)]);
-          return created;
-        },
-      ),
+      submitReview: (ref, review) =>
+        runMutation(set, get, `review:${gitHubPullRequestKey(ref)}`, async () => {
+          await api().submitGitHubPullRequestReview(ref, review);
+          void get().refreshAll(ref);
+        }),
 
-    replyToThread: (ref, threadId, body) =>
-      runMutation(set, get, `thread-reply:${gitHubPullRequestKey(ref)}:${threadId}`, async () => {
-        const created = await replyGitHubPullRequestReviewThread(ref, threadId, body);
-        const key = gitHubPullRequestKey(ref);
-        set((state) =>
-          patchFiles(state, key, (files) => ({
-            ...files,
-            threads: files.threads.map((thread) =>
-              thread.id === threadId && !thread.comments.some((c) => c.id === created.id)
-                ? { ...thread, comments: [...thread.comments, created] }
-                : thread,
-            ),
-          })),
-        );
-        void get().loadFiles(ref);
-        return created;
-      }),
+      addReviewComment: (ref, commitId, comment) =>
+        runMutation(
+          set,
+          get,
+          `review-comment:${gitHubPullRequestKey(ref)}:${comment.side}:${comment.path}:${comment.line}`,
+          async () => {
+            const created = await api().addGitHubPullRequestReviewComment(ref, commitId, comment);
+            void Promise.all([get().loadFiles(ref), reloadTimelineIfLoaded(ref)]);
+            return created;
+          },
+        ),
 
-    setThreadResolved: (ref, threadId, resolved) =>
-      runMutation(set, get, `thread-resolve:${gitHubPullRequestKey(ref)}:${threadId}`, async () => {
-        const key = gitHubPullRequestKey(ref);
-        const apply = (isResolved: boolean) =>
+      replyToThread: (ref, threadId, body) =>
+        runMutation(set, get, `thread-reply:${gitHubPullRequestKey(ref)}:${threadId}`, async () => {
+          const created = await api().replyGitHubPullRequestReviewThread(ref, threadId, body);
+          const key = gitHubPullRequestKey(ref);
           set((state) =>
             patchFiles(state, key, (files) => ({
               ...files,
               threads: files.threads.map((thread) =>
-                thread.id === threadId ? { ...thread, isResolved } : thread,
+                thread.id === threadId && !thread.comments.some((c) => c.id === created.id)
+                  ? { ...thread, comments: [...thread.comments, created] }
+                  : thread,
               ),
             })),
           );
-        apply(resolved);
-        try {
-          const result = await setGitHubPullRequestThreadResolved(ref, threadId, resolved);
-          apply(result.isResolved);
-        } catch (error) {
-          apply(!resolved);
-          throw error;
-        }
-        void get().loadFiles(ref);
-      }),
-
-    setFileViewed: (ref, path, viewed) =>
-      runMutation(set, get, `viewed:${gitHubPullRequestKey(ref)}:${path}`, async () => {
-        const key = gitHubPullRequestKey(ref);
-        const previous = get()
-          .files.get(key)
-          ?.files.find((file) => file.path === path)?.viewedState;
-        const apply = (viewedState: GitHubPullRequestFiles["files"][number]["viewedState"]) =>
-          set((state) =>
-            patchFiles(state, key, (files) => ({
-              ...files,
-              files: files.files.map((file) =>
-                file.path === path ? { ...file, viewedState } : file,
-              ),
-            })),
-          );
-        // Invalidate any pre-write snapshot before applying the optimistic state.
-        nextRequest(resourceKey("files", key));
-        apply(viewed ? "viewed" : "unviewed");
-        try {
-          const result = await setGitHubPullRequestFileViewed(ref, path, viewed);
-          nextRequest(resourceKey("files", key));
-          apply(result.viewedState);
-        } catch (error) {
-          nextRequest(resourceKey("files", key));
-          apply(previous ?? (viewed ? "unviewed" : "viewed"));
-          throw error;
-        } finally {
-          // Reconcile while inactive too; the replacement read owns loading cleanup.
           void get().loadFiles(ref);
-        }
-      }),
+          return created;
+        }),
 
-    setReviewers: (ref, changes) =>
-      runMutation(set, get, `reviewers:${gitHubPullRequestKey(ref)}`, async () => {
-        const detail = await setGitHubPullRequestReviewers(ref, changes);
-        const key = gitHubPullRequestKey(ref);
-        nextRequest(resourceKey("detail", key));
-        set((state) => ({
-          details: setCapped(state.details, key, detail, MAX_CACHED_PULL_REQUESTS),
-          loading: without(state.loading, resourceKey("detail", key)),
-        }));
-        void reloadTimelineIfLoaded(ref);
-      }),
+      setThreadResolved: (ref, threadId, resolved) =>
+        runMutation(
+          set,
+          get,
+          `thread-resolve:${gitHubPullRequestKey(ref)}:${threadId}`,
+          async () => {
+            const key = gitHubPullRequestKey(ref);
+            const apply = (isResolved: boolean) =>
+              set((state) =>
+                patchFiles(state, key, (files) => ({
+                  ...files,
+                  threads: files.threads.map((thread) =>
+                    thread.id === threadId ? { ...thread, isResolved } : thread,
+                  ),
+                })),
+              );
+            apply(resolved);
+            try {
+              const result = await api().setGitHubPullRequestThreadResolved(
+                ref,
+                threadId,
+                resolved,
+              );
+              apply(result.isResolved);
+            } catch (error) {
+              apply(!resolved);
+              throw error;
+            }
+            void get().loadFiles(ref);
+          },
+        ),
 
-    changeLabel: (ref, name, present) =>
-      runMutation(set, get, `labels:${gitHubPullRequestKey(ref)}`, async () => {
-        const labels = await changeGitHubPullRequestLabel(ref, name, present);
-        const key = gitHubPullRequestKey(ref);
-        nextRequest(resourceKey("detail", key));
-        set((state) => ({
-          ...patchDetail(state, key, (detail) => ({ ...detail, labels })),
-          loading: without(state.loading, resourceKey("detail", key)),
-        }));
-        void Promise.all([reloadDetail(ref), reloadTimelineIfLoaded(ref)]);
-      }),
+      setFileViewed: (ref, path, viewed) =>
+        runMutation(set, get, `viewed:${gitHubPullRequestKey(ref)}:${path}`, async () => {
+          const key = gitHubPullRequestKey(ref);
+          const previous = get()
+            .files.get(key)
+            ?.files.find((file) => file.path === path)?.viewedState;
+          const apply = (viewedState: GitHubPullRequestFiles["files"][number]["viewedState"]) =>
+            set((state) =>
+              patchFiles(state, key, (files) => ({
+                ...files,
+                files: files.files.map((file) =>
+                  file.path === path ? { ...file, viewedState } : file,
+                ),
+              })),
+            );
+          // Invalidate any pre-write snapshot before applying the optimistic state.
+          nextRequest(requestSequence, resourceKey("files", key));
+          apply(viewed ? "viewed" : "unviewed");
+          try {
+            const result = await api().setGitHubPullRequestFileViewed(ref, path, viewed);
+            nextRequest(requestSequence, resourceKey("files", key));
+            apply(result.viewedState);
+          } catch (error) {
+            nextRequest(requestSequence, resourceKey("files", key));
+            apply(previous ?? (viewed ? "unviewed" : "viewed"));
+            throw error;
+          } finally {
+            // Reconcile while inactive too; the replacement read owns loading cleanup.
+            void get().loadFiles(ref);
+          }
+        }),
 
-    setLabels: (ref, labels) =>
-      runMutation(set, get, `labels:${gitHubPullRequestKey(ref)}`, async () => {
-        const next = await setGitHubPullRequestLabels(ref, labels);
-        const key = gitHubPullRequestKey(ref);
-        set((state) => patchDetail(state, key, (detail) => ({ ...detail, labels: next })));
-        void Promise.all([reloadDetail(ref), reloadTimelineIfLoaded(ref)]);
-      }),
-  };
-});
+      setReviewers: (ref, changes) =>
+        runMutation(set, get, `reviewers:${gitHubPullRequestKey(ref)}`, async () => {
+          const detail = await api().setGitHubPullRequestReviewers(ref, changes);
+          const key = gitHubPullRequestKey(ref);
+          nextRequest(requestSequence, resourceKey("detail", key));
+          set((state) => ({
+            details: setCapped(state.details, key, detail, MAX_CACHED_PULL_REQUESTS),
+            loading: without(state.loading, resourceKey("detail", key)),
+          }));
+          void reloadTimelineIfLoaded(ref);
+        }),
+
+      changeLabel: (ref, name, present) =>
+        runMutation(set, get, `labels:${gitHubPullRequestKey(ref)}`, async () => {
+          const labels = await api().changeGitHubPullRequestLabel(ref, name, present);
+          const key = gitHubPullRequestKey(ref);
+          nextRequest(requestSequence, resourceKey("detail", key));
+          set((state) => ({
+            ...patchDetail(state, key, (detail) => ({ ...detail, labels })),
+            loading: without(state.loading, resourceKey("detail", key)),
+          }));
+          void Promise.all([reloadDetail(ref), reloadTimelineIfLoaded(ref)]);
+        }),
+
+      setLabels: (ref, labels) =>
+        runMutation(set, get, `labels:${gitHubPullRequestKey(ref)}`, async () => {
+          const next = await api().setGitHubPullRequestLabels(ref, labels);
+          const key = gitHubPullRequestKey(ref);
+          set((state) => patchDetail(state, key, (detail) => ({ ...detail, labels: next })));
+          void Promise.all([reloadDetail(ref), reloadTimelineIfLoaded(ref)]);
+        }),
+    };
+  },
+);
+
+/**
+ * Reads the nearest node scope's pull requests; other code uses
+ * `scope.store(pullRequestsStore)`.
+ */
+export const usePullRequestsStore = scopedStoreHook(pullRequestsStore);
 
 function documentVisible(): boolean {
   return typeof document === "undefined" || document.visibilityState !== "hidden";
@@ -539,20 +571,29 @@ export function startVisiblePolling(intervalMs: number, tick: () => void): () =>
   };
 }
 
-/** Polls the detail of one pull request. Returns the stop function. */
-export function startPullRequestDetailPolling(ref: GitHubPullRequestRef): () => void {
+/**
+ * Polls the detail of one pull request on `scope`'s node (the app's command
+ * scope when omitted). Returns the stop function.
+ */
+export function startPullRequestDetailPolling(
+  ref: GitHubPullRequestRef,
+  scope: NodeScope = appCommandScope(),
+): () => void {
+  const store = scope.store(pullRequestsStore);
   return startVisiblePolling(PULL_REQUEST_DETAIL_POLL_MS, () => {
-    void usePullRequestsStore.getState().loadDetail(ref);
+    if (!scope.disposed) void store.getState().loadDetail(ref);
   });
 }
 
-/** Polls one list query. Returns the stop function. */
+/** Polls one list query on `scope`'s node. Returns the stop function. */
 export function startPullRequestListPolling(
   projectId: string,
   filter: GitHubPullRequestListFilter,
   query = "",
+  scope: NodeScope = appCommandScope(),
 ): () => void {
+  const store = scope.store(pullRequestsStore);
   return startVisiblePolling(PULL_REQUEST_LIST_POLL_MS, () => {
-    void usePullRequestsStore.getState().loadList(projectId, filter, query);
+    if (!scope.disposed) void store.getState().loadList(projectId, filter, query);
   });
 }

@@ -1,3 +1,4 @@
+import { registrarFrom } from "./commands-registry-contracts.js";
 import { describe, expect, mock, test } from "bun:test";
 import type { CommandContext, CommandHandler } from "./commands-context.js";
 import { registerSystemCommands } from "./commands-registry-system.js";
@@ -42,11 +43,11 @@ const CLAUDE_BRIDGE_COMMAND = "/usr/bin/bun /opt/claude-bridge/dist/index.js --p
 describe("environment process usage", () => {
   test("registers the environment process usage command", () => {
     const commands = new Map<string, CommandHandler>();
-    registerSystemCommands((name, handler) => commands.set(name, handler));
+    registerSystemCommands(registrarFrom((name, handler) => commands.set(name, handler)));
     expect(commands.has("get_environment_process_usage")).toBe(true);
   });
 
-  test("rejects unexpected arguments and loads every stored environment", async () => {
+  test("drops unexpected arguments and loads every stored environment", async () => {
     const commands = new Map<string, CommandHandler>();
     const loadEnvironments = mock(async () => [environment({ id: "env-1", name: "alpha" })]);
     const snapshot = {
@@ -55,13 +56,14 @@ describe("environment process usage", () => {
       truncated: false,
     };
     const read = mock(async (_environments: ProcessUsageEnvironment[]) => snapshot);
-    registerSystemCommands((name, handler) => commands.set(name, handler), undefined, read);
+    registerSystemCommands(
+      registrarFrom((name, handler) => commands.set(name, handler)),
+      undefined,
+      read,
+    );
 
-    await expect(
-      commands.get("get_environment_process_usage")!({ extra: true }, {} as CommandContext),
-    ).rejects.toThrow(/Unexpected arguments field: extra/);
-
-    await commands.get("get_environment_process_usage")!({}, {
+    // A defined command drops unknown keys (plan item 7009) rather than refusing them.
+    await commands.get("get_environment_process_usage")!({ extra: true }, {
       storage: { loadEnvironments },
     } as unknown as CommandContext);
     expect(loadEnvironments).toHaveBeenCalledTimes(1);
@@ -86,7 +88,11 @@ describe("environment process usage", () => {
         truncated: false,
       };
     });
-    registerSystemCommands((name, handler) => commands.set(name, handler), undefined, read);
+    registerSystemCommands(
+      registrarFrom((name, handler) => commands.set(name, handler)),
+      undefined,
+      read,
+    );
     const context = { storage: { loadEnvironments } } as unknown as CommandContext;
     const handler = commands.get("get_environment_process_usage")!;
 
@@ -112,7 +118,11 @@ describe("environment process usage", () => {
       if (calls === 1) throw new Error("ps unavailable");
       return { environments: [], sampledAt: "2026-09-13T00:00:00.000Z", truncated: false };
     });
-    registerSystemCommands((name, handler) => commands.set(name, handler), undefined, read);
+    registerSystemCommands(
+      registrarFrom((name, handler) => commands.set(name, handler)),
+      undefined,
+      read,
+    );
     const context = {
       storage: { loadEnvironments: async () => [] },
     } as unknown as CommandContext;
@@ -147,7 +157,7 @@ describe("environment process usage", () => {
       seedStore(root, "environments.json", environments);
       const commands = new Map<string, CommandHandler>();
       registerSystemCommands(
-        (name, handler) => commands.set(name, handler),
+        registrarFrom((name, handler) => commands.set(name, handler)),
         undefined,
         (stored) =>
           readEnvironmentProcessUsage(stored, {
@@ -173,7 +183,7 @@ describe("environment process usage", () => {
 
   test("rejects when stored environments cannot be loaded", async () => {
     const commands = new Map<string, CommandHandler>();
-    registerSystemCommands((name, handler) => commands.set(name, handler));
+    registerSystemCommands(registrarFrom((name, handler) => commands.set(name, handler)));
     await expect(
       commands.get("get_environment_process_usage")!({}, {
         storage: {

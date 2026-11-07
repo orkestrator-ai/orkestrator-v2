@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:a14f6addf3170a3a2b744782f9b10c936584033fbc59585c860cac787d6b4c9f",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "expectedHead": {
+          "type": "string"
+        },
+        "step": {},
+        "workflowId": {
+          "type": "string"
+        }
+      },
+      "required": ["expectedHead", "workflowId"],
+      "type": "object"
+    }
+  }
+}

@@ -1,0 +1,69 @@
+{
+  "schemaVersion": 1,
+  "domain": "accounts",
+  "commands": {
+    "cancel_agent_account_login": {
+      "untyped": true
+    },
+    "cancel_opencode_provider_login": {
+      "untyped": true
+    },
+    "cursor_sdk_login_cancel": {
+      "untyped": true
+    },
+    "cursor_sdk_login_start": {
+      "untyped": true
+    },
+    "cursor_sdk_login_status": {
+      "untyped": true
+    },
+    "cursor_sdk_logout": {
+      "untyped": true
+    },
+    "get_agent_account_login": {
+      "untyped": true
+    },
+    "get_agent_account_usage": {
+      "untyped": true
+    },
+    "get_opencode_provider_login": {
+      "untyped": true
+    },
+    "get_plan_usage": {
+      "untyped": true
+    },
+    "list_agent_accounts": {
+      "untyped": true
+    },
+    "list_opencode_provider_auth": {
+      "untyped": true
+    },
+    "remove_agent_account": {
+      "untyped": true
+    },
+    "remove_opencode_provider_login": {
+      "untyped": true
+    },
+    "rename_agent_account": {
+      "untyped": true
+    },
+    "set_active_agent_account": {
+      "untyped": true
+    },
+    "set_opencode_provider_api_key": {
+      "untyped": true
+    },
+    "start_agent_account_login": {
+      "untyped": true
+    },
+    "start_opencode_provider_login": {
+      "untyped": true
+    },
+    "submit_agent_account_login_code": {
+      "untyped": true
+    },
+    "submit_opencode_provider_login_code": {
+      "untyped": true
+    }
+  }
+}

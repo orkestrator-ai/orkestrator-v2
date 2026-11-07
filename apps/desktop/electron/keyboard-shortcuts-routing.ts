@@ -24,7 +24,7 @@ type Contents = {
 /** Native input wiring and remembered child ownership, shared by menu commands. */
 export class KeyboardShortcutsRouting {
   // Native menu activation can temporarily clear WebContents focus. Remember
-  // the child per physical window so realm menu commands keep their owner.
+  // the child per physical window so menu commands keep their owner.
   private readonly lastFocus = new Map<number, number>();
 
   constructor(
@@ -45,7 +45,7 @@ export class KeyboardShortcutsRouting {
     return this.target(focusedId ?? this.lastFocus.get(windowId)) ?? { renderer: fallback };
   }
 
-  /** The shell renderer of the physical window an app renderer (shell or realm) is in. */
+  /** The shell renderer of the physical window an app renderer is in. */
   private windowShell(rendererId: number): KeyboardShortcutsRenderer | null {
     for (const owner of this.owners()) {
       if (owner.contents.id === rendererId) return owner.window.webContents;
@@ -97,8 +97,7 @@ export class KeyboardShortcutsRouting {
         return;
       }
       // An app document routes window-owned shortcuts itself: only it knows
-      // whether a terminal or text field there owns the key (Ctrl+K), and a
-      // realm forwards them over its message channel. A native artifact view
+      // whether a terminal or text field there owns the key (Ctrl+K). A native artifact view
       // (the only child left with focus to restore once previews returned)
       // runs no router, so the key goes to the window's shell from here.
       if (!target.restoreFocus) return;

@@ -4,8 +4,9 @@ import {
   parseWebAnnotationRequestMarker,
   type WebAnnotationRequestOperation,
 } from "@orkestrator/protocol/web-annotations";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { openWebAnnotationRequest } from "@/lib/web-annotations/navigation";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 
 export function webAnnotationMarkerFor(text: string | null | undefined) {
   return text ? parseWebAnnotationRequestMarker(text) : null;
@@ -34,6 +35,8 @@ export function WebAnnotationRequestChip({
 }) {
   const [error, setError] = useState<string | null>(null);
   const [opening, setOpening] = useState(false);
+  // The chat's own node: its active environment and its annotations.
+  const scope = useNodeScope();
   return (
     <div
       className="mb-2 flex flex-wrap items-center gap-2 text-xs"
@@ -49,14 +52,15 @@ export function WebAnnotationRequestChip({
         className="rounded text-primary underline-offset-2 outline-none hover:underline focus-hairline focus-hairline-outset disabled:opacity-60"
         disabled={opening}
         onClick={() => {
-          const target = environmentId ?? usePaneLayoutStore.getState().activeEnvironmentId;
+          const target =
+            environmentId ?? scope.store(paneLayoutStore).getState().activeEnvironmentId;
           if (!target) {
             setError("Open this environment to view the annotation.");
             return;
           }
           setOpening(true);
           setError(null);
-          void openWebAnnotationRequest(target, requestId)
+          void openWebAnnotationRequest(target, requestId, scope)
             .then((result) => {
               if (!result.ok) setError(result.error);
             })

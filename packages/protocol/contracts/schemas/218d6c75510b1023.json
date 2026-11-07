@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:218d6c75510b1023d41de1088dfc1a9b4d1d76bab3e66dfea9e241f4a7843a7d",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "body": {
+          "type": "string"
+        },
+        "commentId": {
+          "type": "number"
+        },
+        "issueNumber": {
+          "type": "number"
+        },
+        "projectId": {
+          "type": "string"
+        }
+      },
+      "required": ["body", "commentId", "issueNumber", "projectId"],
+      "type": "object"
+    }
+  }
+}

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { NativeAsyncQuestionPart } from "@/lib/chat/native-message-types";
 import { AsyncQuestionResponseContext } from "./NativeMessage.shared";
 import {
@@ -7,11 +8,12 @@ import {
   NativeAsyncQuestionCard,
   serializeAsyncQuestionAnswers,
 } from "./NativeAsyncQuestionCard";
-import { usePromptDraftStore } from "@/stores/promptDraftStore";
+import { promptDraftStore } from "@/stores/promptDraftStore";
+import { appCommandStore } from "@/test/app-command-store";
 
 afterEach(() => {
   cleanup();
-  usePromptDraftStore.getState().reset();
+  appCommandStore(promptDraftStore).getState().reset();
 });
 
 const part: NativeAsyncQuestionPart = {
@@ -28,7 +30,7 @@ const part: NativeAsyncQuestionPart = {
 
 describe("NativeAsyncQuestionCard", () => {
   test("normalizes the question title before suppressing repeated accompanying text", () => {
-    render(
+    renderInAppCommandScope(
       <AsyncQuestionResponseContext.Provider value={{ responses: [] }}>
         <NativeAsyncQuestionCard
           part={{
@@ -49,7 +51,7 @@ describe("NativeAsyncQuestionCard", () => {
   });
 
   test("suppresses accompanying text that repeats a later question title", () => {
-    render(
+    renderInAppCommandScope(
       <AsyncQuestionResponseContext.Provider value={{ responses: [] }}>
         <NativeAsyncQuestionCard part={{ ...part, content: "  Any\n constraints?  " }} />
       </AsyncQuestionResponseContext.Provider>,
@@ -60,7 +62,7 @@ describe("NativeAsyncQuestionCard", () => {
   });
 
   test.each(["-", "*", "•"])("suppresses Codex's plain-text fallback with %s bullets", (bullet) => {
-    render(
+    renderInAppCommandScope(
       <AsyncQuestionResponseContext.Provider value={{ responses: [] }}>
         <NativeAsyncQuestionCard
           part={{
@@ -87,7 +89,7 @@ describe("NativeAsyncQuestionCard", () => {
       { id: "item-1:1", title: "Which target? Any constraints?", options: ["Europe"] },
     ];
     expect(asyncQuestionContentRepeatsQuestions(content, questions)).toBe(true);
-    render(
+    renderInAppCommandScope(
       <AsyncQuestionResponseContext.Provider value={{ responses: [] }}>
         <NativeAsyncQuestionCard
           part={{ ...part, content, asyncQuestion: { ...part.asyncQuestion, questions } }}
@@ -110,7 +112,7 @@ describe("NativeAsyncQuestionCard", () => {
       { id: "item-1:1", title: "Which target? Any constraints?", options: ["Europe"] },
     ];
     expect(asyncQuestionContentRepeatsQuestions(content, questions)).toBe(false);
-    render(
+    renderInAppCommandScope(
       <AsyncQuestionResponseContext.Provider value={{ responses: [] }}>
         <NativeAsyncQuestionCard
           part={{ ...part, content, asyncQuestion: { ...part.asyncQuestion, questions } }}
@@ -123,7 +125,7 @@ describe("NativeAsyncQuestionCard", () => {
   });
 
   test("suppresses accompanying text that only combines question titles", () => {
-    render(
+    renderInAppCommandScope(
       <AsyncQuestionResponseContext.Provider value={{ responses: [] }}>
         <NativeAsyncQuestionCard part={{ ...part, content: "Which target? Any constraints?" }} />
       </AsyncQuestionResponseContext.Provider>,
@@ -135,7 +137,7 @@ describe("NativeAsyncQuestionCard", () => {
   test("renders a restated question that adds context after its options", () => {
     const content = "Which target?\n- Staging\n- Production\n\nStaging is currently broken.";
     expect(asyncQuestionContentRepeatsQuestions(content, part.asyncQuestion.questions)).toBe(false);
-    render(
+    renderInAppCommandScope(
       <AsyncQuestionResponseContext.Provider value={{ responses: [] }}>
         <NativeAsyncQuestionCard part={{ ...part, content }} />
       </AsyncQuestionResponseContext.Provider>,
@@ -155,7 +157,7 @@ describe("NativeAsyncQuestionCard", () => {
   });
 
   test("renders accompanying text that starts with a question title and adds context", () => {
-    render(
+    renderInAppCommandScope(
       <AsyncQuestionResponseContext.Provider value={{ responses: [] }}>
         <NativeAsyncQuestionCard
           part={{ ...part, content: "Which target? I need this before deployment." }}
@@ -167,7 +169,7 @@ describe("NativeAsyncQuestionCard", () => {
   });
 
   test("renders the agent's accompanying text with activity-neutral copy", () => {
-    render(
+    renderInAppCommandScope(
       <AsyncQuestionResponseContext.Provider value={{ responses: [] }}>
         <NativeAsyncQuestionCard part={{ ...part, content: "I need this before deployment." }} />
       </AsyncQuestionResponseContext.Provider>,
@@ -180,7 +182,7 @@ describe("NativeAsyncQuestionCard", () => {
 
   test("preselects the first option without submitting it", () => {
     const respond = mock(async () => {});
-    render(
+    renderInAppCommandScope(
       <AsyncQuestionResponseContext.Provider value={{ responses: [], respond }}>
         <NativeAsyncQuestionCard part={part} />
       </AsyncQuestionResponseContext.Provider>,
@@ -194,7 +196,7 @@ describe("NativeAsyncQuestionCard", () => {
 
   test("queues one labelled ordinary user response", async () => {
     const respond = mock(async () => {});
-    render(
+    renderInAppCommandScope(
       <AsyncQuestionResponseContext.Provider value={{ responses: [], respond }}>
         <NativeAsyncQuestionCard part={part} />
       </AsyncQuestionResponseContext.Provider>,
@@ -213,7 +215,7 @@ describe("NativeAsyncQuestionCard", () => {
 
   test("⌘↵ or Ctrl+Enter in the text field sends the answer", async () => {
     const respond = mock(async () => {});
-    render(
+    renderInAppCommandScope(
       <AsyncQuestionResponseContext.Provider value={{ responses: [], respond }}>
         <NativeAsyncQuestionCard part={part} />
       </AsyncQuestionResponseContext.Provider>,
@@ -236,7 +238,7 @@ describe("NativeAsyncQuestionCard", () => {
 
   test("Ctrl+Enter on a picked option sends the answer once", async () => {
     const respond = mock(async () => {});
-    render(
+    renderInAppCommandScope(
       <AsyncQuestionResponseContext.Provider value={{ responses: [], respond }}>
         <NativeAsyncQuestionCard
           part={{
@@ -260,7 +262,7 @@ describe("NativeAsyncQuestionCard", () => {
 
   test("⌘↵ does nothing while an answer is still missing", () => {
     const respond = mock(async () => {});
-    render(
+    renderInAppCommandScope(
       <AsyncQuestionResponseContext.Provider value={{ responses: [], respond }}>
         <NativeAsyncQuestionCard part={part} />
       </AsyncQuestionResponseContext.Provider>,
@@ -273,7 +275,7 @@ describe("NativeAsyncQuestionCard", () => {
   });
 
   test("rehydrates a sent response as a read-only card", () => {
-    render(
+    renderInAppCommandScope(
       <AsyncQuestionResponseContext.Provider
         value={{
           responses: [
@@ -295,7 +297,7 @@ describe("NativeAsyncQuestionCard", () => {
 
   test("keeps unfinished answers across an unmount", () => {
     const renderCard = () =>
-      render(
+      renderInAppCommandScope(
         <AsyncQuestionResponseContext.Provider
           value={{ responses: [], draftScope: "env-env-1:tab-question" }}
         >
@@ -322,7 +324,7 @@ describe("NativeAsyncQuestionCard", () => {
     const respond = mock(async () => {
       throw new Error("Bridge unavailable");
     });
-    render(
+    renderInAppCommandScope(
       <AsyncQuestionResponseContext.Provider value={{ responses: [], respond }}>
         <NativeAsyncQuestionCard part={part} />
       </AsyncQuestionResponseContext.Provider>,
@@ -339,7 +341,7 @@ describe("NativeAsyncQuestionCard", () => {
   });
 
   test("renders a failed durable response with recovery guidance", () => {
-    render(
+    renderInAppCommandScope(
       <AsyncQuestionResponseContext.Provider
         value={{
           responses: [{ itemId: "item-1", requestId: "async-question:item-1", state: "failed" }],

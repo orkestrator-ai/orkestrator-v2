@@ -9,6 +9,7 @@ import {
 } from "@orkestrator/protocol/backend-profile";
 import { CONTROLLER_HEADER } from "@orkestrator/protocol/command-nodes";
 import type { BackendHelloIdentity } from "../src/gateway";
+import { registryCommandAccess } from "../src/core/nodes/workspace-grant-test-support.js";
 import { requestUrl, startGateway } from "./gateway-test-harness.js";
 
 const identity: BackendHelloIdentity = {
@@ -147,7 +148,7 @@ describe("DP-02 client grants at the leaf's gateway", () => {
     const grant = "okg_abc.secret";
     const invoke = mock(async () => ({ ok: true }));
     const { info } = await startGateway({
-      backend: { invoke },
+      backend: { invoke, commandAccess: registryCommandAccess },
       backendHello: async () => identity,
       nodeHooks: grantHooks(grant),
     });
@@ -330,6 +331,46 @@ describe("DP-03 relay through the command node", () => {
     } finally {
       await new Promise<void>((resolve) => leaf.close(() => resolve()));
     }
+  });
+
+  test("relays /status with the forwarded grant, so a revoked grant answers the leaf's 401", async () => {
+    const grant = "okg_relayed.secret";
+    const live = new Set([grant]);
+    const { info: leaf } = await startGateway({
+      backendHello: async () => identity,
+      nodeHooks: {
+        ...hooks([]),
+        authenticateGrant: (token: string) => (live.has(token) ? Date.now() + 60_000 : null),
+      },
+    });
+    const { info } = await startGateway({
+      backendHello: async () => identity,
+      nodeHooks: {
+        ...hooks([]),
+        relayTarget: () => ({ baseUrl: leaf.url, headers: { authorization: `Bearer ${grant}` } }),
+      },
+    });
+    const relayed = (path: string, token = info.token) =>
+      requestUrl(
+        new URL(`/__orkestrator/nodes/bk_leaf/__orkestrator/${path}`, info.url).toString(),
+        {
+          headers: { authorization: `Bearer ${token}` },
+        },
+      );
+
+    const accepted = await relayed("status");
+    expect(accepted.status).toBe(200);
+    // The leaf's verdict and nothing else: no identity, version or profile.
+    expect(accepted.json()).toEqual({ ok: true });
+    // A cookie session is the command node's own business, never relayed.
+    expect((await relayed("session")).status).toBe(404);
+
+    live.delete(grant);
+    const revoked = await relayed("status");
+    expect(revoked.status).toBe(401);
+    expect(revoked.headers["set-cookie"]).toBeUndefined();
+    // The client's own command-node credential is checked before anything is relayed.
+    expect((await relayed("status", "wrong-token-123456")).status).toBe(401);
   });
 
   test("relays a compressed leaf answer as the decoded body it read", async () => {

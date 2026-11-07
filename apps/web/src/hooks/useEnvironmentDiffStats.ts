@@ -1,6 +1,6 @@
 import { useEffect } from "react";
+import { environmentDiffStatsChangedEvent } from "@orkestrator/protocol/contract/domains/events";
 import {
-  DIFF_STATS_CHANGED_EVENT,
   isEnvironmentDiffStatsEvent,
   isEnvironmentDiffStatsSnapshot,
   type EnvironmentDiffStatsChange,
@@ -18,7 +18,12 @@ import {
   type HydrationEntry,
   type HydrationUpdate,
 } from "@/lib/bounded-hydration";
-import { listen, NATIVE_EVENT_STREAM_CONNECTED_EVENT, type UnlistenFn } from "@/lib/native/events";
+import type { UnlistenFn } from "@/lib/native/events";
+import { backendApiForScope } from "@/lib/backend/client";
+import { createFilesSessionsApi } from "@/lib/backend/files-sessions";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { useNodeScope } from "@/lib/node-scope/providers";
+import { appCommandScope, listenInScope, onReconnectInScope } from "@/lib/node-scope-slots";
 import { onViewSafetyCheck } from "@/lib/resource-sync";
 
 export interface EnvironmentDiffStatsOptions {
@@ -33,11 +38,20 @@ function toEntries(
   return snapshot.entries.map((entry) => ({ key: entry.environmentId, value: entry }));
 }
 
-/** Reads the diff-stat view, conditionally when a revisioned position is known. */
-export function fetchEnvironmentDiffStatsView(known: ViewRevisionStamp | null) {
+/**
+ * Reads `scope`'s diff-stat view, conditionally when a revisioned position is
+ * known. The app's command scope keeps the `@/lib/backend` read suites spy on.
+ */
+export function fetchEnvironmentDiffStatsView(
+  known: ViewRevisionStamp | null,
+  scope: NodeScope = appCommandScope(),
+) {
   return readViewSnapshot(
     "get_environment_diff_stats",
-    () => backend.getEnvironmentDiffStats(known ?? undefined),
+    () =>
+      backendApiForScope(scope, createFilesSessionsApi, {
+        getEnvironmentDiffStats: backend.getEnvironmentDiffStats,
+      }).getEnvironmentDiffStats(known ?? undefined),
     isEnvironmentDiffStatsSnapshot,
     toEntries,
   );
@@ -76,6 +90,9 @@ export function useEnvironmentDiffStats(options: EnvironmentDiffStatsOptions = {
   const applyChange = useEnvironmentDiffStore((s) => s.applyChange);
   const setSyncStatus = useEnvironmentDiffStore((s) => s.setSyncStatus);
   const { clock, limits } = options;
+  // The node whose worktrees these counts are, read and followed through its
+  // own client (plan item 3003).
+  const scope = useNodeScope();
 
   useEffect(() => {
     let disposed = false;
@@ -85,7 +102,7 @@ export function useEnvironmentDiffStats(options: EnvironmentDiffStatsOptions = {
     // (with its comparison ref) rather than reconstructed from a key.
     const hydration = createBoundedHydration<EnvironmentDiffStatsEvent>({
       name: "environment-diff-stats",
-      fetchSnapshot: ({ known }) => fetchEnvironmentDiffStatsView(known),
+      fetchSnapshot: ({ known }) => fetchEnvironmentDiffStatsView(known, scope),
       replaceAll: (entries) =>
         applySnapshot(
           entries
@@ -102,12 +119,16 @@ export function useEnvironmentDiffStats(options: EnvironmentDiffStatsOptions = {
 
     const subscribe = async () => {
       try {
-        const stopChanges = await listen<unknown>(DIFF_STATS_CHANGED_EVENT, (event) => {
-          // The payload crosses a process boundary and is the only thing
-          // driving the badge, so it is validated rather than trusted.
-          if (!isEnvironmentDiffStatsEvent(event.payload)) return;
-          hydration.receive(toEnvironmentDiffStatsUpdate(event.payload));
-        });
+        const stopChanges = await listenInScope(
+          scope,
+          environmentDiffStatsChangedEvent,
+          (payload) => {
+            // The payload crosses a process boundary and is the only thing
+            // driving the badge, so it is validated rather than trusted.
+            if (!isEnvironmentDiffStatsEvent(payload)) return;
+            hydration.receive(toEnvironmentDiffStatsUpdate(payload));
+          },
+        );
         if (disposed) stopChanges();
         else unlisteners.push(stopChanges);
       } catch {
@@ -118,7 +139,7 @@ export function useEnvironmentDiffStats(options: EnvironmentDiffStatsOptions = {
       if (disposed) return;
 
       try {
-        const stopReconnects = await listen(NATIVE_EVENT_STREAM_CONNECTED_EVENT, () => {
+        const stopReconnects = await onReconnectInScope(scope, () => {
           hydration.onReconnect();
         });
         if (disposed) stopReconnects();
@@ -128,7 +149,7 @@ export function useEnvironmentDiffStats(options: EnvironmentDiffStatsOptions = {
       }
 
       if (disposed) return;
-      unlisteners.push(onViewSafetyCheck(() => hydration.safetyCheck()));
+      unlisteners.push(onViewSafetyCheck(() => hydration.safetyCheck(), scope));
       hydration.request("initial");
     };
 
@@ -139,5 +160,5 @@ export function useEnvironmentDiffStats(options: EnvironmentDiffStatsOptions = {
       hydration.dispose();
       for (const unlisten of unlisteners) unlisten();
     };
-  }, [applySnapshot, applyChange, setSyncStatus, clock, limits]);
+  }, [applySnapshot, applyChange, setSyncStatus, clock, limits, scope]);
 }

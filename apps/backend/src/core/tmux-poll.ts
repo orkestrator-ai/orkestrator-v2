@@ -1,3 +1,4 @@
+import { claudeStateEvents } from "@orkestrator/protocol/contract/domains/events";
 import * as shared from "./tmux-shared.js";
 import { TranscriptTaskTracker, runCommand } from "./tmux-shared.js";
 import type { StateSignalCredential } from "./agent-tools.js";
@@ -783,7 +784,7 @@ export class ClaudeStatePollManager {
     // polling timer that would ever notice. Transition-only, because this poll
     // runs about once a second per container.
     if (endedTurn) this.probeForAgentCreatedPullRequest(poll, environment.id);
-    poll.context.emit(`claude-state-${containerId}`, {
+    poll.context.emit(claudeStateEvents.at(containerId), {
       container_id: containerId,
       state,
       occurred_at: persistedTerminal.updatedAt,

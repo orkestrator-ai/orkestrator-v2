@@ -3,10 +3,11 @@
  * session's own key owns them, and their cards resolve in that conversation.
  */
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { ReactNode } from "react";
 import { invoke } from "@/lib/native/backend";
-import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
+import { type BuildPipeline, buildPipelineStore } from "@/stores/buildPipelineStore";
 import * as realBackend from "@/lib/backend";
 import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
 import { resetTranscriptArtifactCapabilities } from "@/hooks/useTranscriptArtifactCapabilities";
@@ -19,6 +20,7 @@ import {
   workflowPublicationView,
   workflowPublishCall,
 } from "@/lib/chat/workflow-artifact-test-support";
+import { appCommandStore } from "@/test/app-command-store";
 
 const realBackendSnapshot = { ...realBackend };
 const realVirtualizedMessageListSnapshot = { ...realVirtualizedMessageList };
@@ -112,7 +114,7 @@ describe("published artifacts in a build-pipeline stage transcript", () => {
     clearArtifactRequestCache();
     clearArtifactPublicationCache();
     invokeMock.mockReset();
-    useBuildPipelineStore.setState({
+    appCommandStore(buildPipelineStore).setState({
       pipelines: new Map([[pipeline.id, pipeline]]),
       buildEnvironmentIds: new Set([pipeline.environmentId]),
       viewedSessionIds: new Map(),
@@ -137,7 +139,7 @@ describe("published artifacts in a build-pipeline stage transcript", () => {
         publications: [workflowPublicationView(workflowArtifactRef("art_other0001", "Not mine"))],
       },
     ]);
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <BuildChatTab
         isActive
         data={{

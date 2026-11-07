@@ -1,3 +1,5 @@
+import { eventSink } from "../backend-emit.js";
+import { registrarFrom } from "../commands-registry-contracts.js";
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -13,6 +15,7 @@ import { emptyKanbanSyncStore, journalTicketOp } from "../storage-kanban-sync.js
 import type { CommandContext, CommandHandler } from "../commands-context.js";
 import { registerTicketSyncCommands } from "../commands-registry-ticket-sync.js";
 import { createProject, StorageService } from "../storage.js";
+import type { ContractEnvelope } from "./node-link.js";
 import { NodeTicketSync, type TicketSyncLink } from "./node-ticket-sync.js";
 
 /**
@@ -41,28 +44,44 @@ async function storageIn(name: string): Promise<StorageService> {
   return storage;
 }
 
-async function fleet(options: { capability?: boolean } = {}) {
+async function fleet(
+  options: {
+    capability?: boolean;
+    /** The leaf's hello `domains` (plan item 1010); absent is a pre-contract leaf. */
+    domains?: Record<string, { min: number; max: number }>;
+  } = {},
+) {
   const command = await storageIn("command");
   const leaf = await storageIn("leaf");
   const commandProject = await command.addProject(createProject(REPO));
   const leafProject = await leaf.addProject(createProject(REPO));
   const handlers = new Map<string, CommandHandler>();
-  registerTicketSyncCommands((name, handler) => handlers.set(name, handler));
+  registerTicketSyncCommands(registrarFrom((name, handler) => handlers.set(name, handler)));
   const leafContext = {
     storage: leaf,
     nodes: { listControllers: () => [{ controllerId: COMMAND_ID, displayName: "Command" }] },
   } as unknown as CommandContext;
   const received: string[] = [];
+  const envelopes: Array<{ command: string; envelope: ContractEnvelope | undefined }> = [];
   const failNext = new Set<string>();
   const link: TicketSyncLink & { connected: boolean } = {
     connected: true,
-    hello: { capabilities: options.capability === false ? {} : { "ticket-sync": 1 } },
-    async invoke<T>(name: string, args: Record<string, unknown> = {}): Promise<T> {
+    hello: {
+      capabilities: options.capability === false ? {} : { "ticket-sync": 1 },
+      ...(options.domains ? { domains: options.domains } : {}),
+    },
+    async invoke<T>(
+      name: string,
+      args: Record<string, unknown> = {},
+      invokeOptions?: { envelope?: ContractEnvelope },
+    ): Promise<T> {
       if (!link.connected) throw new Error("fetch failed");
       received.push(name);
+      envelopes.push({ command: name, envelope: invokeOptions?.envelope });
       const handler = handlers.get(name);
       if (!handler) throw new Error(`Unknown command: ${name}`);
-      const result = await handler(structuredClone(args), leafContext);
+      // The leaf's registry gets the envelope as the gateway passes it.
+      const result = await handler(structuredClone(args), leafContext, invokeOptions?.envelope);
       // An answer lost on the way back: the leaf acted, the command node never heard.
       if (failNext.delete(name)) throw new Error("connection lost");
       return structuredClone(result) as T;
@@ -82,7 +101,7 @@ async function fleet(options: { capability?: boolean } = {}) {
     ],
     localProjects: () => command.loadProjects(),
     kanban: command.kanban,
-    emit: (event, payload) => events.push({ event, payload }),
+    emit: eventSink((event, payload) => events.push({ event, payload })),
     debounceMs: 1,
     retryDelayMs: 60_000,
   });
@@ -97,6 +116,7 @@ async function fleet(options: { capability?: boolean } = {}) {
     link,
     sync,
     received,
+    envelopes,
     failNext,
     events,
     leafTicket,
@@ -565,6 +585,36 @@ describe("labels", () => {
       description: "New",
       labels: ["bug"],
     });
+  });
+});
+
+describe("ticket-sync domain client (plan item 1010)", () => {
+  test("a leaf with the domain syncs without the capability, and every call carries the envelope", async () => {
+    const f = await fleet({ capability: false, domains: { "ticket-sync": { min: 1, max: 1 } } });
+    const ticket = await f.command.kanban.addKanbanTask(f.commandProject.id, "Contract", "");
+    const result = await f.sync.sync(LEAF_ID);
+    expect(result.state).toBe("in-sync");
+    expect((await f.leafTicket(ticket.id))?.title).toBe("Contract");
+    expect(f.envelopes.length).toBeGreaterThan(0);
+    for (const { envelope } of f.envelopes) {
+      expect(envelope).toMatchObject({ domain: "ticket-sync", version: 1 });
+    }
+    expect((await f.sync.status(f.commandProject.id)).nodes[0]).toMatchObject({
+      state: "in-sync",
+    });
+  });
+
+  test("a pre-contract leaf with the capability gets today's body, with no envelope", async () => {
+    const f = await fleet();
+    await f.command.kanban.addKanbanTask(f.commandProject.id, "Legacy", "");
+    expect((await f.sync.sync(LEAF_ID)).state).toBe("in-sync");
+    expect(f.envelopes.every(({ envelope }) => envelope === undefined)).toBe(true);
+  });
+
+  test("a leaf whose range has no version in common is reported as needing an update", async () => {
+    const f = await fleet({ domains: { "ticket-sync": { min: 2, max: 3 } } });
+    expect((await f.sync.sync(LEAF_ID)).state).toBe("update-required");
+    expect(f.received).toEqual([]);
   });
 });
 

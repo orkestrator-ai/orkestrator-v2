@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import {
+  agentModelCatalogStore,
+  buildPipelineStore,
+  githubIssuesStore,
+  kanbanStore,
   useAgentModelCatalogStore,
   useBuildPipelineStore,
   useGitHubIssuesStore,
@@ -8,9 +12,9 @@ import {
 
 describe("store exports", () => {
   test("publishes the GitHub and build stores through the shared barrel", () => {
-    expect(typeof useBuildPipelineStore.getState).toBe("function");
-    expect(typeof useGitHubIssuesStore.getState).toBe("function");
-    expect(typeof useKanbanStore.getState).toBe("function");
-    expect(typeof useAgentModelCatalogStore.getState).toBe("function");
+    expect(useBuildPipelineStore.def).toBe(buildPipelineStore);
+    expect(useGitHubIssuesStore.def).toBe(githubIssuesStore);
+    expect(useKanbanStore.def).toBe(kanbanStore);
+    expect(useAgentModelCatalogStore.def).toBe(agentModelCatalogStore);
   });
 });

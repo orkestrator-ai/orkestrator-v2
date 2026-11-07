@@ -7,12 +7,13 @@ import { OpenCodeProviderSignIn } from "@/components/opencode/OpenCodeProviderSi
 import { AccountMachineProvider } from "./account-machine";
 import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
 
+/** The window's command node: its own answers, another machine's through it. */
 const workspace = invoke as unknown as ReturnType<typeof mock>;
-const portal = mock(async (command: string, args?: Record<string, unknown>): Promise<unknown> => {
+async function commandNode(command: string, args?: Record<string, unknown>): Promise<unknown> {
   if (command === "invoke_on_node")
     return { outcome: "ok", result: response(String(args?.command)) };
   return response(command);
-});
+}
 function response(command: string): unknown {
   switch (command) {
     case "get_github_cli_status":
@@ -45,23 +46,19 @@ function response(command: string): unknown {
 }
 beforeEach(() => {
   // The previous test's sign-ins scheduled a debounced node refresh. Firing
-  // between tests, with no portal set, it lands on this mock after afterEach.
+  // between tests, it lands on this mock after afterEach.
   workspace.mockClear();
-  workspace.mockImplementation(async (command: string) => response(command));
-  portal.mockClear();
-  window.orkestratorPortal = { invoke: portal } as never;
-  window.orkestratorWorkspaceTarget = { nodeId: "leaf", nodeName: "Leaf", path: "direct" };
+  workspace.mockImplementation(commandNode);
 });
 afterEach(async () => {
   await act(async () => cleanup());
   resetReadCoordinatorForTests();
-  delete window.orkestratorPortal;
-  delete window.orkestratorWorkspaceTarget;
   workspace.mockReset();
 });
 
-for (const machine of ["leaf", null]) {
-  test(`Settings sign-in controls deliver ${machine ?? "command node"} to their backend calls`, async () => {
+{
+  const machine = "leaf";
+  test("Settings sign-in controls deliver the selected machine to their backend calls", async () => {
     render(
       <AccountMachineProvider value={{ machine, name: "Selected machine" }}>
         <GitHubCliSetup />
@@ -90,42 +87,34 @@ for (const machine of ["leaf", null]) {
       "cursor_sdk_login_start",
       "start_opencode_provider_login",
     ]) {
-      if (machine === null)
-        expect(portal.mock.calls.some(([called]) => called === command)).toBe(true);
-      else
-        expect(
-          portal.mock.calls.some(
-            ([called, args]) =>
-              called === "invoke_on_node" && args?.nodeId === machine && args?.command === command,
-          ),
-        ).toBe(true);
+      expect(
+        workspace.mock.calls.some(
+          ([called, args]) =>
+            called === "invoke_on_node" && args?.nodeId === machine && args?.command === command,
+        ),
+      ).toBe(true);
     }
     // Cursor opens the returned link on the client; all login commands still
-    // run on the selected machine rather than this workspace's backend.
-    expect(workspace.mock.calls).toEqual([
-      ["open_in_browser", { url: "https://example.com/login" }],
-    ]);
-    const cursorStart = portal.mock.calls.find(([called, args]) =>
-      machine === null
-        ? called === "cursor_sdk_login_start"
-        : called === "invoke_on_node" && args?.command === "cursor_sdk_login_start",
+    // run on the selected machine rather than this window's own node.
+    expect(
+      workspace.mock.calls.filter(
+        ([command]) =>
+          command !== "invoke_on_node" &&
+          command !== "get_node_status" &&
+          command !== "get_node_summaries",
+      ),
+    ).toEqual([["open_in_browser", { url: "https://example.com/login" }]]);
+    const cursorStart = workspace.mock.calls.find(
+      ([called, args]) => called === "invoke_on_node" && args?.command === "cursor_sdk_login_start",
     )!;
-    expect(machine === null ? cursorStart[1] : cursorStart[1]?.args).toEqual({
-      openBrowser: false,
-    });
+    expect(cursorStart[1]?.args).toEqual({ openBrowser: false });
   });
 }
 
-test("an unscoped workspace sign-in follows the leaf instead of the portal", async () => {
+test("an unscoped sign-in runs on the window's own node", async () => {
   render(<GitHubCliSetup />);
   const github = await screen.findByRole("button", { name: "Sign in to GitHub" });
   await act(async () => fireEvent.click(github));
   expect(workspace).toHaveBeenCalledWith("start_github_cli_login", {});
-  // Federation discovery may read the portal in the background. An unscoped
-  // sign-in must still send every login operation to the workspace backend.
-  expect(
-    portal.mock.calls.filter(
-      ([command]) => command !== "get_node_status" && command !== "get_node_summaries",
-    ),
-  ).toEqual([]);
+  expect(workspace.mock.calls.some(([command]) => command === "invoke_on_node")).toBe(false);
 });

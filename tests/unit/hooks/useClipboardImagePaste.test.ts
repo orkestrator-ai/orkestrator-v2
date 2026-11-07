@@ -48,6 +48,7 @@ import {
   processLocalClipboardPaste,
   useClipboardImagePaste,
 } from "../../../apps/web/src/hooks/useClipboardImagePaste";
+import * as backend from "@/lib/backend";
 
 describe("processLocalClipboardPaste", () => {
   beforeEach(() => {
@@ -87,6 +88,7 @@ describe("processLocalClipboardPaste", () => {
     const onTextPaste = mock(() => {});
 
     const result = await processLocalClipboardPaste(
+      backend,
       "/tmp/worktrees/env",
       onImageSaved,
       onTextPaste,
@@ -107,6 +109,7 @@ describe("processLocalClipboardPaste", () => {
     let pasteFinished = false;
 
     const resultPromise = processLocalClipboardPaste(
+      backend,
       "/tmp/worktrees/env",
       () =>
         new Promise<void>((resolve) => {
@@ -133,6 +136,7 @@ describe("processLocalClipboardPaste", () => {
     const onTextPaste = mock(() => {});
 
     const result = await processLocalClipboardPaste(
+      backend,
       "/tmp/worktrees/env",
       onImageSaved,
       onTextPaste,
@@ -152,6 +156,7 @@ describe("processLocalClipboardPaste", () => {
     const onTextPaste = mock(() => {});
 
     const result = await processLocalClipboardPaste(
+      backend,
       "/tmp/worktrees/env",
       onImageSaved,
       onTextPaste,
@@ -169,6 +174,7 @@ describe("processLocalClipboardPaste", () => {
     const onImageSaved = mock(() => {});
 
     const result = await processLocalClipboardPaste(
+      backend,
       "/tmp/worktrees/env",
       onImageSaved,
       undefined,
@@ -185,6 +191,7 @@ describe("processLocalClipboardPaste", () => {
     const onError = mock(() => {});
 
     const result = await processLocalClipboardPaste(
+      backend,
       "/tmp/worktrees/env",
       undefined,
       undefined,
@@ -203,7 +210,12 @@ describe("processLocalClipboardPaste", () => {
       null) as unknown as typeof HTMLCanvasElement.prototype.getContext;
     const onTextPaste = mock(() => {});
 
-    const result = await processLocalClipboardPaste("/tmp/worktrees/env", undefined, onTextPaste);
+    const result = await processLocalClipboardPaste(
+      backend,
+      "/tmp/worktrees/env",
+      undefined,
+      onTextPaste,
+    );
 
     expect(result).toBe(true);
     expect(onTextPaste).toHaveBeenCalledWith("clipboard text");
@@ -214,7 +226,12 @@ describe("processLocalClipboardPaste", () => {
     mockToDataURL.mockImplementation(() => "data:image/png;base64");
     const onTextPaste = mock(() => {});
 
-    const result = await processLocalClipboardPaste("/tmp/worktrees/env", undefined, onTextPaste);
+    const result = await processLocalClipboardPaste(
+      backend,
+      "/tmp/worktrees/env",
+      undefined,
+      onTextPaste,
+    );
 
     expect(result).toBe(true);
     expect(onTextPaste).toHaveBeenCalledWith("clipboard text");
@@ -225,7 +242,7 @@ describe("processLocalClipboardPaste", () => {
     mockReadImage.mockImplementation(() => Promise.reject(new Error("No image")));
     mockReadText.mockImplementation(() => Promise.reject(new Error("denied")));
 
-    await expect(processLocalClipboardPaste("/tmp/worktrees/env")).resolves.toBe(false);
+    await expect(processLocalClipboardPaste(backend, "/tmp/worktrees/env")).resolves.toBe(false);
     expect(mockWriteLocalFile).not.toHaveBeenCalled();
   });
 
@@ -236,6 +253,7 @@ describe("processLocalClipboardPaste", () => {
     });
 
     const result = await processLocalClipboardPaste(
+      backend,
       "/tmp/worktrees/env",
       onImageSaved,
       undefined,
@@ -247,7 +265,7 @@ describe("processLocalClipboardPaste", () => {
   });
 
   test("does not call writeContainerFile (uses writeLocalFile only)", async () => {
-    await processLocalClipboardPaste("/tmp/worktrees/env");
+    await processLocalClipboardPaste(backend, "/tmp/worktrees/env");
 
     expect(mockWriteLocalFile).toHaveBeenCalled();
     expect(mockWriteContainerFile).not.toHaveBeenCalled();
@@ -285,7 +303,7 @@ describe("processClipboardPaste", () => {
   test("saves clipboard image to container and calls onImageSaved", async () => {
     const onImageSaved = mock(() => {});
 
-    const result = await processClipboardPaste("container-123", onImageSaved);
+    const result = await processClipboardPaste(backend, "container-123", onImageSaved);
 
     expect(result).toBe(true);
     expect(mockWriteContainerFile).toHaveBeenCalledTimes(1);
@@ -300,6 +318,7 @@ describe("processClipboardPaste", () => {
     let pasteFinished = false;
 
     const resultPromise = processClipboardPaste(
+      backend,
       "container-123",
       undefined,
       () =>
@@ -324,7 +343,7 @@ describe("processClipboardPaste", () => {
     mockReadImage.mockImplementation(() => Promise.reject(new Error("No image")));
 
     const onTextPaste = mock(() => {});
-    const result = await processClipboardPaste("container-123", undefined, onTextPaste);
+    const result = await processClipboardPaste(backend, "container-123", undefined, onTextPaste);
 
     expect(result).toBe(true);
     expect(onTextPaste).toHaveBeenCalledWith("clipboard text");
@@ -332,7 +351,7 @@ describe("processClipboardPaste", () => {
   });
 
   test("does not call writeLocalFile (uses writeContainerFile only)", async () => {
-    await processClipboardPaste("container-123");
+    await processClipboardPaste(backend, "container-123");
 
     expect(mockWriteContainerFile).toHaveBeenCalled();
     expect(mockWriteLocalFile).not.toHaveBeenCalled();
@@ -344,7 +363,13 @@ describe("processClipboardPaste", () => {
     );
     const onError = mock(() => {});
 
-    const result = await processClipboardPaste("container-123", undefined, undefined, onError);
+    const result = await processClipboardPaste(
+      backend,
+      "container-123",
+      undefined,
+      undefined,
+      onError,
+    );
 
     expect(result).toBe(false);
     expect(onError).toHaveBeenCalledWith("container unavailable");
@@ -354,7 +379,13 @@ describe("processClipboardPaste", () => {
     mockToDataURL.mockImplementation(() => `data:image/png;base64,${"A".repeat(12 * 1024 * 1024)}`);
     const onError = mock(() => {});
 
-    const result = await processClipboardPaste("container-123", undefined, undefined, onError);
+    const result = await processClipboardPaste(
+      backend,
+      "container-123",
+      undefined,
+      undefined,
+      onError,
+    );
 
     expect(result).toBe(false);
     expect(mockWriteContainerFile).not.toHaveBeenCalled();
@@ -365,7 +396,7 @@ describe("processClipboardPaste", () => {
     mockReadImage.mockImplementation(() => Promise.reject(new Error("No image")));
     mockReadText.mockImplementation(() => Promise.reject(new Error("denied")));
 
-    await expect(processClipboardPaste("container-123")).resolves.toBe(false);
+    await expect(processClipboardPaste(backend, "container-123")).resolves.toBe(false);
     expect(mockWriteContainerFile).not.toHaveBeenCalled();
   });
 });

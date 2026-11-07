@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, screen } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { GraphDescribeJobView } from "@orkestrator/protocol/graphs/describe";
 import type { AgentModelCatalog } from "@/lib/agent-launch";
-import { useConfigStore } from "@/stores/configStore";
+import { configStore } from "@/stores/configStore";
 import { GraphDescribeDialog, type GraphDescribeSubmission } from "./GraphDescribeDialog";
+import { appCommandStore } from "@/test/app-command-store";
 
 const catalog: AgentModelCatalog = {
   claude: [{ id: "opus", name: "Opus", reasoningEfforts: ["high", "xhigh"] }],
@@ -33,7 +35,7 @@ function renderDialog(overrides: Partial<Parameters<typeof GraphDescribeDialog>[
   const onSubmit = mock((_submission: GraphDescribeSubmission) => undefined);
   const onCancelJob = mock(() => undefined);
   const onOpenChange = mock((_open: boolean) => undefined);
-  render(
+  renderInAppCommandScope(
     <GraphDescribeDialog
       open
       onOpenChange={onOpenChange}
@@ -56,8 +58,8 @@ function describeButton(): HTMLButtonElement {
 }
 
 beforeEach(() => {
-  const config = useConfigStore.getState().config;
-  useConfigStore.setState({
+  const config = appCommandStore(configStore).getState().config;
+  appCommandStore(configStore).setState({
     config: { ...config, global: { ...config.global, favoriteModels: [] } },
   });
 });

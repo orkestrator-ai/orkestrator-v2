@@ -1,3 +1,4 @@
+import { eventSink } from "../backend-emit.js";
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -131,7 +132,9 @@ test("restart releases the old runtime while the replacement tracks and emits", 
   const restarted = await harness.restart();
   harnesses.push(restarted);
   const replacementEvents: unknown[] = [];
-  restarted.context.emit = (event, payload) => replacementEvents.push({ event, payload });
+  restarted.context.emit = eventSink((event, payload) =>
+    replacementEvents.push({ event, payload }),
+  );
   const oldEvents = events.length;
   expect(restarted.context.runtime).not.toBe(harness.context.runtime);
   expect(previous.service.trackedIds()).toEqual([]);

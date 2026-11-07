@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { McpManagementSnapshot, McpTargetList } from "@orkestrator/protocol/mcp-management";
 import { isNativeAgentMcpServerName } from "@orkestrator/protocol/native-agent";
-import { getMcpManagementSnapshot, listMcpManagementTargets } from "@/lib/backend/mcp-management";
+import type { ScopeBackend } from "@/lib/backend/scope-backend";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 /**
  * The user MCP servers a graph node can be granted (item 404): the servers in
@@ -31,10 +32,15 @@ export interface ConfiguredMcpServerSource {
   snapshot: (targetId: string) => Promise<McpManagementSnapshot | undefined>;
 }
 
-const BACKEND_SOURCE: ConfiguredMcpServerSource = {
-  listTargets: () => listMcpManagementTargets(),
-  snapshot: (targetId) => getMcpManagementSnapshot(targetId),
-};
+/** The servers of `backend`'s node (the graph's node: `useScopeBackend()`). */
+export function backendMcpServerSource(
+  backend: Pick<ScopeBackend, "listMcpManagementTargets" | "getMcpManagementSnapshot">,
+): ConfiguredMcpServerSource {
+  return {
+    listTargets: () => backend.listMcpManagementTargets(),
+    snapshot: (targetId) => backend.getMcpManagementSnapshot(targetId),
+  };
+}
 
 /**
  * Every server name in the backend's user-scope MCP files, across providers.
@@ -42,7 +48,7 @@ const BACKEND_SOURCE: ConfiguredMcpServerSource = {
  * all throws, so the picker can say it could not read them.
  */
 export async function loadConfiguredUserMcpServers(
-  source: ConfiguredMcpServerSource = BACKEND_SOURCE,
+  source: ConfiguredMcpServerSource,
 ): Promise<ConfiguredMcpServer[]> {
   const list = await source.listTargets();
   const targets = (list?.targets ?? []).filter((target) => target.context.kind === "backend");
@@ -78,10 +84,11 @@ export async function loadConfiguredUserMcpServers(
 export function useConfiguredUserMcpServers(
   source?: ConfiguredMcpServerSource,
 ): ConfiguredMcpServers {
+  const nodeBackend = useScopeBackend();
   const [servers, setServers] = useState<ConfiguredMcpServers>({ state: "loading" });
   useEffect(() => {
     let live = true;
-    loadConfiguredUserMcpServers(source).then(
+    loadConfiguredUserMcpServers(source ?? backendMcpServerSource(nodeBackend)).then(
       (loaded) => {
         if (live) setServers({ state: "ready", servers: loaded });
       },
@@ -92,6 +99,6 @@ export function useConfiguredUserMcpServers(
     return () => {
       live = false;
     };
-  }, [source]);
+  }, [source, nodeBackend]);
   return servers;
 }

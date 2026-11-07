@@ -1,13 +1,15 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 import { useState, useSyncExternalStore, type ReactNode } from "react";
 import * as realResizable from "@/components/ui/resizable";
 import * as realHooks from "@/hooks";
 import { MOBILE_SHELL_MEDIA_QUERY } from "@/components/layout/MobileAppShellLayout";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import type { PaneLeaf, PaneNode, PaneSplit } from "@/types/paneLayout";
 import * as realPaneLeafContainer from "./PaneLeafContainer";
+import { appCommandStore } from "@/test/app-command-store";
 
 const realResizableSnapshot = { ...realResizable };
 const realHooksSnapshot = { ...realHooks };
@@ -100,20 +102,23 @@ function split(id: string, first: PaneNode, second: PaneNode): PaneSplit {
 }
 
 function seedStore(root: PaneNode, activePaneId: string) {
-  usePaneLayoutStore.setState({
+  appCommandStore(paneLayoutStore).setState({
     environments: new Map([[ENVIRONMENT_ID, { containerId: null, activePaneId, root }]]),
   });
 }
 
 function renderTree(node: PaneNode, activePaneId = "right") {
   seedStore(node, activePaneId);
-  const view = render(
+  const view = renderInAppCommandScope(
     <PaneTree node={node} containerId={null} environmentId={ENVIRONMENT_ID} isActive />,
   );
   return {
     ...view,
     rerenderTree: (next: PaneNode) => {
-      seedStore(next, usePaneLayoutStore.getState().environments.get(ENVIRONMENT_ID)!.activePaneId);
+      seedStore(
+        next,
+        appCommandStore(paneLayoutStore).getState().environments.get(ENVIRONMENT_ID)!.activePaneId,
+      );
       view.rerender(
         <PaneTree node={next} containerId={null} environmentId={ENVIRONMENT_ID} isActive />,
       );

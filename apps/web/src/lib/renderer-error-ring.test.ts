@@ -48,10 +48,10 @@ describe("the renderer error ring", () => {
     const error = failure();
     ring.record(error, "lazy-view", "window");
     ring.record(error, "lazy-view", "window");
-    ring.record(error, "lazy-view", "realm");
+    ring.record(error, "lazy-view", "browser");
     expect(ring.entries().map((entry) => [entry.route, entry.count])).toEqual([
       ["window", 2],
-      ["realm", 1],
+      ["browser", 1],
     ]);
   });
 
@@ -93,12 +93,10 @@ describe("where a failure was caught", () => {
   });
 
   test("the surface stands in for a route", () => {
-    expect(rendererErrorRoute({ location: { search: "" } })).toBe("window");
-    expect(rendererErrorRoute({ location: { search: "?realm=workspace&workspace=a" } })).toBe(
-      "realm",
+    expect(rendererErrorRoute({})).toBe("window");
+    expect(rendererErrorRoute({ orkestratorGateway: { enabled: true } })).toBe("browser");
+    expect(rendererErrorRoute({ orkestratorGateway: { enabled: true, desktop: true } })).toBe(
+      "window",
     );
-    expect(
-      rendererErrorRoute({ location: { search: "" }, orkestratorGateway: { enabled: true } }),
-    ).toBe("browser");
   });
 });

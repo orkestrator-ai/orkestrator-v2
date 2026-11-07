@@ -3,6 +3,7 @@ import {
   type RichConversationScope,
 } from "@/lib/chat/rich-content-reset";
 import { create } from "zustand";
+import type { BackendId } from "@orkestrator/protocol/federation";
 import { artifactErrorInfo } from "@/lib/chat/artifact-requests";
 import type { ArtifactLiveSessionResponse } from "@orkestrator/protocol/transcript-artifact-commands";
 import {
@@ -10,10 +11,14 @@ import {
   FRONTEND_RENDER_POLICY,
 } from "@orkestrator/protocol/rich-content-policy";
 import { clampArtifactFrameHeight } from "@orkestrator/protocol/artifact-frame-channel";
+import { backendApiForScope } from "@/lib/backend/client";
 import {
   closeTranscriptArtifactLiveSession,
+  createTranscriptArtifactsApi,
   openTranscriptArtifactLiveSession,
 } from "@/lib/backend/transcript-artifacts";
+import type { ByteBudget } from "@/lib/node-scope/byte-budget";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
 
 /**
  * The single live interactive-artifact host of this application window.
@@ -24,6 +29,14 @@ import {
  * full screen) without reparenting or reloading it. At most one session is
  * active (`FRONTEND_RENDER_POLICY.liveExecutableHostsPerWindow`); starting
  * another artifact asks for an explicit switch.
+ *
+ * The host is window-owned (one per renderer, like the document it shows),
+ * but everything it holds names its node (plan item 3008): a target carries
+ * the `nodeId` of the node scope that asked for it, the live session is
+ * opened and closed on that scope's client, anchors and ended notes are keyed
+ * by `(nodeId, occurrenceKey)`, and a saved preview it keeps reserves its
+ * bytes from the window's `artifacts` budget under that node. Disposing the
+ * scope releases all of it.
  *
  * Stopping ends only this view instance: the backend live-session capability
  * is released, while publications, history and agent work are untouched.
@@ -41,6 +54,8 @@ export type LivePhase =
   "opening" | "loading" | "ready" | "crashed" | "unresponsive" | "navigation-blocked" | "error";
 
 export interface LiveArtifactTarget {
+  /** The node scope whose transcript holds the occurrence; set by `request`. */
+  nodeId: BackendId;
   /** `richArtifactOccurrenceKey` of the transcript occurrence. */
   occurrenceKey: string;
   publicationId: string;
@@ -58,6 +73,9 @@ export interface LiveArtifactTarget {
   /** Initial frame height before the document reports its own. */
   initialHeight?: number;
 }
+
+/** What a producer asks for; `request` adds the asking scope's `nodeId`. */
+export type LiveArtifactRequest = Omit<LiveArtifactTarget, "nodeId">;
 
 export interface LiveLinkRequest {
   href: string;
@@ -79,25 +97,31 @@ export interface LiveHostSession {
 }
 
 export interface LiveHostEnded {
+  nodeId: BackendId;
   occurrenceKey: string;
   environmentId: string;
   reason: string;
 }
 
-interface ArtifactLiveHostState {
+export interface ArtifactLiveHostState {
   active: LiveHostSession | null;
   pendingSwitch: LiveArtifactTarget | null;
   /** The most recent view disposed by a scope change, with its reason. */
   ended: LiveHostEnded | null;
+  /** Inline anchors keyed by `liveAnchorKey(nodeId, occurrenceKey)`. */
   anchors: ReadonlyMap<string, HTMLElement>;
-  request: (target: LiveArtifactTarget) => "started" | "switch-pending" | "already-active";
+  /** `owner` is the node scope whose transcript asks; the session runs on its node. */
+  request: (
+    owner: NodeScope,
+    target: LiveArtifactRequest,
+  ) => "started" | "switch-pending" | "already-active";
   confirmSwitch: () => void;
   cancelSwitch: () => void;
   stop: () => void;
   /** Dispose the active view because its scope is no longer valid. */
   invalidate: (reason: string) => void;
   /** Forget a recorded disposal reason (the user acknowledged it). */
-  clearEnded: (occurrenceKey: string) => void;
+  clearEnded: (nodeId: BackendId, occurrenceKey: string) => void;
   reset: () => void;
   setPlacement: (placement: LivePlacement) => void;
   report: (
@@ -106,7 +130,10 @@ interface ArtifactLiveHostState {
       height?: number;
     },
   ) => void;
-  registerAnchor: (occurrenceKey: string, element: HTMLElement) => () => void;
+  /** `owner` is the placeholder's node scope; disposing it drops the anchor. */
+  registerAnchor: (owner: NodeScope, occurrenceKey: string, element: HTMLElement) => () => void;
+  /** Drops everything of `nodeId`: its node scope was disposed. */
+  releaseNode: (nodeId: BackendId) => void;
   /** Tests only. */
   resetForTests: () => void;
 }
@@ -114,6 +141,22 @@ interface ArtifactLiveHostState {
 export const DEFAULT_LIVE_FRAME_HEIGHT = 480;
 /** One host per window; enforced structurally by the single `active` slot. */
 export const LIVE_HOSTS_PER_WINDOW = FRONTEND_RENDER_POLICY.liveExecutableHostsPerWindow;
+
+/** Bounded prefix of this host's reservations in the window `artifacts` budget. */
+export const LIVE_HOST_BUDGET_NAME = "artifact-live-host";
+
+export function liveAnchorKey(nodeId: BackendId, occurrenceKey: string): string {
+  return `${nodeId}\u0000${occurrenceKey}`;
+}
+
+/** Whether `entry` (a target or an ended note) is `occurrenceKey` on `nodeId`. */
+export function isLiveOccurrence(
+  entry: { nodeId: BackendId; occurrenceKey: string } | null | undefined,
+  nodeId: BackendId,
+  occurrenceKey: string,
+): boolean {
+  return !!entry && entry.nodeId === nodeId && entry.occurrenceKey === occurrenceKey;
+}
 
 let hostCounter = 0;
 
@@ -123,16 +166,102 @@ function nextHostId(): string {
   return `live-${Date.now().toString(36)}-${hostCounter}-${random}`;
 }
 
-function releaseSession(session: ArtifactLiveSessionResponse | null): void {
-  if (!session) return;
-  void closeTranscriptArtifactLiveSession({ generation: session.generation }).catch(() => {
-    // Best effort: the capability also expires on its own.
+/**
+ * The node scope each node's live work runs on, set by `request` and dropped
+ * when that scope is disposed. The host is window-owned, so this map is too.
+ */
+const owners = new Map<BackendId, NodeScope>();
+const boundOwners = new WeakSet<NodeScope>();
+
+/** The node scope a target of `nodeId` runs on, while it is open. */
+export function artifactLiveHostOwner(nodeId: BackendId): NodeScope | null {
+  return owners.get(nodeId) ?? null;
+}
+
+function liveApi(owner: NodeScope) {
+  return backendApiForScope(owner, createTranscriptArtifactsApi, {
+    openTranscriptArtifactLiveSession,
+    closeTranscriptArtifactLiveSession,
   });
 }
 
+function releaseSession(session: ArtifactLiveSessionResponse | null, nodeId: BackendId): void {
+  if (!session) return;
+  const owner = owners.get(nodeId);
+  // A node whose scope is gone took its connection with it; the capability expires on its own.
+  if (!owner) return;
+  void liveApi(owner)
+    .closeTranscriptArtifactLiveSession({ generation: session.generation })
+    .catch(() => {
+      // Best effort: the capability also expires on its own.
+    });
+}
+
+interface PreviewHold {
+  budget: ByteBudget;
+  nodeId: BackendId;
+  key: string;
+}
+
+/** The budget reservation behind each held target's saved preview. */
+const previewHolds = new WeakMap<LiveArtifactTarget, PreviewHold>();
+let previewHoldCounter = 0;
+
+function withoutPreview(target: LiveArtifactTarget): LiveArtifactTarget {
+  const { previewDataUrl: _dropped, ...rest } = target;
+  return rest;
+}
+
+function releasePreview(target: LiveArtifactTarget | null | undefined): void {
+  if (!target) return;
+  const hold = previewHolds.get(target);
+  if (!hold) return;
+  previewHolds.delete(target);
+  hold.budget.release(hold.nodeId, hold.key);
+}
+
 export const useArtifactLiveHostStore = create<ArtifactLiveHostState>((set, get) => {
+  /**
+   * Reserves the target's saved preview from the window `artifacts` budget
+   * under its node. A refused reservation drops the preview (the live view
+   * still runs); an eviction drops it later. The shown node is never evicted.
+   */
+  const holdPreview = (owner: NodeScope, target: LiveArtifactTarget): LiveArtifactTarget => {
+    const preview = target.previewDataUrl;
+    if (!preview) return target;
+    previewHoldCounter += 1;
+    const key = `${LIVE_HOST_BUDGET_NAME}\u0000${previewHoldCounter}`;
+    const budget = owner.budgets.artifacts;
+    const result = budget.reserve(owner.nodeId, key, preview.length, {
+      onEvict: () => {
+        if (previewHolds.get(target)?.key !== key) return;
+        previewHolds.delete(target);
+        const stripped = withoutPreview(target);
+        const { active, pendingSwitch } = get();
+        if (active?.target === target) set({ active: { ...active, target: stripped } });
+        if (pendingSwitch === target) set({ pendingSwitch: stripped });
+      },
+    });
+    if (!result.granted) return withoutPreview(target);
+    previewHolds.set(target, { budget, nodeId: owner.nodeId, key });
+    return target;
+  };
+
+  const bindOwner = (owner: NodeScope) => {
+    // A disposed scope is never an owner: its target then fails as "no longer connected".
+    if (owner.disposed) return;
+    owners.set(owner.nodeId, owner);
+    if (boundOwners.has(owner)) return;
+    boundOwners.add(owner);
+    owner.onDispose(LIVE_HOST_BUDGET_NAME, () => {
+      get().releaseNode(owner.nodeId);
+      if (owners.get(owner.nodeId) === owner) owners.delete(owner.nodeId);
+    });
+  };
+
   const start = (target: LiveArtifactTarget, sessionNumber: number) => {
     const hostId = nextHostId();
+    const ended = get().ended;
     set({
       active: {
         hostId,
@@ -146,13 +275,24 @@ export const useArtifactLiveHostStore = create<ArtifactLiveHostState>((set, get)
         sessionNumber,
       },
       pendingSwitch: null,
-      ended: get().ended?.occurrenceKey === target.occurrenceKey ? null : get().ended,
+      ended: isLiveOccurrence(ended, target.nodeId, target.occurrenceKey) ? null : ended,
     });
-    openTranscriptArtifactLiveSession({
-      environmentId: target.scope.environmentId,
-      logicalSessionKey: target.scope.logicalSessionKey,
-      publicationId: target.publicationId,
-    })
+    const owner = owners.get(target.nodeId);
+    if (!owner) {
+      const current = get().active;
+      if (current?.hostId === hostId) {
+        set({
+          active: { ...current, phase: "error", message: "This machine is no longer connected." },
+        });
+      }
+      return;
+    }
+    liveApi(owner)
+      .openTranscriptArtifactLiveSession({
+        environmentId: target.scope.environmentId,
+        logicalSessionKey: target.scope.logicalSessionKey,
+        publicationId: target.publicationId,
+      })
       .then((session) => {
         const current = get().active;
         if (
@@ -162,7 +302,7 @@ export const useArtifactLiveHostStore = create<ArtifactLiveHostState>((set, get)
           session.revision !== target.revision
         ) {
           // A late or mismatched session: never attach it to another view.
-          releaseSession(session);
+          releaseSession(session, target.nodeId);
           if (current?.hostId === hostId) {
             set({
               active: {
@@ -188,61 +328,79 @@ export const useArtifactLiveHostStore = create<ArtifactLiveHostState>((set, get)
       });
   };
 
+  /** Releases the active view's session and preview, and a pending target's preview. */
+  const releaseActive = (active: LiveHostSession | null) => {
+    if (!active) return;
+    releaseSession(active.session, active.target.nodeId);
+    releasePreview(active.target);
+  };
+
   return {
     active: null,
     pendingSwitch: null,
     ended: null,
     anchors: new Map(),
-    request: (target) => {
+    request: (owner, input) => {
+      bindOwner(owner);
+      const target: LiveArtifactTarget = { ...input, nodeId: owner.nodeId };
       const active = get().active;
       if (
         active &&
-        active.target.occurrenceKey === target.occurrenceKey &&
+        isLiveOccurrence(active.target, target.nodeId, target.occurrenceKey) &&
         active.target.scope.generation === target.scope.generation
       ) {
         return "already-active";
       }
       if (active) {
-        set({ pendingSwitch: target });
+        const previous = get().pendingSwitch;
+        const pending = holdPreview(owner, target);
+        releasePreview(previous);
+        set({ pendingSwitch: pending });
         return "switch-pending";
       }
-      start(target, 1);
+      start(holdPreview(owner, target), 1);
       return "started";
     },
     confirmSwitch: () => {
       const { pendingSwitch, active } = get();
       if (!pendingSwitch) return;
-      releaseSession(active?.session ?? null);
+      releaseActive(active);
       set({ active: null });
       start(pendingSwitch, 1);
     },
-    cancelSwitch: () => set({ pendingSwitch: null }),
+    cancelSwitch: () => {
+      releasePreview(get().pendingSwitch);
+      set({ pendingSwitch: null });
+    },
     stop: () => {
-      const active = get().active;
-      releaseSession(active?.session ?? null);
+      const { active, pendingSwitch } = get();
+      releaseActive(active);
+      releasePreview(pendingSwitch);
       set({ active: null, pendingSwitch: null });
     },
     invalidate: (reason) => {
-      const active = get().active;
+      const { active, pendingSwitch } = get();
       if (!active) return;
-      releaseSession(active.session);
+      releaseActive(active);
+      releasePreview(pendingSwitch);
       set({
         active: null,
         pendingSwitch: null,
         ended: {
+          nodeId: active.target.nodeId,
           occurrenceKey: active.target.occurrenceKey,
           environmentId: active.target.scope.environmentId,
           reason,
         },
       });
     },
-    clearEnded: (occurrenceKey) => {
-      if (get().ended?.occurrenceKey === occurrenceKey) set({ ended: null });
+    clearEnded: (nodeId, occurrenceKey) => {
+      if (isLiveOccurrence(get().ended, nodeId, occurrenceKey)) set({ ended: null });
     },
     reset: () => {
       const active = get().active;
       if (!active) return;
-      releaseSession(active.session);
+      releaseSession(active.session, active.target.nodeId);
       start(active.target, active.sessionNumber + 1);
     },
     setPlacement: (placement) => {
@@ -262,18 +420,42 @@ export const useArtifactLiveHostStore = create<ArtifactLiveHostState>((set, get)
         },
       });
     },
-    registerAnchor: (occurrenceKey, element) => {
+    registerAnchor: (owner, occurrenceKey, element) => {
+      bindOwner(owner);
+      const key = liveAnchorKey(owner.nodeId, occurrenceKey);
       const next = new Map(get().anchors);
-      next.set(occurrenceKey, element);
+      next.set(key, element);
       set({ anchors: next });
       return () => {
-        if (get().anchors.get(occurrenceKey) !== element) return;
+        if (get().anchors.get(key) !== element) return;
         const remaining = new Map(get().anchors);
-        remaining.delete(occurrenceKey);
+        remaining.delete(key);
         set({ anchors: remaining });
       };
     },
+    releaseNode: (nodeId) => {
+      const { active, pendingSwitch, ended, anchors } = get();
+      const next: Partial<ArtifactLiveHostState> = {};
+      if (active?.target.nodeId === nodeId) {
+        releaseActive(active);
+        next.active = null;
+      }
+      if (pendingSwitch?.nodeId === nodeId || next.active === null) {
+        releasePreview(pendingSwitch);
+        next.pendingSwitch = null;
+      }
+      if (ended?.nodeId === nodeId) next.ended = null;
+      const prefix = liveAnchorKey(nodeId, "");
+      if (Array.from(anchors.keys()).some((key) => key.startsWith(prefix))) {
+        next.anchors = new Map(Array.from(anchors).filter(([key]) => !key.startsWith(prefix)));
+      }
+      if (Object.keys(next).length > 0) set(next);
+    },
     resetForTests: () => {
+      const { active, pendingSwitch } = get();
+      releasePreview(active?.target);
+      releasePreview(pendingSwitch);
+      owners.clear();
       set({ active: null, pendingSwitch: null, ended: null, anchors: new Map() });
     },
   };
@@ -349,6 +531,11 @@ registerProtectedRichCache("artifact-live-host", {
       ...(reason === "backend-identity" ? {} : { ended: null }),
     });
   },
+  clearBackend: (backendId, reason) =>
+    clearProtectedHost(
+      (target) => target.scope.backendId === backendId || target.nodeId === backendId,
+      reason === "backend-identity" ? LIVE_HOST_INVALIDATION_REASONS.backendChanged : undefined,
+    ),
   clearEnvironment: (id) =>
     clearProtectedHost(
       (target) => target.scope.environmentId === id,

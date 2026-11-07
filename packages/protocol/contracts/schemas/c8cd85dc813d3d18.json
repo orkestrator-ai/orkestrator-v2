@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:c8cd85dc813d3d186cba4469d12e12b75fe75177f1774f2a27b66e426f082e02",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "imageId": {
+          "type": "string"
+        },
+        "taskId": {
+          "type": "string"
+        }
+      },
+      "required": ["imageId", "taskId"],
+      "type": "object"
+    }
+  }
+}

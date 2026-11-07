@@ -7,7 +7,8 @@ import {
   type AgentInteractionResolution,
   type AgentInteractionResolutionAction,
 } from "@orkestrator/protocol/agent-interactions";
-import { usePromptDraftStore } from "@/stores/promptDraftStore";
+import { useNodeScope } from "@/lib/node-scope/providers";
+import { promptDraftStore } from "@/stores/promptDraftStore";
 
 interface InteractionResolverOptions {
   interaction: AgentInteractionRequest;
@@ -35,6 +36,8 @@ export function useInteractionResolver({
   buildAnswers,
   blocked = false,
 }: InteractionResolverOptions) {
+  // The node the interaction is pending on holds its draft.
+  const drafts = useNodeScope().store(promptDraftStore);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -67,7 +70,7 @@ export function useInteractionResolver({
         outcome.result === "stale" ||
         outcome.result === "already-resolved"
       ) {
-        usePromptDraftStore.getState().clearDraft(draftKey);
+        drafts.getState().clearDraft(draftKey);
       } else {
         setError(
           outcome.result === "rejected"

@@ -1,3 +1,4 @@
+import { eventSink } from "../src/core/backend-emit.js";
 import { describe, expect, mock, test } from "bun:test";
 import path from "node:path";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
@@ -944,7 +945,7 @@ describe("live session read paths", () => {
       const observations: Array<{ revision: number; prompt: unknown }> = [];
       const context = {
         storage: { getEnvironment: async () => environment },
-        emit: (event: string, payload: unknown) => {
+        emit: eventSink((event: string, payload: unknown) => {
           const candidate = payload as {
             kind?: string;
             observation?: { revision: number; prompt: unknown };
@@ -952,7 +953,7 @@ describe("live session read paths", () => {
           if (event === "claude-tmux:event" && candidate.kind === "observation") {
             observations.push(candidate.observation!);
           }
-        },
+        }),
         appRoot: "",
         resourceRoot: "",
       };
@@ -997,7 +998,7 @@ describe("live session read paths", () => {
       }> = [];
       const context = {
         storage: { getEnvironment: async () => environment },
-        emit: (event: string, payload: unknown) => {
+        emit: eventSink((event: string, payload: unknown) => {
           const candidate = payload as {
             kind?: string;
             observation?: (typeof observations)[number];
@@ -1005,7 +1006,7 @@ describe("live session read paths", () => {
           if (event === "claude-tmux:event" && candidate.kind === "observation") {
             observations.push(candidate.observation!);
           }
-        },
+        }),
         appRoot: "",
         resourceRoot: "",
       };
@@ -1106,7 +1107,7 @@ describe("live session read paths", () => {
       const emitted: Array<{ event: string; payload: unknown }> = [];
       const context = {
         storage: { getEnvironment: async () => environment },
-        emit: (event: string, payload: unknown) => emitted.push({ event, payload }),
+        emit: eventSink((event: string, payload: unknown) => emitted.push({ event, payload })),
         appRoot: "",
         resourceRoot: "",
       };
@@ -1222,7 +1223,7 @@ describe("live session read paths", () => {
       const emitted: Array<{ event: string; payload: unknown }> = [];
       const context = {
         storage: { getEnvironment: async () => environment },
-        emit: (event: string, payload: unknown) => emitted.push({ event, payload }),
+        emit: eventSink((event: string, payload: unknown) => emitted.push({ event, payload })),
         appRoot: "",
         resourceRoot: "",
       };
@@ -1342,7 +1343,7 @@ describe("live session read paths", () => {
       const emitted: Array<{ event: string; payload: unknown }> = [];
       const context = {
         storage: { getEnvironment: async () => environment },
-        emit: (event: string, payload: unknown) => emitted.push({ event, payload }),
+        emit: eventSink((event: string, payload: unknown) => emitted.push({ event, payload })),
         appRoot: "",
         resourceRoot: "",
       };
@@ -1445,7 +1446,7 @@ describe("live session read paths", () => {
       const emitted: Array<{ event: string; payload: unknown }> = [];
       const context = {
         storage: { getEnvironment: async () => environment },
-        emit: (event: string, payload: unknown) => emitted.push({ event, payload }),
+        emit: eventSink((event: string, payload: unknown) => emitted.push({ event, payload })),
         appRoot: "",
         resourceRoot: "",
       };
@@ -1496,7 +1497,7 @@ describe("live session read paths", () => {
       const emitted: Array<{ event: string; payload: unknown }> = [];
       const context = {
         storage: { getEnvironment: async () => environment },
-        emit: (event: string, payload: unknown) => emitted.push({ event, payload }),
+        emit: eventSink((event: string, payload: unknown) => emitted.push({ event, payload })),
         appRoot: "",
         resourceRoot: "",
       };
@@ -1546,7 +1547,7 @@ describe("live session read paths", () => {
       const context = {
         storage: { getEnvironment: async () => environment },
         notifyAgentTurnCompleted,
-        emit: (event: string, payload: unknown) => emitted.push({ event, payload }),
+        emit: eventSink((event: string, payload: unknown) => emitted.push({ event, payload })),
         appRoot: "",
         resourceRoot: "",
       };
@@ -1623,7 +1624,7 @@ describe("live session read paths", () => {
             return environment;
           },
         },
-        emit: (event: string, payload: unknown) => emitted.push({ event, payload }),
+        emit: eventSink((event: string, payload: unknown) => emitted.push({ event, payload })),
         appRoot: "",
         resourceRoot: "",
       };
@@ -1784,7 +1785,7 @@ describe("live session read paths", () => {
       const context = {
         storage: { getEnvironment: async () => environment },
         notifyAgentTurnCompleted,
-        emit: (event: string, payload: unknown) => emitted.push({ event, payload }),
+        emit: eventSink((event: string, payload: unknown) => emitted.push({ event, payload })),
         appRoot: "",
         resourceRoot: "",
       };
@@ -1818,7 +1819,7 @@ describe("live session read paths", () => {
       const context = {
         storage: { getEnvironment: async () => environment },
         notifyAgentTurnCompleted,
-        emit: (event: string, payload: unknown) => emitted.push({ event, payload }),
+        emit: eventSink((event: string, payload: unknown) => emitted.push({ event, payload })),
         appRoot: "",
         resourceRoot: "",
       };
@@ -1869,7 +1870,7 @@ describe("live session read paths", () => {
       const context = {
         storage: { getEnvironment: async () => environment },
         notifyAgentTurnCompleted,
-        emit: (event: string, payload: unknown) => emitted.push({ event, payload }),
+        emit: eventSink((event: string, payload: unknown) => emitted.push({ event, payload })),
         appRoot: "",
         resourceRoot: "",
       };
@@ -1924,7 +1925,7 @@ describe("live session read paths", () => {
       const context = {
         storage: { getEnvironment },
         notifyAgentTurnCompleted,
-        emit: (event: string, payload: unknown) => emitted.push({ event, payload }),
+        emit: eventSink((event: string, payload: unknown) => emitted.push({ event, payload })),
         appRoot: "",
         resourceRoot: "",
       };
@@ -1960,7 +1961,7 @@ describe("live session read paths", () => {
       const context = {
         storage: { getEnvironment: async () => environment },
         notifyAgentTurnCompleted,
-        emit: (event: string, payload: unknown) => emitted.push({ event, payload }),
+        emit: eventSink((event: string, payload: unknown) => emitted.push({ event, payload })),
         appRoot: "",
         resourceRoot: "",
       };
@@ -2076,7 +2077,7 @@ describe("live session read paths", () => {
             return environment;
           },
         },
-        emit: (event: string, payload: unknown) => emitted.push({ event, payload }),
+        emit: eventSink((event: string, payload: unknown) => emitted.push({ event, payload })),
         appRoot: "",
         resourceRoot: "",
       };

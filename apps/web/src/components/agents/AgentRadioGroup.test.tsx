@@ -1,13 +1,15 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { useState } from "react";
 import { AgentIcon, AgentRadioGroup } from "./AgentRadioGroup";
 import type { LaunchAgent } from "@/lib/agent-launch";
-import { useConfigStore } from "@/stores/configStore";
+import { configStore } from "@/stores/configStore";
+import { appCommandStore } from "@/test/app-command-store";
 
 afterEach(() => {
   cleanup();
-  useConfigStore.setState((state) => ({
+  appCommandStore(configStore).setState((state) => ({
     config: {
       ...state.config,
       global: {
@@ -26,7 +28,7 @@ function renderGroup(overrides: Partial<Parameters<typeof AgentRadioGroup>[0]> =
     label: "Build agent",
     ...overrides,
   };
-  return { onChange, ...render(<AgentRadioGroup {...props} />) };
+  return { onChange, ...renderInAppCommandScope(<AgentRadioGroup {...props} />) };
 }
 
 /** The group as a real caller drives it: the parent owns the selection. */
@@ -45,7 +47,7 @@ function renderControlled(initial: LaunchAgent = "claude") {
       />
     );
   }
-  return { onChange, ...render(<Harness />) };
+  return { onChange, ...renderInAppCommandScope(<Harness />) };
 }
 
 function radios() {
@@ -72,7 +74,7 @@ describe("AgentRadioGroup", () => {
   });
 
   test("exposes all five agents when every platform is enabled", () => {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       config: {
         ...state.config,
         global: {
@@ -198,7 +200,7 @@ describe("AgentRadioGroup keyboard navigation", () => {
 
 describe("AgentRadioGroup isolation", () => {
   test("never shares a radio name or an input id between two groups", () => {
-    render(
+    renderInAppCommandScope(
       <div>
         <AgentRadioGroup value="claude" onChange={() => undefined} label="Build agent" />
         <AgentRadioGroup value="codex" onChange={() => undefined} label="Review agent" />
@@ -231,7 +233,7 @@ describe("AgentRadioGroup isolation", () => {
   test("selecting in one group does not call the other group's handler", () => {
     const onBuildChange = mock((_agent: LaunchAgent) => undefined);
     const onReviewChange = mock((_agent: LaunchAgent) => undefined);
-    render(
+    renderInAppCommandScope(
       <div>
         <AgentRadioGroup value="claude" onChange={onBuildChange} label="Build agent" />
         <AgentRadioGroup value="claude" onChange={onReviewChange} label="Review agent" />
@@ -296,7 +298,7 @@ describe("AgentRadioGroup descriptions", () => {
 describe("AgentIcon", () => {
   test("draws a distinct glyph for every agent", () => {
     const glyphs = (["claude", "codex", "cursor", "grok", "opencode"] as const).map((agent) => {
-      const { container, unmount } = render(<AgentIcon agent={agent} />);
+      const { container, unmount } = renderInAppCommandScope(<AgentIcon agent={agent} />);
       const svg = container.querySelector("svg");
       expect(svg).not.toBeNull();
       const html = svg!.outerHTML;
@@ -308,17 +310,17 @@ describe("AgentIcon", () => {
   });
 
   test("passes its class through to the glyph", () => {
-    const { container } = render(<AgentIcon agent="codex" className="size-4" />);
+    const { container } = renderInAppCommandScope(<AgentIcon agent="codex" className="size-4" />);
 
     expect(container.querySelector("svg")!.getAttribute("class")).toContain("size-4");
   });
 
   test("falls back to the OpenCode glyph for an unknown agent", () => {
-    const opencode = render(<AgentIcon agent="opencode" />);
+    const opencode = renderInAppCommandScope(<AgentIcon agent="opencode" />);
     const expected = opencode.container.querySelector("svg")!.outerHTML;
     opencode.unmount();
 
-    const { container } = render(<AgentIcon agent={"gemini" as LaunchAgent} />);
+    const { container } = renderInAppCommandScope(<AgentIcon agent={"gemini" as LaunchAgent} />);
 
     expect(container.querySelector("svg")!.outerHTML).toBe(expected);
   });

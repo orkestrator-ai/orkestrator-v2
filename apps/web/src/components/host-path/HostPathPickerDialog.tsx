@@ -10,23 +10,29 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import type { HostDirectoryListing } from "@/lib/backend/files-sessions";
 import {
-  createHostDirectory,
-  listHostDirectory,
-  type HostDirectoryListing,
-} from "@/lib/backend/files-sessions";
-import { useHostPathPickerStore } from "@/lib/host-path-picker";
+  createHostDirectoryOn,
+  listHostDirectoryOn,
+  useHostPathPickerStore,
+} from "@/lib/host-path-picker";
+import { useScopesWithCommandFallback, useSignal } from "@/lib/node-scope/providers";
 import { Z_FULLSCREEN_DIALOG } from "@/constants/z-index";
 import { cn } from "@/lib/utils";
 
 /**
  * Mounted once at the app root; opened by `pickHostPath`. It lists directories
- * through the backend, so it browses the machine the backend runs on, whether
- * that is this computer or a remote host.
+ * through the requesting node's client, so it browses the machine that node's
+ * backend runs on, whether that is this computer or a remote host. A request
+ * for a node this window has no scope for is cancelled, never browsed on
+ * another machine.
  */
 export function HostPathPickerDialog() {
   const request = useHostPathPickerStore((state) => state.request);
   const settle = useHostPathPickerStore((state) => state.settle);
+  const { windowScope } = useScopesWithCommandFallback();
+  useSignal(windowScope.nodeScopes);
+  const client = request ? (windowScope.get(request.nodeId)?.client ?? null) : null;
   const isFileMode = request?.mode === "file";
 
   const [listing, setListing] = useState<HostDirectoryListing | null>(null);
@@ -65,11 +71,12 @@ export function HostPathPickerDialog() {
 
   const fetchListing = useCallback(
     (path: string | undefined, hidden: boolean) => {
+      if (!client) return Promise.resolve();
       const generation = ++loadGeneration.current;
       createOperation.current = null;
       navigationPending.current = true;
       addressEdited.current = false;
-      return listHostDirectory(path, { includeFiles: isFileMode, showHidden: hidden })
+      return listHostDirectoryOn(client, path, { includeFiles: isFileMode, showHidden: hidden })
         .then(
           (result) => {
             if (generation !== loadGeneration.current) return;
@@ -101,7 +108,7 @@ export function HostPathPickerDialog() {
           }
         });
     },
-    [isFileMode],
+    [client, isFileMode],
   );
 
   const load = (path: string | undefined, hidden: boolean) => {
@@ -127,18 +134,20 @@ export function HostPathPickerDialog() {
     }
   }
 
-  // `fetchListing` only changes with the request's mode, so this restarts
-  // browsing once per request. A layout effect retires the previous request's
-  // listing in the same commit that cleared its state.
+  // `fetchListing` only changes with the request's mode and node, so this
+  // restarts browsing once per request. A layout effect retires the previous
+  // request's listing in the same commit that cleared its state.
   useLayoutEffect(() => {
-    if (!request) {
+    if (!request || !client) {
       loadGeneration.current += 1;
       createOperation.current = null;
       navigationPending.current = false;
+      // The requesting node's scope is not open (or just closed): cancel.
+      if (request) settle(null);
       return;
     }
     void fetchListing(request.defaultPath?.trim() || undefined, false);
-  }, [request, fetchListing]);
+  }, [request, client, fetchListing, settle]);
 
   const navigate = (path: string) => void load(path, showHidden);
 
@@ -156,14 +165,16 @@ export function HostPathPickerDialog() {
 
   const createFolder = async () => {
     const name = newFolderName?.trim();
-    if (!listing || !name || createOperation.current || navigationPending.current) return;
+    if (!client || !listing || !name || createOperation.current || navigationPending.current) {
+      return;
+    }
     const generation = loadGeneration.current;
     const operation = {};
     createOperation.current = operation;
     setIsCreatingFolder(true);
     setCreateFolderError(null);
     try {
-      const created = await createHostDirectory(listing.path, name);
+      const created = await createHostDirectoryOn(client, listing.path, name);
       // A navigation or new request started meanwhile owns the view now.
       if (generation !== loadGeneration.current) return;
       navigate(created.path);

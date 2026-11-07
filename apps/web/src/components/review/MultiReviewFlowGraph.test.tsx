@@ -1,14 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { useEffect, useState } from "react";
-import {
-  act,
-  cleanup,
-  fireEvent,
-  render,
-  renderHook,
-  screen,
-  within,
-} from "@testing-library/react";
+import { act, cleanup, fireEvent, renderHook, screen, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 import {
@@ -19,11 +12,18 @@ import {
 } from "@/contexts";
 import { ContextMenuItem } from "@/components/ui/context-menu";
 import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore";
-import { useFlowGraphViewStore as useMultiReviewFlowViewStore } from "@/stores/flowGraphViewStore";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import {
+  flowGraphViewKey,
+  useFlowGraphViewStore as useMultiReviewFlowViewStore,
+} from "@/stores/flowGraphViewStore";
+import { getWindowScope } from "@/lib/node-scope/app-window-scope";
+
+/** Outside a provider, flow views are remembered under the app's command node. */
+const viewKeyOf = (key: string) => flowGraphViewKey(getWindowScope().commandScope().nodeId, key);
+import { environmentStore } from "@/stores/environmentStore";
 import type { Environment } from "@/types";
-import { useMultiReviewStore } from "@/stores/multiReviewStore";
-import { useUIStore } from "@/stores/uiStore";
+import { multiReviewStore } from "@/stores/multiReviewStore";
+import { useUIChromeStore } from "@/stores/uiChromeStore";
 import { MultiReviewInspectorHeader } from "./MultiReviewInspector";
 import { MultiReviewTab } from "./MultiReviewTab";
 import {
@@ -43,6 +43,7 @@ import {
   flowViewportHeight,
   resizedFlowViewportHeight,
 } from "@/components/flow-graph/flow-viewport";
+import { appCommandStore } from "@/test/app-command-store";
 
 const STARTED = "2026-08-14T00:00:00.000Z";
 
@@ -405,8 +406,8 @@ for (const clean of [true, false]) {
 }
 
 function renderTab(target: MultiReviewWorkflow) {
-  useMultiReviewStore.getState().replaceWorkflow(target);
-  return render(
+  appCommandStore(multiReviewStore).getState().replaceWorkflow(target);
+  return renderInAppCommandScope(
     <MultiReviewTab
       data={{ environmentId: target.environmentId, workflowId: target.id, isLocal: true }}
       isActive
@@ -423,18 +424,18 @@ function edgeState(id: string): string | null {
 }
 
 beforeEach(() => {
-  useMultiReviewStore.setState({ workflows: new Map() });
+  appCommandStore(multiReviewStore).setState({ workflows: new Map() });
   useMultiReviewFlowViewStore.setState({ views: new Map() });
-  useUIStore.setState({ multiReviewGraphHeight: null });
+  useUIChromeStore.setState({ multiReviewGraphHeight: null });
   useMessagePartExpansionStore.getState().reset();
 });
 afterEach(cleanup);
 
 describe("flow graph by phase", () => {
   test.each(PHASES)("maps nodes and edges while $name", (phase) => {
-    const environments = useEnvironmentStore.getState().environments;
+    const environments = appCommandStore(environmentStore).getState().environments;
     if (phase.prUrl)
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [{ id: "env-1", prUrl: phase.prUrl, prState: "open" } as Environment],
       });
     try {
@@ -474,7 +475,7 @@ describe("flow graph by phase", () => {
       expect(selected[0]!.getAttribute("aria-label")).toStartWith(phase.selected);
     } finally {
       cleanup();
-      useEnvironmentStore.setState({ environments });
+      appCommandStore(environmentStore).setState({ environments });
     }
   });
 
@@ -698,7 +699,7 @@ describe("flow graph nodes", () => {
       fixSession: { ...fixSession("running")!, requestIds: ["prepare-1"] },
       activeRequest: { kind: "prepare", requestId: "prepare-1", state: "sent", createdAt: STARTED },
     });
-    useMultiReviewStore.getState().replaceWorkflow(target);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(target);
     const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => true);
     function Registrar() {
       const terminal = useTerminalContext();
@@ -708,7 +709,7 @@ describe("flow graph nodes", () => {
       }, [terminal]);
       return null;
     }
-    render(
+    renderInAppCommandScope(
       <TerminalProvider>
         <Registrar />
         <MultiReviewTab
@@ -758,7 +759,7 @@ describe("flow graph nodes", () => {
       backendRevision: 2,
       activeRequest: { kind: "consolidate", requestId: "c-1", state: "sent", createdAt: STARTED },
     });
-    act(() => useMultiReviewStore.getState().replaceWorkflow(next));
+    act(() => appCommandStore(multiReviewStore).getState().replaceWorkflow(next));
     view.rerender(
       <MultiReviewTab
         data={{ environmentId: next.environmentId, workflowId: next.id, isLocal: true }}
@@ -818,7 +819,7 @@ describe("stacked layout", () => {
   };
 
   test("stacks the nodes in pipeline order with one straight connector per hop", () => {
-    render(<MultiReviewFlowGraph {...props} layout="stacked" />);
+    renderInAppCommandScope(<MultiReviewFlowGraph {...props} layout="stacked" />);
     expect(document.querySelector("[data-flow-layout]")?.getAttribute("data-flow-layout")).toBe(
       "stacked",
     );
@@ -841,7 +842,7 @@ describe("stacked layout", () => {
   });
 
   test("routes the stacked clean-review connector around Address Findings from consolidation", () => {
-    render(
+    renderInAppCommandScope(
       <MultiReviewFlowGraph
         {...props}
         layout="stacked"
@@ -862,7 +863,7 @@ describe("stacked layout", () => {
       get: () => 720,
     });
     try {
-      render(<MultiReviewFlowGraph {...props} />);
+      renderInAppCommandScope(<MultiReviewFlowGraph {...props} />);
       expect(document.querySelector("[data-flow-layout]")?.getAttribute("data-flow-layout")).toBe(
         "stacked",
       );
@@ -879,7 +880,7 @@ describe("stacked layout", () => {
       get: () => 1440,
     });
     try {
-      render(<MultiReviewFlowGraph {...props} />);
+      renderInAppCommandScope(<MultiReviewFlowGraph {...props} />);
       expect(document.querySelector("[data-flow-layout]")?.getAttribute("data-flow-layout")).toBe(
         "graph",
       );
@@ -1027,7 +1028,7 @@ describe("zoom and pan", () => {
     });
 
   test("zooms in and out within bounds and resets to 100%", () => {
-    render(<MultiReviewFlowGraph {...panel(4)} />);
+    renderInAppCommandScope(<MultiReviewFlowGraph {...panel(4)} />);
     const zoomIn = screen.getByRole("button", { name: "Zoom in" });
     const zoomOut = screen.getByRole("button", { name: "Zoom out" });
     expect(zoomLevel()).toBe("100%");
@@ -1042,7 +1043,7 @@ describe("zoom and pan", () => {
   });
 
   test("scales the canvas rather than relaying it out", () => {
-    render(<MultiReviewFlowGraph {...panel(2)} />);
+    renderInAppCommandScope(<MultiReviewFlowGraph {...panel(2)} />);
     fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
     const canvas = screen.getByRole("tablist", { name: "Multi Review pipeline" });
     expect(canvas.style.transform).toBe("scale(1.25)");
@@ -1052,7 +1053,7 @@ describe("zoom and pan", () => {
   });
 
   test("keeps a node reached from the keyboard in view", () => {
-    render(<SelectableGraph {...panel(32)} />);
+    renderInAppCommandScope(<SelectableGraph {...panel(32)} />);
     const layout = geometry(32);
     const height = flowViewportHeight(layout.height);
     screen.getByRole("tab", { name: "reviewer:1, running" }).focus();
@@ -1091,7 +1092,7 @@ describe("zoom and pan", () => {
       matches: query.includes("prefers-reduced-motion"),
     })) as typeof window.matchMedia;
     try {
-      render(<SelectableGraph {...panel(4)} />);
+      renderInAppCommandScope(<SelectableGraph {...panel(4)} />);
       const layout = multiReviewFlowLayout({ width, reviewerCount: 4, packageHasChips: false });
       const maxScroll = layout.width - width;
       expect(maxScroll).toBeGreaterThan(0);
@@ -1137,7 +1138,7 @@ describe("zoom and pan", () => {
       matches: query.includes("prefers-reduced-motion"),
     })) as typeof window.matchMedia;
     try {
-      render(<SelectableGraph {...panel(4)} />);
+      renderInAppCommandScope(<SelectableGraph {...panel(4)} />);
       const layout = multiReviewFlowLayout({ width, reviewerCount: 4, packageHasChips: false });
       const maxScroll = layout.width - width;
       expect(maxScroll).toBeGreaterThan(0);
@@ -1178,7 +1179,7 @@ describe("zoom and pan", () => {
         get: () => 1800,
       });
       try {
-        render(<MultiReviewFlowGraph {...panel(4)} layout={layout} />);
+        renderInAppCommandScope(<MultiReviewFlowGraph {...panel(4)} layout={layout} />);
         fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
         const original = viewport();
         // Use a reader's manual pan rather than a selected stage's centre.
@@ -1236,7 +1237,7 @@ describe("zoom and pan", () => {
         get: () => width,
       });
       const notify = () => act(() => callbacks.forEach((callback) => callback()));
-      const view = render(<MultiReviewFlowGraph {...panel(4)} />);
+      const view = renderInAppCommandScope(<MultiReviewFlowGraph {...panel(4)} />);
       try {
         expect(viewport().scrollLeft).toBe(0);
         width = 0;
@@ -1270,8 +1271,8 @@ describe("zoom and pan", () => {
     globalThis.ResizeObserver = undefined as unknown as typeof ResizeObserver;
     useMultiReviewFlowViewStore
       .getState()
-      .saveView("workflow-zoom", { zoom: 1.25, scrollLeft: 37, scrollTop: 12, width });
-    const view = render(<MultiReviewFlowGraph {...panel(4)} selectedId="pr" />);
+      .saveView(viewKeyOf("workflow-zoom"), { zoom: 1.25, scrollLeft: 37, scrollTop: 12, width });
+    const view = renderInAppCommandScope(<MultiReviewFlowGraph {...panel(4)} selectedId="pr" />);
     try {
       expect(viewport().scrollLeft).toBe(37);
       expect(zoomLevel()).toBe("125%");
@@ -1290,7 +1291,7 @@ describe("zoom and pan", () => {
   });
 
   test("zooms with Ctrl + wheel or a pinch, and leaves a plain wheel to scrolling", () => {
-    render(<MultiReviewFlowGraph {...panel(4)} />);
+    renderInAppCommandScope(<MultiReviewFlowGraph {...panel(4)} />);
     // happy-dom's WheelEvent drops modifier keys from its init dictionary.
     const wheel = (deltaY: number, ctrlKey: boolean) => {
       const event = new WheelEvent("wheel", { deltaY, bubbles: true, cancelable: true });
@@ -1312,7 +1313,7 @@ describe("zoom and pan", () => {
   });
 
   test("pans by dragging the canvas, but not from a node", () => {
-    render(<MultiReviewFlowGraph {...panel(32)} />);
+    renderInAppCommandScope(<MultiReviewFlowGraph {...panel(32)} />);
     const element = viewport();
     fireEvent.pointerDown(screen.getByRole("tab", { name: "reviewer:1, running" }), {
       button: 0,
@@ -1340,7 +1341,7 @@ describe("zoom and pan", () => {
   test("a press in a node's context menu selects its item instead of starting a pan", () => {
     const restart = mock(() => undefined);
     const props = panel(4);
-    render(
+    renderInAppCommandScope(
       <MultiReviewFlowGraph
         {...props}
         packageNode={{
@@ -1363,7 +1364,7 @@ describe("zoom and pan", () => {
   });
 
   test("the divider drags the graph taller or shorter and remembers where it was let go", () => {
-    render(<MultiReviewFlowGraph {...panel(4)} />);
+    renderInAppCommandScope(<MultiReviewFlowGraph {...panel(4)} />);
     const natural = flowViewportHeight(geometry(4).height);
     const max = resizedFlowViewportHeight(Number.POSITIVE_INFINITY, geometry(4).height);
     const divider = screen.getByRole("separator", { name: "Resize graph" });
@@ -1374,9 +1375,9 @@ describe("zoom and pan", () => {
     fireEvent.pointerMove(divider, { pointerId: 1, clientY: 180 });
     expect(viewport().style.height).toBe(`${natural + 80}px`);
     // Only letting go stores it.
-    expect(useUIStore.getState().multiReviewGraphHeight).toBeNull();
+    expect(useUIChromeStore.getState().multiReviewGraphHeight).toBeNull();
     fireEvent.pointerUp(divider, { pointerId: 1, clientY: 180 });
-    expect(useUIStore.getState().multiReviewGraphHeight).toBe(natural + 80);
+    expect(useUIChromeStore.getState().multiReviewGraphHeight).toBe(natural + 80);
     expect(viewport().style.height).toBe(`${natural + 80}px`);
 
     // Dragging past either limit stops at it.
@@ -1386,7 +1387,7 @@ describe("zoom and pan", () => {
     fireEvent.pointerMove(divider, { pointerId: 2, clientY: 5000 });
     expect(viewport().style.height).toBe(`${max}px`);
     fireEvent.pointerUp(divider, { pointerId: 2, clientY: 5000 });
-    expect(useUIStore.getState().multiReviewGraphHeight).toBe(max);
+    expect(useUIChromeStore.getState().multiReviewGraphHeight).toBe(max);
 
     fireEvent.keyDown(divider, { key: "ArrowUp" });
     expect(viewport().style.height).toBe(`${max - 16}px`);
@@ -1395,32 +1396,34 @@ describe("zoom and pan", () => {
 
     // A double-click gives the graph its own height back.
     fireEvent.doubleClick(divider);
-    expect(useUIStore.getState().multiReviewGraphHeight).toBeNull();
+    expect(useUIChromeStore.getState().multiReviewGraphHeight).toBeNull();
     expect(viewport().style.height).toBe(`${natural}px`);
   });
 
   test("clicking the divider preserves automatic growth and focuses it for keyboard resizing", () => {
-    const { rerender } = render(<MultiReviewFlowGraph {...panel(4)} />);
+    const { rerender } = renderInAppCommandScope(<MultiReviewFlowGraph {...panel(4)} />);
     const divider = screen.getByRole("separator", { name: "Resize graph" });
     fireEvent.pointerDown(divider, { button: 0, pointerId: 1, clientY: 100 });
     fireEvent.pointerMove(divider, { pointerId: 1, clientY: 101 });
     fireEvent.pointerUp(divider, { pointerId: 1, clientY: 101 });
-    expect(useUIStore.getState().multiReviewGraphHeight).toBeNull();
+    expect(useUIChromeStore.getState().multiReviewGraphHeight).toBeNull();
     expect(document.activeElement === divider).toBe(true);
     rerender(<MultiReviewFlowGraph {...panel(8)} />);
     expect(viewport().style.height).toBe(`${flowViewportHeight(geometry(8).height)}px`);
     fireEvent.keyDown(divider, { key: "ArrowUp" });
-    expect(useUIStore.getState().multiReviewGraphHeight).toBe(
+    expect(useUIChromeStore.getState().multiReviewGraphHeight).toBe(
       flowViewportHeight(geometry(8).height) - 16,
     );
   });
 
   test("the stacked layout ignores a saved height and omits the divider", () => {
-    useUIStore.setState({ multiReviewGraphHeight: 300 });
-    const { rerender } = render(<MultiReviewFlowGraph {...panel(4)} layout="stacked" />);
+    useUIChromeStore.setState({ multiReviewGraphHeight: 300 });
+    const { rerender } = renderInAppCommandScope(
+      <MultiReviewFlowGraph {...panel(4)} layout="stacked" />,
+    );
     const automaticHeight = viewport().style.height;
     expect(screen.queryByRole("separator", { name: "Resize graph" }) === null).toBe(true);
-    act(() => useUIStore.getState().setMultiReviewGraphHeight(500));
+    act(() => useUIChromeStore.getState().setMultiReviewGraphHeight(500));
     expect(viewport().style.height).toBe(automaticHeight);
     rerender(<MultiReviewFlowGraph {...panel(4)} layout="graph" />);
     expect(viewport().style.height).toBe("500px");
@@ -1433,14 +1436,14 @@ describe("zoom and pan", () => {
     "lostPointerCapture",
   ] as const) {
     test(`an interrupted resize (${interruption}) restores the latest saved height`, () => {
-      useUIStore.setState({ multiReviewGraphHeight: 300 });
-      const { rerender } = render(<MultiReviewFlowGraph {...panel(4)} />);
+      useUIChromeStore.setState({ multiReviewGraphHeight: 300 });
+      const { rerender } = renderInAppCommandScope(<MultiReviewFlowGraph {...panel(4)} />);
       const divider = screen.getByRole("separator", { name: "Resize graph" });
       fireEvent.pointerDown(divider, { button: 0, pointerId: 1, clientY: 100 });
       fireEvent.pointerMove(divider, { pointerId: 1, clientY: 180 });
       expect(viewport().style.height).toBe("380px");
       // Another graph can save a preference while this one's drag is active.
-      act(() => useUIStore.getState().setMultiReviewGraphHeight(420));
+      act(() => useUIChromeStore.getState().setMultiReviewGraphHeight(420));
       if (interruption === "stacked") {
         rerender(<MultiReviewFlowGraph {...panel(4)} layout="stacked" />);
         rerender(<MultiReviewFlowGraph {...panel(4)} layout="graph" />);
@@ -1451,16 +1454,16 @@ describe("zoom and pan", () => {
         fireEvent[interruption](divider, { pointerId: 1, clientY: 180 });
         fireEvent.pointerUp(divider, { pointerId: 1, clientY: 180 });
       }
-      expect(useUIStore.getState().multiReviewGraphHeight).toBe(420);
+      expect(useUIChromeStore.getState().multiReviewGraphHeight).toBe(420);
       expect(viewport().style.height).toBe("420px");
-      act(() => useUIStore.getState().setMultiReviewGraphHeight(460));
+      act(() => useUIChromeStore.getState().setMultiReviewGraphHeight(460));
       expect(viewport().style.height).toBe("460px");
     });
   }
 
   test("a remembered graph height applies to every graph, but not in fullscreen", () => {
-    useUIStore.setState({ multiReviewGraphHeight: 300 });
-    render(<MultiReviewFlowGraph {...panel(4)} />);
+    useUIChromeStore.setState({ multiReviewGraphHeight: 300 });
+    renderInAppCommandScope(<MultiReviewFlowGraph {...panel(4)} />);
     expect(viewport().style.height).toBe("300px");
     fireEvent.click(screen.getByTestId("multi-review-fullscreen"));
     expect(viewport().style.height).toBe("");
@@ -1468,7 +1471,7 @@ describe("zoom and pan", () => {
   });
 
   test("fullscreen lays the graph over the window until the button or Escape leaves it", () => {
-    render(<MultiReviewFlowGraph {...panel(4)} />);
+    renderInAppCommandScope(<MultiReviewFlowGraph {...panel(4)} />);
     const wrapper = () => document.querySelector<HTMLElement>("[data-flow-layout]")!;
     // Entering and leaving fullscreen moves the graph, so query it afresh.
     const toggle = () => screen.getByTestId("multi-review-fullscreen");
@@ -1497,7 +1500,7 @@ describe("zoom and pan", () => {
     const tab = document.createElement("div");
     document.body.append(tab);
     try {
-      render(
+      renderInAppCommandScope(
         <div className="@container">
           <MultiReviewFlowGraph {...panel(4)} fullscreenContainer={tab} />
         </div>,
@@ -1516,7 +1519,7 @@ describe("zoom and pan", () => {
   });
 
   test("an Escape another layer already handled leaves fullscreen alone", () => {
-    render(<MultiReviewFlowGraph {...panel(4)} layout="stacked" />);
+    renderInAppCommandScope(<MultiReviewFlowGraph {...panel(4)} layout="stacked" />);
     fireEvent.click(screen.getByTestId("multi-review-fullscreen"));
     const wrapper = () => document.querySelector<HTMLElement>("[data-flow-layout]")!;
     expect(wrapper().hasAttribute("data-flow-fullscreen")).toBe(true);
@@ -1534,7 +1537,7 @@ describe("zoom and pan", () => {
 
   test("Escape from another pane or an inactive tab is not consumed", () => {
     const props = panel(4);
-    const view = render(<MultiReviewFlowGraph {...props} isActive />);
+    const view = renderInAppCommandScope(<MultiReviewFlowGraph {...props} isActive />);
     fireEvent.click(screen.getByTestId("multi-review-fullscreen"));
     const outside = new KeyboardEvent("keydown", {
       key: "Escape",
@@ -1569,7 +1572,7 @@ describe("zoom and pan", () => {
   });
 
   test("the stacked layout has the same controls and bounds, with 44 px targets", () => {
-    render(<MultiReviewFlowGraph {...panel(4)} layout="stacked" />);
+    renderInAppCommandScope(<MultiReviewFlowGraph {...panel(4)} layout="stacked" />);
     const controls = screen.getByRole("group", { name: "Zoom" });
     for (const name of ["Zoom out", "Zoom in"]) {
       expect(within(controls).getByRole("button", { name }).className).toContain("size-11");
@@ -1593,30 +1596,32 @@ describe("zoom and pan", () => {
   });
 
   test("the stacked and wide layouts each keep their own view", () => {
-    const stacked = render(<MultiReviewFlowGraph {...panel(4)} layout="stacked" />);
+    const stacked = renderInAppCommandScope(
+      <MultiReviewFlowGraph {...panel(4)} layout="stacked" />,
+    );
     fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
     expect(zoomLevel()).toBe("125%");
     stacked.unmount();
 
-    const wide = render(<MultiReviewFlowGraph {...panel(4)} layout="graph" />);
+    const wide = renderInAppCommandScope(<MultiReviewFlowGraph {...panel(4)} layout="graph" />);
     expect(zoomLevel()).toBe("100%");
     fireEvent.click(screen.getByRole("button", { name: "Zoom out" }));
     expect(zoomLevel()).toBe("80%");
     wide.unmount();
 
     const views = useMultiReviewFlowViewStore.getState().views;
-    expect(views.get("workflow-zoom")?.zoom).toBe(0.8);
-    expect(views.get("workflow-zoom\u0000stacked")?.zoom).toBe(1.25);
-    const again = render(<MultiReviewFlowGraph {...panel(4)} layout="stacked" />);
+    expect(views.get(viewKeyOf("workflow-zoom"))?.zoom).toBe(0.8);
+    expect(views.get(viewKeyOf("workflow-zoom\u0000stacked"))?.zoom).toBe(1.25);
+    const again = renderInAppCommandScope(<MultiReviewFlowGraph {...panel(4)} layout="stacked" />);
     expect(zoomLevel()).toBe("125%");
     again.unmount();
-    render(<MultiReviewFlowGraph {...panel(4)} layout="graph" />);
+    renderInAppCommandScope(<MultiReviewFlowGraph {...panel(4)} layout="graph" />);
     expect(zoomLevel()).toBe("80%");
   });
 
   test("a two-finger pinch zooms either layout, and one finger leaves scrolling alone", () => {
     for (const layout of ["stacked", "graph"] as const) {
-      const view = render(<MultiReviewFlowGraph {...panel(4)} layout={layout} />);
+      const view = renderInAppCommandScope(<MultiReviewFlowGraph {...panel(4)} layout={layout} />);
       const viewport = document.querySelector<HTMLElement>("[data-flow-viewport]")!;
       const touch = (type: string, points: Array<[number, number]>) => {
         const event = new Event(type, { bubbles: true, cancelable: true });
@@ -1663,7 +1668,7 @@ describe("zoom and pan", () => {
     renderTab(first);
     expect(zoomLevel()).toBe("150%");
     // Nothing about the view reaches the workflow record.
-    expect(useMultiReviewStore.getState().workflows.get(first.id)).toEqual(first);
+    expect(appCommandStore(multiReviewStore).getState().workflows.get(first.id)).toEqual(first);
   });
 
   test("resets zoom and pan when the panel width changes", () => {
@@ -1675,11 +1680,15 @@ describe("zoom and pan", () => {
     );
     act(() => hook.result.current.zoomBy(1));
     expect(hook.result.current.zoom).toBe(1.25);
-    expect(useMultiReviewFlowViewStore.getState().views.get("workflow-resize")?.width).toBe(1200);
+    expect(
+      useMultiReviewFlowViewStore.getState().views.get(viewKeyOf("workflow-resize"))?.width,
+    ).toBe(1200);
 
     hook.rerender({ width: 1000 });
     expect(hook.result.current.zoom).toBe(1);
-    expect(useMultiReviewFlowViewStore.getState().views.has("workflow-resize")).toBe(false);
+    expect(useMultiReviewFlowViewStore.getState().views.has(viewKeyOf("workflow-resize"))).toBe(
+      false,
+    );
 
     // Going back to the old width does not bring the old view back.
     hook.rerender({ width: 1200 });
@@ -1687,9 +1696,12 @@ describe("zoom and pan", () => {
   });
 
   test("restores a remembered view only at the width it was taken at", () => {
-    useMultiReviewFlowViewStore
-      .getState()
-      .saveView("workflow-restore", { zoom: 0.5, scrollLeft: 0, scrollTop: 40, width: 1200 });
+    useMultiReviewFlowViewStore.getState().saveView(viewKeyOf("workflow-restore"), {
+      zoom: 0.5,
+      scrollLeft: 0,
+      scrollTop: 40,
+      width: 1200,
+    });
     const content = { width: 1440, height: 2_400 };
     const before = renderHook(
       ({ width }: { width: number | null }) =>
@@ -1703,13 +1715,15 @@ describe("zoom and pan", () => {
     before.unmount();
 
     renderHook(() => useFlowViewport({ viewKey: "workflow-restore", measuredWidth: 900, content }));
-    expect(useMultiReviewFlowViewStore.getState().views.has("workflow-restore")).toBe(false);
+    expect(useMultiReviewFlowViewStore.getState().views.has(viewKeyOf("workflow-restore"))).toBe(
+      false,
+    );
   });
 });
 
 describe("step transcript tails", () => {
   function renderWithStepTail(target: MultiReviewWorkflow) {
-    useMultiReviewStore.getState().replaceWorkflow(target);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(target);
     const loadStepTranscript = mock(
       async (workflowId: string, step: "prepare" | "consolidate" | "fix") => ({
         workflowId,
@@ -1729,7 +1743,7 @@ describe("step transcript tails", () => {
         ],
       }),
     );
-    render(
+    renderInAppCommandScope(
       <MultiReviewTab
         data={{ environmentId: target.environmentId, workflowId: target.id, isLocal: true }}
         isActive
@@ -1833,7 +1847,7 @@ test.each([
   ["fix", "wrench"],
   ["pr", "git-pull-request"],
 ] as const)("the idle %s inspector keeps its kind icon", (kind, icon) => {
-  const view = render(
+  const view = renderInAppCommandScope(
     <MultiReviewInspectorHeader
       node={{
         id: "idle-node",

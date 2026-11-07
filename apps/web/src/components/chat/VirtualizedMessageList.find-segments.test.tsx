@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { createRef, useContext, type ReactNode } from "react";
 import * as realVirtuoso from "react-virtuoso";
 import { setHighlightBackend } from "@/lib/chat/highlighter/client";
@@ -130,7 +131,7 @@ describe("find pairs rich matches by block identity", () => {
       createdAt: "2026-10-20T10:00:00.000Z",
       parts: [{ type: "text", content, sourcePartId: "part-1" }],
     };
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <VirtualizedMessageList
         messages={[message]}
         computeItemKey={(_index, item) => item.id}
@@ -227,7 +228,7 @@ describe("find pairs rich matches by block identity", () => {
         ],
       }),
     );
-    render(
+    renderInAppCommandScope(
       <VirtualizedMessageList
         messages={[row]}
         computeItemKey={(_index, item) => item.id}
@@ -323,7 +324,7 @@ describe("find pairs rich matches by block identity", () => {
         </div>
       );
     }
-    render(
+    renderInAppCommandScope(
       <VirtualizedMessageList
         messages={[message]}
         computeItemKey={(_index, item) => item.id}

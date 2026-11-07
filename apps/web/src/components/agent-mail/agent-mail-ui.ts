@@ -10,7 +10,13 @@ import {
   type AgentMailParticipant,
   type MailboxCapabilities,
 } from "@orkestrator/protocol/agent-mail";
-import { useAgentMailStore } from "@/stores/agentMailStore";
+import * as backend from "@/lib/backend";
+import { createAgentMailApi, type AgentMailApi } from "@/lib/backend/agent-mail";
+import { backendApiForScope } from "@/lib/backend/client";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { useNodeScope } from "@/lib/node-scope/providers";
+import { appCommandScope } from "@/lib/node-scope-slots";
+import { agentMailStore, useAgentMailStore } from "@/stores/agentMailStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 
 export type AgentMailStatusTone = "muted" | "progress" | "warning" | "error";
@@ -127,15 +133,18 @@ export function formatAgentMailTime(iso: string): string {
 
 /**
  * Open the messages panel on one tab: its conversations, or with `compose`
- * the person's own conversation with it.
+ * the person's own conversation with it. The panel is the tab's node's
+ * (`scope`; the app's command scope for a caller with none yet).
  */
 export function openAgentMailForTab(
   environmentId: string,
   tabId: string,
   mode: "inbox" | "compose" = "inbox",
+  scope: NodeScope = appCommandScope(),
 ): void {
   const mailboxId = agentMailboxId(environmentId, tabId);
-  useAgentMailStore
+  scope
+    .store(agentMailStore)
     .getState()
     .openPanel(
       mode === "compose"
@@ -144,9 +153,16 @@ export function openAgentMailForTab(
     );
 }
 
-/** Open the conversation between two participants. */
-export function openAgentMailConversation(a: string, b: string): void {
-  useAgentMailStore.getState().openPanel({ conversation: [a, b] });
+/** Open the conversation between two participants, in `scope`'s panel. */
+export function openAgentMailConversation(
+  a: string,
+  b: string,
+  scope: NodeScope = appCommandScope(),
+): void {
+  scope
+    .store(agentMailStore)
+    .getState()
+    .openPanel({ conversation: [a, b] });
 }
 
 /**
@@ -187,4 +203,14 @@ export function agentMailParticipantLabel(
       tabName: participant.displayName,
     }),
   );
+}
+
+/**
+ * The nearest node scope and its mail commands (plan item 3010): the
+ * `@/lib/backend` named exports (which suites mock or spy on) on the app's
+ * command scope, otherwise that scope's own node.
+ */
+export function useAgentMailScope(): { scope: NodeScope; api: AgentMailApi } {
+  const scope = useNodeScope();
+  return { scope, api: backendApiForScope(scope, createAgentMailApi, backend) };
 }

@@ -3,7 +3,8 @@
  * is retired on evidence rather than a guess
  * (`docs/architecture/version-compatibility.md`).
  *
- * Each path is a fixed id from {@link COMPATIBILITY_PATH_IDS}; nothing else is
+ * Each path is a fixed id from {@link COMPATIBILITY_PATH_IDS}, or a domain
+ * client adapter's id (`domain-adapter.<source>.<domain>.v<version>`); nothing else is
  * recorded: no session, agent, URL, port or version of the other side. Hot
  * paths call {@link CompatibilityPathUsage.record}, which only bumps memory.
  * Once a sink is attached (the backend attaches its database at startup), the
@@ -13,6 +14,11 @@
  * database sink lives in `compatibility-path-usage-store.ts`, so the paths that
  * record here never import storage.
  */
+import {
+  isDomainAdapterPathId,
+  type DomainAdapterPathId,
+} from "@orkestrator/protocol/contract/client-usage";
+
 /**
  * Every counted path. Add an id when a change adds a path for an older peer
  * and remove it with the path. The register in the architecture doc names
@@ -66,6 +72,12 @@ export const COMPATIBILITY_PATH_IDS = [
    */
   "node-coordinator-mail.older-node",
   /**
+   * A command node collected a leaf's outbox without `coordinatorMail` (it
+   * predates `node-coordinator-mail`) while the leaf's coordinator had mail
+   * queued for it: the mail stays held on the leaf until that node is updated.
+   */
+  "node-coordinator-mail.older-command-node",
+  /**
    * A leaf kept a coordinator notice on its own coordinator because the command
    * node attached to it has not said it takes `coordinator-notices`.
    */
@@ -115,6 +127,24 @@ export const COMPATIBILITY_PATH_IDS = [
    */
   "workspace-grant.config-echo",
   /**
+   * A retired coordinator command was called (plan item 7009):
+   * `hide_coordinator_work` (the Work panel's "Clear finished", removed in
+   * v2.36.5-beta), `associate_coordinator_workflow` (never called; launches
+   * record their own associations) or `start_coordinator_multi_review` (its
+   * last caller, Control MCP's `launch_multi_review`, moved off it in
+   * v2.36.4-beta).
+   */
+  "retired-command.hide-coordinator-work",
+  "retired-command.associate-coordinator-workflow",
+  "retired-command.start-coordinator-multi-review",
+  /**
+   * The retired `start_coordinator_node_multi_review` was called (plan item
+   * 7009): its only caller, Control MCP's `launch_multi_review` on the same
+   * command node, moved to `launch_coordinator_node_multi_review` in
+   * v2.36.4-beta.
+   */
+  "retired-command.start-coordinator-node-multi-review",
+  /**
    * A stream that did not say how it wants relayed node events got one under the
    * old shared name: a renderer or desktop from before per-node names.
    */
@@ -124,9 +154,23 @@ export const COMPATIBILITY_PATH_IDS = [
    * desktop's main process from before it took per-node relayed events.
    */
   "relayed-node-event.legacy-desktop-stream",
+  /**
+   * A retired per-provider CLI check (`check_opencode_cli`, `check_codex_cli`,
+   * `check_cursor_cli`, `check_grok_cli`, `check_pi_cli`) was called: no
+   * renderer in the support window asks them (plan item 7009).
+   */
+  "retired-command.provider-cli-check",
+  /** The retired no-op `cleanup_stale_local_servers_cmd` was called (plan item 7009). */
+  "retired-command.cleanup-stale-local-servers",
 ] as const;
 
-export type CompatibilityPathId = (typeof COMPATIBILITY_PATH_IDS)[number];
+/**
+ * A fixed path id, or a domain client adapter's id
+ * (`domain-adapter.<backend|renderer>.<domain>.v<version>`, plan item 1009):
+ * one per adapter below its domain's current version, bounded by the domain
+ * names and the adapter list rather than listed here.
+ */
+export type CompatibilityPathId = (typeof COMPATIBILITY_PATH_IDS)[number] | DomainAdapterPathId;
 
 /** One path's persisted usage. */
 export interface CompatibilityPathUsageEntry {
@@ -158,6 +202,11 @@ export const COMPATIBILITY_PATH_USAGE_STORE = "compatibility-path-usage";
 const FLUSH_INTERVAL_MS = 60_000;
 const KNOWN_IDS = new Set<string>(COMPATIBILITY_PATH_IDS);
 
+/** Whether `id` is a fixed path id or a well-formed domain adapter id. */
+export function isCompatibilityPathId(id: string): id is CompatibilityPathId {
+  return KNOWN_IDS.has(id) || isDomainAdapterPathId(id);
+}
+
 function isIso(value: unknown): value is string {
   return typeof value === "string" && Number.isFinite(Date.parse(value));
 }
@@ -172,7 +221,9 @@ export function normalizeCompatibilityPathUsage(
     value && typeof value === "object" ? (value as { paths?: unknown }).paths : undefined;
   if (stored && typeof stored === "object") {
     for (const [id, entry] of Object.entries(stored)) {
-      if ((!includeUnknown && !KNOWN_IDS.has(id)) || !entry || typeof entry !== "object") continue;
+      if ((!includeUnknown && !isCompatibilityPathId(id)) || !entry || typeof entry !== "object") {
+        continue;
+      }
       const { count, firstSeenAt, lastSeenAt } = entry as Record<string, unknown>;
       if (!Number.isSafeInteger(count) || (count as number) < 0) continue;
       if (!isIso(firstSeenAt) || !isIso(lastSeenAt)) continue;
@@ -219,15 +270,19 @@ export class CompatibilityPathUsage {
     private readonly flushIntervalMs = FLUSH_INTERVAL_MS,
   ) {}
 
-  /** Counts one use of a path. Never throws and never does I/O. */
-  record(id: CompatibilityPathId): void {
+  /**
+   * Counts `count` uses of a path (one by default; a renderer's upload carries
+   * several). Never throws and never does I/O.
+   */
+  record(id: CompatibilityPathId, count = 1): void {
+    if (!Number.isSafeInteger(count) || count < 1) return;
     const at = this.now().toISOString();
     const usage = this.pending.get(id);
     if (usage) {
-      usage.count += 1;
+      usage.count = Math.min(Number.MAX_SAFE_INTEGER, usage.count + count);
       usage.lastSeenAt = at;
     } else {
-      this.pending.set(id, { count: 1, firstSeenAt: at, lastSeenAt: at });
+      this.pending.set(id, { count, firstSeenAt: at, lastSeenAt: at });
     }
     this.scheduleFlush();
   }

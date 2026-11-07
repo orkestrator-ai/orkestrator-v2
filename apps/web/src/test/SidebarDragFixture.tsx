@@ -20,15 +20,16 @@ import { SortableProjectFolder } from "@/components/sidebar/SortableProjectFolde
 import { Collapsible } from "@/components/ui/collapsible";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
 import { TerminalProvider } from "@/contexts/TerminalContext";
-import { useProjectStore, useEnvironmentStore, useUIStore } from "@/stores";
+import { environmentStore, projectStore, uiStore } from "@/stores";
 import {
+  coordinatorActivityStore,
   useCoordinatorActivity,
-  useCoordinatorActivityStore,
 } from "@/stores/coordinatorActivityStore";
 import { useMachineViewStore } from "@/stores/machineViewStore";
-import { usePrMonitorStore } from "@/stores/prMonitorStore";
-import type { ActivitySortOrder } from "@/stores/uiStore";
+import { prMonitorStore } from "@/stores/prMonitorStore";
+import { type ActivitySortOrder, useUIChromeStore } from "@/stores/uiChromeStore";
 import type { Project, Environment } from "@/types";
+import { appCommandStore } from "@/test/app-command-store";
 
 const ALIGNMENT_ICON =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==";
@@ -338,34 +339,38 @@ function install() {
       }
     },
   };
-  useProjectStore.getState().setProjects(projects);
-  useEnvironmentStore.setState({ environments });
+  appCommandStore(projectStore).getState().setProjects(projects);
+  appCommandStore(environmentStore).setState({ environments });
   if (mergeReady) {
     // The fixture has no PR monitor service, so seed its confirmed mirror.
-    usePrMonitorStore.getState().applySnapshot(
-      environments
-        .filter((environment) => environment.prUrl)
-        .map((environment) => ({
-          environmentId: environment.id,
-          mode: "normal",
-          checkInProgress: false,
-          consecutiveErrors: 0,
-          lastCheckAt: "2026-10-28T10:00:00.000Z",
-          lastSuccessfulCheckAt: "2026-10-28T10:00:00.000Z",
-          prUrl: environment.prUrl,
-          prState: environment.prState,
-          hasMergeConflicts: environment.hasMergeConflicts,
-          checkSummary: { passed: 3, total: 3, pending: 0 },
-        })),
-    );
-    usePrMonitorStore.getState().setSyncStatus("current");
+    appCommandStore(prMonitorStore)
+      .getState()
+      .applySnapshot(
+        environments
+          .filter((environment) => environment.prUrl)
+          .map((environment) => ({
+            environmentId: environment.id,
+            mode: "normal",
+            checkInProgress: false,
+            consecutiveErrors: 0,
+            lastCheckAt: "2026-10-28T10:00:00.000Z",
+            lastSuccessfulCheckAt: "2026-10-28T10:00:00.000Z",
+            prUrl: environment.prUrl,
+            prState: environment.prState,
+            hasMergeConflicts: environment.hasMergeConflicts,
+            checkSummary: { passed: 3, total: 3, pending: 0 },
+          })),
+      );
+    appCommandStore(prMonitorStore).getState().setSyncStatus("current");
   }
-  useUIStore.setState({
+  appCommandStore(uiStore).setState({
     collapsedProjects: [],
     collapsedProjectFolders: [],
     projectCollapseChoices: projects.map((p) => p.id),
     selectedProjectId: null,
     selectedEnvironmentId: null,
+  });
+  useUIChromeStore.setState({
     environmentSortMode: activitySort || crossMachine ? "activity" : "project",
     activitySortOrder: (params.get("order") as ActivitySortOrder | null) ?? "priority",
   });
@@ -439,7 +444,7 @@ function HouseRepositoryGroup() {
  */
 function setAlignmentActivity(state: CoordinatorActivityState | null) {
   alignmentActivity = state;
-  void useCoordinatorActivityStore.getState().refresh();
+  void appCommandStore(coordinatorActivityStore).getState().refresh();
 }
 
 let instance: ReturnType<typeof install> | undefined;

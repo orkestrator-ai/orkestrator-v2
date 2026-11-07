@@ -3,7 +3,7 @@ import { ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 import type { PermissionRuleApplication } from "@orkestrator/protocol/permission-rules";
 import { Button } from "@/components/ui/button";
-import { deletePermissionRule } from "@/lib/backend";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 /**
  * "Approved by rule …": a request an Orkestrator permission rule answered
@@ -17,12 +17,13 @@ export function PermissionRuleNote({
   application: PermissionRuleApplication;
   ruleExists: boolean;
 }) {
+  const nodeBackend = useScopeBackend();
   const [removing, setRemoving] = useState(false);
   const [removed, setRemoved] = useState(false);
   const remove = async () => {
     setRemoving(true);
     try {
-      await deletePermissionRule(application.ruleId);
+      await nodeBackend.deletePermissionRule(application.ruleId);
       setRemoved(true);
       toast.success("Rule removed", {
         description: "Matching requests will ask again.",

@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { SHIPPED_REVIEW_LENS_PRESETS } from "@orkestrator/protocol/review-lens";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { AgentModelRef } from "@orkestrator/protocol/native-agent";
 import * as realDialog from "@/components/ui/dialog";
@@ -21,12 +22,13 @@ mock.module("@/components/ui/dialog", () => ({
 
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
 import type { AgentModelCatalog } from "@/lib/agent-launch";
-import { useConfigStore } from "@/stores/configStore";
+import { configStore } from "@/stores/configStore";
 import {
   BuildLaunchDialog,
   resolveStepState,
   type BuildLaunchSelection,
 } from "./BuildLaunchDialog";
+import { appCommandStore } from "@/test/app-command-store";
 
 const catalog: AgentModelCatalog = {
   claude: [
@@ -63,15 +65,15 @@ const STEP_LABELS = [
 ] as const;
 
 function setFavorites(favoriteModels: AgentModelRef[]) {
-  const config = useConfigStore.getState().config;
-  useConfigStore.setState({
+  const config = appCommandStore(configStore).getState().config;
+  appCommandStore(configStore).setState({
     config: { ...config, global: { ...config.global, favoriteModels } },
   });
 }
 
 function setEnabledPlatforms(enabledAgentPlatforms: AgentPlatform[]) {
-  const config = useConfigStore.getState().config;
-  useConfigStore.setState({
+  const config = appCommandStore(configStore).getState().config;
+  appCommandStore(configStore).setState({
     config: { ...config, global: { ...config.global, enabledAgentPlatforms } },
   });
 }
@@ -96,7 +98,7 @@ function renderDialog(overrides: Partial<Parameters<typeof BuildLaunchDialog>[0]
     onConfirm,
     ...overrides,
   };
-  return { onConfirm, ...render(<BuildLaunchDialog {...props} />) };
+  return { onConfirm, ...renderInAppCommandScope(<BuildLaunchDialog {...props} />) };
 }
 
 function picker(step: string) {
@@ -456,7 +458,7 @@ describe("BuildLaunchDialog", () => {
         },
       ],
     };
-    const view = render(
+    const view = renderInAppCommandScope(
       <BuildLaunchDialog
         open
         onOpenChange={() => undefined}
@@ -863,7 +865,7 @@ describe("BuildLaunchDialog", () => {
 
   test("disables container builds and falls back to local while Docker is unavailable", async () => {
     const onConfirm = mock((_selection: BuildLaunchSelection) => undefined);
-    render(
+    renderInAppCommandScope(
       <DockerAvailabilityProvider available={false}>
         <BuildLaunchDialog
           open
@@ -905,7 +907,7 @@ describe("BuildLaunchDialog", () => {
         onConfirm={onConfirm}
       />
     );
-    const view = render(
+    const view = renderInAppCommandScope(
       <DockerAvailabilityProvider available>{dialog}</DockerAvailabilityProvider>,
     );
     const environment = screen.getByRole("radiogroup", {
@@ -931,7 +933,7 @@ describe("BuildLaunchDialog", () => {
 
   test("does not force a local build when the project has no local checkout", () => {
     const onConfirm = mock((_selection: BuildLaunchSelection) => undefined);
-    render(
+    renderInAppCommandScope(
       <DockerAvailabilityProvider available={false}>
         <BuildLaunchDialog
           open
@@ -1000,7 +1002,7 @@ describe("BuildLaunchDialog", () => {
         />
       </DockerAvailabilityProvider>
     );
-    const view = render(dialog(true, false));
+    const view = renderInAppCommandScope(dialog(true, false));
     await waitFor(() => {
       const environment = screen.getByRole("radiogroup", {
         name: "Where it runs",
@@ -1046,7 +1048,7 @@ describe("BuildLaunchDialog", () => {
         onConfirm={onConfirm}
       />
     );
-    const view = render(dialog(true));
+    const view = renderInAppCommandScope(dialog(true));
     chooseFavorite("Review", /Codex A/);
 
     view.rerender(dialog(false));
@@ -1265,7 +1267,7 @@ describe("BuildLaunchDialog step instructions", () => {
         onConfirm={onConfirm}
       />
     );
-    const view = render(dialog(true));
+    const view = renderInAppCommandScope(dialog(true));
     toggle("Build");
     type("Build", "Only for this launch.");
     view.rerender(dialog(false));

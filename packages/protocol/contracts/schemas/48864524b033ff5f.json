@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:48864524b033ff5f6d619f5fe7a9bb0c31c9ad160aa00eee23bd6d13ae031d5f",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "branch": {
+          "type": "string"
+        },
+        "containerId": {
+          "type": "string"
+        },
+        "filePath": {
+          "type": "string"
+        }
+      },
+      "required": ["branch", "containerId", "filePath"],
+      "type": "object"
+    }
+  }
+}

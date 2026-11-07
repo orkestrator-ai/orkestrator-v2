@@ -1,10 +1,11 @@
+import { coordinatorAccountSwitchedEvent } from "@orkestrator/protocol/contract/domains/events";
+import type { BackendEmit } from "../backend-emit.js";
 import {
   isAgentAccountPlatform,
   type AgentAccountPlatform,
 } from "@orkestrator/protocol/agent-accounts";
 import {
   COORDINATOR_ACCOUNT_SWITCH_LIMIT,
-  COORDINATOR_ACCOUNT_SWITCHED_EVENT,
   MAX_LISTED_COORDINATOR_ACCOUNT_SWITCHES,
   normalizeCoordinatorAccountSwitchGrants,
   type CoordinatorAccountSwitchGrantState,
@@ -30,7 +31,7 @@ export interface AccountSwitchGrantDeps {
   /** This machine's own global config. */
   loadGlobalConfig(): Promise<{ coordinatorAccountSwitchGrant?: unknown }>;
   projectName(projectId: string): Promise<string | undefined>;
-  emit(event: string, payload: unknown): void;
+  emit: BackendEmit;
 }
 
 export type GrantedAccountSwitchOutcome =
@@ -142,7 +143,7 @@ export async function runTimerAccountSwitch(
   if ("overLimit" in result) throw new Error("A self-timer's switch has no limit.");
   if (result.ran) {
     const record = accountSwitchRecord(result.request);
-    if (record) deps.emit(COORDINATOR_ACCOUNT_SWITCHED_EVENT, record);
+    if (record) deps.emit(coordinatorAccountSwitchedEvent, record);
   }
   return { outcome: result.ran ? "ran" : "existing", request: result.request };
 }
@@ -188,7 +189,7 @@ export async function runGrantedAccountSwitch(
   }
   if (result.ran) {
     const record = accountSwitchRecord(result.request);
-    if (record) deps.emit(COORDINATOR_ACCOUNT_SWITCHED_EVENT, record);
+    if (record) deps.emit(coordinatorAccountSwitchedEvent, record);
   }
   return { outcome: result.ran ? "ran" : "existing", request: result.request };
 }

@@ -6,7 +6,6 @@ import {
   type ChangeProjection,
   type ChangesGetDiffResult,
 } from "@orkestrator/protocol/change-resources";
-import * as backend from "@/lib/backend";
 import type { LegacyPayloadSummary } from "@/lib/backend/changes";
 import { useToolChangePresentation } from "@/hooks/useChangeProjection";
 import { toolPresentationKey, useChangeProjectionStore } from "@/stores/changeProjectionStore";
@@ -16,6 +15,7 @@ import { ChangeHunksView } from "@/components/changes/ChangeHunksView";
 import { useOptionalTerminalContext } from "@/contexts/TerminalContext";
 import type { ChangeDiffTarget } from "@/types/paneLayout";
 import { useToolChangeScope } from "./NativeMessage.change-scope";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 /**
  * Transcript tool rows rendered from backend change projections
@@ -154,6 +154,7 @@ type DiffBodyState =
 
 /** Backend-rendered hunks for one diff identity, fetched when first shown. */
 export function ChangeDiffBody({ diffIdentityId }: { diffIdentityId: string }) {
+  const nodeBackend = useScopeBackend();
   // A fetched answer, tagged with the identity it answers; a cached body is
   // read during render, so only the network result is state.
   const [fetched, setFetched] = useState<{ id: string; state: DiffBodyState } | null>(null);
@@ -167,7 +168,7 @@ export function ChangeDiffBody({ diffIdentityId }: { diffIdentityId: string }) {
   useEffect(() => {
     if (diffBodyCache.has(diffIdentityId)) return;
     let cancelled = false;
-    backend.getChangeDiff(diffIdentityId).then(
+    nodeBackend.getChangeDiff(diffIdentityId).then(
       (result) => {
         if (cancelled) return;
         if (result?.kind === "body") rememberDiffBody(diffIdentityId, result);
@@ -186,7 +187,7 @@ export function ChangeDiffBody({ diffIdentityId }: { diffIdentityId: string }) {
     return () => {
       cancelled = true;
     };
-  }, [diffIdentityId]);
+  }, [diffIdentityId, nodeBackend]);
 
   if (state.status === "loading") {
     return <div className="px-3 py-1.5 text-xs text-muted-foreground">Loading change…</div>;
@@ -426,6 +427,7 @@ export function useLegacyPayloadMeasurement(
   rowKey: string,
   input: LegacyPayloadInput | null,
 ): LegacyMeasurement {
+  const nodeBackend = useScopeBackend();
   const toolName = input?.toolName;
   const filePath = input?.filePath;
   const before = input?.before;
@@ -460,7 +462,7 @@ export function useLegacyPayloadMeasurement(
     const settle = (state: LegacyMeasurement) => {
       if (!cancelled) setFetched({ rowKey, input: stableInput, state });
     };
-    backend.measureLegacyToolPayload(request).then(
+    nodeBackend.measureLegacyToolPayload(request).then(
       (summary) => {
         if (cancelled) return;
         if (!summary) {
@@ -481,7 +483,7 @@ export function useLegacyPayloadMeasurement(
     return () => {
       cancelled = true;
     };
-  }, [rowKey, stableInput]);
+  }, [rowKey, stableInput, nodeBackend]);
 
   if (!stableInput) return { status: "idle" };
   const cached = cachedLegacy(rowKey, stableInput);

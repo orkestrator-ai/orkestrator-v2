@@ -471,7 +471,7 @@ async function runScenario(mode: Counts["mode"], temporaryRoot: string): Promise
           );
           const data = module.useTerminalPortalStore
             .getState()
-            .getTerminal(environmentId, "tab-shell");
+            .getTerminal(module.commandTerminalPortalNodeId(), environmentId, "tab-shell");
           const buffer = data?.terminal.buffer.active;
           if (!buffer) return "";
           return Array.from(
@@ -749,9 +749,12 @@ async function runScenario(mode: Counts["mode"], temporaryRoot: string): Promise
       }, target.id);
     }
 
-    // A reload rehydrates from the backend, on the same transport.
+    // A reload rehydrates from the backend, on the same transport, and the
+    // window keeps the project it had selected, which the title names.
     await window.reload();
-    await expect(window).toHaveTitle(profile.electronTitle, { timeout: 60_000 });
+    await expect(window).toHaveTitle(`${profile.electronTitle} - ${project.name}`, {
+      timeout: 60_000,
+    });
     await openEnvironment(target.name);
     await expect(window.locator(".xterm:visible").first()).toBeVisible({ timeout: 60_000 });
     await expect

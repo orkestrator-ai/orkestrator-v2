@@ -3,7 +3,31 @@ import {
   isProjectHomeEnvironment,
   reconcileProjectHomeEnvironment,
 } from "./project-home-environment.js";
-import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
+import type {
+  CommandRegistrar,
+  DefinedCommandHandler,
+  RegistryDependencies,
+} from "./commands-registry-types.js";
+import { ASYNC_HANDLER } from "./commands-registry-async-decode.js";
+import type { AnyCommandDef } from "@orkestrator/protocol/contract/command";
+import {
+  armPrRefreshAfterAgentCompletionCommand,
+  detectPrCommand,
+  detectPrLocalCommand,
+  disarmPrRefreshAfterAgentCompletionCommand,
+  generateReviewPackageCommand,
+  getPrMonitorStateCommand,
+  mergeEnvironmentPrCommand,
+  mergePrCommand,
+  mergePrLocalCommand,
+  prMonitorAgentTurnCompletedCommand,
+  prMonitorProbeEnvironmentCommand,
+  prMonitorRefreshCommand,
+  prMonitorWatchCommand,
+  setEnvironmentAutoMergeCommand,
+  verifyEnvironmentPrCommand,
+  verifyReviewPackageCommand,
+} from "@orkestrator/protocol/contract/domains/pull-requests";
 import {
   isReviewPackageReference,
   parseReviewValidationPlan,
@@ -58,37 +82,90 @@ import {
 import type { MergeEnvironmentPrResult } from "./commands-helpers.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
+import {
+  awaitBridgeReadyCommand,
+  cleanupStaleLocalServersCommand,
+  getLocalClaudeServerStatusCommand,
+  getLocalCodexServerStatusCommand,
+  getLocalCursorServerStatusCommand,
+  getLocalGrokServerStatusCommand,
+  getLocalOpencodeServerStatusCommand,
+  getLocalPiServerStatusCommand,
+  peekContainerAgentBridgeCommand,
+  peekLocalAgentBridgeCommand,
+  startLocalClaudeServerCommand,
+  startLocalCodexServerCommand,
+  startLocalCursorServerCommand,
+  startLocalGrokServerCommand,
+  startLocalOpencodeServerCommand,
+  startLocalPiServerCommand,
+  stopLocalClaudeServerCommand,
+  stopLocalCodexServerCommand,
+  stopLocalCursorServerCommand,
+  stopLocalGrokServerCommand,
+  stopLocalOpencodeServerCommand,
+  stopLocalPiServerCommand,
+} from "@orkestrator/protocol/contract/domains/agent-servers";
+import { compatibilityPathUsage } from "./compatibility-path-usage.js";
+import type { LocalServerKind } from "./local-server-runtime.js";
 
 const log = createLogger("pull-request");
+
+/** The local bridge commands of each agent (`agent-servers`, plan item 7009). */
+const LOCAL_SERVER_COMMANDS = {
+  opencode: {
+    start: startLocalOpencodeServerCommand,
+    stop: stopLocalOpencodeServerCommand,
+    status: getLocalOpencodeServerStatusCommand,
+  },
+  claude: {
+    start: startLocalClaudeServerCommand,
+    stop: stopLocalClaudeServerCommand,
+    status: getLocalClaudeServerStatusCommand,
+  },
+  codex: {
+    start: startLocalCodexServerCommand,
+    stop: stopLocalCodexServerCommand,
+    status: getLocalCodexServerStatusCommand,
+  },
+  cursor: {
+    start: startLocalCursorServerCommand,
+    stop: stopLocalCursorServerCommand,
+    status: getLocalCursorServerStatusCommand,
+  },
+  grok: {
+    start: startLocalGrokServerCommand,
+    stop: stopLocalGrokServerCommand,
+    status: getLocalGrokServerStatusCommand,
+  },
+  pi: {
+    start: startLocalPiServerCommand,
+    stop: stopLocalPiServerCommand,
+    status: getLocalPiServerStatusCommand,
+  },
+} as const satisfies Record<LocalServerKind, unknown>;
 
 export function registerPullRequestCommands(
   register: CommandRegistrar,
   dependencies: RegistryDependencies,
 ): void {
   const { bridgeReadinessWaits, commands } = dependencies;
-  register("verify_environment_pr", async ({ environmentId, prUrl, targetBranch }, context) =>
-    verifyEnvironmentPullRequest(
-      asString(environmentId, "environmentId"),
-      asString(prUrl, "prUrl"),
-      asString(targetBranch, "targetBranch"),
-      context,
-    ),
+  // The environment PR commands are registered with their `pull-requests`
+  // definitions (plan item 7006); every handler is `async`, so a refused
+  // argument is still a rejection.
+  const registerDefined = <C extends AnyCommandDef>(def: C, handler: DefinedCommandHandler<C>) =>
+    register(def, handler, ASYNC_HANDLER);
+  registerDefined(
+    verifyEnvironmentPrCommand,
+    async ({ environmentId, prUrl, targetBranch }, context) =>
+      verifyEnvironmentPullRequest(
+        asString(environmentId, "environmentId"),
+        asString(prUrl, "prUrl"),
+        asString(targetBranch, "targetBranch"),
+        context,
+      ),
   );
-  register("generate_review_package", async (args, context) => {
-    assertOnlyKeys(
-      args,
-      [
-        "environmentId",
-        "packageId",
-        "round",
-        "targetBranch",
-        "preparation",
-        "additionalLimitations",
-        "expectedHead",
-        "validationPlan",
-      ],
-      "generate_review_package",
-    );
+  registerDefined(generateReviewPackageCommand, async (args, context) => {
     const { environmentId, packageId, round, targetBranch, preparation, additionalLimitations } =
       args;
     const parsedPackageId = parseReviewPackageId(packageId);
@@ -131,8 +208,7 @@ export function registerPullRequestCommands(
       },
     );
   });
-  register("verify_review_package", async (args, context) => {
-    assertOnlyKeys(args, ["environmentId", "reviewPackage"], "verify_review_package");
+  registerDefined(verifyReviewPackageCommand, async (args, context) => {
     const { environmentId, reviewPackage } = args;
     if (!isReviewPackageReference(reviewPackage)) {
       throw new Error("Expected reviewPackage to be a valid review package reference");
@@ -144,7 +220,7 @@ export function registerPullRequestCommands(
     );
   });
 
-  register("detect_pr_local", async ({ environmentId, branch }, { storage, runtime }) => {
+  registerDefined(detectPrLocalCommand, async ({ environmentId, branch }, { storage, runtime }) => {
     let env = await storage.getEnvironment(asString(environmentId, "environmentId"));
     if (!env) throw new Error(`Environment not found: ${environmentId}`);
     if (!env.worktreePath)
@@ -169,7 +245,7 @@ export function registerPullRequestCommands(
       checkSummary: detection.checkSummary,
     };
   });
-  register("detect_pr", async ({ containerId, branch }) => {
+  registerDefined(detectPrCommand, async ({ containerId, branch }) => {
     const resolvedContainerId = asString(containerId, "containerId");
     const detection = await detectEnvironmentPullRequest({
       environmentId: resolvedContainerId,
@@ -189,7 +265,7 @@ export function registerPullRequestCommands(
       checkSummary: detection.checkSummary,
     };
   });
-  register("merge_pr_local", async ({ environmentId, method, deleteBranch }, context) => {
+  registerDefined(mergePrLocalCommand, async ({ environmentId, method, deleteBranch }, context) => {
     const id = asString(environmentId, "environmentId");
     const environment = await context.storage.getEnvironment(id);
     if (!environment?.worktreePath) throw new Error("Local environment worktree is not available");
@@ -202,7 +278,7 @@ export function registerPullRequestCommands(
       async (result) => result,
     );
   });
-  register("merge_pr", async ({ containerId, method, deleteBranch }, context) => {
+  registerDefined(mergePrCommand, async ({ containerId, method, deleteBranch }, context) => {
     const resolvedContainerId = asString(containerId, "containerId");
     const environment = findEnvironmentByContainerId(
       await context.storage.loadEnvironments(),
@@ -231,8 +307,8 @@ export function registerPullRequestCommands(
       async (result) => result,
     );
   });
-  register(
-    "merge_environment_pr",
+  registerDefined(
+    mergeEnvironmentPrCommand,
     async (
       {
         environmentId,
@@ -391,7 +467,7 @@ export function registerPullRequestCommands(
    * also arms tracking, so the first client to ask starts the polling even if
    * no lifecycle command has run since the backend started.
    */
-  register("get_pr_monitor_state", async (args, context) => {
+  registerDefined(getPrMonitorStateCommand, async (args, context) => {
     await context.runtime.prMonitor.sync(context);
     // Without `knownGeneration`/`knownRevision` this keeps the legacy
     // `{ entries }` shape, now additively stamped. With them it answers the
@@ -411,7 +487,7 @@ export function registerPullRequestCommands(
    * the outcome is visible. Durable in the backend, so a renderer reload no
    * longer forgets that an answer is being waited for.
    */
-  register("pr_monitor_watch", async ({ environmentId, mode }, context) => {
+  registerDefined(prMonitorWatchCommand, async ({ environmentId, mode }, context) => {
     const id = asString(environmentId, "environmentId");
     const requestedMode = asString(mode, "mode");
     if (!isPrMonitorMode(requestedMode)) {
@@ -426,7 +502,7 @@ export function registerPullRequestCommands(
     );
   });
   /** Requests an immediate check for an environment already being monitored. */
-  register("pr_monitor_refresh", async ({ environmentId }, context) => {
+  registerDefined(prMonitorRefreshCommand, async ({ environmentId }, context) => {
     await context.runtime.prMonitor.requestRefresh(
       asString(environmentId, "environmentId"),
       context,
@@ -441,8 +517,7 @@ export function registerPullRequestCommands(
    * deletes the environment once auto-merge has merged the PR. Every call
    * restates it, so turning auto-merge on again without it withdraws it.
    */
-  register("set_environment_auto_merge", async (args, context) => {
-    assertOnlyKeys(args, ["environmentId", "enabled", "cleanupAfterMerge"], "arguments");
+  registerDefined(setEnvironmentAutoMergeCommand, async (args, context) => {
     const id = asString(args.environmentId, "environmentId");
     const enabled = asRequiredBoolean(args.enabled, "enabled");
     const cleanupAfterMerge =
@@ -483,8 +558,7 @@ export function registerPullRequestCommands(
    * Kept backend-only: renderers continue to derive buttons solely from the
    * authoritative PR fields projected by environment snapshots/events.
    */
-  register("arm_pr_refresh_after_agent_completion", async (args, context) => {
-    assertOnlyKeys(args, ["environmentId"], "arguments");
+  registerDefined(armPrRefreshAfterAgentCompletionCommand, async (args, context) => {
     const id = asString(args.environmentId, "environmentId");
     const { armedAt } = await context.storage.armPrRecheckAfterAgentCompletion(id);
     if (armedAt) {
@@ -499,15 +573,14 @@ export function registerPullRequestCommands(
     return armedAt;
   });
   /** Rolls back a failed Resolve launch without consuming a newer request. */
-  register("disarm_pr_refresh_after_agent_completion", async (args, context) => {
-    assertOnlyKeys(args, ["environmentId", "armedAt"], "arguments");
+  registerDefined(disarmPrRefreshAfterAgentCompletionCommand, async (args, context) => {
     await context.storage.disarmPrRecheckAfterAgentCompletion(
       asString(args.environmentId, "environmentId"),
       asString(args.armedAt, "armedAt"),
     );
   });
   /** Internal completion edge from native, tmux, or terminal supervision. */
-  register("pr_monitor_agent_turn_completed", async ({ environmentId }, context) => {
+  registerDefined(prMonitorAgentTurnCompletedCommand, async ({ environmentId }, context) => {
     const id = asString(environmentId, "environmentId");
     const environment = await context.storage.getEnvironment(id);
     if (!environment?.prRecheckAfterAgentCompletionArmedAt) return;
@@ -548,72 +621,34 @@ export function registerPullRequestCommands(
    * Internal: driven by the backend's own agent-idle edge (see
    * `OrkestratorBackend`'s `onActivityTransition` wiring), never by a renderer.
    */
-  register("pr_monitor_probe_environment", async (args, context) => {
-    assertOnlyKeys(args, ["environmentId"], "arguments");
+  registerDefined(prMonitorProbeEnvironmentCommand, async (args, context) => {
     await context.runtime.prMonitor.wakeForCompletion(
       asString(args.environmentId, "environmentId"),
       context,
     );
   });
 
-  register("start_local_opencode_server_cmd", ({ environmentId }, context) =>
-    startLocalServer(asString(environmentId, "environmentId"), context, "opencode"),
-  );
-  register("stop_local_opencode_server_cmd", ({ environmentId }, context) =>
-    stopLocalServer(asString(environmentId, "environmentId"), context, "opencode"),
-  );
-  register("get_local_opencode_server_status", ({ environmentId }, context) =>
-    getLocalServerStatus(asString(environmentId, "environmentId"), context, "opencode"),
-  );
-  register("start_local_claude_server_cmd", ({ environmentId }, context) =>
-    startLocalServer(asString(environmentId, "environmentId"), context, "claude"),
-  );
-  register("stop_local_claude_server_cmd", ({ environmentId }, context) =>
-    stopLocalServer(asString(environmentId, "environmentId"), context, "claude"),
-  );
-  register("get_local_claude_server_status", ({ environmentId }, context) =>
-    getLocalServerStatus(asString(environmentId, "environmentId"), context, "claude"),
-  );
-  register("start_local_codex_server_cmd", ({ environmentId }, context) =>
-    startLocalServer(asString(environmentId, "environmentId"), context, "codex"),
-  );
-  register("stop_local_codex_server_cmd", ({ environmentId }, context) =>
-    stopLocalServer(asString(environmentId, "environmentId"), context, "codex"),
-  );
-  register("get_local_codex_server_status", ({ environmentId }, context) =>
-    getLocalServerStatus(asString(environmentId, "environmentId"), context, "codex"),
-  );
-  register("start_local_cursor_server_cmd", ({ environmentId }, context) =>
-    startLocalServer(asString(environmentId, "environmentId"), context, "cursor"),
-  );
-  register("stop_local_cursor_server_cmd", ({ environmentId }, context) =>
-    stopLocalServer(asString(environmentId, "environmentId"), context, "cursor"),
-  );
-  register("get_local_cursor_server_status", ({ environmentId }, context) =>
-    getLocalServerStatus(asString(environmentId, "environmentId"), context, "cursor"),
-  );
-  register("start_local_grok_server_cmd", ({ environmentId }, context) =>
-    startLocalServer(asString(environmentId, "environmentId"), context, "grok"),
-  );
-  register("stop_local_grok_server_cmd", ({ environmentId }, context) =>
-    stopLocalServer(asString(environmentId, "environmentId"), context, "grok"),
-  );
-  register("get_local_grok_server_status", ({ environmentId }, context) =>
-    getLocalServerStatus(asString(environmentId, "environmentId"), context, "grok"),
-  );
-  register("start_local_pi_server_cmd", ({ environmentId }, context) =>
-    startLocalServer(asString(environmentId, "environmentId"), context, "pi"),
-  );
-  register("stop_local_pi_server_cmd", ({ environmentId }, context) =>
-    stopLocalServer(asString(environmentId, "environmentId"), context, "pi"),
-  );
-  register("get_local_pi_server_status", ({ environmentId }, context) =>
-    getLocalServerStatus(asString(environmentId, "environmentId"), context, "pi"),
-  );
-  register("cleanup_stale_local_servers_cmd", () => undefined);
+  for (const [kind, local] of Object.entries(LOCAL_SERVER_COMMANDS) as [
+    LocalServerKind,
+    (typeof LOCAL_SERVER_COMMANDS)[LocalServerKind],
+  ][]) {
+    register(local.start, ({ environmentId }, context) =>
+      startLocalServer(environmentId, context, kind),
+    );
+    register(local.stop, ({ environmentId }, context) =>
+      stopLocalServer(environmentId, context, kind),
+    );
+    register(local.status, ({ environmentId }, context) =>
+      getLocalServerStatus(environmentId, context, kind),
+    );
+  }
+  // Retired (plan item 7009): a no-op since the Electron migration, counted
+  // until it is removed.
+  register(cleanupStaleLocalServersCommand, () => {
+    compatibilityPathUsage.record("retired-command.cleanup-stale-local-servers");
+  });
 
-  register("await_bridge_ready", (args, context) => {
-    assertOnlyKeys(args, ["environmentId", "agent", "timeoutMs"], "arguments");
+  register(awaitBridgeReadyCommand, (args, context) => {
     const environmentId = asNonBlankString(args.environmentId, "environmentId");
     if (!isAgentBridgeKind(args.agent)) {
       throw new Error(`agent must be one of: ${LOCAL_SERVER_KINDS.join(", ")}`);
@@ -815,8 +850,7 @@ export function registerPullRequestCommands(
   // Backend-internal observation surface. Never starts a bridge, so a
   // background reconciler can read activity without spawning one process per
   // environment or keeping every bridge alive on a poll.
-  register("peek_local_agent_bridge", (args, context) => {
-    assertOnlyKeys(args, ["environmentId", "agent"], "arguments");
+  register(peekLocalAgentBridgeCommand, (args, context) => {
     return peekLocalAgentBridgeState(
       asNonBlankString(args.environmentId, "environmentId"),
       context,
@@ -830,8 +864,7 @@ export function registerPullRequestCommands(
       return state.status === "running" ? { port: state.port, authToken: state.authToken } : null;
     });
   });
-  register("peek_container_agent_bridge", (args) => {
-    assertOnlyKeys(args, ["containerId", "agent"], "arguments");
+  register(peekContainerAgentBridgeCommand, (args) => {
     return peekContainerAgentBridge(
       asNonBlankString(args.containerId, "containerId"),
       asLocalServerKind(args.agent, "agent"),

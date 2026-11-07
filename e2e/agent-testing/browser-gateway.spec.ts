@@ -821,7 +821,14 @@ test("file rename preserves selection, survives reload and cancels on workspace 
       async ({ projectId, environmentId }) => {
         const modulePath = "/src/stores/uiStore.ts";
         const { useUIStore } = await import(modulePath);
-        useUIStore.getState().selectProjectAndEnvironment(projectId, environmentId);
+        const { getWindowScope } = await import(
+          /* @vite-ignore */ "/src/lib/node-scope/app-window-scope.ts" as string
+        );
+        getWindowScope()
+          .commandScope()
+          .store(useUIStore.def)
+          .getState()
+          .selectProjectAndEnvironment(projectId, environmentId);
       },
       { projectId: fixture.id, environmentId: other!.id },
     );

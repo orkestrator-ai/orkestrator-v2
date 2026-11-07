@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:b31457c6de75194ede48ac2a8bf27d37dd820fc9f7dc9d96341700fd6c412bd6",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "acceptanceCriteria": {},
+        "buildPipelineId": {},
+        "description": {},
+        "environmentId": {},
+        "kind": {},
+        "labels": {},
+        "markdown": {},
+        "prMergeCommented": {},
+        "prState": {},
+        "prUrl": {},
+        "preserveDoneStatus": {},
+        "sections": {},
+        "status": {},
+        "taskId": {
+          "type": "string"
+        },
+        "title": {}
+      },
+      "required": ["taskId"],
+      "type": "object"
+    }
+  }
+}

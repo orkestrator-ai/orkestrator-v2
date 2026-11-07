@@ -7,10 +7,12 @@ import { portalStore } from "../../apps/web/src/lib/portal/portal-store";
 import { onGlobalSettingsCloseRequest } from "../../apps/web/src/lib/settings-navigation";
 import { useAppDialogStore } from "../../apps/web/src/stores/appDialogStore";
 import { useEnvironmentStore } from "../../apps/web/src/stores/environmentStore";
+import { getWindowScope } from "../../apps/web/src/lib/node-scope/app-window-scope";
 import type { Environment } from "../../apps/web/src/types";
 import type { ConnectionList, ConnectToRemoteInput } from "@orkestrator/protocol/connections";
 import { FullscreenSettingsLayout } from "../../apps/web/src/components/settings/FullscreenSettingsLayout";
 import { MachinesSettings } from "../../apps/web/src/components/settings/machines/MachinesSettings";
+import { appCommandStore } from "../../apps/web/src/test/app-command-store";
 
 const rebuildMode = new URLSearchParams(window.location.search).has("rebuild");
 const oldEnvironment = {
@@ -245,7 +247,7 @@ function hostSignIns() {
 function installMachinesFixture() {
   if (rebuildMode) {
     portalStore.store.setState({ selfId: "bk_self" as never });
-    useEnvironmentStore.setState({ environments: [] });
+    appCommandStore(useEnvironmentStore.def).setState({ environments: [] });
   }
   window.orkestrator = {
     ...window.orkestrator!,
@@ -423,12 +425,17 @@ export function MachinesSettingsFixture() {
       {showMachines && <MachinesSettings />}
       {rebuildMode && (
         <>
-          <button onClick={() => useEnvironmentStore.getState().setEnvironments([oldEnvironment])}>
+          <button
+            onClick={() =>
+              appCommandStore(useEnvironmentStore.def).getState().setEnvironments([oldEnvironment])
+            }
+          >
             Load environment snapshot
           </button>
           <button
             onClick={() =>
               useAppDialogStore.getState().open({
+                nodeId: getWindowScope().commandScope().nodeId,
                 kind: "environment-settings",
                 environmentId: oldEnvironment.id,
                 section: "container",

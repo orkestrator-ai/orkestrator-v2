@@ -8,10 +8,12 @@ import { useConfigStore } from "../../apps/web/src/stores/configStore";
 import { useEnvironmentStore } from "../../apps/web/src/stores/environmentStore";
 import { usePreviewServiceStore } from "../../apps/web/src/stores/previewServiceStore";
 import { useTerminalPortalStore } from "../../apps/web/src/stores/terminalPortalStore";
+import { getWindowScope } from "../../apps/web/src/lib/node-scope/app-window-scope";
 import {
   listenForTerminalBrowserTabRequests,
   type TerminalBrowserTabRequest,
 } from "../../apps/web/src/lib/terminal-links";
+import { appCommandStore } from "../../apps/web/src/test/app-command-store";
 
 export function TerminalLinksFixture() {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -26,13 +28,14 @@ export function TerminalLinksFixture() {
   useEffect(() => {
     const originalBackend = window.orkestrator;
     const originalGateway = window.orkestratorGateway;
-    const originalEnvironments = useEnvironmentStore.getState().environments;
-    const { capabilities: originalCapabilities, status: originalStatus } =
-      usePreviewServiceStore.getState();
-    const originalConfig = useConfigStore.getState().config;
+    const originalEnvironments = appCommandStore(useEnvironmentStore.def).getState().environments;
+    const { capabilities: originalCapabilities, status: originalStatus } = appCommandStore(
+      usePreviewServiceStore.def,
+    ).getState();
+    const originalConfig = appCommandStore(useConfigStore.def).getState().config;
     const search = new URLSearchParams(location.search);
     if (search.get("defaultTarget") === "browser-tab") {
-      useConfigStore.setState({
+      appCommandStore(useConfigStore.def).setState({
         config: {
           ...originalConfig,
           global: { ...originalConfig.global, terminalLinkDefaultTarget: "browser-tab" },
@@ -46,12 +49,12 @@ export function TerminalLinksFixture() {
         desktop: true,
         baseUrl: "https://remote.tailnet.ts.net",
       };
-      useEnvironmentStore.setState({
+      appCommandStore(useEnvironmentStore.def).setState({
         environments: [
           { id: "osc-environment", environmentType: "local" },
         ] as unknown as Environment[],
       });
-      usePreviewServiceStore.setState({
+      appCommandStore(usePreviewServiceStore.def).setState({
         status: "ready",
         capabilities: {
           backendInstanceId: "backend-instance-1",
@@ -84,8 +87,11 @@ export function TerminalLinksFixture() {
       setInternal((current) => [...current, request]);
     });
     const store = useTerminalPortalStore.getState();
+    // The fixture renders no node scope: its terminal is the command node's.
+    const nodeId = getWindowScope().commandScope().nodeId;
     const data = store.createTerminal(
       {
+        nodeId,
         environmentId: "osc-environment",
         tabId: "osc-source-tab",
         containerId: null,
@@ -112,12 +118,12 @@ export function TerminalLinksFixture() {
       stopData.dispose();
       stopSelection.dispose();
       stopListening();
-      store.disposeTerminal("osc-environment", "osc-source-tab");
+      store.disposeTerminal(nodeId, "osc-environment", "osc-source-tab");
       window.orkestrator = originalBackend;
       window.orkestratorGateway = originalGateway;
-      useConfigStore.setState({ config: originalConfig });
-      useEnvironmentStore.setState({ environments: originalEnvironments });
-      usePreviewServiceStore.setState({
+      appCommandStore(useConfigStore.def).setState({ config: originalConfig });
+      appCommandStore(useEnvironmentStore.def).setState({ environments: originalEnvironments });
+      appCommandStore(usePreviewServiceStore.def).setState({
         capabilities: originalCapabilities,
         status: originalStatus,
       });

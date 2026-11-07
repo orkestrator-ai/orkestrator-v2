@@ -1,7 +1,8 @@
 /** The shared ticket tools, on this node's board or, for a coordinator, another node's. */
 import type { McpServer } from "@modelcontextprotocol/server";
-import { z } from "zod";
+import { Schema } from "effect";
 import { normalizeTicketLabelName, ticketLabelKey } from "@orkestrator/protocol/ticket-labels";
+import { describe, refine, str, toolInput, withDefault } from "./tool-schema.js";
 import {
   ticketKindField,
   ticketLabelColorField,
@@ -106,12 +107,16 @@ export function registerTicketTools(
       title: "List Kanban tickets",
       description:
         "List Kanban tickets for one configured project. With nodeId, list that machine's board: this board's tickets synced there plus any made only there (syncedFromCommandNode marks synced copies). runsOn names the machine a ticket's build or environment runs on.",
-      inputSchema: z.object({
-        projectId: z.string().trim().min(1).max(200),
-        status: z.enum(["backlog", "in-progress", "review", "done"]).optional(),
-        label: ticketLabelNameField.optional().describe("Only tickets with this label."),
-        nodeId: nodeIdField,
-      }),
+      inputSchema: toolInput(
+        Schema.Struct({
+          projectId: str({ trim: true, min: 1, max: 200 }),
+          status: Schema.optionalKey(Schema.Literals(["backlog", "in-progress", "review", "done"])),
+          label: Schema.optionalKey(
+            describe(ticketLabelNameField, "Only tickets with this label."),
+          ),
+          nodeId: nodeIdField,
+        }),
+      ),
       annotations: readAnnotations(),
     },
     async ({ projectId, status, label, nodeId }) => {
@@ -142,11 +147,13 @@ export function registerTicketTools(
       title: "Read a Kanban ticket",
       description:
         "Read one ticket after verifying it belongs to the selected project. Ticket ids are the same on every machine that syncs this board; with nodeId, read that machine's copy.",
-      inputSchema: z.object({
-        projectId: z.string().trim().min(1).max(200),
-        ticketId: z.string().trim().min(1).max(200),
-        nodeId: nodeIdField,
-      }),
+      inputSchema: toolInput(
+        Schema.Struct({
+          projectId: str({ trim: true, min: 1, max: 200 }),
+          ticketId: str({ trim: true, min: 1, max: 200 }),
+          nodeId: nodeIdField,
+        }),
+      ),
       annotations: readAnnotations(),
     },
     async ({ projectId, ticketId, nodeId }) => {
@@ -168,18 +175,23 @@ export function registerTicketTools(
       description:
         "Create a ticket in one configured project. Give either sections (structured) or description and acceptanceCriteria (plain text); both forms are kept in step. " +
         "With nodeId, the ticket is created on this board and synced to that machine (now, or when it reconnects: sync.state says which), so start_build_pipeline with the same nodeId can build it by this id. A machine too old to sync gets a ticket of its own instead (sync.state update-required).",
-      inputSchema: z.object({
-        requestId: z.string().trim().min(1).max(256),
-        projectId: z.string().trim().min(1).max(200),
-        title: z.string().trim().min(1).max(500),
-        kind: ticketKindField,
-        sections: ticketSectionsField,
-        description: z.string().max(100_000).default(""),
-        acceptanceCriteria: z.string().max(100_000).default(""),
-        status: z.enum(["backlog", "in-progress", "review", "done"]).default("backlog"),
-        labels: ticketLabelsField,
-        nodeId: nodeIdField,
-      }),
+      inputSchema: toolInput(
+        Schema.Struct({
+          requestId: str({ trim: true, min: 1, max: 256 }),
+          projectId: str({ trim: true, min: 1, max: 200 }),
+          title: str({ trim: true, min: 1, max: 500 }),
+          kind: ticketKindField,
+          sections: ticketSectionsField,
+          description: withDefault(str({ max: 100_000 }), ""),
+          acceptanceCriteria: withDefault(str({ max: 100_000 }), ""),
+          status: withDefault(
+            Schema.Literals(["backlog", "in-progress", "review", "done"]),
+            "backlog",
+          ),
+          labels: ticketLabelsField,
+          nodeId: nodeIdField,
+        }),
+      ),
       annotations: {
         readOnlyHint: false,
         destructiveHint: false,
@@ -202,7 +214,7 @@ export function registerTicketTools(
       const structured = {
         ...(kind ? { kind } : {}),
         ...(sections ? { sections } : {}),
-        ...(labels ? { labels } : {}),
+        ...(labels ? { labels: [...labels] } : {}),
       };
       if (operator) {
         return operatorCreateTicket(callerOnNode(operator, nodeId), {
@@ -249,31 +261,33 @@ export function registerTicketTools(
       title: "Update a Kanban ticket",
       description:
         "Update specified editable fields of a ticket in one project; sections replaces only the sections it names. Changes to a synced ticket reach every machine with this project; with nodeId the answer also says whether that machine has it yet.",
-      inputSchema: z
-        .object({
-          requestId: z.string().trim().min(1).max(256).optional(),
-          projectId: z.string().trim().min(1).max(200),
-          ticketId: z.string().trim().min(1).max(200),
-          title: z.string().trim().min(1).max(500).optional(),
+      inputSchema: toolInput(
+        Schema.Struct({
+          requestId: Schema.optionalKey(str({ trim: true, min: 1, max: 256 })),
+          projectId: str({ trim: true, min: 1, max: 200 }),
+          ticketId: str({ trim: true, min: 1, max: 200 }),
+          title: Schema.optionalKey(str({ trim: true, min: 1, max: 500 })),
           kind: ticketKindField,
           sections: ticketSectionsField,
-          description: z.string().max(100_000).optional(),
-          acceptanceCriteria: z.string().max(100_000).optional(),
-          status: z.enum(["backlog", "in-progress", "review", "done"]).optional(),
+          description: Schema.optionalKey(str({ max: 100_000 })),
+          acceptanceCriteria: Schema.optionalKey(str({ max: 100_000 })),
+          status: Schema.optionalKey(Schema.Literals(["backlog", "in-progress", "review", "done"])),
           labels: ticketLabelsField,
           nodeId: nodeIdField,
-        })
-        .refine(
-          ({ title, kind, sections, description, acceptanceCriteria, status, labels }) =>
-            title !== undefined ||
-            kind !== undefined ||
-            sections !== undefined ||
-            description !== undefined ||
-            acceptanceCriteria !== undefined ||
-            status !== undefined ||
-            labels !== undefined,
-          "Provide at least one field to update",
+        }).check(
+          refine(
+            ({ title, kind, sections, description, acceptanceCriteria, status, labels }) =>
+              title !== undefined ||
+              kind !== undefined ||
+              sections !== undefined ||
+              description !== undefined ||
+              acceptanceCriteria !== undefined ||
+              status !== undefined ||
+              labels !== undefined,
+            "Provide at least one field to update",
+          ),
         ),
+      ),
       annotations: {
         readOnlyHint: false,
         destructiveHint: true,
@@ -315,13 +329,15 @@ export function registerTicketTools(
       title: "Add a Kanban ticket comment",
       description:
         "Append a durable comment to a ticket in one project. Comments sync with the ticket to every machine with this project.",
-      inputSchema: z.object({
-        requestId: z.string().trim().min(1).max(256),
-        projectId: z.string().trim().min(1).max(200),
-        ticketId: z.string().trim().min(1).max(200),
-        text: z.string().trim().min(1).max(20_000),
-        nodeId: nodeIdField,
-      }),
+      inputSchema: toolInput(
+        Schema.Struct({
+          requestId: str({ trim: true, min: 1, max: 256 }),
+          projectId: str({ trim: true, min: 1, max: 200 }),
+          ticketId: str({ trim: true, min: 1, max: 200 }),
+          text: str({ trim: true, min: 1, max: 20_000 }),
+          nodeId: nodeIdField,
+        }),
+      ),
       annotations: {
         readOnlyHint: false,
         destructiveHint: false,
@@ -380,14 +396,14 @@ function registerTicketLabelTools(
   server: McpServer,
   { invoke, operator }: Pick<ControlMcpToolContext, "invoke" | "operator">,
 ): void {
-  const projectIdField = z.string().trim().min(1).max(200);
+  const projectIdField = str({ trim: true, min: 1, max: 200 });
   server.registerTool(
     "list_ticket_labels",
     {
       title: "List Kanban ticket labels",
       description:
         "List the labels a project's tickets can carry: its label catalogue and every label in use, with ticketCount.",
-      inputSchema: z.object({ projectId: projectIdField }),
+      inputSchema: toolInput(Schema.Struct({ projectId: projectIdField })),
       annotations: readAnnotations(),
     },
     async ({ projectId }) => {
@@ -405,13 +421,15 @@ function registerTicketLabelTools(
       title: "Create a Kanban ticket label",
       description:
         "Add a label to a project's catalogue so tickets can use it. An existing name (any case) is kept, taking a color or description given here.",
-      inputSchema: z.object({
-        requestId: z.string().trim().min(1).max(256),
-        projectId: projectIdField,
-        name: ticketLabelNameField,
-        color: ticketLabelColorField,
-        description: ticketLabelDescriptionField,
-      }),
+      inputSchema: toolInput(
+        Schema.Struct({
+          requestId: str({ trim: true, min: 1, max: 256 }),
+          projectId: projectIdField,
+          name: ticketLabelNameField,
+          color: ticketLabelColorField,
+          description: ticketLabelDescriptionField,
+        }),
+      ),
       annotations: {
         readOnlyHint: false,
         destructiveHint: false,
@@ -442,13 +460,15 @@ function registerTicketLabelTools(
       title: "Add or remove a ticket label",
       description:
         "Add one label to a ticket, or remove it with present false. A name the project already uses keeps its spelling; a new name starts a label.",
-      inputSchema: z.object({
-        requestId: z.string().trim().min(1).max(256).optional(),
-        projectId: projectIdField,
-        ticketId: z.string().trim().min(1).max(200),
-        name: ticketLabelNameField,
-        present: z.boolean().default(true).describe("False removes the label."),
-      }),
+      inputSchema: toolInput(
+        Schema.Struct({
+          requestId: Schema.optionalKey(str({ trim: true, min: 1, max: 256 })),
+          projectId: projectIdField,
+          ticketId: str({ trim: true, min: 1, max: 200 }),
+          name: ticketLabelNameField,
+          present: describe(withDefault(Schema.Boolean, true), "False removes the label."),
+        }),
+      ),
       annotations: {
         readOnlyHint: false,
         destructiveHint: false,

@@ -28,21 +28,17 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  listAgentAccounts,
-  listMachineAgentAccounts,
-  openAgentSignInTerminal,
-  readHostAgentSignIns,
-  setActiveAgentAccount,
-  setPreferredAgentIdentity,
-} from "@/lib/backend";
+import { listMachineAgentAccounts, setPreferredAgentIdentity } from "@/lib/backend";
 import { subscribeCommandNodeEvents, subscribeNodeEvents } from "@/lib/federation/node-events";
 import { inMachineOrder } from "@/lib/federation/sidebar-layout";
 import { usePortalLayout } from "@/lib/portal/portal-layout";
 import { requestCloseGlobalSettings, requestGlobalSettings } from "@/lib/settings-navigation";
 import { useAccountMachineStore } from "@/components/settings/account-machine";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
-import { useUIStore } from "@/stores/uiStore";
+import { uiStore } from "@/stores/uiStore";
+import { isCommandNodeSelection } from "@/stores/windowSelectionStore";
+import { getWindowScope } from "@/lib/node-scope/app-window-scope";
+import { appCommandScope } from "@/lib/node-scope-slots";
 import { cn } from "@/lib/utils";
 import {
   isPreferredIdentity,
@@ -63,6 +59,7 @@ import {
 import type { BackendId } from "@orkestrator/protocol/federation";
 import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
 import { MachineSection, MachineStatusDot } from "./machine-ui";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 /** Coalesces a burst of changes on one machine into one read. */
 const REREAD_DEBOUNCE_MS = 250;
@@ -557,7 +554,8 @@ function showSignInTerminal(
   requestCloseGlobalSettings();
   if (machine.self) {
     useRemoteWorkspaceStore.getState().showLocal();
-    const ui = useUIStore.getState();
+    // This window's own node.
+    const ui = appCommandScope().store(uiStore).getState();
     ui.selectProject(terminal.projectId);
     ui.selectEnvironment(terminal.environmentId);
     return;
@@ -570,11 +568,12 @@ function showSignInTerminal(
 
 /** The environment on screen, when it is on `machine`: a sign-in terminal prefers it. */
 function environmentOnScreen(machine: MachineAgentAccounts): string | undefined {
-  const remote = useRemoteWorkspaceStore.getState().active;
-  if (machine.self) {
-    return remote ? undefined : (useUIStore.getState().selectedEnvironmentId ?? undefined);
-  }
-  return remote?.nodeId === machine.nodeId ? (remote.environmentId ?? undefined) : undefined;
+  const windowScope = getWindowScope();
+  const selection = windowScope.selection.get();
+  const onMachine = machine.self
+    ? isCommandNodeSelection(windowScope, selection)
+    : selection?.nodeId === machine.nodeId;
+  return onMachine ? (selection?.environmentId ?? undefined) : undefined;
 }
 
 export function MachineAgentAccountsSection({
@@ -594,6 +593,7 @@ export function MachineAgentAccountsSection({
    */
   wide?: boolean;
 }) {
+  const nodeBackend = useScopeBackend();
   const { machineOrder } = usePortalLayout();
   const [machines, setMachines] = useState<MachineAgentAccounts[] | null>(null);
   const [busy, setBusy] = useState<ReadonlySet<string>>(new Set());
@@ -684,8 +684,8 @@ export function MachineAgentAccountsSection({
       const seq = nextSeq(machine.nodeId);
       const target = machineTarget(machine);
       const [snapshot, signIns] = await Promise.allSettled([
-        listAgentAccounts(target),
-        readHostAgentSignIns(target),
+        nodeBackend.listAgentAccounts(target),
+        nodeBackend.readHostAgentSignIns(target),
       ]);
       const parsedSnapshot =
         snapshot.status === "fulfilled" ? parseAgentAccountsSnapshot(snapshot.value) : undefined;
@@ -710,7 +710,7 @@ export function MachineAgentAccountsSection({
         ...(signInsValue ? { signIns: signInsValue } : {}),
       });
     },
-    [nextSeq, patch],
+    [nextSeq, patch, nodeBackend],
   );
 
   // One subscription per machine listed. The first resync arrives once the
@@ -762,7 +762,11 @@ export function MachineAgentAccountsSection({
     setError(null);
     try {
       const seq = nextSeq(machine.nodeId);
-      const result = await setActiveAgentAccount(platform, accountId, machineTarget(machine));
+      const result = await nodeBackend.setActiveAgentAccount(
+        platform,
+        accountId,
+        machineTarget(machine),
+      );
       const snapshot = parseAgentAccountsSnapshot(result);
       if (!snapshot) throw new Error("Invalid account snapshot");
       patch(machine.nodeId, seq, { snapshot });
@@ -814,7 +818,7 @@ export function MachineAgentAccountsSection({
         const seq = nextSeq(machine.nodeId);
         try {
           const snapshot = parseAgentAccountsSnapshot(
-            await setActiveAgentAccount(platform, accountId, machineTarget(machine)),
+            await nodeBackend.setActiveAgentAccount(platform, accountId, machineTarget(machine)),
           );
           if (!snapshot) throw new Error("Invalid account snapshot");
           patch(machine.nodeId, seq, { snapshot });
@@ -834,7 +838,7 @@ export function MachineAgentAccountsSection({
     if (!begin(key)) return;
     setError(null);
     try {
-      const terminal = await openAgentSignInTerminal(
+      const terminal = await nodeBackend.openAgentSignInTerminal(
         platform,
         machineTarget(machine),
         environmentOnScreen(machine),

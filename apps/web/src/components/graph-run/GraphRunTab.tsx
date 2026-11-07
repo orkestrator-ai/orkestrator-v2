@@ -54,22 +54,17 @@ import { useOptionalTerminalContext } from "@/contexts/TerminalContext";
 import { useReviewModelCatalog } from "@/hooks/useBuildLaunchOptions";
 import { useScrollOffsetAcrossHide } from "@/hooks/useScrollOffsetAcrossHide";
 import { modelsForAgent } from "@/lib/agent-launch";
-import {
-  answerGraphRunHumanNode,
-  answerGraphRunQuestion,
-  cancelGraphRun,
-  graphRunRewindBackend,
-  pauseGraphRun,
-  resumeGraphRun,
-  retryGraphActivation,
-  skipGraphActivation,
-  type GraphRunRewindBackend,
-} from "@/lib/backend/graph-runs";
+import type { GraphRunRewindBackend } from "@/lib/backend/graph-runs";
 import { resolveCatalogModelLabel } from "@/lib/chat/model-label";
 import { onResourceChanged, onResourceResync, onViewSafetyCheck } from "@/lib/resource-sync";
 import { cn } from "@/lib/utils";
 import { useEnvironmentStore } from "@/stores/environmentStore";
-import { flowAttemptKey, useFlowGraphViewStore } from "@/stores/flowGraphViewStore";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
+import {
+  flowAttemptKey,
+  flowGraphViewKey,
+  useFlowGraphViewStore,
+} from "@/stores/flowGraphViewStore";
 import { EMPTY_GRAPH_RUN, useGraphRunStore } from "@/stores/graphRunStore";
 import type { GraphRunTabData } from "@/types/paneLayout";
 import { useGraphRunCodeRewind } from "./GraphRunCodeRewindDialog";
@@ -85,6 +80,7 @@ import {
 } from "./graph-run-actions";
 import { graphRunFlowModel, type GraphRunFlowNode } from "./graph-run-flow";
 import { graphRunHeaderSummary } from "./graph-run-summary";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 /**
  * A graph run tab ("Graph run" or the run's name; plan P2.11, D16, D17): the
@@ -171,9 +167,13 @@ export function GraphRunTab({
   environmentId,
   data,
   isActive,
-  rewindBackend = graphRunRewindBackend,
+  rewindBackend: rewindOverride,
   layout,
 }: GraphRunTabProps) {
+  const nodeBackend = useScopeBackend();
+  const { scope: nodeScope } = useScopesWithCommandFallback();
+  const rewindBackend =
+    rewindOverride === undefined ? nodeBackend.graphRunRewindBackend : rewindOverride;
   const runId = data.runId;
   const entry = useGraphRunStore((state) => state.runs.get(runId)) ?? EMPTY_GRAPH_RUN;
   const loadRun = useGraphRunStore((state) => state.loadRun);
@@ -184,17 +184,22 @@ export function GraphRunTab({
   useEffect(() => {
     void loadRun(runId);
     const reload = () => void loadRun(runId);
-    const offChange = onResourceChanged("graph-run", (change) => {
-      if (change.id === runId) reload();
-    });
-    const offResync = onResourceResync(reload);
-    const offSafety = onViewSafetyCheck(reload);
+    // The run's node's change feed (plan item 4007).
+    const offChange = onResourceChanged(
+      "graph-run",
+      (change) => {
+        if (change.id === runId) reload();
+      },
+      nodeScope,
+    );
+    const offResync = onResourceResync(reload, nodeScope);
+    const offSafety = onViewSafetyCheck(reload, nodeScope);
     return () => {
       offChange();
       offResync();
       offSafety();
     };
-  }, [loadRun, runId]);
+  }, [loadRun, runId, nodeScope]);
   // Returning to the tab re-reads the run: events may have been missed meanwhile.
   useEffect(() => {
     if (isActive) void loadRun(runId);
@@ -259,6 +264,7 @@ function GraphRunView({
   layout?: "graph" | "stacked";
   refreshError: string | null;
 }) {
+  const nodeBackend = useScopeBackend();
   const panelId = `${useId()}inspector`;
   const graphId = `${panelId}-graph`;
   const [tabRoot, setTabRoot] = useState<HTMLDivElement | null>(null);
@@ -267,9 +273,12 @@ function GraphRunView({
     useEnvironmentStore((state) => state.getEnvironmentById(environmentId)?.containerId) ??
     undefined;
   const applyRun = useGraphRunStore((state) => state.applyRun);
+  const reloadRun = useGraphRunStore((state) => state.loadRun);
   const modelCatalog = useReviewModelCatalog(run.projectId, true);
   const viewKey = `graph-run:${run.id}`;
-  const collapsed = useFlowGraphViewStore((state) => state.collapsed.has(viewKey));
+  // View state is remembered per node: run ids are only unique on theirs.
+  const storeViewKey = flowGraphViewKey(useScopesWithCommandFallback().scope.nodeId, viewKey);
+  const collapsed = useFlowGraphViewStore((state) => state.collapsed.has(storeViewKey));
   const setCollapsed = useFlowGraphViewStore((state) => state.setCollapsed);
   const expandedAttemptKeys = useFlowGraphViewStore((state) => state.expandedAttempts);
   const setAttemptExpanded = useFlowGraphViewStore((state) => state.setAttemptExpanded);
@@ -282,9 +291,9 @@ function GraphRunView({
       new Set(
         run.rewinds
           .map((rewind) => rewind.id)
-          .filter((id) => expandedAttemptKeys.has(flowAttemptKey(viewKey, id))),
+          .filter((id) => expandedAttemptKeys.has(flowAttemptKey(storeViewKey, id))),
       ),
-    [expandedAttemptKeys, run.rewinds, viewKey],
+    [expandedAttemptKeys, run.rewinds, storeViewKey],
   );
   const model = useMemo(
     () => graphRunFlowModel(run.plan, run, { expandedAttempts }),
@@ -366,14 +375,17 @@ function GraphRunView({
     switch (key) {
       case "expand-attempt":
       case "collapse-attempt":
-        if (node.attemptId) setAttemptExpanded(viewKey, node.attemptId, key === "expand-attempt");
+        if (node.attemptId)
+          setAttemptExpanded(storeViewKey, node.attemptId, key === "expand-attempt");
         return;
       case "open-session":
         openSession(node);
         return;
       case "retry":
         if (activation)
-          void act("retry the node", () => retryGraphActivation(run.id, activation.key));
+          void act("retry the node", () =>
+            nodeBackend.retryGraphActivation(run.id, activation.key),
+          );
         return;
       case "restart":
         if (activation)
@@ -384,13 +396,13 @@ function GraphRunView({
         return;
       case "skip":
         if (activation)
-          void act("skip the node", () => skipGraphActivation(run.id, activation.key));
+          void act("skip the node", () => nodeBackend.skipGraphActivation(run.id, activation.key));
         return;
       case "pause":
-        void act("pause the run", () => pauseGraphRun(run.id));
+        void act("pause the run", () => nodeBackend.pauseGraphRun(run.id));
         return;
       case "resume":
-        void act("resume the run", () => resumeGraphRun(run.id));
+        void act("resume the run", () => nodeBackend.resumeGraphRun(run.id));
         return;
       case "cancel":
         setConfirmCancel(true);
@@ -401,26 +413,26 @@ function GraphRunView({
   const answer = async (activation: NodeActivation, reply: GraphQuestionAnswer) => {
     const question = activation.session?.question;
     if (!question) return;
-    await answerGraphRunQuestion({
+    await nodeBackend.answerGraphRunQuestion({
       runId: run.id,
       activationKey: activation.key,
       questionId: question.id,
       ...reply,
     });
     // The answer's own change event re-reads the run; read now for a prompt face.
-    void useGraphRunStore.getState().loadRun(run.id);
+    void reloadRun(run.id);
   };
 
   const answerHuman = async (activation: NodeActivation, reply: GraphHumanNodeAnswer) => {
     const wait = activation.human;
     if (!wait) return;
-    await answerGraphRunHumanNode({
+    await nodeBackend.answerGraphRunHumanNode({
       runId: run.id,
       activationKey: activation.key,
       waitId: wait.id,
       ...reply,
     });
-    void useGraphRunStore.getState().loadRun(run.id);
+    void reloadRun(run.id);
   };
 
   const contextMenuFor = (node: GraphRunFlowNode, actions: GraphRunActionSpec[]): ReactNode => {
@@ -586,7 +598,7 @@ function GraphRunView({
                 className="h-7 gap-1.5 px-2 text-xs"
                 aria-expanded={!collapsed}
                 aria-controls={graphId}
-                onClick={() => setCollapsed(viewKey, !collapsed)}
+                onClick={() => setCollapsed(storeViewKey, !collapsed)}
               >
                 {collapsed ? (
                   <ChevronRight className="size-3.5" />
@@ -661,7 +673,7 @@ function GraphRunView({
                 onAnswer={answer}
                 onHumanAnswer={answerHuman}
                 onSelectActivation={(attemptId, activationKey) => {
-                  setAttemptExpanded(viewKey, attemptId, true);
+                  setAttemptExpanded(storeViewKey, attemptId, true);
                   setPinnedId(activationKey);
                 }}
               />
@@ -683,7 +695,7 @@ function GraphRunView({
             <AlertDialogCancel>Keep running</AlertDialogCancel>
             <AlertDialogAction
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              onClick={() => void act("cancel the run", () => cancelGraphRun(run.id))}
+              onClick={() => void act("cancel the run", () => nodeBackend.cancelGraphRun(run.id))}
             >
               Cancel run
             </AlertDialogAction>

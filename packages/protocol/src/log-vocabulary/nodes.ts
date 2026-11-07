@@ -19,6 +19,8 @@ export const NODES_LOG_AREAS = defineLogAreas({
       "verification.record-failed": "A node verification could not be recorded.",
       "profile.record-failed": "A node profile could not be recorded.",
       "detach.unconfirmed": "A forgotten node has not confirmed the detach yet.",
+      "grant.scope-disagreement":
+        "Debug only, for one release: the grant allow-list and the old deny-lists disagree on a command.",
       "grant.revocation-listener-failed":
         "A connection could not be told its client grant was removed; the grant is still gone.",
       "handover.recovery-pending": "Command handover recovery is still pending.",
@@ -28,6 +30,10 @@ export const NODES_LOG_AREAS = defineLogAreas({
       "ticket-sync.unknown-project":
         "A node sent ticket changes for a project that no longer exists here.",
       "ticket-sync.forget-failed": "A detached command node's ticket copies could not be released.",
+      "fleet-update.requested":
+        "The update policy asked an older leaf to install the command node's version.",
+      "fleet-update.failed": "The update policy could not read or update a leaf; it retries later.",
+      "fleet-update.policy-load-failed": "The stored update policy could not be read; it is off.",
     },
   },
 });

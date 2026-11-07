@@ -2,13 +2,14 @@ import { useEffect, useState } from "react";
 import { Loader2, ShieldAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useFederation } from "@/components/federation/FederationProvider";
-import * as backend from "@/lib/backend";
 import type { EnvironmentSetupApproval } from "@/lib/backend";
 import {
   approveSetupCommandsOnNodes,
   type SetupApprovalNodeResult,
 } from "@/lib/portal/setup-approvals";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { approveSetupRuntime, forceResolveSetupRuntime } from "@/lib/setup-commands";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 type Operation = "once" | "project" | "everywhere" | "skip";
 
@@ -36,7 +37,10 @@ function CommandList({ commands }: { commands: readonly string[] }) {
  * approves them for the project here or on every machine, or skips setup.
  */
 export function SetupApprovalPanel({ environmentId }: { environmentId: string }) {
+  const nodeBackend = useScopeBackend();
   const federation = useFederation();
+  // The node whose environment this is.
+  const scope = useNodeScope();
   const [approval, setApproval] = useState<EnvironmentSetupApproval | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [operation, setOperation] = useState<Operation | null>(null);
@@ -47,7 +51,7 @@ export function SetupApprovalPanel({ environmentId }: { environmentId: string })
   useEffect(() => {
     // The parent keys this panel by environment, so state starts empty.
     let active = true;
-    backend.getEnvironmentSetupApproval(environmentId).then(
+    nodeBackend.getEnvironmentSetupApproval(environmentId).then(
       (value) => {
         if (active) setApproval(value);
       },
@@ -60,14 +64,14 @@ export function SetupApprovalPanel({ environmentId }: { environmentId: string })
     return () => {
       active = false;
     };
-  }, [environmentId]);
+  }, [environmentId, nodeBackend]);
 
   const run = async (kind: Operation) => {
     setError(null);
     setOperation(kind);
     try {
       if (kind === "skip") {
-        await forceResolveSetupRuntime(environmentId);
+        await forceResolveSetupRuntime(environmentId, scope);
         return;
       }
       if (!approval) return;
@@ -78,7 +82,7 @@ export function SetupApprovalPanel({ environmentId }: { environmentId: string })
         setNodeResults(result.nodes);
         return;
       }
-      await approveSetupRuntime(environmentId, approval.hash, kind !== "once");
+      await approveSetupRuntime(environmentId, approval.hash, kind !== "once", scope);
     } catch (operationError) {
       setError(operationError instanceof Error ? operationError.message : "Setup approval failed");
       // Never retry a rejected hash automatically. Show the current commands
@@ -87,7 +91,7 @@ export function SetupApprovalPanel({ environmentId }: { environmentId: string })
         setApproval(null);
         setNodeResults(null);
         try {
-          setApproval(await backend.getEnvironmentSetupApproval(environmentId));
+          setApproval(await nodeBackend.getEnvironmentSetupApproval(environmentId));
         } catch (reason) {
           setLoadError(reason instanceof Error ? reason.message : "Could not read setup commands");
         }

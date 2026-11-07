@@ -108,13 +108,15 @@ export function createFakeReadEnvironment(
 }
 
 /**
- * Makes the shared coordinator (used by hooks) a fake-backed one. Call
+ * Makes the command scope's coordinator (used by hooks) a fake-backed one,
+ * and its window policy the window's, so window-level setters
+ * (`setReadCoordinatorDataSaving`) reach it. Call
  * `resetReadCoordinatorForTests()` in `afterEach` to restore the default.
  */
 export function installFakeReadCoordinator(
   options: Partial<ReadCoordinatorOptions> = {},
 ): FakeReadEnvironment {
   const environment = createFakeReadEnvironment(options);
-  resetReadCoordinatorForTests(() => environment.coordinator);
+  resetReadCoordinatorForTests(() => environment.coordinator, environment.coordinator.policy);
   return environment;
 }

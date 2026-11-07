@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:57e5c76fcdf3a0d8d383473541f83ee98b267cc9fb5a5a0546c5ad4b16d74ed9",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "environmentId": {
+          "type": "string"
+        },
+        "messageId": {
+          "type": "string"
+        },
+        "queueKey": {
+          "type": "string"
+        }
+      },
+      "required": ["environmentId", "messageId", "queueKey"],
+      "type": "object"
+    }
+  }
+}

@@ -1,3 +1,4 @@
+import { eventSink } from "./backend-emit.js";
 import { describe, expect, test } from "bun:test";
 import {
   COORDINATOR_WAKE_ATTENTION_EVENT,
@@ -158,7 +159,7 @@ describe("environment attention events", () => {
       const observed: unknown[] = [];
       installStorageEventFanout(
         storage,
-        (event, payload) => emitted.push({ event, payload }),
+        eventSink((event, payload) => emitted.push({ event, payload })),
         (change) => observed.push(change),
       );
       const environment = await storage.addEnvironment(createEnvironment("project-1"));

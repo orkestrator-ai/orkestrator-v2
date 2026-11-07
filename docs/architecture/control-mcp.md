@@ -157,6 +157,15 @@ better served by a `voice` or `custom` credential.
   schemas with the SDK's `fromJsonSchema` and compiled once per process
   (`control-mcp-direct-tools.ts`).
 
+The other tools' inputs (projects, environments, tickets, mail, the
+coordinator's tools, and the agent tools server's) are Effect Schemas,
+registered with `toolInput(schema)` from `tool-schema.ts`: `tools/list`
+publishes the schema's JSON Schema and `tools/call` decodes the arguments
+with it, so the handler gets the decoded value (trimmed strings, defaults
+filled in). `strictObject` refuses unknown keys and publishes
+`additionalProperties: false`; a plain `Schema.Struct` drops them. The
+backend has no Zod (`no-zod.test.ts`).
+
 The server is stateless: it is rebuilt for every request, so it never sends
 `tools/list_changed`. The gateway is how a client with a fixed tool list
 reaches everything else.

@@ -1,12 +1,13 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { graphTemplateExample } from "@orkestrator/protocol/graphs/examples";
 import type { GraphTemplateDetail } from "@orkestrator/protocol/graphs/library";
 import type { GraphTemplateV1 } from "@orkestrator/protocol/graphs/template";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
-import { useEnvironmentStore } from "@/stores/environmentStore";
-import { graphDesignerTab, useGraphDesignerStore } from "@/stores/graphDesignerStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { environmentStore } from "@/stores/environmentStore";
+import { graphDesignerStore, graphDesignerTab } from "@/stores/graphDesignerStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import type { Environment } from "@/types";
 import type { GraphDesignerTabData } from "@/types/paneLayout";
 import { GraphDesignerTab } from "./GraphDesignerTab";
@@ -17,6 +18,7 @@ import {
   userDetail,
 } from "./graph-designer.test-fixtures";
 import { installReactFlowDomStubs } from "./react-flow.test-support";
+import { appCommandStore } from "@/test/app-command-store";
 
 /**
  * The editable designer end to end in the tab (item 212): new graph, palette,
@@ -97,11 +99,11 @@ function installBackend() {
 }
 
 function seedStores(data: GraphDesignerTabData) {
-  useGraphDesignerStore.setState({ libraries: new Map(), tabs: new Map() });
-  useEnvironmentStore.setState({
+  appCommandStore(graphDesignerStore).setState({ libraries: new Map(), tabs: new Map() });
+  appCommandStore(environmentStore).setState({
     environments: [{ id: ENVIRONMENT_ID, projectId: "project-1" } as Environment],
   });
-  usePaneLayoutStore.setState({
+  appCommandStore(paneLayoutStore).setState({
     environments: new Map([
       [
         ENVIRONMENT_ID,
@@ -121,13 +123,13 @@ function seedStores(data: GraphDesignerTabData) {
 }
 
 function persisted(): GraphDesignerTabData | undefined {
-  const root = usePaneLayoutStore.getState().environments.get(ENVIRONMENT_ID)!.root;
+  const root = appCommandStore(paneLayoutStore).getState().environments.get(ENVIRONMENT_ID)!.root;
   return root.kind === "leaf" ? root.tabs[0]!.graphDesignerData : undefined;
 }
 
 function renderTab(data: GraphDesignerTabData = {}) {
   seedStores(data);
-  return render(
+  return renderInAppCommandScope(
     <div style={{ width: 1600, height: 1000, position: "relative" }}>
       <GraphDesignerTab tabId={TAB_ID} environmentId={ENVIRONMENT_ID} data={data} isActive />
     </div>,

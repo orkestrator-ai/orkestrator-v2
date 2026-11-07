@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import {
   type MultiReviewReviewerTranscript,
   type MultiReviewWorkflow,
@@ -8,13 +9,14 @@ import type { StructuredReviewReport } from "@orkestrator/protocol/structured-re
 import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore";
 import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
 import { installFakeReadCoordinator } from "@/lib/testing/read-coordinator";
-import { useMultiReviewStore } from "@/stores/multiReviewStore";
+import { multiReviewStore } from "@/stores/multiReviewStore";
 import {
   MANUAL_REFRESH_TIMEOUT_MS,
   MultiReviewReviewerTab,
   REFRESH_INTERVAL_MS,
   toMultiReviewReviewerMessages,
 } from "./MultiReviewReviewerTab";
+import { appCommandStore } from "@/test/app-command-store";
 
 const report: StructuredReviewReport = {
   reviewScope: {
@@ -101,7 +103,7 @@ function reviewingWorkflow(): MultiReviewWorkflow {
 }
 
 beforeEach(() => {
-  useMultiReviewStore.setState({ workflows: new Map() });
+  appCommandStore(multiReviewStore).setState({ workflows: new Map() });
   useMessagePartExpansionStore.getState().reset();
 });
 afterEach(() => {
@@ -253,7 +255,7 @@ describe("MultiReviewReviewerTab", () => {
       ],
     }));
 
-    render(
+    renderInAppCommandScope(
       <MultiReviewReviewerTab
         data={{
           environmentId: "env-1",
@@ -325,7 +327,7 @@ describe("MultiReviewReviewerTab", () => {
       }
     });
     const { clock } = installFakeReadCoordinator();
-    const { unmount } = render(
+    const { unmount } = renderInAppCommandScope(
       <MultiReviewReviewerTab
         data={{
           environmentId: "env-1",
@@ -378,7 +380,7 @@ describe("MultiReviewReviewerTab", () => {
           ? { ...running, transcript: "unchanged" as const }
           : running,
     );
-    render(
+    renderInAppCommandScope(
       <MultiReviewReviewerTab
         data={{
           environmentId: "env-1",
@@ -428,8 +430,10 @@ describe("MultiReviewReviewerTab", () => {
       messages: [],
     };
     const loadTranscript = mock(async () => running);
-    useMultiReviewStore.setState({ workflows: new Map([["multi-1", reviewingWorkflow()]]) });
-    render(
+    appCommandStore(multiReviewStore).setState({
+      workflows: new Map([["multi-1", reviewingWorkflow()]]),
+    });
+    renderInAppCommandScope(
       <MultiReviewReviewerTab
         data={{
           environmentId: "env-1",
@@ -460,7 +464,7 @@ describe("MultiReviewReviewerTab", () => {
 
     // A checkpoint reads at once and puts the poll back on its interval.
     act(() => {
-      useMultiReviewStore.setState({
+      appCommandStore(multiReviewStore).setState({
         workflows: new Map([["multi-1", { ...reviewingWorkflow(), backendRevision: 8 }]]),
       });
     });
@@ -512,7 +516,7 @@ describe("MultiReviewReviewerTab", () => {
     let unmount: (() => void) | undefined;
 
     try {
-      ({ unmount } = render(
+      ({ unmount } = renderInAppCommandScope(
         <MultiReviewReviewerTab
           data={{
             environmentId: "env-1",
@@ -586,7 +590,7 @@ describe("MultiReviewReviewerTab", () => {
       return calls <= 2 ? completed : await manual;
     });
 
-    render(
+    renderInAppCommandScope(
       <MultiReviewReviewerTab
         data={{
           environmentId: "env-1",
@@ -663,7 +667,7 @@ describe("MultiReviewReviewerTab", () => {
     let unmount: (() => void) | undefined;
 
     try {
-      ({ unmount } = render(
+      ({ unmount } = renderInAppCommandScope(
         <MultiReviewReviewerTab
           data={{
             environmentId: "env-1",
@@ -731,7 +735,7 @@ describe("MultiReviewReviewerTab", () => {
       reviewerId: "reviewer-1",
       isLocal: true,
     };
-    const view = render(
+    const view = renderInAppCommandScope(
       <MultiReviewReviewerTab data={data} isActive loadTranscript={loadTranscript} />,
     );
 
@@ -753,7 +757,7 @@ describe("MultiReviewReviewerTab", () => {
       throw new Error("Multi review workflow not found: multi-1");
     });
 
-    render(
+    renderInAppCommandScope(
       <MultiReviewReviewerTab
         data={{
           environmentId: "env-1",
@@ -776,7 +780,7 @@ describe("MultiReviewReviewerTab", () => {
       throw new Error("Multi review workflow not found: multi-1");
     });
 
-    render(
+    renderInAppCommandScope(
       <MultiReviewReviewerTab
         data={{
           environmentId: "env-1",
@@ -813,7 +817,7 @@ describe("MultiReviewReviewerTab", () => {
     };
     const loadTranscript = mock(async () => running);
     const { coordinator } = installFakeReadCoordinator();
-    render(
+    renderInAppCommandScope(
       <MultiReviewReviewerTab
         data={{
           environmentId: "env-1",
@@ -856,7 +860,7 @@ describe("MultiReviewReviewerTab", () => {
     const loadTranscript = mock(async () => running);
 
     try {
-      render(
+      renderInAppCommandScope(
         <MultiReviewReviewerTab
           data={{
             environmentId: "env-1",
@@ -882,7 +886,7 @@ describe("MultiReviewReviewerTab", () => {
     async (startedAt) => {
       const loadTranscript = mock(async () => runningClaudeTranscript({ startedAt }));
 
-      render(
+      renderInAppCommandScope(
         <MultiReviewReviewerTab
           data={reviewerTabData()}
           isActive
@@ -907,7 +911,7 @@ describe("MultiReviewReviewerTab", () => {
     const loadTranscript = mock(async () => runningClaudeTranscript({ startedAt }));
 
     try {
-      render(
+      renderInAppCommandScope(
         <MultiReviewReviewerTab
           data={reviewerTabData()}
           isActive
@@ -934,7 +938,7 @@ describe("MultiReviewReviewerTab", () => {
     const data = reviewerTabData();
 
     try {
-      const view = render(
+      const view = renderInAppCommandScope(
         <MultiReviewReviewerTab data={data} isActive loadTranscript={loadTranscript} />,
       );
 
@@ -967,7 +971,7 @@ describe("MultiReviewReviewerTab", () => {
     );
 
     try {
-      render(
+      renderInAppCommandScope(
         <MultiReviewReviewerTab
           data={reviewerTabData()}
           isActive
@@ -1001,7 +1005,7 @@ describe("MultiReviewReviewerTab", () => {
     });
 
     try {
-      render(
+      renderInAppCommandScope(
         <MultiReviewReviewerTab
           data={reviewerTabData()}
           isActive
@@ -1039,7 +1043,7 @@ describe("MultiReviewReviewerTab", () => {
     });
 
     try {
-      render(
+      renderInAppCommandScope(
         <MultiReviewReviewerTab
           data={reviewerTabData()}
           isActive
@@ -1069,7 +1073,7 @@ describe("MultiReviewReviewerTab", () => {
         }),
       );
 
-      render(
+      renderInAppCommandScope(
         <MultiReviewReviewerTab
           data={reviewerTabData()}
           isActive
@@ -1105,7 +1109,7 @@ describe("MultiReviewReviewerTab", () => {
       ],
     }));
 
-    render(
+    renderInAppCommandScope(
       <MultiReviewReviewerTab
         data={{
           environmentId: "env-1",
@@ -1138,7 +1142,7 @@ describe("MultiReviewReviewerTab stop control", () => {
 
   test("does not offer Stop for a pending reviewer while the package is preparing", async () => {
     const stopReviewer = mock(async () => ({}) as never);
-    render(
+    renderInAppCommandScope(
       <MultiReviewReviewerTab
         data={{
           environmentId: "env-1",
@@ -1173,7 +1177,7 @@ describe("MultiReviewReviewerTab stop control", () => {
       return {} as never;
     });
 
-    render(
+    renderInAppCommandScope(
       <MultiReviewReviewerTab
         data={{
           environmentId: "env-1",
@@ -1228,9 +1232,9 @@ describe("MultiReviewReviewerTab stop control", () => {
       current = { ...current, workflowPhase: "reviewing", status: "pending", messages: [] };
       return restartedWorkflow;
     });
-    useMultiReviewStore.getState().replaceWorkflow(failedWorkflow);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(failedWorkflow);
 
-    render(
+    renderInAppCommandScope(
       <MultiReviewReviewerTab
         data={{
           environmentId: "env-1",
@@ -1247,7 +1251,9 @@ describe("MultiReviewReviewerTab stop control", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Restart reviewer" }));
     await waitFor(() => expect(restartReviewer).toHaveBeenCalledWith("multi-1", "reviewer-1"));
     await waitFor(() =>
-      expect(useMultiReviewStore.getState().workflows.get("multi-1")?.phase).toBe("reviewing"),
+      expect(appCommandStore(multiReviewStore).getState().workflows.get("multi-1")?.phase).toBe(
+        "reviewing",
+      ),
     );
     expect(screen.getByRole("button", { name: "Restart reviewer" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: /Refresh.*transcript/ }) === null).toBe(true);
@@ -1265,7 +1271,7 @@ describe("MultiReviewReviewerTab stop control", () => {
       return reviewingWorkflow();
     });
 
-    render(
+    renderInAppCommandScope(
       <MultiReviewReviewerTab
         data={{
           environmentId: "env-1",
@@ -1291,7 +1297,7 @@ describe("MultiReviewReviewerTab stop control", () => {
       dispatchState: "sent" as const,
     }));
 
-    render(
+    renderInAppCommandScope(
       <MultiReviewReviewerTab
         data={{
           environmentId: "env-1",
@@ -1317,7 +1323,7 @@ describe("MultiReviewReviewerTab stop control", () => {
       throw new Error("A reviewer can only be unstuck while review is running");
     });
 
-    render(
+    renderInAppCommandScope(
       <MultiReviewReviewerTab
         data={{
           environmentId: "env-1",
@@ -1343,7 +1349,7 @@ describe("MultiReviewReviewerTab stop control", () => {
       stalledSince: "2026-08-14T00:20:00.000Z",
     }));
 
-    render(
+    renderInAppCommandScope(
       <MultiReviewReviewerTab
         data={{
           environmentId: "env-1",
@@ -1373,7 +1379,7 @@ describe("MultiReviewReviewerTab stop control", () => {
       throw new Error("Multi review reviewer not found: reviewer-1");
     });
 
-    render(
+    renderInAppCommandScope(
       <MultiReviewReviewerTab
         data={{
           environmentId: "env-1",
@@ -1405,7 +1411,7 @@ describe("MultiReviewReviewerTab stop control", () => {
       throw new Error("The Multi Review controller is busy");
     });
 
-    render(
+    renderInAppCommandScope(
       <MultiReviewReviewerTab
         data={{
           environmentId: "env-1",
@@ -1446,7 +1452,7 @@ describe("MultiReviewReviewerTab stop control", () => {
     });
     const stopReviewer = mock(async () => ({}) as never);
 
-    render(
+    renderInAppCommandScope(
       <MultiReviewReviewerTab
         data={{
           environmentId: "env-1",

@@ -33,6 +33,8 @@ import { Switch } from "@/components/ui/switch";
 import { Z_FULLSCREEN_DIALOG } from "@/constants/z-index";
 import { forgetNode, nodeErrorText, reconnectNode, updateNode } from "@/lib/backend/command-nodes";
 import { MACHINE_COLOR_CHOICES, machineDotClass } from "@/lib/federation/machine-colors";
+import { backendClientOver, NO_ARGS } from "@/lib/node-scope/domains/invoke-over";
+import { nodesApi } from "@/lib/node-scope/domains/nodes";
 import { cn } from "@/lib/utils";
 import { CommandNodeSection } from "./CommandNodeSection";
 import { DeviceConnectionSection, SaveOnDeviceForm } from "./DeviceConnectionSection";
@@ -158,13 +160,15 @@ function ProfileSection({ machine, onChanged }: { machine: MachineEntry; onChang
   const load = useCallback(
     (): Promise<void> =>
       call
-        ? call<unknown>("get_backend_profile").then(
-            (value) => {
-              setProfile(parseBackendProfile(value));
-              setLoadFailed(false);
-            },
-            () => setLoadFailed(true),
-          )
+        ? nodesApi(backendClientOver(call))
+            .get_backend_profile(NO_ARGS)
+            .then(
+              (value) => {
+                setProfile(parseBackendProfile(value));
+                setLoadFailed(false);
+              },
+              () => setLoadFailed(true),
+            )
         : Promise.resolve(),
     [call],
   );
@@ -177,7 +181,7 @@ function ProfileSection({ machine, onChanged }: { machine: MachineEntry; onChang
     if (!call || !profile) return;
     setSaving(true);
     try {
-      const next = await call<unknown>("update_backend_profile", {
+      const next = await nodesApi(backendClientOver(call)).update_backend_profile({
         expectedRevision: profile.revision,
         ...update,
       });
@@ -322,7 +326,7 @@ function StatusSection({
     const started = performance.now();
     try {
       if (call && (machine.role === "self" || machine.connected)) {
-        await call("get_backend_profile");
+        await nodesApi(backendClientOver(call)).get_backend_profile(NO_ARGS);
       } else if (api && connection) {
         if (!(await api.probe(connection.id))) throw new Error("No answer");
       }

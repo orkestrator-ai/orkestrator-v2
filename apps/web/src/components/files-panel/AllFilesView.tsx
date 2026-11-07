@@ -1,5 +1,6 @@
 import { useMemo, useState, type DragEvent, type MouseEvent, type ReactNode } from "react";
 import { useFilesPanelStore } from "@/stores";
+import { useFilesPanelChromeStore } from "@/stores/filesPanelChromeStore";
 import { useTerminalContext, type CreateFileTabOptions } from "@/contexts";
 import {
   externalFilesFromDataTransfer,
@@ -103,7 +104,7 @@ export function AllFilesView({
   const changes = useFilesPanelStore((state) => state.changes);
   const isLoadingTree = useFilesPanelStore((state) => state.isLoadingTree);
   const expandedFolders = useFilesPanelStore((state) => state.expandedFolders);
-  const closePanel = useFilesPanelStore((state) => state.closePanel);
+  const closePanel = useFilesPanelChromeStore((state) => state.closePanel);
   const setFolderExpanded = useFilesPanelStore((state) => state.setFolderExpanded);
   const { createFileTab } = useTerminalContext();
   const isMobile = useMediaQuery("(max-width: 767px)");

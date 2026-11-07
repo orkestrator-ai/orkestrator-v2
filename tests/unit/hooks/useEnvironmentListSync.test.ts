@@ -1,5 +1,6 @@
 import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
-import { act, renderHook } from "@testing-library/react";
+import { act } from "@testing-library/react";
+import type { NodeScope } from "../../../apps/web/src/lib/node-scope/node-scope";
 import * as realResourceSync from "../../../apps/web/src/lib/resource-sync";
 
 const realResourceSyncSnapshot = { ...realResourceSync };
@@ -8,9 +9,9 @@ const capturedResyncHandlers = new Set<ResourceResyncHandler>();
 
 mock.module("@/lib/resource-sync", () => ({
   ...realResourceSyncSnapshot,
-  onResourceResync: (handler: ResourceResyncHandler) => {
+  onResourceResync: (handler: ResourceResyncHandler, scope?: NodeScope) => {
     capturedResyncHandlers.add(handler);
-    const unsubscribeReal = realResourceSyncSnapshot.onResourceResync(handler);
+    const unsubscribeReal = realResourceSyncSnapshot.onResourceResync(handler, scope);
     return () => {
       capturedResyncHandlers.delete(handler);
       unsubscribeReal();
@@ -19,6 +20,7 @@ mock.module("@/lib/resource-sync", () => ({
 }));
 
 import { useEnvironmentListSync } from "../../../apps/web/src/hooks/useEnvironmentListSync";
+import { renderHookInAppCommandScope } from "../../../apps/web/src/test/render-in-node-scope";
 
 const { dispatchResourceChange, requestResourceResync, resetResourceSync } =
   realResourceSyncSnapshot;
@@ -66,7 +68,9 @@ describe("useEnvironmentListSync", () => {
     globalThis.clearInterval = mock(() => {}) as typeof clearInterval;
 
     const refreshProject = mock<(projectId: string) => Promise<void>>(() => Promise.resolve());
-    const { unmount } = renderHook(() => useEnvironmentListSync(["project-1"], refreshProject));
+    const { unmount } = renderHookInAppCommandScope(() =>
+      useEnvironmentListSync(["project-1"], refreshProject),
+    );
     unmount();
 
     // Assert the behavioral invariant, not one historical delay literal:
@@ -78,7 +82,7 @@ describe("useEnvironmentListSync", () => {
     const firstRefreshProject = mock<(projectId: string) => Promise<void>>(() => Promise.resolve());
     const nextRefreshProject = mock<(projectId: string) => Promise<void>>(() => Promise.resolve());
 
-    const { rerender, unmount } = renderHook(
+    const { rerender, unmount } = renderHookInAppCommandScope(
       ({ projectIds, refreshProject }) => useEnvironmentListSync(projectIds, refreshProject),
       { initialProps: { projectIds: ["project-1"], refreshProject: firstRefreshProject } },
     );
@@ -115,7 +119,9 @@ describe("useEnvironmentListSync", () => {
     globalThis.setInterval = (() => 1) as unknown as typeof setInterval;
     globalThis.clearInterval = mock(() => {}) as typeof clearInterval;
 
-    renderHook(() => useEnvironmentListSync(["project-1", "project-2"], refreshProject));
+    renderHookInAppCommandScope(() =>
+      useEnvironmentListSync(["project-1", "project-2"], refreshProject),
+    );
 
     await announceEnvironmentChange();
 
@@ -127,7 +133,9 @@ describe("useEnvironmentListSync", () => {
 
   test("refreshes only the announced project and ignores unloaded projects", async () => {
     const refreshProject = mock<(projectId: string) => Promise<void>>(() => Promise.resolve());
-    renderHook(() => useEnvironmentListSync(["project-1", "project-2"], refreshProject));
+    renderHookInAppCommandScope(() =>
+      useEnvironmentListSync(["project-1", "project-2"], refreshProject),
+    );
 
     await announceEnvironmentChange(1, "project-2");
     await announceEnvironmentChange(2, "project-not-loaded");
@@ -146,7 +154,9 @@ describe("useEnvironmentListSync", () => {
     const setup = (served: () => Promise<boolean> = () => Promise.resolve(true)) => {
       const refreshProject = mock<(projectId: string) => Promise<void>>(() => Promise.resolve());
       const refreshEnvironment = mock<(projectId: string, id: string) => Promise<boolean>>(served);
-      renderHook(() => useEnvironmentListSync(["project-1"], refreshProject, refreshEnvironment));
+      renderHookInAppCommandScope(() =>
+        useEnvironmentListSync(["project-1"], refreshProject, refreshEnvironment),
+      );
       return { refreshProject, refreshEnvironment };
     };
 
@@ -236,7 +246,7 @@ describe("useEnvironmentListSync", () => {
       const refreshEnvironment = mock<(projectId: string, id: string) => Promise<boolean>>(() =>
         Promise.resolve(true),
       );
-      renderHook(() =>
+      renderHookInAppCommandScope(() =>
         useEnvironmentListSync(["project-1", "project-2"], refreshProject, refreshEnvironment),
       );
       await announceEnvironmentChange();
@@ -250,7 +260,9 @@ describe("useEnvironmentListSync", () => {
     globalThis.setInterval = (() => 1) as unknown as typeof setInterval;
     globalThis.clearInterval = mock(() => {}) as typeof clearInterval;
 
-    renderHook(() => useEnvironmentListSync(["project-1", "project-2"], refreshProject));
+    renderHookInAppCommandScope(() =>
+      useEnvironmentListSync(["project-1", "project-2"], refreshProject),
+    );
 
     await act(async () => {
       requestResourceResync();
@@ -265,7 +277,7 @@ describe("useEnvironmentListSync", () => {
 
   test("ignores manifest and irrelevant selective resync requests", async () => {
     const refreshProject = mock<(projectId: string) => Promise<void>>(() => Promise.resolve());
-    renderHook(() => useEnvironmentListSync(["project-1"], refreshProject));
+    renderHookInAppCommandScope(() => useEnvironmentListSync(["project-1"], refreshProject));
 
     await deliverResync({
       resources: new Set(["environment"]),
@@ -281,7 +293,9 @@ describe("useEnvironmentListSync", () => {
 
   test("handles a relevant selective explicit resync request", async () => {
     const refreshProject = mock<(projectId: string) => Promise<void>>(() => Promise.resolve());
-    renderHook(() => useEnvironmentListSync(["project-1", "project-2"], refreshProject));
+    renderHookInAppCommandScope(() =>
+      useEnvironmentListSync(["project-1", "project-2"], refreshProject),
+    );
 
     await deliverResync({
       resources: new Set(["environment"]),
@@ -299,7 +313,7 @@ describe("useEnvironmentListSync", () => {
     globalThis.setInterval = (() => 1) as unknown as typeof setInterval;
     globalThis.clearInterval = mock(() => {}) as typeof clearInterval;
 
-    renderHook(() => useEnvironmentListSync(["project-1"], refreshProject));
+    renderHookInAppCommandScope(() => useEnvironmentListSync(["project-1"], refreshProject));
 
     await act(async () => {
       // A reorder announces once per moved environment.
@@ -317,7 +331,9 @@ describe("useEnvironmentListSync", () => {
     globalThis.setInterval = (() => 1) as unknown as typeof setInterval;
     globalThis.clearInterval = mock(() => {}) as typeof clearInterval;
 
-    const { unmount } = renderHook(() => useEnvironmentListSync(["project-1"], refreshProject));
+    const { unmount } = renderHookInAppCommandScope(() =>
+      useEnvironmentListSync(["project-1"], refreshProject),
+    );
     unmount();
 
     await announceEnvironmentChange();
@@ -336,7 +352,9 @@ describe("useEnvironmentListSync", () => {
     globalThis.setInterval = (() => 1) as unknown as typeof setInterval;
     globalThis.clearInterval = mock(() => {}) as typeof clearInterval;
 
-    const { unmount } = renderHook(() => useEnvironmentListSync(["project-1"], refreshProject));
+    const { unmount } = renderHookInAppCommandScope(() =>
+      useEnvironmentListSync(["project-1"], refreshProject),
+    );
     await announceEnvironmentChange(1);
     await announceEnvironmentChange(2);
     expect(refreshProject).toHaveBeenCalledTimes(1);
@@ -361,7 +379,7 @@ describe("useEnvironmentListSync", () => {
     globalThis.setInterval = (() => 1) as unknown as typeof setInterval;
     globalThis.clearInterval = mock(() => {}) as typeof clearInterval;
 
-    const hook = renderHook(
+    const hook = renderHookInAppCommandScope(
       ({ projectIds }) => useEnvironmentListSync(projectIds, refreshProject),
       { initialProps: { projectIds: ["project-1"] } },
     );
@@ -381,7 +399,7 @@ describe("useEnvironmentListSync", () => {
   test("does nothing when there are no projects", async () => {
     const refreshProject = mock<(projectId: string) => Promise<void>>(() => Promise.resolve());
 
-    renderHook(() => useEnvironmentListSync([], refreshProject));
+    renderHookInAppCommandScope(() => useEnvironmentListSync([], refreshProject));
     await act(async () => {
       requestResourceResync();
       await Promise.resolve();
@@ -400,7 +418,9 @@ describe("useEnvironmentListSync", () => {
         : Promise.resolve(),
     );
 
-    renderHook(() => useEnvironmentListSync(["project-1", "project-2"], refreshProject));
+    renderHookInAppCommandScope(() =>
+      useEnvironmentListSync(["project-1", "project-2"], refreshProject),
+    );
 
     act(() => {
       requestResourceResync();
@@ -444,7 +464,7 @@ describe("useEnvironmentListSync", () => {
     globalThis.setInterval = (() => 1) as unknown as typeof setInterval;
     globalThis.clearInterval = mock(() => {}) as typeof clearInterval;
 
-    renderHook(() => useEnvironmentListSync(["project-1"], refreshProject));
+    renderHookInAppCommandScope(() => useEnvironmentListSync(["project-1"], refreshProject));
 
     await announceEnvironmentChange(1);
     expect(refreshProject).toHaveBeenCalledTimes(1);
@@ -472,7 +492,7 @@ describe("useEnvironmentListSync", () => {
     globalThis.setInterval = (() => 1) as unknown as typeof setInterval;
     globalThis.clearInterval = mock(() => {}) as typeof clearInterval;
 
-    renderHook(() => useEnvironmentListSync(["project-1"], refreshProject));
+    renderHookInAppCommandScope(() => useEnvironmentListSync(["project-1"], refreshProject));
 
     await announceEnvironmentChange(1);
     for (const revision of [2, 3, 4]) {
@@ -501,7 +521,7 @@ describe("useEnvironmentListSync", () => {
     globalThis.setInterval = (() => 1) as unknown as typeof setInterval;
     globalThis.clearInterval = mock(() => {}) as typeof clearInterval;
 
-    renderHook(() => useEnvironmentListSync(["project-1"], refreshProject));
+    renderHookInAppCommandScope(() => useEnvironmentListSync(["project-1"], refreshProject));
 
     await announceEnvironmentChange(1);
     await act(async () => {
@@ -523,7 +543,7 @@ describe("useEnvironmentListSync", () => {
     globalThis.setInterval = (() => 1) as unknown as typeof setInterval;
     globalThis.clearInterval = mock(() => {}) as typeof clearInterval;
 
-    renderHook(() => useEnvironmentListSync(["project-1"], refreshProject));
+    renderHookInAppCommandScope(() => useEnvironmentListSync(["project-1"], refreshProject));
 
     await announceEnvironmentChange(1);
     await announceEnvironmentChange(2);
@@ -544,7 +564,7 @@ describe("useEnvironmentListSync", () => {
       .mockImplementationOnce(() => Promise.reject(new Error("temporary failure")))
       .mockImplementation(() => Promise.resolve());
 
-    renderHook(() => useEnvironmentListSync(["project-1"], refreshProject));
+    renderHookInAppCommandScope(() => useEnvironmentListSync(["project-1"], refreshProject));
 
     await act(async () => {
       requestResourceResync();

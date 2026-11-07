@@ -10,6 +10,7 @@ import { publishTerminalGeometryIfOwned } from "@/lib/terminal-geometry-owner";
 import { createXtermTerminal } from "@/lib/terminal-xterm";
 import { escapePathForTerminalInput, handleTerminalPaste } from "@/lib/terminal-paste";
 import {
+  terminalSessionStore,
   useTerminalSessionStore,
   createSessionKey,
   useConfigStore,
@@ -17,14 +18,15 @@ import {
   useEnvironmentStore,
 } from "@/stores";
 import { useAgentActivityStore } from "@/stores/agentActivityStore";
-import { useSessionStore } from "@/stores/sessionStore";
+import { sessionStore, useSessionStore } from "@/stores/sessionStore";
 import {
   useTerminalPortalStore,
   createTerminalKey,
   type PersistentTerminalData,
 } from "@/stores/terminalPortalStore";
 import { cn } from "@/lib/utils";
-import { bootstrapTerminalSession } from "@/lib/backend";
+import { backendForScope } from "@/lib/backend/scope-backend";
+import { useNodeScope, useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import type { TabType } from "@/contexts";
 import {
   DEFAULT_TERMINAL_APPEARANCE,
@@ -202,6 +204,8 @@ export function PersistentTerminal({
   onSetupComplete,
   onWrite,
 }: PersistentTerminalProps) {
+  // This node's backend (plan item 4001); the command node outside a node scope.
+  const backendScope = useScopesWithCommandFallback().scope;
   const isMobile = useMediaQuery("(max-width: 767px)");
   // Mirrored into a ref so the focus effect below can read the current
   // viewport without listing isMobile as a dependency: crossing the
@@ -301,7 +305,9 @@ export function PersistentTerminal({
   const sessionKey = createSessionKey(containerId, tabId, environmentId);
   const agentActivityState = useAgentActivityStore((state) => state.tabStates[tabId] ?? "idle");
 
-  // Session persistence
+  // Session persistence, on this terminal's node (plan item 3010).
+  const terminalSessions = useNodeScope().store(terminalSessionStore);
+  const persistentSessions = useNodeScope().store(sessionStore);
   const existingSession = useTerminalSessionStore((state) => state.sessions.get(sessionKey));
   const setSession = useTerminalSessionStore((state) => state.setSession);
   const setSerializedBuffer = useTerminalSessionStore((state) => state.setSerializedBuffer);
@@ -346,7 +352,8 @@ export function PersistentTerminal({
 
   // Subscribe to containerElement and isOpened from store to ensure we have the latest values
   // (props might be stale if store was updated after TerminalPortalHost rendered)
-  const terminalKey = createTerminalKey(environmentId, tabId);
+  const terminalNodeId = terminalData.nodeId;
+  const terminalKey = createTerminalKey(terminalNodeId, environmentId, tabId);
   const storedContainerElement = useTerminalPortalStore(
     (state) => state.terminals.get(terminalKey)?.containerElement ?? null,
   );
@@ -459,13 +466,14 @@ export function PersistentTerminal({
 
   const handlePaste = useCallback(async () => {
     await handleTerminalPaste({
+      writer: backendForScope(backendScope),
       containerId,
       worktreePath,
       writeToTerminal: writeRef.current,
       focusTerminal: () => terminal.focus(),
       componentName: "PersistentTerminal",
     });
-  }, [containerId, worktreePath, terminal]);
+  }, [containerId, worktreePath, terminal, backendScope]);
 
   // Keep compose bar ref in sync with state for synchronous access in key handler
   useEffect(() => {
@@ -987,7 +995,7 @@ export function PersistentTerminal({
 
     const runLoad = () => {
       if (
-        (useSessionStore.getState().sessionSnapshotGenerations.get(environmentId) ?? 0) >
+        (persistentSessions.getState().sessionSnapshotGenerations.get(environmentId) ?? 0) >
         sessionSnapshotBaseline
       ) {
         setSessionHydrationCheck((revision) => revision + 1);
@@ -1006,7 +1014,7 @@ export function PersistentTerminal({
           // store contains failures and superseded requests without publishing.
           // Only a newer successful generation is authoritative for this mount.
           if (
-            (useSessionStore.getState().sessionSnapshotGenerations.get(environmentId) ?? 0) >
+            (persistentSessions.getState().sessionSnapshotGenerations.get(environmentId) ?? 0) >
             sessionSnapshotBaseline
           ) {
             setSessionHydrationCheck((revision) => revision + 1);
@@ -1030,7 +1038,7 @@ export function PersistentTerminal({
         retryTimer = null;
       }
     };
-  }, [environmentId, loadSessionsForEnvironment, sessionSnapshotBaseline]);
+  }, [environmentId, loadSessionsForEnvironment, persistentSessions, sessionSnapshotBaseline]);
 
   // Restore only after the store has received an authoritative snapshot. The
   // load effect above updates Zustand synchronously before awaiting the backend,
@@ -1103,13 +1111,13 @@ export function PersistentTerminal({
   useEffect(() => {
     if (sessionId && sessionId !== existingSessionId) {
       log.debug("session.id-stored", () => ({ sessionKey, sessionId }));
-      const currentSession = useTerminalSessionStore.getState().sessions.get(sessionKey);
+      const currentSession = terminalSessions.getState().sessions.get(sessionKey);
       setSession(sessionKey, {
         ...currentSession,
         sessionId,
       });
     }
-  }, [sessionId, existingSessionId, sessionKey, setSession]);
+  }, [sessionId, existingSessionId, sessionKey, setSession, terminalSessions]);
 
   // Create persistent session for sidebar tracking
   useEffect(() => {
@@ -1342,8 +1350,8 @@ export function PersistentTerminal({
 
       terminal.open(containerElement);
 
-      markTerminalOpened(environmentId, tabId);
-      setTerminalContainer(environmentId, tabId, containerElement);
+      markTerminalOpened(terminalNodeId, environmentId, tabId);
+      setTerminalContainer(terminalNodeId, environmentId, tabId, containerElement);
 
       // Initial fit and font loading
       fitToLaidOutPane(fitAddon, terminalRef.current);
@@ -1405,7 +1413,12 @@ export function PersistentTerminal({
         // This can happen when the container was detached from DOM for too long and xterm disposed itself
         if (!hasXtermBefore) {
           // Recreate the terminal - this will trigger a re-render with new terminalData
-          const newTerminalData = recreateTerminal(environmentId, tabId, createXtermTerminal);
+          const newTerminalData = recreateTerminal(
+            terminalNodeId,
+            environmentId,
+            tabId,
+            createXtermTerminal,
+          );
           if (newTerminalData) {
             // Terminal was disposed and recreated - return empty cleanup since no handlers
             // were set up. The effect will re-run with the new terminalData from the store.
@@ -1478,7 +1491,7 @@ export function PersistentTerminal({
     }
 
     // Always update pane tracking
-    setTerminalPane(environmentId, tabId, paneId);
+    setTerminalPane(terminalNodeId, environmentId, tabId, paneId);
 
     // Handle user input. The xterm instance persists across portal moves, so
     // defensively remove any older input handler before installing this owner.
@@ -1575,7 +1588,7 @@ export function PersistentTerminal({
           (options) => serializeAddon.serialize(options),
           terminal.options.scrollback,
         );
-        const currentStoreBuffer = useTerminalSessionStore
+        const currentStoreBuffer = terminalSessions
           .getState()
           .sessions.get(sessionKey)?.serializedBuffer;
         const currentStoreLength = currentStoreBuffer?.length ?? 0;
@@ -1599,7 +1612,7 @@ export function PersistentTerminal({
             currentStoreLength === 0;
 
           if (restorationComplete && newBufferIsMeaningful) {
-            useTerminalSessionStore.getState().setSerializedBuffer(sessionKey, bufferContent);
+            terminalSessions.getState().setSerializedBuffer(sessionKey, bufferContent);
             const persistentId = persistentSessionIdRef.current;
             if (persistentId) {
               savePersistentSessionBuffer(persistentId, bufferContent).catch((err) => {
@@ -1632,6 +1645,7 @@ export function PersistentTerminal({
     paneId,
     containerId,
     environmentId,
+    terminalNodeId,
     isReconnecting,
     markTerminalOpened,
     setTerminalContainer,
@@ -1645,6 +1659,7 @@ export function PersistentTerminal({
     connectToCurrentTarget,
     sessionKey,
     savePersistentSessionBuffer,
+    terminalSessions,
   ]);
 
   // Refresh terminal when it becomes visible (isActive changes to true)
@@ -1887,7 +1902,8 @@ export function PersistentTerminal({
         if (disposed) return;
         dispatched = true;
 
-        void bootstrapTerminalSession(targetSessionId, launchData)
+        void backendForScope(backendScope)
+          .bootstrapTerminalSession(targetSessionId, launchData)
           .then((result) => {
             if (disposed || bootstrapRequestedForSessionRef.current !== targetSessionId) return;
             if (result.bootstrapped) {
@@ -1938,6 +1954,7 @@ export function PersistentTerminal({
       }
     };
   }, [
+    backendScope,
     acknowledgeInitialLaunchOptions,
     bootstrapped,
     isEnvironmentReady,
@@ -2035,7 +2052,7 @@ export function PersistentTerminal({
     connectionAttemptInFlightRef.current = null;
     if (isBackendManagedSetupTab) {
       const key = createSessionKey(containerId ?? null, tabId, environmentId);
-      const terminalStore = useTerminalSessionStore.getState();
+      const terminalStore = terminalSessions.getState();
       const existing = terminalStore.sessions.get(key);
       const { sessionId: _deadSetupSession, ...preserved } = existing ?? {};
       let preservedBuffer = existing?.serializedBuffer;
@@ -2068,6 +2085,7 @@ export function PersistentTerminal({
     tabId,
     terminal,
     terminalData.serializeAddon,
+    terminalSessions,
   ]);
   const handleDismissDisconnectedNotice = useCallback(() => {
     setDisconnectedNoticeDismissed(true);

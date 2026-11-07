@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { act, renderHook } from "@testing-library/react";
+import { act } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import { gitHubPullRequestKey } from "@orkestrator/protocol/github-pull-requests";
 import { usePullRequestDetail } from "@/hooks/usePullRequestData";
 import {
@@ -18,10 +19,11 @@ import {
 } from "../../../../tests/helpers/controlled-timeout";
 import {
   PULL_REQUEST_DETAIL_POLL_MS,
+  pullRequestsStore,
   resourceKey,
   startPullRequestDetailPolling,
-  usePullRequestsStore,
 } from "./pullRequestsStore";
+import { appCommandStore } from "@/test/app-command-store";
 
 const key = gitHubPullRequestKey(prRef);
 
@@ -47,17 +49,21 @@ describe("pullRequestsStore reads", () => {
       get_github_pull_request: () => (fail ? Promise.reject(new Error("boom")) : pending.promise),
     });
 
-    await usePullRequestsStore.getState().loadDetail(prRef);
-    expect(usePullRequestsStore.getState().errors.get(resourceKey("detail", key))).toBe("boom");
-    expect(usePullRequestsStore.getState().details.has(key)).toBe(false);
+    await appCommandStore(pullRequestsStore).getState().loadDetail(prRef);
+    expect(
+      appCommandStore(pullRequestsStore).getState().errors.get(resourceKey("detail", key)),
+    ).toBe("boom");
+    expect(appCommandStore(pullRequestsStore).getState().details.has(key)).toBe(false);
 
     fail = false;
-    const load = usePullRequestsStore.getState().loadDetail(prRef);
-    expect(usePullRequestsStore.getState().loading.has(resourceKey("detail", key))).toBe(true);
+    const load = appCommandStore(pullRequestsStore).getState().loadDetail(prRef);
+    expect(
+      appCommandStore(pullRequestsStore).getState().loading.has(resourceKey("detail", key)),
+    ).toBe(true);
     pending.resolve(makeDetail());
     await load;
 
-    const state = usePullRequestsStore.getState();
+    const state = appCommandStore(pullRequestsStore).getState();
     expect(state.loading.has(resourceKey("detail", key))).toBe(false);
     expect(state.errors.has(resourceKey("detail", key))).toBe(false);
     expect(state.details.get(key)?.title).toBe("feat: add usage history tab");
@@ -74,14 +80,14 @@ describe("pullRequestsStore reads", () => {
     const queue = [first, second];
     installBackend({ get_github_pull_request: () => queue.shift()!.promise });
 
-    const older = usePullRequestsStore.getState().loadDetail(prRef);
-    const newer = usePullRequestsStore.getState().loadDetail(prRef);
+    const older = appCommandStore(pullRequestsStore).getState().loadDetail(prRef);
+    const newer = appCommandStore(pullRequestsStore).getState().loadDetail(prRef);
     second.resolve(makeDetail({ title: "newer" }));
     await newer;
     first.resolve(makeDetail({ title: "older" }));
     await older;
 
-    expect(usePullRequestsStore.getState().details.get(key)?.title).toBe("newer");
+    expect(appCommandStore(pullRequestsStore).getState().details.get(key)?.title).toBe("newer");
   });
 
   test("loadList keys results by project, filter and query", async () => {
@@ -94,32 +100,38 @@ describe("pullRequestsStore reads", () => {
         hasMore: false,
       }),
     });
-    await usePullRequestsStore.getState().loadList("p1", "mine", " bug ");
+    await appCommandStore(pullRequestsStore).getState().loadList("p1", "mine", " bug ");
     expect(callsFor("list_github_pull_requests")).toEqual([
       { projectId: "p1", filter: "mine", query: "bug" },
     ]);
-    expect(usePullRequestsStore.getState().lists.has("p1:mine:bug")).toBe(true);
+    expect(appCommandStore(pullRequestsStore).getState().lists.has("p1:mine:bug")).toBe(true);
   });
 });
 
 describe("pullRequestsStore mutations", () => {
   test("setFileViewed is optimistic and reverts when GitHub rejects it", async () => {
-    usePullRequestsStore.setState({ files: new Map([[key, makeFiles()]]) });
+    appCommandStore(pullRequestsStore).setState({ files: new Map([[key, makeFiles()]]) });
     const pending = deferred<never>();
     installBackend({
       set_github_pull_request_file_viewed: () => pending.promise,
       get_github_pull_request_files: () => makeFiles(),
     });
 
-    const write = usePullRequestsStore.getState().setFileViewed(prRef, "src/app.ts", true);
-    expect(usePullRequestsStore.getState().files.get(key)?.files[0]?.viewedState).toBe("viewed");
+    const write = appCommandStore(pullRequestsStore)
+      .getState()
+      .setFileViewed(prRef, "src/app.ts", true);
+    expect(
+      appCommandStore(pullRequestsStore).getState().files.get(key)?.files[0]?.viewedState,
+    ).toBe("viewed");
     pending.reject(new Error("denied"));
     await expect(write).rejects.toThrow("denied");
-    expect(usePullRequestsStore.getState().files.get(key)?.files[0]?.viewedState).toBe("unviewed");
+    expect(
+      appCommandStore(pullRequestsStore).getState().files.get(key)?.files[0]?.viewedState,
+    ).toBe("unviewed");
   });
 
   test("updateState stores the returned detail and re-fetches a loaded timeline", async () => {
-    usePullRequestsStore.setState({
+    appCommandStore(pullRequestsStore).setState({
       details: new Map([[key, makeDetail()]]),
       timelines: new Map([[key, { ref: prRef, items: [], truncated: false }]]),
     });
@@ -127,8 +139,8 @@ describe("pullRequestsStore mutations", () => {
       update_github_pull_request_state: () => makeDetail({ state: "closed" }),
       get_github_pull_request_timeline: () => ({ ref: prRef, items: [], truncated: false }),
     });
-    await usePullRequestsStore.getState().updateState(prRef, "close");
-    expect(usePullRequestsStore.getState().details.get(key)?.state).toBe("closed");
+    await appCommandStore(pullRequestsStore).getState().updateState(prRef, "close");
+    expect(appCommandStore(pullRequestsStore).getState().details.get(key)?.state).toBe("closed");
     expect(callsFor("update_github_pull_request_state")).toEqual([
       { owner: "acme", repo: "widget", number: 42, action: "close" },
     ]);
@@ -164,9 +176,12 @@ describe("pull request polling", () => {
   });
 
   test("the detail hook polls only while active", async () => {
-    const { rerender, unmount } = renderHook(({ active }) => usePullRequestDetail(prRef, active), {
-      initialProps: { active: true },
-    });
+    const { rerender, unmount } = renderHookInAppCommandScope(
+      ({ active }) => usePullRequestDetail(prRef, active),
+      {
+        initialProps: { active: true },
+      },
+    );
     expect(clock.pendingCount()).toBe(1);
     expect(callsFor("get_github_pull_request")).toHaveLength(1);
 
@@ -185,18 +200,24 @@ test("a files read predating a viewed write cannot undo acknowledged state", asy
   const old = deferred<ReturnType<typeof makeFiles>>();
   const refreshed = deferred<ReturnType<typeof makeFiles>>();
   const reads = [old, refreshed];
-  usePullRequestsStore.setState({ files: new Map([[key, makeFiles()]]) });
+  appCommandStore(pullRequestsStore).setState({ files: new Map([[key, makeFiles()]]) });
   installBackend({
     get_github_pull_request_files: () => reads.shift()!.promise,
     set_github_pull_request_file_viewed: () => ({ viewedState: "viewed" }),
   });
-  const read = usePullRequestsStore.getState().loadFiles(prRef);
-  await usePullRequestsStore.getState().setFileViewed(prRef, "src/app.ts", true);
+  const read = appCommandStore(pullRequestsStore).getState().loadFiles(prRef);
+  await appCommandStore(pullRequestsStore).getState().setFileViewed(prRef, "src/app.ts", true);
   old.resolve(makeFiles());
   await read;
-  expect(usePullRequestsStore.getState().files.get(key)?.files[0]?.viewedState).toBe("viewed");
+  expect(appCommandStore(pullRequestsStore).getState().files.get(key)?.files[0]?.viewedState).toBe(
+    "viewed",
+  );
   refreshed.resolve(makeFiles({ files: [{ ...makeFiles().files[0]!, viewedState: "viewed" }] }));
   await act(async () => {});
-  expect(usePullRequestsStore.getState().files.get(key)?.files[0]?.viewedState).toBe("viewed");
-  expect(usePullRequestsStore.getState().loading.has(resourceKey("files", key))).toBe(false);
+  expect(appCommandStore(pullRequestsStore).getState().files.get(key)?.files[0]?.viewedState).toBe(
+    "viewed",
+  );
+  expect(appCommandStore(pullRequestsStore).getState().loading.has(resourceKey("files", key))).toBe(
+    false,
+  );
 });

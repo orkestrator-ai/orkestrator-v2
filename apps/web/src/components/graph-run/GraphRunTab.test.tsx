@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act as reactAct, useEffect } from "react";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { GraphRun, NodeActivation } from "@orkestrator/protocol/graphs/run";
 import {
   TerminalProvider,
@@ -12,9 +13,10 @@ import { invoke as nativeInvoke } from "@/lib/native/backend";
 import type { GraphRunRewindBackend } from "@/lib/backend/graph-runs";
 import { dispatchResourceChange, resetResourceSync } from "@/lib/resource-sync";
 import { useFlowGraphViewStore } from "@/stores/flowGraphViewStore";
-import { useGraphRunStore } from "@/stores/graphRunStore";
+import { graphRunStore } from "@/stores/graphRunStore";
 import { GraphRunTab } from "./GraphRunTab";
 import { POLICY, act, agentSession, runOf } from "./graph-run.test-fixtures";
+import { appCommandStore } from "@/test/app-command-store";
 
 const invokeMock = nativeInvoke as unknown as ReturnType<typeof mock>;
 
@@ -90,7 +92,7 @@ function RegisterCreateTab() {
 }
 
 function renderTab(props: { isActive?: boolean; rewindBackend?: GraphRunRewindBackend } = {}) {
-  return render(
+  return renderInAppCommandScope(
     <TerminalProvider>
       <RegisterCreateTab />
       <div style={{ width: 1400, height: 900, position: "relative" }}>
@@ -113,7 +115,7 @@ function reviewRun(activations: NodeActivation[], overrides: Partial<GraphRun> =
 beforeEach(() => {
   handlers = {};
   createTabMock = mock(() => true);
-  useGraphRunStore.setState({
+  appCommandStore(graphRunStore).setState({
     runs: new Map(),
     lists: new Map(),
     transcripts: new Map(),

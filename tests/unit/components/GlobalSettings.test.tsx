@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { useConfigStore } from "@/stores/configStore";
-import { useProjectStore } from "@/stores/projectStore";
-import { useUIStore } from "@/stores/uiStore";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
+import { configStore } from "@/stores/configStore";
+import { projectStore } from "@/stores/projectStore";
+import { uiStore } from "@/stores/uiStore";
 import { PLATFORM_ICON_CLASS } from "@/components/icons/AgentIcons";
 import { AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
 import { mockWriteText } from "../../mocks/clipboard";
@@ -23,6 +24,7 @@ import type {
   GlobalConfig,
   WebClientStatus,
 } from "@/types";
+import { appCommandStore } from "../../../apps/web/src/test/app-command-store";
 
 // What a save with nothing to clear sends beside its patch; toHaveBeenCalledWith
 // ignores the undefined `machine`, and any cleared key or machine would fail it.
@@ -31,7 +33,7 @@ const SAVE_OPTIONS = { unset: [], machine: undefined };
 // As the backend does, merge the changed keys onto the current settings.
 const mockPatchGlobalConfig = mock(
   async (patch: Record<string, unknown>, options?: { unset?: string[] }) => {
-    const global = { ...useConfigStore.getState().config.global, ...patch } as Record<
+    const global = { ...appCommandStore(configStore).getState().config.global, ...patch } as Record<
       string,
       unknown
     >;
@@ -43,7 +45,7 @@ const mockPatchGlobalConfig = mock(
 const mockSetGitHubToken = mock(async (token: string | null) => ({
   version: "1.0",
   global: {
-    ...useConfigStore.getState().config.global,
+    ...appCommandStore(configStore).getState().config.global,
     githubTokenConfigured: token !== null,
   },
   repositories: {},
@@ -51,7 +53,7 @@ const mockSetGitHubToken = mock(async (token: string | null) => ({
 const mockSetCursorApiKey = mock(async (apiKey: string | null) => ({
   version: "1.0",
   global: {
-    ...useConfigStore.getState().config.global,
+    ...appCommandStore(configStore).getState().config.global,
     cursorApiKeyConfigured: apiKey !== null,
   },
   repositories: {},
@@ -59,7 +61,7 @@ const mockSetCursorApiKey = mock(async (apiKey: string | null) => ({
 const mockSetAnthropicApiKey = mock(async (apiKey: string | null) => ({
   version: "1.0",
   global: {
-    ...useConfigStore.getState().config.global,
+    ...appCommandStore(configStore).getState().config.global,
     anthropicApiKeyConfigured: apiKey !== null,
   },
   repositories: {},
@@ -67,7 +69,7 @@ const mockSetAnthropicApiKey = mock(async (apiKey: string | null) => ({
 const mockSetOpenCodeZenApiKey = mock(async (apiKey: string | null) => ({
   version: "1.0",
   global: {
-    ...useConfigStore.getState().config.global,
+    ...appCommandStore(configStore).getState().config.global,
     openCodeZenApiKeyConfigured: apiKey !== null,
   },
   repositories: {},
@@ -248,7 +250,7 @@ async function flushAutoSave() {
 
 describe("GlobalSettings", () => {
   const setSavedCodexMaxConcurrentThreads = (value: number) => {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,
@@ -361,10 +363,10 @@ describe("GlobalSettings", () => {
       source: "file" as const,
     }));
     window.orkestratorGateway = { enabled: true };
-    useProjectStore.setState({ projects: [], isLoading: false, error: null });
-    useUIStore.setState({ selectedProjectId: null });
+    appCommandStore(projectStore).setState({ projects: [], isLoading: false, error: null });
+    appCommandStore(uiStore).setState({ selectedProjectId: null });
 
-    useConfigStore.setState({
+    appCommandStore(configStore).setState({
       config: {
         version: "1.0",
         global: {
@@ -403,13 +405,13 @@ describe("GlobalSettings", () => {
   });
 
   test("Cursor sign-in controls remain available when Cursor is disabled", async () => {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       config: {
         ...state.config,
         global: { ...state.config.global, enabledAgentPlatforms: ["claude"] },
       },
     }));
-    render(<GlobalSettings activeSection="cursor" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="cursor" />);
     expect(await screen.findByRole("button", { name: "Sign in with Cursor" })).toBeTruthy();
     expect(screen.queryByRole("region", { name: "Cursor Agent sign-in" }) === null).toBe(true);
   });
@@ -451,7 +453,7 @@ describe("GlobalSettings", () => {
       };
       return snapshot;
     });
-    render(<GlobalSettings activeSection="claude" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="claude" />);
     const card = screen.getByRole("region", { name: "Claude Code sign-in" });
     expect(await within(card).findByText("Signed in")).toBeTruthy();
     const added = await screen.findByRole("listitem", { name: "Work account" });
@@ -461,7 +463,7 @@ describe("GlobalSettings", () => {
   });
 
   test("saves codexMode changes", async () => {
-    render(<GlobalSettings activeSection="codex" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="codex" />);
 
     // Each platform pane labels its own mode group, so the query cannot pick up
     // another platform's control.
@@ -484,7 +486,7 @@ describe("GlobalSettings", () => {
   });
 
   test("refetches plan usage after saving an OpenCode Zen API key", async () => {
-    render(<GlobalSettings activeSection="opencode" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="opencode" />);
     await waitFor(() => expect(mockGetPlanUsage).toHaveBeenCalledTimes(1));
 
     const zenKey = screen.getByLabelText("OpenCode Zen API key");
@@ -505,7 +507,7 @@ describe("GlobalSettings", () => {
   test.each(["claude", "codex"] as const)(
     "shows account usage without a separate plan card for %s",
     async (platform) => {
-      render(<GlobalSettings activeSection={platform} />);
+      renderInAppCommandScope(<GlobalSettings activeSection={platform} />);
       await screen.findByText("5-hour limit");
       expect(
         screen.getByRole("region", {
@@ -527,7 +529,7 @@ describe("GlobalSettings", () => {
   test.each(["cursor", "opencode"] as const)(
     "retains the platform plan card and forced refresh for %s",
     async (platform) => {
-      render(<GlobalSettings activeSection={platform} />);
+      renderInAppCommandScope(<GlobalSettings activeSection={platform} />);
       const card = screen.getByRole("region", { name: "Plan usage" });
       await waitFor(() =>
         expect(mockGetPlanUsage).toHaveBeenCalledWith(platform, { force: false }, undefined),
@@ -546,7 +548,7 @@ describe("GlobalSettings", () => {
   );
 
   test("forces Claude account usage past the cache on return after disabling host credentials", async () => {
-    const view = render(<GlobalSettings activeSection="claude" />);
+    const view = renderInAppCommandScope(<GlobalSettings activeSection="claude" />);
     await screen.findByText("5-hour limit");
     view.rerender(<GlobalSettings activeSection="general" />);
     mockGetAgentAccountUsage.mockImplementation(async (platform) => ({
@@ -576,7 +578,7 @@ describe("GlobalSettings", () => {
   });
 
   test("forces mounted Claude account usage after saving an Anthropic API key", async () => {
-    render(<GlobalSettings activeSection="claude" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="claude" />);
     await screen.findByText("5-hour limit");
     const key = screen.getByPlaceholderText("sk-ant-...");
     fireEvent.change(key, { target: { value: "test-anthropic-key" } });
@@ -595,7 +597,7 @@ describe("GlobalSettings", () => {
   });
 
   test("shows the default Codex subagent limit and saves changes", async () => {
-    render(<GlobalSettings activeSection="codex" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="codex" />);
 
     const input = screen.getByLabelText("Concurrent subagent limit") as HTMLInputElement;
     expect(input.value).toBe("5");
@@ -615,7 +617,7 @@ describe("GlobalSettings", () => {
 
   test("initializes the Codex subagent limit from a persisted non-default value", async () => {
     setSavedCodexMaxConcurrentThreads(9);
-    render(<GlobalSettings activeSection="codex" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="codex" />);
 
     expect((screen.getByLabelText("Concurrent subagent limit") as HTMLInputElement).value).toBe(
       "9",
@@ -634,7 +636,7 @@ describe("GlobalSettings", () => {
   ] as const) {
     test(`rejects ${description} without corrupting the saved Codex subagent limit`, async () => {
       setSavedCodexMaxConcurrentThreads(7);
-      render(<GlobalSettings activeSection="codex" />);
+      renderInAppCommandScope(<GlobalSettings activeSection="codex" />);
 
       const input = screen.getByLabelText("Concurrent subagent limit") as HTMLInputElement;
 
@@ -642,14 +644,16 @@ describe("GlobalSettings", () => {
 
       expect(input.value).toBe("7");
       await flushAutoSave();
-      expect(useConfigStore.getState().config.global.codexMaxConcurrentThreads).toBe(7);
+      expect(appCommandStore(configStore).getState().config.global.codexMaxConcurrentThreads).toBe(
+        7,
+      );
       expect(mockPatchGlobalConfig).not.toHaveBeenCalled();
     });
   }
 
   test("resynchronizes the Codex subagent limit when the config store changes", async () => {
     setSavedCodexMaxConcurrentThreads(4);
-    render(<GlobalSettings activeSection="codex" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="codex" />);
 
     const input = screen.getByLabelText("Concurrent subagent limit") as HTMLInputElement;
     expect(input.value).toBe("4");
@@ -664,7 +668,7 @@ describe("GlobalSettings", () => {
   test("retains a Codex subagent limit edit after a failed save so it can be retried", async () => {
     setSavedCodexMaxConcurrentThreads(6);
     mockPatchGlobalConfig.mockRejectedValueOnce(new Error("disk full"));
-    render(<GlobalSettings activeSection="codex" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="codex" />);
 
     const input = screen.getByLabelText("Concurrent subagent limit") as HTMLInputElement;
     fireEvent.change(input, { target: { value: "10" } });
@@ -693,7 +697,7 @@ describe("GlobalSettings", () => {
 
   test("shows the shared backend status and credentials in Electron", async () => {
     window.orkestratorGateway = undefined;
-    render(<GlobalSettings activeSection="web-client" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="web-client" />);
 
     expect(screen.getByText("Web client")).toBeTruthy();
     expect(screen.getByText(/Connect from orkestrator.dev/)).toBeTruthy();
@@ -705,7 +709,7 @@ describe("GlobalSettings", () => {
 
   test("persists and applies Electron web access changes", async () => {
     window.orkestratorGateway = undefined;
-    render(<GlobalSettings activeSection="web-client" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="web-client" />);
     await screen.findByText("Running");
 
     fireEvent.click(screen.getByRole("switch", { name: "Allow web access" }));
@@ -722,7 +726,7 @@ describe("GlobalSettings", () => {
   });
 
   test("copies the current web client URL", async () => {
-    render(<GlobalSettings activeSection="web-client" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="web-client" />);
     await screen.findByText("Running");
 
     fireEvent.click(screen.getByRole("button", { name: "Copy web client URL" }));
@@ -742,7 +746,7 @@ describe("GlobalSettings", () => {
       error: "Refusing to replace the existing Tailscale Serve configuration on HTTPS port 443",
       resetAvailable: true,
     });
-    render(<GlobalSettings activeSection="web-client" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="web-client" />);
 
     expect(await screen.findByText(/Refusing to replace/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Reset Tailscale Serve" }));
@@ -776,7 +780,7 @@ describe("GlobalSettings", () => {
       error: "Existing HTTPS listener",
       resetAvailable: true,
     });
-    render(<GlobalSettings activeSection="web-client" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="web-client" />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Reset Tailscale Serve" }));
     const dialog = await screen.findByRole("alertdialog");
@@ -810,7 +814,7 @@ describe("GlobalSettings", () => {
         error: null,
         resetAvailable: false,
       });
-    render(<GlobalSettings activeSection="web-client" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="web-client" />);
 
     const confirmReset = async () => {
       fireEvent.click(await screen.findByRole("button", { name: "Reset Tailscale Serve" }));
@@ -836,7 +840,7 @@ describe("GlobalSettings", () => {
   test("keeps a failed Electron web access transition retryable after config persistence", async () => {
     window.orkestratorGateway = undefined;
     mockSetWebClientEnabled.mockRejectedValueOnce(new Error("control request failed"));
-    render(<GlobalSettings activeSection="web-client" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="web-client" />);
     await screen.findByText("Running");
 
     fireEvent.click(screen.getByRole("switch", { name: "Allow web access" }));
@@ -858,7 +862,7 @@ describe("GlobalSettings", () => {
   });
 
   test("renders the authoritative disabled status as Off", async () => {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       config: {
         ...state.config,
         global: { ...state.config.global, webClientEnabled: false },
@@ -871,13 +875,13 @@ describe("GlobalSettings", () => {
       error: null,
     });
 
-    render(<GlobalSettings activeSection="web-client" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="web-client" />);
     expect(await screen.findByText("Off")).toBeTruthy();
     expect(screen.queryByRole("link") === null).toBe(true);
   });
 
   test("displays, reveals, edits, and saves the gateway token", async () => {
-    render(<GlobalSettings activeSection="web-client" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="web-client" />);
     const input = (await screen.findByLabelText("Gateway token")) as HTMLInputElement;
 
     expect(input.type).toBe("password");
@@ -895,7 +899,7 @@ describe("GlobalSettings", () => {
   });
 
   test("copies the gateway token", async () => {
-    render(<GlobalSettings activeSection="web-client" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="web-client" />);
     await screen.findByDisplayValue("gateway-token-123456");
 
     fireEvent.click(screen.getByRole("button", { name: "Copy gateway token" }));
@@ -910,7 +914,7 @@ describe("GlobalSettings", () => {
     const logs = captureLogs();
     mockWriteText.mockRejectedValue(new Error("clipboard denied"));
     try {
-      render(<GlobalSettings activeSection="web-client" />);
+      renderInAppCommandScope(<GlobalSettings activeSection="web-client" />);
       await screen.findByText("Running");
       await screen.findByDisplayValue("gateway-token-123456");
 
@@ -950,7 +954,7 @@ describe("GlobalSettings", () => {
       editable: false,
       source: "environment",
     });
-    render(<GlobalSettings activeSection="web-client" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="web-client" />);
 
     const input = (await screen.findByLabelText("Gateway token")) as HTMLInputElement;
     await waitFor(() => expect(input.value).toBe("environment-token-123456"));
@@ -959,7 +963,7 @@ describe("GlobalSettings", () => {
   });
 
   test("validates gateway token character and encoded-cookie boundaries", async () => {
-    render(<GlobalSettings activeSection="web-client" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="web-client" />);
     const input = (await screen.findByLabelText("Gateway token")) as HTMLInputElement;
 
     fireEvent.change(input, { target: { value: "short" } });
@@ -984,7 +988,7 @@ describe("GlobalSettings", () => {
 
   test("shows gateway token load failures without enabling an empty input", async () => {
     mockGetGatewayTokenSettings.mockRejectedValueOnce(new Error("token settings unavailable"));
-    render(<GlobalSettings activeSection="web-client" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="web-client" />);
 
     expect(await screen.findByText("token settings unavailable")).toBeTruthy();
     expect((screen.getByLabelText("Gateway token") as HTMLInputElement).disabled).toBe(true);
@@ -993,7 +997,7 @@ describe("GlobalSettings", () => {
   test("reports gateway token persistence failures and keeps the edit retryable", async () => {
     const logs = captureLogs();
     mockSetGatewayToken.mockRejectedValueOnce(new Error("credential write failed"));
-    render(<GlobalSettings activeSection="web-client" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="web-client" />);
     const input = (await screen.findByLabelText("Gateway token")) as HTMLInputElement;
 
     fireEvent.change(input, { target: { value: "replacement-token-123456" } });
@@ -1022,7 +1026,7 @@ describe("GlobalSettings", () => {
   });
 
   test("does not let a remote client change the desktop web access lifecycle", async () => {
-    render(<GlobalSettings activeSection="web-client" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="web-client" />);
     const input = (await screen.findByLabelText("Gateway token")) as HTMLInputElement;
 
     fireEvent.change(input, { target: { value: "replacement-token-123456" } });
@@ -1035,11 +1039,11 @@ describe("GlobalSettings", () => {
   });
 
   test("does not refetch gateway credentials for unrelated configuration changes", async () => {
-    render(<GlobalSettings activeSection="web-client" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="web-client" />);
     await screen.findByLabelText("Gateway token");
 
     act(() => {
-      useConfigStore.setState((state) => ({
+      appCommandStore(configStore).setState((state) => ({
         config: {
           ...state.config,
           global: { ...state.config.global, webClientEnabled: false },
@@ -1073,7 +1077,7 @@ describe("GlobalSettings", () => {
       .mockImplementationOnce(() => firstToken.promise)
       .mockImplementationOnce(() => secondToken.promise);
 
-    const view = render(<GlobalSettings activeSection="web-client" />);
+    const view = renderInAppCommandScope(<GlobalSettings activeSection="web-client" />);
     view.rerender(<GlobalSettings activeSection="general" />);
     view.rerender(<GlobalSettings activeSection="web-client" />);
 
@@ -1118,7 +1122,7 @@ describe("GlobalSettings", () => {
     const token = deferred<{ token: string; editable: boolean; source: "file" }>();
     mockGetWebClientStatus.mockImplementationOnce(() => status.promise);
     mockGetGatewayTokenSettings.mockImplementationOnce(() => token.promise);
-    const view = render(<GlobalSettings activeSection="web-client" />);
+    const view = renderInAppCommandScope(<GlobalSettings activeSection="web-client" />);
     view.unmount();
 
     await act(async () => {
@@ -1142,7 +1146,7 @@ describe("GlobalSettings", () => {
       url: null,
       error: "No Tailscale connection was found",
     });
-    const { unmount } = render(<GlobalSettings activeSection="web-client" />);
+    const { unmount } = renderInAppCommandScope(<GlobalSettings activeSection="web-client" />);
 
     expect(await screen.findByText("Unavailable")).toBeTruthy();
     expect(screen.getByText("No Tailscale connection was found")).toBeTruthy();
@@ -1150,12 +1154,12 @@ describe("GlobalSettings", () => {
     unmount();
 
     mockGetWebClientStatus.mockRejectedValueOnce(new Error("IPC unavailable"));
-    render(<GlobalSettings activeSection="web-client" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="web-client" />);
     expect(await screen.findByText("IPC unavailable")).toBeTruthy();
   });
 
   test("shows a disabled lifecycle toggle in a remote browser", async () => {
-    render(<GlobalSettings activeSection="web-client" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="web-client" />);
     await screen.findByText("Running");
 
     expect(screen.getByLabelText("Gateway token")).toBeTruthy();
@@ -1166,7 +1170,7 @@ describe("GlobalSettings", () => {
   });
 
   test("uses a normal browser link for the active remote gateway", async () => {
-    render(<GlobalSettings activeSection="web-client" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="web-client" />);
     const link = (await screen.findByRole("link", { name: /100\.88\.12\.3/ })) as HTMLAnchorElement;
 
     expect(link.href).toBe("http://100.88.12.3:34121/");
@@ -1176,7 +1180,7 @@ describe("GlobalSettings", () => {
 
   test("opens the managed HTTPS address in the system browser from Electron", async () => {
     window.orkestratorGateway = undefined;
-    render(<GlobalSettings activeSection="web-client" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="web-client" />);
     const link = await screen.findByRole("link", { name: /100\.88\.12\.3/ });
 
     fireEvent.click(link);
@@ -1190,7 +1194,7 @@ describe("GlobalSettings", () => {
         .map((button) => button.closest("li")?.querySelector("span")?.textContent ?? "");
 
     test("names and refreshes the fallback repository when none is selected", async () => {
-      useProjectStore.setState({
+      appCommandStore(projectStore).setState({
         projects: [
           {
             id: "project-2",
@@ -1211,7 +1215,7 @@ describe("GlobalSettings", () => {
         ],
       });
 
-      render(<GlobalSettings activeSection="opencode" />);
+      renderInAppCommandScope(<GlobalSettings activeSection="opencode" />);
 
       expect(
         screen.getByText("No repository is selected; models are loaded from Fallback Repository."),
@@ -1231,7 +1235,7 @@ describe("GlobalSettings", () => {
     });
 
     test("defaults to the two managed provider catalogues", () => {
-      render(<GlobalSettings activeSection="opencode" />);
+      renderInAppCommandScope(<GlobalSettings activeSection="opencode" />);
 
       expect(providerItems()).toEqual(["opencode", "opencode-go"]);
       // Nothing is dirty yet, so the section must not offer a reset.
@@ -1239,7 +1243,7 @@ describe("GlobalSettings", () => {
     });
 
     test("adds a provider and saves the widened list", async () => {
-      render(<GlobalSettings activeSection="opencode" />);
+      renderInAppCommandScope(<GlobalSettings activeSection="opencode" />);
 
       fireEvent.change(screen.getByLabelText("Add a provider"), {
         target: { value: "OpenRouter" },
@@ -1261,7 +1265,7 @@ describe("GlobalSettings", () => {
     });
 
     test("removes a provider and saves the narrowed list", async () => {
-      render(<GlobalSettings activeSection="opencode" />);
+      renderInAppCommandScope(<GlobalSettings activeSection="opencode" />);
 
       fireEvent.click(screen.getByRole("button", { name: "Remove opencode-go provider" }));
       expect(providerItems()).toEqual(["opencode"]);
@@ -1276,7 +1280,7 @@ describe("GlobalSettings", () => {
     });
 
     test("rejects a duplicate, a blank, and a pasted model id", () => {
-      render(<GlobalSettings activeSection="opencode" />);
+      renderInAppCommandScope(<GlobalSettings activeSection="opencode" />);
       const input = screen.getByLabelText("Add a provider");
       const addButton = () => screen.getByRole("button", { name: "Add" }) as HTMLButtonElement;
 
@@ -1296,7 +1300,7 @@ describe("GlobalSettings", () => {
     });
 
     test("warns that clearing every provider offers the whole catalogue", async () => {
-      render(<GlobalSettings activeSection="opencode" />);
+      renderInAppCommandScope(<GlobalSettings activeSection="opencode" />);
 
       for (const provider of ["opencode", "opencode-go"]) {
         fireEvent.click(screen.getByRole("button", { name: `Remove ${provider} provider` }));
@@ -1314,7 +1318,7 @@ describe("GlobalSettings", () => {
     });
 
     test("restores the managed defaults after an edit", () => {
-      render(<GlobalSettings activeSection="opencode" />);
+      renderInAppCommandScope(<GlobalSettings activeSection="opencode" />);
 
       fireEvent.click(screen.getByRole("button", { name: "Remove opencode provider" }));
       fireEvent.click(screen.getByRole("button", { name: "Reset to defaults" }));
@@ -1323,7 +1327,7 @@ describe("GlobalSettings", () => {
     });
 
     test("refuses to add past the stored provider cap", () => {
-      useConfigStore.setState((state) => ({
+      appCommandStore(configStore).setState((state) => ({
         config: {
           ...state.config,
           global: {
@@ -1335,7 +1339,7 @@ describe("GlobalSettings", () => {
           },
         },
       }));
-      render(<GlobalSettings activeSection="opencode" />);
+      renderInAppCommandScope(<GlobalSettings activeSection="opencode" />);
 
       expect(providerItems()).toHaveLength(MAX_OPENCODE_MODEL_PROVIDERS);
       fireEvent.change(screen.getByLabelText("Add a provider"), {
@@ -1358,7 +1362,7 @@ describe("GlobalSettings", () => {
   });
 
   test("renders every settings section", () => {
-    const { rerender } = render(<GlobalSettings activeSection="general" />);
+    const { rerender } = renderInAppCommandScope(<GlobalSettings activeSection="general" />);
     expect(screen.getByText("Preferred Editor")).toBeTruthy();
     rerender(<GlobalSettings activeSection="version-control" />);
     expect(screen.getByText("GitHub authentication")).toBeTruthy();
@@ -1387,7 +1391,7 @@ describe("GlobalSettings", () => {
   });
 
   test("saves one shared custom review instruction", async () => {
-    render(<GlobalSettings activeSection="review" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="review" />);
 
     const instruction = screen.getByLabelText("Review instruction") as HTMLTextAreaElement;
     expect(instruction.value).toContain("{{targetBranch}}");
@@ -1414,7 +1418,7 @@ describe("GlobalSettings", () => {
   });
 
   test("does not allow an empty review instruction to be saved", async () => {
-    render(<GlobalSettings activeSection="review" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="review" />);
     await waitFor(() => expect(mockGetLogDirectory).toHaveBeenCalled());
 
     fireEvent.change(screen.getByLabelText("Review instruction"), {
@@ -1431,14 +1435,14 @@ describe("GlobalSettings", () => {
   });
 
   test("falls back to the built-in instruction for malformed persisted values", () => {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       config: {
         ...state.config,
         global: { ...state.config.global, reviewInstruction: 123 as never },
       },
     }));
 
-    render(<GlobalSettings activeSection="review" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="review" />);
 
     const instruction = screen.getByLabelText("Review instruction") as HTMLTextAreaElement;
     expect(instruction.value).toContain("correctness, regressions, security");
@@ -1447,7 +1451,7 @@ describe("GlobalSettings", () => {
   });
 
   test("enforces the review instruction length boundary", async () => {
-    render(<GlobalSettings activeSection="review" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="review" />);
     await waitFor(() => expect(mockGetLogDirectory).toHaveBeenCalled());
     const instruction = screen.getByLabelText("Review instruction") as HTMLTextAreaElement;
 
@@ -1471,7 +1475,7 @@ describe("GlobalSettings", () => {
   });
 
   test("does not warn at the inclusive recommended-length boundary", async () => {
-    render(<GlobalSettings activeSection="review" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="review" />);
     await waitFor(() => expect(mockGetLogDirectory).toHaveBeenCalled());
     const instruction = screen.getByLabelText("Review instruction") as HTMLTextAreaElement;
 
@@ -1490,7 +1494,7 @@ describe("GlobalSettings", () => {
   test("keeps every described-by target present in the document", async () => {
     // Asserting only that the warning id appears would let a regression drop
     // the description and status ids, leaving the field partly unannounced.
-    render(<GlobalSettings activeSection="review" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="review" />);
     await waitFor(() => expect(mockGetLogDirectory).toHaveBeenCalled());
     const instruction = screen.getByLabelText("Review instruction") as HTMLTextAreaElement;
 
@@ -1510,7 +1514,7 @@ describe("GlobalSettings", () => {
   });
 
   test("warns about long review instructions without blocking legacy values", async () => {
-    render(<GlobalSettings activeSection="review" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="review" />);
     await waitFor(() => expect(mockGetLogDirectory).toHaveBeenCalled());
     const instruction = screen.getByLabelText("Review instruction") as HTMLTextAreaElement;
 
@@ -1547,7 +1551,7 @@ describe("GlobalSettings", () => {
   });
 
   test("reports custom instructions that do not use the target branch token", async () => {
-    render(<GlobalSettings activeSection="review" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="review" />);
     await waitFor(() => expect(mockGetLogDirectory).toHaveBeenCalled());
     const instruction = screen.getByLabelText("Review instruction") as HTMLTextAreaElement;
 
@@ -1562,7 +1566,7 @@ describe("GlobalSettings", () => {
   });
 
   test("saves a non-default editor selection", async () => {
-    render(<GlobalSettings activeSection="general" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="general" />);
 
     fireEvent.click(screen.getByRole("button", { name: "Cursor" }));
     await flushAutoSave();
@@ -1578,7 +1582,7 @@ describe("GlobalSettings", () => {
   test("saves the default agent from the Defaults page", async () => {
     // Default Agent sits beside the defaults it governs rather than on General,
     // and the same control appears at the repository and environment tiers.
-    render(<GlobalSettings activeSection="defaults" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="defaults" />);
 
     const agents = screen.getByRole("radiogroup", { name: "Default agent" });
     expect(
@@ -1601,7 +1605,7 @@ describe("GlobalSettings", () => {
   });
 
   test("shows all platforms and persists visibility choices", async () => {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,
@@ -1611,7 +1615,7 @@ describe("GlobalSettings", () => {
         },
       },
     }));
-    render(<GlobalSettings activeSection="platforms" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="platforms" />);
 
     for (const name of ["Claude Code", "Codex", "Cursor Agent", "Grok Build", "OpenCode"]) {
       expect(screen.getByRole("switch", { name })).toBeTruthy();
@@ -1634,7 +1638,7 @@ describe("GlobalSettings", () => {
 
   test("rehydrates coordinator research controls and saves mode and server edits", async () => {
     const servers = [{ name: "docs", url: "https://docs.example/mcp" }];
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       config: {
         ...state.config,
         global: {
@@ -1644,7 +1648,7 @@ describe("GlobalSettings", () => {
         },
       },
     }));
-    render(<GlobalSettings activeSection="coordinator" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="coordinator" />);
     const choices = screen.getByRole("radiogroup", { name: "Coordinator web research" });
     expect(
       (within(choices).getByRole("radio", { name: /Web search only/ }) as HTMLInputElement).checked,
@@ -1684,14 +1688,13 @@ describe("GlobalSettings", () => {
         SAVE_OPTIONS,
       ),
     );
-    expect(useConfigStore.getState().config.global.coordinatorResearchMcpServers).toEqual([
-      ...servers,
-      { name: "guides", url: "https://guides.example/mcp" },
-    ]);
+    expect(
+      appCommandStore(configStore).getState().config.global.coordinatorResearchMcpServers,
+    ).toEqual([...servers, { name: "guides", url: "https://guides.example/mcp" }]);
   });
 
   test("persists a coordinator safety level change on its own", async () => {
-    render(<GlobalSettings activeSection="coordinator" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="coordinator" />);
 
     const tiers = screen.getByRole("radiogroup", { name: "Coordinator safety level" });
     const providerConfigured = within(tiers).getByRole("radio", {
@@ -1714,13 +1717,13 @@ describe("GlobalSettings", () => {
   });
 
   test("rehydrates coordinator safety changes without losing an edit to favourites", async () => {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       config: {
         ...state.config,
         global: { ...state.config.global, coordinatorProviderTiers: "enforced" },
       },
     }));
-    render(<GlobalSettings activeSection="coordinator" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="coordinator" />);
 
     const tiers = screen.getByRole("radiogroup", { name: "Coordinator safety level" });
     const providerConfigured = within(tiers).getByRole("radio", {
@@ -1731,7 +1734,7 @@ describe("GlobalSettings", () => {
     }) as HTMLInputElement;
 
     act(() => {
-      useConfigStore.getState().updateGlobalConfig({
+      appCommandStore(configStore).getState().updateGlobalConfig({
         coordinatorProviderTiers: "provider-configured",
       });
     });
@@ -1739,9 +1742,11 @@ describe("GlobalSettings", () => {
 
     fireEvent.click(advisory);
     act(() => {
-      useConfigStore.getState().updateGlobalConfig({
-        favoriteModels: [{ platform: "codex", modelId: "gpt-5.4" }],
-      });
+      appCommandStore(configStore)
+        .getState()
+        .updateGlobalConfig({
+          favoriteModels: [{ platform: "codex", modelId: "gpt-5.4" }],
+        });
     });
 
     // A store write that does not touch a field this form owns must not discard
@@ -1757,14 +1762,14 @@ describe("GlobalSettings", () => {
   });
 
   test("draws each platform toggle in its shared accent colour, enabled or not", () => {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,
         global: { ...state.config.global, enabledAgentPlatforms: ["claude"] },
       },
     }));
-    render(<GlobalSettings activeSection="platforms" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="platforms" />);
 
     for (const platform of AGENT_PLATFORMS) {
       const label = document.querySelector(`label[for="platform-${platform}"]`);
@@ -1780,14 +1785,14 @@ describe("GlobalSettings", () => {
   });
 
   test("signals a disabled platform on the tile rather than on the mark inside it", () => {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,
         global: { ...state.config.global, enabledAgentPlatforms: ["claude"] },
       },
     }));
-    render(<GlobalSettings activeSection="platforms" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="platforms" />);
 
     const tileFor = (platform: string) =>
       document.querySelector(`label[for="platform-${platform}"] > span`)!;
@@ -1805,7 +1810,7 @@ describe("GlobalSettings", () => {
     const { invoke } = await import("../../../apps/web/src/lib/native/backend");
     const invokeMock = invoke as unknown as ReturnType<typeof mock>;
     invokeMock.mockClear();
-    let saved = useConfigStore.getState().config;
+    let saved = appCommandStore(configStore).getState().config;
     invokeMock.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
       if (command === "get_config") return saved;
       if (command === "set_container_resource_limits") {
@@ -1827,7 +1832,7 @@ describe("GlobalSettings", () => {
         };
       return undefined;
     });
-    render(<GlobalSettings activeSection="container" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="container" />);
     const cpu = screen.getByLabelText("CPU cores") as HTMLInputElement;
     // Nothing stored: the built-in default, fields disabled.
     expect(cpu.disabled).toBe(true);
@@ -1842,11 +1847,13 @@ describe("GlobalSettings", () => {
       }),
     );
     await waitFor(() =>
-      expect(useConfigStore.getState().config.global.containerResourceLimits).toEqual({
-        cpus: 2,
-        memoryMiB: 4096,
-        pids: null,
-      }),
+      expect(appCommandStore(configStore).getState().config.global.containerResourceLimits).toEqual(
+        {
+          cpus: 2,
+          memoryMiB: 4096,
+          pids: null,
+        },
+      ),
     );
     fireEvent.click(screen.getByRole("button", { name: "No limits" }));
     fireEvent.click(screen.getByRole("button", { name: "Save limits" }));
@@ -1856,11 +1863,13 @@ describe("GlobalSettings", () => {
       }),
     );
     await waitFor(() =>
-      expect(useConfigStore.getState().config.global.containerResourceLimits).toEqual({
-        cpus: null,
-        memoryMiB: null,
-        pids: null,
-      }),
+      expect(appCommandStore(configStore).getState().config.global.containerResourceLimits).toEqual(
+        {
+          cpus: null,
+          memoryMiB: null,
+          pids: null,
+        },
+      ),
     );
     fireEvent.click(screen.getByRole("button", { name: "Built-in default" }));
     fireEvent.click(screen.getByRole("button", { name: "Save limits" }));
@@ -1868,13 +1877,15 @@ describe("GlobalSettings", () => {
       expect(invokeMock).toHaveBeenCalledWith("set_container_resource_limits", { limits: null }),
     );
     await waitFor(() =>
-      expect(useConfigStore.getState().config.global.containerResourceLimits).toBeUndefined(),
+      expect(
+        appCommandStore(configStore).getState().config.global.containerResourceLimits,
+      ).toBeUndefined(),
     );
     invokeMock.mockImplementation(() => Promise.resolve());
   });
 
   test("preserves the selected terminal font family while saving a size change", async () => {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       config: {
         ...state.config,
         global: {
@@ -1886,7 +1897,7 @@ describe("GlobalSettings", () => {
         },
       },
     }));
-    render(<GlobalSettings activeSection="terminal" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="terminal" />);
 
     expect(screen.getByRole("combobox").textContent).toContain("JetBrains Mono");
     fireEvent.keyDown(screen.getAllByRole("slider")[0]!, { key: "ArrowRight" });
@@ -1906,7 +1917,7 @@ describe("GlobalSettings", () => {
   });
 
   test("reveals and saves API credentials on blur", async () => {
-    const { rerender } = render(<GlobalSettings activeSection="claude" />);
+    const { rerender } = renderInAppCommandScope(<GlobalSettings activeSection="claude" />);
     const anthropicInput = screen.getByPlaceholderText("sk-ant-...") as HTMLInputElement;
     expect(anthropicInput.type).toBe("password");
     fireEvent.click(anthropicInput.parentElement!.querySelector("button")!);
@@ -1950,7 +1961,7 @@ describe("GlobalSettings", () => {
   });
 
   test("treats a configured Cursor API key as write-only and clears it explicitly", async () => {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       config: {
         ...state.config,
         global: {
@@ -1959,7 +1970,7 @@ describe("GlobalSettings", () => {
         },
       },
     }));
-    render(<GlobalSettings activeSection="cursor" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="cursor" />);
 
     const input = screen.getByLabelText("Cursor API key") as HTMLInputElement;
     expect(input.value).toBe("");
@@ -1974,7 +1985,7 @@ describe("GlobalSettings", () => {
   });
 
   test("treats a configured Anthropic API key as write-only and clears it explicitly", async () => {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       config: {
         ...state.config,
         global: {
@@ -1984,7 +1995,7 @@ describe("GlobalSettings", () => {
         },
       },
     }));
-    render(<GlobalSettings activeSection="claude" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="claude" />);
 
     const input = screen.getByPlaceholderText(
       "API key configured — enter a replacement",
@@ -2000,7 +2011,7 @@ describe("GlobalSettings", () => {
   });
 
   test("warns that a Cursor key inherited from the host environment cannot be cleared here", async () => {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       config: {
         ...state.config,
         global: {
@@ -2010,7 +2021,7 @@ describe("GlobalSettings", () => {
         },
       },
     }));
-    render(<GlobalSettings activeSection="cursor" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="cursor" />);
 
     // Nothing is stored, so there is no clear button and the field is empty —
     // without this notice the pane implies no key reaches new containers.
@@ -2024,7 +2035,7 @@ describe("GlobalSettings", () => {
   });
 
   test("shows no host-environment warning when the stored key is the one in use", async () => {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       config: {
         ...state.config,
         global: {
@@ -2034,7 +2045,7 @@ describe("GlobalSettings", () => {
         },
       },
     }));
-    render(<GlobalSettings activeSection="cursor" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="cursor" />);
 
     expect(screen.queryByText(/inherited CURSOR_API_KEY from its own environment/) === null).toBe(
       true,
@@ -2043,7 +2054,7 @@ describe("GlobalSettings", () => {
   });
 
   test("treats a configured GitHub token as write-only and replaces it explicitly", async () => {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       config: {
         ...state.config,
         global: {
@@ -2052,7 +2063,7 @@ describe("GlobalSettings", () => {
         },
       },
     }));
-    render(<GlobalSettings activeSection="version-control" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="version-control" />);
 
     fireEvent.click(screen.getByRole("switch", { name: "Use host GitHub CLI credentials" }));
     const githubInput = screen.getByLabelText("GitHub token") as HTMLInputElement;
@@ -2071,7 +2082,7 @@ describe("GlobalSettings", () => {
   });
 
   test("clears a configured GitHub token through the write-only command", async () => {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       config: {
         ...state.config,
         global: {
@@ -2080,7 +2091,7 @@ describe("GlobalSettings", () => {
         },
       },
     }));
-    render(<GlobalSettings activeSection="version-control" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="version-control" />);
 
     fireEvent.click(screen.getByRole("switch", { name: "Use host GitHub CLI credentials" }));
     fireEvent.click(screen.getByRole("button", { name: "Clear stored token" }));
@@ -2094,7 +2105,7 @@ describe("GlobalSettings", () => {
   });
 
   test("switches from host credentials to PAT mode without writing an empty token", async () => {
-    render(<GlobalSettings activeSection="version-control" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="version-control" />);
 
     const hostCredentials = screen.getByRole("switch", {
       name: "Use host GitHub CLI credentials",
@@ -2121,7 +2132,9 @@ describe("GlobalSettings", () => {
     const logs = captureLogs();
     mockSetGitHubToken.mockRejectedValueOnce(new Error("keychain unavailable"));
     try {
-      const { rerender } = render(<GlobalSettings activeSection="version-control" />);
+      const { rerender } = renderInAppCommandScope(
+        <GlobalSettings activeSection="version-control" />,
+      );
       fireEvent.click(screen.getByRole("switch", { name: "Use host GitHub CLI credentials" }));
       rerender(<GlobalSettings activeSection="general" />);
       fireEvent.change(screen.getByPlaceholderText(".env, .env.local"), {
@@ -2129,8 +2142,12 @@ describe("GlobalSettings", () => {
       });
       await flushAutoSave();
 
-      expect(useConfigStore.getState().config.global.envFilePatterns).toEqual([".env.local"]);
-      expect(useConfigStore.getState().config.global.useHostGitHubCredentials).toBe(false);
+      expect(appCommandStore(configStore).getState().config.global.envFilePatterns).toEqual([
+        ".env.local",
+      ]);
+      expect(appCommandStore(configStore).getState().config.global.useHostGitHubCredentials).toBe(
+        false,
+      );
 
       rerender(<GlobalSettings activeSection="version-control" />);
       const token = screen.getByLabelText("GitHub token") as HTMLInputElement;
@@ -2161,7 +2178,7 @@ describe("GlobalSettings", () => {
   });
 
   test("warns about the host token's reach only while containers share it", async () => {
-    render(<GlobalSettings activeSection="version-control" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="version-control" />);
     expect(
       screen.getByRole("combobox", { name: "GitHub access for containers" }).textContent,
     ).toContain("No GitHub access");
@@ -2184,7 +2201,7 @@ describe("GlobalSettings", () => {
   });
 
   test("offers the token field for containers while the backend keeps the host login", async () => {
-    render(<GlobalSettings activeSection="version-control" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="version-control" />);
     expect(screen.queryByLabelText("GitHub token") === null).toBe(true);
 
     await chooseContainerCredential("Personal access token");
@@ -2198,7 +2215,7 @@ describe("GlobalSettings", () => {
   });
 
   test("switches from a configured PAT to host credentials without replacing the PAT", async () => {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       config: {
         ...state.config,
         global: {
@@ -2208,7 +2225,7 @@ describe("GlobalSettings", () => {
         },
       },
     }));
-    render(<GlobalSettings activeSection="version-control" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="version-control" />);
 
     const hostCredentials = screen.getByRole("switch", {
       name: "Use host GitHub CLI credentials",
@@ -2230,7 +2247,7 @@ describe("GlobalSettings", () => {
 
   test("shows the client and backend versions on the debug tab", async () => {
     mockGetAppVersion.mockResolvedValue("9.8.7-test");
-    render(<GlobalSettings activeSection="debug" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="debug" />);
 
     expect(await screen.findByText("App version")).toBeTruthy();
     expect(await screen.findByText("9.8.7-test")).toBeTruthy();
@@ -2242,7 +2259,7 @@ describe("GlobalSettings", () => {
 
   test("does not flag matching client and backend versions", async () => {
     mockGetAppVersion.mockResolvedValue(BUNDLED_APP_VERSION);
-    render(<GlobalSettings activeSection="debug" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="debug" />);
 
     await waitFor(() => expect(screen.getAllByText(BUNDLED_APP_VERSION)).toHaveLength(2));
     expect(screen.queryByText(/runs /) === null).toBe(true);
@@ -2253,7 +2270,7 @@ describe("GlobalSettings", () => {
       enabled: true,
       baseUrl: "https://workstation.example.ts.net:34121/",
     };
-    render(<GlobalSettings activeSection="debug" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="debug" />);
 
     expect(await screen.findByText("2.15.1")).toBeTruthy();
     expect(screen.getByText("workstation.example.ts.net:34121")).toBeTruthy();
@@ -2266,7 +2283,7 @@ describe("GlobalSettings", () => {
       desktop: true,
       baseUrl: "invalid gateway URL",
     };
-    render(<GlobalSettings activeSection="debug" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="debug" />);
 
     expect(await screen.findByText("2.15.1")).toBeTruthy();
     expect(screen.getByText("remote backend")).toBeTruthy();
@@ -2278,7 +2295,7 @@ describe("GlobalSettings", () => {
     // healthy one, on the single tab whose job is to say what is running.
     const logs = captureLogs();
     mockGetAppVersion.mockRejectedValue(new Error("backend offline"));
-    render(<GlobalSettings activeSection="debug" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="debug" />);
 
     expect(await screen.findByText("Unreachable")).toBeTruthy();
     expect(screen.getByText(BUNDLED_APP_VERSION)).toBeTruthy();
@@ -2296,7 +2313,7 @@ describe("GlobalSettings", () => {
 
   test("never shows the client version as the backend's when it reports the unset placeholder", async () => {
     mockGetAppVersion.mockResolvedValue("0.0.0");
-    render(<GlobalSettings activeSection="debug" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="debug" />);
 
     expect(await screen.findByText("Did not report a version")).toBeTruthy();
     expect(screen.getAllByText(BUNDLED_APP_VERSION)).toHaveLength(1);
@@ -2306,7 +2323,7 @@ describe("GlobalSettings", () => {
     // The probe is a backend round trip on every settings open unless the
     // section gate holds, so assert the gate rather than the fetch alone.
     mockGetAppVersion.mockResolvedValue("3.2.1-active");
-    const { rerender } = render(<GlobalSettings activeSection="general" />);
+    const { rerender } = renderInAppCommandScope(<GlobalSettings activeSection="general" />);
     expect(screen.getByText("Preferred Editor")).toBeTruthy();
     expect(mockGetAppVersion).not.toHaveBeenCalled();
 
@@ -2316,7 +2333,7 @@ describe("GlobalSettings", () => {
   });
 
   test("says saving and detail apply live, and saves a level on its own", async () => {
-    render(<GlobalSettings activeSection="debug" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="debug" />);
     expect(await screen.findByText(/apply straight away/)).toBeTruthy();
     expect(screen.queryByText(/restart to take effect/) === null).toBe(true);
     fireEvent.click(screen.getByRole("combobox", { name: "Default log level" }));
@@ -2334,7 +2351,7 @@ describe("GlobalSettings", () => {
 
   test("saves debug logging retention, reports storage, and cleans up its log directory", async () => {
     mockGetLogDirectory.mockResolvedValue("/tmp/orkestrator-logs");
-    render(<GlobalSettings activeSection="debug" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="debug" />);
 
     expect(await screen.findByText("1.5 KB across 2 files")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Disabled" }));
@@ -2358,7 +2375,7 @@ describe("GlobalSettings", () => {
   });
 
   test("keeps the recursive log-storage walk off sections that do not show it", async () => {
-    const { rerender } = render(<GlobalSettings activeSection="general" />);
+    const { rerender } = renderInAppCommandScope(<GlobalSettings activeSection="general" />);
     await waitFor(() => expect(mockGetLogDirectory).toHaveBeenCalled());
     expect(mockGetLogStorageStats).not.toHaveBeenCalled();
 
@@ -2369,7 +2386,7 @@ describe("GlobalSettings", () => {
   test("still reports the log directory when the storage walk fails", async () => {
     mockGetLogDirectory.mockResolvedValue("/tmp/orkestrator-logs");
     mockGetLogStorageStats.mockRejectedValue(new Error("too many entries"));
-    render(<GlobalSettings activeSection="debug" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="debug" />);
 
     expect(await screen.findByText("Storage usage unavailable")).toBeTruthy();
     expect(await screen.findByRole("button", { name: "/tmp/orkestrator-logs" })).toBeTruthy();
@@ -2377,7 +2394,7 @@ describe("GlobalSettings", () => {
 
   test("surfaces a cleanup failure without claiming the logs were removed", async () => {
     mockCleanupLogs.mockRejectedValue(new Error("permission denied"));
-    render(<GlobalSettings activeSection="debug" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="debug" />);
 
     expect(await screen.findByText("1.5 KB across 2 files")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Clean up logs" }));
@@ -2397,7 +2414,7 @@ describe("GlobalSettings", () => {
       return statsCalls === 1 ? first.promise : second.promise;
     });
 
-    const { rerender } = render(<GlobalSettings activeSection="debug" />);
+    const { rerender } = renderInAppCommandScope(<GlobalSettings activeSection="debug" />);
     await waitFor(() => expect(mockGetLogStorageStats).toHaveBeenCalledTimes(1));
 
     rerender(<GlobalSettings activeSection="general" />);
@@ -2429,7 +2446,7 @@ describe("GlobalSettings", () => {
       return statsCalls === 1 ? first.promise : second.promise;
     });
 
-    const { rerender } = render(<GlobalSettings activeSection="debug" />);
+    const { rerender } = renderInAppCommandScope(<GlobalSettings activeSection="debug" />);
     await waitFor(() => expect(mockGetLogStorageStats).toHaveBeenCalledTimes(1));
 
     rerender(<GlobalSettings activeSection="general" />);
@@ -2456,7 +2473,7 @@ describe("GlobalSettings", () => {
   });
 
   test("blocks auto-save for an invalid debug retention until it is fixed", async () => {
-    render(<GlobalSettings activeSection="debug" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="debug" />);
     const retention = await screen.findByLabelText("Log retention days");
 
     // Clearing the field is the ordinary way into the invalid state.
@@ -2475,7 +2492,7 @@ describe("GlobalSettings", () => {
   });
 
   test("uses the default terminal scrollback when legacy config omits it", () => {
-    useConfigStore.setState((state) => {
+    appCommandStore(configStore).setState((state) => {
       // A legacy stored config predates the field, so it is genuinely absent.
       const legacyGlobal: Partial<GlobalConfig> = {
         ...state.config.global,
@@ -2483,7 +2500,7 @@ describe("GlobalSettings", () => {
       };
       return { config: { ...state.config, global: legacyGlobal as GlobalConfig } };
     });
-    const { container } = render(<GlobalSettings activeSection="terminal" />);
+    const { container } = renderInAppCommandScope(<GlobalSettings activeSection="terminal" />);
     expect(screen.getByText("1,000 lines")).toBeTruthy();
 
     const colorTextInput = container.querySelector(
@@ -2501,7 +2518,7 @@ describe("GlobalSettings", () => {
   });
 
   test("saves terminal font and scrollback selections", async () => {
-    render(<GlobalSettings activeSection="terminal" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="terminal" />);
 
     const font = screen.getByRole("combobox");
     fireEvent.keyDown(font, { key: "ArrowDown" });
@@ -2528,7 +2545,7 @@ describe("GlobalSettings", () => {
   });
 
   test("saves the terminal link default and describes the alternative gesture", async () => {
-    render(<GlobalSettings activeSection="previews" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="previews" />);
 
     const target = screen.getByRole("combobox", { name: "Open terminal links in" });
     expect(target.textContent).toContain("External browser");
@@ -2552,7 +2569,7 @@ describe("GlobalSettings", () => {
   });
 
   test("blocks auto-save for invalid domains and terminal colors", async () => {
-    const { rerender } = render(<GlobalSettings activeSection="network" />);
+    const { rerender } = renderInAppCommandScope(<GlobalSettings activeSection="network" />);
     fireEvent.change(screen.getByPlaceholderText(/github\.com/), {
       target: { value: "not a domain" },
     });
@@ -2567,7 +2584,7 @@ describe("GlobalSettings", () => {
   });
 
   test("treats a missing legacy Claude mode as native and saves explicit terminal", async () => {
-    useConfigStore.setState((state) => {
+    appCommandStore(configStore).setState((state) => {
       // A config that never set a Claude mode: the pane must show the shipped
       // native default rather than an empty selection.
       const global = { ...state.config.global };
@@ -2582,7 +2599,7 @@ describe("GlobalSettings", () => {
         },
       };
     });
-    render(<GlobalSettings activeSection="claude" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="claude" />);
 
     const section = screen.getByRole("radiogroup", { name: "Claude Code mode" });
     const nativeButton = within(section).getByRole("radio", { name: /^Native/ });
@@ -2611,7 +2628,7 @@ describe("GlobalSettings", () => {
   });
 
   test("saves the Claude native backend selection", async () => {
-    render(<GlobalSettings activeSection="claude" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="claude" />);
 
     fireEvent.click(
       within(screen.getByRole("radiogroup", { name: "Claude native backend" })).getByRole("radio", {
@@ -2635,7 +2652,7 @@ describe("GlobalSettings", () => {
   });
 
   test("trims and deduplicates environment patterns and allowed domains", async () => {
-    const view = render(<GlobalSettings activeSection="general" />);
+    const view = renderInAppCommandScope(<GlobalSettings activeSection="general" />);
     // Env patterns are filenames, so `.ENV` is a different pattern from `.env`
     // and must survive; domains are DNS names, so case is irrelevant there.
     fireEvent.change(screen.getByPlaceholderText(".env, .env.local"), {
@@ -2660,7 +2677,7 @@ describe("GlobalSettings", () => {
   });
 
   test("preserves the tmux Claude model preference when saving unrelated settings", async () => {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
         ...state.config,
@@ -2671,7 +2688,7 @@ describe("GlobalSettings", () => {
       },
     }));
 
-    render(<GlobalSettings activeSection="codex" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="codex" />);
 
     // Each platform pane labels its own mode group, so the query cannot pick up
     // another platform's control.
@@ -2693,7 +2710,7 @@ describe("GlobalSettings", () => {
 
   test("preserves max and ultra Codex preferences when saving unrelated settings", async () => {
     for (const effort of ["max", "ultra"] as const) {
-      useConfigStore.setState((state) => ({
+      appCommandStore(configStore).setState((state) => ({
         ...state,
         config: {
           ...state.config,
@@ -2705,7 +2722,7 @@ describe("GlobalSettings", () => {
           },
         },
       }));
-      const { unmount } = render(<GlobalSettings activeSection="codex" />);
+      const { unmount } = renderInAppCommandScope(<GlobalSettings activeSection="codex" />);
 
       fireEvent.click(
         within(screen.getByRole("radiogroup", { name: "Codex mode" })).getByRole("radio", {
@@ -2735,7 +2752,7 @@ describe("GlobalSettings", () => {
     mockTestDomainResolution.mockResolvedValueOnce([
       { domain: "example.com", valid: true, resolvable: true, ips: [], error: null },
     ]);
-    render(<GlobalSettings activeSection="network" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="network" />);
     const domains = screen.getByPlaceholderText(/github\.com/) as HTMLTextAreaElement;
 
     fireEvent.change(domains, { target: { value: "not a domain" } });
@@ -2773,7 +2790,7 @@ describe("GlobalSettings", () => {
       ])
       .mockRejectedValueOnce(new Error("resolver offline"));
     try {
-      render(<GlobalSettings activeSection="network" />);
+      renderInAppCommandScope(<GlobalSettings activeSection="network" />);
       const domains = screen.getByPlaceholderText(/github\.com/);
       fireEvent.change(domains, {
         target: { value: "resolved.example\nmissing.example\ninvalid.example" },
@@ -2806,7 +2823,7 @@ describe("GlobalSettings", () => {
       updated: ["container-1"],
       failed: [],
     });
-    render(<GlobalSettings activeSection="version-control" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="version-control" />);
 
     await chooseContainerCredential("Personal access token");
     const token = screen.getByLabelText("GitHub token");
@@ -2825,7 +2842,7 @@ describe("GlobalSettings", () => {
     mockPropagateGithubCredentialsToContainers.mockRejectedValueOnce(
       new Error("container unavailable"),
     );
-    render(<GlobalSettings activeSection="version-control" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="version-control" />);
 
     await chooseContainerCredential("Personal access token");
     await flushAutoSave();
@@ -2836,7 +2853,9 @@ describe("GlobalSettings", () => {
     expect(mockToastError).toHaveBeenCalledWith("Settings saved, but containers were not updated", {
       description: "container unavailable",
     });
-    expect(useConfigStore.getState().config.global.containerGitHubCredential).toBe("pat");
+    expect(appCommandStore(configStore).getState().config.global.containerGitHubCredential).toBe(
+      "pat",
+    );
   });
 
   test("reports partial GitHub credential propagation failures with affected containers", async () => {
@@ -2844,7 +2863,7 @@ describe("GlobalSettings", () => {
       updated: ["environment-1"],
       failed: [["environment-2", "container unavailable"]],
     });
-    render(<GlobalSettings activeSection="version-control" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="version-control" />);
 
     await chooseContainerCredential("Personal access token");
     await flushAutoSave();
@@ -2870,7 +2889,7 @@ describe("GlobalSettings", () => {
         ["environment-5", "failed five"],
       ],
     });
-    render(<GlobalSettings activeSection="version-control" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="version-control" />);
     await chooseContainerCredential("Personal access token");
     await flushAutoSave();
 
@@ -2897,7 +2916,7 @@ describe("GlobalSettings", () => {
       updated: ["environment-1", "environment-2"],
       failed: [],
     });
-    render(<GlobalSettings activeSection="version-control" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="version-control" />);
 
     await chooseContainerCredential("Personal access token");
     await flushAutoSave();
@@ -2923,7 +2942,7 @@ describe("GlobalSettings", () => {
 
   test("reports persistence failures from auto-save", async () => {
     mockPatchGlobalConfig.mockRejectedValueOnce(new Error("disk full"));
-    render(<GlobalSettings activeSection="codex" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="codex" />);
 
     const mode = screen.getByRole("radiogroup", { name: "Codex mode" });
     fireEvent.click(within(mode).getByRole("radio", { name: /^Terminal/ }));
@@ -2938,7 +2957,7 @@ describe("GlobalSettings", () => {
   });
 
   test("saves the experimental scheduling switch, off by default", async () => {
-    render(<GlobalSettings activeSection="experimental" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="experimental" />);
 
     const toggle = screen.getByRole("switch", { name: "Enable scheduling" });
     expect(toggle.getAttribute("aria-checked")).toBe("false");
@@ -2959,18 +2978,18 @@ describe("GlobalSettings", () => {
     const originalGateway = window.orkestratorGateway;
     try {
       window.orkestrator = undefined;
-      const browser = render(<GlobalSettings activeSection="experimental" />);
+      const browser = renderInAppCommandScope(<GlobalSettings activeSection="experimental" />);
       expect(screen.queryByRole("switch", { name }) === null).toBe(true);
       browser.unmount();
 
       window.orkestrator = { ...original, isolatedViewState: true } as NonNullable<typeof original>;
       window.orkestratorGateway = { enabled: true, desktop: true, baseUrl: "https://desk.example" };
-      const remote = render(<GlobalSettings activeSection="experimental" />);
+      const remote = renderInAppCommandScope(<GlobalSettings activeSection="experimental" />);
       expect(screen.queryByRole("switch", { name }) === null).toBe(true);
       remote.unmount();
 
       window.orkestratorGateway = undefined;
-      render(<GlobalSettings activeSection="experimental" />);
+      renderInAppCommandScope(<GlobalSettings activeSection="experimental" />);
       const toggle = screen.getByRole("switch", { name });
       expect(toggle.getAttribute("aria-checked")).toBe("false");
       fireEvent.click(toggle);
@@ -2988,7 +3007,7 @@ describe("GlobalSettings", () => {
   });
 
   test("saves the experimental graphs switch, off by default", async () => {
-    render(<GlobalSettings activeSection="experimental" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="experimental" />);
 
     const toggle = screen.getByRole("switch", { name: "Enable graphs" });
     expect(toggle.getAttribute("aria-checked")).toBe("false");
@@ -3004,11 +3023,16 @@ describe("GlobalSettings", () => {
   });
 
   test("saves false when graphs are switched off and restores it when settings reopen", async () => {
-    useConfigStore.getState().setConfig({
-      ...useConfigStore.getState().config,
-      global: { ...useConfigStore.getState().config.global, experimentalGraphs: true },
-    });
-    const { unmount } = render(<GlobalSettings activeSection="experimental" />);
+    appCommandStore(configStore)
+      .getState()
+      .setConfig({
+        ...appCommandStore(configStore).getState().config,
+        global: {
+          ...appCommandStore(configStore).getState().config.global,
+          experimentalGraphs: true,
+        },
+      });
+    const { unmount } = renderInAppCommandScope(<GlobalSettings activeSection="experimental" />);
     const toggle = screen.getByRole("switch", { name: "Enable graphs" });
     expect(toggle.getAttribute("aria-checked")).toBe("true");
 
@@ -3019,11 +3043,11 @@ describe("GlobalSettings", () => {
         expect.objectContaining({ experimentalGraphs: false }),
         SAVE_OPTIONS,
       );
-      expect(useConfigStore.getState().config.global.experimentalGraphs).toBe(false);
+      expect(appCommandStore(configStore).getState().config.global.experimentalGraphs).toBe(false);
     });
     unmount();
 
-    render(<GlobalSettings activeSection="experimental" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="experimental" />);
     expect(screen.getByRole("switch", { name: "Enable graphs" }).getAttribute("aria-checked")).toBe(
       "false",
     );
@@ -3031,7 +3055,7 @@ describe("GlobalSettings", () => {
   });
 
   test("flushes a pending debounced edit when the form unmounts", async () => {
-    const { unmount } = render(<GlobalSettings activeSection="general" />);
+    const { unmount } = renderInAppCommandScope(<GlobalSettings activeSection="general" />);
 
     fireEvent.change(screen.getByPlaceholderText(".env, .env.local"), {
       target: { value: ".env" },
@@ -3047,7 +3071,7 @@ describe("GlobalSettings", () => {
   });
 
   test("does not save a valid edit before its debounce callback runs", async () => {
-    render(<GlobalSettings activeSection="general" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="general" />);
     fireEvent.change(screen.getByPlaceholderText(".env, .env.local"), {
       target: { value: ".env" },
     });
@@ -3059,7 +3083,7 @@ describe("GlobalSettings", () => {
   });
 
   test("writes once with the final value after a sustained edit burst", async () => {
-    render(<GlobalSettings activeSection="general" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="general" />);
     const env = screen.getByPlaceholderText(".env, .env.local");
 
     fireEvent.change(env, { target: { value: ".env" } });
@@ -3080,13 +3104,13 @@ describe("GlobalSettings", () => {
   });
 
   test("does not re-save a value that normalizes to the stored config", async () => {
-    useConfigStore.setState((state) => ({
+    appCommandStore(configStore).setState((state) => ({
       config: {
         ...state.config,
         global: { ...state.config.global, envFilePatterns: [".env"] },
       },
     }));
-    render(<GlobalSettings activeSection="general" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="general" />);
 
     fireEvent.change(screen.getByPlaceholderText(".env, .env.local"), {
       target: { value: ".env " },
@@ -3098,7 +3122,7 @@ describe("GlobalSettings", () => {
   });
 
   test("settles after saving a value that normalizes to the same config", async () => {
-    render(<GlobalSettings activeSection="general" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="general" />);
 
     fireEvent.change(screen.getByPlaceholderText(".env, .env.local"), {
       target: { value: ".env, .env" },
@@ -3115,7 +3139,7 @@ describe("GlobalSettings", () => {
   test("keeps an edit made while an auto-save is in flight", async () => {
     const firstSave = deferred<any>();
     mockPatchGlobalConfig.mockImplementationOnce(() => firstSave.promise);
-    render(<GlobalSettings activeSection="general" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="general" />);
     const env = screen.getByPlaceholderText(".env, .env.local") as HTMLInputElement;
 
     fireEvent.change(env, { target: { value: ".env" } });
@@ -3128,7 +3152,10 @@ describe("GlobalSettings", () => {
     await act(async () => {
       firstSave.resolve({
         version: "1.0",
-        global: { ...useConfigStore.getState().config.global, envFilePatterns: [".env"] },
+        global: {
+          ...appCommandStore(configStore).getState().config.global,
+          envFilePatterns: [".env"],
+        },
         repositories: {},
       });
       await firstSave.promise;
@@ -3143,7 +3170,7 @@ describe("GlobalSettings", () => {
   });
 
   test("shows why a blocked form is not saving", async () => {
-    render(<GlobalSettings activeSection="network" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="network" />);
 
     fireEvent.change(screen.getByPlaceholderText(/github\.com/), {
       target: { value: "not a domain" },
@@ -3154,7 +3181,7 @@ describe("GlobalSettings", () => {
   });
 
   test("an invalid gateway token does not block saving an unrelated section", async () => {
-    const view = render(<GlobalSettings activeSection="web-client" />);
+    const view = renderInAppCommandScope(<GlobalSettings activeSection="web-client" />);
     const gatewayToken = (await screen.findByDisplayValue(
       "gateway-token-123456",
     )) as HTMLInputElement;
@@ -3179,7 +3206,7 @@ describe("GlobalSettings", () => {
       updated: [],
       failed: [["environment-1", "container unavailable"]],
     });
-    render(<GlobalSettings activeSection="version-control" />);
+    renderInAppCommandScope(<GlobalSettings activeSection="version-control" />);
     await chooseContainerCredential("Personal access token");
 
     // The source change propagates once; each failure keeps the form dirty and
@@ -3207,7 +3234,7 @@ describe("GlobalSettings", () => {
     const logs = captureLogs();
     mockSetGitHubToken.mockRejectedValueOnce(new Error("keychain unavailable"));
     try {
-      render(<GlobalSettings activeSection="version-control" />);
+      renderInAppCommandScope(<GlobalSettings activeSection="version-control" />);
       fireEvent.click(screen.getByRole("switch", { name: "Use host GitHub CLI credentials" }));
       await flushAutoSave();
 
@@ -3221,7 +3248,7 @@ describe("GlobalSettings", () => {
       );
 
       act(() => {
-        useConfigStore.setState((state) => ({
+        appCommandStore(configStore).setState((state) => ({
           config: {
             ...state.config,
             global: { ...state.config.global, allowedDomains: ["example.com"] },

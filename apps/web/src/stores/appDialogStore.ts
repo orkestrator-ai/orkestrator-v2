@@ -1,3 +1,4 @@
+import type { BackendId } from "@orkestrator/protocol/federation";
 import { create } from "zustand";
 
 /**
@@ -7,8 +8,13 @@ import { create } from "zustand";
  * opened from inside it is trapped behind it while it stays open. A sidebar row
  * therefore only records the request here; `AppDialogHost` renders the dialog
  * outside the drawer, and the drawer closes when a request arrives.
+ *
+ * Project and environment ids are only unique on their node, so a request
+ * names its node: the producer passes its scope's node, and the host renders
+ * the dialog inside that node's scope (or drops the request when the window
+ * has no scope for it).
  */
-export type AppDialogRequest =
+export type AppDialogRequest = { nodeId: BackendId } & (
   | {
       kind: "environment-settings";
       environmentId: string;
@@ -17,7 +23,8 @@ export type AppDialogRequest =
     }
   /** Also how another machine's project menu reaches these, in that machine's workspace. */
   | { kind: "repository-settings"; projectId: string }
-  | { kind: "delete-project"; projectId: string };
+  | { kind: "delete-project"; projectId: string }
+);
 
 interface AppDialogState {
   /** The dialog to show, or null when none is open. */

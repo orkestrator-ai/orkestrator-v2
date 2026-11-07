@@ -8,11 +8,13 @@ import {
 } from "@orkestrator/protocol/host-maintenance";
 import { hostMaintenanceSnapshotFixture as snapshot } from "@orkestrator/protocol/testing/host-maintenance-fixtures";
 import { invoke } from "@/lib/native/backend";
+import { listen } from "@/lib/native/events";
 import { useMachineMaintenance } from "./useMachineMaintenance";
 import { useMaintenanceSummaries } from "./useMaintenanceSummaries";
 import type { MachineEntry } from "./machine-list";
 
 const invokeMock = invoke as unknown as ReturnType<typeof mock>;
+const listenMock = listen as unknown as ReturnType<typeof mock>;
 const remote: MachineEntry = {
   key: "node:bk_leaf",
   role: "node",
@@ -43,7 +45,7 @@ afterEach(() => {
   cleanup();
   mock.restore();
   invokeMock.mockReset();
-  delete window.orkestratorPortal;
+  listenMock.mockImplementation(() => Promise.resolve(() => {}));
 });
 
 // Capture only the hook's polling clock; React's own waitFor timers stay real.
@@ -176,21 +178,22 @@ test("summary reads retain per-machine errors and details, reject stale revision
   let finishSelf!: (value: HostMaintenanceSnapshot) => void;
   let failRemote = false;
   let remoteSnapshot = snapshot({ revision: 4, tools: [] });
-  window.orkestratorPortal = {
-    invoke: mock((command: string) => {
-      if (command === "get_host_maintenance")
-        return new Promise((resolve) => {
-          finishSelf = resolve;
-        });
-      return failRemote
-        ? Promise.reject(new Error("leaf offline"))
-        : Promise.resolve({ outcome: "ok", result: remoteSnapshot });
-    }),
-    listen: (event: string, handler: (payload: unknown) => void) => {
-      listeners.set(event, handler);
+  invokeMock.mockImplementation((command: string) => {
+    if (command === "get_host_maintenance")
+      return new Promise((resolve) => {
+        finishSelf = resolve;
+      });
+    return failRemote
+      ? Promise.reject(new Error("leaf offline"))
+      : Promise.resolve({ outcome: "ok", result: remoteSnapshot });
+  });
+  // The command scope's events: the window's own `listen`.
+  listenMock.mockImplementation(
+    async (event: string, handler: (event: { payload: unknown }) => void) => {
+      listeners.set(event, (payload) => handler({ payload }));
       return () => listeners.delete(event);
     },
-  } as never;
+  );
   const { result } = renderHook(() => useMaintenanceSummaries([self, remote]));
   await waitFor(() => expect(result.current.summaries[remote.key]?.snapshot?.revision).toBe(4));
   await act(async () => finishSelf(snapshot({ revision: 5, tools: [] })));

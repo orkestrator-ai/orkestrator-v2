@@ -7,6 +7,7 @@ import {
   runOf,
 } from "../../apps/web/src/components/graph-run/graph-run.test-fixtures";
 import { useGraphRunStore } from "../../apps/web/src/stores/graphRunStore";
+import { appCommandStore } from "../../apps/web/src/test/app-command-store";
 
 function transcriptEntries(count: number) {
   return Array.from({ length: count }, (_, index) => ({
@@ -70,7 +71,9 @@ export function GraphRunFlowFixture() {
         if (command === "graph_run_get") {
           return {
             status: "changed",
-            run: useGraphRunStore.getState().runs.get(initialRun.id)?.run ?? initialRun,
+            run:
+              appCommandStore(useGraphRunStore.def).getState().runs.get(initialRun.id)?.run ??
+              initialRun,
           } as T;
         }
         if (command === "graph_run_transcript") {
@@ -99,17 +102,19 @@ export function GraphRunFlowFixture() {
         </button>
         <button
           onClick={() =>
-            useGraphRunStore.getState().applyRun({
-              ...initialRun,
-              revision: initialRun.revision + 1,
-              activations: [
-                act({ nodeId: "plan" }),
-                act({ nodeId: "package" }),
-                act({ nodeId: "review", branchKey: "panel.1" }),
-                act({ nodeId: "review", branchKey: "panel.2" }),
-                act({ nodeId: "consolidate" }, { state: "running" }),
-              ],
-            })
+            appCommandStore(useGraphRunStore.def)
+              .getState()
+              .applyRun({
+                ...initialRun,
+                revision: initialRun.revision + 1,
+                activations: [
+                  act({ nodeId: "plan" }),
+                  act({ nodeId: "package" }),
+                  act({ nodeId: "review", branchKey: "panel.1" }),
+                  act({ nodeId: "review", branchKey: "panel.2" }),
+                  act({ nodeId: "consolidate" }, { state: "running" }),
+                ],
+              })
           }
         >
           Advance graph run
@@ -118,17 +123,21 @@ export function GraphRunFlowFixture() {
           <button
             onClick={() => {
               transcriptLength.current += 1;
-              const run = useGraphRunStore.getState().runs.get(initialRun.id)?.run ?? initialRun;
-              useGraphRunStore.getState().applyRun({
-                ...run,
-                revision: run.revision + 1,
-                activations: run.activations.map((activation) => ({
-                  ...activation,
-                  session: agentSession({
-                    transcript: transcriptReference(transcriptLength.current),
-                  }),
-                })),
-              });
+              const run =
+                appCommandStore(useGraphRunStore.def).getState().runs.get(initialRun.id)?.run ??
+                initialRun;
+              appCommandStore(useGraphRunStore.def)
+                .getState()
+                .applyRun({
+                  ...run,
+                  revision: run.revision + 1,
+                  activations: run.activations.map((activation) => ({
+                    ...activation,
+                    session: agentSession({
+                      transcript: transcriptReference(transcriptLength.current),
+                    }),
+                  })),
+                });
             }}
           >
             Append transcript entry

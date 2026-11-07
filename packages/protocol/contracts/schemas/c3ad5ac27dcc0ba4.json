@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:c3ad5ac27dcc0ba4ac93fb95f89281091f6507a7a2b4327e6d118df7588d2d76",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "attachments": {},
+        "body": {
+          "type": "string"
+        },
+        "controllerId": {
+          "type": "string"
+        },
+        "coordinatorEnvironmentId": {
+          "type": "string"
+        },
+        "coordinatorTabId": {
+          "type": "string"
+        },
+        "nodeParent": {},
+        "projectId": {
+          "type": "string"
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "steer": {
+          "type": "boolean"
+        },
+        "subject": {
+          "type": "string"
+        },
+        "toEnvironmentId": {
+          "type": "string"
+        },
+        "toTabId": {
+          "type": "string"
+        },
+        "turnOrigin": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  }
+}

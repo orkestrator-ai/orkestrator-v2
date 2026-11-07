@@ -1,6 +1,11 @@
+import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 import { isClientOnlyNativeMessage } from "@/lib/chat/client-only-messages";
 import * as backend from "@/lib/backend";
+import { createAgentHandoffsApi } from "@/lib/backend/agent-handoffs";
+import { backendApiForScope } from "@/lib/backend/client";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { appCommandScope, defineScopedSlot } from "@/lib/node-scope-slots";
 import {
   AGENT_HANDOFF_PROVIDER_LABELS,
   AGENT_HANDOFF_VERSION,
@@ -123,30 +128,56 @@ export function mergeAgentHandoffDisplayMessages(
   ];
 }
 
-const handoffCache = new Map<string, AgentHandoffSnapshot | null>();
-const handoffLoads = new Map<string, Promise<AgentHandoffSnapshot | null>>();
-const handoffLoadEpochs = new Map<string, number>();
-let handoffCacheGeneration = 0;
+/**
+ * The handoff snapshots this window has read from one node, and the reads in
+ * flight. Per node scope (plan item 3009): handoff ids are minted by the
+ * node that stores them, and a snapshot read from one node must never be
+ * served for another. Every function takes an optional trailing `scope`, the
+ * app's command scope when omitted.
+ */
+interface HandoffCache {
+  readonly snapshots: Map<string, AgentHandoffSnapshot | null>;
+  readonly loads: Map<string, Promise<AgentHandoffSnapshot | null>>;
+  readonly loadEpochs: Map<string, number>;
+  generation: number;
+  readonly api: Pick<
+    ReturnType<typeof createAgentHandoffsApi>,
+    "getAgentHandoff" | "createAgentHandoff"
+  >;
+}
 
-export function rememberAgentHandoff(handoff: AgentHandoffSnapshot): void {
-  handoffCache.set(handoff.id, handoff);
+const handoffCacheOf = defineScopedSlot<HandoffCache>("agent-handoffs", (scope) => ({
+  snapshots: new Map(),
+  loads: new Map(),
+  loadEpochs: new Map(),
+  generation: 0,
+  api: backendApiForScope(scope, createAgentHandoffsApi, backend),
+}));
+
+export function rememberAgentHandoff(
+  handoff: AgentHandoffSnapshot,
+  scope: NodeScope = appCommandScope(),
+): void {
+  handoffCacheOf(scope).snapshots.set(handoff.id, handoff);
 }
 
 /**
  * Evicts one handoff without allowing an older in-flight read to repopulate it.
  * A later explicit load starts a fresh backend request.
  */
-export function forgetAgentHandoff(handoffId: string): void {
-  handoffCache.delete(handoffId);
-  handoffLoads.delete(handoffId);
-  handoffLoadEpochs.set(handoffId, (handoffLoadEpochs.get(handoffId) ?? 0) + 1);
+export function forgetAgentHandoff(handoffId: string, scope: NodeScope = appCommandScope()): void {
+  const cache = handoffCacheOf(scope);
+  cache.snapshots.delete(handoffId);
+  cache.loads.delete(handoffId);
+  cache.loadEpochs.set(handoffId, (cache.loadEpochs.get(handoffId) ?? 0) + 1);
 }
 
-export function resetAgentHandoffCache(): void {
-  handoffCacheGeneration += 1;
-  handoffCache.clear();
-  handoffLoads.clear();
-  handoffLoadEpochs.clear();
+export function resetAgentHandoffCache(scope: NodeScope = appCommandScope()): void {
+  const cache = handoffCacheOf(scope);
+  cache.generation += 1;
+  cache.snapshots.clear();
+  cache.loads.clear();
+  cache.loadEpochs.clear();
 }
 
 /** The snapshot inside a stored record, or null when the record is not this handoff's. */
@@ -165,19 +196,21 @@ function snapshotFromRecord(
     : null;
 }
 
-export async function loadAgentHandoff(handoffId: string): Promise<AgentHandoffSnapshot | null> {
-  if (handoffCache.has(handoffId)) return handoffCache.get(handoffId) ?? null;
-  const existing = handoffLoads.get(handoffId);
+export async function loadAgentHandoff(
+  handoffId: string,
+  scope: NodeScope = appCommandScope(),
+): Promise<AgentHandoffSnapshot | null> {
+  // Held across the await: the scope may be disposed before the node answers.
+  const cache = handoffCacheOf(scope);
+  if (cache.snapshots.has(handoffId)) return cache.snapshots.get(handoffId) ?? null;
+  const existing = cache.loads.get(handoffId);
   if (existing) return existing;
-  const generation = handoffCacheGeneration;
-  const epoch = handoffLoadEpochs.get(handoffId) ?? 0;
-  const request = backend.getAgentHandoff(handoffId).then((record) => {
+  const generation = cache.generation;
+  const epoch = cache.loadEpochs.get(handoffId) ?? 0;
+  const request = cache.api.getAgentHandoff(handoffId).then((record) => {
     const parsed = snapshotFromRecord(handoffId, record);
-    if (
-      generation === handoffCacheGeneration &&
-      epoch === (handoffLoadEpochs.get(handoffId) ?? 0)
-    ) {
-      handoffCache.set(handoffId, parsed);
+    if (generation === cache.generation && epoch === (cache.loadEpochs.get(handoffId) ?? 0)) {
+      cache.snapshots.set(handoffId, parsed);
       return parsed;
     }
     // The handoff was forgotten or the whole cache was reset while this read
@@ -186,11 +219,11 @@ export async function loadAgentHandoff(handoffId: string): Promise<AgentHandoffS
   });
   let pending: Promise<AgentHandoffSnapshot | null>;
   pending = request.finally(() => {
-    if (handoffLoads.get(handoffId) === pending) {
-      handoffLoads.delete(handoffId);
+    if (cache.loads.get(handoffId) === pending) {
+      cache.loads.delete(handoffId);
     }
   });
-  handoffLoads.set(handoffId, pending);
+  cache.loads.set(handoffId, pending);
   return pending;
 }
 
@@ -206,10 +239,11 @@ export async function loadAgentHandoff(handoffId: string): Promise<AgentHandoffS
  */
 export async function createAgentHandoff(
   input: backend.CreateAgentHandoffInput,
+  scope: NodeScope = appCommandScope(),
 ): Promise<AgentHandoffSnapshot> {
-  const record = await backend.createAgentHandoff(input).catch((error: unknown) => {
-    const message = error instanceof Error ? error.message : String(error);
-    if (message.includes("Unknown backend command")) {
+  const cache = handoffCacheOf(scope);
+  const record = await cache.api.createAgentHandoff(input).catch((error: unknown) => {
+    if (incompatibility(error, "create_agent_handoff")) {
       throw new Error(
         "Continuing in another agent needs a newer Orkestrator backend. Update this machine and try again.",
       );
@@ -224,6 +258,6 @@ export async function createAgentHandoff(
   ) {
     throw new Error("The conversation transfer was not stored as written");
   }
-  rememberAgentHandoff(snapshot);
+  cache.snapshots.set(snapshot.id, snapshot);
   return snapshot;
 }

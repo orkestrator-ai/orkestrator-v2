@@ -1,12 +1,14 @@
 import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { Environment, Project } from "../../../apps/web/src/types";
 import * as realSortable from "@dnd-kit/sortable";
 import * as realEnvironmentItem from "@/components/environments/EnvironmentItem";
 import * as realBackend from "@/lib/backend";
 import { mockToastError } from "../../mocks/sonner";
-import { useAgentMailStore } from "../../../apps/web/src/stores/agentMailStore";
-import { useConfigStore } from "../../../apps/web/src/stores/configStore";
+import { agentMailStore } from "../../../apps/web/src/stores/agentMailStore";
+import { configStore } from "../../../apps/web/src/stores/configStore";
+import { appCommandStore } from "../../../apps/web/src/test/app-command-store";
 
 const realSortableSnapshot = { ...realSortable };
 const realEnvironmentItemSnapshot = { ...realEnvironmentItem };
@@ -96,7 +98,7 @@ describe("sortable sidebar items", () => {
     openInBrowser.mockClear();
     openInBrowser.mockImplementation(async () => {});
     toastError.mockClear();
-    useAgentMailStore.setState(useAgentMailStore.getInitialState());
+    appCommandStore(agentMailStore).setState(appCommandStore(agentMailStore).getInitialState());
   });
 
   afterAll(() => {
@@ -108,7 +110,7 @@ describe("sortable sidebar items", () => {
   test("SortableEnvironmentItem applies selected and dragging treatments", () => {
     sortableState.isDragging = true;
 
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <SortableEnvironmentItem
         environment={environment}
         isSelected={true}
@@ -134,7 +136,7 @@ describe("sortable sidebar items", () => {
     sortableState.isDragging = true;
     sortableState.transform = { x: 0, y: 40, scaleX: 1, scaleY: 3.5 };
 
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <SortableEnvironmentItem
         environment={environment}
         isSelected={false}
@@ -179,7 +181,7 @@ describe("sortable sidebar items", () => {
   );
 
   test("SortableEnvironmentItem activates dragging from the grip handle only", () => {
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <SortableEnvironmentItem
         environment={environment}
         isSelected={false}
@@ -207,7 +209,7 @@ describe("sortable sidebar items", () => {
     const onCreateEnvironment = mock(() => {});
     const onSelectProject = mock(() => {});
 
-    render(
+    renderInAppCommandScope(
       <SortableProjectGroup
         project={project}
         environments={[environment]}
@@ -267,7 +269,7 @@ describe("sortable sidebar items", () => {
       onRestartEnvironment: () => {},
       onCreateEnvironment: () => {},
     };
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <>
         <SortableProjectGroup {...sharedProps} project={project} environments={[environment]} />
         <SortableProjectGroup {...sharedProps} project={emptyProject} environments={[]} />
@@ -307,10 +309,10 @@ describe("sortable sidebar items", () => {
   });
 
   test("SortableProjectGroup aggregates unseen and failed agent mail", () => {
-    const config = structuredClone(useConfigStore.getInitialState().config);
+    const config = structuredClone(appCommandStore(configStore).getInitialState().config);
     config.global.agentMessaging = { ...config.global.agentMessaging!, enabled: true };
-    useConfigStore.setState({ config });
-    useAgentMailStore.setState({
+    appCommandStore(configStore).setState({ config });
+    appCommandStore(agentMailStore).setState({
       summary: new Map([
         [
           "env-1\0agent",
@@ -330,7 +332,7 @@ describe("sortable sidebar items", () => {
       ]),
     });
 
-    render(
+    renderInAppCommandScope(
       <SortableProjectGroup
         project={project}
         environments={[environment]}
@@ -355,7 +357,7 @@ describe("sortable sidebar items", () => {
   });
 
   test("SortableProjectGroup highlights the header only when isSelected is true", () => {
-    const { rerender } = render(
+    const { rerender } = renderInAppCommandScope(
       <SortableProjectGroup
         project={project}
         environments={[environment]}
@@ -423,7 +425,7 @@ describe("sortable sidebar items", () => {
   function renderProjectGroup(
     overrides: Partial<React.ComponentProps<typeof SortableProjectGroup>> = {},
   ) {
-    return render(
+    return renderInAppCommandScope(
       <SortableProjectGroup
         project={project}
         environments={[environment]}
@@ -676,7 +678,7 @@ describe("sortable sidebar items", () => {
   function renderFolder(
     overrides: Partial<Parameters<typeof SortableProjectFolder>[0]> = {},
   ): ReturnType<typeof render> {
-    return render(
+    return renderInAppCommandScope(
       <SortableProjectFolder
         name="Work"
         projectCount={2}

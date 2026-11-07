@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, screen } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { ComponentProps } from "react";
 import { Collapsible } from "@/components/ui/collapsible";
 import { RepositoryMemberContext } from "@/contexts/RepositoryMemberContext";
@@ -51,7 +52,7 @@ function Header({
 test.each([undefined, false, true])(
   "header reserves repository geometry only when membership is true (%s)",
   (member) => {
-    render(<Header member={member} icon={<span data-testid="project-icon" />} />);
+    renderInAppCommandScope(<Header member={member} icon={<span data-testid="project-icon" />} />);
     const button = screen.getByRole("button", { name: "Open Checkout" });
     const activity = screen.getByTestId("coordinator-activity-icon");
     expect(button.classList.contains("pl-[39px]")).toBe(member === true);
@@ -73,7 +74,7 @@ test.each([undefined, false, true])(
 test.each([false, true])(
   "iconless label retains its layout through coordinator transitions (member %s)",
   (member) => {
-    const view = render(<Header member={member} />);
+    const view = renderInAppCommandScope(<Header member={member} />);
     const button = screen.getByRole("button", { name: "Open Checkout" });
     const label = screen.getByText("This computer");
     const initialClasses = button.className;

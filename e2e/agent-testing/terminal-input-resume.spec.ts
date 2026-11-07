@@ -558,9 +558,11 @@ for (const transport of ["http-sse", "websocket"] as const) {
       const renderedOutput = () =>
         page.evaluate(async (environmentId) => {
           const modulePath = "/src/stores/terminalPortalStore.ts";
-          const { useTerminalPortalStore } = await import(modulePath);
-          const buffer = useTerminalPortalStore.getState().getTerminal(environmentId, "tab-shell")
-            ?.terminal.buffer.active;
+          const { useTerminalPortalStore, commandTerminalPortalNodeId } = await import(modulePath);
+          const buffer = useTerminalPortalStore
+            .getState()
+            .getTerminal(commandTerminalPortalNodeId(), environmentId, "tab-shell")?.terminal
+            .buffer.active;
           if (!buffer) return "";
           const lines: string[] = [];
           for (let index = 0; index < buffer.length; index += 1) {

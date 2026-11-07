@@ -1,11 +1,17 @@
 import { describe, test, expect, beforeEach, mock } from "bun:test";
-import { renderHook, act, waitFor } from "@testing-library/react";
+import { act, waitFor } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import type { PrMonitorEnvironmentState } from "@orkestrator/protocol/pr-monitor";
-import { useEnvironmentStore } from "../../../apps/web/src/stores/environmentStore";
-import { usePrMonitorStore } from "../../../apps/web/src/stores/prMonitorStore";
-import { useFilesPanelStore } from "../../../apps/web/src/stores/filesPanelStore";
-import { useUIStore } from "../../../apps/web/src/stores/uiStore";
+import { environmentStore } from "../../../apps/web/src/stores/environmentStore";
+import { prMonitorStore } from "../../../apps/web/src/stores/prMonitorStore";
+import { filesPanelStore } from "../../../apps/web/src/stores/filesPanelStore";
+import { uiStore } from "../../../apps/web/src/stores/uiStore";
 import { createMockEnvironment } from "../utils/testFactories";
+import {
+  filesPanelTestState,
+  setFilesPanelTestState,
+} from "../../../apps/web/src/test/files-panel-state";
+import { useFilesPanelChromeStore } from "../../../apps/web/src/stores/filesPanelChromeStore";
 
 // Mock backend module BEFORE importing the hook
 const mockGetEnvironmentPrUrl = mock<(environmentId: string) => Promise<string | null>>(() =>
@@ -54,20 +60,21 @@ function monitorState(
 
 // Import hook AFTER mocking
 import { usePullRequest } from "../../../apps/web/src/hooks/usePullRequest";
+import { appCommandStore } from "../../../apps/web/src/test/app-command-store";
 
 describe("usePullRequest", () => {
   beforeEach(() => {
     // Reset store between tests
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [],
       isLoading: false,
       error: null,
     });
 
-    usePrMonitorStore.setState({ states: new Map() });
-    useFilesPanelStore.setState({ isOpen: false, activeTab: "changes", pullRequestTabs: {} });
+    appCommandStore(prMonitorStore).setState({ states: new Map() });
+    setFilesPanelTestState({ isOpen: false, activeTab: "changes", pullRequestTabs: {} });
     // The main view shows env-1, so its files panel is the right-hand PR pane.
-    useUIStore.setState({ selectedProjectId: null, selectedEnvironmentId: "env-1" });
+    appCommandStore(uiStore).setState({ selectedProjectId: null, selectedEnvironmentId: "env-1" });
 
     // Reset mocks
     mockGetEnvironmentPrUrl.mockClear();
@@ -87,7 +94,7 @@ describe("usePullRequest", () => {
   });
 
   test("returns initial state with no environment", () => {
-    const { result } = renderHook(() => usePullRequest({ environmentId: null }));
+    const { result } = renderHookInAppCommandScope(() => usePullRequest({ environmentId: null }));
 
     expect(result.current.prUrl).toBeNull();
     expect(result.current.isDetecting).toBe(false);
@@ -102,30 +109,34 @@ describe("usePullRequest", () => {
       prUrl: "https://github.com/test/repo/pull/123",
     });
 
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [env],
       isLoading: false,
       error: null,
     });
 
-    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+    const { result } = renderHookInAppCommandScope(() =>
+      usePullRequest({ environmentId: "env-1" }),
+    );
 
     expect(result.current.prUrl).toBe("https://github.com/test/repo/pull/123");
   });
 
   test("reacts to authoritative environment and monitor snapshot changes", () => {
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [createMockEnvironment({ id: "env-1", prUrl: null })],
       isLoading: false,
       error: null,
     });
-    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+    const { result } = renderHookInAppCommandScope(() =>
+      usePullRequest({ environmentId: "env-1" }),
+    );
 
     act(() => {
-      useEnvironmentStore
+      appCommandStore(environmentStore)
         .getState()
         .setEnvironmentPR("env-1", "https://github.com/test/repo/pull/789", "open", true);
-      usePrMonitorStore.setState({
+      appCommandStore(prMonitorStore).setState({
         states: new Map([["env-1", monitorState("env-1", { checkInProgress: true })]]),
       });
     });
@@ -147,13 +158,15 @@ describe("usePullRequest", () => {
       prUrl: "https://github.com/test/repo/pull/123",
     });
 
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [env],
       isLoading: false,
       error: null,
     });
 
-    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+    const { result } = renderHookInAppCommandScope(() =>
+      usePullRequest({ environmentId: "env-1" }),
+    );
 
     await act(async () => {
       await result.current.viewPR({ external: true });
@@ -174,13 +187,15 @@ describe("usePullRequest", () => {
       prUrl: null,
     });
 
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [env],
       isLoading: false,
       error: null,
     });
 
-    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+    const { result } = renderHookInAppCommandScope(() =>
+      usePullRequest({ environmentId: "env-1" }),
+    );
 
     await act(async () => {
       await result.current.viewPR();
@@ -188,52 +203,58 @@ describe("usePullRequest", () => {
 
     expect(mockGetEnvironmentPrUrl).toHaveBeenCalledWith("env-1");
     expect(mockOpenInBrowser).not.toHaveBeenCalled();
-    expect(useFilesPanelStore.getState().pullRequestTabs["env-1"]?.map((tab) => tab.ref)).toEqual([
-      { owner: "test", repo: "repo", number: 456 },
-    ]);
+    expect(
+      appCommandStore(filesPanelStore)
+        .getState()
+        .pullRequestTabs["env-1"]?.map((tab) => tab.ref),
+    ).toEqual([{ owner: "test", repo: "repo", number: 456 }]);
   });
 
   test("viewPR opens the PR in the environment's files panel by default", async () => {
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [
         createMockEnvironment({ id: "env-1", prUrl: "https://github.com/test/repo/pull/123" }),
       ],
       isLoading: false,
       error: null,
     });
-    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+    const { result } = renderHookInAppCommandScope(() =>
+      usePullRequest({ environmentId: "env-1" }),
+    );
 
     await act(async () => {
       await result.current.viewPR();
     });
 
     expect(mockOpenInBrowser).not.toHaveBeenCalled();
-    const panel = useFilesPanelStore.getState();
+    const panel = filesPanelTestState();
     expect(panel.isOpen).toBe(true);
     expect(panel.activeTab).toBe("pull-request:test/repo#123");
   });
 
   test("viewPR falls back to GitHub when nothing is shown to host the pane", async () => {
-    useUIStore.setState({ selectedProjectId: null, selectedEnvironmentId: null });
-    useEnvironmentStore.setState({
+    appCommandStore(uiStore).setState({ selectedProjectId: null, selectedEnvironmentId: null });
+    appCommandStore(environmentStore).setState({
       environments: [
         createMockEnvironment({ id: "env-1", prUrl: "https://github.com/test/repo/pull/123" }),
       ],
       isLoading: false,
       error: null,
     });
-    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+    const { result } = renderHookInAppCommandScope(() =>
+      usePullRequest({ environmentId: "env-1" }),
+    );
 
     await act(async () => {
       await result.current.viewPR();
     });
 
     expect(mockOpenInBrowser).toHaveBeenCalledWith("https://github.com/test/repo/pull/123");
-    expect(useFilesPanelStore.getState().isOpen).toBe(false);
+    expect(useFilesPanelChromeStore.getState().isOpen).toBe(false);
   });
 
   test("viewPR falls back to the browser for a URL the viewer cannot show", async () => {
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [
         createMockEnvironment({
           id: "env-1",
@@ -243,7 +264,9 @@ describe("usePullRequest", () => {
       isLoading: false,
       error: null,
     });
-    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+    const { result } = renderHookInAppCommandScope(() =>
+      usePullRequest({ environmentId: "env-1" }),
+    );
 
     await act(async () => {
       await result.current.viewPR();
@@ -252,18 +275,20 @@ describe("usePullRequest", () => {
     expect(mockOpenInBrowser).toHaveBeenCalledWith(
       "https://gitlab.com/test/repo/-/merge_requests/1",
     );
-    expect(useFilesPanelStore.getState().pullRequestTabs).toEqual({});
+    expect(appCommandStore(filesPanelStore).getState().pullRequestTabs).toEqual({});
   });
 
   test("viewPR reports browser rejection after fetching a missing URL", async () => {
     mockGetEnvironmentPrUrl.mockResolvedValueOnce("https://github.com/test/repo/pull/456");
     mockOpenInBrowser.mockRejectedValueOnce(new Error("browser unavailable"));
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [createMockEnvironment({ id: "env-1", prUrl: null })],
       isLoading: false,
       error: null,
     });
-    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+    const { result } = renderHookInAppCommandScope(() =>
+      usePullRequest({ environmentId: "env-1" }),
+    );
 
     await act(async () => {
       await result.current.viewPR({ external: true });
@@ -280,13 +305,15 @@ describe("usePullRequest", () => {
       prUrl: null,
     });
 
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [env],
       isLoading: false,
       error: null,
     });
 
-    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+    const { result } = renderHookInAppCommandScope(() =>
+      usePullRequest({ environmentId: "env-1" }),
+    );
 
     await act(async () => {
       await result.current.viewPR();
@@ -297,12 +324,14 @@ describe("usePullRequest", () => {
 
   test("viewPR handles a rejected fallback URL lookup", async () => {
     mockGetEnvironmentPrUrl.mockRejectedValueOnce(new Error("backend unavailable"));
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [createMockEnvironment({ id: "env-1", prUrl: null })],
       isLoading: false,
       error: null,
     });
-    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+    const { result } = renderHookInAppCommandScope(() =>
+      usePullRequest({ environmentId: "env-1" }),
+    );
 
     await act(async () => {
       await result.current.viewPR();
@@ -322,13 +351,15 @@ describe("usePullRequest", () => {
       prUrl: "https://github.com/test/repo/pull/123",
     });
 
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [env],
       isLoading: false,
       error: null,
     });
 
-    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+    const { result } = renderHookInAppCommandScope(() =>
+      usePullRequest({ environmentId: "env-1" }),
+    );
 
     await act(async () => {
       await result.current.viewPR({ external: true });
@@ -341,7 +372,7 @@ describe("usePullRequest", () => {
     mockOpenInBrowser
       .mockRejectedValueOnce(new Error("browser unavailable"))
       .mockResolvedValueOnce(undefined);
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [
         createMockEnvironment({
           id: "env-1",
@@ -351,7 +382,9 @@ describe("usePullRequest", () => {
       isLoading: false,
       error: null,
     });
-    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+    const { result } = renderHookInAppCommandScope(() =>
+      usePullRequest({ environmentId: "env-1" }),
+    );
 
     await act(async () => result.current.viewPR({ external: true }));
     expect(result.current.error).toBe("browser unavailable");
@@ -368,13 +401,15 @@ describe("usePullRequest", () => {
       prUrl: "https://github.com/test/repo/pull/123",
     });
 
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [env],
       isLoading: false,
       error: null,
     });
 
-    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+    const { result } = renderHookInAppCommandScope(() =>
+      usePullRequest({ environmentId: "env-1" }),
+    );
 
     expect(result.current.prUrl).toBe("https://github.com/test/repo/pull/123");
 
@@ -384,7 +419,7 @@ describe("usePullRequest", () => {
 
     expect(mockClearEnvironmentPr).toHaveBeenCalledWith("env-1");
     // The store should be updated to clear the PR
-    expect(useEnvironmentStore.getState().environments[0]?.prUrl).toBeNull();
+    expect(appCommandStore(environmentStore).getState().environments[0]?.prUrl).toBeNull();
   });
 
   test("resetPR preserves the snapshot and reports backend rejection", async () => {
@@ -394,8 +429,14 @@ describe("usePullRequest", () => {
       prUrl: "https://github.com/test/repo/pull/123",
       prState: "open",
     });
-    useEnvironmentStore.setState({ environments: [env], isLoading: false, error: null });
-    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+    appCommandStore(environmentStore).setState({
+      environments: [env],
+      isLoading: false,
+      error: null,
+    });
+    const { result } = renderHookInAppCommandScope(() =>
+      usePullRequest({ environmentId: "env-1" }),
+    );
 
     await act(async () => {
       await result.current.resetPR();
@@ -406,7 +447,7 @@ describe("usePullRequest", () => {
   });
 
   test("resetPR does nothing when no environmentId", async () => {
-    const { result } = renderHook(() => usePullRequest({ environmentId: null }));
+    const { result } = renderHookInAppCommandScope(() => usePullRequest({ environmentId: null }));
 
     await act(async () => {
       await result.current.resetPR();
@@ -416,17 +457,19 @@ describe("usePullRequest", () => {
   });
 
   test("isDetecting mirrors the backend monitor's checkInProgress", () => {
-    usePrMonitorStore.setState({
+    appCommandStore(prMonitorStore).setState({
       states: new Map([["env-1", monitorState("env-1", { checkInProgress: true })]]),
     });
 
-    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+    const { result } = renderHookInAppCommandScope(() =>
+      usePullRequest({ environmentId: "env-1" }),
+    );
 
     expect(result.current.isDetecting).toBe(true);
   });
 
   test("reacts to authoritative CI check summary events from the monitor store", () => {
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [
         createMockEnvironment({
           id: "env-1",
@@ -437,30 +480,38 @@ describe("usePullRequest", () => {
       isLoading: false,
       error: null,
     });
-    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+    const { result } = renderHookInAppCommandScope(() =>
+      usePullRequest({ environmentId: "env-1" }),
+    );
 
     expect(result.current.checkSummary).toBeNull();
 
     act(() => {
-      usePrMonitorStore.getState().applyEvent({
-        environmentId: "env-1",
-        state: monitorState("env-1", {
-          checkSummary: { passed: 2, total: 3, pending: 1 },
-        }),
-      });
+      appCommandStore(prMonitorStore)
+        .getState()
+        .applyEvent({
+          environmentId: "env-1",
+          state: monitorState("env-1", {
+            checkSummary: { passed: 2, total: 3, pending: 1 },
+          }),
+        });
     });
 
     expect(result.current.checkSummary).toEqual({ passed: 2, total: 3, pending: 1 });
   });
 
   test("isDetecting is false for an unmonitored environment", () => {
-    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+    const { result } = renderHookInAppCommandScope(() =>
+      usePullRequest({ environmentId: "env-1" }),
+    );
 
     expect(result.current.isDetecting).toBe(false);
   });
 
   test("setModeCreatePending requests backend create-pending monitoring", () => {
-    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+    const { result } = renderHookInAppCommandScope(() =>
+      usePullRequest({ environmentId: "env-1" }),
+    );
 
     act(() => {
       result.current.setModeCreatePending();
@@ -470,7 +521,9 @@ describe("usePullRequest", () => {
   });
 
   test("setModeMergePending requests backend merge-pending monitoring", () => {
-    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+    const { result } = renderHookInAppCommandScope(() =>
+      usePullRequest({ environmentId: "env-1" }),
+    );
 
     act(() => {
       result.current.setModeMergePending();
@@ -480,7 +533,9 @@ describe("usePullRequest", () => {
   });
 
   test("arms the backend-owned post-completion PR refresh", async () => {
-    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+    const { result } = renderHookInAppCommandScope(() =>
+      usePullRequest({ environmentId: "env-1" }),
+    );
 
     let armedAt: string | null | undefined;
     await act(async () => {
@@ -492,7 +547,7 @@ describe("usePullRequest", () => {
   });
 
   test("arm refresh is a null no-op without an environment", async () => {
-    const { result } = renderHook(() => usePullRequest({ environmentId: null }));
+    const { result } = renderHookInAppCommandScope(() => usePullRequest({ environmentId: null }));
 
     let armedAt: string | null | undefined;
     await act(async () => {
@@ -505,13 +560,17 @@ describe("usePullRequest", () => {
 
   test("arm refresh propagates backend rejection to its caller", async () => {
     mockArmPrRefreshAfterAgentCompletion.mockRejectedValueOnce(new Error("arm rejected"));
-    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+    const { result } = renderHookInAppCommandScope(() =>
+      usePullRequest({ environmentId: "env-1" }),
+    );
 
     await expect(result.current.armRefreshAfterAgentCompletion()).rejects.toThrow("arm rejected");
   });
 
   test("disarms the exact backend-owned refresh token", async () => {
-    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+    const { result } = renderHookInAppCommandScope(() =>
+      usePullRequest({ environmentId: "env-1" }),
+    );
 
     await act(async () => {
       await result.current.disarmRefreshAfterAgentCompletion("armed-at-1");
@@ -521,7 +580,7 @@ describe("usePullRequest", () => {
   });
 
   test("disarm refresh is a no-op without an environment", async () => {
-    const { result } = renderHook(() => usePullRequest({ environmentId: null }));
+    const { result } = renderHookInAppCommandScope(() => usePullRequest({ environmentId: null }));
 
     await act(async () => {
       await result.current.disarmRefreshAfterAgentCompletion("armed-at-1");
@@ -532,7 +591,9 @@ describe("usePullRequest", () => {
 
   test("disarm refresh propagates backend rejection to its caller", async () => {
     mockDisarmPrRefreshAfterAgentCompletion.mockRejectedValueOnce(new Error("disarm rejected"));
-    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+    const { result } = renderHookInAppCommandScope(() =>
+      usePullRequest({ environmentId: "env-1" }),
+    );
 
     await expect(result.current.disarmRefreshAfterAgentCompletion("armed-at-1")).rejects.toThrow(
       "disarm rejected",
@@ -541,7 +602,9 @@ describe("usePullRequest", () => {
 
   test("a failed mode request is swallowed rather than thrown into the caller", async () => {
     mockPrMonitorWatch.mockImplementation(() => Promise.reject(new Error("backend offline")));
-    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+    const { result } = renderHookInAppCommandScope(() =>
+      usePullRequest({ environmentId: "env-1" }),
+    );
 
     act(() => {
       result.current.setModeMergePending();
@@ -552,7 +615,9 @@ describe("usePullRequest", () => {
 
   test("a failed create-pending request is contained by the hook", async () => {
     mockPrMonitorWatch.mockRejectedValueOnce(new Error("backend offline"));
-    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+    const { result } = renderHookInAppCommandScope(() =>
+      usePullRequest({ environmentId: "env-1" }),
+    );
 
     act(() => {
       result.current.setModeCreatePending();
@@ -562,7 +627,7 @@ describe("usePullRequest", () => {
   });
 
   test("setModeCreatePending does nothing when no environmentId", () => {
-    const { result } = renderHook(() => usePullRequest({ environmentId: null }));
+    const { result } = renderHookInAppCommandScope(() => usePullRequest({ environmentId: null }));
 
     act(() => {
       result.current.setModeCreatePending();
@@ -572,7 +637,7 @@ describe("usePullRequest", () => {
   });
 
   test("setModeMergePending does nothing when no environmentId", () => {
-    const { result } = renderHook(() => usePullRequest({ environmentId: null }));
+    const { result } = renderHookInAppCommandScope(() => usePullRequest({ environmentId: null }));
 
     act(() => {
       result.current.setModeMergePending();

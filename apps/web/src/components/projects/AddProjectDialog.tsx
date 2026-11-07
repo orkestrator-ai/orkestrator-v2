@@ -12,15 +12,11 @@ import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { FolderGit2, FolderOpen, GitBranch, Loader2, LockKeyhole, Plus } from "lucide-react";
 import { GithubIcon } from "@/components/icons/GithubIcon";
-import { pickHostPath } from "@/lib/host-path-picker";
-import {
-  getGitRemoteUrl,
-  listGitHubCloneAccounts,
-  listGitHubCloneRepositories,
-} from "@/lib/backend";
+import { usePickHostPath } from "@/lib/host-path-picker";
 import { cn } from "@/lib/utils";
 import { GitHubRepositoryPicker, type GitHubRepositoryPickerProps } from "./GitHubRepositoryPicker";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 const log = createLogger("web.project");
 
@@ -54,9 +50,20 @@ export function AddProjectDialog({
   validateGitUrl,
   defaultCloneDirectory,
   existingGitUrls,
-  loadGitHubAccounts = listGitHubCloneAccounts,
-  loadGitHubRepositories = listGitHubCloneRepositories,
+  loadGitHubAccounts: loadGitHubAccountsOverride,
+  loadGitHubRepositories: loadGitHubRepositoriesOverride,
 }: AddProjectDialogProps) {
+  const nodeBackend = useScopeBackend();
+  const loadGitHubAccounts =
+    loadGitHubAccountsOverride === undefined
+      ? nodeBackend.listGitHubCloneAccounts
+      : loadGitHubAccountsOverride;
+  const loadGitHubRepositories =
+    loadGitHubRepositoriesOverride === undefined
+      ? nodeBackend.listGitHubCloneRepositories
+      : loadGitHubRepositoriesOverride;
+  // Browses the host of the node this component renders in.
+  const pickHostPath = usePickHostPath();
   const [source, setSource] = useState<ProjectSource>("existing");
   const [isBrowsingGitHub, setIsBrowsingGitHub] = useState(false);
   const [gitUrl, setGitUrl] = useState("");
@@ -171,7 +178,7 @@ export function AddProjectDialog({
     } catch (browseError) {
       log.error("directory-picker.failed", { error: formatLogError(browseError) });
     }
-  }, [localPath]);
+  }, [localPath, pickHostPath]);
 
   // Picker requests inspect immediately; typed paths wait until the user pauses.
   // Both share cancellation so an old lookup cannot replace a newer form value.
@@ -194,7 +201,7 @@ export function AddProjectDialog({
     const timer = setTimeout(
       async () => {
         try {
-          const remoteUrl = await getGitRemoteUrl(repositoryPath);
+          const remoteUrl = await nodeBackend.getGitRemoteUrl(repositoryPath);
           if (cancelled) return;
           if (!remoteUrl || !isCurrent()) {
             lastInspectedPathRef.current = repositoryPath;
@@ -244,7 +251,7 @@ export function AddProjectDialog({
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [isLoading, isOpen, localPath, pickedPath, source]);
+  }, [isLoading, isOpen, localPath, pickedPath, source, nodeBackend]);
 
   const handleNewProjectBrowse = useCallback(async () => {
     try {
@@ -260,7 +267,7 @@ export function AddProjectDialog({
     } catch (browseError) {
       log.error("directory-picker.failed", { error: formatLogError(browseError) });
     }
-  }, [newProjectPath]);
+  }, [newProjectPath, pickHostPath]);
 
   const handleSubmit = useCallback(
     async (event: React.FormEvent) => {

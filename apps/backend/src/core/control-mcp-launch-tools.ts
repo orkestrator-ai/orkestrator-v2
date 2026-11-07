@@ -16,7 +16,8 @@ import {
   createCoordinatorDelegatedPrompt,
 } from "@orkestrator/protocol/review-evidence-frames";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
-import { z } from "zod";
+import { Schema } from "effect";
+import { describe, str, toolInput, withDefault } from "./tool-schema.js";
 import { coordinatorReplayFields } from "./control-mcp-results.js";
 import {
   defaultLaunchAgent,
@@ -121,10 +122,12 @@ export const LAUNCH_DEFAULTS_GUIDANCE =
   "Omit agent, modelId and reasoningId to use the user's configured defaults; set them only when the user asks for a specific agent, model or effort, or agrees to one the task needs.";
 const AGENT_DESCRIPTION =
   "Optional. Omit to use the user's default agent (defaults.agent in get_launch_options). Set only when the user asks for a specific agent.";
-const AGENT_PLATFORM_FIELD = z
-  .enum(["claude", "codex", "cursor", "grok", "opencode", "pi"])
-  .optional()
-  .describe(AGENT_DESCRIPTION);
+const AGENT_PLATFORM_FIELD = Schema.optionalKey(
+  describe(
+    Schema.Literals(["claude", "codex", "cursor", "grok", "opencode", "pi"]),
+    AGENT_DESCRIPTION,
+  ),
+);
 const MODEL_ID_DESCRIPTION =
   "Optional. Omit to use the user's configured default model. Set only when the user asks for a specific model.";
 const REASONING_ID_DESCRIPTION =
@@ -242,11 +245,13 @@ export function registerLaunchOptionsTool(
       title: "Get agent launch options",
       description:
         "List enabled agents and validated model choices for a project. defaults names what a launch runs when modelId and reasoningId are omitted, and isDefault marks each agent's default model. Omit them to use these defaults.",
-      inputSchema: z.object({
-        projectId: z.string().trim().min(1).max(200),
-        environmentId: z.string().trim().min(1).max(200).optional(),
-        nodeId: nodeIdField,
-      }),
+      inputSchema: toolInput(
+        Schema.Struct({
+          projectId: str({ trim: true, min: 1, max: 200 }),
+          environmentId: Schema.optionalKey(str({ trim: true, min: 1, max: 200 })),
+          nodeId: nodeIdField,
+        }),
+      ),
       annotations: coordinatorScope
         ? { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true }
         : readAnnotations(),
@@ -357,54 +362,56 @@ export function registerLaunchTools(
           ? `Coordinator launches require baseBranch and baseCommit from get_launch_options. Use a prompt environment for investigation or interactive work; when the whole spec is known, start a pipeline environment with start_build_pipeline instead. ${COORDINATOR_WORKER_PROMPT_NOTE} `
           : "") +
         "Use a new requestId for each new launch; reuse one only to retry the same launch.",
-      inputSchema: z.object({
-        requestId: z.string().trim().min(1).max(256),
-        projectId: z.string().trim().min(1).max(200),
-        environmentType: z.enum(["local", "containerized"]).default("local"),
-        name: z.string().trim().min(1).max(200).optional(),
-        agent: AGENT_PLATFORM_FIELD,
-        modelId: z.string().trim().min(1).max(500).optional().describe(MODEL_ID_DESCRIPTION),
-        reasoningId: z
-          .string()
-          .trim()
-          .min(1)
-          .max(100)
-          .optional()
-          .describe(REASONING_ID_DESCRIPTION),
-        fastMode: z.boolean().optional().describe(FAST_MODE_DESCRIPTION),
-        conversationMode: z.enum(["plan", "build"]).default("build"),
-        prompt: z
-          .string()
-          .trim()
-          .min(1)
-          .max(MAX_PROMPT_LENGTH)
-          .describe(COORDINATOR_WORKER_PROMPT_FORMAT_RULE),
-        networkAccessMode: z.enum(["restricted", "full"]).optional(),
-        baseBranch: (coordinatorScope
-          ? z.string().trim().min(1).max(500)
-          : z.string().trim().min(1).max(500).optional()
-        ).describe(
-          coordinatorScope
-            ? "Required coordinator base branch; copy coordinatorBase.baseBranch from get_launch_options (checkoutBase.baseBranch only when the user asks to build on the current checkout)."
-            : "Optional branch to use as the environment base.",
-        ),
-        baseCommit: (coordinatorScope
-          ? z.string().regex(/^[0-9a-f]{40}$/i)
-          : z
-              .string()
-              .regex(/^[0-9a-f]{40}$/i)
-              .optional()
-        ).describe(
-          coordinatorScope
-            ? "Required coordinator base commit; copy coordinatorBase.baseCommit from get_launch_options (checkoutBase.baseCommit only when the user asks to build on the current checkout)."
-            : "Optional 40-character commit to use as the environment base.",
-        ),
-        nodeId: nodeIdField.describe(
-          coordinatorScope
-            ? "Launch on that node's copy of this project (a nodeId from list_nodes); take baseBranch and baseCommit from get_launch_options with the same nodeId. Omit for this node."
-            : "Launch on that machine (a nodeId from list_nodes); projectId is that machine's project, from list_projects with the same nodeId. Omit for this machine.",
-        ),
-      }),
+      inputSchema: toolInput(
+        Schema.Struct({
+          requestId: str({ trim: true, min: 1, max: 256 }),
+          projectId: str({ trim: true, min: 1, max: 200 }),
+          environmentType: withDefault(Schema.Literals(["local", "containerized"]), "local"),
+          name: Schema.optionalKey(str({ trim: true, min: 1, max: 200 })),
+          agent: AGENT_PLATFORM_FIELD,
+          modelId: Schema.optionalKey(
+            describe(str({ trim: true, min: 1, max: 500 }), MODEL_ID_DESCRIPTION),
+          ),
+          reasoningId: Schema.optionalKey(
+            describe(str({ trim: true, min: 1, max: 100 }), REASONING_ID_DESCRIPTION),
+          ),
+          fastMode: Schema.optionalKey(describe(Schema.Boolean, FAST_MODE_DESCRIPTION)),
+          conversationMode: withDefault(Schema.Literals(["plan", "build"]), "build"),
+          prompt: describe(
+            str({ trim: true, min: 1, max: MAX_PROMPT_LENGTH }),
+            COORDINATOR_WORKER_PROMPT_FORMAT_RULE,
+          ),
+          networkAccessMode: Schema.optionalKey(Schema.Literals(["restricted", "full"])),
+          baseBranch: coordinatorScope
+            ? describe(
+                str({ trim: true, min: 1, max: 500 }),
+                "Required coordinator base branch; copy coordinatorBase.baseBranch from get_launch_options (checkoutBase.baseBranch only when the user asks to build on the current checkout).",
+              )
+            : Schema.optionalKey(
+                describe(
+                  str({ trim: true, min: 1, max: 500 }),
+                  "Optional branch to use as the environment base.",
+                ),
+              ),
+          baseCommit: coordinatorScope
+            ? describe(
+                str({ pattern: /^[0-9a-f]{40}$/i }),
+                "Required coordinator base commit; copy coordinatorBase.baseCommit from get_launch_options (checkoutBase.baseCommit only when the user asks to build on the current checkout).",
+              )
+            : Schema.optionalKey(
+                describe(
+                  str({ pattern: /^[0-9a-f]{40}$/i }),
+                  "Optional 40-character commit to use as the environment base.",
+                ),
+              ),
+          nodeId: describe(
+            nodeIdField,
+            coordinatorScope
+              ? "Launch on that node's copy of this project (a nodeId from list_nodes); take baseBranch and baseCommit from get_launch_options with the same nodeId. Omit for this node."
+              : "Launch on that machine (a nodeId from list_nodes); projectId is that machine's project, from list_projects with the same nodeId. Omit for this machine.",
+          ),
+        }),
+      ),
       annotations: {
         readOnlyHint: false,
         destructiveHint: true,
@@ -636,29 +643,27 @@ export function registerLaunchTools(
         "Create a native-agent tab and exactly-once initial turn that can execute commands, modify workspace files, and use configured network access. " +
         `${LAUNCH_DEFAULTS_GUIDANCE} The result's selection reports the model and effort that will run.` +
         (coordinatorScope ? ` ${COORDINATOR_WORKER_PROMPT_NOTE}` : ""),
-      inputSchema: z.object({
-        requestId: z.string().trim().min(1).max(256),
-        environmentId: z.string().trim().min(1).max(200),
-        agent: AGENT_PLATFORM_FIELD,
-        modelId: z.string().trim().min(1).max(500).optional().describe(MODEL_ID_DESCRIPTION),
-        reasoningId: z
-          .string()
-          .trim()
-          .min(1)
-          .max(100)
-          .optional()
-          .describe(REASONING_ID_DESCRIPTION),
-        fastMode: z.boolean().optional().describe(FAST_MODE_DESCRIPTION),
-        conversationMode: z.enum(["plan", "build"]).default("build"),
-        title: z.string().trim().min(1).max(200).optional(),
-        prompt: z
-          .string()
-          .trim()
-          .min(1)
-          .max(MAX_PROMPT_LENGTH)
-          .describe(COORDINATOR_WORKER_PROMPT_FORMAT_RULE),
-        nodeId: nodeIdField,
-      }),
+      inputSchema: toolInput(
+        Schema.Struct({
+          requestId: str({ trim: true, min: 1, max: 256 }),
+          environmentId: str({ trim: true, min: 1, max: 200 }),
+          agent: AGENT_PLATFORM_FIELD,
+          modelId: Schema.optionalKey(
+            describe(str({ trim: true, min: 1, max: 500 }), MODEL_ID_DESCRIPTION),
+          ),
+          reasoningId: Schema.optionalKey(
+            describe(str({ trim: true, min: 1, max: 100 }), REASONING_ID_DESCRIPTION),
+          ),
+          fastMode: Schema.optionalKey(describe(Schema.Boolean, FAST_MODE_DESCRIPTION)),
+          conversationMode: withDefault(Schema.Literals(["plan", "build"]), "build"),
+          title: Schema.optionalKey(str({ trim: true, min: 1, max: 200 })),
+          prompt: describe(
+            str({ trim: true, min: 1, max: MAX_PROMPT_LENGTH }),
+            COORDINATOR_WORKER_PROMPT_FORMAT_RULE,
+          ),
+          nodeId: nodeIdField,
+        }),
+      ),
       annotations: {
         readOnlyHint: false,
         destructiveHint: true,

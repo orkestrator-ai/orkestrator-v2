@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test, type Mock } from "bun:test";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { DesignCapabilities } from "@orkestrator/protocol/design-operations";
 import { invoke } from "@/lib/native/backend";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import { resetCapabilities } from "@/lib/design-client";
 import { DesignLaunchButton } from "./DesignLaunchButton";
+import { appCommandStore } from "@/test/app-command-store";
 
 // `@/lib/native/backend` is mocked once in tests/setup.ts; vary its behavior here.
 const invokeMock = invoke as unknown as Mock<(command: string, args?: unknown) => Promise<unknown>>;
@@ -52,7 +54,7 @@ beforeEach(() => {
       };
     throw new Error(`Unexpected command: ${command}`);
   });
-  usePaneLayoutStore.setState((state) => ({
+  appCommandStore(paneLayoutStore).setState((state) => ({
     hydration: new Map(state.hydration).set("env-1", "done"),
   }));
 });
@@ -71,7 +73,7 @@ async function flush() {
 
 describe("DesignLaunchButton", () => {
   test("keeps sm viewport gutters while capping the launch dialog at 42rem", async () => {
-    render(
+    renderInAppCommandScope(
       <DesignLaunchButton
         environmentId="env-1"
         disabled={false}
@@ -92,7 +94,7 @@ describe("DesignLaunchButton", () => {
   });
 
   test("stays enabled without a renderer or free tabs and probes only when opened", async () => {
-    render(
+    renderInAppCommandScope(
       <DesignLaunchButton environmentId="env-1" disabled tabCount={99} createTab={() => true} />,
     );
     await flush();
@@ -112,7 +114,7 @@ describe("DesignLaunchButton", () => {
   });
 
   test("is disabled only without an environment", () => {
-    render(<DesignLaunchButton disabled={false} tabCount={0} createTab={null} />);
+    renderInAppCommandScope(<DesignLaunchButton disabled={false} tabCount={0} createTab={null} />);
     expect(
       (screen.getByRole("button", { name: "New design workspace" }) as HTMLButtonElement).disabled,
     ).toBe(true);

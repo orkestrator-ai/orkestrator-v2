@@ -24,8 +24,13 @@ import {
 } from "@/lib/settings-navigation";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { useAppDialogStore } from "@/stores/appDialogStore";
-import { useUIStore } from "@/stores/uiStore";
+import { uiStore } from "@/stores/uiStore";
 import { MachinesSettings } from "./MachinesSettings";
+import { getWindowScope } from "@/lib/node-scope/app-window-scope";
+import { appCommandStore } from "@/test/app-command-store";
+
+/** Outside a node scope provider, components act for the app's command node. */
+const commandNodeId = () => getWindowScope().commandScope().nodeId;
 
 const originalPortal = portalStore.getState();
 const originalRemote = useRemoteWorkspaceStore.getState();
@@ -1119,7 +1124,7 @@ test("the account overview follows machine additions and removals while Settings
 for (const nodeId of ["bk_self", null]) {
   test(`self Rebuild opens local Container settings with nodeId ${nodeId}`, async () => {
     const originalDialogs = useAppDialogStore.getState();
-    const originalUI = useUIStore.getState();
+    const originalUI = appCommandStore(uiStore).getState();
     portalStore.store.setState({ selfId: "bk_self" as never });
     useRemoteWorkspaceStore.setState({ active: null });
     install({
@@ -1149,8 +1154,9 @@ for (const nodeId of ["bk_self", null]) {
       expect(closeSettings).toHaveBeenCalledTimes(1);
       expectDomAbsent(screen.queryByText("Updates for Desk"));
       expect(useRemoteWorkspaceStore.getState().active).toBeNull();
-      expect(useUIStore.getState().selectedEnvironmentId).toBe("env-self");
+      expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("env-self");
       expect(useAppDialogStore.getState().request).toEqual({
+        nodeId: commandNodeId(),
         kind: "environment-settings",
         environmentId: "env-self",
         section: "container",
@@ -1160,7 +1166,7 @@ for (const nodeId of ["bk_self", null]) {
       portalStore.store.setState(originalPortal, true);
       useRemoteWorkspaceStore.setState(originalRemote, true);
       useAppDialogStore.setState(originalDialogs, true);
-      useUIStore.setState(originalUI, true);
+      appCommandStore(uiStore).setState(originalUI, true);
     }
   });
 }

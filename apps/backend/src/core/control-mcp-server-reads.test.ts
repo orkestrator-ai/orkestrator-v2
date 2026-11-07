@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { StorageService } from "./storage.js";
 import { registerKanbanCommands } from "./commands-registry-kanban.js";
+import { registrarFrom } from "./commands-registry-contracts.js";
 import type { CommandHandler } from "./commands-context.js";
 import { type ControlMcpServer, readControlMcpDescriptor } from "./control-mcp-server.js";
 import { coordinatorRoleCapabilities } from "./control-mcp-tools.js";
@@ -574,7 +575,10 @@ describe("Orkestrator control MCP server", () => {
     const storage = new StorageService(dir);
     await storage.init();
     const commands = new Map<string, CommandHandler>();
-    registerKanbanCommands((name, handler) => commands.set(name, handler), {} as never);
+    registerKanbanCommands(
+      registrarFrom((name, handler) => commands.set(name, handler)),
+      {} as never,
+    );
     for (const name of ["get_kanban_labels", "create_kanban_label", "set_kanban_task_label"]) {
       overrides.set(name, (args) => commands.get(name)!(args, { storage } as never));
     }

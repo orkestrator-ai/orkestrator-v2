@@ -1,5 +1,5 @@
 import { openMachineWorkspace } from "@/lib/federation/open-workspace";
-import { projectLandingBoardTab, type RealmGrouping } from "@/lib/federation/workspace-realm";
+import { projectLandingBoardTab, type WindowGrouping } from "@/lib/federation/window-grouping";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
@@ -38,6 +38,7 @@ import {
   type SidebarDragItem,
 } from "@/components/sidebar/SidebarDragOverlay";
 import { projectTreeSortingStrategy } from "@/lib/sidebar-sorting";
+import { incompatibilityNotice, updatableMachine } from "@/lib/federation/fleet-currency";
 import { getGitHubRepositoryUrl } from "@/lib/gitUrl";
 import { isMachineWritable, type MachineView } from "@/lib/federation/aggregate";
 import { useNodeEnvironmentChangeProjection } from "@/lib/federation/node-change-projections";
@@ -102,9 +103,16 @@ export function openWebPage(url: string): void {
 }
 
 function reportWriteError(machine: MachineView, what: string, error: unknown): void {
+  // A typed incompatibility error leads to the machine's update (plan item 5006).
+  const notice = incompatibilityNotice(error, updatableMachine(machine));
   if (error instanceof OutcomeUnknownError) {
     toast.warning(`${what}: outcome unknown on ${machine.name}`, {
       description: error.message,
+    });
+  } else if (notice) {
+    toast.error(`Could not ${what.toLowerCase()} on ${machine.name}`, {
+      description: notice.text,
+      ...(notice.update ? { action: notice.update } : {}),
     });
   } else {
     toast.error(`Could not ${what.toLowerCase()} on ${machine.name}`, {
@@ -410,7 +418,7 @@ export function RemoteProjectGroup({
   onToggleCollapse: () => void;
   sortable: boolean;
   /** How the window's sidebar groups the list this row is in; decides where it opens. */
-  grouping: RealmGrouping;
+  grouping: WindowGrouping;
   /** Mark the machine with a home before the name, in lists that name machines. */
   showMachine?: boolean;
   /** Shown instead of the project name (a repository group names the machine). */
@@ -661,6 +669,7 @@ export function RemoteEnvironmentItem({
   const selectionId = environment.key;
   const multiSelecting = useUIStore((state) => state.selectedEnvironmentIds.length > 0);
   const checked = useUIStore((state) => state.selectedEnvironmentIds.includes(selectionId));
+  const clearMultiSelection = useUIStore((state) => state.clearMultiSelection);
 
   return (
     <EnvironmentRow
@@ -676,7 +685,7 @@ export function RemoteEnvironmentItem({
       onActivate={(modifiers) => {
         if (applySidebarModifierSelection(selectionId, modifiers)) return;
         // As on this window's rows, a plain click ends a multi-selection and opens the row.
-        useUIStore.getState().clearMultiSelection();
+        clearMultiSelection();
         actions.open();
       }}
       actions={{

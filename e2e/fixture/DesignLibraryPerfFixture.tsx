@@ -3,6 +3,7 @@ import { DesignLaunchButton } from "../../apps/web/src/components/design/DesignL
 import { useEnvironmentStore } from "../../apps/web/src/stores/environmentStore";
 import { usePaneLayoutStore } from "../../apps/web/src/stores/paneLayoutStore";
 import type { Environment } from "../../apps/web/src/types";
+import { appCommandStore } from "../../apps/web/src/test/app-command-store";
 
 /**
  * The design workspace dialog (and its Saved designs library) against a real
@@ -21,7 +22,7 @@ export function DesignLibraryPerfFixture() {
         ).designInvoke(command, args),
       listen: () => () => undefined,
     } as unknown as typeof window.orkestrator;
-    useEnvironmentStore.setState({
+    appCommandStore(useEnvironmentStore.def).setState({
       environments: [
         {
           id: "design-fixture",
@@ -32,7 +33,7 @@ export function DesignLibraryPerfFixture() {
         } as Environment,
       ],
     });
-    usePaneLayoutStore.setState((state) => ({
+    appCommandStore(usePaneLayoutStore.def).setState((state) => ({
       hydration: new Map(state.hydration).set("design-fixture", "done"),
     }));
   }, []);

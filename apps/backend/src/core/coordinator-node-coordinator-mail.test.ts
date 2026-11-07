@@ -21,6 +21,7 @@ import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import type { CommandContext, CommandHandler } from "./commands-context.js";
 import { registerCoordinatorNodeCommands } from "./commands-registry-coordinator-nodes.js";
 import { registerNodeCommands } from "./commands-registry-nodes.js";
+import { registrarFrom } from "./commands-registry-contracts.js";
 import { registerCoordinatorCommandNodeMail } from "./coordinator-node-coordinator-mail.js";
 import { nodeMailReplyTarget } from "./node-mail-reply-target.js";
 import { NodeCoordination } from "./nodes/node-coordination.js";
@@ -77,7 +78,7 @@ async function link(
     ).id;
   }
   const commands = new Map<string, CommandHandler>();
-  const register = (name: string, handler: CommandHandler) => commands.set(name, handler);
+  const register = registrarFrom((name, handler) => commands.set(name, handler));
   registerCoordinatorNodeCommands(register);
   registerNodeCommands(register);
   registerCoordinatorCommandNodeMail(register);

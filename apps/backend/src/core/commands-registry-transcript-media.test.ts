@@ -3,6 +3,7 @@
  * refuses another environment's container, and answers with the first bytes
  * a message showed after the file is overwritten.
  */
+import { registrarFrom } from "./commands-registry-contracts.js";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -18,7 +19,7 @@ const readerCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
 let containerBytes = "container round 1";
 
 registerTranscriptMediaCommands(
-  (name, handler) => commands.set(name, handler),
+  registrarFrom((name, handler) => commands.set(name, handler)),
   (name) => commands.get(name),
 );
 commands.set("read_file_base64", async (args) => {
@@ -118,9 +119,11 @@ describe("transcript_media_pin", () => {
       "must be absolute",
     );
     await expect(invoke({ ...scope, path: "/w/a.png" })).rejects.toThrow("messageId is required");
+    // Tolerant since plan item 7004: an unknown key is dropped, never refused,
+    // so the refusal is the path's.
     await expect(
-      invoke({ ...scope, messageId: "m1", path: "/w/a.png", extra: true }),
-    ).rejects.toThrow("Unknown arguments: extra");
+      invoke({ ...scope, messageId: "m1", path: "relative.png", extra: true }),
+    ).rejects.toThrow("must be absolute");
     await expect(
       invoke({ ...scope, environmentId: "env-missing", messageId: "m1", path: "/w/a.png" }),
     ).rejects.toThrow("Environment not found");

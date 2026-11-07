@@ -1,3 +1,5 @@
+import { eventSink } from "../backend-emit.js";
+import { registrarFrom } from "../commands-registry-contracts.js";
 import { withRelayController } from "../public-api/relay-context.js";
 import type { BackendProfile } from "@orkestrator/protocol/backend-profile";
 import { BACKEND_HELLO_PATH, CLIENT_API_VERSION } from "@orkestrator/protocol/backend-profile";
@@ -13,7 +15,11 @@ import {
   emptyControllerSettingsStore,
   type ControllerSettingsStore,
 } from "@orkestrator/protocol/controller-settings";
-import { unknownBackendCommandMessage } from "@orkestrator/protocol/unknown-command";
+import {
+  isIncompatibilityError,
+  toWire,
+  unknownCommand,
+} from "@orkestrator/protocol/contract/errors";
 
 import type { CommandContext, CommandHandler } from "../commands-context.js";
 import { registerNodeCommands } from "../commands-registry-nodes.js";
@@ -151,7 +157,7 @@ export class TestNodeNetwork {
   private readonly commands = new Map<string, CommandHandler>();
 
   constructor() {
-    registerNodeCommands((name, handler) => this.commands.set(name, handler));
+    registerNodeCommands(registrarFrom((name, handler) => this.commands.set(name, handler)));
   }
 
   readonly fetch = (async (input: string | URL | Request, init?: RequestInit) => {
@@ -199,8 +205,8 @@ export class TestNodeNetwork {
       const extra = node.commands.get(body.command);
       const handler = this.commands.get(body.command);
       if (!handler && !extra) {
-        // A real gateway answers with the backend's own wording.
-        return json(500, { error: unknownBackendCommandMessage(body.command) });
+        // A real gateway answers with the backend's own wording, coded (plan item 1005).
+        return json(500, toWire(unknownCommand(body.command)));
       }
       try {
         const result = extra
@@ -215,6 +221,7 @@ export class TestNodeNetwork {
             } as unknown as CommandContext);
         return json(200, { result });
       } catch (error) {
+        if (isIncompatibilityError(error)) return json(500, toWire(error));
         return json(500, {
           error: error instanceof Error ? error.message : String(error),
           code: (error as { code?: string }).code,
@@ -237,7 +244,7 @@ export class TestNodeNetwork {
     const events: TestNode["events"] = [];
     const service = new NodeService({
       storage,
-      emit: (event, payload) => events.push({ event, payload }),
+      emit: eventSink((event, payload) => events.push({ event, payload })),
       forceRegistration: options.forceRegistration ?? false,
       portalOrigins: () => [`https://${name}.test`],
       fetchImpl: this.fetch,
@@ -246,11 +253,11 @@ export class TestNodeNetwork {
     });
     const portal = new NodePortal({
       nodes: service,
-      emit: (event, payload) => events.push({ event, payload }),
+      emit: eventSink((event, payload) => events.push({ event, payload })),
       local: {
         invoke: async <T>(command: string, args: Record<string, unknown> = {}) => {
           const handler = node.commands.get(command);
-          if (!handler) throw new Error(unknownBackendCommandMessage(command));
+          if (!handler) throw unknownCommand(command);
           return (await handler(args)) as T;
         },
       },

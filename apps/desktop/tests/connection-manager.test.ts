@@ -755,7 +755,11 @@ describe("Electron connection manager", () => {
     const url = "https://desk.example/__orkestrator/invoke";
     await manager.bind("closing-window", "local");
     const localAuthorization = mock(() => "Bearer local-test");
-    const auth = createWindowRequestAuthorization(manager, "closing-window", localAuthorization);
+    const auth = createWindowRequestAuthorization(
+      manager,
+      { scope: "closing-window", nodes: new Map() },
+      localAuthorization,
+    );
     expect(auth.authorization(url)).toBe("Bearer local-test");
     expect(auth.requestOrigin(url)).toBe("https://desk.example");
     const list = await manager.connect(
@@ -768,9 +772,17 @@ describe("Electron connection manager", () => {
     expect(auth.authorization(url)).toBe(`Bearer ${token}`);
     expect(auth.requestOrigin(url)).toBeNull();
     await manager.bind("local-window", "local");
-    const localAuth = createWindowRequestAuthorization(manager, "local-window", localAuthorization);
+    const localAuth = createWindowRequestAuthorization(
+      manager,
+      { scope: "local-window", nodes: new Map() },
+      localAuthorization,
+    );
     expect(localAuth.authorization(url)).toBe("Bearer local-test");
-    const relayAuth = createWindowRequestAuthorization(manager, "local-window", null);
+    const relayAuth = createWindowRequestAuthorization(
+      manager,
+      { scope: "local-window", nodes: new Map() },
+      null,
+    );
     expect(relayAuth.authorization(url)).toBeNull();
     expect(relayAuth.requestOrigin(url)).toBeNull();
     manager.release("local-window");

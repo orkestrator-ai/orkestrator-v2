@@ -1,5 +1,6 @@
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useMemo, useState, type ReactNode } from "react";
+import { useStore } from "zustand";
 import {
   DndContext,
   KeyboardSensor,
@@ -17,7 +18,7 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { ChevronDown, ChevronRight, WifiOff } from "lucide-react";
+import { ArrowUpCircle, ChevronDown, ChevronRight, WifiOff } from "lucide-react";
 import { toast } from "sonner";
 import {
   SortableProjectFolder,
@@ -49,6 +50,7 @@ import {
 import { openMachineWorkspace, openRepository } from "@/lib/federation/open-workspace";
 import { getGitHubRepositoryUrl } from "@/lib/gitUrl";
 import { updatePortalLayout, usePortalLayout } from "@/lib/portal/portal-layout";
+import { portalStore } from "@/lib/portal/portal-store";
 import {
   normalizeProjectFolderName,
   parseProjectFolderDragId,
@@ -62,6 +64,13 @@ import {
   type ProjectTreeEntry,
 } from "@/lib/project-folders";
 import { machineTextClass } from "@/lib/federation/machine-colors";
+import {
+  currencyDescription,
+  currencyLacksText,
+  currencyOffersUpdate,
+  machineViewCurrency,
+} from "@/lib/federation/fleet-currency";
+import { requestMachineUpdate } from "@/lib/settings-navigation";
 import { cn } from "@/lib/utils";
 import {
   machineCollisionDetection,
@@ -119,9 +128,67 @@ function useDragSensors(coordinateGetter: KeyboardCoordinateGetter = sortableKey
 }
 
 /**
- * A machine heading: its name in the machine's colour and, while it is
- * unreachable or catching up, its status, never activity. The name moves the whole
- * section; the chevron last collapses it.
+ * A machine's version beside its heading, when it differs from the command
+ * node's, with the contract domains it lacks (plan item 5006). Behind the
+ * command node it is a button that opens the machine's update.
+ */
+function MachineVersionSkew({ machine }: { machine: MachineView }) {
+  // The command node's release, from the same portal read as every machine's.
+  const commandRelease = useStore(portalStore.store, (state) => state.commandRelease);
+  const currency = machineViewCurrency(machine, { commandRelease });
+  if (!currency) return null;
+  const lacks = currencyLacksText(currency);
+  const description = currencyDescription(machine.name, currency);
+  const content = (
+    <>
+      {currencyOffersUpdate(currency) ? (
+        <ArrowUpCircle className="h-3 w-3 shrink-0" aria-hidden="true" />
+      ) : null}
+      <span className="shrink-0 font-mono">{currency.version}</span>
+      {lacks ? <span className="min-w-0 truncate opacity-80">· {lacks}</span> : null}
+    </>
+  );
+  const className =
+    // Shrinks well before the machine name does: the name is what the header is for.
+    "flex min-w-0 max-w-[50%] shrink-[8] items-center gap-1 rounded px-1 text-[10px] leading-4";
+  if (!currencyOffersUpdate(currency)) {
+    return (
+      <span
+        className={cn(className, "text-muted-foreground")}
+        title={description}
+        data-testid="machine-version-skew"
+        data-relation={currency.relation}
+      >
+        <span className="sr-only">{description}</span>
+        <span aria-hidden="true" className="flex min-w-0 items-center gap-1">
+          {content}
+        </span>
+      </span>
+    );
+  }
+  return (
+    <button
+      type="button"
+      onClick={() => requestMachineUpdate(machine.backendId)}
+      className={cn(
+        className,
+        "text-amber-400/90 hover:bg-amber-400/10 hover:text-amber-300 outline-none focus-hairline",
+      )}
+      title={`${description} Update it.`}
+      aria-label={`Update ${machine.name}. ${description}`}
+      data-testid="machine-version-skew"
+      data-relation={currency.relation}
+    >
+      {content}
+    </button>
+  );
+}
+
+/**
+ * A machine heading: its name in the machine's colour, its version when it
+ * differs from the command node's and, while it is unreachable or catching
+ * up, its status, never activity. The name moves the whole section; the
+ * chevron last collapses it.
  */
 export function MachineSectionHeader({
   machine,
@@ -155,7 +222,7 @@ export function MachineSectionHeader({
         {...dragHandle}
         {...(dragHandle ? { "aria-label": `Move ${machine.name}` } : {})}
         className={cn(
-          "flex h-6 min-w-0 flex-1 items-center gap-2 rounded-md px-2",
+          "flex h-6 min-w-0 flex-[1_1_auto] items-center gap-2 rounded-md px-2",
           dragHandle && "cursor-grab active:cursor-grabbing",
         )}
       >
@@ -170,6 +237,7 @@ export function MachineSectionHeader({
           {machine.name}
         </span>
       </div>
+      <MachineVersionSkew machine={machine} />
       {!live || catchingUp ? (
         <span
           className="flex shrink-0 items-center gap-1 text-[11px] text-amber-400"

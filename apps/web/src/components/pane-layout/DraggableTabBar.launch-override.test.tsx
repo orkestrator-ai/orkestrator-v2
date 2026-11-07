@@ -1,13 +1,15 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { DndContext } from "@dnd-kit/core";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, screen, waitFor } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { COORDINATOR_LAUNCH_OVERRIDES_COMMAND } from "@orkestrator/protocol/coordinator-launch-overrides";
 import { invoke } from "@/lib/native/backend";
-import { useCoordinatorLaunchOverrideStore } from "@/stores/coordinatorLaunchOverrideStore";
-import { useFileDirtyStore } from "@/stores/fileDirtyStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { coordinatorLaunchOverrideStore } from "@/stores/coordinatorLaunchOverrideStore";
+import { fileDirtyStore } from "@/stores/fileDirtyStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import type { PaneLeaf, TabInfo } from "@/types/paneLayout";
 import { DraggableTabBar } from "./DraggableTabBar";
+import { appCommandStore } from "@/test/app-command-store";
 
 const invokeMock = invoke as unknown as ReturnType<typeof mock>;
 
@@ -24,7 +26,7 @@ const agentTab = (id: string): TabInfo => ({
 
 function renderTabs(tabs: TabInfo[], environmentId = "worker") {
   const pane: PaneLeaf = { kind: "leaf", id: "pane", activeTabId: tabs[0]!.id, tabs };
-  return render(
+  return renderInAppCommandScope(
     <DndContext>
       <DraggableTabBar pane={pane} environmentId={environmentId} onTabSelect={() => undefined} />
     </DndContext>,
@@ -32,9 +34,9 @@ function renderTabs(tabs: TabInfo[], environmentId = "worker") {
 }
 
 beforeEach(() => {
-  useCoordinatorLaunchOverrideStore.getState().reset();
-  useFileDirtyStore.setState({ dirtyFiles: new Map() });
-  usePaneLayoutStore.setState({
+  appCommandStore(coordinatorLaunchOverrideStore).getState().reset();
+  appCommandStore(fileDirtyStore).setState({ dirtyFiles: new Map() });
+  appCommandStore(paneLayoutStore).setState({
     environments: new Map(),
     hydration: new Map(),
     activeEnvironmentId: null,
@@ -55,7 +57,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
-  useCoordinatorLaunchOverrideStore.getState().reset();
+  appCommandStore(coordinatorLaunchOverrideStore).getState().reset();
   invokeMock.mockReset();
   invokeMock.mockImplementation(async () => undefined);
 });
@@ -159,7 +161,7 @@ describe("launch override marker on the tab strip", () => {
       ],
     };
     const tabs = Array.from({ length: 40 }, (_, index) => agentTab(`tab-${index}`));
-    const { container } = render(
+    const { container } = renderInAppCommandScope(
       <DndContext>
         <DraggableTabBar
           pane={{ kind: "leaf", id: "left", activeTabId: "tab-0", tabs: tabs.slice(0, 20) }}

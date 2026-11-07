@@ -149,6 +149,12 @@ export interface BrowserPreviewManagerOptions {
   requestPreviewShortcut: (tabId: string, shortcut: AppShortcutId) => void;
   /** Service previews are unavailable without a transport (old backend, feature off). */
   transport?: BrowserPreviewServiceTransport;
+  /**
+   * The address an address-bar URL loads, applied on every attach and
+   * navigation: another node's runtime puts it on that node's gateway
+   * (`nodePreviewUrl` in `node-previews.ts`). Absent, the URL loads as sent.
+   */
+  resolveAddress?: (url: string) => string;
   /** Open a service in the default browser through the private preview origin. */
   openServiceExternally?: (target: BrowserPreviewServiceTarget) => Promise<void>;
   /** Process-wide pending capture spool; capture is unavailable without it. */
@@ -429,7 +435,10 @@ export class BrowserPreviewManager {
     input: BrowserPreviewAttachInput,
     token: number,
   ): Promise<BrowserPreviewState> {
-    const url = input.url;
+    const url =
+      typeof input.url === "string" && this.options.resolveAddress
+        ? this.options.resolveAddress(input.url)
+        : input.url;
     const navigationScope = typeof url === "string" ? previewNavigationScope(url) : null;
     if (!url || !navigationScope)
       throw new Error("Browser previews require a loopback or authenticated gateway-preview URL");
@@ -820,8 +829,12 @@ export class BrowserPreviewManager {
     return activationAge >= 0 && activationAge <= CLIPBOARD_USER_ACTIVATION_WINDOW_MS;
   }
 
-  async navigate(tabId: string, url: string): Promise<BrowserPreviewState> {
+  async navigate(tabId: string, requested: string): Promise<BrowserPreviewState> {
     const preview = this.get(tabId);
+    const url =
+      !preview.service && this.options.resolveAddress
+        ? this.options.resolveAddress(requested)
+        : requested;
     const navigationScope = this.scopeFor(url);
     if (preview.service && navigationScope !== preview.navigationScope) {
       throw new Error("Service previews navigate by service path; attach the new path instead");

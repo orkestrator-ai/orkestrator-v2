@@ -7,7 +7,8 @@ import { toNodeEnvironmentSummary } from "@orkestrator/protocol/node-summaries";
  */
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import type { ReactNode } from "react";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import {
   environmentKey,
   environmentRef,
@@ -23,8 +24,8 @@ import { useHoverTooltip } from "@/components/ui/hover-tooltip";
 import { portalStore } from "@/lib/portal/portal-store";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
-import { useConfigStore } from "@/stores/configStore";
-import { useUIStore } from "@/stores/uiStore";
+import { configStore } from "@/stores/configStore";
+import { uiStore } from "@/stores/uiStore";
 import {
   connectionList,
   installDesktopFake,
@@ -36,8 +37,9 @@ import { mockWriteText } from "../../../../../tests/mocks/clipboard";
 import { FederatedActivityList } from "./FederatedSidebarSections";
 import { FederationProvider } from "./FederationProvider";
 import { RemoteEnvironmentItem, RemoteProjectGroup } from "./RemoteMachineTree";
+import { appCommandStore } from "@/test/app-command-store";
 
-const initialUI = useUIStore.getState();
+const initialUI = appCommandStore(uiStore).getState();
 const initialRemote = useRemoteWorkspaceStore.getState();
 const initialMachines = useMachineViewStore.getState();
 
@@ -50,7 +52,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   uninstallDesktopFake();
-  useUIStore.setState(initialUI, true);
+  appCommandStore(uiStore).setState(initialUI, true);
   useRemoteWorkspaceStore.setState(initialRemote, true);
   useMachineViewStore.setState(initialMachines, true);
 });
@@ -99,7 +101,7 @@ function renderWithFederation(node: ReactNode) {
     list: connectionList([remoteConnection("a", "Machine A", "teal")]),
     datasets: { a: sharedIdDataset("working") },
   });
-  return render(<FederationProvider>{node}</FederationProvider>);
+  return renderInAppCommandScope(<FederationProvider>{node}</FederationProvider>);
 }
 
 test("a row whose delete failed says why and offers a retry instead of spinning", () => {
@@ -107,7 +109,7 @@ test("a row whose delete failed says why and offers a retry instead of spinning"
     deleting: true,
     deleteFailure: "Terminal process trees are running",
   });
-  const { container } = render(
+  const { container } = renderInAppCommandScope(
     <RemoteEnvironmentItem machine={machineView([row])} environment={row} />,
   );
   expect(screen.getByText("Delete failed: Terminal process trees are running")).toBeTruthy();
@@ -119,7 +121,7 @@ test("a row whose delete failed says why and offers a retry instead of spinning"
 test("a delete past two minutes says how long it has been running", () => {
   const started = new Date(Date.now() - 5 * 60_000).toISOString();
   const slow = environment("slow", { deleting: true, deletingSince: started });
-  const { container } = render(
+  const { container } = renderInAppCommandScope(
     <RemoteEnvironmentItem machine={machineView([slow])} environment={slow} />,
   );
   expect(screen.getByText("Still deleting after 5 min")).toBeTruthy();
@@ -127,7 +129,9 @@ test("a delete past two minutes says how long it has been running", () => {
   cleanup();
 
   const fresh = environment("fresh", { deleting: true, deletingSince: new Date().toISOString() });
-  render(<RemoteEnvironmentItem machine={machineView([fresh])} environment={fresh} />);
+  renderInAppCommandScope(
+    <RemoteEnvironmentItem machine={machineView([fresh])} environment={fresh} />,
+  );
   expect(screen.queryByText(/Still deleting/) === null).toBe(true);
 });
 
@@ -138,7 +142,9 @@ test("a slow delete says which step it is on, when its machine reports one this 
     deletingSince: started,
     deletingStep: "worktree",
   });
-  render(<RemoteEnvironmentItem machine={machineView([slow])} environment={slow} />);
+  renderInAppCommandScope(
+    <RemoteEnvironmentItem machine={machineView([slow])} environment={slow} />,
+  );
   expect(screen.getByText("Still deleting after 5 min: removing the worktree")).toBeTruthy();
   cleanup();
 
@@ -148,7 +154,9 @@ test("a slow delete says which step it is on, when its machine reports one this 
     deletingSince: started,
     deletingStep: "defragmenting" as never,
   });
-  render(<RemoteEnvironmentItem machine={machineView([newer])} environment={newer} />);
+  renderInAppCommandScope(
+    <RemoteEnvironmentItem machine={machineView([newer])} environment={newer} />,
+  );
   expect(screen.getByText("Still deleting after 5 min")).toBeTruthy();
   cleanup();
 
@@ -159,13 +167,15 @@ test("a slow delete says which step it is on, when its machine reports one this 
     deletingStep: "worktree",
     deleteFailure: "Deletion failed. Retry on the owning machine.",
   });
-  render(<RemoteEnvironmentItem machine={machineView([failed])} environment={failed} />);
+  renderInAppCommandScope(
+    <RemoteEnvironmentItem machine={machineView([failed])} environment={failed} />,
+  );
   expect(screen.queryByText(/Still deleting/) === null).toBe(true);
 });
 
 test("another machine's row shows its unread agent mail and a failed delivery", () => {
   const row = environment("feature", { agentMailUnread: 120, agentMailFailed: true });
-  render(<RemoteEnvironmentItem machine={machineView([row])} environment={row} />);
+  renderInAppCommandScope(<RemoteEnvironmentItem machine={machineView([row])} environment={row} />);
   expect(screen.getByLabelText("120 unread agent messages").textContent).toBe("99+");
   expect(screen.getByLabelText("Agent message delivery failed")).toBeTruthy();
 });
@@ -299,7 +309,7 @@ test("the row's computed description retains work, mail, PR and activity subtitl
     agentMailFailed: true,
     prState: "open",
   });
-  render(
+  renderInAppCommandScope(
     <RemoteEnvironmentItem
       machine={machineView([row])}
       environment={row}
@@ -339,7 +349,7 @@ test("deleting without hovering reads remote details and warns about the open PR
     },
   });
   const row = environment("feature");
-  render(
+  renderInAppCommandScope(
     <FederationProvider>
       <RemoteEnvironmentItem machine={machineView([row])} environment={row} />
     </FederationProvider>,
@@ -357,7 +367,7 @@ test("another machine's row copies the environment's ID, not its machine-qualifi
   mockWriteText.mockReset();
   mockWriteText.mockResolvedValue(undefined);
   const row = environment("feature");
-  render(<RemoteEnvironmentItem machine={machineView([row])} environment={row} />);
+  renderInAppCommandScope(<RemoteEnvironmentItem machine={machineView([row])} environment={row} />);
   fireEvent.contextMenu(screen.getByRole("button", { name: "feature, on Machine A, Idle" }));
   fireEvent.click(await screen.findByRole("menuitem", { name: "Copy Environment ID" }));
   expect(mockWriteText).toHaveBeenCalledWith("feature");
@@ -401,7 +411,7 @@ test("a machine-qualified row describes change counts along with unread work and
       />
     );
   }
-  render(<Row />);
+  renderInAppCommandScope(<Row />);
   expect(
     screen.getByRole("button", {
       name: "feature, on Machine A, Idle",
@@ -413,7 +423,7 @@ test("a machine-qualified row describes change counts along with unread work and
 
 for (const state of ["current", "stale", "blocked"] as const) {
   test(`remote row reacts to the checks setting with an unchanged ${state} PR summary`, () => {
-    const initialConfig = useConfigStore.getState().config;
+    const initialConfig = appCommandStore(configStore).getState().config;
     const row = environment("feature", {
       environmentType: "local",
       prState: "open",
@@ -425,13 +435,15 @@ for (const state of ["current", "stale", "blocked"] as const) {
     const machine = machineView([row]);
     if (state === "stale") machine.freshness = "stale";
     try {
-      useConfigStore.getState().updateGlobalConfig({ autoMergeRequireChecks: true });
-      render(<RemoteEnvironmentItem machine={machine} environment={row} />);
+      appCommandStore(configStore).getState().updateGlobalConfig({ autoMergeRequireChecks: true });
+      renderInAppCommandScope(<RemoteEnvironmentItem machine={machine} environment={row} />);
       const button = screen.getByRole("button", { name: "feature, on Machine A, Idle" });
       // No rerender or summary replacement: only the live config changes.
       for (const requireChecks of [true, false, true]) {
         act(() =>
-          useConfigStore.getState().updateGlobalConfig({ autoMergeRequireChecks: requireChecks }),
+          appCommandStore(configStore)
+            .getState()
+            .updateGlobalConfig({ autoMergeRequireChecks: requireChecks }),
         );
         expect(button.querySelector("[data-merge-ready]") !== null).toBe(
           state === "current" && !requireChecks,
@@ -439,16 +451,16 @@ for (const state of ["current", "stale", "blocked"] as const) {
       }
     } finally {
       cleanup();
-      useConfigStore.setState({ config: initialConfig });
+      appCommandStore(configStore).setState({ config: initialConfig });
     }
   });
 }
 
 test("a remote row disarms when focus leaves the shell for a child frame", () => {
   const row = environment("frame-target");
-  render(<RemoteEnvironmentItem machine={machineView([row])} environment={row} />);
+  renderInAppCommandScope(<RemoteEnvironmentItem machine={machineView([row])} environment={row} />);
   fireEvent.click(screen.getByRole("button", { name: /frame-target/ }));
-  const frameDocument = document.implementation.createHTMLDocument("Child realm");
+  const frameDocument = document.implementation.createHTMLDocument("Child document");
   try {
     // A separate document has its own event path; shell blur revokes the arm.
     fireEvent.blur(window);

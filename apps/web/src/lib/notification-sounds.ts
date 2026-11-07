@@ -1,5 +1,6 @@
 import { normalizeNotificationSoundSettings } from "@orkestrator/protocol/notification-sounds";
-import { useConfigStore } from "@/stores/configStore";
+import { appCommandScope } from "@/lib/node-scope-slots";
+import { configStore } from "@/stores/configStore";
 
 export type NotificationSoundKind =
   "agent-stopped" | "pr-merged" | "coordinator-report" | "agent-question";
@@ -109,8 +110,9 @@ export async function playNotificationSound(kind: NotificationSoundKind): Promis
 }
 
 export function isNotificationSoundEnabled(kind: NotificationSoundKind): boolean {
+  // The sounds are this window's: the settings of the node it is connected to.
   const settings = normalizeNotificationSoundSettings(
-    useConfigStore.getState().config.global.notificationSounds,
+    appCommandScope().store(configStore).getState().config.global.notificationSounds,
   );
   switch (kind) {
     case "agent-stopped":

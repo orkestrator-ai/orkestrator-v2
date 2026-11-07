@@ -1,12 +1,14 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { act, cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup } from "@testing-library/react";
+import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
-import { useEnvironmentStore } from "@/stores/environmentStore";
-import { useAgentActivityStore } from "@/stores/agentActivityStore";
-import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
-import { usePrMonitorStore } from "@/stores/prMonitorStore";
+import { environmentStore } from "@/stores/environmentStore";
+import { agentActivityStore } from "@/stores/agentActivityStore";
+import { buildPipelineStore } from "@/stores/buildPipelineStore";
+import { prMonitorStore } from "@/stores/prMonitorStore";
 import type { Environment } from "@/types";
 import { useEnvironmentIdNameSignal } from "./useEnvironmentNameSignal";
+import { appCommandStore } from "@/test/app-command-store";
 
 const environment: Environment = {
   id: "env",
@@ -26,15 +28,21 @@ const environment: Environment = {
   agentActivityState: "waiting",
   agentActivityUpdatedAt: "2026-10-28T10:00:00Z",
 };
-const initialEnvironment = useEnvironmentStore.getState();
-const initialActivity = useAgentActivityStore.getState();
-const initialBuild = useBuildPipelineStore.getState();
-const initialMonitor = usePrMonitorStore.getState();
+const initialEnvironment = appCommandStore(environmentStore).getState();
+const initialActivity = appCommandStore(agentActivityStore).getState();
+const initialBuild = appCommandStore(buildPipelineStore).getState();
+const initialMonitor = appCommandStore(prMonitorStore).getState();
 beforeEach(() => {
-  useEnvironmentStore.setState({ environments: [environment], deletingEnvironments: new Set() });
-  useAgentActivityStore.setState({ containerStates: {}, containerStateUpdatedAt: {} });
-  useBuildPipelineStore.setState({ activeBuildEnvironmentIds: new Set() });
-  usePrMonitorStore.setState({
+  appCommandStore(environmentStore).setState({
+    environments: [environment],
+    deletingEnvironments: new Set(),
+  });
+  appCommandStore(agentActivityStore).setState({
+    containerStates: {},
+    containerStateUpdatedAt: {},
+  });
+  appCommandStore(buildPipelineStore).setState({ activeBuildEnvironmentIds: new Set() });
+  appCommandStore(prMonitorStore).setState({
     syncStatus: "current",
     states: new Map([
       [
@@ -57,30 +65,35 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
-  useEnvironmentStore.setState(initialEnvironment, true);
-  useAgentActivityStore.setState(initialActivity, true);
-  useBuildPipelineStore.setState(initialBuild, true);
-  usePrMonitorStore.setState(initialMonitor, true);
+  appCommandStore(environmentStore).setState(initialEnvironment, true);
+  appCommandStore(agentActivityStore).setState(initialActivity, true);
+  appCommandStore(buildPipelineStore).setState(initialBuild, true);
+  appCommandStore(prMonitorStore).setState(initialMonitor, true);
 });
 
 test("pipeline-only changes override waiting and restore it when work ends", () => {
-  const { result } = renderHook(() => useEnvironmentIdNameSignal("env"));
+  const { result } = renderHookInAppCommandScope(() => useEnvironmentIdNameSignal("env"));
   expect(result.current).toBe("needs-answer");
-  act(() => useBuildPipelineStore.setState({ activeBuildEnvironmentIds: new Set(["env"]) }));
+  act(() =>
+    appCommandStore(buildPipelineStore).setState({ activeBuildEnvironmentIds: new Set(["env"]) }),
+  );
   expect(result.current).toBe("merge-ready");
-  act(() => useBuildPipelineStore.setState({ activeBuildEnvironmentIds: new Set() }));
+  act(() => appCommandStore(buildPipelineStore).setState({ activeBuildEnvironmentIds: new Set() }));
   expect(result.current).toBe("needs-answer");
 });
 
 test("Docker and stopped-container gates suppress waiting; local worktrees stay answerable", () => {
-  const { result, rerender } = renderHook(() => useEnvironmentIdNameSignal("env"), {
-    wrapper: ({ children }) => (
-      <DockerAvailabilityProvider available={false}>{children}</DockerAvailabilityProvider>
-    ),
-  });
+  const { result, rerender } = renderHookInAppCommandScope(
+    () => useEnvironmentIdNameSignal("env"),
+    {
+      wrapper: ({ children }) => (
+        <DockerAvailabilityProvider available={false}>{children}</DockerAvailabilityProvider>
+      ),
+    },
+  );
   expect(result.current).toBe("merge-ready");
   act(() =>
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [{ ...environment, environmentType: "local", status: "stopped" }],
     }),
   );
@@ -89,24 +102,24 @@ test("Docker and stopped-container gates suppress waiting; local worktrees stay 
 });
 
 test("stopped containers suppress signals and live activity updates restore priority", () => {
-  useEnvironmentStore.setState({
+  appCommandStore(environmentStore).setState({
     environments: [
       { ...environment, status: "stopped", hasMergeConflicts: true, prMergeability: "dirty" },
     ],
   });
-  usePrMonitorStore.setState((state) => ({
+  appCommandStore(prMonitorStore).setState((state) => ({
     states: new Map([["env", { ...state.states.get("env")!, hasMergeConflicts: true }]]),
   }));
-  const { result } = renderHook(() => useEnvironmentIdNameSignal("env"));
+  const { result } = renderHookInAppCommandScope(() => useEnvironmentIdNameSignal("env"));
   expect(result.current).toBeNull();
   act(() =>
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [{ ...environment, hasMergeConflicts: true, prMergeability: "dirty" }],
     }),
   );
   expect(result.current).toBe("needs-answer");
   act(() =>
-    useAgentActivityStore.setState({
+    appCommandStore(agentActivityStore).setState({
       containerStates: { container: "working" },
       containerStateUpdatedAt: { container: "2026-10-28T11:00:00Z" },
     }),
@@ -117,7 +130,7 @@ test("stopped containers suppress signals and live activity updates restore prio
 for (const signal of ["waiting", "ready", "conflicts"] as const) {
   test(`deletion suppresses ${signal}, including persisted lifecycle state`, () => {
     if (signal !== "waiting")
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         environments: [
           {
             ...environment,
@@ -128,10 +141,10 @@ for (const signal of ["waiting", "ready", "conflicts"] as const) {
         ],
       });
     if (signal === "conflicts")
-      usePrMonitorStore.setState((state) => ({
+      appCommandStore(prMonitorStore).setState((state) => ({
         states: new Map([["env", { ...state.states.get("env")!, hasMergeConflicts: true }]]),
       }));
-    const { result } = renderHook(() => useEnvironmentIdNameSignal("env"));
+    const { result } = renderHookInAppCommandScope(() => useEnvironmentIdNameSignal("env"));
     expect(result.current).toBe(
       signal === "waiting"
         ? "needs-answer"
@@ -139,10 +152,10 @@ for (const signal of ["waiting", "ready", "conflicts"] as const) {
           ? "merge-ready"
           : "merge-conflicts",
     );
-    act(() => useEnvironmentStore.getState().setDeleting("env", true));
+    act(() => appCommandStore(environmentStore).getState().setDeleting("env", true));
     expect(result.current).toBeNull();
     act(() =>
-      useEnvironmentStore.setState({
+      appCommandStore(environmentStore).setState({
         deletingEnvironments: new Set(),
         environments: [{ ...environment, lifecycleOperation: "deleting" }],
       }),
@@ -152,9 +165,12 @@ for (const signal of ["waiting", "ready", "conflicts"] as const) {
 }
 
 test("missing and unselected environments have no signal", () => {
-  const { result, rerender } = renderHook(({ id }) => useEnvironmentIdNameSignal(id), {
-    initialProps: { id: null as string | null },
-  });
+  const { result, rerender } = renderHookInAppCommandScope(
+    ({ id }) => useEnvironmentIdNameSignal(id),
+    {
+      initialProps: { id: null as string | null },
+    },
+  );
   expect(result.current).toBeNull();
   rerender({ id: "missing" });
   expect(result.current).toBeNull();

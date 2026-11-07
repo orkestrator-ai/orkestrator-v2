@@ -6,9 +6,10 @@ import {
   type Collision,
   type DroppableContainer,
 } from "@dnd-kit/core";
-import { getAllLeaves, usePaneLayoutStore } from "@/stores";
+import { getAllLeaves, paneLayoutStore } from "@/stores";
 import type { TabType } from "@/contexts";
-import { useNativeComposeStore } from "@/stores/nativeComposeStore";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { nativeComposeStore } from "@/stores/nativeComposeStore";
 import { createSessionKey as createNativeSessionKey } from "@/lib/utils";
 import {
   parseDraggableTabId,
@@ -205,12 +206,13 @@ export function findStartupAgentTabId(state: { root: PaneNode }): string | null 
  * A user who already clicked a non-setup tab is left alone — in either the
  * startup agent's own pane or the pane they are actually looking at, and an
  * unresolvable focused pane fails closed. Returns whether selection changed so
- * callers can treat the handoff as one-shot.
+ * callers can treat the handoff as one-shot. The layout is `scope`'s node's.
  */
 export function handoffSetupFocusToStartupAgent(
   environmentId: string,
   state: { root: PaneNode; activePaneId: string },
   startupTabId: string,
+  scope: NodeScope,
 ): boolean {
   const leaves = getAllLeaves(state.root);
   const agentLeaf = leaves.find((leaf) => leaf.tabs.some((tab) => tab.id === startupTabId));
@@ -226,7 +228,7 @@ export function handoffSetupFocusToStartupAgent(
     return false;
   }
 
-  usePaneLayoutStore.getState().setActiveTab(agentLeaf.id, startupTabId, environmentId);
+  scope.store(paneLayoutStore).getState().setActiveTab(agentLeaf.id, startupTabId, environmentId);
   return true;
 }
 
@@ -489,12 +491,18 @@ export function createAgentNativeTab({
  * preselects. They must not lock the tab: the user can still change them
  * before the first prompt is sent.
  */
-export function seedDeferredNativePlatform(tab: TabInfo, platform: AgentPlatform): void {
+export function seedDeferredNativePlatform(
+  tab: TabInfo,
+  platform: AgentPlatform,
+  scope: NodeScope,
+): void {
   const data = tab.nativeAgentData;
   if (tab.type !== "agent-native" || !data || data.platform) return;
   const sessionKey = createNativeSessionKey(data.environmentId, tab.id);
-  const current = useNativeComposeStore.getState().drafts.get(sessionKey);
-  useNativeComposeStore.getState().updateDraft(sessionKey, {
+  // The draft lives on the node whose pane opens the tab (plan item 3010).
+  const compose = scope.store(nativeComposeStore).getState();
+  const current = compose.drafts.get(sessionKey);
+  compose.updateDraft(sessionKey, {
     ...(current?.platform ? {} : { platform }),
     ...(tab.initialAgentModel && current?.modelId === undefined
       ? { modelId: tab.initialAgentModel }

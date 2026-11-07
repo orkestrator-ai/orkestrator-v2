@@ -1,6 +1,7 @@
 import { describe, test, expect, beforeEach } from "bun:test";
-import { useEnvironmentStore } from "../../../apps/web/src/stores/environmentStore";
+import { environmentStore } from "../../../apps/web/src/stores/environmentStore";
 import type { Environment } from "../../../apps/web/src/types";
+import { appCommandStore } from "../../../apps/web/src/test/app-command-store";
 
 const createEnvironment = (overrides: Partial<Environment> = {}): Environment => ({
   id: "env-1",
@@ -22,7 +23,7 @@ const createEnvironment = (overrides: Partial<Environment> = {}): Environment =>
 describe("environmentStore", () => {
   beforeEach(() => {
     // Reset store between tests
-    useEnvironmentStore.setState({
+    appCommandStore(environmentStore).setState({
       environments: [],
       isLoading: false,
       error: null,
@@ -31,7 +32,7 @@ describe("environmentStore", () => {
   });
 
   test("initial state is empty", () => {
-    const state = useEnvironmentStore.getState();
+    const state = appCommandStore(environmentStore).getState();
     expect(state.environments).toEqual([]);
     expect(state.isLoading).toBe(false);
     expect(state.error).toBeNull();
@@ -40,9 +41,9 @@ describe("environmentStore", () => {
   test("addEnvironment adds an environment to the store", () => {
     const env = createEnvironment();
 
-    useEnvironmentStore.getState().addEnvironment(env);
+    appCommandStore(environmentStore).getState().addEnvironment(env);
 
-    const state = useEnvironmentStore.getState();
+    const state = appCommandStore(environmentStore).getState();
     expect(state.environments).toHaveLength(1);
     expect(state.environments[0]).toEqual(env);
   });
@@ -50,22 +51,22 @@ describe("environmentStore", () => {
   test("updateEnvironmentStatus updates the status", () => {
     const env = createEnvironment();
 
-    useEnvironmentStore.getState().addEnvironment(env);
-    useEnvironmentStore.getState().updateEnvironmentStatus("env-1", "running");
+    appCommandStore(environmentStore).getState().addEnvironment(env);
+    appCommandStore(environmentStore).getState().updateEnvironmentStatus("env-1", "running");
 
-    const state = useEnvironmentStore.getState();
+    const state = appCommandStore(environmentStore).getState();
     expect(state.environments[0]?.status).toBe("running");
   });
 
   test("setEnvironmentPR sets the PR URL", () => {
     const env = createEnvironment({ status: "running" });
 
-    useEnvironmentStore.getState().addEnvironment(env);
-    useEnvironmentStore
+    appCommandStore(environmentStore).getState().addEnvironment(env);
+    appCommandStore(environmentStore)
       .getState()
       .setEnvironmentPR("env-1", "https://github.com/test/repo/pull/123", "open");
 
-    const state = useEnvironmentStore.getState();
+    const state = appCommandStore(environmentStore).getState();
     expect(state.environments[0]?.prUrl).toBe("https://github.com/test/repo/pull/123");
   });
 
@@ -74,11 +75,13 @@ describe("environmentStore", () => {
     const env2 = createEnvironment({ id: "env-2", projectId: "project-2", name: "test-repo-2" });
     const env3 = createEnvironment({ id: "env-3", projectId: "project-1", name: "test-repo-3" });
 
-    useEnvironmentStore.getState().addEnvironment(env1);
-    useEnvironmentStore.getState().addEnvironment(env2);
-    useEnvironmentStore.getState().addEnvironment(env3);
+    appCommandStore(environmentStore).getState().addEnvironment(env1);
+    appCommandStore(environmentStore).getState().addEnvironment(env2);
+    appCommandStore(environmentStore).getState().addEnvironment(env3);
 
-    const projectEnvs = useEnvironmentStore.getState().getEnvironmentsByProjectId("project-1");
+    const projectEnvs = appCommandStore(environmentStore)
+      .getState()
+      .getEnvironmentsByProjectId("project-1");
     expect(projectEnvs).toHaveLength(2);
     expect(projectEnvs.map((e) => e.id)).toEqual(["env-1", "env-3"]);
   });
@@ -87,17 +90,17 @@ describe("environmentStore", () => {
     const env1 = createEnvironment({ id: "env-1", projectId: "project-1", name: "test-repo-1" });
     const env2 = createEnvironment({ id: "env-2", projectId: "project-1", name: "test-repo-2" });
 
-    useEnvironmentStore.getState().addEnvironment(env1);
-    useEnvironmentStore.getState().addEnvironment(env2);
-    useEnvironmentStore.getState().removeEnvironment("env-1");
+    appCommandStore(environmentStore).getState().addEnvironment(env1);
+    appCommandStore(environmentStore).getState().addEnvironment(env2);
+    appCommandStore(environmentStore).getState().removeEnvironment("env-1");
 
-    const state = useEnvironmentStore.getState();
+    const state = appCommandStore(environmentStore).getState();
     expect(state.environments).toHaveLength(1);
     expect(state.environments[0]?.id).toBe("env-2");
   });
 
   test("isDeleting rehydrates from backend lifecycle and tombstone fields", () => {
-    const store = useEnvironmentStore.getState();
+    const store = appCommandStore(environmentStore).getState();
     store.setEnvironments([
       createEnvironment({ id: "live" }),
       createEnvironment({ id: "operation", lifecycleOperation: "deleting" }),
@@ -135,9 +138,11 @@ describe("environmentStore", () => {
       setupPhase: "running",
     });
 
-    useEnvironmentStore.getState().setEnvironments([completeLocal, completeContainer, incomplete]);
+    appCommandStore(environmentStore)
+      .getState()
+      .setEnvironments([completeLocal, completeContainer, incomplete]);
 
-    const state = useEnvironmentStore.getState();
+    const state = appCommandStore(environmentStore).getState();
     expect(state.getEnvironmentById("env-complete-local")).toMatchObject({
       setupScriptsComplete: true,
       setupPhase: "ready",
@@ -160,9 +165,11 @@ describe("environmentStore", () => {
       setupPhase: "ready",
     });
 
-    useEnvironmentStore.getState().addEnvironment(env);
+    appCommandStore(environmentStore).getState().addEnvironment(env);
 
-    expect(useEnvironmentStore.getState().getEnvironmentById("env-complete")).toMatchObject({
+    expect(
+      appCommandStore(environmentStore).getState().getEnvironmentById("env-complete"),
+    ).toMatchObject({
       setupScriptsComplete: true,
       setupPhase: "ready",
     });
@@ -177,9 +184,11 @@ describe("environmentStore", () => {
       setupPhase: "ready",
     });
 
-    useEnvironmentStore.getState().mergeEnvironmentsForProject("project-1", [env]);
+    appCommandStore(environmentStore).getState().mergeEnvironmentsForProject("project-1", [env]);
 
-    expect(useEnvironmentStore.getState().getEnvironmentById("env-complete")).toMatchObject({
+    expect(
+      appCommandStore(environmentStore).getState().getEnvironmentById("env-complete"),
+    ).toMatchObject({
       setupScriptsComplete: true,
       setupPhase: "ready",
     });
@@ -187,14 +196,14 @@ describe("environmentStore", () => {
 
   test("mergeEnvironmentsForProject preserves state and object identity for an unchanged snapshot", () => {
     const env = createEnvironment({ id: "env-1", projectId: "project-1" });
-    const store = useEnvironmentStore.getState();
+    const store = appCommandStore(environmentStore).getState();
     store.setEnvironments([env]);
-    const beforeState = useEnvironmentStore.getState();
+    const beforeState = appCommandStore(environmentStore).getState();
     const beforeEnvironment = beforeState.environments[0];
 
     store.mergeEnvironmentsForProject("project-1", [{ ...env }]);
 
-    const afterState = useEnvironmentStore.getState();
+    const afterState = appCommandStore(environmentStore).getState();
     expect(afterState).toBe(beforeState);
     expect(afterState.environments[0]).toBe(beforeEnvironment);
   });
@@ -211,18 +220,18 @@ describe("environmentStore", () => {
       setupPhase: "failed",
     });
 
-    const store = useEnvironmentStore.getState();
+    const store = appCommandStore(environmentStore).getState();
     store.setEnvironments([complete]);
     store.setEnvironments([incomplete]);
 
-    expect(useEnvironmentStore.getState().getEnvironmentById("env-1")).toMatchObject({
+    expect(appCommandStore(environmentStore).getState().getEnvironmentById("env-1")).toMatchObject({
       setupScriptsComplete: false,
       setupPhase: "failed",
     });
   });
 
   test("updateEnvironment applies setupScriptsComplete and setupPhase atomically", () => {
-    const store = useEnvironmentStore.getState();
+    const store = appCommandStore(environmentStore).getState();
     store.addEnvironment(
       createEnvironment({
         id: "env-1",
@@ -236,14 +245,14 @@ describe("environmentStore", () => {
       setupPhase: "running",
     });
 
-    expect(useEnvironmentStore.getState().getEnvironmentById("env-1")).toMatchObject({
+    expect(appCommandStore(environmentStore).getState().getEnvironmentById("env-1")).toMatchObject({
       setupScriptsComplete: false,
       setupPhase: "running",
     });
   });
 
   test("updateEnvironment preserves setup state when unrelated fields change", () => {
-    const store = useEnvironmentStore.getState();
+    const store = appCommandStore(environmentStore).getState();
     store.addEnvironment(
       createEnvironment({
         id: "env-1",
@@ -254,7 +263,7 @@ describe("environmentStore", () => {
 
     store.updateEnvironment("env-1", { name: "renamed" });
 
-    expect(useEnvironmentStore.getState().getEnvironmentById("env-1")).toMatchObject({
+    expect(appCommandStore(environmentStore).getState().getEnvironmentById("env-1")).toMatchObject({
       name: "renamed",
       setupScriptsComplete: false,
       setupPhase: "failed",
@@ -262,7 +271,7 @@ describe("environmentStore", () => {
   });
 
   test("updateEnvironment applies the authoritative running-to-ready transition", () => {
-    const store = useEnvironmentStore.getState();
+    const store = appCommandStore(environmentStore).getState();
     store.addEnvironment(
       createEnvironment({
         id: "env-1",
@@ -276,48 +285,50 @@ describe("environmentStore", () => {
       setupPhase: "ready",
     });
 
-    expect(useEnvironmentStore.getState().getEnvironmentById("env-1")).toMatchObject({
+    expect(appCommandStore(environmentStore).getState().getEnvironmentById("env-1")).toMatchObject({
       setupScriptsComplete: true,
       setupPhase: "ready",
     });
   });
 
   test("updateEnvironment is a no-op for identical partial updates and missing environments", () => {
-    const store = useEnvironmentStore.getState();
+    const store = appCommandStore(environmentStore).getState();
     store.addEnvironment(createEnvironment({ id: "env-1", name: "unchanged" }));
-    const before = useEnvironmentStore.getState();
+    const before = appCommandStore(environmentStore).getState();
 
     store.updateEnvironment("env-1", { name: "unchanged" });
-    expect(useEnvironmentStore.getState()).toBe(before);
+    expect(appCommandStore(environmentStore).getState()).toBe(before);
 
     store.updateEnvironment("missing", { name: "ignored" });
-    expect(useEnvironmentStore.getState()).toBe(before);
+    expect(appCommandStore(environmentStore).getState()).toBe(before);
   });
 
   test("updateEnvironment preserves order for non-order changes and re-sorts order changes", () => {
-    const store = useEnvironmentStore.getState();
+    const store = appCommandStore(environmentStore).getState();
     store.setEnvironments([
       createEnvironment({ id: "env-1", order: 0 }),
       createEnvironment({ id: "env-2", order: 1 }),
     ]);
-    const secondBefore = useEnvironmentStore.getState().environments[1];
+    const secondBefore = appCommandStore(environmentStore).getState().environments[1];
 
     store.updateEnvironment("env-1", { name: "renamed" });
-    let state = useEnvironmentStore.getState();
+    let state = appCommandStore(environmentStore).getState();
     expect(state.environments.map((environment) => environment.id)).toEqual(["env-1", "env-2"]);
     expect(state.environments[1]).toBe(secondBefore);
 
     store.updateEnvironment("env-1", { order: 2 });
-    state = useEnvironmentStore.getState();
+    state = appCommandStore(environmentStore).getState();
     expect(state.environments.map((environment) => environment.id)).toEqual(["env-2", "env-1"]);
   });
 
   test("removeEnvironment clears renderer-local deletion state", () => {
-    const store = useEnvironmentStore.getState();
+    const store = appCommandStore(environmentStore).getState();
     store.addEnvironment(createEnvironment({ id: "env-1" }));
     store.setDeleting("env-1", true);
 
     store.removeEnvironment("env-1");
-    expect(useEnvironmentStore.getState().deletingEnvironments.has("env-1")).toBe(false);
+    expect(appCommandStore(environmentStore).getState().deletingEnvironments.has("env-1")).toBe(
+      false,
+    );
   });
 });

@@ -1,6 +1,13 @@
-import { beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import type { BackendId } from "@orkestrator/protocol/federation";
+import type { StoreApi } from "zustand/vanilla";
+import { WindowScope } from "@/lib/node-scope/window-scope";
+import { FakeNodeClient } from "@/test/render-in-node-scope";
 import type { Environment } from "@/types";
-import { useEnvironmentStore } from "./environmentStore";
+import { environmentStore, type EnvironmentState } from "./environmentStore";
+
+const NODE_A = "bk_environment-store-a" as BackendId;
+const NODE_B = "bk_environment-store-b" as BackendId;
 
 function environment(id: string, overrides: Partial<Environment> = {}): Environment {
   return {
@@ -22,55 +29,58 @@ function environment(id: string, overrides: Partial<Environment> = {}): Environm
   };
 }
 
+let windowScope: WindowScope;
+/** NODE_A's instance; the tests name their scope, as converted code does. */
+let environments: StoreApi<EnvironmentState>;
+
 beforeEach(() => {
-  useEnvironmentStore.setState({
-    environments: [],
-    isLoading: false,
-    error: null,
-    deletingEnvironments: new Set(),
-    deletingStartedAt: new Map(),
-  });
+  windowScope = new WindowScope();
+  environments = windowScope
+    .open({ role: "command", client: new FakeNodeClient({ nodeId: NODE_A }) })
+    .store(environmentStore);
 });
+
+afterEach(() => windowScope.dispose());
 
 describe("environmentStore", () => {
   test("repeated status and PR updates retain the environment array and unchanged rows", () => {
-    const store = useEnvironmentStore.getState();
+    const store = environments.getState();
     store.setEnvironments([environment("one"), environment("two")]);
-    const initial = useEnvironmentStore.getState().environments;
+    const initial = environments.getState().environments;
     for (let i = 0; i < 3; i++) {
       store.updateEnvironmentStatus("one", "stopped");
       store.setEnvironmentPR("one", null, null);
-      expect(useEnvironmentStore.getState().environments).toBe(initial);
+      expect(environments.getState().environments).toBe(initial);
     }
     store.updateEnvironmentStatus("one", "running");
-    const changed = useEnvironmentStore.getState().environments;
+    const changed = environments.getState().environments;
     expect(changed).not.toBe(initial);
     expect(changed[1]).toBe(initial[1]);
     store.updateEnvironmentStatus("one", "running");
-    expect(useEnvironmentStore.getState().environments).toBe(changed);
+    expect(environments.getState().environments).toBe(changed);
     store.setEnvironmentPR("one", "https://example.test/pr/1", "open", false);
-    const withPR = useEnvironmentStore.getState().environments;
+    const withPR = environments.getState().environments;
     expect(withPR).not.toBe(changed);
     expect(withPR[1]).toBe(initial[1]);
     for (let i = 0; i < 3; i++) {
       store.setEnvironmentPR("one", "https://example.test/pr/1", "open", false);
-      expect(useEnvironmentStore.getState().environments).toBe(withPR);
+      expect(environments.getState().environments).toBe(withPR);
     }
   });
 
   test("sorts snapshots while preserving authoritative setup fields", () => {
-    useEnvironmentStore
+    environments
       .getState()
       .setEnvironments([
         environment("second", { order: 2, setupPhase: "failed" }),
         environment("first", { order: 1, setupPhase: "ready", setupOverride: true }),
       ]);
 
-    expect(useEnvironmentStore.getState().environments.map((item) => item.id)).toEqual([
+    expect(environments.getState().environments.map((item) => item.id)).toEqual([
       "first",
       "second",
     ]);
-    expect(useEnvironmentStore.getState().getEnvironmentById("first")).toMatchObject({
+    expect(environments.getState().getEnvironmentById("first")).toMatchObject({
       setupPhase: "ready",
       setupOverride: true,
     });
@@ -78,35 +88,35 @@ describe("environmentStore", () => {
 
   test("merges one project without replacing other project snapshots", () => {
     const other = environment("other", { projectId: "project-2" });
-    useEnvironmentStore.getState().setEnvironments([environment("old"), other]);
+    environments.getState().setEnvironments([environment("old"), other]);
 
-    useEnvironmentStore
+    environments
       .getState()
       .mergeEnvironmentsForProject("project-1", [environment("new", { setupPhase: "running" })]);
 
-    expect(useEnvironmentStore.getState().environments).toEqual([
+    expect(environments.getState().environments).toEqual([
       other,
       environment("new", { setupPhase: "running" }),
     ]);
   });
 
   test("adds environments in display order and selects one project's entries", () => {
-    useEnvironmentStore
+    environments
       .getState()
       .setEnvironments([
         environment("late", { order: 3 }),
         environment("other", { projectId: "project-2", order: 0 }),
       ]);
 
-    useEnvironmentStore.getState().addEnvironment(environment("early", { order: 1 }));
+    environments.getState().addEnvironment(environment("early", { order: 1 }));
 
-    expect(useEnvironmentStore.getState().environments.map((item) => item.id)).toEqual([
+    expect(environments.getState().environments.map((item) => item.id)).toEqual([
       "other",
       "early",
       "late",
     ]);
     expect(
-      useEnvironmentStore
+      environments
         .getState()
         .getEnvironmentsByProjectId("project-1")
         .map((item) => item.id),
@@ -114,50 +124,43 @@ describe("environmentStore", () => {
   });
 
   test("applies setup transitions and skips byte-identical updates", () => {
-    useEnvironmentStore
-      .getState()
-      .setEnvironments([environment("env-1", { setupPhase: "running" })]);
-    const before = useEnvironmentStore.getState();
+    environments.getState().setEnvironments([environment("env-1", { setupPhase: "running" })]);
+    const before = environments.getState();
 
-    useEnvironmentStore.getState().updateEnvironment("env-1", {
+    environments.getState().updateEnvironment("env-1", {
       setupPhase: "running",
     });
-    expect(useEnvironmentStore.getState()).toBe(before);
+    expect(environments.getState()).toBe(before);
 
-    useEnvironmentStore.getState().updateEnvironment("env-1", {
+    environments.getState().updateEnvironment("env-1", {
       setupPhase: "failed",
       setupScriptsComplete: false,
     });
-    expect(useEnvironmentStore.getState().getEnvironmentById("env-1")).toMatchObject({
+    expect(environments.getState().getEnvironmentById("env-1")).toMatchObject({
       setupPhase: "failed",
       setupScriptsComplete: false,
     });
 
-    useEnvironmentStore.getState().addEnvironment(environment("env-2", { order: 2 }));
-    useEnvironmentStore.getState().updateEnvironment("env-2", { order: -1 });
-    expect(useEnvironmentStore.getState().environments.map((item) => item.id)).toEqual([
-      "env-2",
-      "env-1",
-    ]);
+    environments.getState().addEnvironment(environment("env-2", { order: 2 }));
+    environments.getState().updateEnvironment("env-2", { order: -1 });
+    expect(environments.getState().environments.map((item) => item.id)).toEqual(["env-2", "env-1"]);
   });
 
   test("updates lifecycle, pull request, loading, and error projections", () => {
-    useEnvironmentStore.getState().setEnvironments([environment("env-1")]);
+    environments.getState().setEnvironments([environment("env-1")]);
 
-    useEnvironmentStore.getState().updateEnvironmentStatus("env-1", "running");
-    useEnvironmentStore
-      .getState()
-      .setEnvironmentPR("env-1", "https://example.test/pull/1", "open", true);
-    useEnvironmentStore.getState().setLoading(true);
-    useEnvironmentStore.getState().setError("snapshot unavailable");
+    environments.getState().updateEnvironmentStatus("env-1", "running");
+    environments.getState().setEnvironmentPR("env-1", "https://example.test/pull/1", "open", true);
+    environments.getState().setLoading(true);
+    environments.getState().setError("snapshot unavailable");
 
-    expect(useEnvironmentStore.getState().getEnvironmentById("env-1")).toMatchObject({
+    expect(environments.getState().getEnvironmentById("env-1")).toMatchObject({
       status: "running",
       prUrl: "https://example.test/pull/1",
       prState: "open",
       hasMergeConflicts: true,
     });
-    expect(useEnvironmentStore.getState()).toMatchObject({
+    expect(environments.getState()).toMatchObject({
       isLoading: true,
       error: "snapshot unavailable",
     });
@@ -166,28 +169,26 @@ describe("environmentStore", () => {
   test("PR updates retain mergeability only for the same PR", () => {
     const oldUrl = "https://example.test/pull/1";
     const newUrl = "https://example.test/pull/2";
-    useEnvironmentStore
+    environments
       .getState()
       .setEnvironments([
         environment("env-1", { prUrl: oldUrl, prState: "open", prMergeability: "clean" }),
       ]);
-    useEnvironmentStore.getState().setEnvironmentPR("env-1", oldUrl, "open", false);
-    expect(useEnvironmentStore.getState().getEnvironmentById("env-1")?.prMergeability).toBe(
-      "clean",
-    );
-    useEnvironmentStore.getState().setEnvironmentPR("env-1", newUrl, "open", false);
-    expect(useEnvironmentStore.getState().getEnvironmentById("env-1")).toMatchObject({
+    environments.getState().setEnvironmentPR("env-1", oldUrl, "open", false);
+    expect(environments.getState().getEnvironmentById("env-1")?.prMergeability).toBe("clean");
+    environments.getState().setEnvironmentPR("env-1", newUrl, "open", false);
+    expect(environments.getState().getEnvironmentById("env-1")).toMatchObject({
       prUrl: newUrl,
       prMergeability: null,
     });
-    useEnvironmentStore.getState().updateEnvironment("env-1", { prMergeability: "clean" });
-    useEnvironmentStore.getState().setEnvironmentPR("env-1", null, null);
-    expect(useEnvironmentStore.getState().getEnvironmentById("env-1")?.prMergeability).toBeNull();
+    environments.getState().updateEnvironment("env-1", { prMergeability: "clean" });
+    environments.getState().setEnvironmentPR("env-1", null, null);
+    expect(environments.getState().getEnvironmentById("env-1")?.prMergeability).toBeNull();
   });
 
   test("reorders only the selected project and ignores unknown ids", () => {
     const other = environment("other", { projectId: "project-2", order: 4 });
-    useEnvironmentStore
+    environments
       .getState()
       .setEnvironments([
         environment("first", { order: 0 }),
@@ -195,9 +196,9 @@ describe("environmentStore", () => {
         other,
       ]);
 
-    useEnvironmentStore.getState().reorderEnvironments("project-1", ["second", "missing", "first"]);
+    environments.getState().reorderEnvironments("project-1", ["second", "missing", "first"]);
 
-    expect(useEnvironmentStore.getState().environments).toEqual([
+    expect(environments.getState().environments).toEqual([
       other,
       environment("second", { order: 0 }),
       environment("first", { order: 2 }),
@@ -205,7 +206,7 @@ describe("environmentStore", () => {
   });
 
   test("treats persisted deletion state as authoritative", () => {
-    useEnvironmentStore
+    environments
       .getState()
       .setEnvironments([
         environment("operation", { lifecycleOperation: "deleting" }),
@@ -213,31 +214,31 @@ describe("environmentStore", () => {
         environment("live"),
       ]);
 
-    expect(useEnvironmentStore.getState().isDeleting("operation")).toBe(true);
-    expect(useEnvironmentStore.getState().isDeleting("requested")).toBe(true);
-    expect(useEnvironmentStore.getState().isDeleting("live")).toBe(false);
+    expect(environments.getState().isDeleting("operation")).toBe(true);
+    expect(environments.getState().isDeleting("requested")).toBe(true);
+    expect(environments.getState().isDeleting("live")).toBe(false);
 
-    useEnvironmentStore.getState().setDeleting("live", true);
-    expect(useEnvironmentStore.getState().isDeleting("live")).toBe(true);
-    useEnvironmentStore.getState().removeEnvironment("live");
-    expect(useEnvironmentStore.getState().isDeleting("live")).toBe(false);
+    environments.getState().setDeleting("live", true);
+    expect(environments.getState().isDeleting("live")).toBe(true);
+    environments.getState().removeEnvironment("live");
+    expect(environments.getState().isDeleting("live")).toBe(false);
   });
 
   test("a failed tombstone stays unavailable and retry starts a fresh attempt", () => {
-    useEnvironmentStore.getState().setEnvironments([
+    environments.getState().setEnvironments([
       environment("failed", {
         lifecycleOperation: "deleting",
         deletionRequestedAt: "2026-11-05T12:00:00.000Z",
         deletionError: "Terminal process trees are still running",
       }),
     ]);
-    expect(useEnvironmentStore.getState().isDeleting("failed")).toBe(true);
-    useEnvironmentStore.getState().setDeleting("failed", true);
-    expect(useEnvironmentStore.getState().isDeleting("failed")).toBe(true);
-    expect(useEnvironmentStore.getState().deletingStartedAt.get("failed")).toBeDefined();
-    useEnvironmentStore.getState().setDeleting("failed", false);
-    expect(useEnvironmentStore.getState().deletingStartedAt.has("failed")).toBe(false);
-    expect(useEnvironmentStore.getState().isDeleting("failed")).toBe(true);
+    expect(environments.getState().isDeleting("failed")).toBe(true);
+    environments.getState().setDeleting("failed", true);
+    expect(environments.getState().isDeleting("failed")).toBe(true);
+    expect(environments.getState().deletingStartedAt.get("failed")).toBeDefined();
+    environments.getState().setDeleting("failed", false);
+    expect(environments.getState().deletingStartedAt.has("failed")).toBe(false);
+    expect(environments.getState().isDeleting("failed")).toBe(true);
   });
 });
 
@@ -245,19 +246,19 @@ describe("snapshots keep what did not change", () => {
   const nested = () => ({ defaultAgent: "codex" as const });
 
   test("one changed environment leaves the project's others untouched", () => {
-    const store = useEnvironmentStore.getState();
+    const store = environments.getState();
     store.setEnvironments([
       environment("a", { order: 0, agentSettings: nested() }),
       environment("b", { order: 1, agentSettings: nested() }),
     ]);
-    const [a, b] = useEnvironmentStore.getState().environments;
+    const [a, b] = environments.getState().environments;
 
     store.mergeEnvironmentsForProject("project-1", [
       environment("a", { order: 0, agentSettings: nested(), status: "running" }),
       environment("b", { order: 1, agentSettings: nested() }),
     ]);
 
-    const [nextA, nextB] = useEnvironmentStore.getState().environments;
+    const [nextA, nextB] = environments.getState().environments;
     expect(nextB).toBe(b!);
     expect(nextA).not.toBe(a!);
     expect(nextA!.status).toBe("running");
@@ -266,27 +267,70 @@ describe("snapshots keep what did not change", () => {
   });
 
   test("a resync with nothing new publishes nothing", () => {
-    const store = useEnvironmentStore.getState();
+    const store = environments.getState();
     store.setEnvironments([environment("a", { agentSettings: nested() })]);
-    const before = useEnvironmentStore.getState();
+    const before = environments.getState();
     store.setEnvironments([environment("a", { agentSettings: nested() })]);
-    expect(useEnvironmentStore.getState()).toBe(before);
+    expect(environments.getState()).toBe(before);
   });
 
   test("a removed field is removed, not carried over", () => {
-    const store = useEnvironmentStore.getState();
+    const store = environments.getState();
     store.setEnvironments([environment("a", { agentSettings: nested() })]);
     store.mergeEnvironmentsForProject("project-1", [environment("a")]);
-    expect(useEnvironmentStore.getState().environments[0]!.agentSettings).toBeUndefined();
+    expect(environments.getState().environments[0]!.agentSettings).toBeUndefined();
   });
 
   test("an update with an equal nested value keeps its identity", () => {
-    const store = useEnvironmentStore.getState();
+    const store = environments.getState();
     store.setEnvironments([environment("a", { agentSettings: nested() })]);
-    const before = useEnvironmentStore.getState().environments[0]!;
+    const before = environments.getState().environments[0]!;
     store.updateEnvironment("a", { agentSettings: nested(), status: "running" });
-    expect(useEnvironmentStore.getState().environments[0]!.agentSettings).toBe(
-      before.agentSettings!,
-    );
+    expect(environments.getState().environments[0]!.agentSettings).toBe(before.agentSettings!);
+  });
+});
+
+describe("environmentStore per node", () => {
+  test("two scopes holding the same environment id do not collide", () => {
+    const leaf = windowScope
+      .open({ role: "leaf", client: new FakeNodeClient({ nodeId: NODE_B }) })
+      .store(environmentStore);
+    expect(leaf).not.toBe(environments);
+
+    // Environment ids are node-local: both nodes have an `env-1`.
+    environments.getState().setEnvironments([environment("env-1", { name: "on-a" })]);
+    leaf.getState().setEnvironments([environment("env-1", { name: "on-b" })]);
+    expect(environments.getState().getEnvironmentById("env-1")?.name).toBe("on-a");
+    expect(leaf.getState().getEnvironmentById("env-1")?.name).toBe("on-b");
+
+    leaf.getState().updateEnvironmentStatus("env-1", "running");
+    leaf.getState().setDeleting("env-1", true);
+    expect(environments.getState().getEnvironmentById("env-1")?.status).toBe("stopped");
+    expect(environments.getState().isDeleting("env-1")).toBe(false);
+
+    leaf.getState().removeEnvironment("env-1");
+    expect(leaf.getState().environments).toEqual([]);
+    expect(environments.getState().getEnvironmentById("env-1")?.name).toBe("on-a");
+  });
+
+  test("a disposed scope drops its environments; the other node keeps its own", () => {
+    const leafScope = windowScope.open({
+      role: "leaf",
+      client: new FakeNodeClient({ nodeId: NODE_B }),
+    });
+    leafScope
+      .store(environmentStore)
+      .getState()
+      .setEnvironments([environment("env-1")]);
+    environments.getState().setEnvironments([environment("env-1")]);
+
+    leafScope.dispose();
+
+    expect(environments.getState().environments.map(({ id }) => id)).toEqual(["env-1"]);
+    const reopened = windowScope.open({
+      role: "leaf",
+      client: new FakeNodeClient({ nodeId: NODE_B }),
+    });
+    expect(reopened.store(environmentStore).getState().environments).toEqual([]);
   });
 });

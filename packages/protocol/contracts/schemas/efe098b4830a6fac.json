@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:efe098b4830a6fac973e4a45cf3b5e209f15464d8338973a27dfeca36a95a8e2",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "draftKey": {
+          "type": "string"
+        },
+        "expectedRevision": {
+          "type": "number"
+        },
+        "ownerId": {
+          "type": "string"
+        },
+        "ownerType": {
+          "type": "string"
+        },
+        "value": {}
+      },
+      "required": ["draftKey", "ownerId", "ownerType"],
+      "type": "object"
+    }
+  }
+}

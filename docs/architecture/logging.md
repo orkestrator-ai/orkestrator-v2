@@ -361,7 +361,8 @@ no storage fields was not SQLite holding the loop for 250 ms at a time.
 
 **`upkeep.finished`.** `stop` is `done` (no free pages left), `budget` (1 GiB
 per pass), `busy` (another connection held the database), `no-progress`,
-`not-incremental` (the file has no incremental auto-vacuum), `no-free-pages`
+`slow-step` (a step took over 100 ms, so the disk is busy; the next check
+carries on), `not-incremental` (the file has no incremental auto-vacuum), `no-free-pages`
 (nothing to release, so no child ran) or `failed` (beside `upkeep.vacuum-failed`).
 `optimizeMs` is the part on the backend's own connection; `releaseMs` is the
 child's run, which does not hold the event loop.

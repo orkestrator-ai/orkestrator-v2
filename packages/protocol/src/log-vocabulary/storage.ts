@@ -64,7 +64,7 @@ export const STORAGE_LOG_AREAS = defineLogAreas({
         "Deleted content could not be scrubbed from the WAL yet because the truncating checkpoint failed or a reader held an older snapshot; it is retried without waiting until it succeeds.",
       "upkeep.vacuum-failed": "Periodic page reclamation failed; the next upkeep pass retries.",
       "upkeep.finished":
-        "One periodic upkeep pass ended: `optimizeMs` is how long refreshing planner statistics held the event loop, `released` and `left` the free pages returned and still free, `releaseMs` the release child's run and `stop` why it ended (`done`, `budget`, `busy`, `no-progress`, `not-incremental`, `no-free-pages`, `failed`).",
+        "One periodic upkeep pass ended: `optimizeMs` is how long refreshing planner statistics held the event loop, `released` and `left` the free pages returned and still free, `releaseMs` the release child's run and `stop` why it ended (`done`, `budget`, `busy`, `no-progress`, `slow-step`, `not-incremental`, `no-free-pages`, `failed`).",
       "operation.slow": {
         description:
           "A synchronous SQLite call or transaction held the event loop for at least 250 ms. `database` is `main` or `ledger`, `op` the statement kind or `transaction`, `table` its table (a transaction's slowest statement's), `durationMs` the whole call; a transaction adds `mode`, `beginMs` (waiting for the write lock), `sqlMs` (its statements) and `commitMs`. `busy` means the busy timeout ran out. Repeats of one series within 10 s are folded into the next line.",

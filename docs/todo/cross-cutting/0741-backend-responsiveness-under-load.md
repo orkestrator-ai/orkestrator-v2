@@ -26,7 +26,7 @@ Analysed 2026-10-28 against `main` at `7e3ceb7ce`; task 6 analysed again
 3. **Cut per-request work on the agent MCP endpoint**: every request rebuilt the tool server and parsed the whole mail store. Status: done (2026-10-29). No request parses the mail store any more; building the tool server per request stays, by decision, until task 6 shows it matters.
 4. **Find what held the desktop main thread from 02:22:55Z to 09:08:17Z**: Status: done as an investigation (2026-10-29). It was most likely a modal alert opened behind other windows; which dialog is not recorded anywhere. The fixes were made under 0880 (deleted 2026-11-06); its live check is task 7.
 5. **Stop parsing the whole mail store per mail call**: Status: done (2026-10-29). Reads use a shared read model that re-parses only changed rows; writes still parse once.
-6. **Qualify under load with the new stall log**: Status: open. Part A, the ledger at production scale, ran 2026-11-06. Four statements that read whole tables for about 1 to 24 s with a cold cache are fixed, and on a quiet disk a run at mini's size had no stall over 1 s. Under disk contention, commit fsyncs on the event loop still stall for 10 to 15 s; that is not fixed and needs a decision (task 6, Decisions). Part B, the live heavy run on the production install, is still needed.
+6. **Qualify under load with the new stall log**: Status: open. Part A, the ledger at production scale, ran 2026-11-06. Four statements that read whole tables for about 1 to 24 s with a cold cache are fixed, and on a quiet disk a run at mini's size had no stall over 1 s. Under disk contention, commit fsyncs on the event loop still stall for 10 to 15 s; that is not fixed. Two open decisions wait for the user (task 6, Decisions): ledger `synchronous = NORMAL`, and lowering ledger retention from 90 to 30 days. Part B, the live heavy run on the production install, is still needed.
 7. **Modal-dialog routing on a production install**: real update, restart, toolchain and startup-failure dialogs open as sheets or on a host window, ask for attention, and do not hold the main thread. Moved from to-do 0880 (deleted 2026-11-06). Status: open (needs a production install).
 
 Evidence is labelled **measured** (read from logs, the power log, the unified
@@ -616,7 +616,14 @@ run *is* the real workload.
   changes the ledger's durability contract, and another worktree
   (`storage-release-vs-writers`, with a script not on `main` at the time) was
   measuring `synchronous = NORMAL` against disk writers at the same time, so
-  the two results should be read together.
+  the two results should be read together. That worktree's result
+  ([7210](7210-storage-work-left-on-the-event-loop.md) task 4) does not
+  settle this one. For the free-page release child, `NORMAL` changed nothing
+  under four fsync writers (worst backend write 3.3 s and 3.4 s, against
+  1.5–4.2 s with `FULL`). Its long write-lock holds were cold page reads,
+  not commit fsyncs. A ledger commit is a small write with no such reads, and
+  there the measured `NORMAL` p50 was 0.0 ms, so the difference is specific to
+  ledger commits. Open: the user decides.
   - **`synchronous = NORMAL` for the ledger file only (recommended).**
     - Pros: one setting in `openChangeLedgerDatabase`. A commit no longer
       fsyncs (p50 0.0 ms against 12 ms under contention). WAL mode keeps the

@@ -63,6 +63,8 @@ export const DOMAIN_NAMES = [
   "coordinator",
   "agent-servers",
   "claude-tmux",
+  // Appendix E's "Public API (`public_action`)" group (plan item 1006).
+  "public-api",
 ] as const;
 
 export type DomainName = (typeof DOMAIN_NAMES)[number];

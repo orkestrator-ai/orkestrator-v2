@@ -45,6 +45,7 @@
     "./contract/envelope": "./src/contract/envelope.ts",
     "./contract/errors": "./src/contract/errors.ts",
     "./contract/event": "./src/contract/event.ts",
+    "./contract/json-schema": "./src/contract/json-schema.ts",
     "./node/logger-environment": "./src/node/logger-environment.ts",
     "./node/command-capture": "./src/node/command-capture.ts",
     "./node/command-failure-reason": "./src/node/command-failure-reason.ts",

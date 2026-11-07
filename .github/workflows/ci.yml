@@ -161,6 +161,12 @@ jobs:
         if: ${{ !cancelled() }}
         run: mise run test:logged -- --name doc-numbers -- bun test tests/unit/todo-index.test.ts tests/unit/number-claims.test.ts --parallel=1 --only-failures
 
+      # Every registered command has a contract domain and the committed
+      # manifest matches the registry (plan item 1006).
+      - name: Check the command contract manifest
+        if: ${{ !cancelled() }}
+        run: mise run contract:check
+
   typecheck:
     name: Typecheck
     runs-on: ubuntu-latest

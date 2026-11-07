@@ -1,0 +1,5024 @@
+{
+  "schemaVersion": 1,
+  "generatedBy": "scripts/generate-contract-manifest.ts (mise run contract:manifest)",
+  "counts": {
+    "commands": 996,
+    "defined": 0,
+    "untyped": 996
+  },
+  "untypedByDomain": {
+    "accounts": 33,
+    "agent-mail": 23,
+    "agent-servers": 77,
+    "claude-tmux": 28,
+    "config": 31,
+    "coordinator": 102,
+    "design": 35,
+    "docker": 29,
+    "environments": 63,
+    "files": 28,
+    "git": 23,
+    "graphs": 39,
+    "kanban": 29,
+    "mcp": 13,
+    "multi-review": 30,
+    "native-sessions": 87,
+    "node-files": 8,
+    "node-mail": 13,
+    "nodes": 51,
+    "pipelines": 35,
+    "previews": 17,
+    "projects": 26,
+    "public-api": 1,
+    "pull-requests": 42,
+    "system": 47,
+    "terminals": 26,
+    "ticket-sync": 7,
+    "transcripts": 16,
+    "web-annotations": 37
+  },
+  "domains": {},
+  "commands": {
+    "abort_node_file_write": {
+      "domain": "node-files",
+      "untyped": true,
+      "read": false
+    },
+    "accept_command_handover": {
+      "domain": "nodes",
+      "untyped": true,
+      "read": false
+    },
+    "ack_agent_mail": {
+      "domain": "agent-mail",
+      "untyped": true,
+      "read": false
+    },
+    "ack_node_outbox": {
+      "domain": "node-mail",
+      "untyped": true,
+      "read": false
+    },
+    "ack_ticket_sync_outbox": {
+      "domain": "ticket-sync",
+      "untyped": true,
+      "read": false
+    },
+    "acknowledge_startup_agent_session": {
+      "domain": "environments",
+      "untyped": true,
+      "read": false
+    },
+    "add_environment_domains": {
+      "domain": "environments",
+      "untyped": true,
+      "read": false
+    },
+    "add_github_issue_comment": {
+      "domain": "pull-requests",
+      "untyped": true,
+      "read": false
+    },
+    "add_github_pull_request_comment": {
+      "domain": "pull-requests",
+      "untyped": true,
+      "read": false
+    },
+    "add_github_pull_request_review_comment": {
+      "domain": "pull-requests",
+      "untyped": true,
+      "read": false
+    },
+    "add_kanban_comment": {
+      "domain": "kanban",
+      "untyped": true,
+      "read": false
+    },
+    "add_kanban_image": {
+      "domain": "kanban",
+      "untyped": true,
+      "read": false
+    },
+    "add_kanban_task": {
+      "domain": "kanban",
+      "untyped": true,
+      "read": false
+    },
+    "add_node": {
+      "domain": "nodes",
+      "untyped": true,
+      "read": false
+    },
+    "add_project": {
+      "domain": "projects",
+      "untyped": true,
+      "read": false
+    },
+    "address_coordinator_multi_review_action": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "address_multi_review": {
+      "domain": "multi-review",
+      "untyped": true,
+      "read": false
+    },
+    "adopt_coordinator_workflow": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "adopt_native_agent_session": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": false
+    },
+    "allow_controller": {
+      "domain": "nodes",
+      "untyped": true,
+      "read": false
+    },
+    "answer_controller_worker_question": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "answer_node_ssh_prompt": {
+      "domain": "nodes",
+      "untyped": true,
+      "read": false
+    },
+    "answer_project_worker_question": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "append_feature_plan_message": {
+      "domain": "kanban",
+      "untyped": true,
+      "read": false
+    },
+    "append_feature_story_message": {
+      "domain": "kanban",
+      "untyped": true,
+      "read": false
+    },
+    "append_node_file_write": {
+      "domain": "node-files",
+      "untyped": true,
+      "read": false
+    },
+    "apply_env_keys": {
+      "domain": "nodes",
+      "untyped": true,
+      "read": false
+    },
+    "apply_environment_allowed_domains": {
+      "domain": "environments",
+      "untyped": true,
+      "read": false
+    },
+    "apply_mcp_configuration": {
+      "domain": "mcp",
+      "untyped": true,
+      "read": false
+    },
+    "apply_pane_layout_intent": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": false
+    },
+    "apply_project_root_changes": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "apply_ticket_sync": {
+      "domain": "ticket-sync",
+      "untyped": true,
+      "read": false
+    },
+    "approve_environment_setup": {
+      "domain": "environments",
+      "untyped": true,
+      "read": false
+    },
+    "approve_native_agent_interaction_and_remember": {
+      "domain": "config",
+      "untyped": true,
+      "read": false
+    },
+    "approve_project_setup_commands": {
+      "domain": "environments",
+      "untyped": true,
+      "read": false
+    },
+    "approve_setup_commands_on_nodes": {
+      "domain": "nodes",
+      "untyped": true,
+      "read": false
+    },
+    "arm_pr_refresh_after_agent_completion": {
+      "domain": "pull-requests",
+      "untyped": true,
+      "read": false
+    },
+    "arrange_projects": {
+      "domain": "projects",
+      "untyped": true,
+      "read": false
+    },
+    "arrange_projects_by_intent": {
+      "domain": "projects",
+      "untyped": true,
+      "read": false
+    },
+    "ask_coordinator_suborks": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "assert_coordinator_delegation_available": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "assert_coordinator_environment_scope": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "assert_coordinator_node_delegation_available": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "assign_bug_report_agent": {
+      "domain": "system",
+      "untyped": true,
+      "read": false
+    },
+    "assign_coordinator_conversation_agent": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "associate_coordinator_workflow": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "attach_controller": {
+      "domain": "nodes",
+      "untyped": true,
+      "read": false
+    },
+    "attach_terminal": {
+      "domain": "terminals",
+      "untyped": true,
+      "read": false
+    },
+    "await_bridge_ready": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": false
+    },
+    "await_environment_setup_session": {
+      "domain": "environments",
+      "untyped": true,
+      "read": false
+    },
+    "begin_native_agent_sign_in": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": false
+    },
+    "begin_node_file_write": {
+      "domain": "node-files",
+      "untyped": true,
+      "read": false
+    },
+    "bootstrap_terminal_session": {
+      "domain": "terminals",
+      "untyped": true,
+      "read": false
+    },
+    "cache_agent_model_catalog": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": false
+    },
+    "cache_opencode_model_catalog": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": false
+    },
+    "cancel_agent_account_login": {
+      "domain": "accounts",
+      "untyped": true,
+      "read": false
+    },
+    "cancel_build_pipeline": {
+      "domain": "pipelines",
+      "untyped": true,
+      "read": false
+    },
+    "cancel_container_operation": {
+      "domain": "environments",
+      "untyped": true,
+      "read": false
+    },
+    "cancel_coordinator_graph_run": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "cancel_feature_planning": {
+      "domain": "kanban",
+      "untyped": true,
+      "read": false
+    },
+    "cancel_github_cli_login": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": false
+    },
+    "cancel_host_update": {
+      "domain": "system",
+      "untyped": true,
+      "read": false
+    },
+    "cancel_mcp_apply": {
+      "domain": "mcp",
+      "untyped": true,
+      "read": false
+    },
+    "cancel_multi_review": {
+      "domain": "multi-review",
+      "untyped": true,
+      "read": false
+    },
+    "cancel_native_agent_sign_in": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": false
+    },
+    "cancel_opencode_provider_login": {
+      "domain": "accounts",
+      "untyped": true,
+      "read": false
+    },
+    "cancel_review_validation": {
+      "domain": "multi-review",
+      "untyped": true,
+      "read": false
+    },
+    "cancel_user_command": {
+      "domain": "terminals",
+      "untyped": true,
+      "read": false
+    },
+    "change_github_pull_request_label": {
+      "domain": "pull-requests",
+      "untyped": true,
+      "read": false
+    },
+    "changes_apply_restore": {
+      "domain": "git",
+      "untyped": true,
+      "read": false
+    },
+    "changes_get_capabilities": {
+      "domain": "git",
+      "untyped": true,
+      "read": true
+    },
+    "changes_get_diagnostics": {
+      "domain": "git",
+      "untyped": true,
+      "read": true
+    },
+    "changes_get_diff": {
+      "domain": "git",
+      "untyped": true,
+      "read": true
+    },
+    "changes_get_files": {
+      "domain": "git",
+      "untyped": true,
+      "read": true
+    },
+    "changes_get_handoff": {
+      "domain": "git",
+      "untyped": true,
+      "read": true
+    },
+    "changes_get_history": {
+      "domain": "git",
+      "untyped": true,
+      "read": true
+    },
+    "changes_get_thread": {
+      "domain": "git",
+      "untyped": true,
+      "read": true
+    },
+    "changes_get_tool_presentations": {
+      "domain": "git",
+      "untyped": true,
+      "read": true
+    },
+    "changes_get_view": {
+      "domain": "git",
+      "untyped": true,
+      "read": true
+    },
+    "changes_measure_legacy_payload": {
+      "domain": "git",
+      "untyped": true,
+      "read": false
+    },
+    "changes_prepare_restore": {
+      "domain": "git",
+      "untyped": true,
+      "read": false
+    },
+    "changes_refresh": {
+      "domain": "git",
+      "untyped": true,
+      "read": false
+    },
+    "changes_resolve_live_detail": {
+      "domain": "git",
+      "untyped": true,
+      "read": false
+    },
+    "check_any_ai_cli": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": true
+    },
+    "check_base_image": {
+      "domain": "docker",
+      "untyped": true,
+      "read": true
+    },
+    "check_claude_cli": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": true
+    },
+    "check_claude_config": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": true
+    },
+    "check_codex_cli": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": true
+    },
+    "check_container_host_reachability": {
+      "domain": "docker",
+      "untyped": true,
+      "read": true
+    },
+    "check_container_workspace_paths": {
+      "domain": "files",
+      "untyped": true,
+      "read": true
+    },
+    "check_coordinator_upstream_merge": {
+      "domain": "config",
+      "untyped": true,
+      "read": true
+    },
+    "check_cursor_cli": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": true
+    },
+    "check_docker": {
+      "domain": "docker",
+      "untyped": true,
+      "read": true
+    },
+    "check_github_cli": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": true
+    },
+    "check_grok_cli": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": true
+    },
+    "check_opencode_cli": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": true
+    },
+    "check_pi_cli": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": true
+    },
+    "claim_feature_plan_build": {
+      "domain": "kanban",
+      "untyped": true,
+      "read": false
+    },
+    "claude_tmux_answer_pre_tool_use": {
+      "domain": "claude-tmux",
+      "untyped": true,
+      "read": false
+    },
+    "claude_tmux_answer_selection_prompt": {
+      "domain": "claude-tmux",
+      "untyped": true,
+      "read": false
+    },
+    "claude_tmux_create_interactive_terminal": {
+      "domain": "claude-tmux",
+      "untyped": true,
+      "read": false
+    },
+    "claude_tmux_detach_interactive_terminal": {
+      "domain": "claude-tmux",
+      "untyped": true,
+      "read": false
+    },
+    "claude_tmux_hold_hook": {
+      "domain": "claude-tmux",
+      "untyped": true,
+      "read": false
+    },
+    "claude_tmux_interrupt": {
+      "domain": "claude-tmux",
+      "untyped": true,
+      "read": false
+    },
+    "claude_tmux_list_previous_sessions": {
+      "domain": "claude-tmux",
+      "untyped": true,
+      "read": false
+    },
+    "claude_tmux_pending_hooks": {
+      "domain": "claude-tmux",
+      "untyped": true,
+      "read": false
+    },
+    "claude_tmux_reconcile_orphans": {
+      "domain": "claude-tmux",
+      "untyped": true,
+      "read": false
+    },
+    "claude_tmux_reply_hook": {
+      "domain": "claude-tmux",
+      "untyped": true,
+      "read": false
+    },
+    "claude_tmux_resize": {
+      "domain": "claude-tmux",
+      "untyped": true,
+      "read": false
+    },
+    "claude_tmux_resize_interactive_terminal": {
+      "domain": "claude-tmux",
+      "untyped": true,
+      "read": false
+    },
+    "claude_tmux_send_keys": {
+      "domain": "claude-tmux",
+      "untyped": true,
+      "read": false
+    },
+    "claude_tmux_send_text": {
+      "domain": "claude-tmux",
+      "untyped": true,
+      "read": false
+    },
+    "claude_tmux_start": {
+      "domain": "claude-tmux",
+      "untyped": true,
+      "read": false
+    },
+    "claude_tmux_start_interactive_terminal": {
+      "domain": "claude-tmux",
+      "untyped": true,
+      "read": false
+    },
+    "claude_tmux_status": {
+      "domain": "claude-tmux",
+      "untyped": true,
+      "read": false
+    },
+    "claude_tmux_stop": {
+      "domain": "claude-tmux",
+      "untyped": true,
+      "read": false
+    },
+    "claude_tmux_submit": {
+      "domain": "claude-tmux",
+      "untyped": true,
+      "read": false
+    },
+    "claude_tmux_submit_queued": {
+      "domain": "claude-tmux",
+      "untyped": true,
+      "read": false
+    },
+    "claude_tmux_switch_effort": {
+      "domain": "claude-tmux",
+      "untyped": true,
+      "read": false
+    },
+    "claude_tmux_switch_fast_mode": {
+      "domain": "claude-tmux",
+      "untyped": true,
+      "read": false
+    },
+    "claude_tmux_switch_model": {
+      "domain": "claude-tmux",
+      "untyped": true,
+      "read": false
+    },
+    "claude_tmux_switch_plan_mode": {
+      "domain": "claude-tmux",
+      "untyped": true,
+      "read": false
+    },
+    "claude_tmux_tasks": {
+      "domain": "claude-tmux",
+      "untyped": true,
+      "read": false
+    },
+    "claude_tmux_transcript": {
+      "domain": "claude-tmux",
+      "untyped": true,
+      "read": false
+    },
+    "claude_tmux_write_interactive_terminal": {
+      "domain": "claude-tmux",
+      "untyped": true,
+      "read": false
+    },
+    "cleanup_logs": {
+      "domain": "environments",
+      "untyped": true,
+      "read": false
+    },
+    "cleanup_orphaned_buffers": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": false
+    },
+    "cleanup_orphaned_containers": {
+      "domain": "docker",
+      "untyped": true,
+      "read": false
+    },
+    "cleanup_stale_local_servers_cmd": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": false
+    },
+    "clear_coordinator_worker_goal": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "clear_environment_pr": {
+      "domain": "environments",
+      "untyped": true,
+      "read": false
+    },
+    "clear_task_build_status": {
+      "domain": "pipelines",
+      "untyped": true,
+      "read": false
+    },
+    "close_container_logs": {
+      "domain": "docker",
+      "untyped": true,
+      "read": false
+    },
+    "close_coordinator_conversation": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "close_github_issue": {
+      "domain": "pull-requests",
+      "untyped": true,
+      "read": false
+    },
+    "close_local_terminal_session": {
+      "domain": "terminals",
+      "untyped": true,
+      "read": false
+    },
+    "close_node_workspace": {
+      "domain": "nodes",
+      "untyped": true,
+      "read": false
+    },
+    "collect_node_outbox": {
+      "domain": "node-mail",
+      "untyped": true,
+      "read": false
+    },
+    "collect_ticket_sync_outbox": {
+      "domain": "ticket-sync",
+      "untyped": true,
+      "read": false
+    },
+    "commit_node_file_write": {
+      "domain": "node-files",
+      "untyped": true,
+      "read": false
+    },
+    "compare_project_files": {
+      "domain": "nodes",
+      "untyped": true,
+      "read": false
+    },
+    "connect_linear": {
+      "domain": "kanban",
+      "untyped": true,
+      "read": false
+    },
+    "controller_multi_review_surface": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "coordinator_node_multi_review_surface": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "coordinator_node_ticket": {
+      "domain": "ticket-sync",
+      "untyped": true,
+      "read": false
+    },
+    "copy_external_file": {
+      "domain": "files",
+      "untyped": true,
+      "read": false
+    },
+    "copy_project_to_node": {
+      "domain": "nodes",
+      "untyped": true,
+      "read": false
+    },
+    "create_agent_handoff": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": false
+    },
+    "create_bug_report": {
+      "domain": "system",
+      "untyped": true,
+      "read": false
+    },
+    "create_client_grant": {
+      "domain": "nodes",
+      "untyped": true,
+      "read": false
+    },
+    "create_container_folder": {
+      "domain": "files",
+      "untyped": true,
+      "read": false
+    },
+    "create_control_mcp_credential": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "create_controller_environment": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "create_controller_pr": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "create_coordinator_conversation": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "create_coordinator_pr": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "create_environment": {
+      "domain": "environments",
+      "untyped": true,
+      "read": false
+    },
+    "create_feature_build": {
+      "domain": "pipelines",
+      "untyped": true,
+      "read": false
+    },
+    "create_feature_plan": {
+      "domain": "kanban",
+      "untyped": true,
+      "read": false
+    },
+    "create_host_directory": {
+      "domain": "projects",
+      "untyped": true,
+      "read": false
+    },
+    "create_local_folder": {
+      "domain": "files",
+      "untyped": true,
+      "read": false
+    },
+    "create_local_terminal_session": {
+      "domain": "terminals",
+      "untyped": true,
+      "read": false
+    },
+    "create_node_action_request": {
+      "domain": "node-mail",
+      "untyped": true,
+      "read": false
+    },
+    "create_preview_attachment": {
+      "domain": "previews",
+      "untyped": true,
+      "read": false
+    },
+    "create_preview_handoff_url": {
+      "domain": "previews",
+      "untyped": true,
+      "read": false
+    },
+    "create_project_from_scratch": {
+      "domain": "projects",
+      "untyped": true,
+      "read": false
+    },
+    "create_scheduled_job": {
+      "domain": "system",
+      "untyped": true,
+      "read": false
+    },
+    "create_session": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": false
+    },
+    "create_terminal_session": {
+      "domain": "terminals",
+      "untyped": true,
+      "read": false
+    },
+    "cursor_sdk_login_cancel": {
+      "domain": "accounts",
+      "untyped": true,
+      "read": false
+    },
+    "cursor_sdk_login_start": {
+      "domain": "accounts",
+      "untyped": true,
+      "read": false
+    },
+    "cursor_sdk_login_status": {
+      "domain": "accounts",
+      "untyped": true,
+      "read": false
+    },
+    "cursor_sdk_logout": {
+      "domain": "accounts",
+      "untyped": true,
+      "read": false
+    },
+    "custom_fix_coordinator_multi_review_action": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "decline_coordinator_upstream_merge": {
+      "domain": "config",
+      "untyped": true,
+      "read": false
+    },
+    "delete_agent_handoff": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": false
+    },
+    "delete_build_pipeline": {
+      "domain": "pipelines",
+      "untyped": true,
+      "read": false
+    },
+    "delete_compose_draft": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": false
+    },
+    "delete_container_annotation_evidence": {
+      "domain": "files",
+      "untyped": true,
+      "read": false
+    },
+    "delete_container_file": {
+      "domain": "files",
+      "untyped": true,
+      "read": false
+    },
+    "delete_environment": {
+      "domain": "environments",
+      "untyped": true,
+      "read": false
+    },
+    "delete_file_draft": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": false
+    },
+    "delete_kanban_comment": {
+      "domain": "kanban",
+      "untyped": true,
+      "read": false
+    },
+    "delete_kanban_image": {
+      "domain": "kanban",
+      "untyped": true,
+      "read": false
+    },
+    "delete_kanban_task": {
+      "domain": "kanban",
+      "untyped": true,
+      "read": false
+    },
+    "delete_local_file": {
+      "domain": "files",
+      "untyped": true,
+      "read": false
+    },
+    "delete_multi_review_workflow": {
+      "domain": "multi-review",
+      "untyped": true,
+      "read": false
+    },
+    "delete_pane_layout": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": false
+    },
+    "delete_permission_rule": {
+      "domain": "config",
+      "untyped": true,
+      "read": false
+    },
+    "delete_project_permission_rules": {
+      "domain": "config",
+      "untyped": true,
+      "read": false
+    },
+    "delete_scheduled_job": {
+      "domain": "system",
+      "untyped": true,
+      "read": false
+    },
+    "delete_session": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": false
+    },
+    "delete_sessions_by_environment": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": false
+    },
+    "deliver_node_mail": {
+      "domain": "node-mail",
+      "untyped": true,
+      "read": false
+    },
+    "design_action": {
+      "domain": "design",
+      "untyped": true,
+      "read": false
+    },
+    "design_cancel": {
+      "domain": "design",
+      "untyped": true,
+      "read": false
+    },
+    "design_capabilities": {
+      "domain": "design",
+      "untyped": true,
+      "read": false
+    },
+    "design_capture": {
+      "domain": "design",
+      "untyped": true,
+      "read": false
+    },
+    "design_changes": {
+      "domain": "design",
+      "untyped": true,
+      "read": false
+    },
+    "design_checkpoint": {
+      "domain": "design",
+      "untyped": true,
+      "read": false
+    },
+    "design_execute": {
+      "domain": "design",
+      "untyped": true,
+      "read": false
+    },
+    "design_export_preview": {
+      "domain": "design",
+      "untyped": true,
+      "read": false
+    },
+    "design_export_reconcile": {
+      "domain": "design",
+      "untyped": true,
+      "read": false
+    },
+    "design_export_save": {
+      "domain": "design",
+      "untyped": true,
+      "read": false
+    },
+    "design_hierarchy": {
+      "domain": "design",
+      "untyped": true,
+      "read": false
+    },
+    "design_history": {
+      "domain": "design",
+      "untyped": true,
+      "read": false
+    },
+    "design_import": {
+      "domain": "design",
+      "untyped": true,
+      "read": false
+    },
+    "design_import_host_file": {
+      "domain": "design",
+      "untyped": true,
+      "read": false
+    },
+    "design_intent_discard": {
+      "domain": "design",
+      "untyped": true,
+      "read": false
+    },
+    "design_intent_import": {
+      "domain": "design",
+      "untyped": true,
+      "read": false
+    },
+    "design_intent_resume": {
+      "domain": "design",
+      "untyped": true,
+      "read": false
+    },
+    "design_intent_run": {
+      "domain": "design",
+      "untyped": true,
+      "read": false
+    },
+    "design_intent_save": {
+      "domain": "design",
+      "untyped": true,
+      "read": false
+    },
+    "design_intents": {
+      "domain": "design",
+      "untyped": true,
+      "read": false
+    },
+    "design_library": {
+      "domain": "design",
+      "untyped": true,
+      "read": false
+    },
+    "design_open_file": {
+      "domain": "design",
+      "untyped": true,
+      "read": false
+    },
+    "design_operation_status": {
+      "domain": "design",
+      "untyped": true,
+      "read": false
+    },
+    "design_prepare": {
+      "domain": "design",
+      "untyped": true,
+      "read": false
+    },
+    "design_purge": {
+      "domain": "design",
+      "untyped": true,
+      "read": false
+    },
+    "design_readiness": {
+      "domain": "design",
+      "untyped": true,
+      "read": false
+    },
+    "design_save": {
+      "domain": "design",
+      "untyped": true,
+      "read": false
+    },
+    "design_session_link": {
+      "domain": "design",
+      "untyped": true,
+      "read": false
+    },
+    "design_session_link_states": {
+      "domain": "design",
+      "untyped": true,
+      "read": false
+    },
+    "design_session_resume": {
+      "domain": "design",
+      "untyped": true,
+      "read": false
+    },
+    "design_session_unlink": {
+      "domain": "design",
+      "untyped": true,
+      "read": false
+    },
+    "design_snapshot": {
+      "domain": "design",
+      "untyped": true,
+      "read": false
+    },
+    "design_status": {
+      "domain": "design",
+      "untyped": true,
+      "read": false
+    },
+    "design_sync": {
+      "domain": "design",
+      "untyped": true,
+      "read": false
+    },
+    "design_validate": {
+      "domain": "design",
+      "untyped": true,
+      "read": false
+    },
+    "detach_controller": {
+      "domain": "nodes",
+      "untyped": true,
+      "read": false
+    },
+    "detach_controller_here": {
+      "domain": "nodes",
+      "untyped": true,
+      "read": false
+    },
+    "detach_terminal": {
+      "domain": "terminals",
+      "untyped": true,
+      "read": false
+    },
+    "detect_pr": {
+      "domain": "pull-requests",
+      "untyped": true,
+      "read": false
+    },
+    "detect_pr_local": {
+      "domain": "pull-requests",
+      "untyped": true,
+      "read": false
+    },
+    "disarm_pr_refresh_after_agent_completion": {
+      "domain": "pull-requests",
+      "untyped": true,
+      "read": false
+    },
+    "discard_agent_mail_inject": {
+      "domain": "agent-mail",
+      "untyped": true,
+      "read": false
+    },
+    "discard_bug_report": {
+      "domain": "system",
+      "untyped": true,
+      "read": false
+    },
+    "discard_native_agent_dispatch": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": false
+    },
+    "discard_node_detach": {
+      "domain": "nodes",
+      "untyped": true,
+      "read": false
+    },
+    "discard_recovery_copy": {
+      "domain": "environments",
+      "untyped": true,
+      "read": false
+    },
+    "disconnect_environment_sessions": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": false
+    },
+    "disconnect_linear": {
+      "domain": "kanban",
+      "untyped": true,
+      "read": false
+    },
+    "dismiss_native_agent_suggested_prompt": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": false
+    },
+    "dismiss_node_outcome": {
+      "domain": "nodes",
+      "untyped": true,
+      "read": false
+    },
+    "dismiss_notices": {
+      "domain": "config",
+      "untyped": true,
+      "read": false
+    },
+    "dispatch_native_agent_intent": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": false
+    },
+    "dispatch_native_agent_prompt": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": false
+    },
+    "docker_cleanup_execute": {
+      "domain": "docker",
+      "untyped": true,
+      "read": false
+    },
+    "docker_cleanup_preview": {
+      "domain": "docker",
+      "untyped": true,
+      "read": false
+    },
+    "docker_container_status": {
+      "domain": "docker",
+      "untyped": true,
+      "read": false
+    },
+    "docker_remove_container": {
+      "domain": "docker",
+      "untyped": true,
+      "read": false
+    },
+    "docker_start_container": {
+      "domain": "docker",
+      "untyped": true,
+      "read": false
+    },
+    "docker_stop_container": {
+      "domain": "docker",
+      "untyped": true,
+      "read": false
+    },
+    "docker_system_prune": {
+      "domain": "docker",
+      "untyped": true,
+      "read": false
+    },
+    "docker_version": {
+      "domain": "docker",
+      "untyped": true,
+      "read": false
+    },
+    "edit_controller_worker_tab": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "edit_coordinator_worker_tab": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "enqueue_prompt_queue_message": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": false
+    },
+    "ensure_environment_setup": {
+      "domain": "environments",
+      "untyped": true,
+      "read": false
+    },
+    "ensure_host_pi_model_catalog": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": false
+    },
+    "ensure_native_agent_session": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": false
+    },
+    "ensure_project_coordinator": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "ensure_project_home_environment": {
+      "domain": "environments",
+      "untyped": true,
+      "read": false
+    },
+    "fetch_project_git": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "file_bug_report": {
+      "domain": "system",
+      "untyped": true,
+      "read": false
+    },
+    "find_project_icons": {
+      "domain": "projects",
+      "untyped": true,
+      "read": false
+    },
+    "fingerprint_project_files": {
+      "domain": "nodes",
+      "untyped": true,
+      "read": false
+    },
+    "forget_node": {
+      "domain": "nodes",
+      "untyped": true,
+      "read": false
+    },
+    "fork_controller_environment": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "fork_coordinator_worker": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "fork_environment": {
+      "domain": "environments",
+      "untyped": true,
+      "read": false
+    },
+    "fork_native_agent_session": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": false
+    },
+    "generate_review_package": {
+      "domain": "pull-requests",
+      "untyped": true,
+      "read": false
+    },
+    "get_agent_account_login": {
+      "domain": "accounts",
+      "untyped": true,
+      "read": true
+    },
+    "get_agent_account_usage": {
+      "domain": "accounts",
+      "untyped": true,
+      "read": true
+    },
+    "get_agent_handoff": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": true
+    },
+    "get_agent_handoff_capabilities": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": true
+    },
+    "get_agent_interaction_observations": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": true
+    },
+    "get_agent_mail_conversation": {
+      "domain": "agent-mail",
+      "untyped": true,
+      "read": true
+    },
+    "get_agent_mail_inbox_snapshot": {
+      "domain": "agent-mail",
+      "untyped": true,
+      "read": true
+    },
+    "get_agent_mail_mailbox": {
+      "domain": "agent-mail",
+      "untyped": true,
+      "read": true
+    },
+    "get_agent_mail_mailboxes": {
+      "domain": "agent-mail",
+      "untyped": true,
+      "read": true
+    },
+    "get_agent_mail_message": {
+      "domain": "agent-mail",
+      "untyped": true,
+      "read": true
+    },
+    "get_agent_mail_status": {
+      "domain": "agent-mail",
+      "untyped": true,
+      "read": true
+    },
+    "get_agent_mail_summary": {
+      "domain": "agent-mail",
+      "untyped": true,
+      "read": true
+    },
+    "get_agent_messaging_settings": {
+      "domain": "agent-mail",
+      "untyped": true,
+      "read": true
+    },
+    "get_agent_model_catalog_cache": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": true
+    },
+    "get_agent_registry": {
+      "domain": "agent-mail",
+      "untyped": true,
+      "read": true
+    },
+    "get_agent_sign_in_status": {
+      "domain": "accounts",
+      "untyped": true,
+      "read": true
+    },
+    "get_app_version": {
+      "domain": "system",
+      "untyped": true,
+      "read": true
+    },
+    "get_artifact_metrics": {
+      "domain": "system",
+      "untyped": true,
+      "read": true
+    },
+    "get_available_ai_cli": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": true
+    },
+    "get_backend_profile": {
+      "domain": "nodes",
+      "untyped": true,
+      "read": true
+    },
+    "get_bug_report": {
+      "domain": "system",
+      "untyped": true,
+      "read": true
+    },
+    "get_build_pipeline": {
+      "domain": "pipelines",
+      "untyped": true,
+      "read": true
+    },
+    "get_build_pipeline_session_projection": {
+      "domain": "pipelines",
+      "untyped": true,
+      "read": true
+    },
+    "get_build_pipeline_worker_transcript": {
+      "domain": "pipelines",
+      "untyped": true,
+      "read": true
+    },
+    "get_claude_model_catalog": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": true
+    },
+    "get_claude_server_log": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": true
+    },
+    "get_claude_server_status": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": true
+    },
+    "get_claude_terminal_state": {
+      "domain": "environments",
+      "untyped": true,
+      "read": true
+    },
+    "get_client_state_capabilities": {
+      "domain": "config",
+      "untyped": true,
+      "read": true
+    },
+    "get_codex_server_log": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": true
+    },
+    "get_codex_server_status": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": true
+    },
+    "get_compatibility_path_usage": {
+      "domain": "system",
+      "untyped": true,
+      "read": true
+    },
+    "get_compose_draft": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": true
+    },
+    "get_config": {
+      "domain": "config",
+      "untyped": true,
+      "read": true
+    },
+    "get_container_github_credential_status": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": true
+    },
+    "get_container_host_port": {
+      "domain": "docker",
+      "untyped": true,
+      "read": true
+    },
+    "get_container_host_reachability": {
+      "domain": "docker",
+      "untyped": true,
+      "read": true
+    },
+    "get_container_lifecycle_snapshot": {
+      "domain": "environments",
+      "untyped": true,
+      "read": true
+    },
+    "get_container_logs": {
+      "domain": "docker",
+      "untyped": true,
+      "read": true
+    },
+    "get_container_usage": {
+      "domain": "docker",
+      "untyped": true,
+      "read": true
+    },
+    "get_control_mcp_settings": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": true
+    },
+    "get_controller_worker_changes": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": true
+    },
+    "get_coordinator_account_switch_grant": {
+      "domain": "accounts",
+      "untyped": true,
+      "read": true
+    },
+    "get_coordinator_checkout_turn": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": true
+    },
+    "get_coordinator_feature_plan": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": true
+    },
+    "get_coordinator_graph_run": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": true
+    },
+    "get_coordinator_launch_environment": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": true
+    },
+    "get_coordinator_node_launch_environment": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": true
+    },
+    "get_coordinator_node_mailbox": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": true
+    },
+    "get_coordinator_pane_layout": {
+      "domain": "config",
+      "untyped": true,
+      "read": true
+    },
+    "get_coordinator_upstream_auto_merge": {
+      "domain": "config",
+      "untyped": true,
+      "read": true
+    },
+    "get_coordinator_worker_changes": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": true
+    },
+    "get_coordinator_worker_goal": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": true
+    },
+    "get_credential_status": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": true
+    },
+    "get_cursor_server_log": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": true
+    },
+    "get_cursor_server_status": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": true
+    },
+    "get_database_stats": {
+      "domain": "system",
+      "untyped": true,
+      "read": true
+    },
+    "get_default_project_location": {
+      "domain": "projects",
+      "untyped": true,
+      "read": true
+    },
+    "get_desktop_connections": {
+      "domain": "config",
+      "untyped": true,
+      "read": true
+    },
+    "get_docker_capacity": {
+      "domain": "docker",
+      "untyped": true,
+      "read": true
+    },
+    "get_docker_image_status": {
+      "domain": "docker",
+      "untyped": true,
+      "read": true
+    },
+    "get_docker_system_stats": {
+      "domain": "docker",
+      "untyped": true,
+      "read": true
+    },
+    "get_docker_topology": {
+      "domain": "docker",
+      "untyped": true,
+      "read": true
+    },
+    "get_environment": {
+      "domain": "environments",
+      "untyped": true,
+      "read": true
+    },
+    "get_environment_commit_ancestry": {
+      "domain": "git",
+      "untyped": true,
+      "read": true
+    },
+    "get_environment_diff_stats": {
+      "domain": "git",
+      "untyped": true,
+      "read": true
+    },
+    "get_environment_disk_usage": {
+      "domain": "system",
+      "untyped": true,
+      "read": true
+    },
+    "get_environment_extensions": {
+      "domain": "environments",
+      "untyped": true,
+      "read": true
+    },
+    "get_environment_inputs": {
+      "domain": "environments",
+      "untyped": true,
+      "read": true
+    },
+    "get_environment_network_policy": {
+      "domain": "environments",
+      "untyped": true,
+      "read": true
+    },
+    "get_environment_pr_health": {
+      "domain": "environments",
+      "untyped": true,
+      "read": true
+    },
+    "get_environment_pr_url": {
+      "domain": "environments",
+      "untyped": true,
+      "read": true
+    },
+    "get_environment_process_usage": {
+      "domain": "system",
+      "untyped": true,
+      "read": true
+    },
+    "get_environment_resources": {
+      "domain": "environments",
+      "untyped": true,
+      "read": true
+    },
+    "get_environment_setup_approval": {
+      "domain": "environments",
+      "untyped": true,
+      "read": true
+    },
+    "get_environment_snapshot": {
+      "domain": "environments",
+      "untyped": true,
+      "read": true
+    },
+    "get_environment_snapshots": {
+      "domain": "environments",
+      "untyped": true,
+      "read": true
+    },
+    "get_environment_status": {
+      "domain": "environments",
+      "untyped": true,
+      "read": true
+    },
+    "get_environment_uncommitted_paths": {
+      "domain": "git",
+      "untyped": true,
+      "read": true
+    },
+    "get_environments": {
+      "domain": "environments",
+      "untyped": true,
+      "read": true
+    },
+    "get_feature_planning_snapshot": {
+      "domain": "kanban",
+      "untyped": true,
+      "read": true
+    },
+    "get_feature_plans": {
+      "domain": "kanban",
+      "untyped": true,
+      "read": true
+    },
+    "get_file_draft": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": true
+    },
+    "get_file_subtree": {
+      "domain": "files",
+      "untyped": true,
+      "read": true
+    },
+    "get_file_tree": {
+      "domain": "files",
+      "untyped": true,
+      "read": true
+    },
+    "get_git_remote_url": {
+      "domain": "projects",
+      "untyped": true,
+      "read": true
+    },
+    "get_git_status": {
+      "domain": "git",
+      "untyped": true,
+      "read": true
+    },
+    "get_github_cli_login": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": true
+    },
+    "get_github_cli_status": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": true
+    },
+    "get_github_issue": {
+      "domain": "pull-requests",
+      "untyped": true,
+      "read": true
+    },
+    "get_github_issues": {
+      "domain": "pull-requests",
+      "untyped": true,
+      "read": true
+    },
+    "get_github_pull_request": {
+      "domain": "pull-requests",
+      "untyped": true,
+      "read": true
+    },
+    "get_github_pull_request_files": {
+      "domain": "pull-requests",
+      "untyped": true,
+      "read": true
+    },
+    "get_github_pull_request_timeline": {
+      "domain": "pull-requests",
+      "untyped": true,
+      "read": true
+    },
+    "get_global_config": {
+      "domain": "config",
+      "untyped": true,
+      "read": true
+    },
+    "get_grok_server_log": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": true
+    },
+    "get_grok_server_status": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": true
+    },
+    "get_host_maintenance": {
+      "domain": "system",
+      "untyped": true,
+      "read": true
+    },
+    "get_host_restart_impact": {
+      "domain": "system",
+      "untyped": true,
+      "read": true
+    },
+    "get_kanban_image_data": {
+      "domain": "kanban",
+      "untyped": true,
+      "read": true
+    },
+    "get_kanban_tasks": {
+      "domain": "kanban",
+      "untyped": true,
+      "read": true
+    },
+    "get_linear_connection": {
+      "domain": "kanban",
+      "untyped": true,
+      "read": true
+    },
+    "get_linear_issue": {
+      "domain": "kanban",
+      "untyped": true,
+      "read": true
+    },
+    "get_linear_issues": {
+      "domain": "kanban",
+      "untyped": true,
+      "read": true
+    },
+    "get_local_claude_server_status": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": true
+    },
+    "get_local_codex_server_status": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": true
+    },
+    "get_local_cursor_server_status": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": true
+    },
+    "get_local_file_subtree": {
+      "domain": "files",
+      "untyped": true,
+      "read": true
+    },
+    "get_local_file_tree": {
+      "domain": "files",
+      "untyped": true,
+      "read": true
+    },
+    "get_local_git_status": {
+      "domain": "git",
+      "untyped": true,
+      "read": true
+    },
+    "get_local_grok_server_status": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": true
+    },
+    "get_local_opencode_server_status": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": true
+    },
+    "get_local_pi_server_status": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": true
+    },
+    "get_log_directory": {
+      "domain": "environments",
+      "untyped": true,
+      "read": true
+    },
+    "get_log_storage_stats": {
+      "domain": "environments",
+      "untyped": true,
+      "read": true
+    },
+    "get_machine_load": {
+      "domain": "system",
+      "untyped": true,
+      "read": true
+    },
+    "get_mcp_definition": {
+      "domain": "mcp",
+      "untyped": true,
+      "read": true
+    },
+    "get_mcp_management_rollout": {
+      "domain": "mcp",
+      "untyped": true,
+      "read": true
+    },
+    "get_mcp_management_snapshot": {
+      "domain": "mcp",
+      "untyped": true,
+      "read": true
+    },
+    "get_mcp_operation": {
+      "domain": "mcp",
+      "untyped": true,
+      "read": true
+    },
+    "get_multi_review_reviewer_history_page": {
+      "domain": "multi-review",
+      "untyped": true,
+      "read": true
+    },
+    "get_multi_review_reviewer_projection": {
+      "domain": "multi-review",
+      "untyped": true,
+      "read": true
+    },
+    "get_multi_review_reviewer_tool_details": {
+      "domain": "multi-review",
+      "untyped": true,
+      "read": true
+    },
+    "get_multi_review_reviewer_transcript": {
+      "domain": "multi-review",
+      "untyped": true,
+      "read": true
+    },
+    "get_multi_review_step_tool_details": {
+      "domain": "multi-review",
+      "untyped": true,
+      "read": true
+    },
+    "get_multi_review_step_transcript": {
+      "domain": "multi-review",
+      "untyped": true,
+      "read": true
+    },
+    "get_multi_review_workflow": {
+      "domain": "multi-review",
+      "untyped": true,
+      "read": true
+    },
+    "get_native_agent_auth_status": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": true
+    },
+    "get_native_agent_discovery_update": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": true
+    },
+    "get_native_agent_goal": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": true
+    },
+    "get_native_agent_live_update": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": true
+    },
+    "get_native_agent_message_page": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": true
+    },
+    "get_native_agent_model_catalog": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": true
+    },
+    "get_native_agent_projection": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": true
+    },
+    "get_native_agent_projection_update": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": true
+    },
+    "get_native_agent_session": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": true
+    },
+    "get_native_agent_session_account": {
+      "domain": "accounts",
+      "untyped": true,
+      "read": true
+    },
+    "get_native_agent_session_state_update": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": true
+    },
+    "get_native_agent_sign_in_resend": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": true
+    },
+    "get_native_agent_sync_capabilities": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": true
+    },
+    "get_native_agent_tool_details": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": true
+    },
+    "get_native_agent_transcript_update": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": true
+    },
+    "get_node_project_coordinator": {
+      "domain": "node-mail",
+      "untyped": true,
+      "read": true
+    },
+    "get_node_status": {
+      "domain": "nodes",
+      "untyped": true,
+      "read": true
+    },
+    "get_node_summaries": {
+      "domain": "nodes",
+      "untyped": true,
+      "read": true
+    },
+    "get_opencode_model_catalog_cache": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": true
+    },
+    "get_opencode_model_preferences": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": true
+    },
+    "get_opencode_provider_login": {
+      "domain": "accounts",
+      "untyped": true,
+      "read": true
+    },
+    "get_opencode_server_log": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": true
+    },
+    "get_opencode_server_status": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": true
+    },
+    "get_orkestrator_containers": {
+      "domain": "docker",
+      "untyped": true,
+      "read": true
+    },
+    "get_pane_layout": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": true
+    },
+    "get_pi_server_log": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": true
+    },
+    "get_pi_server_status": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": true
+    },
+    "get_plan_usage": {
+      "domain": "accounts",
+      "untyped": true,
+      "read": true
+    },
+    "get_portal_layout": {
+      "domain": "nodes",
+      "untyped": true,
+      "read": true
+    },
+    "get_pr_monitor_state": {
+      "domain": "pull-requests",
+      "untyped": true,
+      "read": true
+    },
+    "get_preview_capabilities": {
+      "domain": "previews",
+      "untyped": true,
+      "read": true
+    },
+    "get_preview_diagnostics": {
+      "domain": "previews",
+      "untyped": true,
+      "read": true
+    },
+    "get_preview_public_origin": {
+      "domain": "previews",
+      "untyped": true,
+      "read": true
+    },
+    "get_preview_services": {
+      "domain": "previews",
+      "untyped": true,
+      "read": true
+    },
+    "get_preview_settings": {
+      "domain": "previews",
+      "untyped": true,
+      "read": true
+    },
+    "get_progressive_read_metrics": {
+      "domain": "system",
+      "untyped": true,
+      "read": true
+    },
+    "get_project": {
+      "domain": "projects",
+      "untyped": true,
+      "read": true
+    },
+    "get_project_base_branch_tip": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": true
+    },
+    "get_project_clone": {
+      "domain": "projects",
+      "untyped": true,
+      "read": true
+    },
+    "get_project_coordinator": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": true
+    },
+    "get_project_coordinator_view": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": true
+    },
+    "get_project_copy_options": {
+      "domain": "nodes",
+      "untyped": true,
+      "read": true
+    },
+    "get_project_git_status": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": true
+    },
+    "get_project_notes": {
+      "domain": "kanban",
+      "untyped": true,
+      "read": true
+    },
+    "get_project_seed_files": {
+      "domain": "nodes",
+      "untyped": true,
+      "read": true
+    },
+    "get_project_usage_limits": {
+      "domain": "accounts",
+      "untyped": true,
+      "read": true
+    },
+    "get_projects": {
+      "domain": "projects",
+      "untyped": true,
+      "read": true
+    },
+    "get_prompt_queue": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": true
+    },
+    "get_rebuild_preview": {
+      "domain": "environments",
+      "untyped": true,
+      "read": true
+    },
+    "get_recurring_work_diagnostics": {
+      "domain": "system",
+      "untyped": true,
+      "read": true
+    },
+    "get_repository_config": {
+      "domain": "config",
+      "untyped": true,
+      "read": true
+    },
+    "get_resource_revision_manifest": {
+      "domain": "system",
+      "untyped": true,
+      "read": true
+    },
+    "get_review_validation_output": {
+      "domain": "multi-review",
+      "untyped": true,
+      "read": true
+    },
+    "get_scheduled_job": {
+      "domain": "system",
+      "untyped": true,
+      "read": true
+    },
+    "get_scoped_resource_revision_manifest": {
+      "domain": "system",
+      "untyped": true,
+      "read": true
+    },
+    "get_scoped_resource_snapshots": {
+      "domain": "system",
+      "untyped": true,
+      "read": true
+    },
+    "get_session": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": true
+    },
+    "get_sessions_by_environment": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": true
+    },
+    "get_system_usage": {
+      "domain": "system",
+      "untyped": true,
+      "read": true
+    },
+    "get_terminal_history_page": {
+      "domain": "terminals",
+      "untyped": true,
+      "read": true
+    },
+    "get_terminal_output_buffer": {
+      "domain": "terminals",
+      "untyped": true,
+      "read": true
+    },
+    "get_terminal_output_snapshot": {
+      "domain": "terminals",
+      "untyped": true,
+      "read": true
+    },
+    "get_terminal_session": {
+      "domain": "terminals",
+      "untyped": true,
+      "read": true
+    },
+    "get_terminal_state_snapshot": {
+      "domain": "terminals",
+      "untyped": true,
+      "read": true
+    },
+    "get_ticket_sync_cursor": {
+      "domain": "ticket-sync",
+      "untyped": true,
+      "read": true
+    },
+    "get_ticket_sync_status": {
+      "domain": "ticket-sync",
+      "untyped": true,
+      "read": true
+    },
+    "get_usage_history": {
+      "domain": "accounts",
+      "untyped": true,
+      "read": true
+    },
+    "get_worker_request_state": {
+      "domain": "node-mail",
+      "untyped": true,
+      "read": true
+    },
+    "get_workflow_result_metrics": {
+      "domain": "pipelines",
+      "untyped": true,
+      "read": true
+    },
+    "get_workflow_result_tools_rollout": {
+      "domain": "pipelines",
+      "untyped": true,
+      "read": true
+    },
+    "get_worktree_locations": {
+      "domain": "system",
+      "untyped": true,
+      "read": true
+    },
+    "get_worktree_snapshot_revisions": {
+      "domain": "files",
+      "untyped": true,
+      "read": true
+    },
+    "graph_capability_ceiling_get": {
+      "domain": "graphs",
+      "untyped": true,
+      "read": false
+    },
+    "graph_capability_ceiling_set": {
+      "domain": "graphs",
+      "untyped": true,
+      "read": false
+    },
+    "graph_describe_cancel": {
+      "domain": "graphs",
+      "untyped": true,
+      "read": true
+    },
+    "graph_describe_dismiss": {
+      "domain": "graphs",
+      "untyped": true,
+      "read": true
+    },
+    "graph_describe_start": {
+      "domain": "graphs",
+      "untyped": true,
+      "read": true
+    },
+    "graph_describe_status": {
+      "domain": "graphs",
+      "untyped": true,
+      "read": true
+    },
+    "graph_launch_options": {
+      "domain": "graphs",
+      "untyped": true,
+      "read": false
+    },
+    "graph_project_template_review": {
+      "domain": "graphs",
+      "untyped": true,
+      "read": false
+    },
+    "graph_project_template_review_decide": {
+      "domain": "graphs",
+      "untyped": true,
+      "read": false
+    },
+    "graph_run_answer": {
+      "domain": "graphs",
+      "untyped": true,
+      "read": false
+    },
+    "graph_run_artifact": {
+      "domain": "graphs",
+      "untyped": true,
+      "read": false
+    },
+    "graph_run_cancel": {
+      "domain": "graphs",
+      "untyped": true,
+      "read": false
+    },
+    "graph_run_effects": {
+      "domain": "graphs",
+      "untyped": true,
+      "read": false
+    },
+    "graph_run_get": {
+      "domain": "graphs",
+      "untyped": true,
+      "read": true
+    },
+    "graph_run_launch": {
+      "domain": "graphs",
+      "untyped": true,
+      "read": false
+    },
+    "graph_run_mock": {
+      "domain": "graphs",
+      "untyped": true,
+      "read": false
+    },
+    "graph_run_pause": {
+      "domain": "graphs",
+      "untyped": true,
+      "read": false
+    },
+    "graph_run_pending": {
+      "domain": "graphs",
+      "untyped": true,
+      "read": false
+    },
+    "graph_run_restart": {
+      "domain": "graphs",
+      "untyped": true,
+      "read": false
+    },
+    "graph_run_resume": {
+      "domain": "graphs",
+      "untyped": true,
+      "read": false
+    },
+    "graph_run_retry": {
+      "domain": "graphs",
+      "untyped": true,
+      "read": false
+    },
+    "graph_run_rewind_code": {
+      "domain": "graphs",
+      "untyped": true,
+      "read": false
+    },
+    "graph_run_rewind_code_preview": {
+      "domain": "graphs",
+      "untyped": true,
+      "read": false
+    },
+    "graph_run_skip": {
+      "domain": "graphs",
+      "untyped": true,
+      "read": false
+    },
+    "graph_run_transcript": {
+      "domain": "graphs",
+      "untyped": true,
+      "read": false
+    },
+    "graph_runs_list": {
+      "domain": "graphs",
+      "untyped": true,
+      "read": true
+    },
+    "graph_sharing_key_trust": {
+      "domain": "graphs",
+      "untyped": true,
+      "read": false
+    },
+    "graph_sharing_keys": {
+      "domain": "graphs",
+      "untyped": true,
+      "read": false
+    },
+    "graph_template_compile": {
+      "domain": "graphs",
+      "untyped": true,
+      "read": false
+    },
+    "graph_template_delete": {
+      "domain": "graphs",
+      "untyped": true,
+      "read": false
+    },
+    "graph_template_duplicate": {
+      "domain": "graphs",
+      "untyped": true,
+      "read": false
+    },
+    "graph_template_export": {
+      "domain": "graphs",
+      "untyped": true,
+      "read": false
+    },
+    "graph_template_get": {
+      "domain": "graphs",
+      "untyped": true,
+      "read": false
+    },
+    "graph_template_import": {
+      "domain": "graphs",
+      "untyped": true,
+      "read": false
+    },
+    "graph_template_save": {
+      "domain": "graphs",
+      "untyped": true,
+      "read": false
+    },
+    "graph_template_share_export": {
+      "domain": "graphs",
+      "untyped": true,
+      "read": false
+    },
+    "graph_template_share_import": {
+      "domain": "graphs",
+      "untyped": true,
+      "read": false
+    },
+    "graph_template_trust": {
+      "domain": "graphs",
+      "untyped": true,
+      "read": false
+    },
+    "graph_templates_list": {
+      "domain": "graphs",
+      "untyped": true,
+      "read": false
+    },
+    "greet": {
+      "domain": "system",
+      "untyped": true,
+      "read": false
+    },
+    "hand_over_command": {
+      "domain": "nodes",
+      "untyped": true,
+      "read": false
+    },
+    "has_claude_credentials": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": false
+    },
+    "hide_coordinator_work": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "hold_native_agent_interaction": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": false
+    },
+    "import_desktop_connections": {
+      "domain": "nodes",
+      "untyped": true,
+      "read": false
+    },
+    "import_legacy_build_pipelines": {
+      "domain": "pipelines",
+      "untyped": true,
+      "read": false
+    },
+    "invoke_on_node": {
+      "domain": "nodes",
+      "untyped": true,
+      "read": false
+    },
+    "launch_build_pipeline": {
+      "domain": "pipelines",
+      "untyped": true,
+      "read": false
+    },
+    "launch_control_job": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "launch_controller_multi_review": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "launch_controller_terminal": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "launch_coordinator_environment": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "launch_coordinator_feature_plan": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "launch_coordinator_multi_review_action": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "launch_coordinator_node_environment": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "launch_coordinator_node_multi_review": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "launch_coordinator_terminal": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "launch_multi_review": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "launch_native_agent_job": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "launch_terminal_job": {
+      "domain": "terminals",
+      "untyped": true,
+      "read": false
+    },
+    "list_agent_accounts": {
+      "domain": "accounts",
+      "untyped": true,
+      "read": true
+    },
+    "list_agent_mail_conversations": {
+      "domain": "agent-mail",
+      "untyped": true,
+      "read": true
+    },
+    "list_agent_mail_inbox": {
+      "domain": "agent-mail",
+      "untyped": true,
+      "read": true
+    },
+    "list_agent_mail_sent": {
+      "domain": "agent-mail",
+      "untyped": true,
+      "read": true
+    },
+    "list_agent_mailboxes": {
+      "domain": "agent-mail",
+      "untyped": true,
+      "read": true
+    },
+    "list_agent_plugins": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": true
+    },
+    "list_agent_skills": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": true
+    },
+    "list_build_pipelines": {
+      "domain": "pipelines",
+      "untyped": true,
+      "read": true
+    },
+    "list_compose_drafts": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": true
+    },
+    "list_controller_worker_commands": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": true
+    },
+    "list_controllers": {
+      "domain": "nodes",
+      "untyped": true,
+      "read": true
+    },
+    "list_coordinator_activity": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": true
+    },
+    "list_coordinator_graph_templates": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": true
+    },
+    "list_coordinator_launch_overrides": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": true
+    },
+    "list_coordinator_worker_commands": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": true
+    },
+    "list_disk_usage_environments": {
+      "domain": "system",
+      "untyped": true,
+      "read": true
+    },
+    "list_docker_containers": {
+      "domain": "docker",
+      "untyped": true,
+      "read": true
+    },
+    "list_environment_agent_skills": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": true
+    },
+    "list_environment_diff_base_branches": {
+      "domain": "git",
+      "untyped": true,
+      "read": true
+    },
+    "list_environment_diff_base_commits": {
+      "domain": "git",
+      "untyped": true,
+      "read": true
+    },
+    "list_environment_hydration": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": true
+    },
+    "list_external_permission_rules": {
+      "domain": "config",
+      "untyped": true,
+      "read": true
+    },
+    "list_github_clone_accounts": {
+      "domain": "projects",
+      "untyped": true,
+      "read": true
+    },
+    "list_github_clone_repositories": {
+      "domain": "projects",
+      "untyped": true,
+      "read": true
+    },
+    "list_github_pull_requests": {
+      "domain": "pull-requests",
+      "untyped": true,
+      "read": true
+    },
+    "list_github_repository_assignable_users": {
+      "domain": "pull-requests",
+      "untyped": true,
+      "read": true
+    },
+    "list_github_repository_labels": {
+      "domain": "pull-requests",
+      "untyped": true,
+      "read": true
+    },
+    "list_host_directory": {
+      "domain": "projects",
+      "untyped": true,
+      "read": true
+    },
+    "list_human_prompts": {
+      "domain": "terminals",
+      "untyped": true,
+      "read": true
+    },
+    "list_machine_agent_accounts": {
+      "domain": "accounts",
+      "untyped": true,
+      "read": true
+    },
+    "list_mcp_management_targets": {
+      "domain": "mcp",
+      "untyped": true,
+      "read": true
+    },
+    "list_multi_review_workflows": {
+      "domain": "multi-review",
+      "untyped": true,
+      "read": true
+    },
+    "list_native_agent_resumable_sessions": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": true
+    },
+    "list_node_action_requests": {
+      "domain": "node-mail",
+      "untyped": true,
+      "read": true
+    },
+    "list_node_outcomes": {
+      "domain": "nodes",
+      "untyped": true,
+      "read": true
+    },
+    "list_node_ssh_prompts": {
+      "domain": "nodes",
+      "untyped": true,
+      "read": true
+    },
+    "list_node_transfers": {
+      "domain": "node-files",
+      "untyped": true,
+      "read": true
+    },
+    "list_nodes": {
+      "domain": "nodes",
+      "untyped": true,
+      "read": true
+    },
+    "list_notice_dismissals": {
+      "domain": "config",
+      "untyped": true,
+      "read": true
+    },
+    "list_opencode_provider_auth": {
+      "domain": "accounts",
+      "untyped": true,
+      "read": true
+    },
+    "list_permission_rules": {
+      "domain": "config",
+      "untyped": true,
+      "read": true
+    },
+    "list_project_copies": {
+      "domain": "nodes",
+      "untyped": true,
+      "read": true
+    },
+    "list_project_copy_candidates": {
+      "domain": "projects",
+      "untyped": true,
+      "read": true
+    },
+    "list_project_copy_files": {
+      "domain": "projects",
+      "untyped": true,
+      "read": true
+    },
+    "list_project_git_mirror_usage": {
+      "domain": "system",
+      "untyped": true,
+      "read": true
+    },
+    "list_project_root_changes": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": true
+    },
+    "list_prompt_queues": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": true
+    },
+    "list_recovery_copies": {
+      "domain": "environments",
+      "untyped": true,
+      "read": true
+    },
+    "list_scheduled_jobs": {
+      "domain": "system",
+      "untyped": true,
+      "read": true
+    },
+    "list_terminal_sessions": {
+      "domain": "terminals",
+      "untyped": true,
+      "read": true
+    },
+    "list_user_commands": {
+      "domain": "terminals",
+      "untyped": true,
+      "read": true
+    },
+    "load_session_buffer": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": false
+    },
+    "local_terminal_resize": {
+      "domain": "terminals",
+      "untyped": true,
+      "read": false
+    },
+    "local_terminal_write": {
+      "domain": "terminals",
+      "untyped": true,
+      "read": false
+    },
+    "mark_agent_mail_conversation_seen": {
+      "domain": "agent-mail",
+      "untyped": true,
+      "read": false
+    },
+    "mark_agent_mail_seen": {
+      "domain": "agent-mail",
+      "untyped": true,
+      "read": false
+    },
+    "mark_bug_report_filed": {
+      "domain": "system",
+      "untyped": true,
+      "read": false
+    },
+    "merge_environment_pr": {
+      "domain": "pull-requests",
+      "untyped": true,
+      "read": false
+    },
+    "merge_github_pull_request": {
+      "domain": "pull-requests",
+      "untyped": true,
+      "read": false
+    },
+    "merge_pr": {
+      "domain": "pull-requests",
+      "untyped": true,
+      "read": false
+    },
+    "merge_pr_local": {
+      "domain": "pull-requests",
+      "untyped": true,
+      "read": false
+    },
+    "move_container_file": {
+      "domain": "files",
+      "untyped": true,
+      "read": false
+    },
+    "move_environment": {
+      "domain": "environments",
+      "untyped": true,
+      "read": false
+    },
+    "move_local_file": {
+      "domain": "files",
+      "untyped": true,
+      "read": false
+    },
+    "move_prompt_queue_message": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": false
+    },
+    "mutate_mcp_definition": {
+      "domain": "mcp",
+      "untyped": true,
+      "read": false
+    },
+    "mute_agent_mail": {
+      "domain": "agent-mail",
+      "untyped": true,
+      "read": false
+    },
+    "native_agent_goal_command": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": false
+    },
+    "native_agent_subork_transcript": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": false
+    },
+    "open_agent_sign_in_terminal": {
+      "domain": "accounts",
+      "untyped": true,
+      "read": false
+    },
+    "open_container_logs": {
+      "domain": "docker",
+      "untyped": true,
+      "read": false
+    },
+    "open_controller_browser": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "open_coordinator_browser": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "open_coordinator_delegation": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "open_coordinator_multi_review": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "open_coordinator_multi_review_fix": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "open_coordinator_node_delegation": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "open_in_browser": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": false
+    },
+    "open_in_editor": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": false
+    },
+    "open_local_in_editor": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": false
+    },
+    "open_node_workspace": {
+      "domain": "nodes",
+      "untyped": true,
+      "read": false
+    },
+    "open_project_agents_md_pr": {
+      "domain": "projects",
+      "untyped": true,
+      "read": false
+    },
+    "override_environment_setup": {
+      "domain": "environments",
+      "untyped": true,
+      "read": false
+    },
+    "patch_global_config": {
+      "domain": "config",
+      "untyped": true,
+      "read": false
+    },
+    "patch_repository_settings": {
+      "domain": "config",
+      "untyped": true,
+      "read": false
+    },
+    "pause_build_pipeline": {
+      "domain": "pipelines",
+      "untyped": true,
+      "read": false
+    },
+    "pause_coordinator_worker_goal": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "pause_multi_review_step": {
+      "domain": "multi-review",
+      "untyped": true,
+      "read": false
+    },
+    "pause_project_coordinator": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "pause_scheduled_job": {
+      "domain": "system",
+      "untyped": true,
+      "read": false
+    },
+    "peek_container_agent_bridge": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": false
+    },
+    "peek_local_agent_bridge": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": false
+    },
+    "perform_native_agent_mcp_action": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": false
+    },
+    "perform_native_agent_session_action": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": false
+    },
+    "place_node_mail_attachments": {
+      "domain": "node-mail",
+      "untyped": true,
+      "read": false
+    },
+    "plan_diagnostics_bundle": {
+      "domain": "system",
+      "untyped": true,
+      "read": false
+    },
+    "post_github_completion_comment": {
+      "domain": "pull-requests",
+      "untyped": true,
+      "read": false
+    },
+    "post_linear_completion_comment": {
+      "domain": "kanban",
+      "untyped": true,
+      "read": false
+    },
+    "post_linear_issue_comment": {
+      "domain": "kanban",
+      "untyped": true,
+      "read": false
+    },
+    "pr_monitor_agent_turn_completed": {
+      "domain": "pull-requests",
+      "untyped": true,
+      "read": false
+    },
+    "pr_monitor_probe_environment": {
+      "domain": "pull-requests",
+      "untyped": true,
+      "read": false
+    },
+    "pr_monitor_refresh": {
+      "domain": "pull-requests",
+      "untyped": true,
+      "read": false
+    },
+    "pr_monitor_watch": {
+      "domain": "pull-requests",
+      "untyped": true,
+      "read": false
+    },
+    "prepare_environment_first_prompt": {
+      "domain": "environments",
+      "untyped": true,
+      "read": false
+    },
+    "prepare_node_mail_attachments": {
+      "domain": "node-mail",
+      "untyped": true,
+      "read": false
+    },
+    "prepare_project_git_branch_switch": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "preview_agents_md_update": {
+      "domain": "nodes",
+      "untyped": true,
+      "read": false
+    },
+    "preview_build_pipeline_code_rewind": {
+      "domain": "pipelines",
+      "untyped": true,
+      "read": false
+    },
+    "preview_command_handover": {
+      "domain": "nodes",
+      "untyped": true,
+      "read": false
+    },
+    "preview_mcp_environment_defaults": {
+      "domain": "mcp",
+      "untyped": true,
+      "read": false
+    },
+    "preview_multi_review_code_rewind": {
+      "domain": "multi-review",
+      "untyped": true,
+      "read": false
+    },
+    "probe_node_host_key": {
+      "domain": "nodes",
+      "untyped": true,
+      "read": false
+    },
+    "probe_preview_service": {
+      "domain": "previews",
+      "untyped": true,
+      "read": false
+    },
+    "propagate_github_token_to_containers": {
+      "domain": "docker",
+      "untyped": true,
+      "read": false
+    },
+    "provision_environment": {
+      "domain": "docker",
+      "untyped": true,
+      "read": false
+    },
+    "prune_agent_handoffs": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": false
+    },
+    "public_action": {
+      "domain": "public-api",
+      "untyped": true,
+      "read": false
+    },
+    "read_agent_skill": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": true
+    },
+    "read_container_file": {
+      "domain": "files",
+      "untyped": true,
+      "read": true
+    },
+    "read_container_file_base64": {
+      "domain": "files",
+      "untyped": true,
+      "read": true
+    },
+    "read_container_logs": {
+      "domain": "docker",
+      "untyped": true,
+      "read": true
+    },
+    "read_diagnostics_bundle": {
+      "domain": "system",
+      "untyped": true,
+      "read": true
+    },
+    "read_env_values": {
+      "domain": "nodes",
+      "untyped": true,
+      "read": true
+    },
+    "read_environment_agent_skill": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": true
+    },
+    "read_environment_details": {
+      "domain": "nodes",
+      "untyped": true,
+      "read": true
+    },
+    "read_environment_file_base64": {
+      "domain": "files",
+      "untyped": true,
+      "read": true
+    },
+    "read_file_at_branch": {
+      "domain": "files",
+      "untyped": true,
+      "read": true
+    },
+    "read_file_base64": {
+      "domain": "files",
+      "untyped": true,
+      "read": true
+    },
+    "read_host_agent_sign_ins": {
+      "domain": "accounts",
+      "untyped": true,
+      "read": true
+    },
+    "read_host_image_file": {
+      "domain": "projects",
+      "untyped": true,
+      "read": true
+    },
+    "read_local_file": {
+      "domain": "files",
+      "untyped": true,
+      "read": true
+    },
+    "read_local_file_at_branch": {
+      "domain": "files",
+      "untyped": true,
+      "read": true
+    },
+    "read_node_file": {
+      "domain": "node-files",
+      "untyped": true,
+      "read": true
+    },
+    "read_project_agents_md_section": {
+      "domain": "projects",
+      "untyped": true,
+      "read": true
+    },
+    "reattach_container": {
+      "domain": "docker",
+      "untyped": true,
+      "read": false
+    },
+    "reconcile_agent_interactions": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": false
+    },
+    "reconcile_claude_state_polling": {
+      "domain": "claude-tmux",
+      "untyped": true,
+      "read": false
+    },
+    "reconcile_notice_dismissals": {
+      "domain": "config",
+      "untyped": true,
+      "read": false
+    },
+    "reconcile_orphaned_tab_resources": {
+      "domain": "environments",
+      "untyped": true,
+      "read": false
+    },
+    "reconcile_pending_environment_renames": {
+      "domain": "environments",
+      "untyped": true,
+      "read": false
+    },
+    "reconcile_tab_teardowns": {
+      "domain": "environments",
+      "untyped": true,
+      "read": false
+    },
+    "reconcile_workflow_scheduling": {
+      "domain": "system",
+      "untyped": true,
+      "read": false
+    },
+    "reconnect_node": {
+      "domain": "nodes",
+      "untyped": true,
+      "read": false
+    },
+    "record_kanban_criteria_checks": {
+      "domain": "kanban",
+      "untyped": true,
+      "read": false
+    },
+    "record_node_environment_origin": {
+      "domain": "node-mail",
+      "untyped": true,
+      "read": false
+    },
+    "record_preview_client_metrics": {
+      "domain": "previews",
+      "untyped": true,
+      "read": false
+    },
+    "record_renderer_errors": {
+      "domain": "system",
+      "untyped": true,
+      "read": false
+    },
+    "recover_multi_review_fix_session": {
+      "domain": "multi-review",
+      "untyped": true,
+      "read": false
+    },
+    "recreate_environment": {
+      "domain": "environments",
+      "untyped": true,
+      "read": false
+    },
+    "refresh_environment_diff_stats": {
+      "domain": "git",
+      "untyped": true,
+      "read": false
+    },
+    "refresh_host_agent_model_catalog": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": false
+    },
+    "refresh_mcp_environment_defaults": {
+      "domain": "mcp",
+      "untyped": true,
+      "read": false
+    },
+    "refresh_native_agent_commands": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": false
+    },
+    "refresh_native_agent_models": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": false
+    },
+    "register_preview_service": {
+      "domain": "previews",
+      "untyped": true,
+      "read": false
+    },
+    "release_preview_attachment": {
+      "domain": "previews",
+      "untyped": true,
+      "read": false
+    },
+    "remember_environment_agent_selection": {
+      "domain": "projects",
+      "untyped": true,
+      "read": false
+    },
+    "remove_agent_account": {
+      "domain": "accounts",
+      "untyped": true,
+      "read": false
+    },
+    "remove_environment_domains": {
+      "domain": "environments",
+      "untyped": true,
+      "read": false
+    },
+    "remove_opencode_provider_login": {
+      "domain": "accounts",
+      "untyped": true,
+      "read": false
+    },
+    "remove_preview_service": {
+      "domain": "previews",
+      "untyped": true,
+      "read": false
+    },
+    "remove_project": {
+      "domain": "projects",
+      "untyped": true,
+      "read": false
+    },
+    "remove_prompt_queue_message": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": false
+    },
+    "remove_queued_build_pipeline_message": {
+      "domain": "pipelines",
+      "untyped": true,
+      "read": false
+    },
+    "rename_agent_account": {
+      "domain": "accounts",
+      "untyped": true,
+      "read": false
+    },
+    "rename_container_file": {
+      "domain": "files",
+      "untyped": true,
+      "read": false
+    },
+    "rename_environment": {
+      "domain": "environments",
+      "untyped": true,
+      "read": false
+    },
+    "rename_environment_from_prompt": {
+      "domain": "environments",
+      "untyped": true,
+      "read": false
+    },
+    "rename_local_file": {
+      "domain": "files",
+      "untyped": true,
+      "read": false
+    },
+    "rename_session": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": false
+    },
+    "renew_client_grant": {
+      "domain": "nodes",
+      "untyped": true,
+      "read": false
+    },
+    "renew_node_workspace": {
+      "domain": "nodes",
+      "untyped": true,
+      "read": false
+    },
+    "renew_preview_attachment": {
+      "domain": "previews",
+      "untyped": true,
+      "read": false
+    },
+    "reorder_environments": {
+      "domain": "environments",
+      "untyped": true,
+      "read": false
+    },
+    "reorder_projects": {
+      "domain": "projects",
+      "untyped": true,
+      "read": false
+    },
+    "reorder_sessions": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": false
+    },
+    "reply_github_pull_request_review_thread": {
+      "domain": "pull-requests",
+      "untyped": true,
+      "read": false
+    },
+    "request_coordinator_agents_md_update": {
+      "domain": "projects",
+      "untyped": true,
+      "read": false
+    },
+    "request_coordinator_root_changes": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "request_coordinator_worker_answer": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "request_host_update": {
+      "domain": "system",
+      "untyped": true,
+      "read": false
+    },
+    "request_host_update_check": {
+      "domain": "system",
+      "untyped": true,
+      "read": false
+    },
+    "resolve_container_operation": {
+      "domain": "environments",
+      "untyped": true,
+      "read": false
+    },
+    "resolve_controller_conflicts": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "resolve_coordinator_conflicts": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "resolve_mcp_environment_overlay": {
+      "domain": "mcp",
+      "untyped": true,
+      "read": false
+    },
+    "resolve_native_agent_interaction": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": false
+    },
+    "resolve_node_action_request": {
+      "domain": "node-mail",
+      "untyped": true,
+      "read": false
+    },
+    "resolve_preview_target": {
+      "domain": "previews",
+      "untyped": true,
+      "read": false
+    },
+    "restart_build_pipeline_current_step": {
+      "domain": "pipelines",
+      "untyped": true,
+      "read": false
+    },
+    "restart_build_pipeline_reviewer": {
+      "domain": "pipelines",
+      "untyped": true,
+      "read": false
+    },
+    "restart_build_pipeline_step": {
+      "domain": "pipelines",
+      "untyped": true,
+      "read": false
+    },
+    "restart_controller_build_pipeline_step": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "restart_coordinator_build_pipeline_step": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "restart_multi_review_reviewer": {
+      "domain": "multi-review",
+      "untyped": true,
+      "read": false
+    },
+    "restart_multi_review_step": {
+      "domain": "multi-review",
+      "untyped": true,
+      "read": false
+    },
+    "restore_provider_credentials": {
+      "domain": "environments",
+      "untyped": true,
+      "read": false
+    },
+    "restore_recovery_copy": {
+      "domain": "environments",
+      "untyped": true,
+      "read": false
+    },
+    "resume_agent_account_auto_switch": {
+      "domain": "accounts",
+      "untyped": true,
+      "read": false
+    },
+    "resume_build_pipeline": {
+      "domain": "pipelines",
+      "untyped": true,
+      "read": false
+    },
+    "resume_multi_review_step": {
+      "domain": "multi-review",
+      "untyped": true,
+      "read": false
+    },
+    "resume_native_agent_session": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": false
+    },
+    "resume_project_coordinator": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "resume_scheduled_job": {
+      "domain": "system",
+      "untyped": true,
+      "read": false
+    },
+    "retry_agent_mail_inject": {
+      "domain": "agent-mail",
+      "untyped": true,
+      "read": false
+    },
+    "retry_build_pipeline_completion_comment": {
+      "domain": "pipelines",
+      "untyped": true,
+      "read": false
+    },
+    "retry_build_pipeline_interaction_failure": {
+      "domain": "pipelines",
+      "untyped": true,
+      "read": false
+    },
+    "retry_build_pipeline_review": {
+      "domain": "pipelines",
+      "untyped": true,
+      "read": false
+    },
+    "retry_build_pipeline_reviewer": {
+      "domain": "pipelines",
+      "untyped": true,
+      "read": false
+    },
+    "retry_build_pipeline_stage": {
+      "domain": "pipelines",
+      "untyped": true,
+      "read": false
+    },
+    "retry_coordinator_conversation": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "retry_feature_planning": {
+      "domain": "kanban",
+      "untyped": true,
+      "read": false
+    },
+    "retry_multi_review": {
+      "domain": "multi-review",
+      "untyped": true,
+      "read": false
+    },
+    "retry_native_agent_dispatch": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": false
+    },
+    "retry_prompt_queue_dispatch": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": false
+    },
+    "return_node_outbox_mail": {
+      "domain": "node-mail",
+      "untyped": true,
+      "read": false
+    },
+    "reveal_in_file_manager": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": false
+    },
+    "revert_container_file": {
+      "domain": "files",
+      "untyped": true,
+      "read": false
+    },
+    "revert_local_file": {
+      "domain": "files",
+      "untyped": true,
+      "read": false
+    },
+    "revoke_client_grant": {
+      "domain": "nodes",
+      "untyped": true,
+      "read": false
+    },
+    "revoke_control_mcp_credential": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "revoke_preview_access": {
+      "domain": "previews",
+      "untyped": true,
+      "read": false
+    },
+    "revoke_provider_credentials": {
+      "domain": "environments",
+      "untyped": true,
+      "read": false
+    },
+    "rewind_build_pipeline_code": {
+      "domain": "pipelines",
+      "untyped": true,
+      "read": false
+    },
+    "rewind_multi_review_code": {
+      "domain": "multi-review",
+      "untyped": true,
+      "read": false
+    },
+    "rotate_control_mcp_credential": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "rotate_control_mcp_token": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "run_controller_worker_command": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "run_coordinator_worker_command": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "run_environment_setup": {
+      "domain": "environments",
+      "untyped": true,
+      "read": false
+    },
+    "run_granted_agent_account_switch": {
+      "domain": "nodes",
+      "untyped": true,
+      "read": false
+    },
+    "run_scheduled_job": {
+      "domain": "system",
+      "untyped": true,
+      "read": false
+    },
+    "run_timer_agent_account_switch": {
+      "domain": "nodes",
+      "untyped": true,
+      "read": false
+    },
+    "run_user_command": {
+      "domain": "terminals",
+      "untyped": true,
+      "read": false
+    },
+    "save_agent_handoff": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": false
+    },
+    "save_bug_report_screenshot": {
+      "domain": "system",
+      "untyped": true,
+      "read": false
+    },
+    "save_build_pipeline": {
+      "domain": "pipelines",
+      "untyped": true,
+      "read": false
+    },
+    "save_compose_draft": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": false
+    },
+    "save_config": {
+      "domain": "config",
+      "untyped": true,
+      "read": false
+    },
+    "save_coordinator_pane_layout": {
+      "domain": "config",
+      "untyped": true,
+      "read": false
+    },
+    "save_desktop_connections": {
+      "domain": "config",
+      "untyped": true,
+      "read": false
+    },
+    "save_file_draft": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": false
+    },
+    "save_pane_layout": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": false
+    },
+    "save_project_notes": {
+      "domain": "kanban",
+      "untyped": true,
+      "read": false
+    },
+    "save_session_buffer": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": false
+    },
+    "select_coordinator_conversation": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "send_agent_mail": {
+      "domain": "agent-mail",
+      "untyped": true,
+      "read": false
+    },
+    "send_approved_project_home_message": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "send_build_pipeline_message": {
+      "domain": "pipelines",
+      "untyped": true,
+      "read": false
+    },
+    "send_coordinator_agent_mail": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "send_coordinator_command_node_mail": {
+      "domain": "node-mail",
+      "untyped": true,
+      "read": false
+    },
+    "send_coordinator_node_mail": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "send_external_agent_mail": {
+      "domain": "agent-mail",
+      "untyped": true,
+      "read": false
+    },
+    "set_active_agent_account": {
+      "domain": "accounts",
+      "untyped": true,
+      "read": false
+    },
+    "set_agent_account_auto_switch": {
+      "domain": "accounts",
+      "untyped": true,
+      "read": false
+    },
+    "set_agent_interaction_monitor_adoption": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": false
+    },
+    "set_agent_messaging_paused": {
+      "domain": "agent-mail",
+      "untyped": true,
+      "read": false
+    },
+    "set_anthropic_api_key": {
+      "domain": "config",
+      "untyped": true,
+      "read": false
+    },
+    "set_command_node_enabled": {
+      "domain": "nodes",
+      "untyped": true,
+      "read": false
+    },
+    "set_container_resource_limits": {
+      "domain": "environments",
+      "untyped": true,
+      "read": false
+    },
+    "set_coordinator_account_switch_grant": {
+      "domain": "accounts",
+      "untyped": true,
+      "read": false
+    },
+    "set_coordinator_upstream_auto_merge": {
+      "domain": "config",
+      "untyped": true,
+      "read": false
+    },
+    "set_coordinator_worker_goal": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "set_cursor_api_key": {
+      "domain": "config",
+      "untyped": true,
+      "read": false
+    },
+    "set_environment_auto_merge": {
+      "domain": "pull-requests",
+      "untyped": true,
+      "read": false
+    },
+    "set_environment_diff_base": {
+      "domain": "git",
+      "untyped": true,
+      "read": false
+    },
+    "set_environment_initial_prompt": {
+      "domain": "environments",
+      "untyped": true,
+      "read": false
+    },
+    "set_environment_pending_agent_launch": {
+      "domain": "environments",
+      "untyped": true,
+      "read": false
+    },
+    "set_environment_pr": {
+      "domain": "environments",
+      "untyped": true,
+      "read": false
+    },
+    "set_environment_unread": {
+      "domain": "pipelines",
+      "untyped": true,
+      "read": false
+    },
+    "set_github_cli_reminder_dismissed": {
+      "domain": "config",
+      "untyped": true,
+      "read": false
+    },
+    "set_github_pull_request_file_viewed": {
+      "domain": "pull-requests",
+      "untyped": true,
+      "read": false
+    },
+    "set_github_pull_request_labels": {
+      "domain": "pull-requests",
+      "untyped": true,
+      "read": false
+    },
+    "set_github_pull_request_reviewers": {
+      "domain": "pull-requests",
+      "untyped": true,
+      "read": false
+    },
+    "set_github_pull_request_thread_resolved": {
+      "domain": "pull-requests",
+      "untyped": true,
+      "read": false
+    },
+    "set_github_token": {
+      "domain": "config",
+      "untyped": true,
+      "read": false
+    },
+    "set_host_gh_channel": {
+      "domain": "system",
+      "untyped": true,
+      "read": false
+    },
+    "set_host_update_channel": {
+      "domain": "system",
+      "untyped": true,
+      "read": false
+    },
+    "set_mcp_management_rollout": {
+      "domain": "mcp",
+      "untyped": true,
+      "read": false
+    },
+    "set_native_agent_resumable_session_archived": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": false
+    },
+    "set_opencode_provider_api_key": {
+      "domain": "accounts",
+      "untyped": true,
+      "read": false
+    },
+    "set_opencode_zen_api_key": {
+      "domain": "config",
+      "untyped": true,
+      "read": false
+    },
+    "set_preferred_agent_identity": {
+      "domain": "accounts",
+      "untyped": true,
+      "read": false
+    },
+    "set_workflow_result_tools_rollout": {
+      "domain": "pipelines",
+      "untyped": true,
+      "read": false
+    },
+    "sign_out_native_agent": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": false
+    },
+    "skip_build_pipeline_step": {
+      "domain": "pipelines",
+      "untyped": true,
+      "read": false
+    },
+    "skip_multi_review_step": {
+      "domain": "multi-review",
+      "untyped": true,
+      "read": false
+    },
+    "start_agent_account_login": {
+      "domain": "accounts",
+      "untyped": true,
+      "read": false
+    },
+    "start_build_pipeline": {
+      "domain": "pipelines",
+      "untyped": true,
+      "read": false
+    },
+    "start_claude_server": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": false
+    },
+    "start_codex_server": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": false
+    },
+    "start_controller_build_pipeline": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "start_controller_multi_review": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "start_coordinator_build_pipeline": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "start_coordinator_graph_run": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "start_coordinator_multi_review": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "start_coordinator_node_build_pipeline": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "start_coordinator_node_multi_review": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "start_cursor_server": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": false
+    },
+    "start_environment": {
+      "domain": "environments",
+      "untyped": true,
+      "read": false
+    },
+    "start_environment_background": {
+      "domain": "environments",
+      "untyped": true,
+      "read": false
+    },
+    "start_feature_plan_build": {
+      "domain": "pipelines",
+      "untyped": true,
+      "read": false
+    },
+    "start_feature_planning": {
+      "domain": "kanban",
+      "untyped": true,
+      "read": false
+    },
+    "start_github_cli_login": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": false
+    },
+    "start_grok_server": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": false
+    },
+    "start_host_image_update": {
+      "domain": "system",
+      "untyped": true,
+      "read": false
+    },
+    "start_host_toolchain_repair": {
+      "domain": "system",
+      "untyped": true,
+      "read": false
+    },
+    "start_local_claude_server_cmd": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": false
+    },
+    "start_local_codex_server_cmd": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": false
+    },
+    "start_local_cursor_server_cmd": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": false
+    },
+    "start_local_grok_server_cmd": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": false
+    },
+    "start_local_opencode_server_cmd": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": false
+    },
+    "start_local_pi_server_cmd": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": false
+    },
+    "start_local_terminal_session": {
+      "domain": "terminals",
+      "untyped": true,
+      "read": false
+    },
+    "start_multi_review": {
+      "domain": "multi-review",
+      "untyped": true,
+      "read": false
+    },
+    "start_multi_review_custom_fix": {
+      "domain": "multi-review",
+      "untyped": true,
+      "read": false
+    },
+    "start_opencode_provider_login": {
+      "domain": "accounts",
+      "untyped": true,
+      "read": false
+    },
+    "start_opencode_server": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": false
+    },
+    "start_pi_server": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": false
+    },
+    "start_project_clone": {
+      "domain": "projects",
+      "untyped": true,
+      "read": false
+    },
+    "start_review_validation": {
+      "domain": "multi-review",
+      "untyped": true,
+      "read": false
+    },
+    "start_terminal_session": {
+      "domain": "terminals",
+      "untyped": true,
+      "read": false
+    },
+    "stat_node_file": {
+      "domain": "node-files",
+      "untyped": true,
+      "read": false
+    },
+    "status_review_validation": {
+      "domain": "multi-review",
+      "untyped": true,
+      "read": false
+    },
+    "steer_build_pipeline": {
+      "domain": "pipelines",
+      "untyped": true,
+      "read": false
+    },
+    "steer_native_agent_queued_prompt": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": false
+    },
+    "steer_queued_build_pipeline_message": {
+      "domain": "pipelines",
+      "untyped": true,
+      "read": false
+    },
+    "stop_build_pipeline_reviewer": {
+      "domain": "pipelines",
+      "untyped": true,
+      "read": false
+    },
+    "stop_claude_server": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": false
+    },
+    "stop_codex_server": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": false
+    },
+    "stop_controller_worker_turn": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "stop_coordinator_worker_turn": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "stop_cursor_server": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": false
+    },
+    "stop_environment": {
+      "domain": "environments",
+      "untyped": true,
+      "read": false
+    },
+    "stop_grok_server": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": false
+    },
+    "stop_local_claude_server_cmd": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": false
+    },
+    "stop_local_codex_server_cmd": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": false
+    },
+    "stop_local_cursor_server_cmd": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": false
+    },
+    "stop_local_grok_server_cmd": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": false
+    },
+    "stop_local_opencode_server_cmd": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": false
+    },
+    "stop_local_pi_server_cmd": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": false
+    },
+    "stop_multi_review_reviewer": {
+      "domain": "multi-review",
+      "untyped": true,
+      "read": false
+    },
+    "stop_multi_review_validation": {
+      "domain": "multi-review",
+      "untyped": true,
+      "read": false
+    },
+    "stop_native_agent_background_task": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": false
+    },
+    "stop_native_agent_session": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": false
+    },
+    "stop_native_agent_suborks": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": false
+    },
+    "stop_opencode_server": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": false
+    },
+    "stop_pi_server": {
+      "domain": "agent-servers",
+      "untyped": true,
+      "read": false
+    },
+    "stop_review_validation_command": {
+      "domain": "multi-review",
+      "untyped": true,
+      "read": false
+    },
+    "stream_container_logs": {
+      "domain": "docker",
+      "untyped": true,
+      "read": false
+    },
+    "submit_agent_account_login_code": {
+      "domain": "accounts",
+      "untyped": true,
+      "read": false
+    },
+    "submit_github_pull_request_review": {
+      "domain": "pull-requests",
+      "untyped": true,
+      "read": false
+    },
+    "submit_opencode_provider_login_code": {
+      "domain": "accounts",
+      "untyped": true,
+      "read": false
+    },
+    "switch_project_git_branch": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "sync_all_environments_with_docker": {
+      "domain": "environments",
+      "untyped": true,
+      "read": false
+    },
+    "sync_controller_settings": {
+      "domain": "nodes",
+      "untyped": true,
+      "read": false
+    },
+    "sync_environment_status": {
+      "domain": "environments",
+      "untyped": true,
+      "read": false
+    },
+    "sync_node_tickets": {
+      "domain": "ticket-sync",
+      "untyped": true,
+      "read": false
+    },
+    "sync_project_git": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "sync_sessions_with_container": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": false
+    },
+    "teardown_tab": {
+      "domain": "environments",
+      "untyped": true,
+      "read": false
+    },
+    "terminal_resize": {
+      "domain": "terminals",
+      "untyped": true,
+      "read": false
+    },
+    "terminal_snapshot_applied": {
+      "domain": "terminals",
+      "untyped": true,
+      "read": false
+    },
+    "terminal_snapshot_failed": {
+      "domain": "terminals",
+      "untyped": true,
+      "read": false
+    },
+    "terminal_write": {
+      "domain": "terminals",
+      "untyped": true,
+      "read": false
+    },
+    "test_domain_resolution": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": false
+    },
+    "transcript_artifact_capabilities": {
+      "domain": "transcripts",
+      "untyped": true,
+      "read": false
+    },
+    "transcript_artifact_close_live_session": {
+      "domain": "transcripts",
+      "untyped": true,
+      "read": false
+    },
+    "transcript_artifact_get_publication": {
+      "domain": "transcripts",
+      "untyped": true,
+      "read": false
+    },
+    "transcript_artifact_list_drafts": {
+      "domain": "transcripts",
+      "untyped": true,
+      "read": false
+    },
+    "transcript_artifact_list_publications": {
+      "domain": "transcripts",
+      "untyped": true,
+      "read": false
+    },
+    "transcript_artifact_open_live_session": {
+      "domain": "transcripts",
+      "untyped": true,
+      "read": false
+    },
+    "transcript_artifact_prepare_worker": {
+      "domain": "transcripts",
+      "untyped": true,
+      "read": false
+    },
+    "transcript_artifact_read_draft": {
+      "domain": "transcripts",
+      "untyped": true,
+      "read": false
+    },
+    "transcript_artifact_read_representation": {
+      "domain": "transcripts",
+      "untyped": true,
+      "read": false
+    },
+    "transcript_artifact_render_mermaid": {
+      "domain": "transcripts",
+      "untyped": true,
+      "read": false
+    },
+    "transcript_artifact_stage_asset": {
+      "domain": "transcripts",
+      "untyped": true,
+      "read": false
+    },
+    "transcript_artifact_workflow_live_snapshot": {
+      "domain": "transcripts",
+      "untyped": true,
+      "read": false
+    },
+    "transcript_media_close_stream": {
+      "domain": "transcripts",
+      "untyped": true,
+      "read": false
+    },
+    "transcript_media_open_stream": {
+      "domain": "transcripts",
+      "untyped": true,
+      "read": false
+    },
+    "transcript_media_pdf_preview": {
+      "domain": "transcripts",
+      "untyped": true,
+      "read": false
+    },
+    "transcript_media_pin": {
+      "domain": "transcripts",
+      "untyped": true,
+      "read": false
+    },
+    "transfer_coordinator_attachments": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "transfer_node_files": {
+      "domain": "node-files",
+      "untyped": true,
+      "read": false
+    },
+    "trust_node_host_key": {
+      "domain": "nodes",
+      "untyped": true,
+      "read": false
+    },
+    "unstick_multi_review_reviewer": {
+      "domain": "multi-review",
+      "untyped": true,
+      "read": false
+    },
+    "unwatch_node_events": {
+      "domain": "nodes",
+      "untyped": true,
+      "read": false
+    },
+    "update_agent_messaging_settings": {
+      "domain": "agent-mail",
+      "untyped": true,
+      "read": false
+    },
+    "update_backend_profile": {
+      "domain": "nodes",
+      "untyped": true,
+      "read": false
+    },
+    "update_environment_agent_settings": {
+      "domain": "environments",
+      "untyped": true,
+      "read": false
+    },
+    "update_environment_allowed_domains": {
+      "domain": "environments",
+      "untyped": true,
+      "read": false
+    },
+    "update_environment_resources": {
+      "domain": "environments",
+      "untyped": true,
+      "read": false
+    },
+    "update_feature_plan": {
+      "domain": "kanban",
+      "untyped": true,
+      "read": false
+    },
+    "update_github_issue": {
+      "domain": "pull-requests",
+      "untyped": true,
+      "read": false
+    },
+    "update_github_issue_comment": {
+      "domain": "pull-requests",
+      "untyped": true,
+      "read": false
+    },
+    "update_github_issue_status": {
+      "domain": "pull-requests",
+      "untyped": true,
+      "read": false
+    },
+    "update_github_pull_request_comment": {
+      "domain": "pull-requests",
+      "untyped": true,
+      "read": false
+    },
+    "update_github_pull_request_state": {
+      "domain": "pull-requests",
+      "untyped": true,
+      "read": false
+    },
+    "update_global_config": {
+      "domain": "config",
+      "untyped": true,
+      "read": false
+    },
+    "update_kanban_task": {
+      "domain": "kanban",
+      "untyped": true,
+      "read": false
+    },
+    "update_native_agent_controls": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": false
+    },
+    "update_node": {
+      "domain": "nodes",
+      "untyped": true,
+      "read": false
+    },
+    "update_notification_sound_settings": {
+      "domain": "config",
+      "untyped": true,
+      "read": false
+    },
+    "update_port_mappings": {
+      "domain": "environments",
+      "untyped": true,
+      "read": false
+    },
+    "update_portal_layout": {
+      "domain": "nodes",
+      "untyped": true,
+      "read": false
+    },
+    "update_preview_service": {
+      "domain": "previews",
+      "untyped": true,
+      "read": false
+    },
+    "update_preview_settings": {
+      "domain": "previews",
+      "untyped": true,
+      "read": false
+    },
+    "update_project": {
+      "domain": "projects",
+      "untyped": true,
+      "read": false
+    },
+    "update_repository_config": {
+      "domain": "config",
+      "untyped": true,
+      "read": false
+    },
+    "update_scheduled_job": {
+      "domain": "system",
+      "untyped": true,
+      "read": false
+    },
+    "update_session_activity": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": false
+    },
+    "update_session_status": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": false
+    },
+    "update_worktree_locations": {
+      "domain": "system",
+      "untyped": true,
+      "read": false
+    },
+    "validate_domains": {
+      "domain": "native-sessions",
+      "untyped": true,
+      "read": false
+    },
+    "validate_git_url": {
+      "domain": "projects",
+      "untyped": true,
+      "read": false
+    },
+    "validate_mcp_mutation": {
+      "domain": "mcp",
+      "untyped": true,
+      "read": false
+    },
+    "verify_environment_pr": {
+      "domain": "pull-requests",
+      "untyped": true,
+      "read": false
+    },
+    "verify_project_launch_base": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "verify_review_package": {
+      "domain": "pull-requests",
+      "untyped": true,
+      "read": false
+    },
+    "watch_coordinator_pull_request": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "watch_node_events": {
+      "domain": "nodes",
+      "untyped": true,
+      "read": false
+    },
+    "web_annotation_archive": {
+      "domain": "web-annotations",
+      "untyped": true,
+      "read": false
+    },
+    "web_annotation_asset_get": {
+      "domain": "web-annotations",
+      "untyped": true,
+      "read": false
+    },
+    "web_annotation_asset_stage": {
+      "domain": "web-annotations",
+      "untyped": true,
+      "read": false
+    },
+    "web_annotation_capture": {
+      "domain": "web-annotations",
+      "untyped": true,
+      "read": false
+    },
+    "web_annotation_capture_replace": {
+      "domain": "web-annotations",
+      "untyped": true,
+      "read": false
+    },
+    "web_annotation_create": {
+      "domain": "web-annotations",
+      "untyped": true,
+      "read": false
+    },
+    "web_annotation_delete": {
+      "domain": "web-annotations",
+      "untyped": true,
+      "read": false
+    },
+    "web_annotation_destinations": {
+      "domain": "web-annotations",
+      "untyped": true,
+      "read": false
+    },
+    "web_annotation_draft_delete": {
+      "domain": "web-annotations",
+      "untyped": true,
+      "read": false
+    },
+    "web_annotation_draft_get": {
+      "domain": "web-annotations",
+      "untyped": true,
+      "read": false
+    },
+    "web_annotation_draft_save": {
+      "domain": "web-annotations",
+      "untyped": true,
+      "read": false
+    },
+    "web_annotation_entries": {
+      "domain": "web-annotations",
+      "untyped": true,
+      "read": false
+    },
+    "web_annotation_entry_append": {
+      "domain": "web-annotations",
+      "untyped": true,
+      "read": false
+    },
+    "web_annotation_entry_edit": {
+      "domain": "web-annotations",
+      "untyped": true,
+      "read": false
+    },
+    "web_annotation_get": {
+      "domain": "web-annotations",
+      "untyped": true,
+      "read": false
+    },
+    "web_annotation_operation_receipt": {
+      "domain": "web-annotations",
+      "untyped": true,
+      "read": false
+    },
+    "web_annotation_reopen": {
+      "domain": "web-annotations",
+      "untyped": true,
+      "read": false
+    },
+    "web_annotation_request_cancel": {
+      "domain": "web-annotations",
+      "untyped": true,
+      "read": false
+    },
+    "web_annotation_request_follow_up": {
+      "domain": "web-annotations",
+      "untyped": true,
+      "read": false
+    },
+    "web_annotation_request_get": {
+      "domain": "web-annotations",
+      "untyped": true,
+      "read": false
+    },
+    "web_annotation_request_prepare": {
+      "domain": "web-annotations",
+      "untyped": true,
+      "read": false
+    },
+    "web_annotation_request_recover": {
+      "domain": "web-annotations",
+      "untyped": true,
+      "read": false
+    },
+    "web_annotation_request_response": {
+      "domain": "web-annotations",
+      "untyped": true,
+      "read": false
+    },
+    "web_annotation_request_send": {
+      "domain": "web-annotations",
+      "untyped": true,
+      "read": false
+    },
+    "web_annotation_requests": {
+      "domain": "web-annotations",
+      "untyped": true,
+      "read": false
+    },
+    "web_annotation_resolve": {
+      "domain": "web-annotations",
+      "untyped": true,
+      "read": false
+    },
+    "web_annotation_result_capture": {
+      "domain": "web-annotations",
+      "untyped": true,
+      "read": false
+    },
+    "web_annotation_update": {
+      "domain": "web-annotations",
+      "untyped": true,
+      "read": false
+    },
+    "web_annotations_capabilities": {
+      "domain": "web-annotations",
+      "untyped": true,
+      "read": false
+    },
+    "web_annotations_changes": {
+      "domain": "web-annotations",
+      "untyped": true,
+      "read": false
+    },
+    "web_annotations_list": {
+      "domain": "web-annotations",
+      "untyped": true,
+      "read": false
+    },
+    "web_annotations_metrics": {
+      "domain": "web-annotations",
+      "untyped": true,
+      "read": false
+    },
+    "web_annotations_migrate": {
+      "domain": "web-annotations",
+      "untyped": true,
+      "read": false
+    },
+    "web_annotations_migration_status": {
+      "domain": "web-annotations",
+      "untyped": true,
+      "read": false
+    },
+    "web_annotations_reconcile_draft": {
+      "domain": "web-annotations",
+      "untyped": true,
+      "read": false
+    },
+    "web_annotations_rollout": {
+      "domain": "web-annotations",
+      "untyped": true,
+      "read": false
+    },
+    "web_annotations_rollout_set": {
+      "domain": "web-annotations",
+      "untyped": true,
+      "read": false
+    },
+    "write_bug_report_attachment": {
+      "domain": "system",
+      "untyped": true,
+      "read": false
+    },
+    "write_container_file": {
+      "domain": "files",
+      "untyped": true,
+      "read": false
+    },
+    "write_coordinator_attachment": {
+      "domain": "coordinator",
+      "untyped": true,
+      "read": false
+    },
+    "write_initial_prompt_attachments": {
+      "domain": "files",
+      "untyped": true,
+      "read": false
+    },
+    "write_local_file": {
+      "domain": "files",
+      "untyped": true,
+      "read": false
+    },
+    "write_user_command_input": {
+      "domain": "terminals",
+      "untyped": true,
+      "read": false
+    }
+  },
+  "events": {}
+}

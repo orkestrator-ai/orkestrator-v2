@@ -173,6 +173,14 @@ run = "bun scripts/generate-codex-app-server-protocol.ts"
 description = "Check the Codex app-server protocol for drift"
 run = "bun scripts/generate-codex-app-server-protocol.ts --check"
 
+[tasks."contract:manifest"]
+description = "Regenerate the command contract manifest (packages/protocol/contracts/manifest.json)"
+run = "bun scripts/generate-contract-manifest.ts"
+
+[tasks."contract:check"]
+description = "Check the command contract manifest for drift from the command registry"
+run = "bun scripts/generate-contract-manifest.ts --check"
+
 [tasks.setup]
 description = "Install dependencies and build every native bridge"
 run = [

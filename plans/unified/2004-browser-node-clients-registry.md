@@ -3,7 +3,7 @@ id: 2004
 title: "Browser: per-node client registry with in-memory grants"
 phase: 2
 plan: "§6.2 steps 4-5 and Connection budget"
-status: in-progress
+status: done
 depends_on: [2002, 2003]
 blocked_by: ""
 owner: claude-worker
@@ -58,7 +58,7 @@ updated: 2026-11-07
 ## Done when
 
 - [x] The registry can open two leaves in a test against fake leaves (`node-clients.test.ts`, "two leaves acquired at once", over the real browser `NodeClient` and transport). It is not yet used by the UI.
-- [ ] The same against a live attached `dev:test` profile. Not run here (Notes).
+- [x] The same against a live attached `dev:test` profile: a page opened two leaves at once through the registry (`openLeafScope`) against `uf-2013-cmd` with `uf-2013-leaf` and `uf-2013-smoke` attached, both `live` on their own direct routes (2013's two-leaf case, 2026-11-07).
 
 ## Notes
 
@@ -72,8 +72,9 @@ updated: 2026-11-07
 - **Leaf terminals use WebSocket.** Every leaf transport gets `terminalTransport: "websocket"` (failures still fall back to HTTP/SSE inside the transport). The origin-wide `orkestrator-terminal-transport` key is read only by `createBrowserGatewayApi`, i.e. for the command node, unchanged.
 - **Where Effect is used (2026-11-07).** (1) Grant lifetimes: a registry root `Lifetime` (Effect `Scope`), one child per node, one grandchild per grant; the grant's finalizers stop its renewal and revoke it, so replacement, last release, `pagehide` and `dispose()` all end a grant the same way, in a defined order. (2) Opening a grant is an `Effect.tryPromise` with `Effect.timeout` per attempt and `Effect.retry` on `Schedule.exponential` capped with `Schedule.modifyDelay` and bounded by `Schedule.upTo({ times })`; it runs with the node's `AbortSignal`, so a release interrupts it, and an attempt interrupted by its timeout or a release revokes the grant if it arrives late. (3) `NodeGrantOpenError` is a `Data.TaggedError`. Not used: the renewal stays `keepWorkspaceAlive` (the item says so, and `FrameRealm` still uses it), and the leases and listener fanout are plain synchronous code React reads.
 - **Coordination with 2010.** 2010's `createBrowserNodeClient` (committed in `ceee0b9d4`) is the default `createClient`; no adapter was needed.
-- **Open: Done when, live profile.** Opening two leaves against a live attached `dev:test` profile needs a command node with two linked leaves running on isolated profiles, which this worker cannot start safely (the production instance shares the host). The fake-leaf proof is ticked; the live run is left to the final live qualification pass, or to [2013](2013-second-scope-proof.md), which opens a leaf scope in the app. The aggregate suite is left to review preparation.
+- **Done when, live profile (closed 2026-11-07 by [2013](2013-second-scope-proof.md)'s two-leaf case; the note below is the earlier state).** Opening two leaves against a live attached `dev:test` profile needs a command node with two linked leaves running on isolated profiles, which this worker cannot start safely (the production instance shares the host). The fake-leaf proof is ticked; the live run is left to the final live qualification pass, or to [2013](2013-second-scope-proof.md), which opens a leaf scope in the app. The aggregate suite is left to review preparation.
 
 ## Work log
 
 - 2026-11-07 (claude-worker): added `apps/web/src/lib/node-scope/node-clients.ts` (registry, leases, grant lifetimes, Effect open policy, `pagehide` keepalive revoke, reopen without reload, per-node URLs, WebSocket leaf terminals) and `node-clients.test.ts` (19 tests: direct, direct failure then relay, HTML/wrong installation, retries, timeout with late grant revoked, renewal, lapse then reopen without reload, refusal reopen and its interval, reopen on another route, last release revokes, released while opening, `pagehide` close and restore, default keepalive close, dispose, per-node URLs, node URL variants, two leaves over the real transport, leaf scope in a `WindowScope`); made `lib/portal/workspaces.ts` injectable and added the node-taking variants to `lib/gateway-url.ts`. Tests: `node-clients.test.ts` 19 pass (380 pass over 20 reruns); `lib/node-scope`, `lib/portal`, `lib/native`, `components/federation`, `gateway-url`, `browser-address`, `environment-address`: 883 pass across 58 files. Web typecheck: no errors in these files (7 in another agent's `rich-content-reset.test.tsx`). fmt and oxlint clean; no source-guard findings in these files. Open: the live `dev:test` run.
+- 2026-11-07 (claude-worker, 2013 live pass): opened two leaves at once against a live attached `dev:test` setup at commit `6860254e8` (spec in `6d985b088`): `e2e/agent-testing/scope-proof.spec.ts` "one page holds the command scope and two leaf scopes at once (direct)" with `ORKESTRATOR_AGENT_TEST_PROFILE=uf-2013-cmd`, `ORKESTRATOR_AGENT_TEST_LEAF_PROFILE=uf-2013-leaf`, `ORKESTRATOR_AGENT_TEST_SECOND_LEAF_PROFILE=uf-2013-smoke`: 1 passed. Three scopes live at once (command + two leaves), each leaf read, listened to and given a terminal over its own grant and direct route; the relay path was proven for one leaf by 2013's relay case (also passed). Live Done-when ticked; status done (aggregate suite left to review preparation, as in Notes).

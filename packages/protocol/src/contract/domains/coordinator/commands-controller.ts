@@ -23,8 +23,10 @@
  * secrets (`admin`); the controller-facing and coordinator-node commands are
  * workspace-excluded plumbing that only a command node's coordinator or this
  * node's Control MCP tools call (`internal`); the job launches, the
- * renderer's Multi Review button and `get_coordinator_node_launch_environment`
- * (not workspace-excluded today) are `workspace`.
+ * renderer's Multi Review button are `workspace`.
+ * `get_coordinator_node_launch_environment` is `internal` (plan item 7012): a
+ * Control MCP tool step that trusts the scope its caller names, which no
+ * client sends.
  *
  * Browser-safe.
  */
@@ -443,7 +445,7 @@ export const getCoordinatorNodeLaunchEnvironmentCommand = defineCommand({
   domain: coordinatorDomain,
   name: "get_coordinator_node_launch_environment",
   since: 1,
-  access: "workspace",
+  access: "internal",
   read: true,
   args: Schema.Struct({
     scope: arg,

@@ -3,11 +3,11 @@ id: 7012
 title: "Derive the grant allow-list from the manifest and fail closed"
 phase: 7
 plan: "§10.2 and §12 Phase 7"
-status: not-started
+status: in-progress
 depends_on: [7001, 7002, 7003, 7004, 7005, 7006, 7007, 7008, 7009, 0006]
 blocked_by: ""
-owner: ""
-branch: ""
+owner: claude-worker
+branch: unified-federation-b4c9ee65814d
 pr: ""
 updated: 2026-11-07
 ---

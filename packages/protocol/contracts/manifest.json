@@ -4347,7 +4347,7 @@
     "get_ticket_sync_status": {
       "domain": "ticket-sync",
       "since": 1,
-      "access": "admin",
+      "access": "workspace",
       "read": true,
       "critical": [],
       "argsDigest": "sha256:786c7fbb037ddfcbdcd1a12adb32f69b71e81e24222a424bbe514e3bcb10995b",

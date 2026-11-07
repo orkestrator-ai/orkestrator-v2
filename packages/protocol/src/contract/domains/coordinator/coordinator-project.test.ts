@@ -103,11 +103,19 @@ const NAMES = [
 ];
 
 /**
- * `internal`: what `isWorkspaceExcludedCommand` refuses (coordinator tool
- * plumbing, `*_controller_*` node-link commands, approval-only steps).
+ * `internal`: what the old grant deny-lists refused (coordinator tool
+ * plumbing, `*_controller_*` node-link commands, approval-only steps), and the
+ * Control MCP tool steps that trust their caller's scope (plan item 7012).
  */
 const INTERNAL = new Set([
   "answer_controller_worker_question",
+  "ask_coordinator_suborks",
+  "launch_coordinator_environment",
+  "open_coordinator_delegation",
+  "send_coordinator_agent_mail",
+  "start_coordinator_build_pipeline",
+  "start_coordinator_graph_run",
+  "start_coordinator_multi_review",
   "answer_project_worker_question",
   "apply_project_root_changes",
   "clear_coordinator_worker_goal",

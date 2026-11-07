@@ -70,7 +70,10 @@ describe("coordinator controller commands", () => {
     for (const def of COORDINATOR_CONTROLLER_COMMANDS) {
       expect({ name: def.name, workspace: def.access === "workspace" }).toEqual({
         name: def.name,
-        workspace: !isWorkspaceExcludedCommand(def.name),
+        // Narrowed to `internal` by plan item 7012 (a Control MCP tool step).
+        workspace:
+          !isWorkspaceExcludedCommand(def.name) &&
+          def.name !== "get_coordinator_node_launch_environment",
       });
     }
   });

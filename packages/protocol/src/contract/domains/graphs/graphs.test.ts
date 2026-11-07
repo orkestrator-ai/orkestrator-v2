@@ -44,7 +44,7 @@ describe("graphs definitions", () => {
     }
   });
 
-  it("classifies reads with the routing classifier; every command is a workspace command", () => {
+  it("classifies reads with the routing classifier; every command but the ceiling write is a workspace command", () => {
     for (const def of GRAPHS_COMMANDS) {
       expect({ name: def.name, read: def.read }).toEqual({
         name: def.name,
@@ -52,7 +52,8 @@ describe("graphs definitions", () => {
       });
       expect({ name: def.name, access: def.access }).toEqual({
         name: def.name,
-        access: "workspace",
+        // The project's capability ceiling is set from Settings only (plan item 7012).
+        access: def.name === "graph_capability_ceiling_set" ? "admin" : "workspace",
       });
       expect(def.encoded).toBe(false);
     }

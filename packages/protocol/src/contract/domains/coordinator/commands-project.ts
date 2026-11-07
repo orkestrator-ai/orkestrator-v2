@@ -17,9 +17,15 @@
  * every message is unchanged. Fields are listed in the order the handler
  * checks them, because a decode reports the first failure.
  *
- * `access`: the commands `isWorkspaceExcludedCommand` refuses (coordinator
+ * `access`: the commands the old grant deny-lists refused (coordinator
  * tool plumbing, `*_controller_*` node-link commands, and the steps only the
- * user's approval runs) are `internal`; every other command is `workspace`.
+ * user's approval runs) are `internal`, and so (plan item 7012) are the
+ * Control MCP tool steps that trust the scope their caller names and that no
+ * client sends: `launch_coordinator_environment`,
+ * `open_coordinator_delegation`, `start_coordinator_build_pipeline`,
+ * `start_coordinator_graph_run`, `start_coordinator_multi_review`,
+ * `send_coordinator_agent_mail` and `ask_coordinator_suborks`. Every other
+ * command is `workspace`.
  * `read` is `isNodeReadCommand(name)`.
  *
  * Browser-safe.
@@ -489,7 +495,7 @@ export const launchCoordinatorEnvironmentCommand = defineCommand({
   domain: coordinatorDomain,
   name: "launch_coordinator_environment",
   since: 1,
-  access: "workspace",
+  access: "internal",
   read: false,
   args: Schema.Struct({
     scope: optionalUnknown,
@@ -541,7 +547,7 @@ export const openCoordinatorDelegationCommand = defineCommand({
   domain: coordinatorDomain,
   name: "open_coordinator_delegation",
   since: 1,
-  access: "workspace",
+  access: "internal",
   read: false,
   args: Schema.Struct({
     scope: optionalUnknown,
@@ -559,7 +565,7 @@ export const startCoordinatorBuildPipelineCommand = defineCommand({
   domain: coordinatorDomain,
   name: "start_coordinator_build_pipeline",
   since: 1,
-  access: "workspace",
+  access: "internal",
   read: false,
   args: Schema.Struct({
     scope: optionalUnknown,
@@ -580,7 +586,7 @@ export const startCoordinatorMultiReviewCommand = defineCommand({
   domain: coordinatorDomain,
   name: "start_coordinator_multi_review",
   since: 1,
-  access: "workspace",
+  access: "internal",
   read: false,
   args: Schema.Struct({
     scope: optionalUnknown,
@@ -1014,7 +1020,7 @@ export const askCoordinatorSuborksCommand = defineCommand({
   domain: coordinatorDomain,
   name: "ask_coordinator_suborks",
   since: 1,
-  access: "workspace",
+  access: "internal",
   read: false,
   args: Schema.Struct({
     scope: optionalUnknown,
@@ -1045,7 +1051,7 @@ export const startCoordinatorGraphRunCommand = defineCommand({
   domain: coordinatorDomain,
   name: "start_coordinator_graph_run",
   since: 1,
-  access: "workspace",
+  access: "internal",
   read: false,
   args: Schema.Struct({
     scope: optionalUnknown,
@@ -1144,7 +1150,7 @@ export const sendCoordinatorAgentMailCommand = defineCommand({
   domain: coordinatorDomain,
   name: "send_coordinator_agent_mail",
   since: 1,
-  access: "workspace",
+  access: "internal",
   read: false,
   args: Schema.Struct({
     projectId: Schema.String,

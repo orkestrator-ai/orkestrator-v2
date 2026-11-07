@@ -102,12 +102,17 @@ export const ackTicketSyncOutboxCommand = defineCommand({
   critical: [],
 });
 
-/** Where each leaf with a copy of the project stands (command node, for the board). */
+/**
+ * Where each leaf with a copy of the project stands (command node, for the
+ * board). `workspace` (plan item 7012): the Kanban board's sync strip reads
+ * it, through a workspace grant too, and the old deny-lists always let it
+ * through.
+ */
 export const getTicketSyncStatusCommand = defineCommand({
   domain: ticketSyncDomain,
   name: "get_ticket_sync_status",
   since: 1,
-  access: "admin",
+  access: "workspace",
   read: true,
   args: Schema.Struct({ projectId: optionalUnknown }),
   result: Schema.Struct({

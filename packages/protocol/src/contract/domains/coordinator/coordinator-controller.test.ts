@@ -35,12 +35,7 @@ const ADMIN = new Set([
 ]);
 
 /** Not workspace-excluded today: jobs, the renderer's Multi Review button, one coordinator read. */
-const WORKSPACE = new Set([
-  "launch_control_job",
-  "launch_native_agent_job",
-  "launch_multi_review",
-  "get_coordinator_node_launch_environment",
-]);
+const WORKSPACE = new Set(["launch_control_job", "launch_native_agent_job", "launch_multi_review"]);
 
 const CRITICAL: Record<string, readonly string[]> = {
   create_control_mcp_credential: ["capabilities", "deniedActions"],

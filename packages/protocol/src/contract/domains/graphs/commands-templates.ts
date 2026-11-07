@@ -156,11 +156,15 @@ export const graphCapabilityCeilingGetCommand = defineCommand({
   critical: [],
 });
 
+/**
+ * `admin`: the machine's ceiling on what graph runs may do, which a workspace
+ * grant has always been refused (plan item 7012).
+ */
 export const graphCapabilityCeilingSetCommand = defineCommand({
   domain: graphsDomain,
   name: "graph_capability_ceiling_set",
   since: 1,
-  access: "workspace",
+  access: "admin",
   read: false,
   args: Schema.Struct({ projectId: checked, ceiling: checked, expectedRevision: checked }),
   result: GraphProjectCeilingSchema,

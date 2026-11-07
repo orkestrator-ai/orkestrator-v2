@@ -288,6 +288,29 @@ timer; each scope gets its own. Inside a registration, read with
 once), then `layouts`. A `command-scope` registration never runs on another
 node's scope, because it writes command-scope singletons.
 
+## A node's workspace in the window's tree
+
+With the per-window `inTreeNodes` setting on for a node (Settings → Machines →
+"Workspace in this window", `stores/inTreeNodesStore.ts`; development override
+`VITE_ORKESTRATOR_IN_TREE_NODES=<ids>|*`), `RemoteWorkspaceRegion` renders
+`InTreeWorkspace` for it instead of a realm (plan item 4001). Every other node
+keeps its realm. The pieces:
+
+| Piece | Where | What it does |
+| --- | --- | --- |
+| `holdInTreeScope(nodeId)` | `lib/federation/in-tree-scopes.ts` | Opens the node's leaf scope in the app's window scope (browser: the node-client registry; desktop: main's node scope through `window.orkestrator.node`), starts `WARM_SCOPE_SERVICES`, and counts holds. The last release keeps the scope for `IN_TREE_RELEASE_GRACE_MS`, then stops the services and disposes it. Releasing never cancels work on the node. `configureInTreeScopes` replaces the host and services in tests. |
+| `createRealmLoopback(request)`, `RealmChannelContext` | `lib/federation/realm-channel.ts` | The realm protocol in memory. The window's side is the same `useRealmRequests` a realm uses (`components/federation/realm-requests.tsx`). The realm side (`WorkspaceRealmHost`, `RealmTitleBarPanels`) reads its channel from context, and the page's channel is the default. Plan item 4005 replaces the messages with direct calls. |
+| `NodeErrorBoundary` | `components/federation/NodeErrorBoundary.tsx` | One node's workspace shows a per-node error with Try again. It wraps the command node's content too. |
+| `WorkspaceContent`, `useNodeWorkspaceServices`, `useNodeBootHydration` | `components/layout/WorkspaceContent.tsx` | The central region's content, its overlay start handlers, and the per-node background hooks. `App` and `InTreeWorkspace` both render them, each inside its own `NodeScopeProvider`. |
+| `NodeWorkspaceLayout` | `components/layout/NodeWorkspaceLayout.tsx` | Another node's toolbar, content and files panel under the window's title bar. A realm document's `AppShell` and `InTreeWorkspace` both use it. |
+| `backendForScope(scope)` | `lib/backend/scope-backend.ts` | Every `@/lib/backend` command function for one scope. On the app's command scope it is the module itself, so suites that mock it still see the call. Workspace components call it instead of a named export (see below). |
+
+Components in the workspace subtree call their node, not the command node.
+Do this through `backendForScope(useScopesWithCommandFallback().scope)` or
+`backendApiForScope`, never a bare `@/lib/backend` named export. No guard
+counts component-level named exports yet. Plan item 4001's Notes list what
+still reaches the command node.
+
 ## Rules the guards hold
 
 - The `scoped-store-shim` source guard (`tests/unit/source-guards.test.ts`)

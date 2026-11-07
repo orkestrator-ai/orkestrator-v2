@@ -60,7 +60,9 @@ export function onCreateEnvironmentRequest(listener: (projectId: string) => void
  * laid over the node's own) and start apply as they would there.
  */
 export function openMachineWorkspace(spec: MachineWorkspaceSpec): void {
-  // A realm is one node's workspace; the window decides what it shows.
+  // A realm is one node's workspace; the window decides what it shows. A node
+  // shown in the window's own tree runs in the window's document, so its
+  // opens take the direct path below (plan item 4005).
   if (isWorkspaceRealm()) {
     if (spec.projectId)
       postToShell({

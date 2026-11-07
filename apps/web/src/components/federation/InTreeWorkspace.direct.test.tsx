@@ -401,3 +401,30 @@ test("selection: navigating inside the in-tree workspace is the window's one sel
   await settle();
   expect(exchanged("selection")).toEqual([]);
 });
+
+test("open: a cross-node open from inside the in-tree workspace is the window's direct open", async () => {
+  await openLeaf({ projectId: project.id });
+  await settle();
+  // "Open the coordinator on <command node>" inside the node's workspace
+  // (`LeafModeCoordinatorGate`) runs in the window's document.
+  act(() =>
+    openMachineWorkspace({
+      connectionId: SELF_NODE_ID,
+      projectId: "own-project",
+      boardTab: "coordinator",
+      title: "app",
+    }),
+  );
+  expect(useRemoteWorkspaceStore.getState().active).toBeNull();
+  const own = getWindowScope().commandScope().store(uiStore).getState();
+  expect(own.selectedProjectId).toBe("own-project");
+  expect(own.projectBoardTab).toBe("coordinator");
+  expect(screen.getByTestId("in-tree-workspace").className).toContain("hidden");
+  // And back to the node, from the window's side.
+  act(() =>
+    openMachineWorkspace({ connectionId: LEAF, projectId: project.id, title: project.name }),
+  );
+  expect(useRemoteWorkspaceStore.getState().active?.nodeId).toBe(LEAF);
+  await settle();
+  expect(exchanged("open")).toEqual([]);
+});

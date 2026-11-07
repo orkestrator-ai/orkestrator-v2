@@ -60,6 +60,9 @@ export function WorkspaceRealmHost() {
   // The page's transport in a realm document; the window's loopback for a
   // node shown in the window's own tree (`InTreeWorkspace`).
   const channel = useRealmChannel();
+  // In the window's tree this node shares the window's document and stores:
+  // what they hold is read and written directly, not exchanged (plan item 4005).
+  const inTree = channel.kind === "loopback";
   const projectsLoaded = useProjectStore((state) => state.hasLoaded);
   const configLoaded = useConfigStore((state) => state.hasLoaded);
   const projectIds = useMemo(() => projects.map((project) => project.id), [projects]);
@@ -154,14 +157,18 @@ export function WorkspaceRealmHost() {
     }
     useBugReportStore.getState().openSheet();
   }, [channel, request]);
+  // The toolbar here toggles the window's sidebar; in the window's tree it
+  // writes the window's store itself, so there is nothing to report.
   useEffect(
     () =>
-      useUIChromeStore.subscribe((state, previous) => {
-        if (state.sidebarOpen !== previous.sidebarOpen) {
-          channel.post({ type: "sidebar", open: state.sidebarOpen });
-        }
-      }),
-    [channel],
+      inTree
+        ? undefined
+        : useUIChromeStore.subscribe((state, previous) => {
+            if (state.sidebarOpen !== previous.sidebarOpen) {
+              channel.post({ type: "sidebar", open: state.sidebarOpen });
+            }
+          }),
+    [channel, inTree],
   );
   useEffect(
     () =>

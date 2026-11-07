@@ -50,11 +50,22 @@ function selectRequest(request: RealmRequest | undefined): Omit<RealmSelectReque
  * state for every machine, its grouping, which decides whether the node's
  * coordinator opens directly, and whether it is shown: a hidden realm's own
  * Page Visibility still reads visible, so it is told to defer its reads.
+ *
+ * A node in the window's own tree (`inTree`, plan item 4005) shares the
+ * window's document and stores, so what the window's stores already hold is
+ * read there directly and not sent (report Appendix C): the sidebar is
+ * `uiChromeStore`'s.
  */
+export interface RealmRequestsOptions {
+  /** The node is shown in the window's own tree (`InTreeWorkspace`), over a loopback. */
+  readonly inTree?: boolean;
+}
+
 export function useRealmRequests(
   nodeId: string,
   send: ((message: ShellToRealmMessage) => void) | null,
   shown: boolean,
+  { inTree = false }: RealmRequestsOptions = {},
 ) {
   const request = useRemoteWorkspaceStore((state) => state.requests[nodeId]);
   const sidebarOpen = useUIChromeStore((state) => state.sidebarOpen);
@@ -95,8 +106,8 @@ export function useRealmRequests(
   }, [flush, request, send]);
 
   useEffect(() => {
-    if (send && ready.current) send({ type: "sidebar", open: sidebarOpen });
-  }, [send, sidebarOpen]);
+    if (send && ready.current && !inTree) send({ type: "sidebar", open: sidebarOpen });
+  }, [inTree, send, sidebarOpen]);
 
   useEffect(() => {
     if (send && ready.current && !phoneLayout) send({ type: "filesPanel", open: filesPanelOpen });
@@ -170,7 +181,7 @@ export function useRealmRequests(
       if (!message) return;
       if (message.type === "ready") {
         ready.current = true;
-        latest.current.send?.({ type: "sidebar", open: latest.current.sidebarOpen });
+        if (!inTree) latest.current.send?.({ type: "sidebar", open: latest.current.sidebarOpen });
         if (!latest.current.phoneLayout) {
           latest.current.send?.({ type: "filesPanel", open: latest.current.filesPanelOpen });
         }
@@ -185,7 +196,8 @@ export function useRealmRequests(
         };
         useRemoteWorkspaceStore.getState().noteRealmSelection(nodeId, message);
       } else if (message.type === "sidebar") {
-        useUIChromeStore.getState().setSidebarOpen(message.open);
+        // In the window's tree the toolbar writes the window's store itself.
+        if (!inTree) useUIChromeStore.getState().setSidebarOpen(message.open);
       } else if (message.type === "filesPanel") {
         if (latest.current.phoneLayout) return;
         if (useFilesPanelChromeStore.getState().isOpen !== message.open) {
@@ -237,7 +249,7 @@ export function useRealmRequests(
         });
       }
     },
-    [flush, flushPanel, nodeId],
+    [flush, flushPanel, inTree, nodeId],
   );
 
   return { restart, onMessage };

@@ -106,7 +106,7 @@ export function InTreeWorkspace({ nodeId, shown }: { nodeId: string; shown: bool
   const [failure, setFailure] = useState<{ attempt: number; message: string } | null>(null);
   const workspace = opened?.attempt === attempt ? opened.workspace : null;
   const send = useMemo(() => (workspace ? workspace.pair.send : null), [workspace]);
-  const { restart, onMessage } = useRealmRequests(nodeId, send, shown);
+  const { restart, onMessage } = useRealmRequests(nodeId, send, shown, { inTree: true });
   // The document currently open, for the unmount below and a retry.
   const pairRef = useRef<RealmLoopback | null>(null);
 

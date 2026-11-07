@@ -20,7 +20,8 @@
  *   loaded drops it, which is why the realm says `ready` once it listens.
  *
  * Plan item 4005 replaces the loopback's messages with direct calls one by
- * one (report Appendix C); 6002 deletes the page channel with realms.
+ * one (report Appendix C); 6002 deletes the page channel with realms. Tests
+ * watch what still crosses a loopback with `observeRealmLoopbacks`.
  *
  * Imperative callers outside React (`open-workspace.ts`, `settings-navigation.ts`,
  * `open-bug-report.ts`, `app-shortcuts.ts`, `realm-boot-timing.ts`) keep the
@@ -62,6 +63,32 @@ export const pageRealmChannel: RealmChannel = Object.freeze({
   post: postToShell,
   onMessage: onShellMessage,
 });
+
+/** What crossed a loopback: towards its realm side, or towards the window. */
+export interface RealmLoopbackTraffic {
+  readonly direction: "to-realm" | "to-window";
+  readonly message: ShellToRealmMessage | RealmToShellMessage;
+}
+
+const loopbackObservers = new Set<(traffic: RealmLoopbackTraffic) => void>();
+
+/**
+ * Test seam: reports every message any loopback carries, when it is sent
+ * (plan item 4005 asserts which messages an in-tree node no longer
+ * exchanges). Returns the stop, which tests call in `afterEach`.
+ */
+export function observeRealmLoopbacks(
+  observer: (traffic: RealmLoopbackTraffic) => void,
+): () => void {
+  loopbackObservers.add(observer);
+  return () => {
+    loopbackObservers.delete(observer);
+  };
+}
+
+function reportTraffic(traffic: RealmLoopbackTraffic): void {
+  for (const observer of Array.from(loopbackObservers)) observer(traffic);
+}
 
 /** One in-tree node's loopback. */
 export interface RealmLoopback {
@@ -109,6 +136,7 @@ export function createRealmLoopback(
     isRealm: () => true,
     initialRequest: () => (initial ? { type: "select" as const, ...initial } : null),
     post: (message: RealmToShellMessage) => {
+      if (!closed) reportTraffic({ direction: "to-window", message });
       // The window's side parses, as it does a frame's or a view's message.
       deliver(shellListeners, message as unknown);
     },
@@ -126,7 +154,9 @@ export function createRealmLoopback(
     send(message) {
       // Parsed as `onShellMessage` parses what crosses the page.
       const parsed = parseShellMessage(message);
-      if (parsed) deliver(realmListeners, parsed);
+      if (!parsed) return;
+      if (!closed) reportTraffic({ direction: "to-realm", message: parsed });
+      deliver(realmListeners, parsed);
     },
     onRealmMessage(handler) {
       if (closed) return () => undefined;

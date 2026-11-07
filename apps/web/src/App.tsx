@@ -23,6 +23,7 @@ import {
   useConfigStore,
   useClaudeOptionsStore,
 } from "@/stores";
+import { useUIChromeStore } from "@/stores/uiChromeStore";
 import { useProjectStore } from "@/stores/projectStore";
 import { setReadCoordinatorConnection } from "@/lib/read-coordinator";
 import { connectionListDisconnected, setTransportDisconnected } from "@/lib/transport-connectivity";
@@ -306,10 +307,10 @@ function ConnectedApp() {
   }, []);
   const selectedEnvironmentId = useUIStore((state) => state.selectedEnvironmentId);
   const selectedProjectId = useUIStore((state) => state.selectedProjectId);
-  const zoomLevel = useUIStore((state) => state.zoomLevel);
-  const zoomIn = useUIStore((state) => state.zoomIn);
-  const zoomOut = useUIStore((state) => state.zoomOut);
-  const resetZoom = useUIStore((state) => state.resetZoom);
+  const zoomLevel = useUIChromeStore((state) => state.zoomLevel);
+  const zoomIn = useUIChromeStore((state) => state.zoomIn);
+  const zoomOut = useUIChromeStore((state) => state.zoomOut);
+  const resetZoom = useUIChromeStore((state) => state.resetZoom);
   const projectBoardTab = useUIStore((state) => state.projectBoardTab);
   const setProjectBoardTab = useUIStore((state) => state.setProjectBoardTab);
   const environments = useEnvironmentStore((state) => state.environments);

@@ -8,9 +8,10 @@
  * can exist on two machines. The two cannot collide: a key is a JSON array.
  */
 import { environmentKey } from "@orkestrator/protocol/federation";
-import type { BackendId } from "@orkestrator/protocol/federation";
-import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
-import { useUIStore } from "@/stores/uiStore";
+import { getWindowScope } from "@/lib/node-scope/app-window-scope";
+import { appCommandScope } from "@/lib/node-scope-slots";
+import { uiStore } from "@/stores/uiStore";
+import { isCommandNodeSelection } from "@/stores/windowSelectionStore";
 
 export interface SidebarSelectionModifiers {
   shiftKey?: boolean;
@@ -71,16 +72,12 @@ export function sidebarRowSelectionIds(): string[] {
 
 /** The row of the environment this window shows, on whichever machine it is. */
 function shownRowSelectionId(): string | null {
-  const remote = useRemoteWorkspaceStore.getState().active;
-  if (remote) {
-    return remote.environmentId
-      ? environmentKey({
-          backendId: remote.nodeId as BackendId,
-          environmentId: remote.environmentId,
-        })
-      : null;
-  }
-  return useUIStore.getState().selectedEnvironmentId;
+  const windowScope = getWindowScope();
+  const selection = windowScope.selection.get();
+  if (!selection?.environmentId) return null;
+  return isCommandNodeSelection(windowScope, selection)
+    ? selection.environmentId
+    : environmentKey({ backendId: selection.nodeId, environmentId: selection.environmentId });
 }
 
 /**
@@ -92,7 +89,8 @@ export function applySidebarModifierSelection(
   modifiers: SidebarSelectionModifiers,
 ): boolean {
   if (!modifiers.shiftKey && !modifiers.metaKey) return false;
-  const ui = useUIStore.getState();
+  // The sidebar's multi-selection is kept by this window's own node.
+  const ui = appCommandScope().store(uiStore).getState();
   const selection = resolveSidebarSelection(
     selectionId,
     modifiers,

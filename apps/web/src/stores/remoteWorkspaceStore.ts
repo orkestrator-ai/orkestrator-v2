@@ -1,29 +1,31 @@
 import { create } from "zustand";
-import {
-  environmentKey,
-  environmentRef,
-  projectKey,
-  projectRef,
-  type BackendId,
-} from "@orkestrator/protocol/federation";
-import { useMachineViewStore } from "./machineViewStore";
+import type { BackendId } from "@orkestrator/protocol/federation";
 import type {
   RealmPanel,
   RealmSelectRequest,
   RealmUsageReading,
 } from "@/lib/federation/workspace-realm";
-import { useUIStore } from "./uiStore";
+import { getWindowScope } from "@/lib/node-scope/app-window-scope";
+import type { NodeSelection } from "@/lib/node-scope/window-scope";
+import { isCommandNodeSelection, noteNodeSelectionRecents } from "./windowSelectionStore";
 
 /**
- * Which other node's workspace the window's central region shows.
+ * Which other node's workspace realm the window's central region shows.
  *
  * The window stays on its command node. Opening an environment of another
  * node shows that node's workspace realm in the central region (see
- * `lib/federation/workspace-realm.ts`), while this window's own selection is
- * cleared so its own workspace shows nothing behind it. Selecting anything of
- * the window's own node again returns the region to it. A few realms stay
- * open, hidden, so going back to a node is instant; closing one only ends
- * this window's view of it.
+ * `lib/federation/workspace-realm.ts`). A few realms stay open, hidden, so
+ * going back to a node is instant; closing one only ends this window's view
+ * of it.
+ *
+ * Which node is shown, and what is selected there, is the window's one
+ * node-qualified selection (`windowSelectionStore`, plan item 3006): `active`
+ * is derived from it (the selection while it is on an open realm's node), and
+ * opening or a realm's report moves it. Selecting anything of the window's own
+ * node moves the selection back, which ends `active`; the command node's
+ * `uiStore` shows nothing while the selection is on another node. What stays
+ * here is realm-only (open realms, their requests and title bars) and goes
+ * with realms (plan item 6002).
  */
 
 /** Realms kept open per window, the shown one included. */
@@ -105,8 +107,35 @@ function pick<T>(record: Record<string, T>, ids: readonly string[]): Record<stri
 }
 
 let nextSeq = 1;
-/** Set while this store itself clears the window's own selection. */
-let clearingLocalSelection = false;
+
+/** `active` for `selection`: the selection while it is on an open realm's node. */
+function activeFor(
+  selection: NodeSelection | null,
+  realms: readonly string[],
+): RemoteWorkspaceSelection | null {
+  if (!selection || !realms.includes(selection.nodeId)) return null;
+  if (isCommandNodeSelection(getWindowScope(), selection)) return null;
+  return {
+    nodeId: selection.nodeId,
+    projectId: selection.projectId,
+    environmentId: selection.environmentId,
+    ...(selection.projectHome ? { projectHome: true } : {}),
+  };
+}
+
+function sameActive(
+  a: RemoteWorkspaceSelection | null,
+  b: RemoteWorkspaceSelection | null,
+): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return (
+    a.nodeId === b.nodeId &&
+    a.projectId === b.projectId &&
+    a.environmentId === b.environmentId &&
+    Boolean(a.projectHome) === Boolean(b.projectHome)
+  );
+}
 
 /** Pending intent wins over reports from an earlier request. */
 export function realmPanel(
@@ -122,142 +151,125 @@ export function realmPanel(
     : (report?.panel ?? null);
 }
 
-export const useRemoteWorkspaceStore = create<RemoteWorkspaceState>()((set, get) => ({
-  active: null,
-  realms: [],
-  requests: {},
-  titleBars: {},
-  panelRequests: {},
-  open: (nodeId, request) => {
-    const realms = [...get().realms.filter((id) => id !== nodeId), nodeId].slice(-MAX_OPEN_REALMS);
-    const requests: Record<string, RealmRequest> = {};
-    for (const id of realms) {
-      const existing = get().requests[id];
-      if (existing && id !== nodeId) requests[id] = existing;
-    }
-    requests[nodeId] = { seq: nextSeq++, request: { type: "select", ...request } };
-    set({
-      active: {
-        nodeId,
+export const useRemoteWorkspaceStore = create<RemoteWorkspaceState>()((set, get) => {
+  /** Re-derives `active` from the window's selection. */
+  const derive = () => {
+    const next = activeFor(getWindowScope().selection.get(), get().realms);
+    if (!sameActive(get().active, next)) set({ active: next });
+  };
+  return {
+    active: null,
+    realms: [],
+    requests: {},
+    titleBars: {},
+    panelRequests: {},
+    open: (nodeId, request) => {
+      const realms = [...get().realms.filter((id) => id !== nodeId), nodeId].slice(
+        -MAX_OPEN_REALMS,
+      );
+      const requests: Record<string, RealmRequest> = {};
+      for (const id of realms) {
+        const existing = get().requests[id];
+        if (existing && id !== nodeId) requests[id] = existing;
+      }
+      requests[nodeId] = { seq: nextSeq++, request: { type: "select", ...request } };
+      const selection: NodeSelection = {
+        nodeId: nodeId as BackendId,
         projectId: request.projectId ?? null,
         environmentId: request.environmentId ?? null,
-      },
-      realms,
-      requests,
-      titleBars: pick(get().titleBars, realms),
-      panelRequests: pick(get().panelRequests, realms),
-    });
-    clearLocalSelection();
-    noteRemoteSelection(nodeId, request.projectId ?? null, request.environmentId ?? null);
-  },
-  showLocal: () => {
-    if (get().active) set({ active: null });
-  },
-  noteRealmSelection: (nodeId, selection) => {
-    const active = get().active;
-    if (active?.nodeId !== nodeId) return;
-    if (
-      active.projectId === selection.projectId &&
-      active.environmentId === selection.environmentId &&
-      Boolean(active.projectHome) === Boolean(selection.projectHome)
-    ) {
-      return;
-    }
-    set({ active: { nodeId, ...selection } });
-    noteRemoteSelection(
-      nodeId,
-      selection.projectId,
-      selection.environmentId,
-      selection.projectHome,
-    );
-  },
-  closeRealm: (nodeId) => {
-    const { active, realms, requests, titleBars, panelRequests } = get();
-    if (!realms.includes(nodeId)) return;
-    const { [nodeId]: _closed, ...rest } = requests;
-    const { [nodeId]: _titleBar, ...otherTitleBars } = titleBars;
-    const { [nodeId]: _panelRequest, ...otherPanelRequests } = panelRequests;
-    set({
-      realms: realms.filter((id) => id !== nodeId),
-      requests: rest,
-      titleBars: otherTitleBars,
-      panelRequests: otherPanelRequests,
-      active: active?.nodeId === nodeId ? null : active,
-    });
-  },
-  noteRealmTitleBar: (nodeId, titleBar) => {
-    if (!get().realms.includes(nodeId)) return;
-    const previous = get().titleBars[nodeId];
-    const report =
-      previous && (previous.requestSeq ?? 0) > (titleBar.requestSeq ?? 0)
-        ? { ...titleBar, panel: previous.panel, requestSeq: previous.requestSeq }
-        : titleBar;
-    set({ titleBars: { ...get().titleBars, [nodeId]: { ...report, receivedAt: Date.now() } } });
-  },
-  requestRealmPanel: (nodeId, panel, open, inset, restoreFocus) => {
-    if (!get().realms.includes(nodeId)) return;
-    set({
-      panelRequests: {
-        ...get().panelRequests,
-        [nodeId]: {
-          seq: nextSeq++,
-          panel,
-          open,
-          inset,
-          ...(restoreFocus ? { restoreFocus: true } : {}),
+      };
+      set({
+        active: activeFor(selection, realms),
+        realms,
+        requests,
+        titleBars: pick(get().titleBars, realms),
+        panelRequests: pick(get().panelRequests, realms),
+      });
+      // The window's own node shows nothing behind the realm: its `uiStore`
+      // projects no selection while the selection is on another node.
+      getWindowScope().select(selection);
+      derive();
+      noteNodeSelectionRecents(selection);
+    },
+    showLocal: () => {
+      if (!get().active) return;
+      const windowScope = getWindowScope();
+      if (!isCommandNodeSelection(windowScope, windowScope.selection.get()))
+        windowScope.select(null);
+      derive();
+    },
+    noteRealmSelection: (nodeId, reported) => {
+      const active = get().active;
+      if (active?.nodeId !== nodeId) return;
+      const selection: NodeSelection = {
+        nodeId: nodeId as BackendId,
+        projectId: reported.projectId,
+        environmentId: reported.environmentId,
+        ...(reported.projectHome ? { projectHome: true } : {}),
+      };
+      const next = activeFor(selection, get().realms);
+      if (sameActive(active, next)) return;
+      set({ active: next });
+      getWindowScope().select(selection);
+      derive();
+      noteNodeSelectionRecents(selection);
+    },
+    closeRealm: (nodeId) => {
+      const { realms, requests, titleBars, panelRequests } = get();
+      if (!realms.includes(nodeId)) return;
+      const { [nodeId]: _closed, ...rest } = requests;
+      const { [nodeId]: _titleBar, ...otherTitleBars } = titleBars;
+      const { [nodeId]: _panelRequest, ...otherPanelRequests } = panelRequests;
+      set({
+        active: get().active?.nodeId === nodeId ? null : get().active,
+        realms: realms.filter((id) => id !== nodeId),
+        requests: rest,
+        titleBars: otherTitleBars,
+        panelRequests: otherPanelRequests,
+      });
+      const windowScope = getWindowScope();
+      if (windowScope.selection.get()?.nodeId === nodeId) windowScope.select(null);
+      derive();
+    },
+    noteRealmTitleBar: (nodeId, titleBar) => {
+      if (!get().realms.includes(nodeId)) return;
+      const previous = get().titleBars[nodeId];
+      const report =
+        previous && (previous.requestSeq ?? 0) > (titleBar.requestSeq ?? 0)
+          ? { ...titleBar, panel: previous.panel, requestSeq: previous.requestSeq }
+          : titleBar;
+      set({ titleBars: { ...get().titleBars, [nodeId]: { ...report, receivedAt: Date.now() } } });
+    },
+    requestRealmPanel: (nodeId, panel, open, inset, restoreFocus) => {
+      if (!get().realms.includes(nodeId)) return;
+      set({
+        panelRequests: {
+          ...get().panelRequests,
+          [nodeId]: {
+            seq: nextSeq++,
+            panel,
+            open,
+            inset,
+            ...(restoreFocus ? { restoreFocus: true } : {}),
+          },
         },
-      },
-    });
-  },
-}));
-
-/** Shell-owned bookkeeping also covers navigation reported by the active realm. */
-function noteRemoteSelection(
-  nodeId: string,
-  projectId: string | null,
-  environmentId: string | null,
-  projectHome = false,
-): void {
-  const views = useMachineViewStore.getState();
-  const backendId = nodeId as BackendId;
-  const selectedProjectKey = projectId ? projectKey(projectRef(backendId, projectId)) : null;
-  views.recordRecent([
-    ...(environmentId ? [environmentKey(environmentRef(backendId, environmentId))] : []),
-    ...(selectedProjectKey ? [selectedProjectKey] : []),
-  ]);
-  if (environmentId || views.revealedProject?.key !== selectedProjectKey) {
-    views.revealProject(null);
-  }
-  // Explicit opens clear the heading; a realm targeting that project's Home continues it.
-  if (!projectHome || views.openedRepository?.projectKey !== selectedProjectKey) {
-    views.noteRepositoryOpened(null);
-  }
-}
-
-function clearLocalSelection(): void {
-  const ui = useUIStore.getState();
-  if (ui.selectedProjectId === null && ui.selectedEnvironmentId === null) return;
-  clearingLocalSelection = true;
-  try {
-    ui.selectProject(null);
-  } finally {
-    clearingLocalSelection = false;
-  }
-}
+      });
+    },
+  };
+});
 
 /**
- * Any selection of the window's own node (a sidebar row, a shortcut, a
- * notification) brings the central region back to it. Returns the stop
- * function.
+ * Keeps `active` derived from the window's selection while realms are open:
+ * any selection of the window's own node (a sidebar row, a shortcut, a
+ * notification) moves the selection back to it and so brings the central
+ * region back. Returns the stop.
  */
 export function startRemoteWorkspaceSelectionSync(): () => void {
-  return useUIStore.subscribe((state, previous) => {
-    if (clearingLocalSelection || !useRemoteWorkspaceStore.getState().active) return;
-    const reselected = state.projectSelectionRevision !== previous.projectSelectionRevision;
-    const environmentChosen =
-      state.selectedEnvironmentId !== null &&
-      state.selectedEnvironmentId !== previous.selectedEnvironmentId;
-    if (reselected || environmentChosen) useRemoteWorkspaceStore.getState().showLocal();
+  const windowScope = getWindowScope();
+  return windowScope.selection.subscribe((selection) => {
+    const state = useRemoteWorkspaceStore.getState();
+    const next = activeFor(selection, state.realms);
+    if (!sameActive(state.active, next)) useRemoteWorkspaceStore.setState({ active: next });
   });
 }
 

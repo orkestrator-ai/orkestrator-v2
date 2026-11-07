@@ -27,6 +27,7 @@ import {
   useFilesPanelStore,
   multiReviewStore,
 } from "@/stores";
+import { useUIChromeStore } from "@/stores/uiChromeStore";
 import { useFilesPanelChromeStore } from "@/stores/filesPanelChromeStore";
 import { useTerminalContext, MAX_TABS, type AgentLaunchModeOverride } from "@/contexts";
 import type { DefaultAgent, Environment } from "@/types";
@@ -161,8 +162,8 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   // panel's legacy list is only the fallback for a backend without one.
   const changeProjection = useEnvironmentChangeProjection(selectedEnvironmentId);
   const hasChanges = changeProjection ? changeProjection.badge.visible : changes.length > 0;
-  const sidebarOpen = useUIStore((state) => state.sidebarOpen);
-  const toggleSidebar = useUIStore((state) => state.toggleSidebar);
+  const sidebarOpen = useUIChromeStore((state) => state.sidebarOpen);
+  const toggleSidebar = useUIChromeStore((state) => state.toggleSidebar);
 
   const [isOpeningEditor, setIsOpeningEditor] = useState(false);
   const [editorError, setEditorError] = useState<string | null>(null);

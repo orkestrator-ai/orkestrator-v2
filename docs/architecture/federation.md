@@ -467,12 +467,20 @@ environment, board tab, work target, dialogs) is one shared definition,
 `@orkestrator/protocol/realm-request`, which the web encoder and parsers and
 the desktop main process all use.
 
-- **Which realms are open.** `remoteWorkspaceStore` keeps `active` (the node
-  shown, or `null` for the window's own workspace) and `realms`, the nodes
-  with an open realm, least recently shown first. `open()` moves the node to
-  the end and keeps the last 3 (`MAX_OPEN_REALMS`). An evicted realm unmounts
-  and ends this window's view of that node; work on the node continues.
-  Realms that are not shown stay mounted, hidden, so going back is instant.
+- **Which realms are open.** The node shown, and what is selected there, is
+  the window's one node-qualified selection `{ nodeId, projectId,
+  environmentId }` (`WindowScope.selection`, `stores/windowSelectionStore.ts`;
+  plan item 3006). Each node scope's `uiStore` projects it: its
+  `selectedProjectId` is the selection's project while the selection is on that
+  node and `null` otherwise, and selecting there moves the selection to that
+  node. `remoteWorkspaceStore` derives `active` from it (the selection while it
+  is on an open realm's node, `null` for the window's own workspace) and keeps
+  `realms`, the nodes with an open realm, least recently shown first. `open()`
+  moves the selection and the node to the end and keeps the last 3
+  (`MAX_OPEN_REALMS`). An evicted realm unmounts and ends this window's view of
+  that node; work on the node continues. Realms that are not shown stay
+  mounted, hidden, so going back is instant. The command node's selection
+  survives a reload of the window (session storage).
 - **Desktop.** `WorkspaceViews` (`apps/desktop/electron/workspace-views.ts`)
   opens a child `WebContentsView` per realm: the standard preload,
   `contextIsolation`, no node integration, `sandbox`, a deny-all
@@ -740,7 +748,7 @@ its own `ResizeObserver` a single fit.
 Monaco editor, and `workspace-realm-electron.spec.ts` a real realm's bounds and
 window size, through these changes.
 The handle is disabled in compact. The full width is kept in
-`uiStore.sidebarWidth` while compact or hidden, so it returns on leaving, across
+`uiChromeStore.sidebarWidth` (the window's chrome, shared by every node) while compact or hidden, so it returns on leaving, across
 reloads too.
 
 ### One presentation for both paths
@@ -852,7 +860,7 @@ environments..." field open the same dialog, so they behave identically.
 - **Recently used.** `machineViewStore.recentKeys` (persisted with the rest
   of the window's cross-machine view state, at most 64) holds node-qualified
   `projectKey` / `environmentKey` values, newest first. This window's own
-  selections are recorded from `uiStore` (`FederationEffects`); another
+  selections are recorded from the command node's `uiStore` (`FederationEffects`); another
   machine's project or environment is recorded when it is opened
   (`remoteWorkspaceStore.open`), reported by the active realm after navigation,
   or chosen in the search. Reports from inactive realms do not change recency.

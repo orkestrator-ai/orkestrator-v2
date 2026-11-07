@@ -22,7 +22,8 @@ import {
   releaseSidebarAction,
   useSidebarActionStore,
 } from "@/stores/sidebarActionStore";
-import { useEnvironmentStore, useUIStore } from "@/stores";
+import { useScopedStoreApi } from "@/lib/node-scope/scoped-store-shim";
+import { uiStore, useEnvironmentStore } from "@/stores";
 import type { Environment } from "@/types";
 
 const log = createLogger("web.sidebar");
@@ -71,9 +72,10 @@ export function useSelectedEnvironmentActions({
 
   // An environment deleted elsewhere leaves the selection, whichever machine it was on.
   const resolvedCount = selected.length;
+  const ui = useScopedStoreApi(uiStore);
   useEffect(() => {
     if (resolvedCount === selectionIds.length) return;
-    const { selectedEnvironmentIds, setMultiSelection } = useUIStore.getState();
+    const { selectedEnvironmentIds, setMultiSelection } = ui.getState();
     const known = new Set(
       resolveSelectedEnvironments(
         selectedEnvironmentIds,
@@ -83,7 +85,7 @@ export function useSelectedEnvironmentActions({
       ).map((entry) => entry.selectionId),
     );
     setMultiSelection(selectedEnvironmentIds.filter((id) => known.has(id)));
-  }, [deletingEnvironments, localEnvironments, machines, resolvedCount, selectionIds.length]);
+  }, [deletingEnvironments, localEnvironments, machines, resolvedCount, selectionIds.length, ui]);
 
   const run = async (action: BulkAction, targets: readonly SelectedEnvironment[]) => {
     const available = targets.filter(isSelectedEnvironmentReachable);

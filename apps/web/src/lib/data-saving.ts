@@ -1,6 +1,6 @@
 import { defineScopedService } from "@/lib/node-scope/scoped-service";
 import { setReadCoordinatorDataSaving } from "@/lib/read-coordinator";
-import { useUIStore } from "@/stores/uiStore";
+import { useUIChromeStore } from "@/stores/uiChromeStore";
 
 interface DataSavingSource {
   getState(): { dataSaving: boolean };
@@ -14,7 +14,7 @@ interface DataSavingSource {
  * the backend.
  */
 export function startDataSavingReadPolicy(
-  store: DataSavingSource = useUIStore,
+  store: DataSavingSource = useUIChromeStore,
   apply: (enabled: boolean) => void = setReadCoordinatorDataSaving,
 ): () => void {
   let current = store.getState().dataSaving;

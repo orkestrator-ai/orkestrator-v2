@@ -48,6 +48,7 @@ import { paneLayoutPersistenceService } from "@/lib/pane-layout-persistence";
 import { startResourceSync, type ResourceSyncOptions } from "@/lib/resource-sync";
 import { storeResourceSyncService } from "@/lib/store-resource-sync";
 import { transportConnectivityService } from "@/lib/transport-connectivity";
+import { windowSelectionPersistenceService } from "@/stores/windowSelectionStore";
 import {
   isResourceRevisionManifest,
   isScopedResourceRevisionManifest,
@@ -119,6 +120,7 @@ export const WARM_SCOPE_SERVICES: readonly ScopedServiceDef[] = [
 export const COMMAND_SCOPE_SERVICES: readonly ScopedServiceDef[] = [
   ...WARM_SCOPE_SERVICES,
   dataSavingReadPolicyService,
+  windowSelectionPersistenceService,
   paneLayoutPersistenceService,
   buildPipelineCompletionNotesService,
 ];

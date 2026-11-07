@@ -56,6 +56,12 @@ export const SHIMMED_STORES: readonly ShimmedStore[] = [
     module: "apps/web/src/stores/projectStore",
     hook: "useProjectStore",
   },
+  // Plan item 3006: a node's UI state (the selection is the window's, the chrome a window store).
+  {
+    store: "ui",
+    module: "apps/web/src/stores/uiStore",
+    hook: "useUIStore",
+  },
   // Plan item 3007: the files panel's per-node state (its chrome is a window store).
   {
     store: "files-panel",

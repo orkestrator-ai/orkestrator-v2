@@ -4,7 +4,7 @@ import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
 import { environmentStore, useEnvironmentStore } from "@/stores/environmentStore";
 import { projectStore, useProjectStore } from "@/stores/projectStore";
-import { useUIStore } from "@/stores/uiStore";
+import { uiStore } from "@/stores/uiStore";
 import { resolveEnvironmentAgentActivity } from "@/lib/environment-agent-activity";
 import type { Environment } from "@/types";
 
@@ -107,7 +107,7 @@ export function ProjectHomeActivity({
           scope.store(environmentStore).getState().isDeleting(home.id)
         )
           return;
-        const ui = useUIStore.getState();
+        const ui = scope.store(uiStore).getState();
         ui.selectProjectAndEnvironment(home.projectId, home.id);
         ui.setProjectBoardTab("home");
       }}

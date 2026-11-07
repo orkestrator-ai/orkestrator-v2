@@ -7,7 +7,7 @@ import { FilesPanelPullRequests } from "./FilesPanelPullRequests";
 import { FileActionDialog, type PendingFileAction } from "./FileActionDialog";
 import { DiffBaseDialog } from "./DiffBaseDialog";
 import { DiffBaseNotice } from "./DiffBaseNotice";
-import { useFilesPanelStore, useUIStore } from "@/stores";
+import { uiStore, useFilesPanelStore } from "@/stores";
 import { filesPanelStore, isFilesPanelFileTab } from "@/stores/filesPanelStore";
 import { useFilesPanel, FileBatchActionError } from "@/hooks";
 import { ensureProjectHomeInStore } from "@/hooks/useFilesPanel";
@@ -62,7 +62,7 @@ export function FilesPanel() {
             .store(filesPanelStore)
             .getState()
             .requestFileOpen({ environmentId: home.id, filePath, options });
-          const ui = useUIStore.getState();
+          const ui = scope.store(uiStore).getState();
           ui.selectProjectAndEnvironment(projectScopeProjectId, home.id);
           ui.setProjectBoardTab("home");
         })

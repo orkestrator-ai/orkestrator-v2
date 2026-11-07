@@ -40,7 +40,10 @@ import {
 import type { StoreApi } from "zustand";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { environmentStore, type EnvironmentState } from "@/stores/environmentStore";
-import { useUIStore } from "@/stores/uiStore";
+import { uiStore, type UIState } from "@/stores/uiStore";
+import { selectionOnScope } from "@/stores/windowSelectionStore";
+import { windowScopeOf } from "@/lib/node-scope/window-scope";
+import { environmentKey, environmentRef } from "@orkestrator/protocol/federation";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -188,20 +191,39 @@ const PHASE_TEXT: Record<LiveHostSession["phase"], string> = {
   error: "Could not start",
 };
 
-function environmentScopeSnapshot(environmentsStore: StoreApi<EnvironmentState>) {
+/**
+ * The owner node's environments and the window's selection as the guard
+ * compares them. The selection is node-qualified (plan item 3006): an
+ * environment selected on another node is named by its node-qualified key,
+ * which never equals one of the owner's environment ids, so moving to it is
+ * a switch away, while selecting only another node's project is not.
+ */
+function environmentScopeSnapshot(
+  owner: NodeScope,
+  environmentsStore: StoreApi<EnvironmentState>,
+  ui: StoreApi<UIState>,
+) {
   const environments = environmentsStore.getState();
-  const ui = useUIStore.getState();
+  const selection = windowScopeOf(owner)?.selection.get() ?? null;
+  const onOwner = selectionOnScope(owner, selection) !== null;
+  const selectedEnvironmentId =
+    selection?.environmentId == null
+      ? null
+      : onOwner
+        ? selection.environmentId
+        : environmentKey(environmentRef(selection.nodeId, selection.environmentId));
   return {
     environmentIds: new Set(environments.environments.map((environment) => environment.id)),
     deletingIds: environments.deletingEnvironments,
-    selectedEnvironmentId: ui.selectedEnvironmentId,
-    selectedEnvironmentIds: ui.selectedEnvironmentIds,
+    selectedEnvironmentId,
+    selectedEnvironmentIds: ui.getState().selectedEnvironmentIds,
   };
 }
 
 /**
  * Dispose the live view when its conversation's environment is deleted or
- * the user switches the active environment away from it. The saved preview
+ * the user switches the active environment away from it, on its node or to
+ * another node's. The saved preview
  * is shown in the transcript card with the reason. The environment is the
  * live target's node's: environment ids are node-local (plan item 3004).
  */
@@ -209,9 +231,11 @@ function useLiveHostScopeGuard(owner: NodeScope | null): void {
   useEffect(() => {
     if (!owner) return;
     const environments = owner.store(environmentStore);
-    let previous = environmentScopeSnapshot(environments);
+    const ui = owner.store(uiStore);
+    const windowScope = windowScopeOf(owner);
+    let previous = environmentScopeSnapshot(owner, environments, ui);
     const check = () => {
-      const next = environmentScopeSnapshot(environments);
+      const next = environmentScopeSnapshot(owner, environments, ui);
       const active = useArtifactLiveHostStore.getState().active;
       const reason = active
         ? liveHostScopeInvalidation(active.target.scope.environmentId, previous, next)
@@ -220,10 +244,12 @@ function useLiveHostScopeGuard(owner: NodeScope | null): void {
       if (reason) useArtifactLiveHostStore.getState().invalidate(reason);
     };
     const offEnvironments = environments.subscribe(check);
-    const offUi = useUIStore.subscribe(check);
+    const offUi = ui.subscribe(check);
+    const offSelection = windowScope?.selection.subscribe(check);
     return () => {
       offEnvironments();
       offUi();
+      offSelection?.();
     };
   }, [owner]);
 }

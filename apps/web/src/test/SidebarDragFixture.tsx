@@ -27,7 +27,7 @@ import {
 } from "@/stores/coordinatorActivityStore";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { usePrMonitorStore } from "@/stores/prMonitorStore";
-import type { ActivitySortOrder } from "@/stores/uiStore";
+import { type ActivitySortOrder, useUIChromeStore } from "@/stores/uiChromeStore";
 import type { Project, Environment } from "@/types";
 
 const ALIGNMENT_ICON =
@@ -366,6 +366,8 @@ function install() {
     projectCollapseChoices: projects.map((p) => p.id),
     selectedProjectId: null,
     selectedEnvironmentId: null,
+  });
+  useUIChromeStore.setState({
     environmentSortMode: activitySort || crossMachine ? "activity" : "project",
     activitySortOrder: (params.get("order") as ActivitySortOrder | null) ?? "priority",
   });

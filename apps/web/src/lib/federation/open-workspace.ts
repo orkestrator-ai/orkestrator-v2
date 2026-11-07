@@ -9,7 +9,7 @@ import {
 import { useAppDialogStore } from "@/stores/appDialogStore";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
-import { useUIStore } from "@/stores/uiStore";
+import { uiStore } from "@/stores/uiStore";
 
 export interface MachineWorkspaceSpec {
   /** The node, by identity. */
@@ -76,7 +76,7 @@ export function openMachineWorkspace(spec: MachineWorkspaceSpec): void {
   const selfId = portalStore.getState().selfId;
   if (!selfId || spec.connectionId === selfId) {
     useRemoteWorkspaceStore.getState().showLocal();
-    const ui = useUIStore.getState();
+    const ui = getWindowScope().commandScope().store(uiStore).getState();
     if (!spec.projectId) return;
     if (spec.createEnvironment) requestCreateEnvironment(spec.projectId);
     else if (spec.environmentId) {

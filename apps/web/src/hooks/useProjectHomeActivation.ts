@@ -1,7 +1,13 @@
 import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { errorText } from "@/components/settings/machines/machine-ui";
-import { environmentStore, useEnvironmentStore, useProjectStore, useUIStore } from "@/stores";
+import {
+  environmentStore,
+  uiStore,
+  useEnvironmentStore,
+  useProjectStore,
+  useUIStore,
+} from "@/stores";
 import { ensureProjectHomeInStore, isProjectHomeDeletionInProgress } from "@/hooks/useFilesPanel";
 import { filesPanelStore, projectRootFilesTargetId } from "@/stores/filesPanelStore";
 import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
@@ -66,6 +72,8 @@ export function useProjectHomeActivation() {
 
   useLayoutEffect(() => {
     if (!selectedProjectId) return;
+    // Held across the ensure below: the scope may be disposed by the time it answers.
+    const uiApi = scope.store(uiStore);
     if (projectDeleting || homeDeleting) {
       suppressedSelection.current = selectionKey;
       return;
@@ -81,7 +89,7 @@ export function useProjectHomeActivation() {
       // A realm selects its requested project before the first snapshot arrives.
       // Only a known project (or a completed snapshot) can confirm no checkout.
       if (projectPending) return;
-      const ui = useUIStore.getState();
+      const ui = uiApi.getState();
       if (selectedHomeId) ui.selectEnvironment(null);
       if (ui.projectBoardTab === "home") ui.setProjectBoardTab("coordinator");
       reconciled.current = null;
@@ -97,14 +105,14 @@ export function useProjectHomeActivation() {
         .store(filesPanelStore)
         .getState()
         .movePullRequestTabs(projectRootFilesTargetId(selectedProjectId), known.id);
-      useUIStore.getState().selectEnvironment(known.id);
+      uiApi.getState().selectEnvironment(known.id);
       return;
     }
     if (reconciled.current === key) return;
     let cancelled = false;
     void ensureProjectHomeInStore(selectedProjectId, scope)
       .then((home) => {
-        const ui = useUIStore.getState();
+        const ui = uiApi.getState();
         if (
           cancelled ||
           scope.disposed ||

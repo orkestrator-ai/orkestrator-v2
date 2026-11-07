@@ -28,6 +28,7 @@ import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useProjectStore } from "@/stores/projectStore";
 import { useRealmShellStore } from "@/stores/realmShellStore";
 import { useUIStore } from "@/stores/uiStore";
+import { useUIChromeStore } from "@/stores/uiChromeStore";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("web.federation");
@@ -105,9 +106,7 @@ export function WorkspaceRealmHost() {
           return;
         }
         // The window's sidebar: the toolbar here shows and toggles it.
-        if (message.type === "sidebar" && useUIStore.getState().sidebarOpen !== message.open) {
-          useUIStore.setState({ sidebarOpen: message.open });
-        }
+        if (message.type === "sidebar") useUIChromeStore.getState().setSidebarOpen(message.open);
         // The window owns the files panel's state; applying it is not a new choice to report.
         if (
           message.type === "filesPanel" &&
@@ -143,7 +142,7 @@ export function WorkspaceRealmHost() {
   }, [request]);
   useEffect(
     () =>
-      useUIStore.subscribe((state, previous) => {
+      useUIChromeStore.subscribe((state, previous) => {
         if (state.sidebarOpen !== previous.sidebarOpen) {
           postToShell({ type: "sidebar", open: state.sidebarOpen });
         }

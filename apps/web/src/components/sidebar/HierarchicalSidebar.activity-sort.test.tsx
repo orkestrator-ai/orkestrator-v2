@@ -16,6 +16,7 @@ import { displayedActivityResolver } from "@/lib/environment-activity-sort";
 import { FederationProvider } from "@/components/federation/FederationProvider";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useEnvironmentStore, useProjectStore, useUIStore } from "@/stores";
+import { useUIChromeStore } from "@/stores/uiChromeStore";
 import {
   connectionList,
   installDesktopFake,
@@ -118,7 +119,7 @@ test("sidebar menu orders cross-machine activity and preserves the order under a
   });
   useProjectStore.setState({ projects: [], hasLoaded: true });
   useEnvironmentStore.setState({ environments: [], deletingEnvironments: new Set() });
-  useUIStore.setState({ environmentSortMode: "activity", activitySortOrder: "priority" });
+  useUIChromeStore.setState({ environmentSortMode: "activity", activitySortOrder: "priority" });
   useMachineViewStore.setState({ machineFilter: "all" });
   render(
     <FederationProvider>

@@ -1,7 +1,7 @@
 import { Gauge } from "lucide-react";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { useUIStore } from "@/stores/uiStore";
+import { useUIChromeStore } from "@/stores/uiChromeStore";
 import { SETTINGS_CARD_CLASS, SettingsSectionHeader } from "./SettingsPageLayout";
 import { cn } from "@/lib/utils";
 
@@ -11,8 +11,8 @@ import { cn } from "@/lib/utils";
  * backend keep their own cadence.
  */
 export function DataSavingSetting() {
-  const dataSaving = useUIStore((state) => state.dataSaving);
-  const setDataSaving = useUIStore((state) => state.setDataSaving);
+  const dataSaving = useUIChromeStore((state) => state.dataSaving);
+  const setDataSaving = useUIChromeStore((state) => state.setDataSaving);
   return (
     <div className="space-y-3" data-testid="data-saving-setting">
       <SettingsSectionHeader icon={<Gauge className="h-4 w-4" />} title="Data saving">

@@ -14,13 +14,13 @@ import {
   formatErrorContext,
   useErrorDialogStore,
   useTerminalSessionStore,
-  useUIStore,
   usePaneLayoutStore,
   getAllLeaves,
 } from "@/stores";
 import { createSessionKey as createNativeSessionKey } from "@/lib/utils";
 import { getNativeAgentData } from "@/types/paneLayout";
 import { useSessionStore } from "@/stores/sessionStore";
+import { uiStore } from "@/stores/uiStore";
 import * as backend from "@/lib/backend";
 import { backendApiForScope } from "@/lib/backend/client";
 import { createFilesSessionsApi } from "@/lib/backend/files-sessions";
@@ -694,7 +694,7 @@ export function useEnvironmentLifecycleService(): void {
       scope,
       "native-agent-async-question",
       (payload) => {
-        const selectedEnvironmentId = useUIStore.getState().selectedEnvironmentId;
+        const selectedEnvironmentId = scope.store(uiStore).getState().selectedEnvironmentId;
         if (selectedEnvironmentId === payload.environment_id) {
           const root = usePaneLayoutStore.getState().getRoot(selectedEnvironmentId);
           const owningTabIsVisible = getAllLeaves(root).some((pane) => {
@@ -1016,9 +1016,11 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
   const deleteEnvironment = useCallback(
     async (environmentId: string) => {
       const node = environmentNode(scope);
+      // Held across the awaits below: the scope may be disposed by then.
+      const ui = scope.store(uiStore);
       const projectId =
         node.environments.getState().getEnvironmentById(environmentId)?.projectId ??
-        useUIStore.getState().selectedProjectId;
+        ui.getState().selectedProjectId;
       setDeleting(environmentId, true);
       const didActivate = activateProjectForEnvironmentCleanup(environmentId, scope);
       setError(null);
@@ -1067,7 +1069,7 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
           projectId &&
           node.environments.getState().getEnvironmentById(environmentId)
         ) {
-          useUIStore.getState().selectProjectAndEnvironment(projectId, environmentId);
+          ui.getState().selectProjectAndEnvironment(projectId, environmentId);
         }
       }
     },

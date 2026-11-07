@@ -36,7 +36,7 @@ import {
 } from "@/components/review/multi-review-steps";
 import { runtimeParts } from "@/lib/review/runtime-summary";
 import { formatObservedAt } from "@/lib/view-freshness";
-import { useUIStore } from "@/stores/uiStore";
+import { useUIChromeStore } from "@/stores/uiChromeStore";
 import { PIPELINE_FLOW_MIN_HEIGHT, pipelineFlowLayout } from "./pipeline-flow-layout";
 import type {
   PipelineFlowModel,
@@ -337,8 +337,8 @@ export function PipelineFlowGraph({
   landOnSelection = false,
   onSelectionLanded,
 }: PipelineFlowGraphProps) {
-  const storedHeight = useUIStore((state) => state.pipelineGraphHeight);
-  const setStoredHeight = useUIStore((state) => state.setPipelineGraphHeight);
+  const storedHeight = useUIChromeStore((state) => state.pipelineGraphHeight);
+  const setStoredHeight = useUIChromeStore((state) => state.setPipelineGraphHeight);
   const nodes = model.nodes.map((node) => views.get(node.id)!);
   const byId = new Map(model.nodes.map((node) => [node.id, node] as const));
   const columnLabel = (column: PipelineFlowModel["columns"][number]) => {

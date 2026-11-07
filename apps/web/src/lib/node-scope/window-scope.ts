@@ -19,13 +19,36 @@ import { createSignal, type WritableSignal } from "./signal";
 
 /**
  * A selection that says which node it belongs to, so a project or
- * environment id is never read against the wrong node. Not wired yet: the UI
- * store still owns today's selection until plan items 3006 and 3017 move it.
+ * environment id is never read against the wrong node. The window's one
+ * selection (plan item 3006): its node is the node the window shows, and
+ * each node scope's `uiStore` projects it (`stores/windowSelectionStore.ts`).
  */
 export interface NodeSelection {
   readonly nodeId: BackendId;
   readonly projectId: string | null;
   readonly environmentId: string | null;
+  /** The environment is its project's home (a realm reports it before summaries list it). */
+  readonly projectHome?: boolean;
+}
+
+/** Whether two selections name the same node, project, environment and home flag. */
+export function sameNodeSelection(a: NodeSelection | null, b: NodeSelection | null): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return (
+    a.nodeId === b.nodeId &&
+    a.projectId === b.projectId &&
+    a.environmentId === b.environmentId &&
+    Boolean(a.projectHome) === Boolean(b.projectHome)
+  );
+}
+
+/** The window each open node scope belongs to. */
+const windowOfScope = new WeakMap<NodeScope, WindowScope>();
+
+/** The window `scope` was opened in, or `null` for a scope built outside one. */
+export function windowScopeOf(scope: NodeScope): WindowScope | null {
+  return windowOfScope.get(scope) ?? null;
 }
 
 export interface WindowScopeOptions {
@@ -92,6 +115,7 @@ export class WindowScope {
       ...(this.domainUsage ? { domainUsage: this.domainUsage } : {}),
     });
     this.registry.set(nodeId, scope);
+    windowOfScope.set(scope, this);
     // Runs after the scope's services have stopped and before its stores,
     // budgets and client are released, so nothing can look a closing scope up.
     scope.onDispose("window-registry", () => {
@@ -145,7 +169,13 @@ export class WindowScope {
     return scope;
   }
 
+  /**
+   * Sets the window's selection. A value equal to the current one (same
+   * node, project, environment and home flag) changes nothing and notifies
+   * nobody.
+   */
   select(selection: NodeSelection | null): void {
+    if (sameNodeSelection(selection, this.selectionSignal.get())) return;
     this.selectionSignal.set(selection);
   }
 

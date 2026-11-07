@@ -13,6 +13,7 @@ import { projectFolderKey } from "@/lib/project-folders";
 import { sidebarFolderKey, useMachineViewStore } from "@/stores/machineViewStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { useEnvironmentStore, useProjectStore, useUIStore } from "@/stores";
+import { useUIChromeStore } from "@/stores/uiChromeStore";
 import {
   connectionList,
   installDesktopFake,
@@ -112,9 +113,11 @@ beforeEach(() => {
     selectedEnvironmentId: null,
     selectedEnvironmentIds: [],
     recentProjectIds: [],
-    environmentSortMode: "project",
     collapsedProjects: [],
     collapsedProjectFolders: [],
+  });
+  useUIChromeStore.setState({
+    environmentSortMode: "project",
   });
 });
 

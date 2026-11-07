@@ -669,6 +669,7 @@ export function RemoteEnvironmentItem({
   const selectionId = environment.key;
   const multiSelecting = useUIStore((state) => state.selectedEnvironmentIds.length > 0);
   const checked = useUIStore((state) => state.selectedEnvironmentIds.includes(selectionId));
+  const clearMultiSelection = useUIStore((state) => state.clearMultiSelection);
 
   return (
     <EnvironmentRow
@@ -684,7 +685,7 @@ export function RemoteEnvironmentItem({
       onActivate={(modifiers) => {
         if (applySidebarModifierSelection(selectionId, modifiers)) return;
         // As on this window's rows, a plain click ends a multi-selection and opens the row.
-        useUIStore.getState().clearMultiSelection();
+        clearMultiSelection();
         actions.open();
       }}
       actions={{

@@ -12,6 +12,7 @@ import { useEnvironmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useProjectStore } from "@/stores/projectStore";
 import { useUIStore } from "@/stores/uiStore";
+import { useUIChromeStore } from "@/stores/uiChromeStore";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import type { AppConfig, Environment } from "@/types";
 import type { DockerAvailability } from "@orkestrator/protocol/docker-availability";
@@ -524,10 +525,12 @@ function resetStores({
     selectedEnvironmentId,
     projectBoardTab: "coordinator",
     recentProjectIds: [],
-    sidebarWidth: 280,
     collapsedProjects: [],
     selectedEnvironmentIds: [],
     expandedSessionsEnvironments: [],
+  });
+  useUIChromeStore.setState({
+    sidebarWidth: 280,
     zoomLevel: 100,
   });
 
@@ -3452,7 +3455,7 @@ describe("App startup checks and global events", () => {
     await waitFor(() => expect(appEventCallbacks.has("menu-zoom")).toBe(true));
 
     act(() => appEventCallbacks.get("menu-zoom")?.({ payload: "out" }));
-    expect(useUIStore.getState().zoomLevel).toBe(90);
+    expect(useUIChromeStore.getState().zoomLevel).toBe(90);
 
     const keydown = (key: string, modifiers: KeyboardEventInit) => {
       const event = new KeyboardEvent("keydown", { key, cancelable: true, ...modifiers });
@@ -3469,7 +3472,7 @@ describe("App startup checks and global events", () => {
       expect(keydown("=", { ctrlKey: true, altKey: true }).defaultPrevented).toBe(false);
       expect(keydown("=", {}).defaultPrevented).toBe(false);
     });
-    expect(useUIStore.getState().zoomLevel).toBe(100);
+    expect(useUIChromeStore.getState().zoomLevel).toBe(100);
 
     // A key a focused surface already claimed (the design canvas's Ctrl/⌘+0)
     // is left to it.
@@ -3489,14 +3492,14 @@ describe("App startup checks and global events", () => {
           }),
         );
       });
-      expect(useUIStore.getState().zoomLevel).toBe(110);
+      expect(useUIChromeStore.getState().zoomLevel).toBe(110);
     } finally {
       window.removeEventListener("keydown", claim, { capture: true });
     }
     act(() => {
       keydown("0", { metaKey: true });
     });
-    expect(useUIStore.getState().zoomLevel).toBe(100);
+    expect(useUIChromeStore.getState().zoomLevel).toBe(100);
 
     act(() => {
       appEventCallbacks.get("claude-credentials-error")?.({

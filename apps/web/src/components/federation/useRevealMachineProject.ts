@@ -8,7 +8,7 @@ import {
 } from "@/lib/federation/sidebar-layout";
 import { usePortalLayout } from "@/lib/portal/portal-layout";
 import { sidebarFolderKey, useMachineViewStore } from "@/stores/machineViewStore";
-import { useUIStore } from "@/stores/uiStore";
+import { useUIChromeStore } from "@/stores/uiChromeStore";
 import { useFederation } from "./FederationProvider";
 import { useMachineViews } from "./useMachineViews";
 
@@ -82,12 +82,12 @@ export function useRevealMachineProject(): (machine: MachineView, projectId: str
       views.recordRecent([project.key]);
       views.revealProject(project.key);
 
-      const ui = useUIStore.getState();
+      const chrome = useUIChromeStore.getState();
       const shownHere =
-        ui.environmentSortMode !== "activity" &&
+        chrome.environmentSortMode !== "activity" &&
         (views.grouping === "machine" || isMachineShown(machine));
       if (!shownHere) {
-        ui.setEnvironmentSortMode("project");
+        chrome.setEnvironmentSortMode("project");
         views.setGrouping("machine");
       }
     },

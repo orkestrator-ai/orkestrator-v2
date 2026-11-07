@@ -23,6 +23,7 @@ import { portalStore } from "@/lib/portal/portal-store";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { useUIStore } from "@/stores/uiStore";
+import { useUIChromeStore } from "@/stores/uiChromeStore";
 import { FederationProvider } from "./FederationProvider";
 import { RemoteWorkspaceRegion } from "./RemoteWorkspaceRegion";
 import { setFilesPanelTestState } from "@/test/files-panel-state";
@@ -73,7 +74,7 @@ function renderRegion(anchor: HTMLElement) {
 
 beforeEach(() => {
   useRemoteWorkspaceStore.setState(INITIAL_REMOTE, true);
-  useUIStore.setState({ environmentSortMode: "project" });
+  useUIChromeStore.setState({ environmentSortMode: "project" });
   useMachineViewStore.setState({ grouping: "machine" });
   sessionStorage.clear();
   reload = mock(() => undefined);
@@ -213,7 +214,7 @@ describe("desktop: another machine's workspace in the central region", () => {
     act(() =>
       fake.emitViewEvent({ viewId: "view-1", type: "message", message: { type: "ready" } }),
     );
-    const open = useUIStore.getState().sidebarOpen;
+    const open = useUIChromeStore.getState().sidebarOpen;
     expect(fake.workspaceViews.send).toHaveBeenCalledWith("view-1", { type: "sidebar", open });
     const grouping = useMachineViewStore.getState().grouping;
     expect(fake.workspaceViews.send).toHaveBeenCalledWith("view-1", { type: "grouping", grouping });
@@ -232,8 +233,8 @@ describe("desktop: another machine's workspace in the central region", () => {
         message: { type: "sidebar", open: !open },
       }),
     );
-    expect(useUIStore.getState().sidebarOpen).toBe(!open);
-    act(() => useUIStore.setState({ sidebarOpen: open }));
+    expect(useUIChromeStore.getState().sidebarOpen).toBe(!open);
+    act(() => useUIChromeStore.setState({ sidebarOpen: open }));
   });
 
   test("the files panel is one state across this window and every open realm", async () => {
@@ -1156,7 +1157,7 @@ test("realms receive the latest effective grouping before readiness and after a 
   act(() => fake.emitViewEvent({ viewId: "view-1", type: "crashed" }));
   act(() => {
     useMachineViewStore.getState().setGrouping("repository");
-    useUIStore.setState({ environmentSortMode: "activity" });
+    useUIChromeStore.setState({ environmentSortMode: "activity" });
   });
   fireEvent.click(await screen.findByRole("button", { name: "Try again" }));
   await waitFor(() =>
@@ -1169,12 +1170,12 @@ test("realms receive the latest effective grouping before readiness and after a 
     grouping: "activity",
   });
   // Project sorting restores the saved grouping and activity sorting overrides it again.
-  act(() => useUIStore.setState({ environmentSortMode: "project" }));
+  act(() => useUIChromeStore.setState({ environmentSortMode: "project" }));
   expect(fake.workspaceViews.send).toHaveBeenLastCalledWith("view-2", {
     type: "grouping",
     grouping: "repository",
   });
-  act(() => useUIStore.setState({ environmentSortMode: "activity" }));
+  act(() => useUIChromeStore.setState({ environmentSortMode: "activity" }));
   expect(fake.workspaceViews.send).toHaveBeenLastCalledWith("view-2", {
     type: "grouping",
     grouping: "activity",
@@ -1220,14 +1221,14 @@ test("browser grouping delivery uses the current workspace envelope and survives
     configurable: true,
     value: { postMessage: post },
   });
-  act(() => useUIStore.setState({ environmentSortMode: "activity" }));
+  act(() => useUIChromeStore.setState({ environmentSortMode: "activity" }));
   expect(post).not.toHaveBeenCalled();
   act(() => frameMessage(frame, "workspace-1", { type: "ready" }));
   expect(post).toHaveBeenCalledWith(
     frameEnvelope("workspace-1", { type: "grouping", grouping: "activity" }),
     window.location.origin,
   );
-  act(() => useUIStore.setState({ environmentSortMode: "project" }));
+  act(() => useUIChromeStore.setState({ environmentSortMode: "project" }));
   expect(post).toHaveBeenLastCalledWith(
     frameEnvelope("workspace-1", { type: "grouping", grouping: "repository" }),
     window.location.origin,
@@ -1293,7 +1294,7 @@ test("phone compact sends activity or repository grouping according to the displ
   try {
     const fake = install(true);
     useMachineViewStore.setState({ grouping: "compact" });
-    useUIStore.setState({ environmentSortMode: "activity" });
+    useUIChromeStore.setState({ environmentSortMode: "activity" });
     renderRegion(anchorElement());
     act(() => useRemoteWorkspaceStore.getState().open("bk_a", {}));
     await waitFor(() => expect(fake.workspaceViews.setVisible).toHaveBeenCalled());
@@ -1304,7 +1305,7 @@ test("phone compact sends activity or repository grouping according to the displ
       type: "grouping",
       grouping: "activity",
     });
-    act(() => useUIStore.setState({ environmentSortMode: "project" }));
+    act(() => useUIChromeStore.setState({ environmentSortMode: "project" }));
     expect(fake.workspaceViews.send).toHaveBeenCalledWith("view-1", {
       type: "grouping",
       grouping: "repository",

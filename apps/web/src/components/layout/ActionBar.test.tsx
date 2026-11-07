@@ -18,6 +18,7 @@ import * as realStores from "@/stores";
 import { defineScopedStore } from "@/lib/node-scope/scoped-store";
 import type { MultiReviewState } from "@/stores/multiReviewStore";
 import * as realFilesPanelChrome from "@/stores/filesPanelChromeStore";
+import * as realUIChrome from "@/stores/uiChromeStore";
 import * as realHooks from "@/hooks";
 import * as realContexts from "@/contexts";
 import * as realBackend from "@/lib/backend";
@@ -67,6 +68,7 @@ const realTooltipSnapshot = { ...realTooltip };
 const realSettingsSnapshot = { ...realSettings };
 const realStoresSnapshot = { ...realStores };
 const realFilesPanelChromeSnapshot = { ...realFilesPanelChrome };
+const realUIChromeSnapshot = { ...realUIChrome };
 const realHooksSnapshot = { ...realHooks };
 const realContextsSnapshot = { ...realContexts };
 const realBackendSnapshot = { ...realBackend };
@@ -723,8 +725,6 @@ mock.module("@/stores", () => ({
       setProjectCollapsed: (projectId: string, collapsed: boolean) => void;
       projectBoardTab: ProjectBoardTab;
       setProjectBoardTab: (tab: ProjectBoardTab) => void;
-      sidebarOpen: boolean;
-      toggleSidebar: () => void;
     }) => T,
   ) =>
     useRealSelection
@@ -739,8 +739,6 @@ mock.module("@/stores", () => ({
             setProjectCollapsed: setProjectCollapsedMock,
             projectBoardTab: currentProjectBoardTab,
             setProjectBoardTab: setProjectBoardTabMock,
-            sidebarOpen: currentSidebarOpen,
-            toggleSidebar: toggleSidebarMock,
           },
           selector,
         ),
@@ -841,6 +839,13 @@ mock.module("@/stores/filesPanelChromeStore", () => ({
   ) => selectState({ isOpen: currentFilesPanelOpen, togglePanel: toggleFilesPanelMock }, selector),
 }));
 
+mock.module("@/stores/uiChromeStore", () => ({
+  ...realUIChromeSnapshot,
+  useUIChromeStore: <T,>(
+    selector?: (state: { sidebarOpen: boolean; toggleSidebar: () => void }) => T,
+  ) => selectState({ sidebarOpen: currentSidebarOpen, toggleSidebar: toggleSidebarMock }, selector),
+}));
+
 mock.module("@/lib/multi-review-persistence", () => ({
   ...realMultiReviewPersistenceSnapshot,
   findActiveMultiReviewWorkflow: findActiveMultiReviewWorkflowMock,
@@ -871,6 +876,7 @@ afterAll(() => {
   mock.module("@/components/settings", () => realSettingsSnapshot);
   mock.module("@/stores", () => realStoresSnapshot);
   mock.module("@/stores/filesPanelChromeStore", () => realFilesPanelChromeSnapshot);
+  mock.module("@/stores/uiChromeStore", () => realUIChromeSnapshot);
   mock.module("@/hooks", () => realHooksSnapshot);
   mock.module("@/contexts", () => realContextsSnapshot);
   mock.module("@/lib/backend", () => realBackendSnapshot);

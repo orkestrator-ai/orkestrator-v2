@@ -54,10 +54,12 @@ import {
 import {
   environmentStore,
   projectStore,
+  uiStore,
   useUIStore,
   useProjectStore,
   useEnvironmentStore,
 } from "@/stores";
+import { useUIChromeStore } from "@/stores/uiChromeStore";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
 import { drainProjectHomeEnsures } from "@/hooks/useFilesPanel";
@@ -258,8 +260,9 @@ export async function deleteProjectAndEnvironments(
 ): Promise<void> {
   const projects = scope.store(projectStore).getState();
   projects.setDeleting(projectId, true);
-  if (useUIStore.getState().selectedProjectId === projectId) {
-    useUIStore.getState().selectProject(null);
+  const ui = scope.store(uiStore);
+  if (ui.getState().selectedProjectId === projectId) {
+    ui.getState().selectProject(null);
   }
   try {
     const admittedHomes = await drainProjectHomeEnsures(projectId, scope);
@@ -287,8 +290,8 @@ export async function deleteProjectAndEnvironments(
     }
     await removeProject(projectId);
   } finally {
-    if (useUIStore.getState().selectedProjectId === projectId) {
-      useUIStore.getState().selectProject(null);
+    if (ui.getState().selectedProjectId === projectId) {
+      ui.getState().selectProject(null);
     }
     projects.setDeleting(projectId, false);
   }
@@ -347,8 +350,8 @@ export function HierarchicalSidebar() {
   const collapsedProjects = useUIStore((state) => state.collapsedProjects);
   const collapsedProjectFolders = useUIStore((state) => state.collapsedProjectFolders);
   const selectedEnvironmentIds = useUIStore((state) => state.selectedEnvironmentIds);
-  const environmentSortMode = useUIStore((state) => state.environmentSortMode);
-  const activitySortOrder = useUIStore((state) => state.activitySortOrder);
+  const environmentSortMode = useUIChromeStore((state) => state.environmentSortMode);
+  const activitySortOrder = useUIChromeStore((state) => state.activitySortOrder);
   const selectProject = useUIStore((state) => state.selectProject);
   const selectProjectAndEnvironment = useUIStore((state) => state.selectProjectAndEnvironment);
   const setProjectCollapsed = useUIStore((state) => state.setProjectCollapsed);
@@ -357,8 +360,8 @@ export function HierarchicalSidebar() {
   const setProjectFolderCollapsed = useUIStore((state) => state.setProjectFolderCollapsed);
   const clearMultiSelection = useUIStore((state) => state.clearMultiSelection);
   const projectsLoaded = useProjectStore((state) => state.hasLoaded);
-  const setEnvironmentSortMode = useUIStore((state) => state.setEnvironmentSortMode);
-  const setActivitySortOrder = useUIStore((state) => state.setActivitySortOrder);
+  const setEnvironmentSortMode = useUIChromeStore((state) => state.setEnvironmentSortMode);
+  const setActivitySortOrder = useUIChromeStore((state) => state.setActivitySortOrder);
   // Multi-machine presentation. This sidebar's own machine keeps its full
   // tree; other machines appear as their own sections, or merged into one
   // projection when grouped by project/repository or sorted by activity.
@@ -513,14 +516,14 @@ export function HierarchicalSidebar() {
   useEffect(
     () =>
       onAppShortcut("rotate-sidebar-grouping", () => {
-        const ui = useUIStore.getState();
-        if (!isMobile && !ui.sidebarOpen) ui.toggleSidebar();
+        const chrome = useUIChromeStore.getState();
+        if (!isMobile && !chrome.sidebarOpen) chrome.toggleSidebar();
         const views = useMachineViewStore.getState();
         const next = nextSidebarView(
           {
             grouping: views.grouping,
             groupingBeforeCompact: views.groupingBeforeCompact,
-            sortMode: useUIStore.getState().environmentSortMode,
+            sortMode: useUIChromeStore.getState().environmentSortMode,
           },
           { mergedModes: mergedModesAvailable, compact: !isMobile },
         );

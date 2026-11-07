@@ -12,6 +12,7 @@ import { useCoordinatorActivityStore } from "@/stores/coordinatorActivityStore";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { useEnvironmentStore, useProjectStore, useUIStore } from "@/stores";
+import { useUIChromeStore } from "@/stores/uiChromeStore";
 import {
   connectionList,
   installDesktopFake,
@@ -110,8 +111,10 @@ beforeEach(() => {
     selectedProjectId: null,
     selectedEnvironmentId: null,
     selectedEnvironmentIds: [],
-    environmentSortMode: "project",
     collapsedProjects: [],
+  });
+  useUIChromeStore.setState({
+    environmentSortMode: "project",
   });
   useMachineViewStore.setState({
     grouping: "compact",
@@ -361,9 +364,9 @@ describe("the keyboard", () => {
   test("rotation reopens a hidden sidebar whose handler is still mounted", async () => {
     renderSidebar();
     await findCompactIcons(1);
-    act(() => useUIStore.setState({ sidebarOpen: false }));
+    act(() => useUIChromeStore.setState({ sidebarOpen: false }));
     act(() => requestAppShortcut("rotate-sidebar-grouping"));
-    expect(useUIStore.getState().sidebarOpen).toBe(true);
+    expect(useUIChromeStore.getState().sidebarOpen).toBe(true);
     expect(useMachineViewStore.getState().grouping).toBe("machine");
   });
 
@@ -385,16 +388,16 @@ describe("the keyboard", () => {
   test("activity rotation preserves sorting and restores grouping through both stores", async () => {
     installTwoMachines();
     useMachineViewStore.setState({ groupingBeforeCompact: "repository" });
-    useUIStore.setState({ environmentSortMode: "activity" });
+    useUIChromeStore.setState({ environmentSortMode: "activity" });
     renderSidebar();
     await findCompactIcons(2);
     act(() => requestAppShortcut("rotate-sidebar-grouping"));
     expect(useMachineViewStore.getState().grouping).toBe("repository");
-    expect(useUIStore.getState().environmentSortMode).toBe("activity");
+    expect(useUIChromeStore.getState().environmentSortMode).toBe("activity");
     expect(await screen.findByTestId("federated-activity-list")).toBeTruthy();
     act(() => requestAppShortcut("rotate-sidebar-grouping"));
     expect(useMachineViewStore.getState().grouping).toBe("compact");
-    expect(useUIStore.getState().environmentSortMode).toBe("activity");
+    expect(useUIChromeStore.getState().environmentSortMode).toBe("activity");
     await findCompactIcons(2);
   });
 
@@ -487,14 +490,14 @@ describe("leaving with the mouse", () => {
     await findCompactIcons(2);
     fireEvent.pointerDown(screen.getByRole("button", { name: "Sidebar view: Compact" }));
     fireEvent.click(await screen.findByRole("menuitemradio", { name: "By activity" }));
-    expect(useUIStore.getState().environmentSortMode).toBe("activity");
+    expect(useUIChromeStore.getState().environmentSortMode).toBe("activity");
     expect(useMachineViewStore.getState().grouping).toBe("repository");
     expect(await screen.findByTestId("federated-activity-list")).toBeTruthy();
   });
 
   test("compact is kept while sorted by activity, with nothing to sort", async () => {
     installTwoMachines();
-    useUIStore.setState({ environmentSortMode: "activity" });
+    useUIChromeStore.setState({ environmentSortMode: "activity" });
     renderSidebar();
     await findCompactIcons(2);
     expect(screen.queryByTestId("federated-activity-list") === null).toBe(true);

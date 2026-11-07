@@ -68,7 +68,8 @@ function environment(id: string, hasUnreadWork: boolean): Environment {
 }
 
 beforeEach(() => {
-  useRemoteWorkspaceStore.setState({ active: null });
+  useRemoteWorkspaceStore.setState({ active: null, realms: [], requests: {} });
+  getWindowScope().select(null);
   playConfiguredNotificationSound.mockReset();
   playConfiguredNotificationSound.mockResolvedValue(true);
   primeNotificationSounds.mockReset();
@@ -174,10 +175,11 @@ describe("when a coordinator is woken for its worker", () => {
   test("sounds when a remote workspace covers the selected coordinator", async () => {
     showCoordinator();
     await mounted();
+    // The window's selection moves to the leaf's workspace.
     act(() =>
-      useRemoteWorkspaceStore.setState({
-        active: { nodeId: "bk_leaf", projectId: "remote-project", environmentId: "remote-env" },
-      }),
+      useRemoteWorkspaceStore
+        .getState()
+        .open("bk_leaf", { projectId: "remote-project", environmentId: "remote-env" }),
     );
     deliver(wake("remote-covered"));
     expect(playConfiguredNotificationSound).toHaveBeenCalledWith("coordinator-report");

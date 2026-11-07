@@ -22,7 +22,7 @@ import { useAgentMailStore } from "@/stores/agentMailStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useNativeComposeStore } from "@/stores/nativeComposeStore";
 import { useProjectStore } from "@/stores/projectStore";
-import { useUIStore } from "@/stores/uiStore";
+import { useUIChromeStore } from "@/stores/uiChromeStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { useCoordinatorPaneLayoutStore } from "@/stores/coordinatorPaneLayoutStore";
 import { resetClientStateCapabilitiesForTests } from "@/lib/client-state-capabilities";
@@ -354,7 +354,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
   beforeEach(() => {
     useRealAgentTab = false;
     useAgentMailStore.setState(useAgentMailStore.getInitialState());
-    useUIStore.setState({ coordinatorIntroDismissed: false });
+    useUIChromeStore.setState({ coordinatorIntroDismissed: false });
     resetNativeAgentSyncCapabilityForTests();
     useConfigStore.setState({ config: initialConfig });
     useNativeComposeStore.getState().clearDraft(sessionKey);
@@ -448,7 +448,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
   });
 
   test("the first-run card explains the coordinator until dismissed, and ? shows it again", async () => {
-    useUIStore.setState({ coordinatorIntroDismissed: false });
+    useUIChromeStore.setState({ coordinatorIntroDismissed: false });
     useRealAgentTab = true;
     useConfigStore.getState().updateGlobalConfig({
       enabledAgentPlatforms: ["claude"],
@@ -473,7 +473,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
       ),
     );
     // Per user, in the UI store: it stays dismissed after a remount.
-    expect(useUIStore.getState().coordinatorIntroDismissed).toBe(true);
+    expect(useUIChromeStore.getState().coordinatorIntroDismissed).toBe(true);
     view.unmount();
     render(<CoordinatorPanel projectId="project-1" />);
     await screen.findByRole("textbox", { name: "What would you like to get done?" });

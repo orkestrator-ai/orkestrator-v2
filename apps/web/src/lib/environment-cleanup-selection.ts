@@ -5,7 +5,7 @@ import {
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import type { Environment } from "@/types";
 import { environmentStore } from "@/stores/environmentStore";
-import { useUIStore } from "@/stores/uiStore";
+import { uiStore } from "@/stores/uiStore";
 
 /**
  * Leave a tearing-down environment so the project workspace is shown instead
@@ -16,7 +16,7 @@ export function activateProjectForEnvironmentCleanup(
   scope: NodeScope,
   previousEnvironment?: Environment,
 ): boolean {
-  const ui = useUIStore.getState();
+  const ui = scope.store(uiStore).getState();
   if (ui.selectedEnvironmentId !== environmentId) return false;
 
   const envStore = scope.store(environmentStore).getState();
@@ -53,7 +53,7 @@ export function activateProjectForEnvironmentCleanup(
  * survives.
  */
 export function reconcileSelectedEnvironmentCleanupSelection(scope: NodeScope): boolean {
-  const ui = useUIStore.getState();
+  const ui = scope.store(uiStore).getState();
   const selectedEnvironmentId = ui.selectedEnvironmentId;
   if (!selectedEnvironmentId) return false;
 
@@ -71,7 +71,7 @@ export function reconcileSelectedEnvironmentCleanupSelection(scope: NodeScope): 
 /** Watches `scope`'s environments for the selected one being torn down. */
 export function startEnvironmentCleanupSelectionSync(scope: NodeScope): () => void {
   const unsubscribeEnvironment = scope.store(environmentStore).subscribe((state, previous) => {
-    const selectedEnvironmentId = useUIStore.getState().selectedEnvironmentId;
+    const selectedEnvironmentId = scope.store(uiStore).getState().selectedEnvironmentId;
     if (!selectedEnvironmentId) return;
 
     // Read the snapshots directly. Store helpers like getEnvironmentById() call

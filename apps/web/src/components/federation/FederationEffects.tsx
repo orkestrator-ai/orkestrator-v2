@@ -14,7 +14,7 @@ import { requestGlobalSettings } from "@/lib/settings-navigation";
 import type { MachineView } from "@/lib/federation/aggregate";
 import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
 import { environmentStore } from "@/stores/environmentStore";
-import { useUIStore } from "@/stores";
+import { uiStore } from "@/stores";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useFederation } from "./FederationProvider";
 import { useMachineViews } from "./useMachineViews";
@@ -54,7 +54,7 @@ function useRecentSelections(backendId: BackendId | null) {
   const scope = useShimNodeScope("environment");
   useEffect(() => {
     if (!backendId) return;
-    return useUIStore.subscribe((state, previous) => {
+    return scope.store(uiStore).subscribe((state, previous) => {
       if (
         state.projectSelectionRevision === previous.projectSelectionRevision &&
         state.selectedEnvironmentId === previous.selectedEnvironmentId
@@ -94,6 +94,8 @@ function useRecentSelections(backendId: BackendId | null) {
 /** `?resource=` names a machine and a resource; never a route, port or token. */
 function useResourceLink(machines: readonly MachineView[]) {
   const handled = useRef(false);
+  // This window's own node, which a link to a bound machine opens on.
+  const scope = useShimNodeScope(uiStore.name);
   const openPanel = openMachineWorkspace;
   useEffect(() => {
     if (handled.current) return;
@@ -125,12 +127,13 @@ function useResourceLink(machines: readonly MachineView[]) {
           .flat()
           .find((candidate) => candidate.ref.environmentId === ref.environmentId);
         if (environment) {
-          useUIStore
+          scope
+            .store(uiStore)
             .getState()
             .selectProjectAndEnvironment(environment.projectId, ref.environmentId);
         }
       } else {
-        useUIStore.getState().selectProject(ref.projectId);
+        scope.store(uiStore).getState().selectProject(ref.projectId);
       }
       return;
     }
@@ -151,7 +154,7 @@ function useResourceLink(machines: readonly MachineView[]) {
     } else {
       openPanel({ connectionId: machine.connectionId, projectId: ref.projectId, title: "Project" });
     }
-  }, [machines, openPanel]);
+  }, [machines, openPanel, scope]);
 }
 
 /**

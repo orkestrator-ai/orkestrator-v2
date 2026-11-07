@@ -16,6 +16,7 @@ import {
   useUIStore,
   getAllLeaves,
 } from "@/stores";
+import { useUIChromeStore } from "@/stores/uiChromeStore";
 import { useMediaQuery } from "@/hooks";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { sidebarPanelConstraints, sidebarPanelMode } from "@/lib/sidebar-width";
@@ -170,7 +171,7 @@ export function AppShell({ children }: AppShellProps) {
   if (!isMobile && !desktopShown) setDesktopShown(true);
   const filesPanelOpen = useFilesPanelChromeStore((state) => state.isOpen);
   const filesPanelRef = useFilesPanelPullRequestWidth(filesPanelOpen);
-  const sidebarOpen = useUIStore((state) => state.sidebarOpen);
+  const sidebarOpen = useUIChromeStore((state) => state.sidebarOpen);
   // The phone layout's drawer stays a full list; the choice is kept for desktop widths.
   const compactSidebar = useMachineViewStore((state) => state.grouping === "compact") && !isMobile;
   const sidebarMode = sidebarPanelMode({ sidebarOpen, compact: compactSidebar });
@@ -259,14 +260,14 @@ export function AppShell({ children }: AppShellProps) {
     // forwards ⌘K to the window; the phone layout's drawer stays closed.
     if (workspaceRealm || isMobile) return;
     return setUnhandledAppShortcut((id) => {
-      const ui = useUIStore.getState();
-      if (ui.sidebarOpen) return false;
+      const chrome = useUIChromeStore.getState();
+      if (chrome.sidebarOpen) return false;
       if (id !== "search-projects" && id !== "rotate-sidebar-grouping") return false;
       // Compact has no search to wait for, and it must not open on leaving compact.
       if (id === "search-projects" && useMachineViewStore.getState().grouping === "compact") {
         return false;
       }
-      ui.toggleSidebar();
+      chrome.toggleSidebar();
       return true;
     });
   }, [isMobile, workspaceRealm]);

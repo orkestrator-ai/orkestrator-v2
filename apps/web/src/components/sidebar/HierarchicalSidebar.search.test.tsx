@@ -13,6 +13,7 @@ import { projectFolderKey } from "@/lib/project-folders";
 import { sidebarFolderKey, useMachineViewStore } from "@/stores/machineViewStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { useEnvironmentStore, useProjectStore, useUIStore } from "@/stores";
+import { useUIChromeStore } from "@/stores/uiChromeStore";
 import {
   SELF_NODE_ID,
   connectionList,
@@ -90,7 +91,9 @@ for (const { mode, offline } of [
       },
       respondPortal: (command) => (command === "get_projects" ? [] : undefined),
     });
-    useUIStore.setState({ environmentSortMode: mode === "activity" ? "activity" : "project" });
+    useUIChromeStore.setState({
+      environmentSortMode: mode === "activity" ? "activity" : "project",
+    });
     useMachineViewStore.setState({
       grouping: mode === "repository" ? "repository" : "machine",
       machineFilter: SELF_NODE_ID,
@@ -130,7 +133,7 @@ for (const { mode, offline } of [
     expect(view.collapsedProjectKeys).not.toContain(key);
     expect(view.collapsedFolderKeys).not.toContain(folderKey);
     expect(view.recentKeys[0]).toBe(key);
-    expect(useUIStore.getState().environmentSortMode).toBe("project");
+    expect(useUIChromeStore.getState().environmentSortMode).toBe("project");
     expect(useUIStore.getState().selectedProjectId).toBeNull();
     expect(useUIStore.getState().selectedEnvironmentId).toBeNull();
     expect(useProjectStore.getState().projects).toEqual([]);
@@ -206,7 +209,7 @@ for (const mode of ["machine", "project", "repository", "activity"] as const) {
     });
     useProjectStore.setState({ projects: [localProject], hasLoaded: true });
     useEnvironmentStore.setState({ environments: [localEnvironment] });
-    useUIStore.setState({
+    useUIChromeStore.setState({
       environmentSortMode: mode === "activity" ? "activity" : "project",
       activitySortOrder: "oldest",
     });
@@ -263,10 +266,10 @@ for (const mode of ["machine", "project", "repository", "activity"] as const) {
       environmentKey(environmentRef("bk_mbp3" as BackendId, "run")),
       key,
     ]);
-    expect(useUIStore.getState().environmentSortMode).toBe(
+    expect(useUIChromeStore.getState().environmentSortMode).toBe(
       mode === "activity" ? "activity" : "project",
     );
-    expect(useUIStore.getState().activitySortOrder).toBe("oldest");
+    expect(useUIChromeStore.getState().activitySortOrder).toBe("oldest");
     expect(useUIStore.getState().selectedProjectId).toBeNull();
     expect(useUIStore.getState().selectedEnvironmentId).toBeNull();
     expect(useProjectStore.getState().projects).toEqual([localProject]);

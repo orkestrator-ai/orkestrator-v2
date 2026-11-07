@@ -15,7 +15,7 @@ import {
 } from "@/components/federation/FederatedSidebarSections";
 import { isMachineShown } from "@/lib/federation/sidebar-layout";
 import { useMachineViewStore } from "@/stores/machineViewStore";
-import { useUIStore } from "@/stores/uiStore";
+import { useUIChromeStore } from "@/stores/uiChromeStore";
 import { FederationProvider } from "@/components/federation/FederationProvider";
 import { ProjectSearchBar } from "@/components/sidebar/ProjectSearchBar";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
@@ -157,7 +157,7 @@ function SearchContent() {
   const reveal = useRevealMachineProject();
   const machines = useMachineViews();
   const grouping = useMachineViewStore((state) => state.grouping);
-  const sort = useUIStore((state) => state.environmentSortMode);
+  const sort = useUIChromeStore((state) => state.environmentSortMode);
   const [selected, setSelected] = useState<string | null>(null);
   const opened = useRemoteWorkspaceStore((state) => state.active);
   return (
@@ -172,7 +172,7 @@ function SearchContent() {
           value={sort === "activity" ? "activity" : grouping}
           onChange={(event) => {
             const mode = event.target.value;
-            useUIStore
+            useUIChromeStore
               .getState()
               .setEnvironmentSortMode(mode === "activity" ? "activity" : "project");
             if (mode === "machine" || mode === "project" || mode === "repository")

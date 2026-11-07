@@ -11,6 +11,7 @@ import { portalStore } from "@/lib/portal/portal-store";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { useEnvironmentStore, useProjectStore, useUIStore } from "@/stores";
+import { useUIChromeStore } from "@/stores/uiChromeStore";
 import {
   OUTCOME_UNKNOWN,
   connectionList,
@@ -117,7 +118,7 @@ function setup({
     revealedProject: null,
     recentKeys: [],
   });
-  useUIStore.setState({ environmentSortMode: sortMode });
+  useUIChromeStore.setState({ environmentSortMode: sortMode });
   render(
     <FederationProvider>
       <HierarchicalSidebar />

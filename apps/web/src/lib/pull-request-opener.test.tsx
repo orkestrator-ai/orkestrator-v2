@@ -7,6 +7,7 @@ import { useFilesPanelStore } from "@/stores/filesPanelStore";
 import { useProjectPullRequestsStore } from "@/stores/projectPullRequestsStore";
 import { useProjectStore } from "@/stores/projectStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
+import { resetWindowScopeForTests } from "@/lib/node-scope/app-window-scope";
 import {
   currentFilesPanelTargetId,
   openPullRequestInApp,
@@ -45,9 +46,12 @@ beforeEach(() => {
   useProjectStore.setState({ projects: [project] });
   setFilesPanelTestState({ pullRequestTabs: {}, isOpen: false, activeTab: "changes" });
   useProjectPullRequestsStore.setState({ projects: {} });
-  useRemoteWorkspaceStore.setState({ active: null });
+  useRemoteWorkspaceStore.setState({ active: null, realms: [], requests: {} });
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  resetWindowScopeForTests();
+});
 
 /** What the main view shows; opening a pull request must leave all of it alone. */
 function mainView() {
@@ -121,9 +125,8 @@ test("a pull request from another project opens in the current view's pane", () 
 test("another machine's workspace has its own pane, so the window falls back", () => {
   useEnvironmentStore.setState({ environments: [environment] });
   useUIStore.setState({ selectedEnvironmentId: "env", selectedProjectId: "project" });
-  useRemoteWorkspaceStore.setState({
-    active: { nodeId: "node-2", projectId: null, environmentId: null },
-  });
+  // The window's selection moves to the other node, so this node's shows nothing.
+  useRemoteWorkspaceStore.getState().open("node-2", {});
   expect(openPullRequestInApp(ref)).toBe(false);
   expect(useFilesPanelChromeStore.getState().isOpen).toBe(false);
 });

@@ -84,6 +84,12 @@ steps in one change.
    - A store with window state too (open state, widths) splits it into an
      ordinary window store (`filesPanelChromeStore`, `windowStorageKey`) that
      every node shares, and the scoped part.
+   - The selection is the window's, node-qualified: `WindowScope.selection`
+     (`stores/windowSelectionStore.ts`, plan item 3006). The scoped `uiStore`
+     projects it (its `selectedProjectId` is null while another node is
+     shown) and a selection made there moves it, so read "what does the
+     window show" from the selection (`selectionOnScope(scope)`,
+     `isCommandNodeSelection`), not from one node's store.
    - A store that holds heavy data (transcript history, previews) does not
      bound it per instance, which would multiply by the number of nodes
      (invariant 11). Each entry reserves its bytes from the window budget,

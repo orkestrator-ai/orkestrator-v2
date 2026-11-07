@@ -9,6 +9,7 @@ import {
   useRemoteWorkspaceStore,
 } from "@/stores/remoteWorkspaceStore";
 import { useEnvironmentStore, useProjectStore, useUIStore } from "@/stores";
+import { useUIChromeStore } from "@/stores/uiChromeStore";
 import {
   connectionList,
   installDesktopFake,
@@ -59,8 +60,10 @@ beforeEach(() => {
     selectedProjectId: null,
     selectedEnvironmentId: null,
     recentProjectIds: [],
-    environmentSortMode: "project",
     collapsedProjects: [],
+  });
+  useUIChromeStore.setState({
+    environmentSortMode: "project",
   });
 });
 

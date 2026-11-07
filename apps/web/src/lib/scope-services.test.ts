@@ -41,7 +41,7 @@ import {
 import { getNodeConnectivity, transportConnectivityService } from "@/lib/transport-connectivity";
 import { buildPipelineStore } from "@/stores/buildPipelineStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
-import { useUIStore } from "@/stores/uiStore";
+import { useUIChromeStore } from "@/stores/uiChromeStore";
 
 const COMMAND_NODE = "bk_command-node" as BackendId;
 const LEAF_NODE = "bk_leaf-node" as BackendId;
@@ -143,7 +143,7 @@ class LeftoverTracker {
     }
 
     for (const [name, store] of [
-      ["ui", useUIStore as unknown as { subscribe: Subscribe }],
+      ["ui-chrome", useUIChromeStore as unknown as { subscribe: Subscribe }],
       ["pane-layout", usePaneLayoutStore as unknown as { subscribe: Subscribe }],
     ] as const) {
       this.trackStore(name, store);
@@ -292,7 +292,7 @@ describe("scoped services: start, stop and restart", () => {
     {
       def: dataSavingReadPolicyService,
       on: "command",
-      expectsWhileRunning: (live) => expect(live["store:ui"]).toBe(1),
+      expectsWhileRunning: (live) => expect(live["store:ui-chrome"]).toBe(1),
     },
     {
       def: paneLayoutPersistenceService,

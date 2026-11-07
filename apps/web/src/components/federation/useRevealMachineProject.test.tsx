@@ -21,6 +21,7 @@ import {
 } from "@/test/federation-desktop-fake";
 import { sidebarFolderKey, useMachineViewStore } from "@/stores/machineViewStore";
 import { useUIStore } from "@/stores/uiStore";
+import { useUIChromeStore } from "@/stores/uiChromeStore";
 import { MergedProjectList, RemoteMachineSection } from "./FederatedSidebarSections";
 import { isMachineShown } from "@/lib/federation/sidebar-layout";
 import { openMachineWorkspace } from "@/lib/federation/open-workspace";
@@ -51,7 +52,7 @@ function Harness() {
   const reveal = useRevealMachineProject();
   const machines = useMachineViews();
   const grouping = useMachineViewStore((state) => state.grouping);
-  const sort = useUIStore((state) => state.environmentSortMode);
+  const sort = useUIChromeStore((state) => state.environmentSortMode);
   useEffect(() => {
     captured.reveal = reveal;
     captured.machines = machines;
@@ -85,7 +86,7 @@ describe("useRevealMachineProject", () => {
     localStorage.removeItem("machine-view-storage");
     useRemoteWorkspaceStore.setState(INITIAL_REMOTE_STATE, true);
     useMachineViewStore.setState(INITIAL_MACHINE_VIEW_STATE, true);
-    useUIStore.setState({ environmentSortMode: "project" });
+    useUIChromeStore.setState({ environmentSortMode: "project" });
     resetSonnerMocks();
     installDesktopFake({
       list: connectionList([MBP3]),
@@ -103,7 +104,7 @@ describe("useRevealMachineProject", () => {
     uninstallDesktopFake();
     useRemoteWorkspaceStore.setState(INITIAL_REMOTE_STATE, true);
     useMachineViewStore.setState(INITIAL_MACHINE_VIEW_STATE, true);
-    useUIStore.setState({ environmentSortMode: "project" });
+    useUIChromeStore.setState({ environmentSortMode: "project" });
     localStorage.removeItem("machine-view-storage");
     captured.reveal = null;
     captured.machines = [];
@@ -172,10 +173,10 @@ describe("useRevealMachineProject", () => {
   });
 
   test("reveals a compact project paired with activity sort in the machine list", async () => {
-    useUIStore.setState({ environmentSortMode: "activity" });
+    useUIChromeStore.setState({ environmentSortMode: "activity" });
     useMachineViewStore.setState({ grouping: "compact" });
     await revealIn();
-    expect(useUIStore.getState().environmentSortMode).toBe("project");
+    expect(useUIChromeStore.getState().environmentSortMode).toBe("project");
     expect(useMachineViewStore.getState().grouping).toBe("machine");
     expect(projectRow()?.querySelector("[aria-current]")?.getAttribute("aria-current")).toBe(
       "true",
@@ -232,7 +233,7 @@ describe("useRevealMachineProject", () => {
       expect(projectRow()?.querySelector("[aria-current]")?.getAttribute("aria-current")).toBe(
         "true",
       );
-      expect(useUIStore.getState().environmentSortMode).toBe("project");
+      expect(useUIChromeStore.getState().environmentSortMode).toBe("project");
       expect(mockToastInfo).not.toHaveBeenCalled();
     });
 

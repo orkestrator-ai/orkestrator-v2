@@ -6,6 +6,7 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/componen
 import { useSidebarPanelMotion } from "@/components/layout/useSidebarPanelMotion";
 import { sidebarPanelConstraints, type SidebarPanelMode } from "@/lib/sidebar-width";
 import { useUIStore } from "@/stores/uiStore";
+import { useUIChromeStore } from "@/stores/uiChromeStore";
 
 /** Real panels with the shell's pinning and constraints, without backend dependencies. */
 export function SidebarMotionFixture() {
@@ -22,7 +23,7 @@ export function SidebarMotionFixture() {
     mainElement: main,
   });
   useEffect(() => {
-    useUIStore.setState({ sidebarWidth: 344 });
+    useUIChromeStore.setState({ sidebarWidth: 344 });
     const onResize = () => setResizes((value) => value + 1);
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);

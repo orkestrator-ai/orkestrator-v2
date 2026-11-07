@@ -13,9 +13,9 @@ import {
   projectRootFilesTargetId,
   useFilesPanelStore,
 } from "@/stores/filesPanelStore";
-import { useProjectStore } from "@/stores/projectStore";
-import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
-import { useUIStore } from "@/stores/uiStore";
+import { appCommandScope } from "@/lib/node-scope-slots";
+import { projectStore } from "@/stores/projectStore";
+import { uiStore } from "@/stores/uiStore";
 
 /**
  * Opens a pull request inside the app. Returns false when there is nowhere to
@@ -54,16 +54,18 @@ export function PullRequestOpenerProvider({
 }
 
 /**
- * The target whose pull request tabs the right-hand files panel shows now:
- * the selected environment, or the selected project's root checkout. Mirrors
- * `useFilesPanel`. Null when nothing is selected, as under another machine's
- * workspace, which clears this window's selection and has its own panel.
+ * The target whose pull request tabs `scope`'s files panel shows now (the
+ * command node's by default): the selected environment, or the selected
+ * project's root checkout. Mirrors `useFilesPanel`. Null when nothing is
+ * selected there, as while the window shows another node, whose workspace
+ * has its own panel.
  */
-export function currentFilesPanelTargetId(): string | null {
-  const ui = useUIStore.getState();
+export function currentFilesPanelTargetId(scope: NodeScope = appCommandScope()): string | null {
+  const ui = scope.store(uiStore).getState();
   if (ui.selectedEnvironmentId) return ui.selectedEnvironmentId;
   if (!ui.selectedProjectId) return null;
-  const project = useProjectStore
+  const project = scope
+    .store(projectStore)
     .getState()
     .projects.find((candidate) => candidate.id === ui.selectedProjectId);
   return project ? projectRootFilesTargetId(project.id) : null;
@@ -84,8 +86,8 @@ export function openPullRequestInApp(
   view?: GitHubPullRequestViewTab,
   scope?: NodeScope,
 ): boolean {
-  if (useRemoteWorkspaceStore.getState().active) return false;
-  const targetId = currentFilesPanelTargetId();
+  // Null while the window shows another node: its workspace has its own panel.
+  const targetId = currentFilesPanelTargetId(scope);
   if (!targetId) return false;
   armPullRequestFallback(ref);
   const filesPanel = scope

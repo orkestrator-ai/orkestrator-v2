@@ -27,7 +27,7 @@ import { MOBILE_SHELL_MEDIA_QUERY } from "@/lib/mobile-shell";
 import { isGlobalSettingsSection, requestGlobalSettings } from "@/lib/settings-navigation";
 import { useFilesPanelChromeStore } from "@/stores/filesPanelChromeStore";
 import { useMachineViewStore } from "@/stores/machineViewStore";
-import { useUIStore } from "@/stores/uiStore";
+import { useUIChromeStore } from "@/stores/uiChromeStore";
 import {
   closeLeafWorkspace,
   keepWorkspaceAlive,
@@ -167,13 +167,13 @@ function useRealmRequests(
   shown: boolean,
 ) {
   const request = useRemoteWorkspaceStore((state) => state.requests[nodeId]);
-  const sidebarOpen = useUIStore((state) => state.sidebarOpen);
+  const sidebarOpen = useUIChromeStore((state) => state.sidebarOpen);
   const filesPanelOpen = useFilesPanelChromeStore((state) => state.isOpen);
   // The phone layout's files panel is a full-screen sheet of this window's own
   // node, and a realm shows none there, so the state is only shared on desktop.
   const phoneLayout = useMediaQuery(MOBILE_SHELL_MEDIA_QUERY);
   const storedGrouping = useMachineViewStore((state) => state.grouping);
-  const sortMode = useUIStore((state) => state.environmentSortMode);
+  const sortMode = useUIChromeStore((state) => state.environmentSortMode);
   const grouping = realmGroupingFor(sortMode, storedGrouping, phoneLayout);
   const delivered = useRef(0);
   const ready = useRef(false);
@@ -295,8 +295,7 @@ function useRealmRequests(
         };
         useRemoteWorkspaceStore.getState().noteRealmSelection(nodeId, message);
       } else if (message.type === "sidebar") {
-        const ui = useUIStore.getState();
-        if (ui.sidebarOpen !== message.open) ui.toggleSidebar();
+        useUIChromeStore.getState().setSidebarOpen(message.open);
       } else if (message.type === "filesPanel") {
         if (latest.current.phoneLayout) return;
         if (useFilesPanelChromeStore.getState().isOpen !== message.open) {

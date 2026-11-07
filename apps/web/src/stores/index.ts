@@ -1,5 +1,6 @@
-export { useUIStore } from "./uiStore";
+export { uiStore, useUIStore } from "./uiStore";
 export type { ProjectBoardTab } from "./uiStore";
+export { useUIChromeStore } from "./uiChromeStore";
 export { projectStore, useProjectStore } from "./projectStore";
 export { environmentStore, useEnvironmentStore } from "./environmentStore";
 export { configStore, useConfigStore } from "./configStore";

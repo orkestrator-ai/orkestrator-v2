@@ -16,6 +16,7 @@ import {
 import type { MachineView } from "@/lib/federation/aggregate";
 import { getReadCoordinator, resetReadCoordinatorForTests } from "@/lib/read-coordinator";
 import { useEnvironmentStore, useProjectStore, useUIStore } from "@/stores";
+import { useUIChromeStore } from "@/stores/uiChromeStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useAppDialogStore } from "@/stores/appDialogStore";
 import { useFilesPanelStore } from "@/stores/filesPanelStore";
@@ -249,19 +250,20 @@ test("panel messages leave sidebar and selection untouched; only sidebar message
     return undefined;
   });
   useProjectStore.setState({ projects: [], hasLoaded: true });
-  useUIStore.setState({ sidebarOpen: true, selectedProjectId: null, selectedEnvironmentId: null });
+  useUIStore.setState({ selectedProjectId: null, selectedEnvironmentId: null });
+  useUIChromeStore.setState({ sidebarOpen: true });
   render(<WorkspaceRealmHost />);
   await waitFor(() => expect(useProjectStore.getState().isLoading).toBe(false));
   const selection = useUIStore.getState().projectSelectionRevision;
   for (const open of [false, true]) {
     act(() => deliver({ type: "panel", panel: "agent", open, inset: 6, seq: 1 }));
-    expect(useUIStore.getState().sidebarOpen).toBe(true);
+    expect(useUIChromeStore.getState().sidebarOpen).toBe(true);
     expect(useUIStore.getState().projectSelectionRevision).toBe(selection);
   }
   act(() => deliver({ type: "sidebar", open: false }));
-  expect(useUIStore.getState().sidebarOpen).toBe(false);
+  expect(useUIChromeStore.getState().sidebarOpen).toBe(false);
   act(() => deliver({ type: "panel", panel: "usage", open: true, inset: 6, seq: 2 }));
-  expect(useUIStore.getState().sidebarOpen).toBe(false);
+  expect(useUIChromeStore.getState().sidebarOpen).toBe(false);
   expect(useUIStore.getState().projectSelectionRevision).toBe(selection);
   // The window's grouping is kept for the coordinator gate.
   act(() => deliver({ type: "grouping", grouping: "project" }));

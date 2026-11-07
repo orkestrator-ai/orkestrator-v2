@@ -33,6 +33,7 @@ import {
 import { ProjectSearchBar } from "@/components/sidebar/ProjectSearchBar";
 import { requestAppShortcut, onAppShortcut } from "@/lib/app-shortcuts";
 import { useUIStore as realUIStore } from "@/stores/uiStore";
+import { useUIChromeStore } from "@/stores/uiChromeStore";
 import type { TabInfo } from "@/types/paneLayout";
 
 import { invoke as nativeInvoke } from "@/lib/native/backend";
@@ -263,7 +264,7 @@ beforeEach(() => {
   selectedEnvironmentPr = {};
   useBuildPipelineStore.setState({ activeBuildEnvironmentIds: new Set() });
   usePrMonitorStore.setState({ states: new Map(), syncStatus: "idle" });
-  uiStore.setState({ sidebarOpen: true });
+  useUIChromeStore.setState({ sidebarOpen: true });
   mountSearch = false;
   startDraggingMock.mockReset();
   document.title = "";
@@ -584,12 +585,12 @@ describe("AppShell", () => {
 
     expect(screen.getByTestId("resize-handle")).toBeTruthy();
 
-    act(() => uiStore.setState({ sidebarOpen: false }));
+    act(() => useUIChromeStore.setState({ sidebarOpen: false }));
     rerender(<AppShell>Workspace</AppShell>);
     await waitFor(() => expect(screen.queryByText("Sidebar") === null).toBe(true));
     expect(screen.queryByTestId("resize-handle") === null).toBe(true);
 
-    act(() => uiStore.setState({ sidebarOpen: true }));
+    act(() => useUIChromeStore.setState({ sidebarOpen: true }));
     rerender(<AppShell>Workspace</AppShell>);
     expect(screen.getByText("Sidebar")).toBeTruthy();
     expect(screen.getByTestId("resize-handle")).toBeTruthy();
@@ -598,12 +599,12 @@ describe("AppShell", () => {
   test("search reveals the hidden desktop sidebar and delivers the pending request exactly once", async () => {
     isMobile = false;
     mountSearch = true;
-    uiStore.setState({ sidebarOpen: false });
+    useUIChromeStore.setState({ sidebarOpen: false });
     const { rerender } = render(<AppShell>Workspace</AppShell>);
     expect(screen.queryByText("Sidebar") === null).toBe(true);
     fireEvent.keyDown(document.body, { key: "k", code: "KeyK", metaKey: true });
     await waitFor(() => expect(screen.getByTestId("project-search-dialog")).toBeTruthy());
-    expect(uiStore.getState().sidebarOpen).toBe(true);
+    expect(useUIChromeStore.getState().sidebarOpen).toBe(true);
     const input = screen.getByRole("combobox");
     await waitFor(() => expect(document.activeElement).toBe(input));
     // A second delivery would toggle the just-mounted search closed.
@@ -623,10 +624,10 @@ describe("AppShell", () => {
     isMobile = false;
     mountSearch = true;
     render(<AppShell>Workspace</AppShell>);
-    act(() => uiStore.setState({ sidebarOpen: false }));
+    act(() => useUIChromeStore.setState({ sidebarOpen: false }));
     expect(screen.getByText("Sidebar")).toBeTruthy();
     act(() => requestAppShortcut("search-projects"));
-    expect(uiStore.getState().sidebarOpen).toBe(true);
+    expect(useUIChromeStore.getState().sidebarOpen).toBe(true);
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 300));
     });
@@ -645,15 +646,15 @@ describe("AppShell", () => {
   test("in compact, search stays closed and is not delivered when compact is left", async () => {
     isMobile = false;
     mountSearch = true;
-    uiStore.setState({ sidebarOpen: false });
+    useUIChromeStore.setState({ sidebarOpen: false });
     useMachineViewStore.setState({ grouping: "compact" });
     render(<AppShell>Workspace</AppShell>);
     fireEvent.keyDown(document.body, { key: "k", code: "KeyK", metaKey: true });
-    expect(uiStore.getState().sidebarOpen).toBe(false);
+    expect(useUIChromeStore.getState().sidebarOpen).toBe(false);
 
     act(() => {
       useMachineViewStore.setState({ grouping: "machine" });
-      uiStore.setState({ sidebarOpen: true });
+      useUIChromeStore.setState({ sidebarOpen: true });
     });
     await waitFor(() => expect(screen.getByText("Sidebar")).toBeTruthy());
     expect(screen.queryByTestId("project-search-dialog") === null).toBe(true);
@@ -661,7 +662,7 @@ describe("AppShell", () => {
 
   test("the rotate shortcut shows a hidden sidebar and is delivered to it once", async () => {
     isMobile = false;
-    uiStore.setState({ sidebarOpen: false });
+    useUIChromeStore.setState({ sidebarOpen: false });
     let rotated = 0;
     function Rotator() {
       useEffect(() => onAppShortcut("rotate-sidebar-grouping", () => rotated++), []);
@@ -669,7 +670,7 @@ describe("AppShell", () => {
     }
     const { rerender } = render(<AppShell>Workspace</AppShell>);
     fireEvent.keyDown(document.body, { key: "D", code: "KeyD", metaKey: true, shiftKey: true });
-    expect(uiStore.getState().sidebarOpen).toBe(true);
+    expect(useUIChromeStore.getState().sidebarOpen).toBe(true);
     rerender(
       <AppShell>
         <Rotator />
@@ -696,7 +697,7 @@ describe("AppShell", () => {
 
   test("a realm skips the shell's hidden-sidebar fallback", () => {
     isMobile = false;
-    uiStore.setState({ sidebarOpen: false });
+    useUIChromeStore.setState({ sidebarOpen: false });
     const happyDOM = (window as unknown as { happyDOM: { setURL(url: string): void } }).happyDOM;
     const href = window.location.href;
     happyDOM.setURL("https://node.test/?realm=workspace&workspace=w1");
@@ -705,7 +706,7 @@ describe("AppShell", () => {
       act(() => {
         requestAppShortcut("search-projects");
       });
-      expect(uiStore.getState().sidebarOpen).toBe(false);
+      expect(useUIChromeStore.getState().sidebarOpen).toBe(false);
       expect(screen.queryByText("Sidebar") === null).toBe(true);
     } finally {
       cleanup();

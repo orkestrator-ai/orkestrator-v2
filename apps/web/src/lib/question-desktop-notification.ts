@@ -2,7 +2,8 @@ import type { EnvironmentAttentionReason } from "@orkestrator/protocol/environme
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useProjectStore } from "@/stores/projectStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
-import { useUIStore } from "@/stores/uiStore";
+import { uiStore } from "@/stores/uiStore";
+import { appCommandScope } from "@/lib/node-scope-slots";
 
 /** What this client may do with desktop notifications. */
 export type DesktopNotificationPermission = NotificationPermission | "unsupported";
@@ -57,7 +58,8 @@ function environmentLabel(environmentId: string, projectId: string): string | nu
 
 function openEnvironment(projectId: string, environmentId: string): void {
   useRemoteWorkspaceStore.getState().showLocal();
-  const ui = useUIStore.getState();
+  // A local notification is this window's own node's.
+  const ui = appCommandScope().store(uiStore).getState();
   ui.setProjectCollapsed(projectId, false);
   ui.selectProjectAndEnvironment(projectId, environmentId);
   if (

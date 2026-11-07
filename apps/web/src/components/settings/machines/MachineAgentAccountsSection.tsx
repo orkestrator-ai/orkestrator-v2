@@ -42,7 +42,10 @@ import { usePortalLayout } from "@/lib/portal/portal-layout";
 import { requestCloseGlobalSettings, requestGlobalSettings } from "@/lib/settings-navigation";
 import { useAccountMachineStore } from "@/components/settings/account-machine";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
-import { useUIStore } from "@/stores/uiStore";
+import { uiStore } from "@/stores/uiStore";
+import { isCommandNodeSelection } from "@/stores/windowSelectionStore";
+import { getWindowScope } from "@/lib/node-scope/app-window-scope";
+import { appCommandScope } from "@/lib/node-scope-slots";
 import { cn } from "@/lib/utils";
 import {
   isPreferredIdentity,
@@ -557,7 +560,8 @@ function showSignInTerminal(
   requestCloseGlobalSettings();
   if (machine.self) {
     useRemoteWorkspaceStore.getState().showLocal();
-    const ui = useUIStore.getState();
+    // This window's own node.
+    const ui = appCommandScope().store(uiStore).getState();
     ui.selectProject(terminal.projectId);
     ui.selectEnvironment(terminal.environmentId);
     return;
@@ -570,11 +574,12 @@ function showSignInTerminal(
 
 /** The environment on screen, when it is on `machine`: a sign-in terminal prefers it. */
 function environmentOnScreen(machine: MachineAgentAccounts): string | undefined {
-  const remote = useRemoteWorkspaceStore.getState().active;
-  if (machine.self) {
-    return remote ? undefined : (useUIStore.getState().selectedEnvironmentId ?? undefined);
-  }
-  return remote?.nodeId === machine.nodeId ? (remote.environmentId ?? undefined) : undefined;
+  const windowScope = getWindowScope();
+  const selection = windowScope.selection.get();
+  const onMachine = machine.self
+    ? isCommandNodeSelection(windowScope, selection)
+    : selection?.nodeId === machine.nodeId;
+  return onMachine ? (selection?.environmentId ?? undefined) : undefined;
 }
 
 export function MachineAgentAccountsSection({

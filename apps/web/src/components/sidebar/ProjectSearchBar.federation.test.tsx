@@ -20,6 +20,11 @@ import { useUIStore } from "@/stores/uiStore";
 import type { Environment, Project } from "@/types";
 import { ProjectSearchBar } from "./ProjectSearchBar";
 import { selectOnNode } from "@/test/node-selection";
+import { FakeNodeClient } from "@/test/render-in-node-scope";
+import { getWindowScope } from "@/lib/node-scope/app-window-scope";
+import { noteAuthoritativeRead } from "@/lib/node-scope/snapshot-sync";
+import { environmentStore } from "@/stores/environmentStore";
+import { projectStore } from "@/stores/projectStore";
 
 const INITIAL_MACHINE_VIEW_STATE = useMachineViewStore.getState();
 const INITIAL_REMOTE_WORKSPACE_STATE = useRemoteWorkspaceStore.getState();
@@ -618,4 +623,62 @@ describe("ProjectSearchBar across machines", () => {
       expect(onSelectEnvironment).not.toHaveBeenCalled();
     });
   }
+  test("a machine whose scope the window holds warm is searched from that scope's stores", async () => {
+    renderSearch();
+    await openAndType("run-desktop");
+    await option("run-desktop-app, environment of orkestrator-v2 on mbp3");
+    const summaries = portalStore.getState().nodes;
+    // mbp3's scope, holding its own records with an environment renamed since the summary.
+    const scope = getWindowScope().open({
+      role: "leaf",
+      client: new FakeNodeClient({ nodeId: "bk_mbp3" as BackendId }),
+      tier: "warm",
+    });
+    try {
+      act(() => {
+        scope
+          .store(projectStore)
+          .getState()
+          .setProjects([
+            {
+              id: "tg",
+              name: "telegram-scraper",
+              gitUrl: "git@github.com:acme/telegram-scraper.git",
+              localPath: null,
+              addedAt: "2026-01-01T00:00:00.000Z",
+              order: 0,
+            },
+            {
+              id: "ork-3",
+              name: "orkestrator-v2",
+              gitUrl: "https://github.com/acme/orkestrator-v2.git",
+              localPath: null,
+              addedAt: "2026-01-01T00:00:00.000Z",
+              order: 1,
+            },
+          ]);
+        scope
+          .store(environmentStore)
+          .getState()
+          .setEnvironments([
+            {
+              ...localEnvironment,
+              id: "run",
+              projectId: "ork-3",
+              name: "ship-desktop-app",
+              branch: "develop",
+              status: "stopped",
+              worktreePath: "/Users/someone/worktrees/run-desktop-wt",
+            } as Environment,
+          ]);
+        noteAuthoritativeRead(scope, "environment");
+      });
+      const input = screen.getByRole("combobox", { name: "Search projects and environments" });
+      fireEvent.change(input, { target: { value: "ship-desktop" } });
+      await option("ship-desktop-app, environment of orkestrator-v2 on mbp3");
+      expect(portalStore.getState().nodes).toBe(summaries);
+    } finally {
+      scope.dispose();
+    }
+  });
 });

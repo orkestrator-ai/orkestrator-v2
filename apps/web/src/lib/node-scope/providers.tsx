@@ -119,9 +119,18 @@ export function useOptionalNodeScope(): NodeScope | null {
  * targets, the host path picker); new code uses `useNodeScope()`.
  */
 export function useScopesWithCommandFallback(): { windowScope: WindowScope; scope: NodeScope } {
-  const windowScope = useContext(WindowScopeContext) ?? getWindowScope();
+  const windowScope = useWindowScopeWithFallback();
   const scope = useContext(NodeScopeContext);
   return { windowScope, scope: scope ?? windowScope.commandScope() };
+}
+
+/**
+ * The nearest window scope, or the app's outside a provider, in every mode,
+ * without requiring a command scope. For window-level readers that render in
+ * trees with no provider (the sidebar's machine views, plan item 5007).
+ */
+export function useWindowScopeWithFallback(): WindowScope {
+  return useContext(WindowScopeContext) ?? getWindowScope();
 }
 
 /** Reads a signal and re-renders when it changes. */

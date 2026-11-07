@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useSyncExternalStore } from "react";
 import { FALLBACK_MACHINE_COLOR } from "@orkestrator/protocol/backend-profile";
 import type { NodeConnectionState } from "@orkestrator/protocol/command-nodes";
 import type { ConnectionTransportState } from "@orkestrator/protocol/connections";
@@ -21,6 +21,12 @@ import { useEnvironmentStore, useProjectStore } from "@/stores";
 import type { MachineView } from "@/lib/federation/aggregate";
 import { orderMachines, registryOrder } from "@/lib/federation/sidebar-layout";
 import { usePortalLayout } from "@/lib/portal/portal-layout";
+import { useWindowScopeWithFallback } from "@/lib/node-scope/providers";
+import {
+  machineViewWithScopeRows,
+  scopeRowsSource,
+  type ScopeRows,
+} from "@/lib/federation/scope-overlay";
 import {
   boundedText,
   repositoryHint,
@@ -188,13 +194,39 @@ export function useBoundMachineView(): MachineView | null {
   }, [bound, environments, projects, activeBuildEnvironmentIds, release]);
 }
 
-/** Every machine but the window's own, from the command node's read model: its other nodes. */
+/** The window's warm and live node scopes' own rows, by node (plan item 5007). */
+function useScopeRows(): ReadonlyMap<BackendId, ScopeRows> {
+  const source = scopeRowsSource(useWindowScopeWithFallback());
+  return useSyncExternalStore(source.subscribe, source.getSnapshot, source.getSnapshot);
+}
+
+/**
+ * Every machine but the window's own: its other nodes, from the command
+ * node's read model, with the rows of a node whose scope the window holds
+ * warm or live taken from that scope's stores (`scope-overlay.ts`).
+ */
 export function useRemoteMachineViews(): MachineView[] {
   const { portalState, bound } = useFederation();
   const boundId = bound?.backendId ?? null;
+  const scopeRows = useScopeRows();
   return useMemo(() => {
-    return portalState.nodes.filter((node) => node.nodeId !== boundId).map(viewFromNodeSummary);
-  }, [boundId, portalState.nodes]);
+    return portalState.nodes
+      .filter((node) => node.nodeId !== boundId)
+      .map((node) => {
+        const view = viewFromNodeSummary(node);
+        const rows = scopeRows.get(node.nodeId);
+        return rows ? machineViewWithScopeRows(view, node, rows) : view;
+      });
+  }, [boundId, portalState.nodes, scopeRows]);
+}
+
+/** One of the window's other machines, as `useRemoteMachineViews` gives it. */
+export function useRemoteMachineView(nodeId: BackendId | null): MachineView | null {
+  const machines = useRemoteMachineViews();
+  return useMemo(
+    () => (nodeId ? (machines.find((machine) => machine.backendId === nodeId) ?? null) : null),
+    [machines, nodeId],
+  );
 }
 
 /**

@@ -428,8 +428,10 @@ which runs with the command node's authority.
   machine. `useBoundMachineView` projects the bound machine from the window's
   own full stores (projects, environments, active builds), so it is never
   read twice. `useRemoteMachineViews` maps every other node's summary
-  (`viewFromNodeSummary`). The order is the command node's registry order,
-  then the user's portal layout.
+  (`viewFromNodeSummary`), and takes the rows of a node whose scope the
+  window holds warm or live from that scope's stores
+  ([Summaries and scopes together](#summaries-and-scopes-together)). The
+  order is the command node's registry order, then the user's portal layout.
 - **Writes** are offered only while `isMachineWritable`
   (`lib/federation/aggregate.ts`): the bound machine, or a node whose
   connection is `connected`. There is no offline queue.
@@ -639,19 +641,58 @@ them all.
 
 Summaries are the floor for every node, whatever its tier: the sidebar, the
 ⌘K search and the title bar's per-machine readings show every other node
-from the command node's summaries and routed reads, and the command node's
-own rows from the window's full stores (`useBoundMachineView`). Attention
-from a warm or live node arrives on its scope's client, and from every other
-node through the command node's relay (`lib/federation/window-attention.ts`).
-A node's scope overlays its full stores where its workspace is drawn: the
-central region, its dialogs, the files panel and the bug report sheet on
-that node read the scope, never the summaries. Its sidebar rows still come
-from the summaries while the scope is warm or live: the report's "full scope
-stores overlay warm/live nodes" in the sidebar (§9) is not built, so detail
-beyond a summary there comes from routed reads (`useNodeEnvironment`,
-`node-environment-reads.ts`). The parity tests (`sidebar-parity.test.tsx`,
-`remote-row-parity.test.tsx`) keep a summary row and a full-store row drawn
-alike.
+from the command node's summaries, and the command node's own rows from the
+window's full stores (`useBoundMachineView`). Attention from a warm or live
+node arrives on its scope's client, and from every other node through the
+command node's relay (`lib/federation/window-attention.ts`). A node's scope
+overlays its full stores where its workspace is drawn: the central region,
+its dialogs, the files panel and the bug report sheet on that node read the
+scope, never the summaries.
+
+**The overlay** (`lib/federation/scope-overlay.ts`, plan item 5007). The
+same reading holds for a node's rows in the sidebar, the ⌘K search and the
+title bar's names and merge-ready shimmer of the node on screen: while the
+window holds its scope `warm` or `live`, `useRemoteMachineViews` takes its
+projects and environments from that scope's `projectStore` and
+`environmentStore` (`machineViewWithScopeRows`), so a change the scope hears
+on the node's own stream, such as an environment renamed, shows without
+waiting for the next summary. Every other node, and a `summary` or
+`suspended` one, keeps its summary rows.
+
+- **The same row either way.** The scope's records go through the projection
+  the command node applies to the node's summary reads
+  (`toNodeProjectSummary`, `toNodeEnvironmentSummary`), with the same caps
+  (500 projects, 500 environments per project, `truncated` past them) and
+  the same order (each list by the node's own `order`). What a summary read
+  adds to the ordinary records is not in the scope's stores and is kept from
+  the summary: the PR monitor health (`prMonitorConfirmed`,
+  `prViewerCanMerge`, `prCheckSummary`), `buildPipeline`, `buildActive`, the
+  agent-mail badge, Docker availability (which a row created since the last
+  summary takes from the machine's other rows) and a project's
+  `defaultBranch`. A project's icon is the scope's, so past the summary's
+  shared icon budget (256 KiB per node) a warm node's projects keep theirs.
+- **When the scope is used.** Only a leaf scope, while its tier is `warm`
+  or `live`, its client hears the node (`connection` `live` or
+  `resyncing`), and its stores hold the node's authoritative projects
+  (`projectStore.hasLoaded`) and environments (the environment resync's
+  `noteAuthoritativeRead`, `scopeAuthoritativeReads`). A scope painted from
+  its snapshot ([Snapshots](#snapshots)) therefore shows the summary until
+  its own reads land. The view's machine-level fields (connection,
+  freshness, `loadedAt`, release) stay the command node's, so writes are
+  offered on the same rule as before (`isMachineWritable`).
+- **No flicker.** Rows are keyed by node-qualified key on both sources, so
+  a tier change re-renders a row in place; with the same data the drawn rows
+  are identical, and a row that differs takes the newer source's values.
+  `scopeRowsSource` keeps its snapshot's identity while no node's rows
+  changed, so the machine views re-render only on a real change.
+
+Detail beyond a row still comes from routed reads (`useNodeEnvironment`,
+`node-environment-reads.ts`). The parity tests keep a summary row and a
+scope row alike: `environment-row-model.parity.test.ts` (every row case
+through both), `scope-overlay.test.ts` (a whole machine view, the bounds,
+the readiness rules) and `sidebar-parity.test.tsx` (the drawn sidebar across
+summary, warm, live and suspended, and a rename shown before the summary),
+next to `remote-row-parity.test.tsx` for a summary row and this window's.
 
 ### Failure isolation
 
@@ -910,7 +951,9 @@ component with two thin adapters:
 | Drag card | `SidebarDragOverlay` | `HierarchicalSidebar` | `MergedProjectList`, `RemoteMachineTree` |
 
 The adapters only gather facts (from this window's stores, or from
-`NodeEnvironmentSummary`/`NodeProjectSummary`) and actions. When changing what a
+`NodeEnvironmentSummary`/`NodeProjectSummary`, which for a warm or live node
+are its scope's records in the summary's shape,
+[Summaries and scopes together](#summaries-and-scopes-together)) and actions. When changing what a
 row, header, badge, icon, menu, hover card, filter or sort shows:
 
 - Change the shared component or the model, not an adapter. A new fact goes in
@@ -920,7 +963,10 @@ row, header, badge, icon, menu, hover card, filter or sort shows:
   the machine's summary read (`get_environment_snapshots` with
   `includePrMonitorHealth`), so older machines degrade to the previous display.
   If the field changes on an event other than an environment change, make
-  `NodeReadModel` re-read on it (agent mail does).
+  `NodeReadModel` re-read on it (agent mail does). If only the summary read
+  adds it (it is not in the node's ordinary environment record), list it in
+  `SUMMARY_ONLY_ENVIRONMENT_FIELDS` (`scope-overlay.ts`), so a warm node's row
+  keeps it from the summary.
 - Add a case to `environment-row-model.parity.test.ts`, which feeds one
   environment through both adapters and requires the same row, or a rendering
   test to `remote-row-parity.test.tsx`.
@@ -972,8 +1018,10 @@ environments. The ⌘K shortcut and the sidebar's "Search projects,
 environments..." field open the same dialog, so they behave identically.
 
 - **Sources.** This machine's rows come from its full stores
-  (`localSearchSource`); every other machine's from its summaries
-  (`machineSearchSource`, over `useMachineViews`). Both are normalized into
+  (`localSearchSource`); every other machine's from its summaries, or from
+  its scope's stores while the window holds it warm or live
+  (`machineSearchSource`, over `useMachineViews`;
+  [Summaries and scopes together](#summaries-and-scopes-together)). Both are normalized into
   the same records with the same helpers (`repositoryHint`, `pathName`), so a
   remote row matches on exactly the fields a local row does: project name,
   repository owner/name and repository name (never the host or scheme),
@@ -1155,8 +1203,6 @@ Plan items that are not implemented, or only partly, as of this change.
   refuse), as with the realms before.
 - **Mobile**: the iOS app shows other nodes in its one `WKWebView`, as a
   browser does. There is no mobile SSH.
-- **Sidebar rows of open nodes** come from the summaries even while the
-  node's scope is warm or live ([Summaries and scopes together](#summaries-and-scopes-together)).
 - **SSH**: macOS and Linux desktop only; Windows is not qualified; no SSH in
   browsers. Nothing installs or starts a remote backend and there is no SSH
   pairing for the gateway token. No ControlMaster multiplexing. No UI

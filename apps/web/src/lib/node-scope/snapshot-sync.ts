@@ -44,6 +44,7 @@ export type ScopeSnapshotSync =
     };
 
 const LIVE: ScopeSnapshotSync = Object.freeze({ state: "live" });
+const NOTHING_SEEN: ReadonlySet<SnapshotGatedKind> = Object.freeze(new Set<SnapshotGatedKind>());
 
 /** How long a mutation waits for `live` before it is refused. */
 export const SNAPSHOT_MUTATION_WAIT_MS = 30_000;
@@ -64,6 +65,8 @@ interface SyncEntry {
   readonly signal: WritableSignal<ScopeSnapshotSync>;
   /** Kinds with an authoritative read since the scope opened, hydrated or not. */
   readonly seen: Set<SnapshotGatedKind>;
+  /** `seen` as a signal, a new frozen set each time a kind is first read. */
+  readonly seenSignal: WritableSignal<ReadonlySet<SnapshotGatedKind>>;
   /** Mutations waiting for `live`; told when the scope is disposed or its snapshot discarded. */
   readonly waiters: Set<(reason: "disposed" | "discarded") => void>;
   disposeHooked: boolean;
@@ -77,6 +80,7 @@ function entryFor(scope: NodeScope): SyncEntry {
     entry = {
       signal: createSignal(LIVE),
       seen: new Set(),
+      seenSignal: createSignal<ReadonlySet<SnapshotGatedKind>>(NOTHING_SEEN),
       waiters: new Set(),
       disposeHooked: false,
     };
@@ -116,7 +120,10 @@ export function markScopeResyncing(
 /** An authoritative read of `kind` landed in `scope`'s stores. */
 export function noteAuthoritativeRead(scope: NodeScope, kind: SnapshotGatedKind): void {
   const entry = entryFor(scope);
-  entry.seen.add(kind);
+  if (!entry.seen.has(kind)) {
+    entry.seen.add(kind);
+    entry.seenSignal.set(Object.freeze(new Set(entry.seen)));
+  }
   const current = entry.signal.get();
   if (current.state !== "resyncing" || !current.pending.includes(kind)) return;
   const pending = current.pending.filter((other) => other !== kind);
@@ -136,6 +143,18 @@ export function discardScopeResyncing(scope: NodeScope): void {
   if (!entry || entry.signal.get().state === "live") return;
   for (const waiter of Array.from(entry.waiters)) waiter("discarded");
   entry.signal.set(LIVE);
+}
+
+/**
+ * The kinds with an authoritative read in `scope` since it opened, hydrated
+ * from a snapshot or not; it changes when a kind is first read. The sidebar's
+ * scope overlay (plan item 5007) waits on it, because a read that installs
+ * what the store already held notifies no store subscriber.
+ */
+export function scopeAuthoritativeReads(
+  scope: NodeScope,
+): ReadableSignal<ReadonlySet<SnapshotGatedKind>> {
+  return entryFor(scope).seenSignal;
 }
 
 /** Whether every kind in `kinds` has had an authoritative read in `scope`. */

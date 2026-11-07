@@ -21,6 +21,7 @@ import {
   toNodeEnvironmentSummary,
 } from "@orkestrator/protocol/node-summaries";
 import type { MachineView } from "@/lib/federation/aggregate";
+import { machineViewWithScopeRows } from "@/lib/federation/scope-overlay";
 import { isLocalDeletionRetryable } from "@/lib/federation/selected-environments";
 import { localEnvironmentPrMergeState } from "@/lib/pr-merge-readiness";
 import type { Environment } from "@/types";
@@ -138,7 +139,8 @@ function localRow(environment: Environment, markers: Markers): Row {
   );
 }
 
-function nodeRow(environment: Environment, markers: Markers): Row {
+/** The node summary of `environment`, as the command node keeps it. */
+function nodeSummary(environment: Environment, markers: Markers) {
   // The record `get_environment_snapshots` answers a node summary read with.
   const raw = {
     ...environment,
@@ -153,7 +155,38 @@ function nodeRow(environment: Environment, markers: Markers): Row {
   };
   const summary = toNodeEnvironmentSummary(NODE, raw as Record<string, unknown>)!;
   expect(summary.ref).toEqual(environmentRef(NODE, environment.id));
+  return summary;
+}
+
+function nodeRow(environment: Environment, markers: Markers): Row {
+  const summary = nodeSummary(environment, markers);
   return row(nodeEnvironmentRowFacts(machine, summary, { busy: false, writable: true }, true));
+}
+
+/**
+ * The same machine's row while the window holds its scope warm or live (plan
+ * item 5007): the scope's own record, overlaid on the summary, which keeps
+ * only what a summary read adds.
+ */
+function scopeRow(environment: Environment, markers: Markers): Row {
+  const summary = nodeSummary(environment, markers);
+  const project = {
+    id: "project-1",
+    name: "app",
+    gitUrl: "",
+    localPath: "/work/app",
+    addedAt: "2026-10-01T00:00:00Z",
+    order: 0,
+  };
+  const view = machineViewWithScopeRows(
+    machine,
+    { projects: [...machine.projects], environments: [summary] },
+    { projects: [project], environments: [environment] },
+  );
+  expect(view.projects).toEqual(machine.projects);
+  const overlaid = view.environmentsByProject.get("project-1")?.[0];
+  expect(overlaid).toEqual(summary);
+  return row(nodeEnvironmentRowFacts(view, overlaid!, { busy: false, writable: true }, true));
 }
 
 /** Machine lines and failure detail differ by design: remote errors are content-free. */
@@ -288,6 +321,29 @@ describe("an environment row looks the same on its own machine and through a com
       expect(comparable(nodeRow(environment, markers))).toEqual(comparable(local));
     });
   }
+});
+
+describe("another machine's row is the same from its summary and from its warm scope", () => {
+  for (const [label, overrides, markers] of cases) {
+    test(label, () => {
+      const environment = { ...base, ...overrides } as Environment;
+      expect(scopeRow(environment, markers)).toEqual(nodeRow(environment, markers));
+    });
+  }
+
+  test("a PR reading vouched for by the machine's monitor", () => {
+    const environment = {
+      ...base,
+      prUrl: "https://github.com/o/r/pull/1",
+      prState: "open",
+      hasMergeConflicts: false,
+      prMergeability: "clean",
+    } as Environment;
+    const markers = { monitor: monitorFor(environment) };
+    const fromScope = scopeRow(environment, markers);
+    expect(fromScope.model.nameSignal).toBe("merge-ready");
+    expect(fromScope).toEqual(nodeRow(environment, markers));
+  });
 });
 
 test("multi-select takes a failed cleanup but not a delete in flight, on either path", () => {

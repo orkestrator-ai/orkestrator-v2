@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import type { BackendId } from "@orkestrator/protocol/federation";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/components/ui/resizable";
 import { Sidebar } from "./Sidebar";
 import { ActionBar } from "./ActionBar";
@@ -22,7 +23,7 @@ import {
   useShimmerRequiresChecks,
 } from "@/hooks/useEnvironmentNameSignal";
 import { isNodeEnvironmentReadyToMerge } from "@/lib/pr-merge-readiness";
-import { viewFromNodeSummary } from "@/components/federation/useMachineViews";
+import { useRemoteMachineView } from "@/components/federation/useMachineViews";
 import { AgentInfoButton } from "./AgentInfoButton";
 import { AgentMailButton } from "@/components/agent-mail/AgentMailButton";
 import { AgentMailPanel } from "@/components/agent-mail/AgentMailPanel";
@@ -33,7 +34,6 @@ import { GlobalSettingsHost } from "./GlobalSettingsHost";
 import { BugReportSheetHost } from "@/components/bug-report/BugReportSheet";
 import { MachineCpuReadings } from "@/components/federation/MachineCpuReadings";
 import { RemoteWorkspaceRegion } from "@/components/federation/RemoteWorkspaceRegion";
-import { useFederation } from "@/components/federation/FederationProvider";
 import { NodeTitleBarAgentInfo, NodeTitleBarUsage, useShownInTreeNode } from "./ShownNodeTitleBar";
 import {
   retainAppShortcutRouter,
@@ -57,28 +57,33 @@ interface AppShellProps {
   children?: React.ReactNode;
 }
 
-/** Names of the other node's project and environment the central region shows. */
+/**
+ * Names of the other node's project and environment the central region
+ * shows, from the same machine view as its sidebar rows: its scope's stores
+ * while the window holds it warm or live, else its summary (plan item 5007).
+ */
 function useRemoteWorkspaceNames(active: RemoteWorkspaceSelection | null) {
-  const { portalState } = useFederation();
+  const machine = useRemoteMachineView((active?.nodeId ?? null) as BackendId | null);
   const requireChecks = useShimmerRequiresChecks();
   return useMemo(() => {
     if (!active) return null;
-    const node = portalState.nodes.find((candidate) => candidate.nodeId === active.nodeId);
-    const project = node?.projects.find(
+    const project = machine?.projects.find(
       (candidate) => candidate.ref.projectId === active.projectId,
     );
-    const environment = node?.environments.find(
-      (candidate) => candidate.ref.environmentId === active.environmentId,
-    );
+    const environment = active.environmentId
+      ? Array.from(machine?.environmentsByProject.values() ?? [])
+          .flat()
+          .find((candidate) => candidate.ref.environmentId === active.environmentId)
+      : undefined;
     return {
       projectName: project?.name ?? null,
       environmentName: environment?.name ?? null,
       readyToMerge:
-        node && environment
-          ? isNodeEnvironmentReadyToMerge(environment, viewFromNodeSummary(node), requireChecks)
+        machine && environment
+          ? isNodeEnvironmentReadyToMerge(environment, machine, requireChecks)
           : false,
     };
-  }, [active, portalState.nodes, requireChecks]);
+  }, [active, machine, requireChecks]);
 }
 
 export function AppShell({ children }: AppShellProps) {

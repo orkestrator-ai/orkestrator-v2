@@ -1330,6 +1330,8 @@ threshold, and one library serves both the contracts and the renderer's Effect
 runtime. D remains the fallback if the bundle cost later proves unacceptable;
 taking it changes this decision and needs the user's approval.
 
+- **Zod after Phase 7 (2026-11-07):** [7014](../../plans/unified/7014-remaining-zod-to-effect-schema.md) moved the backend's MCP tool inputs and the design service's parsing to Effect Schema, and `zod` left `apps/backend`. Zod remains only as a third-party dependency: a required peer of `@anthropic-ai/claude-agent-sdk` declared by `bridges/claude-bridge`, and a transitive dependency of the MCP SDK, `@cursor/sdk` and `@agentclientprotocol/sdk`.
+
 ### 13.9 Domain granularity
 
 - **A. One global API version.** Cons: any change breaks everyone; what exists

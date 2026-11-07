@@ -3,7 +3,7 @@ id: 7014
 title: "Move the remaining Zod schemas (MCP tools, design service) to Effect Schema"
 phase: 7
 plan: "§13.8 (Effect Schema) and §12 Phase 7"
-status: in-progress
+status: done
 depends_on: [7004]
 blocked_by: ""
 owner: claude-worker
@@ -47,7 +47,7 @@ Found while doing [7004](7004-domain-previews-annotations-artifacts-design.md): 
 ## Done when
 
 - [x] No backend file imports `zod`, and `zod` is not a dependency of `apps/backend`.
-- [ ] `zod` is not a dependency of any package: `bridges/claude-bridge/package.json` still declares `zod` 4.6.7, because it is a required peer dependency of `@anthropic-ai/claude-agent-sdk` (no bridge source imports it). See Notes.
+- [x] No package of ours declares `zod` for its own schemas. (Narrowed on 2026-11-07 by the orchestrator, who wrote this item: `bridges/claude-bridge/package.json` keeps `zod` 4.6.7 only because it is a required peer dependency of `@anthropic-ai/claude-agent-sdk`; no bridge source imports it. `zod` also stays in `bun.lock` as a transitive dependency of the MCP SDK, `@cursor/sdk` and `@agentclientprotocol/sdk`. Neither is a schema system of ours.)
 
 ## Notes
 
@@ -76,3 +76,4 @@ Found while doing [7004](7004-domain-previews-annotations-artifacts-design.md): 
 ## Work log
 
 - 2026-11-07 (claude-worker): `tool-schema.ts` (helper and builders) with `tool-schema.test.ts` (19 tests) and `no-zod.test.ts` (guard: no `zod` import in `apps/backend/{src,tests,scripts}`, no `zod` in the backend's dependencies); the 35 files converted, plus `control-mcp-coordinator-suborks.ts` (wraps the shared subork schema in `toolInput`) and the design service's three callers of the schemas; `zod` removed from `apps/backend/package.json`, `bun.lock` regenerated (the bridge's lockfile unchanged; both frozen installs and `tests/unit/version-drift.test.ts` pass); `docs/architecture/control-mcp.md` says how tool inputs are declared. Commits e5a381186, f1923a137, 55c86c2e1 and this one. Tests: the 179 tool, design and coordinator files 2887 pass, 26 skip, 0 fail (the Zod baseline run had 22 failures in remote-node tests from other agents' in-progress work, gone by the second run); 66 further related files (design, web-annotation, workflow-result, build-pipeline, registry contract suites) pass; `bun check` of `tsconfig.json` and `tsconfig.test.json` clean in these files (two errors in `packages/protocol/src/contract/domains/git/schemas.ts`, another agent's in-progress file); `bun fmt` and oxlint clean.
+- 2026-11-07 (orchestrator): narrowed the last Done-when box to the project's own schemas (see the box) and set the item done.

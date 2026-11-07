@@ -6,6 +6,7 @@ import {
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { asNonBlankString } from "./commands-validation.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
+import { withAsyncArgumentFailures } from "./commands-registry-async-args.js";
 import { nativeAgentSessionStorageKey } from "./native-agent-service-shared.js";
 
 /** The transcript one read returns, like a graph run's. */
@@ -24,7 +25,9 @@ function agentOf(value: unknown): AgentPlatform {
  * Both are defined commands (`native-sessions`, plan item 7001): unknown keys
  * are dropped rather than refused, and `batchId` is critical on the stop.
  */
-export function registerSuborkCommands(register: CommandRegistrar): void {
+export function registerSuborkCommands(registerCommand: CommandRegistrar): void {
+  // `async` handlers keep rejecting on bad arguments (`commands-registry-async-args.ts`).
+  const register = withAsyncArgumentFailures(registerCommand);
   register(stopNativeAgentSuborksCommand, async (args, context) => {
     const sessionKey = nativeAgentSessionStorageKey(
       asNonBlankString(args.environmentId, "environmentId"),

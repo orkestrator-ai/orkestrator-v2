@@ -1,4 +1,5 @@
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
+import { withAsyncArgumentFailures } from "./commands-registry-async-args.js";
 import {
   applyPaneLayoutIntentCommand,
   cleanupOrphanedBuffersCommand,
@@ -43,9 +44,11 @@ import {
 } from "./commands-helpers.js";
 
 export function registerSessionCommands(
-  register: CommandRegistrar,
+  registerCommand: CommandRegistrar,
   dependencies: RegistryDependencies,
 ): void {
+  // `async` handlers keep rejecting on bad arguments (`commands-registry-async-args.ts`).
+  const register = withAsyncArgumentFailures(registerCommand);
   const { conditionalManifestSnapshot } = dependencies;
   register(openInBrowserCommand, ({ url }) => {
     const target = asString(url, "url");

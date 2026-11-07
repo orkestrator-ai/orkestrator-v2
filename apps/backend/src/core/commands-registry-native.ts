@@ -1,4 +1,5 @@
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
+import { withAsyncArgumentFailures } from "./commands-registry-async-args.js";
 import {
   adoptNativeAgentSessionCommand,
   beginNativeAgentSignInCommand,
@@ -81,9 +82,11 @@ function assertNativeAgentLiveWindow(liveWindow: unknown): void {
 }
 
 export function registerNativeAgentCommands(
-  register: CommandRegistrar,
+  registerCommand: CommandRegistrar,
   _dependencies: RegistryDependencies,
 ): void {
+  // `async` handlers keep rejecting on bad arguments (`commands-registry-async-args.ts`).
+  const register = withAsyncArgumentFailures(registerCommand);
   register(ensureNativeAgentSessionCommand, async (args, context) => {
     if (!context.nativeAgents) {
       throw new Error("Native agent service is unavailable");

@@ -24,11 +24,8 @@ describe("on-demand native auth command", () => {
       const readProjectionAuthStatus = mock(async () => null);
       const context = { nativeAgents: { readProjectionAuthStatus } } as unknown as CommandContext;
       for (const invalid of [undefined, 123, "", "   "]) {
-        // A defined command decodes its arguments before the handler runs, so
-        // a refusal is thrown on the call rather than returned as a rejection.
         await expect(
-          (async () =>
-            command("get_native_agent_auth_status")({ ...identity, [field]: invalid }, context))(),
+          command("get_native_agent_auth_status")({ ...identity, [field]: invalid }, context),
         ).rejects.toThrow(field);
       }
       expect(readProjectionAuthStatus).not.toHaveBeenCalled();

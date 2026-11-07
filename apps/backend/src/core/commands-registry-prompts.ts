@@ -1,4 +1,5 @@
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
+import { withAsyncArgumentFailures } from "./commands-registry-async-args.js";
 import {
   createAgentHandoffCommand,
   deleteAgentHandoffCommand,
@@ -38,9 +39,11 @@ import {
 } from "./agent-handoffs.js";
 
 export function registerPromptCommands(
-  register: CommandRegistrar,
+  registerCommand: CommandRegistrar,
   dependencies: RegistryDependencies,
 ): void {
+  // `async` handlers keep rejecting on bad arguments (`commands-registry-async-args.ts`).
+  const register = withAsyncArgumentFailures(registerCommand);
   const { conditionalManifestSnapshot } = dependencies;
   register(getPromptQueueCommand, ({ queueKey }, { storage }) =>
     storage.getPromptQueue(asString(queueKey, "queueKey")),

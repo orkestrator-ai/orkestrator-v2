@@ -28,7 +28,9 @@ published release (2026-10-16).
   after the floor is covered like any other.
 - The floor moves by itself: it becomes v2.21.1 on 2026-12-15, v2.22.3 on
   2026-12-16 and v2.23.0 on 2026-12-18. Nobody needs to announce it.
-- **Today (2026-10-24) the floor is v2.21.0.**
+- **Until 2026-12-15 the floor is v2.21.0.** To find it on another day, take
+  the newest Stable release published at least 60 days earlier, or v2.21.0
+  if there is none.
 
 A compatibility path that exists for peers older than version X may be removed
 once the floor is at or above X: that is, 60 days after the first Stable
@@ -252,10 +254,18 @@ stages, Multi Review reviewers) classify each entry by shape at
 muted notice row per run instead of an empty row or nothing. The
 "unrecognized" notice is permanent; each legacy entry retires with the window.
 
-There is no version or capability handshake. `/__orkestrator/status` is
-authenticated and every client already probes it, so it could carry the app
-version and a capability revision later. Add one only when a change cannot be
-detected from the payload (a change of behaviour rather than of shape).
+The renderer has no version or capability handshake with its backend.
+Backends do have one: the authenticated `GET /__orkestrator/hello`
+([federation.md](federation.md#hello-handshake)) carries `appVersion`, a
+`clientApi` range and a capability map. A command node checks it for each
+leaf it links to (`checkBackendRoute`, `@orkestrator/protocol/node/node-link/backend-hello`)
+and sends a newer field or command only to a leaf that advertises it (for
+example `node-mail-steer`); the desktop main process runs the same check on a
+saved machine's route. The renderer parses a node's hello only to confirm
+its identity before a direct realm session (`openLeafWorkspace`), and never
+reads its capabilities. For the renderer, add a handshake only when a change
+cannot be detected from the payload (a change of behaviour rather than of
+shape).
 
 ### Coordinator build admission identity
 

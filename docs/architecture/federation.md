@@ -6,13 +6,18 @@ connect to one command node, which keeps the registry of leaf nodes in its
 backend, aggregates them, routes commands and runs cross-node coordinators.
 This file describes the client-side federation that was on the branch
 before command nodes. It was reworked into the command node: the registry, routes,
-SSH tunnels and per-machine read model move into the command node backend,
-and the renderer-side multi-backend runtime, machine panels as separate
-renderer realms and the client-owned machine catalogue are removed. Do not
-extend the client-side design; build on command-nodes.md instead.
+SSH tunnels and per-machine read model moved into the command node backend,
+the renderer-side multi-backend runtime and the side-by-side machine panels
+were removed, and a desktop's saved machines are imported once into its
+command node's registry (`importSavedMachinesOnce`). Another node's workspace
+now opens as a workspace realm in the window's central region. Do not extend
+the client-side design; build on command-nodes.md instead.
 
 > **Since built:** the client-side runtime was removed in favour of command
 > nodes; see [command-nodes-handoff.md](../development/command-nodes-handoff.md).
+> The renderer sections below describe what replaced it: summaries and
+> relayed events from the command node, and one workspace realm per other
+> node.
 
 Other references: SSH operator setup in
 [ssh-routes.md](../development/ssh-routes.md), upgrade and rollback in
@@ -24,6 +29,15 @@ What exists today: one desktop window, or one hosted browser page, shows
 projects and environments from several Orkestrator backends ("machines").
 Each environment row starts with a coloured dot naming its machine. A
 machine can be reached over HTTPS/Tailscale, over an OpenSSH tunnel, or both.
+
+## Planned: unified federation
+
+[docs/reports/unified-federation.md](../reports/unified-federation.md)
+proposes one renderer per window that holds a scope per node instead of a
+realm per node, with versioned per-domain interfaces between clients and
+backends. Its work items are in [plans/unified/](../../plans/unified/0000-index.md).
+Until they land, this file describes the code as it is; change the design in
+the report, not here.
 
 ## Properties that carry over to command nodes
 
@@ -45,9 +59,9 @@ command nodes span all connected nodes.
 | --- | --- | --- |
 | Projects, environments, agents, workflows, approvals, files | Owning backend | Render summaries; send explicit commands to the owner |
 | Machine name, colour token, profile revision | That backend (`backend-profile` store) | Cache and display; edit with compare-and-swap |
-| Saved machines, routes, SSH settings, encrypted tokens | Client device (desktop native catalogue, or browser storage) | The renderer sees safe summaries only |
+| Saved machines, routes, SSH settings, encrypted tokens | Desktop native catalogue (the hosted browser keeps none) | The renderer sees safe summaries only |
 | SSH processes, host-key trust, prompts | Desktop main process (`apps/desktop/electron/ssh/`) | React never spawns SSH or builds argv |
-| Machine filter, grouping, outer panel layout | Client presentation (`machineViewStore`) | Persisted locally, by connection ID |
+| Machine filter, grouping, collapsed sections, recently used | Client presentation (`machineViewStore`) | Persisted locally, by machine identity |
 | Environment-local tabs and layouts | Owning backend (unchanged) | Rendered inside that machine's realm |
 
 ## Components
@@ -63,15 +77,18 @@ command nodes span all connected nodes.
 | Desktop | `electron/connection-manager.ts` (+ `connection-*.ts`, `backend-hello.ts`) | Catalogue, bindings, observations, routes, handover |
 | Desktop | `electron/connection-catalogue-store.ts` | Native catalogue file, backup, v1 snapshot |
 | Desktop | `electron/ssh/*` | OpenSSH tunnel supervisor |
-| Desktop | `electron/federation-ipc.ts`, `ssh-prompt-broker.ts`, `backend-panel-views.ts` | IPC, askpass prompts, machine panel views |
-| Renderer | `apps/web/src/lib/federation/*` | Backend clients, registry, runtimes, aggregation, recovery |
-| Renderer | `apps/web/src/components/federation/*` | Provider, filter, dots, rows, sections, panels, effects |
+| Desktop | `electron/federation-ipc.ts`, `ssh-prompt-broker.ts` | IPC, portal channel, askpass prompts |
+| Desktop | `electron/workspace-views.ts`, `node-workspaces.ts`, `realm-contexts.ts` | Workspace realm views, their node workspace grants and per-realm resources |
+| Renderer | `apps/web/src/lib/portal/*` | Portal channel to the command node: summaries, `invoke_on_node`, outcomes, node workspaces |
+| Renderer | `apps/web/src/lib/federation/*` | Aggregation, sidebar layout, relayed node events, realm URL and messages, explicit-owner actions |
+| Renderer | `apps/web/src/components/federation/*` | Provider, machine views, filter, dots, rows, sections, realms, effects |
 | Renderer | `apps/web/src/components/settings/machines/*` | Machines settings: list, settings, updates, SSH dialog, device toggles |
 
-`.oxlintrc.json` forbids `@/lib/native/backend`, `@/lib/backend` and
-`@/lib/backend/*` imports under `apps/web/src/lib/federation/**` and
-`apps/web/src/components/federation/**`. Federated code reaches a machine only
-through a backend-bound client.
+`.oxlintrc.json` forbids `@/lib/native/backend`, `@/lib/backend`,
+`@/lib/native/events` and `@/lib/native/authoritative-events` imports under
+`apps/web/src/lib/federation/**` and `apps/web/src/components/federation/**`.
+Multi-machine code reaches other nodes only through the portal channel
+(`lib/portal`), which the command node routes.
 
 ## Identities
 
@@ -101,9 +118,18 @@ than GET gets `405`. The response (`parseBackendHello`) contains:
 - `schemaVersion: 1`, `installationId`, `generation`, `appVersion`
 - `clientApi: { minVersion, maxVersion }`. The client requires
   `CLIENT_API_VERSION` (1) to fall inside that range.
-- `capabilities`: name to version, at most 64 entries. The backend sends
-  `backend-profile` and `summary-reads`, and also `loopback-client-gateway`
-  while that listener is serving.
+- `capabilities`: name to version, at most 64 entries
+  (`BACKEND_CAPABILITIES`). The backend sends `backend-profile` and
+  `summary-reads`, `loopback-client-gateway` while that listener is serving,
+  and, in node mode, the ten node capabilities (`node-attachment`,
+  `public-action-relay`, `node-mail-steer`, `node-mail-turn-origin`,
+  `node-coordinator-mail`, `node-coordinator-build-origin`,
+  `coordinator-notices`, `node-mail-attachments`, `node-mail-return`,
+  `ticket-sync`). Only backend-to-backend code (a command node about its
+  leaves) acts on them; the desktop only lists their names in its connection
+  summaries, and the renderer parses the hello only to check a node's
+  identity and `endpointRole` (`openLeafWorkspace`).
+- `nodeMode`: `standalone`, `command` or `leaf`, when the backend has one.
 - `profile`: the canonical machine profile.
 - `endpointRole`: `control` on the loopback control listener, otherwise
   `client`.
@@ -155,12 +181,13 @@ handshake before a route is used:
   emits `backend-profile-changed` with the new profile.
 - The desktop applies profile events whose revision is not older than the
   cached one, and writes `profileCache` into the catalogue. That cache labels
-  an offline machine (`profile.cached: true`). Each renderer runtime also
-  applies that machine's profile events (newer revisions only). Profile edits
-  send the newest revision the client has seen. The Machines page warns
-  about colour collisions (`duplicateMachineColors`) but never recolours a
-  machine. On a profile conflict it shows the current values and does not
-  retry.
+  an offline machine (`profile.cached: true`). A command node's read model
+  records each node's profile events in its registry and announces the
+  change, so the renderer's summaries follow. Profile edits send the newest
+  revision the client has seen. Nothing ever recolours a machine
+  (`duplicateMachineColors` in `aggregate.ts` finds collisions, but no page
+  shows them today). On a profile conflict the Machines page shows the
+  current values and does not retry.
 - Names are normalized: control and bidi characters removed, whitespace
   collapsed, at most 64 characters. A device nickname is a separate local
   alias, shown as "(on this device)", and takes precedence for display.
@@ -199,25 +226,27 @@ backend. It stays readable and writable while Local is stopped or crashed.
   be an absolute or `~/` path to a key file, never key material.
 - Migration from v1 and the downgrade path are described in
   [federation-migration.md](../development/federation-migration.md).
-- The hosted browser has no catalogue file. Other machines are kept in
-  `localStorage` `orkestrator.federation.machines` (origin and nickname, at
-  most 16). Their tokens stay in `sessionStorage`
-  `orkestrator.federation.tokens`.
+- The hosted browser has no catalogue. It talks only to the command node
+  that served it, and other machines come from that node's registry.
 
 ## ConnectionManager (desktop main process)
 
-### Bind and observe
+### Bind
 
-- **Bind**: every window scope is bound to one machine. Its legacy
-  single-backend renderer, title, previews and request authorization all use
-  that machine (`bind`, `use`, `release`). The `default` scope follows
-  `activeConnectionId`. A panel is its own scope, `panel:<uuid>`.
-- **Observe**: a window can also hold reference-counted leases on any number
-  of other machines (`observe`/`unobserve`, at most 64 per scope). Observing
-  connects the machine in the background. `invokeOn(scope, connectionId, …)`
-  accepts only a machine the scope is bound to or observes. There is no
-  fallback to Local or to the first entry. A connection with no bindings and
-  no observers is torn down (`releaseIfUnused`).
+- Every window scope is bound to one machine: normally Local, the desktop's
+  command node. Its renderer, title, previews and request authorization all
+  use that machine (`use`, `release`). The `default` scope follows
+  `activeConnectionId`.
+- A workspace realm is its own scope, `realm:<viewId>`, pointed at another
+  node's workspace with the client grant the command node issued
+  (`retargetScopeToWorkspace`, connection ID `workspace:<workspaceId>`) and
+  back (`restoreScopeFrom`). The grant is held for that scope only and never
+  saved.
+- There are no observation leases: other machines are seen through the
+  command node, not through extra connections. `invokeOn(connectionId, …)`
+  runs a command only on Local or a machine this device is connected to;
+  there is no fallback to Local or to the first entry. A connection with no
+  bindings is torn down (`releaseIfUnused`).
 
 ### Queues and locks
 
@@ -299,14 +328,18 @@ the epoch.
 
 ### Events
 
-Remote events go to:
+A connection's events go to (`relayBackendEvent`, `desktop-window-contexts.ts`):
 
-- windows and panels bound to the machine, over the existing
-  `orkestrator:event` channel;
-- observing windows, over `orkestrator:backend-event` with
-  `(connectionId, epoch, event, payload)`.
+- every window and realm whose scope is bound to that connection and listens
+  to the event, over `orkestrator:event`. A window on the direct gateway
+  transport to Local already has Local's events from its own stream, so they
+  are not relayed twice;
+- the portal channel of every realm whose portal scope is on that
+  connection (its window's command node), over `orkestrator:portal-event`.
 
-The envelope comes from the receiving connection, never from the payload.
+Which connection an event belongs to comes from the receiving connection,
+never from the payload. Per-node relayed events are listened to explicitly
+(`addRelayedListen`), so a renderer receives only the nodes it asked for.
 
 ### Local backend unavailable
 
@@ -316,134 +349,161 @@ with a plain message, and remote machines work normally. With no saved
 machines, startup fails as before. An unexpected Local exit marks Local
 unavailable and leaves remote windows connected.
 
-## Renderer runtime (`apps/web/src/lib/federation`)
+## Renderer: summaries, relayed events and realms
 
-### Backend clients
+The renderer keeps no per-machine runtime and no backend client of its own
+for another machine. A window always stays on its command node and sees the
+other nodes in three ways: **summaries** the command node keeps, **events** the
+command node relays, and **workspace realms**, each a full copy of the client
+bound to one other node. The command node's side is in
+[command-nodes.md](command-nodes.md).
 
-`BackendClient` has `connectionId`, `invoke`, `subscribe(listener(event,
-payload, epoch))`, `observe` and `release`. There are two implementations:
+### The portal channel
 
-- `createDesktopBackendClient` uses the `window.orkestrator.backends` IPC.
-  One dispatcher fans out events by the connection they arrived on.
-  `observe`/`release` map to native leases.
-- `createHttpBackendClient` (hosted browser) makes direct HTTPS calls to
-  `/__orkestrator/invoke` and `/__orkestrator/events`. It uses a bearer token,
-  `credentials: "omit"`, `mode: "cors"` and `redirect: "error"`, and excludes
-  terminal output from the stream. Responses are limited to 32 MiB. It reports
-  `open`/`closed`/`unauthorized`.
+`lib/portal/portal-transport.ts` (`portalInvoke`, `portalListen`,
+`portalListenAuthoritative`) always reaches the window's command node. In the
+window itself it is the ordinary workspace transport. Inside a realm, whose
+`window.orkestrator` is bound to the leaf, it is `window.orkestratorPortal`,
+which stays on the window's command node. `workspaceTarget()` names the node
+the workspace is on, or is `null` while it is on the command node.
 
-### Registry and the bound machine
+### Summaries
 
-`FederationProvider` creates one `BackendClientRegistry`. On desktop it is fed
-by the connection list. In a hosted browser it is fed by `browserFederationList`.
-On iOS WKWebView and inside a panel realm, `kind` is `none`.
+- **Reading.** `portalStore` (`lib/portal/portal-store.ts`) reads
+  `get_node_status` and `get_node_summaries` (with `includeSelf: true` while
+  the workspace is on another node, so the command node's own projects come
+  back as a self summary). It re-reads, debounced by 100 ms, on
+  `node-summary-changed`, `nodes-changed`, `node-status-changed` and
+  `native-event-stream-connected`. A backend that predates command nodes is
+  marked `unsupported`.
+- **Where they come from.** The command node's read model
+  (`apps/backend/src/core/nodes/node-read-model.ts`) subscribes to every
+  connected node's event stream and keeps its projects and environments. Reads
+  are fenced by the link epoch, so a late answer from an older connection
+  never applies. They are capped at 500 projects (`MAX_SUMMARY_PROJECTS`) and
+  500 environments per project (`MAX_SUMMARY_ENVIRONMENTS_PER_PROJECT`), past
+  which `truncated` is set, with at most 4 reads at once
+  (`SUMMARY_READ_CONCURRENCY`), and every connected node is re-read every
+  60 s (`SUMMARY_RECONCILE_MS`). A node that becomes unavailable keeps its
+  last-known summaries, labelled `stale`; a new link epoch marks it
+  `catching-up` until it is read again. Summaries never carry transcripts.
+- **The provider.** `FederationProvider`
+  (`components/federation/FederationProvider.tsx`) starts `portalStore` and
+  names the **bound machine**: the node in `workspaceTarget()`, or else the
+  command node. `kind` is `desktop` when the preload provides
+  `isolatedViewState`, otherwise `browser` (the hosted page and the iOS app).
+  `enabled` is true when the command node has other nodes or the workspace is
+  on one.
+- **Machine views.** `useMachineViews`
+  (`components/federation/useMachineViews.ts`) gives one `MachineView` per
+  machine. `useBoundMachineView` projects the bound machine from the window's
+  own full stores (projects, environments, active builds), so it is never
+  read twice. `useRemoteMachineViews` maps every other node's summary
+  (`viewFromNodeSummary`), plus the command node's self summary
+  (`viewFromSelfSummary`) while the workspace is elsewhere. The order is the
+  command node's registry order, then the user's portal layout.
+- **Writes** are offered only while `isMachineWritable`
+  (`lib/federation/aggregate.ts`): the bound machine, or a node whose
+  connection is `connected`. There is no offline queue.
 
-`registry.sync` creates one `BackendRuntime`, holding summary demand, for
-**every machine except the one this realm is bound to**. The bound machine
-keeps its existing full single-backend stores, and `useBoundMachineView`
-projects them. It is never read twice. `registry.require(backendId)` throws
-when the machine is not connected. Runtimes are disposed when a machine is
-forgotten or federation is turned off, not when a component unmounts.
+`useBoundMachineView` is the renderer's projection of its own stores. The
+`BackendRuntime` class in `apps/backend/src/core/backend-runtime.ts` is
+unrelated: it is the process state of one backend instance
+([backend-runtime.md](backend-runtime.md)). The renderer has no runtime by
+that name.
 
-### BackendRuntime
+### Relayed events
 
-- **State**: one zustand vanilla store per machine
-  (`MachineSummaryState`: `backendId`, `connection`, `freshness`, `projects`,
-  `environmentsByProject`, `truncated`, `epoch`, `lastError`). The runtime
-  also owns its own `PrefetchedCommandCache`, so identical reads on two
-  machines never share an answer, and its own `OperationRecovery`.
-- **Hydration** (`hydrate`): calls `get_projects` (first 500,
-  `MAX_SUMMARY_PROJECTS`), then `get_environment_snapshots` per project (first
-  500 each, `MAX_SUMMARY_ENVIRONMENTS_PER_PROJECT`). At most 4 reads run at
-  once (`SUMMARY_READ_CONCURRENCY`). One hydration runs at a time, with at
-  most one queued rerun. Records past a cap set `truncated`, and the sidebar
-  says so. Summaries never fetch transcripts.
-- **Epoch fencing**: a result applies only if the epoch and backend ID it
-  started under are still current. An event with a new epoch updates the
-  epoch, marks the machine `catching-up` and rehydrates. That event is not
-  applied.
-- **Revision gaps**: `resource-changed` revisions are compared only within
-  this machine. A repeat or a skip rehydrates **this machine only**.
-  Environment changes are coalesced per project (250 ms). Project changes and
-  `native-event-stream-connected` trigger a full rehydrate.
-- **Identity change** (provisional to verified): summaries and cache are reset
-  and reloaded under the proved ID.
-- **Credential or trust failure** (`authentication-required`,
-  `trust-blocked`): cache and summaries are purged and `freshness` becomes
-  `stale`. This is not shown as a normal offline state. A plain disconnect
-  keeps the last-known summaries, labelled stale.
-- **Writes** (`mutate`) clear the runtime's prefetch cache and go through
-  `OperationRecovery`. Writes are allowed only while
-  `isMachineWritable` (bound machine, or transport `connected`). There is no
-  offline queue.
+`lib/federation/node-events.ts` is the subscription that matches reads routed
+through the command node. A view names a node and the exact events it applies
+(`subscribeNodeEvents`), and gets `onResync` once the subscription is in place
+and again whenever events may have been missed, then `onEvent` for each event.
+One lease per node (`watch_node_events`, renewed every 30 s,
+`NODE_EVENT_WATCH_RENEW_MS`, and dropped with `unwatch_node_events` when the
+last view leaves) covers every view's events. Frames arrive under the node's
+own name (`relayed-node-event:<nodeId>`) when the command node relays that way,
+or under the single old name `relayed-node-event` from an older command node,
+so both are listened to. The command node's own resources need no relay:
+`subscribeCommandNodeEvents` listens on the portal channel directly.
 
-### Outcome unknown
-
-`OperationRecovery.run` turns an ambiguous failure into an `UnknownOutcome`
-record: a `TypeError`, or a message matching
-network/socket/abort/timeout/reset. The record holds `backendId`, `command`,
-`label`, `requestKey?` and a content-free FNV fingerprint of the input, never
-the arguments. At most 50 are kept. The write is **never resent**.
-`UnknownOutcomesNotice` shows the records under their own machine's section
-until the user dismisses them. This covers federated runtime writes: sidebar
-start, stop, delete and create, and profile edits on other machines. Inside a
-panel or the bound window, the existing single-backend paths and their own
-recovery apply.
-
-### Captured-owner actions
+### Explicit-owner actions and unknown outcomes
 
 `federated-actions.ts` takes the concrete `EnvironmentRef`/`ProjectRef` it was
-started with. A delete confirmation names the machine and keeps the captured
-ref, so later focus or filter changes cannot retarget it. Creating an
-environment inside a project instance targets that project's machine. There is
-no placement. Dragging a federated row is refused with an explanation, and
-nothing moves between machines.
+started with and sends the node's ordinary command through
+`portalStore.invokeOnNode`, which calls `invoke_on_node` on the command node
+(or the command itself when the ref is the command node's own). Later focus or
+filter changes cannot retarget it. A delete confirmation names the machine.
 
-## Machine panels: one realm per machine
+When a routed write's answer is lost, the command node records an
+outcome-unknown entry against the node and answers `outcome: "unknown"`;
+`invokeOnNode` throws `OutcomeUnknownError` and the write is **never resent**.
+`UnknownOutcomesNotice` lists that node's records (`list_node_outcomes`) under
+its section until the user dismisses them (`dismiss_node_outcome`). The older
+client-side `lib/federation/operation-recovery.ts` is no longer imported.
 
-A **machine panel** shows one workspace of another machine beside the window's
-own workspace. The outer layout (`machineViewStore.panels`, at most 4, oldest
-closed first) is client-local.
+<a id="machine-panels-one-realm-per-machine"></a>
 
-- **Desktop**: `BackendPanelViews` creates a child `WebContentsView` with the
-  standard preload, `contextIsolation`, no node integration, and the renderer
-  URL with `?panel=workspace&project=…&environment=…`. Each panel:
-  - binds its own connection scope `panel:<uuid>`;
-  - uses its own session partition per machine,
-    `persist:orkestrator-panel-<sha256(connectionId)[:16]>`;
-  - installs its own request-auth hook for that scope, plus navigation guards,
-    the [renderer permission policy](renderer-security.md#permissions) and a
-    deny-all window-open handler.
+## Workspace realms: one realm per other node
 
-  The parent sends only bounds (scaled by zoom), visibility and close. The
-  native view is hidden while a dialog or menu of the parent is open. A window
-  has at most 4 panels. A panel cannot switch machines. Closing a panel, or its
-  parent, releases only that scope.
-- **Hosted browser**: a same-origin `<iframe>` of the app with
-  `?panel=workspace&machine=<id>&…`. `web-gateway.ts` installs the frame's
-  gateway API with that machine's origin and this tab's session token, so the
-  frame talks to that machine directly and nothing goes through the page's
-  backend. On a phone-sized viewport the same URL opens in a new tab instead
-  of a side panel.
-- Inside a panel realm, `AppShell` renders only the action bar and workspace:
-  no sidebar, no nested panels, no federation.
+Opening an environment of another node shows that node's workspace in the
+window's central region as a **realm**: this client's own code, bound to that
+node only, so its stores, caches, events and credentials reach only that
+node. The window (title bar, sidebar, settings, the portal) never leaves its
+command node and never reloads. `lib/federation/workspace-realm.ts` defines
+the realm URL (`?realm=workspace&…`, built by `realmSearchParams`) and the
+small set of window↔realm messages. What a realm opens on (project,
+environment, board tab, work target, dialogs) is one shared definition,
+`@orkestrator/protocol/realm-request`, which the web encoder and parsers and
+the desktop main process all use.
+
+- **Which realms are open.** `remoteWorkspaceStore` keeps `active` (the node
+  shown, or `null` for the window's own workspace) and `realms`, the nodes
+  with an open realm, least recently shown first. `open()` moves the node to
+  the end and keeps the last 3 (`MAX_OPEN_REALMS`). An evicted realm unmounts
+  and ends this window's view of that node; work on the node continues.
+  Realms that are not shown stay mounted, hidden, so going back is instant.
+- **Desktop.** `WorkspaceViews` (`apps/desktop/electron/workspace-views.ts`)
+  opens a child `WebContentsView` per realm: the standard preload,
+  `contextIsolation`, no node integration, `sandbox`, a deny-all
+  window-open handler, navigation guards, the
+  [renderer permission policy](renderer-security.md#permissions) and its own
+  request-auth hook. Each realm binds its own connection scope
+  `realm:<viewId>` to the node through the command node (`bindScope`, which
+  opens the node's workspace grant with `open_node_workspace`), plus a portal
+  scope on the command node. Its storage partition is per window slot and
+  node, `persist:orkestrator-realm-<slot>-<hash(nodeId)>`
+  (`rendererPartitionForRealm`). Main allows at most 4 views per window
+  (`DEFAULT_MAX_VIEWS`, one more than the renderer keeps, for a realm being
+  replaced). A realm has its own native browser previews and artifact hosts
+  (`registerRealm`, `RealmContexts`). The window sends bounds, visibility and
+  messages; closing a realm, or its window, releases only its scopes.
+- **Browser and iOS.** `FrameRealm`
+  (`components/federation/RemoteWorkspaceRegion.tsx`) renders a same-origin
+  `<iframe>` of the app with the realm URL plus `workspace=<workspaceId>`. The
+  window opens the node's workspace (`openLeafWorkspace`,
+  `lib/portal/workspaces.ts`): direct to one of the node's origins when its
+  hello answers with the node's identity and `endpointRole: "client"`,
+  otherwise relayed through the command node. The grant is kept in the tab's
+  `sessionStorage` under `orkestrator.workspace-realm:<workspaceId>`
+  (`lib/portal/workspace-target-storage.ts`), never in the URL, and renewed
+  while the realm is open.
+- **Inside a realm**, `AppShell` renders only the action bar, the workspace,
+  the files panel and the realm's own dialogs: no sidebar, no nested realms,
+  no multi-machine views. The window's title bar shows the realm node's host
+  meters and agent button; their popovers open inside the realm.
 
 **Why realms.** The workspace UI is built on many module-level singleton
 stores and services: project, environment, UI, terminal, file, session and
 pane stores, the prefetch cache, gateway URL resolution and the event
-transport. Each assumes one backend. Re-keying every one of them for two
-machines in one React tree would be a rewrite with a large leakage surface.
-A separate realm per machine gives each panel its own copies of all of them.
-Isolation comes from the realm boundary and a scope bound to one machine, not
-from careful keying.
-
-**Deviation from the plan.** Section 07 of the plan says "two such scopes must
-coexist in the same React render tree". That is **not** what was built. Two
-machines' detail UIs never share a render tree. The main window's tree holds
-only summary runtimes for other machines (the sidebar). Full workspaces of
-other machines run in their own realms. The trade-off: a panel costs a
-renderer process (desktop) or a frame, and some desktop-only features are not
-wired into panel views (see Known limitations).
+transport. Each assumes one backend. A separate realm per node gives each
+node its own copies of all of them; isolation comes from the realm boundary
+and a scope bound to one node, not from careful keying. Two nodes' workspaces
+are never in one React tree: the window's tree holds its own full stores and
+the summaries of every other node. The cost is a renderer process (desktop)
+or a frame per open realm, and the boundary itself (the message protocol, the
+ready handshake, title-bar popovers and focus handoff). See
+[Planned: unified federation](#planned-unified-federation) for what is meant
+to replace them.
 
 ### Realm boot
 
@@ -518,7 +578,8 @@ debug lines in the console only.
 
 ## Sidebar presentation
 
-When federation is enabled and at least one other machine is saved,
+When multi-machine views are enabled (`federation.enabled`: the command node
+has at least one other node, or the workspace is on one),
 `HierarchicalSidebar` replaces the switch-and-reload `ServerConnectionSwitcher`
 with `MachinesFilter`:
 
@@ -527,7 +588,7 @@ with `MachinesFilter`:
   such as `2 connected · 1 unavailable`. It never says "all caught up" while a
   machine is missing (`connectivitySummary`).
 - Changing the filter is presentation only. It never closes a transport or
-  changes a panel's owner.
+  a realm.
 - Grouping options are **By machine** (the bound machine's full tree, then
   `RemoteMachineSection` per other machine, in that backend's order), **By
   project** (instances with machine badges; equal names stay separate) and
@@ -835,7 +896,8 @@ reconnect.
   destination, `shell: false` and no remote command.
 - The bearer is injected only for the exact current origin of the scope's
   bound machine, and only under `/__orkestrator/`
-  (`getRendererRequestAuthorization`). Each panel has its own hook and scope.
+  (`getRendererRequestAuthorization`). Each workspace realm has its own hook
+  and scope.
   Two tunnels on the same loopback host differ by port and never share a
   credential.
 - Backend-sourced strings (names, summaries, diagnostics) are bounded and
@@ -856,7 +918,7 @@ Three dimensions are kept separate:
 | --- | --- | --- |
 | Transport (`ConnectionTransportState`) | `disabled`, `connecting`, `authenticating`, `connected`, `reconnecting`, `authentication-required`, `trust-blocked`, `incompatible`, `unreachable` | Client connection layer |
 | Identity (`ConnectionIdentityState`) | `verified`, `provisional`, `conflict` | Client, from hellos |
-| Freshness (`SummaryFreshness`) | `initializing`, `current`, `catching-up`, `stale`, `degraded` | Per-machine runtime |
+| Freshness (`SummaryFreshness`) | `initializing`, `current`, `catching-up`, `stale`, `degraded` | The command node's read model |
 | Activity | `idle`, `working`, `waiting` (backend `agentActivityState`), shown as last-observed while disconnected | Owning backend |
 
 `machineStatusText` shows these as Connected, Catching up, Connecting,
@@ -871,35 +933,34 @@ stops client machinery only, never remote work.
 
 | Flag | Off means |
 | --- | --- |
-| `federation` | All observations end and `observe` is refused. Renderer runtimes are disposed. The sidebar returns to the single-machine switcher. Window bindings are untouched. |
+| `federation` | Saved and shown under This device ("Show all machines together"), but nothing reads it today: multi-machine views follow the command node's registry (`federation.enabled`), not this flag. |
 | `sshRoutes` | SSH is removed from `supportedRouteKinds`. Live SSH connections hand over, or fail if the machine has no HTTPS route. `connectSsh` and host-key probes are refused. |
 | `routeFallback` | Only the preferred or current route is tried. Repeated stream drops never switch routes. |
 
-The hosted browser reports `federation: true, sshRoutes: false,
-routeFallback: false` and has no toggles.
+The hosted browser has no catalogue, so it has no flags and no toggles
+(`ClientOptions` renders only where `window.orkestrator.connections` offers
+`setFeatures`).
 
 ## Known limitations
 
 Plan items that are not implemented, or only partly, as of this change.
 
-- **No shared client-runtime package.** The runtime lives in
-  `apps/web/src/lib/federation`. The bound machine keeps the legacy
-  singleton stores (`projectStore`, `environmentStore`, …); isolation between
-  machines comes from separate renderer realms, not from runtime-scoped
-  store factories. Two machines' workspaces are never in one React tree.
-- **Desktop machine panels** have no native browser previews and no live
-  interactive-artifact hosts (`browserPreviewManager` and `artifactHosts`
-  are `null` for panel senders), so those fall back to their non-native
-  presentations there. A panel never switches machines. The panel overlay is
-  hidden while a dialog or menu of the window is open.
-- **Hosted-browser panels** are same-origin frames with a direct session to
-  the other machine; that machine must allow the page's origin
-  (`--allowed-origins`). Tokens for other machines last for the tab session
-  only. Browser previews inside such a frame need the other machine's own
-  preview credentials and are not qualified.
-- **Mobile**: the iOS WKWebView shell stays single-machine (`kind: "none"`);
-  there is no mobile SSH and no federated background/resume handling (MB-01).
-  A phone-width hosted page opens another machine's workspace in a new tab.
+- **No node-scoped stores.** The window and each realm keep the singleton
+  stores (`projectStore`, `environmentStore`, …); isolation between nodes
+  comes from separate realms, not from node-scoped store factories. Two
+  nodes' workspaces are never in one React tree. See
+  [Planned: unified federation](#planned-unified-federation).
+- **Desktop realms** are bound to one node for their life. While one of the
+  window's own overlays covers the central region, the native view is
+  replaced by a still of it (`capturePage`), because a native view always
+  draws over the page.
+- **Browser and iOS realms** are same-origin frames. A direct session needs
+  the node to answer the page's probe (its gateway must accept the page's
+  origin, `--allowed-origins`); otherwise the realm is relayed through the
+  command node. Grants are kept for the tab session only. Browser previews inside
+  a frame need the node's own preview credentials and are not qualified.
+- **Mobile**: the iOS app shows other nodes as frame realms, as a browser
+  does, all in one WebContent process. There is no mobile SSH.
 - **SSH**: macOS and Linux desktop only; Windows is not qualified; no SSH in
   browsers. Nothing installs or starts a remote backend and there is no SSH
   pairing for the gateway token. No ControlMaster multiplexing. No UI
@@ -916,17 +977,18 @@ Plan items that are not implemented, or only partly, as of this change.
   connection method. There is no merge or re-pair UI; resolve a conflict by
   forgetting one entry.
 - **Summaries** are capped at 500 projects and 500 environments per project
-  with a truncation notice and no pagination. There is no per-environment
-  detail demand in the main window; detail comes from panels. Last-known
-  summaries persist per machine identity in this client's storage (bounded
-  to 256 KiB) and are purged on credential rejection or forgetting.
+  with a truncation notice and no pagination. Detail beyond them comes from
+  reads routed through the command node (`useNodeEnvironment`,
+  `node-environment-reads.ts`) or from the node's realm. Last-known summaries
+  are kept by the command node's read model, survive its restart, and are
+  shown as `stale` while the node is unavailable.
 - **Repository grouping** has no UI for explicit user mappings, and backends
   publish no repository hint; the client derives a credential-free
   `host/owner/name` from `gitUrl`.
 - **Revocation**: there is no per-device "revoke this device" action (the
   gateway has one shared token) and no revocation signal from the backend.
-  Protected summaries are purged when the transport becomes
-  `authentication-required` or `trust-blocked`.
+  The command node keeps a node's last-known summaries, labelled `stale`,
+  whatever made the node unavailable, including a rejected credential.
 - **Links and notifications**: machine-qualified links are a `?resource=`
   page parameter (Copy link on other machines' rows); desktop has no OS URL
   handler. Attention notices for other machines are in-app toasts; the app

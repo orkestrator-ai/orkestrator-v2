@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:d4391729a51dd275d856f7e5a58a1af02bea7bfad9844aec127d9adbbc62d819",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "accountId": {},
+        "email": {},
+        "enabled": {
+          "type": "boolean"
+        },
+        "included": {
+          "type": "boolean"
+        },
+        "platform": {
+          "type": "string"
+        }
+      },
+      "required": ["platform"],
+      "type": "object"
+    }
+  }
+}

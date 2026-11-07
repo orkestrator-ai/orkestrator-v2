@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:68e0d5a231af8415c6709c9297a6685ef2aad437ce0d1c28c0326cd0549b3a15",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "additions": {},
+        "after": {},
+        "before": {},
+        "deletions": {},
+        "diff": {},
+        "filePath": {},
+        "toolName": {}
+      },
+      "type": "object"
+    }
+  }
+}

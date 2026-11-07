@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:454a07868c4d5982bd7e8ddda36d6e59abfb295d84201b5b9adc7d60ed9e6345",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "issueNumber": {
+          "type": "number"
+        },
+        "projectId": {
+          "type": "string"
+        },
+        "status": {
+          "enum": ["backlog", "todo", "inprogress", "review"],
+          "type": "string"
+        }
+      },
+      "required": ["issueNumber", "projectId", "status"],
+      "type": "object"
+    }
+  }
+}

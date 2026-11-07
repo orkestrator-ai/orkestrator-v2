@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:4aa955a6ec4f943d33ae5ba082ef980f8b2adf0629a20ee3c9e7806fabcdf23b",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "inputs": {},
+        "method": {},
+        "providerId": {
+          "type": "string"
+        },
+        "providerLabel": {}
+      },
+      "required": ["providerId"],
+      "type": "object"
+    }
+  }
+}

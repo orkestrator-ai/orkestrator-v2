@@ -29,14 +29,10 @@ import {
   NODE_EVENT_WATCH_RENEW_MS,
   RELAYED_NODE_EVENT,
   relayedNodeEventName,
-  type NodeEventWatchResult,
 } from "@orkestrator/protocol/node-events";
+import { portalNodesApi } from "@/lib/node-scope/domains/nodes";
 import { portalStore } from "@/lib/portal/portal-store";
-import {
-  portalInvoke,
-  portalListen,
-  portalListenAuthoritative,
-} from "@/lib/portal/portal-transport";
+import { portalListen, portalListenAuthoritative } from "@/lib/portal/portal-transport";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("web.federation");
@@ -168,15 +164,15 @@ async function syncWatch(watch: NodeWatch): Promise<void> {
         await ensureListening();
         if (watches.get(watch.nodeId) !== watch) return;
         if (key && key !== watch.confirmedKey) {
-          const result = await portalInvoke<NodeEventWatchResult>("watch_node_events", {
+          const result = await portalNodesApi().watch_node_events({
             nodeId: watch.nodeId,
             prefixes: key.split(","),
             watchId: watch.watchId,
           });
           if (watches.get(watch.nodeId) !== watch) {
-            await portalInvoke("unwatch_node_events", { watchId: watch.watchId }).catch(
-              () => undefined,
-            );
+            await portalNodesApi()
+              .unwatch_node_events({ watchId: watch.watchId })
+              .catch(() => undefined);
             return;
           }
           // A command node downgraded under this lease stops saying it.
@@ -299,7 +295,7 @@ export function subscribeNodeEvents(
     watches.delete(nodeId);
     // The lease expires on its own if this is lost.
     void Promise.resolve()
-      .then(() => portalInvoke("unwatch_node_events", { watchId: current.watchId }))
+      .then(() => portalNodesApi().unwatch_node_events({ watchId: current.watchId }))
       .catch(() => undefined);
   };
 }

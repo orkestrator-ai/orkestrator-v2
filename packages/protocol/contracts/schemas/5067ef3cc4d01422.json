@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:5067ef3cc4d0142238efd12376edd0c26aa3e339102cd6f4ddf0e3e76a5e6cf9",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "callIds": {},
+        "conversationId": {
+          "type": "string"
+        },
+        "environmentId": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        }
+      },
+      "required": ["conversationId", "environmentId", "provider"],
+      "type": "object"
+    }
+  }
+}

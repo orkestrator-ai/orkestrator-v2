@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:c07a580c5254d461fe61d470c9141213079883fa3c975acea4ba1f164cb89090",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "baseBranch": {},
+        "baseCommit": {},
+        "conversationId": {},
+        "coordinatorId": {
+          "type": "string"
+        },
+        "kind": {},
+        "projectId": {
+          "type": "string"
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "resourceId": {
+          "type": "string"
+        }
+      },
+      "required": ["coordinatorId", "projectId", "requestId", "resourceId"],
+      "type": "object"
+    }
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:ae24744de677dfed494e5ba9a137fcc8006d2741cbad7be2b348023bcb3363d1",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "body": {
+          "type": "string"
+        },
+        "issueNumber": {
+          "type": "number"
+        },
+        "projectId": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": ["body", "issueNumber", "projectId", "title"],
+      "type": "object"
+    }
+  }
+}

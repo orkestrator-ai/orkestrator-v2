@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:35440473c9f5d5590d8adde7f0dc0cc90009a4fa0f55a6e9dec43c102f2de6bc",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "number": {
+          "type": "number"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "repo": {
+          "type": "string"
+        },
+        "viewed": {
+          "type": "boolean"
+        }
+      },
+      "required": ["number", "owner", "path", "repo", "viewed"],
+      "type": "object"
+    }
+  }
+}

@@ -11,16 +11,14 @@ import {
   type ProjectCopyRecord,
 } from "@orkestrator/protocol/project-copy";
 import type { UnlistenFn } from "@/lib/native/events";
-import { portalInvoke, portalListen } from "./portal-transport";
+import { portalNodesApi } from "@/lib/node-scope/domains/nodes";
+import { portalListen } from "./portal-transport";
 
 export function getProjectCopyOptions(
   nodeId: string,
   projectId: string,
 ): Promise<ProjectCopyOptions> {
-  return portalInvoke<ProjectCopyOptions>("get_project_copy_options", {
-    nodeId,
-    projectId,
-  });
+  return portalNodesApi().get_project_copy_options({ nodeId, projectId });
 }
 
 export function copyProjectToNode(input: {
@@ -30,11 +28,11 @@ export function copyProjectToNode(input: {
   paths: string[];
   rememberFiles: boolean;
 }): Promise<ProjectCopyRecord> {
-  return portalInvoke<ProjectCopyRecord>("copy_project_to_node", input);
+  return portalNodesApi().copy_project_to_node(input);
 }
 
 export async function listProjectCopies(): Promise<ProjectCopyRecord[]> {
-  const value = await portalInvoke<ProjectCopyRecord[]>("list_project_copies", {});
+  const value = await portalNodesApi().list_project_copies({});
   return Array.isArray(value) ? value : [];
 }
 

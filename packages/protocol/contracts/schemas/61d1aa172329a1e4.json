@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:61d1aa172329a1e4375721a0bfc7c622213ddac2fb237686b8b4aa221d6bc68f",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "comment": {},
+        "commitId": {
+          "type": "string"
+        },
+        "number": {
+          "type": "number"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "repo": {
+          "type": "string"
+        }
+      },
+      "required": ["commitId", "number", "owner", "repo"],
+      "type": "object"
+    }
+  }
+}

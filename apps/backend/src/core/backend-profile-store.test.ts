@@ -226,7 +226,8 @@ describe("backend profile commands", () => {
 
     const initial = (await invoke("get_backend_profile")) as BackendProfile;
     expect(initial.revision).toBe(1);
-    await expect(invoke("get_backend_profile", { extra: true })).rejects.toThrow();
+    // A defined command drops unknown keys (plan item 7009) rather than refusing them.
+    expect(await invoke("get_backend_profile", { extra: true })).toEqual(initial);
     expect(emitted).toEqual([]);
 
     const updated = (await invoke("update_backend_profile", {

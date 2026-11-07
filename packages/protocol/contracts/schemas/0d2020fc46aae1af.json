@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:0d2020fc46aae1afdc824528ce57c20a57b78a50ca26b6f1d98231ec019aa6bf",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "action": {
+          "enum": ["close", "reopen", "ready-for-review", "convert-to-draft"],
+          "type": "string"
+        },
+        "number": {
+          "type": "number"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "repo": {
+          "type": "string"
+        }
+      },
+      "required": ["action", "number", "owner", "repo"],
+      "type": "object"
+    }
+  }
+}

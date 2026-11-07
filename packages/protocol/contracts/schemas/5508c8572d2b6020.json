@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:5508c8572d2b602014d93c21cd5465d08e90320ef497386bbe7384822ed3d330",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "action": {},
+        "at": {},
+        "catchUpMinutes": {},
+        "cron": {},
+        "everySeconds": {},
+        "expectedRevision": {},
+        "name": {},
+        "scheduleId": {},
+        "startAt": {},
+        "timeZone": {}
+      },
+      "type": "object"
+    }
+  }
+}

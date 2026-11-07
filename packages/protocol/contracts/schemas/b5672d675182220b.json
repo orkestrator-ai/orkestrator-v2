@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:b5672d675182220bff69d3498fe977e7bb9bb83303171c8550078dc03a9c68d7",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "enabled": {},
+        "nodeId": {},
+        "routeOrder": {},
+        "routes": {},
+        "token": {}
+      },
+      "type": "object"
+    }
+  }
+}

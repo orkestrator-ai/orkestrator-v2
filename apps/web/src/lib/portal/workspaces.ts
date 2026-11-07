@@ -11,6 +11,7 @@
 
 import { BACKEND_HELLO_PATH, parseBackendHello } from "@orkestrator/protocol/backend-profile";
 import type { BackendId } from "@orkestrator/protocol/federation";
+import { nodesApiOver } from "@/lib/node-scope/domains/nodes";
 import { portalInvoke } from "./portal-transport";
 
 export interface OpenedNodeWorkspace {
@@ -91,7 +92,10 @@ export async function openLeafWorkspace(
   } = { commandNodeName: "" },
 ): Promise<LeafWorkspace> {
   const invoke = options.invoke ?? portalInvoke;
-  const opened = await invoke<OpenedNodeWorkspace>("open_node_workspace", { nodeId });
+  // The web's record names the node with its branded id (plan item 7010 converges them).
+  const opened = (await nodesApiOver(invoke).open_node_workspace({
+    nodeId,
+  })) as OpenedNodeWorkspace;
   const probe = options.probe ?? reachable;
   const relayBaseUrl = `${window.location.origin}${opened.relayBase}`;
   for (const origin of opened.directOrigins) {
@@ -152,7 +156,7 @@ export function keepWorkspaceAlive(
     running = true;
     try {
       if (failed) throw new Error("Workspace needs recovery");
-      await invoke("renew_node_workspace", { workspaceId });
+      await nodesApiOver(invoke).renew_node_workspace({ workspaceId });
       renewedAt = Date.now();
     } catch {
       failed = true;
@@ -189,5 +193,7 @@ export async function closeLeafWorkspace(
   workspaceId: string,
   invoke: CommandNodeInvoke = portalInvoke,
 ): Promise<void> {
-  await invoke("close_node_workspace", { workspaceId }).catch(() => undefined);
+  await nodesApiOver(invoke)
+    .close_node_workspace({ workspaceId })
+    .catch(() => undefined);
 }

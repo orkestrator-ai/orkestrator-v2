@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:e41a8d0bd2861c158edca315243816c8ce0c094261b575d94fba7233bb9bc8dd",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "confirmationToken": {},
+        "includeNestedRepositories": {},
+        "projectId": {
+          "type": "string"
+        },
+        "ref": {
+          "type": "string"
+        }
+      },
+      "required": ["projectId", "ref"],
+      "type": "object"
+    }
+  }
+}

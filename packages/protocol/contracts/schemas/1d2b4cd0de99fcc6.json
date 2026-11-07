@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:1d2b4cd0de99fcc6d49c228bcaf6d1648979cffb5fbdd25da2f1272fe353cfe7",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "cursor": {},
+        "environmentId": {
+          "type": "string"
+        },
+        "logicalSessionKey": {
+          "type": "string"
+        },
+        "pageSize": {}
+      },
+      "required": ["environmentId", "logicalSessionKey"],
+      "type": "object"
+    }
+  }
+}

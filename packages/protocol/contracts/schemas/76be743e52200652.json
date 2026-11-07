@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:76be743e52200652d03a9f753e99908a9d5acb54ae1d1899c85e5af5cca5e7b6",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "number": {
+          "type": "number"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "repo": {
+          "type": "string"
+        },
+        "resolved": {
+          "type": "boolean"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": ["number", "owner", "repo", "resolved", "threadId"],
+      "type": "object"
+    }
+  }
+}

@@ -1,4 +1,4 @@
-import { portalInvoke } from "./portal-transport";
+import { portalNodesApi } from "@/lib/node-scope/domains/nodes";
 
 /** Mirrors `nodes/node-setup-approvals.ts` on the backend. */
 export type SetupApprovalNodeStatus =
@@ -22,5 +22,8 @@ export function approveSetupCommandsOnNodes(
   projectId: string,
   hash: string,
 ): Promise<{ nodes: SetupApprovalNodeResult[] }> {
-  return portalInvoke("approve_setup_commands_on_nodes", { nodeId, projectId, hash });
+  // The web's own status union; the definition reads `status` as a string a newer node may extend.
+  return portalNodesApi().approve_setup_commands_on_nodes({ nodeId, projectId, hash }) as Promise<{
+    nodes: SetupApprovalNodeResult[];
+  }>;
 }

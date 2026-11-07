@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:3cc130299f8a302223b71b370b7c49b63afb3e8ddccea4329e5ccdb89170eaf3",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "cursor": {
+          "type": "string"
+        },
+        "owner": {
+          "type": "string"
+        }
+      },
+      "required": ["owner"],
+      "type": "object"
+    }
+  }
+}

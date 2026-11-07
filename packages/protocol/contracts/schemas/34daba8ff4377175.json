@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:34daba8ff437717507bc8d1bf9b558ed721c58752c22e1bce9bee8e23167bc4a",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "onlyIfAbsent": {},
+        "projectId": {},
+        "upstream": {},
+        "upstreamCommit": {}
+      },
+      "type": "object"
+    }
+  }
+}

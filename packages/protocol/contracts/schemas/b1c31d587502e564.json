@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:b1c31d587502e56491b06870677547d8fb2467faf0bedbe3fb597dae72ded6e1",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "seed": {}
+      },
+      "type": "object"
+    }
+  }
+}

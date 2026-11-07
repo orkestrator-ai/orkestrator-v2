@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:1de8ddee1dbb13170f8acf113548028fb979bee74f61298bbf7414163319a38e",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "filter": {
+          "enum": ["open", "mine", "review-requested", "closed"],
+          "type": "string"
+        },
+        "projectId": {
+          "type": "string"
+        },
+        "query": {}
+      },
+      "required": ["filter", "projectId"],
+      "type": "object"
+    }
+  }
+}

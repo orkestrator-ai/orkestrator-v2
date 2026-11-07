@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:c6bb2caffc477ab278eaeb6994a8234469a018fc9dee7d89ae3ceec3e3f3732b",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "gitUrl": {},
+        "localPath": {},
+        "requestKey": {}
+      },
+      "type": "object"
+    }
+  }
+}

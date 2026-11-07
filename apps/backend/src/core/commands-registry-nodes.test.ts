@@ -33,12 +33,7 @@ function setup() {
 
 test("portal layout update validates arguments before storage or event publication", async () => {
   const { handlers, context, updatePortalLayout, emit } = setup();
-  for (const input of [
-    { unknown: true },
-    { machineOrder: "wrong" },
-    { projectFolders: { malformed: 42 } },
-    { revision: 1 },
-  ]) {
+  for (const input of [{ machineOrder: "wrong" }, { projectFolders: { malformed: 42 } }]) {
     await expect(handlers.get("update_portal_layout")!(input, context)).rejects.toThrow();
   }
   expect(updatePortalLayout).not.toHaveBeenCalled();
@@ -59,10 +54,16 @@ test("successful portal layout mutation publishes the authoritative stored revis
   expect(emit).toHaveBeenCalledTimes(1);
 });
 
-test("portal layout read rejects unexpected arguments", async () => {
-  const { handlers, context, getPortalLayout, layout } = setup();
-  await expect(handlers.get("get_portal_layout")!({ extra: true }, context)).rejects.toThrow();
-  expect(getPortalLayout).not.toHaveBeenCalled();
+// The node commands are defined (plan item 7009): unknown keys are dropped, not refused.
+test("portal layout update drops unknown keys before parsing", async () => {
+  const { handlers, context, updatePortalLayout } = setup();
+  await handlers.get("update_portal_layout")!({ machineOrder: ["bk_a"], revision: 1 }, context);
+  expect(updatePortalLayout).toHaveBeenCalledWith({ machineOrder: ["bk_a"] });
+});
+
+test("portal layout read drops unexpected arguments", async () => {
+  const { handlers, context, layout } = setup();
+  expect(await handlers.get("get_portal_layout")!({ extra: true }, context)).toEqual(layout);
   expect(await handlers.get("get_portal_layout")!({}, context)).toEqual(layout);
 });
 
@@ -73,7 +74,6 @@ test("setup fan-out validates arguments before accessing the portal", async () =
     { nodeId: 1, projectId: "p", hash: "a".repeat(64) },
     { nodeId: "bk_a", projectId: false, hash: "a".repeat(64) },
     { nodeId: "bk_a", projectId: "p", hash: null },
-    { nodeId: "bk_a", projectId: "p", hash: "a".repeat(64), extra: true },
   ]) {
     await expect(
       handlers.get("approve_setup_commands_on_nodes")!(input, context),

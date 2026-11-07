@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:5d2e1d5995d678493bd66e72daaa17ccd17172089f22a9acfd525eaca8f6fcc3",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "attachments": {},
+        "body": {},
+        "deliverNow": {},
+        "nodeId": {},
+        "replyToMessageId": {},
+        "requestId": {},
+        "scope": {},
+        "subject": {},
+        "toEnvironmentId": {},
+        "toTabId": {}
+      },
+      "type": "object"
+    }
+  }
+}

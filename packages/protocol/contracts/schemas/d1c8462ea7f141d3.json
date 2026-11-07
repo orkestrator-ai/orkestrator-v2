@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:d1c8462ea7f141d3c336820024377ac7170d2b0d3ddc91296454c9d93c052b78",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "containerId": {
+          "type": "string"
+        },
+        "deleteBranch": {},
+        "method": {}
+      },
+      "required": ["containerId"],
+      "type": "object"
+    }
+  }
+}

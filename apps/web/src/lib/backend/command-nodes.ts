@@ -5,7 +5,8 @@ import type {
   NodeView,
 } from "@orkestrator/protocol/command-nodes";
 import { parseNodeRefusal } from "@orkestrator/protocol/command-nodes";
-import { clientInvoke, portalBackendClient, type BackendClient } from "./client";
+import { NO_ARGS, nodesApi } from "@/lib/node-scope/domains/nodes";
+import { portalBackendClient, type BackendClient } from "./client";
 
 /** A node command's error for display: a refusal's message without its code prefix. */
 export function nodeErrorText(error: unknown): string {
@@ -27,18 +28,18 @@ export function nodeErrorText(error: unknown): string {
  * over the portal's command node.
  */
 export function createCommandNodesApi(client: BackendClient) {
-  const invoke = clientInvoke(client);
+  const nodes = () => nodesApi(client);
 
   async function getNodeStatus(): Promise<NodeStatus> {
-    return invoke<NodeStatus>("get_node_status");
+    return nodes().get_node_status(NO_ARGS);
   }
 
   async function setCommandNodeEnabled(enabled: boolean): Promise<NodeStatus> {
-    return invoke<NodeStatus>("set_command_node_enabled", { enabled });
+    return nodes().set_command_node_enabled({ enabled });
   }
 
   async function listNodes(): Promise<NodeListResult> {
-    return invoke<NodeListResult>("list_nodes");
+    return nodes().list_nodes(NO_ARGS);
   }
 
   /** Register a node. The token is sent to this backend once and kept there. */
@@ -47,7 +48,7 @@ export function createCommandNodesApi(client: BackendClient) {
     token: string;
     displayName?: string;
   }): Promise<NodeView> {
-    return invoke<NodeView>("add_node", { ...input });
+    return nodes().add_node({ ...input });
   }
 
   async function updateNode(input: {
@@ -57,11 +58,11 @@ export function createCommandNodesApi(client: BackendClient) {
     routeOrder?: string[];
     token?: string;
   }): Promise<NodeView> {
-    return invoke<NodeView>("update_node", { ...input });
+    return nodes().update_node({ ...input });
   }
 
   async function reconnectNode(nodeId: string): Promise<NodeView> {
-    return invoke<NodeView>("reconnect_node", { nodeId });
+    return nodes().reconnect_node({ nodeId });
   }
 
   /** Forget a node here. Nothing on that node is stopped or deleted. */
@@ -69,28 +70,27 @@ export function createCommandNodesApi(client: BackendClient) {
     nodeId: string,
     options: { withoutDetach?: boolean } = {},
   ): Promise<{ forgotten: boolean; detached: boolean }> {
-    return invoke("forget_node", { nodeId, ...options });
+    return nodes().forget_node({ nodeId, ...options });
   }
 
   async function discardNodeDetach(nodeId: string): Promise<{ discarded: boolean }> {
-    return invoke("discard_node_detach", { nodeId });
+    return nodes().discard_node_detach({ nodeId });
   }
 
   /** Detach a command node from this node (leaf side). It may not re-attach until allowed. */
   async function detachControllerHere(controllerId: string): Promise<{ detached: boolean }> {
-    return invoke("detach_controller_here", { controllerId });
+    return nodes().detach_controller_here({ controllerId });
   }
 
   async function allowController(controllerId: string): Promise<{ allowed: boolean }> {
-    return invoke("allow_controller", { controllerId });
+    return nodes().allow_controller({ controllerId });
   }
 
   async function answerNodeSshPrompt(
     promptId: string,
     answer: string | null,
   ): Promise<{ answered: boolean }> {
-    return invoke(
-      "answer_node_ssh_prompt",
+    return nodes().answer_node_ssh_prompt(
       answer === null ? { promptId, cancel: true } : { promptId, answer },
     );
   }
@@ -100,11 +100,12 @@ export function createCommandNodesApi(client: BackendClient) {
     destination: string;
     fingerprints: Array<{ type: string; fingerprint: string }>;
   }> {
-    return invoke("probe_node_host_key", { ...input });
+    const probe = await nodes().probe_node_host_key({ ...input });
+    return { ...probe, fingerprints: [...probe.fingerprints] };
   }
 
   async function trustNodeHostKey(probeId: string): Promise<{ added: number }> {
-    return invoke("trust_node_host_key", { probeId });
+    return nodes().trust_node_host_key({ probeId });
   }
 
   function listNodeSshPrompts(): Promise<
@@ -116,7 +117,15 @@ export function createCommandNodesApi(client: BackendClient) {
       state: "open" | "closed";
     }>
   > {
-    return invoke("list_node_ssh_prompts");
+    return nodes().list_node_ssh_prompts(NO_ARGS) as Promise<
+      Array<{
+        promptId: string;
+        nodeId: string;
+        kind: string;
+        message: string;
+        state: "open" | "closed";
+      }>
+    >;
   }
 
   return {

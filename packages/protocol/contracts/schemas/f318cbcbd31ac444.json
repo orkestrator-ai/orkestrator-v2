@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:f318cbcbd31ac444d136c271d9c7ccfe0642e7e6317540c2daecbec0a697b653",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "ancestor": {
+          "type": "string"
+        },
+        "descendant": {
+          "type": "string"
+        },
+        "environmentId": {
+          "type": "string"
+        }
+      },
+      "required": ["ancestor", "descendant", "environmentId"],
+      "type": "object"
+    }
+  }
+}

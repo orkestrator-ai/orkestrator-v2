@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:e9f47f59a5e6ac4af50b67840f9524e501bb3ac0b772a0cc993e14949fc6bf84",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "measurementId": {
+          "type": "string"
+        },
+        "pathIds": {}
+      },
+      "required": ["measurementId"],
+      "type": "object"
+    }
+  }
+}

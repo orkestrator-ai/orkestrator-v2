@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:eba20bfd97d2d317aeb6fc8fbca64ce37ab986e1e8cd4b925cd562aa8a53bffe",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "additionalLimitations": {},
+        "environmentId": {
+          "type": "string"
+        },
+        "expectedHead": {},
+        "packageId": {},
+        "preparation": {},
+        "round": {},
+        "targetBranch": {
+          "type": "string"
+        },
+        "validationPlan": {}
+      },
+      "required": ["environmentId", "targetBranch"],
+      "type": "object"
+    }
+  }
+}

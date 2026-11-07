@@ -18,7 +18,8 @@ import {
   type PortalLayoutUpdate,
 } from "@orkestrator/protocol/portal-layout";
 import { NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
-import { portalInvoke, portalListen } from "./portal-transport";
+import { NO_ARGS, portalNodesApi } from "@/lib/node-scope/domains/nodes";
+import { portalListen } from "./portal-transport";
 
 interface PortalLayoutState {
   layout: PortalLayout;
@@ -58,7 +59,7 @@ function unsupportedCommand(error: unknown, command: string): boolean {
 async function read(): Promise<void> {
   const request = ++readRevision;
   try {
-    const layout = parsePortalLayout(await portalInvoke<unknown>("get_portal_layout"));
+    const layout = parsePortalLayout(await portalNodesApi().get_portal_layout(NO_ARGS));
     if (request === readRevision) apply(layout);
   } catch (error) {
     if (request !== readRevision || writing > 0) return;
@@ -124,7 +125,7 @@ export async function updatePortalLayout(update: PortalLayoutUpdate): Promise<vo
   writing += 1;
   let unsupported = false;
   try {
-    await portalInvoke<unknown>("update_portal_layout", { ...update });
+    await portalNodesApi().update_portal_layout({ ...update });
   } catch (error) {
     unsupported = unsupportedCommand(error, "update_portal_layout");
     if (!unsupported) throw error;

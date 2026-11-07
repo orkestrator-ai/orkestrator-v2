@@ -3,7 +3,8 @@ import {
   type BackendProfile,
   type BackendProfileUpdate,
 } from "@orkestrator/protocol/backend-profile";
-import { clientInvoke, commandBackendClient, type BackendClient } from "./client";
+import { NO_ARGS, nodesApi } from "@/lib/node-scope/domains/nodes";
+import { commandBackendClient, type BackendClient } from "./client";
 
 /**
  * This file's commands on `client`'s node (plan item 3002). A scoped store or
@@ -11,18 +12,16 @@ import { clientInvoke, commandBackendClient, type BackendClient } from "./client
  * over the window's command scope.
  */
 export function createMachineProfileApi(client: BackendClient) {
-  const invoke = clientInvoke(client);
+  const nodes = () => nodesApi(client);
 
   /** This realm's own machine profile (canonical name + colour). */
   async function getBackendProfile(): Promise<BackendProfile> {
-    return parseBackendProfile(await invoke<unknown>("get_backend_profile"));
+    return parseBackendProfile(await nodes().get_backend_profile(NO_ARGS));
   }
 
   /** Compare-and-swap edit; a stale revision is refused by the backend. */
   async function updateBackendProfile(update: BackendProfileUpdate): Promise<BackendProfile> {
-    return parseBackendProfile(
-      await invoke<unknown>("update_backend_profile", { ...update } as Record<string, unknown>),
-    );
+    return parseBackendProfile(await nodes().update_backend_profile({ ...update }));
   }
 
   return { getBackendProfile, updateBackendProfile };

@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:5e5df74cb56a66defb9dabc64939bea56ecca3eaf6df8043925bf2b7359cb8e6",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "activateTab": {},
+        "agent": {},
+        "agentDefaulted": {},
+        "attachments": {},
+        "autoMergeEnabledAt": {},
+        "conversationMode": {},
+        "environmentId": {},
+        "fastMode": {},
+        "literal": {},
+        "modelId": {},
+        "prompt": {},
+        "reasoningId": {},
+        "requestId": {},
+        "reviewTab": {},
+        "title": {}
+      },
+      "type": "object"
+    }
+  }
+}

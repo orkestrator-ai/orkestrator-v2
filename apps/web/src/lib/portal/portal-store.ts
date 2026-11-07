@@ -33,12 +33,12 @@ import {
 import {
   NODE_SUMMARY_CHANGED_EVENT,
   NODE_OUTCOMES_CHANGED_EVENT,
-  type NodeSummariesResult,
   type NodeSummary,
   type SelfNodeSummary,
 } from "@orkestrator/protocol/node-summaries";
 import type { MachineRelease } from "@orkestrator/protocol/fleet-currency";
 import { invoke } from "@/lib/native/backend";
+import { NO_ARGS, nodesApiOver, portalNodesApi } from "@/lib/node-scope/domains/nodes";
 import { listen, NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
 import { portalInvoke, portalListen, workspaceTarget } from "./portal-transport";
 
@@ -162,11 +162,8 @@ export class PortalStore {
     // non-command backend still reports its status.
     const includeSelf = workspaceTarget() !== null;
     const [status, summaries] = await Promise.allSettled([
-      portalInvoke<NodeStatus>("get_node_status"),
-      portalInvoke<NodeSummariesResult>(
-        "get_node_summaries",
-        includeSelf ? { includeSelf: true } : {},
-      ),
+      portalNodesApi().get_node_status(NO_ARGS),
+      portalNodesApi().get_node_summaries(includeSelf ? { includeSelf: true } : {}),
     ]);
     const statusValue = status.status === "fulfilled" ? status.value : null;
     const summariesValue =
@@ -210,15 +207,13 @@ export class PortalStore {
       if (!isNodeReadCommand(command)) this.scheduleRefresh();
       return result;
     }
-    const routed = await portalInvoke<
-      { outcome: "ok"; result: T } | { outcome: "unknown"; requestKey: string; outcomeId: string }
-    >("invoke_on_node", { nodeId, command, args, requestKey });
+    const routed = await portalNodesApi().invoke_on_node({ nodeId, command, args, requestKey });
     if (routed.outcome === "unknown") {
       this.store.setState((state) => ({ outcomesRevision: state.outcomesRevision + 1 }));
       throw new OutcomeUnknownError(nodeId, command, routed.requestKey);
     }
     if (!isNodeReadCommand(command)) this.scheduleRefresh();
-    return routed.result;
+    return routed.result as T;
   }
 }
 
@@ -231,7 +226,7 @@ export interface NodeOutcomeRecord {
 
 /** The profile (name and colour) of the machine the window's workspace is on. */
 export async function getWorkspaceProfile(): Promise<BackendProfile> {
-  return parseBackendProfile(await invoke<unknown>("get_backend_profile"));
+  return parseBackendProfile(await nodesApiOver(invoke).get_backend_profile(NO_ARGS));
 }
 
 export function listenWorkspaceProfile(
@@ -248,7 +243,7 @@ export function listenWorkspaceProfile(
 
 /** Outcome-unknown records the command node keeps for a node. */
 export async function listNodeOutcomes(nodeId: string): Promise<NodeOutcomeRecord[]> {
-  const value = await portalInvoke<NodeOutcomeRecord[]>("list_node_outcomes", { nodeId });
+  const value = await portalNodesApi().list_node_outcomes({ nodeId });
   return Array.isArray(value) ? value : [];
 }
 
@@ -393,7 +388,7 @@ export class NodeOutcomesStore {
 export const nodeOutcomesStore = new NodeOutcomesStore();
 
 export async function dismissNodeOutcome(outcomeId: string): Promise<void> {
-  await portalInvoke("dismiss_node_outcome", { outcomeId });
+  await portalNodesApi().dismiss_node_outcome({ outcomeId });
 }
 
 export interface NodeActionRequestView {
@@ -482,7 +477,8 @@ export interface AgentsMdPreview {
 }
 
 export async function previewAgentsMdUpdate(requestId: string): Promise<AgentsMdPreview> {
-  return portalInvoke<AgentsMdPreview>("preview_agents_md_update", { requestId });
+  // The section's own shape is the web's (`AgentsMdSection`); the definition keeps it open.
+  return portalNodesApi().preview_agents_md_update({ requestId }) as Promise<AgentsMdPreview>;
 }
 
 /**

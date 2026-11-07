@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:a217cd99b3584df19ee536eee79e3e30d3fe7eb39e1e63f00232b64979f83204",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "issueNumber": {
+          "type": "number"
+        },
+        "projectId": {
+          "type": "string"
+        }
+      },
+      "required": ["issueNumber", "projectId"],
+      "type": "object"
+    }
+  }
+}

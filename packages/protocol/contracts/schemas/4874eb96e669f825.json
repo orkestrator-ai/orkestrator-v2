@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:4874eb96e669f825cba9d9d1c2b5f8d9ea3068e471e23e8e5b2cc0e7a60fdff5",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "includeFiles": {
+          "type": "boolean"
+        },
+        "path": {
+          "type": "string"
+        },
+        "showHidden": {
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    }
+  }
+}

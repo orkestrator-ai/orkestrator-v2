@@ -143,5 +143,5 @@ binds used a scratch directory of dummy files, never a real agent home.
 
 - [7320: the inputs section shows an empty box for a staged revision with no providers](7320-empty-inputs-section.md)
 - [Container lifecycle: rollout switches and legacy runtimes](../../architecture/container-lifecycle.md#rollout-switches-and-legacy-runtimes)
-- [Security review, M9](../../reports/2-26-10-27-security.md#m9-legacy-pre-staged-inputs-images-still-mount-whole-host-agent-homes)
-- [Security index](../../reports/security/0000-index.md)
+- Security review, M9 (`git show 413bd6219:docs/reports/2-26-10-27-security.md`)
+- Security index (`git show 413bd6219:docs/reports/security/0000-index.md`)

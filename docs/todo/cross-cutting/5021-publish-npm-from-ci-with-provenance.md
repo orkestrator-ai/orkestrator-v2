@@ -40,4 +40,4 @@ This changes how the package is published and needs npm settings changed, so it 
 
 - [Releasing the desktop app](../../development/releasing.md)
 - [5022](5022-release-chain-live-evidence.md)
-- [Security report, §5 Low severity](../../reports/2-26-10-27-security.md#5-low-severity) (L6)
+- Security report, §5 Low severity (`git show 413bd6219:docs/reports/2-26-10-27-security.md`) (L6)

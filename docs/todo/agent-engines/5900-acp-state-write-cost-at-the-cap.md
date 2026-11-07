@@ -110,12 +110,12 @@ Measured on 2026-11-05 on an Intel Core Ultra 9 285H (16 CPUs, 62 GiB RAM, about
 
 - A crash can lose at most one interval of output.
 - `persistState()` barriers stay.
-- [Report invariants](../../reports/2026-10-27-efficiency.md#invariants-every-fix-must-keep): any cache needs byte and count bounds.
+- Report invariants (`git show 413bd6219:docs/reports/2026-10-27-efficiency.md`): any cache needs byte and count bounds.
 
 ## Related
 
 - [1202 task 6](../cross-cutting/1202-efficiency-review-follow-ups.md), BR-1 and BR-12
-- [Efficiency report, C](../../reports/2026-10-27-efficiency.md#c-bridges)
+- Efficiency report, C (`git show 413bd6219:docs/reports/2026-10-27-efficiency.md`)
 
 ## Replaces
 

@@ -50,7 +50,7 @@ Analysed 2026-11-04 against `main` at `e198fd4a7`.
 
 ## Related
 
-- [C1 outcome record](../../reports/2026-11-04-coordinator-c1-wake-reliability-outcome.md): every task in the report and where it went
+- C1 outcome record (`git show 413bd6219:docs/reports/2026-11-04-coordinator-c1-wake-reliability-outcome.md`): every task in the report and where it went
 - [2900-coordinator-node-mail-live-qualification.md](2900-coordinator-node-mail-live-qualification.md): the same two-node setup
 - [`docs/architecture/coordinator.md`](../../architecture/coordinator.md#status-wakes)
 - [`docs/architecture/goals.md`](../../architecture/goals.md)

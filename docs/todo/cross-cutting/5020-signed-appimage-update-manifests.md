@@ -36,4 +36,4 @@ Do the work once, under 0032 task 2, and mark this file finished when it lands. 
 
 - [0032](0032-dependency-upgrades.md) task 2
 - [Releasing the desktop app](../../development/releasing.md)
-- [Security report, §5 Low severity](../../reports/2-26-10-27-security.md#5-low-severity) (L6)
+- Security report, §5 Low severity (`git show 413bd6219:docs/reports/2-26-10-27-security.md`) (L6)

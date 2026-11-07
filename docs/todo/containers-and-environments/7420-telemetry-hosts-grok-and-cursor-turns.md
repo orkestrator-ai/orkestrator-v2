@@ -142,4 +142,4 @@ nor CI configuration is substituted for an observed arm64 pass.
 ## Related
 
 - [6101](6101-egress-name-checks-platform-coverage.md), [6102](6102-egress-name-check-residual-channels.md)
-- [Security report, M12](../../reports/2-26-10-27-security.md#m12-egress-firewall-limitations-design)
+- Security report, M12 (`git show 413bd6219:docs/reports/2-26-10-27-security.md`)

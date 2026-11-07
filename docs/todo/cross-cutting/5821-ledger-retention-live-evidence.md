@@ -106,7 +106,7 @@ Analysed 2026-11-05 against `main` at `0e8958f57`.
 
 ## Related
 
-- Batch file E3, parts 0730 and 0540 (deleted): its outcome is the [closing check of E3](../../reports/2026-11-06-efficiency-logging-database-outcome.md#closing-check-of-e3-retention-and-deletion), which names the commit that holds the file's last version.
+- Batch file E3, parts 0730 and 0540 (deleted): its outcome is the closing check of E3 (`git show 413bd6219:docs/reports/2026-11-06-efficiency-logging-database-outcome.md`), which names the commit that holds the file's last version.
 - [Change tracking](../../architecture/change-tracking.md#age-based-retention)
 - [5361](5361-retention-pass-on-a-large-real-store.md), the object store side of the pass
 - [5820](5820-removed-project-kanban-notes-plans.md), the rest of the same batch

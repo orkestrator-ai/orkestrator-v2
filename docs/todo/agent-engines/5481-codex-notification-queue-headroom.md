@@ -50,7 +50,7 @@ Analysed 2026-11-05 against `main` at `69a3b4ca5`.
 ## Related
 
 - [1202 task 6](../cross-cutting/1202-efficiency-review-follow-ups.md#6-bridge-hot-paths): what was built for BR-13.
-- [Efficiency report, C](../../reports/2026-10-27-efficiency.md#c-bridges) (BR-13).
+- Efficiency report, C (`git show 413bd6219:docs/reports/2026-10-27-efficiency.md`) (BR-13).
 
 ## Replaces
 

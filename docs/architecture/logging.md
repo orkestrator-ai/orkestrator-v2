@@ -955,7 +955,7 @@ Its metadata and names are redacted too; common fixtures enforce parity.
 `scripts/recurring-live-ab.ts` counts `Unhandled promise rejection (continuing)` by its
 exact text, so that prefix does not change.
 
-The [R5 addendum](../reports/2026-10-29-logging-and-database-efficiency.md#addendum-log-output-shortened-by-r5)
+The R5 addendum (`git show 413bd6219:docs/reports/2026-10-29-logging-and-database-efficiency.md`)
 lists every site these backstops shortened and the evidence each loses.
 
 ## Output
@@ -1378,7 +1378,7 @@ its boot steps to the main process as a fixed-shape message, and the main proces
 writes them as `[workspaces] realm.boot-step` with the realm's node. See
 [Realm boot](federation.md#realm-boot).
 
-Recommendation R8 in the [review](../reports/2026-10-29-logging-and-database-efficiency.md)
+Recommendation R8 in the review (`git show 413bd6219:docs/reports/2026-10-29-logging-and-database-efficiency.md`)
 asked whether more may be saved. The answer is the content-free error ring:
 [Renderer failures in the essential log](#renderer-failures-in-the-essential-log). The
 console itself still stays in the browser.
@@ -1421,7 +1421,7 @@ with one vocabulary file per domain (`web-kanban.ts`, `web-sync.ts`, and so on).
 - **Other readers.** `e2e/agent-testing/dev-startup-retry.ts` and
   `event-stream-outage.ts` read console text, and match the new lines.
 
-The [addendum to the review](../reports/2026-10-29-logging-and-database-efficiency.md#addendum-renderer-levels-changed-by-r1)
+The addendum to the review (`git show 413bd6219:docs/reports/2026-10-29-logging-and-database-efficiency.md`)
 lists every level this migration changed.
 
 ## The lint rule

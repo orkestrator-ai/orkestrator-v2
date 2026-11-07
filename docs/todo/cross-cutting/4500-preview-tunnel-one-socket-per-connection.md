@@ -11,7 +11,7 @@ Analysed 2026-11-04 against `main` at `96ee1eb3e`.
 
 ### 1. Measure the cost
 
-**Problem.** Finding DK-6 in [the 2026-10-27 efficiency report](../../reports/2026-10-27-efficiency.md) rates this Low with Medium confidence, and nothing has measured it.
+**Problem.** Finding DK-6 in the 2026-10-27 efficiency report (`git show 413bd6219:docs/reports/2026-10-27-efficiency.md`) rates this Low with Medium confidence, and nothing has measured it.
 
 **Context.** Split out of [1202](1202-efficiency-review-follow-ups.md) task 12, which re-checked it on 2026-11-04 and found it still applies. It also carries the "Needs verification" item of efficiency report file `docs/reports/efficiency-logging-database/0692-dk-6-preview-tunnel-multiplexing.md` (batch E-0692), deleted on 2026-11-05 once its closing check confirmed everything else; its original text is at `69a3b4ca5`, and its last version, ending with its outcome table, is the parent of the commit that deleted it. `desktop.connect_ms` (`preview-transport-manager.ts`) already records each tunnel's open time.
 

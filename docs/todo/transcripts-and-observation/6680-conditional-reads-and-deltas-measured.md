@@ -2,7 +2,7 @@
 
 ## Task analysis
 
-Analysed 2026-11-06 against `main` at `cbe0f9a5b`. The E10 batch file (efficiency report parts 0160, 0180 and 0190) is deleted. Its last version, with every task's status, is the parent of the commit that deleted it, and `git show cbe0f9a5b:docs/reports/efficiency-logging-database/0160-e10-conditional-reads-and-deltas.md` shows it as built from. Its outcome is the [closing check of E10](../../reports/2026-11-06-efficiency-logging-database-outcome.md#closing-check-of-e10-conditional-reads-and-deltas) in the efficiency outcome report.
+Analysed 2026-11-06 against `main` at `cbe0f9a5b`. The E10 batch file (efficiency report parts 0160, 0180 and 0190) is deleted. Its last version, with every task's status, is the parent of the commit that deleted it, and `git show cbe0f9a5b:docs/reports/efficiency-logging-database/0160-e10-conditional-reads-and-deltas.md` shows it as built from. Its outcome is the closing check of E10 (`git show 413bd6219:docs/reports/2026-11-06-efficiency-logging-database-outcome.md`) in the efficiency outcome report.
 
 ### Tasks
 
@@ -209,14 +209,14 @@ E10's baseline is taken on an isolated `dev:test` profile for Claude, and with a
 
 ## Constraints and rationale
 
-- [Report invariants](../../reports/2026-10-27-efficiency.md#invariants-every-fix-must-keep): anything built later needs byte and count bounds on its cache or ring, keeps missed events detectable, and records a new wire form in [version-compatibility.md](../../architecture/version-compatibility.md).
+- Report invariants (`git show 413bd6219:docs/reports/2026-10-27-efficiency.md`): anything built later needs byte and count bounds on its cache or ring, keeps missed events detectable, and records a new wire form in [version-compatibility.md](../../architecture/version-compatibility.md).
 - A bridge answering "unchanged" for state must still reach the backend's interaction and queue reads (part 0180).
 - A delta must carry `revisedMessages` for rows outside the live tail (invariant 14), and a base from another history epoch or provider session must never produce one.
 - The profile baseline must never run a billed turn. Run it only on a profile started with `--no-agent-credentials`, so that a fault in the spec cannot fall back to a host login.
 
 ## Related
 
-- [Efficiency outcome, closing check of E10](../../reports/2026-11-06-efficiency-logging-database-outcome.md#closing-check-of-e10-conditional-reads-and-deltas)
+- Efficiency outcome, closing check of E10 (`git show 413bd6219:docs/reports/2026-11-06-efficiency-logging-database-outcome.md`)
 - [1202 efficiency follow-ups](../cross-cutting/1202-efficiency-review-follow-ups.md), tasks 1, 4 and 5
 - [5340](5340-transcript-reads-live-evidence.md) and [6260](6260-projection-hashing-measurements.md): the other transcript measurements; the loopback-model spec here can take theirs without a billed turn
-- [Efficiency report, B](../../reports/2026-10-27-efficiency.md#b-native-agent-transcript-pipeline) (TX-1, TX-5, TX-6)
+- Efficiency report, B (`git show 413bd6219:docs/reports/2026-10-27-efficiency.md`) (TX-1, TX-5, TX-6)

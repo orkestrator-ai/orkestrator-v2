@@ -67,6 +67,6 @@ Analysed 2026-11-05 against `main` at `0e8958f57`.
 
 ## Related
 
-- Batch file E3, part 0840 (deleted): its outcome is the [closing check of E3](../../reports/2026-11-06-efficiency-logging-database-outcome.md#closing-check-of-e3-retention-and-deletion), which names the commit that holds the file's last version.
-- [Logging and database report, D4](../../reports/2026-10-29-logging-and-database-efficiency.md#d4-the-rest-of-the-ledger-never-shrinks-medium-growing)
+- Batch file E3, part 0840 (deleted): its outcome is the closing check of E3 (`git show 413bd6219:docs/reports/2026-11-06-efficiency-logging-database-outcome.md`), which names the commit that holds the file's last version.
+- Logging and database report, D4 (`git show 413bd6219:docs/reports/2026-10-29-logging-and-database-efficiency.md`)
 - [Change tracking](../../architecture/change-tracking.md#deleting-an-environment), which covers the ledger half of D4

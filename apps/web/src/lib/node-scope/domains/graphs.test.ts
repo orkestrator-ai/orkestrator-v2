@@ -14,7 +14,7 @@ import { graphs } from "./graphs";
 const GRAPHS_V1: NegotiatedDomains = { graphs: { min: 1, max: 1 } };
 
 function fakeClient(answer: (command: string) => unknown, domains?: NegotiatedDomains | null) {
-  const invokeRaw = mock(async (command: string) => answer(command));
+  const invokeRaw = mock(async (command: string, ..._rest: unknown[]) => answer(command));
   const client: BackendClient = {
     invokeRaw: invokeRaw as unknown as BackendClient["invokeRaw"],
     ...(domains === undefined

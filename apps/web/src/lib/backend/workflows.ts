@@ -1,8 +1,8 @@
 import { coordinatorApi } from "@/lib/node-scope/domains/coordinator";
 import { asWebModel, nativeSessions } from "@/lib/node-scope/domains/native-sessions";
 import { terminals } from "@/lib/node-scope/domains/terminals";
-import { hydrationRequests } from "@/lib/hydration-request-limiter";
 import { agentServersApi } from "@/lib/node-scope/domains/agent-servers";
+import { hydrationRequests } from "@/lib/hydration-request-limiter";
 import {
   LIST_ENVIRONMENT_HYDRATION_COMMAND,
   isEnvironmentHydrationBatch,
@@ -10,12 +10,7 @@ import {
 } from "@orkestrator/protocol/environment-hydration";
 import { hostTimeZone } from "@orkestrator/protocol/schedule-time";
 import { terminalWriteWasDelivered } from "@/lib/backend/shared";
-import type {
-  CreateFeatureBuildInput,
-  CreateFeatureBuildResult,
-} from "@orkestrator/protocol/feature-build";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
-import type { BuildPipelineRestartSelection } from "@orkestrator/protocol/build-pipeline-restart-selection";
 import type {
   AgentInteractionApplyOutcome,
   AgentInteractionOrigin,
@@ -23,33 +18,7 @@ import type {
   AgentInteractionResolution,
 } from "@orkestrator/protocol/agent-interactions";
 import type {
-  BuildPipeline as BackendBuildPipeline,
-  BuildPipelineCodeRewindPreview,
-  PipelineQueuedSteerDelivery,
-  StartBuildPipelineInput,
-} from "@orkestrator/protocol/build-pipeline";
-import type {
-  ReviewValidationOutput,
-  ReviewValidationOutputKnown,
-  ReviewValidationRun,
-} from "@orkestrator/protocol/review-workflow";
-import {
-  isMultiReviewReviewerHistoryPage,
-  type MultiReviewWorkflow as BackendMultiReviewWorkflow,
-  type MultiReviewReviewerHistoryPage,
-  type MultiReviewReviewerTranscript,
-  type MultiReviewStepKind,
-  type MultiReviewStepTranscript,
-  type StartMultiReviewCustomAddressFindingsInput,
-  type StartMultiReviewInput,
-  type MultiReviewModelSelection,
-  type MultiReviewRewindStep,
-  type MultiReviewSkippableStep,
-} from "@orkestrator/protocol/multi-review";
-import type {
-  Environment,
   PersistedWorkflowRecord,
-  PersistedBuildPipeline,
   PersistedNativeAgentSession,
   PersistedComposeDraft,
   PersistedFileDraft,
@@ -96,13 +65,10 @@ import {
 } from "@orkestrator/protocol/native-agent";
 /** PR detection result containing URL, state, and merge conflict status */
 
-import {
-  isRecord,
-  parseTerminalSessionCreateResult,
-  type TerminalSessionCreateResult,
-} from "./shared";
-import type { KanbanTask } from "./kanban";
-import { clientInvoke, commandBackendClient, type BackendClient } from "./client";
+import { parseTerminalSessionCreateResult, type TerminalSessionCreateResult } from "./shared";
+import { commandBackendClient, type BackendClient } from "./client";
+import { createBuildPipelinesApi } from "./build-pipelines";
+import { createMultiReviewsApi } from "./multi-reviews";
 
 /**
  * The platform a native-agent command names.
@@ -129,12 +95,6 @@ export interface NativeAgentJobLaunchResult {
   /** The reused tab was busy, so the prompt waits for its current work to end. */
   queued?: boolean;
 }
-
-// --- Multi Review Workflow Commands ---
-
-// Controller leases are backend-only. The renderer has no caller for
-// claim/validate/release, and backend-owned records reject renderer writes, so
-// keeping wrappers here would only advertise an API the renderer must not use.
 
 /** What an explicit command-list refresh did, with the projection it produced. */
 export interface NativeAgentCommandRefreshResult<TMessage = unknown> {
@@ -167,30 +127,9 @@ export type NativeAgentSuborkTranscript =
     }
   | { status: "missing" | "none" | "unavailable" };
 
-// --- Build Pipeline Persistence ---
+// --- Build pipelines and Multi Review: `build-pipelines.ts`, `multi-reviews.ts` ---
 
-export type ConditionalBuildPipeline<T> =
-  | { unchanged: true; revision: number }
-  | {
-      unchanged: false;
-      record: PersistedBuildPipeline<T>;
-      messagePatches: Array<{
-        sessionKey: string;
-        baseRevision?: number;
-        baseCount?: number;
-        startIndex: number;
-        revision: number;
-        messages: unknown[];
-        /** The stored transcript could not be read; keep what is held. */
-        unavailable?: true;
-        /** Over the response budget; a later read fetches it. */
-        deferred?: true;
-        /** Some history was not retained by the backend's transcript bound. */
-        complete?: false;
-      }>;
-    }
-  | PersistedBuildPipeline<T>
-  | null;
+export type { ConditionalBuildPipeline } from "./build-pipelines";
 
 // --- Prompt Queues ---
 
@@ -206,45 +145,12 @@ export type ConditionalBuildPipeline<T> =
  * over the window's command scope.
  */
 export function createWorkflowsApi(client: BackendClient) {
-  const invoke = clientInvoke(client);
+  // Build pipelines and Multi Review live in their own files (plan item 7007).
+  const buildPipelinesApi = createBuildPipelinesApi(client);
+  const multiReviewsApi = createMultiReviewsApi(client);
   const native = () => nativeSessions(client);
   // The `terminals` domain client for local terminals (plan item 7002).
   const terminalsDomain = () => terminals(client);
-
-  /**
-   * Bounded validation output. With `known` (the size and anchor of the tail the
-   * caller holds per stream) a current backend answers only the appended bytes;
-   * an older backend ignores it and answers a full tail.
-   */
-  async function getReviewValidationOutput(
-    environmentId: string,
-    runId: string,
-    resultId: string,
-    known?: ReviewValidationOutputKnown,
-  ): Promise<ReviewValidationOutput> {
-    return invoke<ReviewValidationOutput>("get_review_validation_output", {
-      environmentId,
-      runId,
-      resultId,
-      ...(known && (known.stdout || known.stderr) ? { known } : {}),
-    });
-  }
-
-  /**
-   * Stop one validation command. The environment-owned worker records it as
-   * incomplete with its partial output and keeps running the remaining commands.
-   */
-  async function stopReviewValidationCommand(
-    environmentId: string,
-    run: ReviewValidationRun,
-    resultId: string,
-  ): Promise<ReviewValidationRun> {
-    return invoke<ReviewValidationRun>("stop_review_validation_command", {
-      environmentId,
-      run,
-      resultId,
-    });
-  }
 
   /**
    * Launch work whose tab is a projection of a backend-owned native session.
@@ -276,276 +182,6 @@ export function createWorkflowsApi(client: BackendClient) {
     return coordinatorApi(client).launch_native_agent_job(
       input,
     ) as Promise<NativeAgentJobLaunchResult>;
-  }
-
-  async function startMultiReview(
-    input: StartMultiReviewInput,
-  ): Promise<BackendMultiReviewWorkflow> {
-    return invoke<BackendMultiReviewWorkflow>("start_multi_review", { ...input });
-  }
-
-  async function addressMultiReviewFindings(
-    workflowId: string,
-  ): Promise<BackendMultiReviewWorkflow> {
-    return invoke<BackendMultiReviewWorkflow>("address_multi_review", { workflowId });
-  }
-
-  async function startMultiReviewCustomAddressFindings(
-    input: StartMultiReviewCustomAddressFindingsInput,
-  ): Promise<BackendMultiReviewWorkflow> {
-    return invoke<BackendMultiReviewWorkflow>("start_multi_review_custom_fix", { ...input });
-  }
-
-  async function retryMultiReview(workflowId: string): Promise<BackendMultiReviewWorkflow> {
-    return invoke<BackendMultiReviewWorkflow>("retry_multi_review", { workflowId });
-  }
-
-  async function recoverMultiReviewAddressFindingsSession(input: {
-    environmentId: string;
-    tabId: string;
-    expectedProviderSessionId: string;
-    replacementProviderSessionId: string;
-  }): Promise<BackendMultiReviewWorkflow> {
-    return invoke<BackendMultiReviewWorkflow>("recover_multi_review_fix_session", input);
-  }
-
-  async function cancelMultiReview(workflowId: string): Promise<BackendMultiReviewWorkflow> {
-    return invoke<BackendMultiReviewWorkflow>("cancel_multi_review", { workflowId });
-  }
-
-  /**
-   * Retire one reviewer and let the review continue without it. The backend
-   * aborts that reviewer's session best-effort and consolidates from whatever the
-   * remaining reviewers produced.
-   */
-  async function stopMultiReviewReviewer(
-    workflowId: string,
-    reviewerId: string,
-  ): Promise<BackendMultiReviewWorkflow> {
-    return invoke<BackendMultiReviewWorkflow>("stop_multi_review_reviewer", {
-      workflowId,
-      reviewerId,
-    });
-  }
-
-  /** Stop validation commands and continue Multi Review with the evidence collected so far. */
-  async function stopMultiReviewValidation(
-    workflowId: string,
-  ): Promise<BackendMultiReviewWorkflow> {
-    return invoke<BackendMultiReviewWorkflow>("stop_multi_review_validation", { workflowId });
-  }
-
-  /** A `model` is "Restart in…": the reviewer runs on it from now on. */
-  async function restartMultiReviewReviewer(
-    workflowId: string,
-    reviewerId: string,
-    model?: MultiReviewModelSelection,
-  ): Promise<BackendMultiReviewWorkflow> {
-    return invoke<BackendMultiReviewWorkflow>("restart_multi_review_reviewer", {
-      workflowId,
-      reviewerId,
-      ...(model ? { model } : {}),
-    });
-  }
-
-  /** Moves on without a step's result: the reviewers still working, or Address Findings. */
-  async function skipMultiReviewStep(
-    workflowId: string,
-    step: MultiReviewSkippableStep,
-  ): Promise<BackendMultiReviewWorkflow> {
-    return invoke<BackendMultiReviewWorkflow>("skip_multi_review_step", { workflowId, step });
-  }
-
-  /** What "Rewind code to here" on a step would drop, and why it cannot run now, if it cannot. */
-  async function previewMultiReviewCodeRewind(
-    workflowId: string,
-    step: MultiReviewRewindStep,
-  ): Promise<BuildPipelineCodeRewindPreview> {
-    return invoke<BuildPipelineCodeRewindPreview>("preview_multi_review_code_rewind", {
-      workflowId,
-      step,
-    });
-  }
-
-  /** Resets the worktree to the commit a step started from and restarts that step. */
-  async function rewindMultiReviewCode(
-    workflowId: string,
-    step: MultiReviewRewindStep,
-    expectedHead: string,
-  ): Promise<BackendMultiReviewWorkflow> {
-    return invoke<BackendMultiReviewWorkflow>("rewind_multi_review_code", {
-      workflowId,
-      step,
-      expectedHead,
-    });
-  }
-
-  async function restartMultiReviewStep(
-    workflowId: string,
-    kind: "prepare" | "consolidate" | "fix",
-    model?: BackendMultiReviewWorkflow["fixModel"],
-  ): Promise<BackendMultiReviewWorkflow> {
-    return invoke<BackendMultiReviewWorkflow>("restart_multi_review_step", {
-      workflowId,
-      kind,
-      ...(model ? { model } : {}),
-    });
-  }
-
-  async function pauseMultiReviewStep(
-    workflowId: string,
-    kind: "prepare" | "consolidate" | "fix",
-  ): Promise<BackendMultiReviewWorkflow> {
-    return invoke<BackendMultiReviewWorkflow>("pause_multi_review_step", { workflowId, kind });
-  }
-
-  async function resumeMultiReviewStep(
-    workflowId: string,
-    kind: "prepare" | "consolidate" | "fix",
-  ): Promise<BackendMultiReviewWorkflow> {
-    return invoke<BackendMultiReviewWorkflow>("resume_multi_review_step", { workflowId, kind });
-  }
-
-  async function unstickMultiReviewReviewer(
-    workflowId: string,
-    reviewerId: string,
-  ): Promise<BackendMultiReviewWorkflow> {
-    return invoke<BackendMultiReviewWorkflow>("unstick_multi_review_reviewer", {
-      workflowId,
-      reviewerId,
-    });
-  }
-
-  async function getMultiReviewWorkflow<T = unknown>(
-    workflowId: string,
-  ): Promise<PersistedWorkflowRecord<T> | null> {
-    return invoke<PersistedWorkflowRecord<T> | null>("get_multi_review_workflow", {
-      workflowId,
-    });
-  }
-
-  /**
-   * `unchanged` when the record is still at `knownRevision`, otherwise the
-   * record. A backend that predates the conditional read ignores the revision
-   * and always answers with the record.
-   */
-  async function getMultiReviewWorkflowConditional<T = unknown>(
-    workflowId: string,
-    knownRevision?: number,
-  ): Promise<{ unchanged: true; revision: number } | PersistedWorkflowRecord<T> | null> {
-    const response = await invoke<unknown>("get_multi_review_workflow", {
-      workflowId,
-      ...(knownRevision === undefined ? {} : { knownRevision }),
-    });
-    if (response === null || response === undefined) return null;
-    if (
-      isRecord(response) &&
-      response.unchanged === true &&
-      Number.isSafeInteger(response.revision) &&
-      (response.revision as number) >= 0
-    ) {
-      return response as { unchanged: true; revision: number };
-    }
-    if (!isRecord(response) || "unchanged" in response || typeof response.id !== "string") {
-      throw new Error("Invalid get_multi_review_workflow response");
-    }
-    return response as unknown as PersistedWorkflowRecord<T>;
-  }
-
-  async function listMultiReviewWorkflows<T = unknown>(
-    environmentId: string,
-  ): Promise<Array<PersistedWorkflowRecord<T>>> {
-    return hydrationRequests.run(() =>
-      invoke<Array<PersistedWorkflowRecord<T>>>("list_multi_review_workflows", {
-        environmentId,
-      }),
-    );
-  }
-
-  /**
-   * Reads a bounded reviewer transcript tail. Passing the previous response's
-   * `sourceToken` lets the backend answer `transcript: "unchanged"` with no
-   * messages when nothing moved; the caller then keeps what it already shows.
-   */
-  async function getMultiReviewReviewerTranscript(
-    workflowId: string,
-    reviewerId: string,
-    options: { knownSourceToken?: string } = {},
-  ): Promise<MultiReviewReviewerTranscript> {
-    return invoke<MultiReviewReviewerTranscript>("get_multi_review_reviewer_transcript", {
-      workflowId,
-      reviewerId,
-      ...(options.knownSourceToken ? { knownSourceToken: options.knownSourceToken } : {}),
-    });
-  }
-
-  /**
-   * Reads a bounded tail of a preparation, consolidation or Fix session, with
-   * the reviewer transcript's conditional `knownSourceToken` contract.
-   */
-  async function getMultiReviewStepTranscript(
-    workflowId: string,
-    step: MultiReviewStepKind,
-    options: { knownSourceToken?: string } = {},
-  ): Promise<MultiReviewStepTranscript> {
-    return invoke<MultiReviewStepTranscript>("get_multi_review_step_transcript", {
-      workflowId,
-      step,
-      ...(options.knownSourceToken ? { knownSourceToken: options.knownSourceToken } : {}),
-    });
-  }
-
-  /** The body behind a step row, resolved against its authoritative owned session. */
-  async function getMultiReviewStepToolDetails(
-    workflowId: string,
-    step: MultiReviewStepKind,
-    detailRef: string,
-  ): Promise<NativeAgentToolDetails> {
-    return invoke<NativeAgentToolDetails>("get_multi_review_step_tool_details", {
-      workflowId,
-      step,
-      detailRef,
-    });
-  }
-
-  /** The body behind a reviewer row's deferred `detailRef`, read on expansion. */
-  async function getMultiReviewReviewerToolDetails(
-    workflowId: string,
-    reviewerId: string,
-    detailRef: string,
-  ): Promise<NativeAgentToolDetails> {
-    return invoke<NativeAgentToolDetails>("get_multi_review_reviewer_tool_details", {
-      workflowId,
-      reviewerId,
-      detailRef,
-    });
-  }
-
-  /**
-   * Reviewer history before `before` (a transcript `historyCursor` or a page's
-   * `nextCursor`). An answer outside the protocol's bounds is refused rather
-   * than rendered.
-   */
-  async function getMultiReviewReviewerHistoryPage(
-    workflowId: string,
-    reviewerId: string,
-    options: { before: string; limit?: number; targetBytes?: number },
-  ): Promise<MultiReviewReviewerHistoryPage> {
-    const page = await invoke<unknown>("get_multi_review_reviewer_history_page", {
-      workflowId,
-      reviewerId,
-      before: options.before,
-      ...(options.limit === undefined ? {} : { limit: options.limit }),
-      ...(options.targetBytes === undefined ? {} : { targetBytes: options.targetBytes }),
-    });
-    if (!isMultiReviewReviewerHistoryPage(page)) {
-      throw new Error("The reviewer history page was malformed");
-    }
-    return page;
-  }
-
-  async function deleteMultiReviewWorkflow(workflowId: string): Promise<void> {
-    return invoke("delete_multi_review_workflow", { workflowId });
   }
 
   async function ensureNativeAgentSession(input: {
@@ -1106,410 +742,6 @@ export function createWorkflowsApi(client: BackendClient) {
     return native().discard_native_agent_dispatch(input);
   }
 
-  async function startBuildPipeline(input: StartBuildPipelineInput): Promise<BackendBuildPipeline> {
-    return invoke<BackendBuildPipeline>("start_build_pipeline", { ...input });
-  }
-
-  /**
-   * Creates the ticket and starts its build in one backend-owned request.
-   *
-   * The renderer deliberately does not create the ticket itself and then start a
-   * pipeline: those are two writes, and a tab that goes away between them leaves
-   * a ticket nobody is building. `requestId` makes a retry return the same ticket
-   * and the same pipeline rather than a second of each.
-   */
-  async function createFeatureBuild(
-    input: CreateFeatureBuildInput,
-  ): Promise<CreateFeatureBuildResult> {
-    return invoke<CreateFeatureBuildResult>("create_feature_build", { ...input });
-  }
-
-  async function pauseBuildPipeline(pipelineId: string): Promise<BackendBuildPipeline> {
-    return invoke<BackendBuildPipeline>("pause_build_pipeline", { pipelineId });
-  }
-
-  async function resumeBuildPipeline(pipelineId: string): Promise<BackendBuildPipeline> {
-    return invoke<BackendBuildPipeline>("resume_build_pipeline", { pipelineId });
-  }
-
-  async function cancelBuildPipeline(pipelineId: string): Promise<BackendBuildPipeline> {
-    return invoke<BackendBuildPipeline>("cancel_build_pipeline", { pipelineId });
-  }
-
-  async function sendBuildPipelineMessage(
-    pipelineId: string,
-    text: string,
-  ): Promise<BackendBuildPipeline> {
-    return invoke<BackendBuildPipeline>("send_build_pipeline_message", {
-      pipelineId,
-      text,
-    });
-  }
-
-  /**
-   * Injects an instruction into the turn the pipeline agent is running now.
-   * `delivery` is `queued` when there was no live turn to steer, in which case the
-   * instruction waits for the agent like an ordinary message.
-   */
-  async function steerBuildPipeline(
-    pipelineId: string,
-    text: string,
-  ): Promise<{ pipeline: BackendBuildPipeline; delivery: "steered" | "queued" }> {
-    return invoke<{ pipeline: BackendBuildPipeline; delivery: "steered" | "queued" }>(
-      "steer_build_pipeline",
-      { pipelineId, text },
-    );
-  }
-
-  /**
-   * Moves one queued message into the turn the pipeline agent is running now.
-   * `notice` is the agent's reason when it refused, or the warning when delivery
-   * could not be confirmed.
-   */
-  async function steerQueuedBuildPipelineMessage(
-    pipelineId: string,
-    messageId: string,
-  ): Promise<{
-    pipeline: BackendBuildPipeline;
-    delivery: PipelineQueuedSteerDelivery;
-    notice?: string;
-  }> {
-    return invoke<{
-      pipeline: BackendBuildPipeline;
-      delivery: PipelineQueuedSteerDelivery;
-      notice?: string;
-    }>("steer_queued_build_pipeline_message", { pipelineId, messageId });
-  }
-
-  /** `removed` is false when the message had already left the queue as the next turn. */
-  async function removeQueuedBuildPipelineMessage(
-    pipelineId: string,
-    messageId: string,
-  ): Promise<{ pipeline: BackendBuildPipeline; removed: boolean }> {
-    return invoke<{ pipeline: BackendBuildPipeline; removed: boolean }>(
-      "remove_queued_build_pipeline_message",
-      { pipelineId, messageId },
-    );
-  }
-
-  async function restartBuildPipelineCurrentStep(
-    pipelineId: string,
-  ): Promise<BackendBuildPipeline> {
-    return invoke<BackendBuildPipeline>("restart_build_pipeline_current_step", { pipelineId });
-  }
-
-  async function retryBuildPipelineStage(pipelineId: string): Promise<BackendBuildPipeline> {
-    return invoke<BackendBuildPipeline>("retry_build_pipeline_stage", {
-      pipelineId,
-    });
-  }
-
-  /** Runs one failed reviewer of the current review pass again. */
-  async function retryBuildPipelineReviewer(
-    pipelineId: string,
-    reviewerId: string,
-  ): Promise<BackendBuildPipeline> {
-    return invoke<BackendBuildPipeline>("retry_build_pipeline_reviewer", {
-      pipelineId,
-      reviewerId,
-    });
-  }
-
-  /**
-   * Runs one reviewer again whatever state it is in, keeping the rest of the panel.
-   * `reviewerId` names a live reviewer, or the session of one whose pass has ended.
-   */
-  async function restartBuildPipelineReviewer(
-    pipelineId: string,
-    reviewerId: string,
-  ): Promise<BackendBuildPipeline> {
-    return invoke<BackendBuildPipeline>("restart_build_pipeline_reviewer", {
-      pipelineId,
-      reviewerId,
-    });
-  }
-
-  /** Stops one reviewer of the running review, keeping the rest of the panel. */
-  async function stopBuildPipelineReviewer(
-    pipelineId: string,
-    reviewerId: string,
-  ): Promise<BackendBuildPipeline> {
-    return invoke<BackendBuildPipeline>("stop_build_pipeline_reviewer", { pipelineId, reviewerId });
-  }
-
-  /**
-   * Restarts a pipeline step. A `selection` ("Restart in…") runs the step, and
-   * every later run of it, on that agent and model instead.
-   */
-  async function restartBuildPipelineStep(
-    pipelineId: string,
-    stageId: string,
-    selection?: BuildPipelineRestartSelection,
-  ): Promise<BackendBuildPipeline> {
-    return invoke<BackendBuildPipeline>("restart_build_pipeline_step", {
-      pipelineId,
-      stageId,
-      ...(selection ? { selection } : {}),
-    });
-  }
-
-  /** What "Rewind code to here" would drop, read before the user confirms it. */
-  async function previewBuildPipelineCodeRewind(
-    pipelineId: string,
-    stageId: string,
-  ): Promise<BuildPipelineCodeRewindPreview> {
-    return invoke<BuildPipelineCodeRewindPreview>("preview_build_pipeline_code_rewind", {
-      pipelineId,
-      stageId,
-    });
-  }
-
-  /**
-   * Resets the worktree to the commit a step started from and restarts that
-   * step. `expectedHead` is the HEAD the confirmed preview showed.
-   */
-  async function rewindBuildPipelineCode(
-    pipelineId: string,
-    stageId: string,
-    expectedHead: string,
-  ): Promise<BackendBuildPipeline> {
-    return invoke<BackendBuildPipeline>("rewind_build_pipeline_code", {
-      pipelineId,
-      stageId,
-      expectedHead,
-    });
-  }
-
-  /** Skips the pipeline's current stage and moves on to the next one. */
-  async function skipBuildPipelineStep(
-    pipelineId: string,
-    stageId: string,
-  ): Promise<BackendBuildPipeline> {
-    return invoke<BackendBuildPipeline>("skip_build_pipeline_step", { pipelineId, stageId });
-  }
-
-  async function retryBuildPipelineInteractionFailure(
-    pipelineId: string,
-  ): Promise<BackendBuildPipeline> {
-    return invoke<BackendBuildPipeline>("retry_build_pipeline_interaction_failure", {
-      pipelineId,
-    });
-  }
-
-  async function retryBuildPipelineCompletionComment(
-    pipelineId: string,
-  ): Promise<BackendBuildPipeline> {
-    return invoke<BackendBuildPipeline>("retry_build_pipeline_completion_comment", { pipelineId });
-  }
-
-  async function importLegacyBuildPipelines(
-    projectId: string,
-    snapshots: unknown[],
-  ): Promise<{ importedIds: string[]; skipped: number }> {
-    return invoke("import_legacy_build_pipelines", { projectId, snapshots });
-  }
-
-  async function getBuildPipeline<T = unknown>(
-    pipelineId: string,
-  ): Promise<PersistedBuildPipeline<T> | null> {
-    return invoke<PersistedBuildPipeline<T> | null>("get_build_pipeline", { pipelineId });
-  }
-
-  /**
-   * Resolve one backend-owned build stage through the same native projection used
-   * by an ordinary agent tab. The backend validates both identifiers against the
-   * persisted pipeline before adopting the provider session for inspection.
-   */
-  async function getBuildPipelineSessionProjection<TMessage = unknown>(input: {
-    pipelineId: string;
-    sessionKey: string;
-    refreshUsage?: boolean;
-  }): Promise<NativeAgentSessionProjection<TMessage> | null> {
-    return invoke<NativeAgentSessionProjection<TMessage> | null>(
-      "get_build_pipeline_session_projection",
-      input,
-    );
-  }
-
-  /**
-   * Resolve one Multi Review reviewer's provider session through the native
-   * projection, as {@link getBuildPipelineSessionProjection} does for a stage.
-   * The backend finds the session from the persisted workflow.
-   */
-  async function getMultiReviewReviewerProjection<TMessage = unknown>(input: {
-    workflowId: string;
-    reviewerId: string;
-    refreshUsage?: boolean;
-  }): Promise<NativeAgentSessionProjection<TMessage> | null> {
-    return invoke<NativeAgentSessionProjection<TMessage> | null>(
-      "get_multi_review_reviewer_projection",
-      input,
-    );
-  }
-
-  /**
-   * Control state plus transcript windows for the sessions whose bodies the
-   * caller does not hold at their committed revision. `knownSessions` names the
-   * bodies held (revision and count); omitted sessions come back whole, and
-   * `prioritySessionKey` is served first when the response budget runs out.
-   */
-  async function getBuildPipelineConditional<T = unknown>(
-    pipelineId: string,
-    knownRevision?: number,
-    knownSessions: Record<string, { revision: number; count: number }> = {},
-    prioritySessionKey?: string,
-  ): Promise<ConditionalBuildPipeline<T>> {
-    const response = await invoke<unknown>("get_build_pipeline", {
-      pipelineId,
-      knownRevision,
-      knownSessions,
-      ...(prioritySessionKey ? { prioritySessionKey } : {}),
-    });
-    if (response === null) return null;
-    if (!isRecord(response)) {
-      throw new Error("Invalid get_build_pipeline response");
-    }
-    if (!("unchanged" in response)) {
-      if (typeof response.id !== "string") {
-        throw new Error("Invalid get_build_pipeline response");
-      }
-      return response as unknown as PersistedBuildPipeline<T>;
-    }
-    if (
-      response.unchanged === true &&
-      Number.isSafeInteger(response.revision) &&
-      (response.revision as number) >= 0
-    ) {
-      return response as { unchanged: true; revision: number };
-    }
-    if (
-      response.unchanged !== false ||
-      !isRecord(response.record) ||
-      typeof response.record.id !== "string" ||
-      !Array.isArray(response.messagePatches) ||
-      !response.messagePatches.every((value) => {
-        if (!isRecord(value)) return false;
-        return (
-          typeof value.sessionKey === "string" &&
-          Number.isSafeInteger(value.startIndex) &&
-          (value.startIndex as number) >= 0 &&
-          Number.isSafeInteger(value.revision) &&
-          (value.revision as number) >= 0 &&
-          (value.baseRevision === undefined ||
-            (Number.isSafeInteger(value.baseRevision) && (value.baseRevision as number) >= 0)) &&
-          (value.baseCount === undefined ||
-            (Number.isSafeInteger(value.baseCount) && (value.baseCount as number) >= 0)) &&
-          (value.unavailable === undefined || value.unavailable === true) &&
-          (value.deferred === undefined || value.deferred === true) &&
-          (value.complete === undefined || value.complete === false) &&
-          Array.isArray(value.messages)
-        );
-      })
-    ) {
-      throw new Error("Invalid get_build_pipeline response");
-    }
-    return response as unknown as ConditionalBuildPipeline<T>;
-  }
-
-  /**
-   * Control state only: `unchanged` when the record is still at `knownRevision`,
-   * otherwise the record without any transcript body.
-   */
-  async function getBuildPipelineControl<T = unknown>(
-    pipelineId: string,
-    knownRevision?: number,
-  ): Promise<{ unchanged: true; revision: number } | PersistedBuildPipeline<T> | null> {
-    const response = await invoke<unknown>("get_build_pipeline", {
-      pipelineId,
-      ...(knownRevision === undefined ? {} : { knownRevision }),
-    });
-    if (response === null) return null;
-    if (
-      isRecord(response) &&
-      response.unchanged === true &&
-      Number.isSafeInteger(response.revision) &&
-      (response.revision as number) >= 0
-    ) {
-      return response as { unchanged: true; revision: number };
-    }
-    if (!isRecord(response) || "unchanged" in response || typeof response.id !== "string") {
-      throw new Error("Invalid get_build_pipeline response");
-    }
-    return response as unknown as PersistedBuildPipeline<T>;
-  }
-
-  async function listBuildPipelines<T = unknown>(
-    projectId: string,
-  ): Promise<Array<PersistedBuildPipeline<T>>> {
-    return hydrationRequests.run(() =>
-      invoke<Array<PersistedBuildPipeline<T>>>("list_build_pipelines", { projectId }),
-    );
-  }
-
-  async function listBuildPipelinesConditional<T = unknown>(
-    projectId: string,
-    knownRevisions: Record<string, number>,
-  ): Promise<{ ids: string[]; records: Array<PersistedBuildPipeline<T>> }> {
-    const response = await hydrationRequests.run(() =>
-      invoke<unknown>("list_build_pipelines", {
-        projectId,
-        knownRevisions,
-      }),
-    );
-    // Older backends ignore knownRevisions and return the complete record array.
-    if (Array.isArray(response)) {
-      if (!response.every((entry) => isRecord(entry) && typeof entry.id === "string")) {
-        throw new Error("Invalid list_build_pipelines response");
-      }
-      return {
-        ids: response.map((entry) => entry.id as string),
-        records: response as Array<PersistedBuildPipeline<T>>,
-      };
-    }
-    if (
-      !isRecord(response) ||
-      !Array.isArray(response.ids) ||
-      !response.ids.every((id) => typeof id === "string") ||
-      !Array.isArray(response.records) ||
-      !response.records.every((entry) => isRecord(entry) && typeof entry.id === "string")
-    ) {
-      throw new Error("Invalid list_build_pipelines response");
-    }
-    return response as unknown as {
-      ids: string[];
-      records: Array<PersistedBuildPipeline<T>>;
-    };
-  }
-
-  async function deleteBuildPipeline(pipelineId: string): Promise<void> {
-    return invoke("delete_build_pipeline", { pipelineId });
-  }
-
-  async function clearTaskBuildStatus(taskId: string): Promise<{
-    task: KanbanTask;
-    removedPipelineIds: string[];
-  }> {
-    return invoke("clear_task_build_status", { taskId });
-  }
-
-  /**
-   * Marks or clears the environment's unread badge.
-   *
-   * A dedicated command rather than a general update so two clients racing on the
-   * badge cannot clobber each other's unrelated environment fields.
-   */
-  async function setEnvironmentUnread(
-    environmentId: string,
-    unread: boolean,
-    expectedLastActivityAt?: string | null,
-  ): Promise<Environment> {
-    return invoke<Environment>("set_environment_unread", {
-      environmentId,
-      unread,
-      ...(expectedLastActivityAt === undefined ? {} : { expectedLastActivityAt }),
-    });
-  }
-
   async function getPromptQueue<T = unknown>(
     queueKey: string,
   ): Promise<PersistedPromptQueue<T> | null> {
@@ -1735,34 +967,9 @@ export function createWorkflowsApi(client: BackendClient) {
   }
 
   return {
-    getReviewValidationOutput,
-    stopReviewValidationCommand,
+    ...buildPipelinesApi,
+    ...multiReviewsApi,
     launchNativeAgentJob,
-    startMultiReview,
-    addressMultiReviewFindings,
-    startMultiReviewCustomAddressFindings,
-    retryMultiReview,
-    recoverMultiReviewAddressFindingsSession,
-    cancelMultiReview,
-    stopMultiReviewReviewer,
-    stopMultiReviewValidation,
-    restartMultiReviewReviewer,
-    skipMultiReviewStep,
-    previewMultiReviewCodeRewind,
-    rewindMultiReviewCode,
-    restartMultiReviewStep,
-    pauseMultiReviewStep,
-    resumeMultiReviewStep,
-    unstickMultiReviewReviewer,
-    getMultiReviewWorkflow,
-    getMultiReviewWorkflowConditional,
-    listMultiReviewWorkflows,
-    getMultiReviewReviewerTranscript,
-    getMultiReviewStepTranscript,
-    getMultiReviewStepToolDetails,
-    getMultiReviewReviewerToolDetails,
-    getMultiReviewReviewerHistoryPage,
-    deleteMultiReviewWorkflow,
     ensureNativeAgentSession,
     adoptNativeAgentSession,
     getNativeAgentSession,
@@ -1802,37 +1009,6 @@ export function createWorkflowsApi(client: BackendClient) {
     dispatchNativeAgentIntent,
     retryNativeAgentDispatch,
     discardNativeAgentDispatch,
-    startBuildPipeline,
-    createFeatureBuild,
-    pauseBuildPipeline,
-    resumeBuildPipeline,
-    cancelBuildPipeline,
-    sendBuildPipelineMessage,
-    steerBuildPipeline,
-    steerQueuedBuildPipelineMessage,
-    removeQueuedBuildPipelineMessage,
-    restartBuildPipelineCurrentStep,
-    retryBuildPipelineStage,
-    retryBuildPipelineReviewer,
-    restartBuildPipelineReviewer,
-    stopBuildPipelineReviewer,
-    restartBuildPipelineStep,
-    previewBuildPipelineCodeRewind,
-    rewindBuildPipelineCode,
-    skipBuildPipelineStep,
-    retryBuildPipelineInteractionFailure,
-    retryBuildPipelineCompletionComment,
-    importLegacyBuildPipelines,
-    getBuildPipeline,
-    getBuildPipelineSessionProjection,
-    getMultiReviewReviewerProjection,
-    getBuildPipelineConditional,
-    getBuildPipelineControl,
-    listBuildPipelines,
-    listBuildPipelinesConditional,
-    deleteBuildPipeline,
-    clearTaskBuildStatus,
-    setEnvironmentUnread,
     getPromptQueue,
     listPromptQueues,
     listEnvironmentHydration,
@@ -1860,34 +1036,7 @@ export type WorkflowsApi = ReturnType<typeof createWorkflowsApi>;
 
 /** The window's command-scope binding (the counted shim, plan item 3002). */
 export const {
-  getReviewValidationOutput,
-  stopReviewValidationCommand,
   launchNativeAgentJob,
-  startMultiReview,
-  addressMultiReviewFindings,
-  startMultiReviewCustomAddressFindings,
-  retryMultiReview,
-  recoverMultiReviewAddressFindingsSession,
-  cancelMultiReview,
-  stopMultiReviewReviewer,
-  stopMultiReviewValidation,
-  restartMultiReviewReviewer,
-  skipMultiReviewStep,
-  previewMultiReviewCodeRewind,
-  rewindMultiReviewCode,
-  restartMultiReviewStep,
-  pauseMultiReviewStep,
-  resumeMultiReviewStep,
-  unstickMultiReviewReviewer,
-  getMultiReviewWorkflow,
-  getMultiReviewWorkflowConditional,
-  listMultiReviewWorkflows,
-  getMultiReviewReviewerTranscript,
-  getMultiReviewStepTranscript,
-  getMultiReviewStepToolDetails,
-  getMultiReviewReviewerToolDetails,
-  getMultiReviewReviewerHistoryPage,
-  deleteMultiReviewWorkflow,
   ensureNativeAgentSession,
   adoptNativeAgentSession,
   getNativeAgentSession,
@@ -1927,6 +1076,30 @@ export const {
   dispatchNativeAgentIntent,
   retryNativeAgentDispatch,
   discardNativeAgentDispatch,
+  getPromptQueue,
+  listPromptQueues,
+  listEnvironmentHydration,
+  enqueuePromptQueueMessage,
+  removePromptQueueMessage,
+  movePromptQueueMessage,
+  retryPromptQueueDispatch,
+  getComposeDraft,
+  listComposeDrafts,
+  saveComposeDraft,
+  deleteComposeDraft,
+  getFileDraft,
+  saveFileDraft,
+  deleteFileDraft,
+  awaitBridgeReady,
+  createLocalTerminalSession,
+  startLocalTerminalSession,
+  writeLocalTerminal,
+  resizeLocalTerminal,
+  closeLocalTerminalSession,
+} = createWorkflowsApi(commandBackendClient);
+
+/** The split files' command-scope bindings, exported here as before (plan item 7007). */
+export {
   startBuildPipeline,
   createFeatureBuild,
   pauseBuildPipeline,
@@ -1950,7 +1123,6 @@ export const {
   importLegacyBuildPipelines,
   getBuildPipeline,
   getBuildPipelineSessionProjection,
-  getMultiReviewReviewerProjection,
   getBuildPipelineConditional,
   getBuildPipelineControl,
   listBuildPipelines,
@@ -1958,24 +1130,34 @@ export const {
   deleteBuildPipeline,
   clearTaskBuildStatus,
   setEnvironmentUnread,
-  getPromptQueue,
-  listPromptQueues,
-  listEnvironmentHydration,
-  enqueuePromptQueueMessage,
-  removePromptQueueMessage,
-  movePromptQueueMessage,
-  retryPromptQueueDispatch,
-  getComposeDraft,
-  listComposeDrafts,
-  saveComposeDraft,
-  deleteComposeDraft,
-  getFileDraft,
-  saveFileDraft,
-  deleteFileDraft,
-  awaitBridgeReady,
-  createLocalTerminalSession,
-  startLocalTerminalSession,
-  writeLocalTerminal,
-  resizeLocalTerminal,
-  closeLocalTerminalSession,
-} = createWorkflowsApi(commandBackendClient);
+} from "./build-pipelines";
+export {
+  getReviewValidationOutput,
+  stopReviewValidationCommand,
+  startMultiReview,
+  addressMultiReviewFindings,
+  startMultiReviewCustomAddressFindings,
+  retryMultiReview,
+  recoverMultiReviewAddressFindingsSession,
+  cancelMultiReview,
+  stopMultiReviewReviewer,
+  stopMultiReviewValidation,
+  restartMultiReviewReviewer,
+  skipMultiReviewStep,
+  previewMultiReviewCodeRewind,
+  rewindMultiReviewCode,
+  restartMultiReviewStep,
+  pauseMultiReviewStep,
+  resumeMultiReviewStep,
+  unstickMultiReviewReviewer,
+  getMultiReviewWorkflow,
+  getMultiReviewWorkflowConditional,
+  listMultiReviewWorkflows,
+  getMultiReviewReviewerTranscript,
+  getMultiReviewStepTranscript,
+  getMultiReviewStepToolDetails,
+  getMultiReviewReviewerToolDetails,
+  getMultiReviewReviewerHistoryPage,
+  deleteMultiReviewWorkflow,
+  getMultiReviewReviewerProjection,
+} from "./multi-reviews";

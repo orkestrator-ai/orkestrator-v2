@@ -51,7 +51,7 @@ afterEach(() => {
 
 describe("lib/backend factories", () => {
   test("every source file has a factory", () => {
-    expect(modules.length).toBe(36);
+    expect(modules.length).toBe(38);
   });
 
   for (const file of modules) {

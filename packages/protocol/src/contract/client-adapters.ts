@@ -34,6 +34,8 @@ import { designClient } from "./domains/design/client.js";
 import { filesClient } from "./domains/files/client.js";
 import { gitClient } from "./domains/git/client.js";
 import { graphsClient } from "./domains/graphs/client.js";
+import { multiReviewClient } from "./domains/multi-review/client.js";
+import { pipelinesClient } from "./domains/pipelines/client.js";
 import { nativeSessionsClient } from "./domains/native-sessions/client.js";
 import { nodeFilesClient } from "./domains/node-files/client.js";
 import { nodesClient } from "./domains/nodes/client.js";
@@ -66,6 +68,8 @@ export const DOMAIN_CLIENTS: readonly DomainClientDef[] = Object.freeze([
   filesClient,
   gitClient,
   graphsClient,
+  multiReviewClient,
+  pipelinesClient,
   nativeSessionsClient,
   nodeFilesClient,
   nodesClient,

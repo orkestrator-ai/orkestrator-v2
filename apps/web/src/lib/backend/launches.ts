@@ -17,6 +17,7 @@ import type {
   LaunchMultiReviewActionInput,
   MultiReviewActionResult,
 } from "@orkestrator/protocol/multi-review";
+import { pipelines } from "@/lib/node-scope/domains/pipelines";
 import { clientInvoke, commandBackendClient, type BackendClient } from "./client";
 
 /**
@@ -31,14 +32,14 @@ export function createLaunchesApi(client: BackendClient) {
   async function launchBuildPipeline(
     input: LaunchBuildPipelineInput,
   ): Promise<BackendBuildPipeline> {
-    return invoke<BackendBuildPipeline>("launch_build_pipeline", { ...input });
+    return pipelines(client).launch_build_pipeline({ ...input });
   }
 
   /** The Features view's Build: the backend claims, creates the ticket and starts. */
   async function startFeaturePlanBuild(
     input: StartFeaturePlanBuildInput,
   ): Promise<StartFeaturePlanBuildResult> {
-    return invoke<StartFeaturePlanBuildResult>("start_feature_plan_build", { ...input });
+    return pipelines(client).start_feature_plan_build({ ...input });
   }
 
   /**

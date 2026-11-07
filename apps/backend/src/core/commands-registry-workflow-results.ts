@@ -5,6 +5,11 @@ import {
   type WorkflowResultToolsSettings,
 } from "@orkestrator/protocol/workflow-results";
 import type { CommandRegistrar } from "./commands-registry-types.js";
+import {
+  getWorkflowResultMetricsCommand,
+  getWorkflowResultToolsRolloutCommand,
+  setWorkflowResultToolsRolloutCommand,
+} from "@orkestrator/protocol/contract/domains/pipelines";
 
 /**
  * Operational surface for the workflow result transport.
@@ -18,7 +23,7 @@ import type { CommandRegistrar } from "./commands-registry-types.js";
  */
 export function registerWorkflowResultCommands(register: CommandRegistrar): void {
   register(
-    "get_workflow_result_metrics",
+    getWorkflowResultMetricsCommand,
     async (_args, { workflowResults, workflowResultRollout }) => {
       if (!workflowResults) throw new Error("Workflow result service is unavailable");
       return {
@@ -28,14 +33,14 @@ export function registerWorkflowResultCommands(register: CommandRegistrar): void
     },
   );
 
-  register("get_workflow_result_tools_rollout", async (_args, { storage }) => {
+  register(getWorkflowResultToolsRolloutCommand, async (_args, { storage }) => {
     return normalizeWorkflowResultToolsSettings(
       (await storage.loadConfig()).global.workflowResultTools,
     );
   });
 
   register(
-    "set_workflow_result_tools_rollout",
+    setWorkflowResultToolsRolloutCommand,
     async ({ enabled, providers, kinds }, { storage, workflowResultRollout }) => {
       if (enabled !== undefined && typeof enabled !== "boolean") {
         throw new Error("enabled must be a boolean");

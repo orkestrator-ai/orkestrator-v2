@@ -1911,6 +1911,11 @@ This project uses **shadcn/ui** components. When adding new UI:
 - **Zustand** for global state (`apps/web/src/stores/`)
 - **React Context** for component-tree state (`apps/web/src/contexts/`)
 - Stores use `Map<string, T>` pattern for per-environment/per-session state
+- Per-node stores are being converted to node-scope instances, one store at a
+  time (`defineScopedStore`, `scopedStoreHook`). A converted store's static
+  `getState`/`setState`/`subscribe` is a deprecated command-scope shim,
+  counted by a shrink-only source guard. Follow
+  [`docs/development/node-scopes.md`](docs/development/node-scopes.md).
 
 # Code review
 

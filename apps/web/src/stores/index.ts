@@ -3,7 +3,7 @@ export type { ProjectBoardTab } from "./uiStore";
 export { useProjectStore } from "./projectStore";
 export { useEnvironmentStore } from "./environmentStore";
 export { useConfigStore } from "./configStore";
-export { useClaudeOptionsStore } from "./claudeOptionsStore";
+export { claudeOptionsStore, useClaudeOptionsStore } from "./claudeOptionsStore";
 export type { ClaudeOptions, AgentType } from "./claudeOptionsStore";
 export { useAgentActivityStore } from "./agentActivityStore";
 export type { AgentActivityState } from "./agentActivityStore";

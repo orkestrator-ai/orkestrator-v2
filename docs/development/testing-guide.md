@@ -446,6 +446,11 @@ expect(client.calls("list_environments")).toHaveLength(2);
   calls `resetWindowScopeForTests()`.
 - Plain modules take the scope explicitly, so their tests need no React:
   open a scope with `new WindowScope().open({ role, client })` and pass it.
+- A converted store (`scopedStoreHook`) read under `renderInNodeScope` reads
+  the rendered scope. Seed it with `scope.store(def).setState(...)`, not the
+  deprecated `useXStore.setState`, which reaches the app's command scope. The
+  per-store recipe, including the tests, is
+  [node-scopes.md](node-scopes.md#tests).
 
 ### Agent CLIs on `PATH`
 

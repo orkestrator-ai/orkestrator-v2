@@ -473,5 +473,8 @@
     "apps/web/src/lib/store-resource-sync.ts": 1,
     "apps/web/src/lib/web-annotations/sync.ts": 1,
     "apps/web/src/stores/previewServiceStore.ts": 1
+  },
+  "scoped-store-shim": {
+    "[claude-options] apps/web/src/App.tsx": 1
   }
 }

@@ -106,6 +106,7 @@ deleted once their behaviour is in a living doc; git history keeps them. The
 | [credentials-and-models.md](development/credentials-and-models.md) | Credential and catalogue inventory. |
 | [test-logs.md](development/test-logs.md) | Diagnostic-bounds rationale. Operator commands stay in `testing-guide.md`. |
 | [disk-usage.md](development/disk-usage.md) | Where Orkestrator work leaves disk state, who prunes each location, `disk:report`, `dev:prune`, Docker build-cache limit. |
+| [node-scopes.md](development/node-scopes.md) | Converting a store to per-node scope instances: `defineScopedStore`, the `scopedStoreHook` command-scope shim, imperative sites, tests with `renderInNodeScope`, and the `scoped-store-shim` baseline (`--guard`). |
 | [linting.md](development/linting.md) | `bun fmt`/oxlint/`bun check` configuration, exclusions, severity policy and disable-directive rules. |
 | [releasing.md](development/releasing.md) | Cutting a desktop release, CI secrets, artifact names, how the in-app updater decides to run, Linux/Omarchy notes. |
 | [container-qualification.md](development/container-qualification.md) | Real-Docker qualification: C01–C30 scenario matrix, live suites and how to run them, platform dimensions, benchmark harness and regression targets. |

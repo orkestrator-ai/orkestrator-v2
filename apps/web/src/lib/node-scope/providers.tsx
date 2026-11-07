@@ -102,6 +102,16 @@ export function useNodeScope(): NodeScope {
 }
 
 /**
+ * The nearest `NodeScopeProvider`'s scope, or `null` outside one, in every
+ * mode. For the converted-store shim (`scopedStoreHook`, plan item 3001),
+ * which must know when it falls back to the command scope; new code uses
+ * `useNodeScope()`.
+ */
+export function useOptionalNodeScope(): NodeScope | null {
+  return useContext(NodeScopeContext);
+}
+
+/**
  * The nearest window and node scope without the strict check: outside a
  * provider they are the app's window scope and its command scope, in every
  * mode. Only for window-level stores whose producers and readers still render

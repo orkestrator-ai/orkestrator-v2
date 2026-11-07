@@ -3,10 +3,13 @@
  *
  *   bun tests/source-guards/update-baseline.ts
  *   bun tests/source-guards/update-baseline.ts --guard window-orkestrator-direct
+ *   bun tests/source-guards/update-baseline.ts --guard scoped-store-shim
  *
  * With `--guard <id>` (repeatable) only those guards' entries are rescanned;
  * every other guard's entries are kept exactly as committed, so adding or
- * shrinking one guard cannot also absorb another guard's new findings.
+ * shrinking one guard cannot also absorb another guard's new findings. A guard
+ * that counts per subject (`scoped-store-shim`, per store) also prints each
+ * subject's total.
  *
  * The output is deterministic (guards in declaration order, files sorted), so
  * running it twice on the same tree writes the same bytes. A baseline entry
@@ -36,6 +39,16 @@ export function selectedGuards(argv: readonly string[]): GuardId[] | null {
     index += 1;
   }
   return selected.length > 0 ? selected : null;
+}
+
+/** Totals per subject for a guard whose entries are keyed `[subject] file`. */
+export function subjectTotals(entries: Readonly<Record<string, number>>): Array<[string, number]> {
+  const totals = new Map<string, number>();
+  for (const [key, count] of Object.entries(entries)) {
+    const subject = /^\[([^\]]+)\] /.exec(key)?.[1];
+    if (subject) totals.set(subject, (totals.get(subject) ?? 0) + count);
+  }
+  return [...totals].sort(([left], [right]) => left.localeCompare(right));
 }
 
 /** `committed` with the `selected` guards' entries replaced by `scanned`'s. */
@@ -71,6 +84,8 @@ if (import.meta.main) {
     const counts = Object.values(baseline[guard]);
     const total = counts.reduce((sum, count) => sum + count, 0);
     console.log(`${guard}: ${counts.length} file(s), ${total} finding(s)`);
+    for (const [subject, count] of subjectTotals(baseline[guard]))
+      console.log(`  [${subject}] ${count} finding(s)`);
   }
   console.log(`Wrote ${path.relative(root, BASELINE_PATH)} (scan ${Math.round(elapsed)} ms).`);
 }

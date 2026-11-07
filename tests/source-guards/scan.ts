@@ -10,7 +10,9 @@ import {
   type ScannedFile,
   type SourceGuard,
 } from "./guard";
+import { isTestSource } from "./paths";
 import { releasedPortRebind } from "./released-port-rebind";
+import { scopedStoreShim } from "./scoped-store-shim";
 import { sleepBeforeNegativeAssertion } from "./sleep-before-negative-assertion";
 import { smallFakePid } from "./small-fake-pid";
 import { subprocessWithoutBudget } from "./subprocess-without-budget";
@@ -23,6 +25,7 @@ export const SOURCE_GUARDS: readonly SourceGuard[] = [
   smallFakePid,
   windowOrkestratorDirect,
   directTransportImport,
+  scopedStoreShim,
 ];
 
 export const SCANNED_ROOTS = ["tests", "apps", "bridges", "packages", "scripts", "e2e"] as const;
@@ -37,24 +40,27 @@ const EXCLUDED_DIRECTORIES: ReadonlySet<string> = new Set(["node_modules", "dist
 const EXCLUDED_PATHS: ReadonlySet<string> = new Set(["tests/source-guards/fixtures"]);
 
 const SCRIPT_FILE = /\.[cm]?[jt]sx?$/;
-const TEST_FILE = /\.(?:test|spec)\.[cm]?[jt]sx?$/;
 const BUN_TEST_FILE = /\.test\.[cm]?[jt]sx?$/;
-const SUPPORT_NAME = /test-harness|test-support|fixture/i;
-const SUPPORT_DIRECTORY = /(?:^|\/)(?:tests|testing|__tests__)\//;
 
-/** Test files plus the modules that support them. */
-export function isTestSource(relativePath: string): boolean {
-  const name = path.posix.basename(relativePath);
-  if (!SCRIPT_FILE.test(name) || name.endsWith(".d.ts")) return false;
-  return TEST_FILE.test(name) || SUPPORT_NAME.test(name) || SUPPORT_DIRECTORY.test(relativePath);
-}
+export { isTestSource };
 
 export interface Finding {
   guard: GuardId;
   file: string;
   line: number;
+  /** Set by guards that count per subject (see `SubjectFinding`). */
+  subject?: string;
 }
 
+/**
+ * The baseline entry a finding counts against: its file, or
+ * `[subject] file` for a guard that counts per subject.
+ */
+export function baselineKey(finding: Pick<Finding, "file" | "subject">): string {
+  return finding.subject ? `[${finding.subject}] ${finding.file}` : finding.file;
+}
+
+/** Per guard, findings grouped by baseline key (`baselineKey`). */
 export type Findings = Record<GuardId, Record<string, Finding[]>>;
 
 export function emptyFindings(): Findings {
@@ -111,8 +117,16 @@ export function scanSource(
   );
   const findings: Finding[] = [];
   candidates.forEach((guard, index) => {
-    for (const offset of visitors[index]!.finish())
-      findings.push({ guard: guard.id, file: file.path, line: lineAt(file.source, offset) });
+    for (const found of visitors[index]!.finish()) {
+      const offset = typeof found === "number" ? found : found.offset;
+      const finding: Finding = {
+        guard: guard.id,
+        file: file.path,
+        line: lineAt(file.source, offset),
+      };
+      if (typeof found !== "number") finding.subject = found.subject;
+      findings.push(finding);
+    }
   });
   return findings;
 }
@@ -191,7 +205,7 @@ export function scanRepository(
       isBunTest: BUN_TEST_FILE.test(relative),
     };
     for (const finding of scanSource(file, fileGuards))
-      (findings[finding.guard][finding.file] ??= []).push(finding);
+      (findings[finding.guard][baselineKey(finding)] ??= []).push(finding);
   };
   const testGuards = guards.filter((guard) => !guard.productionRoots);
   for (const relative of listTestSources(root)) scanFile(relative, testGuards);

@@ -102,7 +102,7 @@ Some guards read production sources instead of tests (`SourceGuard.productionRoo
 the walk is `listProductionSources`, which skips test files and test-support
 modules). They hold the node-scope boundaries of the unified federation work and
 are described in [Transports only through a scope](#transports-only-through-a-scope):
-`window-orkestrator-direct` and `direct-transport-import`.
+`window-orkestrator-direct`, `direct-transport-import` and `scoped-store-shim`.
 
 Existing offenders are tolerated by a ratchet, not fixed in bulk:
 `tests/source-guards/baseline.json` holds a count per guard and file. The test
@@ -290,6 +290,18 @@ baseline:
   renderer's base patterns, because overrides replace one another. Add a
   directory to it once its last importer is gone; type-only imports stay
   allowed (`allowTypeImports`), as in the guard.
+
+- **`scoped-store-shim`** (source guard, plan item 3001). Static calls
+  (`getState`, `setState`, `subscribe`, `getInitialState`, or destructuring
+  them) on a converted store's hook in `apps/web/src` production code. Each
+  is the deprecated command-scope shim, which does not say which node it
+  means. The guard counts per store and per file, so its baseline keys are
+  `[store] file`. It finds the store from the import, following aliases,
+  namespace imports and re-exports through `@/stores` or any other module, and
+  never from the identifier's spelling. Only stores listed in `SHIMMED_STORES`
+  are counted; a store enters when its item converts it. Regenerate with
+  `--guard scoped-store-shim`, which prints the total per store. The
+  conversion recipe is [node-scopes.md](node-scopes.md).
 
 To retire an importer, route it through a scope, then regenerate only this
 guard's entries with

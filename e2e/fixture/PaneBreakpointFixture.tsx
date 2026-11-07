@@ -14,7 +14,10 @@ import { PaneTree } from "../../apps/web/src/components/pane-layout/PaneTree";
 import { TerminalPortalHost } from "../../apps/web/src/components/terminal/TerminalPortalHost";
 import { useEnvironmentStore } from "../../apps/web/src/stores/environmentStore";
 import { usePaneLayoutStore } from "../../apps/web/src/stores/paneLayoutStore";
-import { useTerminalPortalStore } from "../../apps/web/src/stores/terminalPortalStore";
+import {
+  commandTerminalPortalNodeId,
+  useTerminalPortalStore,
+} from "../../apps/web/src/stores/terminalPortalStore";
 import type { PaneSplit } from "../../apps/web/src/types/paneLayout";
 
 const ENVIRONMENT_ID = "breakpoint-environment";
@@ -225,7 +228,9 @@ function installBackend() {
   } as Window["orkestrator"];
 
   const terminal = () =>
-    useTerminalPortalStore.getState().getTerminal(ENVIRONMENT_ID, TERMINAL_TAB_ID)?.terminal;
+    useTerminalPortalStore
+      .getState()
+      .getTerminal(commandTerminalPortalNodeId(), ENVIRONMENT_ID, TERMINAL_TAB_ID)?.terminal;
   window.writeBreakpointTerminal = (text) =>
     new Promise((resolve, reject) => {
       const instance = terminal();

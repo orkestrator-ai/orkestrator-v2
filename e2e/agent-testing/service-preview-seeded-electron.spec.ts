@@ -390,7 +390,7 @@ async function terminalLinkPoint(
 ): Promise<{ x: number; y: number } | string> {
   return store(
     "/src/stores/terminalPortalStore.ts",
-    `const data = module.useTerminalPortalStore.getState().getTerminal(arg.environmentId, arg.tabId);
+    `const data = module.useTerminalPortalStore.getState().getTerminal(module.commandTerminalPortalNodeId(), arg.environmentId, arg.tabId);
      if (!data) return "no terminal";
      const screen =
        data.terminal.element?.querySelector(".xterm-screen") ??

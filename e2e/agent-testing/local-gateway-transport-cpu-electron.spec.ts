@@ -324,7 +324,7 @@ async function measureRun(mode: TransportMode, run: number, root: string): Promi
           `(async () => {
         const module = await import("/src/stores/terminalPortalStore.ts");
         globalThis.__cpuRendered = () => {
-          const buffer = module.useTerminalPortalStore.getState().getTerminal(${JSON.stringify(environment.id)}, "tab-shell")?.terminal.buffer.active;
+          const buffer = module.useTerminalPortalStore.getState().getTerminal(module.commandTerminalPortalNodeId(), ${JSON.stringify(environment.id)}, "tab-shell")?.terminal.buffer.active;
           return buffer ? Array.from({ length: buffer.length }, (_, i) => buffer.getLine(i)?.translateToString(true) ?? "").join("\\n") : "";
         };
       })()`,

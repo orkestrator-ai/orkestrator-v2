@@ -455,9 +455,12 @@ function renderedTerminal(page: Page, environmentId: string, tabId: string): Pro
   return page.evaluate(
     async ({ environmentId, tabId }) => {
       const modulePath = "/src/stores/terminalPortalStore.ts";
-      const { useTerminalPortalStore } = await import(/* @vite-ignore */ modulePath);
-      const buffer = useTerminalPortalStore.getState().getTerminal(environmentId, tabId)?.terminal
-        .buffer.active;
+      const { useTerminalPortalStore, commandTerminalPortalNodeId } = await import(
+        /* @vite-ignore */ modulePath
+      );
+      const buffer = useTerminalPortalStore
+        .getState()
+        .getTerminal(commandTerminalPortalNodeId(), environmentId, tabId)?.terminal.buffer.active;
       if (!buffer) return "";
       const lines: string[] = [];
       for (let index = 0; index < buffer.length; index += 1) {

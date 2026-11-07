@@ -19,10 +19,11 @@
  *    from that node (a node transport's credential changed, its connection or
  *    identity moved), so several live nodes do not clear each other's content
  *    (docs/reports/unified-federation.md §7.4);
- *  - `noteRichContentConnection(id, { nodeId? })`: a desktop connection
- *    switch, tracked per node;
- *  - `noteRichBackendIdentity(id, { nodeId? })`: the authenticated backend
- *    identity changed under the same window or node, tracked per node;
+ *  - `noteRichContentConnection(id, scope?)`: a desktop connection switch,
+ *    recorded on that node scope (default: the command scope, whose change
+ *    clears everything; any other scope clears only its node);
+ *  - `noteRichBackendIdentity(id, scope?)`: the authenticated backend
+ *    identity changed under the same node scope, recorded the same way;
  *  - `clearRichEnvironmentContent(id)`: an environment was deleted;
  *  - `clearRichConversationContent(scope)`: a conversation was deleted or
  *    its permission revoked, as established by authoritative artifact reads
@@ -37,6 +38,8 @@ import {
   richScopePrefixes,
   type RichTranscriptScope,
 } from "@/lib/chat/rich-identity";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { appCommandScope, defineScopedSlot } from "@/lib/node-scope-slots";
 import { clearRichViewEnvironment, useRichContentViewStore } from "@/stores/richContentViewStore";
 
 export type RichConversationScope = Pick<
@@ -49,7 +52,9 @@ export interface ProtectedRichCache {
   clearAll: (reason: ProtectedRichClearReason) => void;
   /**
    * Drop entries derived from one node: those whose scope's `backendId` is
-   * `nodeId` (a node's id is its backend identity). A cache without it is
+   * `nodeId` (a node's id is its backend identity) and those a node-keyed
+   * cache holds under `nodeId`. Called once for each id the node is known by
+   * (its scope's node id and the identity it reported). A cache without it is
    * cleared entirely by a node clear, which over-clears but never leaks.
    */
   clearBackend?: (nodeId: string, reason: ProtectedRichClearReason) => void;
@@ -132,12 +137,16 @@ export function clearProtectedRichContent(
     return;
   }
   richContentResetCounters.node++;
+  const ids = nodeAliases(nodeId);
   // Scheduler cache keys carry the scope after the kind: ["cache", kind, backend, env, session, …].
-  richRenderScheduler.clearMatching((key) => decodeRichKey(key)?.[2] === nodeId);
-  useRichContentViewStore.getState().clearPrefixes(richBackendPrefixes(nodeId));
+  richRenderScheduler.clearMatching((key) => ids.includes(decodeRichKey(key)?.[2] as string));
+  useRichContentViewStore.getState().clearPrefixes(ids.flatMap(richBackendPrefixes));
   each((cache) => {
-    if (cache.clearBackend) cache.clearBackend(nodeId, reason);
-    else cache.clearAll(reason);
+    if (!cache.clearBackend) {
+      cache.clearAll(reason);
+      return;
+    }
+    for (const id of ids) cache.clearBackend(id, reason);
   });
 }
 
@@ -166,64 +175,102 @@ export function clearRichConversationContent(scope: RichConversationScope): void
   each((cache) => cache.clearConversation?.(scope));
 }
 
-/** The tracking slot of a caller that names no node: the window's own connection. */
-const WINDOW_SLOT = "\u0000window";
+/**
+ * What one node scope last reported about where its content comes from. Held
+ * on the scope (plan item 3016), so a second live node never overwrites the
+ * first one's notes and a disposed scope's notes go with it.
+ */
+interface RichContentNotes {
+  readonly scope: NodeScope;
+  /** `undefined` until the first report. */
+  connection: string | null | undefined;
+  identity: string | undefined;
+}
 
-/** Per node (or the window slot): the last connection reported. */
-const lastConnections = new Map<string, string | null>();
+/** The notes of every open scope, for resolving which ids name one node. */
+const openNotes = new Set<RichContentNotes>();
 
-/** Which node a note is about. Without one, the window's own connection. */
-export interface RichContentNoteScope {
-  nodeId?: string;
+const richContentNotes = defineScopedSlot<RichContentNotes>("rich-content-notes", (scope) => {
+  const notes: RichContentNotes = { scope, connection: undefined, identity: undefined };
+  openNotes.add(notes);
+  scope.onDispose("rich-content-notes", () => openNotes.delete(notes));
+  return notes;
+});
+
+/**
+ * Every id content of the node `nodeId` may be keyed by: a scope's own node
+ * id and the authenticated identity it reported differ while the command
+ * scope still runs under a provisional id (a hosted page before plan item
+ * 2011), and render keys carry the identity while byte caches carry the
+ * scope's id.
+ */
+function nodeAliases(nodeId: string): string[] {
+  const ids = new Set([nodeId]);
+  for (const notes of openNotes) {
+    if (notes.scope.disposed) continue;
+    if (notes.identity === nodeId) ids.add(notes.scope.nodeId);
+    if (notes.scope.nodeId === nodeId && notes.identity !== undefined) ids.add(notes.identity);
+  }
+  return Array.from(ids);
 }
 
 /**
- * Record the active desktop connection, per node. A change from a previously
- * known connection replaces the backend this window (or that node's scope)
- * talks to, so its protected content is cleared: everything for the window
- * slot, only that node's for a named one. The first report only records the
- * value, and one node's report never touches another's.
+ * A note on `scope` saw its source change. The command scope is the window's
+ * own connection, through which everything the window shows came (relayed
+ * leaves included), so it clears everything, as before; another node's
+ * scope clears only that node's content.
  */
-export function noteRichContentConnection(
-  connectionId: string | null,
-  scope: RichContentNoteScope = {},
-): void {
-  const slot = scope.nodeId ?? WINDOW_SLOT;
-  const previous = lastConnections.get(slot);
-  lastConnections.set(slot, connectionId);
+function clearForNote(reason: ProtectedRichClearReason, scope: NodeScope, nodeId: string): void {
+  if (scope.role === "command") clearProtectedRichContent(reason);
+  else clearProtectedRichContent(reason, { nodeId });
+}
+
+/**
+ * Record `scope`'s active desktop connection (default: the app's command
+ * scope). A change from a previously known connection replaces the backend
+ * that scope talks to, so its protected content is cleared. The first report
+ * only records the value, and one scope's report never touches another's.
+ */
+export function noteRichContentConnection(connectionId: string | null, scope?: NodeScope): void {
+  const target = scope ?? appCommandScope();
+  const notes = richContentNotes(target);
+  const previous = notes.connection;
+  notes.connection = connectionId;
   if (previous !== undefined && previous !== connectionId) {
-    clearProtectedRichContent(
-      "connection",
-      scope.nodeId === undefined ? {} : { nodeId: scope.nodeId },
-    );
+    clearForNote("connection", target, target.nodeId);
   }
 }
-
-/** Per node (or the window slot): the last authenticated backend identity. */
-const lastBackendIdentities = new Map<string, string>();
 
 /**
- * Record the authenticated backend identity (from the capabilities read), per
- * node. A different identity than the one content was derived from clears it:
- * everything for the window slot, and for a named node only the content keyed
- * by the identity it replaced, so other live nodes keep theirs.
+ * Record the authenticated backend identity `scope` answered with (from the
+ * capabilities read; default: the app's command scope). A different identity
+ * than the one content was derived from clears it: everything for the
+ * command scope, and for another scope the content keyed by the identity it
+ * replaced or by the scope's node, so other live nodes keep theirs.
  */
-export function noteRichBackendIdentity(backendId: string, scope: RichContentNoteScope = {}): void {
-  const slot = scope.nodeId ?? WINDOW_SLOT;
-  const previous = lastBackendIdentities.get(slot);
-  lastBackendIdentities.set(slot, backendId);
+export function noteRichBackendIdentity(backendId: string, scope?: NodeScope): void {
+  const target = scope ?? appCommandScope();
+  const notes = richContentNotes(target);
+  const previous = notes.identity;
   if (previous !== undefined && previous !== backendId) {
-    clearProtectedRichContent(
-      "backend-identity",
-      scope.nodeId === undefined ? {} : { nodeId: previous },
-    );
+    // Resolved while the old identity is still recorded, so its aliases
+    // (the scope's own node id) are cleared with it.
+    clearForNote("backend-identity", target, previous);
   }
+  notes.identity = backendId;
 }
 
-/** Tests: forget the recorded connections and backend identities. */
+/** The identity `scope` last reported (default: the app's command scope). */
+export function richBackendIdentityOf(scope?: NodeScope): string | undefined {
+  return richContentNotes(scope ?? appCommandScope()).identity;
+}
+
+/** Tests: forget every open scope's notes and reset the counters. */
 export function resetRichContentResetTracking(): void {
-  lastConnections.clear();
-  lastBackendIdentities.clear();
+  for (const notes of openNotes) {
+    notes.connection = undefined;
+    notes.identity = undefined;
+  }
   richContentResetCounters.all = 0;
   richContentResetCounters.node = 0;
   richContentResetCounters.environment = 0;

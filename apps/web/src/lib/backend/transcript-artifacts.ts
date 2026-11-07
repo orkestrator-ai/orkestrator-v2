@@ -24,8 +24,11 @@ import {
 } from "@orkestrator/protocol/transcript-media-pins";
 import type { WorkflowSnapshotV1 } from "@orkestrator/protocol/workflow-snapshot";
 
-export function getTranscriptArtifactCapabilities(): Promise<TranscriptArtifactCapabilities> {
-  return invoke(TRANSCRIPT_ARTIFACT_COMMANDS.capabilities);
+/** `call` sends the read to a node other than the command node (a scope's invoker). */
+export function getTranscriptArtifactCapabilities(
+  call: typeof invoke = invoke,
+): Promise<TranscriptArtifactCapabilities> {
+  return call(TRANSCRIPT_ARTIFACT_COMMANDS.capabilities);
 }
 
 export function getTranscriptArtifactPublication(

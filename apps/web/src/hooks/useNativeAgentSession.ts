@@ -46,7 +46,6 @@ import {
   getNativeAgentProjection,
   getNativeAgentProjectionUpdate,
   getNativeAgentMessagePage,
-  getNativeAgentSyncCapabilities,
   getNativeAgentTranscriptUpdate,
   getNativeAgentSessionStateUpdate,
   getNativeAgentDiscoveryUpdate,
@@ -73,6 +72,15 @@ import {
   updateNativeAgentControls,
 } from "@/lib/backend";
 import { isUnsupportedBackendCommand } from "@/lib/backend/shared";
+import {
+  disableNativeLiveUpdate,
+  invalidateNativeAgentSyncCapability,
+  nativeAgentProgressiveSupported,
+  nativeAgentSyncSupported,
+  nativeLiveUpdateSupported,
+  nativeObservationEventsSupported,
+  nativeTranscriptPatchesSupported,
+} from "@/lib/native-agent-sync-capabilities";
 import type { PermissionRuleChoiceInput } from "@/lib/backend/permission-rules";
 import { encodedValueBytes, retainedHistoryBytes } from "@/lib/native-history-accounting";
 import {
@@ -88,10 +96,7 @@ import {
   nativeObservationInvalidationMatches,
   subscribeNativeObservationInvalidations,
 } from "@/lib/native-observation-events";
-import {
-  NATIVE_AGENT_OBSERVATION_EVENT_VERSION,
-  nativeSessionInvalidationNamesDiscovery,
-} from "@orkestrator/protocol/native-agent-observation";
+import { nativeSessionInvalidationNamesDiscovery } from "@orkestrator/protocol/native-agent-observation";
 import { onResourceChanged, onResourceResync } from "@/lib/resource-sync";
 import { createSessionKey } from "@/lib/utils";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
@@ -125,22 +130,6 @@ const MAX_DUPLICATE_PAGE_SKIPS =
  * every tool they call, so this is what bounds the cost of following it.
  */
 export const HELD_HISTORY_RECONCILE_INTERVAL_MS = 30_000;
-
-let syncCapability: {
-  supported: boolean;
-  progressive: boolean;
-  /** The backend announces stamped, session-scoped activity invalidations. */
-  observationEvents?: boolean;
-  /** The backend can answer transcript deltas with part-level patches. */
-  transcriptPatches?: boolean;
-  /** The backend answers transcript and state in one request. */
-  liveUpdate?: boolean;
-  checkedAt: number;
-  generation: number;
-} | null = null;
-let syncCapabilityGeneration = 0;
-let syncCapabilityInvalidationQueued = false;
-let syncCapabilityRequest: { generation: number; promise: Promise<boolean> } | null = null;
 
 function messagePartCount(message: unknown): number {
   const parts = (message as { parts?: unknown })?.parts;
@@ -327,84 +316,6 @@ function historyMessageWindow(params: {
   return params.serverWindow?.truncated ? withServerFields(false) : undefined;
 }
 
-async function nativeAgentSyncSupported(): Promise<boolean> {
-  const generation = syncCapabilityGeneration;
-  if (
-    syncCapability &&
-    syncCapability.generation === generation &&
-    (syncCapability.supported || Date.now() - syncCapability.checkedAt < 30_000)
-  ) {
-    return syncCapability.supported;
-  }
-  if (syncCapabilityRequest?.generation === generation) return syncCapabilityRequest.promise;
-  const promise = (async () => {
-    try {
-      const capabilities = await getNativeAgentSyncCapabilities();
-      const supported = capabilities.projectionSyncVersions?.includes(1) === true;
-      const progressive = capabilities.progressiveViewVersions?.includes(1) === true;
-      const observationEvents =
-        capabilities.observationEventVersions?.includes(NATIVE_AGENT_OBSERVATION_EVENT_VERSION) ===
-        true;
-      const transcriptPatches =
-        capabilities.transcriptPatchVersions?.includes(NATIVE_AGENT_TRANSCRIPT_PATCH_VERSION) ===
-        true;
-      const liveUpdate =
-        capabilities.liveUpdateVersions?.includes(NATIVE_AGENT_LIVE_UPDATE_VERSION) === true;
-      if (generation === syncCapabilityGeneration) {
-        syncCapability = {
-          supported,
-          progressive,
-          observationEvents,
-          transcriptPatches,
-          liveUpdate,
-          checkedAt: Date.now(),
-          generation,
-        };
-      }
-      return supported;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (message.includes("Unknown backend command: get_native_agent_sync_capabilities")) {
-        if (generation === syncCapabilityGeneration) {
-          syncCapability = {
-            supported: false,
-            progressive: false,
-            checkedAt: Date.now(),
-            generation,
-          };
-        }
-        return false;
-      }
-      throw error;
-    }
-  })();
-  const request = { generation, promise };
-  syncCapabilityRequest = request;
-  try {
-    return await promise;
-  } finally {
-    if (syncCapabilityRequest === request) syncCapabilityRequest = null;
-  }
-}
-
-/**
- * Whether the connected backend announces stamped, session-scoped activity
- * invalidations (step 07). Synchronous and conservative: false until the
- * capability read for the current backend generation has answered.
- */
-export function nativeObservationEventsSupported(): boolean {
-  return Boolean(
-    syncCapability?.generation === syncCapabilityGeneration && syncCapability.observationEvents,
-  );
-}
-
-/** Synchronous and conservative: false until this backend generation answered. */
-function nativeTranscriptPatchesSupported(): boolean {
-  return Boolean(
-    syncCapability?.generation === syncCapabilityGeneration && syncCapability.transcriptPatches,
-  );
-}
-
 /** A backend that turned out not to have the command answers both parts `pending`. */
 async function readLiveUpdate<TMessage>(
   send: <T>(command: string, input: object, run: () => Promise<T>) => Promise<T>,
@@ -419,24 +330,10 @@ async function readLiveUpdate<TMessage>(
         error.message === "Invalid native agent live update response");
     if (!invalidResponse && !isUnsupportedBackendCommand(error, "get_native_agent_live_update"))
       throw error;
-    if (syncCapability) syncCapability.liveUpdate = false;
+    disableNativeLiveUpdate();
     const pending = { viewVersion: NATIVE_AGENT_LIVE_UPDATE_VERSION, status: "pending" } as const;
     return { viewVersion: NATIVE_AGENT_LIVE_UPDATE_VERSION, transcript: pending, state: pending };
   }
-}
-
-/** Synchronous and conservative: false until this backend generation answered. */
-function nativeLiveUpdateSupported(): boolean {
-  return Boolean(
-    syncCapability?.generation === syncCapabilityGeneration && syncCapability.liveUpdate,
-  );
-}
-
-async function nativeAgentProgressiveSupported(): Promise<boolean> {
-  await nativeAgentSyncSupported();
-  return Boolean(
-    syncCapability?.generation === syncCapabilityGeneration && syncCapability.progressive,
-  );
 }
 
 /**
@@ -537,19 +434,6 @@ function restoreTranscriptViewFromProjection<TMessage>(
   };
 }
 
-function invalidateNativeAgentSyncCapability(): void {
-  // Every mounted session hears the same reconnect/resync announcement. Treat
-  // callbacks delivered in one turn as one backend-generation change so they
-  // can still share the replacement backend's capability request.
-  if (syncCapabilityInvalidationQueued) return;
-  syncCapabilityInvalidationQueued = true;
-  syncCapabilityGeneration += 1;
-  syncCapability = null;
-  queueMicrotask(() => {
-    syncCapabilityInvalidationQueued = false;
-  });
-}
-
 /** A merged sync transcript computed ahead of the fence that installs it. */
 interface SyncMaterializationPlan<TMessage> {
   materialized: NativeAgentSessionProjection<TMessage>;
@@ -568,9 +452,10 @@ interface SyncMaterializationPlan<TMessage> {
 }
 
 /**
- * Forget the negotiated backend capability.
+ * Forget the negotiated backend capability (the command scope's; see
+ * `@/lib/native-agent-sync-capabilities`).
  *
- * The answer is cached for the life of the process because it changes only
+ * The answer is cached for the life of the scope because it changes only
  * when the backend itself is replaced, and `onResourceResync` already
  * announces that. Tests are the one caller that swaps backends without an
  * announcement: a suite that advertises a different capability set has to say

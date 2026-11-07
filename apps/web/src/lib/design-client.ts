@@ -31,6 +31,13 @@ import type {
   DesignSyncResult,
 } from "@orkestrator/protocol/design-operations";
 import { invoke } from "@/lib/native/backend";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import {
+  appCommandScope,
+  defineScopedSlot,
+  scopeInvoker,
+  type ScopeInvoke,
+} from "@/lib/node-scope-slots";
 import { getGatewayBaseUrl } from "@/lib/gateway-url";
 
 /** A typed design failure; UI branches on `failure.code`, never message text. */
@@ -89,8 +96,10 @@ export function failureOf(error: unknown): DesignFailure {
 export async function designCommand<T>(
   command: string,
   args: Record<string, unknown> = {},
+  /** Another node's invoker (`scopeInvoker`); default the command node's. */
+  call: ScopeInvoke = invoke,
 ): Promise<T> {
-  const result = await invoke<DesignCommandResult<T>>(command, args);
+  const result = await call<DesignCommandResult<T>>(command, args);
   if (!result || typeof result !== "object" || !("ok" in result))
     throw new DesignClientError({
       code: "unsupported",
@@ -106,17 +115,34 @@ export function designBackendKey(): string {
   return getGatewayBaseUrl() || "local";
 }
 
-const capabilities = new Map<string, Promise<DesignCapabilities>>();
+/**
+ * One node's answers, held on its scope (plan item 3016), by backend key: the
+ * command scope's backend key moves with the window's gateway.
+ */
+const scopeCapabilities = defineScopedSlot(
+  "design-capabilities",
+  () => new Map<string, Promise<DesignCapabilities>>(),
+);
 
 /**
  * Every backend in the support window serves `design_capabilities` (it shipped
  * in v2.21.0, the floor), so a backend without it is too old for the canvas and
  * gets a typed failure rather than a v1 fallback. Failures are not cached.
+ * Cached per node scope (default: the command node's).
  */
-export function getCapabilities(backend = designBackendKey()): Promise<DesignCapabilities> {
+export function getCapabilities(
+  backend = designBackendKey(),
+  scope?: NodeScope,
+): Promise<DesignCapabilities> {
+  const target = scope ?? appCommandScope();
+  const capabilities = scopeCapabilities(target);
   let cached = capabilities.get(backend);
   if (!cached) {
-    cached = designCommand<DesignCapabilities>("design_capabilities").catch((error: unknown) => {
+    cached = designCommand<DesignCapabilities>(
+      "design_capabilities",
+      {},
+      scopeInvoker(target),
+    ).catch((error: unknown) => {
       capabilities.delete(backend);
       if (classifyTransportError(error) === "unsupported")
         throw new DesignClientError({
@@ -131,8 +157,8 @@ export function getCapabilities(backend = designBackendKey()): Promise<DesignCap
   return cached;
 }
 
-export function resetCapabilities() {
-  capabilities.clear();
+export function resetCapabilities(scope?: NodeScope) {
+  scopeCapabilities(scope).clear();
 }
 
 // The `design_action` surface, still used for canvas lifecycle and listing.

@@ -11,13 +11,13 @@ import type {
   ArtifactRepresentation,
   ArtifactRepresentationResponse,
 } from "@orkestrator/protocol/transcript-artifact-commands";
-import { FRONTEND_RENDER_POLICY } from "@orkestrator/protocol/rich-content-policy";
 import {
   getTranscriptArtifactPublication,
   listTranscriptArtifactPublications,
   readTranscriptArtifactRepresentation,
 } from "@/lib/backend/transcript-artifacts";
 import { encodeRichKey, type RichTranscriptScope } from "./rich-identity";
+import { NodeByteCache, richContentNodeId } from "./rich-byte-cache";
 import {
   clearRichConversationContent,
   decodeRichKey,
@@ -33,8 +33,11 @@ import {
  *   whose generation is no longer the newest requested for that conversation
  *   is discarded: a late answer from a discarded session cannot populate the
  *   current one.
- * - Settled results are an LRU bounded by count and estimated bytes; in-flight
- *   reads are de-duplicated and counted separately. Failures are not cached.
+ * - Settled results are an LRU bounded by count, keyed by `(node, key)`, whose
+ *   estimated bytes are reserved from the window's shared `artifacts` budget
+ *   (plan item 3016), so several live nodes share one bound. The node is the
+ *   one the scope's `backendId` names (`richContentNodeId`). In-flight reads
+ *   are de-duplicated and counted separately. Failures are not cached.
  */
 
 export type ArtifactReadScope = Pick<
@@ -43,7 +46,6 @@ export type ArtifactReadScope = Pick<
 >;
 
 const MAX_ENTRIES = 64;
-const MAX_BYTES = FRONTEND_RENDER_POLICY.maxSettledCacheBytes;
 /** Larger single values (e.g. big captures) are served but not retained. */
 const MAX_RETAINED_VALUE_BYTES = 4 * 1024 * 1024;
 /** Upper bound for concatenating paged UTF-8 representations. */
@@ -51,11 +53,19 @@ export const MAX_TEXT_REPRESENTATION_BYTES = 2 * 1024 * 1024;
 
 interface Settled {
   value: unknown;
-  bytes: number;
 }
 
-const settled = new Map<string, Settled>();
-let settledBytes = 0;
+const settled = new NodeByteCache<Settled>({
+  name: "artifact-requests",
+  budget: "artifacts",
+  maxEntries: MAX_ENTRIES,
+  maxEntryBytes: MAX_RETAINED_VALUE_BYTES,
+});
+/** Read keys are `[kind, backend, environment, session, generation, …]`. */
+const readNode = (key: string): string => {
+  const backendId = decodeRichKey(key)?.[1];
+  return richContentNodeId(typeof backendId === "string" ? backendId : null);
+};
 const inflight = new Map<string, Promise<unknown>>();
 const latestGeneration = new Map<string, string>();
 
@@ -75,27 +85,11 @@ export function isCurrentArtifactScopeGeneration(scope: ArtifactReadScope): bool
 }
 
 function remember(key: string, value: unknown, bytes: number): void {
-  if (bytes > MAX_RETAINED_VALUE_BYTES) return;
-  const previous = settled.get(key);
-  if (previous) settledBytes -= previous.bytes;
-  settled.delete(key);
-  settled.set(key, { value, bytes });
-  settledBytes += bytes;
-  while (settled.size > MAX_ENTRIES || settledBytes > MAX_BYTES) {
-    const oldest = settled.keys().next().value;
-    if (oldest === undefined) break;
-    settledBytes -= settled.get(oldest)!.bytes;
-    settled.delete(oldest);
-  }
+  settled.set(readNode(key), key, { value }, bytes);
 }
 
 function recall(key: string): Settled | undefined {
-  const entry = settled.get(key);
-  if (entry) {
-    settled.delete(key);
-    settled.set(key, entry);
-  }
-  return entry;
+  return settled.get(readNode(key), key);
 }
 
 /**
@@ -121,7 +115,6 @@ const readEpoch = () => cacheEpoch;
 
 export function clearArtifactRequestCache(): void {
   settled.clear();
-  settledBytes = 0;
   inflight.clear();
   latestGeneration.clear();
   clearSearchBodiesWhere(() => true);
@@ -134,18 +127,16 @@ export function clearArtifactRequestCache(): void {
  * `[backend, environment, session]`.
  */
 function clearArtifactRequestsWhere(
-  readMatches: (parts: unknown[]) => boolean,
+  readMatches: (parts: unknown[], nodeId: string | null) => boolean,
   generationMatches: (parts: unknown[]) => boolean,
 ): void {
-  for (const [key, entry] of Array.from(settled.entries())) {
-    const parts = decodeRichKey(key);
-    if (!parts || !readMatches(parts)) continue;
-    settled.delete(key);
-    settledBytes -= entry.bytes;
-  }
+  settled.deleteWhere((entry) => {
+    const parts = decodeRichKey(entry.key);
+    return parts !== null && readMatches(parts, entry.nodeId);
+  });
   for (const key of Array.from(inflight.keys())) {
     const parts = decodeRichKey(key);
-    if (parts && readMatches(parts)) inflight.delete(key);
+    if (parts && readMatches(parts, null)) inflight.delete(key);
   }
   for (const key of Array.from(latestGeneration.keys())) {
     const parts = decodeRichKey(key);
@@ -181,11 +172,14 @@ export function clearArtifactRequestsForConversation(scope: RichConversationScop
   );
 }
 
-/** A node's credential, connection or identity changed: drop what it served. */
+/**
+ * A node's credential, connection or identity changed: drop what it served,
+ * by the scope's `backendId` or by the node a read is accounted to.
+ */
 export function clearArtifactRequestsForBackend(backendId: string): void {
   clearSearchBodiesWhere((held) => (held.backendId ?? "") === backendId);
   clearArtifactRequestsWhere(
-    (parts) => parts[1] === backendId,
+    (parts, nodeId) => parts[1] === backendId || nodeId === backendId,
     (parts) => parts[0] === backendId,
   );
 }
@@ -390,7 +384,7 @@ function noteScopedReadFailure(scope: ArtifactReadScope, error: unknown): void {
 }
 
 export function artifactRequestCacheStats(): { entries: number; bytes: number; inflight: number } {
-  return { entries: settled.size, bytes: settledBytes, inflight: inflight.size };
+  return { entries: settled.size, bytes: settled.bytes, inflight: inflight.size };
 }
 
 export class StaleArtifactScopeError extends Error {

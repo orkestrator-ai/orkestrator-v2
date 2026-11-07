@@ -296,6 +296,9 @@ export function clearMarkdownSearchCache(): void {
 }
 
 // Projections hold message text: cleared with other protected rich content.
+// Entries are keyed by the text itself (a pure function of it, equal on every
+// node), not by node, so a clear of one node clears them all: that costs a
+// re-parse, never another node's data (plan item 3016 Notes).
 registerProtectedRichCache("markdown-search", { clearAll: clearMarkdownSearchCache });
 
 export interface MarkdownSearchOptions {

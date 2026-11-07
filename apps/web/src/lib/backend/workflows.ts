@@ -532,7 +532,8 @@ export async function getNativeAgentProjection<TMessage = unknown>(input: {
   return invoke("get_native_agent_projection", input);
 }
 
-export async function getNativeAgentSyncCapabilities(): Promise<{
+/** `call` sends the read to a node other than the command node (a scope's invoker). */
+export async function getNativeAgentSyncCapabilities(call: typeof invoke = invoke): Promise<{
   projectionSyncVersions: number[];
   historyPagingVersions: number[];
   progressiveViewVersions?: number[];
@@ -543,7 +544,7 @@ export async function getNativeAgentSyncCapabilities(): Promise<{
   /** One request for transcript and state (`get_native_agent_live_update`). */
   liveUpdateVersions?: number[];
 }> {
-  const response = await invoke<unknown>("get_native_agent_sync_capabilities");
+  const response = await call<unknown>("get_native_agent_sync_capabilities");
   if (!response || typeof response !== "object" || Array.isArray(response)) {
     throw new Error("Invalid native agent sync capabilities response");
   }

@@ -15,6 +15,8 @@ import type {
 } from "@orkestrator/protocol/change-resources";
 import type { LineCount } from "@orkestrator/protocol/change-measurements";
 import { invoke } from "@/lib/native/backend";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { appCommandScope, defineScopedSlot, scopeInvoker } from "@/lib/node-scope-slots";
 
 /**
  * Backend change-tracking commands (docs/architecture/change-tracking.md).
@@ -126,20 +128,35 @@ export function applyChangeRestore(
   });
 }
 
-let capabilities: Promise<ChangeTrackingCapabilities | null> | null = null;
+/** One node's answer, held on its scope (plan item 3016). */
+const changeTrackingCapabilities = defineScopedSlot<{
+  request: Promise<ChangeTrackingCapabilities | null> | null;
+}>("change-tracking-capabilities", () => ({ request: null }));
 
-/** What this backend's change tracking offers; null for a backend without it. Cached per page. */
-export function getChangeTrackingCapabilities(): Promise<ChangeTrackingCapabilities | null> {
-  capabilities ??= invoke<ChangeTrackingCapabilities>("changes_get_capabilities").catch(() => {
-    capabilities = null;
+/**
+ * What `scope`'s backend's change tracking offers (default: the command
+ * node); null for a backend without it. Cached per node scope; a failure is
+ * not cached.
+ */
+export function getChangeTrackingCapabilities(
+  // A default, not an optional parameter, so the wrapper's arity stays 0.
+  target: NodeScope = appCommandScope(),
+): Promise<ChangeTrackingCapabilities | null> {
+  const slot = changeTrackingCapabilities(target);
+  if (slot.request) return slot.request;
+  const request = scopeInvoker(target)<ChangeTrackingCapabilities>(
+    "changes_get_capabilities",
+  ).catch(() => {
+    if (slot.request === request) slot.request = null;
     return null;
   });
-  return capabilities;
+  slot.request = request;
+  return request;
 }
 
 /** Test seam. */
-export function resetChangeTrackingCapabilitiesForTests(): void {
-  capabilities = null;
+export function resetChangeTrackingCapabilitiesForTests(scope?: NodeScope): void {
+  changeTrackingCapabilities(scope).request = null;
 }
 
 /** Backend measurement of a legacy transcript tool payload (never counted in the client). */

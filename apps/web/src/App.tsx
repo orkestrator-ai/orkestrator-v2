@@ -114,7 +114,7 @@ import { isWorkspaceRealm } from "@/lib/federation/workspace-realm";
 import { readStoredWorkspace } from "@/lib/portal/workspace-target-storage";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { CommandNodeScopeProvider, WindowScopeProvider } from "@/lib/node-scope/providers";
-import { commandClient } from "@/lib/node-scope/app-window-scope";
+import { commandClient, getWindowScope } from "@/lib/node-scope/app-window-scope";
 
 const log = createLogger("web.app");
 
@@ -470,8 +470,9 @@ function ConnectedApp() {
       setReadCoordinatorConnection(list.activeConnectionId);
       // ...and pause while that connection is known to be down.
       setTransportDisconnected("desktop-connection", connectionListDisconnected(list));
-      // So is protected rich transcript content (render caches, artifact reads).
-      noteRichContentConnection(list.activeConnectionId);
+      // So is protected rich transcript content (render caches, artifact reads),
+      // noted on the command scope, whose connection this list administers.
+      noteRichContentConnection(list.activeConnectionId, getWindowScope().commandScope());
       setConnectionScopeResolved(true);
       setLocalBackendUnavailableMessage(
         list.activeConnectionId === LOCAL_CONNECTION_ID && list.localAvailable === false

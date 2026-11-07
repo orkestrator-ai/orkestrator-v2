@@ -18,6 +18,7 @@ import {
   subscribeArtifactSearchBodies,
 } from "@/lib/chat/artifact-requests";
 import { registerProtectedRichCache } from "@/lib/chat/rich-content-reset";
+import { useRichTranscriptScope } from "@/lib/chat/rich-identity";
 import type { SearchProjection } from "@/lib/chat/rich-markdown/search-segments";
 import {
   resolveFindSelection,
@@ -149,13 +150,19 @@ export function useAgentChatFind<TItem>({
   }, [searchIndex, searching]);
 
   // The index holds message text: cleared with other protected rich content.
+  // It is one transcript's, so a clear of another node leaves it; a transcript
+  // that does not know its node yet is cleared by any node's clear.
   const searchIndexCacheId = useId();
+  const transcriptBackendId = useRichTranscriptScope()?.backendId ?? null;
   useEffect(
     () =>
       registerProtectedRichCache(`agent-chat-find:${searchIndexCacheId}`, {
         clearAll: () => searchIndex.clear(),
+        clearBackend: (nodeId) => {
+          if (transcriptBackendId === null || transcriptBackendId === nodeId) searchIndex.clear();
+        },
       }),
-    [searchIndex, searchIndexCacheId],
+    [searchIndex, searchIndexCacheId, transcriptBackendId],
   );
   const resolved = useMemo(
     () => resolveFindSelection(selection, matches, items, getSearchProjection),

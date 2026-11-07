@@ -28,8 +28,11 @@ import { invoke } from "@/lib/native/backend";
  */
 
 /** Unknown command on an older backend: every capability off. */
-export const getClientStateCapabilities = async (): Promise<ClientStateCapabilities> =>
-  parseClientStateCapabilities(await invoke(CLIENT_STATE_CAPABILITIES_COMMAND));
+/** `call` sends the command to a node other than the command node (a scope's invoker). */
+export const getClientStateCapabilities = async (
+  call: typeof invoke = invoke,
+): Promise<ClientStateCapabilities> =>
+  parseClientStateCapabilities(await call(CLIENT_STATE_CAPABILITIES_COMMAND));
 
 export const getCoordinatorPaneLayout = async (
   projectId: string,

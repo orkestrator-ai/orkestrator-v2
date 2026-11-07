@@ -17,20 +17,24 @@
  * the message shows them and returns that copy from then on, so overwriting
  * the file does not change what an earlier message shows.
  *
- * Concurrent requests for the same reference share one read. Decoded bytes
- * that cannot change (inline, remote, pinned) go into the bounded
- * image-preview cache; a live read of a file never does.
+ * Concurrent requests for the same reference on the same node share one
+ * read. Decoded bytes that cannot change (inline, remote, pinned) go into the
+ * bounded image-preview cache, keyed by node; a live read of a file never
+ * does. Every read goes through the command node today (`@/lib/backend`), so
+ * the node is the command scope's.
  */
 import { pinTranscriptMedia, readContainerFileBase64, readFileBase64 } from "@/lib/backend";
 import { parseLocalFilePathFromUrl } from "@/lib/chat/file-url";
 import {
   clearImagePreviewCache,
+  clearImagePreviewCacheForNode,
   imagePreviewCacheKey,
   readImagePreviewCache,
   readImagePreviewSnapshot,
   writeImagePreviewCache,
 } from "@/lib/chat/image-preview-cache";
 import { registerProtectedRichCache } from "@/lib/chat/rich-content-reset";
+import { richContentNodeId } from "@/lib/chat/rich-byte-cache";
 import type { NativeAgentToolDetails } from "@orkestrator/protocol/native-agent";
 import type {
   TranscriptMediaPinResponse,
@@ -171,9 +175,19 @@ export function mediaCacheKey(reference: MediaReference, pin?: MediaPinScope): s
     : key;
 }
 
-/** Both shapes of one read, so either caller joining it gets the same promise. */
-const inflight = new Map<string, { resolved: Promise<ResolvedMedia>; url: Promise<string> }>();
-let resetGeneration = 0;
+/**
+ * Both shapes of one read, so either caller joining it gets the same promise,
+ * keyed by `(node, key)`. `current` turns false when a clear supersedes the
+ * read: its bytes are then never cached nor returned.
+ */
+interface InflightRead {
+  readonly nodeId: string;
+  readonly resolved: Promise<ResolvedMedia>;
+  readonly url: Promise<string>;
+  current: boolean;
+}
+const inflight = new Map<string, InflightRead>();
+const inflightId = (nodeId: string, key: string) => `${nodeId}\u0000${key}`;
 
 interface ResolveOptions {
   loadToolDetails?: ToolDetailLoader;
@@ -191,11 +205,12 @@ export function resolveMediaUrl(
   options: ResolveOptions = {},
 ): Promise<string> {
   const key = mediaCacheKey(reference, options.pin);
+  const nodeId = richContentNodeId();
   if (options.cacheImage) {
-    const cached = readImagePreviewCache(key);
+    const cached = readImagePreviewCache(key, nodeId);
     if (cached) return Promise.resolve(cached);
   }
-  return startRead(key, reference, options).url;
+  return startRead(nodeId, key, reference, options).url;
 }
 
 /** {@link resolveMediaUrl} with the provenance of a local file's bytes. */
@@ -204,40 +219,48 @@ export function resolveMedia(
   options: ResolveOptions = {},
 ): Promise<ResolvedMedia> {
   const key = mediaCacheKey(reference, options.pin);
+  const nodeId = richContentNodeId();
   if (options.cacheImage) {
-    const cached = readImagePreviewCache(key);
+    const cached = readImagePreviewCache(key, nodeId);
     if (cached) {
-      const snapshot = readImagePreviewSnapshot(key, cached);
+      const snapshot = readImagePreviewSnapshot(key, cached, nodeId);
       return Promise.resolve(snapshot ? { url: cached, snapshot } : { url: cached });
     }
   }
-  return startRead(key, reference, options).resolved;
+  return startRead(nodeId, key, reference, options).resolved;
 }
 
 function startRead(
+  nodeId: string,
   key: string,
   reference: MediaReference,
   options: ResolveOptions,
-): { resolved: Promise<ResolvedMedia>; url: Promise<string> } {
-  const existing = inflight.get(key);
+): InflightRead {
+  const id = inflightId(nodeId, key);
+  const existing = inflight.get(id);
   if (existing) return existing;
-  const generation = resetGeneration;
+  // Assigned below, before the read can settle.
+  let read!: InflightRead;
   const request = resolveUncached(reference, {
     ...options,
     asImage: options.cacheImage,
-    isCurrent: () => generation === resetGeneration,
+    isCurrent: () => read.current,
   }).then(({ cacheable, ...resolved }): ResolvedMedia => {
-    if (generation !== resetGeneration)
-      throw new DOMException("Superseded media read", "AbortError");
+    if (!read.current) throw new DOMException("Superseded media read", "AbortError");
     if (options.cacheImage && cacheable && resolved.url.startsWith("data:")) {
-      writeImagePreviewCache(key, resolved.url, resolved.snapshot);
+      writeImagePreviewCache(key, resolved.url, resolved.snapshot, nodeId);
     }
     return resolved;
   });
-  const read = { resolved: request, url: request.then((resolved) => resolved.url) };
-  inflight.set(key, read);
+  read = {
+    nodeId,
+    resolved: request,
+    url: request.then((resolved) => resolved.url),
+    current: true,
+  };
+  inflight.set(id, read);
   const cleanup = () => {
-    if (inflight.get(key) === read) inflight.delete(key);
+    if (inflight.get(id) === read) inflight.delete(id);
   };
   void request.then(cleanup, cleanup);
   // Callers hold one of the two; neither rejection may go unhandled.
@@ -343,17 +366,28 @@ function mimeFor(path: string, asImage: boolean | undefined): string {
   return asImage && !mime.startsWith("image/") ? "image/png" : mime;
 }
 
+/** Supersede the in-flight reads `matches` selects (all of them by default). */
+function supersedeReads(matches: (read: InflightRead) => boolean = () => true): void {
+  for (const [id, read] of Array.from(inflight)) {
+    if (!matches(read)) continue;
+    read.current = false;
+    inflight.delete(id);
+  }
+}
+
 /** Drop in-flight bookkeeping (tests). */
 export function clearMediaResolverInflight(): void {
-  resetGeneration++;
-  inflight.clear();
+  supersedeReads();
 }
 
 // Resolved media (data: URLs of environment files) is protected content.
 registerProtectedRichCache("media", {
   clearAll: () => {
-    resetGeneration++;
-    inflight.clear();
+    supersedeReads();
     clearImagePreviewCache();
+  },
+  clearBackend: (nodeId) => {
+    supersedeReads((read) => read.nodeId === nodeId);
+    clearImagePreviewCacheForNode(nodeId);
   },
 });

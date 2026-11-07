@@ -9,6 +9,7 @@ import {
   setReadCoordinatorScopeHidden,
 } from "@/lib/read-coordinator";
 import {
+  flushMicrotasks,
   installFakeReadCoordinator,
   type FakeReadEnvironment,
 } from "@/lib/testing/read-coordinator";
@@ -45,6 +46,7 @@ let machineOrder: string[];
 let usageCalls: string[];
 let unreachable: Set<string>;
 let leafScopes: NodeScope[];
+let pendingRoutedSamples: Map<string, Promise<ReturnType<typeof sample>>>;
 
 function sample(cpuPercent: number) {
   return {
@@ -63,6 +65,7 @@ beforeEach(() => {
   usageCalls = [];
   unreachable = new Set();
   leafScopes = [];
+  pendingRoutedSamples = new Map();
   portalStore.store.setState({ selfId: null, status: null, nodes: [], loaded: false });
   portalLayoutStore.setState({ layout: emptyPortalLayout(), loaded: false, error: null });
   invokeMock.mockReset();
@@ -83,7 +86,10 @@ beforeEach(() => {
         const nodeId = String(args.nodeId);
         usageCalls.push(nodeId);
         if (unreachable.has(nodeId)) throw new Error("node-unavailable");
-        return { outcome: "ok", result: sample(nodeId === "bk_a" ? 7 : 93) };
+        return {
+          outcome: "ok",
+          result: await (pendingRoutedSamples.get(nodeId) ?? sample(nodeId === "bk_a" ? 7 : 93)),
+        };
       }
       default:
         return undefined;
@@ -232,3 +238,49 @@ test("a machine whose scope is hidden keeps its figure, read through the command
   expect(labels()).toContain("bk_b CPU usage: 93%");
   expect(usageCalls.filter((id) => id === "bk_b").length).toBeGreaterThan(1);
 });
+
+for (const tier of ["warm", "suspended"] as const) {
+  test(`a ${tier} machine returning live uses its leaf sample and stops routed polling`, async () => {
+    const scope = openLeafScope("bk_b", 55);
+    scope.setTier(tier);
+    setReadCoordinatorScopeHidden(scope, true);
+    renderReadings();
+    await waitFor(() => expect(labels()).toContain("bk_b CPU usage: 93%"));
+
+    // Hold the next command-node refresh open across the return to the leaf.
+    let release!: (value: ReturnType<typeof sample>) => void;
+    pendingRoutedSamples.set(
+      "bk_b",
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+    );
+    await act(async () => {
+      await reads.clock.advance(5_000);
+    });
+    expect(usageCalls.filter((id) => id === "bk_b")).toHaveLength(2);
+    expect(labels()).toContain("bk_b CPU usage: 93%");
+
+    act(() => {
+      scope.setTier("live");
+      setReadCoordinatorScopeHidden(scope, false);
+    });
+    await waitFor(() => expect(labels()).toContain("bk_b CPU usage: 55%"));
+
+    await act(async () => {
+      release(sample(12));
+      await flushMicrotasks();
+    });
+    expect(labels()).toContain("bk_b CPU usage: 55%");
+
+    // Several routed polling intervals pass; only the other machines keep reading.
+    pendingRoutedSamples.delete("bk_b");
+    const commandReads = usageCalls.filter((id) => id === "bk_self").length;
+    await act(async () => {
+      await reads.clock.advance(11_000);
+    });
+    expect(usageCalls.filter((id) => id === "bk_b")).toHaveLength(2);
+    expect(usageCalls.filter((id) => id === "bk_self").length).toBeGreaterThan(commandReads);
+    expect(labels()).toContain("bk_b CPU usage: 55%");
+  });
+}

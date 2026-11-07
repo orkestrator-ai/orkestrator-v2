@@ -15,6 +15,8 @@ import * as realContextMenu from "@/components/ui/context-menu";
 import * as realTooltip from "@/components/ui/tooltip";
 import * as realSettings from "@/components/settings";
 import * as realStores from "@/stores";
+import { defineScopedStore } from "@/lib/node-scope/scoped-store";
+import type { MultiReviewState } from "@/stores/multiReviewStore";
 import * as realFilesPanelChrome from "@/stores/filesPanelChromeStore";
 import * as realHooks from "@/hooks";
 import * as realContexts from "@/contexts";
@@ -748,6 +750,16 @@ mock.module("@/stores", () => ({
       removeWorkflow: removeMultiReviewWorkflowMock,
     }),
   },
+  // The action bar writes its scope's instance (plan item 3003); this def's
+  // actions are the mocks the launch tests assert on.
+  multiReviewStore: defineScopedStore<MultiReviewState>(
+    "multi-review-action-bar-test",
+    () => () => ({
+      workflows: new Map(),
+      replaceWorkflow: installMultiReviewWorkflowMock,
+      removeWorkflow: removeMultiReviewWorkflowMock,
+    }),
+  ),
 }));
 
 mock.module("@/hooks", () => ({

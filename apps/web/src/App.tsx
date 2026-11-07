@@ -15,7 +15,13 @@ import { TerminalContainer } from "@/components/terminal";
 import { LazyLoadBoundary, LazyLoadInlineErrorFallback } from "@/components/LazyLoadBoundary";
 import { ProjectLauncher } from "@/components/projects";
 import { TerminalProvider } from "@/contexts";
-import { useUIStore, useEnvironmentStore, useConfigStore, useClaudeOptionsStore } from "@/stores";
+import {
+  claudeOptionsStore,
+  useUIStore,
+  useEnvironmentStore,
+  useConfigStore,
+  useClaudeOptionsStore,
+} from "@/stores";
 import { useProjectStore } from "@/stores/projectStore";
 import { setReadCoordinatorConnection } from "@/lib/read-coordinator";
 import { connectionListDisconnected, setTransportDisconnected } from "@/lib/transport-connectivity";
@@ -1073,7 +1079,10 @@ function ConnectedApp() {
           ? environment?.initialPrompt?.trim()
           : undefined;
       const launchPrompt = explicitPrompt || storedPrompt || undefined;
-      const existingOptions = useClaudeOptionsStore.getState().getOptions(environmentId);
+      const existingOptions = commandScope
+        .store(claudeOptionsStore)
+        .getState()
+        .getOptions(environmentId);
 
       if (launchPrompt) {
         // List hydration deliberately excludes attachment bodies. Read the
@@ -1176,6 +1185,7 @@ function ConnectedApp() {
     },
     [
       clearClaudeOptions,
+      commandScope,
       config,
       dockerAvailable,
       getEnvironmentById,

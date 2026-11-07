@@ -21,7 +21,7 @@ import {
   useProjectStore,
   useConfigStore,
   useFilesPanelStore,
-  useMultiReviewStore,
+  multiReviewStore,
 } from "@/stores";
 import { useFilesPanelChromeStore } from "@/stores/filesPanelChromeStore";
 import { useTerminalContext, MAX_TABS, type AgentLaunchModeOverride } from "@/contexts";
@@ -343,9 +343,9 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     (environmentId: string, tabId: string, title: string, surface: TabLaunchSurface = "agent") => {
       const { homeId, tab } = projectHomeRevealRef.current;
       if (homeId === environmentId && tab !== "home") setProjectBoardTab("home");
-      return beginTabLaunch(environmentId, { tabId, title, surface });
+      return beginTabLaunch(environmentId, { tabId, title, surface }, actionBarScope);
     },
-    [setProjectBoardTab],
+    [actionBarScope, setProjectBoardTab],
   );
 
   const openProjectBoardTab = useCallback(
@@ -776,6 +776,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       const releaseLaunch = claimTabLaunch(
         `review:${agentOverride ?? "default"}`,
         selectedEnvironmentId,
+        actionBarScope,
       );
       if (!releaseLaunch) return;
 
@@ -866,6 +867,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         });
     },
     [
+      actionBarScope,
       actionDefaultFor,
       canCreateTab,
       preferredModelsByPlatform,
@@ -981,6 +983,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         if (!launched) {
           launch.failed();
           const legacy = await legacyLaunchMultiReview({
+            scope: actionBarScope,
             environmentId: selectedEnvironmentId,
             projectId: selectedProjectId,
             targetBranch: defaultPrTargetBranch(
@@ -999,7 +1002,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
           if (legacy.reused) announceReused();
           return;
         }
-        useMultiReviewStore.getState().replaceWorkflow(launched.workflow);
+        actionBarScope.store(multiReviewStore).getState().replaceWorkflow(launched.workflow);
         if (launched.ui.status !== "opened" || !launched.ui.tabId) {
           throw new Error(launched.recovery ?? "The review's tab could not be opened.");
         }
@@ -1018,6 +1021,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       }
     },
     [
+      actionBarScope,
       beginLaunchedTab,
       canCreateTab,
       config.global.reviewInstruction,
@@ -1142,7 +1146,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   const handleRun = useCallback(async () => {
     const environmentId = selectedEnvironmentId;
     if (!environmentId || tabCount >= MAX_TABS || !runCommands || runCommands.length === 0) return;
-    const releaseLaunch = claimTabLaunch("run", environmentId);
+    const releaseLaunch = claimTabLaunch("run", environmentId, actionBarScope);
     if (!releaseLaunch) return;
     const tabId = `terminal-job-${createUuid()}`;
     const launch = beginLaunchedTab(environmentId, tabId, "Run Commands", "terminal");
@@ -1164,7 +1168,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         description: error instanceof Error ? error.message : String(error),
       });
     }
-  }, [beginLaunchedTab, runCommands, selectedEnvironmentId, tabCount]);
+  }, [actionBarScope, beginLaunchedTab, runCommands, selectedEnvironmentId, tabCount]);
 
   const handleCreateScript = useCallback(
     (
@@ -1199,6 +1203,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       const releaseLaunch = claimTabLaunch(
         `create-script:${agentOverride ?? "default"}`,
         environmentId,
+        actionBarScope,
       );
       if (!releaseLaunch) return Promise.resolve(false);
       const tabId = `agent-job-${createUuid()}`;
@@ -1235,6 +1240,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         });
     },
     [
+      actionBarScope,
       beginLaunchedTab,
       actionDefaultFor,
       isRunning,
@@ -1761,7 +1767,11 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     async (agentOverride?: AgentPlatform) => {
       const environmentId = selectedEnvironmentId;
       if (!environmentId || tabCount >= MAX_TABS || !isRunning) return;
-      const releaseLaunch = claimTabLaunch(`push:${agentOverride ?? "default"}`, environmentId);
+      const releaseLaunch = claimTabLaunch(
+        `push:${agentOverride ?? "default"}`,
+        environmentId,
+        actionBarScope,
+      );
       if (!releaseLaunch) return;
 
       const pushPrompt = createPushChangesPrompt();
@@ -1808,6 +1818,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       }
     },
     [
+      actionBarScope,
       beginLaunchedTab,
       actionDefaultFor,
       isRunning,

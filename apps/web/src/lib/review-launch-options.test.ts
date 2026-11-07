@@ -45,7 +45,7 @@ describe("buildReviewModelCatalog", () => {
       ],
     });
 
-    expect(buildReviewModelCatalog()).toEqual({
+    expect(buildReviewModelCatalog(useAgentModelCatalogStore.getState())).toEqual({
       claude: [
         {
           id: "claude-live",
@@ -101,7 +101,7 @@ describe("buildReviewModelCatalog", () => {
       ] as any,
     });
 
-    expect(buildReviewModelCatalog().claude).toEqual([
+    expect(buildReviewModelCatalog(useAgentModelCatalogStore.getState()).claude).toEqual([
       expect.objectContaining({
         id: "supports-effort-without-levels",
         reasoningEfforts: ["low", "medium", "high"],
@@ -129,7 +129,9 @@ describe("buildReviewModelCatalog", () => {
       ] as any,
     });
 
-    const [defaultAllow, explicitDeny] = buildReviewModelCatalog().claude;
+    const [defaultAllow, explicitDeny] = buildReviewModelCatalog(
+      useAgentModelCatalogStore.getState(),
+    ).claude;
     expect(defaultAllow?.supportsSpeed).toBe(true);
     expect(explicitDeny?.supportsSpeed).toBeUndefined();
   });
@@ -163,7 +165,7 @@ describe("buildReviewModelCatalog", () => {
       },
     ]);
 
-    const catalog = buildReviewModelCatalog();
+    const catalog = buildReviewModelCatalog(useAgentModelCatalogStore.getState());
     expect(catalog.cursor).toEqual([
       {
         id: "composer-2.5",
@@ -205,7 +207,7 @@ describe("buildReviewModelCatalog", () => {
       },
     ]);
 
-    const catalog = buildReviewModelCatalog();
+    const catalog = buildReviewModelCatalog(useAgentModelCatalogStore.getState());
     expect(catalog.pi?.map((model) => model.id)).toEqual([
       "default",
       "openai/gpt-4",
@@ -222,7 +224,7 @@ describe("buildReviewModelCatalog", () => {
       { platform: "pi", id: "openai/gpt-6.1-sol", label: "GPT-6.1 Sol", sessionDefault: true },
     ]);
 
-    const catalog = buildReviewModelCatalog();
+    const catalog = buildReviewModelCatalog(useAgentModelCatalogStore.getState());
     expect(catalog.pi?.map((model) => model.sessionDefault ?? false)).toEqual([false, true]);
     expect(firstModelFor("pi", catalog)).toBe("openai/gpt-6.1-sol");
   });
@@ -239,7 +241,7 @@ describe("buildReviewModelCatalog", () => {
       ],
     });
 
-    expect(buildReviewModelCatalog().claude).toEqual([
+    expect(buildReviewModelCatalog(useAgentModelCatalogStore.getState()).claude).toEqual([
       expect.objectContaining({
         id: "sonnet",
         resolvedModel: "claude-sonnet-resolved",
@@ -257,7 +259,7 @@ describe("buildReviewModelCatalog", () => {
       ],
     });
 
-    expect(buildReviewModelCatalog().codex).toEqual([
+    expect(buildReviewModelCatalog(useAgentModelCatalogStore.getState()).codex).toEqual([
       expect.objectContaining({
         id: "codex-without-efforts",
         reasoningEfforts: ["medium", "high"],
@@ -268,7 +270,7 @@ describe("buildReviewModelCatalog", () => {
   test("uses safe fallbacks and does not expose stale configured models", () => {
     useAgentModelCatalogStore.setState({ claudeModels: [] });
 
-    const catalog = buildReviewModelCatalog();
+    const catalog = buildReviewModelCatalog(useAgentModelCatalogStore.getState());
 
     expect(catalog.claude.length).toBeGreaterThan(0);
     expect(catalog.claude).toEqual(

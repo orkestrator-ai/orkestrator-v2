@@ -66,7 +66,14 @@ steps in one change.
      stop with `scope.onDispose(name, stop)` (invariant 15). Long-running work
      belongs in a scoped service (`defineScopedService`).
    - Module state next to the store (`let cache = …`) belongs in the store's
-     state or in a scoped slot, not at module level.
+     state or in a scoped slot, not at module level. A companion module
+     (`multi-review-persistence.ts`, `tab-launch.ts`) holds its maps, sets
+     and timers in one `defineScopedSlot` (`lib/node-scope-slots.ts`), and
+     each of its functions takes an optional trailing `scope` (the app's
+     command scope when omitted, for callers with no scope yet). Callers that
+     have one pass it. Hold the slot and `scope.store(def)` you read before an
+     `await`, because the scope may be disposed by the time it answers. Clear
+     the slot's timers with `scope.onDispose` (plan item 3003).
    - A persisted store wraps its creator in `persist` and keys it by its
      node: `name: nodeStorageKey("foo-storage", scope)` (`lib/persistence-keys.ts`;
      a `NodeScope` is a `StorageNode`). `persist` hydrates synchronously from

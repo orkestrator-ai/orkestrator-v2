@@ -24,6 +24,8 @@ import { fileTabChangeDiffTarget } from "@/components/terminal/change-diff-targe
 import { multiReviewReviewerScrollKey } from "@/lib/multi-review-keys";
 import { clearPersistedVirtuosoState } from "@/hooks";
 import { cancelTabLaunchFocus } from "@/lib/tab-launch";
+import { tabLaunchStore } from "@/stores/tabLaunchStore";
+import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
 import { DraggableTabBar } from "./DraggableTabBar";
 import { TabLaunchShimmer, useEnvironmentTabLaunches } from "./TabLaunchShimmer";
 import { DropZoneOverlay } from "./DropZoneOverlay";
@@ -197,6 +199,7 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
   // Pane host for terminal rendering (tab targets are moved here)
   const portalHostRef = useRef<HTMLDivElement>(null);
   const terminalNodeId = useTerminalPortalNodeId();
+  const launchScope = useShimNodeScope(tabLaunchStore.name);
   const { registerPaneHost, unregisterPaneHost } = useTerminalPortalStore(
     useShallow((state) => ({
       registerPaneHost: state.registerPaneHost,
@@ -219,18 +222,18 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
   // Handle clicking on the pane to focus it
   const handlePaneClick = useCallback(() => {
     if (activePaneId !== pane.id) {
-      cancelTabLaunchFocus(environmentId);
+      cancelTabLaunchFocus(environmentId, launchScope);
       setActivePane(pane.id, environmentId);
     }
-  }, [activePaneId, environmentId, pane.id, setActivePane]);
+  }, [activePaneId, environmentId, launchScope, pane.id, setActivePane]);
 
   // Handle tab selection
   const handleTabSelect = useCallback(
     (tabId: string) => {
-      cancelTabLaunchFocus(environmentId);
+      cancelTabLaunchFocus(environmentId, launchScope);
       setActiveTab(pane.id, tabId, environmentId);
     },
-    [environmentId, pane.id, setActiveTab],
+    [environmentId, launchScope, pane.id, setActiveTab],
   );
 
   const handleTabRefresh = useCallback((tabId: string) => {

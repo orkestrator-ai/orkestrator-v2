@@ -72,7 +72,8 @@ import { resolveCatalogModelLabel } from "@/lib/chat/model-label";
 import { pinNativeAgentParts } from "@/lib/chat/native-agent-pinning";
 import { applyTmuxAgentUsageSummaries } from "@/lib/claude-tmux-usage";
 import type { ClaudeEffortLevel } from "@/lib/claude-types";
-import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
+import { agentModelCatalogStore, useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
+import { useScopedStoreApi } from "@/lib/node-scope/scoped-store-shim";
 import { tmuxQuestionDraftKey } from "@/stores/promptDraftStore";
 import { resolvedPlatformSettings } from "@/lib/agent-settings";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
@@ -201,6 +202,7 @@ export function ClaudeTmuxChatTab({
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [interactiveMode, setInteractiveMode] = useState(false);
+  const modelCatalog = useScopedStoreApi(agentModelCatalogStore);
   const sdkModels = useAgentModelCatalogStore(
     (s) => s.claudeModelCatalogs.get(environmentId)?.models ?? s.claudeModels,
   );
@@ -232,7 +234,7 @@ export function ClaudeTmuxChatTab({
     const env = useEnvironmentStore.getState().getEnvironmentById(environmentId);
     return resolveTmuxModelPreference(
       initialLaunchModel ?? resolvedPlatformSettings(snapshot, env?.projectId, env, "claude").model,
-      tmuxModelList(useAgentModelCatalogStore.getState().getClaudeModels(environmentId)),
+      tmuxModelList(modelCatalog.getState().getClaudeModels(environmentId)),
     );
   });
   const [modelSwitching, setModelSwitching] = useState(false);

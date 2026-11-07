@@ -6,7 +6,7 @@ import type {
 import type { ClaudeModel } from "@/lib/claude-types";
 import { FALLBACK_CLAUDE_MODELS } from "@/lib/claude-fallback-models";
 import { CODEX_MODELS } from "@/lib/codex-models";
-import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
+import type { AgentModelCatalogState } from "@/stores/agentModelCatalogStore";
 import {
   isSelectableOpenCodeModelId,
   openCodeModelDisplayLabel,
@@ -93,6 +93,12 @@ export function includeMissingOpenCodeModels(
   return [...withoutPlaceholder, ...extras];
 }
 
+/** The model-catalog store fields a launcher's catalogue is built from (one node's). */
+export type ReviewCatalogModels = Pick<
+  AgentModelCatalogState,
+  "claudeModels" | "codexModels" | "cursorModels" | "grokModels" | "piModels"
+>;
+
 /**
  * Model options every launcher starts from.
  *
@@ -100,12 +106,7 @@ export function includeMissingOpenCodeModels(
  * `"default"` placeholder; launchers that know a project overlay the backend's
  * durable OpenCode model cache on top of it.
  */
-export function buildReviewModelCatalog(
-  models: Pick<
-    ReturnType<typeof useAgentModelCatalogStore.getState>,
-    "claudeModels" | "codexModels" | "cursorModels" | "grokModels" | "piModels"
-  > = useAgentModelCatalogStore.getState(),
-): ReviewModelCatalog {
+export function buildReviewModelCatalog(models: ReviewCatalogModels): ReviewModelCatalog {
   const liveClaudeModels = models.claudeModels.map(claudeReviewModelOption);
   const claude = liveClaudeModels.length > 0 ? liveClaudeModels : CLAUDE_FALLBACK_MODELS;
 

@@ -222,7 +222,9 @@ import {
   nativeNoticeToastId,
   nativeNoticeToastType,
 } from "./native-notice-identity";
-import { useMultiReviewStore } from "@/stores/multiReviewStore";
+import { multiReviewStore, useMultiReviewStore } from "@/stores/multiReviewStore";
+import { agentModelCatalogStore } from "@/stores/agentModelCatalogStore";
+import { useScopedStoreApi } from "@/lib/node-scope/scoped-store-shim";
 import type { FileCandidate } from "@/types";
 import {
   openWebAnnotationRequest,
@@ -401,7 +403,12 @@ export function SharedNativeAgentController({
   const configuredReasoning = configured.reasoningEffort;
   // Read once per tab, as before: a tab's environment never changes, and the
   // catalog reads the provider stores through getState() without subscribing.
-  const speedCatalog = useMemo(() => buildReviewModelCatalog(), []);
+  const modelCatalog = useScopedStoreApi(agentModelCatalogStore);
+  const speedCatalog = useMemo(
+    () => buildReviewModelCatalog(modelCatalog.getState()),
+    [modelCatalog],
+  );
+  const multiReviews = useScopedStoreApi(multiReviewStore);
   const speedCompatible = modelSupportsSpeed(
     platform,
     speedCatalog,
@@ -525,9 +532,9 @@ export function SharedNativeAgentController({
           replacement.replacementProviderSessionId,
           data.environmentId,
         );
-      useMultiReviewStore.getState().replaceWorkflow(workflow);
+      multiReviews.getState().replaceWorkflow(workflow);
     },
-    [data.environmentId, tabId],
+    [data.environmentId, multiReviews, tabId],
   );
   const draft = useNativeComposeStore((state) =>
     nativeComposeDraft(state, createSessionKey(data.environmentId, tabId)),

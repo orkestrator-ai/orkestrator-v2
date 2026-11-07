@@ -2,7 +2,10 @@ import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { invoke } from "@/lib/native/backend";
 import { CODEX_MODELS, type CodexModel } from "@/lib/codex-models";
 import type { ClaudeModel } from "@/lib/claude-types";
-import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
+import type { BackendId } from "@orkestrator/protocol/federation";
+import { WindowScope } from "@/lib/node-scope/window-scope";
+import { FakeNodeClient } from "@/test/render-in-node-scope";
+import { agentModelCatalogStore, useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 import { hydrateAgentModelCatalogCache } from "./agent-model-catalog-cache";
 
 const invokeMock = invoke as ReturnType<typeof mock>;
@@ -211,5 +214,44 @@ describe("hydrateAgentModelCatalogCache", () => {
     expect(useAgentModelCatalogStore.getState().claudeModels).toEqual(liveClaude);
     expect(useAgentModelCatalogStore.getState().codexModels).toEqual(liveCodex);
     expect(useAgentModelCatalogStore.getState().cursorModels).toEqual(liveCursor);
+  });
+});
+
+describe("hydrateAgentModelCatalogCache per node scope (plan item 3003)", () => {
+  test("reads the scope's node and fills only that scope's store", async () => {
+    invokeMock.mockReset();
+    const windowScope = new WindowScope();
+    try {
+      const command = windowScope.open({
+        role: "command",
+        client: new FakeNodeClient({ nodeId: "bk_catalog-a" as BackendId }),
+      });
+      const client = new FakeNodeClient({
+        nodeId: "bk_catalog-b" as BackendId,
+        invoke: {
+          get_agent_model_catalog_cache: {
+            schemaVersion: 1,
+            claude: {
+              updatedAt: "2026-11-07T00:00:00.000Z",
+              models: [{ id: "claude-leaf", name: "Claude Leaf" }],
+            },
+          },
+        },
+      });
+      const leaf = windowScope.open({ role: "leaf", client });
+      const appCommandModels = useAgentModelCatalogStore.getState().claudeModels;
+
+      await hydrateAgentModelCatalogCache({ seed: true, scope: leaf });
+
+      expect(client.calls("get_agent_model_catalog_cache")[0]?.args).toEqual({ seed: true });
+      expect(invokeMock).not.toHaveBeenCalled();
+      expect(leaf.store(agentModelCatalogStore).getState().claudeModels).toEqual([
+        { id: "claude-leaf", name: "Claude Leaf" },
+      ]);
+      expect(command.store(agentModelCatalogStore).getState().claudeModels).toEqual([]);
+      expect(useAgentModelCatalogStore.getState().claudeModels).toBe(appCommandModels);
+    } finally {
+      windowScope.dispose();
+    }
   });
 });

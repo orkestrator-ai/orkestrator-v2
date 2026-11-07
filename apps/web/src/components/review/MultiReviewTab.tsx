@@ -31,7 +31,8 @@ import { ContextMenuItem } from "@/components/ui/context-menu";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { StructuredReviewReportView } from "./StructuredReviewReportView";
 import { StackedEyes } from "./MultiReviewLaunchDialog";
-import { useMultiReviewStore } from "@/stores/multiReviewStore";
+import { multiReviewStore, useMultiReviewStore } from "@/stores/multiReviewStore";
+import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useMultiReviewPrPhase } from "./useMultiReviewPrPhase";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
@@ -547,6 +548,8 @@ function MultiReviewOverviewTab({
   loadPrSessionState,
 }: MultiReviewTabProps) {
   const createTab = useOptionalTerminalContext()?.createTab;
+  // The workflow belongs to this node; its point reads go to this node (plan item 3003).
+  const workflowScope = useShimNodeScope(multiReviewStore.name);
   const workflow = useMultiReviewStore((state) => state.workflows.get(data.workflowId));
   const replaceWorkflow = useMultiReviewStore((state) => state.replaceWorkflow);
   // A graph-engine review refuses bespoke step controls even once its run has
@@ -669,14 +672,14 @@ function MultiReviewOverviewTab({
     () =>
       // The executor turns a synchronous throw into a rejection, as `await` did.
       new Promise<Awaited<ReturnType<typeof hydrateWorkflow>>>((resolve) =>
-        resolve(hydrateWorkflow(data.workflowId)),
+        resolve(hydrateWorkflow(data.workflowId, workflowScope)),
       ).then(
         (result) => {
           if (!result) setError("The authoritative Multi Review workflow could not be found.");
         },
         (reason: unknown) => setError(reason instanceof Error ? reason.message : String(reason)),
       ),
-    [data.workflowId, hydrateWorkflow],
+    [data.workflowId, hydrateWorkflow, workflowScope],
   );
 
   const hydrate = () => {

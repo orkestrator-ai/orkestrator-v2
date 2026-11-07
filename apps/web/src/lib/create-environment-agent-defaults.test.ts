@@ -245,7 +245,7 @@ describe("resolveCreateEnvironmentAgentDefaults", () => {
       useConfigStore.getInitialState().config.global.agentSettings?.platforms?.claude?.model;
     expect(shippedClaudeModel).toBe("claude-sonnet-5-5");
 
-    const shippedCatalog = buildReviewModelCatalog();
+    const shippedCatalog = buildReviewModelCatalog(useAgentModelCatalogStore.getState());
     expect(shippedCatalog.claude[0]?.id).toBe("default");
 
     expect(

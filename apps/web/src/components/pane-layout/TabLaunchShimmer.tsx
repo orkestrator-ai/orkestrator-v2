@@ -1,8 +1,14 @@
 import { useShallow } from "zustand/react/shallow";
 import { focusTabLaunch } from "@/lib/tab-launch";
+import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
 import { cn } from "@/lib/utils";
 import { createPaneTabElementId } from "@/types/paneLayout";
-import { useTabLaunchStore, type TabLaunch, type TabLaunchSurface } from "@/stores/tabLaunchStore";
+import {
+  tabLaunchStore,
+  useTabLaunchStore,
+  type TabLaunch,
+  type TabLaunchSurface,
+} from "@/stores/tabLaunchStore";
 import { TAB_STRIP_CLASS, TabShell } from "./TabShell";
 
 const NO_LAUNCHES: readonly TabLaunch[] = [];
@@ -62,6 +68,7 @@ export function TabLaunchPlaceholder({
   launch: TabLaunch;
   isPaneFocused: boolean;
 }) {
+  const launchScope = useShimNodeScope(tabLaunchStore.name);
   return (
     <TabShell
       id={createPaneTabElementId(environmentId, paneId, launch.tabId)}
@@ -71,7 +78,7 @@ export function TabLaunchPlaceholder({
       isActive={launch.focused}
       isFocused={launch.focused && isPaneFocused}
       data-testid="tab-launch-placeholder"
-      onClick={() => focusTabLaunch(environmentId, launch.tabId)}
+      onClick={() => focusTabLaunch(environmentId, launch.tabId, launchScope)}
       onKeyDown={(event) => {
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();

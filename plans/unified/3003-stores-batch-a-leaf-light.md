@@ -3,11 +3,11 @@ id: 3003
 title: "Convert the light per-node stores (batch A)"
 phase: 3
 plan: "§12 Phase 3.1"
-status: not-started
+status: in-progress
 depends_on: [3001, 3002]
 blocked_by: ""
-owner: ""
-branch: ""
+owner: claude-worker
+branch: unified-federation-b4c9ee65814d
 pr: ""
 updated: 2026-11-07
 ---
@@ -41,16 +41,39 @@ Convert the stores with the fewest imperative sites, to settle the recipe and th
 
 For each store:
 
-- [ ] Change the definition to `defineScopedStore`, with backend calls through `createXApi(scope.client)`.
-- [ ] Move imperative sites whose scope is known to `scope.store(def)`; leave the rest on the shim.
-- [ ] Turn module singletons in the companion modules into `defineScopedService` or into state on the scope.
-- [ ] Switch tests to `renderInNodeScope` with a `FakeNodeClient` instead of stubbing `window.orkestrator`.
-- [ ] Update the shim baseline.
+- [x] Change the definition to `defineScopedStore`, with backend calls through `createXApi(scope.client)`.
+- [x] Move imperative sites whose scope is known to `scope.store(def)`; leave the rest on the shim.
+- [x] Turn module singletons in the companion modules into `defineScopedService` or into state on the scope.
+- [x] Switch the stores' own tests and the companion modules' tests to explicit scopes (`WindowScope` + `FakeNodeClient`, `renderInNodeScope` for the hook).
+- [ ] Switch the readers' component suites (`ActionBar`, `TerminalContainer.*`, `PaneLeafContainer`, `DraggableTabBar`, `MultiReview*`, `AgentNativeTab`, `CreateEnvironmentDialog`, sidebar) to `renderInNodeScope`, so each hook can retire its shim (`useScopedStore`).
+- [x] Update the shim baseline.
 
 ## Tests
 
-- [ ] Per store: two scopes keep independent state, and a test proves calls go to the scope's client.
+- [x] Per store: two scopes keep independent state, the hook reads the rendered scope, and the deprecated statics reach the command scope.
+- [x] Every backend call the batch's modules make goes to the scope's client (multi-review reads and the legacy launch, the model-catalogue cache read; the stores themselves make none).
+- [ ] The mirror stores' writers (`useEnvironmentDiffStats`, `useWorktreeSnapshotRevisions`, `usePrMonitorService`) read and listen through the scope's client, with a test.
 
 ## Done when
 
-- [ ] Every store in the batch is converted, and the batch's shim count is recorded in Notes (target 0 for these).
+- [x] Every store in the batch is converted, and the batch's shim count is recorded in Notes (target 0 for these; 2 remain, see Notes).
+
+## Notes
+
+- **Stores converted (2026-11-07).** All eight are `defineScopedStore<S>(name, () => creator)` plus `useXStore = scopedStoreHook(def)`, registered in `SHIMMED_STORES` and exported (def beside hook) from `@/stores`: `environment-diff`, `worktree-snapshot`, `agent-activity`, `pr-monitor`, `multi-review`, `agent-model-catalog`, `tab-launch`, and `claude-options` (3001's, verified unchanged). `tabLaunchStore` and `worktreeSnapshotStore` were not in the barrel; they are now, because the guard's barrel test expects every shimmed store there. The state interfaces are exported for tests and helpers. No store creator makes a backend call, so none needed `createXApi`.
+- **Shim totals (`scoped-store-shim`, 2026-11-07): 2 in 1 file.** `multi-review`: 2 in `lib/pane-layout-authoritative.ts` (`hydratePaneLayoutDependencies` and `reconcileAuthoritativePaneLayout`, plain code reached from pane-layout persistence with no scope; plan item 3013 threads one). `claude-options`: 0 (the `App.tsx` site now uses 3014's `commandScope`). `environment-diff`, `worktree-snapshot`, `agent-activity`, `pr-monitor`, `agent-model-catalog`, `tab-launch`: 0. `lib-backend-command-default`: 0 for the batch's modules.
+- **Imperative sites moved.** Components and hooks use 3007's `useScopedStoreApi(def)` / `useShimNodeScope(def.name)` (they note a shim use when no provider is above them, so 4004 sees it), because their suites still render without a provider and `useNodeScope()` throws there: `TerminalContainer.view`, `DraggableTabBar`, `PaneLeafContainer`, `TabLaunchShimmer`, `MultiReviewTab`, `AgentNativeTab.controller` / `.helpers`, `ClaudeTmuxChatTab`, `CreateEnvironmentDialog`, `DesignWorkspaceDialog`. `useActionBarController` uses its existing `actionBarScope`; `App.tsx` uses `commandScope`. `buildReviewModelCatalog(models)` lost its `= useAgentModelCatalogStore.getState()` default (a hidden static); its callers pass their scope's state or their hook selections (which also lets two `react-hooks/exhaustive-deps` suppressions go; `useBuildLaunchOptions` then needed a `react/set-state-in-effect` suppression for a pre-existing reset, because React Compiler analysis had been skipped while the file held a react-hooks suppression). `syncCachedAcpModels(scope, models)` takes its scope first.
+- **Companion modules.**
+  - `multi-review-persistence.ts`: the unavailable markers and the reads in flight (its 2 module singletons) are one `defineScopedSlot("multi-review-persistence")`. Every export takes an optional trailing `scope` (`hydrateMultiReviewWorkflow(id, scope?)`, `hydrateMultiReviewWorkflowsForEnvironment(id, scope?)`, `applyMultiReviewWorkflowsForEnvironment(id, entries, scope?)`, `findActiveMultiReviewWorkflow(id, scope?)`, `isMultiReviewWorkflowKnownUnavailable(id, scope?)`, `resetMultiReviewPersistenceForTests(scope?)`). Reads go through `backendApiForScope(scope, createWorkflowsApi, { … })`, so the command scope keeps the mocked named exports and any other scope reaches its own client. The store and slot are read before each `await`.
+  - `tab-launch.ts`: the arrival timers, the layout watch and the double-press claims (its 3 module singletons) are one `defineScopedSlot("tab-launches")` whose `scope.onDispose` clears every timer and stops the watch (invariant 15). The claim release timer is now tracked so dispose clears it. `beginTabLaunch`, `cancelTabLaunchFocus`, `focusTabLaunch`, `claimTabLaunch` and `resetTabLaunches` take an optional trailing `scope`. The pane layout it watches is still the command scope's singleton (3013).
+  - `agent-model-catalog-cache.ts`: `hydrateAgentModelCatalogCache({ seed?, scope? })` reads the scope's node (`backendApiForScope(scope, createConfigIntegrationsApi, …)`) into that scope's store. It had no module state, only its 11 sites.
+  - `multi-review-launch-compat.ts`: `LegacyMultiReviewLaunchInput.scope` (required); start, cancel and delete go to that scope's node, and the workflow lands in that scope's store. It imports `multiReviewStore` through `@/stores`, as it did the hook, so `ActionBar.test.tsx`'s barrel mock (now a test-only def whose actions are its mocks) still sees the writes.
+- **Decision: optional trailing `scope` on the companions (2026-11-07).** Options: (a) required `scope` everywhere: every remaining caller without a scope (`store-resource-sync.ts`, `boot-hydration.ts`, `pane-layout-authoritative.ts`, `app-startup.ts`, the settings refresh) and about 60 test calls would change in files other items own this wave; (b) optional trailing `scope`, defaulting to the app's command scope, the convention 3014 (`resource-sync.ts`, `pane-layout-persistence.ts`) and 3016 (slots) already use. Chosen: (b); every production caller that has a scope passes it. The defaults are not counted by the `scoped-store-shim` guard. The production callers that still rely on them: `store-resource-sync.ts` (the `workflows` registration, command scope only), `boot-hydration.ts`, `pane-layout-authoritative.ts`, `app-startup.ts`, `components/settings/agent/refresh-model-catalog.ts`.
+- **`store-resource-sync` (3014 landed in d6c5a5602).** Multi Review's change and resync handlers stay in the shared `workflows` registration, `command-scope`. Splitting them into an `every-scope` registration needs (1) the build-pipeline half, which shares the hidden-window deferral, overflow resync and retry timer with it, converted by 3011, and (2) the resync's environment list read from `context.scope.store(environmentStore)` (3004, in progress). Recorded for 3011: when the pipeline store converts, move both halves to `every-scope` and pass `context.scope` to `hydrateMultiReviewWorkflow(s…)`.
+- **Open: the mirror stores' writers.** `useEnvironmentDiffStats`, `useWorktreeSnapshotRevisions` and `usePrMonitorService` write the nearest scope's store but read the command node through the global `listen` and `lib/backend` named exports. Under the command scope (all the app renders today) that is the same node. They should move to `listenInScope(scope, …)`, `backendApiForScope` and `onViewSafetyCheck(cb, scope)` before a leaf provider mounts them (4001). Not done here: `usePrMonitorService.ts` carries 3004's uncommitted edits, and a leaf client's `NATIVE_EVENT_STREAM_CONNECTED_EVENT` semantics need checking with 2011.
+- **Where Effect is used, and where not.** Not used. The stores are zustand creators over 2001's scope (whose lifetime is already an Effect `Scope`); the companions' state is plain maps in a slot, and their timers stop through `scope.onDispose`, which runs on the scope's Effect-backed lifetime.
+- **Aggregate suite left to review preparation.** `mise run test` was not run.
+
+## Work log
+
+- 2026-11-07 (claude-worker): converted the eight stores (seven new, `claude-options` verified) and registered them; moved every imperative site with a known scope, including `App.tsx`'s `claude-options` site; turned the singletons of `multi-review-persistence.ts` and `tab-launch.ts` into scoped slots; scoped `agent-model-catalog-cache.ts` and `multi-review-launch-compat.ts`; removed `buildReviewModelCatalog`'s static default; added the companion-module paragraph to `docs/development/node-scopes.md`. Tests: new `stores/light-scoped-stores.test.tsx` (25: per store, two scopes, hook under `renderInNodeScope`, statics on the command scope; barrel), new `lib/multi-review-launch-compat.test.ts` (1), per-scope blocks in `multi-review-persistence.test.ts` (+3), `tab-launch.test.ts` (+3), `agent-model-catalog-cache.test.ts` (+1); `agentModelCatalogStore.test.ts` and `worktreeSnapshotStore.test.ts` now open explicit scopes. Whole web suite: 13,844 pass, 2 fail (`AppDialogHost.test.tsx`, from 3004's uncommitted `AppDialogHost.tsx`). `tests/unit/source-guards.test.ts`: 98 pass, 2 fail (the repository ratchet, on the pre-existing test-guard findings only). Web typecheck: no errors in this item's files (others' in-progress files had some). oxlint and fmt clean on the touched files.

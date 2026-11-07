@@ -24,7 +24,9 @@ import {
 import { modelSupportsSpeed } from "@/lib/agent-launch";
 import { resolvedPlatformSettings } from "@/lib/agent-settings";
 import { usePickHostPath } from "@/lib/host-path-picker";
-import { buildReviewModelCatalog } from "@/lib/review-launch-options";
+import { buildReviewModelCatalog, type ReviewCatalogModels } from "@/lib/review-launch-options";
+import { useScopedStoreApi } from "@/lib/node-scope/scoped-store-shim";
+import { agentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 import {
   handTabInitialPromptToBackend,
   type TabInitialPromptOptions,
@@ -124,6 +126,7 @@ function designInitialPromptOptions(
   environmentId: string,
   platform: DesignAgent,
   images: readonly DesignPromptImage[],
+  models: ReviewCatalogModels,
 ): TabInitialPromptOptions {
   const environment = useEnvironmentStore.getState().getEnvironmentById(environmentId);
   const configured = resolvedPlatformSettings(
@@ -132,7 +135,7 @@ function designInitialPromptOptions(
     environment,
     platform,
   );
-  const fastMode = modelSupportsSpeed(platform, buildReviewModelCatalog(), configured.model)
+  const fastMode = modelSupportsSpeed(platform, buildReviewModelCatalog(models), configured.model)
     ? configured.fastMode
     : undefined;
   return {
@@ -167,6 +170,7 @@ export function DesignWorkspaceDialog({
 }) {
   // Browses the host of the node this component renders in.
   const pickHostPath = usePickHostPath();
+  const modelCatalog = useScopedStoreApi(agentModelCatalogStore);
   const backendKey = designBackendKey();
   const scope = `${backendKey}\u0000${environmentId}`;
   const scopeRef = useRef(scope);
@@ -399,7 +403,12 @@ export function DesignWorkspaceDialog({
             throw new Error(
               "Too many images for this conversation. Remove some images and try again.",
             );
-          const promptOptions = designInitialPromptOptions(environmentId, platform, images);
+          const promptOptions = designInitialPromptOptions(
+            environmentId,
+            platform,
+            images,
+            modelCatalog.getState(),
+          );
           let created = false;
           try {
             // The prompt stays on the tab as the renderer fallback until the

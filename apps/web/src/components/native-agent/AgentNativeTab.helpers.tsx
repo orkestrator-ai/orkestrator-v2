@@ -69,7 +69,8 @@ import { createSessionKey } from "@/lib/utils";
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useShallow } from "zustand/react/shallow";
-import { syncCachedAcpModels } from "@/stores/agentModelCatalogStore";
+import { agentModelCatalogStore, syncCachedAcpModels } from "@/stores/agentModelCatalogStore";
+import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
 import {
   nativeComposeDraft,
   unassignedNativeComposePersistenceStore,
@@ -612,6 +613,8 @@ export function UnassignedNativeAgentComposer({
     modelCatalogRetriedRef.current.clear();
     setModels([]);
   }, [environmentId]);
+  // The catalogue it publishes is this node's (plan item 3003).
+  const modelCatalogScope = useShimNodeScope(agentModelCatalogStore.name);
   // A normal read remains side-effect free. On the first selection of a
   // bridge-backed platform, however, tell the backend which one the user needs:
   // if its durable list is missing, the backend starts that bridge and seeds the
@@ -635,11 +638,11 @@ export function UnassignedNativeAgentComposer({
         // The backend has already normalized and durably cached these models.
         // Mirror its response even if this tab became inactive while first-use
         // discovery ran, so every other mounted launcher sees the new snapshot.
-        syncCachedAcpModels(catalog);
+        syncCachedAcpModels(modelCatalogScope, catalog);
         // A first-run download lands in the backend's durable cache only; pull
         // it into the store the launch dialogs read from.
         if (catalog.some((model) => model.platform === ensureAgent)) {
-          void hydrateAgentModelCatalogCache().catch(() => undefined);
+          void hydrateAgentModelCatalogCache({ scope: modelCatalogScope }).catch(() => undefined);
         }
         if (
           !modelCatalogMountedRef.current ||
@@ -678,7 +681,7 @@ export function UnassignedNativeAgentComposer({
         }
         log.warn("model-catalogue.load-failed", { error: formatLogError(error) });
       });
-  }, [environmentId, modelCatalogRetryRevision, models, platform]);
+  }, [environmentId, modelCatalogRetryRevision, modelCatalogScope, models, platform]);
   // A host that was not signed in when the picker first asked has nothing to
   // list. Focus is a useful retry signal for host probes after an external
   // sign-in, but must not restart environment bridges (Cursor, Grok or Pi).

@@ -81,6 +81,8 @@ export function useProjectModelCatalog(projectId: string, enabled: boolean) {
 
   useEffect(() => {
     let cancelled = false;
+    // Drops the previous project's catalogue before this project's read lands.
+    // oxlint-disable-next-line react/set-state-in-effect
     setCachedOpenCodeCatalog(null);
     if (!enabled || !projectId)
       return () => {
@@ -114,7 +116,13 @@ export function useProjectModelCatalog(projectId: string, enabled: boolean) {
 
   const catalog = useMemo(() => {
     // The standard Claude/Codex catalogs and the unpinned OpenCode placeholder.
-    const baseCatalog = buildReviewModelCatalog();
+    const baseCatalog = buildReviewModelCatalog({
+      claudeModels,
+      codexModels,
+      cursorModels,
+      grokModels,
+      piModels,
+    });
     const allowedProviders = normalizeOpenCodeModelProviders(openCodeModelProviders);
     const favoriteOpenCodeIds = (favoriteModels ?? [])
       .filter((favorite) => favorite.platform === "opencode")
@@ -134,11 +142,6 @@ export function useProjectModelCatalog(projectId: string, enabled: boolean) {
       ...baseCatalog,
       opencode: includeMissingOpenCodeModels(mapped, favoriteOpenCodeIds, allowedProviders),
     };
-    // buildReviewModelCatalog reads the Claude/Codex/Cursor/Grok/Pi stores through
-    // getState(), which does not subscribe. These selectors are the subscription:
-    // the rule sees them as unused because the body never names them, but dropping
-    // them freezes the catalog at whatever was loaded on first render.
-    // oxlint-disable-next-line react-hooks/exhaustive-deps
   }, [
     claudeModels,
     codexModels,

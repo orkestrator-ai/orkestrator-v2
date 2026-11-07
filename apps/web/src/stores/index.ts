@@ -5,9 +5,13 @@ export { useEnvironmentStore } from "./environmentStore";
 export { configStore, useConfigStore } from "./configStore";
 export { claudeOptionsStore, useClaudeOptionsStore } from "./claudeOptionsStore";
 export type { ClaudeOptions, AgentType } from "./claudeOptionsStore";
-export { useAgentActivityStore } from "./agentActivityStore";
+export { agentActivityStore, useAgentActivityStore } from "./agentActivityStore";
 export type { AgentActivityState } from "./agentActivityStore";
-export { syncCachedAcpModels, useAgentModelCatalogStore } from "./agentModelCatalogStore";
+export {
+  agentModelCatalogStore,
+  syncCachedAcpModels,
+  useAgentModelCatalogStore,
+} from "./agentModelCatalogStore";
 export { filesPanelStore, useFilesPanelStore } from "./filesPanelStore";
 export { useFilesPanelChromeStore } from "./filesPanelChromeStore";
 export type { FilesPanelTab } from "./filesPanelStore";
@@ -32,9 +36,9 @@ export {
   type FeatureStoryCard,
 } from "./featurePlanStore";
 export { useGitHubIssuesStore, githubIssueDetailKey } from "./githubIssuesStore";
-export { usePrMonitorStore } from "./prMonitorStore";
+export { prMonitorStore, usePrMonitorStore } from "./prMonitorStore";
 export { useBuildPipelineStore } from "./buildPipelineStore";
-export { useMultiReviewStore } from "./multiReviewStore";
+export { multiReviewStore, useMultiReviewStore } from "./multiReviewStore";
 export type {
   BuildPipeline,
   BuildPhase,
@@ -44,6 +48,9 @@ export type {
   PipelineSessionPhase,
 } from "./buildPipelineStore";
 export type { PrMonitorEnvironmentState } from "./prMonitorStore";
-export { useEnvironmentDiffStore } from "./environmentDiffStore";
+export { environmentDiffStore, useEnvironmentDiffStore } from "./environmentDiffStore";
 export { useAgentMailStore } from "./agentMailStore";
 export type { EnvironmentDiffStats } from "./environmentDiffStore";
+export { tabLaunchStore, useTabLaunchStore } from "./tabLaunchStore";
+export type { TabLaunch, TabLaunchSurface } from "./tabLaunchStore";
+export { useWorktreeSnapshotStore, worktreeSnapshotStore } from "./worktreeSnapshotStore";

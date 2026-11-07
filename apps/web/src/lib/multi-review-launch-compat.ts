@@ -10,10 +10,15 @@
  */
 import type { MultiReviewLaunchSelection } from "@/components/review/MultiReviewLaunchDialog";
 import * as backend from "@/lib/backend";
+import { backendApiForScope } from "@/lib/backend/client";
+import { createWorkflowsApi } from "@/lib/backend/workflows";
 import { findActiveMultiReviewWorkflow } from "@/lib/multi-review-persistence";
-import { useMultiReviewStore } from "@/stores";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { multiReviewStore } from "@/stores";
 
 export interface LegacyMultiReviewLaunchInput {
+  /** The node that owns the environment: the launch, its store and its tab are that node's. */
+  scope: NodeScope;
   environmentId: string;
   projectId: string;
   targetBranch: string;
@@ -27,7 +32,13 @@ export interface LegacyMultiReviewLaunchInput {
 export async function legacyLaunchMultiReview(
   input: LegacyMultiReviewLaunchInput,
 ): Promise<{ reused: boolean }> {
-  const { createTab, selection } = input;
+  const { createTab, selection, scope } = input;
+  const store = scope.store(multiReviewStore);
+  const api = backendApiForScope(scope, createWorkflowsApi, {
+    startMultiReview: backend.startMultiReview,
+    cancelMultiReview: backend.cancelMultiReview,
+    deleteMultiReviewWorkflow: backend.deleteMultiReviewWorkflow,
+  });
   let workflowId: string | undefined;
   let cancelRequested = false;
   try {
@@ -36,7 +47,7 @@ export async function legacyLaunchMultiReview(
     // rather than failing the launch: the running one is otherwise
     // unreachable, and its Abandon control — the only way to free the
     // environment for a new review — lives inside the tab being reopened.
-    const active = await findActiveMultiReviewWorkflow(input.environmentId);
+    const active = await findActiveMultiReviewWorkflow(input.environmentId, scope);
     if (active) {
       if (!createTab(active.id)) {
         throw new Error(
@@ -46,7 +57,7 @@ export async function legacyLaunchMultiReview(
       }
       return { reused: true };
     }
-    const workflow = await backend.startMultiReview({
+    const workflow = await api.startMultiReview({
       environmentId: input.environmentId,
       projectId: input.projectId,
       targetBranch: input.targetBranch,
@@ -58,12 +69,12 @@ export async function legacyLaunchMultiReview(
       autoPr: selection.autoPr,
     });
     workflowId = workflow.id;
-    useMultiReviewStore.getState().replaceWorkflow(workflow);
+    store.getState().replaceWorkflow(workflow);
     if (!createTab(workflow.id)) {
       const launchError = "The environment is not ready or the maximum tab count was reached.";
-      const cancelled = await backend.cancelMultiReview(workflow.id);
+      const cancelled = await api.cancelMultiReview(workflow.id);
       cancelRequested = true;
-      useMultiReviewStore.getState().replaceWorkflow(cancelled);
+      store.getState().replaceWorkflow(cancelled);
       // Cancellation is asynchronous, and only a terminal workflow may be
       // deleted. Deleting a still-cancelling one is rejected by the backend,
       // which would replace this message with a confusing storage error and
@@ -73,14 +84,14 @@ export async function legacyLaunchMultiReview(
           `${launchError} Cancellation is still in progress; the saved Multi Review remains available for recovery.`,
         );
       }
-      await backend.deleteMultiReviewWorkflow(workflow.id);
-      useMultiReviewStore.getState().removeWorkflow(workflow.id);
+      await api.deleteMultiReviewWorkflow(workflow.id);
+      store.getState().removeWorkflow(workflow.id);
       throw new Error(launchError);
     }
     return { reused: false };
   } catch (error) {
     if (workflowId && !cancelRequested) {
-      void backend.cancelMultiReview(workflowId).catch(() => undefined);
+      void api.cancelMultiReview(workflowId).catch(() => undefined);
     }
     throw error;
   }

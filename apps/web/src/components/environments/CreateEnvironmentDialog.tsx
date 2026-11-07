@@ -118,7 +118,12 @@ import {
   openCodeModelDisplayLabel,
   openCodeModelProviderId,
 } from "@orkestrator/protocol/native-agent";
-import { syncCachedAcpModels, useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
+import {
+  agentModelCatalogStore,
+  syncCachedAcpModels,
+  useAgentModelCatalogStore,
+} from "@/stores/agentModelCatalogStore";
+import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("web.environment");
@@ -312,6 +317,8 @@ export function CreateEnvironmentDialog({
       : !localEnvironmentAvailable && configEnvironmentType === "local" && dockerAvailable
         ? "containerized"
         : configEnvironmentType;
+  // The node whose catalogue this dialog reads and seeds (plan item 3003).
+  const catalogScope = useShimNodeScope(agentModelCatalogStore.name);
   const claudeModels = useAgentModelCatalogStore((state) => state.claudeModels);
   const codexModels = useAgentModelCatalogStore((state) => state.codexModels);
   const cursorModels = useAgentModelCatalogStore((state) => state.cursorModels);
@@ -334,12 +341,12 @@ export function CreateEnvironmentDialog({
     piCatalogSeedAttemptedRef.current = true;
     void ensureHostPiModelCatalog()
       .then((models) => {
-        if (Array.isArray(models) && models.length > 0) syncCachedAcpModels(models);
+        if (Array.isArray(models) && models.length > 0) syncCachedAcpModels(catalogScope, models);
       })
       .catch((error) => {
         log.warn("models.pi-seed-failed", { error: formatLogError(error) });
       });
-  }, [enabledAgentPlatforms, open, piModels.length]);
+  }, [catalogScope, enabledAgentPlatforms, open, piModels.length]);
   const {
     favorites: favoriteModels,
     toggleFavorite: toggleFavoriteModel,
@@ -381,7 +388,13 @@ export function CreateEnvironmentDialog({
    */
   const hasAvailableOpenCodeModels = cachedOpenCodeModels.length > 0;
   const modelCatalog = useMemo(() => {
-    const baseCatalog = buildReviewModelCatalog();
+    const baseCatalog = buildReviewModelCatalog({
+      claudeModels,
+      codexModels,
+      cursorModels,
+      grokModels,
+      piModels,
+    });
     const catalog =
       cachedOpenCodeModels.length > 0
         ? {
@@ -447,11 +460,6 @@ export function CreateEnvironmentDialog({
         normalizeOpenCodeModelProviders(config.global.openCodeModelProviders),
       ),
     };
-    // buildReviewModelCatalog reads the Claude/Codex/Cursor/Grok/Pi stores through
-    // getState(), which does not subscribe. These selectors are the subscription:
-    // the rule sees them as unused because the body never names them, but dropping
-    // them freezes the catalog at whatever was loaded on first render.
-    // oxlint-disable-next-line react-hooks/exhaustive-deps
   }, [
     claudeModels,
     cachedOpenCodeModels,

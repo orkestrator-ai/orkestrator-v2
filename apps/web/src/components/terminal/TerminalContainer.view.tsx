@@ -43,7 +43,7 @@ import {
   getAllLeaves,
 } from "@/stores";
 import { filesPanelStore } from "@/stores/filesPanelStore";
-import { useScopedStoreApi } from "@/lib/node-scope/scoped-store-shim";
+import { useScopedStoreApi, useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
 import { useShallow } from "zustand/react/shallow";
 import { toast } from "sonner";
 import { showTabLimitReachedToast } from "@/lib/tab-limit-toast";
@@ -80,7 +80,8 @@ import { listen, NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events
 import { createOrkestratorScriptPrompt } from "@/prompts";
 import { isEnvironmentSetupSettled } from "@orkestrator/protocol/environment-readiness";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
-import { useMultiReviewStore } from "@/stores/multiReviewStore";
+import { multiReviewStore } from "@/stores/multiReviewStore";
+import { tabLaunchStore } from "@/stores/tabLaunchStore";
 import { hydrateMultiReviewWorkflowsForEnvironment } from "@/lib/multi-review-persistence";
 import { PaneTree } from "@/components/pane-layout";
 import {
@@ -135,6 +136,9 @@ export function TerminalContainer({
   obscured = false,
   onReveal,
 }: TerminalContainerProps) {
+  // This node's Multi Review workflows and tab launches (plan item 3003).
+  const multiReviewScope = useShimNodeScope(multiReviewStore.name);
+  const tabLaunchScope = useShimNodeScope(tabLaunchStore.name);
   const activeWriteRef = useRef<((data: string) => Promise<void>) | null>(null);
   const obscuredRef = useRef(obscured);
   const onRevealRef = useRef(onReveal);
@@ -872,7 +876,7 @@ export function TerminalContainer({
       beginHydration(environmentId);
       void Promise.allSettled([
         backend.getPaneLayout(environmentId),
-        hydrateMultiReviewWorkflowsForEnvironment(environmentId),
+        hydrateMultiReviewWorkflowsForEnvironment(environmentId, multiReviewScope),
       ]).then(async ([layoutResult, multiReviewResult]) => {
         // These independent snapshots need not describe the same instant.
         // A launch between the list read and the layout read must not make
@@ -944,7 +948,7 @@ export function TerminalContainer({
             // tabs so their own read-through view can retry hydration.
             dependenciesUnknown ||
             multiReviewResult.status === "rejected" ||
-            useMultiReviewStore.getState().workflows.has(workflowId),
+            multiReviewScope.store(multiReviewStore).getState().workflows.has(workflowId),
         });
         const restored =
           restoredSnapshot && persisted?.version === LEGACY_PANE_LAYOUT_VERSION
@@ -1085,6 +1089,7 @@ export function TerminalContainer({
     codexMode,
     piMode,
     worktreePath,
+    multiReviewScope,
   ]);
 
   // Reset pane layout when container changes within the same environment
@@ -1246,7 +1251,7 @@ export function TerminalContainer({
       // For local environments, we don't need a containerId but do need worktreePath to be set
       if (!isEnvironmentRunning || (!containerId && !isLocalEnvironmentReady)) return false;
 
-      cancelTabLaunchFocus(environmentId);
+      cancelTabLaunchFocus(environmentId, tabLaunchScope);
       const allTabs = getAllTabs(environmentId);
       // A Multi Review workflow outlives the tab that launched it, so reopening
       // one is a normal request rather than a duplicate: the launcher reattaches
@@ -1638,6 +1643,7 @@ export function TerminalContainer({
       piMode,
       isLocalEnvironmentReady,
       isLocalEnvironment,
+      tabLaunchScope,
       createBrowserTab,
     ],
   );
@@ -1662,7 +1668,7 @@ export function TerminalContainer({
   // Handler for creating file viewer tabs
   const handleCreateFileTab = useCallback(
     (filePath: string, options?: CreateFileTabOptions) => {
-      cancelTabLaunchFocus(environmentId);
+      cancelTabLaunchFocus(environmentId, tabLaunchScope);
       const requestedDiff = options?.changeDiff;
       // For container environments, need containerId and running state
       // For local environments, need worktreePath
@@ -1781,6 +1787,7 @@ export function TerminalContainer({
       getAllTabs,
       environmentId,
       handleCreateTab,
+      tabLaunchScope,
     ],
   );
 
@@ -1806,11 +1813,12 @@ export function TerminalContainer({
       const activeTab = activePane.tabs.find((tab) => tab.id === activePane.activeTabId);
       const reviewData = activeTab?.multiReviewTabData;
       if (activeTab?.type === "multi-review" && reviewData && !reviewData.reviewerId) {
-        const phase = useMultiReviewStore.getState().workflows.get(reviewData.workflowId)?.phase;
+        const multiReviews = multiReviewScope.store(multiReviewStore);
+        const phase = multiReviews.getState().workflows.get(reviewData.workflowId)?.phase;
         if (phase && isMultiReviewTerminalPhase(phase)) {
           try {
             await backend.deleteMultiReviewWorkflow(reviewData.workflowId);
-            useMultiReviewStore.getState().removeWorkflow(reviewData.workflowId);
+            multiReviews.getState().removeWorkflow(reviewData.workflowId);
           } catch (error) {
             toast.error("Could not close Multi Review", {
               description: error instanceof Error ? error.message : String(error),
@@ -1821,7 +1829,7 @@ export function TerminalContainer({
       }
       removeTab(activePane.id, activePane.activeTabId, environmentId);
     }
-  }, [environmentId, getActivePane, removeTab]);
+  }, [environmentId, getActivePane, multiReviewScope, removeTab]);
 
   // Electron owns Command+W as a native menu accelerator. Route its event to
   // the currently active environment and resolve the pane from live store
@@ -1893,21 +1901,21 @@ export function TerminalContainer({
     (type: CreatableTabType, options?: CreateTabOptions): boolean => {
       const created = handleCreateTab(type, options);
       if (created) {
-        cancelTabLaunchFocus(environmentId);
+        cancelTabLaunchFocus(environmentId, tabLaunchScope);
         revealIfObscured();
       }
       return created;
     },
-    [environmentId, handleCreateTab, revealIfObscured],
+    [environmentId, handleCreateTab, revealIfObscured, tabLaunchScope],
   );
   const selectTabFromContext = useCallback(
     (index: number) => {
-      cancelTabLaunchFocus(environmentId);
+      cancelTabLaunchFocus(environmentId, tabLaunchScope);
       handleSelectTab(index);
       const activePane = getActivePane(environmentId);
       if (activePane && index >= 0 && index < activePane.tabs.length) revealIfObscured();
     },
-    [environmentId, getActivePane, handleSelectTab, revealIfObscured],
+    [environmentId, getActivePane, handleSelectTab, revealIfObscured, tabLaunchScope],
   );
   const createFileTabFromContext = useCallback(
     (filePath: string, options?: CreateFileTabOptions) => {

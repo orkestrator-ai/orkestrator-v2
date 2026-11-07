@@ -57,6 +57,42 @@ export const SHIMMED_STORES: readonly ShimmedStore[] = [
     module: "apps/web/src/stores/projectPullRequestsStore",
     hook: "useProjectPullRequestsStore",
   },
+  // Plan item 3003: the light per-node stores (batch A).
+  {
+    store: "agent-activity",
+    module: "apps/web/src/stores/agentActivityStore",
+    hook: "useAgentActivityStore",
+  },
+  {
+    store: "agent-model-catalog",
+    module: "apps/web/src/stores/agentModelCatalogStore",
+    hook: "useAgentModelCatalogStore",
+  },
+  {
+    store: "environment-diff",
+    module: "apps/web/src/stores/environmentDiffStore",
+    hook: "useEnvironmentDiffStore",
+  },
+  {
+    store: "multi-review",
+    module: "apps/web/src/stores/multiReviewStore",
+    hook: "useMultiReviewStore",
+  },
+  {
+    store: "pr-monitor",
+    module: "apps/web/src/stores/prMonitorStore",
+    hook: "usePrMonitorStore",
+  },
+  {
+    store: "tab-launch",
+    module: "apps/web/src/stores/tabLaunchStore",
+    hook: "useTabLaunchStore",
+  },
+  {
+    store: "worktree-snapshot",
+    module: "apps/web/src/stores/worktreeSnapshotStore",
+    hook: "useWorktreeSnapshotStore",
+  },
 ];
 
 /** The statics a zustand hook carries, which the shim keeps as deprecated. */

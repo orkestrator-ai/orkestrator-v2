@@ -18,6 +18,7 @@ import { sleepBeforeNegativeAssertion } from "./sleep-before-negative-assertion"
 import { smallFakePid } from "./small-fake-pid";
 import { subprocessWithoutBudget } from "./subprocess-without-budget";
 import { windowOrkestratorDirect } from "./window-orkestrator-direct";
+import { workspaceCommandBoundCall } from "./workspace-command-bound-call";
 
 export const SOURCE_GUARDS: readonly SourceGuard[] = [
   sleepBeforeNegativeAssertion,
@@ -28,6 +29,7 @@ export const SOURCE_GUARDS: readonly SourceGuard[] = [
   directTransportImport,
   scopedStoreShim,
   libBackendCommandDefault,
+  workspaceCommandBoundCall,
 ];
 
 export const SCANNED_ROOTS = ["tests", "apps", "bridges", "packages", "scripts", "e2e"] as const;

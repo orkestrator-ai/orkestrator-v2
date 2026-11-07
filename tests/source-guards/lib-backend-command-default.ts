@@ -104,11 +104,25 @@ function exportsOf(file: string, source: string): ModuleExports {
   return { shims, named, star };
 }
 
+/** The subject of a `lib/backend` file's shim: its base name; other modules have none. */
+export function libBackendSubject(moduleId: string): string | null {
+  return moduleId.startsWith(LIB_BACKEND_PREFIX) ? moduleId.slice(LIB_BACKEND_PREFIX.length) : null;
+}
+
 /** Follows an exported name to the `lib/backend` file whose shim binds it. */
 export class LibBackendShimResolver {
   private readonly cache = new Map<string, { source: string; exports: ModuleExports }>();
 
-  constructor(private readonly readModule: ReadModule) {}
+  /**
+   * `subjectOf` names the module whose shim binds a name (`null`: not
+   * counted). The default counts the `lib/backend` files only; the
+   * workspace guard (plan item 4007) also counts other renderer modules'
+   * command-bound exports.
+   */
+  constructor(
+    private readonly readModule: ReadModule,
+    private readonly subjectOf: (moduleId: string) => string | null = libBackendSubject,
+  ) {}
 
   /** The `lib/backend` file (its base name) whose shim `exported` is, or `null`. */
   shimOf(moduleId: string, exported: string, seen: Set<string> = new Set()): string | null {
@@ -117,10 +131,7 @@ export class LibBackendShimResolver {
     seen.add(key);
     const exports = this.exports(moduleId);
     if (!exports) return null;
-    if (exports.shims.has(exported))
-      return moduleId.startsWith(LIB_BACKEND_PREFIX)
-        ? moduleId.slice(LIB_BACKEND_PREFIX.length)
-        : null;
+    if (exports.shims.has(exported)) return this.subjectOf(moduleId);
     const named = exports.named.get(exported);
     if (named) return this.shimOf(named.module, named.imported, seen);
     for (const target of exports.star) {
@@ -191,7 +202,7 @@ function isNameOnly(node: AnyNode, parent: AnyNode | undefined): boolean {
   return false;
 }
 
-function visitShimUses(
+export function visitShimUses(
   program: AnyNode,
   file: ScannedFile,
   resolver: LibBackendShimResolver,

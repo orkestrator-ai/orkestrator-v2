@@ -3,11 +3,11 @@ id: 4007
 title: "Every workspace call goes to the workspace's node, with a guard"
 phase: 4
 plan: "§5.2, §7.3, §7.6 and §12 Phase 4"
-status: not-started
+status: in-progress
 depends_on: [4001]
 blocked_by: ""
-owner: ""
-branch: ""
+owner: claude-worker
+branch: unified-federation-b4c9ee65814d
 pr: ""
 updated: 2026-11-07
 ---

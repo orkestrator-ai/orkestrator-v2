@@ -9,6 +9,7 @@ export const GUARD_IDS = [
   "direct-transport-import",
   "scoped-store-shim",
   "lib-backend-command-default",
+  "workspace-command-bound-call",
 ] as const;
 
 export type GuardId = (typeof GUARD_IDS)[number];

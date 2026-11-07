@@ -237,6 +237,7 @@ the window includes a release that needs them:
 | Design receipts with no intent digest matched on kind, preconditions, gesture and client ids (`settledMatches`, `core/design/records.ts`) | 2026-10-24 | Digests shipped in v2.21.0. A receipt without one now never matches: the retry is refused with `reusedCorrelation`, runs nothing, and `operation_status` still answers. |
 | `export_build_pipeline_for_downgrade` (one pipeline in the pre-split inline schema) | 2026-10-24 | The split (#875) is in v2.21.0, so every release in the window reads the current format; the export only served unpublished builds. |
 | Prompt-queue claim commands (`claim_prompt_queue_head`, `acknowledge_prompt_queue_claim`, `reject_prompt_queue_claim`, `requeue_prompt_queue_message`) and their renderer wrappers | 2026-10-24 | No client has called them since at least 2026-08-01; the backend drainer dispatches through storage. |
+| Looped Review commands (`start_looped_review`, `pause_looped_review`, `resume_looped_review`, `retry_looped_review`, `cancel_looped_review`, `get_looped_review_workflow`, `list_looped_review_workflows`, `save_looped_review_workflow`, `delete_looped_review_workflow`, `generate_looped_review_package`, `verify_looped_review_package`, `get_looped_review_provider_session`, `claim_looped_review_controller`, `release_looped_review_controller`, `validate_looped_review_controller`) and the coordinator's (`start_coordinator_looped_review`, `get_coordinator_looped_review`, `cancel_coordinator_looped_review`) | 2026-10-29 | The feature was removed (#1417, first in v2.34.4-beta), not replaced, so no path was kept: a renderer from v2.21.0 to v2.34.3-beta that calls one gets `unknown-command`. Recorded on 2026-11-07 for the contract CI job ([1008](../../plans/unified/1008-contract-ci-job.md)). |
 | Legacy `DELETE` close for bridges before `POST /session/:id/close` (`LEGACY_DELETE_RETAINS_HISTORY`, `bridge-close.legacy-delete`) | 2026-10-31 | All five bridges in every published release from v2.21.0 serve the route and answer an unknown session in band, so only an unpublished source build reaches it. That build now gets the restart notice instead. |
 | Renderer v1 design fallback for backends without `design_capabilities`: `design_changes` and `get_canvas_state` snapshots, `design_action` edits, `design_status` readiness, the `list_canvases` library and the `legacy` canvas mode (`design-controller.ts`, `design-launch.ts`, `DesignLibrary.tsx`) | 2026-11-06 | `design_capabilities` shipped in #844 (2026-09-25) and is in every release from v2.21.0, the floor, so only an unpublished source build reached it. That build now gets a typed "too old for the design canvas" failure. `design_action` stays on the backend for MCP, canvas lifecycle and listing. |
 
@@ -606,10 +607,11 @@ export const nodeMailClient = domainClient(nodeMail, {
   `--lower-baseline` writes nothing and fails if any domain rose. Moving an
   untyped command to another domain in the map is the one reason to edit the
   baseline by hand; the total must not change, and review checks it.
-- **Commands.** `mise run contract:manifest` regenerates the manifest and then
-  lowers the baseline. `mise run contract:check` runs the manifest drift check
-  (`--check`, no writes) and the ratchet, and every failure names this
-  section. CI runs `contract:check` in `ci.yml`'s Lint job.
+- **Commands.** `mise run contract:manifest` regenerates the manifest, then
+  lowers the baseline, then stores the argument schemas (below).
+  `mise run contract:check` runs the manifest drift check (`--check`, no
+  writes) and the ratchet, and every failure names this section. CI runs
+  `contract:check` and `contract:ci` in `ci.yml`'s Lint job.
 - **Release snapshots** (plan item
   [1007](../../plans/unified/1007-release-snapshots-and-backfill.md),
   `scripts/contract-snapshots.ts`): `release:version` writes
@@ -629,12 +631,55 @@ export const nodeMailClient = domainClient(nodeMail, {
   v2.26.1-alpha), domains from the current tree, and names the current tree
   no longer has in an `unmapped` blob. `--check` verifies without writing.
 - **Contract CI job** (plan item
-  [1008](../../plans/unified/1008-contract-ci-job.md)): from the snapshots in
-  the support window it asserts that a client adapter exists for every
-  (domain, version), that no command disappeared without a domain bump and a
-  register row, and that register rows name real counter ids; later, that the
-  current parser accepts fixtures generated from older schemas
-  (`effect/Arbitrary`) and that no required field was added without a bump.
+  [1008](../../plans/unified/1008-contract-ci-job.md), `scripts/contract-ci.ts`,
+  `mise run contract:ci`, every PR). It computes the
+  [support floor](#the-support-window) from `releases/index.json` and today's
+  date (`--now <date>` to try another day): the newest `stable` entry whose
+  `publishedAt` is at least 60 days old, otherwise v2.21.0. Every snapshotted
+  release at or above it is in the window, including one whose `publishedAt`
+  is still `null`, which is never the floor. Stage 1 then fails when:
+  - the index and the `releases/*.json` files disagree, or an in-window
+    snapshot does not verify;
+  - an in-window release speaks a (domain, version) that the domain's client
+    in `adapters.json` has no adapter for. A release that does not advertise
+    a domain speaks version 0. A domain with no client yet is called by name
+    through the untyped invoke, which is version 0 for every peer, so it is
+    checked from the day it gets a client; a versioned domain that left
+    `DOMAIN_NAMES` always fails;
+  - a command of an in-window release is no longer registered and no
+    register or Retired row names it (as a code span), or its domain is not
+    at a higher version than in that release. The bump is not required when
+    the domain is unversioned on both sides, or when the snapshot has no
+    domain for the command (pre-contract names the current map does not
+    place);
+  - a register row's Counter cell is not "None ..." and names no id, or an id
+    that is neither in `COMPATIBILITY_PATH_IDS` nor a domain adapter id, or a
+    row does not have the six columns;
+  - a domain is above the version an in-window release advertises and no
+    register row names the old version's adapter counter
+    (`domain-adapter.renderer.<domain>.v<old>` or `.backend.`), a register
+    row names an adapter `adapters.json` no longer has (move it to Retired),
+    or a domain is below an in-window release's version;
+  - a defined command's argument schema (current manifest or an in-window
+    release) is not in the schema store.
+
+  **Argument schema store.** Manifests and snapshots keep only digests, so
+  `scripts/contract-ci-schemas.ts` (the last step of `contract:manifest`)
+  keeps each defined command's canonical argument schema document in
+  `contracts/schemas/<hex16>.json`, by digest, and removes only files that no
+  registry command, manifest or snapshot references. Commit the new files
+  with the manifest.
+
+  **Stage 2** (`CONTRACT_CI_STAGE_2` in the script, off; `--stage2` runs it,
+  and plan item [7001](../../plans/unified/7001-domain-native-sessions.md)
+  turns it on). For each defined command of an in-window release whose domain
+  has not been bumped since, it fails when the current schema requires a
+  field the older one did not (through `properties`, `items` and `$ref`;
+  union branches are not compared), and when fixtures generated from the
+  older stored schema (`SchemaRepresentation.fromJsonSchemaDocument`, then
+  `effect/Arbitrary`, 25 seeded samples, sent as JSON) are refused by
+  `decodeCommandArgs` with the definition the real registry registered, in
+  a sandboxed child. No handler runs.
 
 ### How to add a command
 
@@ -650,8 +695,9 @@ export const nodeMailClient = domainClient(nodeMail, {
    another backend, `NodeLink.invokeCommand(def, args)`. A node in the window
    that lacks the command answers `unknown-command`, which the adapter or
    caller reads with `incompatibility()`.
-5. Run `mise run contract:manifest` and commit `manifest.json` (and the
-   baseline, if it changed). `mise run contract:check` must pass.
+5. Run `mise run contract:manifest` and commit `manifest.json`, the new
+   `contracts/schemas/` file (and the baseline, if it changed).
+   `mise run contract:check` and `mise run contract:ci` must pass.
 
 Converting an existing string command is the same, plus: delete its entry in
 `contract-domain-map.ts` (the generator refuses a defined command that is

@@ -174,15 +174,21 @@ description = "Check the Codex app-server protocol for drift"
 run = "bun scripts/generate-codex-app-server-protocol.ts --check"
 
 [tasks."contract:manifest"]
-description = "Regenerate the command contract manifest and lower the untyped-command baseline (packages/protocol/contracts/)"
+description = "Regenerate the command contract manifest, lower the untyped-command baseline and store argument schemas (packages/protocol/contracts/)"
 run = [
   "bun scripts/generate-contract-manifest.ts",
   "bun scripts/contract-check.ts --lower-baseline",
+  "bun scripts/contract-ci-schemas.ts",
 ]
 
 [tasks."contract:check"]
 description = "Check the command contract manifest for drift and that untyped commands only shrink"
 run = "bun scripts/contract-check.ts"
+
+[tasks."contract:ci"]
+description = "Check the support window: client adapters, removed commands, the compatibility register and stored argument schemas"
+raw_args = true
+run = "bun scripts/contract-ci.ts"
 
 [tasks."contract:backfill"]
 description = "Snapshot the contract of every published release that has none (packages/protocol/contracts/releases/)"

@@ -172,7 +172,7 @@ function MachineVersionSkew({ machine }: { machine: MachineView }) {
       onClick={() => requestMachineUpdate(machine.backendId)}
       className={cn(
         className,
-        "text-amber-400/90 hover:bg-amber-400/10 hover:text-amber-300 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+        "text-amber-400/90 hover:bg-amber-400/10 hover:text-amber-300 outline-none focus-hairline",
       )}
       title={`${description} Update it.`}
       aria-label={`Update ${machine.name}. ${description}`}

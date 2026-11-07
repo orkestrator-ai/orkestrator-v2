@@ -872,8 +872,12 @@ test("Home native preview hides beneath board panels and returns without losing 
       async ({ projectId, homeId }) => {
         const modulePath = "/src/stores/uiStore.ts";
         const { useUIStore } = await import(modulePath);
-        useUIStore.getState().selectProjectAndEnvironment(projectId, homeId);
-        useUIStore.getState().setProjectBoardTab("home");
+        const { getWindowScope } = await import(
+          /* @vite-ignore */ "/src/lib/node-scope/app-window-scope.ts" as string
+        );
+        const ui = getWindowScope().commandScope().store(useUIStore.def).getState();
+        ui.selectProjectAndEnvironment(projectId, homeId);
+        ui.setProjectBoardTab("home");
       },
       { projectId: environment.projectId, homeId: home.id },
     );
@@ -884,7 +888,10 @@ test("Home native preview hides beneath board panels and returns without losing 
     await s().window.evaluate(async () => {
       const modulePath = "/src/stores/uiStore.ts";
       const { useUIStore } = await import(modulePath);
-      useUIStore.getState().selectProject(null);
+      const { getWindowScope } = await import(
+        /* @vite-ignore */ "/src/lib/node-scope/app-window-scope.ts" as string
+      );
+      getWindowScope().commandScope().store(useUIStore.def).getState().selectProject(null);
     });
     await preview("destroy", tabId).catch(() => undefined);
     await invoke("delete_environment", { environmentId: home.id });
@@ -1561,7 +1568,15 @@ async function uiStore(action: string, ...args: unknown[]): Promise<void> {
     async ({ action, args }) => {
       const modulePath = "/src/stores/uiStore.ts";
       const { useUIStore } = await import(modulePath);
-      (useUIStore.getState() as Record<string, (...values: unknown[]) => void>)[action]!(...args);
+      const { getWindowScope } = await import(
+        /* @vite-ignore */ "/src/lib/node-scope/app-window-scope.ts" as string
+      );
+      (
+        getWindowScope().commandScope().store(useUIStore.def).getState() as Record<
+          string,
+          (...values: unknown[]) => void
+        >
+      )[action]!(...args);
     },
     { action, args },
   );

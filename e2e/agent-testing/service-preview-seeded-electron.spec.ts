@@ -145,7 +145,13 @@ async function store<T>(modulePath: string, script: string, arg: unknown = null)
   return s().window.evaluate(
     async ({ modulePath, script, arg }) => {
       const module = await import(modulePath);
-      return new Function("module", "arg", script)(module, arg);
+      // A per-node store's instance in the app's command scope.
+      const { getWindowScope } = await import(
+        /* @vite-ignore */ "/src/lib/node-scope/app-window-scope.ts" as string
+      );
+      const commandStore = (hook: { def: unknown }) =>
+        getWindowScope().commandScope().store(hook.def);
+      return new Function("module", "arg", "commandStore", script)(module, arg, commandStore);
     },
     { modulePath, script, arg },
   ) as Promise<T>;
@@ -154,7 +160,7 @@ async function store<T>(modulePath: string, script: string, arg: unknown = null)
 async function select(name: Name): Promise<void> {
   await store(
     "/src/stores/uiStore.ts",
-    "module.useUIStore.getState().selectProjectAndEnvironment(arg.projectId, arg.environmentId)",
+    "commandStore(module.useUIStore).getState().selectProjectAndEnvironment(arg.projectId, arg.environmentId)",
     { projectId: s().projectId, environmentId: env(name).id },
   );
   await closeStartupDialogs();
@@ -178,7 +184,7 @@ interface TabSummary {
 function tabs(name: Name): Promise<TabSummary[]> {
   return store(
     "/src/stores/paneLayoutStore.ts",
-    `return module.usePaneLayoutStore.getState().getAllTabs(arg).map((tab) => ({
+    `return commandStore(module.usePaneLayoutStore).getState().getAllTabs(arg).map((tab) => ({
       id: tab.id,
       type: tab.type,
       url: tab.browserData?.url ?? null,
@@ -191,7 +197,7 @@ function tabs(name: Name): Promise<TabSummary[]> {
 function activeTabId(name: Name): Promise<string | null> {
   return store(
     "/src/stores/paneLayoutStore.ts",
-    "return module.usePaneLayoutStore.getState().getActivePane(arg)?.activeTabId ?? null",
+    "return commandStore(module.usePaneLayoutStore).getState().getActivePane(arg)?.activeTabId ?? null",
     env(name).id,
   );
 }
@@ -199,7 +205,7 @@ function activeTabId(name: Name): Promise<string | null> {
 async function activateTab(name: Name, tabId: string): Promise<void> {
   await store(
     "/src/stores/paneLayoutStore.ts",
-    `const state = module.usePaneLayoutStore.getState();
+    `const state = commandStore(module.usePaneLayoutStore).getState();
      const pane = state.findPaneWithTab(arg.tabId, arg.environmentId);
      if (!pane) throw new Error("Tab is not in the layout");
      state.setActivePane(pane.id, arg.environmentId);

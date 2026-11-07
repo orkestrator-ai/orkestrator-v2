@@ -401,7 +401,15 @@ async function uiStore(action: string, ...args: unknown[]): Promise<void> {
     async ({ action, args }) => {
       const modulePath = "/src/stores/uiStore.ts";
       const { useUIStore } = await import(modulePath);
-      (useUIStore.getState() as Record<string, (...values: unknown[]) => void>)[action]!(...args);
+      const { getWindowScope } = await import(
+        /* @vite-ignore */ "/src/lib/node-scope/app-window-scope.ts" as string
+      );
+      (
+        getWindowScope().commandScope().store(useUIStore.def).getState() as Record<
+          string,
+          (...values: unknown[]) => void
+        >
+      )[action]!(...args);
     },
     { action, args },
   );
@@ -2108,7 +2116,16 @@ function rendererLayoutRevision(): Promise<number | null> {
   return s().window.evaluate(async (environmentId) => {
     const modulePath = "/src/stores/paneLayoutStore.ts";
     const { usePaneLayoutStore } = await import(modulePath);
-    return usePaneLayoutStore.getState().environments.get(environmentId)?.backendRevision ?? null;
+    const { getWindowScope } = await import(
+      /* @vite-ignore */ "/src/lib/node-scope/app-window-scope.ts" as string
+    );
+    return (
+      getWindowScope()
+        .commandScope()
+        .store(usePaneLayoutStore.def)
+        .getState()
+        .environments.get(environmentId)?.backendRevision ?? null
+    );
   }, s().environmentId);
 }
 
@@ -3166,13 +3183,21 @@ test("a remote terminal link opens the native localhost forward in a separate br
           const { useTerminalPortalStore } = await import(terminalPath);
           const { useEnvironmentStore } = await import(environmentPath);
           const { usePreviewServiceStore } = await import(capabilitiesPath);
+          const { getWindowScope } = await import(
+            /* @vite-ignore */ "/src/lib/node-scope/app-window-scope.ts" as string
+          );
+          const environments = getWindowScope().commandScope().store(useEnvironmentStore.def);
           // Hydrate from the remote backend's authoritative environment record.
           const environment = await (globalThis as any).orkestrator.invoke("get_environment", {
             environmentId,
           });
-          if (!useEnvironmentStore.getState().getEnvironmentById(environmentId))
-            useEnvironmentStore.getState().addEnvironment(environment);
-          await usePreviewServiceStore.getState().loadCapabilities({ force: true });
+          if (!environments.getState().getEnvironmentById(environmentId))
+            environments.getState().addEnvironment(environment);
+          await getWindowScope()
+            .commandScope()
+            .store(usePreviewServiceStore.def)
+            .getState()
+            .loadCapabilities({ force: true });
           const host = document.createElement("div");
           host.id = "external-preview-terminal";
           Object.assign(host.style, {

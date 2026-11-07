@@ -302,7 +302,8 @@ async function measureRun(mode: TransportMode, run: number, root: string): Promi
           id,
           `(async () => {
         const { useUIStore } = await import("/src/stores/uiStore.ts");
-        useUIStore.getState().selectProjectAndEnvironment(${JSON.stringify(project.id)}, ${JSON.stringify(environment.id)});
+        const { getWindowScope } = await import("/src/lib/node-scope/app-window-scope.ts");
+        getWindowScope().commandScope().store(useUIStore.def).getState().selectProjectAndEnvironment(${JSON.stringify(project.id)}, ${JSON.stringify(environment.id)});
       })()`,
         ),
       );

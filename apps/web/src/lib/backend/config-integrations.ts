@@ -57,6 +57,7 @@ import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import { environmentsClient } from "@orkestrator/protocol/contract/domains/environments";
 import { clientInvoke, commandBackendClient, machineInvoker, type BackendClient } from "./client";
 import { backendDomainApi, machineBackendClient, withArgumentsObject } from "./domain-client";
+import { config as configDomain } from "@/lib/node-scope/domains/config";
 
 /**
  * Workspace machine settings with the command node's inherited preferences.
@@ -315,6 +316,9 @@ export type { MergeEnvironmentPrResult, MergePrResult };
  * over the window's command scope.
  */
 export function createConfigIntegrationsApi(client: BackendClient) {
+  // The machine's own settings commands here (`config` domain, plan item 7005);
+  // the layered reads and saves go through `command-node-config.ts`.
+  const settings = configDomain(client);
   const invoke = clientInvoke(client);
   // GitHub issues and the environment PR commands (`pull-requests`, plan item 7006).
   const prDomain = () => pullRequests(client);
@@ -441,7 +445,7 @@ export function createConfigIntegrationsApi(client: BackendClient) {
   }
 
   async function saveConfig(config: AppConfig): Promise<void> {
-    return invoke("save_config", { config });
+    return settings().save_config({ config });
   }
 
   /**
@@ -450,7 +454,7 @@ export function createConfigIntegrationsApi(client: BackendClient) {
    * scopes).
    */
   async function getGlobalConfig(): Promise<GlobalConfig> {
-    return invoke<GlobalConfig>("get_global_config");
+    return (await settings().get_global_config({})) as GlobalConfig;
   }
 
   /** Read one platform's plan/quota windows from the backend. */
@@ -522,7 +526,7 @@ export function createConfigIntegrationsApi(client: BackendClient) {
   }
 
   async function getRepositoryConfig(projectId: string): Promise<RepositoryConfig> {
-    return invoke<RepositoryConfig>("get_repository_config", { projectId });
+    return (await settings().get_repository_config({ projectId })) as RepositoryConfig;
   }
 
   async function getLogDirectory(machine?: AccountMachine): Promise<string> {

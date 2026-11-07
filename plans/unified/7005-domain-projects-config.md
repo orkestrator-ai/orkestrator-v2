@@ -46,11 +46,10 @@ Apply the conversion checklist from [1011](1011-contract-policy-and-docs.md)'s "
   - Strict (`assertOnlyKeys`) handlers become tolerant-with-critical.
   - Hand-written `commands-validation.ts` parsing is replaced by the schema where it is equivalent; keep user-facing error text.
 - [x] Fold the domain's capability command (if any) into the domain version. Keep the command registered for pre-contract clients until its register row retires.
-- [x] Web side, except `config-integrations.ts` (split out below):
+- [x] Web side:
   - a domain client in `apps/web/src/lib/node-scope/domains/<domain>.ts`, with a version-1 adapter and a version-0 legacy adapter that keeps today's capability gating;
   - the domain's `lib/backend` functions call it;
   - typed results replace `invoke<T>` casts.
-- [ ] Web side, `lib/backend/config-integrations.ts`: `saveConfig`, `getGlobalConfig` and `getRepositoryConfig` through the `config` client. Done in the working tree, not committed: the committed file does not parse (see Notes).
 - [x] Move the domain's shared types from `apps/backend/src/core/models.ts` and `apps/web/src/types/index.ts` to inferred protocol types where they match (see [7010](7010-converge-models.md)). (`Project` moved; the config records do not match yet and are left to 7010 with faithful schemas, see Notes.)
 - [x] Classify the register rows for these domains: retired, mechanical (adapter), or unaffected. Update `version-compatibility.md`.
 - [x] Add a scenario module to [1012](1012-mixed-version-qualification.md)'s script for the domain's main flows. (`projects` and `config`; see Work log for the runs.)
@@ -102,7 +101,7 @@ Apply the conversion checklist from [1011](1011-contract-policy-and-docs.md)'s "
 - **Test edits** (outside "unchanged"): `commands-host-files.test.ts`, three "validates its arguments" tests: `Unexpected arguments field: extra` became the key dropped (and the flag text asserted from the schema). `commands-registry-permission-rules.test.ts`: `{ injected: true }` left the refusal list; the successful call now carries it and asserts the service sees only the declared arguments.
 - **Async handlers.** A converted `async` handler throws a decode failure synchronously (1003's registry); the tests above call through `Promise.resolve().then`, and production callers `await`. `ASYNC_HANDLER` (7004) was not needed.
 - **Shared files.** Commits were built from temporary indexes starting at the current HEAD, with only this item's hunks in `contract-domain-map.ts`, `client-adapters.ts`, `package.json`, `models.ts`, `types/index.ts`, `commands-registry-projects.ts`, the four `lib/backend` files, `version-compatibility.md` and the scenario index. `commands-registry-projects.ts` was found truncated to zero bytes in the working tree at 05:11 (another agent's write) and then overwritten from a stale copy; this item's edits were reapplied twice from a script and the committed blob is HEAD plus this item's hunks. The docs commit a2831242 also carries 7006's "Git, GitHub, pull requests and changes" bullet, which sat between this item's bullet and the next in the working tree.
-- **`config-integrations.ts` not committed.** HEAD's `apps/web/src/lib/backend/config-integrations.ts` does not parse since 815683859/c64a67788 (`getAgentModelCatalogCache`'s parameter list runs into `const accountsOn_ = …`; it matches `output/7008/config-commit.ts`). The working tree's copy is correct; this item's three call sites there are made in the working tree and wait for the owner's fix.
+- **`config-integrations.ts` committed last.** The committed file did not parse between 815683859/c64a67788 and 7006's repair in 0a64f9792 (`getAgentModelCatalogCache`'s parameter list ran into `const accountsOn_ = …`), so this item's three call sites there (`saveConfig`, `getGlobalConfig`, `getRepositoryConfig`) were committed after it.
 - Aggregate suite left to review preparation.
 
 ## Work log

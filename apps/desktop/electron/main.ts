@@ -197,6 +197,10 @@ import {
 } from "./command-handover.js";
 import { ArtifactHostManager } from "./artifact-host-manager.js";
 import { reportArtifactHostDiagnostics, reportMainThreadStall } from "./diagnostic-logging.js";
+import {
+  processMemoryDiagnosticInterval,
+  startProcessMemoryDiagnostic,
+} from "./process-memory-diagnostic.js";
 import { ARTIFACT_SHELL_SCHEME_PRIVILEGES } from "./artifact-host-shell.js";
 import { ARTIFACT_HOST_CHANNELS } from "@orkestrator/protocol/artifact-host-ipc";
 import {
@@ -284,6 +288,24 @@ const liveLogPolicy = createLiveLogPolicy({
 });
 const applyStoredLogPolicy = liveLogPolicy.apply;
 app.on("will-quit", () => liveLogPolicy.dispose());
+// Development only (plan 0004): per-process and per-realm memory, labelled by node hash.
+const stopProcessMemoryDiagnostic = startProcessMemoryDiagnostic({
+  intervalMs: processMemoryDiagnosticInterval(isDev),
+  metrics: () => (app.isReady() ? app.getAppMetrics() : []),
+  realms: () =>
+    (workspaceViews?.realmProcesses() ?? []).flatMap((realm) =>
+      realm.pid === null
+        ? []
+        : [
+            {
+              pid: realm.pid,
+              nodeHash: connectionPartitionKey(realm.nodeId),
+              visible: realm.visible,
+            },
+          ],
+    ),
+});
+app.on("will-quit", stopProcessMemoryDiagnostic);
 
 let backend: BackendHttpClient | null = null;
 let nodeWorkspaceScopes: NodeWorkspaceScopes | null = null;

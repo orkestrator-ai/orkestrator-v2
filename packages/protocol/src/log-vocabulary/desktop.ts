@@ -35,6 +35,11 @@ export const DESKTOP_LOG_AREAS = defineLogAreas({
         minLevel: "error",
         fields: { lagMs: "number", intervalMs: "number" },
       },
+      "process-memory":
+        "Development only: working set per Electron process type, sampled on an interval.",
+      "process-memory.failed": "Development only: one process memory sample could not be read.",
+      "process-memory.realm":
+        "Development only: one workspace realm's renderer memory, labelled by node id hash.",
       "quit.stopping-backend": "The app is quitting and has asked the Local backend to stop.",
       "relaunch.schedule-failed":
         "The AppImage relaunch waiter failed; using Electron's relauncher.",

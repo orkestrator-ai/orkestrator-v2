@@ -36,6 +36,7 @@ type WebContentsLike = {
   capturePage?(): Promise<{ isEmpty(): boolean; toJPEG(quality: number): Uint8Array }>;
   on(event: string, listener: (...args: unknown[]) => void): void;
   setWindowOpenHandler(handler: () => { action: "deny" }): void;
+  getOSProcessId?(): number;
 };
 
 type ViewLike = {
@@ -364,6 +365,15 @@ export class WorkspaceViews {
     for (const entry of this.views.values()) {
       if (entry.parentWebContentsId === parentWebContentsId) this.layout(entry);
     }
+  }
+
+  /** Each open realm's node, visibility and renderer process, for the dev memory diagnostic. */
+  realmProcesses(): Array<{ nodeId: string; visible: boolean; pid: number | null }> {
+    return Array.from(this.views.values(), (entry) => ({
+      nodeId: entry.nodeId,
+      visible: entry.visible,
+      pid: entry.webContents.isDestroyed() ? null : (entry.webContents.getOSProcessId?.() ?? null),
+    }));
   }
 
   viewForWebContents(webContentsId: number): WorkspaceViewRecord | null {

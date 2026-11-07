@@ -73,7 +73,7 @@ describe("domainClient", () => {
       expect(args).toEqual({ projectId: "p" });
       return [{ id: "e1" }] as never;
     };
-    const api: ApiOf<typeof client> = client.adapters[version as number]!(call, {} as never);
+    const api: ApiOf<typeof client> = client.adapters[version as number]!(call);
     expect(await api.list("p")).toEqual(["v3:e1"]);
   });
 

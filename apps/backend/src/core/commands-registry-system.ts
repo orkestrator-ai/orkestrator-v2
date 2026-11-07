@@ -1,10 +1,8 @@
 import { MACHINE_LOAD_COMMAND } from "@orkestrator/protocol/machine-load";
-import { recordDomainAdapterUsageCommand } from "@orkestrator/protocol/contract/client-usage";
 import { RECORD_RENDERER_ERRORS_COMMAND } from "@orkestrator/protocol/renderer-errors";
 import { APP_VERSION } from "./constants.js";
 import { asString, assertOnlyKeys } from "./commands-validation.js";
 import { diagnosticsSources } from "./diagnostics-sources.js";
-import { recordRendererDomainAdapterUsage } from "./domain-adapter-usage.js";
 import { RendererErrorRecorder } from "./renderer-error-recorder.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
 import {
@@ -41,14 +39,6 @@ export function registerSystemCommands(
     assertOnlyKeys(args, ["entries"], "arguments");
     return rendererErrors.record(args.entries);
   });
-  /**
-   * A renderer's new domain client adapter counts (plan item 1009), into the
-   * compatibility-path counters: names and numbers only. Refused to workspace
-   * clients (`workspace-grant-scope.ts`): the counters are this machine's own.
-   */
-  register(recordDomainAdapterUsageCommand, (args) =>
-    recordRendererDomainAdapterUsage(args.entries),
-  );
   register("get_app_version", (args) => {
     assertOnlyKeys(args, [], "arguments");
     return APP_VERSION;

@@ -1,5 +1,5 @@
 import type { NodeSummariesResult } from "@orkestrator/protocol/node-summaries";
-import { incompatibility } from "@orkestrator/protocol/contract/errors";
+import { isUnknownCommandError } from "@orkestrator/protocol/unknown-command";
 
 import type { NodeFileInvoker } from "./node-file-transfer.js";
 
@@ -84,7 +84,7 @@ export async function approveSetupCommandsOnNodes(
           entry.status =
             (error as { code?: unknown })?.code === "outcome-unknown"
               ? "outcome-unknown"
-              : incompatibility(error, APPROVE_PROJECT_SETUP_COMMANDS)?.code === "unknown-command"
+              : isUnknownCommandError(error, APPROVE_PROJECT_SETUP_COMMANDS)
                 ? "needs-update"
                 : "failed";
           entry.error = message.slice(0, 200) || "Approval failed.";

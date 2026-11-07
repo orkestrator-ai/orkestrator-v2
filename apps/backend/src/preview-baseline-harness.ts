@@ -1,4 +1,3 @@
-import { unknownCommand } from "@orkestrator/protocol/contract/errors";
 import { registrarFrom } from "./core/commands-registry-contracts.js";
 import { configureLogger } from "@orkestrator/protocol/logger";
 /**
@@ -110,7 +109,7 @@ export async function startPreviewBaselineHarness(): Promise<PreviewBaselineHarn
       backend: {
         invoke: async (command, args) => {
           const handler = handlers.get(command);
-          if (!handler) throw unknownCommand(command);
+          if (!handler) throw new Error(`Unknown backend command: ${command}`);
           return handler(args as Parameters<CommandHandler>[0], context);
         },
       },

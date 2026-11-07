@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 1,
+  "domain": "previews",
+  "commands": {
+    "create_preview_attachment": {
+      "untyped": true
+    },
+    "create_preview_handoff_url": {
+      "untyped": true
+    },
+    "get_preview_capabilities": {
+      "untyped": true
+    },
+    "get_preview_diagnostics": {
+      "untyped": true
+    },
+    "get_preview_public_origin": {
+      "untyped": true
+    },
+    "get_preview_services": {
+      "untyped": true
+    },
+    "get_preview_settings": {
+      "untyped": true
+    },
+    "probe_preview_service": {
+      "untyped": true
+    },
+    "register_preview_service": {
+      "untyped": true
+    },
+    "release_preview_attachment": {
+      "untyped": true
+    },
+    "remove_preview_service": {
+      "untyped": true
+    },
+    "renew_preview_attachment": {
+      "untyped": true
+    },
+    "resolve_preview_target": {
+      "untyped": true
+    },
+    "revoke_preview_access": {
+      "untyped": true
+    },
+    "update_preview_service": {
+      "untyped": true
+    },
+    "update_preview_settings": {
+      "untyped": true
+    }
+  }
+}

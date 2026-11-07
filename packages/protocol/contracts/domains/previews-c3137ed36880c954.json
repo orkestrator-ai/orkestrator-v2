@@ -1,0 +1,70 @@
+{
+  "schemaVersion": 1,
+  "domain": "previews",
+  "commands": {
+    "create_preview_attachment": {
+      "untyped": true,
+      "read": false
+    },
+    "create_preview_handoff_url": {
+      "untyped": true,
+      "read": false
+    },
+    "get_preview_capabilities": {
+      "untyped": true,
+      "read": true
+    },
+    "get_preview_diagnostics": {
+      "untyped": true,
+      "read": true
+    },
+    "get_preview_public_origin": {
+      "untyped": true,
+      "read": true
+    },
+    "get_preview_services": {
+      "untyped": true,
+      "read": true
+    },
+    "get_preview_settings": {
+      "untyped": true,
+      "read": true
+    },
+    "probe_preview_service": {
+      "untyped": true,
+      "read": false
+    },
+    "register_preview_service": {
+      "untyped": true,
+      "read": false
+    },
+    "release_preview_attachment": {
+      "untyped": true,
+      "read": false
+    },
+    "remove_preview_service": {
+      "untyped": true,
+      "read": false
+    },
+    "renew_preview_attachment": {
+      "untyped": true,
+      "read": false
+    },
+    "resolve_preview_target": {
+      "untyped": true,
+      "read": false
+    },
+    "revoke_preview_access": {
+      "untyped": true,
+      "read": false
+    },
+    "update_preview_service": {
+      "untyped": true,
+      "read": false
+    },
+    "update_preview_settings": {
+      "untyped": true,
+      "read": false
+    }
+  }
+}

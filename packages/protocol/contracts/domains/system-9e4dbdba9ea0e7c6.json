@@ -1,0 +1,98 @@
+{
+  "schemaVersion": 1,
+  "domain": "system",
+  "commands": {
+    "cancel_host_update": {
+      "untyped": true,
+      "read": false
+    },
+    "get_app_version": {
+      "untyped": true,
+      "read": true
+    },
+    "get_compatibility_path_usage": {
+      "untyped": true,
+      "read": true
+    },
+    "get_environment_disk_usage": {
+      "untyped": true,
+      "read": true
+    },
+    "get_environment_process_usage": {
+      "untyped": true,
+      "read": true
+    },
+    "get_host_maintenance": {
+      "untyped": true,
+      "read": true
+    },
+    "get_host_restart_impact": {
+      "untyped": true,
+      "read": true
+    },
+    "get_recurring_work_diagnostics": {
+      "untyped": true,
+      "read": true
+    },
+    "get_resource_revision_manifest": {
+      "untyped": true,
+      "read": true
+    },
+    "get_scoped_resource_revision_manifest": {
+      "untyped": true,
+      "read": true
+    },
+    "get_scoped_resource_snapshots": {
+      "untyped": true,
+      "read": true
+    },
+    "get_system_usage": {
+      "untyped": true,
+      "read": true
+    },
+    "get_worktree_locations": {
+      "untyped": true,
+      "read": true
+    },
+    "greet": {
+      "untyped": true,
+      "read": false
+    },
+    "list_disk_usage_environments": {
+      "untyped": true,
+      "read": true
+    },
+    "reconcile_workflow_scheduling": {
+      "untyped": true,
+      "read": false
+    },
+    "request_host_update": {
+      "untyped": true,
+      "read": false
+    },
+    "request_host_update_check": {
+      "untyped": true,
+      "read": false
+    },
+    "set_host_gh_channel": {
+      "untyped": true,
+      "read": false
+    },
+    "set_host_update_channel": {
+      "untyped": true,
+      "read": false
+    },
+    "start_host_image_update": {
+      "untyped": true,
+      "read": false
+    },
+    "start_host_toolchain_repair": {
+      "untyped": true,
+      "read": false
+    },
+    "update_worktree_locations": {
+      "untyped": true,
+      "read": false
+    }
+  }
+}

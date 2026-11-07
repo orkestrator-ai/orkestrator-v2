@@ -1,0 +1,78 @@
+{
+  "schemaVersion": 1,
+  "domain": null,
+  "commands": {
+    "cancel_coordinator_looped_review": {
+      "untyped": true,
+      "read": false
+    },
+    "cancel_looped_review": {
+      "untyped": true,
+      "read": false
+    },
+    "claim_looped_review_controller": {
+      "untyped": true,
+      "read": false
+    },
+    "delete_looped_review_workflow": {
+      "untyped": true,
+      "read": false
+    },
+    "generate_looped_review_package": {
+      "untyped": true,
+      "read": false
+    },
+    "get_coordinator_looped_review": {
+      "untyped": true,
+      "read": true
+    },
+    "get_looped_review_provider_session": {
+      "untyped": true,
+      "read": true
+    },
+    "get_looped_review_workflow": {
+      "untyped": true,
+      "read": true
+    },
+    "list_looped_review_workflows": {
+      "untyped": true,
+      "read": true
+    },
+    "pause_looped_review": {
+      "untyped": true,
+      "read": false
+    },
+    "release_looped_review_controller": {
+      "untyped": true,
+      "read": false
+    },
+    "resume_looped_review": {
+      "untyped": true,
+      "read": false
+    },
+    "retry_looped_review": {
+      "untyped": true,
+      "read": false
+    },
+    "save_looped_review_workflow": {
+      "untyped": true,
+      "read": false
+    },
+    "start_coordinator_looped_review": {
+      "untyped": true,
+      "read": false
+    },
+    "start_looped_review": {
+      "untyped": true,
+      "read": false
+    },
+    "validate_looped_review_controller": {
+      "untyped": true,
+      "read": false
+    },
+    "verify_looped_review_package": {
+      "untyped": true,
+      "read": false
+    }
+  }
+}

@@ -1,6 +1,5 @@
 import type { BackendHello } from "@orkestrator/protocol/backend-profile";
 import { checkBackendRoute } from "./backend-hello.js";
-import { fromWire } from "@orkestrator/protocol/contract/errors";
 import { spawn, type ChildProcess } from "node:child_process";
 import { cp, lstat, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -673,12 +672,8 @@ export class BackendHttpClient {
       result?: T;
       error?: string;
     };
-    if (!response.ok) {
-      // A typed incompatibility keeps its class, code and bounded details (1005).
-      const incompatible = fromWire(payload);
-      if (incompatible) throw incompatible;
+    if (!response.ok)
       throw new Error(payload.error ?? `Backend request failed with HTTP ${response.status}`);
-    }
     return payload.result as T;
   }
 

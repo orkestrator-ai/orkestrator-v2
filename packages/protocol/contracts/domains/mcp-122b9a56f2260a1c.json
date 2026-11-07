@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "domain": "mcp",
+  "commands": {
+    "apply_mcp_configuration": {
+      "untyped": true
+    },
+    "cancel_mcp_apply": {
+      "untyped": true
+    },
+    "get_mcp_definition": {
+      "untyped": true
+    },
+    "get_mcp_management_rollout": {
+      "untyped": true
+    },
+    "get_mcp_management_snapshot": {
+      "untyped": true
+    },
+    "get_mcp_operation": {
+      "untyped": true
+    },
+    "list_mcp_management_targets": {
+      "untyped": true
+    },
+    "mutate_mcp_definition": {
+      "untyped": true
+    },
+    "set_mcp_management_rollout": {
+      "untyped": true
+    },
+    "validate_mcp_mutation": {
+      "untyped": true
+    }
+  }
+}

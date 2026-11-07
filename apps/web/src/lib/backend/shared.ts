@@ -41,3 +41,18 @@ export function terminalWriteWasDelivered(result: unknown): boolean {
     (result as { delivered?: unknown }).delivered === false
   );
 }
+
+/**
+ * The backend predates exactly this command, so the caller takes its
+ * compatibility path. Only the backend's own answer naming the command counts:
+ * any other failure may mean the launch already ran, and falling back then
+ * would run it twice.
+ */
+export function isUnsupportedBackendCommand(error: unknown, command: string): boolean {
+  const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
+  // The dispatcher's wording, and the one the node-routing code also checks for.
+  return (
+    message.includes(`Unknown backend command: ${command}`) ||
+    message.includes(`Unknown command: ${command}`)
+  );
+}

@@ -13,8 +13,6 @@ import path from "node:path";
 import * as Schema from "effect/Schema";
 import { buildInvokeEnvelope, defineCommand } from "@orkestrator/protocol/contract/command";
 import { defineDomain } from "@orkestrator/protocol/contract/domain";
-import { incompatibility, unknownCommand } from "@orkestrator/protocol/contract/errors";
-import { unknownBackendCommandMessage } from "@orkestrator/protocol/unknown-command";
 import type { CommandContext } from "../../backend/src/core/commands-context";
 import {
   CommandRegistry,
@@ -63,8 +61,7 @@ async function startContractGateway() {
       invoke: (command, args, invocation) => {
         seen.push(invocation === undefined ? [command, args] : [command, args, invocation]);
         const handler = commands.get(command);
-        // As `OrkestratorBackend.invoke` does (plan item 1005).
-        if (!handler) throw unknownCommand(command, invocation?.domain);
+        if (!handler) throw new Error(`Unknown backend command: ${command}`);
         return handler(args, {} as CommandContext, invocation);
       },
       hasCommand: (command) => commands.has(command),
@@ -86,7 +83,7 @@ async function startContractGateway() {
 /** Main's invoke handler over the backend client, and a renderer talking to it over fake IPC. */
 type Handler = (event: unknown, ...args: unknown[]) => unknown;
 
-function rendererOver(client: BackendHttpClient, { electronErrors = false } = {}) {
+function rendererOver(client: BackendHttpClient) {
   const handlers = new Map<string, Handler>();
   const unused = () => {
     throw new Error("unused in this test");
@@ -129,15 +126,7 @@ function rendererOver(client: BackendHttpClient, { electronErrors = false } = {}
     invoke: async <T>(channel: string, ...args: unknown[]) => {
       const handler = handlers.get(channel);
       if (!handler) throw new Error(`missing handler: ${channel}`);
-      try {
-        return (await handler(sender, ...args)) as T;
-      } catch (error) {
-        if (!electronErrors) throw error;
-        // What Electron does: only the message crosses, behind its own wrapper.
-        throw new Error(
-          `Error invoking remote method '${channel}': Error: ${(error as Error).message}`,
-        );
-      }
+      return (await handler(sender, ...args)) as T;
     },
     on: () => undefined,
   };
@@ -200,69 +189,8 @@ describe("Electron IPC invoke envelope", () => {
         { envelope: { domain: "system", version: 1, critical: ["steer"] } },
       ),
     ).rejects.toThrow("Critical field steer");
-  });
-});
-
-describe("typed incompatibility errors over IPC (plan item 1005)", () => {
-  /** What reaches the renderer: the context bridge passes only the message. */
-  const overTheBridge = (error: unknown) => new Error((error as Error).message);
-
-  test("keep their code and details from the gateway, through main and the preload", async () => {
-    const gateway = await startContractGateway();
-    const { api } = rendererOver(new BackendHttpClient(gateway.url, TOKEN), {
-      electronErrors: true,
-    });
-
-    const version = await api
-      .invoke("get_contract_probe", { text: "a" }, { envelope: { domain: "system", version: 9 } })
-      .catch((error: unknown) => error);
-    // The preload rebuilds the error with its code and details...
-    expect((version as { code?: unknown }).code).toBe("unsupported-version");
-    expect((version as { details?: unknown }).details).toEqual({
-      domain: "system",
-      range: { min: 1, max: 2 },
-      command: "get_contract_probe",
-    });
-    // ...and the message form carries them across the context bridge.
-    expect(incompatibility(overTheBridge(version), "get_contract_probe")).toEqual({
-      code: "unsupported-version",
-      domain: "system",
-      range: { min: 1, max: 2 },
-      command: "get_contract_probe",
-    });
-    expect((version as Error).message).toContain("accepts versions 1 to 2");
-
-    const field = await api
-      .invoke(
-        "get_contract_probe",
-        { text: "a", steer: "secret-steer-value" },
-        { envelope: { domain: "system", version: 1, critical: ["steer"] } },
-      )
-      .catch((error: unknown) => error);
-    expect(incompatibility(overTheBridge(field))).toEqual({
-      code: "unsupported-field",
-      domain: "system",
-      field: "steer",
-      command: "get_contract_probe",
-    });
-    expect((field as Error).message).not.toContain("secret-steer-value");
-
-    const unknown = await api.invoke("get_missing", {}).catch((error: unknown) => error);
-    expect((unknown as { code?: unknown }).code).toBe("unknown-command");
-    expect(incompatibility(overTheBridge(unknown), "get_missing")?.code).toBe("unknown-command");
-    // An older renderer's text matcher still finds the legacy answer.
-    expect((unknown as Error).message).toContain(unknownBackendCommandMessage("get_missing"));
-  });
-
-  test("leave every other error as it was", async () => {
-    const gateway = await startContractGateway();
-    const { api } = rendererOver(new BackendHttpClient(gateway.url, TOKEN), {
-      electronErrors: true,
-    });
-    const failure = await api.invoke("get_contract_probe", {}).catch((error: unknown) => error);
-    expect((failure as Error).message).toBe("Expected text to be a string");
-    expect((failure as { code?: unknown }).code).toBeUndefined();
-    expect(incompatibility(failure, "get_contract_probe")).toBeNull();
+    // Only the text crosses the backend client today; plan item 1005 keeps the
+    // code and details on this path.
   });
 });
 

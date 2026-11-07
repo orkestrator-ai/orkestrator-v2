@@ -1,0 +1,98 @@
+{
+  "schemaVersion": 1,
+  "domain": "agent-mail",
+  "commands": {
+    "ack_agent_mail": {
+      "untyped": true,
+      "read": false
+    },
+    "discard_agent_mail_inject": {
+      "untyped": true,
+      "read": false
+    },
+    "get_agent_mail_conversation": {
+      "untyped": true,
+      "read": true
+    },
+    "get_agent_mail_inbox_snapshot": {
+      "untyped": true,
+      "read": true
+    },
+    "get_agent_mail_mailbox": {
+      "untyped": true,
+      "read": true
+    },
+    "get_agent_mail_mailboxes": {
+      "untyped": true,
+      "read": true
+    },
+    "get_agent_mail_message": {
+      "untyped": true,
+      "read": true
+    },
+    "get_agent_mail_status": {
+      "untyped": true,
+      "read": true
+    },
+    "get_agent_mail_summary": {
+      "untyped": true,
+      "read": true
+    },
+    "get_agent_messaging_settings": {
+      "untyped": true,
+      "read": true
+    },
+    "get_agent_registry": {
+      "untyped": true,
+      "read": true
+    },
+    "list_agent_mail_conversations": {
+      "untyped": true,
+      "read": true
+    },
+    "list_agent_mail_inbox": {
+      "untyped": true,
+      "read": true
+    },
+    "list_agent_mail_sent": {
+      "untyped": true,
+      "read": true
+    },
+    "list_agent_mailboxes": {
+      "untyped": true,
+      "read": true
+    },
+    "mark_agent_mail_conversation_seen": {
+      "untyped": true,
+      "read": false
+    },
+    "mark_agent_mail_seen": {
+      "untyped": true,
+      "read": false
+    },
+    "mute_agent_mail": {
+      "untyped": true,
+      "read": false
+    },
+    "retry_agent_mail_inject": {
+      "untyped": true,
+      "read": false
+    },
+    "send_agent_mail": {
+      "untyped": true,
+      "read": false
+    },
+    "send_external_agent_mail": {
+      "untyped": true,
+      "read": false
+    },
+    "set_agent_messaging_paused": {
+      "untyped": true,
+      "read": false
+    },
+    "update_agent_messaging_settings": {
+      "untyped": true,
+      "read": false
+    }
+  }
+}

@@ -53,7 +53,7 @@ import {
 import { isActiveFeaturePlanningPhase } from "@/stores/featurePlanStore";
 import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
 import * as backend from "@/lib/backend";
-import { incompatibility } from "@orkestrator/protocol/contract/errors";
+import { isUnsupportedBackendCommand } from "@/lib/backend/shared";
 import { scheduleBuildPipelineTabActivation } from "@/lib/feature-build-activation";
 import {
   FEATURE_BUILD_ALREADY_ACTIVE,
@@ -547,8 +547,7 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
         const started = await backend
           .startFeaturePlanBuild({ featureId: feature.id })
           .catch((error: unknown) => {
-            if (incompatibility(error, "start_feature_plan_build")?.code !== "unknown-command")
-              throw error;
+            if (!isUnsupportedBackendCommand(error, "start_feature_plan_build")) throw error;
             return null;
           });
         if (!started) {

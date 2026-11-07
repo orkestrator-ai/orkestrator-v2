@@ -1,0 +1,87 @@
+{
+  "schemaVersion": 1,
+  "domain": "design",
+  "commands": {
+    "design_action": {
+      "untyped": true
+    },
+    "design_cancel": {
+      "untyped": true
+    },
+    "design_capabilities": {
+      "untyped": true
+    },
+    "design_capture": {
+      "untyped": true
+    },
+    "design_changes": {
+      "untyped": true
+    },
+    "design_checkpoint": {
+      "untyped": true
+    },
+    "design_execute": {
+      "untyped": true
+    },
+    "design_export_preview": {
+      "untyped": true
+    },
+    "design_export_reconcile": {
+      "untyped": true
+    },
+    "design_export_save": {
+      "untyped": true
+    },
+    "design_hierarchy": {
+      "untyped": true
+    },
+    "design_history": {
+      "untyped": true
+    },
+    "design_import": {
+      "untyped": true
+    },
+    "design_import_host_file": {
+      "untyped": true
+    },
+    "design_library": {
+      "untyped": true
+    },
+    "design_open_file": {
+      "untyped": true
+    },
+    "design_operation_status": {
+      "untyped": true
+    },
+    "design_prepare": {
+      "untyped": true
+    },
+    "design_purge": {
+      "untyped": true
+    },
+    "design_readiness": {
+      "untyped": true
+    },
+    "design_save": {
+      "untyped": true
+    },
+    "design_session_link": {
+      "untyped": true
+    },
+    "design_session_unlink": {
+      "untyped": true
+    },
+    "design_snapshot": {
+      "untyped": true
+    },
+    "design_status": {
+      "untyped": true
+    },
+    "design_sync": {
+      "untyped": true
+    },
+    "design_validate": {
+      "untyped": true
+    }
+  }
+}

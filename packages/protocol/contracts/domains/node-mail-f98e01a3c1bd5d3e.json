@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "domain": "node-mail",
+  "commands": {
+    "ack_node_outbox": {
+      "untyped": true,
+      "read": false
+    },
+    "collect_node_outbox": {
+      "untyped": true,
+      "read": false
+    },
+    "create_node_action_request": {
+      "untyped": true,
+      "read": false
+    },
+    "deliver_node_mail": {
+      "untyped": true,
+      "read": false
+    },
+    "list_node_action_requests": {
+      "untyped": true,
+      "read": true
+    },
+    "record_node_environment_origin": {
+      "untyped": true,
+      "read": false
+    },
+    "resolve_node_action_request": {
+      "untyped": true,
+      "read": false
+    }
+  }
+}

@@ -1,4 +1,3 @@
-import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 import { isClientOnlyNativeMessage } from "@/lib/chat/client-only-messages";
 import * as backend from "@/lib/backend";
@@ -209,7 +208,8 @@ export async function createAgentHandoff(
   input: backend.CreateAgentHandoffInput,
 ): Promise<AgentHandoffSnapshot> {
   const record = await backend.createAgentHandoff(input).catch((error: unknown) => {
-    if (incompatibility(error, "create_agent_handoff")) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes("Unknown backend command")) {
       throw new Error(
         "Continuing in another agent needs a newer Orkestrator backend. Update this machine and try again.",
       );

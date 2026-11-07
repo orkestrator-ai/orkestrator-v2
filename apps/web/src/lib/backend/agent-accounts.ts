@@ -20,7 +20,7 @@ import {
   SET_COORDINATOR_ACCOUNT_SWITCH_GRANT_COMMAND,
   type CoordinatorAccountSwitchGrantState,
 } from "@orkestrator/protocol/coordinator-account-switch-grant";
-import { incompatibility } from "@orkestrator/protocol/contract/errors";
+import { isUnknownBackendCommand } from "@/lib/portal/unknown-command";
 import type { NativeAgentAuthStatus } from "@orkestrator/protocol/native-agent";
 import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
 
@@ -135,11 +135,7 @@ export async function getCoordinatorAccountSwitchGrant(
       { platform },
     );
   } catch (error) {
-    if (
-      incompatibility(error, GET_COORDINATOR_ACCOUNT_SWITCH_GRANT_COMMAND)?.code ===
-      "unknown-command"
-    )
-      return null;
+    if (isUnknownBackendCommand(error, GET_COORDINATOR_ACCOUNT_SWITCH_GRANT_COMMAND)) return null;
     throw error;
   }
 }

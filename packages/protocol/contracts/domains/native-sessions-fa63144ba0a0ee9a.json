@@ -1,0 +1,326 @@
+{
+  "schemaVersion": 1,
+  "domain": "native-sessions",
+  "commands": {
+    "adopt_native_agent_session": {
+      "untyped": true,
+      "read": false
+    },
+    "apply_pane_layout_intent": {
+      "untyped": true,
+      "read": false
+    },
+    "begin_native_agent_sign_in": {
+      "untyped": true,
+      "read": false
+    },
+    "cancel_native_agent_sign_in": {
+      "untyped": true,
+      "read": false
+    },
+    "cleanup_orphaned_buffers": {
+      "untyped": true,
+      "read": false
+    },
+    "create_session": {
+      "untyped": true,
+      "read": false
+    },
+    "delete_agent_handoff": {
+      "untyped": true,
+      "read": false
+    },
+    "delete_compose_draft": {
+      "untyped": true,
+      "read": false
+    },
+    "delete_file_draft": {
+      "untyped": true,
+      "read": false
+    },
+    "delete_pane_layout": {
+      "untyped": true,
+      "read": false
+    },
+    "delete_session": {
+      "untyped": true,
+      "read": false
+    },
+    "delete_sessions_by_environment": {
+      "untyped": true,
+      "read": false
+    },
+    "discard_native_agent_dispatch": {
+      "untyped": true,
+      "read": false
+    },
+    "disconnect_environment_sessions": {
+      "untyped": true,
+      "read": false
+    },
+    "dismiss_native_agent_suggested_prompt": {
+      "untyped": true,
+      "read": false
+    },
+    "dispatch_native_agent_intent": {
+      "untyped": true,
+      "read": false
+    },
+    "dispatch_native_agent_prompt": {
+      "untyped": true,
+      "read": false
+    },
+    "enqueue_prompt_queue_message": {
+      "untyped": true,
+      "read": false
+    },
+    "ensure_native_agent_session": {
+      "untyped": true,
+      "read": false
+    },
+    "fork_native_agent_session": {
+      "untyped": true,
+      "read": false
+    },
+    "get_agent_handoff": {
+      "untyped": true,
+      "read": true
+    },
+    "get_agent_interaction_observations": {
+      "untyped": true,
+      "read": true
+    },
+    "get_compose_draft": {
+      "untyped": true,
+      "read": true
+    },
+    "get_file_draft": {
+      "untyped": true,
+      "read": true
+    },
+    "get_native_agent_auth_status": {
+      "untyped": true,
+      "read": true
+    },
+    "get_native_agent_discovery_update": {
+      "untyped": true,
+      "read": true
+    },
+    "get_native_agent_goal": {
+      "untyped": true,
+      "read": true
+    },
+    "get_native_agent_message_page": {
+      "untyped": true,
+      "read": true
+    },
+    "get_native_agent_projection": {
+      "untyped": true,
+      "read": true
+    },
+    "get_native_agent_projection_update": {
+      "untyped": true,
+      "read": true
+    },
+    "get_native_agent_session": {
+      "untyped": true,
+      "read": true
+    },
+    "get_native_agent_session_state_update": {
+      "untyped": true,
+      "read": true
+    },
+    "get_native_agent_sync_capabilities": {
+      "untyped": true,
+      "read": true
+    },
+    "get_native_agent_tool_details": {
+      "untyped": true,
+      "read": true
+    },
+    "get_native_agent_transcript_update": {
+      "untyped": true,
+      "read": true
+    },
+    "get_pane_layout": {
+      "untyped": true,
+      "read": true
+    },
+    "get_prompt_queue": {
+      "untyped": true,
+      "read": true
+    },
+    "get_session": {
+      "untyped": true,
+      "read": true
+    },
+    "get_sessions_by_environment": {
+      "untyped": true,
+      "read": true
+    },
+    "hold_native_agent_interaction": {
+      "untyped": true,
+      "read": false
+    },
+    "list_compose_drafts": {
+      "untyped": true,
+      "read": true
+    },
+    "list_native_agent_resumable_sessions": {
+      "untyped": true,
+      "read": true
+    },
+    "list_prompt_queues": {
+      "untyped": true,
+      "read": true
+    },
+    "load_session_buffer": {
+      "untyped": true,
+      "read": false
+    },
+    "move_prompt_queue_message": {
+      "untyped": true,
+      "read": false
+    },
+    "native_agent_goal_command": {
+      "untyped": true,
+      "read": false
+    },
+    "open_in_browser": {
+      "untyped": true,
+      "read": false
+    },
+    "open_in_editor": {
+      "untyped": true,
+      "read": false
+    },
+    "open_local_in_editor": {
+      "untyped": true,
+      "read": false
+    },
+    "perform_native_agent_mcp_action": {
+      "untyped": true,
+      "read": false
+    },
+    "perform_native_agent_session_action": {
+      "untyped": true,
+      "read": false
+    },
+    "prune_agent_handoffs": {
+      "untyped": true,
+      "read": false
+    },
+    "reconcile_agent_interactions": {
+      "untyped": true,
+      "read": false
+    },
+    "refresh_native_agent_commands": {
+      "untyped": true,
+      "read": false
+    },
+    "refresh_native_agent_models": {
+      "untyped": true,
+      "read": false
+    },
+    "remove_prompt_queue_message": {
+      "untyped": true,
+      "read": false
+    },
+    "rename_session": {
+      "untyped": true,
+      "read": false
+    },
+    "reorder_sessions": {
+      "untyped": true,
+      "read": false
+    },
+    "resolve_native_agent_interaction": {
+      "untyped": true,
+      "read": false
+    },
+    "resume_native_agent_session": {
+      "untyped": true,
+      "read": false
+    },
+    "retry_native_agent_dispatch": {
+      "untyped": true,
+      "read": false
+    },
+    "retry_prompt_queue_dispatch": {
+      "untyped": true,
+      "read": false
+    },
+    "reveal_in_file_manager": {
+      "untyped": true,
+      "read": false
+    },
+    "save_agent_handoff": {
+      "untyped": true,
+      "read": false
+    },
+    "save_compose_draft": {
+      "untyped": true,
+      "read": false
+    },
+    "save_file_draft": {
+      "untyped": true,
+      "read": false
+    },
+    "save_pane_layout": {
+      "untyped": true,
+      "read": false
+    },
+    "save_session_buffer": {
+      "untyped": true,
+      "read": false
+    },
+    "set_agent_interaction_monitor_adoption": {
+      "untyped": true,
+      "read": false
+    },
+    "set_native_agent_resumable_session_archived": {
+      "untyped": true,
+      "read": false
+    },
+    "sign_out_native_agent": {
+      "untyped": true,
+      "read": false
+    },
+    "steer_native_agent_queued_prompt": {
+      "untyped": true,
+      "read": false
+    },
+    "stop_native_agent_background_task": {
+      "untyped": true,
+      "read": false
+    },
+    "stop_native_agent_session": {
+      "untyped": true,
+      "read": false
+    },
+    "sync_sessions_with_container": {
+      "untyped": true,
+      "read": false
+    },
+    "test_domain_resolution": {
+      "untyped": true,
+      "read": false
+    },
+    "update_native_agent_controls": {
+      "untyped": true,
+      "read": false
+    },
+    "update_session_activity": {
+      "untyped": true,
+      "read": false
+    },
+    "update_session_status": {
+      "untyped": true,
+      "read": false
+    },
+    "validate_domains": {
+      "untyped": true,
+      "read": false
+    }
+  }
+}

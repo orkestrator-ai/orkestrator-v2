@@ -29,7 +29,6 @@ import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import { isUnknownCommandError, unknownBackendCommandMessage } from "../unknown-command.js";
 import { DomainNameSchema, DomainVersionSchema } from "./envelope.js";
-import { formatIpcIncompatibility, parseIpcIncompatibility } from "./ipc-error.js";
 
 export const INCOMPATIBILITY_CODES = [
   "unknown-command",
@@ -45,17 +44,11 @@ export interface VersionRange {
   readonly max: number;
 }
 
-/**
- * What an incompatibility names. Every member is optional and bounded.
- * `command` is the command the peer refused (plan item 1005): a reader asking
- * about one command ignores an incompatibility that names another, such as a
- * nested call's unknown command inside a handler.
- */
+/** What an incompatibility names. Every member is optional and bounded. */
 export interface IncompatibilityDetails {
   readonly domain?: string;
   readonly range?: VersionRange;
   readonly field?: string;
-  readonly command?: string;
 }
 
 /** One incompatibility, as {@link incompatibility} reports it. */
@@ -66,12 +59,6 @@ export interface Incompatibility extends IncompatibilityDetails {
 /** The longest field name a `details.field` carries (plan item 1005). */
 export const MAX_DETAIL_FIELD_LENGTH = 64;
 
-/** The longest command name a `details.command` carries. */
-export const MAX_DETAIL_COMMAND_LENGTH = 64;
-
-/** A command name as `details.command` carries it: an identifier, never free text. */
-const DETAIL_COMMAND_PATTERN = /^[A-Za-z][A-Za-z0-9_.:-]*$/u;
-
 /** The longest error message {@link fromWire} accepts. */
 export const MAX_WIRE_MESSAGE_LENGTH = 2_048;
 
@@ -81,12 +68,6 @@ export const IncompatibilityDetailsSchema = Schema.Struct({
   range: Schema.optionalKey(Schema.Struct({ min: DomainVersionSchema, max: DomainVersionSchema })),
   field: Schema.optionalKey(
     Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(MAX_DETAIL_FIELD_LENGTH)),
-  ),
-  command: Schema.optionalKey(
-    Schema.String.check(
-      Schema.isMaxLength(MAX_DETAIL_COMMAND_LENGTH),
-      Schema.isPattern(DETAIL_COMMAND_PATTERN),
-    ),
   ),
 });
 
@@ -183,15 +164,8 @@ export function isIncompatibilityError(error: unknown): error is Incompatibility
 }
 
 function detailsOf(error: IncompatibilityError): IncompatibilityDetails {
-  const details: { domain?: string; range?: VersionRange; field?: string; command?: string } = {};
+  const details: { domain?: string; range?: VersionRange; field?: string } = {};
   if (error.domain !== undefined) details.domain = error.domain;
-  if (
-    error.command !== undefined &&
-    error.command.length <= MAX_DETAIL_COMMAND_LENGTH &&
-    DETAIL_COMMAND_PATTERN.test(error.command)
-  ) {
-    details.command = error.command;
-  }
   if (error._tag === "UnsupportedVersionError" && error.range !== undefined) {
     details.range = { min: error.range.min, max: error.range.max };
   }
@@ -255,11 +229,8 @@ export function fromWire(body: unknown): IncompatibilityError | null {
   }
 }
 
-function withDomain(details: IncompatibilityDetails): { domain?: string; command?: string } {
-  return {
-    ...(details.domain === undefined ? {} : { domain: details.domain }),
-    ...(details.command === undefined ? {} : { command: details.command }),
-  };
+function withDomain(details: IncompatibilityDetails): { domain?: string } {
+  return details.domain === undefined ? {} : { domain: details.domain };
 }
 
 const CODE_SET: ReadonlySet<string> = new Set(INCOMPATIBILITY_CODES);
@@ -267,24 +238,26 @@ const CODE_SET: ReadonlySet<string> = new Set(INCOMPATIBILITY_CODES);
 /** The detail members an error carries as its own properties, without the absent ones. */
 function ownDetails(error: object): Record<string, unknown> {
   const own: Record<string, unknown> = {};
-  for (const key of ["domain", "range", "field", "command"] as const) {
+  for (const key of ["domain", "range", "field"] as const) {
     const value = (error as Record<string, unknown>)[key];
     if (value !== undefined) own[key] = value;
   }
   return own;
 }
 
-function messageOf(error: unknown): string | null {
-  if (typeof error === "string") return error;
-  if (typeof error === "object" && error !== null) {
-    const message = (error as { message?: unknown }).message;
-    if (typeof message === "string") return message;
-  }
-  return null;
-}
-
-/** The code and bounded details `error` carries itself, without reading legacy text. */
-function codedIncompatibility(error: unknown): Incompatibility | null {
+/**
+ * Reads an incompatibility from any thrown or received value, or returns
+ * `null` for anything else.
+ *
+ * - A value with an incompatibility `code` (one of the error classes, a
+ *   transport's rebuilt error with `code` and `details`, or a wire body) is
+ *   read by its code. Details come from its `details` object when it has one,
+ *   otherwise from its own `domain`, `range` and `field`.
+ * - Otherwise, when `command` is given, a pre-contract node's legacy
+ *   `Unknown backend command: <command>` text (in an `Error` or a string) is
+ *   read as `unknown-command`, through `isUnknownCommandError`.
+ */
+export function incompatibility(error: unknown, command?: string): Incompatibility | null {
   if (typeof error === "object" && error !== null) {
     const code = (error as { code?: unknown }).code;
     if (typeof code === "string" && CODE_SET.has(code)) {
@@ -295,74 +268,8 @@ function codedIncompatibility(error: unknown): Incompatibility | null {
       return { code: code as IncompatibilityCode, ...details };
     }
   }
-  const message = messageOf(error);
-  const ipc = message === null ? null : parseIpcIncompatibility(message);
-  return ipc ? { code: ipc.code, ...readDetails(ipc.details) } : null;
-}
-
-/**
- * Reads an incompatibility from any thrown or received value, or returns
- * `null` for anything else.
- *
- * - A value with an incompatibility `code` (one of the error classes, a
- *   transport's rebuilt error with `code` and `details`, or a wire body) is
- *   read by its code. Details come from its `details` object when it has one,
- *   otherwise from its own `domain`, `range`, `field` and `command`.
- * - A message led by the IPC form `[code key=value …] ` (`./ipc-error.ts`),
- *   which is how a desktop renderer receives the code, is read the same way.
- * - When `command` is given, an incompatibility that names another command
- *   is not this command's (a nested call's, say) and reads as `null`.
- * - Otherwise, when `command` is given, a pre-contract node's legacy
- *   `Unknown backend command: <command>` text (in an `Error` or a string) is
- *   read as `unknown-command`, through `isUnknownCommandError`.
- */
-export function incompatibility(error: unknown, command?: string): Incompatibility | null {
-  const coded = codedIncompatibility(error);
-  if (coded) {
-    if (command !== undefined && coded.command !== undefined && coded.command !== command) {
-      return null;
-    }
-    return coded;
-  }
   if (command !== undefined && isUnknownCommandError(error, command)) {
     return { code: "unknown-command" };
   }
   return null;
-}
-
-const LEGACY_UNKNOWN_COMMAND_PREFIX = unknownBackendCommandMessage("");
-
-/**
- * {@link incompatibility} for a classifier that does not know which command
- * failed (a read coordinator, a transport classifier). A coded error is read
- * as usual; legacy text counts only when the message *starts* with the
- * unknown-command answer, i.e. the backend's own direct answer, not one
- * wrapped by a nested call. Prefer `incompatibility(error, command)`.
- */
-export function incompatibilityOfAnyCommand(error: unknown): Incompatibility | null {
-  const coded = codedIncompatibility(error);
-  if (coded) return coded;
-  const message = messageOf(error);
-  if (message === null || !message.startsWith(LEGACY_UNKNOWN_COMMAND_PREFIX)) return null;
-  const name = message.slice(LEGACY_UNKNOWN_COMMAND_PREFIX.length).split(/\s/u, 1)[0] ?? "";
-  if (name.length === 0) return null;
-  return {
-    code: "unknown-command",
-    ...(name.length <= MAX_DETAIL_COMMAND_LENGTH && DETAIL_COMMAND_PATTERN.test(name)
-      ? { command: name }
-      : {}),
-  };
-}
-
-/**
- * The message an incompatibility carries across Electron IPC
- * (`[code key=value …] text`, `./ipc-error.ts`), or `null` when `error` is
- * not a coded incompatibility. Desktop main throws this message in place of
- * the error, because only the message crosses.
- */
-export function incompatibilityIpcMessage(error: unknown): string | null {
-  const coded = codedIncompatibility(error);
-  if (!coded) return null;
-  const { code, ...details } = coded;
-  return formatIpcIncompatibility(code, details, messageOf(error) ?? "");
 }

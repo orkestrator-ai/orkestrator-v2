@@ -1,0 +1,69 @@
+{
+  "schemaVersion": 1,
+  "domain": "pull-requests",
+  "commands": {
+    "add_github_issue_comment": {
+      "untyped": true
+    },
+    "arm_pr_refresh_after_agent_completion": {
+      "untyped": true
+    },
+    "close_github_issue": {
+      "untyped": true
+    },
+    "detect_pr": {
+      "untyped": true
+    },
+    "detect_pr_local": {
+      "untyped": true
+    },
+    "disarm_pr_refresh_after_agent_completion": {
+      "untyped": true
+    },
+    "get_github_issue": {
+      "untyped": true
+    },
+    "get_github_issues": {
+      "untyped": true
+    },
+    "get_pr_monitor_state": {
+      "untyped": true
+    },
+    "merge_environment_pr": {
+      "untyped": true
+    },
+    "merge_pr": {
+      "untyped": true
+    },
+    "merge_pr_local": {
+      "untyped": true
+    },
+    "post_github_completion_comment": {
+      "untyped": true
+    },
+    "pr_monitor_agent_turn_completed": {
+      "untyped": true
+    },
+    "pr_monitor_probe_environment": {
+      "untyped": true
+    },
+    "pr_monitor_refresh": {
+      "untyped": true
+    },
+    "pr_monitor_watch": {
+      "untyped": true
+    },
+    "update_github_issue": {
+      "untyped": true
+    },
+    "update_github_issue_comment": {
+      "untyped": true
+    },
+    "update_github_issue_status": {
+      "untyped": true
+    },
+    "verify_environment_pr": {
+      "untyped": true
+    }
+  }
+}

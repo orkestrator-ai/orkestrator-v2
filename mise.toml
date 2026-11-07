@@ -184,13 +184,10 @@ run = [
 description = "Check the command contract manifest for drift and that untyped commands only shrink"
 run = "bun scripts/contract-check.ts"
 
-[tasks."contract:adapters"]
-description = "Regenerate the domain client adapter list (packages/protocol/contracts/adapters.json)"
-run = "bun scripts/generate-contract-adapters.ts"
-
-[tasks."contract:adapters:check"]
-description = "Check the domain client adapter list for drift from the domain client definitions"
-run = "bun scripts/generate-contract-adapters.ts --check"
+[tasks."contract:backfill"]
+description = "Snapshot the contract of every published release that has none (packages/protocol/contracts/releases/)"
+raw_args = true
+run = "bun scripts/backfill-contract-snapshots.ts"
 
 [tasks.setup]
 description = "Install dependencies and build every native bridge"

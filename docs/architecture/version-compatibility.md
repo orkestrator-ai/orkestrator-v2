@@ -20,10 +20,11 @@ published release (2026-10-16).
 
 - *Published* means a non-draft GitHub release on `orkestrator-ai/orkestrator-v2`
   on any channel ([releasing.md](../development/releasing.md#update-channels)).
-  Drafts that were never published (v2.24.0-alpha to v2.26.0-alpha) and source
-  or dev builds (version `0.0.0`, or any commit between releases) are not
-  covered. Nothing before v2.21.0 was ever published as a release or on npm, so
-  only source builds ever ran it.
+  Drafts that were never published (v2.24.0-alpha to v2.26.1-alpha and
+  v2.35.2-beta, although npm carries the alphas), tags with no release
+  (v2.22.0 to v2.22.2) and source or dev builds (version `0.0.0`, or any
+  commit between releases) are not covered. Nothing before v2.21.0 was ever
+  published as a release or on npm, so only source builds ever ran it.
 - Prereleases are ordered by version, so a Beta or Unstable release at or
   after the floor is covered like any other.
 - The floor moves by itself: it becomes v2.21.1 on 2026-12-15, v2.22.3 on
@@ -141,7 +142,7 @@ supported peer already has the newer behaviour.
 | Leaves without `node-coordinator-build-origin`: new-environment builds are refused before launch | `start_coordinator_node_build_pipeline` | `coordinator-build.origin-upgrade-required` | Leaves predating admission identity (2026-11-05) | The floor includes the first Stable release with admission identity; retain legacy snapshot refusals permanently | X1 |
 | Live prompt-queue claim state (`outstandingClaim`) | `restoreLegacyPromptQueueClaims`, queue mutation and reservation guards | None (read normalization) | Claims from releases through v2.29.0-beta (the last with the claim commands), including external callers. Those releases refuse a schema-5 database (from v2.34.4-beta), so a claim seen here was either carried across the upgrade or written by a backend that opened the database before that migration and is still running | Claim-writing peers can no longer share the database; retain exclusion until settlement or expiry meanwhile | [0078](../todo/cross-cutting/0078-legacy-prompt-queue-claim-state.md) |
 | New names for the Rework and Address Findings steps in stored and transmitted data: this build writes `fix`, `fixing`, `address`, `addressing`, `fixModel` and the rest, and reads the new names as well | `workflow-vocabulary.ts`, run by the renderer's stores and the backend's start commands; `normalizeActionDefaults` reads a saved `addressFindings` key; `workflow-tab-title.ts` reads the former `Fix` tab title; the CLI's former flags | None (renderer side and a read normalization) | Peers on the build that flips the names ([4740](../todo/cross-cutting/4740-workflow-vocabulary-stage-two.md)), and restored tabs with the former title | The floor is at or above the first Stable release with the flip. The user approved flipping before the window ends, once their own machines are updated (2026-11-04); the readers still stay for the window | [4740](../todo/cross-cutting/4740-workflow-vocabulary-stage-two.md) |
-| Backends without `launch_build_pipeline`: the renderer merges the saved Build defaults itself and calls `start_build_pipeline` | `legacyBuildPipelineStartInput` (`apps/web/src/lib/build-pipeline-launch-compat.ts`), chosen in `useBuildPipeline.ts` when `incompatibility(error, "launch_build_pipeline")` reads `unknown-command` | None (renderer side) | Backends before the one-request launches (2026-11-01) | The floor is at or above the first Stable release with `launch_build_pipeline` | Build launch |
+| Backends without `launch_build_pipeline`: the renderer merges the saved Build defaults itself and calls `start_build_pipeline` | `legacyBuildPipelineStartInput` (`apps/web/src/lib/build-pipeline-launch-compat.ts`), chosen in `useBuildPipeline.ts` by `isUnsupportedBackendCommand` | None (renderer side) | Backends before the one-request launches (2026-11-01) | The floor is at or above the first Stable release with `launch_build_pipeline` | Build launch |
 | Releases without a published lockfile: `installRelease` installs them with a plain `bun install`, so their transitive dependencies resolve afresh | The `else` branch in `installRelease` (`packages/protocol/src/node/standalone-service.ts`) | None (runs in the service's installing process) | `service install --release` of a release older than `resources/release-runtime/` (2026-11-04), v2.36.3-beta and earlier | The floor is at or above the first Stable release with `resources/release-runtime/` | [5022](../todo/cross-cutting/5022-release-chain-live-evidence.md) |
 | Releases without a published lockfile, first run through the site's `install.sh`: it runs them through `bun x`, so their transitive dependencies resolve afresh | The branch in `main` of `apps/web-public/public/install.sh` that finds no `resources/release-runtime/` in the fetched package | None (runs on the user's host before any backend) | `PINNED_RELEASE` 2.36.1, the pin at the time of writing, and any `ORKESTRATOR_INSTALL_VERSION` older than `resources/release-runtime/` (2026-11-04), v2.36.3-beta and earlier | `PINNED_RELEASE` is a Stable release with `resources/release-runtime/`, and older releases are outside the window | [5022](../todo/cross-cutting/5022-release-chain-live-evidence.md) task 4 |
 | Backends without `start_feature_plan_build`: the renderer sequences ticket, claim, start and link with its own rollbacks | `legacyStartFeaturePlanBuild` (`apps/web/src/lib/feature-plan-build-compat.ts`), chosen in `FeaturesView.tsx`; `claim_feature_plan_build` stays registered for it | None (renderer side) | Backends before the one-request launches (2026-11-01) | The floor is at or above the first Stable release with `start_feature_plan_build`; `claim_feature_plan_build` and the store's `claimFeatureBuild` retire with it | Build launch |
@@ -461,42 +462,18 @@ Version skew is reported with a code, never detected from message text
 
 | Code | Class | Details |
 | --- | --- | --- |
-| `unknown-command` | `UnknownCommandError` (`unknownCommand(command, domain?)`) | The `command` and, when the call's envelope named one, its `domain`. The message stays `Unknown backend command: <name>` for older clients. Every backend site that misses a command throws it, nested in-process calls included. |
-| `unsupported-version` | `UnsupportedVersionError` (`unsupportedVersion`) | `domain`, the backend's `range` `{ min, max }` and the `command`. |
-| `unsupported-field` | `UnsupportedFieldError` (`unsupportedField`) | `domain`, the critical `field` (at most 64 characters) and the `command`. |
+| `unknown-command` | `UnknownCommandError` (`unknownCommand(command, domain?)`) | `domain` when known. The message stays `Unknown backend command: <name>` for older clients. |
+| `unsupported-version` | `UnsupportedVersionError` (`unsupportedVersion`) | `domain` and the backend's `range` `{ min, max }`. |
+| `unsupported-field` | `UnsupportedFieldError` (`unsupportedField`) | `domain` and the critical `field` (at most 64 characters). |
 
 The classes are Effect `Data.TaggedError`s with a `code` property. The gateway
 answers them with `toWire(error)`: `{ error, code, details: { domain?, range?,
-field?, command? } }`, never an argument value (`command` only when it is an
-identifier of at most 64 characters); `fromWire(body)` rebuilds the class.
-
-Each transport keeps the code and details:
-
-- **Web HTTP:** `GatewayHttpError` (`apps/web/src/lib/native/gateway-http-error.ts`)
-  has `status`, the body's `code` and an incompatibility's bounded `details`.
-- **Node link:** `NodeLink` rethrows `fromWire(body)`, so a routed call
-  (`invoke_on_node`) and the command node's own callers see the leaf's class.
-- **Electron IPC:** the desktop backend client rebuilds the class, and main's
-  `orkestrator:invoke` sends it in the message form
-  `[code key=value …] text` (`contract/ipc-error.ts`, values URI-encoded),
-  because only a message crosses IPC and the context bridge. The preload
-  also sets `error.code` and `error.details`; the renderer reads the message
-  form through `incompatibility()`.
-
-Callers use `incompatibility(error, command)`, which reads `code` (or the IPC
-message form) first and falls back to the legacy text only for the named
-command (a pre-contract node). An incompatibility whose `details.command`
-names another command (a nested call's) reads as `null`, so a fallback never
-fires for a command that ran. A fallback to an older command checks
-`?.code === "unknown-command"`; a "this backend cannot" state accepts any
-code. Classifiers that do not know the command use
-`incompatibilityOfAnyCommand(error)`, which accepts legacy text only at the
-start of the message. No renderer code matches `Unknown backend command`
-itself (`tests/unit/unknown-command-text-guard.test.ts`).
-
-The one UI text is `describeIncompatibility(error, machine, command?)`
-(`apps/web/src/lib/describe-incompatibility.ts`): "Not available on
-<machine> (version x). Update it."
+field? } }`, never an argument value; `fromWire(body)` rebuilds the class.
+Callers use `incompatibility(error, command?)`, which reads `code` first and
+falls back to the legacy text only for the named command (a pre-contract
+node). Carrying `code` and `details` through the web HTTP client and Electron
+IPC, and the one UI state "not available on <machine>; update it", are plan
+item [1005](../../plans/unified/1005-typed-incompatibility-errors.md).
 
 ### Client adapters
 
@@ -520,35 +497,13 @@ export const nodeMailClient = domainClient(nodeMail, {
 - **Version 0 is the legacy adapter**: today's capability-gated behaviour
   (the per-domain `*_capabilities` commands or the hello `capabilities`) for
   nodes without a range, so callers are already version-agnostic.
-- `createDomainClient(def, { call, domains, capabilities?, invoke?, usage? })`
-  binds a definition to one node's transport. `client.api()` picks once per
-  connection generation (per `domains` object identity; `reset()` forgets it),
-  caches the adapter and throws the coded `unsupported-version`, with the
-  node's range, when nothing overlaps. `call(def, args, envelope)` gets the
-  envelope fields `{ domain, version, critical? }` without `args` (they stay
-  under desktop IPC's 4096-character bound), and none for adapter 0, so a
-  pre-contract node gets today's body. Results are decoded tolerantly with the
-  command's schema. Adapter 0's context has the hello `capabilities`, an
-  untyped `invoke`, and `capability(command)`, which reads one of the domain's
-  `LEGACY_CAPABILITY_COMMANDS` once per generation (`null` when the node
-  predates it). Node scopes expose it as `scope.domain(...)`
+- Plan item [1009](../../plans/unified/1009-domain-clients-and-adapters.md)
+  (in progress) adds `createDomainClient(def, { call, domains })`, which picks
+  once per connection generation, caches the choice and throws a coded
+  `unsupported-version` when nothing overlaps; the committed adapter list
+  `packages/protocol/contracts/adapters.json`; and content-free usage counters
+  per (domain, adapter version). Node scopes expose it as `scope.domain(...)`
   ([2011](../../plans/unified/2011-scope-domain-negotiation.md)).
-- **Adapter list.** Every domain client is defined under
-  `packages/protocol/src/contract/domains/`, one per domain, and listed in
-  `DOMAIN_CLIENTS` (`contract/client-adapters.ts`).
-  `packages/protocol/contracts/adapters.json` is its committed form (per
-  domain: `current` and `adapters`, highest first), written by
-  `mise run contract:adapters`; `mise run contract:adapters:check` fails on
-  drift and runs in CI next to `contract:check`. The contract CI job reads it.
-- **Usage counters.** Every call through an adapter below its domain's current
-  version is counted, names and numbers only. The backend's own clients count
-  into the compatibility-path counters as
-  `domain-adapter.backend.<domain>.v<version>` (`backendDomainAdapterUsage`);
-  a desktop window's renderer counts into a bounded ring
-  (`domain-adapter-usage-ring.ts`, next to the error ring) and sends new counts
-  with `record_domain_adapter_usage` to its own backend, which adds the listed
-  pairs as `domain-adapter.renderer.<domain>.v<version>`. Read them with
-  `get_compatibility_path_usage` like any other path.
 - **Retirement:** the adapter for version *v* is deleted when the support
   floor passes the first Stable release with *v + 1*, the register's usual
   rule. The legacy adapter 0 goes when the floor passes the first Stable
@@ -582,10 +537,23 @@ export const nodeMailClient = domainClient(nodeMail, {
   (`--check`, no writes) and the ratchet, and every failure names this
   section. CI runs `contract:check` in `ci.yml`'s Lint job.
 - **Release snapshots** (plan item
-  [1007](../../plans/unified/1007-release-snapshots-and-backfill.md)):
-  `release:version` writes `packages/protocol/contracts/releases/<version>.json`,
-  deduplicated by per-domain digest, with a backfill for every published
-  release since v2.21.0 and `contracts/releases/index.json` listing them.
+  [1007](../../plans/unified/1007-release-snapshots-and-backfill.md),
+  `scripts/contract-snapshots.ts`): `release:version` writes
+  `packages/protocol/contracts/releases/<version>.json` from the committed
+  manifest (after checking it is current). A release file references one
+  blob per domain, `contracts/domains/<domain>-<hex16>.json`, named by the
+  SHA-256 of the blob's text, so releases with an unchanged domain share its
+  blob and storage grows with domain changes, not releases.
+  `contracts/releases/index.json` lists each snapshotted release with its
+  channel and GitHub publication time (`null` until published), which is all
+  the floor needs. `mise run contract:backfill` snapshots any published
+  release that has none: a tag that commits a manifest is split from it, and
+  a pre-contract release is checked out in a temporary worktree, installed
+  with its pinned Bun, and its own registry listed in a sandboxed child; its
+  snapshot is marked `preContract`, every command `{ untyped: true }` with
+  `read` from its own `isNodeReadCommand` where it has one (from
+  v2.26.1-alpha), domains from the current tree, and names the current tree
+  no longer has in an `unmapped` blob. `--check` verifies without writing.
 - **Contract CI job** (plan item
   [1008](../../plans/unified/1008-contract-ci-job.md)): from the snapshots in
   the support window it asserts that a client adapter exists for every

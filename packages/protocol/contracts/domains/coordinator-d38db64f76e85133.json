@@ -1,0 +1,190 @@
+{
+  "schemaVersion": 1,
+  "domain": "coordinator",
+  "commands": {
+    "address_coordinator_multi_review_action": {
+      "untyped": true,
+      "read": false
+    },
+    "adopt_coordinator_workflow": {
+      "untyped": true,
+      "read": false
+    },
+    "assert_coordinator_delegation_available": {
+      "untyped": true,
+      "read": false
+    },
+    "assert_coordinator_node_delegation_available": {
+      "untyped": true,
+      "read": false
+    },
+    "assign_coordinator_conversation_agent": {
+      "untyped": true,
+      "read": false
+    },
+    "associate_coordinator_workflow": {
+      "untyped": true,
+      "read": false
+    },
+    "close_coordinator_conversation": {
+      "untyped": true,
+      "read": false
+    },
+    "controller_multi_review_surface": {
+      "untyped": true,
+      "read": false
+    },
+    "coordinator_node_multi_review_surface": {
+      "untyped": true,
+      "read": false
+    },
+    "create_controller_environment": {
+      "untyped": true,
+      "read": false
+    },
+    "create_coordinator_conversation": {
+      "untyped": true,
+      "read": false
+    },
+    "ensure_project_coordinator": {
+      "untyped": true,
+      "read": false
+    },
+    "fetch_project_git": {
+      "untyped": true,
+      "read": false
+    },
+    "get_control_mcp_settings": {
+      "untyped": true,
+      "read": true
+    },
+    "get_project_base_branch_tip": {
+      "untyped": true,
+      "read": true
+    },
+    "get_project_coordinator": {
+      "untyped": true,
+      "read": true
+    },
+    "get_project_coordinator_view": {
+      "untyped": true,
+      "read": true
+    },
+    "get_project_git_status": {
+      "untyped": true,
+      "read": true
+    },
+    "launch_control_job": {
+      "untyped": true,
+      "read": false
+    },
+    "launch_controller_multi_review": {
+      "untyped": true,
+      "read": false
+    },
+    "launch_coordinator_environment": {
+      "untyped": true,
+      "read": false
+    },
+    "launch_coordinator_multi_review_action": {
+      "untyped": true,
+      "read": false
+    },
+    "launch_coordinator_node_environment": {
+      "untyped": true,
+      "read": false
+    },
+    "launch_coordinator_node_multi_review": {
+      "untyped": true,
+      "read": false
+    },
+    "launch_native_agent_job": {
+      "untyped": true,
+      "read": false
+    },
+    "open_coordinator_delegation": {
+      "untyped": true,
+      "read": false
+    },
+    "open_coordinator_multi_review": {
+      "untyped": true,
+      "read": false
+    },
+    "open_coordinator_multi_review_fix": {
+      "untyped": true,
+      "read": false
+    },
+    "open_coordinator_node_delegation": {
+      "untyped": true,
+      "read": false
+    },
+    "pause_project_coordinator": {
+      "untyped": true,
+      "read": false
+    },
+    "prepare_project_git_branch_switch": {
+      "untyped": true,
+      "read": false
+    },
+    "resume_project_coordinator": {
+      "untyped": true,
+      "read": false
+    },
+    "rotate_control_mcp_token": {
+      "untyped": true,
+      "read": false
+    },
+    "select_coordinator_conversation": {
+      "untyped": true,
+      "read": false
+    },
+    "send_coordinator_agent_mail": {
+      "untyped": true,
+      "read": false
+    },
+    "send_coordinator_node_mail": {
+      "untyped": true,
+      "read": false
+    },
+    "start_controller_build_pipeline": {
+      "untyped": true,
+      "read": false
+    },
+    "start_controller_multi_review": {
+      "untyped": true,
+      "read": false
+    },
+    "start_coordinator_build_pipeline": {
+      "untyped": true,
+      "read": false
+    },
+    "start_coordinator_multi_review": {
+      "untyped": true,
+      "read": false
+    },
+    "start_coordinator_node_build_pipeline": {
+      "untyped": true,
+      "read": false
+    },
+    "start_coordinator_node_multi_review": {
+      "untyped": true,
+      "read": false
+    },
+    "switch_project_git_branch": {
+      "untyped": true,
+      "read": false
+    },
+    "sync_project_git": {
+      "untyped": true,
+      "read": false
+    },
+    "verify_project_launch_base": {
+      "untyped": true,
+      "read": false
+    },
+    "write_coordinator_attachment": {
+      "untyped": true,
+      "read": false
+    }
+  }
+}

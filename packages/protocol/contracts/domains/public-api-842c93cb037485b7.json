@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "domain": "public-api",
+  "commands": {
+    "public_action": {
+      "untyped": true,
+      "read": false
+    }
+  }
+}

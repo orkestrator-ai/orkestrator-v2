@@ -1,0 +1,162 @@
+{
+  "schemaVersion": 1,
+  "domain": "graphs",
+  "commands": {
+    "graph_capability_ceiling_get": {
+      "untyped": true,
+      "read": false
+    },
+    "graph_capability_ceiling_set": {
+      "untyped": true,
+      "read": false
+    },
+    "graph_describe_cancel": {
+      "untyped": true,
+      "read": true
+    },
+    "graph_describe_dismiss": {
+      "untyped": true,
+      "read": true
+    },
+    "graph_describe_start": {
+      "untyped": true,
+      "read": true
+    },
+    "graph_describe_status": {
+      "untyped": true,
+      "read": true
+    },
+    "graph_launch_options": {
+      "untyped": true,
+      "read": false
+    },
+    "graph_project_template_review": {
+      "untyped": true,
+      "read": false
+    },
+    "graph_project_template_review_decide": {
+      "untyped": true,
+      "read": false
+    },
+    "graph_run_answer": {
+      "untyped": true,
+      "read": false
+    },
+    "graph_run_artifact": {
+      "untyped": true,
+      "read": false
+    },
+    "graph_run_cancel": {
+      "untyped": true,
+      "read": false
+    },
+    "graph_run_effects": {
+      "untyped": true,
+      "read": false
+    },
+    "graph_run_get": {
+      "untyped": true,
+      "read": false
+    },
+    "graph_run_launch": {
+      "untyped": true,
+      "read": false
+    },
+    "graph_run_mock": {
+      "untyped": true,
+      "read": false
+    },
+    "graph_run_pause": {
+      "untyped": true,
+      "read": false
+    },
+    "graph_run_pending": {
+      "untyped": true,
+      "read": false
+    },
+    "graph_run_restart": {
+      "untyped": true,
+      "read": false
+    },
+    "graph_run_resume": {
+      "untyped": true,
+      "read": false
+    },
+    "graph_run_retry": {
+      "untyped": true,
+      "read": false
+    },
+    "graph_run_rewind_code": {
+      "untyped": true,
+      "read": false
+    },
+    "graph_run_rewind_code_preview": {
+      "untyped": true,
+      "read": false
+    },
+    "graph_run_skip": {
+      "untyped": true,
+      "read": false
+    },
+    "graph_run_transcript": {
+      "untyped": true,
+      "read": false
+    },
+    "graph_runs_list": {
+      "untyped": true,
+      "read": false
+    },
+    "graph_sharing_key_trust": {
+      "untyped": true,
+      "read": false
+    },
+    "graph_sharing_keys": {
+      "untyped": true,
+      "read": false
+    },
+    "graph_template_compile": {
+      "untyped": true,
+      "read": false
+    },
+    "graph_template_delete": {
+      "untyped": true,
+      "read": false
+    },
+    "graph_template_duplicate": {
+      "untyped": true,
+      "read": false
+    },
+    "graph_template_export": {
+      "untyped": true,
+      "read": false
+    },
+    "graph_template_get": {
+      "untyped": true,
+      "read": false
+    },
+    "graph_template_import": {
+      "untyped": true,
+      "read": false
+    },
+    "graph_template_save": {
+      "untyped": true,
+      "read": false
+    },
+    "graph_template_share_export": {
+      "untyped": true,
+      "read": false
+    },
+    "graph_template_share_import": {
+      "untyped": true,
+      "read": false
+    },
+    "graph_template_trust": {
+      "untyped": true,
+      "read": false
+    },
+    "graph_templates_list": {
+      "untyped": true,
+      "read": false
+    }
+  }
+}

@@ -150,7 +150,6 @@ describe("decodeCommandArgs", () => {
       code: "unsupported-field",
       domain: "node-mail",
       field: "idempotencyKey",
-      command: "deliver_node_mail",
     });
   });
 

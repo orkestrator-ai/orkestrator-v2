@@ -1,0 +1,90 @@
+{
+  "schemaVersion": 1,
+  "domain": "pull-requests",
+  "commands": {
+    "add_github_issue_comment": {
+      "untyped": true,
+      "read": false
+    },
+    "arm_pr_refresh_after_agent_completion": {
+      "untyped": true,
+      "read": false
+    },
+    "close_github_issue": {
+      "untyped": true,
+      "read": false
+    },
+    "detect_pr": {
+      "untyped": true,
+      "read": false
+    },
+    "detect_pr_local": {
+      "untyped": true,
+      "read": false
+    },
+    "disarm_pr_refresh_after_agent_completion": {
+      "untyped": true,
+      "read": false
+    },
+    "get_github_issue": {
+      "untyped": true,
+      "read": true
+    },
+    "get_github_issues": {
+      "untyped": true,
+      "read": true
+    },
+    "get_pr_monitor_state": {
+      "untyped": true,
+      "read": true
+    },
+    "merge_environment_pr": {
+      "untyped": true,
+      "read": false
+    },
+    "merge_pr": {
+      "untyped": true,
+      "read": false
+    },
+    "merge_pr_local": {
+      "untyped": true,
+      "read": false
+    },
+    "post_github_completion_comment": {
+      "untyped": true,
+      "read": false
+    },
+    "pr_monitor_agent_turn_completed": {
+      "untyped": true,
+      "read": false
+    },
+    "pr_monitor_probe_environment": {
+      "untyped": true,
+      "read": false
+    },
+    "pr_monitor_refresh": {
+      "untyped": true,
+      "read": false
+    },
+    "pr_monitor_watch": {
+      "untyped": true,
+      "read": false
+    },
+    "update_github_issue": {
+      "untyped": true,
+      "read": false
+    },
+    "update_github_issue_comment": {
+      "untyped": true,
+      "read": false
+    },
+    "update_github_issue_status": {
+      "untyped": true,
+      "read": false
+    },
+    "verify_environment_pr": {
+      "untyped": true,
+      "read": false
+    }
+  }
+}

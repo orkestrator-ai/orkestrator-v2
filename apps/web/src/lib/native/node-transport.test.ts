@@ -2,9 +2,6 @@ import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:
 import { captureLogs, type LogCapture } from "@orkestrator/protocol/testing/log-capture";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import { relayedNodeEventName } from "@orkestrator/protocol/node-events";
-import { incompatibility, toWire, unknownCommand } from "@orkestrator/protocol/contract/errors";
-import { unknownBackendCommandMessage } from "@orkestrator/protocol/unknown-command";
-import { GatewayHttpError } from "./gateway-http-error";
 import {
   createNodeTransport,
   type NodeTransport,
@@ -665,50 +662,5 @@ describe("a relayed node transport whose grant is revoked", () => {
     globalThis.fetch = answering;
     await until(() => timers.pendingDelays().length === 1, "No retry was scheduled");
     expect(rejected).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe("a failed invoke (plan item 1005)", () => {
-  test("keeps the gateway's code and an incompatibility's bounded details", async () => {
-    const bodies: Record<string, unknown> = {
-      get_missing: toWire(unknownCommand("get_missing", "git")),
-      get_versioned: {
-        error: "Domain git version 9 is not supported; this backend accepts versions 1 to 2.",
-        code: "unsupported-version",
-        details: { domain: "git", range: { min: 1, max: 2 }, extra: "dropped" },
-      },
-      get_coded: { error: "Busy", code: "workspace-busy" },
-      get_plain: { error: "Plain failure" },
-    };
-    globalThis.fetch = mock(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const { command } = JSON.parse(String(init?.body)) as { command: string };
-      return new Response(JSON.stringify(bodies[command]), { status: 500 });
-    }) as unknown as typeof fetch;
-    const node = transport({ baseUrl: A, credential: "token-a" });
-    const failure = (command: string) => node.invoke(command).catch((error: unknown) => error);
-
-    const missing = await failure("get_missing");
-    expect(missing).toBeInstanceOf(GatewayHttpError);
-    expect(missing).toMatchObject({
-      status: 500,
-      code: "unknown-command",
-      details: { domain: "git", command: "get_missing" },
-      message: unknownBackendCommandMessage("get_missing"),
-    });
-    expect(incompatibility(missing, "get_missing")?.code).toBe("unknown-command");
-    expect(incompatibility(missing, "get_other")).toBeNull();
-
-    const versioned = (await failure("get_versioned")) as GatewayHttpError;
-    expect(versioned.details).toEqual({ domain: "git", range: { min: 1, max: 2 } });
-    expect(incompatibility(versioned)?.code).toBe("unsupported-version");
-
-    const coded = (await failure("get_coded")) as GatewayHttpError;
-    expect(coded.code).toBe("workspace-busy");
-    expect(coded.details).toBeUndefined();
-    expect(incompatibility(coded)).toBeNull();
-
-    const plain = (await failure("get_plain")) as GatewayHttpError;
-    expect(plain.code).toBeUndefined();
-    expect(plain.message).toBe("Plain failure");
   });
 });

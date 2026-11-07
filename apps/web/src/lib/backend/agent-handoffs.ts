@@ -1,4 +1,3 @@
-import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import { invoke } from "@/lib/native/backend";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { PersistedAgentHandoff } from "@/types";
@@ -74,9 +73,8 @@ export async function getAgentHandoffCapabilities(): Promise<AgentHandoffCapabil
       pruning: candidate.pruning === true,
     };
   } catch (error) {
-    if (incompatibility(error, "get_agent_handoff_capabilities")?.code === "unknown-command") {
-      return LEGACY_CAPABILITIES;
-    }
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes("Unknown backend command")) return LEGACY_CAPABILITIES;
     throw error;
   }
 }

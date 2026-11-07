@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "domain": "node-mail",
+  "commands": {
+    "ack_node_outbox": {
+      "untyped": true,
+      "read": false
+    },
+    "collect_node_outbox": {
+      "untyped": true,
+      "read": false
+    },
+    "create_node_action_request": {
+      "untyped": true,
+      "read": false
+    },
+    "deliver_node_mail": {
+      "untyped": true,
+      "read": false
+    },
+    "get_node_project_coordinator": {
+      "untyped": true,
+      "read": true
+    },
+    "get_worker_request_state": {
+      "untyped": true,
+      "read": true
+    },
+    "list_node_action_requests": {
+      "untyped": true,
+      "read": true
+    },
+    "place_node_mail_attachments": {
+      "untyped": true,
+      "read": false
+    },
+    "prepare_node_mail_attachments": {
+      "untyped": true,
+      "read": false
+    },
+    "record_node_environment_origin": {
+      "untyped": true,
+      "read": false
+    },
+    "resolve_node_action_request": {
+      "untyped": true,
+      "read": false
+    },
+    "return_node_outbox_mail": {
+      "untyped": true,
+      "read": false
+    },
+    "send_coordinator_command_node_mail": {
+      "untyped": true,
+      "read": false
+    }
+  }
+}

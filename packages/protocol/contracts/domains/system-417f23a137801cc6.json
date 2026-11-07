@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 1,
+  "domain": "system",
+  "commands": {
+    "cancel_host_update": {
+      "untyped": true
+    },
+    "get_app_version": {
+      "untyped": true
+    },
+    "get_environment_disk_usage": {
+      "untyped": true
+    },
+    "get_environment_process_usage": {
+      "untyped": true
+    },
+    "get_host_maintenance": {
+      "untyped": true
+    },
+    "get_host_restart_impact": {
+      "untyped": true
+    },
+    "get_recurring_work_diagnostics": {
+      "untyped": true
+    },
+    "get_resource_revision_manifest": {
+      "untyped": true
+    },
+    "get_scoped_resource_revision_manifest": {
+      "untyped": true
+    },
+    "get_scoped_resource_snapshots": {
+      "untyped": true
+    },
+    "get_system_usage": {
+      "untyped": true
+    },
+    "get_worktree_locations": {
+      "untyped": true
+    },
+    "greet": {
+      "untyped": true
+    },
+    "list_disk_usage_environments": {
+      "untyped": true
+    },
+    "reconcile_workflow_scheduling": {
+      "untyped": true
+    },
+    "request_host_update": {
+      "untyped": true
+    },
+    "request_host_update_check": {
+      "untyped": true
+    },
+    "set_host_gh_channel": {
+      "untyped": true
+    },
+    "set_host_update_channel": {
+      "untyped": true
+    },
+    "start_host_image_update": {
+      "untyped": true
+    },
+    "start_host_toolchain_repair": {
+      "untyped": true
+    },
+    "update_worktree_locations": {
+      "untyped": true
+    }
+  }
+}

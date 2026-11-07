@@ -1,0 +1,82 @@
+{
+  "schemaVersion": 1,
+  "domain": "config",
+  "commands": {
+    "approve_native_agent_interaction_and_remember": {
+      "untyped": true,
+      "read": false
+    },
+    "delete_permission_rule": {
+      "untyped": true,
+      "read": false
+    },
+    "delete_project_permission_rules": {
+      "untyped": true,
+      "read": false
+    },
+    "get_config": {
+      "untyped": true,
+      "read": true
+    },
+    "get_desktop_connections": {
+      "untyped": true,
+      "read": true
+    },
+    "get_global_config": {
+      "untyped": true,
+      "read": true
+    },
+    "get_repository_config": {
+      "untyped": true,
+      "read": true
+    },
+    "list_external_permission_rules": {
+      "untyped": true,
+      "read": true
+    },
+    "list_permission_rules": {
+      "untyped": true,
+      "read": true
+    },
+    "save_config": {
+      "untyped": true,
+      "read": false
+    },
+    "save_desktop_connections": {
+      "untyped": true,
+      "read": false
+    },
+    "set_anthropic_api_key": {
+      "untyped": true,
+      "read": false
+    },
+    "set_cursor_api_key": {
+      "untyped": true,
+      "read": false
+    },
+    "set_github_cli_reminder_dismissed": {
+      "untyped": true,
+      "read": false
+    },
+    "set_github_token": {
+      "untyped": true,
+      "read": false
+    },
+    "set_opencode_zen_api_key": {
+      "untyped": true,
+      "read": false
+    },
+    "update_global_config": {
+      "untyped": true,
+      "read": false
+    },
+    "update_notification_sound_settings": {
+      "untyped": true,
+      "read": false
+    },
+    "update_repository_config": {
+      "untyped": true,
+      "read": false
+    }
+  }
+}

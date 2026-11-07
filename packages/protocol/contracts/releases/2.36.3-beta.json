@@ -1,0 +1,163 @@
+{
+  "schemaVersion": 1,
+  "version": "2.36.3-beta",
+  "channel": "beta",
+  "preContract": true,
+  "source": "registry",
+  "commit": "e198fd4a74201c17fff09b4ef40a156222ce0640",
+  "readClassified": true,
+  "counts": {
+    "commands": 975,
+    "defined": 0,
+    "untyped": 975,
+    "unmapped": 0
+  },
+  "domains": {
+    "accounts": {
+      "file": "domains/accounts-31a6d7b92a1cead2.json",
+      "digest": "sha256:31a6d7b92a1cead283b5d381310d8ec09c703c1f1c44af42446763ed965fa71c",
+      "commands": 33
+    },
+    "agent-mail": {
+      "file": "domains/agent-mail-2c191824ff3aabd0.json",
+      "digest": "sha256:2c191824ff3aabd01200c72e5ec915041e98e3586c9d6442f65a105f284f9f4c",
+      "commands": 23
+    },
+    "agent-servers": {
+      "file": "domains/agent-servers-1319b70532c9f246.json",
+      "digest": "sha256:1319b70532c9f246dfe86a17c069434a8bc1966fbef07304f9591ec9bb68740c",
+      "commands": 77
+    },
+    "claude-tmux": {
+      "file": "domains/claude-tmux-70b664e44f68501b.json",
+      "digest": "sha256:70b664e44f68501b57a74d0474e19d91c3cc5ee9006a979e65cbab6935faf88f",
+      "commands": 28
+    },
+    "config": {
+      "file": "domains/config-40311358ae5f55f7.json",
+      "digest": "sha256:40311358ae5f55f7f6d2bdbe1c6a95ccb4ec1753181580ca924a355e9e44311a",
+      "commands": 31
+    },
+    "coordinator": {
+      "file": "domains/coordinator-dac4579376d9c504.json",
+      "digest": "sha256:dac4579376d9c504c5a0e2794be51789362bfaaa0f70fb2e84722848b4428594",
+      "commands": 96
+    },
+    "design": {
+      "file": "domains/design-650a4e297137a969.json",
+      "digest": "sha256:650a4e297137a9691434d67a3dcb877ca481f0f978582cd0dc1ee721439fbbb5",
+      "commands": 35
+    },
+    "docker": {
+      "file": "domains/docker-b701ca627529fdfd.json",
+      "digest": "sha256:b701ca627529fdfd6854f8041df62032d77ec8553c2c238b88be4e3f1ab981c0",
+      "commands": 29
+    },
+    "environments": {
+      "file": "domains/environments-a8881e2dab8ac193.json",
+      "digest": "sha256:a8881e2dab8ac193b834c05220bae33115d1d49ec740d12348ce8daeda1cf258",
+      "commands": 63
+    },
+    "files": {
+      "file": "domains/files-17a200a48ce4e8f1.json",
+      "digest": "sha256:17a200a48ce4e8f1899459f64583828e06094e04e38fa7cb7a9a832f21a9c4d6",
+      "commands": 28
+    },
+    "git": {
+      "file": "domains/git-62c99041b6735a6e.json",
+      "digest": "sha256:62c99041b6735a6efc607922f9ff73a744704e78c69354bbcf3eb54f3be4259f",
+      "commands": 23
+    },
+    "graphs": {
+      "file": "domains/graphs-ee82d0e815e994a7.json",
+      "digest": "sha256:ee82d0e815e994a763d0ce3d6154eba5a9d631e7f195093707e35aef1fd4738d",
+      "commands": 39
+    },
+    "kanban": {
+      "file": "domains/kanban-eb7d52104b309372.json",
+      "digest": "sha256:eb7d52104b309372fd4f8278b9389294570b8950821114772144c765b10df8ed",
+      "commands": 29
+    },
+    "mcp": {
+      "file": "domains/mcp-5f568decffcad168.json",
+      "digest": "sha256:5f568decffcad168d79f691fff4324db879744f6271ae879c1fcf84267871408",
+      "commands": 13
+    },
+    "multi-review": {
+      "file": "domains/multi-review-e0adde793ba66a0d.json",
+      "digest": "sha256:e0adde793ba66a0d19a37027f9030e3913a67b445ca84e0e0dae2c62184284d3",
+      "commands": 27
+    },
+    "native-sessions": {
+      "file": "domains/native-sessions-d3697dfce9e31001.json",
+      "digest": "sha256:d3697dfce9e31001160c2e66d3e9b4e535d249c2df15e6e22c508ed1e089e8d8",
+      "commands": 85
+    },
+    "node-files": {
+      "file": "domains/node-files-6a19b8fd1c04bd1e.json",
+      "digest": "sha256:6a19b8fd1c04bd1e218fd8fdcce3b44d300d8f92baad1cb9bb9154076643851f",
+      "commands": 8
+    },
+    "node-mail": {
+      "file": "domains/node-mail-56e1df90a8e1b9d2.json",
+      "digest": "sha256:56e1df90a8e1b9d275f891385ffe3aa0e084d9365f933d52821645e5e94b27fe",
+      "commands": 13
+    },
+    "nodes": {
+      "file": "domains/nodes-40e3d077773dec2c.json",
+      "digest": "sha256:40e3d077773dec2c06b96caf633cf2db3d55634c8a7c1fc2e6a366aa03507216",
+      "commands": 50
+    },
+    "pipelines": {
+      "file": "domains/pipelines-9856dc984b9ff763.json",
+      "digest": "sha256:9856dc984b9ff763f929dd3ef0383ff7475bcb19e1af68e8c254671bee19bfc6",
+      "commands": 33
+    },
+    "previews": {
+      "file": "domains/previews-e9fefbec40b4ff7e.json",
+      "digest": "sha256:e9fefbec40b4ff7edd4183c39eccc7311c85fdade1392649013f7839a5adf190",
+      "commands": 17
+    },
+    "projects": {
+      "file": "domains/projects-5286b29861677156.json",
+      "digest": "sha256:5286b2986167715676096024a961022653e68636232ee4d991a9adccdd7dc0bb",
+      "commands": 26
+    },
+    "public-api": {
+      "file": "domains/public-api-842c93cb037485b7.json",
+      "digest": "sha256:842c93cb037485b72dc3fd6667739bdc454695bba25e1ce576d9e6587c27942b",
+      "commands": 1
+    },
+    "pull-requests": {
+      "file": "domains/pull-requests-30ac4cb8a46a2ed5.json",
+      "digest": "sha256:30ac4cb8a46a2ed5b388c0f68e0ebcff58b9f65f97b5f8e968fa87970d3fddcc",
+      "commands": 42
+    },
+    "system": {
+      "file": "domains/system-8c5a48dbb0411d4b.json",
+      "digest": "sha256:8c5a48dbb0411d4b3482a9dafd6c2a25ea7d9b390d3d516d927f6f87df70b7cd",
+      "commands": 40
+    },
+    "terminals": {
+      "file": "domains/terminals-98929ea25cf1a00b.json",
+      "digest": "sha256:98929ea25cf1a00b056c58509def4a09335ae596afb5a0b87df8b325fac1411d",
+      "commands": 26
+    },
+    "ticket-sync": {
+      "file": "domains/ticket-sync-1ccbc7c53c72eb27.json",
+      "digest": "sha256:1ccbc7c53c72eb273d2617ed9fa229b24cef983ba9685010a59cdd8b1470d29f",
+      "commands": 7
+    },
+    "transcripts": {
+      "file": "domains/transcripts-44953cd49171c3c8.json",
+      "digest": "sha256:44953cd49171c3c893bdabfaee72f2a41fd425386b1f2d061dcda9c0f9e13411",
+      "commands": 16
+    },
+    "web-annotations": {
+      "file": "domains/web-annotations-25b288f30e2be20c.json",
+      "digest": "sha256:25b288f30e2be20cc1f9d5495c5a43392f730167c9faa7ba4a419d316b87a435",
+      "commands": 37
+    }
+  },
+  "events": {}
+}

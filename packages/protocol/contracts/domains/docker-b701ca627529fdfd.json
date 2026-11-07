@@ -1,0 +1,122 @@
+{
+  "schemaVersion": 1,
+  "domain": "docker",
+  "commands": {
+    "check_base_image": {
+      "untyped": true,
+      "read": true
+    },
+    "check_container_host_reachability": {
+      "untyped": true,
+      "read": true
+    },
+    "check_docker": {
+      "untyped": true,
+      "read": true
+    },
+    "cleanup_orphaned_containers": {
+      "untyped": true,
+      "read": false
+    },
+    "close_container_logs": {
+      "untyped": true,
+      "read": false
+    },
+    "docker_cleanup_execute": {
+      "untyped": true,
+      "read": false
+    },
+    "docker_cleanup_preview": {
+      "untyped": true,
+      "read": false
+    },
+    "docker_container_status": {
+      "untyped": true,
+      "read": false
+    },
+    "docker_remove_container": {
+      "untyped": true,
+      "read": false
+    },
+    "docker_start_container": {
+      "untyped": true,
+      "read": false
+    },
+    "docker_stop_container": {
+      "untyped": true,
+      "read": false
+    },
+    "docker_system_prune": {
+      "untyped": true,
+      "read": false
+    },
+    "docker_version": {
+      "untyped": true,
+      "read": false
+    },
+    "get_container_host_port": {
+      "untyped": true,
+      "read": true
+    },
+    "get_container_host_reachability": {
+      "untyped": true,
+      "read": true
+    },
+    "get_container_logs": {
+      "untyped": true,
+      "read": true
+    },
+    "get_container_usage": {
+      "untyped": true,
+      "read": true
+    },
+    "get_docker_capacity": {
+      "untyped": true,
+      "read": true
+    },
+    "get_docker_image_status": {
+      "untyped": true,
+      "read": true
+    },
+    "get_docker_system_stats": {
+      "untyped": true,
+      "read": true
+    },
+    "get_docker_topology": {
+      "untyped": true,
+      "read": true
+    },
+    "get_orkestrator_containers": {
+      "untyped": true,
+      "read": true
+    },
+    "list_docker_containers": {
+      "untyped": true,
+      "read": true
+    },
+    "open_container_logs": {
+      "untyped": true,
+      "read": false
+    },
+    "propagate_github_token_to_containers": {
+      "untyped": true,
+      "read": false
+    },
+    "provision_environment": {
+      "untyped": true,
+      "read": false
+    },
+    "read_container_logs": {
+      "untyped": true,
+      "read": true
+    },
+    "reattach_container": {
+      "untyped": true,
+      "read": false
+    },
+    "stream_container_logs": {
+      "untyped": true,
+      "read": false
+    }
+  }
+}

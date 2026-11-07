@@ -41,7 +41,7 @@ import {
 import { createOrkestratorScriptPrompt } from "@orkestrator/protocol/orkestrator-script-prompt";
 import { createPRPrompt, createResolveConflictsPrompt } from "@orkestrator/protocol/pr-prompt";
 import * as backend from "@/lib/backend";
-import { incompatibility } from "@orkestrator/protocol/contract/errors";
+import { isUnsupportedBackendCommand } from "@/lib/backend/shared";
 import { getEnvironmentBrowserUrl, getEnvironmentPortAddress } from "@/lib/environment-address";
 import { isBackendOnAnotherDevice, isGatewayBrowserPreviewSupported } from "@/lib/gateway-url";
 import { showTabLimitReachedToast } from "@/lib/tab-limit-toast";
@@ -973,8 +973,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
             autoPr: selection.autoPr,
           })
           .catch((error: unknown) => {
-            if (incompatibility(error, "launch_multi_review")?.code !== "unknown-command")
-              throw error;
+            if (!isUnsupportedBackendCommand(error, "launch_multi_review")) throw error;
             return null;
           });
         if (!launched) {

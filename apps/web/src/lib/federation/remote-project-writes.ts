@@ -7,7 +7,7 @@ import {
   type ProjectArrangement,
   type ProjectArrangementIntent,
 } from "@/lib/project-folders";
-import { incompatibility } from "@orkestrator/protocol/contract/errors";
+import { isUnknownBackendCommand } from "@/lib/portal/unknown-command";
 import type { FederatedProject } from "./summaries";
 
 const OPTIMISTIC_ARRANGEMENT_MS = 10_000;
@@ -136,8 +136,7 @@ export function createRemoteProjectWrites(portal: PortalStore) {
       ? portal
           .invokeOnNode(write.nodeId, "arrange_projects_by_intent", { intent })
           .catch((error: unknown) => {
-            if (incompatibility(error, "arrange_projects_by_intent")?.code !== "unknown-command")
-              throw error;
+            if (!isUnknownBackendCommand(error, "arrange_projects_by_intent")) throw error;
             entry.intents.length = 0;
             return whole();
           })

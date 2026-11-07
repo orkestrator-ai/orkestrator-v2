@@ -1,0 +1,114 @@
+{
+  "schemaVersion": 1,
+  "domain": "claude-tmux",
+  "commands": {
+    "claude_tmux_answer_pre_tool_use": {
+      "untyped": true,
+      "read": false
+    },
+    "claude_tmux_answer_selection_prompt": {
+      "untyped": true,
+      "read": false
+    },
+    "claude_tmux_create_interactive_terminal": {
+      "untyped": true,
+      "read": false
+    },
+    "claude_tmux_detach_interactive_terminal": {
+      "untyped": true,
+      "read": false
+    },
+    "claude_tmux_interrupt": {
+      "untyped": true,
+      "read": false
+    },
+    "claude_tmux_list_previous_sessions": {
+      "untyped": true,
+      "read": false
+    },
+    "claude_tmux_pending_hooks": {
+      "untyped": true,
+      "read": false
+    },
+    "claude_tmux_reconcile_orphans": {
+      "untyped": true,
+      "read": false
+    },
+    "claude_tmux_reply_hook": {
+      "untyped": true,
+      "read": false
+    },
+    "claude_tmux_resize": {
+      "untyped": true,
+      "read": false
+    },
+    "claude_tmux_resize_interactive_terminal": {
+      "untyped": true,
+      "read": false
+    },
+    "claude_tmux_send_keys": {
+      "untyped": true,
+      "read": false
+    },
+    "claude_tmux_send_text": {
+      "untyped": true,
+      "read": false
+    },
+    "claude_tmux_start": {
+      "untyped": true,
+      "read": false
+    },
+    "claude_tmux_start_interactive_terminal": {
+      "untyped": true,
+      "read": false
+    },
+    "claude_tmux_status": {
+      "untyped": true,
+      "read": false
+    },
+    "claude_tmux_stop": {
+      "untyped": true,
+      "read": false
+    },
+    "claude_tmux_submit": {
+      "untyped": true,
+      "read": false
+    },
+    "claude_tmux_submit_queued": {
+      "untyped": true,
+      "read": false
+    },
+    "claude_tmux_switch_effort": {
+      "untyped": true,
+      "read": false
+    },
+    "claude_tmux_switch_fast_mode": {
+      "untyped": true,
+      "read": false
+    },
+    "claude_tmux_switch_model": {
+      "untyped": true,
+      "read": false
+    },
+    "claude_tmux_switch_plan_mode": {
+      "untyped": true,
+      "read": false
+    },
+    "claude_tmux_tasks": {
+      "untyped": true,
+      "read": false
+    },
+    "claude_tmux_transcript": {
+      "untyped": true,
+      "read": false
+    },
+    "claude_tmux_write_interactive_terminal": {
+      "untyped": true,
+      "read": false
+    },
+    "reconcile_claude_state_polling": {
+      "untyped": true,
+      "read": false
+    }
+  }
+}

@@ -1,0 +1,118 @@
+{
+  "schemaVersion": 1,
+  "domain": "accounts",
+  "commands": {
+    "cancel_agent_account_login": {
+      "untyped": true,
+      "read": false
+    },
+    "cancel_opencode_provider_login": {
+      "untyped": true,
+      "read": false
+    },
+    "cursor_sdk_login_cancel": {
+      "untyped": true,
+      "read": false
+    },
+    "cursor_sdk_login_start": {
+      "untyped": true,
+      "read": false
+    },
+    "cursor_sdk_login_status": {
+      "untyped": true,
+      "read": false
+    },
+    "cursor_sdk_logout": {
+      "untyped": true,
+      "read": false
+    },
+    "get_agent_account_login": {
+      "untyped": true,
+      "read": true
+    },
+    "get_agent_account_usage": {
+      "untyped": true,
+      "read": true
+    },
+    "get_agent_sign_in_status": {
+      "untyped": true,
+      "read": true
+    },
+    "get_native_agent_session_account": {
+      "untyped": true,
+      "read": true
+    },
+    "get_opencode_provider_login": {
+      "untyped": true,
+      "read": true
+    },
+    "get_plan_usage": {
+      "untyped": true,
+      "read": true
+    },
+    "get_usage_history": {
+      "untyped": true,
+      "read": true
+    },
+    "list_agent_accounts": {
+      "untyped": true,
+      "read": true
+    },
+    "list_machine_agent_accounts": {
+      "untyped": true,
+      "read": true
+    },
+    "list_opencode_provider_auth": {
+      "untyped": true,
+      "read": true
+    },
+    "open_agent_sign_in_terminal": {
+      "untyped": true,
+      "read": false
+    },
+    "read_host_agent_sign_ins": {
+      "untyped": true,
+      "read": true
+    },
+    "remove_agent_account": {
+      "untyped": true,
+      "read": false
+    },
+    "remove_opencode_provider_login": {
+      "untyped": true,
+      "read": false
+    },
+    "rename_agent_account": {
+      "untyped": true,
+      "read": false
+    },
+    "set_active_agent_account": {
+      "untyped": true,
+      "read": false
+    },
+    "set_opencode_provider_api_key": {
+      "untyped": true,
+      "read": false
+    },
+    "set_preferred_agent_identity": {
+      "untyped": true,
+      "read": false
+    },
+    "start_agent_account_login": {
+      "untyped": true,
+      "read": false
+    },
+    "start_opencode_provider_login": {
+      "untyped": true,
+      "read": false
+    },
+    "submit_agent_account_login_code": {
+      "untyped": true,
+      "read": false
+    },
+    "submit_opencode_provider_login_code": {
+      "untyped": true,
+      "read": false
+    }
+  }
+}

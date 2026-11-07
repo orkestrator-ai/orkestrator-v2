@@ -1,0 +1,118 @@
+{
+  "schemaVersion": 1,
+  "domain": "kanban",
+  "commands": {
+    "add_kanban_comment": {
+      "untyped": true,
+      "read": false
+    },
+    "add_kanban_image": {
+      "untyped": true,
+      "read": false
+    },
+    "add_kanban_task": {
+      "untyped": true,
+      "read": false
+    },
+    "append_feature_plan_message": {
+      "untyped": true,
+      "read": false
+    },
+    "append_feature_story_message": {
+      "untyped": true,
+      "read": false
+    },
+    "cancel_feature_planning": {
+      "untyped": true,
+      "read": false
+    },
+    "claim_feature_plan_build": {
+      "untyped": true,
+      "read": false
+    },
+    "connect_linear": {
+      "untyped": true,
+      "read": false
+    },
+    "create_feature_plan": {
+      "untyped": true,
+      "read": false
+    },
+    "delete_kanban_comment": {
+      "untyped": true,
+      "read": false
+    },
+    "delete_kanban_image": {
+      "untyped": true,
+      "read": false
+    },
+    "delete_kanban_task": {
+      "untyped": true,
+      "read": false
+    },
+    "disconnect_linear": {
+      "untyped": true,
+      "read": false
+    },
+    "get_feature_planning_snapshot": {
+      "untyped": true,
+      "read": true
+    },
+    "get_feature_plans": {
+      "untyped": true,
+      "read": true
+    },
+    "get_kanban_image_data": {
+      "untyped": true,
+      "read": true
+    },
+    "get_kanban_tasks": {
+      "untyped": true,
+      "read": true
+    },
+    "get_linear_connection": {
+      "untyped": true,
+      "read": true
+    },
+    "get_linear_issue": {
+      "untyped": true,
+      "read": true
+    },
+    "get_linear_issues": {
+      "untyped": true,
+      "read": true
+    },
+    "get_project_notes": {
+      "untyped": true,
+      "read": true
+    },
+    "post_linear_completion_comment": {
+      "untyped": true,
+      "read": false
+    },
+    "post_linear_issue_comment": {
+      "untyped": true,
+      "read": false
+    },
+    "retry_feature_planning": {
+      "untyped": true,
+      "read": false
+    },
+    "save_project_notes": {
+      "untyped": true,
+      "read": false
+    },
+    "start_feature_planning": {
+      "untyped": true,
+      "read": false
+    },
+    "update_feature_plan": {
+      "untyped": true,
+      "read": false
+    },
+    "update_kanban_task": {
+      "untyped": true,
+      "read": false
+    }
+  }
+}

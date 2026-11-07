@@ -14,7 +14,7 @@ import {
 import { parseAgentsMdChanges } from "@orkestrator/protocol/agents-md-orkestrator";
 import { isBackendId, type BackendId } from "@orkestrator/protocol/federation";
 import { repositoryHint } from "@orkestrator/protocol/node-summaries";
-import { incompatibility } from "@orkestrator/protocol/contract/errors";
+import { isUnknownCommandError } from "@orkestrator/protocol/unknown-command";
 import type { CoordinatorNoticeRoute } from "@orkestrator/protocol/coordinator-notices";
 import { parseProjectHomeMessage } from "@orkestrator/protocol/project-home-message";
 import {
@@ -1388,7 +1388,7 @@ export class NodeCoordination {
         if (error instanceof NodeOutcomeUnknownError) return lost;
         if (error instanceof NodeUnavailableError)
           throw new Error(`${target.nodeName} is not connected; nothing was sent.`);
-        if (incompatibility(error, "answer_controller_worker_question")?.code === "unknown-command")
+        if (isUnknownCommandError(error, "answer_controller_worker_question"))
           throw new Error(
             `${target.nodeName} runs an older Orkestrator that cannot relay answers; update it. Nothing was sent.`,
           );

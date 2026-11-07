@@ -1,0 +1,122 @@
+{
+  "schemaVersion": 1,
+  "domain": "design",
+  "commands": {
+    "design_action": {
+      "untyped": true,
+      "read": false
+    },
+    "design_cancel": {
+      "untyped": true,
+      "read": false
+    },
+    "design_capabilities": {
+      "untyped": true,
+      "read": false
+    },
+    "design_capture": {
+      "untyped": true,
+      "read": false
+    },
+    "design_changes": {
+      "untyped": true,
+      "read": false
+    },
+    "design_checkpoint": {
+      "untyped": true,
+      "read": false
+    },
+    "design_execute": {
+      "untyped": true,
+      "read": false
+    },
+    "design_export_preview": {
+      "untyped": true,
+      "read": false
+    },
+    "design_export_reconcile": {
+      "untyped": true,
+      "read": false
+    },
+    "design_export_save": {
+      "untyped": true,
+      "read": false
+    },
+    "design_hierarchy": {
+      "untyped": true,
+      "read": false
+    },
+    "design_history": {
+      "untyped": true,
+      "read": false
+    },
+    "design_import": {
+      "untyped": true,
+      "read": false
+    },
+    "design_import_host_file": {
+      "untyped": true,
+      "read": false
+    },
+    "design_library": {
+      "untyped": true,
+      "read": false
+    },
+    "design_open_file": {
+      "untyped": true,
+      "read": false
+    },
+    "design_operation_status": {
+      "untyped": true,
+      "read": false
+    },
+    "design_prepare": {
+      "untyped": true,
+      "read": false
+    },
+    "design_purge": {
+      "untyped": true,
+      "read": false
+    },
+    "design_readiness": {
+      "untyped": true,
+      "read": false
+    },
+    "design_save": {
+      "untyped": true,
+      "read": false
+    },
+    "design_session_link": {
+      "untyped": true,
+      "read": false
+    },
+    "design_session_link_states": {
+      "untyped": true,
+      "read": false
+    },
+    "design_session_resume": {
+      "untyped": true,
+      "read": false
+    },
+    "design_session_unlink": {
+      "untyped": true,
+      "read": false
+    },
+    "design_snapshot": {
+      "untyped": true,
+      "read": false
+    },
+    "design_status": {
+      "untyped": true,
+      "read": false
+    },
+    "design_sync": {
+      "untyped": true,
+      "read": false
+    },
+    "design_validate": {
+      "untyped": true,
+      "read": false
+    }
+  }
+}

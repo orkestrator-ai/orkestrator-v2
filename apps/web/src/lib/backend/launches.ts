@@ -3,7 +3,7 @@
  * backend fills the saved defaults, owns every step and compensates failures.
  *
  * Each has an older-backend answer in the caller, chosen with
- * `incompatibility(error, command)` (`@orkestrator/protocol/contract/errors`) and listed in
+ * `isUnsupportedBackendCommand` (`./shared`) and listed in
  * `docs/architecture/version-compatibility.md`.
  */
 import { invoke } from "@/lib/native/backend";

@@ -1,4 +1,3 @@
-import { unknownCommand } from "@orkestrator/protocol/contract/errors";
 import type { ControlMcpProfile } from "@orkestrator/protocol/control-mcp";
 import {
   ControlMcpServer,
@@ -70,7 +69,7 @@ export async function controlMcpHarness(
     session.harness.dataDir,
     async <T>(command: string, args: Record<string, unknown> = {}) => {
       const handler = session.harness.commands.get(command);
-      if (!handler) throw unknownCommand(command);
+      if (!handler) throw new Error(`Unknown backend command: ${command}`);
       return (await handler(args, session.harness.context)) as T;
     },
     { port: 0, ...options },

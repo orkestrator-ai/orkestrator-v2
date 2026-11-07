@@ -10,7 +10,7 @@ import {
   applyPromptQueuesForEnvironment,
   type PromptQueueSource,
 } from "@/lib/prompt-queue-persistence";
-import { incompatibility } from "@orkestrator/protocol/contract/errors";
+import { isUnknownCommandError } from "@orkestrator/protocol/unknown-command";
 import { hydrationActivity } from "@/lib/hydration-activity";
 import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
 import type { PersistedPromptQueue, PersistedWorkflowRecord } from "@/types";
@@ -115,9 +115,7 @@ export class EnvironmentHydrationBatcher {
         // A failed batch must not make an unrelated environment's lists fail.
         // Only an unsupported command disables batching for future requests;
         // transient transport/validation failures fall back for this chunk.
-        if (
-          incompatibility(error, LIST_ENVIRONMENT_HYDRATION_COMMAND)?.code === "unknown-command"
-        ) {
+        if (isUnknownCommandError(error, LIST_ENVIRONMENT_HYDRATION_COMMAND)) {
           this.batchSupported = false;
         }
         return this.sendSeparately(ids, batch);

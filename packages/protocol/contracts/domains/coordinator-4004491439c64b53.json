@@ -1,0 +1,105 @@
+{
+  "schemaVersion": 1,
+  "domain": "coordinator",
+  "commands": {
+    "address_coordinator_multi_review_action": {
+      "untyped": true
+    },
+    "adopt_coordinator_workflow": {
+      "untyped": true
+    },
+    "assert_coordinator_delegation_available": {
+      "untyped": true
+    },
+    "assign_coordinator_conversation_agent": {
+      "untyped": true
+    },
+    "associate_coordinator_workflow": {
+      "untyped": true
+    },
+    "close_coordinator_conversation": {
+      "untyped": true
+    },
+    "create_coordinator_conversation": {
+      "untyped": true
+    },
+    "ensure_project_coordinator": {
+      "untyped": true
+    },
+    "fetch_project_git": {
+      "untyped": true
+    },
+    "get_control_mcp_settings": {
+      "untyped": true
+    },
+    "get_project_base_branch_tip": {
+      "untyped": true
+    },
+    "get_project_coordinator": {
+      "untyped": true
+    },
+    "get_project_coordinator_view": {
+      "untyped": true
+    },
+    "get_project_git_status": {
+      "untyped": true
+    },
+    "launch_control_job": {
+      "untyped": true
+    },
+    "launch_coordinator_environment": {
+      "untyped": true
+    },
+    "launch_coordinator_multi_review_action": {
+      "untyped": true
+    },
+    "launch_native_agent_job": {
+      "untyped": true
+    },
+    "open_coordinator_delegation": {
+      "untyped": true
+    },
+    "open_coordinator_multi_review": {
+      "untyped": true
+    },
+    "open_coordinator_multi_review_fix": {
+      "untyped": true
+    },
+    "pause_project_coordinator": {
+      "untyped": true
+    },
+    "prepare_project_git_branch_switch": {
+      "untyped": true
+    },
+    "resume_project_coordinator": {
+      "untyped": true
+    },
+    "rotate_control_mcp_token": {
+      "untyped": true
+    },
+    "select_coordinator_conversation": {
+      "untyped": true
+    },
+    "send_coordinator_agent_mail": {
+      "untyped": true
+    },
+    "start_coordinator_build_pipeline": {
+      "untyped": true
+    },
+    "start_coordinator_multi_review": {
+      "untyped": true
+    },
+    "switch_project_git_branch": {
+      "untyped": true
+    },
+    "sync_project_git": {
+      "untyped": true
+    },
+    "verify_project_launch_base": {
+      "untyped": true
+    },
+    "write_coordinator_attachment": {
+      "untyped": true
+    }
+  }
+}

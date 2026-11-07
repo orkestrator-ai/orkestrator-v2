@@ -1,6 +1,0 @@
-{
-  "schemaVersion": 1,
-  "generatedBy": "scripts/generate-contract-adapters.ts (mise run contract:adapters)",
-  "retirement": "Adapter v is deleted when the support floor passes the first Stable release with v + 1.",
-  "domains": {}
-}

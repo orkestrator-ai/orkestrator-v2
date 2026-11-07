@@ -500,6 +500,11 @@ described in **Updating Bun and lockfiles**:
 - `packages/protocol/package.json`
 - `packages/toolchain/package.json`
 
+It also refuses to start when the contract manifest has drifted, and writes
+the release's contract snapshot under `packages/protocol/contracts/releases/`
+(see `docs/architecture/version-compatibility.md`, "The manifest, the ratchet
+and CI"); commit it with the bump.
+
 A new versioned manifest must be added to this list and to
 `VERSIONED_MANIFESTS` in that script; `tests/unit/release/set-version.test.ts`
 fails until both name it. To check a bump by hand:

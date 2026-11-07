@@ -4,7 +4,7 @@ import {
   type MachineLoadView,
   type MachineUnavailableReason,
 } from "@orkestrator/protocol/machine-load";
-import { incompatibility } from "@orkestrator/protocol/contract/errors";
+import { isUnknownCommandError } from "@orkestrator/protocol/unknown-command";
 import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import type { ControlMcpInvoker } from "./control-shared-actions.js";
 
@@ -65,7 +65,7 @@ export async function readNodeMachineLoad(
         ? viewOf(routed.result)
         : unavailable("error", `The connection to ${node.name} was lost before it answered.`),
     (error: unknown) => {
-      if (incompatibility(error, MACHINE_LOAD_COMMAND)?.code === "unknown-command") {
+      if (isUnknownCommandError(error, MACHINE_LOAD_COMMAND)) {
         compatibilityPathUsage.record("machine-load.older-node");
         return unavailable(
           "older-version",

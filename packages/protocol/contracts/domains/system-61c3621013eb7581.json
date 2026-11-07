@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "domain": "system",
+  "commands": {
+    "get_app_version": {
+      "untyped": true
+    },
+    "get_environment_disk_usage": {
+      "untyped": true
+    },
+    "get_environment_process_usage": {
+      "untyped": true
+    },
+    "get_recurring_work_diagnostics": {
+      "untyped": true
+    },
+    "get_resource_revision_manifest": {
+      "untyped": true
+    },
+    "get_scoped_resource_revision_manifest": {
+      "untyped": true
+    },
+    "get_scoped_resource_snapshots": {
+      "untyped": true
+    },
+    "get_system_usage": {
+      "untyped": true
+    },
+    "get_worktree_locations": {
+      "untyped": true
+    },
+    "greet": {
+      "untyped": true
+    },
+    "list_disk_usage_environments": {
+      "untyped": true
+    },
+    "reconcile_workflow_scheduling": {
+      "untyped": true
+    },
+    "update_worktree_locations": {
+      "untyped": true
+    }
+  }
+}

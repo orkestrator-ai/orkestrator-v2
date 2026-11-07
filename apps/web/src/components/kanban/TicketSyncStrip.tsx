@@ -1,4 +1,4 @@
-import { incompatibility } from "@orkestrator/protocol/contract/errors";
+import { isUnknownCommandError } from "@orkestrator/protocol/unknown-command";
 import { useEffect, useState } from "react";
 import { AlertTriangle } from "lucide-react";
 import {
@@ -52,8 +52,7 @@ export function useTicketSyncStatus(
           if (!disposed && next && Array.isArray(next.nodes)) setStatus(next);
         } catch (error) {
           if (disposed) return;
-          if (incompatibility(error, "get_ticket_sync_status")?.code === "unknown-command")
-            setStatus(null);
+          if (isUnknownCommandError(error, "get_ticket_sync_status")) setStatus(null);
           else
             setStatus((previous) => ({
               ...(previous?.projectId === projectId

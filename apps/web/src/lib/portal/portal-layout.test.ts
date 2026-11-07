@@ -1,7 +1,5 @@
 import { afterEach, beforeEach, expect, mock, test } from "bun:test";
 import { waitFor } from "@testing-library/react";
-import { fromWire, toWire, unknownCommand } from "@orkestrator/protocol/contract/errors";
-import { unknownBackendCommandMessage } from "@orkestrator/protocol/unknown-command";
 import {
   emptyPortalLayout,
   PORTAL_LAYOUT_CHANGED_EVENT,
@@ -110,18 +108,12 @@ test("rejected write rolls back by rereading even if no event arrives", async ()
   expect(getPortalLayout().machineOrder).toEqual(["bk_a"]);
 });
 
-for (const [label, answer] of [
-  ["coded", (command: string) => fromWire(toWire(unknownCommand(command)))],
-  ["legacy text", (command: string) => new Error(unknownBackendCommandMessage(command))],
-] as const)
-  test(`only unknown-command reads enable the in-page fallback (${label})`, async () => {
-    invoke.mockImplementation(async (command: string) => {
-      throw answer(command);
-    });
-    await start();
-    await updatePortalLayout({ machineOrder: ["bk_local"] });
-    expect(getPortalLayout().machineOrder).toEqual(["bk_local"]);
-  });
+test("only unknown-command reads enable the in-page fallback", async () => {
+  invoke.mockRejectedValue(new Error("Unknown command: get_portal_layout"));
+  await start();
+  await updatePortalLayout({ machineOrder: ["bk_local"] });
+  expect(getPortalLayout().machineOrder).toEqual(["bk_local"]);
+});
 
 test("storage or transport read failure stays unloaded and prevents writes until reconnect succeeds", async () => {
   invoke.mockRejectedValue(new Error("storage unavailable"));

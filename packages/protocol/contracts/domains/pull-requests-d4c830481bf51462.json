@@ -1,0 +1,170 @@
+{
+  "schemaVersion": 1,
+  "domain": "pull-requests",
+  "commands": {
+    "add_github_issue_comment": {
+      "untyped": true,
+      "read": false
+    },
+    "add_github_pull_request_comment": {
+      "untyped": true,
+      "read": false
+    },
+    "add_github_pull_request_review_comment": {
+      "untyped": true,
+      "read": false
+    },
+    "arm_pr_refresh_after_agent_completion": {
+      "untyped": true,
+      "read": false
+    },
+    "change_github_pull_request_label": {
+      "untyped": true,
+      "read": false
+    },
+    "close_github_issue": {
+      "untyped": true,
+      "read": false
+    },
+    "detect_pr": {
+      "untyped": true,
+      "read": false
+    },
+    "detect_pr_local": {
+      "untyped": true,
+      "read": false
+    },
+    "disarm_pr_refresh_after_agent_completion": {
+      "untyped": true,
+      "read": false
+    },
+    "generate_review_package": {
+      "untyped": true,
+      "read": false
+    },
+    "get_github_issue": {
+      "untyped": true,
+      "read": true
+    },
+    "get_github_issues": {
+      "untyped": true,
+      "read": true
+    },
+    "get_github_pull_request": {
+      "untyped": true,
+      "read": true
+    },
+    "get_github_pull_request_files": {
+      "untyped": true,
+      "read": true
+    },
+    "get_github_pull_request_timeline": {
+      "untyped": true,
+      "read": true
+    },
+    "get_pr_monitor_state": {
+      "untyped": true,
+      "read": true
+    },
+    "list_github_pull_requests": {
+      "untyped": true,
+      "read": true
+    },
+    "list_github_repository_assignable_users": {
+      "untyped": true,
+      "read": true
+    },
+    "list_github_repository_labels": {
+      "untyped": true,
+      "read": true
+    },
+    "merge_environment_pr": {
+      "untyped": true,
+      "read": false
+    },
+    "merge_github_pull_request": {
+      "untyped": true,
+      "read": false
+    },
+    "merge_pr": {
+      "untyped": true,
+      "read": false
+    },
+    "merge_pr_local": {
+      "untyped": true,
+      "read": false
+    },
+    "post_github_completion_comment": {
+      "untyped": true,
+      "read": false
+    },
+    "pr_monitor_agent_turn_completed": {
+      "untyped": true,
+      "read": false
+    },
+    "pr_monitor_probe_environment": {
+      "untyped": true,
+      "read": false
+    },
+    "pr_monitor_refresh": {
+      "untyped": true,
+      "read": false
+    },
+    "pr_monitor_watch": {
+      "untyped": true,
+      "read": false
+    },
+    "reply_github_pull_request_review_thread": {
+      "untyped": true,
+      "read": false
+    },
+    "set_github_pull_request_file_viewed": {
+      "untyped": true,
+      "read": false
+    },
+    "set_github_pull_request_labels": {
+      "untyped": true,
+      "read": false
+    },
+    "set_github_pull_request_reviewers": {
+      "untyped": true,
+      "read": false
+    },
+    "set_github_pull_request_thread_resolved": {
+      "untyped": true,
+      "read": false
+    },
+    "submit_github_pull_request_review": {
+      "untyped": true,
+      "read": false
+    },
+    "update_github_issue": {
+      "untyped": true,
+      "read": false
+    },
+    "update_github_issue_comment": {
+      "untyped": true,
+      "read": false
+    },
+    "update_github_issue_status": {
+      "untyped": true,
+      "read": false
+    },
+    "update_github_pull_request_comment": {
+      "untyped": true,
+      "read": false
+    },
+    "update_github_pull_request_state": {
+      "untyped": true,
+      "read": false
+    },
+    "verify_environment_pr": {
+      "untyped": true,
+      "read": false
+    },
+    "verify_review_package": {
+      "untyped": true,
+      "read": false
+    }
+  }
+}

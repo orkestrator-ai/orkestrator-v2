@@ -14,7 +14,7 @@ import { invoke } from "@/lib/native/backend";
 import type { AppConfig, GlobalConfig } from "@/types";
 import { portalStore } from "./portal-store";
 import { portalInvoke, workspaceTarget } from "./portal-transport";
-import { incompatibility } from "@orkestrator/protocol/contract/errors";
+import { isUnknownBackendCommand } from "./unknown-command";
 
 type ConfigInvoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
@@ -99,7 +99,7 @@ async function patchGlobalOnNode(
       ...(unset.length > 0 ? { unset } : {}),
     });
   } catch (error) {
-    if (incompatibility(error, PATCH_GLOBAL_CONFIG)?.code !== "unknown-command") throw error;
+    if (!isUnknownBackendCommand(error, PATCH_GLOBAL_CONFIG)) throw error;
     const current = await nodeInvoke<AppConfig>("get_config");
     const global = { ...current.global, ...patch } as Record<string, unknown>;
     for (const key of unset) delete global[key];

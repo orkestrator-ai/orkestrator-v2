@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "domain": "git",
+  "commands": {
+    "get_environment_diff_stats": {
+      "untyped": true
+    },
+    "get_environment_uncommitted_paths": {
+      "untyped": true
+    },
+    "get_git_status": {
+      "untyped": true
+    },
+    "get_local_git_status": {
+      "untyped": true
+    },
+    "refresh_environment_diff_stats": {
+      "untyped": true
+    }
+  }
+}

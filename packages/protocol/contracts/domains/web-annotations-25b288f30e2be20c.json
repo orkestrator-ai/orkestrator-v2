@@ -1,0 +1,154 @@
+{
+  "schemaVersion": 1,
+  "domain": "web-annotations",
+  "commands": {
+    "web_annotation_archive": {
+      "untyped": true,
+      "read": false
+    },
+    "web_annotation_asset_get": {
+      "untyped": true,
+      "read": false
+    },
+    "web_annotation_asset_stage": {
+      "untyped": true,
+      "read": false
+    },
+    "web_annotation_capture": {
+      "untyped": true,
+      "read": false
+    },
+    "web_annotation_capture_replace": {
+      "untyped": true,
+      "read": false
+    },
+    "web_annotation_create": {
+      "untyped": true,
+      "read": false
+    },
+    "web_annotation_delete": {
+      "untyped": true,
+      "read": false
+    },
+    "web_annotation_destinations": {
+      "untyped": true,
+      "read": false
+    },
+    "web_annotation_draft_delete": {
+      "untyped": true,
+      "read": false
+    },
+    "web_annotation_draft_get": {
+      "untyped": true,
+      "read": false
+    },
+    "web_annotation_draft_save": {
+      "untyped": true,
+      "read": false
+    },
+    "web_annotation_entries": {
+      "untyped": true,
+      "read": false
+    },
+    "web_annotation_entry_append": {
+      "untyped": true,
+      "read": false
+    },
+    "web_annotation_entry_edit": {
+      "untyped": true,
+      "read": false
+    },
+    "web_annotation_get": {
+      "untyped": true,
+      "read": false
+    },
+    "web_annotation_operation_receipt": {
+      "untyped": true,
+      "read": false
+    },
+    "web_annotation_reopen": {
+      "untyped": true,
+      "read": false
+    },
+    "web_annotation_request_cancel": {
+      "untyped": true,
+      "read": false
+    },
+    "web_annotation_request_follow_up": {
+      "untyped": true,
+      "read": false
+    },
+    "web_annotation_request_get": {
+      "untyped": true,
+      "read": false
+    },
+    "web_annotation_request_prepare": {
+      "untyped": true,
+      "read": false
+    },
+    "web_annotation_request_recover": {
+      "untyped": true,
+      "read": false
+    },
+    "web_annotation_request_response": {
+      "untyped": true,
+      "read": false
+    },
+    "web_annotation_request_send": {
+      "untyped": true,
+      "read": false
+    },
+    "web_annotation_requests": {
+      "untyped": true,
+      "read": false
+    },
+    "web_annotation_resolve": {
+      "untyped": true,
+      "read": false
+    },
+    "web_annotation_result_capture": {
+      "untyped": true,
+      "read": false
+    },
+    "web_annotation_update": {
+      "untyped": true,
+      "read": false
+    },
+    "web_annotations_capabilities": {
+      "untyped": true,
+      "read": false
+    },
+    "web_annotations_changes": {
+      "untyped": true,
+      "read": false
+    },
+    "web_annotations_list": {
+      "untyped": true,
+      "read": false
+    },
+    "web_annotations_metrics": {
+      "untyped": true,
+      "read": false
+    },
+    "web_annotations_migrate": {
+      "untyped": true,
+      "read": false
+    },
+    "web_annotations_migration_status": {
+      "untyped": true,
+      "read": false
+    },
+    "web_annotations_reconcile_draft": {
+      "untyped": true,
+      "read": false
+    },
+    "web_annotations_rollout": {
+      "untyped": true,
+      "read": false
+    },
+    "web_annotations_rollout_set": {
+      "untyped": true,
+      "read": false
+    }
+  }
+}

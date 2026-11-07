@@ -1,0 +1,82 @@
+{
+  "schemaVersion": 1,
+  "domain": "git",
+  "commands": {
+    "changes_apply_restore": {
+      "untyped": true,
+      "read": false
+    },
+    "changes_get_capabilities": {
+      "untyped": true,
+      "read": true
+    },
+    "changes_get_diagnostics": {
+      "untyped": true,
+      "read": true
+    },
+    "changes_get_diff": {
+      "untyped": true,
+      "read": true
+    },
+    "changes_get_files": {
+      "untyped": true,
+      "read": true
+    },
+    "changes_get_handoff": {
+      "untyped": true,
+      "read": true
+    },
+    "changes_get_history": {
+      "untyped": true,
+      "read": true
+    },
+    "changes_get_thread": {
+      "untyped": true,
+      "read": true
+    },
+    "changes_get_tool_presentations": {
+      "untyped": true,
+      "read": true
+    },
+    "changes_get_view": {
+      "untyped": true,
+      "read": true
+    },
+    "changes_measure_legacy_payload": {
+      "untyped": true,
+      "read": false
+    },
+    "changes_prepare_restore": {
+      "untyped": true,
+      "read": false
+    },
+    "changes_refresh": {
+      "untyped": true,
+      "read": false
+    },
+    "changes_resolve_live_detail": {
+      "untyped": true,
+      "read": false
+    },
+    "get_environment_diff_stats": {
+      "untyped": true,
+      "read": true
+    },
+    "get_environment_uncommitted_paths": {
+      "untyped": true,
+      "read": true
+    },
+    "get_git_status": {
+      "untyped": true,
+      "read": true
+    },
+    "get_local_git_status": {
+      "untyped": true,
+      "read": true
+    },
+    "refresh_environment_diff_stats": {
+      "untyped": true,
+      "read": false
+    }
+  }
+}

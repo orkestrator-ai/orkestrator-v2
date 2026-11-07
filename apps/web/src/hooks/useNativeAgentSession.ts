@@ -71,7 +71,7 @@ import {
   stopNativeAgentBackgroundTask,
   updateNativeAgentControls,
 } from "@/lib/backend";
-import { incompatibility } from "@orkestrator/protocol/contract/errors";
+import { isUnsupportedBackendCommand } from "@/lib/backend/shared";
 import {
   disableNativeLiveUpdate,
   invalidateNativeAgentSyncCapability,
@@ -328,10 +328,7 @@ async function readLiveUpdate<TMessage>(
       error instanceof Error &&
       (error.message === "Native agent live update response exceeded 20 MiB" ||
         error.message === "Invalid native agent live update response");
-    if (
-      !invalidResponse &&
-      incompatibility(error, "get_native_agent_live_update")?.code !== "unknown-command"
-    )
+    if (!invalidResponse && !isUnsupportedBackendCommand(error, "get_native_agent_live_update"))
       throw error;
     disableNativeLiveUpdate();
     const pending = { viewVersion: NATIVE_AGENT_LIVE_UPDATE_VERSION, status: "pending" } as const;

@@ -1,3 +1,4 @@
+import { eventSink } from "../backend-emit.js";
 import { describe, expect, test } from "bun:test";
 
 import type { NodeRoute } from "@orkestrator/protocol/command-nodes";
@@ -103,7 +104,7 @@ describe("relaying another node's events on request", () => {
     const emitted: unknown[] = [];
     const relay = new NodeEventRelay({
       nodes: command.service,
-      emit: (_event, payload) => emitted.push(payload),
+      emit: eventSink((_event, payload) => emitted.push(payload)),
       fetchImpl: network.fetch,
       now: () => now,
     });
@@ -204,7 +205,7 @@ describe("relaying another node's events on request", () => {
           transport: link.transport.bind(link),
         }),
       },
-      emit: (_event, payload) => frames.push(payload as RelayedNodeEvent),
+      emit: eventSink((_event, payload) => frames.push(payload as RelayedNodeEvent)),
       fetchImpl: network.fetch,
     });
     relay.start();

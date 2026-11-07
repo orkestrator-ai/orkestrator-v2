@@ -1,3 +1,4 @@
+import { eventSink } from "../src/core/backend-emit.js";
 import { afterAll, afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 
 import {
@@ -537,7 +538,7 @@ export async function createCommandFixtures() {
       runtime:
         options.runtime ??
         createRuntime((event, payload) => context.emit(event, payload), options.runtimeOptions),
-      emit: mock((event: string, payload: unknown) => {
+      emit: eventSink((event, payload) => {
         emitted.push({ event, payload });
       }),
       storage: {

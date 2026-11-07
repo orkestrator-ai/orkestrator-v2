@@ -1,3 +1,5 @@
+import { nodeOutboxReadyEvent } from "@orkestrator/protocol/contract/domains/events";
+import type { BackendEmit } from "../backend-emit.js";
 import { createLogger } from "@orkestrator/protocol/logger";
 import { createHash } from "node:crypto";
 import type { BackendId } from "@orkestrator/protocol/federation";
@@ -236,7 +238,7 @@ export class LeafNodeMail {
   constructor(
     private readonly store: NodeMailStore,
     private readonly context: LeafMailContext,
-    private readonly emit: (event: string, payload: unknown) => void,
+    private readonly emit: BackendEmit,
     private readonly now: () => number = Date.now,
     /** Items that have left the outbox, whose spooled images can go too. */
     private readonly onAcknowledged: (items: OutboxItem[]) => void = () => undefined,
@@ -483,7 +485,7 @@ export class LeafNodeMail {
         result: entry,
       };
     });
-    this.emit(NODE_OUTBOX_READY_EVENT, { controllerId });
+    this.emit(nodeOutboxReadyEvent, { controllerId });
     return queued;
   }
 

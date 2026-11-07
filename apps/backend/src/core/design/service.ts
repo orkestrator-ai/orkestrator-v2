@@ -1,7 +1,8 @@
+import { designCanvasChangedEvent } from "@orkestrator/protocol/contract/domains/events";
+import type { BackendEmit } from "../backend-emit.js";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import {
-  DESIGN_EVENT,
   DESIGN_MAX_CANVASES,
   DESIGN_MAX_DOCUMENT_BYTES,
   type DesignCanvas,
@@ -195,7 +196,7 @@ export class DesignService {
   private readonly executeWaitMs: number;
   constructor(
     dataDir: string,
-    private readonly emit: (event: string, payload: unknown) => void,
+    private readonly emit: BackendEmit,
     readonly renderer: DesignRendererLike = new DesignRenderer({
       profiles: new DesignProfileLedger(join(dataDir, DESIGN_BROWSER_PROFILES_DIRECTORY)),
     }),
@@ -678,7 +679,7 @@ export class DesignService {
 
   publish(change: DesignChange) {
     // Content-free bounded hints; clients read snapshots/deltas and detect gaps.
-    this.emit(DESIGN_EVENT, { ...change, generation: this.generation });
+    this.emit(designCanvasChangedEvent, { ...change, generation: this.generation });
   }
 
   receipt(

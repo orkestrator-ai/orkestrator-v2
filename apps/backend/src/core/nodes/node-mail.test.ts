@@ -1,3 +1,4 @@
+import { eventSink } from "../backend-emit.js";
 import { describe, expect, test } from "bun:test";
 
 import type { BackendId } from "@orkestrator/protocol/federation";
@@ -52,7 +53,7 @@ function leaf(
           }
         : {}),
     },
-    (event, payload) => events.push({ event, payload }),
+    eventSink((event, payload) => events.push({ event, payload })),
     () => now,
   );
   const at = (iso: string) => {

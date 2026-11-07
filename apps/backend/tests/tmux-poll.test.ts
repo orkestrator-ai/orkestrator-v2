@@ -1,3 +1,4 @@
+import { eventSink } from "../src/core/backend-emit.js";
 import { describe, expect, mock, test } from "bun:test";
 import type { CommandContext } from "../src/core/commands";
 import type { Environment } from "../src/core/models";
@@ -78,7 +79,7 @@ describe("ClaudeStatePollManager", () => {
           };
         },
       },
-      emit: (event: string, payload: unknown) => emitted.push({ event, payload }),
+      emit: eventSink((event: string, payload: unknown) => emitted.push({ event, payload })),
       appRoot: "",
       resourceRoot: "",
     } as unknown as CommandContext;
@@ -590,7 +591,7 @@ describe("ClaudeStatePollManager", () => {
     const secondEmitted: Array<{ event: string; payload: unknown }> = [];
     const secondContext = {
       ...harness.context,
-      emit: (event: string, payload: unknown) => secondEmitted.push({ event, payload }),
+      emit: eventSink((event: string, payload: unknown) => secondEmitted.push({ event, payload })),
     } as unknown as CommandContext;
 
     harness.manager.start("container-poll", harness.context);
@@ -784,7 +785,7 @@ describe("ClaudeStatePollManager", () => {
           },
         }),
       },
-      emit: (_event: string, payload: unknown) => emitted.push(payload),
+      emit: eventSink((_event: string, payload: unknown) => emitted.push(payload)),
       appRoot: "",
       resourceRoot: "",
     } as unknown as CommandContext;

@@ -9,10 +9,9 @@
  * summary only; file pages are fetched with `changes_get_files`.
  */
 
-import {
-  CHANGE_PROJECTION_CHANGED_EVENT,
-  type ChangeProjectionEvent,
-} from "@orkestrator/protocol/change-resources";
+import { changeProjectionChangedEvent } from "@orkestrator/protocol/contract/domains/events";
+import type { BackendEmit } from "../backend-emit.js";
+import { type ChangeProjectionEvent } from "@orkestrator/protocol/change-resources";
 import type { ChangeLedger } from "./change-ledger.js";
 import type { ProjectionAnnouncer } from "./environment-projector.js";
 import type { ChangeProjectionService } from "./projection-service.js";
@@ -28,7 +27,7 @@ export class ChangeResourcePublisher implements ProjectionAnnouncer {
   constructor(
     private readonly ledger: ChangeLedger,
     private readonly projections: ChangeProjectionService,
-    private readonly emit: (event: string, payload: unknown) => void,
+    private readonly emit: BackendEmit,
   ) {}
 
   announce(resourceKey: string): void {
@@ -101,7 +100,7 @@ export class ChangeResourcePublisher implements ProjectionAnnouncer {
   private send(event: ChangeProjectionEvent): void {
     this.delivered++;
     try {
-      this.emit(CHANGE_PROJECTION_CHANGED_EVENT, event);
+      this.emit(changeProjectionChangedEvent, event);
     } catch {
       // A failed transport delivery is recovered by snapshot reads; the ledger
       // remains authoritative.

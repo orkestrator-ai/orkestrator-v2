@@ -1,7 +1,7 @@
+import { hostMaintenanceUpdatedEvent } from "@orkestrator/protocol/contract/domains/events";
 import { randomUUID } from "node:crypto";
 import {
   CANCELLABLE_HOST_UPDATE_JOB_STATES,
-  HOST_MAINTENANCE_EVENT,
   HOST_MAINTENANCE_LIMITS,
   HOST_TASK_KINDS,
   HOST_UPDATE_IDLE_WAIT,
@@ -333,7 +333,7 @@ export class HostMaintenanceService {
     });
     if (!changed) return this.snapshotOf(this.load());
     const snapshot = this.snapshotOf(changed);
-    this.options.emit(HOST_MAINTENANCE_EVENT, snapshot);
+    this.options.emit(hostMaintenanceUpdatedEvent, snapshot);
     for (const listener of this.listeners) {
       try {
         listener(snapshot);

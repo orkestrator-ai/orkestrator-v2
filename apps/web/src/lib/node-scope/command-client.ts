@@ -27,6 +27,7 @@ import type {
   Unlisten,
 } from "@orkestrator/protocol/node-client";
 import { constantSignal } from "./signal";
+import { typedListen } from "./typed-listen";
 
 type OrkestratorApi = NonNullable<Window["orkestrator"]>;
 type GatewayStreamState = ReturnType<NonNullable<OrkestratorApi["eventStreamConnection"]>["state"]>;
@@ -116,6 +117,7 @@ export function createWindowOrkestratorClient(
       return api.invoke<T>(command, args as Record<string, unknown> | undefined);
     },
     listenRaw,
+    listen: typedListen(listenRaw),
     eventStreamReady,
     terminal: {
       listenOutput: (sessionId, handler) =>

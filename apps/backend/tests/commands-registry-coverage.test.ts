@@ -1,3 +1,4 @@
+import { eventSink } from "../src/core/backend-emit.js";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import http from "node:http";
@@ -127,7 +128,7 @@ function contextWithStorage(
   const context = {
     appRoot: fixtureRoot,
     resourceRoot: fixtureRoot,
-    emit: mock((event: string, payload: unknown) => events.push({ event, payload })),
+    emit: eventSink((event, payload) => events.push({ event, payload })),
     storage: {
       getDataDir: () => REGISTRY_DATA_DIR,
       ...storage,

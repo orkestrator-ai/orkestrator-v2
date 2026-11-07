@@ -1,3 +1,4 @@
+import { eventSink } from "../src/core/backend-emit.js";
 import * as credentialModes from "../src/core/container-credential-mode.js";
 import {
   afterAll,
@@ -284,7 +285,7 @@ function createContext(initialEnvironment = environment()): {
     resourceRoot: root,
     environmentLifecycleTasks: new EnvironmentLifecycleTaskTracker(),
     runtime: new BackendRuntime({ emit: (event, payload) => context.emit(event, payload) }),
-    emit: mock((event: string, payload: unknown) => events.push({ event, payload })),
+    emit: eventSink((event, payload) => events.push({ event, payload })),
     storage: {
       getDataDir: () => root,
       // No added agent accounts: every launch uses the host login.

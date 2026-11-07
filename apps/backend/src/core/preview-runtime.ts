@@ -1,3 +1,4 @@
+import type { BackendEmit } from "./backend-emit.js";
 import { readFile } from "node:fs/promises";
 import type { Duplex } from "node:stream";
 
@@ -50,7 +51,7 @@ export interface PreviewRuntimeStorage extends PreviewRegistryStorage {
 
 export interface PreviewRuntimeOptions {
   storage: PreviewRuntimeStorage;
-  emit: (event: string, payload: unknown) => void;
+  emit: BackendEmit;
   strictDockerOwner?: boolean;
   runDocker?: DockerRunner;
   env?: Record<string, string | undefined>;

@@ -1,3 +1,4 @@
+import { eventSink } from "../src/core/backend-emit.js";
 import { describe, expect, test } from "bun:test";
 import type { CommandContext } from "../src/core/commands";
 import type { StateSignalCredential } from "../src/core/agent-tools";
@@ -92,8 +93,9 @@ function createSignalHarness(
             };
       },
     },
-    emit: (event: string, payload: { state: unknown }) =>
-      emitted.push({ event, state: payload.state }),
+    emit: eventSink((event, payload) =>
+      emitted.push({ event, state: (payload as { state: unknown }).state }),
+    ),
     agentTools: {
       issueStateSignal: (onSignal: () => void) => {
         const signal: IssuedSignal = {

@@ -1,3 +1,4 @@
+import { claudeModelCatalogUpdatedEvent } from "@orkestrator/protocol/contract/domains/events";
 import { bridgeDebugEnvValue } from "@orkestrator/protocol/log-policy";
 import { containerBridgeOperationId } from "./container-bridge-operations.js";
 import type { CommandContext, CommandHandler } from "./commands-context.js";
@@ -366,7 +367,7 @@ export function registerServerCommands(
         await context.storage.updateEnvironment(id, {
           claudeModelCatalog: stale,
         });
-        context.emit("claude-model-catalog-updated", stale);
+        context.emit(claudeModelCatalogUpdatedEvent, stale);
         validatedClaudeModelCatalogs.add(id);
         return stale;
       })

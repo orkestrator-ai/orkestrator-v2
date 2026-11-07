@@ -20,7 +20,8 @@ import type {
 import type { CoordinatorService } from "./coordinator-service.js";
 import type { ProjectGitService } from "./project-git-service.js";
 
-export type BackendEmit = (event: string, payload: unknown) => void;
+export type { BackendEmit, BackendEventSink } from "./backend-emit.js";
+import type { BackendEmit } from "./backend-emit.js";
 
 export type CommandContext = {
   design?: import("./design/index.js").DesignService;

@@ -1,3 +1,4 @@
+import { eventSink } from "./backend-emit.js";
 import { describe, expect, test } from "bun:test";
 import { DIFF_STATS_CHANGED_EVENT } from "@orkestrator/protocol/diff-stats";
 import {
@@ -94,10 +95,10 @@ function createOwner(
     cancel: (timer) => time.clear(timer),
     delay: (callback, delayMs) => time.setTimeout(callback, delayMs),
     cancelDelay: (timer) => time.clear(timer),
-    emit: (event, payload) => {
+    emit: eventSink((event, payload) => {
       if (event === DIFF_STATS_CHANGED_EVENT) diffEvents.push(payload);
       else if (event === WORKTREE_SNAPSHOT_CHANGED_EVENT) snapshotEvents.push(payload);
-    },
+    }),
     onWarning: (warning) => warnings.push(`${warning.event} ${warning.environmentId}`),
     startWatcher: (watcherOptions) => {
       const record: FakeWatcher = {

@@ -1,16 +1,20 @@
+import {
+  environmentDiffStatsChangedEvent,
+  worktreeSnapshotChangedEvent,
+} from "@orkestrator/protocol/contract/domains/events";
+import type { BackendEmit } from "./backend-emit.js";
+import type { PayloadOf } from "@orkestrator/protocol/contract/event";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { WorktreeRemovalReads } from "./worktree-removal-reads.js";
 import type { RecurringPriorityClass } from "@orkestrator/protocol/recurring-work";
 import {
-  DIFF_STATS_CHANGED_EVENT,
   type EnvironmentDiffStats,
   type EnvironmentDiffStatsChange,
   type EnvironmentDiffStatsRemoval,
   type EnvironmentDiffStatsSnapshot,
 } from "@orkestrator/protocol/diff-stats";
 import {
-  WORKTREE_SNAPSHOT_CHANGED_EVENT,
   type WorktreeReadStamp,
   type WorktreeRemoteFreshness,
   type WorktreeSnapshotFreshness,
@@ -174,7 +178,7 @@ export interface DiffStatsWarning {
 export interface DiffStatsServiceOptions {
   /** Runs the real git scan. Injected so the service is testable without git. */
   scan: (target: DiffStatsTarget, request?: ScanRequest) => Promise<DiffScanResult>;
-  emit: (event: string, payload: unknown) => void;
+  emit: BackendEmit;
   /**
    * Reads a file list for an identity no tracked entry covers. Defaults to
    * `scan` for working-tree reads; committed-only reads need this.
@@ -1603,7 +1607,7 @@ export class DiffStatsService {
 
   private announceSnapshot(payload: WorktreeSnapshotState | WorktreeSnapshotRemoval): void {
     this.snapshotRevision += 1;
-    this.emitSafely(WORKTREE_SNAPSHOT_CHANGED_EVENT, payload.environmentId, {
+    this.emitSafely(worktreeSnapshotChangedEvent, payload.environmentId, {
       ...payload,
       generation: this.generation,
       revision: this.snapshotRevision,
@@ -1624,21 +1628,23 @@ export class DiffStatsService {
 
   private announce(payload: EnvironmentDiffStatsChange | EnvironmentDiffStatsRemoval): void {
     this.revision += 1;
-    this.emitSafely(DIFF_STATS_CHANGED_EVENT, payload.environmentId, {
+    this.emitSafely(environmentDiffStatsChangedEvent, payload.environmentId, {
       ...payload,
       generation: this.generation,
       revision: this.revision,
     });
   }
 
-  private emitSafely(event: string, environmentId: string, payload: unknown): void {
+  private emitSafely<
+    E extends typeof environmentDiffStatsChangedEvent | typeof worktreeSnapshotChangedEvent,
+  >(event: E, environmentId: string, payload: PayloadOf<E>): void {
     try {
       this.options.emit(event, payload);
     } catch (error) {
       // One faulty event sink must not turn a best-effort background refresh
       // into an unhandled rejection or stop future scans.
       this.warn(
-        event === DIFF_STATS_CHANGED_EVENT
+        event === environmentDiffStatsChangedEvent
           ? "emit.diff-stats-failed"
           : "emit.worktree-snapshot-failed",
         environmentId,

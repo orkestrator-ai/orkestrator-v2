@@ -1,3 +1,4 @@
+import { agentAccountsChangedEvent } from "@orkestrator/protocol/contract/domains/events";
 import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -14,7 +15,6 @@ import {
 } from "@orkestrator/protocol/agent-account-auto-switch";
 import {
   AGENT_ACCOUNT_PLATFORMS,
-  AGENT_ACCOUNTS_CHANGED_EVENT,
   DEFAULT_AGENT_ACCOUNT_ID,
   MAX_AGENT_ACCOUNT_LABEL_LENGTH,
   MAX_AGENT_ACCOUNTS_PER_PLATFORM,
@@ -87,7 +87,7 @@ const USAGE_ERROR_TTL_MS = 10_000;
 
 /** Tell every view of this machine's accounts to re-read them (`AGENT_ACCOUNTS_CHANGED_EVENT`). */
 function announceAccountsChanged(context: CommandContext, platform: AgentAccountPlatform): void {
-  context.emit(AGENT_ACCOUNTS_CHANGED_EVENT, { platform });
+  context.emit(agentAccountsChangedEvent, { platform });
 }
 
 function accountsRoot(context: CommandContext): string {

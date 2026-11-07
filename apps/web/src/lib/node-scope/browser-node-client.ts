@@ -28,6 +28,7 @@ import {
 } from "@/lib/native/node-transport";
 import { createListenerFanout } from "./listener-fanout";
 import { constantSignal, createSignal } from "./signal";
+import { typedListen } from "./typed-listen";
 
 export interface BrowserNodeClientOptions {
   readonly nodeId: BackendId;
@@ -160,6 +161,7 @@ export function createBrowserNodeClient(options: BrowserNodeClientOptions): Brow
       return created.invoke<T>(command, args as Record<string, unknown> | undefined);
     },
     listenRaw,
+    listen: typedListen(listenRaw),
     eventStreamReady,
     terminal: {
       listenOutput: (sessionId, handler) =>

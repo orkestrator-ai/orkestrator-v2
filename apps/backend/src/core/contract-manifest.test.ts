@@ -14,10 +14,13 @@ import path from "node:path";
 import * as Schema from "effect/Schema";
 import { defineCommand } from "@orkestrator/protocol/contract/command";
 import { defineDomain, isDomainName } from "@orkestrator/protocol/contract/domain";
+import { BACKEND_EVENTS } from "@orkestrator/protocol/contract/domains/events";
+import { defineEvent, defineEventFamily } from "@orkestrator/protocol/contract/event";
 import { canonicalJsonSchema } from "@orkestrator/protocol/contract/json-schema";
 import {
   buildContractManifest,
   CONTRACT_MANIFEST_SCHEMA_VERSION,
+  eventManifestKey,
   ContractManifestError,
   describeManifestDrift,
   parseArguments,
@@ -57,6 +60,19 @@ const deliver = defineCommand({
 
 const handler: CommandHandler = () => null;
 
+const terminals = defineDomain({ name: "terminals", version: 1 });
+const outboxReady = defineEvent({
+  domain: nodeMail,
+  name: "fake-outbox-ready",
+  payload: Schema.Struct({ controllerId: Schema.String }),
+});
+const output = defineEventFamily({
+  domain: terminals,
+  prefix: "fake-output-",
+  payload: Schema.Struct({ text: Schema.String }),
+});
+const FAKE_EVENTS = [output, outboxReady];
+
 /** A registry holding `deliver` and the given string-registered commands, in that order. */
 function fakeRegistry(untyped: readonly string[]): CommandRegistry {
   const registry = new CommandRegistry();
@@ -73,7 +89,7 @@ const FAKE_MAP: ContractDomainMap = {
 const FAKE_COMMANDS = ["zeta_update_task", "alpha_restart", "get_kanban_board"];
 
 function build(untyped: readonly string[] = FAKE_COMMANDS, domainMap = FAKE_MAP) {
-  return buildContractManifest(fakeRegistry(untyped), { domainMap });
+  return buildContractManifest(fakeRegistry(untyped), { domainMap, events: FAKE_EVENTS });
 }
 
 function problemsOf(run: () => unknown): readonly string[] {
@@ -116,8 +132,21 @@ describe("buildContractManifest", () => {
       read: false,
     });
     expect(manifest.domains).toEqual({ "node-mail": { version: 2, min: 1 } });
-    expect(manifest.events).toEqual({});
-    expect(manifest.counts).toEqual({ commands: 4, defined: 1, untyped: 3 });
+    expect(manifest.events).toEqual({
+      "fake-outbox-ready": {
+        domain: "node-mail",
+        payloadDigest: schemaDigest(outboxReady.payload),
+      },
+      "fake-output-*": {
+        domain: "terminals",
+        family: true,
+        prefix: "fake-output-",
+        key: output.key.source,
+        payloadDigest: schemaDigest(output.payload),
+      },
+    });
+    expect(Object.keys(manifest.events)).toEqual(["fake-outbox-ready", "fake-output-*"]);
+    expect(manifest.counts).toEqual({ commands: 4, defined: 1, untyped: 3, events: 2 });
     expect(manifest.untypedByDomain).toEqual({ kanban: 2, system: 1 });
     expect(Object.keys(manifest.untypedByDomain)).toEqual(["kanban", "system"]);
   });
@@ -317,5 +346,48 @@ describe("CONTRACT_DOMAIN_MAP", () => {
       expect([...commands].sort()).toEqual([...commands]);
       for (const command of commands) expect(byCommand.get(command)).toBe(domain as never);
     }
+  });
+});
+
+describe("manifest events (plan item 7011)", () => {
+  test("default to every backend event", () => {
+    const manifest = buildContractManifest(fakeRegistry(FAKE_COMMANDS), { domainMap: FAKE_MAP });
+    expect(Object.keys(manifest.events)).toEqual(BACKEND_EVENTS.map(eventManifestKey).sort());
+    expect(manifest.counts.events).toBe(BACKEND_EVENTS.length);
+    expect(manifest.events["terminal-output-*"]).toMatchObject({
+      domain: "terminals",
+      family: true,
+    });
+    expect(manifest.events["resource-changed"]).toMatchObject({ domain: "system" });
+  });
+
+  test("fail on a duplicate event and on a family prefix covering another event", () => {
+    const covered = defineEvent({ domain: terminals, name: "fake-output-x", payload: Schema.Null });
+    const problems = problemsOf(() =>
+      buildContractManifest(fakeRegistry(FAKE_COMMANDS), {
+        domainMap: FAKE_MAP,
+        events: [outboxReady, outboxReady, output, covered],
+      }),
+    );
+    expect(problems).toEqual([
+      "Event fake-outbox-ready is defined twice.",
+      "Event family fake-output-* also covers fake-output-x.",
+    ]);
+  });
+
+  test("a payload schema change is drift", () => {
+    const changed = defineEvent({
+      domain: nodeMail,
+      name: "fake-outbox-ready",
+      payload: Schema.Struct({ controllerId: Schema.String, count: Schema.Finite }),
+    });
+    const before = serializeContractManifest(build());
+    const after = serializeContractManifest(
+      buildContractManifest(fakeRegistry(FAKE_COMMANDS), {
+        domainMap: FAKE_MAP,
+        events: [output, changed],
+      }),
+    );
+    expect(describeManifestDrift(before, after)).toEqual(["event changed: fake-outbox-ready"]);
   });
 });

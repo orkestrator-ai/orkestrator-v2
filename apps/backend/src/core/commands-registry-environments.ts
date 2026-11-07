@@ -1,3 +1,4 @@
+import { environmentSetupCompleteEvent } from "@orkestrator/protocol/contract/domains/events";
 import { reconcileProjectHomeEnvironment } from "./project-home-environment.js";
 import {
   containerLifecycleSnapshot,
@@ -825,7 +826,7 @@ export function registerEnvironmentCommands(
       });
       environment = (await context.storage.getEnvironment(environment.id)) ?? environment;
     }
-    context.emit("environment-setup-complete", {
+    context.emit(environmentSetupCompleteEvent, {
       environment_id: id,
       success: true,
       overridden: true,

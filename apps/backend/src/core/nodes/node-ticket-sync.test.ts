@@ -1,3 +1,4 @@
+import { eventSink } from "../backend-emit.js";
 import { registrarFrom } from "../commands-registry-contracts.js";
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -83,7 +84,7 @@ async function fleet(options: { capability?: boolean } = {}) {
     ],
     localProjects: () => command.loadProjects(),
     kanban: command.kanban,
-    emit: (event, payload) => events.push({ event, payload }),
+    emit: eventSink((event, payload) => events.push({ event, payload })),
     debounceMs: 1,
     retryDelayMs: 60_000,
   });

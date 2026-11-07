@@ -17,6 +17,7 @@ import {
   type NodeClientRegistryOptions,
 } from "./node-clients";
 import { createSignal, constantSignal } from "./signal";
+import { typedListen } from "./typed-listen";
 import { WindowScope } from "./window-scope";
 
 const LEAF = "bk_leaf" as BackendId;
@@ -120,6 +121,7 @@ function fakeClientFactory() {
           set.delete(wrapped);
         };
       },
+      listen: typedListen((event, handler) => client.listenRaw(event, handler)),
       eventStreamReady: async () => {},
       terminal: { listenOutput: () => () => {}, outputReady: async () => {} },
       connection,

@@ -1,3 +1,9 @@
+import {
+  claudeTmuxEvent,
+  tmuxAgentUsageEvent,
+  tmuxPromptClearedEvent,
+  tmuxPromptDetectedEvent,
+} from "@orkestrator/protocol/contract/domains/events";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { CLAUDE_PINNED_RUNTIME_ENV } from "@orkestrator/protocol/terminal-agent-launch";
 import * as shared from "./tmux-shared.js";
@@ -6,7 +12,6 @@ import { LOW_PRIORITY_SHELL_PREFIX } from "./process-priority.js";
 import * as hooks from "./tmux-hooks.js";
 import {
   AsyncMutex,
-  CLAUDE_TMUX_EVENT,
   COMMAND_AFTER_IDLE_SETTLE_MS,
   COMMAND_IDLE_TIMEOUT_MS,
   COMMAND_NO_HOOK_SETTLE_MS,
@@ -315,7 +320,7 @@ export class TmuxSession {
   private publishTranscriptLine(context: CommandContext, line: unknown, stamped: unknown): void {
     const permissionMode = permissionModeFromTranscriptLine(line);
     if (permissionMode) this.setPermissionMode(permissionMode, context);
-    context.emit(CLAUDE_TMUX_EVENT, {
+    context.emit(claudeTmuxEvent, {
       kind: "transcript-line",
       tab_id: this.tabId,
       environment_id: this.environmentId,
@@ -482,7 +487,7 @@ export class TmuxSession {
     }
 
     this.spawnPollLoop(context);
-    context.emit(CLAUDE_TMUX_EVENT, {
+    context.emit(claudeTmuxEvent, {
       kind: "started",
       tab_id: this.tabId,
       environment_id: this.environmentId,
@@ -497,7 +502,7 @@ export class TmuxSession {
     if (launchedNew && initialPrompt?.trim()) {
       void this.sendInitialPromptWhenReady(initialPrompt, launchedNew)
         .then(() => {
-          context.emit(CLAUDE_TMUX_EVENT, {
+          context.emit(claudeTmuxEvent, {
             kind: "initial-prompt-sent",
             tab_id: this.tabId,
             environment_id: this.environmentId,
@@ -505,7 +510,7 @@ export class TmuxSession {
           });
         })
         .catch((error) => {
-          context.emit(CLAUDE_TMUX_EVENT, {
+          context.emit(claudeTmuxEvent, {
             kind: "warning",
             tab_id: this.tabId,
             environment_id: this.environmentId,
@@ -812,7 +817,7 @@ export class TmuxSession {
               );
               for (const timeout of timeouts) {
                 emittedBlockingIds.delete(timeout.id);
-                context.emit(CLAUDE_TMUX_EVENT, {
+                context.emit(claudeTmuxEvent, {
                   kind: "hook-timed-out",
                   tab_id: this.tabId,
                   environment_id: this.environmentId,
@@ -881,7 +886,7 @@ export class TmuxSession {
               if (this.stopRequested) break;
               continue;
             }
-            context.emit(CLAUDE_TMUX_EVENT, {
+            context.emit(claudeTmuxEvent, {
               kind: "stopped",
               tab_id: this.tabId,
               environment_id: this.environmentId,
@@ -946,7 +951,7 @@ export class TmuxSession {
 
     const previousPrompt = this.observation.prompt;
     this.observation = next;
-    context.emit(CLAUDE_TMUX_EVENT, {
+    context.emit(claudeTmuxEvent, {
       kind: "observation",
       tab_id: this.tabId,
       environment_id: this.environmentId,
@@ -954,7 +959,7 @@ export class TmuxSession {
       observation: next,
     });
     if (usageChanged) {
-      context.emit("tmux-agent-usage", {
+      context.emit(tmuxAgentUsageEvent, {
         tab_id: this.tabId,
         environment_id: this.environmentId,
         session_id: this.sessionId,
@@ -964,14 +969,15 @@ export class TmuxSession {
       });
     }
     if (promptChanged) {
-      context.emit(next.prompt ? "tmux-prompt-detected" : "tmux-prompt-cleared", {
+      const observed = {
         tab_id: this.tabId,
         environment_id: this.environmentId,
         session_id: this.sessionId,
         revision: next.revision,
         observed_at: next.observedAt,
-        ...(next.prompt ? { prompt: next.prompt } : { previous_prompt: previousPrompt }),
-      });
+      };
+      if (next.prompt) context.emit(tmuxPromptDetectedEvent, { ...observed, prompt: next.prompt });
+      else context.emit(tmuxPromptClearedEvent, { ...observed, previous_prompt: previousPrompt });
     }
     await context.runtime.tmux.persistEnvironmentActivity(context, this.environmentId);
   }
@@ -1024,7 +1030,7 @@ export class TmuxSession {
   }
 
   private emitHookFrame(context: CommandContext, event: PendingHookEvent, payload: unknown): void {
-    context.emit(CLAUDE_TMUX_EVENT, {
+    context.emit(claudeTmuxEvent, {
       kind: "hook",
       tab_id: this.tabId,
       environment_id: this.environmentId,
@@ -1316,7 +1322,7 @@ export class TmuxSession {
   }
 
   private emitFastModeChanged(fastMode: boolean, context: CommandContext): void {
-    context.emit(CLAUDE_TMUX_EVENT, {
+    context.emit(claudeTmuxEvent, {
       kind: "fast-mode-changed",
       tab_id: this.tabId,
       environment_id: this.environmentId,
@@ -1448,7 +1454,7 @@ export class TmuxSession {
   private setPermissionMode(permissionMode: string, context: CommandContext): void {
     if (permissionMode === this.permissionMode) return;
     this.permissionMode = permissionMode;
-    context.emit(CLAUDE_TMUX_EVENT, {
+    context.emit(claudeTmuxEvent, {
       kind: "permission-mode-changed",
       tab_id: this.tabId,
       environment_id: this.environmentId,

@@ -1,3 +1,4 @@
+import { eventSink } from "../backend-emit.js";
 import { registrarFrom } from "../commands-registry-contracts.js";
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 
@@ -46,7 +47,7 @@ function coordination(world: MailWorld, controllers: Array<{ id: string; name: s
     nodes: nodes as never,
     portal: portal as never,
     invoke: async () => undefined as never,
-    emit: (event, payload) => events.push({ event, payload }),
+    emit: eventSink((event, payload) => events.push({ event, payload })),
   });
   return { instance, events };
 }

@@ -1,3 +1,4 @@
+import { eventSink } from "./backend-emit.js";
 import { describe, expect, test } from "bun:test";
 import { WORKTREE_SNAPSHOT_CHANGED_EVENT } from "@orkestrator/protocol/worktree-snapshots";
 import {
@@ -63,9 +64,9 @@ function createOwner(overrides: Partial<DiffStatsServiceOptions> = {}) {
     cancel: (timer) => time.clear(timer),
     delay: (callback, delayMs) => time.setTimeout(callback, delayMs),
     cancelDelay: (timer) => time.clear(timer),
-    emit: (event, payload) => {
+    emit: eventSink((event, payload) => {
       if (event === WORKTREE_SNAPSHOT_CHANGED_EVENT) snapshotEvents.push(payload);
-    },
+    }),
     // Containers have no watcher; local roots here are unwatched too.
     startWatcher: () => ({ watching: false, qualified: false, close() {} }),
     scan: async () => {

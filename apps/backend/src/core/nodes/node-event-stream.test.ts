@@ -1,3 +1,4 @@
+import { eventSink } from "../backend-emit.js";
 import { describe, expect, test } from "bun:test";
 
 import type { NodeRoute } from "@orkestrator/protocol/command-nodes";
@@ -92,7 +93,7 @@ describe("the portal read model's periodic re-read", () => {
     const emitted: Array<{ event: string; payload: unknown }> = [];
     const readModel = new NodeReadModel({
       nodes: command.service,
-      emit: (event, payload) => emitted.push({ event, payload }),
+      emit: eventSink((event, payload) => emitted.push({ event, payload })),
       fetchImpl: network.fetch,
       reconcileMs: 40,
     });

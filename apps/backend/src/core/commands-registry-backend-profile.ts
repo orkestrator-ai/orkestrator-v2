@@ -1,3 +1,4 @@
+import { backendProfileChangedEvent } from "@orkestrator/protocol/contract/domains/events";
 import {
   BACKEND_PROFILE_CHANGED_EVENT,
   parseBackendProfileUpdate,
@@ -19,7 +20,7 @@ export function registerBackendProfileCommands(register: CommandRegistrar): void
     const profile = await context.storage.previewServices.updateBackendProfile(
       parseBackendProfileUpdate(args),
     );
-    context.emit(BACKEND_PROFILE_CHANGED_EVENT, profile);
+    context.emit(backendProfileChangedEvent, profile);
     context.nodePortal?.readModel.noteLocalEvent(BACKEND_PROFILE_CHANGED_EVENT, profile);
     return profile;
   });

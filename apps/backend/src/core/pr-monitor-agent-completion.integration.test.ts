@@ -1,3 +1,4 @@
+import { eventSink } from "./backend-emit.js";
 import { expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
@@ -308,7 +309,7 @@ async function withProbeHarness(
     runtime = new BackendRuntime({ emit: (event, payload) => context.emit(event, payload) });
     const context = {
       storage,
-      emit: (event: string, payload: unknown) => events.push({ event, payload }),
+      emit: eventSink((event: string, payload: unknown) => events.push({ event, payload })),
       appRoot: "",
       resourceRoot: "",
       toolchainBinDir: "",

@@ -1,3 +1,4 @@
+import { eventSink } from "../backend-emit.js";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -53,7 +54,7 @@ export function createHarness(
   const service = new ChangeTrackingService({
     dataDir,
     database: () => (database ??= openChangeLedgerDatabase(dataDir)),
-    emit: (event, payload) => events.push({ event, payload }),
+    emit: eventSink((event, payload) => events.push({ event, payload })),
     environmentTarget: async (environmentId) =>
       environmentId === "env-1" || options.aliases?.includes(environmentId)
         ? { kind: "local", worktreePath: repo }

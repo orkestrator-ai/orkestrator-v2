@@ -1,3 +1,4 @@
+import { eventSink } from "../src/core/backend-emit.js";
 import { describe, expect, test } from "bun:test";
 import path from "node:path";
 import { tmuxSessionName } from "../src/core/tmux";
@@ -424,7 +425,7 @@ exit 0
       const emitted: Array<{ event: string; payload: unknown }> = [];
       const context = {
         storage: { getEnvironment: async () => environment },
-        emit: (event: string, payload: unknown) => emitted.push({ event, payload }),
+        emit: eventSink((event: string, payload: unknown) => emitted.push({ event, payload })),
         appRoot: "",
         resourceRoot: "",
       };
@@ -895,7 +896,7 @@ exit 0
       const emitted: Array<{ event: string; payload: unknown }> = [];
       const context = {
         storage: { getEnvironment: async () => environment },
-        emit: (event: string, payload: unknown) => emitted.push({ event, payload }),
+        emit: eventSink((event: string, payload: unknown) => emitted.push({ event, payload })),
         appRoot: "",
         resourceRoot: "",
       };
@@ -1012,7 +1013,7 @@ exit 0
       const emitted: Array<{ event: string; payload: unknown }> = [];
       const context = {
         storage: { getEnvironment: async () => environment },
-        emit: (event: string, payload: unknown) => emitted.push({ event, payload }),
+        emit: eventSink((event: string, payload: unknown) => emitted.push({ event, payload })),
         appRoot: "",
         resourceRoot: "",
       };

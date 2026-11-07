@@ -1,3 +1,4 @@
+import { eventSink } from "./backend-emit.js";
 import { afterEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
@@ -217,7 +218,7 @@ describe("backend profile commands", () => {
     const emitted: Array<{ event: string; payload: unknown }> = [];
     const context = {
       storage,
-      emit: (event: string, payload: unknown) => emitted.push({ event, payload }),
+      emit: eventSink((event: string, payload: unknown) => emitted.push({ event, payload })),
     } as unknown as CommandContext;
     const commands = createCommandRegistry();
     const invoke = (name: string, args: Record<string, unknown> = {}) =>

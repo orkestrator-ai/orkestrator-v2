@@ -1,3 +1,7 @@
+import {
+  environmentSetupCompleteEvent,
+  environmentSetupStartedEvent,
+} from "@orkestrator/protocol/contract/domains/events";
 import { ROOTLESSKIT_HOST_LOOPBACK_ADDRESS } from "@orkestrator/protocol/container-host-reachability";
 import { isEnvironmentSetupSettled } from "@orkestrator/protocol/environment-readiness";
 import {
@@ -584,7 +588,7 @@ export function beginSetupPreparationSession(
     sessionId,
   });
   terminals.emitOutput(sessionId, formatSetupPreparationIntro(environment), context.emit);
-  context.emit("environment-setup-started", {
+  context.emit(environmentSetupStartedEvent, {
     environment_id: environment.id,
     session_id: sessionId,
     environment: toClientEnvironment(environment),
@@ -747,7 +751,7 @@ export async function spawnSetupTerminal(
     bufferChars: terminals.outputLength(sessionId),
   });
 
-  context.emit("environment-setup-started", {
+  context.emit(environmentSetupStartedEvent, {
     environment_id: environment.id,
     session_id: sessionId,
     environment: toClientEnvironment(environment),
@@ -796,7 +800,7 @@ export async function completeEnvironmentSetup(
       success: true,
     });
   }
-  context.emit("environment-setup-complete", {
+  context.emit(environmentSetupCompleteEvent, {
     environment_id: environment.id,
     success: true,
     environment: toClientEnvironment(updated),
@@ -856,7 +860,7 @@ export async function failEnvironmentSetup(
   } catch (clearError) {
     log.warn("setup.clear-launch-failed", { environmentId, error: formatLogError(clearError) });
   }
-  context.emit("environment-setup-complete", {
+  context.emit(environmentSetupCompleteEvent, {
     environment_id: environmentId,
     success: false,
     error: message,
@@ -884,7 +888,7 @@ export async function failEnvironmentSetupBeforeAttempt(
   } catch (updateError) {
     log.warn("setup.record-failure-failed", { environmentId, error: formatLogError(updateError) });
   }
-  context.emit("environment-setup-complete", {
+  context.emit(environmentSetupCompleteEvent, {
     environment_id: environmentId,
     success: false,
     error: message,

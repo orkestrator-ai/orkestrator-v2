@@ -34,6 +34,7 @@ import type { ReactElement } from "react";
 import type { NodeScope, NodeScopeRole } from "@/lib/node-scope/node-scope";
 import { NodeScopeProvider, WindowScopeProvider } from "@/lib/node-scope/providers";
 import { createSignal } from "@/lib/node-scope/signal";
+import { typedListen } from "@/lib/node-scope/typed-listen";
 import { WindowScope } from "@/lib/node-scope/window-scope";
 
 export const FAKE_NODE_ID = "bk_fake-node" as BackendId;
@@ -101,6 +102,11 @@ export class FakeNodeClient implements NodeClient {
     const response = this.responses.get(command);
     return (await (typeof response === "function" ? response(args) : response)) as T;
   }
+
+  /** Typed `listen` (plan item 7011), over {@link listenRaw}. */
+  readonly listen: NodeClient["listen"] = typedListen((event, handler) =>
+    this.listenRaw(event, handler),
+  );
 
   listenRaw<T = unknown>(event: string, handler: (payload: T) => void): Unlisten {
     if (this.disposed) return () => {};

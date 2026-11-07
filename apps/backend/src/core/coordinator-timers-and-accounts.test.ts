@@ -1,3 +1,4 @@
+import { eventSink } from "./backend-emit.js";
 import { registrarFrom } from "./commands-registry-contracts.js";
 import { afterEach, beforeEach, describe, expect, test, spyOn } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -377,7 +378,7 @@ beforeEach(async () => {
             actions,
             loadGlobalConfig: async () => ({}),
             projectName: async () => "Project",
-            emit: (event, payload) => switchEvents.push({ event, payload }),
+            emit: eventSink((event, payload) => switchEvents.push({ event, payload })),
           },
           args,
         )) as T;

@@ -1,3 +1,4 @@
+import { eventSink } from "./backend-emit.js";
 import { registrarFrom } from "./commands-registry-contracts.js";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -178,7 +179,7 @@ beforeEach(async () => {
     save: async (rows) => {
       durable = structuredClone(rows);
     },
-    emit: (event, payload) => events.push({ event, payload }),
+    emit: eventSink((event, payload) => events.push({ event, payload })),
     now: () => clock.now,
     executors: {
       "switch-agent-account": (request) => {
@@ -207,7 +208,7 @@ beforeEach(async () => {
   commandContext = {
     storage,
     nodeCoordination: { actions } as unknown as NodeCoordination,
-    emit: (event: string, payload: unknown) => events.push({ event, payload }),
+    emit: eventSink((event: string, payload: unknown) => events.push({ event, payload })),
   } as unknown as CommandContext;
   const invoke: ControlMcpInvoker = async <T>(
     command: string,

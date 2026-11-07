@@ -8,11 +8,12 @@
  * `-threads.ts`, `-results.ts`, `-requests.ts`, `web-annotation-migration.ts`)
  * is a collaborator that takes this context; none of them extends another.
  */
+import { webAnnotationsChangedEvent } from "@orkestrator/protocol/contract/domains/events";
+import type { BackendEmit } from "./backend-emit.js";
 import { createHash, randomUUID } from "node:crypto";
 import {
   DEFAULT_WEB_ANNOTATION_ROLLOUT_MODE,
   WEB_ANNOTATION_LIMITS,
-  WEB_ANNOTATIONS_CHANGED_EVENT,
   type WebAnnotation,
   type WebAnnotationAsset,
   type WebAnnotationAssetStageResult,
@@ -95,7 +96,7 @@ export interface WebAnnotationHostStorage {
 
 export interface WebAnnotationServiceOptions {
   dataDir: string;
-  emit?: (event: string, payload: unknown) => void;
+  emit?: BackendEmit;
   clock?: () => number;
   faults?: WebAnnotationFaultHook;
   storage?: WebAnnotationHostStorage;
@@ -167,7 +168,7 @@ export class WebAnnotationContext {
           commit.requestIds,
         );
         try {
-          this.options.emit?.(WEB_ANNOTATIONS_CHANGED_EVENT, hint);
+          this.options.emit?.(webAnnotationsChangedEvent, hint);
         } catch {
           // Hints are advisory; clients reconcile from snapshots.
         }

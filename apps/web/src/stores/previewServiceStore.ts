@@ -2,13 +2,13 @@ import { create } from "zustand";
 
 import {
   isUnknownPreviewCommandError,
-  PREVIEW_SERVICES_CHANGED_EVENT,
   previewErrorFromUnknown,
   type PreviewCapabilities,
   type PreviewRegistrySnapshot,
-  type PreviewServicesChangedEvent,
   type PreviewServiceSnapshot,
 } from "@orkestrator/protocol/preview-services";
+import { previewServicesChangedEvent } from "@orkestrator/protocol/contract/domains/events";
+import type { PayloadOf } from "@orkestrator/protocol/contract/event";
 
 import * as backend from "@/lib/backend";
 import { NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
@@ -37,7 +37,7 @@ interface PreviewServiceStoreState {
   ): Promise<PreviewRegistrySnapshot | null>;
   /** An unconditional snapshot requested after any work already in progress. */
   confirmEnvironment(environmentId: string): Promise<PreviewRegistrySnapshot>;
-  handleChanged(event: PreviewServicesChangedEvent): void;
+  handleChanged(event: PayloadOf<typeof previewServicesChangedEvent>): void;
   service(environmentId: string, serviceId: string): PreviewServiceSnapshot | null;
   reset(): void;
 }
@@ -263,7 +263,7 @@ export function ensurePreviewServiceSync(): void {
   if (syncStarted || !commandTransportAvailable()) return;
   syncStarted = true;
   const client = commandClient();
-  client.listenRaw<PreviewServicesChangedEvent>(PREVIEW_SERVICES_CHANGED_EVENT, (event) => {
+  client.listen(previewServicesChangedEvent, (event) => {
     usePreviewServiceStore.getState().handleChanged(event);
   });
   client.listenRaw(NATIVE_EVENT_STREAM_CONNECTED_EVENT, () => {

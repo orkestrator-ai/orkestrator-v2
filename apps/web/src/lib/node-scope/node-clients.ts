@@ -77,6 +77,7 @@ import { createListenerFanout } from "./listener-fanout";
 import type { NodeScope, NodeScopeTier } from "./node-scope";
 import { createSignal } from "./signal";
 import type { WindowScope } from "./window-scope";
+import { typedListen } from "./typed-listen";
 
 /** How a leaf is reached right now; shown in the info panel. */
 export interface LeafRoute extends WorkspaceConnectionPath {
@@ -330,6 +331,7 @@ function createLease(
       return shared.current().invokeRaw<T>(command, args);
     },
     listenRaw,
+    listen: typedListen(listenRaw),
     eventStreamReady(event) {
       if (disposed) return Promise.reject(disposedError());
       return shared.current().eventStreamReady(event);

@@ -10,6 +10,7 @@
  * See docs/architecture/change-tracking.md.
  */
 
+import type { BackendEmit } from "../backend-emit.js";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import type {
@@ -95,7 +96,7 @@ export interface EvidenceSource {
 export interface ChangeTrackingServiceOptions {
   dataDir: string;
   database: () => StorageDatabase;
-  emit: (event: string, payload: unknown) => void;
+  emit: BackendEmit;
   /** Resolve an environment to the worktree its agents write. */
   environmentTarget: (environmentId: string) => Promise<WorktreeTarget | null>;
   /** Map a provider conversation to the logical session (tab) that owns it. */

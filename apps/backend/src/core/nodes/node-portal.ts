@@ -1,12 +1,11 @@
+import { nodeOutcomesChangedEvent } from "@orkestrator/protocol/contract/domains/events";
+import type { BackendEmit } from "../backend-emit.js";
 import { randomUUID } from "node:crypto";
 
 import { parseBackendProfile } from "@orkestrator/protocol/backend-profile";
 import type { NodeView } from "@orkestrator/protocol/command-nodes";
 import { isBackendId, type BackendId } from "@orkestrator/protocol/federation";
-import {
-  NODE_OUTCOMES_CHANGED_EVENT,
-  type NodeSummariesResult,
-} from "@orkestrator/protocol/node-summaries";
+import type { NodeSummariesResult } from "@orkestrator/protocol/node-summaries";
 
 import { ClientGrantService, MAX_GRANT_TTL_MS, type ClientGrant } from "./client-grants.js";
 import { NodeEventRelay } from "./node-event-relay.js";
@@ -85,7 +84,7 @@ export class NodePortal {
   constructor(
     private readonly options: {
       nodes: NodeService;
-      emit: (event: string, payload: unknown) => void;
+      emit: BackendEmit;
       summaries?: ReadModelPersistence;
       /** This node's own commands, for its self summary. */
       local?: ReadModelLocal;
@@ -109,7 +108,7 @@ export class NodePortal {
       ...(options.now ? { now: options.now } : {}),
     });
     this.outcomes = new NodeOutcomeLedger(options.outcomes, (nodeId) => {
-      options.emit(NODE_OUTCOMES_CHANGED_EVENT, { nodeId });
+      options.emit(nodeOutcomesChangedEvent, { nodeId });
     });
     this.grants = new ClientGrantService(options.now);
     options.nodes.onControllerDetached((controllerId) => {

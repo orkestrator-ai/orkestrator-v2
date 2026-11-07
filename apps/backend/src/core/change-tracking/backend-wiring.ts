@@ -4,6 +4,7 @@
  * only decides *when* tracking starts, not how it is assembled.
  */
 
+import type { BackendEmit } from "../backend-emit.js";
 import type { StorageDatabase } from "../storage-database.js";
 import { openBackendDatabase } from "../storage-stores.js";
 import type { StorageService } from "../storage.js";
@@ -20,7 +21,7 @@ const log = createLogger("change-tracking");
 export function createBackendChangeTracking(input: {
   dataDir: string;
   storage: Pick<StorageService, "getEnvironment" | "loadConfig">;
-  emit: (event: string, payload: unknown) => void;
+  emit: BackendEmit;
   /** Pass the scan owner so production cannot omit the explicit-refresh path. */
   diffStats: Pick<DiffStatsTracking, "refreshExplicitly"> & {
     service: Pick<DiffStatsTracking["service"], "refresh">;

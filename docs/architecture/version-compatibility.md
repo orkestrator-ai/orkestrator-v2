@@ -368,9 +368,37 @@ that `args` does not declare (at most 16). `encoded: true` marks a handler that
 returns pre-encoded JSON (the transcript splice); its result is not validated.
 `ArgsOf`, `ResultOf`, `EncodedArgsOf` and `EncodedResultOf` give the types.
 
-`defineEvent({ domain, name, payload })` defines an event (lower kebab case
-name); `decodeEventPayload` and `validateEventPayload` check payloads. Typed
-emit and listen arrive with plan item 7011.
+#### Events
+
+Every backend event is defined in its domain's
+`packages/protocol/src/contract/domains/<domain>/events.ts` and listed in
+`BACKEND_EVENTS` (`@orkestrator/protocol/contract/domains/events`), which the
+manifest's `events` section is generated from.
+
+- `defineEvent({ domain, name, payload })` names one event (lower kebab case,
+  with at most one `:` suffix as in `claude-tmux:event`).
+- `defineEventFamily({ domain, prefix, payload, key? })` names events whose
+  name carries a key: `terminalOutputEvents.at(sessionId)` is
+  `terminal-output-<sessionId>`. The manifest lists a family as `<prefix>*`.
+- The backend emits only definitions: `context.emit(def, payload)`, with the
+  payload typed by the schema (`BackendEmit`, `apps/backend/src/core/backend-emit.ts`).
+  There is no string form, so there is no untyped event to count. Under tests
+  every emit is checked against its schema, its family key pattern and
+  `BACKEND_EVENTS`, and a failure throws; in development it is logged
+  (`contract` `event.invalid`) and the event is still delivered; production
+  does not check. A fixture that records emits by name wraps its recorder in
+  `eventSink((event, payload) => …)`.
+- Clients subscribe with `client.listen(def, handler)` (`NodeClient`, built
+  from `listenEvent` over `listenRaw`). The handler receives payloads that
+  decode against the schema, as sent; a payload that does not decode is
+  dropped and logged by name only (`contract` `listen.payload-invalid`).
+
+Payload schemas pin the fields receivers route on and describe model-shaped
+parts as `Schema.ObjectKeyword` until the models converge on protocol schemas.
+A field an older backend does not send is optional, because a client decodes
+every peer's payloads. Optional payload fields use `Schema.optional`, not
+`Schema.optionalKey`: emitters set absent fields to `undefined`, which the
+wire drops but `optionalKey` refuses.
 
 Schema rules, because the manifest digests each schema's JSON Schema export
 (`Schema.toJsonSchemaDocument`) and an export that is not stable changes every

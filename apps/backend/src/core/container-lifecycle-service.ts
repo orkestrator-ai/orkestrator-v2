@@ -1,5 +1,5 @@
+import { containerLifecycleUpdatedEvent } from "@orkestrator/protocol/contract/domains/events";
 import {
-  CONTAINER_LIFECYCLE_EVENT,
   CONTAINER_LIFECYCLE_SCHEMA_VERSION,
   MAX_RECENT_OPERATION_OUTCOMES,
   TERMINAL_OPERATION_STATUSES,
@@ -126,7 +126,7 @@ async function persist(
   });
   // Progress is published only after it is durable, and carries the revision
   // so a client that missed events can tell it is behind.
-  context.emit(CONTAINER_LIFECYCLE_EVENT, {
+  context.emit(containerLifecycleUpdatedEvent, {
     environmentId,
     snapshot: containerLifecycleSnapshot({ supported: true, record }),
   } satisfies ContainerLifecycleEvent);

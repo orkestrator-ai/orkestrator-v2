@@ -1,11 +1,9 @@
+import { portalLayoutChangedEvent } from "@orkestrator/protocol/contract/domains/events";
 import { workerSessionActivity } from "./worker-session-activity.js";
 import { parseNodeImportEntries } from "@orkestrator/protocol/command-nodes";
 import { isBackendId } from "@orkestrator/protocol/federation";
 import { SYNC_CONTROLLER_SETTINGS_COMMAND } from "@orkestrator/protocol/controller-settings";
-import {
-  PORTAL_LAYOUT_CHANGED_EVENT,
-  parsePortalLayoutUpdate,
-} from "@orkestrator/protocol/portal-layout";
+import { parsePortalLayoutUpdate } from "@orkestrator/protocol/portal-layout";
 
 import type { CommandContext } from "./commands-context.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
@@ -79,7 +77,7 @@ export function registerNodeCommands(register: CommandRegistrar): void {
 
   register("update_portal_layout", async (args, context) => {
     const layout = await context.storage.nodes.updatePortalLayout(parsePortalLayoutUpdate(args));
-    context.emit(PORTAL_LAYOUT_CHANGED_EVENT, layout);
+    context.emit(portalLayoutChangedEvent, layout);
     return layout;
   });
 
@@ -447,7 +445,7 @@ export function registerNodeCommands(register: CommandRegistrar): void {
         loadGlobalConfig: async () => (await context.storage.loadConfig()).global,
         projectName: async (projectId) =>
           (await context.storage.getProject(projectId).catch(() => null))?.name,
-        emit: (event, payload) => context.emit(event, payload),
+        emit: context.emit,
       },
       args,
     );
@@ -479,7 +477,7 @@ export function registerNodeCommands(register: CommandRegistrar): void {
         loadGlobalConfig: async () => (await context.storage.loadConfig()).global,
         projectName: async (projectId) =>
           (await context.storage.getProject(projectId).catch(() => null))?.name,
-        emit: (event, payload) => context.emit(event, payload),
+        emit: context.emit,
       },
       args,
     );

@@ -1,9 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import {
-  DESIGN_EVENT,
-  type DesignChange,
-  type DesignFrame,
-} from "@orkestrator/protocol/design-canvas";
+import type { DesignFrame } from "@orkestrator/protocol/design-canvas";
+import { designCanvasChangedEvent } from "@orkestrator/protocol/contract/domains/events";
 import {
   DESIGN_INTENT_LIMITS,
   DESIGN_NOT_RUN_STATES,
@@ -196,8 +193,8 @@ export class DesignCanvasController {
 
   private activate() {
     const client = commandClient();
-    const hint = client.listenRaw<DesignChange & { generation?: string }>(DESIGN_EVENT, (event) => {
-      if (event?.canvasId !== this.canvasId) return;
+    const hint = client.listen(designCanvasChangedEvent, (event) => {
+      if (event.canvasId !== this.canvasId) return;
       if (
         event.generation &&
         this.projection.generation &&

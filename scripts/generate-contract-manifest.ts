@@ -18,8 +18,12 @@
  *   classifier `isNodeReadCommand`. A command in neither place fails the
  *   generator, so a new string-registered command has to pick a domain.
  *
- * `domains` holds each defined domain's `{ version, min }`, and `events` the
- * typed events (plan item 7011; empty until then). `counts` and
+ * `domains` holds each defined domain's `{ version, min }`, and `events` every
+ * backend event (plan item 7011, `BACKEND_EVENTS`): `{ domain, payloadDigest }`
+ * by name, and an event family (per-terminal `terminal-output-<id>`, ...) as
+ * `<prefix>*` with `{ domain, family: true, prefix, key, payloadDigest }`.
+ * Every event is typed: the backend's `BackendEmit` accepts only a
+ * definition, so there is no untyped event to count. `counts` and
  * `untypedByDomain` are derived totals, so a ratchet (plan item 1011) reads
  * the untyped count without walking `commands`.
  *
@@ -39,6 +43,10 @@ import { dirname, join } from "node:path";
 import { isNodeReadCommand } from "@orkestrator/protocol/command-nodes";
 import { canonicalJsonSchema } from "@orkestrator/protocol/contract/json-schema";
 import type { AnyCommandDef, CommandAccess } from "@orkestrator/protocol/contract/command";
+import {
+  BACKEND_EVENTS,
+  type BackendEventDefinition,
+} from "@orkestrator/protocol/contract/domains/events";
 import { isDomainName, type DomainName } from "@orkestrator/protocol/contract/domain";
 import type { VersionRange } from "@orkestrator/protocol/contract/errors";
 import {
@@ -79,6 +87,20 @@ export interface UntypedCommandEntry {
 
 export type CommandEntry = DefinedCommandEntry | UntypedCommandEntry;
 
+export interface EventEntry {
+  readonly domain: DomainName;
+  readonly payloadDigest: string;
+}
+
+/** An event family, keyed `<prefix>*` in `events`. `key` is the member key pattern's source. */
+export interface EventFamilyEntry {
+  readonly domain: DomainName;
+  readonly family: true;
+  readonly prefix: string;
+  readonly key: string;
+  readonly payloadDigest: string;
+}
+
 export interface ContractManifest {
   readonly schemaVersion: typeof CONTRACT_MANIFEST_SCHEMA_VERSION;
   readonly generatedBy: string;
@@ -86,6 +108,8 @@ export interface ContractManifest {
     readonly commands: number;
     readonly defined: number;
     readonly untyped: number;
+    /** Defined events and event families. */
+    readonly events: number;
   };
   /** Untyped commands per domain, only domains that have one. */
   readonly untypedByDomain: { readonly [domain: string]: number };
@@ -94,8 +118,8 @@ export interface ContractManifest {
     readonly [domain: string]: { readonly version: number; readonly min: number };
   };
   readonly commands: { readonly [command: string]: CommandEntry };
-  /** Typed events (plan item 7011). */
-  readonly events: { readonly [event: string]: never };
+  /** Every backend event (plan item 7011), by name; a family as `<prefix>*`. */
+  readonly events: { readonly [event: string]: EventEntry | EventFamilyEntry };
 }
 
 /** What the generator reads from a command registry (`CommandRegistry` in the backend). */
@@ -110,6 +134,8 @@ export interface BuildManifestOptions {
   readonly domainMap?: ContractDomainMap;
   /** The read classification of an untyped command. Defaults to `isNodeReadCommand`. */
   readonly isRead?: (command: string) => boolean;
+  /** The backend's events. Defaults to `BACKEND_EVENTS`. */
+  readonly events?: readonly BackendEventDefinition[];
 }
 
 /** The registry and the domain map disagree; `problems` lists every finding. */
@@ -127,7 +153,7 @@ export class ContractManifestError extends Error {
 
 type Json = null | boolean | number | string | readonly Json[] | { readonly [key: string]: Json };
 
-/** A schema the manifest digests: a command's `args` or `result`. */
+/** A schema the manifest digests: a command's `args` or `result`, an event's payload. */
 export type DigestedSchema = Parameters<typeof canonicalJsonSchema>[0];
 
 /**
@@ -221,13 +247,19 @@ export function buildContractManifest(
       `${DOMAIN_MAP_PATH} lists commands that are not registered: ${stale.join(", ")}.`,
     );
   }
+  const events = eventEntries(options.events ?? BACKEND_EVENTS, problems);
   if (problems.length > 0) throw new ContractManifestError(problems);
 
   const defined = commands.length - [...untypedByDomain.values()].reduce((a, b) => a + b, 0);
   return {
     schemaVersion: CONTRACT_MANIFEST_SCHEMA_VERSION,
     generatedBy: "scripts/generate-contract-manifest.ts (mise run contract:manifest)",
-    counts: { commands: commands.length, defined, untyped: commands.length - defined },
+    counts: {
+      commands: commands.length,
+      defined,
+      untyped: commands.length - defined,
+      events: events.length,
+    },
     untypedByDomain: sortedRecord(untypedByDomain),
     domains: sortedRecord(
       [...registry.domainRanges].map(
@@ -235,8 +267,52 @@ export function buildContractManifest(
       ),
     ),
     commands: sortedRecord(commands),
-    events: {},
+    events: sortedRecord(events),
   };
+}
+
+/** The manifest key of an event definition: its name, or `<prefix>*` for a family. */
+export function eventManifestKey(def: BackendEventDefinition): string {
+  return def.kind === "event" ? def.name : `${def.prefix}*`;
+}
+
+/** The `events` entries; a duplicate key, or a family prefix covering another event, is a problem. */
+function eventEntries(
+  defs: readonly BackendEventDefinition[],
+  problems: string[],
+): Array<readonly [string, EventEntry | EventFamilyEntry]> {
+  const entries = new Map<string, EventEntry | EventFamilyEntry>();
+  for (const def of defs) {
+    const key = eventManifestKey(def);
+    if (entries.has(key)) {
+      problems.push(`Event ${key} is defined twice.`);
+      continue;
+    }
+    const payloadDigest = schemaDigest(def.payload);
+    entries.set(
+      key,
+      def.kind === "event"
+        ? { domain: def.domain.name, payloadDigest }
+        : {
+            domain: def.domain.name,
+            family: true,
+            prefix: def.prefix,
+            key: def.key.source,
+            payloadDigest,
+          },
+    );
+  }
+  for (const family of defs) {
+    if (family.kind !== "event-family") continue;
+    for (const other of defs) {
+      if (other === family) continue;
+      const name = other.kind === "event" ? other.name : other.prefix;
+      if (name.startsWith(family.prefix)) {
+        problems.push(`Event family ${family.prefix}* also covers ${eventManifestKey(other)}.`);
+      }
+    }
+  }
+  return [...entries];
 }
 
 /**
@@ -358,7 +434,7 @@ export async function runContractManifest(options: RunOptions): Promise<number> 
     await writeFile(manifestPath, generated);
     const { counts } = JSON.parse(generated) as ContractManifest;
     log(
-      `Wrote ${CONTRACT_MANIFEST_PATH}: ${counts.commands} commands (${counts.defined} defined, ${counts.untyped} untyped).`,
+      `Wrote ${CONTRACT_MANIFEST_PATH}: ${counts.commands} commands (${counts.defined} defined, ${counts.untyped} untyped), ${counts.events} events.`,
     );
     return 0;
   }

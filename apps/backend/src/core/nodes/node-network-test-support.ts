@@ -1,3 +1,4 @@
+import { eventSink } from "../backend-emit.js";
 import { registrarFrom } from "../commands-registry-contracts.js";
 import { withRelayController } from "../public-api/relay-context.js";
 import type { BackendProfile } from "@orkestrator/protocol/backend-profile";
@@ -243,7 +244,7 @@ export class TestNodeNetwork {
     const events: TestNode["events"] = [];
     const service = new NodeService({
       storage,
-      emit: (event, payload) => events.push({ event, payload }),
+      emit: eventSink((event, payload) => events.push({ event, payload })),
       forceRegistration: options.forceRegistration ?? false,
       portalOrigins: () => [`https://${name}.test`],
       fetchImpl: this.fetch,
@@ -252,7 +253,7 @@ export class TestNodeNetwork {
     });
     const portal = new NodePortal({
       nodes: service,
-      emit: (event, payload) => events.push({ event, payload }),
+      emit: eventSink((event, payload) => events.push({ event, payload })),
       local: {
         invoke: async <T>(command: string, args: Record<string, unknown> = {}) => {
           const handler = node.commands.get(command);

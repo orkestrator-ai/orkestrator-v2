@@ -1,3 +1,4 @@
+import { eventSink } from "./backend-emit.js";
 import { afterEach, expect, spyOn, test, setDefaultTimeout } from "bun:test";
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -23,7 +24,7 @@ afterEach(async () => {
 async function harness() {
   const events: unknown[] = [];
   const h = await createPublicApiHarness({
-    context: { emit: (event, payload) => events.push({ event, payload }) },
+    context: { emit: eventSink((event, payload) => events.push({ event, payload })) },
   });
   harnesses.push(h);
   return { h, tracking: h.context.runtime.diffStats, events };

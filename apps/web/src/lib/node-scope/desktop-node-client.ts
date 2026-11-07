@@ -23,6 +23,7 @@ import type {
 import { createWindowOrkestratorClient } from "./command-client";
 import { createListenerFanout } from "./listener-fanout";
 import { constantSignal, createSignal } from "./signal";
+import { typedListen } from "./typed-listen";
 
 type OrkestratorApi = NonNullable<Window["orkestrator"]>;
 type PreloadNodeApi = ReturnType<NonNullable<OrkestratorApi["node"]>>;
@@ -177,6 +178,7 @@ export function createDesktopNodeClient(options: DesktopNodeClientOptions): Node
         });
     },
     listenRaw,
+    listen: typedListen(listenRaw),
     eventStreamReady,
     terminal: {
       listenOutput: (sessionId, handler) =>

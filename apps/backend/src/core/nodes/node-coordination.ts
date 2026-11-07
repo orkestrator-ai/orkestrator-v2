@@ -1,3 +1,5 @@
+import { ticketSyncOutboxReadyEvent } from "@orkestrator/protocol/contract/domains/events";
+import type { BackendEmit } from "../backend-emit.js";
 import {
   AGENT_MAIL_MAX_THREAD_HOPS,
   normalizeAgentMessagingSettings,
@@ -45,7 +47,6 @@ import { executeAgentAccountSwitch } from "./node-account-switch.js";
 import { NodeOutcomeUnknownError, NodeUnavailableError } from "./node-link.js";
 import { NodeMailCollector } from "./node-mail-collector.js";
 import { NodeTicketSync } from "./node-ticket-sync.js";
-import { TICKET_SYNC_OUTBOX_READY_EVENT } from "@orkestrator/protocol/ticket-sync";
 import {
   coordinatorContactKey,
   describeCommandCoordinatorMail,
@@ -326,7 +327,7 @@ export class NodeCoordination {
       portal: NodePortal;
       /** This backend's own commands (local deletions, coordinator lookup). */
       invoke: Invoke;
-      emit: (event: string, payload: unknown) => void;
+      emit: BackendEmit;
     },
   ) {
     const { storage, nodes, portal } = options;
@@ -444,7 +445,7 @@ export class NodeCoordination {
         .ticketSyncOutboxControllers()
         .then((controllers) => {
           for (const controllerId of controllers) {
-            options.emit(TICKET_SYNC_OUTBOX_READY_EVENT, { controllerId });
+            options.emit(ticketSyncOutboxReadyEvent, { controllerId });
           }
         })
         .catch(() => undefined);

@@ -12,6 +12,7 @@
  *
  * Usage: bun commands-secret-sweep-test-support.ts <root> <result-file>
  */
+import { eventSink } from "./backend-emit.js";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { AUTH_SECRET_CANARIES } from "../../../../tests/helpers/auth-secret-canaries.js";
@@ -143,9 +144,9 @@ async function main(root: string, resultFile: string): Promise<void> {
   };
 
   const events: string[] = [];
-  const emit = (event: string, payload: unknown) => {
+  const emit = eventSink((event, payload) => {
     events.push(`${event} ${serialize(payload)}`);
-  };
+  });
   const context = {
     storage,
     emit,

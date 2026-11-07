@@ -1,3 +1,5 @@
+import { nodeActionRequestsChangedEvent } from "@orkestrator/protocol/contract/domains/events";
+import type { BackendEmit } from "../backend-emit.js";
 import { randomUUID } from "node:crypto";
 import {
   parseAgentsMdChanges,
@@ -214,7 +216,7 @@ export class NodeActionRequests {
     private readonly options: {
       load(): Promise<unknown>;
       save(requests: NodeActionRequest[]): Promise<void>;
-      emit(event: string, payload: unknown): void;
+      emit: BackendEmit;
       executors: Partial<Record<NodeActionKind, NodeActionExecutor>>;
       /** Tell the requesting conversation what happened. */
       notify?(request: NodeActionRequest): Promise<void>;
@@ -276,7 +278,7 @@ export class NodeActionRequests {
     const save = this.saveQueue.catch(() => undefined).then(() => this.options.save(snapshot));
     this.saveQueue = save;
     await save;
-    this.options.emit(NODE_ACTION_REQUESTS_CHANGED_EVENT, {
+    this.options.emit(nodeActionRequestsChangedEvent, {
       pending: this.requests.filter((request) => request.state === "pending").length,
     });
   }

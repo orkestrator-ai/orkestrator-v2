@@ -1,3 +1,5 @@
+import { nodeSummaryChangedEvent } from "@orkestrator/protocol/contract/domains/events";
+import type { BackendEmit } from "../backend-emit.js";
 import {
   BACKEND_PROFILE_CHANGED_EVENT,
   parseBackendProfile,
@@ -10,7 +12,6 @@ import { NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@orkestrator/protocol/gatew
 import {
   MAX_SUMMARY_ENVIRONMENTS_PER_PROJECT,
   MAX_SUMMARY_PROJECTS,
-  NODE_SUMMARY_CHANGED_EVENT,
   boundedText,
   NODE_SUMMARY_ENVIRONMENT_READ_ARGS,
   toNodeEnvironmentSummary,
@@ -169,7 +170,7 @@ export class NodeReadModel {
   constructor(
     private readonly options: {
       nodes: ReadModelNodes;
-      emit: (event: string, payload: unknown) => void;
+      emit: BackendEmit;
       persistence?: ReadModelPersistence;
       local?: ReadModelLocal;
       fetchImpl?: typeof fetch;
@@ -711,7 +712,7 @@ export class NodeReadModel {
       }
       this.changed.delete(id);
       this.lastChangeEmittedAt.set(id, now);
-      this.options.emit(NODE_SUMMARY_CHANGED_EVENT, {
+      this.options.emit(nodeSummaryChangedEvent, {
         nodeId: id,
         epoch: this.states.get(id)?.epoch ?? 0,
       });

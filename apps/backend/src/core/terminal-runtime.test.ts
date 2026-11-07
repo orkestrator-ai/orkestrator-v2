@@ -1,3 +1,4 @@
+import { eventSink } from "./backend-emit.js";
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import {
   installControlledTimeout,
@@ -50,7 +51,8 @@ function fixture() {
     ...environment,
     lastActivityAt: occurredAt,
   }));
-  const emit = mock((_event: string, _payload: unknown) => undefined);
+  const sink = mock((_event: string, _payload: unknown) => undefined);
+  const emit = eventSink(sink);
   const notifyAgentTurnCompleted = mock(async (_id: string) => undefined);
   const runtime = new BackendRuntime({ emit });
   runtimes.push(runtime);
@@ -79,7 +81,7 @@ function fixture() {
     runtime,
     terminals,
     environment,
-    emit,
+    emit: sink,
     recordEnvironmentCompletion,
     notifyAgentTurnCompleted,
     hooks: terminals.activityHooks("terminal", context),

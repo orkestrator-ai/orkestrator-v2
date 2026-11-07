@@ -1,3 +1,4 @@
+import { eventSink } from "../src/core/backend-emit.js";
 import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
 import { fakePid } from "@orkestrator/protocol/testing/fake-pids";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
@@ -193,7 +194,7 @@ describe("backend command I/O coverage", () => {
   test("attaches, drives, lists, and detaches a container terminal", async () => {
     const context = createContext();
     const emitted: Array<{ event: string; payload: unknown }> = [];
-    context.emit = (event, payload) => emitted.push({ event, payload });
+    context.emit = eventSink((event, payload) => emitted.push({ event, payload }));
     const commands = createCommandRegistry();
     const sessionsBeforeAttach = commands.get("list_terminal_sessions")?.({}, context) as string[];
 

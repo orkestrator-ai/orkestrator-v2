@@ -1,7 +1,6 @@
 import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
 import { randomUUID } from "node:crypto";
 import {
-  PR_MONITOR_CHANGED_EVENT,
   type PrMonitorEnvironmentState,
   type PrCheckSummary,
   type PrMonitorEvent,
@@ -11,6 +10,7 @@ import { PrMonitorService, type PrMonitorServiceOptions } from "./pr-monitor.js"
 import type { Environment } from "./models.js";
 import type { StorageService } from "./storage.js";
 import type { BackendEmit, CommandContext } from "./commands-context.js";
+import { prMonitorChangedEvent } from "@orkestrator/protocol/contract/domains/events";
 import { WorkAdmissionPool } from "./work-admission.js";
 import {
   detectEnvironmentPullRequest,
@@ -414,9 +414,9 @@ export class PrMonitorRuntime {
     }
   }
 
-  private announce(event: string, payload: unknown): void {
+  private announce: BackendEmit = (event, payload) => {
     this.emit?.(event, payload);
-    if (event !== PR_MONITOR_CHANGED_EVENT) return;
+    if (event.name !== prMonitorChangedEvent.name) return;
     this.noteRelayedInputs(payload as PrMonitorEvent);
     for (const listener of this.listeners) {
       try {
@@ -425,7 +425,7 @@ export class PrMonitorRuntime {
         // An observer must never break the monitor it observes.
       }
     }
-  }
+  };
 
   /**
    * Announces `environment-pr-health` when the monitor-side inputs of an
@@ -507,7 +507,7 @@ export class PrMonitorRuntime {
     const admission = new WorkAdmissionPool({ name: "external-pr" });
     const service = new PrMonitorService({
       ...this.options.timing,
-      emit: (event, payload) => this.announce(event, payload),
+      emit: this.announce,
       admission,
       cooldownScope: prMonitorCooldownScope,
       effects: {

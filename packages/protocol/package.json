@@ -44,6 +44,7 @@
     "./contract/client-usage": "./src/contract/client-usage.ts",
     "./contract/command": "./src/contract/command.ts",
     "./contract/domain": "./src/contract/domain.ts",
+    "./contract/domains/events": "./src/contract/domains/events.ts",
     "./contract/envelope": "./src/contract/envelope.ts",
     "./contract/errors": "./src/contract/errors.ts",
     "./contract/event": "./src/contract/event.ts",

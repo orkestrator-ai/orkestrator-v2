@@ -3,6 +3,7 @@
  * module-mocked: a fake dispatch port, a deterministic brief compiler, a
  * fake host storage, a manual clock, and a synthetic PNG builder.
  */
+import { eventSink } from "./backend-emit.js";
 import { createHash } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -347,7 +348,7 @@ export async function createHarness(
       composeText: fakeComposeText,
       storage: host,
       syncDirectories: false,
-      emit: (event, payload) => events.push({ event, payload }),
+      emit: eventSink((event, payload) => events.push({ event, payload })),
       ...overrides,
       ...extra,
     });

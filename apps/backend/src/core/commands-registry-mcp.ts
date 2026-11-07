@@ -520,7 +520,7 @@ export function mcpManagement(context: CommandContext): McpManagementService {
     service = new McpManagementService({
       dataDir: context.storage.getDataDir(),
       storage: context.storage,
-      emit: (event, payload) => context.emit(event, payload),
+      emit: context.emit,
       probe: createMcpRuntimeProbe(context),
       ...mcpContainerOptions(context),
       loadRollout: mcpRolloutLoader(context),

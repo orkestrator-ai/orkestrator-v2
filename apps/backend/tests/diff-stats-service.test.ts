@@ -1,3 +1,4 @@
+import { eventSink, type BackendEmit } from "../src/core/backend-emit.js";
 import { describe, expect, mock, spyOn, test } from "bun:test";
 import { DIFF_STATS_CHANGED_EVENT } from "@orkestrator/protocol/diff-stats";
 import {
@@ -42,7 +43,7 @@ function createHarness(
     watchable?: boolean;
     watcherStartError?: Error;
     pendingCoverage?: boolean;
-    emit?: (event: string, payload: unknown) => void;
+    emit?: BackendEmit;
   } = {},
 ): Harness {
   const watchable = options.watchable ?? true;
@@ -86,7 +87,7 @@ function createHarness(
     },
     emit:
       options.emit ??
-      ((event, payload) => {
+      eventSink((event, payload) => {
         if (event === DIFF_STATS_CHANGED_EVENT) emitted.push({ event, payload });
         else snapshotEvents.push(payload);
       }),

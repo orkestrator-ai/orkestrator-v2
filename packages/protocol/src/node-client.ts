@@ -15,12 +15,13 @@
  * command-scope adapter over today's `window.orkestrator` in
  * `apps/web/src/lib/node-scope/command-client.ts` (2001).
  *
- * The typed `invoke(def, args)` and `listen(def, handler)` overloads over
- * `@orkestrator/protocol/contract` definitions are added by plan item 2011
- * once the contract primitives (1002) land. Until then only the untyped
- * migration members `invokeRaw` and `listenRaw` exist.
+ * The typed `listen(def, handler)` over `@orkestrator/protocol/contract`
+ * event definitions came with plan item 7011; the typed `invoke(def, args)`
+ * is added by plan item 2011. The untyped migration members `invokeRaw` and
+ * `listenRaw` stay until every call site is typed.
  */
 
+import type { AnyEventDef, PayloadOf } from "./contract/event.js";
 import type { BackendId } from "./federation.js";
 
 /** Stops a listener or subscription. Calling it again does nothing. */
@@ -93,8 +94,17 @@ export interface NodeClient {
    * the type argument is the caller's assertion.
    */
   invokeRaw<T = unknown>(command: string, args?: Readonly<Record<string, unknown>>): Promise<T>;
-  /** Untyped event subscription, for migration only (typed events: 7011). */
+  /** Untyped event subscription, for migration only: `listen(def, handler)` replaces it. */
   listenRaw<T = unknown>(event: string, handler: (payload: T) => void): Unlisten;
+  /**
+   * Typed event subscription (plan item 7011): `def` is a backend event from
+   * `@orkestrator/protocol/contract/domains/events` (a family member through
+   * `family.at(key)`). The handler receives payloads that decode against the
+   * definition's schema, as sent; a payload that does not decode is dropped
+   * and reported content-free. Implementations build it with `listenEvent`
+   * over `listenRaw`.
+   */
+  listen<E extends AnyEventDef>(def: E, handler: (payload: PayloadOf<E>) => void): Unlisten;
   /**
    * Resolves once the stream that carries `event` is live; without an event,
    * once the node's main event stream is. It may stay pending while the

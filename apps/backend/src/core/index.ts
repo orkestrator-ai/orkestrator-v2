@@ -52,14 +52,16 @@ import {
 } from "./nodes/index.js";
 import { isBackendId, type BackendId } from "@orkestrator/protocol/federation";
 import type { GatewayNodeHooks } from "../gateway-support-core.js";
+import { legacyAutoSwitchEvent } from "@orkestrator/protocol/agent-account-auto-switch";
+import { AGENT_ACCOUNT_PLATFORMS } from "@orkestrator/protocol/agent-accounts";
 import {
-  AGENT_ACCOUNT_AUTO_SWITCHED_EVENT,
-  legacyAutoSwitchEvent,
-} from "@orkestrator/protocol/agent-account-auto-switch";
-import {
-  AGENT_ACCOUNT_PLATFORMS,
-  AGENT_ACCOUNTS_CHANGED_EVENT,
-} from "@orkestrator/protocol/agent-accounts";
+  agentAccountAutoSwitchedEvent,
+  agentAccountsChangedEvent,
+  controlMcpStateChangedEvent,
+  nativeAgentAsyncQuestionEvent,
+  nativeAgentSessionActivityEvent,
+} from "@orkestrator/protocol/contract/domains/events";
+import { createBackendEmit, type BackendEventSink } from "./backend-emit.js";
 import { pickInheritedGlobalSettings } from "@orkestrator/protocol/controller-settings";
 import type { NodeMode } from "@orkestrator/protocol/command-nodes";
 import { stoppedWorkerMailHook } from "./agent-mail-stopped-worker.js";
@@ -152,7 +154,6 @@ import {
   createCommandRegistry,
   scheduleMergeCleanupRecovery,
   tmuxLocalClaudeConfigDirectory,
-  type BackendEmit,
   type CommandContext,
   type CommandInvocation,
 } from "./commands.js";
@@ -450,7 +451,11 @@ export class OrkestratorBackend {
     credentialSources?: import("@orkestrator/protocol/agent-platforms").AgentPlatform[];
     /** Exact agent tools port (`--agent-tools-port`); a busy one fails startup. */
     agentToolsPort?: number;
-    emit: BackendEmit;
+    /**
+     * The event transport (the gateway's fan-out). Read at emit time; the
+     * backend wraps it in its typed, checked `BackendEmit`.
+     */
+    emit: BackendEventSink;
     /** What applies remote update requests on this host (default: nothing). */
     hostUpdater?: import("@orkestrator/protocol/host-maintenance").HostUpdaterKind;
     /** The standalone launcher's record of a release it rolled back. */
@@ -531,6 +536,7 @@ export class OrkestratorBackend {
     /** Test seam: node links (fetch, SSH, timers). */
     nodeLinks?: Pick<NodeServiceOptions, "fetchImpl" | "createSsh" | "timers" | "heartbeatMs">;
   }) {
+    const emit = createBackendEmit((event, payload) => options.emit(event, payload));
     this.keyedActivityJobs =
       options.keyedActivityJobs ?? keyedSchedulingEnabled("backend-activity");
     this.activityJobClock = options.activityJobClock;
@@ -543,7 +549,7 @@ export class OrkestratorBackend {
       dataDir: options.dataDir,
       updater: options.hostUpdater ?? "none",
       version: APP_VERSION,
-      emit: (event, payload) => options.emit(event, payload),
+      emit,
       rollbackEvidence: options.hostRollbackEvidence,
       onCheck: (latestVersion, isCurrent) => {
         if (!latestVersion || latestVersion === APP_VERSION) return;
@@ -555,10 +561,10 @@ export class OrkestratorBackend {
     this.workflowResultRollout = new WorkflowResultRollout(
       async () => (await storage.loadConfig()).global.workflowResultTools,
     );
-    const design = new DesignService(options.dataDir, options.emit);
+    const design = new DesignService(options.dataDir, emit);
     const previews = new PreviewRuntime({
       storage,
-      emit: options.emit,
+      emit,
       strictDockerOwner: options.strictDockerOwner ?? false,
       // Read at call time: `this.runtime` is assigned below.
       managedProcessRoots: () => [
@@ -577,7 +583,7 @@ export class OrkestratorBackend {
             ownerNamespace: dockerOwnerNamespace(options.dataDir),
             fallbackImage: () => options.dockerImage ?? DOCKER_IMAGE,
             // Read lazily: the gateway that receives events is created after init.
-            emit: (event, payload) => options.emit(event, payload),
+            emit,
             prepareContainer: async (containerId) => {
               await ensureContainerAgentToolsHost(
                 containerId,
@@ -634,7 +640,7 @@ export class OrkestratorBackend {
     this.runtime =
       options.runtime ??
       new BackendRuntime({
-        emit: (event, payload) => options.emit(event, payload),
+        emit,
         // Docker-backed, so unit tests keep the unwatched bounds unless they inject one.
         worktreeSignal:
           process.env.NODE_ENV === "test" ? undefined : containerWorktreeSignalInstaller,
@@ -676,13 +682,13 @@ export class OrkestratorBackend {
         createBackendChangeTracking({
           dataDir: options.dataDir,
           storage,
-          emit: (event, payload) => options.emit(event, payload),
+          emit,
           diffStats: this.runtime.diffStats,
         }),
       );
     }
     // The node portal is created below; a change before then has no self summary to refresh.
-    installStorageEventFanout(storage, options.emit, (change) =>
+    installStorageEventFanout(storage, emit, (change) =>
       this.nodePortal?.readModel.noteLocalEvent(RESOURCE_CHANGED_EVENT, change),
     );
     const context = {
@@ -697,7 +703,7 @@ export class OrkestratorBackend {
       dockerImage: options.dockerImage,
       strictDockerOwner: options.strictDockerOwner ?? false,
       credentialSources: new Set(options.credentialSources ?? []),
-      emit: options.emit,
+      emit,
       agentTools: this.agentTools,
       containerHostReachability: this.containerHostReachability,
       controlMcp: this.controlMcp,
@@ -830,7 +836,7 @@ export class OrkestratorBackend {
     context.coordinators = this.coordinators;
     this.nodes = new NodeService({
       storage,
-      emit: (event, payload) => options.emit(event, payload),
+      emit,
       forceRegistration: options.commandNode === true,
       portalOrigins: () => normalizePortalOrigins(this.portalOriginsSource()),
       selfAccess: () => this.selfAccessSource(),
@@ -848,7 +854,7 @@ export class OrkestratorBackend {
         storage.announceInheritedSettingsChanged();
         for (const platform of AGENT_ACCOUNT_PLATFORMS) {
           // The ticks may have arrived, and every view of them re-reads on this.
-          options.emit(AGENT_ACCOUNTS_CHANGED_EVENT, { platform });
+          emit(agentAccountsChangedEvent, { platform });
           this.accountAutoSwitch?.nudge(platform);
         }
       },
@@ -864,7 +870,7 @@ export class OrkestratorBackend {
     storage.inheritedGlobalSettings = () => this.nodes.inheritedSettings.current();
     this.nodePortal = new NodePortal({
       nodes: this.nodes,
-      emit: (event, payload) => options.emit(event, payload),
+      emit,
       local: { invoke: (command, args = {}) => this.invoke(command, args) },
       summaries: {
         load: () => storage.nodes.loadNodeSummariesCache(),
@@ -882,7 +888,7 @@ export class OrkestratorBackend {
       nodes: this.nodes,
       portal: this.nodePortal,
       invoke: (command, args = {}) => this.invoke(command, args),
-      emit: (event, payload) => options.emit(event, payload),
+      emit,
     });
     context.nodeCoordination = this.nodeCoordination;
     // Coordinator work on the nodes this one controls is read through the
@@ -974,7 +980,7 @@ export class OrkestratorBackend {
       notify: async ({ quietProjectId, ...notice }) => {
         // An older command node hears through its event stream; a newer one
         // ignores that and takes this machine's notice from its outbox.
-        options.emit(AGENT_ACCOUNT_AUTO_SWITCHED_EVENT, legacyAutoSwitchEvent(notice));
+        emit(agentAccountAutoSwitchedEvent, legacyAutoSwitchEvent(notice));
         await this.coordinators.noticeRouter.deliverAutoSwitch(notice, "this machine", {
           coalesceMs: COORDINATOR_STATUS_COALESCE_MS,
           ...(quietProjectId ? { quietProjectId } : {}),
@@ -1034,7 +1040,7 @@ export class OrkestratorBackend {
         // hangs off it; it is not a turn edge.
         onObservationInvalidation: (event) => {
           nativeSessionInvalidationMetrics.record(event.cause, event.agent);
-          options.emit("native-agent-session-activity", {
+          emit(nativeAgentSessionActivityEvent, {
             environment_id: event.environmentId,
             previous_state: event.state,
             state: event.state,
@@ -1048,7 +1054,7 @@ export class OrkestratorBackend {
         },
         onActivityTransition: (event) => {
           nativeSessionInvalidationMetrics.record("transition", event.agent);
-          options.emit("native-agent-session-activity", {
+          emit(nativeAgentSessionActivityEvent, {
             environment_id: event.environmentId,
             previous_state: event.previousState,
             state: event.state,
@@ -1232,7 +1238,7 @@ export class OrkestratorBackend {
           await this.agentMail.drainInjects();
         },
         onAsyncQuestionAttention: (event) => {
-          options.emit("native-agent-async-question", {
+          emit(nativeAgentAsyncQuestionEvent, {
             environment_id: event.environmentId,
             session_key: event.sessionKey,
           });
@@ -1289,7 +1295,7 @@ export class OrkestratorBackend {
     context.mcpManagement = new McpManagementService({
       dataDir: options.dataDir,
       storage,
-      emit: options.emit,
+      emit,
       probe: createMcpRuntimeProbe(context),
       ...mcpContainerOptions(context),
       loadRollout: mcpRolloutLoader(context),
@@ -1309,7 +1315,7 @@ export class OrkestratorBackend {
     );
     this.webAnnotations = new WebAnnotationService({
       dataDir: options.dataDir,
-      emit: options.emit,
+      emit,
       rolloutMode: () => this.webAnnotationRollout.mode,
       storage,
       dispatch: new WebAnnotationDispatchAdapter({
@@ -2790,7 +2796,7 @@ export class OrkestratorBackend {
     this.controlMcp.onStateChange?.(() => {
       if (this.shuttingDown) return;
       this.reserveOwnedPreviewPorts();
-      this.context.emit("control-mcp-state-changed", {});
+      this.context.emit(controlMcpStateChangedEvent, {});
     });
     // Backend-owned timing for scheduled jobs. Fires need the registry writer
     // lease, the Control MCP (coordinator schedules) and the agent tools.

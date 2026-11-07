@@ -1,3 +1,7 @@
+import {
+  environmentActivityRecordedEvent,
+  terminalOutputEvents,
+} from "@orkestrator/protocol/contract/domains/events";
 import type { BackendEmit, CommandContext } from "./commands-context.js";
 import type { PtyProcess } from "./pty.js";
 import { containerIdMatches } from "./commands-review.js";
@@ -371,7 +375,7 @@ export class TerminalRuntime {
       revision,
       generation,
     );
-    emit(`terminal-output-${sessionId}`, terminalOutputPayload(data, revision, generation));
+    emit(terminalOutputEvents.at(sessionId), terminalOutputPayload(data, revision, generation));
   }
 
   resetOutput(sessionId: string): void {
@@ -734,7 +738,7 @@ export class TerminalRuntime {
       .recordEnvironmentCompletion(environmentId, occurredAt)
       .then((environment) => {
         if (!this.isTrackedCompletionActive(id, generation)) return;
-        context.emit("environment-activity-recorded", {
+        context.emit(environmentActivityRecordedEvent, {
           environment_id: environment.id,
           occurred_at: environment.lastActivityAt ?? occurredAt,
           activity_kind: "completed",
@@ -801,7 +805,7 @@ export class TerminalRuntime {
     void context.storage
       .recordEnvironmentActivity(environmentId, occurredAt)
       .then((environment) => {
-        context.emit("environment-activity-recorded", {
+        context.emit(environmentActivityRecordedEvent, {
           environment_id: environment.id,
           occurred_at: environment.lastActivityAt ?? occurredAt,
           activity_kind: "prompt",

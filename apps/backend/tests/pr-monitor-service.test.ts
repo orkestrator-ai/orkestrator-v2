@@ -1,3 +1,4 @@
+import { eventSink } from "../src/core/backend-emit.js";
 import { describe, expect, test } from "bun:test";
 import {
   PR_MONITOR_CHANGED_EVENT,
@@ -52,7 +53,7 @@ function createHarness() {
   };
 
   const service = new PrMonitorService({
-    emit: (event, payload) => emitted.push({ event, payload }),
+    emit: eventSink((event, payload) => emitted.push({ event, payload })),
     onWarning: (warning, error) => warnings.push({ ...warning, error }),
     now: () => new Date(clock.value).toISOString(),
     monotonicNow: () => clock.value,

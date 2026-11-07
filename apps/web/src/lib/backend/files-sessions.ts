@@ -1,7 +1,5 @@
 import { asWebModel, nativeSessions } from "@/lib/node-scope/domains/native-sessions";
 import { files } from "@/lib/node-scope/domains/files";
-import { git } from "@/lib/node-scope/domains/git";
-import { pullRequests } from "@/lib/node-scope/domains/pull-requests";
 import type { FileContentSchema } from "@orkestrator/protocol/contract/domains/files";
 import type * as Schema from "effect/Schema";
 import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
@@ -37,7 +35,7 @@ import type {
 } from "@/types";
 import { isRecord } from "./shared";
 import { environmentsClient } from "@orkestrator/protocol/contract/domains/environments";
-import { commandBackendClient, type BackendClient } from "./client";
+import { clientInvoke, commandBackendClient, type BackendClient } from "./client";
 import { backendDomainApi } from "./domain-client";
 /** PR detection result containing URL, state, and merge conflict status */
 
@@ -175,8 +173,6 @@ export interface AgentExtensionCatalog {
 
 // --- Pane Layout Commands (Restore-on-connect) ---
 
-import { projectsClient } from "@orkestrator/protocol/contract/domains/projects";
-
 /** One entry of a directory on the machine running the Orkestrator backend. */
 export interface HostDirectoryEntry {
   name: string;
@@ -217,16 +213,12 @@ export interface HostImageFile {
 const NO_ARGUMENTS = undefined as unknown as Record<string, never>;
 
 export function createFilesSessionsApi(client: BackendClient) {
-  // The host folder picker and project icons (`projects` domain, plan item 7005).
-  const hostFiles = backendDomainApi(client, projectsClient);
+  const invoke = clientInvoke(client);
   // The `environments` domain's commands here (plan item 7003).
   const environments = backendDomainApi(client, environmentsClient);
   const native = () => nativeSessions(client);
   // The `files` domain client (plan item 7002).
   const filesDomain = () => files(client);
-  // The `git` and `pull-requests` domain clients (plan item 7006).
-  const gitDomain = () => git(client);
-  const prDomain = () => pullRequests(client);
 
   /** Get git changes comparing current state against a target branch */
   async function getGitStatus(
@@ -234,12 +226,11 @@ export function createFilesSessionsApi(client: BackendClient) {
     targetBranch: string,
     includeUncommitted = true,
   ): Promise<GitFileChange[]> {
-    // Without `knownDigest` the answer is the bare list.
-    return (await gitDomain().get_git_status({
+    return invoke<GitFileChange[]>("get_git_status", {
       containerId,
       targetBranch,
       includeUncommitted,
-    })) as GitFileChange[];
+    });
   }
 
   async function getGitStatusSnapshot(
@@ -248,7 +239,7 @@ export function createFilesSessionsApi(client: BackendClient) {
     knownDigest?: string,
     options?: SnapshotReadOptions,
   ): Promise<ConditionalSnapshot<GitFileChange[]>> {
-    const response: unknown = await gitDomain().get_git_status({
+    const response = await invoke<unknown>("get_git_status", {
       containerId,
       targetBranch,
       includeUncommitted: true,
@@ -410,11 +401,11 @@ export function createFilesSessionsApi(client: BackendClient) {
     targetBranch: string,
     includeUncommitted = true,
   ): Promise<GitFileChange[]> {
-    return (await gitDomain().get_local_git_status({
+    return invoke<GitFileChange[]>("get_local_git_status", {
       worktreePath,
       targetBranch,
       includeUncommitted,
-    })) as GitFileChange[];
+    });
   }
 
   async function getLocalGitStatusSnapshot(
@@ -423,7 +414,7 @@ export function createFilesSessionsApi(client: BackendClient) {
     knownDigest?: string,
     options?: SnapshotReadOptions,
   ): Promise<ConditionalSnapshot<GitFileChange[]>> {
-    const response: unknown = await gitDomain().get_local_git_status({
+    const response = await invoke<unknown>("get_local_git_status", {
       worktreePath,
       targetBranch,
       includeUncommitted: true,
@@ -454,10 +445,11 @@ export function createFilesSessionsApi(client: BackendClient) {
   async function getEnvironmentDiffStats(
     known?: ViewRevisionStamp,
   ): Promise<EnvironmentDiffStatsSnapshot | EnvironmentDiffStatsSnapshotOutcome> {
-    // The bare snapshot without `known`, the conditional outcome with it.
-    return gitDomain().get_environment_diff_stats(
-      known ? { ...toViewSnapshotRequestArgs(known) } : NO_ARGUMENTS,
-    ) as Promise<EnvironmentDiffStatsSnapshot | EnvironmentDiffStatsSnapshotOutcome>;
+    if (!known) return invoke<EnvironmentDiffStatsSnapshot>("get_environment_diff_stats");
+    return invoke<EnvironmentDiffStatsSnapshot | EnvironmentDiffStatsSnapshotOutcome>(
+      "get_environment_diff_stats",
+      { ...toViewSnapshotRequestArgs(known) },
+    );
   }
 
   /**
@@ -478,12 +470,12 @@ export function createFilesSessionsApi(client: BackendClient) {
 
   /** Forces an immediate rescan, e.g. after an operation that changed the tree. */
   async function refreshEnvironmentDiffStats(environmentId: string): Promise<void> {
-    return gitDomain().refresh_environment_diff_stats({ environmentId });
+    return invoke<void>("refresh_environment_diff_stats", { environmentId });
   }
 
   /** Branches an environment's checkout can compare its changes against. */
   async function listEnvironmentDiffBaseBranches(environmentId: string): Promise<DiffBaseBranch[]> {
-    return gitDomain().list_environment_diff_base_branches({ environmentId });
+    return invoke<DiffBaseBranch[]>("list_environment_diff_base_branches", { environmentId });
   }
 
   /** The newest commits on `ref` (a full branch ref), first parents only. */
@@ -491,7 +483,7 @@ export function createFilesSessionsApi(client: BackendClient) {
     environmentId: string,
     ref: string,
   ): Promise<DiffBaseCommit[]> {
-    return gitDomain().list_environment_diff_base_commits({ environmentId, ref });
+    return invoke<DiffBaseCommit[]>("list_environment_diff_base_commits", { environmentId, ref });
   }
 
   /** Measures the environment's changes from `commit`; `null` restores the automatic base. */
@@ -499,7 +491,7 @@ export function createFilesSessionsApi(client: BackendClient) {
     environmentId: string,
     base: { ref: string; commit: string } | null,
   ): Promise<Environment> {
-    return gitDomain().set_environment_diff_base({
+    return invoke<Environment>("set_environment_diff_base", {
       environmentId,
       ref: base?.ref ?? null,
       commit: base?.commit ?? null,
@@ -524,10 +516,10 @@ export function createFilesSessionsApi(client: BackendClient) {
   async function getPrMonitorState(
     known?: ViewRevisionStamp,
   ): Promise<PrMonitorSnapshot | PrMonitorSnapshotOutcome> {
-    // The bare snapshot without `known`, the conditional outcome with it.
-    return prDomain().get_pr_monitor_state(
-      known ? { ...toViewSnapshotRequestArgs(known) } : NO_ARGUMENTS,
-    ) as Promise<PrMonitorSnapshot | PrMonitorSnapshotOutcome>;
+    if (!known) return invoke<PrMonitorSnapshot>("get_pr_monitor_state");
+    return invoke<PrMonitorSnapshot | PrMonitorSnapshotOutcome>("get_pr_monitor_state", {
+      ...toViewSnapshotRequestArgs(known),
+    });
   }
 
   /**
@@ -536,17 +528,17 @@ export function createFilesSessionsApi(client: BackendClient) {
    * fast polling continues across renderer reloads and environment switches.
    */
   async function prMonitorWatch(environmentId: string, mode: PrMonitorMode): Promise<void> {
-    return prDomain().pr_monitor_watch({ environmentId, mode });
+    return invoke<void>("pr_monitor_watch", { environmentId, mode });
   }
 
   /** Requests an immediate PR check for an environment already being monitored. */
   async function prMonitorRefresh(environmentId: string): Promise<void> {
-    return prDomain().pr_monitor_refresh({ environmentId });
+    return invoke<void>("pr_monitor_refresh", { environmentId });
   }
 
   /** Durably re-check a conflicting PR when the launched agent turn completes. */
   async function armPrRefreshAfterAgentCompletion(environmentId: string): Promise<string | null> {
-    return prDomain().arm_pr_refresh_after_agent_completion({ environmentId });
+    return invoke<string | null>("arm_pr_refresh_after_agent_completion", { environmentId });
   }
 
   /** Roll back one exact post-completion refresh arm when its agent launch fails. */
@@ -554,7 +546,7 @@ export function createFilesSessionsApi(client: BackendClient) {
     environmentId: string,
     armedAt: string,
   ): Promise<void> {
-    return prDomain().disarm_pr_refresh_after_agent_completion({
+    return invoke<void>("disarm_pr_refresh_after_agent_completion", {
       environmentId,
       armedAt,
     });
@@ -941,7 +933,7 @@ export function createFilesSessionsApi(client: BackendClient) {
     path?: string,
     options: { includeFiles?: boolean; showHidden?: boolean } = {},
   ): Promise<HostDirectoryListing> {
-    return hostFiles().list_host_directory({
+    return invoke<HostDirectoryListing>("list_host_directory", {
       ...(path ? { path } : {}),
       includeFiles: options.includeFiles ?? false,
       showHidden: options.showHidden ?? false,
@@ -953,7 +945,7 @@ export function createFilesSessionsApi(client: BackendClient) {
    * returns its absolute path. Fails if the entry already exists.
    */
   async function createHostDirectory(parent: string, name: string): Promise<{ path: string }> {
-    return hostFiles().create_host_directory({ parent, name });
+    return invoke<{ path: string }>("create_host_directory", { parent, name });
   }
 
   /**
@@ -961,12 +953,12 @@ export function createFilesSessionsApi(client: BackendClient) {
    * its icon or favicon (`public/favicon.svg`, `app/icon.png`, ...), best first.
    */
   async function findProjectIcons(root: string): Promise<string[]> {
-    return hostFiles().find_project_icons({ root });
+    return invoke<string[]>("find_project_icons", { root });
   }
 
   /** Reads one image file (at most 5 MB) from the backend host. */
   async function readHostImageFile(path: string): Promise<HostImageFile> {
-    return hostFiles().read_host_image_file({ path });
+    return invoke<HostImageFile>("read_host_image_file", { path });
   }
 
   return {

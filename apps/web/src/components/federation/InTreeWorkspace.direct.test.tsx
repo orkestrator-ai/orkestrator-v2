@@ -13,6 +13,7 @@ import {
   connectionList,
   installDesktopFake,
   remoteConnection,
+  SELF_NODE_ID,
   sharedIdDataset,
   uninstallDesktopFake,
 } from "@/test/federation-desktop-fake";
@@ -22,20 +23,38 @@ import { closeInTreeScopes, configureInTreeScopes } from "@/lib/federation/in-tr
 import { observeRealmLoopbacks, type RealmLoopbackTraffic } from "@/lib/federation/realm-channel";
 import { getWindowScope, resetWindowScopeForTests } from "@/lib/node-scope/app-window-scope";
 import { WindowScopeProvider } from "@/lib/node-scope/providers";
+import { portalStore } from "@/lib/portal/portal-store";
 import { getReadCoordinator, resetReadCoordinatorForTests } from "@/lib/read-coordinator";
 import { useFilesPanelChromeStore } from "@/stores/filesPanelChromeStore";
+import { createDefaultAppConfig } from "@orkestrator/protocol/app-config-defaults";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { useAppDialogStore } from "@/stores/appDialogStore";
+import { configStore } from "@/stores/configStore";
+import { projectStore } from "@/stores/projectStore";
 import { useInTreeNodesStore } from "@/stores/inTreeNodesStore";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
+import { uiStore } from "@/stores/uiStore";
 import { useUIChromeStore } from "@/stores/uiChromeStore";
+import { openCoordinatorWorkTarget } from "@/lib/coordinator-work-navigation";
+import { openMachineWorkspace } from "@/lib/federation/open-workspace";
+import { REALM_DIALOGS } from "@orkestrator/protocol/realm-request";
 import { FederationProvider } from "./FederationProvider";
 import { RemoteWorkspaceRegion } from "./RemoteWorkspaceRegion";
 
 const INITIAL_REMOTE = useRemoteWorkspaceStore.getState();
 const INITIAL_MACHINE = useMachineViewStore.getState();
 const INITIAL_CHROME = useUIChromeStore.getState();
+const INITIAL_PORTAL = portalStore.getState();
 const LEAF = "bk_a" as BackendId;
 const project = { id: "project-1", name: "Checkout", localPath: null, order: 0 };
+const environment = {
+  id: "env-1",
+  projectId: project.id,
+  name: "feature",
+  environmentType: "local",
+  status: "running",
+};
 
 /** The messages plan item 4005 replaces with direct calls. */
 const DIRECT = new Set([
@@ -68,6 +87,11 @@ class LeafClient extends FakeNodeClient {
 let traffic: RealmLoopbackTraffic[];
 let stopObserving: () => void;
 let restoreScopes: () => void;
+
+/** Whether any loopback carried a message of `type`, either way. */
+function exchanged(type: string): string[] {
+  return directTraffic().filter((entry) => entry.endsWith(`:${type}`));
+}
 
 /** The messages of plan item 4005 that crossed a loopback. */
 function directTraffic(): string[] {
@@ -113,6 +137,11 @@ async function openLeaf(
   return getWindowScope().get(LEAF)!;
 }
 
+/** The node's config arrives (its warm services load it; they are off in this suite). */
+function loadConfig(scope: NodeScope) {
+  act(() => scope.store(configStore).getState().setConfig(createDefaultAppConfig()));
+}
+
 /** Lets microtask deliveries and effects land. */
 async function settle() {
   await act(async () => {
@@ -126,6 +155,8 @@ beforeEach(() => {
   useMachineViewStore.setState({ grouping: "machine" });
   useInTreeNodesStore.setState({ nodes: [LEAF] });
   sessionStorage.clear();
+  // The window's own node, so entry points tell it from another node's.
+  portalStore.store.setState({ selfId: SELF_NODE_ID });
   traffic = [];
   stopObserving = observeRealmLoopbacks((entry) => traffic.push(entry));
   restoreScopes = configureInTreeScopes({
@@ -136,8 +167,9 @@ beforeEach(() => {
           nodeId,
           invoke: {
             get_projects: [project],
-            get_environments: [],
-            get_environment_snapshots: [],
+            get_environments: [environment],
+            get_environment_snapshots: [environment],
+            check_docker: { available: false },
           },
         });
         return windowScope.open({ role: "leaf", client });
@@ -158,6 +190,8 @@ afterEach(() => {
   useUIChromeStore.setState(INITIAL_CHROME, true);
   useInTreeNodesStore.setState({ nodes: [] });
   setFilesPanelTestState({ isOpen: false });
+  useAppDialogStore.setState({ request: null });
+  portalStore.store.setState(INITIAL_PORTAL, true);
   resetReadCoordinatorForTests();
   resetWindowScopeForTests();
   document.body.innerHTML = "";
@@ -206,4 +240,133 @@ test("visibility: hiding an in-tree node leaves the window's reads alone and sen
   expect(screen.getByTestId("in-tree-workspace").className).toContain("hidden");
   expect(getReadCoordinator().getDiagnostics().hostHidden).toBe(false);
   expect(directTraffic().filter((entry) => entry.endsWith(":visibility"))).toEqual([]);
+});
+
+test("select: a sidebar click on the node's environment selects it on the node's scope, read from the window's store", async () => {
+  // What a sidebar row (and every other portal entry point) calls.
+  renderRegion();
+  act(() =>
+    openMachineWorkspace({
+      connectionId: LEAF,
+      projectId: project.id,
+      environmentId: environment.id,
+      title: environment.name,
+    }),
+  );
+  await screen.findByTestId("in-tree-workspace");
+  await waitFor(() => expect(getWindowScope().get(LEAF)?.role).toBe("leaf"));
+  const ui = getWindowScope().get(LEAF)!.store(uiStore);
+  await waitFor(() => expect(ui.getState().projectSelectionRevision).toBeGreaterThan(0));
+  expect(ui.getState().selectedEnvironmentId).toBe(environment.id);
+  expect(getWindowScope().selection.get()).toMatchObject({
+    nodeId: LEAF,
+    projectId: project.id,
+    environmentId: environment.id,
+  });
+  expect(exchanged("select")).toEqual([]);
+});
+
+test("select: ⌘K's project result lands on the asked tab of the node's project", async () => {
+  const scope = await openLeaf({ projectId: project.id });
+  const ui = scope.store(uiStore);
+  await waitFor(() => expect(ui.getState().selectedProjectId).toBe(project.id));
+  // The search's result for another node's project (`ProjectSearchBar`).
+  act(() =>
+    openMachineWorkspace({
+      connectionId: LEAF,
+      projectId: project.id,
+      boardTab: "kanban",
+      title: project.name,
+    }),
+  );
+  await waitFor(() => expect(ui.getState().projectBoardTab).toBe("kanban"));
+  expect(ui.getState().selectedProjectId).toBe(project.id);
+  expect(exchanged("select")).toEqual([]);
+});
+
+test("select: a coordinator's work target on the node opens there, in its scope", async () => {
+  const scope = await openLeaf({ projectId: project.id });
+  // A coordinator's mail tile for a worker on this node.
+  act(() =>
+    openCoordinatorWorkTarget({
+      type: "remote",
+      nodeId: LEAF,
+      projectId: project.id,
+      environmentId: environment.id,
+      title: environment.name,
+      workTarget: {
+        type: "worker-tab",
+        projectId: project.id,
+        environmentId: environment.id,
+      },
+    }),
+  );
+  await waitFor(() =>
+    expect(scope.store(uiStore).getState().selectedEnvironmentId).toBe(environment.id),
+  );
+  // The command node's own selection was not touched.
+  expect(getWindowScope().commandScope().store(uiStore).getState().selectedEnvironmentId).toBe(
+    null,
+  );
+  expect(exchanged("select")).toEqual([]);
+});
+
+for (const dialog of REALM_DIALOGS) {
+  const onEnvironment = dialog.startsWith("environment-");
+  test(`select: the ${dialog} dialog opens for the node once its stores have hydrated`, async () => {
+    const scope = await openLeaf({
+      projectId: project.id,
+      ...(onEnvironment ? { environmentId: environment.id } : {}),
+      dialog,
+    });
+    await waitFor(() =>
+      expect(
+        scope
+          .store(projectStore)
+          .getState()
+          .projects.map((item) => item.id),
+      ).toEqual([project.id]),
+    );
+    await settle();
+    if (dialog === "repository-settings") {
+      // Its dialog reads the node's config, which has not arrived yet.
+      expect(useAppDialogStore.getState().request).toBeNull();
+    }
+    loadConfig(scope);
+    await waitFor(() => expect(useAppDialogStore.getState().request).not.toBeNull());
+    const expected: unknown = onEnvironment
+      ? {
+          kind: "environment-settings",
+          nodeId: LEAF,
+          environmentId: environment.id,
+          ...(dialog === "environment-rebuild" ? { section: "container" } : {}),
+        }
+      : { kind: dialog, nodeId: LEAF, projectId: project.id };
+    expect(useAppDialogStore.getState().request).toEqual(expected as never);
+    expect(exchanged("select")).toEqual([]);
+  });
+}
+
+test("select: Add Project and New Environment open in the node's workspace once its stores have hydrated", async () => {
+  renderRegion();
+  // The machine's "Add project" entry: an empty project.
+  act(() => openMachineWorkspace({ connectionId: LEAF, projectId: "", title: "Machine A" }));
+  expect((await screen.findByRole("dialog")).textContent).toContain("Add project");
+  const scope = getWindowScope().get(LEAF)!;
+  // The machine's "New environment" entry for one of its projects.
+  act(() =>
+    openMachineWorkspace({
+      connectionId: LEAF,
+      projectId: project.id,
+      createEnvironment: true,
+      title: project.name,
+    }),
+  );
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  // Its defaults are the node's config, which has not arrived yet.
+  await settle();
+  expect(screen.queryByText(/Configure a new Ork environment/u)).toBeNull();
+  loadConfig(scope);
+  expect(await screen.findByText(/Configure a new Ork environment/u)).toBeTruthy();
+  expect(exchanged("select")).toEqual([]);
 });

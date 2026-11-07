@@ -55,7 +55,10 @@ function selectRequest(request: RealmRequest | undefined): Omit<RealmSelectReque
  * read there directly and not sent (report Appendix C): the sidebar is
  * `uiChromeStore`'s, the files panel's open state `filesPanelChromeStore`'s,
  * and the grouping `useWindowGrouping`'s (`machineViewStore`). Visibility is
- * not sent either: a hidden node is the scope's tier (plan item 4002).
+ * not sent either: a hidden node is the scope's tier (plan item 4002). Nor
+ * is the window's request (`select`): the node's `WorkspaceRealmHost` reads
+ * `requests[nodeId]` here and applies it once the node's stores have what it
+ * needs.
  */
 export interface RealmRequestsOptions {
   /** The node is shown in the window's own tree (`InTreeWorkspace`), over a loopback. */
@@ -93,12 +96,14 @@ export function useRealmRequests(
   });
 
   const flush = useCallback(() => {
+    // In the window's tree the node's host reads the request from the window's store.
+    if (inTree) return;
     const { request: current, send: deliver } = latest.current;
     if (!deliver || !ready.current || !current || current.seq <= delivered.current) return;
     delivered.current = current.seq;
     selection.current = selectRequest(current);
     deliver(current.request);
-  }, []);
+  }, [inTree]);
 
   useEffect(() => {
     flush();

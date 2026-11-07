@@ -21,15 +21,65 @@ import { type RealmSelectRequest } from "@/lib/federation/workspace-realm";
 import { useRealmChannel } from "@/lib/federation/realm-channel";
 import { useConfigStore } from "@/stores/configStore";
 import { useFilesPanelChromeStore } from "@/stores/filesPanelChromeStore";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
 import { environmentStore } from "@/stores/environmentStore";
 import { useProjectStore } from "@/stores/projectStore";
 import { useRealmShellStore } from "@/stores/realmShellStore";
+import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { uiStore } from "@/stores/uiStore";
 import { useUIChromeStore } from "@/stores/uiChromeStore";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("web.federation");
+
+/**
+ * The window's last request each in-tree node's host applied, by scope: a
+ * host remounted on the same scope (Try again after a crash) resumes from
+ * the node's own selection and does not open a one-shot dialog again, as a
+ * realm document opened after `ready` does not. A new scope starts afresh.
+ */
+const appliedInTree = new WeakMap<NodeScope, number>();
+
+/** What the node's own stores have loaded: the facts its dialogs read. */
+export interface NodeDialogHydration {
+  readonly projectsLoaded: boolean;
+  readonly projectsLoading: boolean;
+  readonly configLoaded: boolean;
+  /** Every project's environments have loaded (`useSidebarHydration`). */
+  readonly environmentsReady: boolean;
+  /** The node's first Docker probe has finished. */
+  readonly dockerReady: boolean;
+}
+
+/**
+ * Whether the node's stores have what a request's dialog reads, so it may
+ * open now. These checks on the node's scope are the only gate: a realm's
+ * window also waits for `ready` before it sends a request, but in the
+ * window's tree there is no `ready` (plan item 4005). Add Project waits for
+ * the node's projects; New Environment also for its config and first Docker
+ * probe (its defaults); a project's dialog for the project list to be live,
+ * Delete Project also for its environments, Repository Settings also for
+ * the config. An environment's dialogs wait for the environment itself.
+ */
+export function dialogHydrated(
+  request: Pick<
+    RealmSelectRequest,
+    "addProject" | "createEnvironmentProjectId" | "dialog" | "environmentId"
+  >,
+  hydration: NodeDialogHydration,
+): boolean {
+  const projectsLive = hydration.projectsLoaded && !hydration.projectsLoading;
+  if (request.addProject) return hydration.projectsLoaded;
+  if (request.createEnvironmentProjectId) {
+    return projectsLive && hydration.configLoaded && hydration.dockerReady;
+  }
+  if (!request.dialog || request.environmentId) return true;
+  if (!projectsLive) return false;
+  if (request.dialog === "delete-project") return hydration.environmentsReady;
+  if (request.dialog === "repository-settings") return hydration.configLoaded;
+  return true;
+}
 
 /**
  * What a node's own sidebar would do for its workspace, in a realm that has
@@ -91,15 +141,32 @@ export function WorkspaceRealmHost() {
     Array.from(bootTiming.settled.values()).some((succeeded) => !succeeded),
   );
 
-  // What the window asked for last, numbered so the same request twice counts twice.
-  const [request, setRequest] = useState<(RealmSelectRequest & { seq: number }) | null>(() => {
-    const initial = channel.initialRequest();
-    return initial ? { ...initial, seq: 1 } : null;
-  });
+  // What the window asked for last, numbered so the same request twice counts
+  // twice. A realm document is told (`select`); in the window's tree it is
+  // the window's node-qualified request itself (plan item 4005).
+  const [sentRequest, setSentRequest] = useState<(RealmSelectRequest & { seq: number }) | null>(
+    () => {
+      const initial = inTree ? null : channel.initialRequest();
+      return initial ? { ...initial, seq: 1 } : null;
+    },
+  );
+  const windowRequest = useRemoteWorkspaceStore((state) =>
+    inTree ? state.requests[scope.nodeId] : undefined,
+  );
+  const request = useMemo(
+    () =>
+      inTree
+        ? windowRequest
+          ? { ...windowRequest.request, seq: windowRequest.seq }
+          : null
+        : sentRequest,
+    [inTree, sentRequest, windowRequest],
+  );
   const nextSeq = useRef(2);
-  const appliedSeq = useRef(0);
+  const [resumedSeq] = useState(() => (inTree ? (appliedInTree.get(scope) ?? 0) : 0));
+  const appliedSeq = useRef(resumedSeq);
   // The request whose dialog the user closed.
-  const [closedSeq, setClosedSeq] = useState(0);
+  const [closedSeq, setClosedSeq] = useState(resumedSeq);
   // Set while the window's files panel state is applied here, so it is not echoed back.
   const applyingShellFilesPanel = useRef(false);
 
@@ -108,7 +175,7 @@ export function WorkspaceRealmHost() {
     () =>
       channel.onMessage((message) => {
         if (message.type === "select") {
-          setRequest({ ...message, seq: nextSeq.current++ });
+          setSentRequest({ ...message, seq: nextSeq.current++ });
           return;
         }
         // The window's sidebar: the toolbar here shows and toggles it.
@@ -138,18 +205,18 @@ export function WorkspaceRealmHost() {
           getReadCoordinator().setHostHidden(message.hidden);
         }
       }),
-    [channel],
+    [channel, inTree],
   );
   useEffect(() => channel.post({ type: "ready" }), [channel]);
   // The window asked for this node's Report a bug sheet, which runs here so
   // its agent session talks to this node.
-  const bugReportSeq = useRef(0);
+  const bugReportSeq = useRef(resumedSeq);
   useEffect(() => {
     if (!request?.bugReport || bugReportSeq.current >= request.seq) return;
     bugReportSeq.current = request.seq;
     // In the window's tree the sheet is the window's, on the command node's
     // backend; another node's report needs the sheet on its scope (5003).
-    if (channel.kind === "loopback") {
+    if (inTree) {
       toast.info("Report a bug for this machine from its own workspace view", {
         description:
           "Turn off “Workspace in this window” for it in Settings → Machines, then report again.",
@@ -157,7 +224,7 @@ export function WorkspaceRealmHost() {
       return;
     }
     useBugReportStore.getState().openSheet();
-  }, [channel, request]);
+  }, [inTree, request]);
   // The toolbar here toggles the window's sidebar; in the window's tree it
   // writes the window's store itself, so there is nothing to report.
   useEffect(
@@ -216,9 +283,17 @@ export function WorkspaceRealmHost() {
   // The New Environment dialog reads its defaults (environment type, ports)
   // when it opens, so it waits for the node's projects, config and first
   // Docker probe. An unfinished probe must not force a local default.
-  const createReady = configLoaded && projectsLoaded && !projectsLoading && dockerReady;
+  const hydration: NodeDialogHydration = {
+    projectsLoaded,
+    projectsLoading,
+    configLoaded,
+    environmentsReady,
+    dockerReady,
+  };
+  const createReady = dialogHydrated({ createEnvironmentProjectId: "*" }, hydration);
   const dialogRequest = request && closedSeq < request.seq ? request : null;
-  const showAddProject = Boolean(dialogRequest?.addProject) && projectsLoaded;
+  const showAddProject =
+    Boolean(dialogRequest?.addProject) && dialogHydrated({ addProject: true }, hydration);
   const createProjectId = createReady ? (dialogRequest?.createEnvironmentProjectId ?? null) : null;
   const createProjectKnown =
     createProjectId !== null && projects.some((project) => project.id === createProjectId);
@@ -235,30 +310,40 @@ export function WorkspaceRealmHost() {
   // Select what was asked for, as the node's own sidebar would.
   useEffect(() => {
     if (!request || appliedSeq.current >= request.seq) return;
+    const seq = request.seq;
+    const applied = () => {
+      appliedSeq.current = seq;
+      if (inTree) appliedInTree.set(scope, seq);
+    };
     const ui = scope.store(uiStore).getState();
+    const hydrated = dialogHydrated(request, {
+      projectsLoaded,
+      projectsLoading,
+      configLoaded,
+      environmentsReady,
+      dockerReady,
+    });
     if (request.addProject) {
-      if (!projectsLoaded) return;
-      appliedSeq.current = request.seq;
+      if (!hydrated) return;
+      applied();
       ui.selectProject(null);
       return;
     }
     if (request.createEnvironmentProjectId) {
-      if (!createReady) return;
-      appliedSeq.current = request.seq;
+      if (!hydrated) return;
+      applied();
       const projectId = request.createEnvironmentProjectId;
       if (projects.some((project) => project.id === projectId)) ui.selectProject(projectId);
       return;
     }
     if (!request.projectId) {
-      appliedSeq.current = request.seq;
+      applied();
       return;
     }
     if (!request.environmentId) {
       // A project's dialog reads the project from the node's loaded list.
-      if (request.dialog && (!projectsLoaded || projectsLoading)) return;
-      if (request.dialog === "delete-project" && !environmentsReady) return;
-      if (request.dialog === "repository-settings" && !configLoaded) return;
-      appliedSeq.current = request.seq;
+      if (!hydrated) return;
+      applied();
       ui.selectProject(request.projectId);
       if (request.boardTab) ui.setProjectBoardTab(request.boardTab);
       if (request.dialog) openDialog(request.dialog, request.projectId, undefined, scope.nodeId);
@@ -268,13 +353,13 @@ export function WorkspaceRealmHost() {
     if (!environment) {
       // Gone since the window listed it: show its project instead.
       if (environmentsReady) {
-        appliedSeq.current = request.seq;
+        applied();
         ui.selectProject(request.projectId);
         if (request.boardTab) ui.setProjectBoardTab(request.boardTab);
       }
       return;
     }
-    appliedSeq.current = request.seq;
+    applied();
     ui.setProjectCollapsed(environment.projectId, false);
     ui.selectProjectAndEnvironment(environment.projectId, environment.id);
     // A project home opens on its Home tab, as its own sidebar opens it.
@@ -295,9 +380,10 @@ export function WorkspaceRealmHost() {
     }
   }, [
     allEnvironments,
-    createReady,
     configLoaded,
+    dockerReady,
     environmentsReady,
+    inTree,
     projects,
     projectsLoaded,
     projectsLoading,

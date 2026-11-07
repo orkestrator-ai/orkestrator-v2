@@ -1,8 +1,9 @@
 /**
- * The realm side runs unchanged on both paths (plan item 4001): a realm
- * document reads its request from its URL and talks over the page's
- * transport; a node in the window's tree reads the same from a loopback in
- * context. Each scenario below runs on both, with the same expectations.
+ * The realm side runs on both paths (plan item 4001): a realm document reads
+ * its request from its URL and talks over the page's transport; a node in
+ * the window's tree has a loopback in context, and reads the window's
+ * request from the window's own store (plan item 4005). Each scenario below
+ * runs on both, with the same expectations.
  */
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import type { ReactElement } from "react";
@@ -27,6 +28,7 @@ import { getReadCoordinator, resetReadCoordinatorForTests } from "@/lib/read-coo
 import { useEnvironmentStore, useProjectStore, useUIStore } from "@/stores";
 import { useAppDialogStore } from "@/stores/appDialogStore";
 import { useConfigStore } from "@/stores/configStore";
+import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { useRealmShellStore } from "@/stores/realmShellStore";
 import { useUIChromeStore } from "@/stores/uiChromeStore";
 import type { Environment, Project } from "@/types";
@@ -83,13 +85,20 @@ function pagePath(): RealmPath {
 }
 
 const loopbacks: RealmLoopback[] = [];
+const INITIAL_REMOTE = useRemoteWorkspaceStore.getState();
 function loopbackPath(): RealmPath {
   let pair: RealmLoopback | null = null;
   const posted: unknown[] = [];
+  // The window asks through its own store, keyed by the node the host shows.
+  const ask = (request: Omit<RealmSelectRequest, "type">) =>
+    act(() =>
+      useRemoteWorkspaceStore.getState().open(getWindowScope().commandScope().nodeId, request),
+    );
   return {
     open(request) {
-      pair = createRealmLoopback(request);
+      pair = createRealmLoopback(null);
       loopbacks.push(pair);
+      ask(request);
       pair.onRealmMessage((message) => posted.push(message));
       const tree: ReactElement = (
         <RealmChannelContext.Provider value={pair.realm}>
@@ -99,6 +108,11 @@ function loopbackPath(): RealmPath {
       render(tree);
     },
     send: (message) => {
+      if (message.type === "select") {
+        const { type: _type, ...request } = message;
+        ask(request);
+        return;
+      }
       act(() => pair!.send(message));
     },
     posted: () => posted.map(parseRealmMessage).filter((m): m is RealmToShellMessage => !!m),
@@ -145,6 +159,7 @@ afterEach(() => {
   happyDOM.setURL(originalHref);
   window.orkestrator = originalNative;
   useAppDialogStore.setState({ request: null });
+  useRemoteWorkspaceStore.setState(INITIAL_REMOTE, true);
   useRealmShellStore.setState({ grouping: null });
   useConfigStore.setState(originalConfig, true);
   useUIStore.setState(originalUI, true);
@@ -169,12 +184,20 @@ for (const [name, makePath] of [
       await waitFor(() => expect(useUIStore.getState().selectedEnvironmentId).toBe(environment.id));
       expect(useUIStore.getState().selectedProjectId).toBe(project.id);
       await settle();
-      // The selection is reported back to the window.
-      expect(path.posted()).toContainEqual({
-        type: "selection",
-        projectId: project.id,
-        environmentId: environment.id,
-      });
+      if (name === "realm document") {
+        // The selection is reported back to the window.
+        expect(path.posted()).toContainEqual({
+          type: "selection",
+          projectId: project.id,
+          environmentId: environment.id,
+        });
+      } else {
+        // In the window's tree it is the window's selection itself.
+        expect(getWindowScope().selection.get()).toMatchObject({
+          projectId: project.id,
+          environmentId: environment.id,
+        });
+      }
     });
 
     test("a project dialog waits for the node's projects, then opens for this node once", async () => {
@@ -236,4 +259,23 @@ test("visibility defers a realm document's reads; in the window's tree the windo
   inTree.send({ type: "visibility", hidden: true });
   await settle();
   expect(getReadCoordinator().getDiagnostics().hostHidden).toBe(false);
+});
+
+test("in the window's tree, a host remounted on the same scope resumes without reopening a one-shot dialog", async () => {
+  const inTree = loopbackPath();
+  inTree.open({ projectId: project.id, dialog: "delete-project" });
+  await act(async () => resolveProjects([project]));
+  await waitFor(() => expect(useAppDialogStore.getState().request?.kind).toBe("delete-project"));
+  const first = useAppDialogStore.getState().requestSequence;
+  // Try again after a crash: a new host, on the same node scope and request.
+  cleanup();
+  const again = createRealmLoopback(null);
+  loopbacks.push(again);
+  render(
+    <RealmChannelContext.Provider value={again.realm}>
+      <WorkspaceRealmHost />
+    </RealmChannelContext.Provider>,
+  );
+  await settle();
+  expect(useAppDialogStore.getState().requestSequence).toBe(first);
 });

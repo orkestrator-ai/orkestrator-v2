@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "generatedBy": "scripts/generate-contract-manifest.ts (mise run contract:manifest)",
   "counts": {
-    "commands": 999,
-    "defined": 999,
+    "commands": 1003,
+    "defined": 1003,
     "untyped": 0,
     "events": 44
   },
@@ -224,7 +224,7 @@
       "read": false,
       "critical": ["projectId", "requestId"],
       "argsDigest": "sha256:aa6500da69e206cd2a4f921e47488fe220409a6cef7dc29466541d78c71fb390",
-      "resultDigest": "sha256:216fdab67e5a9f5b65bda532a8c0b6d66f1d1df0477c2b632997557fb1efbca8"
+      "resultDigest": "sha256:f0d756925c7fc04b936e5ddd3768b8bbe1ff3d0eb45c6f194aece3c86294c637"
     },
     "add_kanban_image": {
       "domain": "kanban",
@@ -233,16 +233,16 @@
       "read": false,
       "critical": [],
       "argsDigest": "sha256:d0a5e5643edd37485fe72fdd07b47842fc2efb35cc06894d063aa7496f0db4af",
-      "resultDigest": "sha256:216fdab67e5a9f5b65bda532a8c0b6d66f1d1df0477c2b632997557fb1efbca8"
+      "resultDigest": "sha256:f0d756925c7fc04b936e5ddd3768b8bbe1ff3d0eb45c6f194aece3c86294c637"
     },
     "add_kanban_task": {
       "domain": "kanban",
       "since": 1,
       "access": "workspace",
       "read": false,
-      "critical": ["markdown", "requestId", "sections"],
-      "argsDigest": "sha256:d27d9726e4ff4ca009b3fb948d4e2ba895cc3f72530b3c297d0d4528c7c1c2bc",
-      "resultDigest": "sha256:216fdab67e5a9f5b65bda532a8c0b6d66f1d1df0477c2b632997557fb1efbca8"
+      "critical": ["labels", "markdown", "requestId", "sections"],
+      "argsDigest": "sha256:58334ab753093a843de5b71e043b3146e560fdd75338be8a6bc356405b69f6c0",
+      "resultDigest": "sha256:f0d756925c7fc04b936e5ddd3768b8bbe1ff3d0eb45c6f194aece3c86294c637"
     },
     "add_node": {
       "domain": "nodes",
@@ -1313,7 +1313,7 @@
       "read": false,
       "critical": [],
       "argsDigest": "sha256:45f27a7d41751decdc3b3369d1de47f632e9e0ecd1d202b69af48ee3b556ce67",
-      "resultDigest": "sha256:d2f42a849217c5642861dc0e984ccc06701ba91bcf9bc84768c5b8e9bb1e4ba7"
+      "resultDigest": "sha256:aa7b34e4652afb047bd8e71b861c79818c5ba5604696145e59e1137833919efa"
     },
     "close_container_logs": {
       "domain": "docker",
@@ -1341,6 +1341,15 @@
       "critical": [],
       "argsDigest": "sha256:a217cd99b3584df19ee536eee79e3e30d3fe7eb39e1e63f00232b64979f83204",
       "resultDigest": "sha256:2a295292405ba04aecb529a92fd9c7f30bd0f7183338c6d8f009103328ab9259"
+    },
+    "close_kanban_task_for_merged_pr": {
+      "domain": "kanban",
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:fc8ca43f8c11253e3e34dcc974b3ce17765b7945bf8fb3d6d7a7d1a486539726",
+      "resultDigest": "sha256:c9921475df8082b224cc88e86f864b96f459c3d5a1ae60c86eb9cb67258b596a"
     },
     "close_local_terminal_session": {
       "domain": "terminals",
@@ -1430,7 +1439,7 @@
       "read": false,
       "critical": [],
       "argsDigest": "sha256:c3b58ad40364e0acbbb0e4b1b585ad53c31bf0199064aee9e06035d6b68c574e",
-      "resultDigest": "sha256:0a3f911014e4d407fa602e56b31785680ac9ab14c3fd467e65f1d65fa954d0ca"
+      "resultDigest": "sha256:2715d376dfaa55be3f538ef2e1527d3f2a689c3d9bcd54824c48fd695171dd73"
     },
     "copy_external_file": {
       "domain": "files",
@@ -1571,6 +1580,15 @@
       "critical": [],
       "argsDigest": "sha256:1efbda8a880d1decb9481e16762c2506dfb286e0f73006d0fc65f7ef22185027",
       "resultDigest": "sha256:59e76172e4d550dd6dd13add126ddd20d7aed5de52f304833f52b4cc5274eaa4"
+    },
+    "create_kanban_label": {
+      "domain": "kanban",
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:025f5b4372a2bd026a5584abcdad69881ec1a8d5ede38d608887d900b75e0334",
+      "resultDigest": "sha256:50e7d45f9e8c5ed6b6d0ee99a12d3e1995aa838eb2218ce58d9fc83ae8926948"
     },
     "create_local_folder": {
       "domain": "files",
@@ -1777,7 +1795,7 @@
       "read": false,
       "critical": [],
       "argsDigest": "sha256:bf2baaf448f09268a1df8835935bbf8f647ea2b446700c7b9501af1d5893b9e1",
-      "resultDigest": "sha256:216fdab67e5a9f5b65bda532a8c0b6d66f1d1df0477c2b632997557fb1efbca8"
+      "resultDigest": "sha256:f0d756925c7fc04b936e5ddd3768b8bbe1ff3d0eb45c6f194aece3c86294c637"
     },
     "delete_kanban_image": {
       "domain": "kanban",
@@ -1786,7 +1804,7 @@
       "read": false,
       "critical": [],
       "argsDigest": "sha256:c8cd85dc813d3d186cba4469d12e12b75fe75177f1774f2a27b66e426f082e02",
-      "resultDigest": "sha256:216fdab67e5a9f5b65bda532a8c0b6d66f1d1df0477c2b632997557fb1efbca8"
+      "resultDigest": "sha256:f0d756925c7fc04b936e5ddd3768b8bbe1ff3d0eb45c6f194aece3c86294c637"
     },
     "delete_kanban_task": {
       "domain": "kanban",
@@ -3516,6 +3534,15 @@
       "argsDigest": "sha256:84686a1a35bac57aced51cbf8472b652de894fb6234505d08e4a7007ab59f9d5",
       "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
     },
+    "get_kanban_labels": {
+      "domain": "kanban",
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:a73d95bae8254dd5cd7f28963c13c672a25901c6b45aaf4d4592ad09f6cecbe1",
+      "resultDigest": "sha256:bffbf2fd5081bc957f98738c4b800488f6855154da3f29a169ef888153e89fc0"
+    },
     "get_kanban_tasks": {
       "domain": "kanban",
       "since": 1,
@@ -3523,7 +3550,7 @@
       "read": true,
       "critical": [],
       "argsDigest": "sha256:4fd04a3dce747fd27f884500f729c3c92a4ee1c37b4864f86c9bc4db9c1d2b4d",
-      "resultDigest": "sha256:970b91427bd96a9101037aac52c7a3f75aff60deb3e6626c45cf5b9096e183df"
+      "resultDigest": "sha256:64c1e6bbaa848790efe28e6aae20d256506e553b7a569c74d1b0cdd14da41684"
     },
     "get_linear_connection": {
       "domain": "kanban",
@@ -6264,7 +6291,7 @@
       "read": false,
       "critical": [],
       "argsDigest": "sha256:4976e34109e9db313148117d3869b53059368eec8542513f2654e008757e3125",
-      "resultDigest": "sha256:935062e7c275a30a58870ef195de9ca6083804a4e3d9f4231d1529d92c2d1c53"
+      "resultDigest": "sha256:88d8637620f2e5d5ee7682fd46ffd8e753565241d9bff5b881bd1d1b2f00db2f"
     },
     "record_node_environment_origin": {
       "domain": "node-mail",
@@ -7481,6 +7508,15 @@
       "argsDigest": "sha256:42d3b46027cef9b0ba3ae200c86b35a42b89f1cd1516b5c7e8a8f7ae4f8d45e3",
       "resultDigest": "sha256:df66df8bec205ae124c7659988d3fe246d103aa8e7bb4dc0a7be38270d82d248"
     },
+    "set_kanban_task_label": {
+      "domain": "kanban",
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["projectId"],
+      "argsDigest": "sha256:72977ee14dfdccaca0e10345929cae424ca309bad31f6850a37a3edece6eda6f",
+      "resultDigest": "sha256:f0d756925c7fc04b936e5ddd3768b8bbe1ff3d0eb45c6f194aece3c86294c637"
+    },
     "set_mcp_management_rollout": {
       "domain": "mcp",
       "since": 1,
@@ -8575,9 +8611,9 @@
       "since": 1,
       "access": "workspace",
       "read": false,
-      "critical": ["markdown", "sections"],
-      "argsDigest": "sha256:840271938e1c16005900f01da64db6be271cbf072602e38eba57169169299f13",
-      "resultDigest": "sha256:216fdab67e5a9f5b65bda532a8c0b6d66f1d1df0477c2b632997557fb1efbca8"
+      "critical": ["labels", "markdown", "preserveDoneStatus", "sections"],
+      "argsDigest": "sha256:b31457c6de75194ede48ac2a8bf27d37dd820fc9f7dc9d96341700fd6c412bd6",
+      "resultDigest": "sha256:f0d756925c7fc04b936e5ddd3768b8bbe1ff3d0eb45c6f194aece3c86294c637"
     },
     "update_native_agent_controls": {
       "domain": "native-sessions",

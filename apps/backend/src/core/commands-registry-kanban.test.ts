@@ -120,14 +120,11 @@ test("terminal status updates preserve done under storage's lease, while users c
 describe("Kanban label command validation", () => {
   test.each([
     ["get_kanban_labels", {}, "projectId"],
-    ["get_kanban_labels", { projectId: "p", extra: true }, "extra"],
     ["get_kanban_labels", { projectId: " " }, "projectId"],
-    ["create_kanban_label", { projectId: "p", name: "bug", extra: true }, "extra"],
     ["create_kanban_label", { name: "bug" }, "projectId"],
     ["create_kanban_label", { projectId: "p", name: " " }, "empty"],
     ["create_kanban_label", { projectId: "p", name: "bug", color: "red" }, "#rrggbb"],
     ["create_kanban_label", { projectId: "p", name: "bug", description: 1 }, "description"],
-    ["set_kanban_task_label", { taskId: "t", name: "bug", extra: true }, "extra"],
     ["set_kanban_task_label", { taskId: "t", name: "bug", present: "false" }, "boolean"],
     ["set_kanban_task_label", { taskId: "t", name: "bug", present: null }, "boolean"],
     ["set_kanban_task_label", { name: "bug" }, "taskId"],
@@ -139,6 +136,41 @@ describe("Kanban label command validation", () => {
         commands.get(name)!(input, { storage: { kanban: {} } } as never),
       ),
     ).rejects.toThrow(message);
+  });
+
+  // Defined commands decode tolerantly (plan item 7008): an unknown key is
+  // dropped before the handler, never refused.
+  test("label commands drop unknown keys before storage", async () => {
+    const calls: Array<[string, unknown[]]> = [];
+    const kanban = {
+      getKanbanLabels: async (...args: unknown[]) => {
+        calls.push(["get", args]);
+        return [];
+      },
+      createKanbanLabel: async (...args: unknown[]) => {
+        calls.push(["create", args]);
+        return { label: { name: "bug", createdAt: "2026-11-07T00:00:00Z" }, created: true };
+      },
+      setKanbanTaskLabel: async (...args: unknown[]) => {
+        calls.push(["set", args]);
+        return { id: "t", labels: ["bug"] };
+      },
+    };
+    const context = { storage: { kanban } } as never;
+    await commands.get("get_kanban_labels")!({ projectId: "p", extra: true }, context);
+    await commands.get("create_kanban_label")!(
+      { projectId: "p", name: "bug", extra: true },
+      context,
+    );
+    await commands.get("set_kanban_task_label")!(
+      { taskId: "t", name: "bug", extra: true },
+      context,
+    );
+    expect(calls).toEqual([
+      ["get", ["p"]],
+      ["create", ["p", { name: "bug" }]],
+      ["set", ["t", "bug", true, undefined]],
+    ]);
   });
 
   test("label commands persist metadata and default present to true, while false removes", async () => {

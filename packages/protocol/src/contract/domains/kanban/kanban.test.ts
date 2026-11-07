@@ -55,6 +55,10 @@ const HANDLER_KEYS: Record<string, readonly string[]> = {
     "preserveDoneStatus",
   ],
   record_kanban_criteria_checks: ["taskId", "checks"],
+  close_kanban_task_for_merged_pr: ["taskId", "prUrl"],
+  get_kanban_labels: ["projectId"],
+  create_kanban_label: ["projectId", "name", "color", "description"],
+  set_kanban_task_label: ["taskId", "name", "present", "projectId"],
   delete_kanban_task: ["taskId"],
   add_kanban_comment: ["requestId", "taskId", "text", "projectId"],
   delete_kanban_comment: ["taskId", "commentId"],
@@ -113,9 +117,9 @@ function argsError(def: AnyCommandDef, raw: unknown): string {
 }
 
 describe("kanban definitions", () => {
-  it("cover the 29 commands once, each in version 1 of the domain", () => {
-    expect(ALL).toHaveLength(29);
-    expect(new Set(ALL.map((def) => def.name)).size).toBe(29);
+  it("cover the 33 commands once, each in version 1 of the domain", () => {
+    expect(ALL).toHaveLength(33);
+    expect(new Set(ALL.map((def) => def.name)).size).toBe(33);
     expect(ALL.map((def) => def.name).sort()).toEqual(Object.keys(HANDLER_KEYS).sort());
     for (const def of ALL) {
       expect({ name: def.name, since: def.since, domain: def.domain.name }).toEqual({
@@ -135,7 +139,7 @@ describe("kanban definitions", () => {
     }
   });
 
-  it("classify reads as the routing classifier does, all workspace access", () => {
+  it("classify reads as the routing classifier does, workspace access but the in-process merge closure", () => {
     for (const def of ALL) {
       expect({ name: def.name, read: def.read }).toEqual({
         name: def.name,
@@ -143,7 +147,8 @@ describe("kanban definitions", () => {
       });
       expect({ name: def.name, access: def.access }).toEqual({
         name: def.name,
-        access: "workspace",
+        // The build pipeline's terminal lifecycle calls it in process only.
+        access: def.name === "close_kanban_task_for_merged_pr" ? "internal" : "workspace",
       });
     }
   });
@@ -153,8 +158,9 @@ describe("kanban definitions", () => {
       ALL.filter((def) => def.critical.length).map((def) => [def.name, [...def.critical]]),
     );
     expect(critical).toEqual({
-      add_kanban_task: ["requestId", "markdown", "sections"],
-      update_kanban_task: ["markdown", "sections"],
+      add_kanban_task: ["requestId", "markdown", "sections", "labels"],
+      update_kanban_task: ["markdown", "sections", "labels", "preserveDoneStatus"],
+      set_kanban_task_label: ["projectId"],
       add_kanban_comment: ["requestId", "projectId"],
       start_feature_planning: ["operationId"],
     });

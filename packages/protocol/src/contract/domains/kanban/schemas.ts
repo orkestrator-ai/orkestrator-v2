@@ -23,6 +23,7 @@
  */
 import * as Schema from "effect/Schema";
 import type { FeaturePlanningRecord } from "../../../feature-planning.js";
+import type { TicketLabelDefinition, TicketLabelSummary } from "../../../ticket-labels.js";
 import { modelRecord, mutableArray, OpenObject, openRecord } from "../../model-schema.js";
 
 const optionalString = Schema.optional(Schema.String);
@@ -82,6 +83,8 @@ export const KanbanTaskSchema = openRecord({
   // `TicketSections`; absent on legacy rows (derived from the mirrors).
   sections: Schema.optional(OpenObject),
   sectionsBasis: optionalString,
+  // Label names in the order they were added (`ticket-labels.ts`); absent when it has none.
+  labels: Schema.optional(mutableArray(Schema.String)),
   // `KanbanStatus`.
   status: Schema.optional(Schema.String),
   comments: Schema.optional(mutableArray(KanbanCommentSchema)),
@@ -95,11 +98,42 @@ export const KanbanTaskSchema = openRecord({
   // `PrState`.
   prState: optionalString,
   prMergeCommented: Schema.optional(Schema.Boolean),
+  // The merged pull request that moved the ticket to done (`kanban-merge-closure.ts`).
+  prMergeDoneUrl: optionalString,
   // `TicketSyncMeta` (`ticket-sync.ts`); absent on rows never synced.
   sync: Schema.optional(OpenObject),
 }).annotate({ identifier: "KanbanTask" });
 
 export const KanbanTaskListSchema = mutableArray(KanbanTaskSchema);
+
+/** `TicketLabelSummary` (`ticket-labels.ts`): one label a project offers, with its ticket count. */
+export const TicketLabelSummarySchema = modelRecord<TicketLabelSummary>()({
+  name: Schema.String,
+  color: optionalString,
+  description: optionalString,
+  // Absent for a label only tickets carry.
+  createdAt: optionalString,
+  ticketCount: Schema.Finite,
+}).annotate({ identifier: "TicketLabelSummary" });
+
+export const TicketLabelSummaryListSchema = mutableArray(TicketLabelSummarySchema);
+
+/** `TicketLabelDefinition` (`ticket-labels.ts`): one label in a project's catalogue. */
+export const TicketLabelDefinitionSchema = modelRecord<TicketLabelDefinition>()({
+  name: Schema.String,
+  color: optionalString,
+  description: optionalString,
+  createdAt: Schema.String,
+}).annotate({ identifier: "TicketLabelDefinition" });
+
+/** `create_kanban_label`: the catalogue entry, and whether this call added it. */
+export const KanbanLabelCreateResultSchema = Schema.Struct({
+  label: TicketLabelDefinitionSchema,
+  created: Schema.Boolean,
+});
+
+/** `close_kanban_task_for_merged_pr`: whether the ticket moved to done. */
+export const KanbanMergeClosureResultSchema = Schema.Struct({ closed: Schema.Boolean });
 
 /** `ProjectNotes`. */
 export const ProjectNotesSchema = openRecord({

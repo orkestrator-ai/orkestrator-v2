@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "digest": "sha256:d27d9726e4ff4ca009b3fb948d4e2ba895cc3f72530b3c297d0d4528c7c1c2bc",
+  "digest": "sha256:58334ab753093a843de5b71e043b3146e560fdd75338be8a6bc356405b69f6c0",
   "document": {
     "definitions": {},
     "dialect": "draft-2020-12",
@@ -10,6 +10,7 @@
         "acceptanceCriteria": {},
         "description": {},
         "kind": {},
+        "labels": {},
         "markdown": {},
         "projectId": {
           "type": "string"

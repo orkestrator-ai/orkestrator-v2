@@ -10,6 +10,7 @@ import {
 import { normalizeTicketLabels } from "@orkestrator/protocol/ticket-labels";
 import type { KanbanTaskContentInput } from "./storage-kanban.js";
 import { parseKanbanLabelInput } from "./storage-kanban-labels.js";
+import { ASYNC_HANDLER } from "./commands-registry-async-decode.js";
 import {
   addKanbanCommentCommand,
   addKanbanImageCommand,
@@ -18,6 +19,8 @@ import {
   appendFeatureStoryMessageCommand,
   cancelFeaturePlanningCommand,
   claimFeaturePlanBuildCommand,
+  closeKanbanTaskForMergedPrCommand,
+  createKanbanLabelCommand,
   createFeaturePlanCommand,
   deleteKanbanCommentCommand,
   deleteKanbanImageCommand,
@@ -25,11 +28,13 @@ import {
   getFeaturePlanningSnapshotCommand,
   getFeaturePlansCommand,
   getKanbanImageDataCommand,
+  getKanbanLabelsCommand,
   getKanbanTasksCommand,
   getProjectNotesCommand,
   recordKanbanCriteriaChecksCommand,
   retryFeaturePlanningCommand,
   saveProjectNotesCommand,
+  setKanbanTaskLabelCommand,
   startFeaturePlanningCommand,
   updateFeaturePlanCommand,
   updateKanbanTaskCommand,
@@ -152,16 +157,19 @@ export function registerKanbanCommands(
   });
   // A ticket whose pull request merged moves to done, once per pull request
   // (`kanban-merge-closure.ts`). Resolves to whether the ticket moved.
-  register("close_kanban_task_for_merged_pr", async (args, { storage }) => {
-    assertOnlyKeys(args, ["taskId", "prUrl"], "arguments");
-    const moved = await storage.kanban.closeKanbanTasksForMergedPullRequests([
-      {
-        taskId: asNonBlankString(args.taskId, "taskId"),
-        prUrl: asNonBlankString(args.prUrl, "prUrl"),
-      },
-    ]);
-    return { closed: moved.length > 0 };
-  });
+  register(
+    closeKanbanTaskForMergedPrCommand,
+    async (args, { storage }) => {
+      const moved = await storage.kanban.closeKanbanTasksForMergedPullRequests([
+        {
+          taskId: asNonBlankString(args.taskId, "taskId"),
+          prUrl: asNonBlankString(args.prUrl, "prUrl"),
+        },
+      ]);
+      return { closed: moved.length > 0 };
+    },
+    ASYNC_HANDLER,
+  );
   register(recordKanbanCriteriaChecksCommand, (args, { storage }) => {
     if (
       !Array.isArray(args.checks) ||
@@ -195,12 +203,10 @@ export function registerKanbanCommands(
       checks,
     );
   });
-  register("get_kanban_labels", (args, { storage }) => {
-    assertOnlyKeys(args, ["projectId"], "arguments");
+  register(getKanbanLabelsCommand, (args, { storage }) => {
     return storage.kanban.getKanbanLabels(asNonBlankString(args.projectId, "projectId"));
   });
-  register("create_kanban_label", (args, { storage }) => {
-    assertOnlyKeys(args, ["projectId", "name", "color", "description"], "arguments");
+  register(createKanbanLabelCommand, (args, { storage }) => {
     return storage.kanban.createKanbanLabel(
       asNonBlankString(args.projectId, "projectId"),
       parseKanbanLabelInput({
@@ -210,8 +216,7 @@ export function registerKanbanCommands(
       }),
     );
   });
-  register("set_kanban_task_label", (args, { storage }) => {
-    assertOnlyKeys(args, ["taskId", "name", "present", "projectId"], "arguments");
+  register(setKanbanTaskLabelCommand, (args, { storage }) => {
     if (args.present !== undefined && typeof args.present !== "boolean") {
       throw new Error("present must be a boolean");
     }

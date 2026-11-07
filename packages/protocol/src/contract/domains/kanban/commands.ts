@@ -26,6 +26,8 @@ import {
   FeaturePlanListSchema,
   FeaturePlanningRecordSchema,
   FeaturePlanSchema,
+  KanbanLabelCreateResultSchema,
+  KanbanMergeClosureResultSchema,
   KanbanTaskListSchema,
   KanbanTaskSchema,
   LinearCompletionCommentResultSchema,
@@ -35,6 +37,7 @@ import {
   LinearIssueListItemSchema,
   ProjectNotesSchema,
   snapshotRead,
+  TicketLabelSummaryListSchema,
 } from "./schemas.js";
 
 const optionalUnknown = Schema.optionalKey(Schema.Unknown);
@@ -88,7 +91,7 @@ export const addKanbanTaskCommand = defineCommand({
     labels: optionalUnknown,
   }),
   result: KanbanTaskSchema,
-  critical: ["requestId", "markdown", "sections"],
+  critical: ["requestId", "markdown", "sections", "labels"],
 });
 
 /** Updates a ticket's fields and content; a field left out is unchanged. */
@@ -114,7 +117,7 @@ export const updateKanbanTaskCommand = defineCommand({
     preserveDoneStatus: optionalUnknown,
   }),
   result: KanbanTaskSchema,
-  critical: ["markdown", "sections"],
+  critical: ["markdown", "sections", "labels", "preserveDoneStatus"],
 });
 
 /** Writes Verify results onto the ticket's criteria; `null` when the ticket is gone. */
@@ -128,6 +131,75 @@ export const recordKanbanCriteriaChecksCommand = defineCommand({
   args: Schema.Struct({ taskId: Schema.String, checks: optionalUnknown }),
   result: Schema.NullOr(KanbanTaskSchema),
   critical: [],
+});
+
+/**
+ * Moves a ticket whose pull request merged to done, once per pull request
+ * (`kanban-merge-closure.ts`). The build pipeline's terminal lifecycle calls
+ * it in process.
+ */
+export const closeKanbanTaskForMergedPrCommand = defineCommand({
+  domain: kanbanDomain,
+  name: "close_kanban_task_for_merged_pr",
+  since: 1,
+  access: "internal",
+  read: false,
+  args: Schema.Struct({ taskId: Schema.String, prUrl: Schema.String }),
+  result: KanbanMergeClosureResultSchema,
+  critical: [],
+});
+
+/** The labels a project offers: its catalogue plus every name a ticket carries. */
+export const getKanbanLabelsCommand = defineCommand({
+  domain: kanbanDomain,
+  name: "get_kanban_labels",
+  since: 1,
+  access: "workspace",
+  read: true,
+  args: Schema.Struct({ projectId: Schema.String }),
+  result: TicketLabelSummaryListSchema,
+  critical: [],
+});
+
+/**
+ * Adds a label to a project's catalogue; an existing name (any case) is kept
+ * and takes the colour or description given. The values are checked by the
+ * handler (`parseKanbanLabelInput`) with its own messages.
+ */
+export const createKanbanLabelCommand = defineCommand({
+  domain: kanbanDomain,
+  name: "create_kanban_label",
+  since: 1,
+  access: "workspace",
+  read: false,
+  args: Schema.Struct({
+    projectId: Schema.String,
+    name: optionalUnknown,
+    color: optionalUnknown,
+    description: optionalUnknown,
+  }),
+  result: KanbanLabelCreateResultSchema,
+  critical: [],
+});
+
+/**
+ * Adds one label to a ticket, or removes it with `present: false`.
+ * `projectId` refuses a ticket of another project with the same id.
+ */
+export const setKanbanTaskLabelCommand = defineCommand({
+  domain: kanbanDomain,
+  name: "set_kanban_task_label",
+  since: 1,
+  access: "workspace",
+  read: false,
+  args: Schema.Struct({
+    taskId: Schema.String,
+    name: Schema.String,
+    present: optionalUnknown,
+    projectId: optionalUnknown,
+  }),
+  result: KanbanTaskSchema,
+  critical: ["projectId"],
 });
 
 export const deleteKanbanTaskCommand = defineCommand({
@@ -449,6 +521,10 @@ export const KANBAN_COMMANDS = [
   addKanbanTaskCommand,
   updateKanbanTaskCommand,
   recordKanbanCriteriaChecksCommand,
+  closeKanbanTaskForMergedPrCommand,
+  getKanbanLabelsCommand,
+  createKanbanLabelCommand,
+  setKanbanTaskLabelCommand,
   deleteKanbanTaskCommand,
   addKanbanCommentCommand,
   deleteKanbanCommentCommand,

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "digest": "sha256:840271938e1c16005900f01da64db6be271cbf072602e38eba57169169299f13",
+  "digest": "sha256:b31457c6de75194ede48ac2a8bf27d37dd820fc9f7dc9d96341700fd6c412bd6",
   "document": {
     "definitions": {},
     "dialect": "draft-2020-12",
@@ -12,10 +12,12 @@
         "description": {},
         "environmentId": {},
         "kind": {},
+        "labels": {},
         "markdown": {},
         "prMergeCommented": {},
         "prState": {},
         "prUrl": {},
+        "preserveDoneStatus": {},
         "sections": {},
         "status": {},
         "taskId": {

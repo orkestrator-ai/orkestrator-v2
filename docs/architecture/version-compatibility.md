@@ -890,8 +890,9 @@ export const nodeMailClient = domainClient(nodeMail, {
   legacy bare shapes, which the result schemas include.
 - **Kanban, agent mail, accounts and MCP**
   ([7008](../../plans/unified/7008-domain-kanban-mail-accounts-mcp.md)):
-  `kanban` (29 commands: tickets with their comments, images and criterion
-  checks, project notes, feature plans and the planning exchange, the Linear
+  `kanban` (33 commands: tickets with their comments, images, labels and
+  criterion checks, the project's label catalogue, the merged-PR closure,
+  project notes, feature plans and the planning exchange, the Linear
   connection), `agent-mail` (23: mailboxes, inboxes, messages and
   conversations on one node, delivery retries, the agent registry and the
   messaging settings; mail between nodes stays `node-mail`), `accounts` (33:
@@ -903,14 +904,17 @@ export const nodeMailClient = domainClient(nodeMail, {
   structs where the type lives in the backend. Kanban ticket ids are the
   same on every node, so a client keeps results under the node it asked.
   `access` is `workspace`, except `admin` for the MCP rollout gate
-  (`get_`/`set_mcp_management_rollout`). The 29 strict accounts handlers
+  (`get_`/`set_mcp_management_rollout`) and `internal` for
+  `close_kanban_task_for_merged_pr`, which the build pipeline calls in
+  process. The 29 strict accounts handlers
   (`assertOnlyKeys`) and six strict Kanban and feature-planning handlers drop
   unknown keys; the lenient mail,
   MCP and Linear handlers read every argument as `optionalKey(Unknown)` and
   keep their own messages. Critical keys: `requestId` on `add_kanban_task`,
-  `add_kanban_comment` and both mail sends; `markdown`/`sections` on
-  `add_kanban_task` and `update_kanban_task`; `projectId` on
-  `add_kanban_comment`; `operationId` on `start_feature_planning` and both
+  `add_kanban_comment` and both mail sends; `markdown`/`sections`/`labels` on
+  `add_kanban_task` and `update_kanban_task`; `preserveDoneStatus` on
+  `update_kanban_task`; `projectId` on `add_kanban_comment` and
+  `set_kanban_task_label`; `operationId` on `start_feature_planning` and both
   login cancels; `reauthenticate` on `start_agent_account_login`; `metadata`
   on `set_opencode_provider_api_key`; `inputs` on
   `start_opencode_provider_login`; `now` on `retry_agent_mail_inject`;

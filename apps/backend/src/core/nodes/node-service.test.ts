@@ -105,6 +105,26 @@ describe("AT-03 portal origins", () => {
     await command.service.forgetNode({ nodeId: "bk_leaf" });
     expect(leaf.service.isPortalOriginAllowed("https://command.test")).toBe(false);
   });
+
+  test("origins that change after the link attached reach the connected leaf (4006 Finding 5)", async () => {
+    const network = new TestNodeNetwork();
+    // The links connect before the gateway binds: no portal origin yet.
+    let origins: string[] = [];
+    const command = await network.add("command", {
+      forceRegistration: true,
+      extra: { portalOrigins: () => origins },
+    });
+    const leaf = await network.add("leaf");
+    await attach(command, leaf);
+    await settle();
+    expect((await command.service.listNodes()).nodes[0]?.connection.state).toBe("connected");
+    expect(leaf.service.isPortalOriginAllowed("https://command.test:41001")).toBe(false);
+    // The gateway bound (or rebound on a new port after a restart).
+    origins = ["https://command.test:41001"];
+    command.service.portalOriginsChanged();
+    await settle();
+    expect(leaf.service.isPortalOriginAllowed("https://command.test:41001")).toBe(true);
+  });
 });
 
 describe("RM-03/RM-04/LM-05/MG-02 leaf mode", () => {

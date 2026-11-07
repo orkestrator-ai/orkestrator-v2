@@ -3004,6 +3004,8 @@ export class OrkestratorBackend {
   /** Set once the gateway has bound: the origins clients use for this node, read on each attach. */
   setPortalOriginsSource(source: () => string[]): void {
     this.portalOriginsSource = source;
+    // Links that attached before the gateway bound sent no (or old) origins.
+    this.nodes.portalOriginsChanged();
   }
 
   /**

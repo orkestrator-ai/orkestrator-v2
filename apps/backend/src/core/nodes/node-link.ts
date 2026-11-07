@@ -216,6 +216,23 @@ export class NodeLink {
     this.setState(state);
   }
 
+  /**
+   * Send the attachment again on the live route, with this node's current
+   * name and portal origins (`NodeService.portalOriginsChanged`). Best
+   * effort: a failure leaves the link as it is, and the next connect sends
+   * them anyway.
+   */
+  async reattach(): Promise<void> {
+    const active = this.active;
+    const token = this.record.credential?.token;
+    if (!active || !token || !this.connected) return;
+    try {
+      await this.attach(active.opened.baseUrl, token);
+    } catch {
+      // Unreachable or refused now: the link's own heartbeat and reconnects decide.
+    }
+  }
+
   /** Routes, credential or enablement changed: reconnect from scratch. */
   update(record: NodeRecord): void {
     const reconnect =

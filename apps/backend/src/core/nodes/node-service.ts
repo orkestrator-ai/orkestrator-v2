@@ -304,6 +304,18 @@ export class NodeService {
     return this.status();
   }
 
+  /**
+   * This node's portal origins changed (its gateway bound after the links
+   * connected, or on a new port after a restart): send them to every
+   * connected node again. A node admits a browser's direct requests only from
+   * the origins its command node sent on attach (`isPortalOriginAllowed`);
+   * without this a page loaded from the new origin fell back to the relay
+   * (4006 Finding 5). A link that is not connected sends them when it connects.
+   */
+  portalOriginsChanged(): void {
+    for (const link of this.links.values()) void link.reattach();
+  }
+
   /** Start or suspend links after any change to attachments or the registry. */
   private applyMode(): void {
     if (!this.started) return;

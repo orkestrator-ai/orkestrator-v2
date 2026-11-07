@@ -1,10 +1,9 @@
 {
   "schemaVersion": 1,
   "description": "Untyped (string-registered) backend commands per contract domain. Shrink-only: see docs/architecture/version-compatibility.md#domain-contracts.",
-  "total": 41,
+  "total": 28,
   "untypedByDomain": {
     "agent-mail": 23,
-    "mcp": 13,
     "node-mail": 3,
     "public-api": 1,
     "ticket-sync": 1

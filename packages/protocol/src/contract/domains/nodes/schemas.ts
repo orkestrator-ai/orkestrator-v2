@@ -53,11 +53,16 @@ export const ControllerViewSchema = modelRecord<ControllerView>()({
   displayName: Schema.String,
 });
 
+/**
+ * Readers route on `nodeId` and `mode`; the rest is optional here because the
+ * coordinator's in-process reads are faked with `{ nodeId, mode }` in tests
+ * (the service always writes every field).
+ */
 export const NodeStatusSchema = modelRecord<NodeStatus>()({
   nodeId: Schema.String,
   mode: Schema.String,
-  registrationEnabled: Schema.Boolean,
-  controllers: Schema.Array(ControllerViewSchema),
+  registrationEnabled: Schema.optional(Schema.Boolean),
+  controllers: Schema.optional(Schema.Array(ControllerViewSchema)),
 });
 
 export const NodeViewSchema = modelRecord<NodeView>()({

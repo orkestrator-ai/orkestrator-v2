@@ -3,7 +3,9 @@
  * domain's module here (see `../scenario.ts`, "Adding a module").
  */
 import type { ScenarioModule } from "../scenario.ts";
+import agentServers from "./agent-servers.ts";
 import claudeTmux from "./claude-tmux.ts";
+import coordinator from "./coordinator.ts";
 import design from "./design.ts";
 import docker from "./docker.ts";
 import environments from "./environments.ts";
@@ -14,11 +16,13 @@ import nativeSessions from "./native-sessions.ts";
 import nodeFiles from "./node-files.ts";
 import nodeMail from "./node-mail.ts";
 import previews from "./previews.ts";
+import nodes from "./nodes.ts";
 import pullRequests from "./pull-requests.ts";
 import terminals from "./terminals.ts";
 import ticketSync from "./ticket-sync.ts";
 import transcriptArtifacts from "./transcript-artifacts.ts";
 import webAnnotations from "./web-annotations.ts";
+import system from "./system.ts";
 
 export const SCENARIOS: readonly ScenarioModule[] = [
   nodeMail,
@@ -30,6 +34,10 @@ export const SCENARIOS: readonly ScenarioModule[] = [
   nativeSessions,
   previews,
   transcriptArtifacts,
+  nodes,
+  coordinator,
+  agentServers,
+  system,
   design,
   webAnnotations,
   environments,

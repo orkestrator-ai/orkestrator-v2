@@ -3,13 +3,12 @@
   "generatedBy": "scripts/generate-contract-manifest.ts (mise run contract:manifest)",
   "counts": {
     "commands": 999,
-    "defined": 958,
-    "untyped": 41,
+    "defined": 971,
+    "untyped": 28,
     "events": 44
   },
   "untypedByDomain": {
     "agent-mail": 23,
-    "mcp": 13,
     "node-mail": 3,
     "public-api": 1,
     "ticket-sync": 1
@@ -60,6 +59,10 @@
       "min": 1
     },
     "kanban": {
+      "version": 1,
+      "min": 1
+    },
+    "mcp": {
       "version": 1,
       "min": 1
     },
@@ -371,8 +374,12 @@
     },
     "apply_mcp_configuration": {
       "domain": "mcp",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:4fe644ba27b30ef7fa04e0178c117fd60ae2296d9887f4dcc5d3dc20ee8b905e",
+      "resultDigest": "sha256:2caa2fb05a4256511345dd5133c907c21282dc146cfaa2a7e7961000ca01fdb1"
     },
     "apply_pane_layout_intent": {
       "domain": "native-sessions",
@@ -673,8 +680,12 @@
     },
     "cancel_mcp_apply": {
       "domain": "mcp",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:4fe644ba27b30ef7fa04e0178c117fd60ae2296d9887f4dcc5d3dc20ee8b905e",
+      "resultDigest": "sha256:2caa2fb05a4256511345dd5133c907c21282dc146cfaa2a7e7961000ca01fdb1"
     },
     "cancel_multi_review": {
       "domain": "multi-review",
@@ -3600,23 +3611,39 @@
     },
     "get_mcp_definition": {
       "domain": "mcp",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:db546eb3fe261b2ab915c4f3a9589d4f904f245a09f52e112ef8c47a46529f0f",
+      "resultDigest": "sha256:49816c43faac49de2ab28afa5901f6449c3f0ccc6e8223b5c95b21536dfad4dd"
     },
     "get_mcp_management_rollout": {
       "domain": "mcp",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "admin",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:70b9efc2ebbb6ac357c52b25479635dc913a5de522c87b72f4b87b5c1feb2cbc"
     },
     "get_mcp_management_snapshot": {
       "domain": "mcp",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:bbef5445a3bdbcf2addf8aed3eff573ccffea2fb6e89ed33573bdfcd366fbd9d",
+      "resultDigest": "sha256:aa680196c21e7d00e2e8cd01ffd1a47edaef082223ed233de22790acc1f99ea2"
     },
     "get_mcp_operation": {
       "domain": "mcp",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:4fe644ba27b30ef7fa04e0178c117fd60ae2296d9887f4dcc5d3dc20ee8b905e",
+      "resultDigest": "sha256:2caa2fb05a4256511345dd5133c907c21282dc146cfaa2a7e7961000ca01fdb1"
     },
     "get_multi_review_reviewer_history_page": {
       "domain": "multi-review",
@@ -3832,7 +3859,7 @@
       "read": true,
       "critical": [],
       "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
-      "resultDigest": "sha256:9d1960d51eb01f1c415c1fd1c0254529785b4d67db43ae8890635175fe9622c4"
+      "resultDigest": "sha256:a5c42fb5cf857f9dd786960404b4a5c9ef0a333ad4cfb023a5c41630c6de3969"
     },
     "get_node_summaries": {
       "domain": "nodes",
@@ -5133,8 +5160,12 @@
     },
     "list_mcp_management_targets": {
       "domain": "mcp",
-      "untyped": true,
-      "read": true
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:0d06dac3e0feeea0fa7bb17fb897b9dcf70e0737968a71773042e55514216032",
+      "resultDigest": "sha256:ebc259c223b64b079cadf8766b61bebb471a72792fb56ed9580ce2a01443e924"
     },
     "list_multi_review_workflows": {
       "domain": "multi-review",
@@ -5442,8 +5473,12 @@
     },
     "mutate_mcp_definition": {
       "domain": "mcp",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:8cfde18a75d5882bda337d1cbc89d822506597c4e8a514d113e0518776d6bb1d",
+      "resultDigest": "sha256:886742f868d22b6f07faa23d99030f4528c3331c0b9be2f1852747b31710fec7"
     },
     "mute_agent_mail": {
       "domain": "agent-mail",
@@ -5822,8 +5857,12 @@
     },
     "preview_mcp_environment_defaults": {
       "domain": "mcp",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:0046872b526507be5e3a46e23ff730718ed247701b1f8f7d2860c95b93ab6871",
+      "resultDigest": "sha256:785dee8289ff5cb5522507bbae5e7dd7ca25f51e08e569ac1d21e9e5deda690e"
     },
     "preview_multi_review_code_rewind": {
       "domain": "multi-review",
@@ -6201,8 +6240,12 @@
     },
     "refresh_mcp_environment_defaults": {
       "domain": "mcp",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:0046872b526507be5e3a46e23ff730718ed247701b1f8f7d2860c95b93ab6871",
+      "resultDigest": "sha256:5b97735c44a078499c31a8e3a3a31a988bf8abf4e6845ae5e030a73e2906dc4d"
     },
     "refresh_native_agent_commands": {
       "domain": "native-sessions",
@@ -6503,8 +6546,12 @@
     },
     "resolve_mcp_environment_overlay": {
       "domain": "mcp",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:baad3fb09196c5473626f324990cac108b7da4443e52863e3a9d9e5882eeefe3",
+      "resultDigest": "sha256:1271a42709a6f663a89bfb44a3df1b33ae34942f9bffb27b3e3c1ba04f6a2d42"
     },
     "resolve_native_agent_interaction": {
       "domain": "native-sessions",
@@ -7141,7 +7188,7 @@
       "read": false,
       "critical": [],
       "argsDigest": "sha256:7a9e0f9c2088df16a99b5f7a22f27d6a991f1ee7a6d4a55c8346f07a0164230d",
-      "resultDigest": "sha256:9d1960d51eb01f1c415c1fd1c0254529785b4d67db43ae8890635175fe9622c4"
+      "resultDigest": "sha256:a5c42fb5cf857f9dd786960404b4a5c9ef0a333ad4cfb023a5c41630c6de3969"
     },
     "set_container_resource_limits": {
       "domain": "environments",
@@ -7325,8 +7372,12 @@
     },
     "set_mcp_management_rollout": {
       "domain": "mcp",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:c5c6137d56dbf85dd2571c9a5e29164bc0759cd04a05d92148b9e081ab138962",
+      "resultDigest": "sha256:70b9efc2ebbb6ac357c52b25479635dc913a5de522c87b72f4b87b5c1feb2cbc"
     },
     "set_native_agent_resumable_session_archived": {
       "domain": "native-sessions",
@@ -8550,8 +8601,12 @@
     },
     "validate_mcp_mutation": {
       "domain": "mcp",
-      "untyped": true,
-      "read": false
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:8cfde18a75d5882bda337d1cbc89d822506597c4e8a514d113e0518776d6bb1d",
+      "resultDigest": "sha256:593cefa7bf550cca64eeefa666d4dd95bc80691c278828bdfff7da2b37584f7b"
     },
     "verify_environment_pr": {
       "domain": "pull-requests",

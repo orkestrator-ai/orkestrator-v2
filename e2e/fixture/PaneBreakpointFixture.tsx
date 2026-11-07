@@ -19,6 +19,7 @@ import {
   useTerminalPortalStore,
 } from "../../apps/web/src/stores/terminalPortalStore";
 import type { PaneSplit } from "../../apps/web/src/types/paneLayout";
+import { appCommandStore } from "../../apps/web/src/test/app-command-store";
 
 const ENVIRONMENT_ID = "breakpoint-environment";
 const TERMINAL_TAB_ID = "breakpoint-terminal";
@@ -134,7 +135,7 @@ function installBackend() {
   const pending: string[] = [];
   window.paneBreakpointPendingCommands = pending;
   const drafts = new Map<string, unknown>();
-  useEnvironmentStore.setState({
+  appCommandStore(useEnvironmentStore.def).setState({
     environments: [
       {
         id: ENVIRONMENT_ID,
@@ -147,7 +148,7 @@ function installBackend() {
       } as never,
     ],
   });
-  usePaneLayoutStore.setState({
+  appCommandStore(usePaneLayoutStore.def).setState({
     activeEnvironmentId: ENVIRONMENT_ID,
     environments: new Map([
       [ENVIRONMENT_ID, { containerId: null, activePaneId: "agent-pane", root }],

@@ -10,15 +10,18 @@ import { FilesPanelPullRequests } from "../../apps/web/src/components/files-pane
 import { useFilesPanelChromeStore } from "../../apps/web/src/stores/filesPanelChromeStore";
 import { useUIStore } from "../../apps/web/src/stores/uiStore";
 import { usePaneLayoutStore } from "../../apps/web/src/stores/paneLayoutStore";
+import { appCommandStore } from "../../apps/web/src/test/app-command-store";
 
 /** Real transcript and panel hosts; only the unavailable GitHub endpoint is fake. */
 export function PrPaneTranscriptFrame({ children }: { children: ReactNode }) {
   const isOpen = useFilesPanelChromeStore((state) => state.isOpen);
   useLayoutEffect(() => {
-    useUIStore.setState({ selectedEnvironmentId: "transcript-env" });
-    const layout = usePaneLayoutStore.getState();
+    appCommandStore(useUIStore.def).setState({ selectedEnvironmentId: "transcript-env" });
+    const layout = appCommandStore(usePaneLayoutStore.def).getState();
     layout.initialize(null, "transcript-env");
-    const owner = usePaneLayoutStore.getState().environments.get("transcript-env")!;
+    const owner = appCommandStore(usePaneLayoutStore.def)
+      .getState()
+      .environments.get("transcript-env")!;
     layout.addTab(
       owner.activePaneId,
       { id: "conversation", type: "plain", displayTitle: "Conversation" },
@@ -42,9 +45,10 @@ export function PrPaneTranscriptFrame({ children }: { children: ReactNode }) {
       listen: () => () => undefined,
     } as unknown as Window["orkestrator"];
     window.prPaneSelection = () => ({
-      environment: useUIStore.getState().selectedEnvironmentId,
-      tab: usePaneLayoutStore.getState().findPaneWithTab("conversation", "transcript-env")
-        ?.activeTabId,
+      environment: appCommandStore(useUIStore.def).getState().selectedEnvironmentId,
+      tab: appCommandStore(usePaneLayoutStore.def)
+        .getState()
+        .findPaneWithTab("conversation", "transcript-env")?.activeTabId,
     });
   }, []);
   return (

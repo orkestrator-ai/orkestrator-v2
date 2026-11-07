@@ -23,6 +23,7 @@ import { validationRun } from "../../apps/web/src/components/build-pipeline/pipe
 import { usePrMonitorStore } from "../../apps/web/src/stores/prMonitorStore";
 import { useFlowGraphViewStore } from "../../apps/web/src/stores/flowGraphViewStore";
 import type { Environment } from "../../apps/web/src/types";
+import { appCommandStore } from "../../apps/web/src/test/app-command-store";
 
 /**
  * A build pipeline in one of a few shapes, for the pipeline flow graph's
@@ -696,7 +697,7 @@ function installBackend(pipeline: BuildPipeline) {
             ),
           });
           // Simulate a tab eviction/missed event: the next mount must read the backend.
-          useBuildPipelineStore.setState({ pipelines: new Map() });
+          appCommandStore(useBuildPipelineStore.def).setState({ pipelines: new Map() });
           return nextPipeline as T;
         }
         case "fixture_append_transcript": {
@@ -716,7 +717,7 @@ function installBackend(pipeline: BuildPipeline) {
                 : session,
             ),
           });
-          useBuildPipelineStore.getState().replacePipeline(nextPipeline);
+          appCommandStore(useBuildPipelineStore.def).getState().replacePipeline(nextPipeline);
           return nextPipeline as T;
         }
         case "pause_build_pipeline":
@@ -833,25 +834,25 @@ function seed(): BuildPipeline {
   }
   installBackend(pipeline);
   if (params.has("autoSteer")) {
-    const { config } = useConfigStore.getState();
-    useConfigStore.setState({
+    const { config } = appCommandStore(useConfigStore.def).getState();
+    appCommandStore(useConfigStore.def).setState({
       config: { ...config, global: { ...config.global, autoSteer: true } },
     });
   }
-  useKanbanStore.setState({
+  appCommandStore(useKanbanStore.def).setState({
     tasks:
       params.get("scenario") === "images"
         ? ([{ id: pipeline.taskId, ...SNAPSHOT, title: "Edited live ticket" }] as never)
         : [],
   });
   useFlowGraphViewStore.setState({ views: new Map(), collapsed: new Set() });
-  useBuildPipelineStore.setState({
+  appCommandStore(useBuildPipelineStore.def).setState({
     pipelines: params.has("restore") ? new Map() : new Map([[pipeline.id, pipeline]]),
     buildEnvironmentIds: new Set([pipeline.environmentId]),
   });
   const shipped = pipeline.sessions.some((session) => session.phase === "pr");
   const prUrl = shipped ? "https://github.com/acme/app/pull/42" : null;
-  useEnvironmentStore.setState({
+  appCommandStore(useEnvironmentStore.def).setState({
     environments: [
       {
         id: pipeline.environmentId,
@@ -863,7 +864,7 @@ function seed(): BuildPipeline {
     ],
   });
   if (shipped) {
-    usePrMonitorStore.setState({
+    appCommandStore(usePrMonitorStore.def).setState({
       states: new Map([
         [
           pipeline.environmentId,
@@ -933,7 +934,7 @@ function SplitPipelineViews({ pipeline }: { pipeline: BuildPipeline }) {
         },
       ],
     };
-    usePaneLayoutStore.setState({
+    appCommandStore(usePaneLayoutStore.def).setState({
       activeEnvironmentId: pipeline.environmentId,
       environments: new Map([
         [pipeline.environmentId, { containerId: null, activePaneId: "pipeline-build-pane", root }],
@@ -975,7 +976,9 @@ function BuildPaneControls({ pipeline }: { pipeline: BuildPipeline }) {
         <button onClick={() => setMount(mount + 1)}>Reopen the tab</button>
         <button
           onClick={() => {
-            const { pipelines, replacePipeline } = useBuildPipelineStore.getState();
+            const { pipelines, replacePipeline } = appCommandStore(
+              useBuildPipelineStore.def,
+            ).getState();
             const current = pipelines.get(pipeline.id)!;
             replacePipeline({
               ...current,

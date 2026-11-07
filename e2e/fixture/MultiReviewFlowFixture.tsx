@@ -9,6 +9,7 @@ import type {
 import type { ReviewIssue, StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 import { MultiReviewTab } from "../../apps/web/src/components/review/MultiReviewTab";
 import { useMultiReviewStore } from "../../apps/web/src/stores/multiReviewStore";
+import { appCommandStore } from "../../apps/web/src/test/app-command-store";
 
 /**
  * A Multi Review in any phase, for the flow graph's browser checks and
@@ -508,8 +509,8 @@ export function MultiReviewFlowFixture() {
   );
 
   useEffect(() => {
-    useMultiReviewStore.getState().replaceWorkflow(workflow);
-    return () => useMultiReviewStore.getState().removeWorkflow(workflow.id);
+    appCommandStore(useMultiReviewStore.def).getState().replaceWorkflow(workflow);
+    return () => appCommandStore(useMultiReviewStore.def).getState().removeWorkflow(workflow.id);
   }, [workflow]);
 
   return (
@@ -518,17 +519,21 @@ export function MultiReviewFlowFixture() {
         <div>
           <button
             onClick={() => {
-              const current = useMultiReviewStore.getState().workflows.get(workflow.id)!;
+              const current = appCommandStore(useMultiReviewStore.def)
+                .getState()
+                .workflows.get(workflow.id)!;
               const validationRun = multiReviewFlowWorkflow("preparing", count).validationRun!;
               // Far wider than any column, yet short enough when wrapped for the
               // details column to fit a 1400px viewport beside the transcript in
               // any monospace font. Thirty repeats overflowed it with Liberation Mono.
               validationRun.results[0]!.command = `mise run ${"long-validation-command-".repeat(12)}`;
-              useMultiReviewStore.getState().replaceWorkflow({
-                ...current,
-                validationRun,
-                backendRevision: current.backendRevision + 1,
-              });
+              appCommandStore(useMultiReviewStore.def)
+                .getState()
+                .replaceWorkflow({
+                  ...current,
+                  validationRun,
+                  backendRevision: current.backendRevision + 1,
+                });
             }}
           >
             Publish validation
@@ -536,11 +541,15 @@ export function MultiReviewFlowFixture() {
           <button
             onClick={() => {
               transcriptEntries.current += 1;
-              const current = useMultiReviewStore.getState().workflows.get(workflow.id)!;
-              useMultiReviewStore.getState().replaceWorkflow({
-                ...current,
-                backendRevision: current.backendRevision + 1,
-              });
+              const current = appCommandStore(useMultiReviewStore.def)
+                .getState()
+                .workflows.get(workflow.id)!;
+              appCommandStore(useMultiReviewStore.def)
+                .getState()
+                .replaceWorkflow({
+                  ...current,
+                  backendRevision: current.backendRevision + 1,
+                });
             }}
           >
             Append package transcript
@@ -551,11 +560,15 @@ export function MultiReviewFlowFixture() {
         <button
           onClick={() => {
             transcriptEntries.current += 1;
-            const current = useMultiReviewStore.getState().workflows.get(workflow.id)!;
-            useMultiReviewStore.getState().replaceWorkflow({
-              ...current,
-              backendRevision: (current.backendRevision ?? 0) + 1,
-            });
+            const current = appCommandStore(useMultiReviewStore.def)
+              .getState()
+              .workflows.get(workflow.id)!;
+            appCommandStore(useMultiReviewStore.def)
+              .getState()
+              .replaceWorkflow({
+                ...current,
+                backendRevision: (current.backendRevision ?? 0) + 1,
+              });
           }}
         >
           Append transcript entry
@@ -568,13 +581,17 @@ export function MultiReviewFlowFixture() {
           </button>
           <button
             onClick={() => {
-              const current = useMultiReviewStore.getState().workflows.get(workflow.id)!;
+              const current = appCommandStore(useMultiReviewStore.def)
+                .getState()
+                .workflows.get(workflow.id)!;
               const next = multiReviewFlowWorkflow("consolidating", count);
-              useMultiReviewStore.getState().replaceWorkflow({
-                ...next,
-                id: current.id,
-                backendRevision: current.backendRevision + 1,
-              });
+              appCommandStore(useMultiReviewStore.def)
+                .getState()
+                .replaceWorkflow({
+                  ...next,
+                  id: current.id,
+                  backendRevision: current.backendRevision + 1,
+                });
             }}
           >
             Advance to consolidation

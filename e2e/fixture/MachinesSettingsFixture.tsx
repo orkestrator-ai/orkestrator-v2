@@ -12,6 +12,7 @@ import type { Environment } from "../../apps/web/src/types";
 import type { ConnectionList, ConnectToRemoteInput } from "@orkestrator/protocol/connections";
 import { FullscreenSettingsLayout } from "../../apps/web/src/components/settings/FullscreenSettingsLayout";
 import { MachinesSettings } from "../../apps/web/src/components/settings/machines/MachinesSettings";
+import { appCommandStore } from "../../apps/web/src/test/app-command-store";
 
 const rebuildMode = new URLSearchParams(window.location.search).has("rebuild");
 const oldEnvironment = {
@@ -246,7 +247,7 @@ function hostSignIns() {
 function installMachinesFixture() {
   if (rebuildMode) {
     portalStore.store.setState({ selfId: "bk_self" as never });
-    useEnvironmentStore.setState({ environments: [] });
+    appCommandStore(useEnvironmentStore.def).setState({ environments: [] });
   }
   window.orkestrator = {
     ...window.orkestrator!,
@@ -424,7 +425,11 @@ export function MachinesSettingsFixture() {
       {showMachines && <MachinesSettings />}
       {rebuildMode && (
         <>
-          <button onClick={() => useEnvironmentStore.getState().setEnvironments([oldEnvironment])}>
+          <button
+            onClick={() =>
+              appCommandStore(useEnvironmentStore.def).getState().setEnvironments([oldEnvironment])
+            }
+          >
             Load environment snapshot
           </button>
           <button

@@ -15,6 +15,7 @@ import {
   type BuildPipeline,
 } from "../../apps/web/src/stores/buildPipelineStore";
 import { usePaneLayoutStore } from "../../apps/web/src/stores/paneLayoutStore";
+import { appCommandStore } from "../../apps/web/src/test/app-command-store";
 
 const ENVIRONMENT_ID = "key-info-environment";
 const PIPELINE_ID = "key-info-pipeline";
@@ -219,13 +220,13 @@ export function KeyInformationTabFixture() {
         listen: () => () => undefined,
       } as unknown as Window["orkestrator"];
     }
-    useBuildPipelineStore.setState({
+    appCommandStore(useBuildPipelineStore.def).setState({
       pipelines: hydration
         ? new Map()
         : new Map([[PIPELINE_ID, empty ? { ...pipeline, keyInformation: undefined } : pipeline]]),
       buildEnvironmentIds: new Set([ENVIRONMENT_ID]),
     });
-    usePaneLayoutStore.setState({
+    appCommandStore(usePaneLayoutStore.def).setState({
       environments: new Map([
         [
           ENVIRONMENT_ID,

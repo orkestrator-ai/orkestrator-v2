@@ -51,6 +51,10 @@ import { PipelineFlowFixture } from "./PipelineFlowFixture";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import { StrictMode, Suspense, lazy, createRef, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
+import {
+  CommandNodeScopeProvider,
+  WindowScopeProvider,
+} from "../../apps/web/src/lib/node-scope/providers";
 import { DndContext } from "@dnd-kit/core";
 import { SortableContext } from "@dnd-kit/sortable";
 import "../../apps/web/src/index.css";
@@ -126,6 +130,7 @@ import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
 import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import type { ReviewValidationRun } from "@orkestrator/protocol/review-workflow";
 import { useVirtuosoScrollState } from "../../apps/web/src/hooks/useVirtuosoScrollState";
+import { appCommandStore } from "../../apps/web/src/test/app-command-store";
 
 const MarkdownEditorDiagramFixture = lazy(async () => ({
   default: (await import("./MarkdownEditorDiagramFixture")).MarkdownEditorDiagramFixture,
@@ -338,8 +343,8 @@ function installDesignLaunchFixture() {
 
 function DesignLaunchFixture() {
   useEffect(() => {
-    usePaneLayoutStore.getState().initialize(null, "design-fixture");
-    useEnvironmentStore.setState({
+    appCommandStore(usePaneLayoutStore.def).getState().initialize(null, "design-fixture");
+    appCommandStore(useEnvironmentStore.def).setState({
       environments: [
         {
           id: "design-fixture",
@@ -350,7 +355,7 @@ function DesignLaunchFixture() {
         } as import("../../apps/web/src/types").Environment,
       ],
     });
-    usePaneLayoutStore.setState((state) => ({
+    appCommandStore(usePaneLayoutStore.def).setState((state) => ({
       hydration: new Map(state.hydration).set("design-fixture", "done"),
     }));
   }, []);
@@ -847,8 +852,13 @@ const multiReviewOverviewWorkflow: MultiReviewWorkflow = {
 
 function MultiReviewOverviewFixture() {
   useEffect(() => {
-    useMultiReviewStore.getState().replaceWorkflow(multiReviewOverviewWorkflow);
-    return () => useMultiReviewStore.getState().removeWorkflow(multiReviewOverviewWorkflow.id);
+    appCommandStore(useMultiReviewStore.def)
+      .getState()
+      .replaceWorkflow(multiReviewOverviewWorkflow);
+    return () =>
+      appCommandStore(useMultiReviewStore.def)
+        .getState()
+        .removeWorkflow(multiReviewOverviewWorkflow.id);
   }, []);
 
   return (
@@ -904,8 +914,13 @@ const multiReviewRunningTileWorkflow: MultiReviewWorkflow = {
 
 function MultiReviewRunningTileFixture() {
   useEffect(() => {
-    useMultiReviewStore.getState().replaceWorkflow(multiReviewRunningTileWorkflow);
-    return () => useMultiReviewStore.getState().removeWorkflow(multiReviewRunningTileWorkflow.id);
+    appCommandStore(useMultiReviewStore.def)
+      .getState()
+      .replaceWorkflow(multiReviewRunningTileWorkflow);
+    return () =>
+      appCommandStore(useMultiReviewStore.def)
+        .getState()
+        .removeWorkflow(multiReviewRunningTileWorkflow.id);
   }, []);
 
   return (
@@ -1297,12 +1312,12 @@ function BuildPipelineHeaderFixture() {
           ? requestedPhase
           : buildPipelineHeaderFixture.phase,
     };
-    useBuildPipelineStore.setState({
+    appCommandStore(useBuildPipelineStore.def).setState({
       pipelines: new Map([[fixture.id, fixture]]),
       buildEnvironmentIds: new Set([buildPipelineHeaderFixture.environmentId]),
     });
     return () => {
-      useBuildPipelineStore.setState({
+      appCommandStore(useBuildPipelineStore.def).setState({
         pipelines: new Map(),
         buildEnvironmentIds: new Set(),
       });
@@ -1733,17 +1748,19 @@ function installSystemUsageFixture() {
  */
 function SystemUsageFixture() {
   useEffect(() => {
-    useProjectStore.getState().setProjects([
-      {
-        id: "project-1",
-        name: "orkestrator-v2",
-        gitUrl: "git@example.com:org/repo.git",
-        localPath: null,
-        addedAt: "2026-09-13T00:00:00.000Z",
-        order: 0,
-      },
-    ]);
-    return () => useProjectStore.getState().setProjects([]);
+    appCommandStore(useProjectStore.def)
+      .getState()
+      .setProjects([
+        {
+          id: "project-1",
+          name: "orkestrator-v2",
+          gitUrl: "git@example.com:org/repo.git",
+          localPath: null,
+          addedAt: "2026-09-13T00:00:00.000Z",
+          order: 0,
+        },
+      ]);
+    return () => appCommandStore(useProjectStore.def).getState().setProjects([]);
   }, []);
 
   return (
@@ -2198,4 +2215,12 @@ function fixtureForPath() {
 
 if (window.location.pathname === "/diff-base") installDiffBaseFixture();
 if (window.location.pathname === "/change-tracking") installChangeTrackingFixture();
-createRoot(document.getElementById("root")!).render(<StrictMode>{fixtureForPath()}</StrictMode>);
+// The app's window scope and command scope, as `App.tsx` mounts them: a
+// per-node store hook outside a provider throws in a development renderer.
+createRoot(document.getElementById("root")!).render(
+  <StrictMode>
+    <WindowScopeProvider>
+      <CommandNodeScopeProvider>{fixtureForPath()}</CommandNodeScopeProvider>
+    </WindowScopeProvider>
+  </StrictMode>,
+);

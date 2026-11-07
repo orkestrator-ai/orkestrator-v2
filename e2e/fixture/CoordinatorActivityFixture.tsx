@@ -9,6 +9,7 @@ import { DockerAvailabilityProvider } from "../../apps/web/src/contexts/DockerAv
 import { useProjectStore, useUIStore } from "../../apps/web/src/stores";
 import { useCoordinatorActivityStore } from "../../apps/web/src/stores/coordinatorActivityStore";
 import type { Project } from "../../apps/web/src/types";
+import { appCommandStore } from "../../apps/web/src/test/app-command-store";
 
 const project = (id: string, name: string, order: number): Project => ({
   id,
@@ -55,8 +56,8 @@ function installFixture() {
       }
     },
   };
-  useProjectStore.setState({ projects });
-  useUIStore.setState({
+  appCommandStore(useProjectStore.def).setState({ projects });
+  appCommandStore(useUIStore.def).setState({
     selectedProjectId: projects[0]!.id,
     selectedEnvironmentId: null,
     projectBoardTab: "coordinator",
@@ -76,7 +77,7 @@ export function CoordinatorActivityFixture() {
   const setFirst = (state: "working" | "waiting" | null) => {
     if (state) activity.orkestrator = state;
     else delete activity.orkestrator;
-    void useCoordinatorActivityStore.getState().refresh();
+    void appCommandStore(useCoordinatorActivityStore.def).getState().refresh();
   };
   return (
     <TerminalProvider>

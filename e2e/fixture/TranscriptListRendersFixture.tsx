@@ -29,6 +29,7 @@ import { useConversationScrollTargetStore } from "../../apps/web/src/stores/conv
 import { useEnvironmentStore } from "../../apps/web/src/stores/environmentStore";
 import { getWindowScope } from "../../apps/web/src/lib/node-scope/app-window-scope";
 import { useNativeAgentProjectionStore } from "../../apps/web/src/stores/nativeAgentProjectionStore";
+import { appCommandStore } from "../../apps/web/src/test/app-command-store";
 
 const ENVIRONMENT_ID = "transcript-list-environment";
 const ROW_COUNT = 100;
@@ -184,7 +185,7 @@ const commits: CommitCounts[] = tabs.map(noCommits);
 
 /** The tab has read its transcript and the store holds it. */
 function isReady(): boolean {
-  const { projections } = useNativeAgentProjectionStore.getState();
+  const { projections } = appCommandStore(useNativeAgentProjectionStore.def).getState();
   return tabs.every(
     (tab) => (projections.get(tab.identity.logicalSessionKey)?.messages.length ?? 0) > 0,
   );
@@ -207,7 +208,7 @@ const fixture = {
   writeUnrelated: async (writes: number, intervalMs = 40) => {
     for (let write = 0; write < writes; write += 1) {
       unrelatedWrites += 1;
-      useEnvironmentStore.setState((state) => ({
+      appCommandStore(useEnvironmentStore.def).setState((state) => ({
         environments: state.environments.map((environment) => ({
           ...environment,
           initialPrompt: `unrelated write ${unrelatedWrites}`,
@@ -313,7 +314,7 @@ declare global {
 }
 
 function installBackend(): void {
-  useEnvironmentStore.setState({
+  appCommandStore(useEnvironmentStore.def).setState({
     environments: [
       {
         id: ENVIRONMENT_ID,

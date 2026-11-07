@@ -6,9 +6,10 @@ import { useAccountMachineStore } from "../../apps/web/src/components/settings/a
 import { useConfigStore } from "../../apps/web/src/stores/configStore";
 import { useRemoteWorkspaceStore } from "../../apps/web/src/stores/remoteWorkspaceStore";
 import type { AppConfig, GlobalConfig } from "../../apps/web/src/types";
+import { appCommandStore } from "../../apps/web/src/test/app-command-store";
 
 function install() {
-  const base = useConfigStore.getState().config;
+  const base = appCommandStore(useConfigStore.def).getState().config;
   const directLeaf = new URLSearchParams(window.location.search).has("direct-leaf");
   const read = (owner: string): AppConfig =>
     JSON.parse(

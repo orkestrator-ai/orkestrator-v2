@@ -9,6 +9,7 @@ import { MobileAppShellLayout } from "../../apps/web/src/components/layout/Mobil
 import { SidebarBottomBar } from "../../apps/web/src/components/sidebar/SidebarBottomBar";
 import { useEnvironmentStore } from "../../apps/web/src/stores/environmentStore";
 import type { Environment } from "../../apps/web/src/types";
+import { appCommandStore } from "../../apps/web/src/test/app-command-store";
 
 const ENVIRONMENT_ID = "settings-drawer-environment";
 
@@ -32,11 +33,11 @@ function installBackend() {
       return new Promise<T>(() => {});
     },
   } as unknown as Window["orkestrator"];
-  useUIStore.setState({
+  appCommandStore(useUIStore.def).setState({
     selectedProjectId: "settings-drawer-project",
     selectedEnvironmentId: ENVIRONMENT_ID,
   });
-  useProjectStore.setState({
+  appCommandStore(useProjectStore.def).setState({
     projects: [
       {
         id: "settings-drawer-project",
@@ -48,7 +49,7 @@ function installBackend() {
       },
     ],
   });
-  useEnvironmentStore.setState({
+  appCommandStore(useEnvironmentStore.def).setState({
     environments: [
       {
         id: ENVIRONMENT_ID,

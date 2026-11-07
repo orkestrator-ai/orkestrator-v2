@@ -1914,10 +1914,10 @@ This project uses **shadcn/ui** components. When adding new UI:
 - Stores use `Map<string, T>` pattern for per-environment/per-session state
 - Per-node stores are node-scope instances (`defineScopedStore`,
   `scopedStoreHook`), one per node the window works with; window stores stay
-  ordinary zustand stores. A scoped store's static
-  `getState`/`setState`/`subscribe` is a deprecated command-scope shim, held
-  at zero production uses by a shrink-only source guard: name the scope
-  (`scope.store(def)`) instead. Follow
+  ordinary zustand stores (listed in `tests/source-guards/window-stores.ts`).
+  A scoped store's hook has no `getState`/`setState`/`subscribe` statics and
+  throws outside a `NodeScopeProvider` in development and tests: name the
+  scope (`scope.store(def)`, `useNodeScope()`) instead. Follow
   [`docs/development/node-scopes.md`](docs/development/node-scopes.md).
 
 # Code review

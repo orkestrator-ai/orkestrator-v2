@@ -9,6 +9,7 @@ import type { BackendId } from "@orkestrator/protocol/federation";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { cleanupNodeScopes, FakeNodeClient, renderInNodeScope } from "@/test/render-in-node-scope";
 import { getWindowScope, resetWindowScopeForTests } from "./app-window-scope";
+import { strictScopeChecks } from "./providers";
 import { defineScopedStore, scopedStoreHook } from "./scoped-store";
 import { WindowScope } from "./window-scope";
 
@@ -103,8 +104,17 @@ describe("scopedStoreHook", () => {
       expect([name, name in useCounterStore]).toEqual([name, false]);
   });
 
-  // Development is the same check (`import.meta.env.DEV`, which a bun test
-  // cannot set: its import.meta.env is process.env, whose values are strings).
+  test("the strict check is on in development and tests, and off in a production build", () => {
+    expect(strictScopeChecks({ DEV: true, MODE: "development" })).toBe(true);
+    expect(strictScopeChecks({ DEV: false, MODE: "test" })).toBe(true);
+    expect(strictScopeChecks({ NODE_ENV: "test" })).toBe(true);
+    expect(strictScopeChecks({ DEV: false, MODE: "production", NODE_ENV: "production" })).toBe(
+      false,
+    );
+    // This run is a test run.
+    expect(strictScopeChecks()).toBe(true);
+  });
+
   test("outside a provider it throws in tests, and names the remedy", () => {
     resetWindowScopeForTests(new FakeNodeClient({ nodeId: COMMAND_NODE }));
     const silence = console.error;

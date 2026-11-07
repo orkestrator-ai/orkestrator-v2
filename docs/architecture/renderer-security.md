@@ -120,7 +120,7 @@ or the iOS app) are deleted (plan items 6002 and 6003). What that changes:
 | Credentials in the renderer | Desktop: none. Browser: each realm's grant in the tab's `sessionStorage` | Desktop: none; main holds every grant and attaches the bearer at the network layer per scope (`window-request-authorization.ts`). Browser and iOS: each grant in memory only, in the node-client registry's closures (`lib/node-scope/node-clients.ts`), never in storage or a URL |
 | Process isolation | Desktop: a renderer per realm. Browser and iOS: none | None on any host |
 | Storage isolation | Desktop: a partition per realm. Browser: namespaced keys | Namespaced keys everywhere (`nodeStorageKey`); the desktop realm partitions are removed at startup |
-| Correctness isolation | Separate heaps | Per-node store instances under a provider, node-tagged events, the shrink-only source guards and the runtime shim guard |
+| Correctness isolation | Separate heaps | Per-node store instances reached only through a provider or a named scope (no store statics, plan item 3018), node-tagged events and the shrink-only source guards |
 
 **The net change in authority is nil.** The window renderer already held
 full command-node authority and showed the same untrusted transcripts, and

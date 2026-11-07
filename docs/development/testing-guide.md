@@ -446,18 +446,19 @@ expect(client.calls("list_environments")).toHaveLength(2);
   calls `resetWindowScopeForTests()`.
 - Plain modules take the scope explicitly, so their tests need no React:
   open a scope with `new WindowScope().open({ role, client })` and pass it.
-- A converted store (`scopedStoreHook`) read under `renderInNodeScope` reads
-  the rendered scope. Seed it with `scope.store(def).setState(...)`, not the
-  deprecated `useXStore.setState`, which reaches the app's command scope. The
-  per-store recipe, including the tests, is
+- A per-node store (`scopedStoreHook`) read under `renderInNodeScope` reads
+  the rendered scope. Seed it with `scope.store(def).setState(...)`. Its hook
+  has no statics, and a component that reads it throws outside a provider in
+  tests (plan item 3018). The per-store recipe, including the tests, is
   [node-scopes.md](node-scopes.md#tests).
-- A component suite that seeds stores through the statics and mocks
-  `@/lib/backend` renders with `renderInAppCommandScope(ui, options)` from the
-  same module: the providers are the app's own window and command scope, so
-  the component's hooks read a provider (no shim fallback, and the store's hook
-  can retire its shim) while the suite's seeds and mocks still apply. It
-  disposes nothing; the suite resets the app's scope with
-  `resetWindowScopeForTests()` as before.
+- A component suite that mocks `@/lib/backend` renders with
+  `renderInAppCommandScope(ui, options)` (or `renderHookInAppCommandScope`,
+  or wraps a `renderToStaticMarkup` element in `InAppCommandScope`) from the
+  same module, and seeds or reads stores with `appCommandStore(def)` from
+  `@/test/app-command-store`: the providers are the app's own window and
+  command scope, so the component reads a provider as it does in the app
+  while the suite's seeds and mocks still apply. It disposes nothing; the
+  suite resets the app's scope with `resetWindowScopeForTests()` as before.
 
 ### Agent CLIs on `PATH`
 

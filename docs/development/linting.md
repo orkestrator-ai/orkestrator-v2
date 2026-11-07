@@ -102,7 +102,7 @@ Some guards read production sources instead of tests (`SourceGuard.productionRoo
 the walk is `listProductionSources`, which skips test files and test-support
 modules). They hold the node-scope boundaries of the unified federation work and
 are described in [Transports only through a scope](#transports-only-through-a-scope):
-`window-orkestrator-direct`, `direct-transport-import`, `scoped-store-shim`,
+`window-orkestrator-direct`, `direct-transport-import`,
 `lib-backend-command-default` and `workspace-command-bound-call`.
 
 Existing offenders are tolerated by a ratchet, not fixed in bulk:
@@ -292,17 +292,14 @@ baseline:
   directory to it once its last importer is gone; type-only imports stay
   allowed (`allowTypeImports`), as in the guard.
 
-- **`scoped-store-shim`** (source guard, plan item 3001). Static calls
-  (`getState`, `setState`, `subscribe`, `getInitialState`, or destructuring
-  them) on a converted store's hook in `apps/web/src` production code. Each
-  is the deprecated command-scope shim, which does not say which node it
-  means. The guard counts per store and per file, so its baseline keys are
-  `[store] file`. It finds the store from the import, following aliases,
-  namespace imports and re-exports through `@/stores` or any other module, and
-  never from the identifier's spelling. Only stores listed in `SHIMMED_STORES`
-  are counted; a store enters when its item converts it. Regenerate with
-  `--guard scoped-store-shim`, which prints the total per store. The
-  conversion recipe is [node-scopes.md](node-scopes.md).
+- **Per-node stores have no statics** (plan item 3018, which retired plan item
+  3001's `scoped-store-shim` source guard). A per-node store's hook
+  (`scopedStoreHook(def)`) carries no `getState`/`setState`/`subscribe`, so
+  the types forbid a call that does not name its node, and the hook throws
+  outside a `NodeScopeProvider` in development and tests. The store registry
+  test (`tests/unit/source-guards.test.ts`, `tests/source-guards/window-stores.ts`)
+  fails on a module in `apps/web/src/stores` that is neither a scoped store
+  nor a listed window store. The recipe is [node-scopes.md](node-scopes.md).
 
 - **`lib-backend-command-default`** (source guard, plan item 3002). Uses of a
   `lib/backend` named export in an `apps/web/src` production module that

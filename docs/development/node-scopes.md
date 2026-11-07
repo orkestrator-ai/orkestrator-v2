@@ -10,26 +10,28 @@ window holds, tiers and budgets those scopes is in
 this page is the contributor's recipe.
 
 **State (2026-11-07).** Every per-node store is a scoped store: the 39
-entries of `SHIMMED_STORES` (plan items 3001 and 3003–3013;
+modules in `apps/web/src/stores` that define a `defineScopedStore` def (plan
+items 3001 and 3003–3013;
 [`claudeOptionsStore`](../../apps/web/src/stores/claudeOptionsStore.ts) is the
-worked example). The window's own stores (`SHIM_GUARD_EXEMPT_STORES`: the
-selection, chrome, dialogs, the machine view, `remoteWorkspaceStore` and the
-like) stay ordinary zustand stores that every node shares. The workspace
-realms that used to isolate nodes are deleted (plan items 6002, 6003), so
-these scopes are the only thing that keeps nodes apart in a window.
+worked example). The window's own stores (`WINDOW_STORES` in
+`tests/source-guards/window-stores.ts`: the selection, chrome, dialogs, the
+machine view, `remoteWorkspaceStore` and the like) stay ordinary zustand
+stores that every node shares. The workspace realms that used to isolate
+nodes are deleted (plan items 6002, 6003), so these scopes are the only thing
+that keeps nodes apart in a window.
 
-**What is left of the shim.** Each scoped store still exports its hook
-through `scopedStoreHook`, which is the one remaining command-scope
-fallback: outside a `NodeScopeProvider` the hook reads the app's command
-scope, and its deprecated statics (`getState`, `setState`, `subscribe`,
-`getInitialState`) always do. Production code has **no** static uses left
-(the `scoped-store-shim` baseline is empty) and every app tree renders under
-a provider, so in the app the fallback is reached only by code that names no
-scope; the runtime guard throws in development and tests if that happens
-while another node's workspace is mounted. Test files still use the statics
-and render without a provider, which the guard does not count. Retiring the
-shim (the strict hook, below) is a per-store change that moves those tests
-to `renderInNodeScope` first; no store has done it yet.
+**The shim is gone (plan item 3018).** A per-node store is reached only
+through a scope. Its hook (`scopedStoreHook(def)`) reads the nearest
+`NodeScopeProvider` and has no `getState`/`setState`/`subscribe`/
+`getInitialState` statics, so code that does not say which node it means no
+longer compiles. Outside a provider the hook throws in development and tests;
+a production build keeps `useNodeScope()`'s fallback to the app's command
+scope, so a tree that lost its provider still behaves as the command node's.
+Plan item 3001's migration shim (`scoped-store-shim.ts`: the deprecated
+statics, the provider-less fallback, `useShimNodeScope`, `useScopedStoreApi`,
+`noteShimUse`), the `scoped-store-shim` source guard that counted static
+calls, and plan item 4004's runtime guard that watched shim uses under a
+mounted leaf were deleted with it.
 
 ## The pieces
 
@@ -37,23 +39,22 @@ to `renderInNodeScope` first; no store has done it yet.
 | --- | --- | --- |
 | `defineScopedStore<S>(name, (scope) => creator)` | `lib/node-scope/scoped-store.ts` | The store's definition. `name` is unique, bounded and stable, because it names the store in logs, guards and baselines. The creator is an ordinary zustand `StateCreator`, and it receives the `NodeScope`, whose `client` it calls. |
 | `scope.store(def)` | `NodeScope` | The scope's `StoreApi<S>` instance, created on first use and dropped when the scope is disposed. Imperative code goes through this. |
-| `useScopedStore(def, selector)` | `lib/node-scope/scoped-store.ts` | The strict hook. It reads the nearest `NodeScopeProvider`, and it throws outside one in development and tests. |
-| `scopedStoreHook(def)` | `lib/node-scope/scoped-store-shim.ts` | The hook every scoped store exports today, and the remaining command-scope fallback. It is called like a zustand hook, reads the nearest node scope, and falls back to the command scope outside a provider. It keeps `getState`, `setState`, `subscribe` and `getInitialState` as `@deprecated` statics on the **command scope's** instance. |
-| `useShimNodeScope(name)`, `useScopedStoreApi(def)` | `lib/node-scope/scoped-store-shim.ts` | The nearest node scope (or `def`'s instance in it) for imperative code in a component or hook, falling back to the command scope outside a provider and noting a shim use, as the hook does. For readers whose tests still render without a provider (plan item 3007). |
-| `noteShimUse(store, via)` | `lib/node-scope/scoped-store-shim.ts` | Called by every shim use: each static, and the hook when it falls back. Its default observer is the runtime shim guard (plan item 4004, below); a test that records shim uses itself replaces it with `setShimUseObserver`. |
-| Runtime shim guard | `lib/node-scope/shim-under-leaf-guard.ts` | While an in-tree leaf workspace is mounted (`useInTreeLeafMount`, called by `InTreeWorkspace`), a shim use of a store in `WORKSPACE_SUBTREE_STORES` throws `ShimUnderLeafError` in development and tests, and in production is counted (`shimUnderLeafCounts()`) and logged once per store and kind as `web.node-scope` `shim-under-leaf`. `SHIM_GUARD_EXEMPT_STORES` lists the window stores. |
-| `scoped-store-shim` guard | `tests/source-guards/scoped-store-shim.ts` | Counts static calls on a converted hook, per store and per file. Its baseline only falls. |
+| `useScopedStore(def, selector)` | `lib/node-scope/scoped-store.ts` | The strict hook. It reads the nearest `NodeScopeProvider` (`useNodeScope()`): it throws outside one in development and tests, and reads the app's command scope outside one in production. |
+| `scopedStoreHook(def)` | `lib/node-scope/scoped-store.ts` | The hook every per-node store exports: `useScopedStore(def, selector)` called like a zustand hook (with no selector it returns the whole state), plus `def` for `scope.store(useFooStore.def)`. It has no statics. |
+| `useNodeScope()` | `lib/node-scope/providers.tsx` | The nearest node scope, for imperative code in a component or hook: `useNodeScope().store(fooStore)`. Same provider rule as the hook. |
+| `WINDOW_STORES` | `tests/source-guards/window-stores.ts` | The window stores. A repository test fails on a module in `stores/` that neither defines a scoped store (exporting its hook through `scopedStoreHook`) nor is listed here. |
 | `createXApi(client)` | every `lib/backend/<x>.ts` | That file's command functions on `client`'s node (plan item 3002). `client` is anything with `invokeRaw` (a `NodeClient`). The file's named exports are `createXApi(commandBackendClient)`: the command-scope shim. |
 | `scopeBackendClient(scope)`, `backendApiForScope(scope, createXApi, { getX })` | `lib/backend/client.ts` | A scope as a factory client (through `invokeInScope`, so the scope's prefetched cache applies), and one factory's functions for a scope, made once per scope. On the app's command scope both return the command-bound path, so suites that mock `@/lib/backend` still see the call. |
 | `lib-backend-command-default` guard | `tests/source-guards/lib-backend-command-default.ts` | Counts uses of a `lib/backend` named export inside a module that defines a scoped store, service or slot, per `lib/backend` file and module. Its baseline only falls. |
 | `renderInNodeScope`, `FakeNodeClient` | `apps/web/src/test/render-in-node-scope.tsx` | Renders a component inside a fresh window scope and node scope ([testing guide](testing-guide.md#rendering-inside-a-node-scope)). |
+| `renderInAppCommandScope`, `renderHookInAppCommandScope`, `InAppCommandScope`, `appCommandStore(def)` | `apps/web/src/test/render-in-node-scope.tsx`, `apps/web/src/test/app-command-store.ts` | For suites that mock `@/lib/backend`: render (or `renderHook`, or wrap a `renderToStaticMarkup` element) under the app's own window and command scope, and seed or read that scope's store instance. |
 
 ## Adding or converting a store
 
 Every per-node store is already converted, so this is the recipe for a new
 per-node store, or for a window store that turns out to hold per-node state.
 A store whose state is the window's whatever node is shown stays an ordinary
-zustand store and goes into `SHIM_GUARD_EXEMPT_STORES` (below). Take
+zustand store and goes into `WINDOW_STORES` (below). Take
 `apps/web/src/stores/fooStore.ts`, exporting `useFooStore`. Do these steps in
 one change.
 
@@ -61,8 +62,7 @@ one change.
    with a definition. Export the state type if tests need it.
 
    ```ts
-   import { defineScopedStore } from "@/lib/node-scope/scoped-store";
-   import { scopedStoreHook } from "@/lib/node-scope/scoped-store-shim";
+   import { defineScopedStore, scopedStoreHook } from "@/lib/node-scope/scoped-store";
 
    export interface FooState { … }
 
@@ -74,7 +74,7 @@ one change.
      },
    }));
 
-   /** Reads the nearest node scope's foos. The statics are the deprecated command-scope shim. */
+   /** Reads the nearest node scope's foos; other code uses `scope.store(fooStore)`. */
    export const useFooStore = scopedStoreHook(fooStore);
    ```
 
@@ -135,71 +135,23 @@ one change.
    re-exports the hook, export the def beside it:
    `export { fooStore, useFooStore } from "./fooStore";`.
 
-3. **Register the store with the guard.** Add one entry to `SHIMMED_STORES`
-   in `tests/source-guards/scoped-store-shim.ts`:
+3. **Name the scope at every imperative site.** The hook has no statics,
+   so `useFooStore.getState()` does not compile. Write instead:
 
-   ```ts
-   { store: "foo", module: "apps/web/src/stores/fooStore", hook: "useFooStore" },
-   ```
-
-   `store` is the def's name and `module` is the file path without its
-   extension. A repository test fails if a `scopedStoreHook` export is not
-   registered, or a registration names no converted store.
-
-4. **Leave hook call sites alone.** `useFooStore((s) => s.x)` compiles and
-   behaves as before: it reads the nearest node scope, which is the command
-   scope everywhere the app renders today.
-
-5. **Convert the imperative sites you can.** Each
-   `useFooStore.getState()`, `setState`, `subscribe` or `getInitialState`
-   outside tests is a shim use. It does not say which node it means, so it
-   reaches the command node. Change it to name its scope:
-
-   | Where the call is | Write instead |
+   | Where the call is | Write |
    | --- | --- |
-   | A component or hook under a provider (anything `App` renders) | `const scope = useNodeScope();` then `scope.store(fooStore).getState()` in the callback. Add `scope` to the callback's dependencies. |
-   | The same, while the reader's tests still render without a provider | `const foo = useScopedStoreApi(fooStore);` (or `useShimNodeScope(fooStore.name)` for a scope), then `foo.getState()`. Switch to `useNodeScope()` when the tests move to `renderInNodeScope`. |
+   | A component or hook (anything `App` renders is under a provider) | `const scope = useNodeScope();` then `scope.store(fooStore).getState()` in the callback. Add `scope` to the callback's dependencies. |
    | Plain code a component calls | Add a `scope: NodeScope` parameter and pass `useNodeScope()` from the caller. |
-   | Plain code that is the command node's by design (a module-level listener, a boot path) | Name it: `appCommandScope().store(fooStore)` (`lib/node-scope-slots.ts`). The baseline is empty, so a static call fails the guard. |
-   | Inside the store's own creator | Use the creator's `get`/`set`, not the hook's statics. |
+   | Plain code that is the command node's by design (a module-level listener, a boot path) | Name it: `appCommandScope().store(fooStore)` (`lib/node-scope-slots.ts`). |
+   | Inside the store's own creator | Use the creator's `get`/`set`. |
 
-   Do not keep `const api = useFooStore` aliases or destructure the statics
-   (`const { getState } = useFooStore`) to dodge the guard. The guard counts
-   destructuring, and aliases defeat review.
+   Do not pass the hook where a `StoreApi` is expected (a `{ getState,
+   subscribe }` parameter): pass `scope.store(fooStore)`.
 
-6. **Update the baseline for this guard only.**
-
-   ```bash
-   bun tests/source-guards/update-baseline.ts --guard scoped-store-shim
-   ```
-
-   This rescans only the `scoped-store-shim` guard and keeps every other
-   guard's committed entries byte for byte, so it cannot admit unrelated
-   findings elsewhere in the tree. It prints the total per store. The
-   baseline has been empty since plan item 4001 (2026-11-07), so the expected
-   diff is none: a new store converts every imperative site in the same
-   change. Never run the command without `--guard`, and never use it to admit
-   a new call.
-
-7. **Move the tests** (next section), then run the store's suite, the suites
-   of the components that read it, `tests/unit/source-guards.test.ts`,
-   `bun run --cwd apps/web typecheck`, `bun fmt` and `oxlint` on the touched
-   files.
-
-### Retiring the shim for a store
-
-Every store's baseline is zero, so what keeps a store on the shim is its
-tests (statics, renders without a provider) and any reader that still falls
-back outside a provider. Once those are gone, change the hook to the strict
-form:
-
-```ts
-export const useFooStore = <U>(selector: (state: FooState) => U) => useScopedStore(fooStore, selector);
-```
-
-Then remove the store's `SHIMMED_STORES` entry in the same change. Any test
-that still renders a reader without a provider then fails loudly, which is
-the point.
+4. **Write the tests** (next section), then run the store's suite, the suites
+   of the components that read it, `tests/unit/source-guards.test.ts` (the
+   store registry), `bun run --cwd apps/web typecheck`, `bun fmt` and `oxlint`
+   on the touched files.
 
 ## Tests
 
@@ -237,13 +189,11 @@ the point.
   expect(client.calls("list_foos")).toHaveLength(1);
   ```
 
-  Under `renderInNodeScope` the component reads the rendered scope. The
-  deprecated statics reach the **app's** command scope, a different instance,
-  so a test that mixes them sees nothing change. Seed state through
-  `scope.store(def)`.
+  Under `renderInNodeScope` the component reads the rendered scope, a fresh
+  window's, never the app's. Seed state through `scope.store(def)`.
 
   A test-support module shared by several suites can own one scope per test
-  and hand the suites accessors instead of statics, as
+  and hand the suites accessors, as
   `components/build-pipeline/build-chat-tab-test-support.tsx` does (plan item
   3011): `buildChatScope()` opens it on first use, `pipelineStore()` is its
   pipeline store, `renderInBuildChat(ui)` renders into it (`renderInNodeScope`
@@ -253,17 +203,18 @@ the point.
   stubs, so their assertions keep working. Actions that still use the
   `@/lib/backend` named exports reach the module mocks as before.
 
-- **Tests that render without a provider** (plain `render`) still work while
-  the shim is in place (most component suites still do). The hook falls back to the app's command scope, which
-  is the same instance the statics use. They may keep `useFooStore.setState(…)`
-  for now (test files are not counted). Reset between tests with
-  `resetWindowScopeForTests()` in `afterEach`, which disposes the app's window
-  scope, so the next test starts from fresh store state. That replaces
-  resetting the old singleton by hand. Move them to `renderInNodeScope` before
-  retiring the shim.
-
-- **Testing the shim itself**: `setShimUseObserver((use) => uses.push(use))`
-  returns a restore function. Call it in `afterEach`.
+- **Suites that mock `@/lib/backend`** (the named exports, which are the
+  app's command scope's) render with `renderInAppCommandScope(ui, { wrapper })`
+  or `renderHookInAppCommandScope(hook, options)`, and seed or read the same
+  instance with `appCommandStore(fooStore)` (`@/test/app-command-store`).
+  Reset between tests with `resetWindowScopeForTests()` in `afterEach`, which
+  disposes the app's window scope, so the next test starts from fresh store
+  state. A plain `render` of a component that reads a per-node store throws
+  `useNodeScope() needs a NodeScopeProvider`: that is the strict check
+  working, not a test to silence. A suite that mocks `@/stores` with a
+  wrapper around a real hook captures the hook in a constant before the
+  `mock.module` call, because the mock rebinds the import (see
+  `components/layout/AppShell.test.tsx`).
 
 - **Tiers** (plan item 4002): build the window with `new WindowScope({
   lifecycle: { host, suspendAfterMs, … }, lifecycleDeps: { clock, visibility,
@@ -366,14 +317,18 @@ tabs restore and follow the leaf's queues.
 
 ## Rules the guards hold
 
-- The `scoped-store-shim` source guard (`tests/unit/source-guards.test.ts`)
-  fails on a static call in a file or for a store where the baseline allows
-  fewer, and on a baseline entry above the real count until the baseline is
-  regenerated smaller. It finds the store from the import, never from the
-  identifier's spelling. Direct imports, aliases (`as`), the `@/stores` barrel,
-  other re-exporting modules (`export { … } from`, `export * from`, import
-  then export), namespace imports and the store module's calls on itself are
-  all counted. Test files and test-support modules are not.
+- A per-node store cannot be reached without naming its node: the hook has no
+  statics (the types forbid `useFooStore.getState()`), and the strict check
+  throws outside a provider in development and tests. The store registry
+  test in `tests/unit/source-guards.test.ts` fails on a module in
+  `apps/web/src/stores` that is neither a scoped store exported through
+  `scopedStoreHook` nor listed in `WINDOW_STORES`, so per-node state cannot be
+  added as a window-wide singleton by accident. Plan item 3018 retired the
+  `scoped-store-shim` source guard (it counted statics, which no longer
+  exist) and plan item 4004's runtime guard (it watched shim uses under a
+  mounted leaf, and nothing reaches the shim any more). The multi-node e2e
+  checks after every flow that no node workspace shows a render failure,
+  which is where a provider-less hook lands in its development renderer.
 - The `lib-backend-command-default` source guard counts each use of a
   `lib/backend` named export (the command-scope shim of plan item 3002) in a
   production module that defines a scoped store, service or slot, keyed
@@ -397,21 +352,6 @@ tabs restore and follow the leaf's queues.
   follow `lib/backend/**`, `lib/node-scope/**`, `src/test/**` or the
   modules in `WORKSPACE_EXEMPT_MODULES`. The baseline is zero (2026-11-07)
   and only falls; regenerate with `--guard workspace-command-bound-call`.
-- At runtime, the shim guard (plan item 4004,
-  `lib/node-scope/shim-under-leaf-guard.ts`) is `noteShimUse`'s default
-  observer. While any in-tree leaf workspace is mounted, a shim use of a store
-  in `WORKSPACE_SUBTREE_STORES` (every converted store so far, plan item
-  3013's set) throws `ShimUnderLeafError` in development and tests. In
-  production it is counted and logged once per store and kind
-  (`web.node-scope` `shim-under-leaf`, store name and kind only). Stores
-  outside the workspace subtree are listed in `SHIM_GUARD_EXEMPT_STORES` (the
-  window stores today) and never throw. A store item that converts a store
-  adds it to one of the two lists; `shim-under-leaf-guard.test.tsx` fails on
-  a `SHIMMED_STORES` entry in neither. A renderer started with
-  `VITE_ORKESTRATOR_SHIM_GUARD=throw` (or `count`) runs that mode whatever
-  the build, and exposes `window.orkestratorShimGuard` (`mode`,
-  `mountedLeaves()`, `uses()`) for the multi-node e2e (plan item 4006), which
-  asserts no use after every flow.
 - Transports are reached only through a scope
   ([linting.md](linting.md#transports-only-through-a-scope)). A converted
   store calls `scope.client`, never `invoke`/`listen` directly.

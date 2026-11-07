@@ -33,9 +33,18 @@ import type { WindowScope } from "./window-scope";
 const WindowScopeContext = createContext<WindowScope | null>(null);
 const NodeScopeContext = createContext<NodeScope | null>(null);
 
-function strictScopeChecks(): boolean {
-  // Vite sets DEV and MODE; under `bun test`, import.meta.env is process.env.
-  const env = import.meta.env as unknown as Record<string, unknown> | undefined;
+/**
+ * Whether a scope reader outside its provider throws: in development (Vite's
+ * `DEV`) and tests (`MODE`/`NODE_ENV` `test`), never in a production build.
+ * `env` is for tests: under `bun test`, import.meta.env is process.env, whose
+ * values are strings, so `DEV: true` cannot be set there.
+ */
+export function strictScopeChecks(
+  env: Readonly<Record<string, unknown>> | undefined = import.meta.env as unknown as Record<
+    string,
+    unknown
+  >,
+): boolean {
   return env?.DEV === true || env?.MODE === "test" || env?.NODE_ENV === "test";
 }
 

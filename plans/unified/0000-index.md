@@ -424,17 +424,17 @@ Report: [§7](../../docs/reports/unified-federation.md#7-store-and-service-scopi
 | --- | --- | --- | --- | --- | --- |
 | 3001 | [3001-scoped-store-shim-and-ratchet.md](3001-scoped-store-shim-and-ratchet.md) | 3 | done | 2001, 2010 | The command-scope shim on converted hooks, and a shrink-only source guard per store that handles the `@/stores` barrel. The worked example is `claudeOptionsStore`. |
 | 3002 | [3002-lib-backend-client-parameter.md](3002-lib-backend-client-parameter.md) | 3 | done | 2010 | `createXApi(client)` factories for all 37 `lib/backend` files, with command-bound exports kept as a counted shim. |
-| 3003 | [3003-stores-batch-a-leaf-light.md](3003-stores-batch-a-leaf-light.md) | 3 | in-progress | 3001, 3002 | Eight light stores (environmentDiff, worktreeSnapshot, agentActivity, prMonitor, multiReview, agentModelCatalog, claudeOptions, tabLaunch). |
+| 3003 | [3003-stores-batch-a-leaf-light.md](3003-stores-batch-a-leaf-light.md) | 3 | done | 3001, 3002 | Eight light stores (environmentDiff, worktreeSnapshot, agentActivity, prMonitor, multiReview, agentModelCatalog, claudeOptions, tabLaunch). |
 | 3004 | [3004-project-and-environment-stores.md](3004-project-and-environment-stores.md) | 3 | done | 3001, 3002, 3016 | `projectStore` and `environmentStore` (57 imperative sites), with `useEnvironments` and `useProjects`. |
 | 3005 | [3005-config-layering.md](3005-config-layering.md) | 3 | done | 3001, 3002 | Scoped `configStore` with `effectiveConfig(scope)`. Layering no longer depends on "am I a realm". |
 | 3006 | [3006-ui-store-split.md](3006-ui-store-split.md) | 3 | done | 3004, 3017 | A node-qualified window selection plus a per-node `uiStore`. `remoteWorkspaceStore` is derived from it until realms go. |
 | 3007 | [3007-files-panel-split.md](3007-files-panel-split.md) | 3 | done | 3001, 3002, 3015 | Files panel open state and width per window; folders, PR tabs and selection per node; `projectPullRequestsStore`. |
 | 3008 | [3008-terminal-portal-and-artifact-hosts.md](3008-terminal-portal-and-artifact-hosts.md) | 3 | done | 3001, 3016 | Window-owned terminal portals and artifact hosts with node-qualified keys, under the window byte budget. |
 | 3009 | [3009-agent-and-transcript-stores.md](3009-agent-and-transcript-stores.md) | 3 | done | 3004, 3016 | `nativeAgentProjection`, `nativeCompose` and `promptDraft` per node, with the history budget kept window-wide. |
-| 3010 | [3010-sessions-terminals-tmux-mail.md](3010-sessions-terminals-tmux-mail.md) | 3 | not-started | 3008, 3009 | `session`, `terminalSession` (a hot spot the report missed), `claudeTmux` and `agentMail` stores. |
-| 3011 | [3011-workflow-stores-a.md](3011-workflow-stores-a.md) | 3 | in-progress | 3004 | Pipeline, Kanban, feature plan, coordinator and graph stores, plus their persistence services. |
+| 3010 | [3010-sessions-terminals-tmux-mail.md](3010-sessions-terminals-tmux-mail.md) | 3 | done | 3008, 3009 | `session`, `terminalSession` (a hot spot the report missed), `claudeTmux` and `agentMail` stores. |
+| 3011 | [3011-workflow-stores-a.md](3011-workflow-stores-a.md) | 3 | done | 3004 | Pipeline, Kanban, feature plan, coordinator and graph stores, plus their persistence services. |
 | 3012 | [3012-workflow-stores-b.md](3012-workflow-stores-b.md) | 3 | done | 3004, 3016 | Design, web annotations, GitHub issues, PRs, change projection, file dirty and preview service stores. |
-| 3013 | [3013-pane-layout-store.md](3013-pane-layout-store.md) | 3 | not-started | 3006, 3007, 3008, 3009, 3010 | `paneLayoutStore` (1,852 LOC, 88 sites) last, with its persistence. The workspace subtree's shim baseline reaches zero. |
+| 3013 | [3013-pane-layout-store.md](3013-pane-layout-store.md) | 3 | in-progress | 3006, 3007, 3008, 3009, 3010 | `paneLayoutStore` (1,852 LOC, 88 sites) last, with its persistence. The workspace subtree's shim baseline reaches zero. |
 | 3014 | [3014-scoped-services-and-startup.md](3014-scoped-services-and-startup.md) | 3 | done | 3001 | `App.tsx:355-369`'s six `start*` services become per-scope services; the read coordinator is split into window and node parts. |
 | 3015 | [3015-persistence-keys-per-node.md](3015-persistence-keys-per-node.md) | 3 | done | 2001 | `desktopConnectionStorageKey(base, nodeId)`; the local-drafts key is namespaced; the command node's keys do not move. |
 | 3016 | [3016-rich-content-and-caches.md](3016-rich-content-and-caches.md) | 3 | done | 2001, 2003 | Rich-content identity per node, byte-bounded caches under window budgets, and capability caches per scope. |
@@ -503,20 +503,20 @@ Report: [§10.2](../../docs/reports/unified-federation.md#102-tighten-the-grant-
 
 | ID | File | Phase | Status | Depends on | Summary |
 | --- | --- | --- | --- | --- | --- |
-| 7001 | [7001-domain-native-sessions.md](7001-domain-native-sessions.md) | 7 | in-progress | 1008, 1010, 1011 | Native agent sessions and prompts (87 commands). Turns on CI stage 2. |
+| 7001 | [7001-domain-native-sessions.md](7001-domain-native-sessions.md) | 7 | done | 1008, 1010, 1011 | Native agent sessions and prompts (87 commands). Turns on CI stage 2. |
 | 7002 | [7002-domain-terminals-files-tmux.md](7002-domain-terminals-files-tmux.md) | 7 | done | 1008, 1010, 1011 | Terminals and files (59) and Claude tmux (28). |
-| 7003 | [7003-domain-environments-docker.md](7003-domain-environments-docker.md) | 7 | not-started | 1008, 1010, 1011 | Environments and container lifecycle (63) and Docker (29). |
+| 7003 | [7003-domain-environments-docker.md](7003-domain-environments-docker.md) | 7 | done | 1008, 1010, 1011 | Environments and container lifecycle (63) and Docker (29). |
 | 7004 | [7004-domain-previews-annotations-artifacts-design.md](7004-domain-previews-annotations-artifacts-design.md) | 7 | done | 1008, 1010, 1011 | Previews, web annotations and design (Zod today, converted to Effect Schema) and transcript artifacts. |
-| 7005 | [7005-domain-projects-config.md](7005-domain-projects-config.md) | 7 | not-started | 1008, 1010, 1011 | Projects, config and settings (71), keeping the config-echo compatibility path. |
-| 7006 | [7006-domain-git-pull-requests.md](7006-domain-git-pull-requests.md) | 7 | not-started | 1008, 1010, 1011 | Git, GitHub, PRs and the changes ledger (81). |
-| 7007 | [7007-domain-pipelines-graphs-multi-review.md](7007-domain-pipelines-graphs-multi-review.md) | 7 | not-started | 1008, 1010, 1011 | Build pipelines and graphs (76) and Multi Review (30), reusing the graph guards. |
-| 7008 | [7008-domain-kanban-mail-accounts-mcp.md](7008-domain-kanban-mail-accounts-mcp.md) | 7 | not-started | 1008, 1010, 1011 | Kanban and Linear, agent mail, agent accounts and MCP management. |
-| 7009 | [7009-domain-coordinator-servers-system.md](7009-domain-coordinator-servers-system.md) | 7 | in-progress | 1008, 1010, 1011 | Coordinator and controller (104), agent servers, system, the rest of nodes, and the ~74 commands with no static caller. |
-| 7010 | [7010-converge-models.md](7010-converge-models.md) | 7 | not-started | 7003, 7005 | `models.ts` and the web's `types/index.ts` become inferred protocol types. |
+| 7005 | [7005-domain-projects-config.md](7005-domain-projects-config.md) | 7 | done | 1008, 1010, 1011 | Projects, config and settings (71), keeping the config-echo compatibility path. |
+| 7006 | [7006-domain-git-pull-requests.md](7006-domain-git-pull-requests.md) | 7 | done | 1008, 1010, 1011 | Git, GitHub, PRs and the changes ledger (81). |
+| 7007 | [7007-domain-pipelines-graphs-multi-review.md](7007-domain-pipelines-graphs-multi-review.md) | 7 | in-progress | 1008, 1010, 1011 | Build pipelines and graphs (76) and Multi Review (30), reusing the graph guards. |
+| 7008 | [7008-domain-kanban-mail-accounts-mcp.md](7008-domain-kanban-mail-accounts-mcp.md) | 7 | in-progress | 1008, 1010, 1011 | Kanban and Linear, agent mail, agent accounts and MCP management. |
+| 7009 | [7009-domain-coordinator-servers-system.md](7009-domain-coordinator-servers-system.md) | 7 | done | 1008, 1010, 1011 | Coordinator and controller (104), agent servers, system, the rest of nodes, and the ~74 commands with no static caller. |
+| 7010 | [7010-converge-models.md](7010-converge-models.md) | 7 | in-progress | 7003, 7005 | `models.ts` and the web's `types/index.ts` become inferred protocol types. |
 | 7011 | [7011-typed-events.md](7011-typed-events.md) | 7 | done | 1002, 1006 | `defineEvent` for every backend event, typed `emit` and `listen`, events in the manifest. |
-| 7012 | [7012-allow-listed-grants.md](7012-allow-listed-grants.md) | 7 | not-started | 7001, 7002, 7003, 7004, 7005, 7006, 7007, 7008, 7009, 0006 | The grant scope becomes the manifest's `access: "workspace"` set and fails closed; the deny-lists are deleted. |
-| 7013 | [7013-retire-legacy-adapters.md](7013-retire-legacy-adapters.md) | 7 | not-started | 7001, 7002, 7003, 7004, 7005, 7006, 7007, 7008, 7009 | Date-gated: remove version-0 adapters and capability commands once the floor passes the first Stable release with `domains`. |
-| 7014 | [7014-remaining-zod-to-effect-schema.md](7014-remaining-zod-to-effect-schema.md) | 7 | not-started | 7004 | Added 2026-11-07: move the 35 backend files still on Zod (MCP tool inputs, the design service's parsing) to Effect Schema, then drop `zod`. |
+| 7012 | [7012-allow-listed-grants.md](7012-allow-listed-grants.md) | 7 | in-progress | 7001, 7002, 7003, 7004, 7005, 7006, 7007, 7008, 7009, 0006 | The grant scope becomes the manifest's `access: "workspace"` set and fails closed; the deny-lists are deleted. |
+| 7013 | [7013-retire-legacy-adapters.md](7013-retire-legacy-adapters.md) | 7 | blocked | 7001, 7002, 7003, 7004, 7005, 7006, 7007, 7008, 7009 | Date-gated: remove version-0 adapters and capability commands once the floor passes the first Stable release with `domains`. |
+| 7014 | [7014-remaining-zod-to-effect-schema.md](7014-remaining-zod-to-effect-schema.md) | 7 | done | 7004 | Added 2026-11-07: move the 35 backend files still on Zod (MCP tool inputs, the design service's parsing) to Effect Schema, then drop `zod`. |
 
 Exit criteria:
 

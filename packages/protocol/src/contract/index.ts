@@ -7,6 +7,8 @@
  * Browser-safe: shared by the backend, web, desktop and CLI.
  */
 export * from "./client.js";
+export * from "./client-adapters.js";
+export * from "./client-usage.js";
 export * from "./command.js";
 export * from "./domain.js";
 export * from "./envelope.js";

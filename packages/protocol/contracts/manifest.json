@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "generatedBy": "scripts/generate-contract-manifest.ts (mise run contract:manifest)",
   "counts": {
-    "commands": 996,
-    "defined": 0,
+    "commands": 997,
+    "defined": 1,
     "untyped": 996
   },
   "untypedByDomain": {
@@ -37,7 +37,12 @@
     "transcripts": 16,
     "web-annotations": 37
   },
-  "domains": {},
+  "domains": {
+    "system": {
+      "version": 1,
+      "min": 1
+    }
+  },
   "commands": {
     "abort_node_file_write": {
       "domain": "node-files",
@@ -3413,6 +3418,15 @@
       "domain": "nodes",
       "untyped": true,
       "read": false
+    },
+    "record_domain_adapter_usage": {
+      "domain": "system",
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:90259bfdb2d04aa50aa139388fb0f2de9823eb69b0348b4432396f91dcb703b2",
+      "resultDigest": "sha256:0483030ff2fee7aadc4fd986a61ac1d0a98bfb0f01435283acc4d9bd3074f415"
     },
     "record_kanban_criteria_checks": {
       "domain": "kanban",

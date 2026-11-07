@@ -54,3 +54,9 @@ export type { EnvironmentDiffStats } from "./environmentDiffStore";
 export { tabLaunchStore, useTabLaunchStore } from "./tabLaunchStore";
 export type { TabLaunch, TabLaunchSurface } from "./tabLaunchStore";
 export { useWorktreeSnapshotStore, worktreeSnapshotStore } from "./worktreeSnapshotStore";
+export {
+  nativeAgentProjectionStore,
+  useNativeAgentProjectionStore,
+} from "./nativeAgentProjectionStore";
+export { nativeComposeStore, useNativeComposeStore } from "./nativeComposeStore";
+export { promptDraftStore, usePromptDraftStore } from "./promptDraftStore";

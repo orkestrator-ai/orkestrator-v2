@@ -80,6 +80,27 @@ describe("ByteBudget", () => {
     expect(notices).toEqual(["session"]);
   });
 
+  test("evictUntil frees room best-effort by the same policy, sparing the key and the shown node", () => {
+    const budget = new ByteBudget("transcripts", 100);
+    budget.setShownNode(SHOWN);
+    const notices: string[] = [];
+    const onEvict = (entry: { nodeId: BackendId; key: string }) =>
+      notices.push(`${entry.nodeId}/${entry.key}`);
+    budget.reserve(SHOWN, "shown", 30, { onEvict });
+    budget.reserve(WARM_1, "own-old", 20, { onEvict });
+    budget.reserve(WARM_2, "other", 20, { onEvict });
+    budget.reserve(WARM_1, "reader", 20, { onEvict });
+
+    // Other nodes first, then the reader's own older entries.
+    expect(keysOf(budget.evictUntil(WARM_1, "reader", 70))).toEqual(["bk_warm-2/other"]);
+    expect(budget.usedBytes).toBe(70);
+    // Cannot reach the target: evicts what it may (never "shown" or "reader").
+    expect(keysOf(budget.evictUntil(WARM_1, "reader", 0))).toEqual(["bk_warm-1/own-old"]);
+    expect(notices).toEqual(["bk_warm-2/other", "bk_warm-1/own-old"]);
+    expect(budget.usedBytes).toBe(50);
+    expect(budget.evictUntil(WARM_1, "reader", 50)).toEqual([]);
+  });
+
   test("release and releaseNode give bytes back without eviction notices", () => {
     const budget = new ByteBudget("transcripts", 100);
     const notices: string[] = [];

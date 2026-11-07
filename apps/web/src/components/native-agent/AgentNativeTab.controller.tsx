@@ -207,7 +207,8 @@ import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useShallow } from "zustand/react/shallow";
 import {
   nativeComposeDraft,
-  nativeComposePersistenceStore,
+  nativeComposePersistence,
+  nativeComposeStore,
   useNativeComposeStore,
   type NativeComposeDraft,
 } from "@/stores/nativeComposeStore";
@@ -224,7 +225,7 @@ import {
 } from "./native-notice-identity";
 import { multiReviewStore, useMultiReviewStore } from "@/stores/multiReviewStore";
 import { agentModelCatalogStore } from "@/stores/agentModelCatalogStore";
-import { useScopedStoreApi } from "@/lib/node-scope/scoped-store-shim";
+import { useScopedStoreApi, useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
 import type { FileCandidate } from "@/types";
 import {
   openWebAnnotationRequest,
@@ -409,6 +410,9 @@ export function SharedNativeAgentController({
     [modelCatalog],
   );
   const multiReviews = useScopedStoreApi(multiReviewStore);
+  // The node this tab's drafts live on: the scope `useNativeComposeStore` reads.
+  const composeScope = useShimNodeScope(nativeComposeStore.name);
+  const composeDrafts = composeScope.store(nativeComposeStore);
   const speedCompatible = modelSupportsSpeed(
     platform,
     speedCatalog,
@@ -507,7 +511,7 @@ export function SharedNativeAgentController({
       replacementProviderSessionId: string;
     }) => {
       const key = createSessionKey(data.environmentId, tabId);
-      const composeStore = useNativeComposeStore.getState();
+      const composeStore = composeDrafts.getState();
       const held = nativeComposeDraft(composeStore, key).heldSubmit;
       if (
         held &&
@@ -534,7 +538,7 @@ export function SharedNativeAgentController({
         );
       multiReviews.getState().replaceWorkflow(workflow);
     },
-    [data.environmentId, multiReviews, tabId],
+    [data.environmentId, multiReviews, tabId, composeDrafts],
   );
   const draft = useNativeComposeStore((state) =>
     nativeComposeDraft(state, createSessionKey(data.environmentId, tabId)),
@@ -661,15 +665,16 @@ export function SharedNativeAgentController({
     platform,
     data.environmentId,
     sessionKey,
-    nativeComposePersistenceStore,
+    nativeComposePersistence(composeDrafts),
     "agent-native",
+    composeScope,
   );
   const addTranscriptAnnotation = useCallback(
     (selectedText: string): TranscriptAnnotation | null => {
       if (queueEditPendingRef.current || submitInFlightRef.current || isDispatching) return null;
       const text = normalizeTranscriptAnnotationText(selectedText);
       if (!text) return null;
-      const current = nativeComposeDraft(useNativeComposeStore.getState(), sessionKey);
+      const current = nativeComposeDraft(composeDrafts.getState(), sessionKey);
       // Migrated references are links, not prompt content: they do not use
       // up the per-prompt allowance.
       if (sendableTranscriptAnnotations(current.annotations).length >= MAX_TRANSCRIPT_ANNOTATIONS) {
@@ -680,12 +685,12 @@ export function SharedNativeAgentController({
       updateDraft(sessionKey, { annotations: [...current.annotations, annotation] });
       return annotation;
     },
-    [isDispatching, sessionKey, updateDraft],
+    [isDispatching, sessionKey, updateDraft, composeDrafts],
   );
   const updateTranscriptAnnotationComment = useCallback(
     (annotationId: string, comment: string) => {
       if (queueEditPendingRef.current || submitInFlightRef.current || isDispatching) return;
-      const current = nativeComposeDraft(useNativeComposeStore.getState(), sessionKey);
+      const current = nativeComposeDraft(composeDrafts.getState(), sessionKey);
       updateDraft(sessionKey, {
         annotations: current.annotations.map((annotation) =>
           annotation.id === annotationId
@@ -694,14 +699,14 @@ export function SharedNativeAgentController({
         ),
       });
     },
-    [isDispatching, sessionKey, updateDraft],
+    [isDispatching, sessionKey, updateDraft, composeDrafts],
   );
   // Back to the prompt once a comment is entered, so the user can keep
   // typing or press Enter again to send.
   const focusComposerAfterAnnotationComment = useCallback(() => {
-    const { text } = nativeComposeDraft(useNativeComposeStore.getState(), sessionKey);
+    const { text } = nativeComposeDraft(composeDrafts.getState(), sessionKey);
     inputRef.current?.focusAtEnd(text);
-  }, [sessionKey]);
+  }, [sessionKey, composeDrafts]);
   const clearTabInitialPrompt = usePaneLayoutStore((state) => state.clearTabInitialPrompt);
   const consumeTabAgentHandoff = usePaneLayoutStore((state) => state.consumeTabAgentHandoff);
   const clearTabAgentHandoff = usePaneLayoutStore((state) => state.clearTabAgentHandoff);
@@ -1721,14 +1726,16 @@ export function SharedNativeAgentController({
   );
   const discardProvisionalDraft = useCallback(() => {
     const discard = (namespace: "agent-native" | typeof platform) =>
-      discardComposeDraft(composeDraftKey(namespace, data.environmentId, sessionKey)).catch(
-        (error) => {
-          log.warn("compose-draft.discard-failed", { error: formatLogError(error) });
-        },
-      );
+      discardComposeDraft(
+        composeDraftKey(namespace, data.environmentId, sessionKey),
+        undefined,
+        composeScope,
+      ).catch((error) => {
+        log.warn("compose-draft.discard-failed", { error: formatLogError(error) });
+      });
     void discard("agent-native");
     void discard(platform);
-  }, [data.environmentId, platform, sessionKey]);
+  }, [composeScope, data.environmentId, platform, sessionKey]);
 
   const releaseRetiredRequestId = useCallback(
     (requestId: string, error: string) => {
@@ -1749,7 +1756,7 @@ export function SharedNativeAgentController({
         { sessionIdentity: noticeSessionIdentity, noticeId },
       ]);
       dismissNotice(noticeSessionIdentity, noticeId);
-      const current = useNativeComposeStore.getState().drafts.get(sessionKey);
+      const current = composeDrafts.getState().drafts.get(sessionKey);
       if (current?.requestId !== requestId) return;
       updateDraft(sessionKey, {
         requestId: undefined,
@@ -1757,7 +1764,7 @@ export function SharedNativeAgentController({
         submissionError: error,
       });
     },
-    [dismissNotice, noticeSessionIdentity, sessionKey, updateDraft],
+    [dismissNotice, noticeSessionIdentity, sessionKey, updateDraft, composeDrafts],
   );
 
   /*
@@ -1805,7 +1812,7 @@ export function SharedNativeAgentController({
   const clearConfirmedDraft = useCallback(
     (requestId: string | undefined): boolean => {
       if (!requestId) return false;
-      const current = useNativeComposeStore.getState().drafts.get(sessionKey);
+      const current = composeDrafts.getState().drafts.get(sessionKey);
       // Editing any content clears requestId in nativeComposeStore. That makes
       // this comparison the ownership check which prevents a late transcript
       // echo from deleting the user's next prompt.
@@ -1819,6 +1826,7 @@ export function SharedNativeAgentController({
       return true;
     },
     [
+      composeDrafts,
       clearDraft,
       consumeBrowserAnnotations,
       data.environmentId,
@@ -2333,13 +2341,13 @@ export function SharedNativeAgentController({
       // still edit it, and a remounted composer must never replay this send.
       if (submitOptions?.preflight && beforeSend) {
         const lifetime = composerLifetimeRef.current;
-        const pendingDraft = nativeComposeDraft(useNativeComposeStore.getState(), sessionKey);
+        const pendingDraft = nativeComposeDraft(composeDrafts.getState(), sessionKey);
         beforeSendPendingRef.current = true;
         setPreparingSend(true);
         try {
           const proceed = await beforeSend();
           if (composerLifetimeRef.current !== lifetime || proceed === false) return false;
-          const currentDraft = nativeComposeDraft(useNativeComposeStore.getState(), sessionKey);
+          const currentDraft = nativeComposeDraft(composeDrafts.getState(), sessionKey);
           if (
             currentDraft.text !== pendingDraft.text ||
             currentDraft.mentions !== pendingDraft.mentions ||
@@ -2487,7 +2495,7 @@ export function SharedNativeAgentController({
           transcriptConfirmedRequestIdRef.current = null;
           // The transcript echo may already have cleared this prompt, and a
           // dispatch can take long enough for the next one to be typed since.
-          const ownedDraft = useNativeComposeStore.getState().drafts.get(sessionKey);
+          const ownedDraft = composeDrafts.getState().drafts.get(sessionKey);
           if (ownedDraft?.requestId === dispatchRequestId) {
             clearDraft(sessionKey);
             consumeBrowserAnnotations(data.environmentId, submittedBrowserAnnotationIds);
@@ -2549,6 +2557,7 @@ export function SharedNativeAgentController({
       return false;
     },
     [
+      composeDrafts,
       adapter.capabilities.attachments,
       autoSteerEnabled,
       beforeSend,
@@ -2618,10 +2627,10 @@ export function SharedNativeAgentController({
 
   useEffect(() => {
     sendAsTextRef.current = () => {
-      const current = nativeComposeDraft(useNativeComposeStore.getState(), sessionKey);
+      const current = nativeComposeDraft(composeDrafts.getState(), sessionKey);
       sendFromComposer(current.text, { literal: true });
     };
-  }, [sendFromComposer, sessionKey]);
+  }, [sendFromComposer, sessionKey, composeDrafts]);
 
   const canArchiveResumable = Boolean(adapter.capabilities.actions?.archive);
   /**
@@ -2745,7 +2754,7 @@ export function SharedNativeAgentController({
   const handleWorkspaceFileAttach = useCallback(
     (file: FileCandidate) => {
       if (queueEditPendingRef.current) return;
-      const current = useNativeComposeStore.getState().drafts.get(sessionKey);
+      const current = composeDrafts.getState().drafts.get(sessionKey);
       const resolved = resolveWorkspaceAttachment(file, {
         containerId: data.containerId,
         worktreePath: envWorktreePath ?? coordinatorWorkspacePath,
@@ -2764,6 +2773,7 @@ export function SharedNativeAgentController({
       });
     },
     [
+      composeDrafts,
       adapter.capabilities.attachments.files,
       adapter.capabilities.attachments.images,
       data.containerId,
@@ -2778,12 +2788,12 @@ export function SharedNativeAgentController({
   const handlePastedImage = useCallback(
     (attachment: { id: string; type: "image"; path: string; previewUrl: string; name: string }) => {
       if (queueEditPendingRef.current) return;
-      const current = useNativeComposeStore.getState().drafts.get(sessionKey);
+      const current = composeDrafts.getState().drafts.get(sessionKey);
       updateDraft(sessionKey, {
         attachments: [...(current?.attachments ?? []), attachment],
       });
     },
-    [sessionKey, updateDraft],
+    [sessionKey, updateDraft, composeDrafts],
   );
   const writeSpecialImage = useCallback(
     (filename: string, base64Data: string) =>
@@ -3071,7 +3081,7 @@ export function SharedNativeAgentController({
     if (!heldSubmit) return;
     // Effects and timers from an older render must never consume a newer send.
     const isCurrent = () =>
-      nativeComposeDraft(useNativeComposeStore.getState(), sessionKey).heldSubmit === heldSubmit;
+      nativeComposeDraft(composeDrafts.getState(), sessionKey).heldSubmit === heldSubmit;
     if (!isCurrent()) return;
     if (draft.text !== heldSubmit.draftText) {
       settleHeldSubmit();
@@ -3128,6 +3138,7 @@ export function SharedNativeAgentController({
     );
     return () => window.clearTimeout(timeout);
   }, [
+    composeDrafts,
     heldSubmit,
     draft.text,
     platform,
@@ -3761,7 +3772,7 @@ export function SharedNativeAgentController({
     // Editing loads the prompt into the composer, so anything
     // already there would be destroyed. Refusing with a reason
     // beats the silent overwrite.
-    const current = nativeComposeDraft(useNativeComposeStore.getState(), sessionKey);
+    const current = nativeComposeDraft(composeDrafts.getState(), sessionKey);
     if (
       queueEditPendingRef.current ||
       submitInFlightRef.current ||

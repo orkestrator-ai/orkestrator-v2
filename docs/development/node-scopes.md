@@ -84,6 +84,19 @@ steps in one change.
    - A store with window state too (open state, widths) splits it into an
      ordinary window store (`filesPanelChromeStore`, `windowStorageKey`) that
      every node shares, and the scoped part.
+   - A store that holds heavy data (transcript history, previews) does not
+     bound it per instance, which would multiply by the number of nodes
+     (invariant 11). Each entry reserves its bytes from the window budget,
+     `scope.budgets.transcripts` (or `artifacts`, `images`), under
+     `(scope.nodeId, "<store>\0<key>")`, with an `onEvict` that drops the
+     entry from this node's store. `nativeAgentProjectionStore` (plan item
+     3009) keeps its reservations in step with its own state through a
+     `subscribe` on its instance inside the creator, so any writer keeps the
+     budget exact; a refused reservation drops the entry as an eviction
+     would. The budget's policy decides what goes: other nodes' least
+     recently used entries first, then this node's, never the shown node's.
+     `ByteBudget.evictUntil(nodeId, key, target)` frees room best-effort for
+     a reader that sizes its next request to what is left.
 
 2. **Keep the barrel.** If `@/stores` (`apps/web/src/stores/index.ts`)
    re-exports the hook, export the def beside it:

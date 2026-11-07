@@ -29,6 +29,12 @@ import {
   recomputeNativeAgentProjectionTotals,
   useNativeAgentProjectionStore,
 } from "@/stores/nativeAgentProjectionStore";
+import { appCommandScope } from "@/lib/node-scope-slots";
+
+/** Retained history the window's shared transcripts budget holds. */
+function windowHistoryBytes(): number {
+  return appCommandScope().budgets.transcripts.usedBytes;
+}
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 
 interface TestMessage {
@@ -259,7 +265,7 @@ function expectExactAccounting(): void {
   const state = useNativeAgentProjectionStore.getState();
   const slow = recomputeNativeAgentProjectionTotals(state);
   expect(state.projectionBytesTotal).toBe(slow.projectionBytesTotal);
-  expect(state.historyBytesTotal).toBe(slow.historyBytesTotal);
+  expect(windowHistoryBytes()).toBe(slow.historyBytesTotal);
   expect(state.progressiveCacheBytesTotal).toBe(slow.progressiveCacheBytesTotal);
   for (const [key, bytes] of state.projectionBytes) {
     expect(bytes).toBe(slowEncodedBytes(state.projections.get(key)!.messages));
@@ -411,7 +417,7 @@ describe("useNativeAgentSession retained-history accounting", () => {
     const evicted = useNativeAgentProjectionStore.getState();
     expect(evicted.syncCaches.has(SESSION_KEY)).toBe(false);
     expect(evicted.historyEvictions.get(SESSION_KEY)).toBe(1);
-    expect(evicted.historyBytesTotal).toBe(slowEncodedBytes(otherHistory));
+    expect(windowHistoryBytes()).toBe(slowEncodedBytes(otherHistory));
     expect(ids(evicted.projections.get(SESSION_KEY)?.messages as TestMessage[])).toEqual([
       "m3",
       "m4",
@@ -428,7 +434,7 @@ describe("useNativeAgentSession retained-history accounting", () => {
     );
     const after = useNativeAgentProjectionStore.getState();
     expect(after.syncCaches.get(SESSION_KEY)?.historyMessages).toEqual([]);
-    expect(after.historyBytesTotal).toBe(slowEncodedBytes(otherHistory));
+    expect(windowHistoryBytes()).toBe(slowEncodedBytes(otherHistory));
     expectExactAccounting();
   });
 

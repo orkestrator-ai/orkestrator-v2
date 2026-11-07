@@ -9,12 +9,19 @@ import {
   setEncodedValueMeasureForTests,
   slowEncodedBytes,
 } from "@/lib/native-history-accounting";
+import { appCommandScope } from "@/lib/node-scope-slots";
 import {
   evictNativeAgentHistoryCaches,
   recomputeNativeAgentProjectionTotals,
   useNativeAgentProjectionStore,
   type NativeAgentSyncCacheEntry,
 } from "./nativeAgentProjectionStore";
+
+/** The command node's retained-history reservations in the window budget. */
+function reservedHistoryBytes(): number {
+  const scope = appCommandScope();
+  return scope.budgets.transcripts.usedBytesFor(scope.nodeId);
+}
 
 function discoveryView(): NativeAgentDiscoveryView {
   return {
@@ -232,7 +239,7 @@ describe("native agent projection byte accounting", () => {
     const state = useNativeAgentProjectionStore.getState();
     const slow = recomputeNativeAgentProjectionTotals(state);
     expect(state.projectionBytesTotal).toBe(slow.projectionBytesTotal);
-    expect(state.historyBytesTotal).toBe(slow.historyBytesTotal);
+    expect(reservedHistoryBytes()).toBe(slow.historyBytesTotal);
     expect(state.progressiveCacheBytesTotal).toBe(slow.progressiveCacheBytesTotal);
     for (const [key, bytes] of state.projectionBytes) {
       expect(bytes).toBe(slowEncodedBytes(state.projections.get(key)!.messages));
@@ -324,7 +331,7 @@ describe("native agent projection byte accounting", () => {
     expect(state.projectionBytes.get("session-a")).toBe(
       slowEncodedBytes([{ id: "session-a-live-message" }]),
     );
-    expect(state.historyBytesTotal).toBe(8);
+    expect(reservedHistoryBytes()).toBe(8);
     expectExactTotals();
   });
 
@@ -439,9 +446,7 @@ describe("native agent projection writes copy only what they change", () => {
     const before = identities();
     setProjection("a", projection("a"), syncCache(live, [], 0));
     expect(changedMaps(before)).toEqual(["projections", "syncCaches"]);
-    expect(recomputeNativeAgentProjectionTotals().historyBytesTotal).toBe(
-      useNativeAgentProjectionStore.getState().historyBytesTotal,
-    );
+    expect(recomputeNativeAgentProjectionTotals().historyBytesTotal).toBe(reservedHistoryBytes());
   });
 
   test("a projection write keeps the sync and progressive Maps while both hold entries", () => {
@@ -484,7 +489,7 @@ describe("native agent projection writes copy only what they change", () => {
     expect(state.projections.has("old")).toBe(false);
     expect(state.projectionBytes.has("old")).toBe(false);
     expect(state.syncCaches.has("old")).toBe(false);
-    expect(state.historyBytesTotal).toBe(0);
+    expect(reservedHistoryBytes()).toBe(0);
     expect(state.progressiveCaches.get("old")?.transcriptToken).toBeUndefined();
     expect(changedMaps(before)).toEqual([
       "projections",
@@ -494,7 +499,7 @@ describe("native agent projection writes copy only what they change", () => {
     ]);
     expect(recomputeNativeAgentProjectionTotals()).toEqual({
       projectionBytesTotal: state.projectionBytesTotal,
-      historyBytesTotal: state.historyBytesTotal,
+      historyBytesTotal: reservedHistoryBytes(),
       progressiveCacheBytesTotal: state.progressiveCacheBytesTotal,
     });
   });
@@ -519,7 +524,7 @@ describe("native agent projection writes copy only what they change", () => {
       expect([...state.projections.keys()]).toEqual(["kept", "new"]);
       expect([...state.projectionBytes.keys()].sort()).toEqual(["kept", "new"]);
       expect([...state.syncCaches.keys()]).toEqual(["kept"]);
-      expect(state.historyBytesTotal).toBe(30);
+      expect(reservedHistoryBytes()).toBe(30);
       expect(state.projectionBytesTotal).toBeLessThanOrEqual(32 * 1024 * 1024);
       expect(state.progressiveCaches.get("old")?.transcriptToken).toBeUndefined();
       expect(changedMaps(before)).toEqual([

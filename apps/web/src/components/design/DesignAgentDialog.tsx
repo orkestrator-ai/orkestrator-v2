@@ -20,7 +20,12 @@ import { useOptionalTerminalContext } from "@/contexts/TerminalContext";
 import { createSessionKey } from "@/lib/utils";
 import { findNativeAgentAdapter } from "@/components/native-agent/adapter";
 import type { DesignProjection } from "@/stores/designStore";
-import { nativeComposeDraft, useNativeComposeStore } from "@/stores/nativeComposeStore";
+import {
+  nativeComposeDraft,
+  nativeComposeStore,
+  useNativeComposeStore,
+} from "@/stores/nativeComposeStore";
+import { useScopedStoreApi } from "@/lib/node-scope/scoped-store-shim";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { TabInfo } from "@/types/paneLayout";
 import { designApi, designBackendKey, failureOf } from "@/lib/design-client";
@@ -168,6 +173,7 @@ function DesignAgentDialogBody({
   const terminal = useOptionalTerminalContext();
   const createTab = terminal?.createTab ?? null;
   const updateDraft = useNativeComposeStore((state) => state.updateDraft);
+  const composeDrafts = useScopedStoreApi(nativeComposeStore);
   const paneEnvironment = usePaneLayoutStore((state) => state.environments.get(environmentId));
   const hydrated = usePaneLayoutStore((state) => state.hydration.get(environmentId) === "done");
 
@@ -378,10 +384,10 @@ function DesignAgentDialogBody({
   /** Returns false when the draft could not be changed. */
   const applyDraft = (tabId: string, addition: DesignDraftAddition): boolean => {
     const sessionKey = createSessionKey(environmentId, tabId);
-    const current = nativeComposeDraft(useNativeComposeStore.getState(), sessionKey);
+    const current = nativeComposeDraft(composeDrafts.getState(), sessionKey);
     const plan = planDesignDraft(current, addition);
     // Both checks run before either change, so a refusal leaves the draft as it was.
-    if (!plan.ok || !addDesignImagesToDraft(sessionKey, images)) {
+    if (!plan.ok || !addDesignImagesToDraft(sessionKey, images, composeDrafts)) {
       setError(
         "That conversation's composer already has the maximum number of attachments. Send or remove some first.",
       );

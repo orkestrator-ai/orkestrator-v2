@@ -29,7 +29,10 @@ import { cn, createSessionKey } from "@/lib/utils";
 import { isRemoteGatewayConnection } from "@/lib/gateway-url";
 import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { getNativeAgentData, type TabInfo } from "@/types/paneLayout";
-import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
+import {
+  nativeAgentProjectionStore,
+  useNativeAgentProjectionStore,
+} from "@/stores/nativeAgentProjectionStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
@@ -272,9 +275,9 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
   const reportOpen = useEffectEvent((next: boolean) => remote?.onOpenChange(next));
   useEffect(() => reportOpen(open), [open, remoteRequest?.seq]);
   const federation = useFederation();
-  // The node whose sessions this popover shows (the command node until the
-  // session stores are scoped).
+  // The node whose sessions this popover shows: its projections and handoffs.
   const { scope: nodeScope } = useScopesWithCommandFallback();
+  const projections = nodeScope.store(nativeAgentProjectionStore);
   // How this window reaches the node its workspace is on, when that is not
   // the command node it connected to.
   const [connectionPath] = useState(workspaceTarget);
@@ -434,9 +437,7 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
       };
       controlUpdateInFlightRef.current = pending;
       setControlUpdateState(pending);
-      const startingProjection = useNativeAgentProjectionStore
-        .getState()
-        .projections.get(session.sessionKey);
+      const startingProjection = projections.getState().projections.get(session.sessionKey);
       try {
         const next = await updateNativeAgentControls({
           environmentId: session.environmentId,
@@ -445,7 +446,7 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
           update,
         });
         if (!next) throw new Error(`${session.providerLabel} session is unavailable`);
-        const projectionState = useNativeAgentProjectionStore.getState();
+        const projectionState = projections.getState();
         const current = projectionState.projections.get(session.sessionKey);
         const currentReplacedSession =
           current?.sessionId && next.sessionId && current.sessionId !== next.sessionId;
@@ -474,7 +475,7 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
         );
       }
     },
-    [activeSession],
+    [activeSession, projections],
   );
   // Only the rewind and undo handlers need the normalised transcript, so it is
   // built when one of them runs rather than on every projection update.
@@ -582,15 +583,13 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
     void projection
       .then((projection) => {
         if (cancelled || !projection || projection.sessionId !== requestedSessionId) return;
-        useNativeAgentProjectionStore
-          .getState()
-          .setProjection(activeSession.sessionKey, projection);
+        projections.getState().setProjection(activeSession.sessionKey, projection);
       })
       .catch(() => undefined);
     return () => {
       cancelled = true;
     };
-  }, [activeSession, currentSessionId, open]);
+  }, [activeSession, currentSessionId, open, projections]);
 
   // Read when the panel opens rather than carried by the projection: an
   // account read is not free, and only this panel shows the account.
@@ -876,21 +875,24 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
     runAction(`continue-${destination}`, async ({ isCurrent }) => {
       // The backend reads the whole transcript, measures the changes and stores
       // the result; the source tab only names what it is looking at.
-      const handoff = await createAgentHandoff({
-        handoffId: createUuid(),
-        environmentId: sourceSession.environmentId,
-        sourceAgent: sourceSession.provider,
-        logicalSessionKey: sourceSession.sessionKey,
-        sourceSessionId,
-        destinationProvider: destination,
-        ...(activeTab?.agentHandoffId ? { priorHandoffId: activeTab.agentHandoffId } : {}),
-        ...(neutralProjection?.title ? { sourceTitle: neutralProjection.title } : {}),
-        ...(modelId ? { sourceModel: modelId } : {}),
-      });
+      const handoff = await createAgentHandoff(
+        {
+          handoffId: createUuid(),
+          environmentId: sourceSession.environmentId,
+          sourceAgent: sourceSession.provider,
+          logicalSessionKey: sourceSession.sessionKey,
+          sourceSessionId,
+          destinationProvider: destination,
+          ...(activeTab?.agentHandoffId ? { priorHandoffId: activeTab.agentHandoffId } : {}),
+          ...(neutralProjection?.title ? { sourceTitle: neutralProjection.title } : {}),
+          ...(modelId ? { sourceModel: modelId } : {}),
+        },
+        nodeScope,
+      );
       if (!isCurrent()) {
         // The source tab changed while this ran, so no destination tab will own
         // the snapshot. The backend reclaims an unreferenced handoff itself.
-        forgetAgentHandoff(handoff.id);
+        forgetAgentHandoff(handoff.id, nodeScope);
         return;
       }
       openHandoffTab(sourceSession.provider, destination, handoff.id);

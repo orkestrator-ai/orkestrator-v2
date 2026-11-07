@@ -1,3 +1,5 @@
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { appCommandScope, defineScopedSlot } from "@/lib/node-scope-slots";
 import type { ReadContext } from "@/lib/read-coordinator";
 
 /**
@@ -23,6 +25,11 @@ import type { ReadContext } from "@/lib/read-coordinator";
  * A join never outlives its round, so an answer is only reused by a view whose
  * read started in the same coordinator read, never by a later one. Explicit
  * and post-mutation refreshes run outside any round and are never joined.
+ *
+ * The registered views are per node scope (plan item 3009), as the read
+ * coordinator is: a session target names a session on one node, and two
+ * nodes' views of the same target must never share a request. Every function
+ * takes an optional trailing `scope`, the app's command scope when omitted.
  */
 
 /** One mounted view's part in its session's shared background read. */
@@ -63,13 +70,19 @@ export class NativeSessionReadRound {
   }
 }
 
-const views = new Map<string, Set<NativeSessionSharedView>>();
+const viewsOf = defineScopedSlot<Map<string, Set<NativeSessionSharedView>>>(
+  "native-session-views",
+  () => new Map(),
+);
 
 /** Register a view under its session target; returns the unregister. */
 export function registerNativeSessionView(
   target: string,
   view: NativeSessionSharedView,
+  scope: NodeScope = appCommandScope(),
 ): () => void {
+  // Held, not looked up again: the unregister may run after the scope is gone.
+  const views = viewsOf(scope);
   let set = views.get(target);
   if (!set) {
     set = new Set();
@@ -92,9 +105,10 @@ export function registerNativeSessionView(
 export async function runNativeSessionReadRound(
   target: string,
   context: ReadContext,
+  scope: NodeScope = appCommandScope(),
 ): Promise<NativeSessionReadRound> {
   const round = new NativeSessionReadRound();
-  const participants = Array.from(views.get(target) ?? []).filter((view) =>
+  const participants = Array.from(viewsOf(scope).get(target) ?? []).filter((view) =>
     view.wantsBackgroundRead(),
   );
   const results = await Promise.allSettled(
@@ -112,12 +126,15 @@ export async function runNativeSessionReadRound(
 }
 
 /** Number of registered views of one session (tests and diagnostics). */
-export function nativeSessionViewCount(target: string): number {
-  return views.get(target)?.size ?? 0;
+export function nativeSessionViewCount(
+  target: string,
+  scope: NodeScope = appCommandScope(),
+): number {
+  return viewsOf(scope).get(target)?.size ?? 0;
 }
 
-export function resetNativeSessionSharedReadsForTests(): void {
-  views.clear();
+export function resetNativeSessionSharedReadsForTests(scope: NodeScope = appCommandScope()): void {
+  viewsOf(scope).clear();
 }
 
 function stableJson(value: unknown): string {

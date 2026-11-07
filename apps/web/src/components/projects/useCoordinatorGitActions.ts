@@ -12,7 +12,7 @@ import {
 import { checkUpstreamMergeOffer } from "@/lib/coordinator-upstream-check";
 import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
 import { environmentStore } from "@/stores/environmentStore";
-import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
+import { nativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import type { RunCoordinatorAction } from "./useCoordinatorActions";
 
 /** How long a message waits on the pre-send fetch before it is sent without merging. */
@@ -130,7 +130,7 @@ export function useCoordinatorGitActions({
             scope.store(environmentStore).getState().environments,
             projectId,
           ),
-          projections: useNativeAgentProjectionStore.getState().projections,
+          projections: scope.store(nativeAgentProjectionStore).getState().projections,
         }) !== null;
       let cancel!: () => void;
       const cancelled = new Promise<false>((resolve) => {

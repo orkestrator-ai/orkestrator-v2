@@ -103,6 +103,22 @@ export const SHIMMED_STORES: readonly ShimmedStore[] = [
     module: "apps/web/src/stores/worktreeSnapshotStore",
     hook: "useWorktreeSnapshotStore",
   },
+  // Plan item 3009: the agent and transcript stores.
+  {
+    store: "native-agent-projection",
+    module: "apps/web/src/stores/nativeAgentProjectionStore",
+    hook: "useNativeAgentProjectionStore",
+  },
+  {
+    store: "native-compose",
+    module: "apps/web/src/stores/nativeComposeStore",
+    hook: "useNativeComposeStore",
+  },
+  {
+    store: "prompt-draft",
+    module: "apps/web/src/stores/promptDraftStore",
+    hook: "usePromptDraftStore",
+  },
 ];
 
 /** The statics a zustand hook carries, which the shim keeps as deprecated. */

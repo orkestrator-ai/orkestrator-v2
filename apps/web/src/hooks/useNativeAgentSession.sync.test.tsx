@@ -19,6 +19,12 @@ import {
   evictNativeAgentHistoryCaches,
   useNativeAgentProjectionStore,
 } from "@/stores/nativeAgentProjectionStore";
+import { appCommandScope } from "@/lib/node-scope-slots";
+
+/** Retained history the window's shared transcripts budget holds. */
+function windowHistoryBytes(): number {
+  return appCommandScope().budgets.transcripts.usedBytes;
+}
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 
 interface TestMessage {
@@ -1073,7 +1079,7 @@ describe("useNativeAgentSession sync-v1 client budgets", () => {
       evictNativeAgentHistoryCaches("other-session", CLIENT_HISTORY_TOTAL_MAX_BYTES, 0);
     });
     expect(useNativeAgentProjectionStore.getState().historyEvictions.get(SESSION_KEY)).toBe(1);
-    expect(useNativeAgentProjectionStore.getState().historyBytesTotal).toBe(0);
+    expect(windowHistoryBytes()).toBe(0);
 
     projectionUpdates = [
       () =>

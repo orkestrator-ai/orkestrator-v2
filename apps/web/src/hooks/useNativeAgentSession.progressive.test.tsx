@@ -24,6 +24,12 @@ import { nativeAgentCapabilities } from "@orkestrator/protocol/native-agent";
 import { buildNativeAgentMessagePatch } from "@orkestrator/protocol/native-agent-transcript-patch";
 import * as realBackend from "@/lib/backend";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
+import { appCommandScope } from "@/lib/node-scope-slots";
+
+/** Retained history the window's shared transcripts budget holds. */
+function windowHistoryBytes(): number {
+  return appCommandScope().budgets.transcripts.usedBytes;
+}
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 
 interface TestMessage {
@@ -3586,7 +3592,7 @@ describe("a held row too large to travel as a revision keeps changing", () => {
       expect(state.syncCaches.get(identity.logicalSessionKey)?.historyBytes).toBeLessThanOrEqual(
         8 * 1024 * 1024,
       );
-      expect(state.historyBytesTotal).toBeLessThanOrEqual(32 * 1024 * 1024);
+      expect(windowHistoryBytes()).toBeLessThanOrEqual(32 * 1024 * 1024);
       expect(session.result.current.projection?.messages).toEqual(tail);
       expect(state.syncCaches.get(identity.logicalSessionKey)?.historyCursor).toBe("before-tail");
       await act(async () => {
@@ -3608,7 +3614,7 @@ describe("a held row too large to travel as a revision keeps changing", () => {
       expect(
         recoveredState.syncCaches.get(identity.logicalSessionKey)?.historyBytes,
       ).toBeLessThanOrEqual(8 * 1024 * 1024);
-      expect(recoveredState.historyBytesTotal).toBeLessThanOrEqual(32 * 1024 * 1024);
+      expect(windowHistoryBytes()).toBeLessThanOrEqual(32 * 1024 * 1024);
     },
   );
 

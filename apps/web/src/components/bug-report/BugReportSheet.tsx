@@ -48,7 +48,8 @@ import { collectBugReportClientContext } from "@/lib/bug-report/client-context";
 import { openBugReport, ownBugReportMachineId } from "@/lib/bug-report/open-bug-report";
 import { createSessionKey } from "@/lib/utils";
 import { useBugReportStore } from "@/stores/bugReportStore";
-import { useNativeComposeStore } from "@/stores/nativeComposeStore";
+import { nativeComposeStore } from "@/stores/nativeComposeStore";
+import { useScopedStoreApi } from "@/lib/node-scope/scoped-store-shim";
 
 const DRAFT_POLL_MS = 3_000;
 
@@ -82,6 +83,8 @@ export function BugReportSheet() {
   const open = useBugReportStore((state) => state.sheetOpen);
   const closeSheet = useBugReportStore((state) => state.closeSheet);
   const setDraftInProgress = useBugReportStore((state) => state.setDraftInProgress);
+  // The captured window lands in the reported tab's draft, on this node.
+  const composeDrafts = useScopedStoreApi(nativeComposeStore);
   const [snapshot, setSnapshot] = useState<BugReportSnapshot | null>(null);
   const readFence = useRef({ revision: 0, mutations: 0 });
   const [loadRevision, setLoadRevision] = useState(0);
@@ -218,7 +221,7 @@ export function BugReportSheet() {
       const saved = await mutate(() => saveBugReportScreenshot(report.id, base64));
       apply(saved.snapshot);
       const sessionKey = createSessionKey(report.runtimeId, report.tabId);
-      const compose = useNativeComposeStore.getState();
+      const compose = composeDrafts.getState();
       const current = compose.drafts.get(sessionKey);
       compose.updateDraft(sessionKey, {
         attachments: [
@@ -241,7 +244,7 @@ export function BugReportSheet() {
       useBugReportStore.getState().openSheet();
       setCapturing(false);
     }
-  }, [apply, closeSheet, mutate, report]);
+  }, [apply, closeSheet, composeDrafts, mutate, report]);
 
   const file = useCallback(
     async (via?: "browser") => {

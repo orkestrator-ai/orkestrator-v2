@@ -35,7 +35,7 @@ import { createSessionKey } from "@/lib/utils";
 import { useConfigStore } from "@/stores";
 import { environmentStore } from "@/stores/environmentStore";
 import type { Environment } from "@/types";
-import { useNativeComposeStore } from "@/stores/nativeComposeStore";
+import { nativeComposeStore } from "@/stores/nativeComposeStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { createUniqueTabId } from "@/components/terminal/TerminalContainer.helpers";
 import {
@@ -172,6 +172,7 @@ export function DesignWorkspaceDialog({
   const pickHostPath = usePickHostPath();
   const modelCatalog = useScopedStoreApi(agentModelCatalogStore);
   const environments = useScopedStoreApi(environmentStore);
+  const composeDrafts = useScopedStoreApi(nativeComposeStore);
   const backendKey = designBackendKey();
   const scope = `${backendKey}\u0000${environmentId}`;
   const scopeRef = useRef(scope);
@@ -400,7 +401,7 @@ export function DesignWorkspaceDialog({
           // Seed the images before the tab mounts so the initial prompt,
           // which the tab sends from its draft, carries them.
           const sessionKey = createSessionKey(environmentId, tabId);
-          if (!addDesignImagesToDraft(sessionKey, images))
+          if (!addDesignImagesToDraft(sessionKey, images, composeDrafts))
             throw new Error(
               "Too many images for this conversation. Remove some images and try again.",
             );
@@ -440,7 +441,7 @@ export function DesignWorkspaceDialog({
           } finally {
             const store = usePaneLayoutStore.getState();
             if (!created && images.length > 0 && !store.findPaneWithTab(tabId, environmentId))
-              useNativeComposeStore.getState().clearDraft(sessionKey);
+              composeDrafts.getState().clearDraft(sessionKey);
           }
         },
         hasTab: (tabId) =>

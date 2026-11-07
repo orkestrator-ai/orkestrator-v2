@@ -114,6 +114,33 @@ export class ByteBudget {
     return { granted: true, evicted };
   }
 
+  /**
+   * Best-effort room: evicts by the policy above, least recently used first,
+   * until `usedBytes <= targetBytes` or nothing evictable is left. Never
+   * evicts `(nodeId, key)` itself or an entry of the shown node. Unlike
+   * `reserve`, it evicts even when it cannot reach the target (a reader
+   * freeing room before it asks for a page sized to what is left). Returns
+   * the evicted entries; their owners hear through `onEvict`.
+   */
+  evictUntil(nodeId: BackendId, key: string, targetBytes: number): readonly ByteBudgetEntry[] {
+    if (this.used <= targetBytes) return [];
+    const victims: Reservation[] = [];
+    let used = this.used;
+    for (const entry of this.evictionOrder(nodeId, entryKey(nodeId, key))) {
+      if (used <= targetBytes) break;
+      victims.push(entry);
+      used -= entry.bytes;
+    }
+    for (const victim of victims) this.remove(entryKey(victim.nodeId, victim.key));
+    const evicted: ByteBudgetEntry[] = [];
+    for (const victim of victims) {
+      const entry = { nodeId: victim.nodeId, key: victim.key, bytes: victim.bytes };
+      evicted.push(entry);
+      notifyEvicted(victim, entry);
+    }
+    return evicted;
+  }
+
   /** Marks an entry most recently used without changing its size. */
   touch(nodeId: BackendId, key: string): void {
     const id = entryKey(nodeId, key);
@@ -167,21 +194,26 @@ export class ByteBudget {
     this.used -= entry.bytes;
   }
 
-  /** The entries to evict to free `needed` bytes, or `null` if they cannot. */
-  private chooseVictims(
-    nodeId: BackendId,
-    reservingId: string,
-    needed: number,
-  ): Reservation[] | null {
+  /** Evictable entries in policy order: other nodes' LRU first, then `nodeId`'s own. */
+  private evictionOrder(nodeId: BackendId, reservingId: string): Reservation[] {
     const others: Reservation[] = [];
     const own: Reservation[] = [];
     for (const [id, entry] of this.entries) {
       if (id === reservingId || entry.nodeId === this.shownNode) continue;
       (entry.nodeId === nodeId ? own : others).push(entry);
     }
+    return [...others, ...own];
+  }
+
+  /** The entries to evict to free `needed` bytes, or `null` if they cannot. */
+  private chooseVictims(
+    nodeId: BackendId,
+    reservingId: string,
+    needed: number,
+  ): Reservation[] | null {
     const victims: Reservation[] = [];
     let freed = 0;
-    for (const entry of [...others, ...own]) {
+    for (const entry of this.evictionOrder(nodeId, reservingId)) {
       if (freed >= needed) break;
       victims.push(entry);
       freed += entry.bytes;
@@ -212,12 +244,14 @@ const MIB = 1024 * 1024;
 
 /**
  * Placeholder totals until plan item 0004 measures per-scope cost and 4002
- * sets per-host values; nothing reserves from these yet. The artifact total
- * matches the existing settled-render cache bound
+ * sets per-host values. The transcript total is the retained native-agent
+ * history bound the renderer had before scopes (plan item 3009: every node's
+ * retained history pages reserve from it). The artifact total matches the
+ * existing settled-render cache bound
  * (`FRONTEND_RENDER_POLICY.maxSettledCacheBytes`).
  */
 export const DEFAULT_WINDOW_BYTE_BUDGETS = {
-  transcripts: 64 * MIB,
+  transcripts: 32 * MIB,
   artifacts: 16 * MIB,
   images: 32 * MIB,
 } as const satisfies Record<keyof WindowByteBudgets, number>;

@@ -103,11 +103,18 @@ import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useCoordinatedRead } from "@/hooks/useCoordinatedRead";
 import {
   evictNativeAgentHistoryCaches,
+  nativeAgentHistoryBudgetBytes,
   nativeAgentHistoryBytesExcept,
+  nativeAgentProjectionStore,
   useNativeAgentProjectionStore,
+  type NativeAgentProjectionState,
   type NativeAgentSyncCacheEntry,
   type NativeAgentProgressiveCacheEntry,
 } from "@/stores/nativeAgentProjectionStore";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import { readCoordinatorFor } from "@/lib/read-coordinator";
+import type { StoreApi } from "zustand/vanilla";
 
 /** Mirrors the backend's default window; only used to size the first expansion. */
 const DEFAULT_MESSAGE_WINDOW = 512;
@@ -118,7 +125,6 @@ import { preferCompleteLiveHead } from "./native-agent-live-head";
 export { IDLE_PROJECTION_REFRESH_MS } from "@/lib/native-session-read-policy";
 const CLIENT_HISTORY_MAX_MESSAGES = 4_096;
 const CLIENT_HISTORY_MAX_BYTES = 8 * 1024 * 1024;
-const CLIENT_HISTORY_TOTAL_MAX_BYTES = 32 * 1024 * 1024;
 /** Mirrors the backend page ceiling so a request is never silently clamped. */
 const HISTORY_PAGE_MAX_MESSAGES = 200;
 /** Pages of already-held rows a single "load earlier" may step past. */
@@ -318,6 +324,7 @@ function historyMessageWindow(params: {
 
 /** A backend that turned out not to have the command answers both parts `pending`. */
 async function readLiveUpdate<TMessage>(
+  scope: NodeScope,
   send: <T>(command: string, input: object, run: () => Promise<T>) => Promise<T>,
   input: Parameters<typeof getNativeAgentLiveUpdate>[0],
 ): Promise<NativeAgentLiveUpdate<TMessage>> {
@@ -333,7 +340,7 @@ async function readLiveUpdate<TMessage>(
       incompatibility(error, "get_native_agent_live_update")?.code !== "unknown-command"
     )
       throw error;
-    disableNativeLiveUpdate();
+    disableNativeLiveUpdate(scope);
     const pending = { viewVersion: NATIVE_AGENT_LIVE_UPDATE_VERSION, status: "pending" } as const;
     return { viewVersion: NATIVE_AGENT_LIVE_UPDATE_VERSION, transcript: pending, state: pending };
   }
@@ -545,8 +552,8 @@ export function nativeSubmissionText(prompt: string, command?: NativeAgentComman
  * re-render the whole tab for every token that hook writes back, with nothing
  * new to show.
  */
-function useSessionCacheSeeds(sessionKey: string) {
-  const { syncCaches, progressiveCaches } = useNativeAgentProjectionStore.getState();
+function useSessionCacheSeeds(store: StoreApi<NativeAgentProjectionState>, sessionKey: string) {
+  const { syncCaches, progressiveCaches } = store.getState();
   return {
     sharedSyncCache: syncCaches.get(sessionKey),
     sharedProgressiveCache: progressiveCaches.get(sessionKey),
@@ -582,6 +589,15 @@ export function useNativeAgentSession<TMessage = unknown>({
   sendingHeld = false,
 }: UseNativeAgentSessionOptions) {
   const sessionKey = useMemo(() => createSessionKey(environmentId, tabId), [environmentId, tabId]);
+  /*
+   * The node this tab's session lives on: the nearest node scope (the app's
+   * command scope outside a provider). Its projection store, capability
+   * answers, shared reads, observation listener, change feed and read
+   * coordinator are that node's, and its retained history reserves from the
+   * window's shared transcripts budget under that node.
+   */
+  const scope = useShimNodeScope(nativeAgentProjectionStore.name);
+  const projectionStore = scope.store(nativeAgentProjectionStore);
   const initialLaunchOptionsRef = useRef({
     model: initialAgentModel,
     reasoningEffort: initialReasoningEffort,
@@ -606,7 +622,10 @@ export function useNativeAgentSession<TMessage = unknown>({
   const sharedProjection = useNativeAgentProjectionStore((state) =>
     state.projections.get(sessionKey),
   ) as NativeAgentSessionProjection<TMessage> | undefined;
-  const { sharedSyncCache, sharedProgressiveCache } = useSessionCacheSeeds(sessionKey);
+  const { sharedSyncCache, sharedProgressiveCache } = useSessionCacheSeeds(
+    projectionStore,
+    sessionKey,
+  );
   const matchingSharedProjection =
     sharedProjection?.platform === platform &&
     sharedProjection.environmentId === environmentId &&
@@ -774,7 +793,7 @@ export function useNativeAgentSession<TMessage = unknown>({
    * silence it for the other.
    */
   const progressiveHistoryEvictionRef = useRef(
-    useNativeAgentProjectionStore.getState().historyEvictions.get(sessionKey) ?? 0,
+    projectionStore.getState().historyEvictions.get(sessionKey) ?? 0,
   );
   /** Never seeded from the shared cache; see the remount reset below. */
   const progressiveStateTokenRef = useRef<string | undefined>(undefined);
@@ -829,7 +848,7 @@ export function useNativeAgentSession<TMessage = unknown>({
    * makes a global eviction actually reclaim the bytes.
    */
   const historyEvictionRef = useRef(
-    useNativeAgentProjectionStore.getState().historyEvictions.get(sessionKey) ?? 0,
+    projectionStore.getState().historyEvictions.get(sessionKey) ?? 0,
   );
   const refreshSequenceRef = useRef(0);
   const projectionOperationEpochRef = useRef(0);
@@ -917,7 +936,7 @@ export function useNativeAgentSession<TMessage = unknown>({
       if (!next) {
         projectionRef.current = null;
         setRuntimeProjection(null);
-        useNativeAgentProjectionStore.getState().setProjection(sessionKey, null, null);
+        projectionStore.getState().setProjection(sessionKey, null, null);
         return;
       }
       const current = projectionRef.current;
@@ -925,19 +944,19 @@ export function useNativeAgentSession<TMessage = unknown>({
         return;
       next = withEffectiveLoadEarlier(next);
       projectionRef.current = next;
-      const stopMarker = useNativeAgentProjectionStore.getState().turnStopMarkers.get(sessionKey);
+      const stopMarker = projectionStore.getState().turnStopMarkers.get(sessionKey);
       if (stopMarker && stopMarker.sessionId !== next.sessionId) {
-        useNativeAgentProjectionStore.getState().clearTurnStopped(sessionKey);
+        projectionStore.getState().clearTurnStopped(sessionKey);
       }
       setRuntimeProjection(next);
-      useNativeAgentProjectionStore
+      projectionStore
         .getState()
         .setProjection(sessionKey, next as NativeAgentSessionProjection, syncCache);
       if (next.sessionId) {
         updateTabNativeSessionId(tabId, next.sessionId, environmentId);
       }
     },
-    [environmentId, sessionKey, tabId, updateTabNativeSessionId],
+    [environmentId, sessionKey, tabId, updateTabNativeSessionId, projectionStore],
   );
 
   /**
@@ -948,10 +967,10 @@ export function useNativeAgentSession<TMessage = unknown>({
    * behind a cursor only the server can mint.
    */
   const historyRequestBudget = useCallback((): { messages: number; bytes: number } => {
-    const otherHistoryBytes = nativeAgentHistoryBytesExcept(sessionKey);
+    const otherHistoryBytes = nativeAgentHistoryBytesExcept(sessionKey, scope);
     const byteCeiling = Math.min(
       CLIENT_HISTORY_MAX_BYTES,
-      Math.max(0, CLIENT_HISTORY_TOTAL_MAX_BYTES - otherHistoryBytes),
+      Math.max(0, nativeAgentHistoryBudgetBytes(scope) - otherHistoryBytes),
     );
     const liveMessages = syncLiveProjectionRef.current?.messages.length ?? 0;
     return {
@@ -963,7 +982,7 @@ export function useNativeAgentSession<TMessage = unknown>({
       // when they arrived and are not serialized again here.
       bytes: Math.max(0, byteCeiling - retainedHistoryBytes(historyMessagesRef.current)),
     };
-  }, [sessionKey]);
+  }, [sessionKey, scope]);
 
   /**
    * Compute — but do not install — the merged transcript one sync update
@@ -998,7 +1017,7 @@ export function useNativeAgentSession<TMessage = unknown>({
       const boundaryCursor = params.boundary
         ? params.boundary.cursor
         : historyBoundaryCursorRef.current;
-      const store = useNativeAgentProjectionStore.getState();
+      const store = projectionStore.getState();
       const evictionGeneration = store.historyEvictions.get(sessionKey) ?? 0;
       const evicted = evictionGeneration !== historyEvictionRef.current;
       const previousLive = syncLiveProjectionRef.current;
@@ -1109,13 +1128,14 @@ export function useNativeAgentSession<TMessage = unknown>({
         retainedCursor = boundaryCursor;
       }
 
-      const otherHistoryBytes = nativeAgentHistoryBytesExcept(sessionKey);
+      const otherHistoryBytes = nativeAgentHistoryBytesExcept(sessionKey, scope);
+      const historyTotalMaxBytes = nativeAgentHistoryBudgetBytes(scope);
       let historyBytes = retainedHistoryBytes(retainedMessages);
       let settledCursor = retainedCursor;
       if (
         retainedMessages.length + displayLive.length > CLIENT_HISTORY_MAX_MESSAGES ||
         historyBytes > CLIENT_HISTORY_MAX_BYTES ||
-        historyBytes + otherHistoryBytes > CLIENT_HISTORY_TOTAL_MAX_BYTES
+        historyBytes + otherHistoryBytes > historyTotalMaxBytes
       ) {
         // Eviction is an explicit collapse back to the bounded live view. The
         // server-supplied first cursor lets the same history be fetched again.
@@ -1147,7 +1167,7 @@ export function useNativeAgentSession<TMessage = unknown>({
         budgetAvailable:
           messages.length < CLIENT_HISTORY_MAX_MESSAGES &&
           historyBytes < CLIENT_HISTORY_MAX_BYTES &&
-          historyBytes + otherHistoryBytes < CLIENT_HISTORY_TOTAL_MAX_BYTES,
+          historyBytes + otherHistoryBytes < historyTotalMaxBytes,
         ...(live.messageWindow ? { serverWindow: live.messageWindow } : {}),
       });
       return {
@@ -1167,7 +1187,7 @@ export function useNativeAgentSession<TMessage = unknown>({
         evictionGeneration,
       };
     },
-    [sessionKey],
+    [sessionKey, scope, projectionStore],
   );
 
   /** Installs a plan. Callers must have fenced the read that produced it. */
@@ -1265,7 +1285,7 @@ export function useNativeAgentSession<TMessage = unknown>({
 
   const updateProgressiveCache = useCallback(
     (patch: Partial<NativeAgentProgressiveCacheEntry>) => {
-      const store = useNativeAgentProjectionStore.getState();
+      const store = projectionStore.getState();
       const previous = store.progressiveCaches.get(sessionKey);
       store.setProgressiveCache(sessionKey, {
         transcriptAvailability: previous?.transcriptAvailability ?? "unavailable",
@@ -1280,7 +1300,7 @@ export function useNativeAgentSession<TMessage = unknown>({
           : {}),
       });
     },
-    [sessionKey],
+    [sessionKey, projectionStore],
   );
 
   const identityBelongsToView = useCallback(
@@ -1375,8 +1395,7 @@ export function useNativeAgentSession<TMessage = unknown>({
       const historyEpochChanged =
         previousEpoch !== value.historyEpoch ||
         (heldHistoryStale && !(value.historyPaging === "direct" && value.historyCursor));
-      const evictionGeneration =
-        useNativeAgentProjectionStore.getState().historyEvictions.get(sessionKey) ?? 0;
+      const evictionGeneration = projectionStore.getState().historyEvictions.get(sessionKey) ?? 0;
       const evicted = evictionGeneration !== progressiveHistoryEvictionRef.current;
       const deleted = deletedMessageIds?.length ? new Set(deletedMessageIds) : undefined;
       const liveIds = new Set(
@@ -1733,6 +1752,7 @@ export function useNativeAgentSession<TMessage = unknown>({
       return next;
     },
     [
+      projectionStore,
       applyProjection,
       discoverySchedule,
       environmentId,
@@ -2049,7 +2069,7 @@ export function useNativeAgentSession<TMessage = unknown>({
         setTranscriptRefreshing(true);
       }
       try {
-        if (await nativeAgentProgressiveSupported()) {
+        if (await nativeAgentProgressiveSupported(scope)) {
           setTranscriptError(null);
           const retainedStateAvailability = beginSessionStateRefresh({ quiet });
           setSessionStateError(null);
@@ -2070,7 +2090,7 @@ export function useNativeAgentSession<TMessage = unknown>({
               ...identity,
               viewVersion: 1 as const,
               liveWindow: DEFAULT_NATIVE_AGENT_LIVE_WINDOW,
-              ...(nativeTranscriptPatchesSupported()
+              ...(nativeTranscriptPatchesSupported(scope)
                 ? { patchVersion: NATIVE_AGENT_TRANSCRIPT_PATCH_VERSION }
                 : {}),
               ...(forceSnapshot
@@ -2093,14 +2113,14 @@ export function useNativeAgentSession<TMessage = unknown>({
           const liveTranscriptToken = progressiveTranscriptTokenRef.current;
           const liveStateToken = progressiveStateTokenRef.current;
           const liveUpdate =
-            background && liveTranscriptToken && liveStateToken && nativeLiveUpdateSupported()
-              ? readLiveUpdate<TMessage>(send, {
+            background && liveTranscriptToken && liveStateToken && nativeLiveUpdateSupported(scope)
+              ? readLiveUpdate<TMessage>(scope, send, {
                   ...identity,
                   viewVersion: NATIVE_AGENT_LIVE_UPDATE_VERSION,
                   liveWindow: DEFAULT_NATIVE_AGENT_LIVE_WINDOW,
                   transcriptToken: liveTranscriptToken,
                   stateToken: liveStateToken,
-                  ...(nativeTranscriptPatchesSupported()
+                  ...(nativeTranscriptPatchesSupported(scope)
                     ? { patchVersion: NATIVE_AGENT_TRANSCRIPT_PATCH_VERSION }
                     : {}),
                 })
@@ -2386,7 +2406,7 @@ export function useNativeAgentSession<TMessage = unknown>({
          * comparison rejected it.
          */
         let commit: (() => void) | null = null;
-        if (await nativeAgentSyncSupported()) {
+        if (await nativeAgentSyncSupported(scope)) {
           const projectionInput = {
             ...identity,
             syncVersion: 1 as const,
@@ -2515,6 +2535,7 @@ export function useNativeAgentSession<TMessage = unknown>({
       }
     },
     [
+      scope,
       applyProjection,
       applyProgressiveDiscovery,
       applyProgressiveState,
@@ -2731,7 +2752,7 @@ export function useNativeAgentSession<TMessage = unknown>({
     // suppressing another identity's authoritative reads.
     establishmentFailureRef.current = false;
     resetSyncState();
-    const store = useNativeAgentProjectionStore.getState();
+    const store = projectionStore.getState();
     historyEvictionRef.current = store.historyEvictions.get(sessionKey) ?? 0;
     progressiveHistoryEvictionRef.current = store.historyEvictions.get(sessionKey) ?? 0;
     const cached = store.syncCaches.get(sessionKey);
@@ -2815,6 +2836,7 @@ export function useNativeAgentSession<TMessage = unknown>({
       setSessionStateError(null);
     }
   }, [
+    projectionStore,
     discoverySchedule,
     enabled,
     environmentId,
@@ -2856,23 +2878,27 @@ export function useNativeAgentSession<TMessage = unknown>({
   const sharedReadTarget = `${environmentId}\u0000${platform}\u0000${sessionKey}`;
   useEffect(() => {
     if (!enabled) return;
-    return registerNativeSessionView(sharedReadTarget, {
-      wantsBackgroundRead: () => backgroundRefreshEnabledRef.current,
-      refresh: async (context, round) => {
-        // A resume or reconnect may have missed any announcement.
-        if (context.reason !== "interval" && context.reason !== "invalidate") {
-          discoverySchedule.markDue();
-        }
-        return (
-          refreshRef.current?.(
-            context.reason === "interval"
-              ? { manual: false, round }
-              : { manual: false, reconcileAfterInFlight: true, round },
-          ) ?? null
-        );
+    return registerNativeSessionView(
+      sharedReadTarget,
+      {
+        wantsBackgroundRead: () => backgroundRefreshEnabledRef.current,
+        refresh: async (context, round) => {
+          // A resume or reconnect may have missed any announcement.
+          if (context.reason !== "interval" && context.reason !== "invalidate") {
+            discoverySchedule.markDue();
+          }
+          return (
+            refreshRef.current?.(
+              context.reason === "interval"
+                ? { manual: false, round }
+                : { manual: false, reconcileAfterInFlight: true, round },
+            ) ?? null
+          );
+        },
       },
-    });
-  }, [discoverySchedule, enabled, sharedReadTarget]);
+      scope,
+    );
+  }, [discoverySchedule, enabled, scope, sharedReadTarget]);
   const { invalidate: coordinatedInvalidate } = useCoordinatedRead({
     key: {
       resource: "native-agent-session",
@@ -2882,13 +2908,14 @@ export function useNativeAgentSession<TMessage = unknown>({
     enabled,
     readOnSubscribe: false,
     retainOnDispose: false,
+    coordinator: readCoordinatorFor(scope),
     demand: nativeSessionReadDemand(platform, runtimeProjection?.turn.phase, {
       active: enabled && isActive,
-      observationEvents: nativeObservationEventsSupported(),
+      observationEvents: nativeObservationEventsSupported(scope),
       quietObservation: runtimeProjection?.turn.quietObservation === true,
     }),
     read: async (context) => {
-      await runNativeSessionReadRound(sharedReadTarget, context);
+      await runNativeSessionReadRound(sharedReadTarget, context, scope);
     },
   });
   useLayoutEffect(() => {
@@ -2896,22 +2923,26 @@ export function useNativeAgentSession<TMessage = unknown>({
   }, [coordinatedInvalidate]);
 
   useEffect(() => {
-    const unsubscribeChange = onResourceChanged("native-agent-session", (change) => {
-      if (
-        change.id !== environmentId ||
-        (change.agent !== undefined &&
-          (change.agent !== platform || change.logicalSessionKey !== sessionKey))
-      ) {
-        return;
-      }
-      if (nativeSessionInvalidationNamesDiscovery(change.cause)) discoverySchedule.markDue();
-      if (enabled && isActive) coordinatedInvalidate();
-    });
+    const unsubscribeChange = onResourceChanged(
+      "native-agent-session",
+      (change) => {
+        if (
+          change.id !== environmentId ||
+          (change.agent !== undefined &&
+            (change.agent !== platform || change.logicalSessionKey !== sessionKey))
+        ) {
+          return;
+        }
+        if (nativeSessionInvalidationNamesDiscovery(change.cause)) discoverySchedule.markDue();
+        if (enabled && isActive) coordinatedInvalidate();
+      },
+      scope,
+    );
     const unsubscribeResync = onResourceResync(() => {
-      invalidateNativeAgentSyncCapability();
+      invalidateNativeAgentSyncCapability(scope);
       discoverySchedule.markDue();
       if (enabled && isActive) coordinatedInvalidate();
-    });
+    }, scope);
     /*
      * The backend observer announces every activity transition, stamped: a
      * turn starting or ending, a question or approval parking the turn. This
@@ -2932,7 +2963,7 @@ export function useNativeAgentSession<TMessage = unknown>({
       ) {
         coordinatedInvalidate();
       }
-    });
+    }, scope);
     return () => {
       unsubscribeChange();
       unsubscribeResync();
@@ -2945,6 +2976,7 @@ export function useNativeAgentSession<TMessage = unknown>({
     environmentId,
     isActive,
     platform,
+    scope,
     sessionKey,
   ]);
 
@@ -2987,7 +3019,7 @@ export function useNativeAgentSession<TMessage = unknown>({
         });
         if (outcome.outcome !== "unknown") pendingDispatchRef.current = null;
         if (outcome.outcome === "accepted") {
-          useNativeAgentProjectionStore.getState().clearTurnStopped(sessionKey);
+          projectionStore.getState().clearTurnStopped(sessionKey);
         }
         await refresh();
         return outcome;
@@ -3009,7 +3041,7 @@ export function useNativeAgentSession<TMessage = unknown>({
         setIsDispatching(false);
       }
     },
-    [beginProjectionMutation, identity, platform, refresh, sessionKey],
+    [beginProjectionMutation, identity, platform, refresh, sessionKey, projectionStore],
   );
 
   const stop = useCallback(async () => {
@@ -3018,10 +3050,10 @@ export function useNativeAgentSession<TMessage = unknown>({
     const next = await stopNativeAgentSession<TMessage>(identity);
     if (operationEpoch === projectionOperationEpochRef.current) applyMutationProjection(next);
     if (stoppedSessionId) {
-      useNativeAgentProjectionStore.getState().markTurnStopped(sessionKey, stoppedSessionId);
+      projectionStore.getState().markTurnStopped(sessionKey, stoppedSessionId);
     }
     return next;
-  }, [applyMutationProjection, beginProjectionMutation, identity, sessionKey]);
+  }, [applyMutationProjection, beginProjectionMutation, identity, sessionKey, projectionStore]);
 
   const stopBackgroundTask = useCallback(
     async (taskId: string) => {
@@ -3297,7 +3329,7 @@ export function useNativeAgentSession<TMessage = unknown>({
     }): Promise<NativeAgentSessionProjection<TMessage> | null> {
       if (options?.automatic && !canLoadEarlierAutomatically()) return null;
       const requestedOperationEpoch = projectionOperationEpochRef.current;
-      const progressive = await nativeAgentProgressiveSupported();
+      const progressive = await nativeAgentProgressiveSupported(scope);
       if (progressive && !historyCursorRef.current) {
         if (historyUnpageableRef.current) return projectionRef.current;
         /*
@@ -3358,7 +3390,7 @@ export function useNativeAgentSession<TMessage = unknown>({
       if (requestedOperationEpoch !== projectionOperationEpochRef.current) {
         return projectionRef.current;
       }
-      if (await nativeAgentSyncSupported()) {
+      if (await nativeAgentSyncSupported(scope)) {
         const before = historyCursorRef.current;
         if (before) {
           /*
@@ -3370,7 +3402,8 @@ export function useNativeAgentSession<TMessage = unknown>({
           evictNativeAgentHistoryCaches(
             sessionKey,
             retainedHistoryBytes(historyMessagesRef.current),
-            CLIENT_HISTORY_TOTAL_MAX_BYTES,
+            nativeAgentHistoryBudgetBytes(scope),
+            scope,
           );
           const budget = historyRequestBudget();
           if (budget.messages <= 0 || budget.bytes <= 0) {
@@ -3547,6 +3580,7 @@ export function useNativeAgentSession<TMessage = unknown>({
       return projection;
     },
     [
+      scope,
       applyProjection,
       canLoadEarlierAutomatically,
       commitSyncMaterialization,

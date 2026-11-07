@@ -170,6 +170,34 @@ export interface BrowserGatewayOptions {
   keepaliveOnPageHide?: boolean;
 }
 
+/**
+ * What a `/status` answer says about this client's credential. Only a 401 is
+ * a refusal. Anything else is no verdict: a 404 comes from a command node
+ * whose relay predates `/status` (or a missing route), never from a lapse.
+ */
+export function credentialProbeVerdict(status: number): "accepted" | "refused" | "unavailable" {
+  if (status === 401) return "refused";
+  return status >= 200 && status < 300 ? "accepted" : "unavailable";
+}
+
+/**
+ * Whether this transport probes the gateway's cookie session. A node transport
+ * never does: one with a grant sends a bearer, and a relayed one
+ * (`/__orkestrator/nodes/<id>`) reaches a leaf whose cookie session it never
+ * holds, so the command node does not relay `/session`.
+ */
+export function detectsBrowserSession(
+  credentials: RequestCredentials,
+  enabled: boolean | undefined,
+  baseUrl: string | undefined,
+): boolean {
+  if (credentials !== "same-origin" || !enabled) return false;
+  if (!baseUrl) return true;
+  return !new URL(baseUrl, "http://gateway.invalid").pathname.startsWith(
+    `${GATEWAY_PREFIX}/nodes/`,
+  );
+}
+
 function normalizedBaseUrl(value: string | undefined): string | undefined {
   return value?.trim().replace(/\/+$/, "") || undefined;
 }
@@ -426,7 +454,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     })
       .then((response) => {
         if (mainStreamCredentialProbe !== controller || controller.signal.aborted) return;
-        if (response.status === 401) mainStreamCredentialRejected();
+        if (credentialProbeVerdict(response.status) === "refused") mainStreamCredentialRejected();
       })
       .catch(() => undefined)
       .finally(() => {
@@ -435,7 +463,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
   };
 
   const detectBrowserSession = async () => {
-    if (credentials !== "same-origin" || !options.browserSessionActivity) return;
+    if (!detectsBrowserSession(credentials, options.browserSessionActivity, baseUrl)) return;
     const controller = new AbortController();
     let disposed = false;
     let lastRefreshAt = 0;

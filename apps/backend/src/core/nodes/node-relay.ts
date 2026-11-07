@@ -16,16 +16,22 @@ import { isGlobalConfigEcho, isGlobalConfigWriteCommand } from "./workspace-gran
  * command-node credential. The command node forwards it over its own
  * verified link with the leaf's token, which the client never sees.
  *
- * Relayed paths are the client API only: hello, invoke, events, terminal
- * and the loopback preview proxies. Administrative commands are refused,
- * the same as for client grants (`isWorkspaceExcludedCommand`), terminals
- * excepted.
+ * Relayed paths are the client API only: hello, status, invoke, events,
+ * terminal and the loopback preview proxies. Administrative commands are
+ * refused, the same as for client grants (`isWorkspaceExcludedCommand`),
+ * terminals excepted.
+ *
+ * `/status` is relayed so a relayed client's credential probe gets the leaf's
+ * verdict on the forwarded credential (200 `{ ok: true }` or 401) instead of
+ * a 404; it says nothing the hello does not. `/session` is not relayed: it
+ * manages a cookie session, and a relayed client never holds the leaf's.
  */
 
 export const NODE_RELAY_PREFIX = "/__orkestrator/nodes/";
 
 const RELAYED_PATHS = [
   /^\/__orkestrator\/hello$/,
+  /^\/__orkestrator\/status$/,
   /^\/__orkestrator\/invoke$/,
   /^\/__orkestrator\/events$/,
   /^\/__orkestrator\/terminal$/,

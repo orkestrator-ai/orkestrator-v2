@@ -9,6 +9,7 @@ import type {
 } from "@orkestrator/protocol/web-annotations";
 import { Button } from "@/components/ui/button";
 import { loadWebAnnotationCapture } from "@/lib/web-annotations/assets";
+import { useWebAnnotationScope } from "@/hooks/useWebAnnotations";
 import { AnnotationImage } from "./AnnotationImage";
 import { useAnnotationPanel } from "./panel-context";
 import {
@@ -37,16 +38,17 @@ const CHECK_OUTCOME: Record<WebAnnotationCheck["outcome"], string> = {
 
 function useCapture(environmentId: string, captureId: string | null) {
   const [capture, setCapture] = useState<WebAnnotationCapture | null>(null);
+  const scope = useWebAnnotationScope();
   useEffect(() => {
     if (!captureId) return;
     let cancelled = false;
-    void loadWebAnnotationCapture(environmentId, captureId).then((loaded) => {
+    void loadWebAnnotationCapture(environmentId, captureId, scope).then((loaded) => {
       if (!cancelled) setCapture(loaded);
     });
     return () => {
       cancelled = true;
     };
-  }, [captureId, environmentId]);
+  }, [captureId, environmentId, scope]);
   return capture;
 }
 

@@ -68,7 +68,12 @@ import { cn } from "@/lib/utils";
 import { createUuid } from "@/lib/uuid";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
-import { ensurePreviewServiceSync, usePreviewServiceStore } from "@/stores/previewServiceStore";
+import { useScopedStoreApi, useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import {
+  ensurePreviewServiceSync,
+  previewServiceStore,
+  usePreviewServiceStore,
+} from "@/stores/previewServiceStore";
 import type { BrowserTabData } from "@/types/paneLayout";
 import { AnnotatedPreviewArea, AnnotationsButton } from "./annotations/BrowserAnnotationsLayout";
 import { currentPageForService } from "./annotations/format";
@@ -108,7 +113,8 @@ type Mode = "desktop-tunnel" | "compatibility" | "top-level" | "unsupported";
 
 export function ServiceBrowserTab(props: ServiceBrowserTabProps) {
   const { target } = props;
-  useEffect(() => ensurePreviewServiceSync(), []);
+  const previewScope = useShimNodeScope(previewServiceStore.name);
+  useEffect(() => ensurePreviewServiceSync(previewScope), [previewScope]);
   if (target.kind === "intent") return <PreviewIntentChooser {...props} target={target} />;
   return <ServicePreview {...props} serviceRef={target.ref} />;
 }
@@ -178,6 +184,8 @@ function ServicePreview({
 }: ServiceBrowserTabProps & { serviceRef: PreviewServiceRef }) {
   const { capabilities, status, services, snapshotLoaded, refreshEnvironment } =
     useEnvironmentServices(serviceRef.environmentId, isActive);
+  // Preview frames load through this node's preview address.
+  const resolvePreviewUrl = usePreviewServiceStore((state) => state.resolvePreviewUrl);
   const retarget = useRetarget(tabId, environmentId);
   const environment = useEnvironmentStore((state) => state.getEnvironmentById(environmentId));
   const updateEnvironment = useEnvironmentStore((state) => state.updateEnvironment);
@@ -403,11 +411,11 @@ function ServicePreview({
     const hostPort = service.endpoint.hostPort;
     if (!hostPort || service.endpoint.state !== "available") return null;
     try {
-      return resolveBrowserAddress(`http://localhost:${hostPort}${path}`);
+      return resolveBrowserAddress(`http://localhost:${hostPort}${path}`, resolvePreviewUrl);
     } catch {
       return null;
     }
-  }, [mode, path, service]);
+  }, [mode, path, resolvePreviewUrl, service]);
 
   // `attachTarget` is rebuilt every render; only its identity (service and
   // path) should re-run the attach, or every render would re-attach the view.
@@ -1091,17 +1099,18 @@ function PreviewIntentChooser({
   const [error, setError] = useState<string | null>(null);
   const [registering, setRegistering] = useState(false);
   const [moving, setMoving] = useState(false);
+  const previews = useScopedStoreApi(previewServiceStore);
 
   useEffect(() => {
     let cancelled = false;
-    void usePreviewServiceStore
+    void previews
       .getState()
       .loadCapabilities()
       .then((loaded) => {
         if (cancelled) return;
         if (!loaded) {
           // Older backend: keep the original behaviour for this link.
-          if (usePreviewServiceStore.getState().status === "unsupported") retarget(target.url);
+          if (previews.getState().status === "unsupported") retarget(target.url);
           return;
         }
         return backend
@@ -1133,7 +1142,7 @@ function PreviewIntentChooser({
     return () => {
       cancelled = true;
     };
-  }, [retarget, target.environmentId, target.source, target.url]);
+  }, [previews, retarget, target.environmentId, target.source, target.url]);
 
   const bind = (serviceId: string, path: string) =>
     retarget(

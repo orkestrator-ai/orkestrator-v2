@@ -119,6 +119,47 @@ export const SHIMMED_STORES: readonly ShimmedStore[] = [
     module: "apps/web/src/stores/promptDraftStore",
     hook: "usePromptDraftStore",
   },
+  // Plan item 3012: the workflow stores (batch B).
+  {
+    store: "design",
+    module: "apps/web/src/stores/designStore",
+    hook: "useDesignStore",
+  },
+  {
+    store: "change-projection",
+    module: "apps/web/src/stores/changeProjectionStore",
+    hook: "useChangeProjectionStore",
+  },
+  {
+    store: "file-dirty",
+    module: "apps/web/src/stores/fileDirtyStore",
+    hook: "useFileDirtyStore",
+  },
+  {
+    store: "github-issues",
+    module: "apps/web/src/stores/githubIssuesStore",
+    hook: "useGitHubIssuesStore",
+  },
+  {
+    store: "preview-service",
+    module: "apps/web/src/stores/previewServiceStore",
+    hook: "usePreviewServiceStore",
+  },
+  {
+    store: "pull-requests",
+    module: "apps/web/src/stores/pullRequestsStore",
+    hook: "usePullRequestsStore",
+  },
+  {
+    store: "web-annotation",
+    module: "apps/web/src/stores/webAnnotationStore",
+    hook: "useWebAnnotationStore",
+  },
+  {
+    store: "web-annotation-preferences",
+    module: "apps/web/src/stores/webAnnotationPreferencesStore",
+    hook: "useWebAnnotationPreferencesStore",
+  },
 ];
 
 /** The statics a zustand hook carries, which the shim keeps as deprecated. */

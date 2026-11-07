@@ -16,9 +16,10 @@ import {
 import { openNewAgentSession } from "@/lib/web-annotations/navigation";
 import { refreshWebAnnotations } from "@/lib/web-annotations/sync";
 import { cn } from "@/lib/utils";
+import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
 import {
   rememberedDestinationTabId,
-  useWebAnnotationPreferencesStore,
+  webAnnotationPreferencesStore,
 } from "@/stores/webAnnotationPreferencesStore";
 
 /** Last destination chosen per environment (a persisted preference; preselects only). */
@@ -96,6 +97,8 @@ export function DestinationPicker({
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState<string | null>(null);
+  // The node whose remembered destinations this environment's choice is kept with.
+  const preferenceScope = useShimNodeScope(webAnnotationPreferencesStore.name);
   // Each environment (or excluded session) loads its options afresh.
   const optionsKey = `${environmentId}\0${excludeTabId ?? ""}`;
   const [loadingFor, setLoadingFor] = useState(optionsKey);
@@ -148,7 +151,7 @@ export function DestinationPicker({
     void fetchOptions().then((loaded) => {
       const { onChange: select, fallback: annotationDefault, valueTabId: chosen } = latest.current;
       if (!loaded || chosen) return;
-      const remembered = rememberedDestinationTabId(environmentId);
+      const remembered = rememberedDestinationTabId(environmentId, preferenceScope);
       // The note's own default is the most specific choice; the last
       // destination used in this environment comes next. Both only preselect.
       const preferred =
@@ -160,11 +163,12 @@ export function DestinationPicker({
         null;
       if (preferred) select(preferred);
     });
-  }, [environmentId, fetchOptions]);
+  }, [environmentId, fetchOptions, preferenceScope]);
 
   const choose = (option: WebAnnotationDestinationOption) => {
     onChange(option);
-    useWebAnnotationPreferencesStore
+    preferenceScope
+      .store(webAnnotationPreferencesStore)
       .getState()
       .rememberDestination(environmentId, option.destination.tabId);
     if (defaultFor) {

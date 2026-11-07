@@ -46,7 +46,12 @@ import {
   setBrowserPreviewVisible,
 } from "@/lib/native/browser-preview";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
-import { ensurePreviewServiceSync, usePreviewServiceStore } from "@/stores/previewServiceStore";
+import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import {
+  ensurePreviewServiceSync,
+  previewServiceStore,
+  usePreviewServiceStore,
+} from "@/stores/previewServiceStore";
 import type { BrowserTabData } from "@/types/paneLayout";
 import { AnnotatedPreviewArea, AnnotationsButton } from "./annotations/BrowserAnnotationsLayout";
 import { currentPageForManualUrl } from "./annotations/format";
@@ -95,6 +100,9 @@ function ManualBrowserTab({
   const previewPublicationAvailable = usePreviewServiceStore(
     (state) => state.capabilities?.surfaces.browserTopLevel.available === true,
   );
+  // The environment's node: its preview registry and its preview addresses.
+  const previewScope = useShimNodeScope(previewServiceStore.name);
+  const resolvePreviewUrl = usePreviewServiceStore((state) => state.resolvePreviewUrl);
   const browserPreviewSupported = (() => {
     try {
       return isGatewayBrowserPreviewSupported();
@@ -326,11 +334,11 @@ function ManualBrowserTab({
       return { resolved: null, error: null };
     }
     try {
-      return { resolved: resolveBrowserAddress(currentUrl), error: null };
+      return { resolved: resolveBrowserAddress(currentUrl, resolvePreviewUrl), error: null };
     } catch (resolutionError) {
       return { resolved: null, error: errorMessage(resolutionError) };
     }
-  }, [browserPreviewSupported, currentUrl]);
+  }, [browserPreviewSupported, currentUrl, resolvePreviewUrl]);
   const resolved = resolution.resolved;
 
   // "Open as service": offered only when this tab's own environment has
@@ -344,9 +352,9 @@ function ManualBrowserTab({
   );
   useEffect(() => {
     if (!isActive || legacyHostPort === null || !browserPreviewSupported) return;
-    ensurePreviewServiceSync();
-    void usePreviewServiceStore.getState().refreshEnvironment(environmentId);
-  }, [browserPreviewSupported, environmentId, isActive, legacyHostPort]);
+    ensurePreviewServiceSync(previewScope);
+    void previewScope.store(previewServiceStore).getState().refreshEnvironment(environmentId);
+  }, [browserPreviewSupported, environmentId, isActive, legacyHostPort, previewScope]);
   const serviceMatch = useMemo(
     () =>
       legacyUrlServiceMatch(
@@ -381,7 +389,7 @@ function ManualBrowserTab({
     const clearCancelled = () =>
       setServiceConversion((current) => (current?.attempt === attempt ? null : current));
     setServiceConversion({ url, state: "checking", attempt });
-    void confirmLegacyUrlServiceMatch(url, environmentId, serviceMatch)
+    void confirmLegacyUrlServiceMatch(url, environmentId, serviceMatch, previewScope)
       .then((target) => {
         if (!isCurrent()) {
           if (conversionMounted.current) clearCancelled();
@@ -402,6 +410,7 @@ function ManualBrowserTab({
   }, [
     currentUrl,
     environmentId,
+    previewScope,
     serviceMatch,
     stopAnnotationForPageChange,
     tabId,
@@ -440,7 +449,7 @@ function ManualBrowserTab({
     (nextAddress: string, recordHistory = true) => {
       let next;
       try {
-        next = resolveBrowserAddress(nextAddress);
+        next = resolveBrowserAddress(nextAddress, resolvePreviewUrl);
       } catch (navigationError) {
         setError(errorMessage(navigationError));
         return;
@@ -497,6 +506,7 @@ function ManualBrowserTab({
       applyNativeState,
       environmentId,
       nativeBrowserPreview,
+      resolvePreviewUrl,
       stopAnnotationForPageChange,
       tabId,
       updateTabBrowserUrl,

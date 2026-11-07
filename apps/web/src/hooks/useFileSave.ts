@@ -7,8 +7,9 @@ import {
   type FileWritePrecondition,
 } from "@orkestrator/protocol/file-write-precondition";
 import * as backend from "@/lib/backend";
+import { useScopedStoreApi } from "@/lib/node-scope/scoped-store-shim";
 import { useFileDirtyStore } from "@/stores";
-import { fileSaveBaseline } from "@/stores/fileDirtyStore";
+import { fileDirtyStore, fileSaveBaseline } from "@/stores/fileDirtyStore";
 
 const log = createLogger("web.files");
 
@@ -58,6 +59,7 @@ export function useFileSave({
   const getContent = useFileDirtyStore((state) => state.getContent);
   const setContent = useFileDirtyStore((state) => state.setContent);
   const setOriginalContent = useFileDirtyStore((state) => state.setOriginalContent);
+  const dirtyFiles = useScopedStoreApi(fileDirtyStore);
   const onReloadRef = useRef(onReloadFromDisk);
   // The conflict toast's Overwrite button outlives the render that showed it.
   const saveRef = useRef<(content: string | undefined, overwrite: boolean) => Promise<boolean>>(
@@ -105,7 +107,7 @@ export function useFileSave({
       // The content this editor last loaded or saved. The backend writes only
       // while the file still holds it, so a change made on disk meanwhile (an
       // agent, a terminal, another window) is reported instead of overwritten.
-      const dirtyEntry = useFileDirtyStore.getState().dirtyFiles.get(tabId);
+      const dirtyEntry = dirtyFiles.getState().dirtyFiles.get(tabId);
       const baseline = dirtyEntry ? fileSaveBaseline(dirtyEntry) : undefined;
       const expected: FileWritePrecondition | undefined =
         overwrite || baseline === undefined ? undefined : { sha256: fileContentSha256(baseline) };
@@ -158,6 +160,7 @@ export function useFileSave({
     },
     [
       containerId,
+      dirtyFiles,
       filePath,
       getContent,
       isLocalEnvironment,

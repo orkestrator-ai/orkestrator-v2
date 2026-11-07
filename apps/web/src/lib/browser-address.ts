@@ -28,7 +28,15 @@ function isRendererServedAddress(previewUrl: URL): boolean {
   return (renderer.port || "80") === (previewUrl.port || "80");
 }
 
-export function resolveBrowserAddress(value: string): BrowserAddress {
+/**
+ * `resolvePreviewUrl` is the node's preview address for a loopback page (the
+ * preview service store's `resolvePreviewUrl`, plan item 3012); the window
+ * gateway's when omitted.
+ */
+export function resolveBrowserAddress(
+  value: string,
+  resolvePreviewUrl: (url: string) => string = resolveGatewayBrowserPreviewUrl,
+): BrowserAddress {
   if (!isGatewayBrowserPreviewSupported()) {
     throw new Error(
       "Browser previews are only available in the desktop app when connected remotely.",
@@ -67,7 +75,7 @@ export function resolveBrowserAddress(value: string): BrowserAddress {
   }
 
   const displayUrl = url.toString();
-  const iframeUrl = resolveGatewayBrowserPreviewUrl(displayUrl);
+  const iframeUrl = resolvePreviewUrl(displayUrl);
   if (iframeUrl === displayUrl && isRendererServedAddress(url)) {
     throw new Error(
       "This address serves the Orkestrator app itself. Enter the address of a service you want to preview.",

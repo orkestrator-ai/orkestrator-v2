@@ -1,4 +1,6 @@
 import { useEffect, useEffectEvent, useMemo, useRef } from "react";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
 import type { WebAnnotationSummary } from "@orkestrator/protocol/web-annotations";
 import {
   NO_WEB_ANNOTATION_FEATURES,
@@ -14,11 +16,21 @@ import {
   EMPTY_WEB_ANNOTATION_CACHE,
   listQueryKey,
   useWebAnnotationStore,
+  webAnnotationStore,
   type ListQuery,
   type ListState,
   type ThreadState,
   type WebAnnotationEnvironmentCache,
 } from "@/stores/webAnnotationStore";
+
+/**
+ * The node scope whose annotations a view shows: the nearest provider's (the
+ * app's command scope outside one, noted as a shim use). Pass it to the sync,
+ * asset and refresh functions so their reads land where the hooks read.
+ */
+export function useWebAnnotationScope(): NodeScope {
+  return useShimNodeScope(webAnnotationStore.name);
+}
 
 /** The environment's cache (a stable empty snapshot until the first fetch). */
 export function useWebAnnotationCache(environmentId: string | null): WebAnnotationEnvironmentCache {
@@ -37,15 +49,16 @@ export function useWebAnnotationSync(environmentId: string | null, visible: bool
   const handleRef = useRef<ReturnType<typeof acquireWebAnnotationSync> | null>(null);
   // Visibility changes update the handle below rather than re-acquiring it.
   const currentVisible = useEffectEvent(() => visible);
+  const scope = useWebAnnotationScope();
   useEffect(() => {
     if (!environmentId) return;
-    const handle = acquireWebAnnotationSync(environmentId, { visible: currentVisible() });
+    const handle = acquireWebAnnotationSync(environmentId, { visible: currentVisible() }, scope);
     handleRef.current = handle;
     return () => {
       handleRef.current = null;
       handle.release();
     };
-  }, [environmentId]);
+  }, [environmentId, scope]);
   useEffect(() => {
     handleRef.current?.setVisible(visible);
   }, [environmentId, visible]);
@@ -66,12 +79,13 @@ export function useWebAnnotationList(
   // Registered by its key, so a new query object with the same key is not a
   // new registration.
   const currentQuery = useEffectEvent(() => query);
+  const scope = useWebAnnotationScope();
   useEffect(() => {
     const latestQuery = currentQuery();
     if (!environmentId || !latestQuery) return;
-    const registration = registerWebAnnotationList(environmentId, latestQuery);
+    const registration = registerWebAnnotationList(environmentId, latestQuery, scope);
     return registration.release;
-  }, [environmentId, key]);
+  }, [environmentId, key, scope]);
   const cache = useWebAnnotationCache(environmentId);
   const state = key ? (cache.lists.get(key) ?? null) : null;
   const items = useMemo(
@@ -89,10 +103,11 @@ export function useWebAnnotationThread(
   environmentId: string | null,
   annotationId: string | null,
 ): ThreadState | null {
+  const scope = useWebAnnotationScope();
   useEffect(() => {
     if (!environmentId || !annotationId) return;
-    return registerWebAnnotationThread(environmentId, annotationId);
-  }, [annotationId, environmentId]);
+    return registerWebAnnotationThread(environmentId, annotationId, scope);
+  }, [annotationId, environmentId, scope]);
   const cache = useWebAnnotationCache(environmentId);
   return annotationId ? (cache.threads.get(annotationId) ?? null) : null;
 }

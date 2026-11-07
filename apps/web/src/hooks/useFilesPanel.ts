@@ -23,7 +23,7 @@ import { environmentBaselineCommit, resolveComparisonRef } from "@/lib/diff-base
 import { useCoordinatedRead } from "@/hooks/useCoordinatedRead";
 import { useWorktreeSnapshotRevisions } from "@/hooks/useWorktreeSnapshotRevisions";
 import { useWorktreeSnapshotStore } from "@/stores/worktreeSnapshotStore";
-import { useChangeProjectionStore } from "@/stores/changeProjectionStore";
+import { changeProjectionStore } from "@/stores/changeProjectionStore";
 import { useEnvironmentChangeProjection } from "@/hooks/useChangeProjection";
 import { isChangeProjection } from "@orkestrator/protocol/change-resources";
 import type { WorktreeReadStamp } from "@orkestrator/protocol/worktree-snapshots";
@@ -661,9 +661,10 @@ export function useFilesPanel() {
       if (!changeResourceKey) return;
       if (showLoading) setLoadingChanges(true);
       try {
+        const projections = scope.store(changeProjectionStore);
         const result = await backend.refreshChanges(changeResourceKey);
         if (result.kind === "settled" && isChangeProjection(result.projection)) {
-          useChangeProjectionStore.getState().applyProjection(result.projection);
+          projections.getState().applyProjection(result.projection);
         }
       } catch (err) {
         log.error("changes.refresh-failed", { error: formatLogError(err) });
@@ -673,7 +674,7 @@ export function useFilesPanel() {
         }
       }
     },
-    [changeResourceKey, environmentSnapshotKey, setLoadingChanges],
+    [changeResourceKey, environmentSnapshotKey, scope, setLoadingChanges],
   );
 
   // Load data for the active tab, showing the loading indicator. Joins an

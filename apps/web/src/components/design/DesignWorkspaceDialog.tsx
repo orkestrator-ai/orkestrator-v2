@@ -32,9 +32,9 @@ import {
   type TabInitialPromptOptions,
 } from "@/lib/tab-initial-prompt";
 import { createSessionKey } from "@/lib/utils";
-import { useConfigStore } from "@/stores";
+import { configStore, useConfigStore } from "@/stores";
 import { environmentStore } from "@/stores/environmentStore";
-import type { Environment } from "@/types";
+import type { AppConfig, Environment } from "@/types";
 import { nativeComposeStore } from "@/stores/nativeComposeStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { createUniqueTabId } from "@/components/terminal/TerminalContainer.helpers";
@@ -128,9 +128,10 @@ function designInitialPromptOptions(
   platform: DesignAgent,
   images: readonly DesignPromptImage[],
   models: ReviewCatalogModels,
+  config: AppConfig,
 ): TabInitialPromptOptions {
   const configured = resolvedPlatformSettings(
-    useConfigStore.getState().config,
+    config,
     environment?.projectId,
     environment,
     platform,
@@ -171,6 +172,7 @@ export function DesignWorkspaceDialog({
   // Browses the host of the node this component renders in.
   const pickHostPath = usePickHostPath();
   const modelCatalog = useScopedStoreApi(agentModelCatalogStore);
+  const configs = useScopedStoreApi(configStore);
   const environments = useScopedStoreApi(environmentStore);
   const composeDrafts = useScopedStoreApi(nativeComposeStore);
   const backendKey = designBackendKey();
@@ -410,6 +412,7 @@ export function DesignWorkspaceDialog({
             platform,
             images,
             modelCatalog.getState(),
+            configs.getState().config,
           );
           let created = false;
           try {

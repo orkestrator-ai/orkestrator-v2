@@ -1,7 +1,11 @@
 import { environmentDeletionFailure } from "@orkestrator/protocol/node-summaries";
 import { useEnvironmentChangeProjection } from "@/hooks/useChangeProjection";
 import { environmentBrowserTarget } from "@/lib/preview-service-entry";
-import { ensurePreviewServiceSync, usePreviewServiceStore } from "@/stores/previewServiceStore";
+import {
+  ensurePreviewServiceSync,
+  previewServiceStore,
+  usePreviewServiceStore,
+} from "@/stores/previewServiceStore";
 import {
   agentSettingsTiers,
   resolvedActionDefault,
@@ -593,9 +597,9 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     (state) => state.capabilities?.surfaces.browserTopLevel.available === true,
   );
   useEffect(() => {
-    ensurePreviewServiceSync();
-    void usePreviewServiceStore.getState().loadCapabilities();
-  }, []);
+    ensurePreviewServiceSync(actionBarScope);
+    void actionBarScope.store(previewServiceStore).getState().loadCapabilities();
+  }, [actionBarScope]);
   const browserPreviewSupported = isGatewayBrowserPreviewSupported() || previewPublicationAvailable;
   const canCopyEnvironmentUrl = !!environmentPortAddress;
 
@@ -1325,7 +1329,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     const launch = beginLaunchedTab(environmentId, tabId, "Browser", "page");
     // Prefer the registered entry service: the tab then follows the service
     // across container recreation instead of pinning today's host port.
-    void environmentBrowserTarget(selectedEnvironment, environmentBrowserUrl)
+    void environmentBrowserTarget(selectedEnvironment, environmentBrowserUrl, actionBarScope)
       .catch(() => environmentBrowserUrl ?? undefined)
       .then((initialUrl) => {
         if (initialUrl) {
@@ -1333,7 +1337,14 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         }
         launch.settled();
       });
-  }, [beginLaunchedTab, canCreateTab, createTab, environmentBrowserUrl, selectedEnvironment]);
+  }, [
+    actionBarScope,
+    beginLaunchedTab,
+    canCreateTab,
+    createTab,
+    environmentBrowserUrl,
+    selectedEnvironment,
+  ]);
 
   const hasRunCommands = runCommands && runCommands.length > 0;
   const canRunCommands =

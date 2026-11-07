@@ -5,7 +5,8 @@ import { cn } from "@/lib/utils";
 import * as backend from "@/lib/backend";
 import { Loader2, AlertCircle, FileCode, Image as ImageIcon } from "lucide-react";
 import { useConfigStore, useFileDirtyStore } from "@/stores";
-import { fileSaveBaseline } from "@/stores/fileDirtyStore";
+import { fileDirtyStore, fileSaveBaseline } from "@/stores/fileDirtyStore";
+import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
 import { DEFAULT_TERMINAL_APPEARANCE } from "@/constants/terminal";
 import { useFileSave } from "@/hooks/useFileSave";
 import { useChangeContentGeneration, useChangeProjection } from "@/hooks/useChangeProjection";
@@ -305,7 +306,8 @@ export function FileViewerTab({
     draftHydrated: boolean;
   } | null>(null);
   const lastDraftFlushRef = useRef<string | null>(null);
-  // Dirty file tracking
+  // Dirty file tracking, and the node the buffer's drafts are kept on.
+  const draftScope = useShimNodeScope(fileDirtyStore.name);
   const setOriginalContent = useFileDirtyStore((state) => state.setOriginalContent);
   const setDirtyContent = useFileDirtyStore((state) => state.setContent);
   const observeDiskContent = useFileDirtyStore((state) => state.observeDiskContent);
@@ -325,17 +327,20 @@ export function FileViewerTab({
     void (async () => {
       // Discard the persisted draft first, or the reload would restore it.
       if (environmentId) {
-        await discardFileDraft(environmentId, filePath, getFileDraftRevisionState(tabId)).catch(
-          (draftError: unknown) => {
-            log.warn("draft.discard-failed", { tabId, error: formatLogError(draftError) });
-          },
-        );
+        await discardFileDraft(
+          environmentId,
+          filePath,
+          getFileDraftRevisionState(tabId, draftScope),
+          draftScope,
+        ).catch((draftError: unknown) => {
+          log.warn("draft.discard-failed", { tabId, error: formatLogError(draftError) });
+        });
       }
       lastDraftFlushRef.current = null;
-      useFileDirtyStore.getState().clearDirty(tabId);
+      draftScope.store(fileDirtyStore).getState().clearDirty(tabId);
       setReloadGeneration((generation) => generation + 1);
     })();
-  }, [environmentId, filePath, tabId]);
+  }, [draftScope, environmentId, filePath, tabId]);
   const { saveFile, isSaving } = useFileSave({
     tabId,
     filePath,
@@ -345,53 +350,68 @@ export function FileViewerTab({
     onReloadFromDisk: reloadFromDisk,
   });
 
-  const reportFileDraftError = useCallback(function reportFileDraftError(
-    draftError: unknown,
-    context: {
-      environmentId: string;
-      filePath: string;
-      tabId: string;
-    },
-  ): void {
-    if (!(draftError instanceof DraftRevisionConflictError)) {
-      log.warn("draft.persist-failed", { tabId: context.tabId, error: formatLogError(draftError) });
-      return;
-    }
-    const currentEntry = useFileDirtyStore.getState().dirtyFiles.get(context.tabId);
-    const discarding = !currentEntry || currentEntry.content === currentEntry.originalContent;
-    toast.error("File draft changed in another window", {
-      id: `file-draft-conflict:${context.tabId}`,
-      description: discarding
-        ? "A newer saved draft was preserved. Discard it explicitly to finish clearing this editor."
-        : "Your editor buffer is unchanged. Choose Save mine to replace the other saved draft.",
-      action: {
-        label: discarding ? "Discard saved draft" : "Save mine",
-        onClick: () => {
-          const entry = useFileDirtyStore.getState().dirtyFiles.get(context.tabId);
-          const state = getFileDraftRevisionState(context.tabId);
-          const hasLocalEdit = Boolean(entry && entry.content !== entry.originalContent);
-          const operation =
-            entry && hasLocalEdit
-              ? resolveFileDraftSaveConflict(
-                  context.environmentId,
-                  context.filePath,
-                  entry.content,
-                  fileSaveBaseline(entry),
-                  state,
-                )
-              : resolveFileDraftDiscardConflict(context.environmentId, context.filePath, state);
-          void operation.catch((retryError) => {
-            reportFileDraftError(retryError, context);
-          });
-        },
+  const reportFileDraftError = useCallback(
+    function reportFileDraftError(
+      draftError: unknown,
+      context: {
+        environmentId: string;
+        filePath: string;
+        tabId: string;
       },
-    });
-  }, []);
+    ): void {
+      if (!(draftError instanceof DraftRevisionConflictError)) {
+        log.warn("draft.persist-failed", {
+          tabId: context.tabId,
+          error: formatLogError(draftError),
+        });
+        return;
+      }
+      const currentEntry = draftScope
+        .store(fileDirtyStore)
+        .getState()
+        .dirtyFiles.get(context.tabId);
+      const discarding = !currentEntry || currentEntry.content === currentEntry.originalContent;
+      toast.error("File draft changed in another window", {
+        id: `file-draft-conflict:${context.tabId}`,
+        description: discarding
+          ? "A newer saved draft was preserved. Discard it explicitly to finish clearing this editor."
+          : "Your editor buffer is unchanged. Choose Save mine to replace the other saved draft.",
+        action: {
+          label: discarding ? "Discard saved draft" : "Save mine",
+          onClick: () => {
+            const entry = draftScope.store(fileDirtyStore).getState().dirtyFiles.get(context.tabId);
+            const state = getFileDraftRevisionState(context.tabId, draftScope);
+            const hasLocalEdit = Boolean(entry && entry.content !== entry.originalContent);
+            const operation =
+              entry && hasLocalEdit
+                ? resolveFileDraftSaveConflict(
+                    context.environmentId,
+                    context.filePath,
+                    entry.content,
+                    fileSaveBaseline(entry),
+                    state,
+                    draftScope,
+                  )
+                : resolveFileDraftDiscardConflict(
+                    context.environmentId,
+                    context.filePath,
+                    state,
+                    draftScope,
+                  );
+            void operation.catch((retryError) => {
+              reportFileDraftError(retryError, context);
+            });
+          },
+        },
+      });
+    },
+    [draftScope],
+  );
 
   const flushFileDraft = useCallback(() => {
     const context = draftFlushContextRef.current;
     if (!context) return;
-    const entry = useFileDirtyStore.getState().dirtyFiles.get(context.tabId);
+    const entry = draftScope.store(fileDirtyStore).getState().dirtyFiles.get(context.tabId);
     const hasLocalEdit = Boolean(entry && entry.content !== entry.originalContent);
     if (!context.draftHydrated && !hasLocalEdit) return;
     const fingerprint =
@@ -412,12 +432,14 @@ export function FileViewerTab({
             context.filePath,
             entry.content,
             fileSaveBaseline(entry),
-            getFileDraftRevisionState(context.tabId),
+            getFileDraftRevisionState(context.tabId, draftScope),
+            draftScope,
           )
         : discardFileDraft(
             context.environmentId,
             context.filePath,
-            getFileDraftRevisionState(context.tabId),
+            getFileDraftRevisionState(context.tabId, draftScope),
+            draftScope,
           );
     void operation.catch((draftError) => {
       if (lastDraftFlushRef.current === fingerprint) {
@@ -425,7 +447,7 @@ export function FileViewerTab({
       }
       reportFileDraftError(draftError, context);
     });
-  }, [reportFileDraftError]);
+  }, [draftScope, reportFileDraftError]);
 
   const renderEditorFallback = useCallback(
     (message: string) => (
@@ -516,7 +538,7 @@ export function FileViewerTab({
           if (!cancelled) {
             setContent(fileContent.content);
             setDetectedLanguage(fileContent.language || language || "plaintext");
-            const liveEntry = useFileDirtyStore.getState().dirtyFiles.get(tabId);
+            const liveEntry = draftScope.store(fileDirtyStore).getState().dirtyFiles.get(tabId);
             let draftReadSucceeded = !environmentId || Boolean(liveEntry);
             let persistedDraft: Awaited<ReturnType<typeof loadFileDraft>> = null;
             if (environmentId && !liveEntry) {
@@ -524,7 +546,8 @@ export function FileViewerTab({
                 persistedDraft = await loadFileDraft(
                   environmentId,
                   filePath,
-                  getFileDraftRevisionState(tabId),
+                  getFileDraftRevisionState(tabId, draftScope),
+                  draftScope,
                 );
                 draftReadSucceeded = true;
               } catch (draftError) {
@@ -586,6 +609,7 @@ export function FileViewerTab({
     hasDiffTarget,
     tabId,
     environmentId,
+    draftScope,
     hydrateDraft,
     observeDiskContent,
     setOriginalContent,

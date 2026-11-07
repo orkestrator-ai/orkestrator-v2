@@ -270,6 +270,13 @@ affected resources, and reconcile every three seconds while visible. Fetch
 errors are shown as connection state and never change a request or annotation
 status.
 
+The renderer runs one sync engine per environment per node scope
+(`lib/web-annotations/sync.ts`): environment ids are only unique on their node,
+so each scope listens on its own client, reads its own node and fills its own
+`webAnnotationStore`. Disposing a scope stops its engines and revokes its image
+object URLs. Unsent editor text kept locally is stored per node
+(`nodeStorageKey`).
+
 ## Anchors and pins
 
 A saved target is a description, never a live element handle. An element

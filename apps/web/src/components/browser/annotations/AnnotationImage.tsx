@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { ImageOff, Loader2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { useWebAnnotationCache } from "@/hooks/useWebAnnotations";
+import { useWebAnnotationCache, useWebAnnotationScope } from "@/hooks/useWebAnnotations";
 import { loadWebAnnotationAsset, retryWebAnnotationAsset } from "@/lib/web-annotations/assets";
 import { cn } from "@/lib/utils";
 
@@ -22,10 +22,11 @@ export function AnnotationImage({
 }) {
   const cache = useWebAnnotationCache(environmentId);
   const asset = assetId ? cache.assets.get(assetId) : undefined;
+  const scope = useWebAnnotationScope();
   useEffect(() => {
     if (!assetId) return;
-    void loadWebAnnotationAsset(environmentId, assetId);
-  }, [assetId, environmentId]);
+    void loadWebAnnotationAsset(environmentId, assetId, scope);
+  }, [assetId, environmentId, scope]);
 
   if (!assetId) {
     return (
@@ -84,7 +85,7 @@ export function AnnotationImage({
           size="sm"
           variant="outline"
           className="h-6 gap-1 px-2 text-[11px]"
-          onClick={() => void retryWebAnnotationAsset(environmentId, assetId)}
+          onClick={() => void retryWebAnnotationAsset(environmentId, assetId, scope)}
         >
           <RefreshCw className="h-3 w-3" aria-hidden />
           Retry image

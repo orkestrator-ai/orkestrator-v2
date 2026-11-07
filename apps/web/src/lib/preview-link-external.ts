@@ -7,7 +7,9 @@ import { openServiceExternally } from "@/lib/preview-external";
 import { linkUrlSource } from "@/lib/preview-service-entry";
 import { isLoopbackUrl, requestTerminalBrowserTab } from "@/lib/terminal-links";
 import { useEnvironmentStore } from "@/stores/environmentStore";
-import { ensurePreviewServiceSync, usePreviewServiceStore } from "@/stores/previewServiceStore";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { appCommandScope } from "@/lib/node-scope-slots";
+import { ensurePreviewServiceSync, previewServiceStore } from "@/stores/previewServiceStore";
 
 export interface ExternalLinkRequest {
   environmentId: string;
@@ -15,6 +17,8 @@ export interface ExternalLinkRequest {
   url: string;
   /** Who printed the link. Defaults to terminal. */
   origin?: "terminal" | "agent";
+  /** The environment's node; the app's command scope when omitted (no caller has one yet). */
+  scope?: NodeScope;
 }
 
 function failureMessage(error: unknown): string {
@@ -39,6 +43,7 @@ export async function openLinkExternally({
   sourceTabId,
   url,
   origin = "terminal",
+  scope = appCommandScope(),
 }: ExternalLinkRequest): Promise<void> {
   const environment = environmentId
     ? useEnvironmentStore.getState().getEnvironmentById(environmentId)
@@ -53,8 +58,9 @@ export async function openLinkExternally({
     return backend.openInBrowser(url);
   }
 
-  ensurePreviewServiceSync();
-  const capabilities = await usePreviewServiceStore
+  ensurePreviewServiceSync(scope);
+  const capabilities = await scope
+    .store(previewServiceStore)
     .getState()
     .loadCapabilities()
     .catch(() => null);

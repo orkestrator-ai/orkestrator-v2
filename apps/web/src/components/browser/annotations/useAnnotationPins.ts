@@ -27,6 +27,7 @@ import {
 } from "@orkestrator/protocol/web-annotations";
 import { getBrowserPreviewCaptureApi } from "@/lib/native/browser-preview";
 import { loadWebAnnotationCapture } from "@/lib/web-annotations/assets";
+import { useWebAnnotationScope } from "@/hooks/useWebAnnotations";
 import { describeWebAnnotationError } from "@/lib/web-annotations/client";
 import { anchorStateLabel, samePage, sameService, type CurrentAnnotationPage } from "./format";
 import type { ShowOnPageResult } from "./panel-context";
@@ -136,6 +137,7 @@ export function useAnnotationPins({
   currentPage: CurrentAnnotationPage | null;
   previewAttached: boolean;
 }) {
+  const annotationScope = useWebAnnotationScope();
   const [pinResults, setPinResults] = useState<ReadonlyMap<string, WebAnnotationAnchorResolution>>(
     new Map(),
   );
@@ -214,7 +216,7 @@ export function useAnnotationPins({
       .filter((item) => item.state === "open" && !item.hidden)
       .slice(0, WEB_ANNOTATION_LIMITS.visiblePins);
     const captures = await mapBounded(visible, PIN_CAPTURE_CONCURRENCY, (item) =>
-      loadWebAnnotationCapture(environmentId, item.currentCaptureId),
+      loadWebAnnotationCapture(environmentId, item.currentCaptureId, annotationScope),
     );
     const pins: BrowserPreviewAnchorQuery[] = [];
     visible.forEach((item, index) => {
@@ -223,7 +225,7 @@ export function useAnnotationPins({
       if (pin) pins.push(pin);
     });
     return pins;
-  }, [environmentId]);
+  }, [annotationScope, environmentId]);
 
   const send = useCallback(
     async (pins: BrowserPreviewAnchorQuery[]) => {
@@ -326,7 +328,11 @@ export function useAnnotationPins({
         };
       }
       const view = viewRef.current;
-      const record = await loadWebAnnotationCapture(environmentId, annotation.currentCaptureId);
+      const record = await loadWebAnnotationCapture(
+        environmentId,
+        annotation.currentCaptureId,
+        annotationScope,
+      );
       const pin = record ? pinQuery(annotation, 1, record) : null;
       if (!record || !pin) {
         return { status: "not-found", reason: "this imported note has no live target" };
@@ -407,7 +413,7 @@ export function useAnnotationPins({
         };
       }
     },
-    [applyResults, currentPage, environmentId, previewAttached, tabId],
+    [annotationScope, applyResults, currentPage, environmentId, previewAttached, tabId],
   );
 
   return { pinResults, showOnPage };

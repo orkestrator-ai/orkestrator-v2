@@ -33,8 +33,14 @@ import {
   type WebAnnotationErrorDetail,
   type WebAnnotationRolloutMode,
 } from "@orkestrator/protocol/web-annotations";
-import { commandBackendClient, type AccountMachine } from "@/lib/backend/client";
+import {
+  commandBackendClient,
+  scopeBackendClient,
+  type AccountMachine,
+} from "@/lib/backend/client";
 import { backendDomainApi, machineBackendClient } from "@/lib/backend/domain-client";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { defineScopedSlot, isAppCommandScope } from "@/lib/node-scope-slots";
 
 export type WebAnnotationCommandName = keyof WebAnnotationCommandArgs;
 
@@ -64,13 +70,28 @@ function apiFor(machine: AccountMachine): WebAnnotationsApiGetter {
   return api;
 }
 
-/** `machine` asks another machine through the command node, as Settings does. */
+/** A node scope's own domain client (plan item 3012), made once per scope. */
+const scopeApis = defineScopedSlot<WebAnnotationsApiGetter>("web-annotations-domain", (scope) =>
+  backendDomainApi(scopeBackendClient(scope), webAnnotationsClient),
+);
+
+/**
+ * `machine` asks another machine through the command node, as Settings does.
+ * Without one, `scope` names the node whose annotations these are (plan item
+ * 3012): its own client; this view's backend when omitted or the app's
+ * command scope.
+ */
 export function webAnnotationCommand<K extends WebAnnotationCommandName>(
   command: K,
   args: WebAnnotationCommandArgs[K],
   machine?: AccountMachine,
+  scope?: NodeScope,
 ): Promise<WebAnnotationCommandResults[K]> {
-  return apiFor(machine)().run(command, args);
+  const api =
+    machine === undefined && scope && !isAppCommandScope(scope)
+      ? scopeApis(scope)
+      : apiFor(machine);
+  return api().run(command, args);
 }
 
 export function errorMessage(error: unknown): string {
@@ -304,11 +325,15 @@ function isCapabilities(value: unknown): value is WebAnnotationCapabilities {
  */
 export async function fetchWebAnnotationCapabilities(
   environmentId?: string,
+  /** The node asked (plan item 3012); this view's backend when omitted. */
+  scope?: NodeScope,
 ): Promise<CapabilityFetch> {
   try {
     const result = await webAnnotationCommand(
       WEB_ANNOTATION_COMMANDS.capabilities,
       environmentId ? { environmentId } : {},
+      undefined,
+      scope,
     );
     if (!isCapabilities(result)) {
       return {

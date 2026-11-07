@@ -30,6 +30,7 @@ import {
   writeLocalDraft,
 } from "@/lib/web-annotations/local-drafts";
 import { commandClient } from "@/lib/node-scope/app-window-scope";
+import { useWebAnnotationScope } from "@/hooks/useWebAnnotations";
 
 export const DRAFT_AUTOSAVE_MS = 800;
 /** Local copies are written at most this often while typing. */
@@ -101,11 +102,15 @@ export function useAnnotationDraft({
   /** Updated only when the editor identity changes, never during render. */
   const targetRef = useRef({ environmentId, editorId });
   const contextRef = useRef(context);
+  // The node the local copy is kept for (`nodeStorageKey`): the panel's scope.
+  const draftNode = useWebAnnotationScope();
+  const nodeRef = useRef(draftNode);
   useLayoutEffect(() => {
     conflictRef.current = conflict;
   }, [conflict]);
   useLayoutEffect(() => {
     contextRef.current = context;
+    nodeRef.current = draftNode;
   });
   // `persist` and `scheduleRetry` call each other and are used by the effect
   // below; these refs hold their latest versions (assigned after commit).
@@ -127,9 +132,15 @@ export function useAnnotationDraft({
     }
     const { environmentId, editorId } = targetRef.current;
     if (dirtyRef.current) {
-      writeLocalDraft(environmentId, editorId, textRef.current, revisionRef.current);
+      writeLocalDraft(
+        environmentId,
+        editorId,
+        textRef.current,
+        revisionRef.current,
+        nodeRef.current,
+      );
     } else {
-      clearLocalDraft(environmentId, editorId);
+      clearLocalDraft(environmentId, editorId, nodeRef.current);
     }
   }, []);
 
@@ -164,7 +175,7 @@ export function useAnnotationDraft({
     const local =
       dirtyRef.current && textKeyRef.current === key
         ? { text: textRef.current, baseRevision: revisionRef.current }
-        : readLocalDraft(environmentId, editorId);
+        : readLocalDraft(environmentId, editorId, nodeRef.current);
     revisionRef.current = local?.baseRevision ?? 0;
     dirtyRef.current = Boolean(local);
     textRef.current = local?.text ?? "";
@@ -262,7 +273,7 @@ export function useAnnotationDraft({
           if (keyRef.current !== requestKey) {
             // The editor switched while this flush was in flight: the text it
             // saved is now on the backend, so its local copy can go.
-            if (draft.text === snapshot) clearLocalDraft(environmentId, editorId);
+            if (draft.text === snapshot) clearLocalDraft(environmentId, editorId, nodeRef.current);
             return;
           }
           revisionRef.current = draft.revision;

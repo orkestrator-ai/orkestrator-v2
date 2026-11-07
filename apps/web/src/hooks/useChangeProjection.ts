@@ -9,7 +9,12 @@ import {
   subscribeToolPresentation,
   subscribeChangeResource,
 } from "@/lib/changes/subscriptions";
-import { toolPresentationKey, useChangeProjectionStore } from "@/stores/changeProjectionStore";
+import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import {
+  changeProjectionStore,
+  toolPresentationKey,
+  useChangeProjectionStore,
+} from "@/stores/changeProjectionStore";
 
 /**
  * The backend's projection for one change resource, kept current by the
@@ -20,10 +25,11 @@ import { toolPresentationKey, useChangeProjectionStore } from "@/stores/changePr
 export function useChangeProjection(
   resourceKey: string | null | undefined,
 ): ChangeProjection | undefined {
+  const nodeScope = useShimNodeScope(changeProjectionStore.name);
   useEffect(() => {
     if (!resourceKey) return;
-    return subscribeChangeResource(resourceKey);
-  }, [resourceKey]);
+    return subscribeChangeResource(resourceKey, nodeScope);
+  }, [nodeScope, resourceKey]);
   return useChangeProjectionStore((state) =>
     resourceKey ? state.projections.get(resourceKey) : undefined,
   );
@@ -67,12 +73,13 @@ export function useToolChangePresentation(
     scope && callId
       ? toolPresentationKey(scope.environmentId, scope.provider, scope.conversationId, callId)
       : null;
+  const nodeScope = useShimNodeScope(changeProjectionStore.name);
   useEffect(() => {
     if (!scope || !callId) return;
-    const release = subscribeToolPresentation(scope, callId);
-    if (revisionHint !== undefined) requestToolPresentation(scope, callId, true);
+    const release = subscribeToolPresentation(scope, callId, nodeScope);
+    if (revisionHint !== undefined) requestToolPresentation(scope, callId, true, nodeScope);
     return release;
-  }, [scope, callId, revisionHint]);
+  }, [nodeScope, scope, callId, revisionHint]);
   const presentation = useChangeProjectionStore((state) =>
     key ? state.toolPresentations.get(key) : undefined,
   );
@@ -81,11 +88,11 @@ export function useToolChangePresentation(
     if (!changeKeys) return;
     const releases = changeKeys
       .split("\n")
-      .map((resourceKey) => subscribeChangeResource(resourceKey));
+      .map((resourceKey) => subscribeChangeResource(resourceKey, nodeScope));
     return () => {
       for (const release of releases) release();
     };
-  }, [changeKeys]);
+  }, [changeKeys, nodeScope]);
   const projections = useChangeProjectionStore((state) => state.projections);
   return {
     presentation,

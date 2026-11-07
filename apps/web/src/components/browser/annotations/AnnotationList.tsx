@@ -6,7 +6,11 @@ import {
 } from "@orkestrator/protocol/web-annotations";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { useWebAnnotationCache, useWebAnnotationList } from "@/hooks/useWebAnnotations";
+import {
+  useWebAnnotationCache,
+  useWebAnnotationList,
+  useWebAnnotationScope,
+} from "@/hooks/useWebAnnotations";
 import { loadWebAnnotationCapture } from "@/lib/web-annotations/assets";
 import { cn } from "@/lib/utils";
 import type { ListQuery } from "@/stores/webAnnotationStore";
@@ -93,6 +97,7 @@ export function AnnotationList({
   const query = listQueryFor(filter, currentPage, cursor);
   const { state, items } = useWebAnnotationList(environmentId, query);
   const cache = useWebAnnotationCache(environmentId);
+  const annotationScope = useWebAnnotationScope();
   const { pinResults } = useAnnotationPanel();
 
   // A cursor from an older snapshot can be rejected: sync has already
@@ -111,9 +116,9 @@ export function AnnotationList({
   useEffect(() => {
     // Keyed by the visible capture ids, not the (per-render) item array.
     for (const item of itemsRef.current) {
-      void loadWebAnnotationCapture(environmentId, item.currentCaptureId);
+      void loadWebAnnotationCapture(environmentId, item.currentCaptureId, annotationScope);
     }
-  }, [captureKey, environmentId]);
+  }, [annotationScope, captureKey, environmentId]);
 
   const destinations = useMemo(() => {
     const map = new Map<string, string>();

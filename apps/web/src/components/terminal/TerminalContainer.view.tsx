@@ -1241,12 +1241,13 @@ export function TerminalContainer({
           environments.getState().getEnvironmentById(environmentId),
           request.url,
           request.origin ?? "terminal",
+          tabLaunchScope,
         );
         if (createBrowserTab(target, pane.id)) {
           usePaneLayoutStore.getState().setActivePane(pane.id, environmentId);
         }
       }),
-    [createBrowserTab, environmentId, environments],
+    [createBrowserTab, environmentId, environments, tabLaunchScope],
   );
 
   // Handler for creating new terminal tabs

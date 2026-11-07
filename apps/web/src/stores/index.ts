@@ -20,7 +20,7 @@ export { usePaneLayoutStore, getAllLeaves } from "./paneLayoutStore";
 export { useTerminalSessionStore, createSessionKey } from "./terminalSessionStore";
 export { formatErrorContext, useErrorDialogStore } from "./errorDialogStore";
 export type { ErrorContext, ErrorDetails } from "./errorDialogStore";
-export { useFileDirtyStore } from "./fileDirtyStore";
+export { fileDirtyStore, useFileDirtyStore } from "./fileDirtyStore";
 export {
   useKanbanStore,
   type KanbanTask,
@@ -35,7 +35,7 @@ export {
   type FeaturePlanStatus,
   type FeatureStoryCard,
 } from "./featurePlanStore";
-export { useGitHubIssuesStore, githubIssueDetailKey } from "./githubIssuesStore";
+export { githubIssuesStore, useGitHubIssuesStore, githubIssueDetailKey } from "./githubIssuesStore";
 export { prMonitorStore, usePrMonitorStore } from "./prMonitorStore";
 export { useBuildPipelineStore } from "./buildPipelineStore";
 export { multiReviewStore, useMultiReviewStore } from "./multiReviewStore";
@@ -60,3 +60,12 @@ export {
 } from "./nativeAgentProjectionStore";
 export { nativeComposeStore, useNativeComposeStore } from "./nativeComposeStore";
 export { promptDraftStore, usePromptDraftStore } from "./promptDraftStore";
+export { changeProjectionStore, useChangeProjectionStore } from "./changeProjectionStore";
+export { designStore, useDesignStore } from "./designStore";
+export { previewServiceStore, usePreviewServiceStore } from "./previewServiceStore";
+export { pullRequestsStore, usePullRequestsStore } from "./pullRequestsStore";
+export { useWebAnnotationStore, webAnnotationStore } from "./webAnnotationStore";
+export {
+  useWebAnnotationPreferencesStore,
+  webAnnotationPreferencesStore,
+} from "./webAnnotationPreferencesStore";

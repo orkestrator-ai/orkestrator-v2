@@ -16,7 +16,12 @@ import {
   serviceReadiness,
   serviceTargetLabel,
 } from "@/lib/preview-service-display";
-import { ensurePreviewServiceSync, usePreviewServiceStore } from "@/stores/previewServiceStore";
+import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import {
+  ensurePreviewServiceSync,
+  previewServiceStore,
+  usePreviewServiceStore,
+} from "@/stores/previewServiceStore";
 import type { Environment } from "@/types";
 
 export interface EnvironmentPreviewServicesProps {
@@ -49,10 +54,12 @@ export function EnvironmentPreviewServices({
   const [editing, setEditing] = useState<PreviewServiceDefinition | null | "new">(null);
   const [busy, setBusy] = useState<string | null>(null);
 
+  const previewScope = useShimNodeScope(previewServiceStore.name);
+
   useEffect(() => {
-    ensurePreviewServiceSync();
+    ensurePreviewServiceSync(previewScope);
     void refresh(environment.id, { force: true });
-  }, [environment.id, refresh]);
+  }, [environment.id, previewScope, refresh]);
 
   if (status === "unsupported") {
     return (

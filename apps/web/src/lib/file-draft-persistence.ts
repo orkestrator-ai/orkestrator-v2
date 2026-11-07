@@ -1,4 +1,8 @@
 import * as backend from "@/lib/backend";
+import { backendApiForScope } from "@/lib/backend/client";
+import { createWorkflowsApi, type WorkflowsApi } from "@/lib/backend/workflows";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { appCommandScope, defineScopedSlot } from "@/lib/node-scope-slots";
 import {
   createDraftRevisionState,
   DraftRevisionConflictError,
@@ -16,23 +20,51 @@ function releaseDesktopClient(state: DraftRevisionState): void {
   void host?.api.invoke("desktop_file_draft_release", { clientId }).catch(() => undefined);
 }
 
-const writeChains = new Map<string, Promise<void>>();
-const defaultRevisionStates = new Map<string, DraftRevisionState>();
-const clientRevisionStates = new Map<string, DraftRevisionState>();
+/**
+ * One node's draft writes (plan item 3012, report Appendix B): the write
+ * chain per draft key and the revision states, so a draft key (which names
+ * an environment id, unique only on its node) never orders or fences another
+ * node's writes. Every export takes an optional trailing `scope`, the app's
+ * command scope when omitted.
+ */
+interface FileDraftWrites {
+  writeChains: Map<string, Promise<void>>;
+  defaultRevisionStates: Map<string, DraftRevisionState>;
+  clientRevisionStates: Map<string, DraftRevisionState>;
+}
+
+const fileDraftWrites = defineScopedSlot<FileDraftWrites>("file-draft-writes", () => ({
+  writeChains: new Map(),
+  defaultRevisionStates: new Map(),
+  clientRevisionStates: new Map(),
+}));
+
+/** `scope`'s node's draft commands (the mocked named exports on the app's command scope). */
+function draftApi(scope: NodeScope) {
+  return backendApiForScope(scope, createWorkflowsApi, backend);
+}
 
 export { createDraftRevisionState };
 export type { DraftRevisionState };
 
-function revisionStateFor(draftKey: string, state?: DraftRevisionState): DraftRevisionState {
+function revisionStateFor(
+  writes: FileDraftWrites,
+  draftKey: string,
+  state?: DraftRevisionState,
+): DraftRevisionState {
   if (state) return state;
-  const existing = defaultRevisionStates.get(draftKey);
+  const existing = writes.defaultRevisionStates.get(draftKey);
   if (existing) return existing;
   const created = createDraftRevisionState();
-  defaultRevisionStates.set(draftKey, created);
+  writes.defaultRevisionStates.set(draftKey, created);
   return created;
 }
 
-export function getFileDraftRevisionState(clientId: string): DraftRevisionState {
+export function getFileDraftRevisionState(
+  clientId: string,
+  scope: NodeScope = appCommandScope(),
+): DraftRevisionState {
+  const { clientRevisionStates } = fileDraftWrites(scope);
   const existing = clientRevisionStates.get(clientId);
   if (existing) return existing;
   const created = createDraftRevisionState();
@@ -40,19 +72,25 @@ export function getFileDraftRevisionState(clientId: string): DraftRevisionState 
   return created;
 }
 
-export function releaseFileDraftRevisionState(clientId: string): void {
+export function releaseFileDraftRevisionState(
+  clientId: string,
+  scope: NodeScope = appCommandScope(),
+): void {
+  if (scope.disposed) return;
+  const { clientRevisionStates } = fileDraftWrites(scope);
   const state = clientRevisionStates.get(clientId);
   if (state) releaseDesktopClient(state);
   clientRevisionStates.delete(clientId);
 }
 
 async function recordFileConflict(
+  scope: NodeScope,
   draftKey: string,
   state: DraftRevisionState,
   error: unknown,
 ): Promise<never> {
   if (!isDraftRevisionConflict(error)) throw error;
-  const current = await backend.getFileDraft(draftKey);
+  const current = await draftApi(scope).getFileDraft(draftKey);
   state.conflictRevision = current?.revision ?? 0;
   throw new DraftRevisionConflictError(draftKey, state.conflictRevision, { cause: error });
 }
@@ -61,7 +99,11 @@ export function fileDraftKey(environmentId: string, filePath: string): string {
   return `file:${environmentId}:${encodeURIComponent(filePath)}`;
 }
 
-function enqueue(draftKey: string, operation: () => Promise<unknown>): Promise<void> {
+function enqueue(
+  writeChains: Map<string, Promise<void>>,
+  draftKey: string,
+  operation: () => Promise<unknown>,
+): Promise<void> {
   const previous = writeChains.get(draftKey) ?? Promise.resolve();
   const next = previous
     .catch(() => undefined)
@@ -84,26 +126,36 @@ export async function loadFileDraft(
   environmentId: string,
   filePath: string,
   revisionState?: DraftRevisionState,
-): Promise<Awaited<ReturnType<typeof backend.getFileDraft>> | null> {
+  scope: NodeScope = appCommandScope(),
+): Promise<Awaited<ReturnType<WorkflowsApi["getFileDraft"]>> | null> {
   const draftKey = fileDraftKey(environmentId, filePath);
-  await (writeChains.get(draftKey) ?? Promise.resolve()).catch(() => undefined);
-  const draft = await backend.getFileDraft(draftKey);
-  const state = revisionStateFor(draftKey, revisionState);
+  // Held across awaits: the scope may be disposed while a read is in flight.
+  const writes = fileDraftWrites(scope);
+  await (writes.writeChains.get(draftKey) ?? Promise.resolve()).catch(() => undefined);
+  const draft = await draftApi(scope).getFileDraft(draftKey);
+  const state = revisionStateFor(writes, draftKey, revisionState);
   releaseDesktopClient(state);
   state.revision = draft?.revision ?? 0;
   state.conflictRevision = null;
   return draft;
 }
 
-/** Hand off immediately: main owns ordering even if this renderer disappears. */
+/**
+ * Hand off immediately: main owns ordering even if this renderer disappears.
+ * Main writes to the window's command node, so only the command scope's
+ * drafts are handed off; another node's go through its own client.
+ */
 function desktopWrite(
+  scope: NodeScope,
+  writes: FileDraftWrites,
   command: "save_file_draft" | "delete_file_draft",
   draftKey: string,
   state: DraftRevisionState,
   args: Record<string, unknown>,
 ): Promise<void> | null {
   const host = typeof window !== "undefined" ? window.orkestratorDesktopHost : undefined;
-  if (!host) return null;
+  if (!host || scope.role !== "command") return null;
+  const { writeChains } = writes;
   if (state.conflictRevision !== null) {
     return Promise.reject(new DraftRevisionConflictError(draftKey, state.conflictRevision));
   }
@@ -125,7 +177,7 @@ function desktopWrite(
     })
     .catch((error: unknown) => {
       if (desktopClients.get(state) === clientId) releaseDesktopClient(state);
-      return recordFileConflict(draftKey, state, error);
+      return recordFileConflict(scope, draftKey, state, error);
     });
   writeChains.set(draftKey, write);
   void write
@@ -142,22 +194,24 @@ export function persistFileDraft(
   content: string,
   originalContent: string,
   revisionState?: DraftRevisionState,
+  scope: NodeScope = appCommandScope(),
 ): Promise<void> {
   const draftKey = fileDraftKey(environmentId, filePath);
-  const state = revisionStateFor(draftKey, revisionState);
-  const handedOff = desktopWrite("save_file_draft", draftKey, state, {
+  const writes = fileDraftWrites(scope);
+  const state = revisionStateFor(writes, draftKey, revisionState);
+  const handedOff = desktopWrite(scope, writes, "save_file_draft", draftKey, state, {
     environmentId,
     filePath,
     content,
     originalContent,
   });
   if (handedOff) return handedOff;
-  return enqueue(draftKey, async () => {
+  return enqueue(writes.writeChains, draftKey, async () => {
     if (state.conflictRevision !== null) {
       throw new DraftRevisionConflictError(draftKey, state.conflictRevision);
     }
     try {
-      const saved = await backend.saveFileDraft(
+      const saved = await draftApi(scope).saveFileDraft(
         draftKey,
         environmentId,
         filePath,
@@ -169,7 +223,7 @@ export function persistFileDraft(
         state.revision = saved.revision;
       }
     } catch (error) {
-      await recordFileConflict(draftKey, state, error);
+      await recordFileConflict(scope, draftKey, state, error);
     }
   });
 }
@@ -178,20 +232,22 @@ export function discardFileDraft(
   environmentId: string,
   filePath: string,
   revisionState?: DraftRevisionState,
+  scope: NodeScope = appCommandScope(),
 ): Promise<void> {
   const draftKey = fileDraftKey(environmentId, filePath);
-  const state = revisionStateFor(draftKey, revisionState);
-  const handedOff = desktopWrite("delete_file_draft", draftKey, state, {});
+  const writes = fileDraftWrites(scope);
+  const state = revisionStateFor(writes, draftKey, revisionState);
+  const handedOff = desktopWrite(scope, writes, "delete_file_draft", draftKey, state, {});
   if (handedOff) return handedOff;
-  return enqueue(draftKey, async () => {
+  return enqueue(writes.writeChains, draftKey, async () => {
     if (state.conflictRevision !== null) {
       throw new DraftRevisionConflictError(draftKey, state.conflictRevision);
     }
     try {
-      await backend.deleteFileDraft(draftKey, state.revision);
+      await draftApi(scope).deleteFileDraft(draftKey, state.revision);
       state.revision = 0;
     } catch (error) {
-      await recordFileConflict(draftKey, state, error);
+      await recordFileConflict(scope, draftKey, state, error);
     }
   });
 }
@@ -202,28 +258,30 @@ export function resolveFileDraftSaveConflict(
   content: string,
   originalContent: string,
   revisionState?: DraftRevisionState,
+  scope: NodeScope = appCommandScope(),
 ): Promise<void> {
   const draftKey = fileDraftKey(environmentId, filePath);
-  const state = revisionStateFor(draftKey, revisionState);
+  const state = revisionStateFor(fileDraftWrites(scope), draftKey, revisionState);
   if (state.conflictRevision !== null) {
     releaseDesktopClient(state);
     state.revision = state.conflictRevision;
     state.conflictRevision = null;
   }
-  return persistFileDraft(environmentId, filePath, content, originalContent, state);
+  return persistFileDraft(environmentId, filePath, content, originalContent, state, scope);
 }
 
 export function resolveFileDraftDiscardConflict(
   environmentId: string,
   filePath: string,
   revisionState?: DraftRevisionState,
+  scope: NodeScope = appCommandScope(),
 ): Promise<void> {
   const draftKey = fileDraftKey(environmentId, filePath);
-  const state = revisionStateFor(draftKey, revisionState);
+  const state = revisionStateFor(fileDraftWrites(scope), draftKey, revisionState);
   if (state.conflictRevision !== null) {
     releaseDesktopClient(state);
     state.revision = state.conflictRevision;
     state.conflictRevision = null;
   }
-  return discardFileDraft(environmentId, filePath, state);
+  return discardFileDraft(environmentId, filePath, state, scope);
 }

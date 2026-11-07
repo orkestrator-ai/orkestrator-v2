@@ -2,8 +2,8 @@ import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { isMultiReviewTerminalPhase } from "@orkestrator/protocol/multi-review";
 import { toast } from "sonner";
 import { SortableContext, horizontalListSortingStrategy } from "@dnd-kit/sortable";
-import { multiReviewStore, usePaneLayoutStore, useFileDirtyStore } from "@/stores";
-import { useScopedStoreApi } from "@/lib/node-scope/scoped-store-shim";
+import { fileDirtyStore, multiReviewStore, usePaneLayoutStore, useFileDirtyStore } from "@/stores";
+import { useScopedStoreApi, useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
 import type { PaneLeaf } from "@/types/paneLayout";
 import { createDraggableTabId, getNativeAgentData, parseDraggableTabId } from "@/types/paneLayout";
 import { cn, createSessionKey } from "@/lib/utils";
@@ -69,16 +69,18 @@ export function DraggableTabBar({
   const placeholderHasFocus = placeholders.some((launch) => launch.focused);
   const isDirty = useFileDirtyStore((state) => state.isDirty);
   const clearDirty = useFileDirtyStore((state) => state.clearDirty);
+  // The node this pane's file drafts are kept on.
+  const draftScope = useShimNodeScope(fileDirtyStore.name);
 
   const discardTabDraft = useCallback(
     (tabId: string): Promise<void> => {
       const tab = pane.tabs.find((candidate) => candidate.id === tabId);
       if (tab?.type === "file" && tab.fileData?.filePath) {
         const filePath = tab.fileData.filePath;
-        const revisionState = getFileDraftRevisionState(tabId);
-        return discardFileDraft(environmentId, filePath, revisionState)
+        const revisionState = getFileDraftRevisionState(tabId, draftScope);
+        return discardFileDraft(environmentId, filePath, revisionState, draftScope)
           .then(() => {
-            releaseFileDraftRevisionState(tabId);
+            releaseFileDraftRevisionState(tabId, draftScope);
           })
           .catch((error) => {
             if (error instanceof DraftRevisionConflictError) {
@@ -89,9 +91,14 @@ export function DraggableTabBar({
                 action: {
                   label: "Discard saved draft",
                   onClick: () => {
-                    void resolveFileDraftDiscardConflict(environmentId, filePath, revisionState)
+                    void resolveFileDraftDiscardConflict(
+                      environmentId,
+                      filePath,
+                      revisionState,
+                      draftScope,
+                    )
                       .then(() => {
-                        releaseFileDraftRevisionState(tabId);
+                        releaseFileDraftRevisionState(tabId, draftScope);
                       })
                       .catch((retryError) => {
                         log.warn("draft.file-conflict-resolve-failed", {
@@ -143,7 +150,7 @@ export function DraggableTabBar({
         throw error;
       });
     },
-    [environmentId, pane.tabs],
+    [draftScope, environmentId, pane.tabs],
   );
 
   // State for unsaved changes confirmation dialog

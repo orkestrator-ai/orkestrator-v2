@@ -17,6 +17,12 @@
  *
  * Unmounting does not cancel backend work: it only stops this client's
  * observation. Remounting rehydrates from a fresh snapshot.
+ *
+ * Per node (plan item 3012): environment ids are only unique on their node,
+ * so each node scope runs its own engines (one per environment), migration
+ * bookkeeping and listeners, writes its own `webAnnotationStore`, and sends
+ * its reads to its own node. Every export takes an optional trailing `scope`,
+ * the app's command scope when omitted; disposing a scope stops its engines.
  */
 import {
   WEB_ANNOTATION_COMMANDS,
@@ -26,12 +32,17 @@ import {
   type WebAnnotationListResult,
 } from "@orkestrator/protocol/web-annotations";
 import { NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { appCommandScope, defineScopedSlot } from "@/lib/node-scope-slots";
 import {
   getWebAnnotationCache,
   listQueryKey,
-  useWebAnnotationStore,
+  webAnnotationStore,
   type ListQuery,
+  type WebAnnotationEnvironmentCache,
+  type WebAnnotationStoreState,
 } from "@/stores/webAnnotationStore";
+import type { StoreApi } from "zustand/vanilla";
 import {
   classifyWebAnnotationError,
   describeWebAnnotationError,
@@ -39,8 +50,12 @@ import {
   isTransientWebAnnotationError,
   webAnnotationCommand,
   webAnnotationErrorDetail,
+  type WebAnnotationCommandName,
 } from "./client";
-import { commandClient } from "@/lib/node-scope/app-window-scope";
+import type {
+  WebAnnotationCommandArgs,
+  WebAnnotationCommandResults,
+} from "@orkestrator/protocol/web-annotations";
 
 interface Work {
   full: boolean;
@@ -110,18 +125,29 @@ const MIGRATION_RETRY_MS = 60_000;
  * `running` while batches are in flight, then either finished (`retryAt`
  * null) or eligible again once `retryAt` has passed.
  */
-const migrations = new Map<string, { running: boolean; retryAt: number | null }>();
+type Migrations = Map<string, { running: boolean; retryAt: number | null }>;
 
-async function runLegacyMigration(environmentId: string) {
+/** What an engine needs of its node: the scope, its store and its commands. */
+interface SyncNode {
+  scope: NodeScope;
+  store: StoreApi<WebAnnotationStoreState>;
+  migrations: Migrations;
+  command<K extends WebAnnotationCommandName>(
+    command: K,
+    args: WebAnnotationCommandArgs[K],
+  ): Promise<WebAnnotationCommandResults[K]>;
+}
+
+async function runLegacyMigration(node: SyncNode, environmentId: string) {
   let previous: number | null = null;
   let retryAt: number | null = null;
   try {
     for (let batch = 0; ; batch += 1) {
-      const status = await webAnnotationCommand(WEB_ANNOTATION_COMMANDS.migrate, {
+      const status = await node.command(WEB_ANNOTATION_COMMANDS.migrate, {
         environmentId,
       });
-      if (!status || typeof status !== "object") break;
-      useWebAnnotationStore.getState().update(environmentId, () => ({ migration: status }));
+      if (!status || typeof status !== "object" || node.scope.disposed) break;
+      node.store.getState().update(environmentId, () => ({ migration: status }));
       const remaining = status.pendingDrafts;
       // Keep importing while drafts remain and each batch makes progress.
       if (remaining > 0 && (previous === null || remaining < previous)) {
@@ -142,7 +168,7 @@ async function runLegacyMigration(environmentId: string) {
     // A failed migration leaves legacy drafts untouched; allow a later retry.
     retryAt = Date.now() + MIGRATION_RETRY_MS;
   }
-  const state = migrations.get(environmentId);
+  const state = node.migrations.get(environmentId);
   if (state) {
     state.running = false;
     state.retryAt = retryAt;
@@ -156,9 +182,13 @@ function isNotFound(error: unknown): boolean {
   );
 }
 
-function listen<T>(event: string, callback: (payload: T) => void): (() => void) | undefined {
+function listen<T>(
+  scope: NodeScope,
+  event: string,
+  callback: (payload: T) => void,
+): (() => void) | undefined {
   try {
-    return commandClient().listenRaw<T>(event, callback);
+    return scope.client.listenRaw<T>(event, callback);
   } catch {
     return undefined;
   }
@@ -180,7 +210,15 @@ class EnvironmentSync {
   readonly threadInterest = new Map<string, number>();
   private threadSeq = new Map<string, number>();
 
-  constructor(readonly environmentId: string) {}
+  constructor(
+    private readonly node: SyncNode,
+    readonly environmentId: string,
+  ) {}
+
+  /** This environment's cache on the engine's node. */
+  private cache(): WebAnnotationEnvironmentCache {
+    return getWebAnnotationCache(this.environmentId, this.node.scope);
+  }
 
   start() {
     this.epoch += 1;
@@ -190,11 +228,13 @@ class EnvironmentSync {
     this.pending = emptyWork();
     // Subscribe first: any change committed while the snapshot is in flight
     // arrives as a buffered hint rather than being lost.
-    const hint = listen<WebAnnotationChangeHint>(WEB_ANNOTATIONS_CHANGED_EVENT, (payload) =>
-      this.onHint(payload),
+    const hint = listen<WebAnnotationChangeHint>(
+      this.node.scope,
+      WEB_ANNOTATIONS_CHANGED_EVENT,
+      (payload) => this.onHint(payload),
     );
-    const reconnect = listen(NATIVE_EVENT_STREAM_CONNECTED_EVENT, () => {
-      useWebAnnotationStore
+    const reconnect = listen(this.node.scope, NATIVE_EVENT_STREAM_CONNECTED_EVENT, () => {
+      this.node.store
         .getState()
         .update(this.environmentId, (cache) =>
           cache.capabilityStatus === "available" ? {} : { capabilityStatus: "unknown" },
@@ -203,7 +243,7 @@ class EnvironmentSync {
       this.schedule({ full: true });
     });
     this.unlisteners = [hint, reconnect].filter((value): value is () => void => Boolean(value));
-    useWebAnnotationStore.getState().update(this.environmentId, (cache) => ({
+    this.node.store.getState().update(this.environmentId, (cache) => ({
       sync: { ...cache.sync, status: "loading" },
     }));
     this.schedule({ full: true });
@@ -257,7 +297,7 @@ class EnvironmentSync {
   }
 
   private handleHint(hint: WebAnnotationChangeHint) {
-    const cache = getWebAnnotationCache(this.environmentId);
+    const cache = this.cache();
     if (hint.reset || cache.generation === null || hint.generation !== cache.generation) {
       this.phase = "loading";
       this.schedule({ full: true });
@@ -313,7 +353,7 @@ class EnvironmentSync {
   }
 
   private setSync(status: "loading" | "ready" | "error", error: string | null = null) {
-    useWebAnnotationStore.getState().update(this.environmentId, (cache) => ({
+    this.node.store.getState().update(this.environmentId, (cache) => ({
       sync: {
         status,
         error,
@@ -328,22 +368,22 @@ class EnvironmentSync {
   private readable = false;
 
   private async ensureCapabilities(epoch: number, refresh = false): Promise<boolean> {
-    const cache = getWebAnnotationCache(this.environmentId);
+    const cache = this.cache();
     const stale = refresh || Date.now() - this.capabilitiesAt > CAPABILITY_REFRESH_MS;
     if (cache.capabilityStatus === "available" && !stale) {
       return cache.capabilities?.operations.read ?? false;
     }
     if (cache.capabilityStatus === "unavailable" && !refresh) return false;
     if (cache.capabilityStatus !== "available") {
-      useWebAnnotationStore.getState().update(this.environmentId, () => ({
+      this.node.store.getState().update(this.environmentId, () => ({
         capabilityStatus: "loading",
       }));
     }
-    const result = await fetchWebAnnotationCapabilities(this.environmentId);
+    const result = await fetchWebAnnotationCapabilities(this.environmentId, this.node.scope);
     if (!this.current(epoch)) return false;
     this.capabilitiesAt = Date.now();
     if (result.status === "available") {
-      useWebAnnotationStore.getState().update(this.environmentId, () => ({
+      this.node.store.getState().update(this.environmentId, () => ({
         capabilities: result.capabilities,
         capabilityStatus: "available",
         capabilityReason:
@@ -355,7 +395,7 @@ class EnvironmentSync {
       return result.capabilities.operations.read;
     }
     if (result.status === "unavailable") {
-      useWebAnnotationStore.getState().update(this.environmentId, () => ({
+      this.node.store.getState().update(this.environmentId, () => ({
         capabilities: null,
         capabilityStatus: "unavailable",
         capabilityReason: result.reason,
@@ -365,7 +405,7 @@ class EnvironmentSync {
     // A failed periodic refresh keeps the last known capabilities: being
     // offline is a sync error, not a capability change.
     if (cache.capabilityStatus !== "available") {
-      useWebAnnotationStore.getState().update(this.environmentId, () => ({
+      this.node.store.getState().update(this.environmentId, () => ({
         capabilityStatus: "error",
         capabilityReason: result.error,
       }));
@@ -380,10 +420,10 @@ class EnvironmentSync {
    */
   private maybeMigrate(enabled: boolean) {
     if (!enabled) return;
-    const state = migrations.get(this.environmentId);
+    const state = this.node.migrations.get(this.environmentId);
     if (state && (state.running || state.retryAt === null || Date.now() < state.retryAt)) return;
-    migrations.set(this.environmentId, { running: true, retryAt: null });
-    void runLegacyMigration(this.environmentId);
+    this.node.migrations.set(this.environmentId, { running: true, retryAt: null });
+    void runLegacyMigration(this.node, this.environmentId);
   }
 
   private async fetchList(
@@ -392,14 +432,14 @@ class EnvironmentSync {
     epoch: number,
     options: { install?: boolean } = {},
   ) {
-    const result = await webAnnotationCommand(WEB_ANNOTATION_COMMANDS.list, {
+    const result = await this.node.command(WEB_ANNOTATION_COMMANDS.list, {
       environmentId: this.environmentId,
       filter: query.filter,
       ...(query.cursor ? { cursor: query.cursor } : {}),
       limit: query.limit,
     });
     if (!this.current(epoch) || (!options.install && !this.listQueries.has(key))) return null;
-    useWebAnnotationStore.getState().installList(
+    this.node.store.getState().installList(
       this.environmentId,
       key,
       {
@@ -431,7 +471,7 @@ class EnvironmentSync {
             install: true,
           });
           if (!this.current(epoch)) return null;
-          useWebAnnotationStore.getState().update(this.environmentId, (cache) => {
+          this.node.store.getState().update(this.environmentId, (cache) => {
             const lists = new Map(cache.lists);
             const current = lists.get(key);
             lists.set(key, {
@@ -455,8 +495,8 @@ class EnvironmentSync {
   async fetchThread(annotationId: string, epoch = this.epoch) {
     const seq = (this.threadSeq.get(annotationId) ?? 0) + 1;
     this.threadSeq.set(annotationId, seq);
-    const store = useWebAnnotationStore.getState();
-    const existing = getWebAnnotationCache(this.environmentId).threads.get(annotationId);
+    const store = this.node.store.getState();
+    const existing = this.cache().threads.get(annotationId);
     if (!existing) {
       store.installThread(this.environmentId, annotationId, {
         data: null,
@@ -465,7 +505,7 @@ class EnvironmentSync {
       });
     }
     try {
-      const data = await webAnnotationCommand(WEB_ANNOTATION_COMMANDS.get, {
+      const data = await this.node.command(WEB_ANNOTATION_COMMANDS.get, {
         environmentId: this.environmentId,
         annotationId,
         entryLimit: THREAD_ENTRY_LIMIT,
@@ -482,7 +522,7 @@ class EnvironmentSync {
       if (!this.current(epoch) || this.threadSeq.get(annotationId) !== seq) return;
       const message = describeWebAnnotationError(error);
       const missing = isNotFound(error);
-      const previous = getWebAnnotationCache(this.environmentId).threads.get(annotationId);
+      const previous = this.cache().threads.get(annotationId);
       store.installThread(this.environmentId, annotationId, {
         // Keep the last good snapshot readable while offline.
         data: previous?.data ?? null,
@@ -494,18 +534,18 @@ class EnvironmentSync {
   }
 
   private async fetchRequests(ids: Iterable<string>, epoch: number) {
-    const cache = getWebAnnotationCache(this.environmentId);
+    const cache = this.cache();
     const wanted = Array.from(ids)
       .filter((id) => cache.requests.has(id))
       .slice(0, MAX_REQUEST_REFETCH);
     await Promise.all(
       wanted.map(async (requestId) => {
-        const result = await webAnnotationCommand(WEB_ANNOTATION_COMMANDS.requestGet, {
+        const result = await this.node.command(WEB_ANNOTATION_COMMANDS.requestGet, {
           environmentId: this.environmentId,
           requestId,
         });
         if (!this.current(epoch)) return;
-        useWebAnnotationStore
+        this.node.store
           .getState()
           .installRequests(this.environmentId, [result.request], result.results);
       }),
@@ -529,17 +569,15 @@ class EnvironmentSync {
         return;
       }
       if (work.reconcile) {
-        this.maybeMigrate(
-          getWebAnnotationCache(this.environmentId).capabilities?.operations.migration ?? false,
-        );
+        this.maybeMigrate(this.cache().capabilities?.operations.migration ?? false);
       }
       let allLists = work.allLists;
       const annotationIds = new Set(work.annotationIds);
       const requestIds = new Set(work.requestIds);
       let target = work.targetRevision;
       if (work.reconcile) {
-        const cache = getWebAnnotationCache(this.environmentId);
-        const changes = await webAnnotationCommand(WEB_ANNOTATION_COMMANDS.changes, {
+        const cache = this.cache();
+        const changes = await this.node.command(WEB_ANNOTATION_COMMANDS.changes, {
           environmentId: this.environmentId,
           ...(cache.generation ? { generation: cache.generation } : {}),
           after: Math.max(0, cache.revision),
@@ -570,7 +608,7 @@ class EnvironmentSync {
       ]);
       if (!this.current(epoch)) return;
       if (target !== null) {
-        useWebAnnotationStore.getState().update(this.environmentId, (cache) => ({
+        this.node.store.getState().update(this.environmentId, (cache) => ({
           revision: Math.max(cache.revision, target ?? -1),
         }));
         this.seenRevision = Math.max(this.seenRevision, target);
@@ -584,12 +622,12 @@ class EnvironmentSync {
   }
 
   private async fullSnapshot(epoch: number) {
-    this.setSync("loading", getWebAnnotationCache(this.environmentId).sync.error);
+    this.setSync("loading", this.cache().sync.error);
     const keys = Array.from(this.listQueries.keys());
     let results = await this.fetchLists(keys, epoch);
     if (!this.current(epoch)) return;
     if (results.length === 0) {
-      const baseline = await webAnnotationCommand(WEB_ANNOTATION_COMMANDS.list, {
+      const baseline = await this.node.command(WEB_ANNOTATION_COMMANDS.list, {
         environmentId: this.environmentId,
         filter: { state: "open" },
         limit: 1,
@@ -603,7 +641,7 @@ class EnvironmentSync {
     const generations = new Set(results.map((result) => result.generation));
     const revision = Math.min(...results.map((result) => result.revision));
     const generation = results[0]!.generation;
-    useWebAnnotationStore.getState().update(this.environmentId, () => ({ generation, revision }));
+    this.node.store.getState().update(this.environmentId, () => ({ generation, revision }));
     this.seenRevision = revision;
     this.phase = "ready";
     this.setSync("ready");
@@ -620,13 +658,31 @@ class EnvironmentSync {
   }
 }
 
-const engines = new Map<string, EnvironmentSync>();
+/** One node's engines and migration progress; disposing the scope stops the engines. */
+interface WebAnnotationSyncNode extends SyncNode {
+  engines: Map<string, EnvironmentSync>;
+}
 
-function engine(environmentId: string): EnvironmentSync {
-  let current = engines.get(environmentId);
+const syncNodes = defineScopedSlot<WebAnnotationSyncNode>("web-annotation-sync", (scope) => {
+  const node: WebAnnotationSyncNode = {
+    scope,
+    store: scope.store(webAnnotationStore),
+    migrations: new Map(),
+    engines: new Map(),
+    command: (command, args) => webAnnotationCommand(command, args, undefined, scope),
+  };
+  scope.onDispose("web-annotation-sync", () => {
+    for (const sync of node.engines.values()) sync.stop();
+    node.engines.clear();
+  });
+  return node;
+});
+
+function engine(node: WebAnnotationSyncNode, environmentId: string): EnvironmentSync {
+  let current = node.engines.get(environmentId);
   if (!current) {
-    current = new EnvironmentSync(environmentId);
-    engines.set(environmentId, current);
+    current = new EnvironmentSync(node, environmentId);
+    node.engines.set(environmentId, current);
   }
   return current;
 }
@@ -637,14 +693,17 @@ export interface WebAnnotationSyncHandle {
 }
 
 /**
- * Observe one environment. The first handle subscribes and fetches; the last
- * release stops observation (never backend work). Visible handles poll.
+ * Observe one environment on `scope`'s node. The first handle subscribes and
+ * fetches; the last release stops observation (never backend work). Visible
+ * handles poll.
  */
 export function acquireWebAnnotationSync(
   environmentId: string,
   options: { visible: boolean },
+  scope: NodeScope = appCommandScope(),
 ): WebAnnotationSyncHandle {
-  const sync = engine(environmentId);
+  const node = syncNodes(scope);
+  const sync = engine(node, environmentId);
   let visible = false;
   let released = false;
   sync.refs += 1;
@@ -659,11 +718,11 @@ export function acquireWebAnnotationSync(
   };
   setVisible(options.visible);
   const active = new Set(
-    Array.from(engines.values())
+    Array.from(node.engines.values())
       .filter((candidate) => candidate.refs > 0)
       .map((candidate) => candidate.environmentId),
   );
-  useWebAnnotationStore.getState().evictInactive(active);
+  node.store.getState().evictInactive(active);
   return {
     setVisible,
     release() {
@@ -680,8 +739,9 @@ export function acquireWebAnnotationSync(
 export function registerWebAnnotationList(
   environmentId: string,
   query: ListQuery,
+  scope: NodeScope = appCommandScope(),
 ): { key: string; release: () => void } {
-  const sync = engine(environmentId);
+  const sync = engine(syncNodes(scope), environmentId);
   const key = listQueryKey(query);
   const existing = sync.listQueries.get(key);
   if (existing) existing.refs += 1;
@@ -699,8 +759,12 @@ export function registerWebAnnotationList(
 }
 
 /** Keep an annotation's thread snapshot fresh while it is open. */
-export function registerWebAnnotationThread(environmentId: string, annotationId: string) {
-  const sync = engine(environmentId);
+export function registerWebAnnotationThread(
+  environmentId: string,
+  annotationId: string,
+  scope: NodeScope = appCommandScope(),
+) {
+  const sync = engine(syncNodes(scope), environmentId);
   const count = sync.threadInterest.get(annotationId) ?? 0;
   sync.threadInterest.set(annotationId, count + 1);
   if (sync.phase !== "stopped" && count === 0) sync.schedule({ annotationIds: [annotationId] });
@@ -715,22 +779,30 @@ export function registerWebAnnotationThread(environmentId: string, annotationId:
  * Refetch after a committed mutation. The receipt proves the write; the view
  * is still rebuilt from backend snapshots, not from the request payload.
  */
-export function refreshWebAnnotations(environmentId: string, request: WorkRequest = {}) {
-  const sync = engines.get(environmentId);
+export function refreshWebAnnotations(
+  environmentId: string,
+  request: WorkRequest = {},
+  scope: NodeScope = appCommandScope(),
+) {
+  if (scope.disposed) return;
+  const sync = syncNodes(scope).engines.get(environmentId);
   if (!sync || sync.phase === "stopped") return;
   sync.schedule({ allLists: true, ...request });
 }
 
-/** Re-read capabilities for every observed environment (after a rollout change). */
-export function refreshAllWebAnnotationCapabilities() {
-  for (const sync of engines.values()) {
+/** Re-read capabilities for every observed environment of `scope`'s node (after a rollout change). */
+export function refreshAllWebAnnotationCapabilities(scope: NodeScope = appCommandScope()) {
+  if (scope.disposed) return;
+  for (const sync of syncNodes(scope).engines.values()) {
     if (sync.phase !== "stopped") sync.schedule({ capabilities: true, reconcile: true });
   }
 }
 
-export function resetWebAnnotationSyncForTests() {
-  for (const sync of engines.values()) sync.stop();
-  engines.clear();
-  migrations.clear();
-  useWebAnnotationStore.getState().reset();
+/** Test seam: stops `scope`'s engines and empties its cache (the app's command scope when omitted). */
+export function resetWebAnnotationSyncForTests(scope: NodeScope = appCommandScope()) {
+  const node = syncNodes(scope);
+  for (const sync of node.engines.values()) sync.stop();
+  node.engines.clear();
+  node.migrations.clear();
+  node.store.getState().reset();
 }

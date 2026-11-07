@@ -7,7 +7,7 @@ tests, and a record of the work.
 
 - **Report status:** being implemented in one combined branch (`unified-federation-b4c9ee65814d`), started 2026-11-07. The row statuses below are current.
 - **Plan verified against:** `main` at `521f734a9`, on 2026-11-07. Every item has a "Current state" section re-checked against that commit. Where the report has drifted, the item says so; [Corrections to the report](#corrections-to-the-report) lists the material ones.
-- **Item count:** 80 items in 8 phases, on 3 tracks (78 planned, plus [4007](4007-workspace-calls-its-node.md) and [7014](7014-remaining-zod-to-effect-schema.md) added on 2026-11-07).
+- **Item count:** 82 items in 8 phases, on 3 tracks (78 planned, plus [3018](3018-retire-command-scope-shim.md), [4007](4007-workspace-calls-its-node.md), [5007](5007-summary-overlay.md) and [7014](7014-remaining-zod-to-effect-schema.md) added on 2026-11-07).
 
 ## How to use this board
 
@@ -397,9 +397,9 @@ Report: [§5](../../docs/reports/unified-federation.md#5-target-architecture), [
 
 | ID | File | Phase | Status | Depends on | Summary |
 | --- | --- | --- | --- | --- | --- |
-| 2001 | [2001-node-scope-core.md](2001-node-scope-core.md) | 2 | in-progress | — | `NodeClient` types, `NodeScope`, `WindowScope` with shared byte budgets, `defineScopedStore`/`defineScopedService`, providers, and the `renderInNodeScope` test helper. |
-| 2002 | [2002-browser-transport-split.md](2002-browser-transport-split.md) | 2 | in-progress | 2001 | Move `createNodeTransport` out of `web-gateway.ts` (1,743 lines) and cut its couplings to the window shell. Two transports coexist. |
-| 2003 | [2003-browser-credentials-and-auth-transport.md](2003-browser-credentials-and-auth-transport.md) | 2 | in-progress | 2002 | `setCredential` on reopen, rich-content cleared per node, no global `fetch`/`EventSource` patch for node clients, and an `acp-client.ts` fix. |
+| 2001 | [2001-node-scope-core.md](2001-node-scope-core.md) | 2 | done | — | `NodeClient` types, `NodeScope`, `WindowScope` with shared byte budgets, `defineScopedStore`/`defineScopedService`, providers, and the `renderInNodeScope` test helper. |
+| 2002 | [2002-browser-transport-split.md](2002-browser-transport-split.md) | 2 | done | 2001 | Move `createNodeTransport` out of `web-gateway.ts` (1,743 lines) and cut its couplings to the window shell. Two transports coexist. |
+| 2003 | [2003-browser-credentials-and-auth-transport.md](2003-browser-credentials-and-auth-transport.md) | 2 | done | 2002 | `setCredential` on reopen, rich-content cleared per node, no global `fetch`/`EventSource` patch for node clients, and an `acp-client.ts` fix. |
 | 2004 | [2004-browser-node-clients-registry.md](2004-browser-node-clients-registry.md) | 2 | done | 2002, 2003 | `node-clients.ts`: in-memory grants, direct then relay, reopen without reload, a `pagehide` close, per-node URLs, WebSocket terminals for leaves. |
 | 2005 | [2005-relay-status-and-session.md](2005-relay-status-and-session.md) | 2 | done | — | Relay `/status` so a relayed client can diagnose a 401; node transports skip `/session`. |
 | 2006 | [2006-desktop-node-scopes.md](2006-desktop-node-scopes.md) | 2 | done | — | Main-process `node-scopes.ts`: single-flight `ensureNodeScope` per (window, node), reusing `NodeWorkspaceScopes`; release triggers. |
@@ -434,11 +434,12 @@ Report: [§7](../../docs/reports/unified-federation.md#7-store-and-service-scopi
 | 3010 | [3010-sessions-terminals-tmux-mail.md](3010-sessions-terminals-tmux-mail.md) | 3 | done | 3008, 3009 | `session`, `terminalSession` (a hot spot the report missed), `claudeTmux` and `agentMail` stores. |
 | 3011 | [3011-workflow-stores-a.md](3011-workflow-stores-a.md) | 3 | done | 3004 | Pipeline, Kanban, feature plan, coordinator and graph stores, plus their persistence services. |
 | 3012 | [3012-workflow-stores-b.md](3012-workflow-stores-b.md) | 3 | done | 3004, 3016 | Design, web annotations, GitHub issues, PRs, change projection, file dirty and preview service stores. |
-| 3013 | [3013-pane-layout-store.md](3013-pane-layout-store.md) | 3 | in-progress | 3006, 3007, 3008, 3009, 3010 | `paneLayoutStore` (1,852 LOC, 88 sites) last, with its persistence. The workspace subtree's shim baseline reaches zero. |
+| 3013 | [3013-pane-layout-store.md](3013-pane-layout-store.md) | 3 | done | 3006, 3007, 3008, 3009, 3010 | `paneLayoutStore` (1,852 LOC, 88 sites) last, with its persistence. The workspace subtree's shim baseline reaches zero. |
 | 3014 | [3014-scoped-services-and-startup.md](3014-scoped-services-and-startup.md) | 3 | done | 3001 | `App.tsx:355-369`'s six `start*` services become per-scope services; the read coordinator is split into window and node parts. |
 | 3015 | [3015-persistence-keys-per-node.md](3015-persistence-keys-per-node.md) | 3 | done | 2001 | `desktopConnectionStorageKey(base, nodeId)`; the local-drafts key is namespaced; the command node's keys do not move. |
 | 3016 | [3016-rich-content-and-caches.md](3016-rich-content-and-caches.md) | 3 | done | 2001, 2003 | Rich-content identity per node, byte-bounded caches under window budgets, and capability caches per scope. |
 | 3017 | [3017-window-stores-node-qualified.md](3017-window-stores-node-qualified.md) | 3 | done | 2001 | Window stores (dialogs, merge PR, coordinator conversation, scroll targets, host path picker) carry `nodeId`. |
+| 3018 | [3018-retire-command-scope-shim.md](3018-retire-command-scope-shim.md) | 3 | not-started | 3013, 4004 | Added 2026-11-07: tests seed stores through scopes, the command-scope statics and the hook's provider-less fallback go. |
 
 Exit criteria:
 
@@ -451,13 +452,13 @@ Report: [§8](../../docs/reports/unified-federation.md#8-data-lifecycle-hydratio
 
 | ID | File | Phase | Status | Depends on | Summary |
 | --- | --- | --- | --- | --- | --- |
-| 4001 | [4001-in-tree-workspace-seam.md](4001-in-tree-workspace-seam.md) | 4 | in-progress | 2013, 3013, 3014 | `<InTreeWorkspace nodeId>` when `inTreeNodes` has the node; a loopback for the realm protocol; `NodeErrorBoundary`. |
+| 4001 | [4001-in-tree-workspace-seam.md](4001-in-tree-workspace-seam.md) | 4 | done | 2013, 3013, 3014 | `<InTreeWorkspace nodeId>` when `inTreeNodes` has the node; a loopback for the realm protocol; `NodeErrorBoundary`. |
 | 4002 | [4002-hydration-tiers-and-budgets.md](4002-hydration-tiers-and-budgets.md) | 4 | done | 4001, 0004 | Summary, warm, live and suspended tiers, suspension timers per host, and pressure eviction at data granularity. |
-| 4003 | [4003-snapshot-first-rehydration.md](4003-snapshot-first-rehydration.md) | 4 | in-progress | 4001 | A new bounded IndexedDB snapshot store (none exists today), with a stale marker until the authoritative read; no content in snapshots. |
+| 4003 | [4003-snapshot-first-rehydration.md](4003-snapshot-first-rehydration.md) | 4 | done | 4001 | A new bounded IndexedDB snapshot store (none exists today), with a stale marker until the authoritative read; no content in snapshots. |
 | 4004 | [4004-runtime-shim-guard.md](4004-runtime-shim-guard.md) | 4 | in-progress | 4001 | A shim call under a mounted leaf throws in development and tests and is counted in production. |
 | 4005 | [4005-direct-navigation.md](4005-direct-navigation.md) | 4 | done | 4001, 3006 | `select`, `sidebar`, `filesPanel`, `grouping`, `visibility`, `ready`, `selection` and `open` become direct calls for in-tree nodes. |
-| 4006 | [4006-multi-node-qualification.md](4006-multi-node-qualification.md) | 4 | not-started | 4002, 4003, 4004, 4005, 2009, 4007 | A new multi-node e2e on desktop and browser, the inactive-environment cycle for a leaf, six-node switching, preview z-order, and iPad memory. |
-| 4007 | [4007-workspace-calls-its-node.md](4007-workspace-calls-its-node.md) | 4 | in-progress | 4001 | Added 2026-11-07: a guard over the workspace import graph for command-bound `@/lib/backend` calls, and the conversions (incl. the design canvas and the tmux client), so an in-tree leaf sends everything to its node. |
+| 4006 | [4006-multi-node-qualification.md](4006-multi-node-qualification.md) | 4 | in-progress | 4002, 4003, 4004, 4005, 2009, 4007 | A new multi-node e2e on desktop and browser, the inactive-environment cycle for a leaf, six-node switching, preview z-order, and iPad memory. |
+| 4007 | [4007-workspace-calls-its-node.md](4007-workspace-calls-its-node.md) | 4 | done | 4001 | Added 2026-11-07: a guard over the workspace import graph for command-bound `@/lib/backend` calls, and the conversions (incl. the design canvas and the tmux client), so an in-tree leaf sends everything to its node. |
 
 Exit criteria:
 
@@ -470,12 +471,13 @@ Report: [§9](../../docs/reports/unified-federation.md#9-cross-node-features), [
 
 | ID | File | Phase | Status | Depends on | Summary |
 | --- | --- | --- | --- | --- | --- |
-| 5001 | [5001-attention-per-scope.md](5001-attention-per-scope.md) | 5 | in-progress | 4001, 0002 | One window attention service across tiers, deduplicated by node; a notification click opens the node. |
+| 5001 | [5001-attention-per-scope.md](5001-attention-per-scope.md) | 5 | done | 4001, 0002 | One window attention service across tiers, deduplicated by node; a notification click opens the node. |
 | 5002 | [5002-pr-opener-and-title-bar.md](5002-pr-opener-and-title-bar.md) | 5 | done | 4001, 3007 | The PR opener works for any shown node; title-bar meters and popovers come from the scope (`panel`, `panelDismissed` and `titleBar` go). |
 | 5003 | [5003-settings-bug-report-shortcuts-dialogs.md](5003-settings-bug-report-shortcuts-dialogs.md) | 5 | done | 4001, 3017 | `settings`, `bugReport` and `shortcut` become direct calls; `BugReportSheet` takes a scope; node dialogs open under their scope. |
 | 5004 | [5004-coordinator-and-portal-through-command-scope.md](5004-coordinator-and-portal-through-command-scope.md) | 5 | done | 4001 | Portal APIs, the leaf coordinator gate and `machineInvoke` go through the command scope. |
-| 5005 | [5005-multiplexed-relay-stream.md](5005-multiplexed-relay-stream.md) | 5 | not-started | 0004, 4002 | Optional: one relay request carries N leaves' event streams. Only if measurements show pressure; otherwise drop it. |
+| 5005 | [5005-multiplexed-relay-stream.md](5005-multiplexed-relay-stream.md) | 5 | done | 0004, 4002 | Optional: one relay request carries N leaves' event streams. Only if measurements show pressure; otherwise drop it. |
 | 5006 | [5006-fleet-currency.md](5006-fleet-currency.md) | 5 | done | 1004, 1005 | Node version skew and missing domains in the sidebar; typed errors link to the update; an optional update policy. |
+| 5007 | [5007-summary-overlay.md](5007-summary-overlay.md) | 5 | not-started | 4002 | Added 2026-11-07: warm and live scopes overlay their sidebar, ⌘K and title-bar summary rows (§9 Sidebar). |
 
 Exit criteria:
 
@@ -488,10 +490,10 @@ Report: [§12 Phase 6](../../docs/reports/unified-federation.md#12-migration-pla
 
 | ID | File | Phase | Status | Depends on | Summary |
 | --- | --- | --- | --- | --- | --- |
-| 6001 | [6001-in-tree-by-default.md](6001-in-tree-by-default.md) | 6 | not-started | 4006, 5001, 5002, 5003, 5004, 0006 | In-tree by default for every node, with realms as a one-release rollback setting. |
-| 6002 | [6002-delete-web-realm-code.md](6002-delete-web-realm-code.md) | 6 | not-started | 6001 | Delete the web realm code, including the boot-timing files the report missed; `MAX_OPEN_REALMS` goes. |
-| 6003 | [6003-delete-desktop-realm-code.md](6003-delete-desktop-realm-code.md) | 6 | not-started | 6001 | Delete realm views, portal and realm IPC, preload APIs and `DEFAULT_MAX_VIEWS`; clean up `persist:orkestrator-realm-*` partitions a release later. |
-| 6004 | [6004-documentation.md](6004-documentation.md) | 6 | not-started | 6002, 6003 | Living docs: command nodes, federation, renderer security, the node-scopes guide, the `AGENTS.md` row. |
+| 6001 | [6001-in-tree-by-default.md](6001-in-tree-by-default.md) | 6 | done | 4006, 5001, 5002, 5003, 5004, 0006 | In-tree by default for every node, with realms as a one-release rollback setting. |
+| 6002 | [6002-delete-web-realm-code.md](6002-delete-web-realm-code.md) | 6 | in-progress | 6001 | Delete the web realm code, including the boot-timing files the report missed; `MAX_OPEN_REALMS` goes. |
+| 6003 | [6003-delete-desktop-realm-code.md](6003-delete-desktop-realm-code.md) | 6 | done | 6001 | Delete realm views, portal and realm IPC, preload APIs and `DEFAULT_MAX_VIEWS`; clean up `persist:orkestrator-realm-*` partitions a release later. |
+| 6004 | [6004-documentation.md](6004-documentation.md) | 6 | in-progress | 6002, 6003 | Living docs: command nodes, federation, renderer security, the node-scopes guide, the `AGENTS.md` row. |
 
 Exit criteria:
 
@@ -510,8 +512,8 @@ Report: [§10.2](../../docs/reports/unified-federation.md#102-tighten-the-grant-
 | 7004 | [7004-domain-previews-annotations-artifacts-design.md](7004-domain-previews-annotations-artifacts-design.md) | 7 | done | 1008, 1010, 1011 | Previews, web annotations and design (Zod today, converted to Effect Schema) and transcript artifacts. |
 | 7005 | [7005-domain-projects-config.md](7005-domain-projects-config.md) | 7 | done | 1008, 1010, 1011 | Projects, config and settings (71), keeping the config-echo compatibility path. |
 | 7006 | [7006-domain-git-pull-requests.md](7006-domain-git-pull-requests.md) | 7 | done | 1008, 1010, 1011 | Git, GitHub, PRs and the changes ledger (81). |
-| 7007 | [7007-domain-pipelines-graphs-multi-review.md](7007-domain-pipelines-graphs-multi-review.md) | 7 | in-progress | 1008, 1010, 1011 | Build pipelines and graphs (76) and Multi Review (30), reusing the graph guards. |
-| 7008 | [7008-domain-kanban-mail-accounts-mcp.md](7008-domain-kanban-mail-accounts-mcp.md) | 7 | in-progress | 1008, 1010, 1011 | Kanban and Linear, agent mail, agent accounts and MCP management. |
+| 7007 | [7007-domain-pipelines-graphs-multi-review.md](7007-domain-pipelines-graphs-multi-review.md) | 7 | done | 1008, 1010, 1011 | Build pipelines and graphs (76) and Multi Review (30), reusing the graph guards. |
+| 7008 | [7008-domain-kanban-mail-accounts-mcp.md](7008-domain-kanban-mail-accounts-mcp.md) | 7 | done | 1008, 1010, 1011 | Kanban and Linear, agent mail, agent accounts and MCP management. |
 | 7009 | [7009-domain-coordinator-servers-system.md](7009-domain-coordinator-servers-system.md) | 7 | done | 1008, 1010, 1011 | Coordinator and controller (104), agent servers, system, the rest of nodes, and the ~74 commands with no static caller. |
 | 7010 | [7010-converge-models.md](7010-converge-models.md) | 7 | done | 7003, 7005 | `models.ts` and the web's `types/index.ts` become inferred protocol types. |
 | 7011 | [7011-typed-events.md](7011-typed-events.md) | 7 | done | 1002, 1006 | `defineEvent` for every backend event, typed `emit` and `listen`, events in the manifest. |

@@ -4,6 +4,7 @@
   "retirement": "Adapter v is deleted when the support floor passes the first Stable release with v + 1.",
   "domains": {
     "accounts": { "current": 1, "adapters": [1, 0] },
+    "agent-mail": { "current": 1, "adapters": [1, 0] },
     "agent-servers": { "current": 1, "adapters": [1, 0] },
     "claude-tmux": { "current": 1, "adapters": [1, 0] },
     "config": { "current": 1, "adapters": [1, 0] },

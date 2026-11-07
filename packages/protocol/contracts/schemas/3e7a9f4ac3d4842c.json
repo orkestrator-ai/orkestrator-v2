@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:3e7a9f4ac3d4842c508eb1f4051220fba9ee3f763ff4568b4ffaf9236a79dfa0",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "environmentId": {},
+        "includeTombstoned": {},
+        "limit": {},
+        "offset": {},
+        "projectId": {},
+        "q": {},
+        "strictProjectScope": {}
+      },
+      "type": "object"
+    }
+  }
+}

@@ -49,6 +49,7 @@ import { webAnnotationsClient } from "./domains/web-annotations/client.js";
 import { kanbanClient } from "./domains/kanban/client.js";
 import { accountsClient } from "./domains/accounts/client.js";
 import { mcpClient } from "./domains/mcp/client.js";
+import { agentMailClient } from "./domains/agent-mail/client.js";
 
 /**
  * Every domain client definition. The pilot domains (plan item 1010) were the
@@ -80,6 +81,7 @@ export const DOMAIN_CLIENTS: readonly DomainClientDef[] = Object.freeze([
   kanbanClient,
   accountsClient,
   mcpClient,
+  agentMailClient,
 ] as readonly DomainClientDef[]);
 
 /** The committed list, relative to the repository root. */

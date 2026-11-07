@@ -22,31 +22,6 @@ import type { DomainName } from "@orkestrator/protocol/contract/domain";
 export type ContractDomainMap = { readonly [Domain in DomainName]?: readonly string[] };
 
 export const CONTRACT_DOMAIN_MAP = {
-  "agent-mail": [
-    "ack_agent_mail",
-    "discard_agent_mail_inject",
-    "get_agent_mail_conversation",
-    "get_agent_mail_inbox_snapshot",
-    "get_agent_mail_mailbox",
-    "get_agent_mail_mailboxes",
-    "get_agent_mail_message",
-    "get_agent_mail_status",
-    "get_agent_mail_summary",
-    "get_agent_messaging_settings",
-    "get_agent_registry",
-    "list_agent_mail_conversations",
-    "list_agent_mail_inbox",
-    "list_agent_mail_sent",
-    "list_agent_mailboxes",
-    "mark_agent_mail_conversation_seen",
-    "mark_agent_mail_seen",
-    "mute_agent_mail",
-    "retry_agent_mail_inject",
-    "send_agent_mail",
-    "send_external_agent_mail",
-    "set_agent_messaging_paused",
-    "update_agent_messaging_settings",
-  ],
   coordinator: [],
   "multi-review": [
     "address_multi_review",

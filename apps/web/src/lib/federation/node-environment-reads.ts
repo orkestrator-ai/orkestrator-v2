@@ -5,7 +5,6 @@
  */
 
 import { useEffect, useState } from "react";
-import type { AgentRegistrySnapshot } from "@orkestrator/protocol/agent-registry";
 import type { BackendId, EnvironmentRef } from "@orkestrator/protocol/federation";
 import {
   NATIVE_AGENT_ACTIVITY_EVENT,
@@ -13,6 +12,7 @@ import {
 } from "@orkestrator/protocol/native-agent-observation";
 import { RESOURCE_CHANGED_EVENT } from "@orkestrator/protocol/resource-events";
 import type { AgentSummarySource } from "@/components/environments/EnvironmentAgentSummary";
+import { agentMailClient } from "@orkestrator/protocol/contract/domains/agent-mail";
 import { environmentsClient } from "@orkestrator/protocol/contract/domains/environments";
 import { backendDomainApi, routedBackendClient } from "@/lib/backend/domain-client";
 import { portalStore } from "@/lib/portal/portal-store";
@@ -36,10 +36,12 @@ export function nodeAgentSummarySource(nodeId: BackendId): AgentSummarySource {
   if (!source) {
     source = {
       resyncOnSubscribe: true,
+      // Routed through the command node, so the `agent-mail` client's version 0 (today's call).
       read: (environmentId) =>
-        portalStore.invokeOnNode<AgentRegistrySnapshot>(nodeId, "get_agent_registry", {
-          environmentId,
-        }),
+        backendDomainApi(
+          routedBackendClient(portalStore, nodeId),
+          agentMailClient,
+        )().get_agent_registry({ environmentId }),
       subscribe: (environmentId, refresh) =>
         subscribeNodeEvents(nodeId, {
           events: [NATIVE_AGENT_ACTIVITY_EVENT, RESOURCE_CHANGED_EVENT],

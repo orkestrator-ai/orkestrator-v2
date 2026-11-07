@@ -10,8 +10,18 @@ import { registerAgentMailCommands } from "./commands-registry-mail.js";
 function fixture(enabled = true) {
   const storage = {
     loadConfig: async () => ({ global: { agentMessaging: { enabled } } }),
-    listAgentMailConversations: mock(async (_options: unknown) => ({ conversations: [] })),
-    getAgentMailConversation: mock(async (_a: string, _b: string, _options: unknown) => ({})),
+    // Real result shapes: results are validated against the `agent-mail` schemas in tests.
+    listAgentMailConversations: mock(async (_options: unknown) => ({
+      revision: 0,
+      conversations: [],
+    })),
+    getAgentMailConversation: mock(async (_a: string, _b: string, _options: unknown) => ({
+      revision: 0,
+      key: "a|b",
+      participants: [],
+      messages: [],
+      total: 0,
+    })),
     markAgentMailConversationSeen: mock(async (_a: string, _b: string, _ids: string[]) => 2),
   };
   const handlers = new Map<string, CommandHandler>();
@@ -83,7 +93,19 @@ describe("retry_agent_mail_inject", () => {
     );
     const storage = {
       retryAgentMailInject,
-      getAgentMailMessage: mock(async () => ({ id: "m" })),
+      getAgentMailMessage: mock(async () => ({
+        id: "m",
+        threadId: "m",
+        requestId: "r",
+        createdAt: "2026-11-07T00:00:00.000Z",
+        from: { kind: "user" },
+        toEnvironmentId: "e",
+        toTabId: "t",
+        trust: "user",
+        placement: "pending-inject",
+        body: "hello",
+        revision: 1,
+      })),
     };
     const drainAgentMail = mock(async () => undefined);
     const handlers = new Map<string, CommandHandler>();

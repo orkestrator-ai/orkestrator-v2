@@ -1,4 +1,4 @@
-import { invokeCommandNodeSetting } from "@/lib/portal/command-node-config";
+import { agentMail, commandNodeAgentMail } from "@/lib/node-scope/domains/agent-mail";
 import { AGENT_MAIL_MAX_MESSAGES_PER_MAILBOX } from "@orkestrator/protocol/agent-mail";
 import type { AgentRegistrySnapshot } from "@orkestrator/protocol/agent-registry";
 import type {
@@ -13,18 +13,18 @@ import type {
   AgentMessagingSettings,
   MailboxDescriptor,
 } from "@orkestrator/protocol/agent-mail";
-import { clientInvoke, commandBackendClient, type BackendClient } from "./client";
+import { commandBackendClient, type BackendClient } from "./client";
 
 /** Messaging settings are the command node's, which its leaves inherit. */
 export function getAgentMessagingSettings(): Promise<AgentMessagingSettings> {
-  return invokeCommandNodeSetting("get_agent_messaging_settings");
+  return commandNodeAgentMail().get_agent_messaging_settings({});
 }
 
 /** Saves the command node's messaging settings and answers with what it stored. */
 export function updateAgentMessagingSettings(
   settings: AgentMessagingSettings,
 ): Promise<AgentMessagingSettings> {
-  return invokeCommandNodeSetting("update_agent_messaging_settings", { settings });
+  return commandNodeAgentMail().update_agent_messaging_settings({ settings });
 }
 
 /**
@@ -33,10 +33,11 @@ export function updateAgentMessagingSettings(
  * over the window's command scope.
  */
 export function createAgentMailApi(client: BackendClient) {
-  const invoke = clientInvoke(client);
+  // Every call goes through the `agent-mail` domain client (plan item 7008).
+  const mail = agentMail(client);
 
   function getAgentMailSummary(): Promise<AgentMailSummarySnapshot> {
-    return invoke("get_agent_mail_summary");
+    return mail().get_agent_mail_summary({});
   }
 
   function listAgentMailboxes(
@@ -48,17 +49,17 @@ export function createAgentMailApi(client: BackendClient) {
       includeTombstoned?: boolean;
     } = {},
   ): Promise<{ mailboxes: MailboxDescriptor[]; total: number; offset: number; limit: number }> {
-    return invoke("list_agent_mailboxes", options);
+    return mail().list_agent_mailboxes(options);
   }
 
   function getAgentMailMailboxes(
     addresses: Array<{ environmentId: string; tabId: string }>,
   ): Promise<AgentMailMailboxBatchSnapshot> {
-    return invoke("get_agent_mail_mailboxes", { addresses });
+    return mail().get_agent_mail_mailboxes({ addresses });
   }
 
   function getAgentMailInboxSnapshot(): Promise<AgentMailInboxSnapshot> {
-    return invoke("get_agent_mail_inbox_snapshot");
+    return mail().get_agent_mail_inbox_snapshot({});
   }
 
   function getAgentMailMailbox(
@@ -66,7 +67,7 @@ export function createAgentMailApi(client: BackendClient) {
     tabId: string,
     unreadOnly = false,
   ): Promise<AgentMailMailboxSnapshot> {
-    return invoke("get_agent_mail_mailbox", {
+    return mail().get_agent_mail_mailbox({
       environmentId,
       tabId,
       unreadOnly,
@@ -79,12 +80,12 @@ export function createAgentMailApi(client: BackendClient) {
     tabId: string,
     messageId: string,
   ): Promise<AgentMailMessage> {
-    return invoke("get_agent_mail_message", { environmentId, tabId, messageId });
+    return mail().get_agent_mail_message({ environmentId, tabId, messageId });
   }
 
   /** Every pair that has exchanged mail, or only one participant's. */
   function listAgentMailConversations(participant?: string): Promise<AgentMailConversationList> {
-    return invoke("list_agent_mail_conversations", participant ? { participant } : {});
+    return mail().list_agent_mail_conversations(participant ? { participant } : {});
   }
 
   /** The messages between two participants, oldest first. */
@@ -93,7 +94,7 @@ export function createAgentMailApi(client: BackendClient) {
     b: string,
     limit?: number,
   ): Promise<AgentMailConversation> {
-    return invoke("get_agent_mail_conversation", { a, b, ...(limit ? { limit } : {}) });
+    return mail().get_agent_mail_conversation({ a, b, ...(limit ? { limit } : {}) });
   }
 
   function markAgentMailConversationSeen(
@@ -101,7 +102,7 @@ export function createAgentMailApi(client: BackendClient) {
     b: string,
     messageIds: string[],
   ): Promise<{ marked: number }> {
-    return invoke("mark_agent_mail_conversation_seen", { a, b, messageIds });
+    return mail().mark_agent_mail_conversation_seen({ a, b, messageIds });
   }
 
   function sendAgentMail(input: {
@@ -112,14 +113,14 @@ export function createAgentMailApi(client: BackendClient) {
     body: string;
     replyToMessageId?: string;
   }): Promise<AgentMailMessage> {
-    return invoke("send_agent_mail", input);
+    return mail().send_agent_mail(input);
   }
 
   function listAgentMailSent(address?: {
     environmentId: string;
     tabId: string;
   }): Promise<AgentMailMessageSummary[]> {
-    return invoke("list_agent_mail_sent", address ?? {});
+    return mail().list_agent_mail_sent(address ?? {});
   }
 
   function ackAgentMail(
@@ -127,7 +128,7 @@ export function createAgentMailApi(client: BackendClient) {
     tabId: string,
     messageId: string,
   ): Promise<AgentMailMessage> {
-    return invoke("ack_agent_mail", { environmentId, tabId, messageId });
+    return mail().ack_agent_mail({ environmentId, tabId, messageId });
   }
 
   function markAgentMailSeen(
@@ -135,7 +136,7 @@ export function createAgentMailApi(client: BackendClient) {
     tabId: string,
     messageId: string,
   ): Promise<AgentMailMessage> {
-    return invoke("mark_agent_mail_seen", { environmentId, tabId, messageId });
+    return mail().mark_agent_mail_seen({ environmentId, tabId, messageId });
   }
 
   function updateAgentMailboxPolicy(input: {
@@ -145,7 +146,7 @@ export function createAgentMailApi(client: BackendClient) {
     mutedInbound?: boolean;
     mutedOutbound?: boolean;
   }): Promise<MailboxDescriptor> {
-    return invoke("mute_agent_mail", input);
+    return mail().mute_agent_mail(input);
   }
 
   function retryAgentMailInject(
@@ -153,7 +154,7 @@ export function createAgentMailApi(client: BackendClient) {
     tabId: string,
     messageId: string,
   ): Promise<AgentMailMessage> {
-    return invoke("retry_agent_mail_inject", { environmentId, tabId, messageId });
+    return mail().retry_agent_mail_inject({ environmentId, tabId, messageId });
   }
 
   /**
@@ -166,7 +167,7 @@ export function createAgentMailApi(client: BackendClient) {
     tabId: string,
     messageId: string,
   ): Promise<AgentMailMessage> {
-    return invoke("retry_agent_mail_inject", { environmentId, tabId, messageId, now: true });
+    return mail().retry_agent_mail_inject({ environmentId, tabId, messageId, now: true });
   }
 
   function discardAgentMailInject(
@@ -174,11 +175,11 @@ export function createAgentMailApi(client: BackendClient) {
     tabId: string,
     messageId: string,
   ): Promise<AgentMailMessage> {
-    return invoke("discard_agent_mail_inject", { environmentId, tabId, messageId });
+    return mail().discard_agent_mail_inject({ environmentId, tabId, messageId });
   }
 
   function setAgentMessagingPaused(paused: boolean): Promise<{ paused: boolean }> {
-    return invoke("set_agent_messaging_paused", { paused });
+    return mail().set_agent_messaging_paused({ paused });
   }
 
   /** Every agent tab and what it is doing, optionally for one project or environment. */
@@ -186,7 +187,7 @@ export function createAgentMailApi(client: BackendClient) {
     projectId?: string;
     environmentId?: string;
   }): Promise<AgentRegistrySnapshot> {
-    return invoke<AgentRegistrySnapshot>("get_agent_registry", filter);
+    return mail().get_agent_registry(filter);
   }
 
   return {

@@ -28,6 +28,7 @@ import projects from "./projects.ts";
 import kanban from "./kanban.ts";
 import accounts from "./accounts.ts";
 import mcp from "./mcp.ts";
+import agentMail from "./agent-mail.ts";
 
 export const SCENARIOS: readonly ScenarioModule[] = [
   nodeMail,
@@ -55,4 +56,5 @@ export const SCENARIOS: readonly ScenarioModule[] = [
   kanban,
   accounts,
   mcp,
+  agentMail,
 ];

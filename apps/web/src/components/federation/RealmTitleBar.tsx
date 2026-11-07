@@ -7,12 +7,9 @@ import {
   SystemUsageMeters,
 } from "@/components/layout/SystemUsageIndicator";
 import { SYSTEM_USAGE_STALE_AFTER_MS, useSystemUsage } from "@/hooks/useSystemUsage";
-import {
-  onShellMessage,
-  postToShell,
-  type RealmPanel,
-  type RealmPanelRequest,
-} from "@/lib/federation/workspace-realm";
+import { type RealmPanel, type RealmPanelRequest } from "@/lib/federation/workspace-realm";
+import { useRealmChannel } from "@/lib/federation/realm-channel";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { realmPanel, useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 
 /**
@@ -36,8 +33,11 @@ const OTHER_PANEL: Record<RealmPanel, RealmPanel> = { usage: "agent", agent: "us
  * popovers it opens, placed under that title bar's triggers.
  */
 export function RealmTitleBarPanels({ activeTab }: { activeTab: TabInfo | null }) {
-  // The same coordinated read the popover's own meters join.
-  const usageView = useSystemUsage({ intervalMs: SYSTEM_USAGE_POLL_INTERVAL_MS });
+  // The page's transport in a realm document, the window's loopback in its tree.
+  const channel = useRealmChannel();
+  // The same coordinated read the popover's own meters join, on this node.
+  const { scope } = useScopesWithCommandFallback();
+  const usageView = useSystemUsage({ intervalMs: SYSTEM_USAGE_POLL_INTERVAL_MS, scope });
   const [requests, setRequests] = useState<Partial<Record<RealmPanel, RealmPanelRequest>>>({});
   const [report, setReport] = useState<{ panel: RealmPanel | null; requestSeq: number }>({
     panel: null,
@@ -47,7 +47,7 @@ export function RealmTitleBarPanels({ activeTab }: { activeTab: TabInfo | null }
 
   useEffect(
     () =>
-      onShellMessage((message) => {
+      channel.onMessage((message) => {
         if (message.type !== "panel") return;
         const seq = message.seq ?? nextSeq.current++;
         const other = OTHER_PANEL[message.panel];
@@ -70,14 +70,14 @@ export function RealmTitleBarPanels({ activeTab }: { activeTab: TabInfo | null }
           },
         }));
       }),
-    [],
+    [channel],
   );
 
   const usage = usageView.sample;
   const usageStale = usageView.stale;
   useEffect(() => {
-    postToShell({ type: "titleBar", usage, usageStale, ...report });
-  }, [report, usage, usageStale]);
+    channel.post({ type: "titleBar", usage, usageStale, ...report });
+  }, [channel, report, usage, usageStale]);
 
   const control = (panel: RealmPanel) => ({
     request: requests[panel] ?? null,
@@ -93,7 +93,7 @@ export function RealmTitleBarPanels({ activeTab }: { activeTab: TabInfo | null }
     },
     onDismiss: () => {
       const seq = requests[panel]?.seq;
-      if (seq !== undefined) postToShell({ type: "panelDismissed", panel, seq });
+      if (seq !== undefined) channel.post({ type: "panelDismissed", panel, seq });
     },
   });
 

@@ -469,9 +469,7 @@
     "apps/web/src/lib/web-annotations/sync.ts": 1,
     "apps/web/src/stores/previewServiceStore.ts": 1
   },
-  "scoped-store-shim": {
-    "[ui] apps/web/src/components/federation/WorkspaceRealmHost.tsx": 2
-  },
+  "scoped-store-shim": {},
   "lib-backend-command-default": {
     "[projects-environments] apps/web/src/lib/scope-services.ts": 3
   }

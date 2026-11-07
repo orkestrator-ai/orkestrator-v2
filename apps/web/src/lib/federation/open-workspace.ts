@@ -1,3 +1,4 @@
+import type { BackendId } from "@orkestrator/protocol/federation";
 import { getWindowScope } from "@/lib/node-scope/app-window-scope";
 import { portalStore } from "@/lib/portal/portal-store";
 import {
@@ -133,11 +134,18 @@ export function openRepository(spec: {
     .noteRepositoryOpened({ name: spec.repository, projectKey: spec.projectKey });
 }
 
-/** Opens one of this window's own node's dialogs, as its sidebar menus do. */
-export function openDialog(dialog: RealmDialog, projectId: string, environmentId?: string): void {
+/**
+ * Opens one of a node's dialogs, as its sidebar menus do: this window's own
+ * node's (its command scope's) unless `nodeId` names another node with a
+ * scope here (one shown in the window's tree, plan item 4001).
+ */
+export function openDialog(
+  dialog: RealmDialog,
+  projectId: string,
+  environmentId?: string,
+  nodeId: BackendId = getWindowScope().commandScope().nodeId,
+): void {
   const dialogs = useAppDialogStore.getState();
-  // This window's own node is its command scope's.
-  const nodeId = getWindowScope().commandScope().nodeId;
   if (dialog === "environment-settings" || dialog === "environment-rebuild") {
     if (environmentId)
       dialogs.open({

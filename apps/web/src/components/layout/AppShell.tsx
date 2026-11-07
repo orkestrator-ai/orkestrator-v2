@@ -1,32 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { usePanelRef } from "react-resizable-panels";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/components/ui/resizable";
 import { Sidebar } from "./Sidebar";
 import { ActionBar } from "./ActionBar";
 import { OpenFileDialog } from "./OpenFileDialog";
 import { KeyboardShortcutsDialog } from "./KeyboardShortcutsDialog";
 import { FilesPanel } from "@/components/files-panel";
-import {
-  useConfigStore,
-  useEnvironmentStore,
-  useFilesPanelStore,
-  usePaneLayoutStore,
-  useProjectStore,
-  useUIStore,
-  getAllLeaves,
-} from "@/stores";
+import { useEnvironmentStore, useProjectStore, useUIStore } from "@/stores";
 import { useUIChromeStore } from "@/stores/uiChromeStore";
 import { useMediaQuery } from "@/hooks";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { sidebarPanelConstraints, sidebarPanelMode } from "@/lib/sidebar-width";
 import { useSidebarPanelMotion } from "./useSidebarPanelMotion";
-import {
-  PULL_REQUEST_PANEL_MIN_WIDTH_PX,
-  PULL_REQUEST_PANEL_WIDTH_PX,
-} from "@/stores/filesPanelStore";
 import { useFilesPanelChromeStore } from "@/stores/filesPanelChromeStore";
-import { DEFAULT_TERMINAL_APPEARANCE, resolveTerminalBackgroundColor } from "@/constants/terminal";
 import { getCurrentWindow } from "@/lib/native/window";
 import { cn } from "@/lib/utils";
 import { MOBILE_SHELL_MEDIA_QUERY, MobileAppShellLayout } from "./MobileAppShellLayout";
@@ -38,10 +24,6 @@ import {
 import { isNodeEnvironmentReadyToMerge } from "@/lib/pr-merge-readiness";
 import { viewFromNodeSummary } from "@/components/federation/useMachineViews";
 import { AgentInfoButton } from "./AgentInfoButton";
-import {
-  coordinatorConversationTab,
-  useActiveCoordinatorConversationStore,
-} from "@/stores/activeCoordinatorConversationStore";
 import { AgentMailButton } from "@/components/agent-mail/AgentMailButton";
 import { AgentMailPanel } from "@/components/agent-mail/AgentMailPanel";
 import { SystemUsageIndicator } from "./SystemUsageIndicator";
@@ -54,67 +36,26 @@ import { RemoteWorkspaceRegion } from "@/components/federation/RemoteWorkspaceRe
 import {
   RealmAgentInfoTrigger,
   RealmSystemUsageMeters,
-  RealmTitleBarPanels,
   useRealmPanelDismiss,
 } from "@/components/federation/RealmTitleBar";
 import { useFederation } from "@/components/federation/FederationProvider";
 import { isWorkspaceRealm } from "@/lib/federation/workspace-realm";
-import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
+import { isInTreeNode, useInTreeNodesStore } from "@/stores/inTreeNodesStore";
 import { retainAppShortcutRouter, setUnhandledAppShortcut } from "@/lib/app-shortcuts";
 import {
   useRemoteWorkspaceStore,
   type RemoteWorkspaceSelection,
 } from "@/stores/remoteWorkspaceStore";
-import type { EnvironmentPaneState } from "@/stores/paneLayoutStore";
+import {
+  FILES_PANEL_MAX_SIZE,
+  NodeWorkspaceLayout,
+  useCentralPanelThemeVars,
+  useFilesPanelPullRequestWidth,
+  useWorkspaceActiveTab,
+} from "./NodeWorkspaceLayout";
 
 interface AppShellProps {
   children?: React.ReactNode;
-}
-
-/** The active tab of an environment's active pane, as the store holds it. */
-function selectActivePaneTab(environment: EnvironmentPaneState | undefined) {
-  if (!environment) return null;
-  const activePane = getAllLeaves(environment.root).find(
-    (leaf) => leaf.id === environment.activePaneId,
-  );
-  if (!activePane?.activeTabId) return null;
-  return activePane.tabs.find((tab) => tab.id === activePane.activeTabId) ?? null;
-}
-
-/** Wide enough for a pull request opened in the panel; files views stay narrow by choice. */
-const FILES_PANEL_MAX_SIZE = "960px";
-
-/**
- * Widens a narrow files panel when it shows a pull request, once per opened
- * tab, so the user's own narrower width for files is otherwise kept.
- */
-function useFilesPanelPullRequestWidth(open: boolean) {
-  const panelRef = usePanelRef();
-  const activeTab = useFilesPanelStore((state) => state.activeTab);
-  const showsPullRequest = open && activeTab.startsWith("pull-request:");
-  useEffect(() => {
-    if (!showsPullRequest) return;
-    // A panel that opens with this tab registers with its group after this
-    // effect runs, and reading its size before then throws. Retry for a few
-    // frames; widening is cosmetic, so giving up is safe.
-    let frame = 0;
-    let attempts = 0;
-    const widen = () => {
-      const panel = panelRef.current;
-      try {
-        if (panel && panel.getSize().inPixels < PULL_REQUEST_PANEL_MIN_WIDTH_PX) {
-          panel.resize(`${PULL_REQUEST_PANEL_WIDTH_PX}px`);
-        }
-        if (panel) return;
-      } catch {
-        // Not laid out yet.
-      }
-      if (++attempts < 10) frame = requestAnimationFrame(widen);
-    };
-    frame = requestAnimationFrame(widen);
-    return () => cancelAnimationFrame(frame);
-  }, [panelRef, showsPullRequest, activeTab]);
-  return panelRef;
 }
 
 /** Names of the other node's project and environment the central region shows. */
@@ -152,6 +93,10 @@ export function AppShell({ children }: AppShellProps) {
     workspaceRealm ? null : state.active,
   );
   const remoteNames = useRemoteWorkspaceNames(remoteWorkspace);
+  // A node shown in this window's tree has its own ⌘⇧P (`InTreeWorkspace`).
+  const inTreeShown = useInTreeNodesStore((state) =>
+    remoteWorkspace ? isInTreeNode(remoteWorkspace.nodeId, state.nodes) : false,
+  );
   const [centralColumn, setCentralColumn] = useState<HTMLDivElement | null>(null);
   const [mobileContent, setMobileContent] = useState<HTMLDivElement | null>(null);
   // The desktop and mobile layouts are different trees, so rendering `children`
@@ -185,14 +130,6 @@ export function AppShell({ children }: AppShellProps) {
   });
   const selectedProjectId = useUIStore((state) => state.selectedProjectId);
   const selectedEnvironmentId = useUIStore((state) => state.selectedEnvironmentId);
-  // Only the selected environment's active tab: a pane-layout change in any
-  // other environment returns the same tab object and does not re-render the
-  // shell (WEB-7).
-  const paneActiveTab = usePaneLayoutStore((state) =>
-    selectedEnvironmentId
-      ? selectActivePaneTab(state.environments.get(selectedEnvironmentId))
-      : null,
-  );
   const activeProjectName = useProjectStore((state) =>
     selectedProjectId
       ? (state.projects.find((project) => project.id === selectedProjectId)?.name ?? null)
@@ -205,25 +142,7 @@ export function AppShell({ children }: AppShellProps) {
       : null,
   );
   const localNameSignal = useEnvironmentIdNameSignal(selectedEnvironmentId);
-  const terminalAppearance =
-    useConfigStore((state) => state.config.global.terminalAppearance) ??
-    DEFAULT_TERMINAL_APPEARANCE;
-
-  const panelBackgroundColor = resolveTerminalBackgroundColor(terminalAppearance.backgroundColor);
-
-  const centralPanelThemeVars = useMemo(
-    () =>
-      ({
-        "--color-background": panelBackgroundColor,
-        "--color-card": panelBackgroundColor,
-        "--color-popover": panelBackgroundColor,
-        "--color-muted": panelBackgroundColor,
-        "--color-secondary": panelBackgroundColor,
-        "--color-accent": panelBackgroundColor,
-        "--color-input": panelBackgroundColor,
-      }) as React.CSSProperties,
-    [panelBackgroundColor],
-  );
+  const centralPanelThemeVars = useCentralPanelThemeVars();
 
   const handleTitleBarMouseDown = (event: React.MouseEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
@@ -237,21 +156,7 @@ export function AppShell({ children }: AppShellProps) {
     remoteNames ? remoteNames.environmentName : activeEnvironmentName,
     import.meta.env.VITE_ORKESTRATOR_PROFILE?.trim() || null,
   );
-  const projectBoardTab = useUIStore((state) => state.projectBoardTab);
-  const coordinatorConversation = useActiveCoordinatorConversationStore((state) => state.active);
-  // The selection is this shell's node's, so a conversation must be on it too.
-  const shellNodeId = useScopesWithCommandFallback().scope.nodeId;
-  const coordinatorTab = useMemo(
-    () =>
-      coordinatorConversationTab(
-        coordinatorConversation,
-        { nodeId: shellNodeId, projectId: selectedProjectId },
-        projectBoardTab,
-      ),
-    [coordinatorConversation, shellNodeId, selectedProjectId, projectBoardTab],
-  );
-  // Keep the coordinator descriptor stable when unrelated pane layouts change.
-  const activeTab = coordinatorTab ?? paneActiveTab;
+  const activeTab = useWorkspaceActiveTab();
 
   // App shortcuts work wherever focus is in this document (`app-shortcuts.ts`).
   useEffect(() => retainAppShortcutRouter(), []);
@@ -289,35 +194,11 @@ export function AppShell({ children }: AppShellProps) {
         {/* The node's tabs and their mail live here; the messages panel opens over the realm. */}
         <AgentMailPanel />
         <HostPark parkRef={contentParkRef} />
-        {/*
-          The window's title bar shows this node's host meters and agent
-          button, as it does for its own node's environments; their popovers
-          open here, under it.
-        */}
-        <RealmTitleBarPanels activeTab={activeTab} />
-        <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
-          <ResizablePanel defaultSize={filesPanelOpen ? 70 : 100} minSize={30}>
-            <div className="flex h-full flex-col" style={centralPanelThemeVars}>
-              <ActionBar />
-              <main className="min-h-0 flex-1 overflow-hidden bg-background">
-                <HostSlot host={contentHost} parkRef={contentParkRef} />
-              </main>
-            </div>
-          </ResizablePanel>
-          {filesPanelOpen && !isMobile && (
-            <>
-              <ResizableHandle />
-              <ResizablePanel
-                defaultSize={30}
-                minSize="240px"
-                maxSize={FILES_PANEL_MAX_SIZE}
-                panelRef={filesPanelRef}
-              >
-                <FilesPanel />
-              </ResizablePanel>
-            </>
-          )}
-        </ResizablePanelGroup>
+        <NodeWorkspaceLayout
+          main={<HostSlot host={contentHost} parkRef={contentParkRef} />}
+          filesPanelOpen={filesPanelOpen}
+          phone={isMobile}
+        />
         {createPortal(children, contentHost)}
       </div>
     );
@@ -327,7 +208,7 @@ export function AppShell({ children }: AppShellProps) {
 
   return (
     <div className="flex h-full w-full flex-col overflow-hidden">
-      <OpenFileDialog />
+      <OpenFileDialog enabled={!inTreeShown} />
       <KeyboardShortcutsDialog />
       {/* Outside both layouts, so a dialog outlives the drawer that requested it. */}
       <AppDialogHost />

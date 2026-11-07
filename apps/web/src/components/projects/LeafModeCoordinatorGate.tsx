@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { ShieldAlert } from "lucide-react";
 import { useStore } from "zustand";
 import { Button } from "@/components/ui/button";
@@ -7,14 +7,64 @@ import { repositoryHint } from "@/lib/federation/summaries";
 import { openMachineWorkspace } from "@/lib/federation/open-workspace";
 import { realmCoordinatorDefers } from "@/lib/federation/workspace-realm";
 import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { useFederation } from "@/components/federation/FederationProvider";
+import { projectStore } from "@/stores/projectStore";
 import { portalStore } from "@/lib/portal/portal-store";
 import { workspaceTarget } from "@/lib/portal/portal-transport";
 import { useProjectStore, useUIStore } from "@/stores";
 import { useRealmShellStore } from "@/stores/realmShellStore";
 
-/** The window's workspace node and the project: a project id is per node. */
-export function leafCoordinatorGateKey(projectId: string | undefined): string {
-  return `${workspaceTarget()?.nodeId ?? "local"}:${projectId ?? ""}`;
+/**
+ * Whether `scope` is another node shown in the window's own tree (plan item
+ * 4001): a leaf scope in a window that is not itself on a leaf.
+ */
+function isInTreeLeaf(scope: NodeScope | null): boolean {
+  return scope?.role === "leaf" && workspaceTarget() === null;
+}
+
+/** The workspace's node and the project: a project id is per node. */
+export function leafCoordinatorGateKey(
+  projectId: string | undefined,
+  scope: NodeScope | null = null,
+): string {
+  const node = isInTreeLeaf(scope) ? scope!.nodeId : (workspaceTarget()?.nodeId ?? "local");
+  return `${node}:${projectId ?? ""}`;
+}
+
+/**
+ * For a node in the window's tree: the command node's own projects, as a
+ * realm reads them from the command node's self summary. The window's command
+ * scope holds them directly.
+ */
+function useCommandNodeSelf(enabled: boolean) {
+  const { windowScope } = useScopesWithCommandFallback();
+  const { boundMachine } = useFederation();
+  const commandProjects = useStore(windowScope.commandScope().store(projectStore), (state) =>
+    enabled ? state.projects : null,
+  );
+  const commandLoaded = useStore(windowScope.commandScope().store(projectStore), (state) =>
+    enabled ? state.hasLoaded : false,
+  );
+  return useMemo(
+    () =>
+      commandProjects
+        ? {
+            loaded: commandLoaded,
+            self: {
+              displayName: boundMachine?.name ?? "",
+              truncated: false,
+              projects: commandProjects.map((project) => ({
+                ref: { projectId: project.id },
+                name: project.name,
+                repositoryHint: repositoryHint(project.gitUrl),
+              })),
+            },
+          }
+        : null,
+    [boundMachine?.name, commandLoaded, commandProjects],
+  );
 }
 
 /** Shown while the facts the gate decides on are still loading. */
@@ -57,10 +107,16 @@ export function LeafModeCoordinatorGate({
   children: ReactNode;
 }) {
   const status = useStore(portalStore.store, (state) => state.status);
-  const self = useStore(portalStore.store, (state) => state.self);
+  const portalSelf = useStore(portalStore.store, (state) => state.self);
   const selfId = useStore(portalStore.store, (state) => state.selfId);
-  const portalLoaded = useStore(portalStore.store, (state) => state.loaded);
+  const portalStatusLoaded = useStore(portalStore.store, (state) => state.loaded);
   const scope = useShimNodeScope("project");
+  // Another node in the window's tree is on a leaf as a realm is; the
+  // command node's projects come from the window's command scope.
+  const inTreeLeaf = isInTreeLeaf(scope);
+  const commandSelf = useCommandNodeSelf(inTreeLeaf);
+  const self = commandSelf ? commandSelf.self : portalSelf;
+  const portalLoaded = commandSelf ? commandSelf.loaded : portalStatusLoaded;
   const projectsLoaded = useProjectStore((state) => state.hasLoaded);
   const projectsLoading = useProjectStore((state) => state.isLoading);
   const projectsError = useProjectStore((state) => state.error);
@@ -68,12 +124,12 @@ export function LeafModeCoordinatorGate({
     (state) => state.projects.find((project) => project.id === projectId)?.gitUrl,
   );
   const grouping = useRealmShellStore((state) => state.grouping);
-  const gateKey = leafCoordinatorGateKey(projectId);
+  const gateKey = leafCoordinatorGateKey(projectId, scope);
   const opened = useUIStore((state) => state.openedLeafCoordinators.includes(gateKey));
   const openLeafCoordinator = useUIStore((state) => state.openLeafCoordinator);
   const openAnyway = () => openLeafCoordinator(gateKey);
   const [retrying, setRetrying] = useState(false);
-  const onLeaf = workspaceTarget() !== null;
+  const onLeaf = workspaceTarget() !== null || inTreeLeaf;
   useEffect(() => {
     if (!portalStore.getState().loaded) void portalStore.refresh();
   }, []);

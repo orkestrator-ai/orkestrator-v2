@@ -63,6 +63,8 @@ export const WEB_SYNC_LOG_AREAS = defineLogAreas({
     events: {
       "service.failed": "A scoped service threw; only it stopped and its scope is marked failed.",
       "finalizer.failed": "A cleanup step of a scope, service or store threw; the rest still ran.",
+      "workspace.render-failed":
+        "A node's workspace in the window's tree failed to render; only it shows an error.",
     },
   },
 });

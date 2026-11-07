@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
 import { useBugReportStore } from "@/stores/bugReportStore";
 import { AddProjectDialog } from "@/components/projects/AddProjectDialog";
 import { CreateEnvironmentFlowDialog } from "@/components/environments/CreateEnvironmentFlowDialog";
@@ -16,19 +17,15 @@ import { openCoordinatorWorkTarget } from "@/lib/coordinator-work-navigation";
 import { openDialog } from "@/lib/federation/open-workspace";
 import { suggestedCloneDirectory } from "@/lib/github-clone";
 import { getReadCoordinator } from "@/lib/read-coordinator";
-import {
-  onShellMessage,
-  postToShell,
-  realmInitialRequest,
-  type RealmSelectRequest,
-} from "@/lib/federation/workspace-realm";
+import { type RealmSelectRequest } from "@/lib/federation/workspace-realm";
+import { useRealmChannel } from "@/lib/federation/realm-channel";
 import { useConfigStore } from "@/stores/configStore";
 import { useFilesPanelChromeStore } from "@/stores/filesPanelChromeStore";
 import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
 import { environmentStore } from "@/stores/environmentStore";
 import { useProjectStore } from "@/stores/projectStore";
 import { useRealmShellStore } from "@/stores/realmShellStore";
-import { useUIStore } from "@/stores/uiStore";
+import { uiStore } from "@/stores/uiStore";
 import { useUIChromeStore } from "@/stores/uiChromeStore";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
@@ -60,6 +57,9 @@ export function WorkspaceRealmHost() {
   } = useEnvironments(null);
   // The node this realm shows: the one the hooks above read.
   const scope = useShimNodeScope("environment");
+  // The page's transport in a realm document; the window's loopback for a
+  // node shown in the window's own tree (`InTreeWorkspace`).
+  const channel = useRealmChannel();
   const projectsLoaded = useProjectStore((state) => state.hasLoaded);
   const configLoaded = useConfigStore((state) => state.hasLoaded);
   const projectIds = useMemo(() => projects.map((project) => project.id), [projects]);
@@ -90,7 +90,7 @@ export function WorkspaceRealmHost() {
 
   // What the window asked for last, numbered so the same request twice counts twice.
   const [request, setRequest] = useState<(RealmSelectRequest & { seq: number }) | null>(() => {
-    const initial = realmInitialRequest();
+    const initial = channel.initialRequest();
     return initial ? { ...initial, seq: 1 } : null;
   });
   const nextSeq = useRef(2);
@@ -103,7 +103,7 @@ export function WorkspaceRealmHost() {
   // Listen first, then say so: the window resends what it asked meanwhile.
   useEffect(
     () =>
-      onShellMessage((message) => {
+      channel.onMessage((message) => {
         if (message.type === "select") {
           setRequest({ ...message, seq: nextSeq.current++ });
           return;
@@ -128,50 +128,61 @@ export function WorkspaceRealmHost() {
         }
         // A frame or view the window hides still reads as visible here, so the
         // window says so and this realm's reads defer as a hidden window's do.
-        if (message.type === "visibility") {
+        // In the window's own tree the document's visibility is the window's,
+        // which a hidden node must not change; its scope's tier does (4002).
+        if (message.type === "visibility" && channel.kind === "page") {
           getReadCoordinator().setHostHidden(message.hidden);
         }
       }),
-    [],
+    [channel],
   );
-  useEffect(() => postToShell({ type: "ready" }), []);
+  useEffect(() => channel.post({ type: "ready" }), [channel]);
   // The window asked for this node's Report a bug sheet, which runs here so
   // its agent session talks to this node.
   const bugReportSeq = useRef(0);
   useEffect(() => {
     if (!request?.bugReport || bugReportSeq.current >= request.seq) return;
     bugReportSeq.current = request.seq;
+    // In the window's tree the sheet is the window's, on the command node's
+    // backend; another node's report needs the sheet on its scope (5003).
+    if (channel.kind === "loopback") {
+      toast.info("Report a bug for this machine from its own workspace view", {
+        description:
+          "Turn off “Workspace in this window” for it in Settings → Machines, then report again.",
+      });
+      return;
+    }
     useBugReportStore.getState().openSheet();
-  }, [request]);
+  }, [channel, request]);
   useEffect(
     () =>
       useUIChromeStore.subscribe((state, previous) => {
         if (state.sidebarOpen !== previous.sidebarOpen) {
-          postToShell({ type: "sidebar", open: state.sidebarOpen });
+          channel.post({ type: "sidebar", open: state.sidebarOpen });
         }
       }),
-    [],
+    [channel],
   );
   useEffect(
     () =>
       useFilesPanelChromeStore.subscribe((state, previous) => {
         if (state.isOpen !== previous.isOpen && !applyingShellFilesPanel.current) {
-          postToShell({ type: "filesPanel", open: state.isOpen });
+          channel.post({ type: "filesPanel", open: state.isOpen });
         }
       }),
-    [],
+    [channel],
   );
 
   useEffect(
     () =>
-      useUIStore.subscribe((state, previous) => {
+      scope.store(uiStore).subscribe((state, previous) => {
         if (
           state.selectedProjectId === previous.selectedProjectId &&
           state.selectedEnvironmentId === previous.selectedEnvironmentId
         ) {
           return;
         }
-        postToShell({
+        channel.post({
           type: "selection",
           projectId: state.selectedProjectId,
           environmentId: state.selectedEnvironmentId,
@@ -188,7 +199,7 @@ export function WorkspaceRealmHost() {
             : {}),
         });
       }),
-    [scope],
+    [channel, scope],
   );
 
   // The New Environment dialog reads its defaults (environment type, ports)
@@ -213,7 +224,7 @@ export function WorkspaceRealmHost() {
   // Select what was asked for, as the node's own sidebar would.
   useEffect(() => {
     if (!request || appliedSeq.current >= request.seq) return;
-    const ui = useUIStore.getState();
+    const ui = scope.store(uiStore).getState();
     if (request.addProject) {
       if (!projectsLoaded) return;
       appliedSeq.current = request.seq;
@@ -239,7 +250,7 @@ export function WorkspaceRealmHost() {
       appliedSeq.current = request.seq;
       ui.selectProject(request.projectId);
       if (request.boardTab) ui.setProjectBoardTab(request.boardTab);
-      if (request.dialog) openDialog(request.dialog, request.projectId);
+      if (request.dialog) openDialog(request.dialog, request.projectId, undefined, scope.nodeId);
       return;
     }
     const environment = allEnvironments.find((candidate) => candidate.id === request.environmentId);
@@ -257,10 +268,10 @@ export function WorkspaceRealmHost() {
     ui.selectProjectAndEnvironment(environment.projectId, environment.id);
     // A project home opens on its Home tab, as its own sidebar opens it.
     if (request.boardTab) ui.setProjectBoardTab(request.boardTab);
-    if (request.workTarget) openCoordinatorWorkTarget(request.workTarget);
+    if (request.workTarget) openCoordinatorWorkTarget(request.workTarget, undefined, scope);
     if (request.dialog) {
       // Opening its settings is not a request to start it.
-      openDialog(request.dialog, environment.projectId, environment.id);
+      openDialog(request.dialog, environment.projectId, environment.id, scope.nodeId);
       return;
     }
     if (startsOnSelection(environment)) {
@@ -280,6 +291,7 @@ export function WorkspaceRealmHost() {
     projectsLoaded,
     projectsLoading,
     request,
+    scope,
     startEnvironment,
   ]);
 

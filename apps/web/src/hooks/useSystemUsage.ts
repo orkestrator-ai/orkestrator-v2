@@ -8,9 +8,13 @@ import {
 } from "@/lib/backend";
 import { backendClientOver, NO_ARGS } from "@/lib/node-scope/domains/invoke-over";
 import { asSystemModel, systemApi } from "@/lib/node-scope/domains/system";
+import { scopeBackendClient } from "@/lib/backend/client";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { isAppCommandScope } from "@/lib/node-scope-slots";
 import { portalStore } from "@/lib/portal/portal-store";
 import {
   getReadCoordinator,
+  readCoordinatorFor,
   readKeyId,
   type ReadCoordinator,
   type ReadCoordinatorClock,
@@ -165,9 +169,11 @@ function useUsageRead<T extends { sampledAt: string }>(options: {
   intervalMs: number;
   read: () => Promise<T>;
   isSample: (value: unknown) => value is T;
+  /** The node whose coordinator reads; the app's command scope when omitted. */
+  scope?: NodeScope;
 }): UsageView<T> {
-  const { key, active, intervalMs, read, isSample } = options;
-  const coordinator = getReadCoordinator();
+  const { key, active, intervalMs, read, isSample, scope } = options;
+  const coordinator = scope ? readCoordinatorFor(scope) : getReadCoordinator();
   const { state } = useCoordinatedRead<T>({
     key,
     coordinator,
@@ -198,20 +204,34 @@ function useUsageRead<T extends { sampledAt: string }>(options: {
   };
 }
 
-/** Host CPU/RAM/GPU/disk sample shared by every mounted meter. */
+/**
+ * Host CPU/RAM/GPU/disk sample shared by every mounted meter. With `scope`
+ * (another node's workspace in the window's tree, plan item 4001) the sample
+ * is that node's, read on its own scope; the app's command scope keeps the
+ * `@/lib/backend` read suites spy on.
+ */
 export function useSystemUsage({
   intervalMs,
   active = true,
+  scope,
 }: {
   intervalMs: number;
   active?: boolean;
+  scope?: NodeScope;
 }): UsageView<SystemUsageSnapshot> {
+  const own = !scope || isAppCommandScope(scope);
   return useUsageRead({
     key: SYSTEM_USAGE_READ_KEY,
     active,
     intervalMs,
-    read: getSystemUsage,
+    read: own
+      ? getSystemUsage
+      : () =>
+          asSystemModel<SystemUsageSnapshot>(
+            systemApi(scopeBackendClient(scope)).get_system_usage(NO_ARGS),
+          ),
     isSample: isSystemUsageSnapshot,
+    ...(own ? {} : { scope }),
   });
 }
 

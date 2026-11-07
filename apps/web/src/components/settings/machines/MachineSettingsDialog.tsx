@@ -39,6 +39,7 @@ import { cn } from "@/lib/utils";
 import { CommandNodeSection } from "./CommandNodeSection";
 import { DeviceConnectionSection, SaveOnDeviceForm } from "./DeviceConnectionSection";
 import { NodeRoutesSection } from "./NodeRoutesSection";
+import { InTreeWorkspaceSection } from "./InTreeWorkspaceSection";
 import { machineInvoke } from "./machine-access";
 import type { MachineEntry } from "./machine-list";
 import { MachineSection, MachineStatusDot, errorText, formatMachineTime } from "./machine-ui";
@@ -109,6 +110,9 @@ export function MachineSettingsDialog({
           <ProfileSection machine={machine} onChanged={onChanged} />
           <StatusSection machine={machine} snapshot={snapshot} api={api} onChanged={onChanged} />
           {node ? <NodeRoutesSection key={node.nodeId} node={node} onSaved={onChanged} /> : null}
+          {node && machine.role !== "self" ? (
+            <InTreeWorkspaceSection nodeId={node.nodeId} name={machine.name} />
+          ) : null}
           {api && connection ? (
             <DeviceConnectionSection
               api={api}

@@ -1,11 +1,10 @@
-import {
-  previewsClient,
-  type PreviewDiagnosticsSnapshot,
-  type PreviewMutationResult,
-  type PreviewPublicationDetail,
-  type PreviewSettingsResponse,
-  type PreviewSettingsShape,
-  type PreviewTargetResolution,
+import type {
+  PreviewDiagnosticsSnapshot,
+  PreviewMutationResult,
+  PreviewPublicationDetail,
+  PreviewSettingsResponse,
+  PreviewSettingsShape,
+  PreviewTargetResolution,
 } from "@orkestrator/protocol/contract/domains/previews";
 import type { PreviewAttachmentDescriptor } from "@orkestrator/protocol/preview-access";
 import type {
@@ -19,7 +18,8 @@ import type {
 
 import { type AccountMachine } from "./agent-accounts";
 import { commandBackendClient, type BackendClient } from "./client";
-import { backendDomainApi, machineBackendClient } from "./domain-client";
+import { previews as previewsDomain } from "@/lib/node-scope/domains/previews";
+import { machineBackendClient } from "./domain-client";
 
 /** The result and settings types are the `previews` domain's schemas (plan item 7004). */
 export type {
@@ -41,12 +41,10 @@ function operationId(): string {
  * over the window's command scope.
  */
 export function createPreviewsApi(client: BackendClient) {
-  const previews = backendDomainApi(client, previewsClient);
+  const previews = previewsDomain(client);
   /** `machine`'s previews: this client's node, or another machine through the command node. */
   const on = (machine?: AccountMachine) =>
-    machine === undefined
-      ? previews()
-      : backendDomainApi(machineBackendClient(client, machine), previewsClient)();
+    machine === undefined ? previews() : previewsDomain(machineBackendClient(client, machine))();
 
   function getPreviewCapabilities(machine?: AccountMachine): Promise<PreviewCapabilities> {
     return on(machine).capabilities({});

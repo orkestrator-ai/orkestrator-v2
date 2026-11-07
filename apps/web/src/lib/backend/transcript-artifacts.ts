@@ -1,7 +1,4 @@
-import {
-  transcriptsClient,
-  type WorkflowLiveSnapshotResponse,
-} from "@orkestrator/protocol/contract/domains/transcripts";
+import type { WorkflowLiveSnapshotResponse } from "@orkestrator/protocol/contract/domains/transcripts";
 import type {
   ArtifactConversationScope,
   ArtifactDraftReadRequest,
@@ -24,7 +21,7 @@ import type {
   TranscriptMediaPinResponse,
 } from "@orkestrator/protocol/transcript-media-pins";
 import { commandBackendClient, type BackendClient } from "./client";
-import { backendDomainApi } from "./domain-client";
+import { transcripts } from "@/lib/node-scope/domains/transcripts";
 
 /** The `transcripts` domain's schema type (plan item 7004). */
 export type { WorkflowLiveSnapshotResponse };
@@ -36,7 +33,7 @@ export type { WorkflowLiveSnapshotResponse };
  * window's command scope.
  */
 export function createTranscriptArtifactsApi(client: BackendClient) {
-  const artifacts = backendDomainApi(client, transcriptsClient);
+  const artifacts = transcripts(client);
 
   function getTranscriptArtifactCapabilities(): Promise<TranscriptArtifactCapabilities> {
     return artifacts().artifactCapabilities({});

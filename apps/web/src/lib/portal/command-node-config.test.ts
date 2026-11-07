@@ -7,6 +7,7 @@ import {
   updateRepositoryConfig,
 } from "@/lib/backend";
 import { portalStore } from "@/lib/portal/portal-store";
+import { unknownBackendCommandMessage } from "@orkestrator/protocol/unknown-command";
 import type { AppConfig, GlobalConfig, RepositoryConfig } from "@/types";
 
 const invokeMock = invoke as unknown as ReturnType<typeof mock>;
@@ -240,7 +241,7 @@ describe("patching global settings", () => {
   test("an older backend gets a read-merge-write of the whole object instead", async () => {
     invokeMock.mockImplementation(async (command: string) => {
       if (command === "patch_global_config") {
-        throw new Error("Unknown command: patch_global_config");
+        throw new Error(unknownBackendCommandMessage("patch_global_config"));
       }
       return config("leaf");
     });

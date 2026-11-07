@@ -8,7 +8,10 @@ import {
   setAgentAccountAutoSwitchIncluded,
   listMachineAgentAccounts,
   setPreferredAgentIdentity,
+  getCoordinatorAccountSwitchGrant,
 } from "./agent-accounts";
+import { unknownBackendCommandMessage } from "@orkestrator/protocol/unknown-command";
+import { GET_COORDINATOR_ACCOUNT_SWITCH_GRANT_COMMAND } from "@orkestrator/protocol/coordinator-account-switch-grant";
 import { listAgentPlugins, startGitHubCliLogin } from "./docker-skills";
 import { cursorSdkLoginStart } from "./config-integrations";
 import { startOpenCodeProviderLogin } from "./opencode-provider-auth";
@@ -215,4 +218,23 @@ test("plugin catalog requests preserve the selected command node or leaf", async
     ],
   ]);
   expect(workspace).not.toHaveBeenCalled();
+});
+
+test("a machine that predates the account switch grant reads as none, on any path", async () => {
+  const unknown = new Error(
+    unknownBackendCommandMessage(GET_COORDINATOR_ACCOUNT_SWITCH_GRANT_COMMAND),
+  );
+  workspace.mockRejectedValueOnce(unknown);
+  expect(await getCoordinatorAccountSwitchGrant("claude")).toBeNull();
+  // A routed answer arrives with the command node's text unchanged.
+  portal.mockRejectedValueOnce(unknown);
+  expect(await getCoordinatorAccountSwitchGrant("claude", "leaf")).toBeNull();
+  expect(portal.mock.calls[0]?.[1]).toMatchObject({
+    nodeId: "leaf",
+    command: GET_COORDINATOR_ACCOUNT_SWITCH_GRANT_COMMAND,
+  });
+
+  const failure = new Error("offline");
+  portal.mockRejectedValueOnce(failure);
+  await expect(getCoordinatorAccountSwitchGrant("claude", "leaf")).rejects.toBe(failure);
 });

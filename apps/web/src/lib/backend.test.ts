@@ -5,6 +5,7 @@ import type { BackendId } from "@orkestrator/protocol/federation";
 import { portalStore } from "@/lib/portal/portal-store";
 import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
+import { unknownBackendCommandMessage } from "@orkestrator/protocol/unknown-command";
 
 const invokeMock = mock<(...args: unknown[]) => Promise<unknown>>(() => Promise.resolve());
 
@@ -2589,7 +2590,8 @@ describe("backend command wrapper coverage", () => {
   });
 
   describe("commands an older backend may not know", () => {
-    const unknown = (name: string) => new Error(`Unknown command: ${name}`);
+    // The backend's own wording, so a drift in it fails here.
+    const unknown = (name: string) => new Error(unknownBackendCommandMessage(name));
 
     test("arrangeProjectsByIntent sends the gesture, and the preview only to an older backend", async () => {
       const intent = { kind: "sort-folder", folder: "Work" } as const;

@@ -20,15 +20,7 @@ export {
  * Version 1 records used canonical first-pane/first-tab pointers and kept the
  * user's real selection in renderer-local storage.
  */
-export interface PersistedPaneLayout {
-  version: number;
-  environmentId: string;
-  containerId: string | null;
-  activePaneId: string;
-  root: unknown;
-  updatedAt: string;
-  revision: number;
-}
+export type { PersistedPaneLayout } from "@orkestrator/protocol/contract/domains/native-sessions";
 
 export interface PersistedPaneLayoutInput {
   version: number;

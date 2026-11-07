@@ -8,7 +8,10 @@
  * same `@orkestrator/protocol` module (directly, through an import, or as an
  * alias `export type X = Y` of one). Re-exporting one symbol makes the two
  * types identical by construction, which no structural comparison could
- * promise. Two lists name the exceptions:
+ * promise. A side may instead declare a view derived from the other side's
+ * protocol type (`export type X<T> = Omit<P, "value"> & { value: T }`, where
+ * `P` is the symbol the other side re-exports): the plan's "narrower or
+ * derived view type". Two lists name the exceptions:
  *
  * - {@link HOMONYMS}: names that deliberately mean different records on the
  *   two sides (each side's meaning stated). The test checks both still
@@ -27,9 +30,15 @@ const BACKEND_MODELS = "apps/backend/src/core/models.ts";
 const WEB_TYPES = "apps/web/src/types/index.ts";
 
 /** Where an exported type comes from. */
+interface ProtocolOrigin {
+  readonly kind: "protocol";
+  readonly module: string;
+  readonly symbol: string;
+}
 type Origin =
-  | { readonly kind: "protocol"; readonly module: string; readonly symbol: string }
-  | { readonly kind: "local" };
+  ProtocolOrigin | { readonly kind: "local"; readonly derivedFrom: readonly ProtocolOrigin[] };
+
+const LOCAL: Origin = { kind: "local", derivedFrom: [] };
 
 /** Names both files export for different records, by design. */
 const HOMONYMS: Readonly<Record<string, { backend: string; web: string }>> = {
@@ -55,17 +64,6 @@ const PENDING: Readonly<Record<string, string>> = {
     "7010 follow-up (native-sessions): 7001's result schema is a tolerant reader (every field optional, providers as strings); the web's type is a narrower view",
   PersistedPromptQueue:
     "7010 follow-up (native-sessions): tolerant result schema; the web's type is generic over its messages",
-  PersistedComposeDraft:
-    "7010 follow-up (native-sessions): tolerant result schema; the web's type is generic over its value",
-  PersistedFileDraft: "7010 follow-up (native-sessions): tolerant result schema",
-  PersistedAgentHandoff:
-    "7010 follow-up (native-sessions): tolerant result schema; the web's type is generic over its snapshot",
-  PersistedPaneLayout:
-    "7010 follow-up (native-sessions): tolerant result schema; the web declares it in `types/paneLayout.ts`",
-  Session: "7010 follow-up (native-sessions): tolerant result schema (every field optional)",
-  SessionType:
-    "7010 follow-up (native-sessions): the schema reads `sessionType` as a string, the models as a literal union",
-  SessionStatus: "7010 follow-up (native-sessions): as SessionType",
 };
 
 interface ExportedTypes {
@@ -115,28 +113,31 @@ function exportedTypes(path: string, seen = new Set<string>()): ExportedTypes {
         exported,
         match[2]!.startsWith("@orkestrator/protocol/")
           ? { kind: "protocol", module: match[2]!, symbol: local }
-          : { kind: "local" },
+          : LOCAL,
       );
     }
   }
   // export type { A, B as C };  (re-exporting imports)
   for (const match of source.matchAll(/export\s+type\s+\{([^}]*)\};/gu)) {
     for (const { local, exported } of names(match[1]!)) {
-      result.set(exported, imports.get(local) ?? { kind: "local" });
+      result.set(exported, imports.get(local) ?? LOCAL);
     }
   }
   // export type X = Y;  (an alias of an imported protocol type) or any other type
   for (const match of source.matchAll(
-    /export\s+type\s+([A-Za-z_]\w*)(<[^=]*>)?\s*=\s*([^;]*);/gu,
+    /export\s+type\s+([A-Za-z_]\w*)(<[^>]*>)?\s*=\s*([^;]*);/gu,
   )) {
     const rhs = match[3]!.trim();
     const aliased =
       match[2] === undefined && /^[A-Za-z_]\w*$/u.test(rhs) ? imports.get(rhs) : undefined;
-    result.set(match[1]!, aliased ?? { kind: "local" });
+    const derivedFrom = [...rhs.matchAll(/[A-Za-z_]\w*/gu)]
+      .map((identifier) => imports.get(identifier[0]))
+      .filter((origin): origin is ProtocolOrigin => origin?.kind === "protocol");
+    result.set(match[1]!, aliased ?? { kind: "local", derivedFrom });
   }
   // export interface X
   for (const match of source.matchAll(/export\s+interface\s+([A-Za-z_]\w*)/gu)) {
-    result.set(match[1]!, { kind: "local" });
+    result.set(match[1]!, LOCAL);
   }
   // export * from "./relative.js";  (the web's pane layout types)
   for (const match of source.matchAll(/export\s+\*\s+from\s+"(\.[^"]+)";/gu)) {
@@ -148,12 +149,27 @@ function exportedTypes(path: string, seen = new Set<string>()): ExportedTypes {
   return { names: result };
 }
 
+function sameSymbol(a: ProtocolOrigin, b: ProtocolOrigin): boolean {
+  return a.module === b.module && a.symbol === b.symbol;
+}
+
 function sameProtocolType(a: Origin | undefined, b: Origin | undefined): boolean {
+  return a?.kind === "protocol" && b?.kind === "protocol" && sameSymbol(a, b);
+}
+
+/** One side is a protocol type and the other a view declared from that same type. */
+function derivedView(a: Origin | undefined, b: Origin | undefined): boolean {
+  const derives = (protocol: Origin | undefined, view: Origin | undefined) =>
+    protocol?.kind === "protocol" &&
+    view?.kind === "local" &&
+    view.derivedFrom.some((origin) => sameSymbol(origin, protocol));
+  return derives(a, b) || derives(b, a);
+}
+
+function converged(name: string, backend: Map<string, Origin>, web: Map<string, Origin>): boolean {
   return (
-    a?.kind === "protocol" &&
-    b?.kind === "protocol" &&
-    a.module === b.module &&
-    a.symbol === b.symbol
+    sameProtocolType(backend.get(name), web.get(name)) ||
+    derivedView(backend.get(name), web.get(name))
   );
 }
 
@@ -173,10 +189,10 @@ describe("backend models and web types converge on protocol types", () => {
     });
   });
 
-  test("every name both files export is the same protocol type, a documented homonym, or pending", () => {
+  test("every name both files export is the same protocol type (or a view of it), a documented homonym, or pending", () => {
     const offenders = shared.filter(
       (name) =>
-        !sameProtocolType(backend.get(name), web.get(name)) &&
+        !converged(name, backend, web) &&
         HOMONYMS[name] === undefined &&
         PENDING[name] === undefined,
     );
@@ -185,7 +201,7 @@ describe("backend models and web types converge on protocol types", () => {
 
   test("the exception lists hold only names that still need them", () => {
     const stale = [...Object.keys(HOMONYMS), ...Object.keys(PENDING)].filter(
-      (name) => !shared.includes(name) || sameProtocolType(backend.get(name), web.get(name)),
+      (name) => !shared.includes(name) || converged(name, backend, web),
     );
     expect(stale).toEqual([]);
   });
@@ -199,8 +215,15 @@ describe("backend models and web types converge on protocol types", () => {
       "ClaudeMode",
       "ClaudeNativeBackend",
       "EnvironmentStatus",
+      "Session",
+      "PersistedFileDraft",
+      "PersistedPaneLayout",
     ]) {
       expect(sameProtocolType(backend.get(name), web.get(name))).toBe(true);
+    }
+    // The web's generic drafts are views of the protocol records.
+    for (const name of ["PersistedComposeDraft", "PersistedAgentHandoff"]) {
+      expect(derivedView(backend.get(name), web.get(name))).toBe(true);
     }
   });
 });

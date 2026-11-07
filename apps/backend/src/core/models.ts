@@ -73,6 +73,17 @@ export type {
   StoredAppConfig as AppConfig,
 } from "@orkestrator/protocol/contract/domains/config";
 export type { AgentPlatform as DefaultAgent } from "@orkestrator/protocol/agent-platforms";
+// The terminal session record, the pane layout and the drafts: the
+// `native-sessions` domain's schemas' types (plan item 7010).
+export type {
+  PersistedAgentHandoff,
+  PersistedComposeDraft,
+  PersistedFileDraft,
+  PersistedPaneLayout,
+  Session,
+  SessionStatus,
+  SessionType,
+} from "@orkestrator/protocol/contract/domains/native-sessions";
 
 export type {
   AgentActivitySource,
@@ -463,39 +474,8 @@ export interface Environment {
   pendingRenamePrompt?: string;
 }
 
-export type SessionType = "plain" | "claude" | "opencode" | "codex" | "root";
-export type SessionStatus = "connected" | "disconnected";
-
-export interface Session {
-  id: string;
-  environmentId: string;
-  containerId: string;
-  tabId: string;
-  sessionType: SessionType;
-  status: SessionStatus;
-  createdAt: string;
-  lastActivityAt: string;
-  name?: string;
-  order: number;
-}
-
 /** Version 2 makes pane and tab selection authoritative in this record. */
 export { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
-
-/**
- * Versioned pane/tab layout persisted by the backend for restore-on-connect.
- * The backend deliberately treats `root` as opaque; the frontend owns the
- * PaneNode schema and validates it before installing a restored layout.
- */
-export interface PersistedPaneLayout {
-  version: number;
-  environmentId: string;
-  containerId: string | null;
-  activePaneId: string;
-  root: unknown;
-  updatedAt: string;
-  revision: number;
-}
 
 /** Durable envelope for a backend-owned Multi Review workflow. */
 export interface PersistedMultiReviewWorkflow {
@@ -918,55 +898,4 @@ export function nativeAgentJobReceiptIsActive(
     return session.dispatchedRequestIds.at(-1) === requestId;
   // A removed waiting item is consumed. An unconfirmed direct admission stays fenced.
   return !receipt.queued;
-}
-
-/**
- * Unsent user input owned by an environment or project.
- *
- * `value` is intentionally opaque: terminal/native composers and feature
- * conversations carry different attachment and mention shapes. The backend
- * owns durability and revisions while each frontend validates its own value.
- */
-export interface PersistedComposeDraft {
-  draftKey: string;
-  ownerType: "environment" | "project";
-  ownerId: string;
-  value: unknown;
-  /**
-   * Bounded provenance written by the retired queue-to-draft transfer command.
-   * Nothing sets it any more; drafts persisted by older versions still carry
-   * it, so it is validated on load and kept on save.
-   */
-  sourcePromptQueue?: {
-    queueKey: string;
-    messageId: string;
-  };
-  updatedAt: string;
-  revision: number;
-}
-
-/** A recoverable unsaved text-file buffer. */
-export interface PersistedFileDraft {
-  draftKey: string;
-  environmentId: string;
-  filePath: string;
-  content: string;
-  originalContent: string;
-  updatedAt: string;
-  revision: number;
-}
-
-/**
- * Immutable provider-to-provider conversation handoff.
- *
- * The backend owns the sensitive, durable envelope while the renderer owns and
- * validates the provider-neutral snapshot schema. Keeping the snapshot opaque
- * avoids coupling backend storage to the three native message wire formats.
- */
-export interface PersistedAgentHandoff {
-  version: number;
-  id: string;
-  environmentId: string;
-  snapshot: unknown;
-  createdAt: string;
 }

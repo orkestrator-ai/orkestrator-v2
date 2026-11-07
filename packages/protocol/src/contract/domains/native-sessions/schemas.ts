@@ -26,6 +26,7 @@
  * Browser-safe.
  */
 import * as Schema from "effect/Schema";
+import type { Mutable } from "effect/Types";
 import { OpenObject, openRecord } from "../../model-schema.js";
 
 const optionalString = Schema.optional(Schema.String);
@@ -39,30 +40,56 @@ export const Generation = Schema.Union([Schema.String, Schema.Finite]);
 
 // --- Terminal sessions, buffers and pane layouts ------------------------------
 
-/** `Session` (models.ts): one terminal tab's session record. */
-export const TerminalSessionSchema = openRecord({
-  id: Schema.optional(Schema.String),
-  environmentId: Schema.optional(Schema.String),
-  containerId: Schema.optional(Schema.String),
-  tabId: Schema.optional(Schema.String),
-  sessionType: Schema.optional(Schema.String),
-  status: Schema.optional(Schema.String),
-  createdAt: Schema.optional(Schema.String),
-  lastActivityAt: Schema.optional(Schema.String),
-  name: optionalString,
-  order: Schema.optional(Schema.Finite),
-});
+// The terminal session record, the pane layout and the drafts are the models
+// themselves (plan item 7010): every field the storage always writes is
+// required, and `apps/backend/src/core/models.ts` and the web's types
+// re-export the types below. They stay open records, so a newer backend's
+// added field passes through a decode.
 
-/** `PersistedPaneLayout` (models.ts). `root` is the renderer's own PaneNode tree. */
-export const PaneLayoutSchema = openRecord({
-  version: Schema.optional(Schema.Finite),
-  environmentId: Schema.optional(Schema.String),
-  containerId: Schema.optional(Schema.NullOr(Schema.String)),
-  activePaneId: Schema.optional(Schema.String),
-  root: Schema.optional(Schema.Unknown),
-  updatedAt: Schema.optional(Schema.String),
-  revision: Schema.optional(Schema.Finite),
+/** `SessionType`: what a terminal tab runs. A new kind bumps the domain. */
+export const SessionTypeSchema = Schema.Literals(["plain", "claude", "opencode", "codex", "root"]);
+export type SessionType = typeof SessionTypeSchema.Type;
+
+/** `SessionStatus`: whether the terminal is attached. */
+export const SessionStatusSchema = Schema.Literals(["connected", "disconnected"]);
+export type SessionStatus = typeof SessionStatusSchema.Type;
+
+/** `Session`: one terminal tab's session record. */
+export const TerminalSessionSchema = openRecord({
+  /** Unique session ID (UUID). */
+  id: Schema.String,
+  environmentId: Schema.String,
+  /** Docker container ID (from the environment). */
+  containerId: Schema.String,
+  /** Frontend tab ID for session restoration. */
+  tabId: Schema.String,
+  sessionType: SessionTypeSchema,
+  status: SessionStatusSchema,
+  /** ISO timestamps. */
+  createdAt: Schema.String,
+  lastActivityAt: Schema.String,
+  /** Custom name for the session (user-defined). */
+  name: optionalString,
+  /** Display order within the environment (lower is higher in the list). */
+  order: Schema.Finite,
 });
+export type Session = Mutable<typeof TerminalSessionSchema.Type>;
+
+/**
+ * `PersistedPaneLayout`: the versioned pane/tab layout the backend stores for
+ * restore-on-connect. `root` is opaque to the backend; the renderer owns the
+ * PaneNode schema and validates it before installing a restored layout.
+ */
+export const PaneLayoutSchema = openRecord({
+  version: Schema.Finite,
+  environmentId: Schema.String,
+  containerId: Schema.NullOr(Schema.String),
+  activePaneId: Schema.String,
+  root: Schema.Unknown,
+  updatedAt: Schema.String,
+  revision: Schema.Finite,
+});
+export type PersistedPaneLayout = Mutable<typeof PaneLayoutSchema.Type>;
 
 /**
  * `ConditionalResourceSnapshot<T>` (resource-events.ts): the answer to a read
@@ -114,12 +141,16 @@ export const PromptQueueRemovalSchema = openRecord({
   queue: Schema.optional(Schema.NullOr(PromptQueueSchema)),
 });
 
-/** `PersistedComposeDraft` (models.ts). `value` is each composer's own shape. */
+/**
+ * `PersistedComposeDraft`: unsent input owned by an environment or project.
+ * `value` is each composer's own shape; the backend owns durability and
+ * revisions while each frontend validates its own value.
+ */
 export const ComposeDraftSchema = openRecord({
-  draftKey: Schema.optional(Schema.String),
-  ownerType: Schema.optional(Schema.String),
-  ownerId: Schema.optional(Schema.String),
-  value: Schema.optional(Schema.Unknown),
+  draftKey: Schema.String,
+  ownerType: Schema.Literals(["environment", "project"]),
+  ownerId: Schema.String,
+  value: Schema.Unknown,
   sourcePromptQueue: Schema.optional(
     Schema.Struct({ queueKey: Schema.String, messageId: Schema.String }),
   ),
@@ -127,29 +158,36 @@ export const ComposeDraftSchema = openRecord({
   webAnnotationMigration: Schema.optional(
     Schema.Struct({ references: Schema.Array(Schema.Unknown) }),
   ),
-  updatedAt: Schema.optional(Schema.String),
-  revision: Schema.optional(Schema.Finite),
+  updatedAt: Schema.String,
+  revision: Schema.Finite,
 });
+export type PersistedComposeDraft = Mutable<typeof ComposeDraftSchema.Type>;
 
-/** `PersistedFileDraft` (models.ts). */
+/** `PersistedFileDraft`: a recoverable unsaved text-file buffer. */
 export const FileDraftSchema = openRecord({
-  draftKey: Schema.optional(Schema.String),
-  environmentId: Schema.optional(Schema.String),
-  filePath: Schema.optional(Schema.String),
-  content: Schema.optional(Schema.String),
-  originalContent: Schema.optional(Schema.String),
-  updatedAt: Schema.optional(Schema.String),
-  revision: Schema.optional(Schema.Finite),
+  draftKey: Schema.String,
+  environmentId: Schema.String,
+  filePath: Schema.String,
+  content: Schema.String,
+  originalContent: Schema.String,
+  updatedAt: Schema.String,
+  revision: Schema.Finite,
 });
+export type PersistedFileDraft = Mutable<typeof FileDraftSchema.Type>;
 
-/** `PersistedAgentHandoff` (models.ts). `snapshot` is the renderer-validated transcript. */
+/**
+ * `PersistedAgentHandoff`: an immutable provider-to-provider handoff. The
+ * backend owns the sensitive envelope; `snapshot` is the renderer-validated,
+ * provider-neutral transcript, opaque to the backend.
+ */
 export const AgentHandoffSchema = openRecord({
-  version: Schema.optional(Schema.Finite),
-  id: Schema.optional(Schema.String),
-  environmentId: Schema.optional(Schema.String),
-  snapshot: Schema.optional(Schema.Unknown),
-  createdAt: Schema.optional(Schema.String),
+  version: Schema.Finite,
+  id: Schema.String,
+  environmentId: Schema.String,
+  snapshot: Schema.Unknown,
+  createdAt: Schema.String,
 });
+export type PersistedAgentHandoff = Mutable<typeof AgentHandoffSchema.Type>;
 
 /** `AGENT_HANDOFF_CAPABILITIES` (backend `agent-handoffs.ts`). */
 export const AgentHandoffCapabilitiesSchema = openRecord({

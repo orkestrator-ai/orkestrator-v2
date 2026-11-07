@@ -395,7 +395,7 @@
       "read": false,
       "critical": [],
       "argsDigest": "sha256:89ce96b4e4ffe73981c7f178145289e2e2d13d01a9fb86a1651f93841337f1b0",
-      "resultDigest": "sha256:b575befc63635bcee49245a00b8a8b32d910f9623212b70939428c3c4f1b5440"
+      "resultDigest": "sha256:10c69932a382bb1e3165945a6516e9f07d4a319c495dd6a2551ca42b584133b0"
     },
     "apply_project_root_changes": {
       "domain": "coordinator",
@@ -481,7 +481,7 @@
     "ask_coordinator_suborks": {
       "domain": "coordinator",
       "since": 1,
-      "access": "workspace",
+      "access": "internal",
       "read": false,
       "critical": [],
       "argsDigest": "sha256:9397dd4c7560923d7b2d93de605926c568dc9df2d047ac07f52acc9ee97e72f5",
@@ -1457,7 +1457,7 @@
       "read": false,
       "critical": [],
       "argsDigest": "sha256:89ea918823de5e7ef81ba2ab9dd58ffdbae39c1a489e2c4aaa0d88221d094366",
-      "resultDigest": "sha256:7f11dc5285412abe77c2d0e5c8abec465a0bacb1846f4f2335c19446c0db6f43"
+      "resultDigest": "sha256:e9cd931e20bbe265c53568a684f91a87c62b5f334270f26f16a4e755fbf89dec"
     },
     "create_bug_report": {
       "domain": "system",
@@ -1642,7 +1642,7 @@
       "read": false,
       "critical": [],
       "argsDigest": "sha256:1ec2c5e37954a8494359aa38c67f627dbe0433a6baedf5edb65451df146982df",
-      "resultDigest": "sha256:2a65bdbd7b72c0a7da56bc81528476506535b7eba57c3464ab330856c304630c"
+      "resultDigest": "sha256:93d6807a1ae00dd2a2e02144325b1d44336e33ea9d6d7ad1c17c74b7f3484512"
     },
     "create_terminal_session": {
       "domain": "terminals",
@@ -2299,7 +2299,7 @@
       "read": false,
       "critical": [],
       "argsDigest": "sha256:a3638ecb0be67a4a6e7a8e598863384d9a730da4a8c542c7b326c3b494624f4e",
-      "resultDigest": "sha256:b7e1622ebb9310e8baf8e7f25492e5d2a1049d4df414abfef37e64ef00f16138"
+      "resultDigest": "sha256:3e03db3640f4a15dabb47a1aa8d4d5f8bfda3059fee96c9fe5799299f2b85ef1"
     },
     "disconnect_linear": {
       "domain": "kanban",
@@ -2632,7 +2632,7 @@
       "read": true,
       "critical": [],
       "argsDigest": "sha256:6e1fbfc7f9a96b504525050cd2e7a31daee9762a60178b2dc6c14e6bbf6b0cfd",
-      "resultDigest": "sha256:df2b0d29625a772e2669c35c65a9d741253f77c0dd826d119e87ec8b395e5bc9"
+      "resultDigest": "sha256:4271108ac1822cfb016d9fa3b98153800c23056df9ef1568bb241dee8e99063b"
     },
     "get_agent_handoff_capabilities": {
       "domain": "native-sessions",
@@ -2902,7 +2902,7 @@
       "read": true,
       "critical": [],
       "argsDigest": "sha256:7481d5e3082fa58d15e02fc33e8c7159ad84d5be201b7c0de6cd6aabc3f82f5c",
-      "resultDigest": "sha256:55c0c57992037b83d5a7a75c862d1471c9384165f3aa70680aaaa7e279f7cb94"
+      "resultDigest": "sha256:ce7bb1541e1dbf5d8bdd61a3639c3c4055bacfa13d99f8d33361d612d1d3aa94"
     },
     "get_config": {
       "domain": "config",
@@ -3033,7 +3033,7 @@
     "get_coordinator_node_launch_environment": {
       "domain": "coordinator",
       "since": 1,
-      "access": "workspace",
+      "access": "internal",
       "read": true,
       "critical": [],
       "argsDigest": "sha256:0d9e6ede3e27e87be91ed9de42268591b7ef0f56461701037148da23b4f61500",
@@ -3352,7 +3352,7 @@
       "read": true,
       "critical": [],
       "argsDigest": "sha256:7481d5e3082fa58d15e02fc33e8c7159ad84d5be201b7c0de6cd6aabc3f82f5c",
-      "resultDigest": "sha256:3880ac5f9e9e468f7d41ce7ff3cd5d91480120dcc8b5a990f8de83c93560b26f"
+      "resultDigest": "sha256:85db6f8aa402642691470d83fbff5cde7486df36f3840c48229789c4ad219e30"
     },
     "get_file_subtree": {
       "domain": "files",
@@ -3982,7 +3982,7 @@
       "read": true,
       "critical": [],
       "argsDigest": "sha256:0614f0bac598b8660383a0add6be976ec11c6b8f3f2287fd386e1e6d5afcd91f",
-      "resultDigest": "sha256:1b1b01038d42f8a33ffa67ea8ddeff22837ec7e22de66ea2abba4bba9bce2529"
+      "resultDigest": "sha256:5de5fad04f9de2a1f85e68117a45f883ddbae3e3fa3ed1d6685b1fef144d0f7f"
     },
     "get_pi_server_log": {
       "domain": "agent-servers",
@@ -4270,7 +4270,7 @@
       "read": true,
       "critical": [],
       "argsDigest": "sha256:4c5c5f0cce6b5fdb203fb5567bba286dcf9741637fff766157bc33b8819da007",
-      "resultDigest": "sha256:18a05a5d7202a6c430789167f7d78e750eb41aafa416a8c25dc16e67d233f723"
+      "resultDigest": "sha256:bd2484ca1cfddd32fd23469561e25994eae759abdfb0b5c8cb329a5e0d475f8b"
     },
     "get_sessions_by_environment": {
       "domain": "native-sessions",
@@ -4279,7 +4279,7 @@
       "read": true,
       "critical": [],
       "argsDigest": "sha256:0614f0bac598b8660383a0add6be976ec11c6b8f3f2287fd386e1e6d5afcd91f",
-      "resultDigest": "sha256:a81c342d3f7d4e120774e065d9fd2e2e9fcbedfa9ff570dd52168b758234b39c"
+      "resultDigest": "sha256:1cbf52bc961141fd3bb5a927660b4f8f924c259ff2c35070d2cdf7028a047c67"
     },
     "get_system_usage": {
       "domain": "system",
@@ -4419,7 +4419,7 @@
     "graph_capability_ceiling_set": {
       "domain": "graphs",
       "since": 1,
-      "access": "workspace",
+      "access": "admin",
       "read": false,
       "critical": ["expectedRevision"],
       "argsDigest": "sha256:7691ba2ed626767c5d8284c9bcdfb161d449bb81e7c005002db4d59541d4f84f",
@@ -4869,7 +4869,7 @@
     "launch_coordinator_environment": {
       "domain": "coordinator",
       "since": 1,
-      "access": "workspace",
+      "access": "internal",
       "read": false,
       "critical": ["requestId"],
       "argsDigest": "sha256:62033390180d2a68f84afba494e9b46d4ed7ebb01e14d018631a58f580dad4e9",
@@ -5034,7 +5034,7 @@
       "read": true,
       "critical": [],
       "argsDigest": "sha256:d2605c8cd83ea20a647a81835a023c1b9cfe47fd59f8b3adf99a0af7621b4576",
-      "resultDigest": "sha256:c521f13524ad5e7099083997587cd62656dfb66b876e7201adbe04869a3b7302"
+      "resultDigest": "sha256:4060d74be4b85896e3bf1a4acc8d1494c956014a89f27331f01aa782268498db"
     },
     "list_controller_worker_commands": {
       "domain": "coordinator",
@@ -5621,7 +5621,7 @@
     "open_coordinator_delegation": {
       "domain": "coordinator",
       "since": 1,
-      "access": "workspace",
+      "access": "internal",
       "read": false,
       "critical": ["requestId"],
       "argsDigest": "sha256:d56558fffd172ae48dd39c02e2da56655699722c132c715eeb2dca8993e33001",
@@ -6498,7 +6498,7 @@
       "read": false,
       "critical": [],
       "argsDigest": "sha256:e32a43e9fcf422b76518fe78903cb064aa5e001d518c41dd04e728ce3e5948f4",
-      "resultDigest": "sha256:2a65bdbd7b72c0a7da56bc81528476506535b7eba57c3464ab330856c304630c"
+      "resultDigest": "sha256:93d6807a1ae00dd2a2e02144325b1d44336e33ea9d6d7ad1c17c74b7f3484512"
     },
     "renew_client_grant": {
       "domain": "nodes",
@@ -6552,7 +6552,7 @@
       "read": false,
       "critical": [],
       "argsDigest": "sha256:4afba85612da7b703ea1ded572331d2cc58e862a5520d10c6a78c4914d78eca9",
-      "resultDigest": "sha256:b7e1622ebb9310e8baf8e7f25492e5d2a1049d4df414abfef37e64ef00f16138"
+      "resultDigest": "sha256:3e03db3640f4a15dabb47a1aa8d4d5f8bfda3059fee96c9fe5799299f2b85ef1"
     },
     "reply_github_pull_request_review_thread": {
       "domain": "pull-requests",
@@ -7083,7 +7083,7 @@
       "read": false,
       "critical": [],
       "argsDigest": "sha256:a4658fda618fa51786c10b24f9425cfaec70455f77e5a1470455c417785ffd6e",
-      "resultDigest": "sha256:7f11dc5285412abe77c2d0e5c8abec465a0bacb1846f4f2335c19446c0db6f43"
+      "resultDigest": "sha256:e9cd931e20bbe265c53568a684f91a87c62b5f334270f26f16a4e755fbf89dec"
     },
     "save_bug_report_screenshot": {
       "domain": "system",
@@ -7110,7 +7110,7 @@
       "read": false,
       "critical": ["expectedRevision"],
       "argsDigest": "sha256:efe098b4830a6fac973e4a45cf3b5e209f15464d8338973a27dfeca36a95a8e2",
-      "resultDigest": "sha256:dee73646e06f9fda5fa0e6bb89e017008b17595ee81544d9a631c37ec8be8b16"
+      "resultDigest": "sha256:96555bf1050f3bcf5addf8bbcd39f8956db86a7f1f2df5af304878d36aa45d8f"
     },
     "save_config": {
       "domain": "config",
@@ -7146,7 +7146,7 @@
       "read": false,
       "critical": ["expectedRevision"],
       "argsDigest": "sha256:9c6f468907b337089d90fe89d245ff34631fa71b0ac890fb6c90d3d54ca6f8a1",
-      "resultDigest": "sha256:9c671d197e6112f3b71ec2771cc68fbf2365131154a12226de01f8537a4471f0"
+      "resultDigest": "sha256:9e99294ccc1d3216a14f6ae1715a5e70f7c7d74a0cbad2898727192b2aadf54e"
     },
     "save_pane_layout": {
       "domain": "native-sessions",
@@ -7155,7 +7155,7 @@
       "read": false,
       "critical": [],
       "argsDigest": "sha256:62885838c027349cc7716654a3aab4da7f9b3f37a7c9bd55aac41ff0ae9c4a67",
-      "resultDigest": "sha256:b575befc63635bcee49245a00b8a8b32d910f9623212b70939428c3c4f1b5440"
+      "resultDigest": "sha256:10c69932a382bb1e3165945a6516e9f07d4a319c495dd6a2551ca42b584133b0"
     },
     "save_project_notes": {
       "domain": "kanban",
@@ -7214,7 +7214,7 @@
     "send_coordinator_agent_mail": {
       "domain": "coordinator",
       "since": 1,
-      "access": "workspace",
+      "access": "internal",
       "read": false,
       "critical": ["attachments", "deliverNow", "requestId"],
       "argsDigest": "sha256:cacf30d727385fcc50c8f00c6ba61a2799849b9f28e7507394f4bca2c098f377",
@@ -7619,7 +7619,7 @@
     "start_coordinator_build_pipeline": {
       "domain": "coordinator",
       "since": 1,
-      "access": "workspace",
+      "access": "internal",
       "read": false,
       "critical": ["requestId"],
       "argsDigest": "sha256:bb4d035bdf37bf11a943e3161b909fc5982c935bc87c1e154389a6e4723700c5",
@@ -7628,7 +7628,7 @@
     "start_coordinator_graph_run": {
       "domain": "coordinator",
       "since": 1,
-      "access": "workspace",
+      "access": "internal",
       "read": false,
       "critical": ["requestId"],
       "argsDigest": "sha256:ad7f8005da5993a231a5bab46aeae57e913b33942aaa50f0e780f023df466b59",
@@ -7637,7 +7637,7 @@
     "start_coordinator_multi_review": {
       "domain": "coordinator",
       "since": 1,
-      "access": "workspace",
+      "access": "internal",
       "read": false,
       "critical": ["requestId"],
       "argsDigest": "sha256:7b14a45fa2a04ea22da05f5d9c29c528fa0082b7db9ac17436821fdd1f55a85f",
@@ -8217,7 +8217,7 @@
       "read": false,
       "critical": [],
       "argsDigest": "sha256:a6c870130e9045680e7a74502e46b2faa62256287afaccd8b386892345ee541b",
-      "resultDigest": "sha256:b7e1622ebb9310e8baf8e7f25492e5d2a1049d4df414abfef37e64ef00f16138"
+      "resultDigest": "sha256:3e03db3640f4a15dabb47a1aa8d4d5f8bfda3059fee96c9fe5799299f2b85ef1"
     },
     "teardown_tab": {
       "domain": "environments",
@@ -8676,7 +8676,7 @@
       "read": false,
       "critical": [],
       "argsDigest": "sha256:4c5c5f0cce6b5fdb203fb5567bba286dcf9741637fff766157bc33b8819da007",
-      "resultDigest": "sha256:2a65bdbd7b72c0a7da56bc81528476506535b7eba57c3464ab330856c304630c"
+      "resultDigest": "sha256:93d6807a1ae00dd2a2e02144325b1d44336e33ea9d6d7ad1c17c74b7f3484512"
     },
     "update_session_status": {
       "domain": "native-sessions",
@@ -8685,7 +8685,7 @@
       "read": false,
       "critical": [],
       "argsDigest": "sha256:61147c69218bfd15c96f53275daffb734deca744ef0cdd341241c5d72c02b427",
-      "resultDigest": "sha256:2a65bdbd7b72c0a7da56bc81528476506535b7eba57c3464ab330856c304630c"
+      "resultDigest": "sha256:93d6807a1ae00dd2a2e02144325b1d44336e33ea9d6d7ad1c17c74b7f3484512"
     },
     "update_worktree_locations": {
       "domain": "system",

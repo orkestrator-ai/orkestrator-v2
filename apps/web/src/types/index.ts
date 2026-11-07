@@ -191,30 +191,10 @@ export interface PersistedPromptQueue<T = unknown> {
   revision: number;
 }
 
-/** Unsent user input persisted by the backend. */
-export interface PersistedComposeDraft<T = unknown> {
-  draftKey: string;
-  ownerType: "environment" | "project";
-  ownerId: string;
+/** Unsent user input persisted by the backend; `value` is the composer's own shape. */
+export type PersistedComposeDraft<T = unknown> = Omit<ProtocolComposeDraft, "value"> & {
   value: T;
-  sourcePromptQueue?: {
-    queueKey: string;
-    messageId: string;
-  };
-  updatedAt: string;
-  revision: number;
-}
-
-/** Unsaved file-editor content persisted by the backend. */
-export interface PersistedFileDraft {
-  draftKey: string;
-  environmentId: string;
-  filePath: string;
-  content: string;
-  originalContent: string;
-  updatedAt: string;
-  revision: number;
-}
+};
 
 /**
  * Sensitive provider-to-provider handoff persisted by the backend.
@@ -222,49 +202,24 @@ export interface PersistedFileDraft {
  * `snapshot` is validated by `lib/agent-handoff.ts`; the backend deliberately
  * treats it as opaque JSON so provider message changes do not migrate storage.
  */
-export interface PersistedAgentHandoff<T = unknown> {
-  version: number;
-  id: string;
-  environmentId: string;
+export type PersistedAgentHandoff<T = unknown> = Omit<ProtocolAgentHandoff, "snapshot"> & {
   snapshot: T;
-  createdAt: string;
-}
+};
 
 /** A setup terminal's state: the protocol's `EnvironmentSetupSessionSnapshot`. */
 export type EnvironmentSetupSession = EnvironmentSetupSessionSnapshot;
 
-// Session types - Terminal session tracking for environments
-
-/** Type of terminal session */
-export type SessionType = "plain" | "claude" | "opencode" | "codex" | "root";
-
-/** Connection status of a terminal session */
-export type SessionStatus = "connected" | "disconnected";
-
-/** Terminal session represents a PTY session within an environment container */
-export interface Session {
-  /** Unique session ID (UUID) */
-  id: string;
-  /** Parent environment ID */
-  environmentId: string;
-  /** Docker container ID (from environment) */
-  containerId: string;
-  /** Frontend tab ID for session restoration */
-  tabId: string;
-  /** Type of session (plain, claude, opencode, root) */
-  sessionType: SessionType;
-  /** Connection status */
-  status: SessionStatus;
-  /** When the session was created (ISO timestamp) */
-  createdAt: string;
-  /** Last activity timestamp (ISO timestamp) */
-  lastActivityAt: string;
-  /** Custom name for the session (user-defined) */
-  name?: string;
-  /** Display order within the environment (lower = higher in list) */
-  order: number;
-  /** Whether the auto-launch command (e.g., claude) was executed */
-}
+// Terminal session records: the `native-sessions` domain's schemas' types.
+import type {
+  PersistedAgentHandoff as ProtocolAgentHandoff,
+  PersistedComposeDraft as ProtocolComposeDraft,
+} from "@orkestrator/protocol/contract/domains/native-sessions";
+export type {
+  PersistedFileDraft,
+  Session,
+  SessionStatus,
+  SessionType,
+} from "@orkestrator/protocol/contract/domains/native-sessions";
 
 // Configuration types: parts of the protocol's settings model.
 export type ContainerResources = ProtocolGlobalConfig["containerResources"];

@@ -376,6 +376,75 @@ describe("read coordinator: visibility, focus and reconnect", () => {
     expect(sub.getState()).toMatchObject({ value: "reconciled", stale: false, revision: 2 });
   });
 
+  test("a host-hidden document defers like a hidden one and re-reads on host-visible", async () => {
+    const { clock, document, coordinator } = setup();
+    const order: string[] = [];
+    const reads = (name: string) => async () => {
+      order.push(name);
+      return name;
+    };
+    coordinator.subscribe({
+      key: key({ resource: "metrics" }),
+      read: reads("metrics"),
+      readOnSubscribe: false,
+      demand: { intervalMs: 5_000, priority: "auxiliary" },
+    });
+    const session = coordinator.subscribe({
+      key: key({ resource: "session" }),
+      read: reads("session"),
+      demand: { priority: "critical" },
+    });
+    await flush();
+    expect(order).toEqual(["session"]);
+    order.length = 0;
+
+    // The realm's own document stays visible; its window hid the frame.
+    coordinator.setHostHidden(true);
+    expect(coordinator.getDiagnostics()).toMatchObject({
+      paused: true,
+      hidden: true,
+      hostHidden: true,
+    });
+    session.invalidate();
+    await clock.advance(60_000);
+    expect(order).toEqual([]);
+    expect(clock.pending).toBe(0);
+    expect(session.getState()).toMatchObject({ value: "session", stale: true });
+    // Its own visibility returning does not resume a frame the window still hides.
+    document.setVisibility("hidden");
+    document.setVisibility("visible");
+    await clock.advance(1_000);
+    expect(order).toEqual([]);
+
+    coordinator.setHostHidden(false);
+    await clock.advance(CRITICAL_READ_RESUME_MAX_DELAY_MS);
+    expect(order).toEqual(["session"]);
+    expect(session.getState()).toMatchObject({ stale: false, revision: 2 });
+    await clock.advance(300);
+    expect(order).toEqual(["session", "metrics"]);
+    expect(coordinator.getDiagnostics()).toMatchObject({ paused: false, hostHidden: false });
+  });
+
+  test("a host-visible frame of a hidden document stays paused", async () => {
+    const { clock, document, coordinator } = setup();
+    const transport = deferredTransport<string>();
+    coordinator.subscribe({
+      key: key(),
+      read: transport.read,
+      readOnSubscribe: false,
+      demand: { intervalMs: 1_000, priority: "critical" },
+    });
+    coordinator.setHostHidden(true);
+    document.setVisibility("hidden");
+    coordinator.setHostHidden(false);
+    await clock.advance(10_000);
+    expect(transport.calls).toHaveLength(0);
+    document.setVisibility("visible");
+    await clock.advance(READ_RESUME_COALESCE_MS);
+    expect(transport.calls).toHaveLength(1);
+    expect(transport.last().context.reason).toBe("resume");
+  });
+
   test("visibility, focus and reconnect signals coalesce into one reconcile", async () => {
     const { clock, document, window, coordinator } = setup();
     const transport = deferredTransport<string>();

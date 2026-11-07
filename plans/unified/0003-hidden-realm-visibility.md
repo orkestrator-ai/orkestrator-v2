@@ -3,11 +3,11 @@ id: 0003
 title: "Tell hidden realm frames that they are hidden"
 phase: 0
 plan: "§3 P4 and §12 Phase 0.3"
-status: not-started
+status: in-progress
 depends_on: []
 blocked_by: ""
-owner: ""
-branch: ""
+owner: claude-worker
+branch: unified-federation-b4c9ee65814d
 pr: ""
 updated: 2026-11-07
 ---
@@ -36,17 +36,17 @@ The hidden-window read deferrals from #1964 apply to hidden realms, so a hidden 
 
 ## Work
 
-- [ ] Add `{ type: "visibility", hidden: boolean }` to `ShellToRealmMessage` and its parser.
-- [ ] Pass `shown` into `useRealmRequests` (`RemoteWorkspaceRegion.tsx:163-334`). Send `visibility` on every change and again on `ready` (:261-269).
-- [ ] Add `setHostHidden(hidden: boolean)` to `ReadCoordinator`. Make `computePaused` treat `isHidden() || hostHidden` as hidden, with the same deferral and resume behaviour as a hidden window.
-- [ ] Handle the message in `WorkspaceRealmHost` by calling `getReadCoordinator().setHostHidden(...)`.
+- [x] Add `{ type: "visibility", hidden: boolean }` to `ShellToRealmMessage` and its parser.
+- [x] Pass `shown` into `useRealmRequests` (`RemoteWorkspaceRegion.tsx:163-334`). Send `visibility` on every change and again on `ready` (:261-269).
+- [x] Add `setHostHidden(hidden: boolean)` to `ReadCoordinator`. Make `computePaused` treat `isHidden() || hostHidden` as hidden, with the same deferral and resume behaviour as a hidden window.
+- [x] Handle the message in `WorkspaceRealmHost` by calling `getReadCoordinator().setHostHidden(...)`.
 - [ ] Measure whether a hidden desktop `WebContentsView` already reports `visibilityState: hidden` (§15). If it does, record that the desktop message is redundant but harmless.
 
 ## Tests
 
-- [ ] Read coordinator: a host-hidden coordinator defers like a hidden document, and a resume after host-visible re-reads authoritative snapshots.
-- [ ] Region test: hiding and showing a realm sends `visibility`, and `ready` re-sends the current value.
-- [ ] Parser test: an unknown type is still ignored, and malformed `visibility` messages are refused.
+- [x] Read coordinator: a host-hidden coordinator defers like a hidden document, and a resume after host-visible re-reads authoritative snapshots.
+- [x] Region test: hiding and showing a realm sends `visibility`, and `ready` re-sends the current value.
+- [x] Parser test: an unknown type is still ignored, and malformed `visibility` messages are refused.
 
 ## Done when
 
@@ -55,3 +55,13 @@ The hidden-window read deferrals from #1964 apply to hidden realms, so a hidden 
 ## Notes
 
 - Deleted with the realm protocol in [6002](6002-delete-web-realm-code.md). The `setHostHidden` override on the read coordinator survives: in-tree, a warm but hidden node scope uses the same override ([4002](4002-hydration-tiers-and-budgets.md)).
+- `setHostHidden` is folded into the coordinator's `isHidden()` (`hostHidden || doc.visibilityState === "hidden"`), so `computePaused`, the visibility-change resume and diagnostics all see one hidden state: a document-visible event does not resume a frame the window still hides, and host-visible does not resume a hidden document. Diagnostics gain `hostHidden`; `hidden` is the combined value.
+- Host visibility follows the region's `shown` (this realm is the active one and the region has a rect). It does not follow the desktop overlay step-aside (`covered`), when a native view is hidden for a moment so the window's dialog can draw over its still; that is brief and the user is still looking at the realm.
+- Scope: only the read coordinator honours the message. Other #1964-era hidden checks that read `document.visibilityState` directly (`store-resource-sync.ts`, `pullRequestsStore.ts`, `useEnvironments.ts`, `terminal-websocket-client.ts`, `web-gateway.ts` stream retry and others) still see a hidden realm frame as visible. Worth a follow-up if the 0004 measurement shows a hidden realm still reads above the hidden-window rate.
+- Desktop main needed no change; `boundedMessage` passes `visibility` through.
+- Effect: not used. The change is a boolean override in an existing imperative scheduler and one more message type; nothing here is an effect pipeline.
+- Open: the `WebContentsView` visibilityState measurement (Work) and the hidden-realm request-rate check (Done when, with 0004) are not done here; live check deferred to the wave-0 live-evidence pass.
+
+## Work log
+
+- 2026-11-07 (claude-worker): added the `visibility` shell→realm message and parser; `useRealmRequests` sends it on every `shown` change and on `ready` for desktop and frame realms; `ReadCoordinator.setHostHidden` defers and resumes like a hidden document; `WorkspaceRealmHost` applies it. Tests: read coordinator (2 new), region (desktop multi-realm and browser frame, 2 new), realm host (1 new), parser (1 new); web federation folders 412 pass, read coordinator and related suites 172 pass; web typecheck clean.

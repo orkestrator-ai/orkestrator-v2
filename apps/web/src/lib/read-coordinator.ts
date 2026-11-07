@@ -15,8 +15,10 @@
  *   exactly one trailing read. An explicit `refresh()` always obtains a read
  *   that started after the call; joining an older read alone never satisfies it.
  * - **Visibility and connectivity.** Automatic reads (periodic, invalidation,
- *   mount, retry) pause while the document is hidden or a transport has
- *   declared itself disconnected (`setDisconnected`). Browser `offline` is not
+ *   mount, retry) pause while the document is hidden, while its host has said
+ *   it is hidden (`setHostHidden`: a workspace realm whose window hides its
+ *   frame or view, which the realm's own Page Visibility does not report), or
+ *   while a transport has declared itself disconnected (`setDisconnected`). Browser `offline` is not
  *   treated as disconnected: a desktop Local backend stays reachable without
  *   internet access, so online/offline is only a hint and `online` merely
  *   triggers a reconcile. Visibility, focus, page-show, online and transport
@@ -251,7 +253,9 @@ export interface ReadCoordinatorOptions {
 export interface ReadCoordinatorDiagnostics {
   paused: boolean;
   dataSaving: boolean;
+  /** The document is hidden, or its host has said so. */
   hidden: boolean;
+  hostHidden: boolean;
   disconnected: boolean;
   connectionId: string | null;
   connectionGeneration: number;
@@ -291,6 +295,12 @@ export interface ReadCoordinator {
   setDataSaving(enabled: boolean): void;
   /** Transport-declared connectivity. Browser `online` is only a hint. */
   setDisconnected(disconnected: boolean): void;
+  /**
+   * The host's word that this document is hidden although its own Page
+   * Visibility says visible: a workspace realm whose window hid its frame.
+   * It defers and resumes reads exactly as a hidden document does.
+   */
+  setHostHidden(hidden: boolean): void;
   /** Invalidates every key matching the predicate. */
   invalidateMatching(predicate: (key: ReadKey) => boolean): void;
   getDiagnostics(): ReadCoordinatorDiagnostics;
@@ -443,6 +453,7 @@ export function createReadCoordinator(options: ReadCoordinatorOptions = {}): Rea
   let connectionId = options.connectionId ?? null;
   let connectionGeneration = 0;
   let disconnected = false;
+  let hostHidden = false;
   let dataSaving = false;
   let paused = false;
   let reconnectWhilePaused = false;
@@ -453,7 +464,7 @@ export function createReadCoordinator(options: ReadCoordinatorOptions = {}): Rea
   let readsStarted = 0;
   let disposed = false;
 
-  const isHidden = () => doc?.visibilityState === "hidden";
+  const isHidden = () => hostHidden || doc?.visibilityState === "hidden";
   const computePaused = () => isHidden() || disconnected;
   paused = computePaused();
 
@@ -1098,6 +1109,12 @@ export function createReadCoordinator(options: ReadCoordinatorOptions = {}): Rea
       updatePaused();
       if (!next) requestReconcile("reconnect");
     },
+    setHostHidden(next) {
+      if (hostHidden === next || disposed) return;
+      hostHidden = next;
+      updatePaused();
+      if (!isHidden()) requestReconcile("resume");
+    },
     invalidateMatching(predicate) {
       for (const entry of Array.from(entries.values())) {
         if (predicate(entry.key)) invalidateEntry(entry);
@@ -1108,6 +1125,7 @@ export function createReadCoordinator(options: ReadCoordinatorOptions = {}): Rea
         paused,
         dataSaving,
         hidden: isHidden(),
+        hostHidden,
         disconnected,
         connectionId,
         connectionGeneration,

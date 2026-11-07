@@ -14,6 +14,7 @@ import {
   type RealmSelectRequest,
 } from "@/lib/federation/workspace-realm";
 import type { MachineView } from "@/lib/federation/aggregate";
+import { getReadCoordinator, resetReadCoordinatorForTests } from "@/lib/read-coordinator";
 import { useEnvironmentStore, useProjectStore, useUIStore } from "@/stores";
 import { useConfigStore } from "@/stores/configStore";
 import { useAppDialogStore } from "@/stores/appDialogStore";
@@ -259,6 +260,44 @@ test("panel messages leave sidebar and selection untouched; only sidebar message
   act(() => deliver({ type: "grouping", grouping: "project" }));
   expect(useRealmShellStore.getState().grouping).toBe("project");
   useRealmShellStore.setState({ grouping: null });
+});
+
+test("the window hiding the realm defers its reads as a hidden window does", async () => {
+  let deliver: (message: unknown) => void = () => undefined;
+  window.orkestrator = {
+    ...originalNative,
+    workspaceRealm: {
+      post: () => undefined,
+      onMessage: (callback: (message: unknown) => void) => {
+        deliver = callback;
+        return () => {
+          deliver = () => undefined;
+        };
+      },
+    },
+  } as typeof window.orkestrator;
+  nativeInvoke.mockImplementation(async (command: string) => {
+    if (command === "get_projects") return [];
+    return undefined;
+  });
+  useProjectStore.setState({ projects: [], hasLoaded: true });
+  resetReadCoordinatorForTests();
+  try {
+    render(<WorkspaceRealmHost />);
+    await waitFor(() => expect(useProjectStore.getState().isLoading).toBe(false));
+    expect(getReadCoordinator().getDiagnostics().hostHidden).toBe(false);
+    act(() => deliver({ type: "visibility", hidden: true }));
+    expect(getReadCoordinator().getDiagnostics()).toMatchObject({
+      hostHidden: true,
+      paused: true,
+    });
+    act(() => deliver({ type: "visibility", hidden: "yes" }));
+    expect(getReadCoordinator().getDiagnostics().hostHidden).toBe(true);
+    act(() => deliver({ type: "visibility", hidden: false }));
+    expect(getReadCoordinator().getDiagnostics().hostHidden).toBe(false);
+  } finally {
+    resetReadCoordinatorForTests();
+  }
 });
 
 test("the files panel follows the window, and only a choice made here is reported back", async () => {

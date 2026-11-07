@@ -15,6 +15,7 @@ import { startsOnSelection } from "@/lib/environment-auto-start";
 import { openCoordinatorWorkTarget } from "@/lib/coordinator-work-navigation";
 import { openDialog } from "@/lib/federation/open-workspace";
 import { suggestedCloneDirectory } from "@/lib/github-clone";
+import { getReadCoordinator } from "@/lib/read-coordinator";
 import {
   onShellMessage,
   postToShell,
@@ -122,6 +123,11 @@ export function WorkspaceRealmHost() {
         // The window's grouping decides whether this node's coordinator opens directly.
         if (message.type === "grouping") {
           useRealmShellStore.setState({ grouping: message.grouping });
+        }
+        // A frame or view the window hides still reads as visible here, so the
+        // window says so and this realm's reads defer as a hidden window's do.
+        if (message.type === "visibility") {
+          getReadCoordinator().setHostHidden(message.hidden);
         }
       }),
     [],

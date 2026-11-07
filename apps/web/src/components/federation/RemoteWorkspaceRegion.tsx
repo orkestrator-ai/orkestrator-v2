@@ -157,10 +157,15 @@ function selectRequest(request: RealmRequest | undefined): Omit<RealmSelectReque
  * opened with is in its URL; later ones are sent once the realm says it is
  * listening, and each at most once. The realm also follows the window's
  * sidebar, which its toolbar toggles, its files panel state, which is one
- * state for every machine, and its grouping, which decides whether the node's
- * coordinator opens directly.
+ * state for every machine, its grouping, which decides whether the node's
+ * coordinator opens directly, and whether it is shown: a hidden realm's own
+ * Page Visibility still reads visible, so it is told to defer its reads.
  */
-function useRealmRequests(nodeId: string, send: ((message: ShellToRealmMessage) => void) | null) {
+function useRealmRequests(
+  nodeId: string,
+  send: ((message: ShellToRealmMessage) => void) | null,
+  shown: boolean,
+) {
   const request = useRemoteWorkspaceStore((state) => state.requests[nodeId]);
   const sidebarOpen = useUIStore((state) => state.sidebarOpen);
   const filesPanelOpen = useFilesPanelStore((state) => state.isOpen);
@@ -174,9 +179,17 @@ function useRealmRequests(nodeId: string, send: ((message: ShellToRealmMessage) 
   const ready = useRef(false);
   const selection = useRef<Omit<RealmSelectRequest, "type">>({});
   // The latest values, for the callbacks below; kept current after each render.
-  const latest = useRef({ request, sidebarOpen, filesPanelOpen, phoneLayout, grouping, send });
+  const latest = useRef({
+    request,
+    sidebarOpen,
+    filesPanelOpen,
+    phoneLayout,
+    grouping,
+    shown,
+    send,
+  });
   useLayoutEffect(() => {
-    latest.current = { request, sidebarOpen, filesPanelOpen, phoneLayout, grouping, send };
+    latest.current = { request, sidebarOpen, filesPanelOpen, phoneLayout, grouping, shown, send };
   });
 
   const flush = useCallback(() => {
@@ -202,6 +215,10 @@ function useRealmRequests(nodeId: string, send: ((message: ShellToRealmMessage) 
   useEffect(() => {
     if (send && ready.current) send({ type: "grouping", grouping });
   }, [send, grouping]);
+
+  useEffect(() => {
+    if (send && ready.current) send({ type: "visibility", hidden: !shown });
+  }, [send, shown]);
 
   // Retain only the latest intent while a document is loading or restarting.
   const panelRequest = useRemoteWorkspaceStore((state) => state.panelRequests[nodeId]);
@@ -268,6 +285,7 @@ function useRealmRequests(nodeId: string, send: ((message: ShellToRealmMessage) 
           latest.current.send?.({ type: "filesPanel", open: latest.current.filesPanelOpen });
         }
         latest.current.send?.({ type: "grouping", grouping: latest.current.grouping });
+        latest.current.send?.({ type: "visibility", hidden: !latest.current.shown });
         flush();
         flushPanel();
       } else if (message.type === "selection") {
@@ -404,7 +422,7 @@ function NativeRealm({
         : null,
     [api, viewId],
   );
-  const { restart, onMessage } = useRealmRequests(nodeId, send);
+  const { restart, onMessage } = useRealmRequests(nodeId, send, shown);
 
   useEffect(() => {
     if (!api) return;
@@ -538,7 +556,7 @@ function FrameRealm({ nodeId, shown }: { nodeId: string; shown: boolean }) {
         : null,
     [workspaceId],
   );
-  const { restart, onMessage } = useRealmRequests(nodeId, send);
+  const { restart, onMessage } = useRealmRequests(nodeId, send, shown);
 
   useEffect(() => {
     let disposed = false;

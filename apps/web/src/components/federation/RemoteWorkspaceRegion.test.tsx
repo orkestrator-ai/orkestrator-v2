@@ -332,6 +332,54 @@ describe("desktop: another machine's workspace in the central region", () => {
     }
   });
 
+  test("each realm is told when the window hides or shows it, and again when it is ready", async () => {
+    const fake = install(true, undefined, ["a", "b"]);
+    renderRegion(anchorElement());
+    const visibility = (viewId: string) =>
+      (
+        fake.workspaceViews.send.mock.calls as unknown as [
+          string,
+          { type: string; hidden?: boolean },
+        ][]
+      )
+        .filter(([id, message]) => id === viewId && message.type === "visibility")
+        .map(([, message]) => message.hidden);
+    act(() => useRemoteWorkspaceStore.getState().open("bk_a", {}));
+    await waitFor(() =>
+      expect(fake.workspaceViews.setVisible).toHaveBeenCalledWith("view-1", true),
+    );
+    // Nothing before the realm listens; on ready it learns it is shown.
+    expect(visibility("view-1")).toEqual([]);
+    act(() =>
+      fake.emitViewEvent({ viewId: "view-1", type: "message", message: { type: "ready" } }),
+    );
+    expect(visibility("view-1")).toEqual([false]);
+
+    // Another machine's realm takes the region: the first is hidden behind it.
+    act(() => useRemoteWorkspaceStore.getState().open("bk_b", {}));
+    await waitFor(() =>
+      expect(fake.workspaceViews.setVisible).toHaveBeenCalledWith("view-2", true),
+    );
+    expect(visibility("view-1")).toEqual([false, true]);
+    act(() =>
+      fake.emitViewEvent({ viewId: "view-2", type: "message", message: { type: "ready" } }),
+    );
+    expect(visibility("view-2")).toEqual([false]);
+
+    act(() => useRemoteWorkspaceStore.getState().open("bk_a", {}));
+    expect(visibility("view-1")).toEqual([false, true, false]);
+    expect(visibility("view-2")).toEqual([false, true]);
+    // The window's own workspace hides every realm.
+    act(() => useRemoteWorkspaceStore.getState().showLocal());
+    expect(visibility("view-1")).toEqual([false, true, false, true]);
+    expect(visibility("view-2")).toEqual([false, true]);
+    // A restarted document hears the current value on its ready.
+    act(() =>
+      fake.emitViewEvent({ viewId: "view-2", type: "message", message: { type: "ready" } }),
+    );
+    expect(visibility("view-2")).toEqual([false, true, true]);
+  });
+
   test("desktop-to-phone isolates reports and phone-to-desktop resynchronizes retained files state", async () => {
     const originalMatchMedia = window.matchMedia;
     let phone = false;
@@ -825,6 +873,36 @@ test("a browser frame initializes and round-trips files state through its worksp
     frameEnvelope("workspace-1", { type: "filesPanel", open: true }),
     window.location.origin,
   );
+});
+
+test("a hidden browser frame is told it is hidden, as its own document cannot tell", async () => {
+  install(false);
+  renderRegion(anchorElement());
+  act(() => useRemoteWorkspaceStore.getState().open("bk_a", {}));
+  const frame = (await screen.findByTitle(/^Workspace on /)) as HTMLIFrameElement;
+  const post = mock((_message: unknown, _origin: string) => undefined);
+  Object.defineProperty(frame, "contentWindow", {
+    configurable: true,
+    value: { postMessage: post },
+  });
+  const visibility = () =>
+    post.mock.calls
+      .map(([envelope]) => (envelope as { message: { type: string; hidden?: boolean } }).message)
+      .filter((message) => message.type === "visibility")
+      .map((message) => message.hidden);
+  act(() => frameMessage(frame, "workspace-1", { type: "ready" }));
+  expect(visibility()).toEqual([false]);
+  expect(post).toHaveBeenCalledWith(
+    frameEnvelope("workspace-1", { type: "visibility", hidden: false }),
+    window.location.origin,
+  );
+  act(() => useRemoteWorkspaceStore.getState().showLocal());
+  expect(screen.getByTestId("frame-workspace-realm").className).toContain("hidden");
+  expect(visibility()).toEqual([false, true]);
+  act(() => frameMessage(frame, "workspace-1", { type: "ready" }));
+  expect(visibility()).toEqual([false, true, true]);
+  act(() => useRemoteWorkspaceStore.getState().open("bk_a", {}));
+  expect(visibility()).toEqual([false, true, true, false]);
 });
 
 test("⌘K forwarded from a browser realm frame opens the window's search", async () => {

@@ -65,6 +65,22 @@ test("only known messages with bounded IDs cross between a window and its realm"
   expect(readFrameEnvelope({ kind: "other", workspaceId: "w", message: {} })).toBeNull();
 });
 
+test("the window's visibility message crosses only as a boolean; unknown types stay ignored", () => {
+  expect(parseShellMessage({ type: "visibility", hidden: true })).toEqual({
+    type: "visibility",
+    hidden: true,
+  });
+  expect(parseShellMessage({ type: "visibility", hidden: false, extra: 1 })).toEqual({
+    type: "visibility",
+    hidden: false,
+  });
+  for (const hidden of [undefined, null, "true", 1, {}]) {
+    expect(parseShellMessage({ type: "visibility", hidden })).toBeNull();
+  }
+  // A newer window's message an older realm does not know is dropped, not misread.
+  expect(parseShellMessage({ type: "focusMode", hidden: true })).toBeNull();
+});
+
 test("a dialog request crosses only with what it opens on", () => {
   expect(parseShellMessage({ type: "select", projectId: "p", dialog: "delete-project" })).toEqual({
     type: "select",

@@ -145,6 +145,12 @@ export type ShellToRealmMessage =
   | { type: "filesPanel"; open: boolean }
   /** How the window's sidebar groups machines' projects; see `realmCoordinatorDefers`. */
   | { type: "grouping"; grouping: RealmGrouping }
+  /**
+   * The window hid or showed this realm. A hidden frame's own Page Visibility
+   * still reads visible, so the realm defers its reads on this instead
+   * (`ReadCoordinator.setHostHidden`). Sent on every change and on `ready`.
+   */
+  | { type: "visibility"; hidden: boolean }
   /** The window's title bar opened or closed one of the realm's popovers. */
   | {
       type: "panel";
@@ -276,6 +282,11 @@ export function parseShellMessage(value: unknown): ShellToRealmMessage | null {
   }
   if (message.type === "filesPanel") {
     return typeof message.open === "boolean" ? { type: "filesPanel", open: message.open } : null;
+  }
+  if (message.type === "visibility") {
+    return typeof message.hidden === "boolean"
+      ? { type: "visibility", hidden: message.hidden }
+      : null;
   }
   if (message.type === "grouping") {
     return isRealmGrouping(message.grouping)

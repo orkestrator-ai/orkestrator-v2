@@ -51,6 +51,7 @@ import { accountsOn } from "@/lib/node-scope/domains/accounts";
 /** PR detection result containing URL, state, and merge conflict status */
 
 import type { PrDetectionResult } from "./projects-environments";
+import { pullRequests } from "@/lib/node-scope/domains/pull-requests";
 import { type AccountMachine } from "./agent-accounts";
 import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import { environmentsClient } from "@orkestrator/protocol/contract/domains/environments";
@@ -277,20 +278,13 @@ export interface LogStorageStats {
 
 // --- Linear Commands ---
 
-export interface GitHubCompletionCommentResult {
-  status: "posted" | "already-posted";
-  commentId: string;
-  postedAt?: string;
-}
+import type { GitHubCompletionCommentResult } from "@orkestrator/protocol/contract/domains/pull-requests";
+export type { GitHubCompletionCommentResult };
 
 // --- GitHub Commands ---
 
-export interface VerifiedEnvironmentPr {
-  url: string;
-  headRefName: string;
-  baseRefName: string;
-  state: "OPEN";
-}
+import type { VerifiedEnvironmentPr } from "@orkestrator/protocol/contract/domains/pull-requests";
+export type { VerifiedEnvironmentPr };
 
 /** What a held setup would run, and what the default branch runs instead. */
 export interface EnvironmentSetupApproval {
@@ -308,14 +302,12 @@ export interface EnvironmentSetupApproval {
 /** Merge method options for PR merging */
 export type MergeMethod = "squash" | "merge" | "rebase";
 
-export interface MergePrResult {
-  outcome: "merged" | "pending" | "unknown";
-}
-
-export interface MergeEnvironmentPrResult extends MergePrResult {
-  cleanupOutcome: "not-requested" | "pending" | "completed" | "failed";
-  cleanupError?: string;
-}
+/** The merge results are the `pull-requests` domain's (plan item 7006). */
+import type {
+  MergeEnvironmentPrResult,
+  MergePrResult,
+} from "@orkestrator/protocol/contract/domains/pull-requests";
+export type { MergeEnvironmentPrResult, MergePrResult };
 
 /**
  * This file's commands on `client`'s node (plan item 3002). A scoped store or
@@ -324,6 +316,8 @@ export interface MergeEnvironmentPrResult extends MergePrResult {
  */
 export function createConfigIntegrationsApi(client: BackendClient) {
   const invoke = clientInvoke(client);
+  // GitHub issues and the environment PR commands (`pull-requests`, plan item 7006).
+  const prDomain = () => pullRequests(client);
   // The Control MCP settings and credentials (`coordinator` domain, plan item 7009).
   const coordinator = () => coordinatorApi(client);
   // The `environments` domain's commands here (plan item 7003).
@@ -340,6 +334,17 @@ export function createConfigIntegrationsApi(client: BackendClient) {
   // Plan usage and the Cursor SDK login are in the `accounts` domain (plan item 7008).
   const accountsOn_ = accountsOn(client);
 
+  // The `agent-servers` domain's catalogue commands (plan item 7009), on this
+  // client's node or, through `machineInvoke`, on another one.
+  const agentServers = () => agentServersApi(client);
+  const agentServersOn = (machine: AccountMachine) =>
+    machine === undefined
+      ? agentServers()
+      : agentServersApi({
+          invokeRaw: <T>(command: string, args?: Readonly<Record<string, unknown>>) =>
+            machineInvoke<T>(machine, command, args as Record<string, unknown> | undefined),
+        });
+
   /**
    * Load the host-wide last-known-good catalogues, seeding Pi on first use. With
    * `seed: true`, the backend also downloads every enabled platform's missing
@@ -351,19 +356,6 @@ export function createConfigIntegrationsApi(client: BackendClient) {
   async function getAgentModelCatalogCache(
     machine?: AccountMachine,
     options: { seed?: boolean } = {},
-  // Plan usage and the Cursor SDK login are in the `accounts` domain (plan item 7008).
-  const accountsOn_ = accountsOn(client);
-
-  // The `agent-servers` domain's catalogue commands (plan item 7009), on this
-  // client's node or, through `machineInvoke`, on another one.
-  const agentServers = () => agentServersApi(client);
-  const agentServersOn = (machine: AccountMachine) =>
-    machine === undefined
-      ? agentServers()
-      : agentServersApi({
-          invokeRaw: <T>(command: string, args?: Readonly<Record<string, unknown>>) =>
-            machineInvoke<T>(machine, command, args as Record<string, unknown> | undefined),
-        });
   ): Promise<AgentModelCatalogCache> {
     const args = options.seed === undefined ? undefined : { seed: options.seed };
     // Without `seed`, today's call sends no arguments object to this node.
@@ -418,7 +410,7 @@ export function createConfigIntegrationsApi(client: BackendClient) {
         agentServers().get_native_agent_model_catalog({ environmentId }),
       );
     }
-    const result = await invoke<
+    const result = await asWebModel<
       | import("@orkestrator/protocol/native-agent").AgentModel[]
       | {
           models: import("@orkestrator/protocol/native-agent").AgentModel[];
@@ -605,14 +597,14 @@ export function createConfigIntegrationsApi(client: BackendClient) {
   }
 
   async function getGitHubIssues(projectId: string): Promise<GitHubIssuesSnapshot> {
-    return invoke<GitHubIssuesSnapshot>("get_github_issues", { projectId });
+    return prDomain().get_github_issues({ projectId });
   }
 
   async function getGitHubIssue(
     projectId: string,
     issueNumber: number,
   ): Promise<GitHubIssueDetail> {
-    return invoke<GitHubIssueDetail>("get_github_issue", { projectId, issueNumber });
+    return prDomain().get_github_issue({ projectId, issueNumber });
   }
 
   async function updateGitHubIssue(
@@ -620,7 +612,7 @@ export function createConfigIntegrationsApi(client: BackendClient) {
     issueNumber: number,
     updates: { title: string; body: string },
   ): Promise<GitHubIssue> {
-    return invoke<GitHubIssue>("update_github_issue", { projectId, issueNumber, ...updates });
+    return prDomain().update_github_issue({ projectId, issueNumber, ...updates });
   }
 
   async function updateGitHubIssueStatus(
@@ -628,11 +620,11 @@ export function createConfigIntegrationsApi(client: BackendClient) {
     issueNumber: number,
     status: GitHubIssueStatus,
   ): Promise<GitHubIssue> {
-    return invoke<GitHubIssue>("update_github_issue_status", { projectId, issueNumber, status });
+    return prDomain().update_github_issue_status({ projectId, issueNumber, status });
   }
 
   async function closeGitHubIssue(projectId: string, issueNumber: number): Promise<GitHubIssue> {
-    return invoke<GitHubIssue>("close_github_issue", { projectId, issueNumber });
+    return prDomain().close_github_issue({ projectId, issueNumber });
   }
 
   async function addGitHubIssueComment(
@@ -640,7 +632,7 @@ export function createConfigIntegrationsApi(client: BackendClient) {
     issueNumber: number,
     body: string,
   ): Promise<GitHubIssueComment> {
-    return invoke<GitHubIssueComment>("add_github_issue_comment", { projectId, issueNumber, body });
+    return prDomain().add_github_issue_comment({ projectId, issueNumber, body });
   }
 
   async function updateGitHubIssueComment(
@@ -649,7 +641,7 @@ export function createConfigIntegrationsApi(client: BackendClient) {
     commentId: number,
     body: string,
   ): Promise<GitHubIssueComment> {
-    return invoke<GitHubIssueComment>("update_github_issue_comment", {
+    return prDomain().update_github_issue_comment({
       projectId,
       issueNumber,
       commentId,
@@ -665,7 +657,7 @@ export function createConfigIntegrationsApi(client: BackendClient) {
     issueNumber: number,
     body: string,
   ): Promise<GitHubCompletionCommentResult> {
-    return invoke<GitHubCompletionCommentResult>("post_github_completion_comment", {
+    return prDomain().post_github_completion_comment({
       pipelineId,
       projectId,
       repositoryOwner,
@@ -703,7 +695,7 @@ export function createConfigIntegrationsApi(client: BackendClient) {
     prUrl: string,
     targetBranch: string,
   ): Promise<VerifiedEnvironmentPr> {
-    return invoke<VerifiedEnvironmentPr>("verify_environment_pr", {
+    return prDomain().verify_environment_pr({
       environmentId,
       prUrl,
       targetBranch,
@@ -762,7 +754,7 @@ export function createConfigIntegrationsApi(client: BackendClient) {
 
   /** Detect PR URL and state for the environment's branch (uses --head to check correct branch) */
   async function detectPr(containerId: string, branch: string): Promise<PrDetectionResult | null> {
-    return invoke<PrDetectionResult | null>("detect_pr", { containerId, branch });
+    return prDomain().detect_pr({ containerId, branch });
   }
 
   /** Detect PR URL and state for local (worktree-based) environments (uses --head to check correct branch) */
@@ -770,7 +762,7 @@ export function createConfigIntegrationsApi(client: BackendClient) {
     environmentId: string,
     branch: string,
   ): Promise<PrDetectionResult | null> {
-    return invoke<PrDetectionResult | null>("detect_pr_local", { environmentId, branch });
+    return prDomain().detect_pr_local({ environmentId, branch });
   }
 
   /**
@@ -784,7 +776,7 @@ export function createConfigIntegrationsApi(client: BackendClient) {
     deleteBranch?: boolean,
     cleanupAfterMerge?: boolean,
   ): Promise<MergeEnvironmentPrResult> {
-    return invoke<MergeEnvironmentPrResult>("merge_environment_pr", {
+    return prDomain().merge_environment_pr({
       environmentId,
       method,
       deleteBranch,
@@ -803,7 +795,7 @@ export function createConfigIntegrationsApi(client: BackendClient) {
     enabled: boolean,
     cleanupAfterMerge?: boolean,
   ): Promise<Environment> {
-    return invoke<Environment>("set_environment_auto_merge", {
+    return prDomain().set_environment_auto_merge({
       environmentId,
       enabled,
       ...(cleanupAfterMerge === undefined ? {} : { cleanupAfterMerge }),
@@ -816,7 +808,7 @@ export function createConfigIntegrationsApi(client: BackendClient) {
     method?: MergeMethod,
     deleteBranch?: boolean,
   ): Promise<MergePrResult> {
-    return invoke<MergePrResult>("merge_pr", { containerId, method, deleteBranch });
+    return prDomain().merge_pr({ containerId, method, deleteBranch });
   }
 
   /** Merge the local environment's PR through the GitHub API */
@@ -825,7 +817,7 @@ export function createConfigIntegrationsApi(client: BackendClient) {
     method?: MergeMethod,
     deleteBranch?: boolean,
   ): Promise<MergePrResult> {
-    return invoke<MergePrResult>("merge_pr_local", { environmentId, method, deleteBranch });
+    return prDomain().merge_pr_local({ environmentId, method, deleteBranch });
   }
 
   return {

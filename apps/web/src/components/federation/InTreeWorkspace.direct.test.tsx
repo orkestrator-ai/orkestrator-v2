@@ -41,6 +41,7 @@ import { projectLandingBoardTab } from "@/lib/federation/window-grouping";
 import { WORKSPACE_DIALOGS } from "@/lib/federation/workspace-request";
 import { FederationProvider } from "./FederationProvider";
 import { RemoteWorkspaceRegion } from "./RemoteWorkspaceRegion";
+import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 
 const INITIAL_REMOTE = useRemoteWorkspaceStore.getState();
 const INITIAL_MACHINE = useMachineViewStore.getState();
@@ -315,10 +316,10 @@ test("select: Add Project and New Environment open in the node's workspace once 
       title: project.name,
     }),
   );
-  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  await waitFor(() => expectDomAbsent(screen.queryByRole("dialog")));
   // Its defaults are the node's config, which has not arrived yet.
   await settle();
-  expect(screen.queryByText(/Configure a new Ork environment/u)).toBeNull();
+  expectDomAbsent(screen.queryByText(/Configure a new Ork environment/u));
   loadConfig(scope);
   expect(await screen.findByText(/Configure a new Ork environment/u)).toBeTruthy();
 });

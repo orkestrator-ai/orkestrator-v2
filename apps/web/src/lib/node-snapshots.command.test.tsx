@@ -52,6 +52,7 @@ import {
   resetCommandScopeSnapshotForTests,
   startCommandScopeSnapshot,
 } from "./node-snapshots";
+import { expectDomAbsent } from "../../../../tests/bounded-test-diagnostics";
 
 const COMMAND = "bk_command" as BackendId;
 const OTHER = "bk_other_command" as BackendId;
@@ -283,10 +284,10 @@ describe("snapshot-first paint of the command node after a restart", () => {
     );
     expect(screen.getByTestId("node-snapshot-preview").textContent).toContain("Checkout");
     expect(screen.getByTestId("snapshot-stale-marker")).toBeTruthy();
-    expect(screen.queryByText("workspace")).toBeNull();
+    expectDomAbsent(screen.queryByText("workspace"));
     act(() => loadAuthoritative(scope));
     expect(screen.getByText("workspace")).toBeTruthy();
-    expect(screen.queryByTestId("node-snapshot-preview")).toBeNull();
+    expectDomAbsent(screen.queryByTestId("node-snapshot-preview"));
   });
 
   test("a scope never hydrated renders its workspace unchanged", () => {

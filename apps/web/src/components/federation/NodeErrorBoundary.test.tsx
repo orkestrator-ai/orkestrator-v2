@@ -1,6 +1,7 @@
 import { afterEach, expect, mock, spyOn, test } from "bun:test";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { NodeErrorBoundary } from "./NodeErrorBoundary";
+import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 
 afterEach(cleanup);
 
@@ -41,7 +42,7 @@ test("a crash in one node's workspace shows that node's error; the window and ot
   expect(alert.getAttribute("data-node")).toBe("bk_a");
   expect(alert.textContent).toContain("BK_A's workspace stopped working.");
   expect(alert.textContent).toContain("Its work keeps running");
-  expect(screen.queryByText("bk_a workspace")).toBeNull();
+  expectDomAbsent(screen.queryByText("bk_a workspace"));
   consoleError.mockRestore();
 });
 
@@ -55,7 +56,7 @@ test("Try again calls the owner's retry and remounts the node's workspace", () =
   fireEvent.click(screen.getByRole("button", { name: "Try again" }));
   expect(onRetry).toHaveBeenCalledWith("bk_a");
   expect(screen.getByText("bk_a workspace")).toBeTruthy();
-  expect(screen.queryByRole("alert")).toBeNull();
+  expectDomAbsent(screen.queryByRole("alert"));
   consoleError.mockRestore();
 });
 

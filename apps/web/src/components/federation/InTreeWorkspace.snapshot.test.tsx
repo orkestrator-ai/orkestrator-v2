@@ -46,6 +46,7 @@ import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { useUIChromeStore } from "@/stores/uiChromeStore";
 import { FederationProvider } from "./FederationProvider";
 import { RemoteWorkspaceRegion } from "./RemoteWorkspaceRegion";
+import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 
 const INITIAL_REMOTE = useRemoteWorkspaceStore.getState();
 const INITIAL_MACHINE = useMachineViewStore.getState();
@@ -287,8 +288,8 @@ describe.each(hosts)("a cold open on the %s", (kind) => {
     await act(async () => projects.resolve([{ ...project, name: "Checkout (current)" }]));
     await waitFor(() => expect(scopeSnapshotSync(scope).get().state).toBe("live"));
     expect(scope.store(projectStore).getState().projects[0]?.name).toBe("Checkout (current)");
-    await waitFor(() => expect(screen.queryByTestId("node-snapshot-preview")).toBeNull());
-    expect(screen.queryByTestId("snapshot-stale-marker")).toBeNull();
+    await waitFor(() => expectDomAbsent(screen.queryByTestId("node-snapshot-preview")));
+    expectDomAbsent(screen.queryByTestId("snapshot-stale-marker"));
     expect(screen.getByTestId("in-tree-workspace").childElementCount).toBeGreaterThan(0);
     await write;
     expect(commands).toContain("set_project_folder");
@@ -307,7 +308,7 @@ test("a node never seen before opens as before: no preview, no marker, nothing w
   renderRegion();
   act(() => useRemoteWorkspaceStore.getState().open(LEAF, { projectId: project.id }));
   expect(await screen.findByText("Opening Studio Mac…")).toBeTruthy();
-  expect(screen.queryByTestId("node-snapshot-preview")).toBeNull();
+  expectDomAbsent(screen.queryByTestId("node-snapshot-preview"));
   await act(async () => connect.resolve());
   const scope = await waitFor(() => getWindowScope().get(LEAF)!);
   expect(scopeSnapshotSync(scope).get().state).toBe("live");

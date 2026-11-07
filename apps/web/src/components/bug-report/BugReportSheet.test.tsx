@@ -15,6 +15,7 @@ import { nativeComposeStore } from "@/stores/nativeComposeStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { FakeNodeClient, renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { appCommandStore } from "@/test/app-command-store";
+import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 
 const nativeAgentSnapshot = { ...realNativeAgent };
 const tabProps: Record<string, unknown>[] = [];
@@ -411,6 +412,6 @@ describe("a report for a node shown in the window's tree (plan item 5003)", () =
     await waitFor(() =>
       expect(useBugReportStore.getState()).toMatchObject({ sheetOpen: false, sheetNodeId: null }),
     );
-    expect(screen.queryByTestId("bug-report-sheet")).toBeNull();
+    expectDomAbsent(screen.queryByTestId("bug-report-sheet"));
   });
 });

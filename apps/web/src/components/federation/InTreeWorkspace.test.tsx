@@ -24,6 +24,7 @@ import { uiStore } from "@/stores/uiStore";
 import { useUIChromeStore } from "@/stores/uiChromeStore";
 import { FederationProvider } from "./FederationProvider";
 import { RemoteWorkspaceRegion } from "./RemoteWorkspaceRegion";
+import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 
 const INITIAL_REMOTE = useRemoteWorkspaceStore.getState();
 const INITIAL_MACHINE = useMachineViewStore.getState();
@@ -154,7 +155,7 @@ test("every node renders in the window's tree, each in its own scope", async () 
   expect(getWindowScope().selection.get()).toMatchObject({ nodeId: LEAF, projectId: project.id });
   expect(useRemoteWorkspaceStore.getState().active?.nodeId).toBe(LEAF);
   // Nothing crashed into the node's error boundary.
-  expect(screen.queryByTestId("node-workspace-error")).toBeNull();
+  expectDomAbsent(screen.queryByTestId("node-workspace-error"));
   // The leaf answered its own workspace's reads.
   expect(clientFor(LEAF).calls("get_projects").length).toBeGreaterThan(0);
 });
@@ -165,7 +166,7 @@ test("closing an in-tree node's view releases its scope after the grace period, 
   act(() => useRemoteWorkspaceStore.getState().open(LEAF, { projectId: project.id }));
   await screen.findByTestId("in-tree-workspace");
   act(() => useRemoteWorkspaceStore.getState().closeNode(LEAF));
-  await waitFor(() => expect(screen.queryByTestId("in-tree-workspace")).toBeNull());
+  await waitFor(() => expectDomAbsent(screen.queryByTestId("in-tree-workspace")));
   // Released, kept for the grace period, then disposed by `closeInTreeScopes`
   // in afterEach (the grace timer itself is covered by in-tree-scopes.test.ts).
   expect(inTreeScopeHolds(LEAF)).toBe(0);
@@ -195,7 +196,7 @@ test("a node whose scope cannot open shows its failure with Try again, and the o
   expect(await screen.findByText("The machine did not answer.")).toBeTruthy();
   act(() => screen.getByText("Try again").click());
   await waitFor(() => expect(getWindowScope().get(LEAF)?.role).toBe("leaf"));
-  await waitFor(() => expect(screen.queryByText("The machine did not answer.")).toBeNull());
+  await waitFor(() => expectDomAbsent(screen.queryByText("The machine did not answer.")));
   expect(attempts).toBe(2);
 });
 

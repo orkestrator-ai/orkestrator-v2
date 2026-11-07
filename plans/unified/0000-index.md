@@ -352,7 +352,7 @@ All independent; start now. Report: [§12 Phase 0](../../docs/reports/unified-fe
 | ID | File | Phase | Status | Depends on | Summary |
 | --- | --- | --- | --- | --- | --- |
 | 0001 | [0001-realm-request-drift.md](0001-realm-request-drift.md) | 0 | done | — | One shared `packages/protocol` definition of the realm open request. A cold desktop realm stops dropping `home`, work targets, `bugReport` and `environment-rebuild`. |
-| 0002 | [0002-attention-without-realm.md](0002-attention-without-realm.md) | 0 | in-progress | — | The shell subscribes to `environment-attention` through `subscribeNodeEvents` for nodes without a realm. The relay needs no change, contrary to the report. |
+| 0002 | [0002-attention-without-realm.md](0002-attention-without-realm.md) | 0 | done | — | The shell subscribes to `environment-attention` through `subscribeNodeEvents` for nodes without a realm. The relay needs no change, contrary to the report. |
 | 0003 | [0003-hidden-realm-visibility.md](0003-hidden-realm-visibility.md) | 0 | done | — | A `visibility` shell→realm message plus `ReadCoordinator.setHostHidden`, so hidden realms get #1964's deferrals. |
 | 0004 | [0004-measurement-report.md](0004-measurement-report.md) | 0 | in-progress | — | Measure memory per realm on each host, the iPad jetsam point, hidden-realm request rate, `nextHopProtocol` and connection counts, and write a report. |
 | 0005 | [0005-documentation-corrections.md](0005-documentation-corrections.md) | 0 | done | — | Fix `federation.md`'s removed renderer runtime and `version-compatibility.md`'s handshake and floor lines. |
@@ -451,13 +451,13 @@ Report: [§8](../../docs/reports/unified-federation.md#8-data-lifecycle-hydratio
 
 | ID | File | Phase | Status | Depends on | Summary |
 | --- | --- | --- | --- | --- | --- |
-| 4001 | [4001-in-tree-workspace-seam.md](4001-in-tree-workspace-seam.md) | 4 | not-started | 2013, 3013, 3014 | `<InTreeWorkspace nodeId>` when `inTreeNodes` has the node; a loopback for the realm protocol; `NodeErrorBoundary`. |
-| 4002 | [4002-hydration-tiers-and-budgets.md](4002-hydration-tiers-and-budgets.md) | 4 | not-started | 4001, 0004 | Summary, warm, live and suspended tiers, suspension timers per host, and pressure eviction at data granularity. |
-| 4003 | [4003-snapshot-first-rehydration.md](4003-snapshot-first-rehydration.md) | 4 | not-started | 4001 | A new bounded IndexedDB snapshot store (none exists today), with a stale marker until the authoritative read; no content in snapshots. |
-| 4004 | [4004-runtime-shim-guard.md](4004-runtime-shim-guard.md) | 4 | not-started | 4001 | A shim call under a mounted leaf throws in development and tests and is counted in production. |
-| 4005 | [4005-direct-navigation.md](4005-direct-navigation.md) | 4 | not-started | 4001, 3006 | `select`, `sidebar`, `filesPanel`, `grouping`, `visibility`, `ready`, `selection` and `open` become direct calls for in-tree nodes. |
+| 4001 | [4001-in-tree-workspace-seam.md](4001-in-tree-workspace-seam.md) | 4 | in-progress | 2013, 3013, 3014 | `<InTreeWorkspace nodeId>` when `inTreeNodes` has the node; a loopback for the realm protocol; `NodeErrorBoundary`. |
+| 4002 | [4002-hydration-tiers-and-budgets.md](4002-hydration-tiers-and-budgets.md) | 4 | done | 4001, 0004 | Summary, warm, live and suspended tiers, suspension timers per host, and pressure eviction at data granularity. |
+| 4003 | [4003-snapshot-first-rehydration.md](4003-snapshot-first-rehydration.md) | 4 | in-progress | 4001 | A new bounded IndexedDB snapshot store (none exists today), with a stale marker until the authoritative read; no content in snapshots. |
+| 4004 | [4004-runtime-shim-guard.md](4004-runtime-shim-guard.md) | 4 | in-progress | 4001 | A shim call under a mounted leaf throws in development and tests and is counted in production. |
+| 4005 | [4005-direct-navigation.md](4005-direct-navigation.md) | 4 | done | 4001, 3006 | `select`, `sidebar`, `filesPanel`, `grouping`, `visibility`, `ready`, `selection` and `open` become direct calls for in-tree nodes. |
 | 4006 | [4006-multi-node-qualification.md](4006-multi-node-qualification.md) | 4 | not-started | 4002, 4003, 4004, 4005, 2009, 4007 | A new multi-node e2e on desktop and browser, the inactive-environment cycle for a leaf, six-node switching, preview z-order, and iPad memory. |
-| 4007 | [4007-workspace-calls-its-node.md](4007-workspace-calls-its-node.md) | 4 | not-started | 4001 | Added 2026-11-07: a guard over the workspace import graph for command-bound `@/lib/backend` calls, and the conversions (incl. the design canvas and the tmux client), so an in-tree leaf sends everything to its node. |
+| 4007 | [4007-workspace-calls-its-node.md](4007-workspace-calls-its-node.md) | 4 | in-progress | 4001 | Added 2026-11-07: a guard over the workspace import graph for command-bound `@/lib/backend` calls, and the conversions (incl. the design canvas and the tmux client), so an in-tree leaf sends everything to its node. |
 
 Exit criteria:
 
@@ -470,10 +470,10 @@ Report: [§9](../../docs/reports/unified-federation.md#9-cross-node-features), [
 
 | ID | File | Phase | Status | Depends on | Summary |
 | --- | --- | --- | --- | --- | --- |
-| 5001 | [5001-attention-per-scope.md](5001-attention-per-scope.md) | 5 | not-started | 4001, 0002 | One window attention service across tiers, deduplicated by node; a notification click opens the node. |
-| 5002 | [5002-pr-opener-and-title-bar.md](5002-pr-opener-and-title-bar.md) | 5 | not-started | 4001, 3007 | The PR opener works for any shown node; title-bar meters and popovers come from the scope (`panel`, `panelDismissed` and `titleBar` go). |
-| 5003 | [5003-settings-bug-report-shortcuts-dialogs.md](5003-settings-bug-report-shortcuts-dialogs.md) | 5 | not-started | 4001, 3017 | `settings`, `bugReport` and `shortcut` become direct calls; `BugReportSheet` takes a scope; node dialogs open under their scope. |
-| 5004 | [5004-coordinator-and-portal-through-command-scope.md](5004-coordinator-and-portal-through-command-scope.md) | 5 | not-started | 4001 | Portal APIs, the leaf coordinator gate and `machineInvoke` go through the command scope. |
+| 5001 | [5001-attention-per-scope.md](5001-attention-per-scope.md) | 5 | in-progress | 4001, 0002 | One window attention service across tiers, deduplicated by node; a notification click opens the node. |
+| 5002 | [5002-pr-opener-and-title-bar.md](5002-pr-opener-and-title-bar.md) | 5 | done | 4001, 3007 | The PR opener works for any shown node; title-bar meters and popovers come from the scope (`panel`, `panelDismissed` and `titleBar` go). |
+| 5003 | [5003-settings-bug-report-shortcuts-dialogs.md](5003-settings-bug-report-shortcuts-dialogs.md) | 5 | done | 4001, 3017 | `settings`, `bugReport` and `shortcut` become direct calls; `BugReportSheet` takes a scope; node dialogs open under their scope. |
+| 5004 | [5004-coordinator-and-portal-through-command-scope.md](5004-coordinator-and-portal-through-command-scope.md) | 5 | done | 4001 | Portal APIs, the leaf coordinator gate and `machineInvoke` go through the command scope. |
 | 5005 | [5005-multiplexed-relay-stream.md](5005-multiplexed-relay-stream.md) | 5 | not-started | 0004, 4002 | Optional: one relay request carries N leaves' event streams. Only if measurements show pressure; otherwise drop it. |
 | 5006 | [5006-fleet-currency.md](5006-fleet-currency.md) | 5 | done | 1004, 1005 | Node version skew and missing domains in the sidebar; typed errors link to the update; an optional update policy. |
 
@@ -513,9 +513,9 @@ Report: [§10.2](../../docs/reports/unified-federation.md#102-tighten-the-grant-
 | 7007 | [7007-domain-pipelines-graphs-multi-review.md](7007-domain-pipelines-graphs-multi-review.md) | 7 | in-progress | 1008, 1010, 1011 | Build pipelines and graphs (76) and Multi Review (30), reusing the graph guards. |
 | 7008 | [7008-domain-kanban-mail-accounts-mcp.md](7008-domain-kanban-mail-accounts-mcp.md) | 7 | in-progress | 1008, 1010, 1011 | Kanban and Linear, agent mail, agent accounts and MCP management. |
 | 7009 | [7009-domain-coordinator-servers-system.md](7009-domain-coordinator-servers-system.md) | 7 | done | 1008, 1010, 1011 | Coordinator and controller (104), agent servers, system, the rest of nodes, and the ~74 commands with no static caller. |
-| 7010 | [7010-converge-models.md](7010-converge-models.md) | 7 | in-progress | 7003, 7005 | `models.ts` and the web's `types/index.ts` become inferred protocol types. |
+| 7010 | [7010-converge-models.md](7010-converge-models.md) | 7 | done | 7003, 7005 | `models.ts` and the web's `types/index.ts` become inferred protocol types. |
 | 7011 | [7011-typed-events.md](7011-typed-events.md) | 7 | done | 1002, 1006 | `defineEvent` for every backend event, typed `emit` and `listen`, events in the manifest. |
-| 7012 | [7012-allow-listed-grants.md](7012-allow-listed-grants.md) | 7 | in-progress | 7001, 7002, 7003, 7004, 7005, 7006, 7007, 7008, 7009, 0006 | The grant scope becomes the manifest's `access: "workspace"` set and fails closed; the deny-lists are deleted. |
+| 7012 | [7012-allow-listed-grants.md](7012-allow-listed-grants.md) | 7 | done | 7001, 7002, 7003, 7004, 7005, 7006, 7007, 7008, 7009, 0006 | The grant scope becomes the manifest's `access: "workspace"` set and fails closed; the deny-lists are deleted. |
 | 7013 | [7013-retire-legacy-adapters.md](7013-retire-legacy-adapters.md) | 7 | blocked | 7001, 7002, 7003, 7004, 7005, 7006, 7007, 7008, 7009 | Date-gated: remove version-0 adapters and capability commands once the floor passes the first Stable release with `domains`. |
 | 7014 | [7014-remaining-zod-to-effect-schema.md](7014-remaining-zod-to-effect-schema.md) | 7 | done | 7004 | Added 2026-11-07: move the 35 backend files still on Zod (MCP tool inputs, the design service's parsing) to Effect Schema, then drop `zod`. |
 

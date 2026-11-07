@@ -258,6 +258,8 @@ describe("test suite ownership", () => {
       "tests/unit/codex-bridge-environment.test.ts",
       // Root launch arguments must agree with Docker scripts and image ownership.
       "tests/unit/container-root-boundary.test.ts",
+      // The committed compatibility register must name the backend's counter ids (1008).
+      "tests/unit/contract-ci.test.ts",
       // The disk report reads the database the backend writes, without migrating it.
       "tests/unit/disk-report.test.ts",
       "tests/unit/components/GitHubCloneIntegration.test.tsx",

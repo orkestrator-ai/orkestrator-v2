@@ -8,6 +8,7 @@ import type { MachineView } from "@/lib/federation/aggregate";
 import {
   isMachineShown,
   mergedProjectView,
+  repositoryIcon,
   repositoryLabel,
   repositoryOpenTarget,
   repositoryTileColor,
@@ -76,9 +77,7 @@ export function compactRepositories(
         key: entry.key,
         name: repositoryLabel(entry.name),
         colorToken: repositoryTileColor(commandNode, entry.name, opens),
-        icon: commandNode?.projects.find(
-          (project) => project.repositoryHint === entry.name && project.icon,
-        )?.icon,
+        icon: repositoryIcon(machines, commandNode, entry.name),
         repository: entry.name,
         opens,
         members: entry.projects.map(memberOf),

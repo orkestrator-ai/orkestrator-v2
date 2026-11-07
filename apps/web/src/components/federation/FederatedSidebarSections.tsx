@@ -19,7 +19,10 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import { ChevronDown, ChevronRight, WifiOff } from "lucide-react";
 import { toast } from "sonner";
-import { SortableProjectFolder } from "@/components/sidebar/SortableProjectFolder";
+import {
+  SortableProjectFolder,
+  type RepositoryMenuActions,
+} from "@/components/sidebar/SortableProjectFolder";
 import { SidebarRootDropZone } from "@/components/sidebar/SidebarRootDropZone";
 import {
   folderDragItem,
@@ -36,6 +39,7 @@ import {
   mergedArrangementUpdate,
   mergedProjectView,
   repositoryArrangementUpdate,
+  repositoryIcon,
   repositoryLabel,
   repositoryMemberLabel,
   repositoryOpenTarget,
@@ -43,6 +47,7 @@ import {
   type MergedProject,
 } from "@/lib/federation/sidebar-layout";
 import { openMachineWorkspace, openRepository } from "@/lib/federation/open-workspace";
+import { getGitHubRepositoryUrl } from "@/lib/gitUrl";
 import { updatePortalLayout, usePortalLayout } from "@/lib/portal/portal-layout";
 import {
   normalizeProjectFolderName,
@@ -87,6 +92,7 @@ import {
   RemoteEnvironmentItem,
   RemoteMachineTree,
   RemoteProjectGroup,
+  openWebPage,
   remoteEnvironmentProject,
   useRemoteEnvironments,
 } from "./RemoteMachineTree";
@@ -408,6 +414,33 @@ function useShownRepositoryHeading(machines: readonly MachineView[]): OpenedRepo
   return (remoteShown ?? (target.bound && localShown)) ? opened : null;
 }
 
+/**
+ * A repository heading's context menu, acting on the member the heading opens:
+ * the same project, machine and dialogs that member's own header menu reaches.
+ */
+function repositoryMenuActions(
+  repository: string,
+  opens: MergedProject,
+  openCoordinator: (() => void) | undefined,
+): RepositoryMenuActions {
+  const { machine, project } = opens;
+  const githubUrl = getGitHubRepositoryUrl(`https://${repository}`);
+  const target = {
+    connectionId: machine.connectionId,
+    projectId: project.ref.projectId,
+    title: project.name,
+  };
+  return {
+    machineName: machine.name,
+    writable: isMachineWritable(machine),
+    ...(openCoordinator ? { openCoordinator } : {}),
+    openBoard: () => openMachineWorkspace({ ...target, boardTab: "kanban" }),
+    ...(githubUrl ? { openGithub: () => openWebPage(githubUrl) } : {}),
+    openSettings: () => openMachineWorkspace({ ...target, dialog: "repository-settings" }),
+    newEnvironment: () => newFederatedEnvironment(machine, project),
+  };
+}
+
 /** Where a merged list's folder (or repository group) keeps its collapsed state. */
 export function mergedFolderCollapseKey(mode: "project" | "repository", name: string): string {
   return sidebarFolderKey(mode, mode === "repository" ? name : projectFolderKey(name));
@@ -578,6 +611,18 @@ export function MergedProjectList({
         : {};
     const opens =
       mode === "repository" ? repositoryOpenTarget(entry.projects, portalState.selfId) : null;
+    const coordinatorGated = opens?.machine.bound === true && portalState.status?.mode === "leaf";
+    const openOpens = opens
+      ? () =>
+          openRepository({
+            repository: entry.name,
+            projectKey: opens.id,
+            connectionId: opens.machine.connectionId,
+            projectId: opens.project.ref.projectId,
+            coordinatorGated,
+            title: opens.name,
+          })
+      : undefined;
     return (
       <SortableProjectFolder
         key={`folder:${entry.key}`}
@@ -591,11 +636,7 @@ export function MergedProjectList({
               icon: (
                 <CommandNodeHomeIcon
                   colorToken={repositoryTileColor(commandNode, entry.name, opens)}
-                  projectIcon={
-                    commandNode?.projects.find(
-                      (project) => project.repositoryHint === entry.name && project.icon,
-                    )?.icon
-                  }
+                  projectIcon={repositoryIcon(machines, commandNode, entry.name)}
                 />
               ),
               subtitle: repositorySummary(entry.projects),
@@ -605,20 +646,17 @@ export function MergedProjectList({
         isCollapsed={isFolderCollapsed(entry.name)}
         onToggleCollapse={() => setFolderKeyCollapsed(folderCollapseKey(entry.name))}
         selected={opens !== null && openedRepository?.name === entry.name}
-        onOpen={
-          opens
-            ? () =>
-                openRepository({
-                  repository: entry.name,
-                  projectKey: opens.id,
-                  connectionId: opens.machine.connectionId,
-                  projectId: opens.project.ref.projectId,
-                  coordinatorGated: opens.machine.bound && portalState.status?.mode === "leaf",
-                  title: opens.name,
-                })
-            : undefined
-        }
+        onOpen={openOpens}
         openMachineName={opens?.machine.name}
+        {...(opens
+          ? {
+              repositoryMenu: repositoryMenuActions(
+                entry.name,
+                opens,
+                coordinatorGated ? undefined : openOpens,
+              ),
+            }
+          : {})}
         {...folderActions}
       >
         {entry.projects.map((item) =>

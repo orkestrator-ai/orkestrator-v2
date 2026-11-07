@@ -473,3 +473,25 @@ export function repositoryTileColor(
   );
   return (onCommandNode ? commandNode : opens?.machine)?.colorToken;
 }
+
+/**
+ * The icon on a repository's home tile: the command node's for its copy of the
+ * repository, shown or not. A repository the command node has no copy of takes
+ * the first icon in machine order, so it does not lose its icon to the house.
+ */
+export function repositoryIcon(
+  machines: readonly MachineView[],
+  commandNode: MachineView | undefined,
+  repository: string,
+): string | undefined {
+  const copies = (machine: MachineView) =>
+    machine.projects.filter((project) => project.repositoryHint === repository);
+  if (commandNode && copies(commandNode).length > 0) {
+    return copies(commandNode).find((project) => project.icon)?.icon ?? undefined;
+  }
+  for (const machine of machines) {
+    const icon = copies(machine).find((project) => project.icon)?.icon;
+    if (icon) return icon;
+  }
+  return undefined;
+}

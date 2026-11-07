@@ -9,6 +9,9 @@ const project = (page: Page, id: string) =>
   page.locator(`[data-project=${JSON.stringify(key(id))}]`);
 const heading = (page: Page, label: string, machine = "Command") =>
   page.getByRole("button", { name: `Open ${label} on ${machine}`, exact: true });
+// Skip the context-menu trigger to reach the frame carrying drop highlights.
+const headingFrame = (page: Page, label: string, machine: string) =>
+  heading(page, label, machine).locator("xpath=ancestor::div[1]");
 
 // Pointer drags target the row under the pointer, including expanded groups.
 async function hoverDrag(page: Page, handle: Locator, target: Locator) {
@@ -35,6 +38,22 @@ test("namespaced headings retain distinct labels and full-hint titles", async ({
   );
   await expect(heading(page, "team-a/shared/app")).toContainText("team-a/shared/app");
   await expect(heading(page, "team-b/shared/app", "Remote")).toContainText("team-b/shared/app");
+});
+
+test("a remote-only repository renders its remote project icon in the heading", async ({
+  page,
+}) => {
+  await page.goto("/merged-project-list?icons");
+  const home = heading(page, "team-b/shared/app", "Remote").getByTestId("command-node-home-icon");
+  const icon = home.getByTestId("project-icon");
+  await expect(icon).toBeVisible();
+  await expect(icon).toHaveAttribute("src", /^data:image\/png;base64,/);
+  await expect(home).toHaveAttribute("data-machine-color", "teal");
+  await expect
+    .poll(() =>
+      icon.evaluate((element: HTMLImageElement) => element.complete && element.naturalWidth),
+    )
+    .toBe(16);
 });
 
 // Space is the heading's keyboard drag, covered by the reorder test below.
@@ -102,9 +121,7 @@ test("the chevron collapses without navigating and the heading reorders with Spa
   await page.keyboard.press("ArrowDown");
   await expect(folder(page, hintA)).toHaveAttribute("style", /translate3d\(0px, [1-9]/);
   // Movement paints before DndContext publishes its new drop target.
-  await expect(heading(page, "team-b/shared/app", "Remote").locator("..")).toHaveClass(
-    /border-primary\/70/,
-  );
+  await expect(headingFrame(page, "team-b/shared/app", "Remote")).toHaveClass(/border-primary\/70/);
   await page.keyboard.press("Space");
   await expect(page.locator("[data-project-folder]").first()).toHaveAttribute(
     "data-project-folder",
@@ -156,7 +173,7 @@ test("a project over a repository header has no join highlight and its drop is r
     "aria-pressed",
     "true",
   );
-  await expect(heading(page, "team-b/shared/app", "Remote").locator("..")).not.toHaveClass(
+  await expect(headingFrame(page, "team-b/shared/app", "Remote")).not.toHaveClass(
     /border-primary\/70|bg-primary\/10/,
   );
   await expect(page.getByTestId("sidebar-root-drop-zone")).toHaveCount(0);

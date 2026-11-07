@@ -92,7 +92,7 @@ const NO_ENVIRONMENTS: readonly FederatedEnvironment[] = [];
  * the backend's `open_in_browser`, which the window's workspace (possibly a
  * leaf) would run.
  */
-function openWebPage(url: string): void {
+export function openWebPage(url: string): void {
   const openExternal = window.orkestrator?.shell?.openExternal;
   if (openExternal) {
     void openExternal(url).catch(() => toast.error("Could not open repository in browser."));

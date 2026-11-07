@@ -7,7 +7,7 @@ tests, and a record of the work.
 
 - **Report status:** being implemented in one combined branch (`unified-federation-b4c9ee65814d`), started 2026-11-07. The row statuses below are current.
 - **Plan verified against:** `main` at `521f734a9`, on 2026-11-07. Every item has a "Current state" section re-checked against that commit. Where the report has drifted, the item says so; [Corrections to the report](#corrections-to-the-report) lists the material ones.
-- **Item count:** 79 items in 8 phases, on 3 tracks (78 planned, plus [7014](7014-remaining-zod-to-effect-schema.md) added on 2026-11-07).
+- **Item count:** 80 items in 8 phases, on 3 tracks (78 planned, plus [4007](4007-workspace-calls-its-node.md) and [7014](7014-remaining-zod-to-effect-schema.md) added on 2026-11-07).
 
 ## How to use this board
 
@@ -104,7 +104,7 @@ fields change.
 | 6 | 1012, 3010, 7001–7009 |
 | 7 | 3013, 7010, 7012, 7013 (7013 is also date-gated), 7014 |
 | 8 | 4001 |
-| 9 | 4002, 4003, 4004, 4005, 5001, 5002, 5003, 5004 |
+| 9 | 4002, 4003, 4004, 4005, 4007, 5001, 5002, 5003, 5004 |
 | 10 | 4006, 5005 (optional) |
 | 11 | 6001 |
 | 12 | 6002, 6003 (after one release with in-tree as default) |
@@ -456,7 +456,8 @@ Report: [§8](../../docs/reports/unified-federation.md#8-data-lifecycle-hydratio
 | 4003 | [4003-snapshot-first-rehydration.md](4003-snapshot-first-rehydration.md) | 4 | not-started | 4001 | A new bounded IndexedDB snapshot store (none exists today), with a stale marker until the authoritative read; no content in snapshots. |
 | 4004 | [4004-runtime-shim-guard.md](4004-runtime-shim-guard.md) | 4 | not-started | 4001 | A shim call under a mounted leaf throws in development and tests and is counted in production. |
 | 4005 | [4005-direct-navigation.md](4005-direct-navigation.md) | 4 | not-started | 4001, 3006 | `select`, `sidebar`, `filesPanel`, `grouping`, `visibility`, `ready`, `selection` and `open` become direct calls for in-tree nodes. |
-| 4006 | [4006-multi-node-qualification.md](4006-multi-node-qualification.md) | 4 | not-started | 4002, 4003, 4004, 4005, 2009 | A new multi-node e2e on desktop and browser, the inactive-environment cycle for a leaf, six-node switching, preview z-order, and iPad memory. |
+| 4006 | [4006-multi-node-qualification.md](4006-multi-node-qualification.md) | 4 | not-started | 4002, 4003, 4004, 4005, 2009, 4007 | A new multi-node e2e on desktop and browser, the inactive-environment cycle for a leaf, six-node switching, preview z-order, and iPad memory. |
+| 4007 | [4007-workspace-calls-its-node.md](4007-workspace-calls-its-node.md) | 4 | not-started | 4001 | Added 2026-11-07: a guard over the workspace import graph for command-bound `@/lib/backend` calls, and the conversions (incl. the design canvas and the tmux client), so an in-tree leaf sends everything to its node. |
 
 Exit criteria:
 

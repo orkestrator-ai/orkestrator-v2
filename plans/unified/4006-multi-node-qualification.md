@@ -4,7 +4,7 @@ title: "Multi-node qualification on desktop, browser and iPad"
 phase: 4
 plan: "§12 Phase 4.6 and exit"
 status: not-started
-depends_on: [4002, 4003, 4004, 4005, 2009]
+depends_on: [4007, 4002, 4003, 4004, 4005, 2009]
 blocked_by: ""
 owner: ""
 branch: ""

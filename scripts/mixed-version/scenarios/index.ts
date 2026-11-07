@@ -13,6 +13,7 @@ import previews from "./previews.ts";
 import terminals from "./terminals.ts";
 import ticketSync from "./ticket-sync.ts";
 import transcriptArtifacts from "./transcript-artifacts.ts";
+import webAnnotations from "./web-annotations.ts";
 
 export const SCENARIOS: readonly ScenarioModule[] = [
   nodeMail,
@@ -25,4 +26,5 @@ export const SCENARIOS: readonly ScenarioModule[] = [
   previews,
   transcriptArtifacts,
   design,
+  webAnnotations,
 ];

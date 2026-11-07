@@ -3,13 +3,13 @@ import { configureLogger } from "@orkestrator/protocol/logger";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { renderHook, act, waitFor } from "@testing-library/react";
 import { configStore } from "../../../apps/web/src/stores/configStore";
-import { useBuildPipelineStore } from "../../../apps/web/src/stores/buildPipelineStore";
+import { buildPipelineStore } from "../../../apps/web/src/stores/buildPipelineStore";
 import { environmentStore } from "../../../apps/web/src/stores/environmentStore";
 import { claudeOptionsStore } from "../../../apps/web/src/stores/claudeOptionsStore";
 import { uiStore } from "../../../apps/web/src/stores/uiStore";
 import { useErrorDialogStore } from "../../../apps/web/src/stores/errorDialogStore";
 import { projectStore } from "../../../apps/web/src/stores/projectStore";
-import { useSessionStore } from "../../../apps/web/src/stores/sessionStore";
+import { sessionStore } from "../../../apps/web/src/stores/sessionStore";
 import { usePaneLayoutStore } from "../../../apps/web/src/stores/paneLayoutStore";
 import { mockToastError, mockToastInfo, mockToastSuccess } from "../../mocks/sonner";
 import type {
@@ -37,31 +37,33 @@ function createDeferred<T>() {
 
 function seedBuildPipeline(environmentId: string): string {
   const id = "pipeline-1";
-  useBuildPipelineStore.getState().replacePipeline({
-    id,
-    taskId: "task-1",
-    projectId: "project-1",
-    environmentId,
-    environmentType: "local",
-    agentType: "claude",
-    phase: "building",
-    sessions: [],
-    currentSessionIndex: -1,
-    iteration: 0,
-    maxIterations: 3,
-    createdAt: "2026-07-29T08:00:00.000Z",
-    taskTitle: "Task",
-    taskSnapshot: {
-      title: "Task",
-      description: "",
-      acceptanceCriteria: "",
-      comments: [],
-      images: [],
-    },
-    source: { type: "kanban", taskId: "task-1" },
-    backendRevision: 1,
-    controller: "backend",
-  });
+  appCommandStore(buildPipelineStore)
+    .getState()
+    .replacePipeline({
+      id,
+      taskId: "task-1",
+      projectId: "project-1",
+      environmentId,
+      environmentType: "local",
+      agentType: "claude",
+      phase: "building",
+      sessions: [],
+      currentSessionIndex: -1,
+      iteration: 0,
+      maxIterations: 3,
+      createdAt: "2026-07-29T08:00:00.000Z",
+      taskTitle: "Task",
+      taskSnapshot: {
+        title: "Task",
+        description: "",
+        acceptanceCriteria: "",
+        comments: [],
+        images: [],
+      },
+      source: { type: "kanban", taskId: "task-1" },
+      backendRevision: 1,
+      controller: "backend",
+    });
   return id;
 }
 
@@ -179,7 +181,7 @@ describe("useEnvironments", () => {
       selectedEnvironmentIds: [],
     });
     usePaneLayoutStore.setState({ environments: new Map(), activeEnvironmentId: null });
-    useBuildPipelineStore.setState({
+    appCommandStore(buildPipelineStore).setState({
       pipelines: new Map(),
       buildEnvironmentIds: new Set(),
     });
@@ -611,7 +613,7 @@ describe("useEnvironments", () => {
     expect(mockDeleteEnvironment).toHaveBeenCalledWith("env-1");
     expect(result.current.allEnvironments).toHaveLength(0);
     expect(result.current.error).toBeNull();
-    expect(useBuildPipelineStore.getState().pipelines.has(pipelineId)).toBe(false);
+    expect(appCommandStore(buildPipelineStore).getState().pipelines.has(pipelineId)).toBe(false);
   });
 
   test("deleteEnvironment activates the project as soon as cleanup starts", async () => {
@@ -742,7 +744,7 @@ describe("useEnvironments", () => {
     expect(useErrorDialogStore.getState().error?.title).toBe("Failed to delete environment");
     expect(useErrorDialogStore.getState().error?.message).toBe("Failed to delete");
     expect(appCommandStore(environmentStore).getState().getEnvironmentById("env-1")).toBeDefined();
-    expect(useBuildPipelineStore.getState().pipelines.has(pipelineId)).toBe(true);
+    expect(appCommandStore(buildPipelineStore).getState().pipelines.has(pipelineId)).toBe(true);
     expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("env-1");
     expect(appCommandStore(uiStore).getState().selectedProjectId).toBe("project-1");
   });
@@ -1674,9 +1676,10 @@ describe("useEnvironments", () => {
       projectId: "project-1",
       status: "running",
     });
-    const originalDisconnect = useSessionStore.getState().disconnectEnvironmentSessions;
+    const originalDisconnect =
+      appCommandStore(sessionStore).getState().disconnectEnvironmentSessions;
     appCommandStore(environmentStore).setState({ environments: [existingEnv] });
-    useSessionStore.setState({
+    appCommandStore(sessionStore).setState({
       disconnectEnvironmentSessions: async () => {
         throw new Error("session disconnect failed");
       },
@@ -1699,7 +1702,7 @@ describe("useEnvironments", () => {
       expect(result.current.error).toBe("session disconnect failed");
       expect(result.current.allEnvironments[0]?.status).toBe("error");
     } finally {
-      useSessionStore.setState({
+      appCommandStore(sessionStore).setState({
         disconnectEnvironmentSessions: originalDisconnect,
       });
     }

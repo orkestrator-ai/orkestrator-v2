@@ -13,7 +13,7 @@ import type {
 import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
 import { configStore } from "@/stores/configStore";
 import { environmentStore } from "@/stores/environmentStore";
-import { useAgentMailStore } from "@/stores/agentMailStore";
+import { agentMailStore } from "@/stores/agentMailStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { multiReviewStore } from "@/stores/multiReviewStore";
 import type { ChangeDiffTarget, PaneLeaf } from "@/types/paneLayout";
@@ -404,7 +404,7 @@ function installPendingMail(environmentIds: string[], tabId: string): void {
       revision: 1,
     });
   }
-  useAgentMailStore.setState({
+  appCommandStore(agentMailStore).setState({
     revision: 1,
     summary: summaries,
     mailboxes,
@@ -509,7 +509,7 @@ describe("PaneLeafContainer", () => {
       },
     }));
     appCommandStore(multiReviewStore).setState({ workflows: new Map() });
-    useAgentMailStore.setState(useAgentMailStore.getInitialState());
+    appCommandStore(agentMailStore).setState(appCommandStore(agentMailStore).getInitialState());
     clearPersistedVirtuosoState.mockClear();
     nativeAgentTabFailureEnvironment = null;
     nativeAgentMountCount = 0;
@@ -805,7 +805,7 @@ describe("PaneLeafContainer", () => {
         revision: 1,
       });
     }
-    useAgentMailStore.setState({
+    appCommandStore(agentMailStore).setState({
       revision: 1,
       summary: summaries,
       mailboxes,

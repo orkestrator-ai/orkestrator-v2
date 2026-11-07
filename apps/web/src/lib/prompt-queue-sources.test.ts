@@ -1,7 +1,8 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import * as realBackend from "@/lib/backend";
-import { useClaudeTmuxStore } from "@/stores/claudeTmuxStore";
+import { claudeTmuxStore, useClaudeTmuxStore } from "@/stores/claudeTmuxStore";
 import type { PersistedPromptQueue } from "@/types";
+import { appCommandStore } from "@/test/app-command-store";
 
 const realBackendSnapshot = { ...realBackend };
 const enqueuePromptQueueMessage = mock(async (..._args: unknown[]): Promise<unknown> => undefined);
@@ -44,7 +45,10 @@ function setTmuxProjection(messages: TestQueuedMessage[]): void {
 
 function getTmuxProjection(key: string): TestQueuedMessage[] | undefined {
   return (
-    useClaudeTmuxStore.getState().messageQueue as unknown as Map<string, TestQueuedMessage[]>
+    appCommandStore(claudeTmuxStore).getState().messageQueue as unknown as Map<
+      string,
+      TestQueuedMessage[]
+    >
   ).get(key);
 }
 
@@ -70,7 +74,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  useClaudeTmuxStore.setState({ messageQueue: new Map() });
+  appCommandStore(claudeTmuxStore).setState({ messageQueue: new Map() });
 });
 
 afterAll(() => {
@@ -98,7 +102,9 @@ describe("store adapter", () => {
 
   test("reads the store's live messageQueue map", () => {
     expect(source().getQueues()).toBeInstanceOf(Map);
-    expect(source().getQueues()).toBe(useClaudeTmuxStore.getState().messageQueue as never);
+    expect(source().getQueues()).toBe(
+      appCommandStore(claudeTmuxStore).getState().messageQueue as never,
+    );
   });
 
   test("setQueue writes through to the store with a fresh map identity", () => {

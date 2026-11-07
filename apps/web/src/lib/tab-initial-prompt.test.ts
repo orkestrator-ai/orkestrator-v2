@@ -1,15 +1,16 @@
 import { afterEach, describe, expect, mock, test, type Mock } from "bun:test";
 import { invoke } from "@/lib/native/backend";
-import { nativeComposeDraft, useNativeComposeStore } from "@/stores/nativeComposeStore";
+import { nativeComposeDraft, nativeComposeStore } from "@/stores/nativeComposeStore";
 import { createSessionKey } from "@/lib/utils";
 import { beginTabInitialPromptFallback } from "./tab-initial-prompt";
 import type { TabInfo } from "@/types/paneLayout";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { handTabInitialPromptToBackend, tabInitialPromptRequestId } from "./tab-initial-prompt";
+import { appCommandStore } from "@/test/app-command-store";
 
 const invokeMock = invoke as unknown as Mock<(command: string, args?: unknown) => Promise<unknown>>;
 const originalInvoke = invokeMock.getMockImplementation()!;
-const initialComposeState = useNativeComposeStore.getState();
+const initialComposeState = appCommandStore(nativeComposeStore).getState();
 const initialLayoutState = usePaneLayoutStore.getState();
 
 function seedTab(tab: TabInfo) {
@@ -36,7 +37,7 @@ const tabPrompt = (tabId: string) =>
 
 afterEach(() => {
   usePaneLayoutStore.setState(initialLayoutState, true);
-  useNativeComposeStore.setState(initialComposeState, true);
+  appCommandStore(nativeComposeStore).setState(initialComposeState, true);
   invokeMock.mockImplementation(originalInvoke);
 });
 
@@ -92,10 +93,12 @@ describe("tab initial prompt hand-off", () => {
     const requestId = tabInitialPromptRequestId("env-1", tabId);
     const seeded = { id: "seeded", type: "image" as const, path: "same.png", name: "seeded.png" };
     const userImage = { ...seeded, id: "user", name: "user.png" };
-    useNativeComposeStore.getState().updateDraft(sessionKey, {
-      text: "My follow-up",
-      attachments: [seeded, userImage],
-    });
+    appCommandStore(nativeComposeStore)
+      .getState()
+      .updateDraft(sessionKey, {
+        text: "My follow-up",
+        attachments: [seeded, userImage],
+      });
     const saved = {
       draftKey: "cleanup",
       ownerType: "environment",
@@ -129,7 +132,9 @@ describe("tab initial prompt hand-off", () => {
       },
       mock(async () => ({}) as never),
     );
-    expect(nativeComposeDraft(useNativeComposeStore.getState(), sessionKey)).toMatchObject({
+    expect(
+      nativeComposeDraft(appCommandStore(nativeComposeStore).getState(), sessionKey),
+    ).toMatchObject({
       text: "My follow-up",
       attachments: [userImage],
     });

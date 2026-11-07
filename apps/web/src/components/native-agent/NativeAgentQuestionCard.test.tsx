@@ -9,11 +9,12 @@ import {
   type AgentInteractionResolution,
 } from "@orkestrator/protocol/agent-interactions";
 import { NativeAgentQuestionCard } from "./NativeAgentQuestionCard";
-import { usePromptDraftStore } from "@/stores/promptDraftStore";
+import { promptDraftStore } from "@/stores/promptDraftStore";
+import { appCommandStore } from "@/test/app-command-store";
 
 afterEach(() => {
   cleanup();
-  usePromptDraftStore.getState().reset();
+  appCommandStore(promptDraftStore).getState().reset();
 });
 
 function question(
@@ -348,7 +349,7 @@ describe("NativeAgentQuestionCard", () => {
     expect(input.autocomplete).toBe("off");
     expect(screen.getByText(/discarded when you leave this tab/)).toBeTruthy();
     fireEvent.change(input, { target: { value: "discard-me" } });
-    expect(usePromptDraftStore.getState().drafts.size).toBe(0);
+    expect(appCommandStore(promptDraftStore).getState().drafts.size).toBe(0);
 
     view.unmount();
     render(<NativeAgentQuestionCard interaction={interaction} onResolve={onResolve} />);
@@ -362,7 +363,7 @@ describe("NativeAgentQuestionCard", () => {
     expect(onResolve.mock.calls[0]?.[0].answer?.answers).toEqual([
       { questionId: "q0", freeText: "send-live" },
     ]);
-    expect(usePromptDraftStore.getState().drafts.size).toBe(0);
+    expect(appCommandStore(promptDraftStore).getState().drafts.size).toBe(0);
   });
 
   test("omits an unanswered optional question from the resolution", async () => {

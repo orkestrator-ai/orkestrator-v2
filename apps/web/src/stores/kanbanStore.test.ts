@@ -6,7 +6,8 @@ import { appCommandScope } from "@/lib/node-scope-slots";
 // The shared sonner replacement lives in tests/setup.ts; a competing local
 // mock.module for it would leak through Bun's global module cache.
 import { mockToastError, mockToastWarning } from "../../../../tests/mocks/sonner";
-import { useBuildPipelineStore } from "./buildPipelineStore";
+import { buildPipelineStore } from "./buildPipelineStore";
+import { appCommandStore } from "@/test/app-command-store";
 
 const realBackendSnapshot = { ...realBackend };
 const clearTaskBuildStatusMock = mock(async (taskId: string) => ({
@@ -85,7 +86,7 @@ describe("kanbanStore.clearTaskBuildStatus", () => {
       isLoading: false,
       currentProjectId: "project-1",
     });
-    useBuildPipelineStore.setState({
+    appCommandStore(buildPipelineStore).setState({
       pipelines: new Map(),
       buildEnvironmentIds: new Set(),
     });
@@ -109,7 +110,7 @@ describe("kanbanStore.clearTaskBuildStatus", () => {
       taskId: "task-1",
       environmentId: "env-b",
     });
-    useBuildPipelineStore.setState({
+    appCommandStore(buildPipelineStore).setState({
       pipelines: new Map([
         [first.id, first],
         [second.id, second],
@@ -119,7 +120,7 @@ describe("kanbanStore.clearTaskBuildStatus", () => {
 
     await useKanbanStore.getState().clearTaskBuildStatus("task-1");
 
-    expect(useBuildPipelineStore.getState().pipelines.size).toBe(0);
+    expect(appCommandStore(buildPipelineStore).getState().pipelines.size).toBe(0);
   });
 
   test("fails closed when authoritative pipeline cleanup fails", async () => {
@@ -130,7 +131,7 @@ describe("kanbanStore.clearTaskBuildStatus", () => {
     useKanbanStore.setState({
       tasks: [task({ buildPipelineId: pipeline.id, environmentId: "env-1" })],
     });
-    useBuildPipelineStore.setState({
+    appCommandStore(buildPipelineStore).setState({
       pipelines: new Map([[pipeline.id, pipeline]]),
       buildEnvironmentIds: new Set(["env-1"]),
     });
@@ -139,7 +140,9 @@ describe("kanbanStore.clearTaskBuildStatus", () => {
     await useKanbanStore.getState().clearTaskBuildStatus("task-1");
 
     expect(useKanbanStore.getState().tasks[0]?.buildPipelineId).toBe(pipeline.id);
-    expect(useBuildPipelineStore.getState().pipelines.has("pipeline-fail")).toBe(true);
+    expect(appCommandStore(buildPipelineStore).getState().pipelines.has("pipeline-fail")).toBe(
+      true,
+    );
     expect(mockToastError).toHaveBeenCalledTimes(1);
   });
 
@@ -151,7 +154,7 @@ describe("kanbanStore.clearTaskBuildStatus", () => {
     useKanbanStore.setState({
       tasks: [task({ buildPipelineId: pipeline.id, environmentId: "env-1" })],
     });
-    useBuildPipelineStore.setState({
+    appCommandStore(buildPipelineStore).setState({
       pipelines: new Map([[pipeline.id, pipeline]]),
       buildEnvironmentIds: new Set(["env-1"]),
     });
@@ -171,7 +174,7 @@ describe("kanbanStore.clearTaskBuildStatus", () => {
     useKanbanStore.setState({
       tasks: [task({ buildPipelineId: pipeline.id, environmentId: "env-1" })],
     });
-    useBuildPipelineStore.setState({
+    appCommandStore(buildPipelineStore).setState({
       pipelines: new Map([[pipeline.id, pipeline]]),
       buildEnvironmentIds: new Set(["env-1"]),
     });
@@ -180,7 +183,9 @@ describe("kanbanStore.clearTaskBuildStatus", () => {
     await useKanbanStore.getState().clearTaskBuildStatus("task-1");
 
     expect(useKanbanStore.getState().tasks[0]?.buildPipelineId).toBe("pipeline-update-fail");
-    expect(useBuildPipelineStore.getState().pipelines.has("pipeline-update-fail")).toBe(true);
+    expect(
+      appCommandStore(buildPipelineStore).getState().pipelines.has("pipeline-update-fail"),
+    ).toBe(true);
   });
 });
 
@@ -393,7 +398,7 @@ describe("kanbanStore task actions", () => {
       environmentId: "env-fallback",
       source: { type: "kanban", taskId: "fallback-task" },
     });
-    useBuildPipelineStore.setState({ pipelines: new Map([[pipeline.id, pipeline]]) });
+    appCommandStore(buildPipelineStore).setState({ pipelines: new Map([[pipeline.id, pipeline]]) });
     expect(findTaskForEnvironment("env-fallback", appCommandScope())).toEqual({
       task: undefined,
       taskId: "fallback-task",

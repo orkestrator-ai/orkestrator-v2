@@ -1,4 +1,4 @@
-import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { buildPipelineStore } from "@/stores/buildPipelineStore";
 import type { BuildPipeline } from "@orkestrator/protocol/build-pipeline";
 import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
 import * as realDndCore from "@dnd-kit/core";
@@ -65,6 +65,7 @@ mock.module("@/components/ui/context-menu", () => ({
 }));
 
 import { KanbanCard } from "@/components/kanban/KanbanCard";
+import { appCommandStore } from "../../../apps/web/src/test/app-command-store";
 
 const DndContext = realDndCoreSnapshot.DndContext;
 
@@ -338,7 +339,7 @@ describe("KanbanCard", () => {
 test.each([undefined, "current"])(
   "the badge uses one current pipeline with link %s despite older runs",
   (buildPipelineId) => {
-    const previous = useBuildPipelineStore.getState().pipelines;
+    const previous = appCommandStore(buildPipelineStore).getState().pipelines;
     const older = {
       id: "old",
       taskId: "task-1",
@@ -354,7 +355,7 @@ test.each([undefined, "current"])(
       delivery: { policy: "open-pr" },
     } as BuildPipeline;
     try {
-      useBuildPipelineStore.setState({
+      appCommandStore(buildPipelineStore).setState({
         pipelines: new Map([
           [older.id, older],
           [current.id, current],
@@ -365,7 +366,7 @@ test.each([undefined, "current"])(
       expect(screen.queryByText("Pushing") === null).toBe(true);
     } finally {
       cleanup();
-      useBuildPipelineStore.setState({ pipelines: previous });
+      appCommandStore(buildPipelineStore).setState({ pipelines: previous });
     }
   },
 );

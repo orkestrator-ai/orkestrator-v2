@@ -3,29 +3,30 @@ import type { TranscriptContent, TranscriptLine } from "@/lib/claude-tmux-client
 import type { ClaudeMessage } from "@/lib/claude-types";
 import { ERROR_MESSAGE_PREFIX } from "@/lib/chat/client-only-messages";
 import {
+  claudeTmuxStore,
+  compactConsecutiveAssistantMessages,
   createClaudeTmuxStateKey,
   getEnvironmentIdFromClaudeTmuxStateKey,
   migrateLegacyClaudeTmuxState,
-  compactConsecutiveAssistantMessages,
   payloadToApproval,
   payloadToElicitation,
   payloadToInfoEvent,
   payloadToPermission,
   payloadToPlan,
   payloadToQuestion,
-  useClaudeTmuxStore,
   visibleTmuxMessages,
 } from "./claudeTmuxStore";
 import {
+  promptDraftStore,
   tmuxElicitationDraftKey,
   tmuxPlanDraftKey,
   tmuxQuestionDraftKey,
-  usePromptDraftStore,
 } from "./promptDraftStore";
 import { seedQueuedPrompt } from "@/stores/testing/queue-projection";
+import { appCommandStore } from "@/test/app-command-store";
 
 function reset() {
-  useClaudeTmuxStore.setState({
+  appCommandStore(claudeTmuxStore).setState({
     tabs: new Map(),
     attachments: new Map(),
     draftText: new Map(),
@@ -33,7 +34,7 @@ function reset() {
     messageQueue: new Map(),
     effortLevels: new Map(),
   });
-  usePromptDraftStore.getState().reset();
+  appCommandStore(promptDraftStore).getState().reset();
 }
 
 beforeEach(() => {
@@ -52,7 +53,7 @@ describe("state keys", () => {
   });
 
   test("atomically migrates matching legacy tab and compose state to a scoped key", () => {
-    const store = useClaudeTmuxStore.getState();
+    const store = appCommandStore(claudeTmuxStore).getState();
     const scopedKey = createClaudeTmuxStateKey("env-1", "tab-a");
     store.setRunning("tab-a", true, {
       environmentId: "env-1",
@@ -78,7 +79,7 @@ describe("state keys", () => {
 
     expect(migrateLegacyClaudeTmuxState("tab-a", scopedKey, "env-1")).toBe(true);
 
-    const migrated = useClaudeTmuxStore.getState();
+    const migrated = appCommandStore(claudeTmuxStore).getState();
     expect(migrated.tabs.has("tab-a")).toBe(false);
     expect(migrated.getTab(scopedKey)).toMatchObject({
       running: true,
@@ -100,7 +101,7 @@ describe("state keys", () => {
   });
 
   test("does not migrate legacy state owned by another environment", () => {
-    const store = useClaudeTmuxStore.getState();
+    const store = appCommandStore(claudeTmuxStore).getState();
     const scopedKey = createClaudeTmuxStateKey("env-2", "tab-a");
     store.setRunning("tab-a", true, {
       environmentId: "env-1",
@@ -109,12 +110,12 @@ describe("state keys", () => {
     store.setDraftText("tab-a", "do not move");
 
     expect(migrateLegacyClaudeTmuxState("tab-a", scopedKey, "env-2")).toBe(false);
-    expect(useClaudeTmuxStore.getState().tabs.has(scopedKey)).toBe(false);
-    expect(useClaudeTmuxStore.getState().getDraftText("tab-a")).toBe("do not move");
+    expect(appCommandStore(claudeTmuxStore).getState().tabs.has(scopedKey)).toBe(false);
+    expect(appCommandStore(claudeTmuxStore).getState().getDraftText("tab-a")).toBe("do not move");
   });
 
   test("keeps newer scoped values while removing duplicate legacy values", () => {
-    const store = useClaudeTmuxStore.getState();
+    const store = appCommandStore(claudeTmuxStore).getState();
     const scopedKey = createClaudeTmuxStateKey("env-1", "tab-a");
     store.setRunning("tab-a", true, {
       environmentId: "env-1",
@@ -129,7 +130,7 @@ describe("state keys", () => {
 
     expect(migrateLegacyClaudeTmuxState("tab-a", scopedKey, "env-1")).toBe(true);
 
-    const migrated = useClaudeTmuxStore.getState();
+    const migrated = appCommandStore(claudeTmuxStore).getState();
     expect(migrated.tabs.has("tab-a")).toBe(false);
     expect(migrated.getTab(scopedKey).sessionId).toBe("scoped-session");
     expect(migrated.getDraftText(scopedKey)).toBe("new scoped draft");
@@ -143,7 +144,7 @@ describe("state keys", () => {
     expect(migrateLegacyClaudeTmuxState(scopedKey, scopedKey, "env-1")).toBe(false);
     // Nothing was ever stored under the bare id.
     expect(migrateLegacyClaudeTmuxState("tab-a", scopedKey, "env-1")).toBe(false);
-    expect(useClaudeTmuxStore.getState().tabs.has(scopedKey)).toBe(false);
+    expect(appCommandStore(claudeTmuxStore).getState().tabs.has(scopedKey)).toBe(false);
   });
 
   test("resolves a bare tab id onto its one scoped tab for every compose accessor", () => {
@@ -153,7 +154,7 @@ describe("state keys", () => {
      * draft and queue across two entries, one of which nothing reads.
      */
     const scopedKey = createClaudeTmuxStateKey("env-1", "tab-a");
-    const store = useClaudeTmuxStore.getState();
+    const store = appCommandStore(claudeTmuxStore).getState();
     store.setRunning(scopedKey, true, {
       environmentId: "env-1",
       sessionId: "session-1",
@@ -177,7 +178,7 @@ describe("state keys", () => {
       attachments: [],
     });
 
-    const state = useClaudeTmuxStore.getState();
+    const state = appCommandStore(claudeTmuxStore).getState();
     expect(state.draftText.has("tab-a")).toBe(false);
     expect(state.messageQueue.has("tab-a")).toBe(false);
     expect(state.getDraftText(scopedKey)).toBe("bare draft");
@@ -198,7 +199,7 @@ describe("state keys", () => {
      * would put a prompt into the wrong environment's queue, so an ambiguous
      * id stays unresolved.
      */
-    const store = useClaudeTmuxStore.getState();
+    const store = appCommandStore(claudeTmuxStore).getState();
     const keyA = createClaudeTmuxStateKey("env-1", "tab-a");
     const keyB = createClaudeTmuxStateKey("env-2", "tab-a");
     store.setRunning(keyA, true, { environmentId: "env-1", sessionId: "a" });
@@ -211,7 +212,7 @@ describe("state keys", () => {
       attachments: [],
     });
 
-    const state = useClaudeTmuxStore.getState();
+    const state = appCommandStore(claudeTmuxStore).getState();
     expect(state.draftText.get("tab-a")).toBe("ambiguous");
     expect(state.getDraftText(keyA)).toBe("");
     expect(state.getDraftText(keyB)).toBe("");
@@ -222,21 +223,25 @@ describe("state keys", () => {
 
 describe("applyTranscriptLine", () => {
   test("preserves the model Claude Code recorded on an assistant transcript line", () => {
-    useClaudeTmuxStore.getState().applyTranscriptLine("e", {
-      type: "assistant",
-      uuid: "assistant-model",
-      message: {
-        role: "assistant",
-        model: "claude-opus-4-6",
-        content: [{ type: "text", text: "Done" }],
-      },
-    });
+    appCommandStore(claudeTmuxStore)
+      .getState()
+      .applyTranscriptLine("e", {
+        type: "assistant",
+        uuid: "assistant-model",
+        message: {
+          role: "assistant",
+          model: "claude-opus-4-6",
+          content: [{ type: "text", text: "Done" }],
+        },
+      });
 
-    expect(useClaudeTmuxStore.getState().getTab("e").messages[0]?.modelId).toBe("claude-opus-4-6");
+    expect(appCommandStore(claudeTmuxStore).getState().getTab("e").messages[0]?.modelId).toBe(
+      "claude-opus-4-6",
+    );
   });
 
   test("rejects synthetic, subagent, sidechain, and blank model attribution", () => {
-    const store = useClaudeTmuxStore.getState();
+    const store = appCommandStore(claudeTmuxStore).getState();
     store.applyTranscriptLine("e", {
       type: "assistant",
       uuid: "synthetic",
@@ -286,7 +291,7 @@ describe("applyTranscriptLine", () => {
   });
 
   test("adopts model attribution from a later line with the same uuid", () => {
-    const store = useClaudeTmuxStore.getState();
+    const store = appCommandStore(claudeTmuxStore).getState();
     store.applyTranscriptLine("e", {
       type: "assistant",
       uuid: "assistant-repeat",
@@ -312,8 +317,8 @@ describe("applyTranscriptLine", () => {
       createdAt: "2026-01-01T00:00:00Z",
       message: { role: "user", content: "hello" },
     };
-    useClaudeTmuxStore.getState().applyTranscriptLine("env-1", line);
-    const env = useClaudeTmuxStore.getState().getTab("env-1");
+    appCommandStore(claudeTmuxStore).getState().applyTranscriptLine("env-1", line);
+    const env = appCommandStore(claudeTmuxStore).getState().getTab("env-1");
     expect(env.messages).toHaveLength(1);
     expect(env.messages[0]!.content).toBe("hello");
     expect(env.messages[0]!.role).toBe("user");
@@ -322,7 +327,7 @@ describe("applyTranscriptLine", () => {
   });
 
   test("replaceTranscript removes stale messages without clearing local drafts", () => {
-    const store = useClaudeTmuxStore.getState();
+    const store = appCommandStore(claudeTmuxStore).getState();
     store.applyTranscriptLine("e", {
       type: "assistant",
       uuid: "stale",
@@ -338,14 +343,14 @@ describe("applyTranscriptLine", () => {
       },
     ]);
 
-    expect(useClaudeTmuxStore.getState().getTab("e").messages).toMatchObject([
+    expect(appCommandStore(claudeTmuxStore).getState().getTab("e").messages).toMatchObject([
       { id: "server", content: "server copy" },
     ]);
-    expect(useClaudeTmuxStore.getState().getDraftText("e")).toBe("keep my draft");
+    expect(appCommandStore(claudeTmuxStore).getState().getDraftText("e")).toBe("keep my draft");
   });
 
   test("replaceTranscript accepts an authoritative empty snapshot", () => {
-    const store = useClaudeTmuxStore.getState();
+    const store = appCommandStore(claudeTmuxStore).getState();
     store.applyTranscriptLine("e", {
       type: "assistant",
       uuid: "stale",
@@ -354,7 +359,7 @@ describe("applyTranscriptLine", () => {
 
     store.replaceTranscript("e", []);
 
-    expect(useClaudeTmuxStore.getState().getTab("e").messages).toEqual([]);
+    expect(appCommandStore(claudeTmuxStore).getState().getTab("e").messages).toEqual([]);
   });
 
   test("assistant tool_use + later tool_result merge into prior assistant message", () => {
@@ -384,9 +389,9 @@ describe("applyTranscriptLine", () => {
         ],
       },
     };
-    useClaudeTmuxStore.getState().applyTranscriptLine("e", useLine);
-    useClaudeTmuxStore.getState().applyTranscriptLine("e", resultLine);
-    const env = useClaudeTmuxStore.getState().getTab("e");
+    appCommandStore(claudeTmuxStore).getState().applyTranscriptLine("e", useLine);
+    appCommandStore(claudeTmuxStore).getState().applyTranscriptLine("e", resultLine);
+    const env = appCommandStore(claudeTmuxStore).getState().getTab("e");
     // Crucial: the tool_result-only "user" line should NOT create a second
     // message; it merges into the prior assistant message's parts.
     expect(env.messages).toHaveLength(1);
@@ -428,9 +433,9 @@ describe("applyTranscriptLine", () => {
       }) as TranscriptLine;
 
     const settleOf = (line: TranscriptLine) => {
-      useClaudeTmuxStore.getState().applyTranscriptLine("e", launch);
-      useClaudeTmuxStore.getState().applyTranscriptLine("e", line);
-      const parts = useClaudeTmuxStore.getState().getTab("e").messages[0]!.parts;
+      appCommandStore(claudeTmuxStore).getState().applyTranscriptLine("e", launch);
+      appCommandStore(claudeTmuxStore).getState().applyTranscriptLine("e", line);
+      const parts = appCommandStore(claudeTmuxStore).getState().getTab("e").messages[0]!.parts;
       const invocation = parts.find((p) => p.type === "tool-invocation" && p.toolUseId === "tu1");
       expect(invocation!.toolState).toBe("success");
       return invocation!.settledAt;
@@ -455,16 +460,18 @@ describe("applyTranscriptLine", () => {
     });
 
     test("keeps the first stamp when a later record repeats the result", () => {
-      useClaudeTmuxStore.getState().applyTranscriptLine("e", launch);
-      useClaudeTmuxStore
+      appCommandStore(claudeTmuxStore).getState().applyTranscriptLine("e", launch);
+      appCommandStore(claudeTmuxStore)
         .getState()
         .applyTranscriptLine("e", resultLine("2026-08-17T10:04:30.000Z"));
-      useClaudeTmuxStore.getState().applyTranscriptLine("e", {
-        ...resultLine("2026-08-17T11:00:00.000Z"),
-        uuid: "r2",
-      });
+      appCommandStore(claudeTmuxStore)
+        .getState()
+        .applyTranscriptLine("e", {
+          ...resultLine("2026-08-17T11:00:00.000Z"),
+          uuid: "r2",
+        });
 
-      const parts = useClaudeTmuxStore.getState().getTab("e").messages[0]!.parts;
+      const parts = appCommandStore(claudeTmuxStore).getState().getTab("e").messages[0]!.parts;
       // A tool settles once. Restamping would move a card the reader has
       // already found in its place.
       expect(parts.find((p) => p.type === "tool-invocation")?.settledAt).toBe(
@@ -512,10 +519,10 @@ describe("applyTranscriptLine", () => {
       },
     };
 
-    useClaudeTmuxStore.getState().applyTranscriptLine("e", useLine);
-    useClaudeTmuxStore.getState().applyTranscriptLine("e", resultLine);
+    appCommandStore(claudeTmuxStore).getState().applyTranscriptLine("e", useLine);
+    appCommandStore(claudeTmuxStore).getState().applyTranscriptLine("e", resultLine);
 
-    const parts = useClaudeTmuxStore.getState().getTab("e").messages[0]!.parts;
+    const parts = appCommandStore(claudeTmuxStore).getState().getTab("e").messages[0]!.parts;
     const invocation = parts.find(
       (p) => p.type === "tool-invocation" && p.toolUseId === "task-tu1",
     );
@@ -558,10 +565,10 @@ describe("applyTranscriptLine", () => {
       },
     };
 
-    useClaudeTmuxStore.getState().applyTranscriptLine("e", useLine);
-    useClaudeTmuxStore.getState().applyTranscriptLine("e", resultLine);
+    appCommandStore(claudeTmuxStore).getState().applyTranscriptLine("e", useLine);
+    appCommandStore(claudeTmuxStore).getState().applyTranscriptLine("e", resultLine);
 
-    const parts = useClaudeTmuxStore.getState().getTab("e").messages[0]!.parts;
+    const parts = appCommandStore(claudeTmuxStore).getState().getTab("e").messages[0]!.parts;
     const byId = (id: string) =>
       parts.find((p) => p.type === "tool-invocation" && p.toolUseId === id);
 
@@ -587,18 +594,20 @@ describe("applyTranscriptLine", () => {
       },
     };
 
-    useClaudeTmuxStore.getState().applyTranscriptLine("e", useLine);
-    useClaudeTmuxStore.getState().applyTranscriptLine("e", resultLine);
+    appCommandStore(claudeTmuxStore).getState().applyTranscriptLine("e", useLine);
+    appCommandStore(claudeTmuxStore).getState().applyTranscriptLine("e", resultLine);
 
-    const parts = useClaudeTmuxStore.getState().getTab("e").messages[0]!.parts;
+    const parts = appCommandStore(claudeTmuxStore).getState().getTab("e").messages[0]!.parts;
     expect(parts.find((p) => p.type === "tool-invocation")?.taskSnapshot).toBeUndefined();
   });
 
   test("ignores non-message line types", () => {
-    useClaudeTmuxStore.getState().applyTranscriptLine("e", {
-      type: "summary",
-    } as unknown as TranscriptLine);
-    expect(useClaudeTmuxStore.getState().getTab("e").messages).toHaveLength(0);
+    appCommandStore(claudeTmuxStore)
+      .getState()
+      .applyTranscriptLine("e", {
+        type: "summary",
+      } as unknown as TranscriptLine);
+    expect(appCommandStore(claudeTmuxStore).getState().getTab("e").messages).toHaveLength(0);
   });
 
   test("re-applying the same line is idempotent (dedup by uuid)", () => {
@@ -607,10 +616,10 @@ describe("applyTranscriptLine", () => {
       uuid: "u-stable",
       message: { role: "assistant", content: "hi" },
     };
-    useClaudeTmuxStore.getState().applyTranscriptLine("e", line);
-    useClaudeTmuxStore.getState().applyTranscriptLine("e", line);
-    useClaudeTmuxStore.getState().applyTranscriptLine("e", line);
-    expect(useClaudeTmuxStore.getState().getTab("e").messages).toHaveLength(1);
+    appCommandStore(claudeTmuxStore).getState().applyTranscriptLine("e", line);
+    appCommandStore(claudeTmuxStore).getState().applyTranscriptLine("e", line);
+    appCommandStore(claudeTmuxStore).getState().applyTranscriptLine("e", line);
+    expect(appCommandStore(claudeTmuxStore).getState().getTab("e").messages).toHaveLength(1);
   });
 
   test("falls back to a stable hash when uuid and timestamp are absent", () => {
@@ -618,10 +627,10 @@ describe("applyTranscriptLine", () => {
       type: "system",
       message: { role: "system", content: "boot" },
     };
-    useClaudeTmuxStore.getState().applyTranscriptLine("e", line);
-    useClaudeTmuxStore.getState().applyTranscriptLine("e", line);
+    appCommandStore(claudeTmuxStore).getState().applyTranscriptLine("e", line);
+    appCommandStore(claudeTmuxStore).getState().applyTranscriptLine("e", line);
     // Two applications of an identical line MUST dedupe.
-    expect(useClaudeTmuxStore.getState().getTab("e").messages).toHaveLength(1);
+    expect(appCommandStore(claudeTmuxStore).getState().getTab("e").messages).toHaveLength(1);
   });
 
   test("drops user messages that only contain slash-command meta wrappers", () => {
@@ -654,11 +663,11 @@ describe("applyTranscriptLine", () => {
         content: "<local-command-stdout>Set model to [1mSonnet 4.6[22m</local-command-stdout>",
       },
     };
-    const store = useClaudeTmuxStore.getState();
+    const store = appCommandStore(claudeTmuxStore).getState();
     store.applyTranscriptLine("e", caveat);
     store.applyTranscriptLine("e", cmdMeta);
     store.applyTranscriptLine("e", stdout);
-    expect(useClaudeTmuxStore.getState().getTab("e").messages).toHaveLength(0);
+    expect(appCommandStore(claudeTmuxStore).getState().getTab("e").messages).toHaveLength(0);
   });
 
   test("preserves user text that surrounds command-meta wrappers", () => {
@@ -670,8 +679,8 @@ describe("applyTranscriptLine", () => {
         content: "Please run this:\n<command-name>/help</command-name>\nand let me know.",
       },
     };
-    useClaudeTmuxStore.getState().applyTranscriptLine("e", line);
-    const msg = useClaudeTmuxStore.getState().getTab("e").messages[0];
+    appCommandStore(claudeTmuxStore).getState().applyTranscriptLine("e", line);
+    const msg = appCommandStore(claudeTmuxStore).getState().getTab("e").messages[0];
     expect(msg).toBeTruthy();
     expect(msg!.content).toBe("Please run this:\n\nand let me know.");
   });
@@ -685,34 +694,36 @@ describe("applyTranscriptLine", () => {
         content: "model is [1mSonnet 4.6[22m now",
       },
     };
-    useClaudeTmuxStore.getState().applyTranscriptLine("e", line);
-    const msg = useClaudeTmuxStore.getState().getTab("e").messages[0]!;
+    appCommandStore(claudeTmuxStore).getState().applyTranscriptLine("e", line);
+    const msg = appCommandStore(claudeTmuxStore).getState().getTab("e").messages[0]!;
     expect(msg.content).toBe("model is Sonnet 4.6 now");
   });
 
   test("tool_use parts carry the diff sides the backend stamped, verbatim", () => {
     // Mapping tool inputs to sides is the backend's job (tmux-transcript-tool-diffs).
-    useClaudeTmuxStore.getState().applyTranscriptLine("e", {
-      type: "assistant",
-      uuid: "edit-1",
-      message: {
-        role: "assistant",
-        content: [
-          {
-            type: "tool_use",
-            id: "tu-edit",
-            name: "Edit",
-            input: { file_path: "/work/a.ts", old_string: "x", new_string: "y" },
-          },
-          { type: "tool_use", id: "tu-read", name: "Read", input: { file_path: "/work/b.ts" } },
-        ],
-      },
-      toolDiffs: {
-        "tu-edit": { filePath: "/work/a.ts", before: "x", after: "y" },
-        "tu-read": { filePath: "/work/b.ts" },
-      },
-    });
-    const tools = useClaudeTmuxStore
+    appCommandStore(claudeTmuxStore)
+      .getState()
+      .applyTranscriptLine("e", {
+        type: "assistant",
+        uuid: "edit-1",
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "tool_use",
+              id: "tu-edit",
+              name: "Edit",
+              input: { file_path: "/work/a.ts", old_string: "x", new_string: "y" },
+            },
+            { type: "tool_use", id: "tu-read", name: "Read", input: { file_path: "/work/b.ts" } },
+          ],
+        },
+        toolDiffs: {
+          "tu-edit": { filePath: "/work/a.ts", before: "x", after: "y" },
+          "tu-read": { filePath: "/work/b.ts" },
+        },
+      });
+    const tools = appCommandStore(claudeTmuxStore)
       .getState()
       .getTab("e")
       .messages[0]!.parts.filter((p) => p.type === "tool-invocation");
@@ -721,22 +732,24 @@ describe("applyTranscriptLine", () => {
   });
 
   test("without backend-stamped sides the store derives nothing from the tool input", () => {
-    useClaudeTmuxStore.getState().applyTranscriptLine("e", {
-      type: "assistant",
-      uuid: "edit-2",
-      message: {
-        role: "assistant",
-        content: [
-          {
-            type: "tool_use",
-            id: "tu-edit",
-            name: "Edit",
-            input: { file_path: "/work/a.ts", old_string: "x", new_string: "y" },
-          },
-        ],
-      },
-    });
-    const tool = useClaudeTmuxStore
+    appCommandStore(claudeTmuxStore)
+      .getState()
+      .applyTranscriptLine("e", {
+        type: "assistant",
+        uuid: "edit-2",
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "tool_use",
+              id: "tu-edit",
+              name: "Edit",
+              input: { file_path: "/work/a.ts", old_string: "x", new_string: "y" },
+            },
+          ],
+        },
+      });
+    const tool = appCommandStore(claudeTmuxStore)
       .getState()
       .getTab("e")
       .messages[0]!.parts.find((p) => p.type === "tool-invocation");
@@ -744,31 +757,35 @@ describe("applyTranscriptLine", () => {
   });
 
   test("failed tool_result marks invocation failure and stores error text", () => {
-    useClaudeTmuxStore.getState().applyTranscriptLine("e", {
-      type: "assistant",
-      uuid: "a-fail",
-      message: {
-        role: "assistant",
-        content: [{ type: "tool_use", id: "tu-fail", name: "Bash", input: {} }],
-      },
-    });
-    useClaudeTmuxStore.getState().applyTranscriptLine("e", {
-      type: "user",
-      uuid: "r-fail",
-      message: {
-        role: "user",
-        content: [
-          {
-            type: "tool_result",
-            tool_use_id: "tu-fail",
-            content: "permission denied",
-            is_error: true,
-          },
-        ],
-      },
-    });
+    appCommandStore(claudeTmuxStore)
+      .getState()
+      .applyTranscriptLine("e", {
+        type: "assistant",
+        uuid: "a-fail",
+        message: {
+          role: "assistant",
+          content: [{ type: "tool_use", id: "tu-fail", name: "Bash", input: {} }],
+        },
+      });
+    appCommandStore(claudeTmuxStore)
+      .getState()
+      .applyTranscriptLine("e", {
+        type: "user",
+        uuid: "r-fail",
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "tu-fail",
+              content: "permission denied",
+              is_error: true,
+            },
+          ],
+        },
+      });
 
-    const parts = useClaudeTmuxStore.getState().getTab("e").messages[0]!.parts;
+    const parts = appCommandStore(claudeTmuxStore).getState().getTab("e").messages[0]!.parts;
     const invocation = parts.find((p) => p.type === "tool-invocation");
     const result = parts.find((p) => p.type === "tool-result");
     expect(invocation?.toolState).toBe("failure");
@@ -777,22 +794,24 @@ describe("applyTranscriptLine", () => {
   });
 
   test("unmatched tool_result falls back to a standalone user message", () => {
-    useClaudeTmuxStore.getState().applyTranscriptLine("e", {
-      type: "user",
-      uuid: "r-orphan",
-      message: {
-        role: "user",
-        content: [
-          {
-            type: "tool_result",
-            tool_use_id: "missing",
-            content: "orphaned",
-          },
-        ],
-      },
-    });
+    appCommandStore(claudeTmuxStore)
+      .getState()
+      .applyTranscriptLine("e", {
+        type: "user",
+        uuid: "r-orphan",
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "missing",
+              content: "orphaned",
+            },
+          ],
+        },
+      });
 
-    const env = useClaudeTmuxStore.getState().getTab("e");
+    const env = appCommandStore(claudeTmuxStore).getState().getTab("e");
     expect(env.messages).toHaveLength(1);
     expect(env.messages[0]!.role).toBe("user");
     expect(env.messages[0]!.parts[0]?.type).toBe("tool-result");
@@ -811,8 +830,8 @@ describe("applyTranscriptLine", () => {
         ],
       },
     };
-    useClaudeTmuxStore.getState().applyTranscriptLine("e", line);
-    const msg = useClaudeTmuxStore.getState().getTab("e").messages[0]!;
+    appCommandStore(claudeTmuxStore).getState().applyTranscriptLine("e", line);
+    const msg = appCommandStore(claudeTmuxStore).getState().getTab("e").messages[0]!;
     const thinking = msg.parts.find((p) => p.type === "thinking");
     const text = msg.parts.find((p) => p.type === "text");
     const tool = msg.parts.find((p) => p.type === "tool-invocation");
@@ -838,8 +857,8 @@ describe("applyTranscriptLine", () => {
         content: [redacted, { type: "text", text: "answer" }],
       },
     };
-    useClaudeTmuxStore.getState().applyTranscriptLine("e", line);
-    const msg = useClaudeTmuxStore.getState().getTab("e").messages[0]!;
+    appCommandStore(claudeTmuxStore).getState().applyTranscriptLine("e", line);
+    const msg = appCommandStore(claudeTmuxStore).getState().getTab("e").messages[0]!;
     expect(msg.parts.map((p) => p.type)).toEqual(["text"]);
   });
 
@@ -859,8 +878,8 @@ describe("applyTranscriptLine", () => {
         content: [summarized, { type: "text", text: "answer" }],
       },
     };
-    useClaudeTmuxStore.getState().applyTranscriptLine("e", line);
-    const msg = useClaudeTmuxStore.getState().getTab("e").messages[0]!;
+    appCommandStore(claudeTmuxStore).getState().applyTranscriptLine("e", line);
+    const msg = appCommandStore(claudeTmuxStore).getState().getTab("e").messages[0]!;
     expect(msg.parts.map((p) => p.type)).toEqual(["thinking", "text"]);
     expect(msg.parts[0]?.content).toBe("weighing two options");
   });
@@ -1016,14 +1035,16 @@ describe("compactConsecutiveAssistantMessages", () => {
 describe("pendingApprovals", () => {
   test("addPendingApproval dedupes by eventId", () => {
     const a = payloadToApproval("evt-1", { tool_name: "Bash", tool_input: {} });
-    useClaudeTmuxStore.getState().addPendingApproval("e", a);
-    useClaudeTmuxStore.getState().addPendingApproval("e", a);
-    useClaudeTmuxStore.getState().addPendingApproval("e", a);
-    expect(useClaudeTmuxStore.getState().getTab("e").pendingApprovals).toHaveLength(1);
+    appCommandStore(claudeTmuxStore).getState().addPendingApproval("e", a);
+    appCommandStore(claudeTmuxStore).getState().addPendingApproval("e", a);
+    appCommandStore(claudeTmuxStore).getState().addPendingApproval("e", a);
+    expect(appCommandStore(claudeTmuxStore).getState().getTab("e").pendingApprovals).toHaveLength(
+      1,
+    );
   });
 
   test("a re-delivered hook with a moved deadline updates the card it already shows", () => {
-    const store = useClaudeTmuxStore.getState();
+    const store = appCommandStore(claudeTmuxStore).getState();
     const payload = { tool_name: "Bash", tool_input: { command: "ls" } };
     store.addPendingApproval(
       "e",
@@ -1033,7 +1054,7 @@ describe("pendingApprovals", () => {
         hold: { available: true },
       }),
     );
-    const before = useClaudeTmuxStore.getState().getTab("e").pendingApprovals;
+    const before = appCommandStore(claudeTmuxStore).getState().getTab("e").pendingApprovals;
     // The same delivery again changes nothing, not even the array identity.
     store.addPendingApproval(
       "e",
@@ -1043,7 +1064,7 @@ describe("pendingApprovals", () => {
         hold: { available: true },
       }),
     );
-    expect(useClaudeTmuxStore.getState().getTab("e").pendingApprovals).toBe(before);
+    expect(appCommandStore(claudeTmuxStore).getState().getTab("e").pendingApprovals).toBe(before);
 
     store.addPendingApproval(
       "e",
@@ -1053,7 +1074,7 @@ describe("pendingApprovals", () => {
         hold: { available: true, heldAt: 2_000 },
       }),
     );
-    const [paused] = useClaudeTmuxStore.getState().getTab("e").pendingApprovals;
+    const [paused] = appCommandStore(claudeTmuxStore).getState().getTab("e").pendingApprovals;
     expect(paused).toEqual(
       expect.objectContaining({
         eventId: "evt-1",
@@ -1068,21 +1089,23 @@ describe("pendingApprovals", () => {
       expiresAt: 400_000,
       hold: { available: true },
     });
-    const [resumed] = useClaudeTmuxStore.getState().getTab("e").pendingApprovals;
+    const [resumed] = appCommandStore(claudeTmuxStore).getState().getTab("e").pendingApprovals;
     expect(resumed!.expiresAt).toBe(400_000);
     expect(resumed!.hold).toEqual({ available: true });
-    expect(useClaudeTmuxStore.getState().getTab("e").pendingApprovals).toHaveLength(1);
+    expect(appCommandStore(claudeTmuxStore).getState().getTab("e").pendingApprovals).toHaveLength(
+      1,
+    );
   });
 
   test("removePendingApproval removes by eventId", () => {
-    useClaudeTmuxStore
+    appCommandStore(claudeTmuxStore)
       .getState()
       .addPendingApproval("e", payloadToApproval("evt-1", { tool_name: "Bash", tool_input: {} }));
-    useClaudeTmuxStore
+    appCommandStore(claudeTmuxStore)
       .getState()
       .addPendingApproval("e", payloadToApproval("evt-2", { tool_name: "Write", tool_input: {} }));
-    useClaudeTmuxStore.getState().removePendingApproval("e", "evt-1");
-    const env = useClaudeTmuxStore.getState().getTab("e");
+    appCommandStore(claudeTmuxStore).getState().removePendingApproval("e", "evt-1");
+    const env = appCommandStore(claudeTmuxStore).getState().getTab("e");
     expect(env.pendingApprovals).toHaveLength(1);
     expect(env.pendingApprovals[0]!.eventId).toBe("evt-2");
   });
@@ -1095,10 +1118,10 @@ describe("prompt draft clearing", () => {
    * drops a pending prompt must drop its draft, or the stale input would
    * resurface on a future prompt that reuses the event id.
    */
-  const drafts = () => usePromptDraftStore.getState();
+  const drafts = () => appCommandStore(promptDraftStore).getState();
 
   test("removePendingPlan clears the plan feedback draft", () => {
-    const store = useClaudeTmuxStore.getState();
+    const store = appCommandStore(claudeTmuxStore).getState();
     store.addPendingPlan("e", payloadToPlan("evt-1", { tool_input: { plan: "p" } }));
     drafts().setDraftValue(tmuxPlanDraftKey("e", "evt-1"), "feedback", "typed");
 
@@ -1108,7 +1131,7 @@ describe("prompt draft clearing", () => {
   });
 
   test("removePendingElicitation clears the typed values draft", () => {
-    const store = useClaudeTmuxStore.getState();
+    const store = appCommandStore(claudeTmuxStore).getState();
     store.addPendingElicitation("e", payloadToElicitation("evt-1", {}));
     drafts().setDraftValue(tmuxElicitationDraftKey("e", "evt-1"), "values", { a: "1" });
 
@@ -1118,7 +1141,7 @@ describe("prompt draft clearing", () => {
   });
 
   test("removePendingQuestion clears the question answer draft", () => {
-    const store = useClaudeTmuxStore.getState();
+    const store = appCommandStore(claudeTmuxStore).getState();
     store.addPendingQuestion("e", payloadToQuestion("evt-1", {}));
     drafts().setDraftValue(tmuxQuestionDraftKey("e", "evt-1"), "answers", [["A"]]);
 
@@ -1128,7 +1151,7 @@ describe("prompt draft clearing", () => {
   });
 
   test("scoped cleanup preserves another session that reused the same event id", () => {
-    const store = useClaudeTmuxStore.getState();
+    const store = appCommandStore(claudeTmuxStore).getState();
     const firstKey = createClaudeTmuxStateKey("env-1", "tab-1");
     const secondKey = createClaudeTmuxStateKey("env-2", "tab-1");
     store.addPendingQuestion(firstKey, payloadToQuestion("shared-event", {}));
@@ -1147,7 +1170,7 @@ describe("prompt draft clearing", () => {
   });
 
   test("replacePendingHooks drops drafts for withdrawn prompts and keeps live ones", () => {
-    const store = useClaudeTmuxStore.getState();
+    const store = appCommandStore(claudeTmuxStore).getState();
     const keptPlan = payloadToPlan("evt-kept", { tool_input: { plan: "p" } });
     store.addPendingPlan("e", keptPlan);
     store.addPendingPlan("e", payloadToPlan("evt-gone", { tool_input: { plan: "q" } }));
@@ -1167,7 +1190,7 @@ describe("prompt draft clearing", () => {
   });
 
   test("resetTab sweeps drafts for every pending prompt on the tab", () => {
-    const store = useClaudeTmuxStore.getState();
+    const store = appCommandStore(claudeTmuxStore).getState();
     store.addPendingPlan("e", payloadToPlan("evt-plan", { tool_input: { plan: "p" } }));
     store.addPendingElicitation("e", payloadToElicitation("evt-elic", {}));
     drafts().setDraftValue(tmuxPlanDraftKey("e", "evt-plan"), "feedback", "typed");
@@ -1330,33 +1353,35 @@ describe("payloadToInfoEvent", () => {
 describe("infoEvents", () => {
   test("pushInfoEvent keeps at most 20", () => {
     for (let i = 0; i < 25; i++) {
-      useClaudeTmuxStore.getState().pushInfoEvent("e", {
-        id: `i${i}`,
-        kind: "Notification",
-        message: String(i),
-        receivedAt: "now",
-      });
+      appCommandStore(claudeTmuxStore)
+        .getState()
+        .pushInfoEvent("e", {
+          id: `i${i}`,
+          kind: "Notification",
+          message: String(i),
+          receivedAt: "now",
+        });
     }
-    const events = useClaudeTmuxStore.getState().getTab("e").infoEvents;
+    const events = appCommandStore(claudeTmuxStore).getState().getTab("e").infoEvents;
     expect(events).toHaveLength(20);
     expect(events[events.length - 1]!.id).toBe("i24");
   });
 
   test("dismissInfoEvent removes by id", () => {
-    useClaudeTmuxStore.getState().pushInfoEvent("e", {
+    appCommandStore(claudeTmuxStore).getState().pushInfoEvent("e", {
       id: "a",
       kind: "Notification",
       message: "x",
       receivedAt: "n",
     });
-    useClaudeTmuxStore.getState().pushInfoEvent("e", {
+    appCommandStore(claudeTmuxStore).getState().pushInfoEvent("e", {
       id: "b",
       kind: "Notification",
       message: "y",
       receivedAt: "n",
     });
-    useClaudeTmuxStore.getState().dismissInfoEvent("e", "a");
-    const events = useClaudeTmuxStore.getState().getTab("e").infoEvents;
+    appCommandStore(claudeTmuxStore).getState().dismissInfoEvent("e", "a");
+    const events = appCommandStore(claudeTmuxStore).getState().getTab("e").infoEvents;
     expect(events).toHaveLength(1);
     expect(events[0]!.id).toBe("b");
   });
@@ -1366,7 +1391,7 @@ describe("drafts, attachments, and queue helpers", () => {
   test("stores draft text and mentions per scoped tab and deletes empty values", () => {
     const keyA = createClaudeTmuxStateKey("env-a", "tab-1");
     const keyB = createClaudeTmuxStateKey("env-b", "tab-1");
-    const store = useClaudeTmuxStore.getState();
+    const store = appCommandStore(claudeTmuxStore).getState();
 
     store.setDraftText(keyA, "hello @src/App.tsx");
     store.setDraftMentions(keyA, [
@@ -1391,15 +1416,15 @@ describe("drafts, attachments, and queue helpers", () => {
     store.setDraftText(keyA, "");
     store.setDraftMentions(keyA, []);
 
-    expect(useClaudeTmuxStore.getState().getDraftText(keyA)).toBe("");
-    expect(useClaudeTmuxStore.getState().getDraftMentions(keyA)).toEqual([]);
-    expect(useClaudeTmuxStore.getState().getDraftText(keyB)).toBe("other draft");
+    expect(appCommandStore(claudeTmuxStore).getState().getDraftText(keyA)).toBe("");
+    expect(appCommandStore(claudeTmuxStore).getState().getDraftMentions(keyA)).toEqual([]);
+    expect(appCommandStore(claudeTmuxStore).getState().getDraftText(keyB)).toBe("other draft");
   });
 
   test("adds, removes, and clears attachments per scoped tab", () => {
     const keyA = createClaudeTmuxStateKey("env-a", "tab-1");
     const keyB = createClaudeTmuxStateKey("env-b", "tab-1");
-    const store = useClaudeTmuxStore.getState();
+    const store = appCommandStore(claudeTmuxStore).getState();
 
     store.addAttachment(keyA, {
       id: "att-1",
@@ -1430,22 +1455,22 @@ describe("drafts, attachments, and queue helpers", () => {
 
     store.removeAttachment(keyA, "att-1");
     expect(
-      useClaudeTmuxStore
+      appCommandStore(claudeTmuxStore)
         .getState()
         .getAttachments(keyA)
         .map((a) => a.id),
     ).toEqual(["att-2"]);
     expect(
-      useClaudeTmuxStore
+      appCommandStore(claudeTmuxStore)
         .getState()
         .getAttachments(keyB)
         .map((a) => a.id),
     ).toEqual(["att-b"]);
 
-    useClaudeTmuxStore.getState().clearAttachments(keyA);
-    expect(useClaudeTmuxStore.getState().getAttachments(keyA)).toEqual([]);
+    appCommandStore(claudeTmuxStore).getState().clearAttachments(keyA);
+    expect(appCommandStore(claudeTmuxStore).getState().getAttachments(keyA)).toEqual([]);
     expect(
-      useClaudeTmuxStore
+      appCommandStore(claudeTmuxStore)
         .getState()
         .getAttachments(keyB)
         .map((a) => a.id),
@@ -1455,7 +1480,7 @@ describe("drafts, attachments, and queue helpers", () => {
   test("projects and replaces queued messages per scoped tab", () => {
     const keyA = createClaudeTmuxStateKey("env-a", "tab-1");
     const keyB = createClaudeTmuxStateKey("env-b", "tab-1");
-    const store = useClaudeTmuxStore.getState();
+    const store = appCommandStore(claudeTmuxStore).getState();
 
     seedQueuedPrompt(store, keyA, { id: "q-1", text: "first", attachments: [] });
     seedQueuedPrompt(store, keyA, { id: "q-2", text: "second", attachments: [] });
@@ -1471,31 +1496,33 @@ describe("drafts, attachments, and queue helpers", () => {
 
     // Reordering and removal are backend commands; the store only adopts the
     // snapshot they return, scoped to the tab that owns it.
-    useClaudeTmuxStore.getState().setQueueProjection(keyA, [
-      { id: "q-3", text: "third", attachments: [] },
-      { id: "q-2", text: "second", attachments: [] },
-    ]);
+    appCommandStore(claudeTmuxStore)
+      .getState()
+      .setQueueProjection(keyA, [
+        { id: "q-3", text: "third", attachments: [] },
+        { id: "q-2", text: "second", attachments: [] },
+      ]);
     expect(
-      useClaudeTmuxStore
+      appCommandStore(claudeTmuxStore)
         .getState()
         .getQueuedMessages(keyA)
         .map((m) => m.id),
     ).toEqual(["q-3", "q-2"]);
 
     expect(
-      useClaudeTmuxStore
+      appCommandStore(claudeTmuxStore)
         .getState()
         .getQueuedMessages(keyB)
         .map((m) => m.id),
     ).toEqual(["q-b"]);
-    useClaudeTmuxStore.getState().setQueueProjection(keyB, []);
-    expect(useClaudeTmuxStore.getState().getQueueLength(keyB)).toBe(0);
+    appCommandStore(claudeTmuxStore).getState().setQueueProjection(keyB, []);
+    expect(appCommandStore(claudeTmuxStore).getState().getQueueLength(keyB)).toBe(0);
   });
 });
 
 describe("session lifecycle", () => {
   test("accepts restarted-session observations from revision one and rejects the retired generation", () => {
-    const store = useClaudeTmuxStore.getState();
+    const store = appCommandStore(claudeTmuxStore).getState();
     const oldPrompt = {
       question: "Old prompt",
       options: [{ number: 1, label: "Continue", optionIndex: 0, selected: true }],
@@ -1520,7 +1547,7 @@ describe("session lifecycle", () => {
       sessionId: "sess-1",
       observationGeneration: "generation-b",
     });
-    expect(useClaudeTmuxStore.getState().getTab("e").observation).toMatchObject({
+    expect(appCommandStore(claudeTmuxStore).getState().getTab("e").observation).toMatchObject({
       generation: "generation-b",
       revision: 0,
       prompt: null,
@@ -1541,7 +1568,7 @@ describe("session lifecycle", () => {
       prompt: null,
     });
 
-    expect(useClaudeTmuxStore.getState().getTab("e").observation).toMatchObject({
+    expect(appCommandStore(claudeTmuxStore).getState().getTab("e").observation).toMatchObject({
       generation: "generation-b",
       revision: 1,
       prompt: null,
@@ -1549,7 +1576,7 @@ describe("session lifecycle", () => {
   });
 
   test("a stopped transition drops the dead session prompt", () => {
-    const store = useClaudeTmuxStore.getState();
+    const store = appCommandStore(claudeTmuxStore).getState();
     store.setRunning("e", true, { sessionId: "sess-1" });
     store.setObservation("e", {
       revision: 4,
@@ -1565,14 +1592,14 @@ describe("session lifecycle", () => {
 
     store.setRunning("e", false, { sessionId: null });
 
-    expect(useClaudeTmuxStore.getState().getTab("e").observation).toMatchObject({
+    expect(appCommandStore(claudeTmuxStore).getState().getTab("e").observation).toMatchObject({
       revision: 0,
       prompt: null,
     });
   });
 
   test("optimistic prompt clearing does not erase a newer authoritative prompt", () => {
-    const store = useClaudeTmuxStore.getState();
+    const store = appCommandStore(claudeTmuxStore).getState();
     const first = {
       question: "First",
       options: [{ number: 1, label: "One", optionIndex: 0, selected: true }],
@@ -1590,7 +1617,7 @@ describe("session lifecycle", () => {
       prompt: first,
     });
     store.clearSelectionPrompt("e", first);
-    expect(useClaudeTmuxStore.getState().getTab("e").observation.prompt).toBeNull();
+    expect(appCommandStore(claudeTmuxStore).getState().getTab("e").observation.prompt).toBeNull();
 
     store.setObservation("e", {
       revision: 2,
@@ -1599,39 +1626,39 @@ describe("session lifecycle", () => {
       prompt: second,
     });
     store.clearSelectionPrompt("e", first);
-    expect(useClaudeTmuxStore.getState().getTab("e").observation.prompt).toBe(second);
+    expect(appCommandStore(claudeTmuxStore).getState().getTab("e").observation.prompt).toBe(second);
   });
 
   test("setRunning preserves prior sessionId when called without sessionId", () => {
-    useClaudeTmuxStore.getState().setRunning("e", true, { sessionId: "sess-1" });
+    appCommandStore(claudeTmuxStore).getState().setRunning("e", true, { sessionId: "sess-1" });
     // Subsequent setRunning that doesn't pass sessionId leaves it intact.
-    useClaudeTmuxStore.getState().setRunning("e", false);
-    const tab = useClaudeTmuxStore.getState().getTab("e");
+    appCommandStore(claudeTmuxStore).getState().setRunning("e", false);
+    const tab = appCommandStore(claudeTmuxStore).getState().getTab("e");
     expect(tab.running).toBe(false);
     expect(tab.sessionId).toBe("sess-1");
   });
 
   test("setRunning with sessionId=null clears it", () => {
-    useClaudeTmuxStore.getState().setRunning("e", true, { sessionId: "sess-1" });
-    useClaudeTmuxStore.getState().setRunning("e", false, { sessionId: null });
-    const tab = useClaudeTmuxStore.getState().getTab("e");
+    appCommandStore(claudeTmuxStore).getState().setRunning("e", true, { sessionId: "sess-1" });
+    appCommandStore(claudeTmuxStore).getState().setRunning("e", false, { sessionId: null });
+    const tab = appCommandStore(claudeTmuxStore).getState().getTab("e");
     expect(tab.sessionId).toBeNull();
   });
 
   test("setRunning records resumed and environmentId", () => {
-    useClaudeTmuxStore.getState().setRunning("tab-a", true, {
+    appCommandStore(claudeTmuxStore).getState().setRunning("tab-a", true, {
       sessionId: "sess-2",
       environmentId: "env-x",
       resumed: true,
     });
-    const tab = useClaudeTmuxStore.getState().getTab("tab-a");
+    const tab = appCommandStore(claudeTmuxStore).getState().getTab("tab-a");
     expect(tab.sessionId).toBe("sess-2");
     expect(tab.environmentId).toBe("env-x");
     expect(tab.resumed).toBe(true);
   });
 
   test("resetTab clears state", () => {
-    const store = useClaudeTmuxStore.getState();
+    const store = appCommandStore(claudeTmuxStore).getState();
     store.setRunning("e", true, { sessionId: "sess-1" });
     store.applyTranscriptLine("e", {
       type: "user",
@@ -1653,13 +1680,13 @@ describe("session lifecycle", () => {
     });
 
     store.resetTab("e");
-    const tab = useClaudeTmuxStore.getState().getTab("e");
+    const tab = appCommandStore(claudeTmuxStore).getState().getTab("e");
     expect(tab.running).toBe(false);
     expect(tab.sessionId).toBeNull();
     expect(tab.messages).toHaveLength(0);
-    expect(useClaudeTmuxStore.getState().getDraftText("e")).toBe("");
-    expect(useClaudeTmuxStore.getState().getAttachments("e")).toEqual([]);
-    expect(useClaudeTmuxStore.getState().getQueuedMessages("e")).toEqual([]);
+    expect(appCommandStore(claudeTmuxStore).getState().getDraftText("e")).toBe("");
+    expect(appCommandStore(claudeTmuxStore).getState().getAttachments("e")).toEqual([]);
+    expect(appCommandStore(claudeTmuxStore).getState().getQueuedMessages("e")).toEqual([]);
   });
 });
 
@@ -1686,21 +1713,21 @@ describe("transcript pages", () => {
     },
   });
   const ids = () =>
-    useClaudeTmuxStore
+    appCommandStore(claudeTmuxStore)
       .getState()
       .getTab("e")
       .messages.map((message) => message.id);
-  const tab = () => useClaudeTmuxStore.getState().getTab("e");
+  const tab = () => appCommandStore(claudeTmuxStore).getState().getTab("e");
 
   test("a tail page shows its rows and remembers the way to what came before", () => {
-    const store = useClaudeTmuxStore.getState();
+    const store = appCommandStore(claudeTmuxStore).getState();
     store.applyTailPage("e", { lines: [text("c"), text("d")], earlierCursor: "s:100" });
     expect(ids()).toEqual(["c", "d"]);
     expect(tab().earlierCursor).toBe("s:100");
   });
 
   test("an earlier page lands above the loaded rows and moves the cursor on", () => {
-    const store = useClaudeTmuxStore.getState();
+    const store = appCommandStore(claudeTmuxStore).getState();
     store.applyTailPage("e", { lines: [text("c"), text("d")], earlierCursor: "s:100" });
     store.prependTranscriptPage("e", "s:100", {
       lines: [text("a"), text("b")],
@@ -1711,7 +1738,7 @@ describe("transcript pages", () => {
   });
 
   test("a page for a cursor the tab has moved on from is dropped", () => {
-    const store = useClaudeTmuxStore.getState();
+    const store = appCommandStore(claudeTmuxStore).getState();
     store.applyTailPage("e", { lines: [text("c")], earlierCursor: "s:100" });
     store.applyTailPage("e", { lines: [text("z")], earlierCursor: "s:500" });
     store.prependTranscriptPage("e", "s:100", { lines: [text("a")], earlierCursor: null });
@@ -1720,7 +1747,7 @@ describe("transcript pages", () => {
   });
 
   test("a row already loaded keeps its newer copy when a page repeats it", () => {
-    const store = useClaudeTmuxStore.getState();
+    const store = appCommandStore(claudeTmuxStore).getState();
     store.applyTailPage("e", { lines: [text("c")], earlierCursor: "s:100" });
     store.prependTranscriptPage("e", "s:100", {
       lines: [text("a"), text("c")],
@@ -1730,7 +1757,7 @@ describe("transcript pages", () => {
   });
 
   test("a result whose call is on an earlier page waits, hidden, and settles the call when it loads", () => {
-    const store = useClaudeTmuxStore.getState();
+    const store = appCommandStore(claudeTmuxStore).getState();
     store.applyTailPage("e", {
       lines: [toolResult("result-1", "tool-1"), text("after")],
       earlierCursor: "s:100",
@@ -1755,7 +1782,7 @@ describe("transcript pages", () => {
 
   for (const timestamp of [undefined, "invalid"]) {
     test(`cross-page adoption ignores unusable record clock: ${timestamp}`, () => {
-      const store = useClaudeTmuxStore.getState();
+      const store = appCommandStore(claudeTmuxStore).getState();
       const result = { ...toolResult("result-1", "tool-1"), timestamp };
       try {
         for (let replay = 0; replay < 2; replay += 1) {
@@ -1784,7 +1811,7 @@ describe("transcript pages", () => {
   }
 
   test("a result with no call anywhere shows once nothing earlier is left to load", () => {
-    const store = useClaudeTmuxStore.getState();
+    const store = appCommandStore(claudeTmuxStore).getState();
     store.applyTailPage("e", { lines: [toolResult("result-1", "gone")], earlierCursor: "s:100" });
     store.prependTranscriptPage("e", "s:100", { lines: [text("a")], earlierCursor: null });
     expect(ids()).toEqual(["a", "result-1"]);
@@ -1792,7 +1819,7 @@ describe("transcript pages", () => {
   });
 
   test("a live result settles a call in the loaded rows as before", () => {
-    const store = useClaudeTmuxStore.getState();
+    const store = appCommandStore(claudeTmuxStore).getState();
     store.applyTailPage("e", { lines: [toolUse("call-1", "tool-1")], earlierCursor: "s:100" });
     store.applyTranscriptLine("e", toolResult("result-1", "tool-1"));
     expect(ids()).toEqual(["call-1"]);
@@ -1800,7 +1827,7 @@ describe("transcript pages", () => {
 
   describe("reopening", () => {
     function loadTwoPages() {
-      const store = useClaudeTmuxStore.getState();
+      const store = appCommandStore(claudeTmuxStore).getState();
       store.applyTailPage("e", { lines: [text("c"), text("d")], earlierCursor: "s:100" });
       store.prependTranscriptPage("e", "s:100", {
         lines: [text("a"), text("b")],
@@ -1810,16 +1837,18 @@ describe("transcript pages", () => {
 
     test("keeps what the reader paged in when the tail overlaps it", () => {
       loadTwoPages();
-      useClaudeTmuxStore.getState().applyTailPage("e", {
-        lines: [text("d"), text("e"), text("f")],
-        earlierCursor: "s:300",
-      });
+      appCommandStore(claudeTmuxStore)
+        .getState()
+        .applyTailPage("e", {
+          lines: [text("d"), text("e"), text("f")],
+          earlierCursor: "s:300",
+        });
       expect(ids()).toEqual(["a", "b", "c", "d", "e", "f"]);
       expect(tab().earlierCursor).toBe("s:50");
     });
 
     test("settles a loaded call whose result arrived while the tab was hidden", () => {
-      const store = useClaudeTmuxStore.getState();
+      const store = appCommandStore(claudeTmuxStore).getState();
       store.applyTailPage("e", {
         lines: [text("a"), toolUse("call-1", "tool-1"), text("b")],
         earlierCursor: "s:10",
@@ -1835,7 +1864,7 @@ describe("transcript pages", () => {
 
     test("starts again from the tail when more than a page was missed", () => {
       loadTwoPages();
-      useClaudeTmuxStore
+      appCommandStore(claudeTmuxStore)
         .getState()
         .applyTailPage("e", { lines: [text("x"), text("y")], earlierCursor: "s:900" });
       expect(ids()).toEqual(["x", "y"]);
@@ -1844,7 +1873,7 @@ describe("transcript pages", () => {
 
     test("a manual refresh starts again from the tail even when it overlaps", () => {
       loadTwoPages();
-      useClaudeTmuxStore
+      appCommandStore(claudeTmuxStore)
         .getState()
         .applyTailPage(
           "e",
@@ -1857,7 +1886,7 @@ describe("transcript pages", () => {
 
     test("a page that reaches the file's start replaces everything", () => {
       loadTwoPages();
-      useClaudeTmuxStore
+      appCommandStore(claudeTmuxStore)
         .getState()
         .applyTailPage("e", { lines: [text("only")], earlierCursor: null });
       expect(ids()).toEqual(["only"]);
@@ -1865,7 +1894,7 @@ describe("transcript pages", () => {
     });
 
     test("rows from before any page was applied are not taken for history", () => {
-      const store = useClaudeTmuxStore.getState();
+      const store = appCommandStore(claudeTmuxStore).getState();
       store.applyTranscriptLine("e", text("older-live"));
       store.applyTranscriptLine("e", text("c"));
       store.applyTailPage("e", { lines: [text("c"), text("d")], earlierCursor: "s:100" });
@@ -1874,7 +1903,7 @@ describe("transcript pages", () => {
     });
 
     test("a whole transcript stays whole when only its tail is read again", () => {
-      const store = useClaudeTmuxStore.getState();
+      const store = appCommandStore(claudeTmuxStore).getState();
       store.applyTailPage("e", { lines: [text("a"), text("b")], earlierCursor: null });
       store.applyTranscriptLine("e", text("c"));
       store.applyTailPage("e", { lines: [text("b"), text("c")], earlierCursor: "s:40" });
@@ -1884,7 +1913,7 @@ describe("transcript pages", () => {
   });
 
   test("replacing the transcript forgets what was known about earlier pages", () => {
-    const store = useClaudeTmuxStore.getState();
+    const store = appCommandStore(claudeTmuxStore).getState();
     store.applyTailPage("e", { lines: [text("c")], earlierCursor: "s:100" });
     store.replaceTranscript("e", []);
     expect(tab().earlierCursor).toBeUndefined();

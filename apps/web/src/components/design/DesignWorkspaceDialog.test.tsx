@@ -12,7 +12,7 @@ import { nativeComposePersistenceStore } from "@/stores/nativeComposeStore";
 import { createSessionKey } from "@/lib/utils";
 import { configStore } from "@/stores";
 import { environmentStore } from "@/stores/environmentStore";
-import { nativeComposeDraft, useNativeComposeStore } from "@/stores/nativeComposeStore";
+import { nativeComposeDraft, nativeComposeStore } from "@/stores/nativeComposeStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { Environment } from "@/types";
 import type { CreatableTabType, CreateTabOptions } from "@/contexts/TerminalContext";
@@ -102,7 +102,7 @@ beforeEach(() => {
     ]),
     hydration: new Map([["env-1", "done"]]),
   });
-  useNativeComposeStore.setState({ drafts: new Map() });
+  appCommandStore(nativeComposeStore).setState({ drafts: new Map() });
   invokeMock.mockClear();
   invokeMock.mockImplementation(async (command: string, args?: unknown) => {
     if (command === "enqueue_prompt_queue_message") return {};
@@ -193,7 +193,7 @@ describe("DesignWorkspaceDialog", () => {
     const createTab = mock((type: CreatableTabType, options?: CreateTabOptions) => {
       if (type === "claude")
         attachments = nativeComposeDraft(
-          useNativeComposeStore.getState(),
+          appCommandStore(nativeComposeStore).getState(),
           createSessionKey("env-1", options!.tabId!),
         ).attachments;
       usePaneLayoutStore
@@ -238,7 +238,7 @@ describe("DesignWorkspaceDialog", () => {
         if (type === "claude") {
           key = createSessionKey("env-1", options!.tabId!);
           expect(
-            nativeComposeDraft(useNativeComposeStore.getState(), key).attachments,
+            nativeComposeDraft(appCommandStore(nativeComposeStore).getState(), key).attachments,
           ).toHaveLength(1);
           if (failure === "throw") throw new Error("tab creation failed");
           return false;
@@ -255,7 +255,7 @@ describe("DesignWorkspaceDialog", () => {
         fireEvent.click(screen.getByRole("button", { name: "Create design workspace" }));
         await flush();
         expect(key).not.toBe("");
-        expect(useNativeComposeStore.getState().drafts.has(key)).toBe(false);
+        expect(appCommandStore(nativeComposeStore).getState().drafts.has(key)).toBe(false);
         expect(onOpenChange).not.toHaveBeenCalled();
         expect(screen.getByRole("alert")).toBeTruthy();
         expect(
@@ -594,7 +594,7 @@ describe("DesignWorkspaceDialog", () => {
         } as Environment,
       ],
     });
-    useNativeComposeStore.setState({ drafts: new Map() });
+    appCommandStore(nativeComposeStore).setState({ drafts: new Map() });
     invokeMock.mockImplementation(async (command: string, args?: unknown) => {
       const request = args as {
         action?: string;
@@ -612,7 +612,7 @@ describe("DesignWorkspaceDialog", () => {
     const createTab = mock((type: CreatableTabType, options?: CreateTabOptions) => {
       if (type === "claude")
         draftAtLaunch = nativeComposeDraft(
-          useNativeComposeStore.getState(),
+          appCommandStore(nativeComposeStore).getState(),
           createSessionKey("env-1", options!.tabId!),
         );
       usePaneLayoutStore
@@ -663,13 +663,13 @@ describe("DesignWorkspaceDialog", () => {
       });
       // Until the queue write lands, the draft is the renderer fallback.
       expect(
-        nativeComposeDraft(useNativeComposeStore.getState(), sessionKey).attachments,
+        nativeComposeDraft(appCommandStore(nativeComposeStore).getState(), sessionKey).attachments,
       ).toHaveLength(1);
       queueWrite.resolve({});
       await flush();
-      expect(nativeComposeDraft(useNativeComposeStore.getState(), sessionKey).attachments).toEqual(
-        [],
-      );
+      expect(
+        nativeComposeDraft(appCommandStore(nativeComposeStore).getState(), sessionKey).attachments,
+      ).toEqual([]);
     } finally {
       restorePaste();
     }
@@ -739,7 +739,7 @@ describe("DesignWorkspaceDialog", () => {
           const sessionKey = createSessionKey("env-1", options.tabId!);
           const key = composeDraftKey("claude", "env-1", sessionKey);
           const images = nativeComposeDraft(
-            useNativeComposeStore.getState(),
+            appCommandStore(nativeComposeStore).getState(),
             sessionKey,
           ).attachments;
           expect(images).toHaveLength(1);
@@ -755,7 +755,8 @@ describe("DesignWorkspaceDialog", () => {
                 .find((tab) => tab.id === options.tabId)?.initialPrompt,
             ).toBe(options.initialPrompt);
             expect(
-              nativeComposeDraft(useNativeComposeStore.getState(), sessionKey).attachments,
+              nativeComposeDraft(appCommandStore(nativeComposeStore).getState(), sessionKey)
+                .attachments,
             ).toEqual(images);
           } else {
             const hook = renderHook(() =>
@@ -774,7 +775,7 @@ describe("DesignWorkspaceDialog", () => {
             await awaitComposeDraftWrites(key);
             expect(saved!.value).toMatchObject({ text: "", attachments: [] });
             // A hidden tab can now remount without resurrecting queue-owned images.
-            useNativeComposeStore.getState().clearDraft(sessionKey);
+            appCommandStore(nativeComposeStore).getState().clearDraft(sessionKey);
             renderHook(() =>
               useNativeComposeDraftPersistence(
                 "claude",
@@ -785,7 +786,8 @@ describe("DesignWorkspaceDialog", () => {
             );
             await flush();
             expect(
-              nativeComposeDraft(useNativeComposeStore.getState(), sessionKey).attachments,
+              nativeComposeDraft(appCommandStore(nativeComposeStore).getState(), sessionKey)
+                .attachments,
             ).toEqual([]);
             expect(error).not.toHaveBeenCalled();
           }
@@ -996,7 +998,7 @@ describe("DesignWorkspaceDialog", () => {
           ]);
           expect(createTab).not.toHaveBeenCalled();
           expect(onOpenChange).not.toHaveBeenCalled();
-          expect(useNativeComposeStore.getState().drafts.size).toBe(0);
+          expect(appCommandStore(nativeComposeStore).getState().drafts.size).toBe(0);
           expect(screen.queryByRole("alert") === null).toBe(true);
           if (scopeChange === "backend")
             expect(

@@ -12,8 +12,9 @@ import type {
 } from "@orkestrator/protocol/native-agent";
 import { nativeAgentCapabilities } from "@orkestrator/protocol/native-agent";
 import * as realBackend from "@/lib/backend";
-import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
+import { nativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { appCommandStore } from "@/test/app-command-store";
 
 interface TestMessage {
   id: string;
@@ -132,14 +133,14 @@ beforeEach(() => {
     hydration: new Map(),
     activeEnvironmentId: null,
   });
-  useNativeAgentProjectionStore.getState().reset();
+  appCommandStore(nativeAgentProjectionStore).getState().reset();
 });
 
 afterEach(() => {
   cleanup();
   resetReadCoordinatorForTests();
   resetResourceSync();
-  useNativeAgentProjectionStore.getState().reset();
+  appCommandStore(nativeAgentProjectionStore).getState().reset();
 });
 
 describe("useNativeAgentSession coordinated background reads", () => {

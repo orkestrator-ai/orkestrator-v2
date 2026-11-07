@@ -12,9 +12,10 @@ import { invoke as nativeInvoke } from "@/lib/native/backend";
 import type { GraphRunRewindBackend } from "@/lib/backend/graph-runs";
 import { dispatchResourceChange, resetResourceSync } from "@/lib/resource-sync";
 import { useFlowGraphViewStore } from "@/stores/flowGraphViewStore";
-import { useGraphRunStore } from "@/stores/graphRunStore";
+import { graphRunStore } from "@/stores/graphRunStore";
 import { GraphRunTab } from "./GraphRunTab";
 import { POLICY, act, agentSession, runOf } from "./graph-run.test-fixtures";
+import { appCommandStore } from "@/test/app-command-store";
 
 const invokeMock = nativeInvoke as unknown as ReturnType<typeof mock>;
 
@@ -113,7 +114,7 @@ function reviewRun(activations: NodeActivation[], overrides: Partial<GraphRun> =
 beforeEach(() => {
   handlers = {};
   createTabMock = mock(() => true);
-  useGraphRunStore.setState({
+  appCommandStore(graphRunStore).setState({
     runs: new Map(),
     lists: new Map(),
     transcripts: new Map(),

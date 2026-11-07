@@ -4,11 +4,12 @@ import { cleanup, screen, waitFor } from "@testing-library/react";
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { COORDINATOR_LAUNCH_OVERRIDES_COMMAND } from "@orkestrator/protocol/coordinator-launch-overrides";
 import { invoke } from "@/lib/native/backend";
-import { useCoordinatorLaunchOverrideStore } from "@/stores/coordinatorLaunchOverrideStore";
+import { coordinatorLaunchOverrideStore } from "@/stores/coordinatorLaunchOverrideStore";
 import { useFileDirtyStore } from "@/stores/fileDirtyStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { PaneLeaf, TabInfo } from "@/types/paneLayout";
 import { DraggableTabBar } from "./DraggableTabBar";
+import { appCommandStore } from "@/test/app-command-store";
 
 const invokeMock = invoke as unknown as ReturnType<typeof mock>;
 
@@ -33,7 +34,7 @@ function renderTabs(tabs: TabInfo[], environmentId = "worker") {
 }
 
 beforeEach(() => {
-  useCoordinatorLaunchOverrideStore.getState().reset();
+  appCommandStore(coordinatorLaunchOverrideStore).getState().reset();
   useFileDirtyStore.setState({ dirtyFiles: new Map() });
   usePaneLayoutStore.setState({
     environments: new Map(),
@@ -56,7 +57,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
-  useCoordinatorLaunchOverrideStore.getState().reset();
+  appCommandStore(coordinatorLaunchOverrideStore).getState().reset();
   invokeMock.mockReset();
   invokeMock.mockImplementation(async () => undefined);
 });

@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import type { AgentActivityState, Environment, EnvironmentType } from "@/types";
 import { agentActivityStore } from "@/stores/agentActivityStore";
 import { claimSidebarAction, releaseSidebarAction } from "@/stores/sidebarActionStore";
-import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { buildPipelineStore } from "@/stores/buildPipelineStore";
 import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
 import { environmentDiffStore } from "@/stores/environmentDiffStore";
 import { useChangeProjectionStore } from "@/stores/changeProjectionStore";
@@ -69,7 +69,7 @@ function seedPipeline(
     phase: "addressing",
     ...overrides,
   });
-  useBuildPipelineStore.getState().replacePipeline(pipeline);
+  appCommandStore(buildPipelineStore).getState().replacePipeline(pipeline);
   return pipeline;
 }
 
@@ -103,7 +103,7 @@ beforeEach(() => {
     containerStates: {},
     containerStateUpdatedAt: {},
   });
-  useBuildPipelineStore.setState({
+  appCommandStore(buildPipelineStore).setState({
     pipelines: new Map(),
     buildEnvironmentIds: new Set(),
     activeBuildEnvironmentIds: new Set(),
@@ -128,11 +128,13 @@ describe("EnvironmentItem build pipeline activity", () => {
     renderItem();
 
     act(() => {
-      useBuildPipelineStore.getState().replacePipeline({
-        ...pipeline,
-        phase: "complete",
-        backendRevision: pipeline.backendRevision + 1,
-      });
+      appCommandStore(buildPipelineStore)
+        .getState()
+        .replacePipeline({
+          ...pipeline,
+          phase: "complete",
+          backendRevision: pipeline.backendRevision + 1,
+        });
     });
 
     expectIdle(environmentIcon());
@@ -208,11 +210,13 @@ describe("EnvironmentItem build pipeline activity", () => {
     renderItem(environmentFixture({ agentActivityState: "working" satisfies AgentActivityState }));
 
     act(() => {
-      useBuildPipelineStore.getState().replacePipeline({
-        ...pipeline,
-        phase: "complete",
-        backendRevision: pipeline.backendRevision + 1,
-      });
+      appCommandStore(buildPipelineStore)
+        .getState()
+        .replacePipeline({
+          ...pipeline,
+          phase: "complete",
+          backendRevision: pipeline.backendRevision + 1,
+        });
     });
 
     expectWorking(environmentIcon());

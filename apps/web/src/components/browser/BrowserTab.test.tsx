@@ -13,7 +13,7 @@ import { StrictMode } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { environmentStore } from "@/stores/environmentStore";
-import { useNativeComposeStore } from "@/stores/nativeComposeStore";
+import { nativeComposeStore } from "@/stores/nativeComposeStore";
 import type { BrowserPreviewState } from "@orkestrator/protocol/browser-preview";
 import { resetWebAnnotationSyncForTests } from "@/lib/web-annotations/sync";
 import {
@@ -243,7 +243,7 @@ describe("BrowserTab", () => {
         } as never,
       ],
     });
-    useNativeComposeStore.setState({ drafts: new Map() });
+    appCommandStore(nativeComposeStore).setState({ drafts: new Map() });
     resetWebAnnotationSyncForTests();
     mockToastError.mockClear();
     mockToastSuccess.mockClear();
@@ -656,7 +656,7 @@ describe("BrowserTab", () => {
     const capture = createFakeCaptureApi();
     const native = installNativePreview({ capture: capture.api });
     const backend = new FakeWebAnnotationBackend("env-1").install();
-    useNativeComposeStore.setState({ drafts: new Map() });
+    appCommandStore(nativeComposeStore).setState({ drafts: new Map() });
     try {
       render(
         <BrowserTab
@@ -681,7 +681,7 @@ describe("BrowserTab", () => {
     // The panel only opens through the pane layout; saving is covered by the
     // annotation panel suite. Nothing was distributed to native drafts.
     expect(backend.callsOf("web_annotation_create")).toHaveLength(0);
-    expect(useNativeComposeStore.getState().drafts.size).toBe(0);
+    expect(appCommandStore(nativeComposeStore).getState().drafts.size).toBe(0);
     expect("startAnnotation" in native.browserPreview).toBe(false);
   });
 

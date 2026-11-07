@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { multiReviewStore } from "@/stores/multiReviewStore";
-import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
+import { nativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { environmentStore } from "@/stores/environmentStore";
 import { configStore } from "@/stores/configStore";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
@@ -70,7 +70,7 @@ function open() {
 const originalGlobalConfig = appCommandStore(configStore).getState().config.global;
 beforeEach(() => {
   appCommandStore(multiReviewStore).setState({ workflows: new Map() });
-  useNativeAgentProjectionStore.getState().reset();
+  appCommandStore(nativeAgentProjectionStore).getState().reset();
   appCommandStore(environmentStore).setState({ environments: [] });
   nativeInvokeMock.mockClear();
   nativeInvokeMock.mockImplementation(async () => undefined);
@@ -79,7 +79,7 @@ afterEach(() => {
   cleanup();
   resetReadCoordinatorForTests();
   appCommandStore(multiReviewStore).setState({ workflows: new Map() });
-  useNativeAgentProjectionStore.getState().reset();
+  appCommandStore(nativeAgentProjectionStore).getState().reset();
   appCommandStore(environmentStore).setState({ environments: [] });
   appCommandStore(configStore).setState((state) => ({
     config: { ...state.config, global: originalGlobalConfig },
@@ -156,7 +156,9 @@ describe("AgentInfoButton Multi Review reviewer tabs", () => {
     );
     await waitFor(() =>
       expect(
-        useNativeAgentProjectionStore.getState().projections.get("reviewer-session-key")?.sessionId,
+        appCommandStore(nativeAgentProjectionStore)
+          .getState()
+          .projections.get("reviewer-session-key")?.sessionId,
       ).toBe("reviewer-provider-session"),
     );
     expect(screen.getByText("claude-opus-reviewer")).toBeTruthy();
@@ -236,7 +238,7 @@ describe("reviewer session boundaries", () => {
           ],
         },
       });
-      useNativeAgentProjectionStore.getState().setProjection(sessionKey, projection);
+      appCommandStore(nativeAgentProjectionStore).getState().setProjection(sessionKey, projection);
       nativeInvokeMock.mockImplementation(async (command: string) =>
         command === "get_native_agent_projection" ? projection : {},
       );
@@ -362,7 +364,7 @@ describe("reviewer session boundaries", () => {
     open();
     await waitFor(() =>
       expect(
-        useNativeAgentProjectionStore
+        appCommandStore(nativeAgentProjectionStore)
           .getState()
           .projections.get("multi-review:workflow-1:reviewer:reviewer-1")?.sessionId,
       ).toBe("reviewer-provider-session"),
@@ -373,7 +375,7 @@ describe("reviewer session boundaries", () => {
     const workflow = multiReviewWorkflow();
     delete workflow.reviewers[0]!.providerSessionId;
     appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow);
-    useNativeAgentProjectionStore
+    appCommandStore(nativeAgentProjectionStore)
       .getState()
       .setProjection("reviewer-session-key", nativeProjection("claude", "old-session"));
     render(<AgentInfoButton activeTab={reviewerTab()} />);
@@ -415,8 +417,9 @@ describe("reviewer session boundaries", () => {
       open();
       await waitFor(() =>
         expect(
-          useNativeAgentProjectionStore.getState().projections.get("reviewer-session-key")
-            ?.sessionId,
+          appCommandStore(nativeAgentProjectionStore)
+            .getState()
+            .projections.get("reviewer-session-key")?.sessionId,
         ).toBe(providerSessionId),
       );
       providerSessionId = "restarted-provider-session";
@@ -437,9 +440,9 @@ describe("reviewer session boundaries", () => {
       // Changing ownership closes the old panel. Reopening must inspect the new identity.
       open();
       await waitFor(() =>
-        expect(useNativeAgentProjectionStore.getState().projections.get(key)?.sessionId).toBe(
-          providerSessionId,
-        ),
+        expect(
+          appCommandStore(nativeAgentProjectionStore).getState().projections.get(key)?.sessionId,
+        ).toBe(providerSessionId),
       );
       expect(
         nativeInvokeMock.mock.calls.filter(

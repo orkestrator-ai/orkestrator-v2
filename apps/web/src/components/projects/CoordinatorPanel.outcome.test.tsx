@@ -18,13 +18,13 @@ import * as clipboard from "@/lib/native/clipboard";
 import { dispatchResourceChange } from "@/lib/resource-sync";
 import { onGlobalSettingsRequest } from "@/lib/settings-navigation";
 import { useAppDialogStore } from "@/stores/appDialogStore";
-import { useAgentMailStore } from "@/stores/agentMailStore";
+import { agentMailStore } from "@/stores/agentMailStore";
 import { configStore } from "@/stores/configStore";
-import { useNativeComposeStore } from "@/stores/nativeComposeStore";
+import { nativeComposeStore } from "@/stores/nativeComposeStore";
 import { projectStore } from "@/stores/projectStore";
 import { useUIChromeStore } from "@/stores/uiChromeStore";
-import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
-import { useCoordinatorPaneLayoutStore } from "@/stores/coordinatorPaneLayoutStore";
+import { nativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
+import { coordinatorPaneLayoutStore } from "@/stores/coordinatorPaneLayoutStore";
 import { resetClientStateCapabilitiesForTests } from "@/lib/client-state-capabilities";
 import { resetUpstreamCheckForTests } from "@/lib/coordinator-upstream-check";
 import { resetNativeAgentSyncCapabilityForTests } from "@/hooks/useNativeAgentSession";
@@ -271,7 +271,7 @@ const unassigned = (conversation: CoordinatorConversation) => ({
 function installPendingMail(): void {
   const environmentId = coordinatorRuntimeId("coordinator-1", mainConversation.id);
   const mailboxId = `${environmentId}\0${mainConversation.tabId}`;
-  useAgentMailStore.setState({
+  appCommandStore(agentMailStore).setState({
     summary: new Map([
       [
         mailboxId,
@@ -354,13 +354,13 @@ function installPendingMail(): void {
 describe("CoordinatorPanel outcome-first wording and banners", () => {
   beforeEach(() => {
     useRealAgentTab = false;
-    useAgentMailStore.setState(useAgentMailStore.getInitialState());
+    appCommandStore(agentMailStore).setState(appCommandStore(agentMailStore).getInitialState());
     useUIChromeStore.setState({ coordinatorIntroDismissed: false });
     resetNativeAgentSyncCapabilityForTests();
     appCommandStore(configStore).setState({ config: initialConfig });
-    useNativeComposeStore.getState().clearDraft(sessionKey);
-    useNativeAgentProjectionStore.getState().reset();
-    useCoordinatorPaneLayoutStore.getState().reset();
+    appCommandStore(nativeComposeStore).getState().clearDraft(sessionKey);
+    appCommandStore(nativeAgentProjectionStore).getState().reset();
+    appCommandStore(coordinatorPaneLayoutStore).getState().reset();
     resetUpstreamCheckForTests();
     resetClientStateCapabilitiesForTests();
     for (const fn of [ensure, getCoordinatorView, getGit, fetchGit, select, assignAgent]) {
@@ -510,7 +510,9 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
 
     fireEvent.input(input, { target: { textContent: "!git status" } });
     await waitFor(() =>
-      expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.text).toBe("!git status"),
+      expect(appCommandStore(nativeComposeStore).getState().drafts.get(sessionKey)?.text).toBe(
+        "!git status",
+      ),
     );
     fireEvent.keyDown(input, { key: "Enter" });
     const rule = await screen.findByRole("alert");
@@ -518,12 +520,14 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
     expect(rule.hasAttribute("data-unassigned-command-refusal")).toBe(true);
     // Nothing started, and the text is still in the box.
     expect(assignAgent).not.toHaveBeenCalled();
-    expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.text).toBe("!git status");
+    expect(appCommandStore(nativeComposeStore).getState().drafts.get(sessionKey)?.text).toBe(
+      "!git status",
+    );
 
     // Still shown while the text is a command; gone once the ! is dropped.
     fireEvent.input(input, { target: { textContent: "!git status --short" } });
     await waitFor(() =>
-      expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.text).toBe(
+      expect(appCommandStore(nativeComposeStore).getState().drafts.get(sessionKey)?.text).toBe(
         "!git status --short",
       ),
     );
@@ -562,7 +566,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
       }),
     );
     await waitFor(() =>
-      expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.text).toBe(
+      expect(appCommandStore(nativeComposeStore).getState().drafts.get(sessionKey)?.text).toBe(
         "Review this branch and tell me what needs attention",
       ),
     );
@@ -575,7 +579,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
     // Still editable, and nothing was sent.
     fireEvent.input(input, { target: { textContent: "Review this branch for security issues" } });
     await waitFor(() =>
-      expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.text).toBe(
+      expect(appCommandStore(nativeComposeStore).getState().drafts.get(sessionKey)?.text).toBe(
         "Review this branch for security issues",
       ),
     );
@@ -600,7 +604,8 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
     await screen.findByRole("textbox");
     await waitFor(() =>
       expect(
-        useNativeAgentProjectionStore.getState().projections.get(sessionKey)?.messages.length,
+        appCommandStore(nativeAgentProjectionStore).getState().projections.get(sessionKey)?.messages
+          .length,
       ).toBe(1),
     );
     expect(screen.queryByRole("group", { name: "Starter prompts" }) === null).toBe(true);
@@ -802,7 +807,8 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
       await waitFor(() => expect(ensureSession.mock.calls.length).toBeGreaterThan(calls));
       await waitFor(() =>
         expect(
-          useNativeAgentProjectionStore.getState().projections.get(sessionKey)?.connection,
+          appCommandStore(nativeAgentProjectionStore).getState().projections.get(sessionKey)
+            ?.connection,
         ).toBe("connected"),
       );
       const input = await screen.findByRole("textbox");
@@ -939,7 +945,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
       await screen.findByText(/Coordination is paused/);
       await waitFor(() =>
         expect(
-          useNativeAgentProjectionStore
+          appCommandStore(nativeAgentProjectionStore)
             .getState()
             .projections.get(sessionKey)
             ?.messages.map((item) => (item as { id: string }).id),
@@ -973,7 +979,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
     const savedTranscriptShown = () =>
       waitFor(() =>
         expect(
-          useNativeAgentProjectionStore
+          appCommandStore(nativeAgentProjectionStore)
             .getState()
             .projections.get(sessionKey)
             ?.messages.map((item) => (item as { id: string }).id),
@@ -1051,7 +1057,8 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
       await waitFor(() => expect(ensureSession).toHaveBeenCalled());
       await waitFor(() =>
         expect(
-          useNativeAgentProjectionStore.getState().projections.get(sessionKey)?.connection,
+          appCommandStore(nativeAgentProjectionStore).getState().projections.get(sessionKey)
+            ?.connection,
         ).toBe("connected"),
       );
       const input = await screen.findByRole("textbox");
@@ -1082,7 +1089,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
         .updateGlobalConfig({ enabledAgentPlatforms: ["claude"] });
       const environmentId = "coordinator:coordinator-1:conversation-1";
       const mailboxId = `${environmentId}\0coordinator-tab`;
-      useAgentMailStore.setState({
+      appCommandStore(agentMailStore).setState({
         summary: new Map([
           [
             mailboxId,

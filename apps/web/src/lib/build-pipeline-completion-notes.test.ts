@@ -3,10 +3,11 @@ import { MAX_TABS_PER_ENVIRONMENT } from "@orkestrator/protocol/pane-layout";
 import { mergePersistedPaneLayouts } from "./pane-layout-merge";
 import { PANE_LAYOUT_VERSION, type PersistedPaneLayoutInput } from "@/types/paneLayout";
 import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
-import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
+import { type BuildPipeline, buildPipelineStore } from "@/stores/buildPipelineStore";
 import { getAllLeaves, usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { PaneNode, TabInfo } from "@/types/paneLayout";
 import { startBuildPipelineCompletionNotes } from "./build-pipeline-completion-notes";
+import { appCommandStore } from "@/test/app-command-store";
 
 const ENVIRONMENT_ID = "env-1";
 
@@ -39,7 +40,7 @@ function splitLayout(): PaneNode {
 }
 
 function install(pipeline: BuildPipeline) {
-  useBuildPipelineStore.getState().replacePipeline(pipeline);
+  appCommandStore(buildPipelineStore).getState().replacePipeline(pipeline);
 }
 
 function notesTabs(): TabInfo[] {
@@ -57,7 +58,10 @@ function paneOf(tabId: string) {
 let stop: (() => void) | undefined;
 
 beforeEach(() => {
-  useBuildPipelineStore.setState({ pipelines: new Map(), buildEnvironmentIds: new Set() });
+  appCommandStore(buildPipelineStore).setState({
+    pipelines: new Map(),
+    buildEnvironmentIds: new Set(),
+  });
   seedLayout(splitLayout(), "pane-chat");
   stop = startBuildPipelineCompletionNotes();
 });
@@ -143,7 +147,7 @@ describe("startBuildPipelineCompletionNotes", () => {
     const local = complete();
     // A second client starts from the common base with a different active pane.
     seedLayout(structuredClone(base.root), "pane-build");
-    useBuildPipelineStore.setState({ pipelines: new Map() });
+    appCommandStore(buildPipelineStore).setState({ pipelines: new Map() });
     const remote = complete();
     for (const [left, right] of [
       [local, remote],
@@ -167,7 +171,7 @@ describe("startBuildPipelineCompletionNotes", () => {
       install(buildPipelineFixture({ phase: "verifying", backendRevision: 1 }));
       install(buildPipelineFixture({ phase: "complete", backendRevision: 2 }));
       if (change === "removed") {
-        useBuildPipelineStore.getState().removePipeline("pipeline-1");
+        appCommandStore(buildPipelineStore).getState().removePipeline("pipeline-1");
       } else {
         install(
           buildPipelineFixture({
@@ -229,7 +233,8 @@ describe("startBuildPipelineCompletionNotes", () => {
       expect(usePaneLayoutStore.getState().getActivePaneId(ENVIRONMENT_ID)).toBe("pane-chat");
       // Isolate each end of the queue to prove both eviction and retention.
       for (let i = 0; i < 65; i++) {
-        if (i !== remaining) useBuildPipelineStore.getState().removePipeline(`queued-${i}`);
+        if (i !== remaining)
+          appCommandStore(buildPipelineStore).getState().removePipeline(`queued-${i}`);
       }
       usePaneLayoutStore.getState().finishHydration(ENVIRONMENT_ID);
       if (remaining === 64) {

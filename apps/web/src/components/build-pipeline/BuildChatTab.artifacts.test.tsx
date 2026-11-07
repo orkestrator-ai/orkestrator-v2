@@ -6,7 +6,7 @@ import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { invoke } from "@/lib/native/backend";
-import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
+import { type BuildPipeline, buildPipelineStore } from "@/stores/buildPipelineStore";
 import * as realBackend from "@/lib/backend";
 import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
 import { resetTranscriptArtifactCapabilities } from "@/hooks/useTranscriptArtifactCapabilities";
@@ -19,6 +19,7 @@ import {
   workflowPublicationView,
   workflowPublishCall,
 } from "@/lib/chat/workflow-artifact-test-support";
+import { appCommandStore } from "@/test/app-command-store";
 
 const realBackendSnapshot = { ...realBackend };
 const realVirtualizedMessageListSnapshot = { ...realVirtualizedMessageList };
@@ -112,7 +113,7 @@ describe("published artifacts in a build-pipeline stage transcript", () => {
     clearArtifactRequestCache();
     clearArtifactPublicationCache();
     invokeMock.mockReset();
-    useBuildPipelineStore.setState({
+    appCommandStore(buildPipelineStore).setState({
       pipelines: new Map([[pipeline.id, pipeline]]),
       buildEnvironmentIds: new Set([pipeline.environmentId]),
       viewedSessionIds: new Map(),

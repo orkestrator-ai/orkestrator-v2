@@ -7,12 +7,13 @@ import type {
   AgentMailSummaryEntry,
   MailboxPresence,
 } from "@orkestrator/protocol/agent-mail";
-import { useAgentMailStore } from "@/stores/agentMailStore";
+import { agentMailStore } from "@/stores/agentMailStore";
 import { FloatingNoticeLayer } from "@/components/ui/floating-notice";
 import { formatAgentMailTime } from "./agent-mail-ui";
 import { AgentMailBanner } from "./AgentMailBanner";
 
 import * as backend from "@/lib/backend/agent-mail";
+import { appCommandStore } from "@/test/app-command-store";
 
 const mailboxId = "env-1\0tab-1";
 
@@ -99,7 +100,7 @@ function install(
     limit: 100,
     revision: 2,
   };
-  useAgentMailStore.setState({
+  appCommandStore(agentMailStore).setState({
     revision: 2,
     summary: new Map([[mailboxId, summary]]),
     mailboxes: new Map([[mailboxId, snapshot]]),
@@ -112,7 +113,7 @@ describe("AgentMailBanner", () => {
   afterEach(() => mock.restore());
   beforeEach(() => {
     cleanup();
-    useAgentMailStore.setState(useAgentMailStore.getInitialState());
+    appCommandStore(agentMailStore).setState(appCommandStore(agentMailStore).getInitialState());
   });
 
   test.each(["pending-inject", "stored", "inject_failed"] as const)(
@@ -168,7 +169,7 @@ describe("AgentMailBanner", () => {
     expect(retry).not.toHaveBeenCalled();
     expect(screen.queryByRole("button", { name: "Deliver now" }) === null).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "View" }));
-    expect(useAgentMailStore.getState().panel).toEqual({ focus: mailboxId });
+    expect(appCommandStore(agentMailStore).getState().panel).toEqual({ focus: mailboxId });
 
     view.rerender(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
     expect(screen.getByText("Delivery paused: loop budget")).toBeTruthy();
@@ -195,7 +196,7 @@ describe("AgentMailBanner", () => {
 
   test("shows the inbox count in a collapsed pill and newest sender, time and subject in the card", () => {
     install("stored");
-    const mailbox = useAgentMailStore.getState().mailboxes.get(mailboxId)!;
+    const mailbox = appCommandStore(agentMailStore).getState().mailboxes.get(mailboxId)!;
     mailbox.messages = [
       {
         ...message("stored"),
@@ -242,12 +243,12 @@ describe("AgentMailBanner", () => {
     expect(screen.getByText("1 message in inbox · pull only")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Deliver now" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "View" }));
-    expect(useAgentMailStore.getState().panel).toEqual({ focus: mailboxId });
+    expect(appCommandStore(agentMailStore).getState().panel).toEqual({ focus: mailboxId });
   });
 
   test("releases newest-first snapshots oldest first, preserving send order for timestamp ties", async () => {
     install("stored");
-    const snapshot = useAgentMailStore.getState().mailboxes.get(mailboxId)!;
+    const snapshot = appCommandStore(agentMailStore).getState().mailboxes.get(mailboxId)!;
     snapshot.messages = [
       { ...message("stored"), id: "newer", createdAt: "2026-11-03T12:00:01.000Z" },
       { ...message("stored"), id: "earlier-tie", createdAt: "2026-11-03T12:00:00.000Z" },
@@ -269,7 +270,7 @@ describe("AgentMailBanner", () => {
 
   test("continues after a refusal and refreshes partial success while showing the refused item", async () => {
     install("stored");
-    const snapshot = useAgentMailStore.getState().mailboxes.get(mailboxId)!;
+    const snapshot = appCommandStore(agentMailStore).getState().mailboxes.get(mailboxId)!;
     snapshot.messages = ["first", "refused", "last"].map((id) => ({ ...message("stored"), id }));
     const deliver = spyOn(backend, "deliverAgentMailNow")
       .mockResolvedValueOnce({ ...message("injected"), body: "hello" })
@@ -277,7 +278,7 @@ describe("AgentMailBanner", () => {
       .mockResolvedValueOnce({ ...message("injected"), body: "hello" });
     const refreshMailbox = mock(async () => undefined);
     const refreshSummary = mock(async () => undefined);
-    useAgentMailStore.setState({ refreshMailbox, refreshSummary });
+    appCommandStore(agentMailStore).setState({ refreshMailbox, refreshSummary });
     render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
     await waitFor(() => expect(refreshMailbox).toHaveBeenCalled());
     const mailboxCalls = refreshMailbox.mock.calls.length;
@@ -295,7 +296,7 @@ describe("AgentMailBanner", () => {
 
   test("describes the pending action when pending and inherited pull-only inbox mail coexist", async () => {
     install("pending-inject");
-    const snapshot = useAgentMailStore.getState().mailboxes.get(mailboxId)!;
+    const snapshot = appCommandStore(agentMailStore).getState().mailboxes.get(mailboxId)!;
     snapshot.descriptor.injectOverride = "inherit";
     snapshot.messages.push(message("stored"));
     const deliver = spyOn(backend, "deliverAgentMailNow").mockResolvedValue({
@@ -325,7 +326,7 @@ describe("AgentMailBanner", () => {
 
   test("stored external mail makes no promise of automatic delivery", () => {
     install("stored", { noAgent: true });
-    const snapshot = useAgentMailStore.getState().mailboxes.get(mailboxId)!;
+    const snapshot = appCommandStore(agentMailStore).getState().mailboxes.get(mailboxId)!;
     snapshot.messages[0]!.trust = "external";
     render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
     expect(screen.getByText("1 message in inbox · waiting for an agent")).toBeTruthy();
@@ -335,7 +336,7 @@ describe("AgentMailBanner", () => {
 
   test("counts only inbox mail, not delivered or expired mail the agent never acknowledged", () => {
     install("stored", { policy: "off" });
-    const state = useAgentMailStore.getState();
+    const state = appCommandStore(agentMailStore).getState();
     state.summary.get(mailboxId)!.agentUnackedCount = 27;
     state.mailboxes
       .get(mailboxId)!
@@ -349,7 +350,7 @@ describe("AgentMailBanner", () => {
 
   test("untrusted inbox mail says why it is not delivered and offers no Deliver now", () => {
     install("stored", { policy: "off" });
-    const messages = useAgentMailStore.getState().mailboxes.get(mailboxId)!.messages;
+    const messages = appCommandStore(agentMailStore).getState().mailboxes.get(mailboxId)!.messages;
     messages[0]!.trust = "external";
     messages.push({ ...message("stored"), id: "cross", trust: "cross-project" });
     render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
@@ -361,7 +362,8 @@ describe("AgentMailBanner", () => {
 
   test("a muted tab's inbox mail offers no Deliver now", () => {
     install("stored", { policy: "off" });
-    useAgentMailStore.getState().mailboxes.get(mailboxId)!.descriptor.mutedInbound = true;
+    appCommandStore(agentMailStore).getState().mailboxes.get(mailboxId)!.descriptor.mutedInbound =
+      true;
     render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
     expect(
       screen.getByText("1 message in inbox · Incoming mail is muted for this tab."),
@@ -371,7 +373,7 @@ describe("AgentMailBanner", () => {
 
   test("counts deliverable and undeliverable inbox mail separately", () => {
     install("stored", { policy: "off" });
-    useAgentMailStore
+    appCommandStore(agentMailStore)
       .getState()
       .mailboxes.get(mailboxId)!
       .messages.push({ ...message("stored"), id: "external", trust: "external" });
@@ -395,7 +397,7 @@ describe("AgentMailBanner", () => {
   test("rehydrates its authoritative summary even when cached state has a revision", async () => {
     install("stored", { policy: "off" });
     const refreshSummary = mock(async () => undefined);
-    useAgentMailStore.setState({ refreshSummary });
+    appCommandStore(agentMailStore).setState({ refreshSummary });
     render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
     await waitFor(() => expect(refreshSummary).toHaveBeenCalledTimes(1));
   });

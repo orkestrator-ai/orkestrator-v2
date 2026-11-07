@@ -10,7 +10,7 @@ import { agentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 import { configStore } from "@/stores/configStore";
 import { projectStore } from "@/stores/projectStore";
 import { uiStore } from "@/stores/uiStore";
-import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { buildPipelineStore } from "@/stores/buildPipelineStore";
 import { environmentStore } from "@/stores/environmentStore";
 import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
@@ -140,7 +140,10 @@ describe("CreateEnvironmentFlowDialog", () => {
     });
     appCommandStore(claudeOptionsStore).setState({ options: {} });
     appCommandStore(agentModelCatalogStore).setState({ claudeModels: [] });
-    useBuildPipelineStore.setState({ pipelines: new Map(), buildEnvironmentIds: new Set() });
+    appCommandStore(buildPipelineStore).setState({
+      pipelines: new Map(),
+      buildEnvironmentIds: new Set(),
+    });
     appCommandStore(environmentStore).setState({ environments: [] });
     appCommandStore(configStore).setState({
       config: structuredClone(appCommandStore(configStore).getInitialState().config),
@@ -813,14 +816,16 @@ describe("CreateEnvironmentFlowDialog", () => {
     // activation intent must remain alive in the app-level resource cache.
     unmount();
     act(() => {
-      useBuildPipelineStore.getState().replacePipeline(
-        buildPipelineFixture({
-          id: "pipeline-pending",
-          projectId: "project-1",
-          environmentId: "env-eventual",
-          phase: "starting-environment",
-        }),
-      );
+      appCommandStore(buildPipelineStore)
+        .getState()
+        .replacePipeline(
+          buildPipelineFixture({
+            id: "pipeline-pending",
+            projectId: "project-1",
+            environmentId: "env-eventual",
+            phase: "starting-environment",
+          }),
+        );
     });
 
     expect(appCommandStore(uiStore).getState()).toMatchObject({

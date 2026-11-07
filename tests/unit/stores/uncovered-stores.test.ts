@@ -3,7 +3,7 @@ import { agentActivityStore } from "../../../apps/web/src/stores/agentActivitySt
 import { useErrorDialogStore } from "../../../apps/web/src/stores/errorDialogStore";
 import { useFileDirtyStore } from "../../../apps/web/src/stores/fileDirtyStore";
 import { prMonitorStore } from "../../../apps/web/src/stores/prMonitorStore";
-import { useSessionStore } from "../../../apps/web/src/stores/sessionStore";
+import { sessionStore } from "../../../apps/web/src/stores/sessionStore";
 import {
   createPortalTargetKey,
   createTerminalKey,
@@ -21,7 +21,11 @@ afterEach(() => {
   useErrorDialogStore.setState({ error: null });
   useFileDirtyStore.setState({ dirtyFiles: new Map() });
   appCommandStore(prMonitorStore).setState({ states: new Map() });
-  useSessionStore.setState({ sessions: new Map(), loadingEnvironments: new Set(), error: null });
+  appCommandStore(sessionStore).setState({
+    sessions: new Map(),
+    loadingEnvironments: new Set(),
+    error: null,
+  });
   useTerminalPortalStore.setState({ paneHosts: new Map(), terminals: new Map() });
 });
 
@@ -237,7 +241,7 @@ describe("local session and terminal portal state", () => {
   test("supports all local session selectors and mutations", () => {
     const session = { id: "session-1", environmentId: "env-1", order: 2, name: "Old" } as never;
     const earlier = { id: "session-2", environmentId: "env-1", order: 1 } as never;
-    const state = useSessionStore.getState();
+    const state = appCommandStore(sessionStore).getState();
     state.addSession(session);
     state.addSession(earlier);
     state.updateSession("session-1", { name: "New" });
@@ -247,10 +251,10 @@ describe("local session and terminal portal state", () => {
       "session-1",
     ]);
     state.setError("failed");
-    expect(useSessionStore.getState().error).toBe("failed");
+    expect(appCommandStore(sessionStore).getState().error).toBe("failed");
     state.removeSession("session-1");
     state.clearAllSessions();
-    expect(useSessionStore.getState().sessions.size).toBe(0);
+    expect(appCommandStore(sessionStore).getState().sessions.size).toBe(0);
   });
 
   test("keys and manages node- and environment-scoped pane hosts", () => {

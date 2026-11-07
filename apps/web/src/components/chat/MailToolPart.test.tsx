@@ -6,7 +6,7 @@ import {
 } from "@orkestrator/protocol/agent-mail";
 import { invoke } from "@/lib/native/backend";
 import type { AgentMailToolCall } from "@/lib/chat/agent-mail-tool-call";
-import { useAgentMailStore } from "@/stores/agentMailStore";
+import { agentMailStore } from "@/stores/agentMailStore";
 import { environmentStore } from "@/stores/environmentStore";
 import type { Environment } from "@/types";
 import { MailToolPart } from "./MailToolPart";
@@ -90,13 +90,13 @@ function mailbox(revision = 1): AgentMailMailboxSnapshot {
 
 beforeEach(() => {
   appCommandStore(environmentStore).setState(appCommandStore(environmentStore).getInitialState());
-  useAgentMailStore.setState(useAgentMailStore.getInitialState());
-  useAgentMailStore.getState().clear();
+  appCommandStore(agentMailStore).setState(appCommandStore(agentMailStore).getInitialState());
+  appCommandStore(agentMailStore).getState().clear();
   invokeMock.mockReset();
 });
 afterEach(() => {
   cleanup();
-  useAgentMailStore.getState().clear();
+  appCommandStore(agentMailStore).getState().clear();
   invokeMock.mockReset();
 });
 
@@ -117,14 +117,16 @@ describe("mounted mail tool tiles", () => {
     expect(await screen.findByText("Recipient")).toBeTruthy();
     expect(senderText()).toBe("To Recipient · Codex worker");
     expect(screen.getByText("handled")).toBeTruthy();
-    await act(async () => useAgentMailStore.getState().refreshMailbox("recipient", "agent"));
+    await act(async () =>
+      appCommandStore(agentMailStore).getState().refreshMailbox("recipient", "agent"),
+    );
     expect(screen.getByText("handled")).toBeTruthy();
     const live = mailbox(3);
     live.messages[100] = { ...live.messages[100]!, placement: "inject_failed", ackedAt: undefined };
-    act(() => useAgentMailStore.getState().setMailbox(live));
+    act(() => appCommandStore(agentMailStore).getState().setMailbox(live));
     expect(screen.getByText("delivery failed")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Open conversation" }));
-    expect(useAgentMailStore.getState().panel?.conversation).toEqual([
+    expect(appCommandStore(agentMailStore).getState().panel?.conversation).toEqual([
       "sender\0agent",
       "recipient\0agent",
     ]);
@@ -156,14 +158,14 @@ describe("mounted mail tool tiles", () => {
     const mounted = render(<MailToolPart call={call} expansionKey="missed" />);
     expect(await screen.findByText("waiting to deliver")).toBeTruthy();
     mounted.unmount();
-    expect(useAgentMailStore.getState().sent.size).toBe(0);
+    expect(appCommandStore(agentMailStore).getState().sent.size).toBe(0);
     invokeMock.mockImplementation(async (command) => {
       if (command === "get_agent_mail_summary")
         return { revision: 2, mailboxes: [{ ...mailbox(2).descriptor, revision: 2 }] };
       if (command === "get_agent_mail_mailboxes") return { revision: 2, mailboxes: [mailbox(2)] };
       throw new Error("Unexpected resync request");
     });
-    await act(async () => useAgentMailStore.getState().refreshSummary());
+    await act(async () => appCommandStore(agentMailStore).getState().refreshSummary());
     render(<MailToolPart call={call} expansionKey="missed" />);
     expect(screen.getByText("handled")).toBeTruthy();
   });
@@ -230,6 +232,8 @@ describe("mounted mail tool tiles", () => {
       false,
     );
     fireEvent.click(screen.getByRole("button", { name: "Open conversation" }));
-    expect(useAgentMailStore.getState().panel?.conversation?.[1]).toBe("recipient\0agent");
+    expect(appCommandStore(agentMailStore).getState().panel?.conversation?.[1]).toBe(
+      "recipient\0agent",
+    );
   });
 });

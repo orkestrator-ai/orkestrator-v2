@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import type { AgentMailMailboxSnapshot } from "@orkestrator/protocol/agent-mail";
-import { useAgentMailStore } from "@/stores/agentMailStore";
+import { agentMailStore } from "@/stores/agentMailStore";
 import { environmentStore } from "@/stores/environmentStore";
 import type { Environment } from "@/types";
 import {
@@ -65,17 +65,17 @@ describe("agentMailParticipantLabel", () => {
 });
 
 describe("useAgentMailEnvironmentName", () => {
-  const initialMail = useAgentMailStore.getState();
+  const initialMail = appCommandStore(agentMailStore).getState();
   const initialEnvironments = appCommandStore(environmentStore).getState();
 
   beforeEach(() => {
-    useAgentMailStore.setState({ mailboxes: new Map() });
+    appCommandStore(agentMailStore).setState({ mailboxes: new Map() });
     appCommandStore(environmentStore).setState({ environments: [] });
   });
 
   afterEach(() => {
     cleanup();
-    useAgentMailStore.setState(initialMail, true);
+    appCommandStore(agentMailStore).setState(initialMail, true);
     appCommandStore(environmentStore).setState(initialEnvironments, true);
   });
 
@@ -119,7 +119,7 @@ describe("useAgentMailEnvironmentName", () => {
       { initialProps: { id: "env-1" as string | undefined } },
     );
     expect(result.current).toBeUndefined();
-    act(() => useAgentMailStore.getState().setMailbox(mailbox));
+    act(() => appCommandStore(agentMailStore).getState().setMailbox(mailbox));
     expect(result.current).toBe("Mailbox name");
     act(() =>
       appCommandStore(environmentStore).setState({

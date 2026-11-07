@@ -5,7 +5,7 @@ import {
   mockToastError as toastErrorMock,
   mockToastSuccess as toastSuccessMock,
 } from "../../../../../tests/mocks/sonner";
-import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { buildPipelineStore } from "@/stores/buildPipelineStore";
 import { projectStore } from "@/stores/projectStore";
 import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
 import type {
@@ -59,7 +59,7 @@ const saveComposeDraftMock = mock(
 const deleteComposeDraftMock = mock(async (_draftKey: string) => undefined);
 const getCachedOpenCodeModelCatalogMock = mock(async () => null);
 const retryCompletionCommentMock = mock(async (pipelineId: string) => {
-  const current = useBuildPipelineStore.getState().pipelines.get(pipelineId)!;
+  const current = appCommandStore(buildPipelineStore).getState().pipelines.get(pipelineId)!;
   return {
     ...current,
     completionCommentStatus: undefined,
@@ -204,7 +204,7 @@ describe("LinearTicketsView", () => {
     navigateToPipelineMock.mockClear();
     toastSuccessMock.mockClear();
     toastErrorMock.mockClear();
-    useBuildPipelineStore.setState({
+    appCommandStore(buildPipelineStore).setState({
       pipelines: new Map(),
       buildEnvironmentIds: new Set(),
     });
@@ -799,7 +799,7 @@ describe("LinearTicketsView", () => {
       },
     });
     act(() => {
-      useBuildPipelineStore.getState().replacePipeline(activePipeline);
+      appCommandStore(buildPipelineStore).getState().replacePipeline(activePipeline);
     });
 
     await waitFor(() => expect(startButton.disabled).toBe(false));
@@ -1070,7 +1070,7 @@ describe("LinearTicketsView", () => {
   });
 
   test("uses the active Linear pipeline when the same issue has older completed runs", async () => {
-    const store = useBuildPipelineStore.getState();
+    const store = appCommandStore(buildPipelineStore).getState();
     const oldPipelineId = "linear-old";
     store.replacePipeline(
       buildPipelineFixture({
@@ -1154,28 +1154,30 @@ describe("LinearTicketsView", () => {
 
   test("clears failed completion comment state when retrying from ticket details", async () => {
     const pipelineId = "linear-completion-failed";
-    useBuildPipelineStore.getState().replacePipeline(
-      buildPipelineFixture({
-        id: pipelineId,
-        taskId: "issue-1",
-        phase: "complete",
-        taskTitle: "ENG-123: Add Linear integration",
-        taskSnapshot: {
-          title: "ENG-123: Add Linear integration",
-          description: "Build Linear support",
-          acceptanceCriteria: "",
-          comments: [],
-          images: [],
-        },
-        source: {
-          type: "linear",
-          issueId: "issue-1",
-          issueIdentifier: "ENG-123",
-        },
-        completionCommentStatus: "failed",
-        completionCommentError: "Linear unavailable",
-      }),
-    );
+    appCommandStore(buildPipelineStore)
+      .getState()
+      .replacePipeline(
+        buildPipelineFixture({
+          id: pipelineId,
+          taskId: "issue-1",
+          phase: "complete",
+          taskTitle: "ENG-123: Add Linear integration",
+          taskSnapshot: {
+            title: "ENG-123: Add Linear integration",
+            description: "Build Linear support",
+            acceptanceCriteria: "",
+            comments: [],
+            images: [],
+          },
+          source: {
+            type: "linear",
+            issueId: "issue-1",
+            issueIdentifier: "ENG-123",
+          },
+          completionCommentStatus: "failed",
+          completionCommentError: "Linear unavailable",
+        }),
+      );
 
     renderLinearTicketsView();
 
@@ -1186,28 +1188,31 @@ describe("LinearTicketsView", () => {
 
     await waitFor(() => {
       expect(
-        useBuildPipelineStore.getState().pipelines.get(pipelineId)?.completionCommentStatus,
+        appCommandStore(buildPipelineStore).getState().pipelines.get(pipelineId)
+          ?.completionCommentStatus,
       ).toBeUndefined();
     });
   });
 
   test("keeps Linear completion retries single-flight and recovers after rejection", async () => {
     const pipelineId = "linear-completion-retry";
-    useBuildPipelineStore.getState().replacePipeline(
-      buildPipelineFixture({
-        id: pipelineId,
-        taskId: "issue-1",
-        phase: "complete",
-        taskTitle: "ENG-123: Add Linear integration",
-        source: {
-          type: "linear",
-          issueId: "issue-1",
-          issueIdentifier: "ENG-123",
-        },
-        completionCommentStatus: "failed",
-        completionCommentError: "Linear unavailable",
-      }),
-    );
+    appCommandStore(buildPipelineStore)
+      .getState()
+      .replacePipeline(
+        buildPipelineFixture({
+          id: pipelineId,
+          taskId: "issue-1",
+          phase: "complete",
+          taskTitle: "ENG-123: Add Linear integration",
+          source: {
+            type: "linear",
+            issueId: "issue-1",
+            issueIdentifier: "ENG-123",
+          },
+          completionCommentStatus: "failed",
+          completionCommentError: "Linear unavailable",
+        }),
+      );
     const pending = deferred<Awaited<ReturnType<typeof retryCompletionCommentMock>>>();
     retryCompletionCommentMock.mockImplementationOnce(() => pending.promise);
     renderLinearTicketsView();

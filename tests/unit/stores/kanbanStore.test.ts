@@ -73,10 +73,11 @@ mock.module("@/lib/backend", () => ({
 
 const { useKanbanStore, findTaskForEnvironment } =
   (await import("../../../apps/web/src/stores/kanbanStore.ts?kanban-store-test")) as typeof import("../../../apps/web/src/stores/kanbanStore");
-import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { buildPipelineStore } from "@/stores/buildPipelineStore";
 // The statics seed the app command scope's stores; the lookup reads that scope.
 import { appCommandScope } from "@/lib/node-scope-slots";
 import type { KanbanTask } from "@/lib/backend";
+import { appCommandStore } from "../../../apps/web/src/test/app-command-store";
 
 afterAll(() => {
   mock.module("@/lib/backend", () => realBackendSnapshot);
@@ -108,7 +109,7 @@ describe("kanbanStore", () => {
       notesLoading: false,
       currentNotesProjectId: null,
     });
-    useBuildPipelineStore.setState({
+    appCommandStore(buildPipelineStore).setState({
       pipelines: new Map(),
       buildEnvironmentIds: new Set(),
     });
@@ -214,7 +215,7 @@ describe("kanbanStore", () => {
         buildPipelineId: undefined,
       });
 
-      useBuildPipelineStore.setState({
+      appCommandStore(buildPipelineStore).setState({
         pipelines: new Map([
           [
             "pipeline-1",
@@ -289,10 +290,16 @@ describe("kanbanStore", () => {
       const updatedTask = useKanbanStore.getState().tasks.find((t) => t.id === "task-1");
       expect(updatedTask?.environmentId).toBeUndefined();
       expect(updatedTask?.buildPipelineId).toBeUndefined();
-      expect(useBuildPipelineStore.getState().pipelines.has("pipeline-1")).toBe(false);
-      expect(useBuildPipelineStore.getState().pipelines.has("pipeline-2")).toBe(true);
-      expect(useBuildPipelineStore.getState().buildEnvironmentIds.has("env-1")).toBe(false);
-      expect(useBuildPipelineStore.getState().buildEnvironmentIds.has("env-2")).toBe(true);
+      expect(appCommandStore(buildPipelineStore).getState().pipelines.has("pipeline-1")).toBe(
+        false,
+      );
+      expect(appCommandStore(buildPipelineStore).getState().pipelines.has("pipeline-2")).toBe(true);
+      expect(appCommandStore(buildPipelineStore).getState().buildEnvironmentIds.has("env-1")).toBe(
+        false,
+      );
+      expect(appCommandStore(buildPipelineStore).getState().buildEnvironmentIds.has("env-2")).toBe(
+        true,
+      );
     });
 
     test("does not touch PR fields when clearing build status", async () => {
@@ -324,7 +331,7 @@ describe("kanbanStore", () => {
     test("leaves tasks and pipelines untouched when the backend update fails", async () => {
       const task = createTask({ environmentId: "env-1", buildPipelineId: "pipeline-1" });
       useKanbanStore.setState({ tasks: [task] });
-      useBuildPipelineStore.setState({
+      appCommandStore(buildPipelineStore).setState({
         pipelines: new Map([
           [
             "pipeline-1",
@@ -365,8 +372,10 @@ describe("kanbanStore", () => {
       const unchanged = useKanbanStore.getState().tasks.find((t) => t.id === "task-1");
       expect(unchanged?.environmentId).toBe("env-1");
       expect(unchanged?.buildPipelineId).toBe("pipeline-1");
-      expect(useBuildPipelineStore.getState().pipelines.has("pipeline-1")).toBe(true);
-      expect(useBuildPipelineStore.getState().buildEnvironmentIds.has("env-1")).toBe(true);
+      expect(appCommandStore(buildPipelineStore).getState().pipelines.has("pipeline-1")).toBe(true);
+      expect(appCommandStore(buildPipelineStore).getState().buildEnvironmentIds.has("env-1")).toBe(
+        true,
+      );
     });
   });
 
@@ -402,7 +411,7 @@ describe("findTaskForEnvironment", () => {
       notesLoading: false,
       currentNotesProjectId: null,
     });
-    useBuildPipelineStore.setState({
+    appCommandStore(buildPipelineStore).setState({
       pipelines: new Map(),
       buildEnvironmentIds: new Set(),
     });
@@ -418,7 +427,7 @@ describe("findTaskForEnvironment", () => {
   });
 
   test("falls back to build pipeline store when not in kanban store", () => {
-    useBuildPipelineStore.setState({
+    appCommandStore(buildPipelineStore).setState({
       pipelines: new Map([
         [
           "pipeline-1",
@@ -456,7 +465,7 @@ describe("findTaskForEnvironment", () => {
   });
 
   test("does not treat Linear-backed pipelines as kanban tasks", () => {
-    useBuildPipelineStore.setState({
+    appCommandStore(buildPipelineStore).setState({
       pipelines: new Map([
         [
           "pipeline-1",
@@ -499,7 +508,7 @@ describe("findTaskForEnvironment", () => {
   });
 
   test("does not treat GitHub-backed pipelines as kanban tasks", () => {
-    useBuildPipelineStore.setState({
+    appCommandStore(buildPipelineStore).setState({
       pipelines: new Map([
         [
           "pipeline-github",
@@ -555,7 +564,7 @@ describe("findTaskForEnvironment", () => {
     const task = createTask({ id: "kanban-task", environmentId: "env-1" });
     useKanbanStore.setState({ tasks: [task] });
 
-    useBuildPipelineStore.setState({
+    appCommandStore(buildPipelineStore).setState({
       pipelines: new Map([
         [
           "pipeline-1",

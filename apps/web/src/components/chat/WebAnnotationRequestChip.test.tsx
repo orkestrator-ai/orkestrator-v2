@@ -4,10 +4,11 @@ import { webAnnotationRequestMarker } from "@orkestrator/protocol/web-annotation
 import { fixtureRequest } from "@orkestrator/protocol/testing/web-annotations-fixtures";
 import { buildPromptWithTranscriptAnnotations } from "@/lib/chat/transcript-annotations";
 import { normalizeNativeMessage } from "@/lib/chat/native-message-adapters";
-import { useNativeComposeStore } from "@/stores/nativeComposeStore";
+import { nativeComposeStore } from "@/stores/nativeComposeStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { FakeWebAnnotationBackend, invokeMock } from "@/test/web-annotation-fakes";
 import { NativeMessage } from "./NativeMessage";
+import { appCommandStore } from "@/test/app-command-store";
 
 function userMessage(content: string) {
   return {
@@ -49,7 +50,7 @@ describe("web annotation request chip", () => {
         ],
       ]),
     });
-    useNativeComposeStore.setState({ drafts: new Map() });
+    appCommandStore(nativeComposeStore).setState({ drafts: new Map() });
   });
   afterEach(() => {
     cleanup();
@@ -71,7 +72,7 @@ describe("web annotation request chip", () => {
     });
     const layout = usePaneLayoutStore.getState().environments.get("env-1")!;
     expect((layout.root as { activeTabId: string }).activeTabId).toMatch(/^browser-/);
-    expect(useNativeComposeStore.getState().drafts.size).toBe(0);
+    expect(appCommandStore(nativeComposeStore).getState().drafts.size).toBe(0);
   });
 
   test("ordinary and legacy transcript annotation messages render unchanged, without a chip", () => {

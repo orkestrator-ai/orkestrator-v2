@@ -27,8 +27,8 @@ import * as realPaneLayoutPersistence from "@/lib/pane-layout-persistence";
 import * as realNativeComposeBarPaste from "@/hooks/useNativeComposeBarPaste";
 import { environmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
-import { useNativeComposeStore, type NativeComposeDraft } from "@/stores/nativeComposeStore";
-import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
+import { type NativeComposeDraft, nativeComposeStore } from "@/stores/nativeComposeStore";
+import { nativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { createSessionKey } from "@/lib/utils";
 import { appCommandStore } from "@/test/app-command-store";
 
@@ -190,11 +190,15 @@ function identity(platform: NativeAgentTabData["platform"]): NativeAgentTabData 
 }
 
 function draftFor(tabId: string) {
-  return useNativeComposeStore.getState().drafts.get(createSessionKey("env-1", tabId));
+  return appCommandStore(nativeComposeStore)
+    .getState()
+    .drafts.get(createSessionKey("env-1", tabId));
 }
 
 function seedDraft(tabId: string, update: Partial<NativeComposeDraft>) {
-  useNativeComposeStore.getState().updateDraft(createSessionKey("env-1", tabId), update);
+  appCommandStore(nativeComposeStore)
+    .getState()
+    .updateDraft(createSessionKey("env-1", tabId), update);
 }
 
 async function renderTab(tabId: string, platform: AgentPlatform = "codex") {
@@ -237,8 +241,8 @@ afterEach(() => {
     hydration: new Map(),
     activeEnvironmentId: null,
   });
-  useNativeComposeStore.setState({ drafts: new Map() });
-  useNativeAgentProjectionStore.getState().reset();
+  appCommandStore(nativeComposeStore).setState({ drafts: new Map() });
+  appCommandStore(nativeAgentProjectionStore).getState().reset();
 });
 
 describe("AgentNativeTab migrated legacy annotation references", () => {

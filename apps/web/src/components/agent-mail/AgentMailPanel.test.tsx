@@ -8,7 +8,7 @@ import type {
   AgentMailParticipant,
   MailboxDescriptor,
 } from "@orkestrator/protocol/agent-mail";
-import { useAgentMailStore } from "@/stores/agentMailStore";
+import { agentMailStore } from "@/stores/agentMailStore";
 import { configStore } from "@/stores/configStore";
 import { filesPanelStore } from "@/stores/filesPanelStore";
 import { uiStore } from "@/stores/uiStore";
@@ -210,8 +210,8 @@ function summaryEntry(overrides: { attentionCount?: number; failedInjectCount?: 
 
 beforeEach(() => {
   cleanup();
-  useAgentMailStore.setState(useAgentMailStore.getInitialState());
-  useAgentMailStore.setState({
+  appCommandStore(agentMailStore).setState(appCommandStore(agentMailStore).getInitialState());
+  appCommandStore(agentMailStore).setState({
     refreshMailbox: mock(async () => undefined),
     refreshSummary: mock(async () => undefined),
   });
@@ -239,7 +239,7 @@ beforeEach(() => {
 });
 
 afterAll(() => {
-  useAgentMailStore.setState(useAgentMailStore.getInitialState());
+  appCommandStore(agentMailStore).setState(appCommandStore(agentMailStore).getInitialState());
   mock.module("@/lib/backend", () => realBackend);
 });
 
@@ -251,7 +251,7 @@ describe("AgentMailButton", () => {
   });
 
   test("counts only mail that needs the person and opens the panel", () => {
-    useAgentMailStore.setState({
+    appCommandStore(agentMailStore).setState({
       summary: new Map([
         [AGENT_1, summaryEntry({ attentionCount: 2, failedInjectCount: 1 })],
         // A summary without the field counts its failures.
@@ -260,11 +260,11 @@ describe("AgentMailButton", () => {
     });
     render(<AgentMailButton />);
     fireEvent.click(screen.getByRole("button", { name: "Agent messages, 3 need you" }));
-    expect(useAgentMailStore.getState().panel).toEqual({});
+    expect(appCommandStore(agentMailStore).getState().panel).toEqual({});
   });
 
   test("shows no badge for the agents' own unseen traffic", () => {
-    useAgentMailStore.setState({
+    appCommandStore(agentMailStore).setState({
       summary: new Map([[AGENT_1, summaryEntry({ attentionCount: 0 })]]),
     });
     render(<AgentMailButton />);
@@ -304,7 +304,7 @@ describe("AgentMailPanel", () => {
       target: { value: "Draft subject" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Back to conversations" }));
-    act(() => useAgentMailStore.getState().closePanel());
+    act(() => appCommandStore(agentMailStore).getState().closePanel());
     act(() => openAgentMailForTab("env-1", "tab-1", "compose"));
     expect(
       ((await screen.findByPlaceholderText("Message Claude 1")) as HTMLTextAreaElement).value,
@@ -316,7 +316,7 @@ describe("AgentMailPanel", () => {
 
   test("focused mailbox errors are visible and retry restores compose and settings", async () => {
     const refresh = mock(async () => {
-      useAgentMailStore.getState().setMailbox({
+      appCommandStore(agentMailStore).getState().setMailbox({
         descriptor: descriptor(),
         messages: [],
         total: 0,
@@ -328,7 +328,7 @@ describe("AgentMailPanel", () => {
     refresh.mockImplementationOnce(async () => {
       throw new Error("Mailbox offline");
     });
-    useAgentMailStore.setState({ refreshMailbox: refresh });
+    appCommandStore(agentMailStore).setState({ refreshMailbox: refresh });
     render(<AgentMailPanel />);
     act(() => openAgentMailForTab("env-1", "tab-1"));
     expect((await screen.findByRole("alert")).textContent).toContain("Mailbox offline");
@@ -363,12 +363,15 @@ describe("AgentMailPanel", () => {
         limit: 200,
       }));
       render(<AgentMailPanel />);
-      act(() => useAgentMailStore.getState().openPanel({}));
+      act(() => appCommandStore(agentMailStore).getState().openPanel({}));
       fireEvent.click(await screen.findByRole("button", { name: "New" }));
       fireEvent.change(screen.getByLabelText("Filter agents"), { target: { value: "Last agent" } });
       fireEvent.click(await screen.findByText("Last agent"));
       expect(listAgentMailboxes).toHaveBeenCalledWith({ offset: 200, limit: 200 });
-      expect(useAgentMailStore.getState().panel?.conversation).toEqual([AGENT_2, "user"]);
+      expect(appCommandStore(agentMailStore).getState().panel?.conversation).toEqual([
+        AGENT_2,
+        "user",
+      ]);
     },
   );
 
@@ -408,7 +411,7 @@ describe("AgentMailPanel", () => {
       ),
     );
     render(<AgentMailPanel />);
-    act(() => useAgentMailStore.getState().openPanel({}));
+    act(() => appCommandStore(agentMailStore).getState().openPanel({}));
 
     const row = await screen.findByTestId("agent-mail-conversation-row");
     expect(row.textContent).toContain("Claude 1");
@@ -424,7 +427,7 @@ describe("AgentMailPanel", () => {
     // The person is not part of this conversation: no composer, but a way to start one.
     expect(screen.queryByPlaceholderText(/^Message /) === null).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Message Codex 2" }));
-    expect(useAgentMailStore.getState().panel).toEqual({
+    expect(appCommandStore(agentMailStore).getState().panel).toEqual({
       focus: AGENT_2,
       conversation: [AGENT_2, "user"],
     });
@@ -460,7 +463,7 @@ describe("AgentMailPanel", () => {
       }));
       getAgentMailConversation.mockImplementation(async () => thread);
       render(<AgentMailPanel />);
-      act(() => useAgentMailStore.getState().openPanel({}));
+      act(() => appCommandStore(agentMailStore).getState().openPanel({}));
       const row = await screen.findByTestId("agent-mail-conversation-row");
       expect(row.textContent).toContain(expected);
       expect(row.textContent).not.toContain("worker · worker");
@@ -499,8 +502,12 @@ describe("AgentMailPanel", () => {
     await waitFor(() => expect(sendAgentMail).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(toastError).toHaveBeenCalled());
     expect((body as HTMLTextAreaElement).value).toBe("hello");
-    act(() => useAgentMailStore.getState().closePanel());
-    act(() => useAgentMailStore.getState().openPanel({ conversation: ["user", AGENT_1] }));
+    act(() => appCommandStore(agentMailStore).getState().closePanel());
+    act(() =>
+      appCommandStore(agentMailStore)
+        .getState()
+        .openPanel({ conversation: ["user", AGENT_1] }),
+    );
     const restored = await screen.findByPlaceholderText("Message Claude 1");
     expect((restored as HTMLTextAreaElement).value).toBe("hello");
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
@@ -549,7 +556,11 @@ describe("AgentMailPanel", () => {
       ),
     );
     render(<AgentMailPanel />);
-    act(() => useAgentMailStore.getState().openPanel({ conversation: [AGENT_1, AGENT_2] }));
+    act(() =>
+      appCommandStore(agentMailStore)
+        .getState()
+        .openPanel({ conversation: [AGENT_1, AGENT_2] }),
+    );
     expect(await screen.findByText("delivery failed")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await waitFor(() =>
@@ -558,7 +569,7 @@ describe("AgentMailPanel", () => {
   });
 
   test("shows a focused tab's delivery settings and changes its policy", async () => {
-    useAgentMailStore.setState({
+    appCommandStore(agentMailStore).setState({
       mailboxes: new Map([
         [
           AGENT_1,
@@ -580,7 +591,7 @@ describe("AgentMailPanel", () => {
       }),
     );
     fireEvent.click(screen.getByRole("button", { name: "Message" }));
-    expect(useAgentMailStore.getState().panel).toEqual({
+    expect(appCommandStore(agentMailStore).getState().panel).toEqual({
       focus: AGENT_1,
       conversation: [AGENT_1, "user"],
     });
@@ -588,10 +599,12 @@ describe("AgentMailPanel", () => {
 
   test("starts a new conversation from the recipient picker", async () => {
     render(<AgentMailPanel />);
-    act(() => useAgentMailStore.getState().openPanel({}));
+    act(() => appCommandStore(agentMailStore).getState().openPanel({}));
     fireEvent.click(await screen.findByRole("button", { name: "New" }));
     fireEvent.click(await screen.findByText("Codex 2"));
-    expect(useAgentMailStore.getState().panel).toEqual({ conversation: [AGENT_2, "user"] });
+    expect(appCommandStore(agentMailStore).getState().panel).toEqual({
+      conversation: [AGENT_2, "user"],
+    });
   });
 
   test.each([true, false])(
@@ -611,7 +624,11 @@ describe("AgentMailPanel", () => {
         ),
       );
       render(<AgentMailPanel />);
-      act(() => useAgentMailStore.getState().openPanel({ conversation: [AGENT_1, AGENT_2] }));
+      act(() =>
+        appCommandStore(agentMailStore)
+          .getState()
+          .openPanel({ conversation: [AGENT_1, AGENT_2] }),
+      );
       expect(await screen.findByText(canReceive ? "in inbox" : "waiting for agent")).toBeTruthy();
       expect(Boolean(screen.queryByRole("button", { name: "Deliver now" }))).toBe(canReceive);
     },
@@ -666,7 +683,7 @@ describe("pull request links in mail", () => {
         number: 42,
       });
       expect(useFilesPanelChromeStore.getState().isOpen).toBe(true);
-      expect(useAgentMailStore.getState().panel).toBeNull();
+      expect(appCommandStore(agentMailStore).getState().panel).toBeNull();
       expect(openInBrowser).not.toHaveBeenCalled();
     } finally {
       appCommandStore(uiStore).setState({ selectedProjectId: null, selectedEnvironmentId: null });
@@ -680,7 +697,7 @@ describe("pull request links in mail", () => {
     await waitFor(() =>
       expect(openInBrowser).toHaveBeenCalledWith("https://github.com/acme/widget/pull/42"),
     );
-    expect(useAgentMailStore.getState().panel).not.toBeNull();
+    expect(appCommandStore(agentMailStore).getState().panel).not.toBeNull();
   });
 });
 
@@ -773,7 +790,7 @@ describe("AgentMailBanner actions", () => {
     });
     const pending = placement === "pending-inject" ? 1 : 0;
     const failed = placement === "inject_failed" ? 1 : 0;
-    useAgentMailStore.setState({
+    appCommandStore(agentMailStore).setState({
       revision: 2,
       summary: new Map([
         [AGENT_1, { ...summaryEntry({ failedInjectCount: failed }), pendingInjectCount: pending }],
@@ -827,7 +844,7 @@ describe("AgentMailBanner actions", () => {
 
   test("Deliver now releases every deliverable inbox message, and skips untrusted mail", async () => {
     installBanner("stored");
-    const mailbox = useAgentMailStore.getState().mailboxes.get(AGENT_1)!;
+    const mailbox = appCommandStore(agentMailStore).getState().mailboxes.get(AGENT_1)!;
     const { body: _body, ...summary } = mail("stored");
     mailbox.messages.push(
       { ...summary, id: "message-2" },

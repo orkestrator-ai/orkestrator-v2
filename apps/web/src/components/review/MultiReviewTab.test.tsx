@@ -25,7 +25,7 @@ import { environmentStore } from "@/stores/environmentStore";
 import { filesPanelStore } from "@/stores/filesPanelStore";
 import { uiStore } from "@/stores/uiStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
-import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
+import { nativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { createSessionKey } from "@/lib/utils";
 import {
   nativeAgentCapabilities,
@@ -4739,7 +4739,7 @@ describe("PR background state and review clock", () => {
   test("keeps review duration stable during PR-only work, completion and remount despite a stale projection", async () => {
     const restorePane = installPrTab();
     const savedEnvironments = appCommandStore(environmentStore).getState().environments;
-    const savedProjections = useNativeAgentProjectionStore.getState().projections;
+    const savedProjections = appCommandStore(nativeAgentProjectionStore).getState().projections;
     const originalNow = Date.now;
     let now = Date.parse("2026-08-14T00:02:00.000Z");
     Date.now = () => now;
@@ -4760,7 +4760,7 @@ describe("PR background state and review clock", () => {
       view.rerender(<MultiReviewTab {...props} />);
       expect(screen.getByTestId("multi-review-elapsed").textContent).toContain("1m 0s");
       act(() => {
-        useNativeAgentProjectionStore.setState({
+        appCommandStore(nativeAgentProjectionStore).setState({
           projections: new Map([
             [
               createSessionKey("env-1", "agent-job-pr"),
@@ -4790,7 +4790,7 @@ describe("PR background state and review clock", () => {
       Date.now = originalNow;
       restorePane();
       appCommandStore(environmentStore).setState({ environments: savedEnvironments });
-      useNativeAgentProjectionStore.setState({ projections: savedProjections });
+      appCommandStore(nativeAgentProjectionStore).setState({ projections: savedProjections });
     }
   });
 });

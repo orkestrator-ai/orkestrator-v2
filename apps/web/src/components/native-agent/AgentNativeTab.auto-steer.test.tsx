@@ -21,8 +21,8 @@ import * as realPaneLayoutPersistence from "@/lib/pane-layout-persistence";
 import * as realNativeComposeBarPaste from "@/hooks/useNativeComposeBarPaste";
 import { environmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
-import { useNativeComposeStore } from "@/stores/nativeComposeStore";
-import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
+import { nativeComposeStore } from "@/stores/nativeComposeStore";
+import { nativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { configStore } from "@/stores/configStore";
 import { createSessionKey } from "@/lib/utils";
 import {
@@ -184,7 +184,8 @@ function identity(platform: NativeAgentTabData["platform"]): NativeAgentTabData 
 }
 
 function draftText(tabId: string) {
-  return useNativeComposeStore.getState().drafts.get(createSessionKey("env-1", tabId))?.text;
+  return appCommandStore(nativeComposeStore).getState().drafts.get(createSessionKey("env-1", tabId))
+    ?.text;
 }
 
 function setAutoSteer(autoSteer: boolean) {
@@ -192,7 +193,9 @@ function setAutoSteer(autoSteer: boolean) {
 }
 
 async function sendWhileRunning(tabId: string, text: string) {
-  useNativeComposeStore.getState().updateDraft(createSessionKey("env-1", tabId), { text });
+  appCommandStore(nativeComposeStore)
+    .getState()
+    .updateDraft(createSessionKey("env-1", tabId), { text });
   renderInAppCommandScope(<AgentNativeTab tabId={tabId} data={identity("cursor")} isActive />);
   const input = await screen.findByRole("textbox");
   await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
@@ -253,8 +256,8 @@ afterEach(() => {
     hydration: new Map(),
     activeEnvironmentId: null,
   });
-  useNativeComposeStore.setState({ drafts: new Map() });
-  useNativeAgentProjectionStore.getState().reset();
+  appCommandStore(nativeComposeStore).setState({ drafts: new Map() });
+  appCommandStore(nativeAgentProjectionStore).getState().reset();
 });
 
 describe("AgentNativeTab auto-steer", () => {
@@ -347,7 +350,7 @@ for (const outcome of ["thrown", "unknown", "null", "refresh-failed"] as const) 
     refreshError = false;
     const input = screen.getByRole("textbox");
     await act(async () => {
-      useNativeComposeStore
+      appCommandStore(nativeComposeStore)
         .getState()
         .updateDraft(createSessionKey("env-1", tabId), { text: "a separate follow-up" });
     });
@@ -370,7 +373,7 @@ test.each(["$deploy now", "/review changes"])(
   "command %s does not promise auto-steering",
   async (text) => {
     setAutoSteer(true);
-    useNativeComposeStore
+    appCommandStore(nativeComposeStore)
       .getState()
       .updateDraft(createSessionKey("env-1", "tab-command"), { text });
     renderInAppCommandScope(
@@ -394,9 +397,13 @@ test.each(["$deploy now", "/review changes"])(
 test("attachments only queue", async () => {
   setAutoSteer(true);
   const tabId = "tab-attachment";
-  useNativeComposeStore.getState().updateDraft(createSessionKey("env-1", tabId), {
-    attachments: [{ id: "file-1", type: "image", path: "/workspace/image.png", name: "image.png" }],
-  });
+  appCommandStore(nativeComposeStore)
+    .getState()
+    .updateDraft(createSessionKey("env-1", tabId), {
+      attachments: [
+        { id: "file-1", type: "image", path: "/workspace/image.png", name: "image.png" },
+      ],
+    });
   await sendWhileRunning(tabId, "read this file");
   await waitFor(() => expect(draftText(tabId) ?? "").toBe(""));
   expect(steerNativeAgentQueuedPromptMock).not.toHaveBeenCalled();
@@ -430,17 +437,21 @@ test("an unknown auto-steer rehydrates backend recovery without restoring or res
   await sendWhileRunning(tabId, "also update the docs");
   await waitFor(() => expect(draftText(tabId) ?? "").toBe(""));
   const sessionKey = createSessionKey("env-1", tabId);
-  const current = useNativeAgentProjectionStore.getState().projections.get(sessionKey)!;
+  const current = appCommandStore(nativeAgentProjectionStore)
+    .getState()
+    .projections.get(sessionKey)!;
   await act(async () => {
-    useNativeAgentProjectionStore.getState().setProjection(sessionKey, {
-      ...current,
-      revision: current.revision + 1,
-      recoverableDispatch: {
-        requestId: "steer-1",
-        kind: "steer",
-        createdAt: "2026-11-03T12:00:00Z",
-      },
-    });
+    appCommandStore(nativeAgentProjectionStore)
+      .getState()
+      .setProjection(sessionKey, {
+        ...current,
+        revision: current.revision + 1,
+        recoverableDispatch: {
+          requestId: "steer-1",
+          kind: "steer",
+          createdAt: "2026-11-03T12:00:00Z",
+        },
+      });
   });
   expect(await screen.findByRole("button", { name: "Retry steer" })).toBeTruthy();
   expect(screen.getByRole("button", { name: "Discard" })).toBeTruthy();

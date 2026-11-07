@@ -18,7 +18,7 @@ import {
 import { createSessionKey } from "@/lib/utils";
 import { emptyProjection, type DesignProjection } from "@/stores/designStore";
 import { environmentStore } from "@/stores/environmentStore";
-import { nativeComposeDraft, useNativeComposeStore } from "@/stores/nativeComposeStore";
+import { nativeComposeDraft, nativeComposeStore } from "@/stores/nativeComposeStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { Environment } from "@/types";
 import type { TabInfo } from "@/types/paneLayout";
@@ -172,7 +172,7 @@ function commandCalls(command: string) {
 }
 
 beforeEach(() => {
-  useNativeComposeStore.setState({ drafts: new Map() });
+  appCommandStore(nativeComposeStore).setState({ drafts: new Map() });
   createTabMock.mockClear();
   invokeMock.mockReset();
   invokeMock.mockImplementation(() =>
@@ -248,7 +248,7 @@ describe("DesignAgentDialog", () => {
         expect(commandCalls("write_local_file")).toHaveLength(1);
         const tabId = createTabMock.mock.calls[0]![1]!.tabId!;
         const draft = nativeComposeDraft(
-          useNativeComposeStore.getState(),
+          appCommandStore(nativeComposeStore).getState(),
           createSessionKey("env-1", tabId),
         );
         expect(draft.attachments).toHaveLength(1);
@@ -271,17 +271,19 @@ describe("DesignAgentDialog", () => {
       const restore = supportPaste();
       seedTabs([agentTab("agent-open", "claude")]);
       const key = createSessionKey("env-1", "agent-open");
-      useNativeComposeStore.getState().updateDraft(key, {
-        text: "keep me",
-        annotations: [{ id: "existing", text: "existing", comment: "" }],
-        attachments: Array.from({ length: existingCount }, (_, i) => ({
-          id: `image-${i}`,
-          type: "image" as const,
-          path: `/tmp/wt/${i}.png`,
-          name: `${i}.png`,
-        })),
-      });
-      const original = nativeComposeDraft(useNativeComposeStore.getState(), key);
+      appCommandStore(nativeComposeStore)
+        .getState()
+        .updateDraft(key, {
+          text: "keep me",
+          annotations: [{ id: "existing", text: "existing", comment: "" }],
+          attachments: Array.from({ length: existingCount }, (_, i) => ({
+            id: `image-${i}`,
+            type: "image" as const,
+            path: `/tmp/wt/${i}.png`,
+            name: `${i}.png`,
+          })),
+        });
+      const original = nativeComposeDraft(appCommandStore(nativeComposeStore).getState(), key);
       try {
         const { onOpenChange } = await renderDialog({ sessions: [link("open", "agent-open")] });
         await pasteImage(screen.getByPlaceholderText("What would you like to know or change?"));
@@ -289,7 +291,9 @@ describe("DesignAgentDialog", () => {
           await pasteImage(screen.getByPlaceholderText("What would you like to know or change?"));
         fireEvent.click(screen.getByRole("button", { name: "Add to composer" }));
         await settlePaste();
-        expect(nativeComposeDraft(useNativeComposeStore.getState(), key)).toEqual(original);
+        expect(nativeComposeDraft(appCommandStore(nativeComposeStore).getState(), key)).toEqual(
+          original,
+        );
         expect(screen.getByRole("alert").textContent).toContain("maximum number of attachments");
         expect(onOpenChange).not.toHaveBeenCalled();
         expect(createTabMock).not.toHaveBeenCalled();
@@ -334,7 +338,7 @@ describe("DesignAgentDialog", () => {
       await settlePaste();
       expect(
         nativeComposeDraft(
-          useNativeComposeStore.getState(),
+          appCommandStore(nativeComposeStore).getState(),
           createSessionKey("env-1", "agent-open"),
         ).attachments,
       ).toHaveLength(1);
@@ -454,7 +458,7 @@ describe("DesignAgentDialog", () => {
     // Resuming alone leaves the reopened conversation's composer untouched.
     expect(
       nativeComposeDraft(
-        useNativeComposeStore.getState(),
+        appCommandStore(nativeComposeStore).getState(),
         createSessionKey("env-1", options!.tabId!),
       ).annotations,
     ).toEqual([]);
@@ -504,7 +508,7 @@ describe("DesignAgentDialog", () => {
     const options = createTabMock.mock.calls[0]![1]!;
     expect(options.initialPrompt).toBeUndefined();
     const draft = nativeComposeDraft(
-      useNativeComposeStore.getState(),
+      appCommandStore(nativeComposeStore).getState(),
       createSessionKey("env-1", options.tabId!),
     );
     expect(draft.annotations).toHaveLength(1);
@@ -632,7 +636,7 @@ describe("DesignAgentDialog", () => {
     seedTabs([agentTab("agent-open", "claude")]);
     const sessionKey = createSessionKey("env-1", "agent-open");
     const existing = { id: "t1", text: "quoted excerpt", comment: "" };
-    useNativeComposeStore
+    appCommandStore(nativeComposeStore)
       .getState()
       .updateDraft(sessionKey, { text: "my unsent words", annotations: [existing] });
     const { onOpenChange } = await renderDialog({ sessions: [link("open", "agent-open")] });
@@ -644,7 +648,7 @@ describe("DesignAgentDialog", () => {
       fireEvent.click(screen.getByRole("button", { name: "Add to composer" }));
     });
 
-    const draft = nativeComposeDraft(useNativeComposeStore.getState(), sessionKey);
+    const draft = nativeComposeDraft(appCommandStore(nativeComposeStore).getState(), sessionKey);
     expect(draft.text).toBe("my unsent words");
     expect(draft.annotations).toHaveLength(2);
     expect(draft.annotations[0]).toEqual(existing);
@@ -687,15 +691,15 @@ describe("DesignAgentDialog", () => {
         screen.getByRole("list", { name: "Attached images" }).querySelectorAll("img"),
       ).toHaveLength(1);
       // Nothing reaches the conversation until the user confirms.
-      expect(nativeComposeDraft(useNativeComposeStore.getState(), sessionKey).attachments).toEqual(
-        [],
-      );
+      expect(
+        nativeComposeDraft(appCommandStore(nativeComposeStore).getState(), sessionKey).attachments,
+      ).toEqual([]);
 
       await act(async () => {
         fireEvent.click(screen.getByRole("button", { name: "Add to composer" }));
       });
 
-      const draft = nativeComposeDraft(useNativeComposeStore.getState(), sessionKey);
+      const draft = nativeComposeDraft(appCommandStore(nativeComposeStore).getState(), sessionKey);
       expect(draft.attachments).toHaveLength(1);
       expect(draft.attachments[0]).toMatchObject({ type: "image" });
       expect(draft.attachments[0]!.path).toStartWith("/tmp/wt/.orkestrator/clipboard/");
@@ -751,7 +755,7 @@ describe("DesignAgentDialog", () => {
     });
     // The unassigned composer sends annotations, so the context stays a removable chip.
     const draft = nativeComposeDraft(
-      useNativeComposeStore.getState(),
+      appCommandStore(nativeComposeStore).getState(),
       createSessionKey("env-1", options!.tabId!),
     );
     expect(draft.text).toBe(
@@ -813,7 +817,7 @@ describe("DesignAgentDialog", () => {
       },
     });
     const draft = nativeComposeDraft(
-      useNativeComposeStore.getState(),
+      appCommandStore(nativeComposeStore).getState(),
       createSessionKey("env-1", options!.tabId!),
     );
     expect(draft.text).toContain("Build the marketing page");

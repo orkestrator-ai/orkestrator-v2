@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { buildPipelineStore } from "@/stores/buildPipelineStore";
 import { githubIssueDetailKey, useGitHubIssuesStore } from "@/stores/githubIssuesStore";
 import type { GitHubIssueDetail, GitHubRepository } from "@/types/github";
 import type { EnvironmentType } from "@/types";
@@ -34,7 +34,7 @@ const saveComposeDraftMock = mock(
 );
 const deleteComposeDraftMock = mock(async (_draftKey: string) => undefined);
 const retryCompletionCommentMock = mock(async (pipelineId: string) => {
-  const current = useBuildPipelineStore.getState().pipelines.get(pipelineId)!;
+  const current = appCommandStore(buildPipelineStore).getState().pipelines.get(pipelineId)!;
   return {
     ...current,
     completionCommentStatus: undefined,
@@ -160,7 +160,7 @@ describe("GitHubIssueDetail", () => {
     deleteComposeDraftMock.mockResolvedValue(undefined);
     retryCompletionCommentMock.mockClear();
     mockToastError.mockClear();
-    useBuildPipelineStore.setState({
+    appCommandStore(buildPipelineStore).setState({
       pipelines: new Map(),
       buildEnvironmentIds: new Set(),
     });
@@ -211,30 +211,32 @@ describe("GitHubIssueDetail", () => {
     environmentId?: string,
   ) {
     const pipelineId = `pipeline-${phase}-${environmentId ?? "pending"}`;
-    useBuildPipelineStore.getState().replacePipeline(
-      buildPipelineFixture({
-        id: pipelineId,
-        taskId: "github:acme/widget#42",
-        environmentId: environmentId ?? "",
-        phase,
-        taskTitle: "#42: Ship GitHub issues",
-        taskSnapshot: {
-          title: detail.title,
-          description: detail.body,
-          acceptanceCriteria: "",
-          comments: [],
-          images: [],
-        },
-        source: {
-          type: "github",
-          repositoryOwner: "acme",
-          repositoryName: "widget",
-          issueNumber: 42,
-          issueUrl: detail.htmlUrl,
-          status: "Todo",
-        },
-      }),
-    );
+    appCommandStore(buildPipelineStore)
+      .getState()
+      .replacePipeline(
+        buildPipelineFixture({
+          id: pipelineId,
+          taskId: "github:acme/widget#42",
+          environmentId: environmentId ?? "",
+          phase,
+          taskTitle: "#42: Ship GitHub issues",
+          taskSnapshot: {
+            title: detail.title,
+            description: detail.body,
+            acceptanceCriteria: "",
+            comments: [],
+            images: [],
+          },
+          source: {
+            type: "github",
+            repositoryOwner: "acme",
+            repositoryName: "widget",
+            issueNumber: 42,
+            issueUrl: detail.htmlUrl,
+            status: "Todo",
+          },
+        }),
+      );
     return pipelineId;
   }
 
@@ -599,22 +601,26 @@ describe("GitHubIssueDetail", () => {
 
   test("keeps retry controls visible for every failed completion comment", async () => {
     const olderId = seedIssuePipeline("failed", "env-old");
-    const older = useBuildPipelineStore.getState().pipelines.get(olderId)!;
-    useBuildPipelineStore.getState().replacePipeline({
-      ...older,
-      completionCommentStatus: "failed",
-      completionCommentError: "first failure",
-      backendRevision: older.backendRevision + 1,
-    });
+    const older = appCommandStore(buildPipelineStore).getState().pipelines.get(olderId)!;
+    appCommandStore(buildPipelineStore)
+      .getState()
+      .replacePipeline({
+        ...older,
+        completionCommentStatus: "failed",
+        completionCommentError: "first failure",
+        backendRevision: older.backendRevision + 1,
+      });
     await new Promise((resolve) => setTimeout(resolve, 2));
     const newerId = seedIssuePipeline("complete", "env-new");
-    const newer = useBuildPipelineStore.getState().pipelines.get(newerId)!;
-    useBuildPipelineStore.getState().replacePipeline({
-      ...newer,
-      completionCommentStatus: "failed",
-      completionCommentError: "second failure",
-      backendRevision: newer.backendRevision + 1,
-    });
+    const newer = appCommandStore(buildPipelineStore).getState().pipelines.get(newerId)!;
+    appCommandStore(buildPipelineStore)
+      .getState()
+      .replacePipeline({
+        ...newer,
+        completionCommentStatus: "failed",
+        completionCommentError: "second failure",
+        backendRevision: newer.backendRevision + 1,
+      });
 
     renderDetail();
 
@@ -638,23 +644,27 @@ describe("GitHubIssueDetail", () => {
     );
     await waitFor(() => {
       expect(
-        useBuildPipelineStore.getState().pipelines.get(olderId)?.completionCommentStatus,
+        appCommandStore(buildPipelineStore).getState().pipelines.get(olderId)
+          ?.completionCommentStatus,
       ).toBeUndefined();
-      expect(useBuildPipelineStore.getState().pipelines.get(newerId)?.completionCommentStatus).toBe(
-        "failed",
-      );
+      expect(
+        appCommandStore(buildPipelineStore).getState().pipelines.get(newerId)
+          ?.completionCommentStatus,
+      ).toBe("failed");
     });
   });
 
   test("keeps completion retries single-flight and recovers after rejection", async () => {
     const pipelineId = seedIssuePipeline("complete", "env-retry");
-    const pipeline = useBuildPipelineStore.getState().pipelines.get(pipelineId)!;
-    useBuildPipelineStore.getState().replacePipeline({
-      ...pipeline,
-      completionCommentStatus: "failed",
-      completionCommentError: "offline",
-      backendRevision: pipeline.backendRevision + 1,
-    });
+    const pipeline = appCommandStore(buildPipelineStore).getState().pipelines.get(pipelineId)!;
+    appCommandStore(buildPipelineStore)
+      .getState()
+      .replacePipeline({
+        ...pipeline,
+        completionCommentStatus: "failed",
+        completionCommentError: "offline",
+        backendRevision: pipeline.backendRevision + 1,
+      });
     let rejectRetry!: (reason?: unknown) => void;
     retryCompletionCommentMock.mockImplementationOnce(
       () =>

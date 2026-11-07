@@ -5,7 +5,7 @@ import { BROWSER_PREVIEW_CAPTURE_EVENT } from "@orkestrator/protocol/browser-pre
 import { resetWebAnnotationAssetsForTests } from "@/lib/web-annotations/assets";
 import { imageRedactor } from "@/lib/web-annotations/redaction";
 import { resetWebAnnotationSyncForTests } from "@/lib/web-annotations/sync";
-import { useNativeComposeStore } from "@/stores/nativeComposeStore";
+import { nativeComposeStore } from "@/stores/nativeComposeStore";
 import {
   createFakeCaptureApi,
   FakeWebAnnotationBackend,
@@ -20,6 +20,7 @@ import {
   panelState,
   seedBrowserLayout,
 } from "@/test/web-annotation-harness";
+import { appCommandStore } from "@/test/app-command-store";
 
 let backend: FakeWebAnnotationBackend;
 let capture: ReturnType<typeof createFakeCaptureApi>;
@@ -48,7 +49,7 @@ describe("annotation panel authoring", () => {
     bus = installFakeOrkestrator({ capture: capture.api });
     backend = new FakeWebAnnotationBackend("env-1").install();
     seedBrowserLayout({ open: true });
-    useNativeComposeStore.setState({ drafts: new Map() });
+    appCommandStore(nativeComposeStore).setState({ drafts: new Map() });
   });
   afterEach(() => {
     cleanup();
@@ -97,7 +98,7 @@ describe("annotation panel authoring", () => {
     // Save → saved thread.
     await waitFor(() => expect(panelState()?.selectedAnnotationId).toBe(annotationId));
     expect(await screen.findByRole("heading", { name: "button “Save”" })).toBeTruthy();
-    expect(useNativeComposeStore.getState().drafts.size).toBe(0);
+    expect(appCommandStore(nativeComposeStore).getState().drafts.size).toBe(0);
     expect(screen.getByText("Choose an agent to discuss or request changes.")).toBeTruthy();
   });
 

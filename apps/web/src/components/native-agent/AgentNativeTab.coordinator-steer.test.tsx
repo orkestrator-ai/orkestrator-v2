@@ -22,8 +22,8 @@ import * as realBackend from "@/lib/backend";
 import * as realPaneLayoutPersistence from "@/lib/pane-layout-persistence";
 import * as realNativeComposeBarPaste from "@/hooks/useNativeComposeBarPaste";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
-import { useNativeComposeStore } from "@/stores/nativeComposeStore";
-import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
+import { nativeComposeStore } from "@/stores/nativeComposeStore";
+import { nativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { configStore } from "@/stores/configStore";
 import { createSessionKey } from "@/lib/utils";
 import { mockToastSuccess, resetSonnerMocks } from "../../../../../tests/mocks/sonner";
@@ -198,7 +198,8 @@ afterAll(() => {
 const TAB_ID = "coordinator-conversation-1";
 
 function draftText() {
-  return useNativeComposeStore.getState().drafts.get(createSessionKey(ENV_ID, TAB_ID))?.text;
+  return appCommandStore(nativeComposeStore).getState().drafts.get(createSessionKey(ENV_ID, TAB_ID))
+    ?.text;
 }
 
 function setAutoSteer(autoSteer: boolean) {
@@ -207,7 +208,9 @@ function setAutoSteer(autoSteer: boolean) {
 
 /** Mount the tab the way `CoordinatorPanel` does, then send while it works. */
 async function sendToWorkingCoordinator(text: string) {
-  useNativeComposeStore.getState().updateDraft(createSessionKey(ENV_ID, TAB_ID), { text });
+  appCommandStore(nativeComposeStore)
+    .getState()
+    .updateDraft(createSessionKey(ENV_ID, TAB_ID), { text });
   renderInAppCommandScope(
     <AgentNativeTab
       tabId={TAB_ID}
@@ -266,8 +269,8 @@ afterEach(() => {
     hydration: new Map(),
     activeEnvironmentId: null,
   });
-  useNativeComposeStore.setState({ drafts: new Map() });
-  useNativeAgentProjectionStore.getState().reset();
+  appCommandStore(nativeComposeStore).setState({ drafts: new Map() });
+  appCommandStore(nativeAgentProjectionStore).getState().reset();
 });
 
 describe("Coordinator chat steering", () => {
@@ -384,7 +387,7 @@ describe("Coordinator chat steering", () => {
 
 async function publishProjection() {
   await act(async () => {
-    useNativeAgentProjectionStore
+    appCommandStore(nativeAgentProjectionStore)
       .getState()
       .setProjection(createSessionKey(ENV_ID, TAB_ID), projectionFor("claude"));
   });
@@ -551,7 +554,7 @@ test("a later applied auto-steer clears history for the same id", async () => {
   try {
     steerOutcome = { outcome: "applied" };
     await act(async () => {
-      useNativeComposeStore
+      appCommandStore(nativeComposeStore)
         .getState()
         .updateDraft(createSessionKey(ENV_ID, TAB_ID), { text: "retry" });
     });

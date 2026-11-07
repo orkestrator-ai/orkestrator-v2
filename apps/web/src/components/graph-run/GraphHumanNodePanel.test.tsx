@@ -11,10 +11,11 @@ import { TerminalProvider } from "@/contexts/TerminalContext";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
 import { dispatchResourceChange, resetResourceSync } from "@/lib/resource-sync";
 import { useFlowGraphViewStore } from "@/stores/flowGraphViewStore";
-import { useGraphRunStore } from "@/stores/graphRunStore";
+import { graphRunStore } from "@/stores/graphRunStore";
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 import { GraphRunTab } from "./GraphRunTab";
 import { act, humanPlan, humanRunOf } from "./graph-run.test-fixtures";
+import { appCommandStore } from "@/test/app-command-store";
 
 const invokeMock = nativeInvoke as unknown as ReturnType<typeof mock>;
 const WAIT_ID = "33333333-3333-4333-8333-333333333333";
@@ -79,7 +80,7 @@ async function openCheck() {
 
 beforeEach(() => {
   handlers = {};
-  useGraphRunStore.setState({
+  appCommandStore(graphRunStore).setState({
     runs: new Map(),
     lists: new Map(),
     transcripts: new Map(),

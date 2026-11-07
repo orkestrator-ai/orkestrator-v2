@@ -3,7 +3,7 @@ import { act, cleanup, renderHook } from "@testing-library/react";
 import type { BuildStepConfigs } from "@orkestrator/protocol/build-pipeline";
 import * as realBackend from "@/lib/backend";
 import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
-import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { buildPipelineStore } from "@/stores/buildPipelineStore";
 import { configStore } from "@/stores/configStore";
 import { usePaneLayoutStore, getAllLeaves } from "@/stores/paneLayoutStore";
 import { uiStore } from "@/stores/uiStore";
@@ -126,7 +126,7 @@ describe("useBuildPipeline", () => {
     startBuildPipelineMock.mockClear();
     legacyStartMock.mockClear();
     getKanbanImageDataMock.mockClear();
-    useBuildPipelineStore.setState({
+    appCommandStore(buildPipelineStore).setState({
       pipelines: new Map(),
       buildEnvironmentIds: new Set(),
     });
@@ -211,14 +211,16 @@ describe("useBuildPipeline", () => {
       expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBeNull();
 
       await act(async () => {
-        useBuildPipelineStore.getState().replacePipeline(
-          buildPipelineFixture({
-            id: "pipeline-pending",
-            environmentId: "env-later",
-            taskId: "task-1",
-            projectId: "project-1",
-          }),
-        );
+        appCommandStore(buildPipelineStore)
+          .getState()
+          .replacePipeline(
+            buildPipelineFixture({
+              id: "pipeline-pending",
+              environmentId: "env-later",
+              taskId: "task-1",
+              projectId: "project-1",
+            }),
+          );
       });
 
       expect(getWindowBuildPipelineActivation("env-later")).toBe("pipeline-pending");
@@ -472,7 +474,7 @@ describe("useBuildPipeline", () => {
     });
 
     expect(pipelineId).toBeUndefined();
-    expect(useBuildPipelineStore.getState().pipelines.size).toBe(0);
+    expect(appCommandStore(buildPipelineStore).getState().pipelines.size).toBe(0);
     expect(usePaneLayoutStore.getState().environments.size).toBe(0);
   });
 
@@ -954,7 +956,7 @@ describe("useBuildPipeline navigation", () => {
   beforeEach(() => {
     cleanup();
     startBuildPipelineMock.mockClear();
-    useBuildPipelineStore.setState({
+    appCommandStore(buildPipelineStore).setState({
       pipelines: new Map(),
       buildEnvironmentIds: new Set(),
     });
@@ -977,7 +979,7 @@ describe("useBuildPipeline navigation", () => {
       taskId: "task-1",
       projectId: "project-1",
     });
-    useBuildPipelineStore.getState().replacePipeline(pipeline);
+    appCommandStore(buildPipelineStore).getState().replacePipeline(pipeline);
     const { result } = renderHook(() => useBuildPipeline());
 
     await act(async () => {

@@ -25,11 +25,12 @@ mock.module("@/components/chat/VirtualizedMessageList", () => ({
 }));
 
 import {
-  useGraphRunStore,
   graphRunCacheKey,
+  graphRunStore,
   type GraphRunTranscriptEntry,
 } from "@/stores/graphRunStore";
 import type { NodeActivation } from "@orkestrator/protocol/graphs/run";
+import { appCommandStore } from "@/test/app-command-store";
 const { GraphActivationTranscript } =
   await import("@/components/graph-run/GraphActivationTranscript");
 const { PipelineSessionTranscript } = await import("./PipelineSessionTranscript");
@@ -179,8 +180,8 @@ describe("PipelineSessionTranscript agent mail", () => {
   });
 
   test("graph activations render stored mail after remount", () => {
-    const before = useGraphRunStore.getState().transcripts;
-    useGraphRunStore.setState({
+    const before = appCommandStore(graphRunStore).getState().transcripts;
+    appCommandStore(graphRunStore).setState({
       transcripts: new Map([
         [
           graphRunCacheKey("run", "activation"),
@@ -228,7 +229,7 @@ describe("PipelineSessionTranscript agent mail", () => {
         view.unmount();
       }
     } finally {
-      useGraphRunStore.setState({ transcripts: before });
+      appCommandStore(graphRunStore).setState({ transcripts: before });
     }
   });
 

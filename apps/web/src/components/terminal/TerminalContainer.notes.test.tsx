@@ -5,7 +5,7 @@ import * as realBackend from "@/lib/backend";
 import { TerminalProvider } from "@/contexts";
 import { environmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
-import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { buildPipelineStore } from "@/stores/buildPipelineStore";
 import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
 import { keyInformation } from "@/components/build-pipeline/key-information-test-fixture";
 import type { Environment } from "@/types";
@@ -43,7 +43,7 @@ test("Notes activation creates and renders a real pane tab, and reopening reuses
       } as Environment,
     ],
   });
-  useBuildPipelineStore.setState({
+  appCommandStore(buildPipelineStore).setState({
     pipelines: new Map([[pipeline.id, pipeline]]),
     buildEnvironmentIds: new Set(["env-1"]),
   });

@@ -5,7 +5,7 @@ import { WEB_ANNOTATION_CONFLICT } from "@orkestrator/protocol/web-annotations";
 import { resetWebAnnotationAssetsForTests } from "@/lib/web-annotations/assets";
 import { resetWebAnnotationSyncForTests } from "@/lib/web-annotations/sync";
 import { environmentStore } from "@/stores/environmentStore";
-import { useNativeComposeStore } from "@/stores/nativeComposeStore";
+import { nativeComposeStore } from "@/stores/nativeComposeStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import {
   createFakeCaptureApi,
@@ -37,7 +37,7 @@ describe("request composer", () => {
     backend = new FakeWebAnnotationBackend("env-1").install();
     backend.seed({ id: "annotation-1", title: "Save button" });
     seedBrowserLayout({ open: true, selectedAnnotationId: "annotation-1" });
-    useNativeComposeStore.setState({ drafts: new Map() });
+    appCommandStore(nativeComposeStore).setState({ drafts: new Map() });
     appCommandStore(environmentStore).setState({
       environments: [
         {
@@ -193,7 +193,7 @@ describe("request composer", () => {
     });
     // Nothing was sent, and no native draft was touched by preparing.
     expect(backend.callsOf("web_annotation_request_send")).toHaveLength(0);
-    expect(useNativeComposeStore.getState().drafts.size).toBe(0);
+    expect(appCommandStore(nativeComposeStore).getState().drafts.size).toBe(0);
   });
 
   test("the remembered destination is shown but never sends by itself", async () => {

@@ -15,9 +15,10 @@ import type { TabInfo } from "@/types/paneLayout";
 import * as adapters from "@/lib/chat/native-message-adapters";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
 import { createSessionKey } from "@/lib/utils";
-import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
+import { nativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { mockToastError, mockToastSuccess } from "../../../../../tests/mocks/sonner";
 import { AgentInfoButton } from "./AgentInfoButton";
+import { appCommandStore } from "@/test/app-command-store";
 
 const ENVIRONMENT_ID = "env-transcript-reads";
 const TAB_ID = "tab-transcript-reads";
@@ -50,19 +51,21 @@ function seed(
   revision: number,
   platform: "opencode" | "claude" = "opencode",
 ) {
-  useNativeAgentProjectionStore.getState().setProjection(SESSION_KEY, {
-    platform,
-    environmentId: ENVIRONMENT_ID,
-    sessionId: "opencode-transcript-reads",
-    connection: "connected",
-    turn: { phase: "running" },
-    messages,
-    interactions: [],
-    composerControls: [],
-    capabilities: nativeAgentCapabilities(platform),
-    revision,
-    generation: "opencode-generation",
-  });
+  appCommandStore(nativeAgentProjectionStore)
+    .getState()
+    .setProjection(SESSION_KEY, {
+      platform,
+      environmentId: ENVIRONMENT_ID,
+      sessionId: "opencode-transcript-reads",
+      connection: "connected",
+      turn: { phase: "running" },
+      messages,
+      interactions: [],
+      composerControls: [],
+      capabilities: nativeAgentCapabilities(platform),
+      revision,
+      generation: "opencode-generation",
+    });
 }
 
 function nativeActions(): Array<{ kind: string; messageId?: string; dryRun?: boolean }> {
@@ -75,7 +78,7 @@ function nativeActions(): Array<{ kind: string; messageId?: string; dryRun?: boo
 }
 
 beforeEach(() => {
-  useNativeAgentProjectionStore.getState().reset();
+  appCommandStore(nativeAgentProjectionStore).getState().reset();
   nativeInvokeMock.mockClear();
   nativeInvokeMock.mockImplementation(() => Promise.resolve());
   mockToastError.mockClear();
@@ -85,7 +88,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   mock.restore();
-  useNativeAgentProjectionStore.getState().reset();
+  appCommandStore(nativeAgentProjectionStore).getState().reset();
 });
 
 describe("AgentInfoButton transcript reads", () => {

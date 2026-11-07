@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
-import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
+import { nativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { configStore } from "@/stores/configStore";
-import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { buildPipelineStore } from "@/stores/buildPipelineStore";
 import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
 import type { TabInfo } from "@/types/paneLayout";
 import type { ContextUsageSnapshot } from "@/lib/context-usage";
@@ -56,7 +56,7 @@ const mockNativeControls = mock<
 const mockStopBackgroundTask = mock<(taskId: string) => Promise<void>>(async () => undefined);
 /** By default the backend answers whatever projection the store holds. */
 const readStoredProjection = async () =>
-  useNativeAgentProjectionStore.getState().projections.get(SESSION_KEY) ?? null;
+  appCommandStore(nativeAgentProjectionStore).getState().projections.get(SESSION_KEY) ?? null;
 const mockNativeProjectionRead =
   mock<(args?: { refreshUsage?: boolean }) => Promise<NativeAgentSessionProjection | null>>(
     readStoredProjection,
@@ -150,7 +150,7 @@ function seedNativeProjection(
   sessionId: string,
   overrides: Partial<NativeAgentSessionProjection> = {},
 ) {
-  useNativeAgentProjectionStore
+  appCommandStore(nativeAgentProjectionStore)
     .getState()
     .setProjection(SESSION_KEY, nativeProjection(platform, sessionId, overrides));
   routeNativeCommands();
@@ -440,8 +440,9 @@ function routeQuotaAccountRead(read: () => Promise<AgentSessionAccount | null>) 
   nativeInvokeMock.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
     if (command === "get_native_agent_projection") {
       return (
-        useNativeAgentProjectionStore.getState().projections.get(String(args?.logicalSessionKey)) ??
-        null
+        appCommandStore(nativeAgentProjectionStore)
+          .getState()
+          .projections.get(String(args?.logicalSessionKey)) ?? null
       );
     }
     if (command === "get_native_agent_session_account") return read();
@@ -459,8 +460,8 @@ let clipboardRejection: Error | null = null;
 const originalConfirm = window.confirm;
 
 beforeEach(() => {
-  useNativeAgentProjectionStore.getState().reset();
-  useBuildPipelineStore.setState({
+  appCommandStore(nativeAgentProjectionStore).getState().reset();
+  appCommandStore(buildPipelineStore).setState({
     pipelines: new Map(),
     buildEnvironmentIds: new Set(),
     viewedSessionIds: new Map(),
@@ -521,7 +522,7 @@ afterEach(() => {
     environments: new Map(),
     activeEnvironmentId: null,
   } as never);
-  useBuildPipelineStore.setState({
+  appCommandStore(buildPipelineStore).setState({
     pipelines: new Map(),
     buildEnvironmentIds: new Set(),
     viewedSessionIds: new Map(),
@@ -800,7 +801,7 @@ describe("AgentInfoButton provider resolution", () => {
         label: "Verification Session",
       },
     ];
-    useBuildPipelineStore.setState({
+    appCommandStore(buildPipelineStore).setState({
       pipelines: new Map([
         [
           "pipeline-1",
@@ -814,13 +815,15 @@ describe("AgentInfoButton provider resolution", () => {
       buildEnvironmentIds: new Set([ENVIRONMENT_ID]),
       viewedSessionIds: new Map([["pipeline-1", "pipeline-build-session"]]),
     });
-    useNativeAgentProjectionStore.getState().setProjection(
-      "pipeline-build-key",
-      nativeProjection("codex", "pipeline-build-session", {
-        contextUsage: projectionUsage(usage({ source: "codex" })),
-        composer: composerState({ selectedModelId: "gpt-5.3-codex" }),
-      }),
-    );
+    appCommandStore(nativeAgentProjectionStore)
+      .getState()
+      .setProjection(
+        "pipeline-build-key",
+        nativeProjection("codex", "pipeline-build-session", {
+          contextUsage: projectionUsage(usage({ source: "codex" })),
+          composer: composerState({ selectedModelId: "gpt-5.3-codex" }),
+        }),
+      );
 
     render(<AgentInfoButton activeTab={buildTab()} />);
     open();
@@ -860,7 +863,7 @@ describe("AgentInfoButton provider resolution", () => {
         label: "Verification Session",
       },
     ];
-    useBuildPipelineStore.setState({
+    appCommandStore(buildPipelineStore).setState({
       pipelines: new Map([
         [
           "pipeline-1",
@@ -932,7 +935,7 @@ describe("AgentInfoButton provider resolution", () => {
       ],
       currentSessionIndex: 0,
     });
-    useBuildPipelineStore.setState({
+    appCommandStore(buildPipelineStore).setState({
       pipelines: new Map([["pipeline-1", snapshot]]),
       buildEnvironmentIds: new Set([ENVIRONMENT_ID]),
       viewedSessionIds: new Map(),
@@ -949,9 +952,10 @@ describe("AgentInfoButton provider resolution", () => {
     open();
 
     await waitFor(() =>
-      expect(useNativeAgentProjectionStore.getState().projections.get(sessionKey)?.sessionId).toBe(
-        sessionId,
-      ),
+      expect(
+        appCommandStore(nativeAgentProjectionStore).getState().projections.get(sessionKey)
+          ?.sessionId,
+      ).toBe(sessionId),
     );
     for (const action of actions) {
       expect(screen.queryByRole("button", { name: action }) === null).toBe(true);
@@ -978,7 +982,7 @@ describe("AgentInfoButton provider resolution", () => {
       currentSessionIndex: 0,
       backendRevision: 1,
     });
-    useBuildPipelineStore.setState({
+    appCommandStore(buildPipelineStore).setState({
       pipelines: new Map([["pipeline-1", snapshot]]),
       buildEnvironmentIds: new Set([ENVIRONMENT_ID]),
       viewedSessionIds: new Map(),
@@ -1002,10 +1006,10 @@ describe("AgentInfoButton provider resolution", () => {
     );
 
     act(() => {
-      useBuildPipelineStore
+      appCommandStore(buildPipelineStore)
         .getState()
         .replacePipeline({ ...snapshot, backendRevision: 2, taskTitle: "Revision 2" });
-      useBuildPipelineStore
+      appCommandStore(buildPipelineStore)
         .getState()
         .replacePipeline({ ...snapshot, backendRevision: 3, taskTitle: "Revision 3" });
     });
@@ -1148,13 +1152,17 @@ describe("AgentInfoButton usage panel", () => {
       account = { ...quotaAccount("claude", "Personal"), running: false };
       read.mockClear();
       await act(async () => {
-        const projection = useNativeAgentProjectionStore.getState().projections.get(SESSION_KEY)!;
-        useNativeAgentProjectionStore.getState().setProjection(SESSION_KEY, {
-          ...projection,
-          connection,
-          turn: { phase: "recovering" },
-          revision: projection.revision + 1,
-        });
+        const projection = appCommandStore(nativeAgentProjectionStore)
+          .getState()
+          .projections.get(SESSION_KEY)!;
+        appCommandStore(nativeAgentProjectionStore)
+          .getState()
+          .setProjection(SESSION_KEY, {
+            ...projection,
+            connection,
+            turn: { phase: "recovering" },
+            revision: projection.revision + 1,
+          });
       });
       await waitFor(() => expect(read).toHaveBeenCalled());
       expect(quota.getByRole("progressbar", { name: "Weekly quota: 25% used" })).toBeTruthy();
@@ -1204,14 +1212,16 @@ describe("AgentInfoButton usage panel", () => {
           invalid = true;
           read.mockClear();
           await act(async () => {
-            const projection = useNativeAgentProjectionStore
+            const projection = appCommandStore(nativeAgentProjectionStore)
               .getState()
               .projections.get(SESSION_KEY)!;
-            useNativeAgentProjectionStore.getState().setProjection(SESSION_KEY, {
-              ...projection,
-              turn: { phase: "running" },
-              revision: projection.revision + 1,
-            });
+            appCommandStore(nativeAgentProjectionStore)
+              .getState()
+              .setProjection(SESSION_KEY, {
+                ...projection,
+                turn: { phase: "running" },
+                revision: projection.revision + 1,
+              });
           });
         }
         await waitFor(() => expect(read).toHaveBeenCalled());
@@ -1241,14 +1251,16 @@ describe("AgentInfoButton usage panel", () => {
           read.mockImplementation(() => oldRead.promise);
           read.mockClear();
           await act(async () => {
-            const projection = useNativeAgentProjectionStore
+            const projection = appCommandStore(nativeAgentProjectionStore)
               .getState()
               .projections.get(SESSION_KEY)!;
-            useNativeAgentProjectionStore.getState().setProjection(SESSION_KEY, {
-              ...projection,
-              turn: { phase: "running" },
-              revision: projection.revision + 1,
-            });
+            appCommandStore(nativeAgentProjectionStore)
+              .getState()
+              .setProjection(SESSION_KEY, {
+                ...projection,
+                turn: { phase: "running" },
+                revision: projection.revision + 1,
+              });
           });
           await waitFor(() => expect(read).toHaveBeenCalled());
         }
@@ -1258,8 +1270,10 @@ describe("AgentInfoButton usage panel", () => {
         const provider = change === "provider" ? "codex" : "claude";
         const environmentId = change === "environment" ? "env-2" : ENVIRONMENT_ID;
         await act(async () => {
-          const projection = useNativeAgentProjectionStore.getState().projections.get(SESSION_KEY)!;
-          useNativeAgentProjectionStore
+          const projection = appCommandStore(nativeAgentProjectionStore)
+            .getState()
+            .projections.get(SESSION_KEY)!;
+          appCommandStore(nativeAgentProjectionStore)
             .getState()
             .setProjection(createSessionKey(environmentId, TAB_ID), {
               ...projection,
@@ -2701,34 +2715,36 @@ describe("AgentInfoButton usage panel", () => {
 
 describe("AgentInfoButton Codex runtime panel", () => {
   function seedCodexRuntime(runtime: NativeAgentSessionProjection["runtime"]) {
-    useNativeAgentProjectionStore.getState().setProjection(CODEX_KEY, {
-      platform: "codex",
-      environmentId: ENVIRONMENT_ID,
-      sessionId: "codex-session-1",
-      connection: "connected",
-      turn: { phase: "idle" },
-      messages: [],
-      interactions: [],
-      composerControls: [],
-      capabilities: {
-        attachments: { files: true, images: true },
-        queue: true,
-        resume: true,
-        fork: true,
-        slashCommands: true,
-        backgroundTasks: false,
-        composer: {
-          provider: true,
-          model: true,
-          reasoning: true,
-          speed: true,
-          mode: true,
+    appCommandStore(nativeAgentProjectionStore)
+      .getState()
+      .setProjection(CODEX_KEY, {
+        platform: "codex",
+        environmentId: ENVIRONMENT_ID,
+        sessionId: "codex-session-1",
+        connection: "connected",
+        turn: { phase: "idle" },
+        messages: [],
+        interactions: [],
+        composerControls: [],
+        capabilities: {
+          attachments: { files: true, images: true },
+          queue: true,
+          resume: true,
+          fork: true,
+          slashCommands: true,
+          backgroundTasks: false,
+          composer: {
+            provider: true,
+            model: true,
+            reasoning: true,
+            speed: true,
+            mode: true,
+          },
         },
-      },
-      runtime,
-      revision: 1,
-      generation: "test",
-    } satisfies NativeAgentSessionProjection);
+        runtime,
+        revision: 1,
+        generation: "test",
+      } satisfies NativeAgentSessionProjection);
   }
 
   test("says so plainly while the projection carries no runtime yet", async () => {
@@ -3059,7 +3075,7 @@ describe("AgentInfoButton Claude session options", () => {
       }
       return {};
     });
-    useNativeAgentProjectionStore
+    appCommandStore(nativeAgentProjectionStore)
       .getState()
       .setProjection(CLAUDE_KEY, neutralClaudeProjection({ executionProfiles: [] }));
     render(<AgentInfoButton activeTab={claudeTab()} />);
@@ -3079,19 +3095,21 @@ describe("AgentInfoButton Claude session options", () => {
   });
 
   test("keeps Claude informational diagnostics in the runtime panel", () => {
-    useNativeAgentProjectionStore.getState().setProjection(CLAUDE_KEY, {
-      ...neutralClaudeProjection(),
-      runtime: {
-        notices: [
-          {
-            method: "system/auth_status",
-            message: "Claude authentication refreshed",
-            severity: "info",
-            source: "provider",
-          },
-        ],
-      },
-    });
+    appCommandStore(nativeAgentProjectionStore)
+      .getState()
+      .setProjection(CLAUDE_KEY, {
+        ...neutralClaudeProjection(),
+        runtime: {
+          notices: [
+            {
+              method: "system/auth_status",
+              message: "Claude authentication refreshed",
+              severity: "info",
+              source: "provider",
+            },
+          ],
+        },
+      });
     render(<AgentInfoButton activeTab={claudeTab()} />);
     open();
 
@@ -3103,7 +3121,7 @@ describe("AgentInfoButton Claude session options", () => {
      * Nesting these under a non-empty profile list hid the prompt-suggestion
      * opt-in — the switch that enables the feature — for most Claude sessions.
      */
-    useNativeAgentProjectionStore
+    appCommandStore(nativeAgentProjectionStore)
       .getState()
       .setProjection(CLAUDE_KEY, neutralClaudeProjection({ executionProfiles: [] }));
     render(<AgentInfoButton activeTab={claudeTab()} />);
@@ -3150,7 +3168,7 @@ describe("AgentInfoButton Claude session options", () => {
     nativeInvokeMock.mockImplementation(async (command: string) =>
       command === "update_native_agent_controls" ? pendingUpdate : undefined,
     );
-    useNativeAgentProjectionStore.getState().setProjection(CLAUDE_KEY, initial);
+    appCommandStore(nativeAgentProjectionStore).getState().setProjection(CLAUDE_KEY, initial);
 
     render(<AgentInfoButton activeTab={claudeTab()} />);
     open();
@@ -3170,7 +3188,9 @@ describe("AgentInfoButton Claude session options", () => {
 
     releaseUpdate(updated);
     await waitFor(() =>
-      expect(useNativeAgentProjectionStore.getState().projections.get(CLAUDE_KEY)).toBe(updated),
+      expect(
+        appCommandStore(nativeAgentProjectionStore).getState().projections.get(CLAUDE_KEY),
+      ).toBe(updated),
     );
     expect(select.value).toBe("reviewer");
     expect(select.disabled).toBe(false);
@@ -3197,7 +3217,7 @@ describe("AgentInfoButton Claude session options", () => {
     nativeInvokeMock.mockImplementation(async (command: string) =>
       command === "update_native_agent_controls" ? pendingUpdate : undefined,
     );
-    useNativeAgentProjectionStore.getState().setProjection(CLAUDE_KEY, initial);
+    appCommandStore(nativeAgentProjectionStore).getState().setProjection(CLAUDE_KEY, initial);
 
     render(<AgentInfoButton activeTab={claudeTab()} />);
     open();
@@ -3205,22 +3225,26 @@ describe("AgentInfoButton Claude session options", () => {
     fireEvent.change(select, { target: { value: "reviewer" } });
 
     act(() => {
-      useNativeAgentProjectionStore.getState().setProjection(CLAUDE_KEY, newerProjection);
+      appCommandStore(nativeAgentProjectionStore)
+        .getState()
+        .setProjection(CLAUDE_KEY, newerProjection);
     });
     releaseUpdate(staleResponse);
 
     await waitFor(() => expect(select.disabled).toBe(false));
-    expect(useNativeAgentProjectionStore.getState().projections.get(CLAUDE_KEY)).toBe(
+    expect(appCommandStore(nativeAgentProjectionStore).getState().projections.get(CLAUDE_KEY)).toBe(
       newerProjection,
     );
   });
 
   test("applies both provider-neutral Claude session toggles", async () => {
     const initial = neutralClaudeProjection();
-    useNativeAgentProjectionStore.getState().setProjection(CLAUDE_KEY, initial);
+    appCommandStore(nativeAgentProjectionStore).getState().setProjection(CLAUDE_KEY, initial);
     nativeInvokeMock.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
       if (command !== "update_native_agent_controls") return undefined;
-      const current = useNativeAgentProjectionStore.getState().projections.get(CLAUDE_KEY)!;
+      const current = appCommandStore(nativeAgentProjectionStore)
+        .getState()
+        .projections.get(CLAUDE_KEY)!;
       const update = args?.update as {
         includeLocalSettings?: boolean;
         promptSuggestions?: boolean;
@@ -3264,7 +3288,7 @@ describe("AgentInfoButton Claude session options", () => {
 
   test("reports a provider-neutral control failure and keeps canonical state", async () => {
     const initial = neutralClaudeProjection();
-    useNativeAgentProjectionStore.getState().setProjection(CLAUDE_KEY, initial);
+    appCommandStore(nativeAgentProjectionStore).getState().setProjection(CLAUDE_KEY, initial);
     nativeInvokeMock.mockImplementation(async (command: string) => {
       if (command === "update_native_agent_controls") {
         throw new Error("settings unavailable");
@@ -3278,7 +3302,9 @@ describe("AgentInfoButton Claude session options", () => {
     fireEvent.click(localSettings);
 
     await waitFor(() => expect(mockToastError).toHaveBeenCalledWith("settings unavailable"));
-    expect(useNativeAgentProjectionStore.getState().projections.get(CLAUDE_KEY)).toBe(initial);
+    expect(appCommandStore(nativeAgentProjectionStore).getState().projections.get(CLAUDE_KEY)).toBe(
+      initial,
+    );
     expect(localSettings.checked).toBe(false);
     expect(localSettings.disabled).toBe(false);
   });
@@ -4463,19 +4489,21 @@ describe("AgentInfoButton backend-owned steering", () => {
     platform: "codex" | "pi" = "codex",
   ) {
     const key = createSessionKey(ENVIRONMENT_ID, tabId);
-    useNativeAgentProjectionStore.getState().setProjection(key, {
-      platform,
-      environmentId: ENVIRONMENT_ID,
-      sessionId: `${platform}-${tabId}`,
-      connection: "connected",
-      turn: { phase },
-      messages: [],
-      interactions: [],
-      composerControls: [],
-      capabilities: nativeAgentCapabilities(platform),
-      revision: 1,
-      generation: `${platform}-generation`,
-    });
+    appCommandStore(nativeAgentProjectionStore)
+      .getState()
+      .setProjection(key, {
+        platform,
+        environmentId: ENVIRONMENT_ID,
+        sessionId: `${platform}-${tabId}`,
+        connection: "connected",
+        turn: { phase },
+        messages: [],
+        interactions: [],
+        composerControls: [],
+        capabilities: nativeAgentCapabilities(platform),
+        revision: 1,
+        generation: `${platform}-generation`,
+      });
   }
 
   function seedRunningCodex(tabId = TAB_ID) {
@@ -4504,14 +4532,16 @@ describe("AgentInfoButton backend-owned steering", () => {
   test("hides the panel while backend-owned steer recovery is parked", () => {
     seedRunningCodex();
     const key = createSessionKey(ENVIRONMENT_ID, TAB_ID);
-    useNativeAgentProjectionStore.getState().setProjection(key, {
-      ...useNativeAgentProjectionStore.getState().projections.get(key)!,
-      recoverableDispatch: {
-        requestId: "backend-steer-recovery",
-        kind: "steer",
-        createdAt: "2026-08-28T10:00:00.000Z",
-      },
-    });
+    appCommandStore(nativeAgentProjectionStore)
+      .getState()
+      .setProjection(key, {
+        ...appCommandStore(nativeAgentProjectionStore).getState().projections.get(key)!,
+        recoverableDispatch: {
+          requestId: "backend-steer-recovery",
+          kind: "steer",
+          createdAt: "2026-08-28T10:00:00.000Z",
+        },
+      });
     render(<AgentInfoButton activeTab={codexTab()} />);
     open();
 
@@ -4637,52 +4667,54 @@ describe("AgentInfoButton backend-owned steering", () => {
 
 describe("AgentInfoButton runtime inventory", () => {
   test("reads rich usage and runtime inventory from the shared projection", () => {
-    useNativeAgentProjectionStore.getState().setProjection(OPENCODE_KEY, {
-      platform: "opencode",
-      environmentId: ENVIRONMENT_ID,
-      sessionId: "opencode-session-1",
-      connection: "connected",
-      turn: { phase: "idle" },
-      messages: [],
-      interactions: [],
-      composerControls: [],
-      capabilities: {
-        attachments: { files: true, images: true },
-        queue: true,
-        resume: true,
-        fork: true,
-        slashCommands: true,
-        backgroundTasks: false,
-        composer: {
-          provider: true,
-          model: true,
-          reasoning: true,
-          speed: false,
-          mode: true,
+    appCommandStore(nativeAgentProjectionStore)
+      .getState()
+      .setProjection(OPENCODE_KEY, {
+        platform: "opencode",
+        environmentId: ENVIRONMENT_ID,
+        sessionId: "opencode-session-1",
+        connection: "connected",
+        turn: { phase: "idle" },
+        messages: [],
+        interactions: [],
+        composerControls: [],
+        capabilities: {
+          attachments: { files: true, images: true },
+          queue: true,
+          resume: true,
+          fork: true,
+          slashCommands: true,
+          backgroundTasks: false,
+          composer: {
+            provider: true,
+            model: true,
+            reasoning: true,
+            speed: false,
+            mode: true,
+          },
         },
-      },
-      contextUsage: {
-        usedTokens: 1_200,
-        maximumTokens: 12_000,
-        percentage: 10,
-        inputTokens: 800,
-        outputTokens: 300,
-        cacheReadTokens: 100,
-        costUsd: 0.25,
-        durationMs: 1_500,
-        source: "opencode",
-        estimated: false,
-      },
-      runtime: {
-        mcpServers: 2,
-        skills: 3,
-        lspServers: 4,
-        todos: 5,
-        files: 6,
-      },
-      revision: 1,
-      generation: "test",
-    } satisfies NativeAgentSessionProjection);
+        contextUsage: {
+          usedTokens: 1_200,
+          maximumTokens: 12_000,
+          percentage: 10,
+          inputTokens: 800,
+          outputTokens: 300,
+          cacheReadTokens: 100,
+          costUsd: 0.25,
+          durationMs: 1_500,
+          source: "opencode",
+          estimated: false,
+        },
+        runtime: {
+          mcpServers: 2,
+          skills: 3,
+          lspServers: 4,
+          todos: 5,
+          files: 6,
+        },
+        revision: 1,
+        generation: "test",
+      } satisfies NativeAgentSessionProjection);
 
     render(<AgentInfoButton activeTab={openCodeTab()} />);
     open();
@@ -4795,12 +4827,14 @@ describe("AgentInfoButton ACP agents", () => {
     nativeInvokeMock.mockImplementation(async (command: string) =>
       command === "get_cursor_account_usage" ? new Promise(() => undefined) : {},
     );
-    useNativeAgentProjectionStore.getState().setProjection(
-      ACP_KEY,
-      acpProjection("cursor", {
-        runtime: { state: "attached", mcp: servers },
-      } as Partial<NativeAgentSessionProjection>),
-    );
+    appCommandStore(nativeAgentProjectionStore)
+      .getState()
+      .setProjection(
+        ACP_KEY,
+        acpProjection("cursor", {
+          runtime: { state: "attached", mcp: servers },
+        } as Partial<NativeAgentSessionProjection>),
+      );
   }
 
   function mcpActionCalls(): Array<{ serverId?: string; action?: string }> {
@@ -4823,7 +4857,9 @@ describe("AgentInfoButton ACP agents", () => {
         }
         return command === "get_cursor_account_usage" ? new Promise(() => undefined) : {};
       });
-      useNativeAgentProjectionStore.getState().setProjection(ACP_KEY, acpProjection("cursor"));
+      appCommandStore(nativeAgentProjectionStore)
+        .getState()
+        .setProjection(ACP_KEY, acpProjection("cursor"));
       render(<AgentInfoButton activeTab={acpTab("cursor")} />);
       open();
       expect(await screen.findByText("fixture@example.test")).toBeTruthy();
@@ -4855,7 +4891,9 @@ describe("AgentInfoButton ACP agents", () => {
       }
       return command === "get_cursor_account_usage" ? new Promise(() => undefined) : {};
     });
-    useNativeAgentProjectionStore.getState().setProjection(ACP_KEY, acpProjection("cursor"));
+    appCommandStore(nativeAgentProjectionStore)
+      .getState()
+      .setProjection(ACP_KEY, acpProjection("cursor"));
     render(<AgentInfoButton activeTab={acpTab("cursor")} />);
     open();
     expect(await screen.findByText("fixture@example.test")).toBeTruthy();
@@ -4876,7 +4914,9 @@ describe("AgentInfoButton ACP agents", () => {
       }
       return command === "get_cursor_account_usage" ? new Promise(() => undefined) : {};
     });
-    useNativeAgentProjectionStore.getState().setProjection(ACP_KEY, acpProjection("cursor"));
+    appCommandStore(nativeAgentProjectionStore)
+      .getState()
+      .setProjection(ACP_KEY, acpProjection("cursor"));
     render(<AgentInfoButton activeTab={acpTab("cursor")} />);
     // Not part of the projection: nothing asks until the account is shown.
     expect(accountReads()).toBe(0);
@@ -4905,7 +4945,9 @@ describe("AgentInfoButton ACP agents", () => {
       }
       return command === "get_cursor_account_usage" ? new Promise(() => undefined) : {};
     });
-    useNativeAgentProjectionStore.getState().setProjection(ACP_KEY, acpProjection("cursor"));
+    appCommandStore(nativeAgentProjectionStore)
+      .getState()
+      .setProjection(ACP_KEY, acpProjection("cursor"));
     render(<AgentInfoButton activeTab={acpTab("cursor")} />);
     open();
     await screen.findByText("old@example.test");
@@ -4939,7 +4981,9 @@ describe("AgentInfoButton ACP agents", () => {
           return kind === "device-code" ? { code: "TEST-CODE" } : {};
         return command === "get_cursor_account_usage" ? new Promise(() => undefined) : {};
       });
-      useNativeAgentProjectionStore.getState().setProjection(ACP_KEY, acpProjection("cursor"));
+      appCommandStore(nativeAgentProjectionStore)
+        .getState()
+        .setProjection(ACP_KEY, acpProjection("cursor"));
       render(<AgentInfoButton activeTab={acpTab("cursor")} />);
       open();
       fireEvent.click(await screen.findByRole("button", { name: "Sign in" }));
@@ -4977,7 +5021,9 @@ describe("AgentInfoButton ACP agents", () => {
       return command === "get_cursor_account_usage" ? new Promise(() => undefined) : {};
     });
     try {
-      useNativeAgentProjectionStore.getState().setProjection(ACP_KEY, acpProjection("cursor"));
+      appCommandStore(nativeAgentProjectionStore)
+        .getState()
+        .setProjection(ACP_KEY, acpProjection("cursor"));
       render(<AgentInfoButton activeTab={acpTab("cursor")} />);
       open();
       fireEvent.click(await screen.findByRole("button", { name: "Sign in" }));
@@ -5037,7 +5083,9 @@ describe("AgentInfoButton ACP agents", () => {
       return command === "get_cursor_account_usage" ? new Promise(() => undefined) : {};
     });
     try {
-      useNativeAgentProjectionStore.getState().setProjection(ACP_KEY, acpProjection("cursor"));
+      appCommandStore(nativeAgentProjectionStore)
+        .getState()
+        .setProjection(ACP_KEY, acpProjection("cursor"));
       render(<AgentInfoButton activeTab={acpTab("cursor")} />);
       open();
       fireEvent.click(await screen.findByRole("button", { name: "Sign in" }));
@@ -5090,7 +5138,9 @@ describe("AgentInfoButton ACP agents", () => {
         }
         return command === "get_cursor_account_usage" ? new Promise(() => undefined) : {};
       });
-      useNativeAgentProjectionStore.getState().setProjection(ACP_KEY, acpProjection("cursor"));
+      appCommandStore(nativeAgentProjectionStore)
+        .getState()
+        .setProjection(ACP_KEY, acpProjection("cursor"));
       const view = render(<AgentInfoButton activeTab={acpTab("cursor")} />);
       open();
       fireEvent.click(await screen.findByRole("button", { name: "Sign in" }));
@@ -5138,7 +5188,9 @@ describe("AgentInfoButton ACP agents", () => {
       }
       return command === "get_cursor_account_usage" ? new Promise(() => undefined) : {};
     });
-    useNativeAgentProjectionStore.getState().setProjection(ACP_KEY, acpProjection("cursor"));
+    appCommandStore(nativeAgentProjectionStore)
+      .getState()
+      .setProjection(ACP_KEY, acpProjection("cursor"));
     render(<AgentInfoButton activeTab={acpTab("cursor")} />);
     open();
     fireEvent.click(await screen.findByRole("button", { name: "Sign in" }));
@@ -5160,7 +5212,9 @@ describe("AgentInfoButton ACP agents", () => {
       }
       return command === "get_cursor_account_usage" ? new Promise(() => undefined) : {};
     });
-    useNativeAgentProjectionStore.getState().setProjection(ACP_KEY, acpProjection("cursor"));
+    appCommandStore(nativeAgentProjectionStore)
+      .getState()
+      .setProjection(ACP_KEY, acpProjection("cursor"));
     render(<AgentInfoButton activeTab={acpTab("cursor")} />);
     open();
     fireEvent.click(await screen.findByRole("button", { name: "Sign in" }));
@@ -5183,7 +5237,9 @@ describe("AgentInfoButton ACP agents", () => {
         }
         return command === "get_cursor_account_usage" ? new Promise(() => undefined) : {};
       });
-      useNativeAgentProjectionStore.getState().setProjection(ACP_KEY, acpProjection("cursor"));
+      appCommandStore(nativeAgentProjectionStore)
+        .getState()
+        .setProjection(ACP_KEY, acpProjection("cursor"));
       render(<AgentInfoButton activeTab={acpTab("cursor")} />);
       open();
       fireEvent.click(await screen.findByRole("button", { name: "Retry account status" }));
@@ -5207,7 +5263,9 @@ describe("AgentInfoButton ACP agents", () => {
       }
       return command === "get_cursor_account_usage" ? new Promise(() => undefined) : {};
     });
-    useNativeAgentProjectionStore.getState().setProjection(ACP_KEY, acpProjection("cursor"));
+    appCommandStore(nativeAgentProjectionStore)
+      .getState()
+      .setProjection(ACP_KEY, acpProjection("cursor"));
     render(<AgentInfoButton activeTab={acpTab("cursor")} />);
     open();
     fireEvent.click(await screen.findByRole("button", { name: "Sign out" }));
@@ -5378,18 +5436,20 @@ describe("AgentInfoButton ACP agents", () => {
     // The point of the generalization: nothing in `AgentRuntimePanel` is
     // Codex-shaped, so a Cursor session gets the same drift block and the same
     // notice cards from the same projection fields.
-    useNativeAgentProjectionStore.getState().setProjection(
-      createSessionKey(ENVIRONMENT_ID, TAB_ID),
-      acpProjection("cursor", {
-        runtime: {
-          state: "attached",
-          drift: { unknownEvents: 3, unknownKinds: ["tool:webSearch"] },
-          notices: [
-            { message: "Cursor substituted a model", severity: "warning", source: "provider" },
-          ],
-        },
-      }),
-    );
+    appCommandStore(nativeAgentProjectionStore)
+      .getState()
+      .setProjection(
+        createSessionKey(ENVIRONMENT_ID, TAB_ID),
+        acpProjection("cursor", {
+          runtime: {
+            state: "attached",
+            drift: { unknownEvents: 3, unknownKinds: ["tool:webSearch"] },
+            notices: [
+              { message: "Cursor substituted a model", severity: "warning", source: "provider" },
+            ],
+          },
+        }),
+      );
     render(<AgentInfoButton activeTab={acpTab("cursor")} />);
     open();
 
@@ -5409,30 +5469,32 @@ describe("AgentInfoButton ACP agents", () => {
   });
 
   test("names a Grok session and renders the usage its bridge reported", () => {
-    useNativeAgentProjectionStore.getState().setProjection(
-      ACP_KEY,
-      acpProjection("grok", {
-        composer: {
-          models: [],
-          fastModeEnabled: null,
-          fastModeAvailable: false,
-          modes: [],
-          selectedModelId: "grok-4.6",
-        },
-        contextUsage: {
-          usedTokens: 15_675,
-          maximumTokens: 500_000,
-          percentage: 3.135,
-          inputTokens: 15_639,
-          outputTokens: 36,
-          cacheReadTokens: 5_888,
-          reasoningTokens: 31,
-          durationMs: 3_200,
-          source: "provider",
-        },
-        runtime: { mcpServers: 2, commands: 3, version: "1.0.3", state: "idle" },
-      }),
-    );
+    appCommandStore(nativeAgentProjectionStore)
+      .getState()
+      .setProjection(
+        ACP_KEY,
+        acpProjection("grok", {
+          composer: {
+            models: [],
+            fastModeEnabled: null,
+            fastModeAvailable: false,
+            modes: [],
+            selectedModelId: "grok-4.6",
+          },
+          contextUsage: {
+            usedTokens: 15_675,
+            maximumTokens: 500_000,
+            percentage: 3.135,
+            inputTokens: 15_639,
+            outputTokens: 36,
+            cacheReadTokens: 5_888,
+            reasoningTokens: 31,
+            durationMs: 3_200,
+            source: "provider",
+          },
+          runtime: { mcpServers: 2, commands: 3, version: "1.0.3", state: "idle" },
+        }),
+      );
 
     render(<AgentInfoButton activeTab={acpTab("grok")} />);
     open();
@@ -5460,29 +5522,31 @@ describe("AgentInfoButton ACP agents", () => {
   });
 
   test("renders Cursor usage when the bridge reported a snapshot", () => {
-    useNativeAgentProjectionStore.getState().setProjection(
-      ACP_KEY,
-      acpProjection("cursor", {
-        composer: {
-          models: [],
-          fastModeEnabled: null,
-          fastModeAvailable: false,
-          modes: [],
-          selectedModelId: "grok-4.6",
-        },
-        contextUsage: {
-          usedTokens: 15_675,
-          maximumTokens: 200_000,
-          percentage: 7.8375,
-          inputTokens: 10_000,
-          outputTokens: 2_000,
-          reasoningTokens: 300,
-          costUsd: 0.042,
-          source: "provider",
-        },
-        runtime: { commands: 7, state: "idle" },
-      }),
-    );
+    appCommandStore(nativeAgentProjectionStore)
+      .getState()
+      .setProjection(
+        ACP_KEY,
+        acpProjection("cursor", {
+          composer: {
+            models: [],
+            fastModeEnabled: null,
+            fastModeAvailable: false,
+            modes: [],
+            selectedModelId: "grok-4.6",
+          },
+          contextUsage: {
+            usedTokens: 15_675,
+            maximumTokens: 200_000,
+            percentage: 7.8375,
+            inputTokens: 10_000,
+            outputTokens: 2_000,
+            reasoningTokens: 300,
+            costUsd: 0.042,
+            source: "provider",
+          },
+          runtime: { commands: 7, state: "idle" },
+        }),
+      );
 
     render(<AgentInfoButton activeTab={acpTab("cursor")} />);
     open();
@@ -5501,32 +5565,34 @@ describe("AgentInfoButton ACP agents", () => {
   test("draws Cursor plan-quota windows with the shared account bars", () => {
     const windowMinutes = 31 * 24 * 60;
     const resetsAt = new Date(Date.now() + (windowMinutes / 2) * 60_000).toISOString();
-    useNativeAgentProjectionStore.getState().setProjection(
-      ACP_KEY,
-      acpProjection("cursor", {
-        contextUsage: {
-          usedTokens: 15_675,
-          source: "cursor",
-          account: [
-            {
-              window: "cursor-internal-auto",
-              label: "Cursor Models",
-              usedPercent: 0,
-              resetsAt,
-              windowMinutes,
-            },
-            {
-              window: "cursor-internal-api",
-              label: "Other Models",
-              usedPercent: 46.444,
-              resetsAt,
-              windowMinutes,
-            },
-            { window: "agent", label: "Agent total", tokens: 1_300_000, spendUsd: 1.25 },
-          ],
-        },
-      }),
-    );
+    appCommandStore(nativeAgentProjectionStore)
+      .getState()
+      .setProjection(
+        ACP_KEY,
+        acpProjection("cursor", {
+          contextUsage: {
+            usedTokens: 15_675,
+            source: "cursor",
+            account: [
+              {
+                window: "cursor-internal-auto",
+                label: "Cursor Models",
+                usedPercent: 0,
+                resetsAt,
+                windowMinutes,
+              },
+              {
+                window: "cursor-internal-api",
+                label: "Other Models",
+                usedPercent: 46.444,
+                resetsAt,
+                windowMinutes,
+              },
+              { window: "agent", label: "Agent total", tokens: 1_300_000, spendUsd: 1.25 },
+            ],
+          },
+        }),
+      );
 
     render(<AgentInfoButton activeTab={acpTab("cursor")} />);
     open();
@@ -5553,12 +5619,14 @@ describe("AgentInfoButton ACP agents", () => {
   });
 
   test("shows Cursor's runtime and says nothing about tokens it never reports", () => {
-    useNativeAgentProjectionStore.getState().setProjection(
-      ACP_KEY,
-      acpProjection("cursor", {
-        runtime: { commands: 7, state: "idle" },
-      }),
-    );
+    appCommandStore(nativeAgentProjectionStore)
+      .getState()
+      .setProjection(
+        ACP_KEY,
+        acpProjection("cursor", {
+          runtime: { commands: 7, state: "idle" },
+        }),
+      );
 
     render(<AgentInfoButton activeTab={acpTab("cursor")} />);
     open();
@@ -5575,24 +5643,26 @@ describe("AgentInfoButton ACP agents", () => {
   });
 
   test("shows token metrics without inventing a context window", () => {
-    useNativeAgentProjectionStore.getState().setProjection(
-      ACP_KEY,
-      acpProjection("grok", {
-        composer: {
-          models: [],
-          fastModeEnabled: null,
-          fastModeAvailable: false,
-          modes: [],
-          selectedModelId: "grok-4.6",
-        },
-        contextUsage: {
-          usedTokens: 222,
-          inputTokens: 200,
-          outputTokens: 22,
-          source: "provider",
-        },
-      }),
-    );
+    appCommandStore(nativeAgentProjectionStore)
+      .getState()
+      .setProjection(
+        ACP_KEY,
+        acpProjection("grok", {
+          composer: {
+            models: [],
+            fastModeEnabled: null,
+            fastModeAvailable: false,
+            modes: [],
+            selectedModelId: "grok-4.6",
+          },
+          contextUsage: {
+            usedTokens: 222,
+            inputTokens: 200,
+            outputTokens: 22,
+            source: "provider",
+          },
+        }),
+      );
 
     render(<AgentInfoButton activeTab={acpTab("grok")} />);
     open();
@@ -5616,7 +5686,9 @@ describe("AgentInfoButton ACP agents", () => {
   });
 
   test("hides the provider actions an ACP agent cannot perform, but offers the transfer", () => {
-    useNativeAgentProjectionStore.getState().setProjection(ACP_KEY, acpProjection("cursor"));
+    appCommandStore(nativeAgentProjectionStore)
+      .getState()
+      .setProjection(ACP_KEY, acpProjection("cursor"));
 
     render(<AgentInfoButton activeTab={acpTab("cursor")} />);
     open();
@@ -5635,7 +5707,9 @@ describe("AgentInfoButton ACP agents", () => {
       .updateGlobalConfig({
         enabledAgentPlatforms: ["claude", "codex", "cursor", "grok", "opencode"],
       });
-    useNativeAgentProjectionStore.getState().setProjection(ACP_KEY, acpProjection("cursor"));
+    appCommandStore(nativeAgentProjectionStore)
+      .getState()
+      .setProjection(ACP_KEY, acpProjection("cursor"));
 
     render(<AgentInfoButton activeTab={acpTab("cursor")} />);
     open();
@@ -5652,7 +5726,9 @@ describe("AgentInfoButton ACP agents", () => {
     appCommandStore(configStore)
       .getState()
       .updateGlobalConfig({ enabledAgentPlatforms: ["cursor"] });
-    useNativeAgentProjectionStore.getState().setProjection(ACP_KEY, acpProjection("cursor"));
+    appCommandStore(nativeAgentProjectionStore)
+      .getState()
+      .setProjection(ACP_KEY, acpProjection("cursor"));
 
     render(<AgentInfoButton activeTab={acpTab("cursor")} />);
     open();
@@ -5669,7 +5745,7 @@ describe("AgentInfoButton ACP agents", () => {
         enabledAgentPlatforms: ["claude", "codex", "cursor", "grok", "opencode"],
       });
     const projection = acpProjection("cursor", { title: "Cursor investigated the flake" });
-    useNativeAgentProjectionStore.getState().setProjection(ACP_KEY, projection);
+    appCommandStore(nativeAgentProjectionStore).getState().setProjection(ACP_KEY, projection);
     const created: Array<Record<string, unknown>> = [];
     nativeInvokeMock.mockImplementation(async (command: string, args: Record<string, unknown>) => {
       if (command === "get_native_agent_projection") return projection;
@@ -5723,7 +5799,9 @@ describe("AgentInfoButton ACP agents", () => {
   });
 
   test("reports an agent that volunteers no runtime facts as unknown", () => {
-    useNativeAgentProjectionStore.getState().setProjection(ACP_KEY, acpProjection("cursor"));
+    appCommandStore(nativeAgentProjectionStore)
+      .getState()
+      .setProjection(ACP_KEY, acpProjection("cursor"));
 
     render(<AgentInfoButton activeTab={acpTab("cursor")} />);
     open();

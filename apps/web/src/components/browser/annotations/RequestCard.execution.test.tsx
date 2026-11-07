@@ -20,9 +20,9 @@ import {
   resetConversationScrollTargets,
   useConversationScrollTargetStore,
 } from "@/stores/conversationScrollTargetStore";
-import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
+import { nativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
-import { usePromptDraftStore } from "@/stores/promptDraftStore";
+import { promptDraftStore } from "@/stores/promptDraftStore";
 import {
   createFakeCaptureApi,
   FakeWebAnnotationBackend,
@@ -35,6 +35,7 @@ import {
   useAnnotationUiTestBudget,
 } from "@/test/web-annotation-harness";
 import { getWindowScope } from "@/lib/node-scope/app-window-scope";
+import { appCommandStore } from "@/test/app-command-store";
 
 /** Outside a node scope provider, components act for the app's command node. */
 const commandNodeId = () => getWindowScope().commandScope().nodeId;
@@ -120,7 +121,7 @@ describe("request card execution details", () => {
     resetWebAnnotationSyncForTests();
     resetWebAnnotationAssetsForTests();
     resetConversationScrollTargets();
-    useNativeAgentProjectionStore.setState({ projections: new Map() });
+    appCommandStore(nativeAgentProjectionStore).setState({ projections: new Map() });
     window.localStorage.clear();
     bus = installFakeOrkestrator({ capture: createFakeCaptureApi().api });
     backend = new FakeWebAnnotationBackend("env-1").install();
@@ -128,7 +129,7 @@ describe("request card execution details", () => {
   afterEach(() => {
     cleanup();
     resetWebAnnotationSyncForTests();
-    usePromptDraftStore.getState().reset();
+    appCommandStore(promptDraftStore).getState().reset();
     bus.restore();
     invokeMock.mockImplementation(() => Promise.resolve());
   });

@@ -6,7 +6,7 @@ import type { GraphTemplateV1 } from "@orkestrator/protocol/graphs/template";
 import { onGraphRunViewRequested, type GraphRunViewRequest } from "@/lib/graph-run-navigation";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
 import { environmentStore } from "@/stores/environmentStore";
-import { useGraphDesignerStore } from "@/stores/graphDesignerStore";
+import { graphDesignerStore } from "@/stores/graphDesignerStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { Environment } from "@/types";
 import type { GraphDesignerTabData } from "@/types/paneLayout";
@@ -86,7 +86,7 @@ function installBackend() {
 }
 
 function renderTab(data: GraphDesignerTabData = {}) {
-  useGraphDesignerStore.setState({ libraries: new Map(), tabs: new Map() });
+  appCommandStore(graphDesignerStore).setState({ libraries: new Map(), tabs: new Map() });
   appCommandStore(environmentStore).setState({
     environments: [{ id: ENVIRONMENT_ID, projectId: "project-1" } as Environment],
   });

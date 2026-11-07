@@ -2,14 +2,15 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { graphTemplateExample } from "@orkestrator/protocol/graphs/examples";
 import type { GraphSubgraphNode } from "@orkestrator/protocol/graphs/template";
-import { useGraphDesignerStore } from "@/stores/graphDesignerStore";
+import { graphDesignerStore } from "@/stores/graphDesignerStore";
 import { GraphNodeEditor } from "./GraphNodeEditor";
 import { renderWithGraphEditor } from "./graph-editor.test-support";
+import { appCommandStore } from "@/test/app-command-store";
 
 afterEach(cleanup);
 
 beforeEach(() => {
-  useGraphDesignerStore.setState({ subgraphTemplates: new Map() });
+  appCommandStore(graphDesignerStore).setState({ subgraphTemplates: new Map() });
 });
 
 const reviewOf = (template: { nodes: { id: string }[] }) =>

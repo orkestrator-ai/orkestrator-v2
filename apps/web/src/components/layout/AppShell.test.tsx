@@ -1,4 +1,4 @@
-import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { buildPipelineStore } from "@/stores/buildPipelineStore";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { useEffect, useState } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -257,7 +257,7 @@ beforeEach(() => {
   selectedEnvironmentId = "environment-1";
   filesPanelOpen = false;
   selectedEnvironmentPr = {};
-  useBuildPipelineStore.setState({ activeBuildEnvironmentIds: new Set() });
+  appCommandStore(buildPipelineStore).setState({ activeBuildEnvironmentIds: new Set() });
   appCommandStore(prMonitorStore).setState({ states: new Map(), syncStatus: "idle" });
   useUIChromeStore.setState({ sidebarOpen: true });
   mountSearch = false;
@@ -421,10 +421,14 @@ describe("AppShell", () => {
     );
     if (signal === "needs-answer") {
       act(() =>
-        useBuildPipelineStore.setState({ activeBuildEnvironmentIds: new Set(["environment-1"]) }),
+        appCommandStore(buildPipelineStore).setState({
+          activeBuildEnvironmentIds: new Set(["environment-1"]),
+        }),
       );
       expect(title.querySelector('[data-name-signal="merge-ready"]')).toBeTruthy();
-      act(() => useBuildPipelineStore.setState({ activeBuildEnvironmentIds: new Set() }));
+      act(() =>
+        appCommandStore(buildPipelineStore).setState({ activeBuildEnvironmentIds: new Set() }),
+      );
       expect(title.querySelector('[data-name-signal="needs-answer"]')).toBeTruthy();
     }
     fireEvent.pointerDown(title, { pointerType: "touch" });

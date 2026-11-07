@@ -12,7 +12,7 @@ import * as realBackend from "@/lib/backend";
 import { PROJECT_HOME_TURN_LABEL } from "@/lib/coordinator-active-turn";
 import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
 import { environmentStore } from "@/stores/environmentStore";
-import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
+import { nativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 
 const backendSnapshot = { ...realBackend };
 // An older backend: only the projections answer.
@@ -48,19 +48,21 @@ describe("useCoordinatorActiveTurn", () => {
   const previousEnvironments = appCommandStore(environmentStore).getState().environments;
   beforeEach(() => {
     renders = 0;
-    useNativeAgentProjectionStore.getState().reset();
+    appCommandStore(nativeAgentProjectionStore).getState().reset();
     appCommandStore(environmentStore).setState({ environments: [home, other] });
-    useNativeAgentProjectionStore.getState().setProjection("home-env:home-tab", {
-      environmentId: "home-env",
-      turn: { phase: "running" },
-      messages: [],
-      interactions: [],
-    } as unknown as NativeAgentSessionProjection);
+    appCommandStore(nativeAgentProjectionStore)
+      .getState()
+      .setProjection("home-env:home-tab", {
+        environmentId: "home-env",
+        turn: { phase: "running" },
+        messages: [],
+        interactions: [],
+      } as unknown as NativeAgentSessionProjection);
   });
   afterEach(() => {
     cleanup();
     resetReadCoordinatorForTests();
-    useNativeAgentProjectionStore.getState().reset();
+    appCommandStore(nativeAgentProjectionStore).getState().reset();
     appCommandStore(environmentStore).setState({ environments: previousEnvironments });
   });
   afterAll(() => {

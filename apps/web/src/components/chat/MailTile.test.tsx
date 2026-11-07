@@ -6,7 +6,7 @@ import { portalStore } from "@/lib/portal/portal-store";
 import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { uiStore } from "@/stores/uiStore";
-import { useAgentMailStore } from "@/stores/agentMailStore";
+import { agentMailStore } from "@/stores/agentMailStore";
 import { environmentStore } from "@/stores/environmentStore";
 import type { Environment } from "@/types";
 import { ChatFindActiveContext } from "./chat-find-context";
@@ -177,13 +177,13 @@ describe("the Open action on a notice about a worker", () => {
 });
 
 describe("MailTile", () => {
-  const initialMail = useAgentMailStore.getState();
+  const initialMail = appCommandStore(agentMailStore).getState();
   const initialEnvironments = appCommandStore(environmentStore).getState();
 
   afterEach(() => {
     cleanup();
     useMessagePartExpansionStore.getState().reset();
-    useAgentMailStore.setState(initialMail, true);
+    appCommandStore(agentMailStore).setState(initialMail, true);
     appCommandStore(environmentStore).setState(initialEnvironments, true);
   });
 
@@ -449,7 +449,7 @@ describe("MailTile", () => {
     "updates a received sender's environment name with tab %s",
     (tabName) => {
       appCommandStore(environmentStore).setState({ environments: [] });
-      useAgentMailStore.setState({ mailboxes: new Map() });
+      appCommandStore(agentMailStore).setState({ mailboxes: new Map() });
       const environmentId = "acf90d0f-8be8-45ba-b87b-745b54a007e0";
       const { container } = render(
         <MailTile
@@ -494,15 +494,15 @@ describe("MailTile", () => {
   });
 
   test("opens the conversation between sender and recipient", () => {
-    useAgentMailStore.setState({ panel: null });
+    appCommandStore(agentMailStore).setState({ panel: null });
     render(
       <MailTile mail={mail({ participants: ["env-2\0tab-2", "env-1\0tab-1"] })} expansionKey="c" />,
     );
     fireEvent.click(screen.getByRole("button", { name: "Open conversation" }));
-    expect(useAgentMailStore.getState().panel).toEqual({
+    expect(appCommandStore(agentMailStore).getState().panel).toEqual({
       conversation: ["env-2\0tab-2", "env-1\0tab-1"],
     });
-    useAgentMailStore.setState({ panel: null });
+    appCommandStore(agentMailStore).setState({ panel: null });
   });
 
   test("offers no conversation without both participants", () => {

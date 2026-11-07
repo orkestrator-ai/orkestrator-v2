@@ -4,9 +4,9 @@ import { unknownBackendCommandMessage } from "@orkestrator/protocol/unknown-comm
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { listen } from "@/lib/native/events";
-import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { buildPipelineStore } from "@/stores/buildPipelineStore";
 import { claudeOptionsStore } from "@/stores/claudeOptionsStore";
-import { createClaudeTmuxStateKey, useClaudeTmuxStore } from "@/stores/claudeTmuxStore";
+import { claudeTmuxStore, createClaudeTmuxStateKey } from "@/stores/claudeTmuxStore";
 import { configStore } from "@/stores/configStore";
 import { environmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
@@ -535,7 +535,7 @@ function resetStores({
     zoomLevel: 100,
   });
 
-  useBuildPipelineStore.setState({
+  appCommandStore(buildPipelineStore).setState({
     pipelines: new Map(),
     buildEnvironmentIds: new Set(),
   });
@@ -562,7 +562,7 @@ function resetStores({
     activeEnvironmentId: null,
   });
 
-  useClaudeTmuxStore.setState({
+  appCommandStore(claudeTmuxStore).setState({
     tabs: new Map(),
     attachments: new Map(),
     draftText: new Map(),
@@ -1166,7 +1166,7 @@ describe("App background processing mounts", () => {
       selectedEnvironmentId: "env-visible",
     });
 
-    useBuildPipelineStore.setState({
+    appCommandStore(buildPipelineStore).setState({
       pipelines: new Map([
         [
           "pipeline-sibling",
@@ -1367,7 +1367,7 @@ describe("App background processing mounts", () => {
     });
 
     const tmuxStateKey = createClaudeTmuxStateKey("env-queued-tmux", "tab-1");
-    useClaudeTmuxStore.setState({
+    appCommandStore(claudeTmuxStore).setState({
       messageQueue: new Map([
         [tmuxStateKey, [{ id: "queue-tmux", text: "Run queued tmux work", attachments: [] }]],
       ]),
@@ -1396,11 +1396,11 @@ describe("App background processing mounts", () => {
     });
 
     const stateKey = createClaudeTmuxStateKey("env-busy-tmux", "tab-1");
-    useClaudeTmuxStore.getState().setRunning(stateKey, true, {
+    appCommandStore(claudeTmuxStore).getState().setRunning(stateKey, true, {
       environmentId: "env-busy-tmux",
       sessionId: "session-tmux",
     });
-    useClaudeTmuxStore.getState().setBusy(stateKey, true);
+    appCommandStore(claudeTmuxStore).getState().setBusy(stateKey, true);
 
     render(<App />);
 
@@ -1419,11 +1419,11 @@ describe("App background processing mounts", () => {
     });
 
     const stateKey = createClaudeTmuxStateKey("env-waiting-tmux", "tab-1");
-    useClaudeTmuxStore.getState().setRunning(stateKey, true, {
+    appCommandStore(claudeTmuxStore).getState().setRunning(stateKey, true, {
       environmentId: "env-waiting-tmux",
       sessionId: "session-tmux",
     });
-    useClaudeTmuxStore.getState().addPendingQuestion(stateKey, {
+    appCommandStore(claudeTmuxStore).getState().addPendingQuestion(stateKey, {
       eventId: "question-1",
       questions: [],
       toolInput: {},

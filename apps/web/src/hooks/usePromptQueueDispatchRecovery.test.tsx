@@ -11,8 +11,9 @@ import {
 } from "@/lib/prompt-queue-persistence";
 import { retryAgentPromptQueueDispatch } from "@/lib/prompt-queue-sources";
 import { invoke } from "@/lib/native/backend";
-import { useClaudeTmuxStore } from "@/stores/claudeTmuxStore";
+import { claudeTmuxStore } from "@/stores/claudeTmuxStore";
 import { usePromptQueueDispatchRecovery } from "./usePromptQueueDispatchRecovery";
+import { appCommandStore } from "@/test/app-command-store";
 
 /**
  * The dispatch-error latch is the only path by which a backend refusal to drain
@@ -94,7 +95,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   resetPromptQueueRevisions();
-  useClaudeTmuxStore.setState({ messageQueue: new Map() });
+  appCommandStore(claudeTmuxStore).setState({ messageQueue: new Map() });
 });
 
 describe("usePromptQueueDispatchRecovery", () => {

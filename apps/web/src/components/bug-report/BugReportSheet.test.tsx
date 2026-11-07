@@ -4,7 +4,7 @@ import type { BugReportSnapshot, BugReportSummary } from "@orkestrator/protocol/
 import * as backend from "@/lib/backend";
 import * as coordinatedPoll from "@/lib/coordinated-poll";
 import * as realNativeAgent from "@/components/native-agent";
-import { useNativeComposeStore } from "@/stores/nativeComposeStore";
+
 import { createSessionKey } from "@/lib/utils";
 import { useBugReportStore } from "@/stores/bugReportStore";
 import type { BackendId } from "@orkestrator/protocol/federation";
@@ -14,6 +14,7 @@ import { openBugReport } from "@/lib/bug-report/open-bug-report";
 import { nativeComposeStore } from "@/stores/nativeComposeStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { FakeNodeClient } from "@/test/render-in-node-scope";
+import { appCommandStore } from "@/test/app-command-store";
 
 const nativeAgentSnapshot = { ...realNativeAgent };
 const tabProps: Record<string, unknown>[] = [];
@@ -276,9 +277,9 @@ describe("BugReportSheet", () => {
       await waitFor(() => expect(save).toHaveBeenCalledWith("r1", "png-base64"));
       const key = createSessionKey(REPORT.runtimeId, REPORT.tabId);
       await waitFor(() =>
-        expect(useNativeComposeStore.getState().drafts.get(key)?.attachments).toMatchObject([
-          { path: savedPath, type: "image" },
-        ]),
+        expect(
+          appCommandStore(nativeComposeStore).getState().drafts.get(key)?.attachments,
+        ).toMatchObject([{ path: savedPath, type: "image" }]),
       );
       expect(useBugReportStore.getState().sheetOpen).toBe(true);
     } finally {

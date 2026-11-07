@@ -22,8 +22,8 @@ import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext
 import { TerminalProvider } from "@/contexts/TerminalContext";
 import { environmentStore, projectStore, uiStore } from "@/stores";
 import {
+  coordinatorActivityStore,
   useCoordinatorActivity,
-  useCoordinatorActivityStore,
 } from "@/stores/coordinatorActivityStore";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { prMonitorStore } from "@/stores/prMonitorStore";
@@ -444,7 +444,7 @@ function HouseRepositoryGroup() {
  */
 function setAlignmentActivity(state: CoordinatorActivityState | null) {
   alignmentActivity = state;
-  void useCoordinatorActivityStore.getState().refresh();
+  void appCommandStore(coordinatorActivityStore).getState().refresh();
 }
 
 let instance: ReturnType<typeof install> | undefined;

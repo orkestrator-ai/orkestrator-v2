@@ -15,12 +15,12 @@ import type { NativeAgentSessionProjection } from "@orkestrator/protocol/native-
 import * as realBackend from "@/lib/backend";
 import * as realNativeAgent from "@/components/native-agent";
 import { configStore } from "@/stores/configStore";
-import { useNativeComposeStore } from "@/stores/nativeComposeStore";
+import { nativeComposeStore } from "@/stores/nativeComposeStore";
 import { projectStore } from "@/stores/projectStore";
-import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
+import { nativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import {
+  coordinatorPaneLayoutStore,
   selectCoordinatorPaneLayout,
-  useCoordinatorPaneLayoutStore,
 } from "@/stores/coordinatorPaneLayoutStore";
 import {
   collectCoordinatorLeaves,
@@ -249,9 +249,9 @@ describe("CoordinatorPanel tab strip", () => {
     useRealAgentTab = false;
     resetNativeAgentSyncCapabilityForTests();
     appCommandStore(configStore).setState({ config: initialConfig });
-    useNativeComposeStore.getState().clearDraft(sessionKey);
-    useNativeAgentProjectionStore.getState().reset();
-    useCoordinatorPaneLayoutStore.getState().reset();
+    appCommandStore(nativeComposeStore).getState().clearDraft(sessionKey);
+    appCommandStore(nativeAgentProjectionStore).getState().reset();
+    appCommandStore(coordinatorPaneLayoutStore).getState().reset();
     resetUpstreamCheckForTests();
     resetClientStateCapabilitiesForTests();
     for (const fn of [ensure, getCoordinatorView, getGit, fetchGit, select, assignAgent]) {
@@ -294,7 +294,9 @@ describe("CoordinatorPanel tab strip", () => {
   });
 
   function storedLayout() {
-    return selectCoordinatorPaneLayout("project-1")(useCoordinatorPaneLayoutStore.getState())!;
+    return selectCoordinatorPaneLayout("project-1")(
+      appCommandStore(coordinatorPaneLayoutStore).getState(),
+    )!;
   }
 
   test("marks the main tab only once side agents are open beside it", async () => {
@@ -386,7 +388,7 @@ describe("CoordinatorPanel tab strip", () => {
         single.activePaneId,
       );
       const originalMainPane = collectCoordinatorLeaves(split.root)[0]!.id;
-      useCoordinatorPaneLayoutStore.getState().setLayout("project-1", split);
+      appCommandStore(coordinatorPaneLayoutStore).getState().setLayout("project-1", split);
       const closed = withWorkspace({
         conversations: [
           { ...mainConversation, closedAt: new Date(1).toISOString() },
@@ -475,7 +477,9 @@ describe("CoordinatorPanel tab strip", () => {
       );
       if (edited.root.kind !== "split") throw new Error("Expected split");
       edited = resizeCoordinatorSplit(edited, edited.root.id, [0.35, 0.65]);
-      act(() => useCoordinatorPaneLayoutStore.getState().setLayout("project-1", edited));
+      act(() =>
+        appCommandStore(coordinatorPaneLayoutStore).getState().setLayout("project-1", edited),
+      );
       const editedSidePane = collectCoordinatorLeaves(edited.root).find((pane) =>
         pane.conversationIds.includes("side-1"),
       )!.id;
@@ -632,7 +636,7 @@ describe("CoordinatorPanel tab strip", () => {
       right!.id,
       "side-1",
     );
-    useCoordinatorPaneLayoutStore
+    appCommandStore(coordinatorPaneLayoutStore)
       .getState()
       .setLayout("project-1", { ...grouped, activePaneId: single.activePaneId });
     render(<CoordinatorPanel projectId="project-1" />);

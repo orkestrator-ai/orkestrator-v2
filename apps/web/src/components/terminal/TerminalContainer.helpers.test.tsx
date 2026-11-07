@@ -23,13 +23,13 @@ import { environmentStore } from "@/stores/environmentStore";
 
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 
-import { useNativeComposeStore } from "@/stores/nativeComposeStore";
+import { nativeComposeStore } from "@/stores/nativeComposeStore";
 
-import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { buildPipelineStore } from "@/stores/buildPipelineStore";
 
 import { multiReviewStore } from "@/stores/multiReviewStore";
 
-import { useTerminalSessionStore } from "@/stores/terminalSessionStore";
+import { terminalSessionStore } from "@/stores/terminalSessionStore";
 
 import { createSessionKey as createNativeSessionKey } from "@/lib/utils";
 
@@ -389,14 +389,14 @@ describe("TerminalContainer", () => {
       error: null,
       deletingEnvironments: new Set(),
     });
-    useTerminalSessionStore.setState({
+    appCommandStore(terminalSessionStore).setState({
       sessions: new Map(),
       composeDraftText: new Map(),
       composeDraftImages: new Map(),
     });
-    useNativeComposeStore.setState({ drafts: new Map() });
+    appCommandStore(nativeComposeStore).setState({ drafts: new Map() });
     appCommandStore(multiReviewStore).setState({ workflows: new Map() });
-    useBuildPipelineStore.setState({
+    appCommandStore(buildPipelineStore).setState({
       pipelines: new Map(),
       buildEnvironmentIds: new Set(),
     });
@@ -1685,7 +1685,7 @@ describe("TerminalContainer", () => {
           },
         });
         expect(
-          useNativeComposeStore
+          appCommandStore(nativeComposeStore)
             .getState()
             .drafts.get(createNativeSessionKey("env-visible", "neutral-native")),
         ).toBeUndefined();
@@ -3281,7 +3281,7 @@ describe("TerminalContainer", () => {
             },
           });
           expect(
-            useNativeComposeStore
+            appCommandStore(nativeComposeStore)
               .getState()
               .drafts.get(createNativeSessionKey("env-visible", `explicit-${platform}`))?.platform,
           ).toBe(platform);
@@ -3327,7 +3327,7 @@ describe("TerminalContainer", () => {
           },
         });
         expect(
-          useNativeComposeStore
+          appCommandStore(nativeComposeStore)
             .getState()
             .drafts.get(createNativeSessionKey("env-visible", "create-dialog-preselect")),
         ).toMatchObject({

@@ -5,7 +5,7 @@ import * as realSortable from "@dnd-kit/sortable";
 import * as realEnvironmentItem from "@/components/environments/EnvironmentItem";
 import * as realBackend from "@/lib/backend";
 import { mockToastError } from "../../mocks/sonner";
-import { useAgentMailStore } from "../../../apps/web/src/stores/agentMailStore";
+import { agentMailStore } from "../../../apps/web/src/stores/agentMailStore";
 import { configStore } from "../../../apps/web/src/stores/configStore";
 import { appCommandStore } from "../../../apps/web/src/test/app-command-store";
 
@@ -97,7 +97,7 @@ describe("sortable sidebar items", () => {
     openInBrowser.mockClear();
     openInBrowser.mockImplementation(async () => {});
     toastError.mockClear();
-    useAgentMailStore.setState(useAgentMailStore.getInitialState());
+    appCommandStore(agentMailStore).setState(appCommandStore(agentMailStore).getInitialState());
   });
 
   afterAll(() => {
@@ -311,7 +311,7 @@ describe("sortable sidebar items", () => {
     const config = structuredClone(appCommandStore(configStore).getInitialState().config);
     config.global.agentMessaging = { ...config.global.agentMessaging!, enabled: true };
     appCommandStore(configStore).setState({ config });
-    useAgentMailStore.setState({
+    appCommandStore(agentMailStore).setState({
       summary: new Map([
         [
           "env-1\0agent",

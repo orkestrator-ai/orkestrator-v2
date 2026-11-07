@@ -4,7 +4,8 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { ClaudeQuestionCard } from "./ClaudeQuestionCard";
 import type { ClaudeQuestionRequest } from "@/lib/claude-types";
 import type { SubmitAnswersHandler } from "@/components/chat/QuestionCard";
-import { usePromptDraftStore } from "@/stores/promptDraftStore";
+import { promptDraftStore } from "@/stores/promptDraftStore";
+import { appCommandStore } from "@/test/app-command-store";
 
 const onSubmitAnswers = mock<SubmitAnswersHandler>(async () => true);
 
@@ -83,7 +84,7 @@ afterEach(() => {
   onSubmitAnswers.mockReset();
   onSubmitAnswers.mockImplementation(async () => true);
   // Cards with a draft key persist drafts, and this suite reuses ids.
-  usePromptDraftStore.getState().reset();
+  appCommandStore(promptDraftStore).getState().reset();
 });
 
 describe("ClaudeQuestionCard", () => {
@@ -495,7 +496,9 @@ describe("ClaudeQuestionCard", () => {
     fireEvent.change(screen.getByPlaceholderText(/Type your own answer/i), {
       target: { value: "half-typed" },
     });
-    expect(usePromptDraftStore.getState().drafts.has("tmux-question-draft")).toBe(true);
+    expect(appCommandStore(promptDraftStore).getState().drafts.has("tmux-question-draft")).toBe(
+      true,
+    );
 
     unmount();
     render(
@@ -523,7 +526,7 @@ describe("ClaudeQuestionCard", () => {
     fireEvent.change(screen.getByPlaceholderText(/Type your own answer/i), {
       target: { value: "ephemeral" },
     });
-    expect(usePromptDraftStore.getState().drafts.size).toBe(0);
+    expect(appCommandStore(promptDraftStore).getState().drafts.size).toBe(0);
   });
 
   test("dismiss delegates to the callback when provided", async () => {

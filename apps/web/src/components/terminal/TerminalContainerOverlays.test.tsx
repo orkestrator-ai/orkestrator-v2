@@ -15,11 +15,11 @@ import { environmentStore } from "@/stores/environmentStore";
 
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 
-import { useNativeComposeStore } from "@/stores/nativeComposeStore";
+import { nativeComposeStore } from "@/stores/nativeComposeStore";
 
-import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { buildPipelineStore } from "@/stores/buildPipelineStore";
 
-import { useTerminalSessionStore } from "@/stores/terminalSessionStore";
+import { terminalSessionStore } from "@/stores/terminalSessionStore";
 
 import { type PersistedPaneLayout } from "@/types/paneLayout";
 
@@ -361,13 +361,13 @@ describe("TerminalContainer", () => {
       error: null,
       deletingEnvironments: new Set(),
     });
-    useTerminalSessionStore.setState({
+    appCommandStore(terminalSessionStore).setState({
       sessions: new Map(),
       composeDraftText: new Map(),
       composeDraftImages: new Map(),
     });
-    useNativeComposeStore.setState({ drafts: new Map() });
-    useBuildPipelineStore.setState({
+    appCommandStore(nativeComposeStore).setState({ drafts: new Map() });
+    appCommandStore(buildPipelineStore).setState({
       pipelines: new Map(),
       buildEnvironmentIds: new Set(),
     });

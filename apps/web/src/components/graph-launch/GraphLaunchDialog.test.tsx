@@ -8,7 +8,7 @@ import type {
 import type { GraphTemplateRef } from "@orkestrator/protocol/graphs/library";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
 import { environmentStore } from "@/stores/environmentStore";
-import { useKanbanStore } from "@/stores/kanbanStore";
+import { kanbanStore } from "@/stores/kanbanStore";
 import type { Environment } from "@/types";
 import type { KanbanTask } from "@/stores/kanbanStore";
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
@@ -185,7 +185,7 @@ function seedStores() {
       { id: "env-other", projectId: "project-2", name: "elsewhere" } as Environment,
     ],
   });
-  useKanbanStore.setState({
+  appCommandStore(kanbanStore).setState({
     tasks: [{ id: "task-1", projectId: PROJECT, title: "Fix login" } as KanbanTask],
   });
 }

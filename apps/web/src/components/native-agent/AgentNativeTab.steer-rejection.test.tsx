@@ -21,8 +21,8 @@ import * as realPaneLayoutPersistence from "@/lib/pane-layout-persistence";
 import * as realNativeComposeBarPaste from "@/hooks/useNativeComposeBarPaste";
 import { environmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
-import { useNativeComposeStore } from "@/stores/nativeComposeStore";
-import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
+import { nativeComposeStore } from "@/stores/nativeComposeStore";
+import { nativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { createSessionKey } from "@/lib/utils";
 import { appCommandStore } from "@/test/app-command-store";
 
@@ -137,11 +137,14 @@ function identity(platform: NativeAgentTabData["platform"]): NativeAgentTabData 
 }
 
 function draftText(tabId: string) {
-  return useNativeComposeStore.getState().drafts.get(createSessionKey("env-1", tabId))?.text;
+  return appCommandStore(nativeComposeStore).getState().drafts.get(createSessionKey("env-1", tabId))
+    ?.text;
 }
 
 async function steerFrom(tabId: string, text: string) {
-  useNativeComposeStore.getState().updateDraft(createSessionKey("env-1", tabId), { text });
+  appCommandStore(nativeComposeStore)
+    .getState()
+    .updateDraft(createSessionKey("env-1", tabId), { text });
   renderInAppCommandScope(<AgentNativeTab tabId={tabId} data={identity("cursor")} isActive />);
   const input = await screen.findByRole("textbox");
   await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
@@ -179,8 +182,8 @@ afterEach(() => {
     hydration: new Map(),
     activeEnvironmentId: null,
   });
-  useNativeComposeStore.setState({ drafts: new Map() });
-  useNativeAgentProjectionStore.getState().reset();
+  appCommandStore(nativeComposeStore).setState({ drafts: new Map() });
+  appCommandStore(nativeAgentProjectionStore).getState().reset();
 });
 
 describe("AgentNativeTab steer rejection", () => {

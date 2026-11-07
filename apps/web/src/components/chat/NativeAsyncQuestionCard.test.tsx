@@ -7,11 +7,12 @@ import {
   NativeAsyncQuestionCard,
   serializeAsyncQuestionAnswers,
 } from "./NativeAsyncQuestionCard";
-import { usePromptDraftStore } from "@/stores/promptDraftStore";
+import { promptDraftStore } from "@/stores/promptDraftStore";
+import { appCommandStore } from "@/test/app-command-store";
 
 afterEach(() => {
   cleanup();
-  usePromptDraftStore.getState().reset();
+  appCommandStore(promptDraftStore).getState().reset();
 });
 
 const part: NativeAsyncQuestionPart = {

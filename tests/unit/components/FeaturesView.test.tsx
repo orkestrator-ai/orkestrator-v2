@@ -13,11 +13,11 @@ import {
   stripStoryRefinementStateBlocks,
 } from "@/lib/feature-planner";
 import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
-import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { buildPipelineStore } from "@/stores/buildPipelineStore";
 import { configStore } from "@/stores/configStore";
 import { environmentStore } from "@/stores/environmentStore";
-import { useFeaturePlanStore } from "@/stores/featurePlanStore";
-import { useKanbanStore } from "@/stores/kanbanStore";
+import { featurePlanStore, useFeaturePlanStore } from "@/stores/featurePlanStore";
+import { kanbanStore, useKanbanStore } from "@/stores/kanbanStore";
 import { projectStore } from "@/stores/projectStore";
 import type { FeaturePlan, FeaturePlanMessage, FeatureStoryCard } from "@/lib/backend";
 import type { KanbanTask } from "@/stores/kanbanStore";
@@ -378,12 +378,12 @@ function updateFeatureInStore(
   featureId: string,
   updates: Partial<FeaturePlan>,
 ): FeaturePlan | undefined {
-  const feature = useFeaturePlanStore
+  const feature = appCommandStore(featurePlanStore)
     .getState()
     .features.find((candidate) => candidate.id === featureId);
   if (!feature) return undefined;
   const updated = { ...feature, ...updates };
-  useFeaturePlanStore.setState((state) => ({
+  appCommandStore(featurePlanStore).setState((state) => ({
     features: state.features.map((candidate) => (candidate.id === featureId ? updated : candidate)),
   }));
   return updated;
@@ -396,7 +396,7 @@ function appendFeatureMessageInStore(
   stateApplication?: FeaturePlanMessage["stateApplication"],
   modelId?: string,
 ): FeaturePlan | undefined {
-  const feature = useFeaturePlanStore
+  const feature = appCommandStore(featurePlanStore)
     .getState()
     .features.find((candidate) => candidate.id === featureId);
   if (!feature) return undefined;
@@ -423,7 +423,7 @@ function appendStoryMessageInStore(
   stateApplication?: FeaturePlanMessage["stateApplication"],
   modelId?: string,
 ): FeaturePlan | undefined {
-  const feature = useFeaturePlanStore
+  const feature = appCommandStore(featurePlanStore)
     .getState()
     .features.find((candidate) => candidate.id === featureId);
   if (!feature) return undefined;
@@ -465,7 +465,7 @@ function seedStores(featureOrFeatures: FeaturePlan | FeaturePlan[]) {
     isLoading: false,
     error: null,
   });
-  useFeaturePlanStore.setState({
+  appCommandStore(featurePlanStore).setState({
     features,
     isLoading: false,
     currentProjectId: "project-1",
@@ -497,7 +497,7 @@ function seedStores(featureOrFeatures: FeaturePlan | FeaturePlan[]) {
       typeof useFeaturePlanStore.getState
     >["cancelPlanning"],
   });
-  useKanbanStore.setState({
+  appCommandStore(kanbanStore).setState({
     tasks: [makeTask()],
     addTask: addTaskMock as unknown as ReturnType<typeof useKanbanStore.getState>["addTask"],
     deleteTask: deleteTaskMock as unknown as ReturnType<
@@ -515,32 +515,34 @@ function seedPipeline({
   failed = false,
 }: { taskId?: string; environmentId?: string; failed?: boolean } = {}): string {
   const id = `pipeline-${taskId}`;
-  useBuildPipelineStore.getState().replacePipeline({
-    id,
-    taskId,
-    projectId: "project-1",
-    environmentId: environmentId ?? "",
-    environmentType: "containerized",
-    agentType: "codex",
-    phase: failed ? "failed" : "building",
-    sessions: [],
-    currentSessionIndex: -1,
-    iteration: 0,
-    maxIterations: 3,
-    createdAt: NOW,
-    taskTitle: "Task",
-    taskSnapshot: {
-      title: "Task",
-      description: "",
-      acceptanceCriteria: "",
-      comments: [],
-      images: [],
-    },
-    source: { type: "kanban", taskId },
-    ...(failed ? { error: "failed to start environment" } : {}),
-    backendRevision: 1,
-    controller: "backend",
-  });
+  appCommandStore(buildPipelineStore)
+    .getState()
+    .replacePipeline({
+      id,
+      taskId,
+      projectId: "project-1",
+      environmentId: environmentId ?? "",
+      environmentType: "containerized",
+      agentType: "codex",
+      phase: failed ? "failed" : "building",
+      sessions: [],
+      currentSessionIndex: -1,
+      iteration: 0,
+      maxIterations: 3,
+      createdAt: NOW,
+      taskTitle: "Task",
+      taskSnapshot: {
+        title: "Task",
+        description: "",
+        acceptanceCriteria: "",
+        comments: [],
+        images: [],
+      },
+      source: { type: "kanban", taskId },
+      ...(failed ? { error: "failed to start environment" } : {}),
+      backendRevision: 1,
+      controller: "backend",
+    });
   return id;
 }
 
@@ -588,9 +590,11 @@ beforeEach(() => {
       title: "",
       status: "collecting",
       stories: [],
-      order: useFeaturePlanStore.getState().features.length,
+      order: appCommandStore(featurePlanStore).getState().features.length,
     });
-    useFeaturePlanStore.setState((state) => ({ features: [...state.features, created] }));
+    appCommandStore(featurePlanStore).setState((state) => ({
+      features: [...state.features, created],
+    }));
     return created.id;
   });
   appendMessageMock.mockClear();
@@ -692,8 +696,11 @@ beforeEach(() => {
     error: null,
     deletingEnvironments: new Set(),
   });
-  useFeaturePlanStore.setState({ chatDrafts: new Map() });
-  useBuildPipelineStore.setState({ pipelines: new Map(), buildEnvironmentIds: new Set() });
+  appCommandStore(featurePlanStore).setState({ chatDrafts: new Map() });
+  appCommandStore(buildPipelineStore).setState({
+    pipelines: new Map(),
+    buildEnvironmentIds: new Set(),
+  });
 });
 
 describe("FeaturesView message drafts", () => {
@@ -838,7 +845,7 @@ describe("FeaturesView message drafts", () => {
       chatFeature({ id: "feature-1", title: "First Feature", order: 0 }),
       chatFeature({ id: "feature-2", title: "Second Feature", order: 1 }),
     ]);
-    useFeaturePlanStore.setState({
+    appCommandStore(featurePlanStore).setState({
       chatDrafts: new Map([
         ["feature:feature-1", "first feature draft"],
         ["feature:feature-2", "second feature draft"],
@@ -878,7 +885,7 @@ describe("FeaturesView message drafts", () => {
   test("clears only the submitted feature and story drafts", async () => {
     seedStores(chatFeature());
     seedExistingCodexEnvironment();
-    useFeaturePlanStore.setState({
+    appCommandStore(featurePlanStore).setState({
       chatDrafts: new Map([
         ["feature:feature-1", "send feature"],
         ["feature:other", "leave feature"],
@@ -890,8 +897,10 @@ describe("FeaturesView message drafts", () => {
     await waitFor(() =>
       expect(startPlanningMock).toHaveBeenCalledWith("feature-1", "feature", "send feature"),
     );
-    expect(useFeaturePlanStore.getState().getChatDraft("feature:feature-1")).toBe("");
-    expect(useFeaturePlanStore.getState().getChatDraft("feature:other")).toBe("leave feature");
+    expect(appCommandStore(featurePlanStore).getState().getChatDraft("feature:feature-1")).toBe("");
+    expect(appCommandStore(featurePlanStore).getState().getChatDraft("feature:other")).toBe(
+      "leave feature",
+    );
     first.unmount();
 
     seedStores(
@@ -901,7 +910,7 @@ describe("FeaturesView message drafts", () => {
       }),
     );
     seedExistingCodexEnvironment();
-    useFeaturePlanStore.setState({
+    appCommandStore(featurePlanStore).setState({
       chatDrafts: new Map([
         ["feature:feature-1:story:story-1", "send story"],
         ["feature:feature-1", "leave chat"],
@@ -914,14 +923,18 @@ describe("FeaturesView message drafts", () => {
     await waitFor(() =>
       expect(startPlanningMock).toHaveBeenCalledWith("feature-1", "story", "send story", "story-1"),
     );
-    expect(useFeaturePlanStore.getState().getChatDraft("feature:feature-1:story:story-1")).toBe("");
-    expect(useFeaturePlanStore.getState().getChatDraft("feature:feature-1")).toBe("leave chat");
+    expect(
+      appCommandStore(featurePlanStore).getState().getChatDraft("feature:feature-1:story:story-1"),
+    ).toBe("");
+    expect(appCommandStore(featurePlanStore).getState().getChatDraft("feature:feature-1")).toBe(
+      "leave chat",
+    );
   });
 
   test("restores the exact feature draft and reports a rejected planning start", async () => {
     startPlanningMock.mockResolvedValueOnce(undefined as never);
     seedStores(chatFeature());
-    useFeaturePlanStore.setState({
+    appCommandStore(featurePlanStore).setState({
       chatDrafts: new Map([["feature:feature-1", "  keep my exact wording  "]]),
     });
     render(<FeaturesView projectId="project-1" />);
@@ -952,7 +965,7 @@ describe("FeaturesView message drafts", () => {
   test("restores the exact story draft and reports a rejected refinement start", async () => {
     startPlanningMock.mockResolvedValueOnce(undefined as never);
     seedStores(featureWithStories());
-    useFeaturePlanStore.setState({
+    appCommandStore(featurePlanStore).setState({
       chatDrafts: new Map([["feature:feature-1:story:story-1", "  preserve story spacing  "]]),
     });
     render(<FeaturesView projectId="project-1" />);
@@ -1279,7 +1292,7 @@ describe("FeaturesView conversation ordering", () => {
     });
 
     act(() => {
-      useFeaturePlanStore.setState({
+      appCommandStore(featurePlanStore).setState({
         features: [
           {
             ...featureA,
@@ -1308,14 +1321,14 @@ describe("FeaturesView conversation ordering", () => {
 describe("FeaturesView lifecycle and navigation", () => {
   test("shows loading state instead of a false empty state while feature loading is pending", async () => {
     seedStores([]);
-    useFeaturePlanStore.setState({ isLoading: true });
+    appCommandStore(featurePlanStore).setState({ isLoading: true });
     render(<FeaturesView projectId="project-1" />);
 
     expect(screen.getAllByText("Loading features...")).toHaveLength(2);
     expect(screen.queryByText("Create a feature to start discovery.") === null).toBe(true);
     expect(screen.queryByText("Select or create a feature.") === null).toBe(true);
 
-    act(() => useFeaturePlanStore.setState({ isLoading: false }));
+    act(() => appCommandStore(featurePlanStore).setState({ isLoading: false }));
     await waitFor(() =>
       expect(screen.getByText("Create a feature to start discovery.")).toBeTruthy(),
     );
@@ -1332,7 +1345,7 @@ describe("FeaturesView lifecycle and navigation", () => {
     await waitFor(() => expect(loadFeaturesMock).toHaveBeenCalledWith("project-1"));
 
     act(() => {
-      useFeaturePlanStore.setState({
+      appCommandStore(featurePlanStore).setState({
         features: [
           featureWithStories({
             id: "project-1-feature",
@@ -1465,7 +1478,9 @@ describe("FeaturesView lifecycle and navigation", () => {
     fireEvent.click(screen.getByRole("button", { name: /Story One/ }));
 
     act(() => {
-      useFeaturePlanStore.setState({ features: [{ ...feature, stories: [feature.stories[1]!] }] });
+      appCommandStore(featurePlanStore).setState({
+        features: [{ ...feature, stories: [feature.stories[1]!] }],
+      });
     });
 
     await waitFor(() =>
@@ -1482,7 +1497,7 @@ describe("FeaturesView lifecycle and navigation", () => {
     expect(screen.getByRole("tab", { name: "Stories" }).getAttribute("aria-selected")).toBe("true");
 
     act(() => {
-      useFeaturePlanStore.setState({
+      appCommandStore(featurePlanStore).setState({
         features: [{ ...feature, stories: [], status: "collecting" }],
       });
     });
@@ -1735,7 +1750,9 @@ describe("FeaturesView build action", () => {
         expect(startFeaturePlanBuildMock).toHaveBeenCalledWith({ featureId: "feature-1" }),
       );
       await waitFor(() =>
-        expect(useBuildPipelineStore.getState().pipelines.get("pipeline-backend")).toBeTruthy(),
+        expect(
+          appCommandStore(buildPipelineStore).getState().pipelines.get("pipeline-backend"),
+        ).toBeTruthy(),
       );
       // Nothing of the renderer sequence runs: no ticket, claim, start or link.
       expect(addTaskMock).not.toHaveBeenCalled();
@@ -1959,7 +1976,7 @@ describe("FeaturesView build action", () => {
     // The pre-launch reservation is durable, but a failed launch must restore
     // the original feature state.
     await waitFor(() => {
-      expect(useFeaturePlanStore.getState().features[0]?.status).toBe("stories");
+      expect(appCommandStore(featurePlanStore).getState().features[0]?.status).toBe("stories");
     });
     expect(updateFeatureMock.mock.calls.at(-1)?.[1]).toMatchObject({
       status: "stories",
@@ -2040,7 +2057,7 @@ describe("FeaturesView build action", () => {
 
   test("reports when the created task is absent from the store", async () => {
     seedStores(featureWithStories());
-    useKanbanStore.setState({ tasks: [] });
+    appCommandStore(kanbanStore).setState({ tasks: [] });
     render(<FeaturesView projectId="project-1" />);
 
     fireEvent.click(screen.getByRole("button", { name: "Build" }));
@@ -2068,7 +2085,7 @@ describe("FeaturesView build action", () => {
         description: "build launch failed",
       }),
     );
-    expect(useFeaturePlanStore.getState().features[0]?.status).toBe("stories");
+    expect(appCommandStore(featurePlanStore).getState().features[0]?.status).toBe("stories");
     expect(updateFeatureMock.mock.calls.at(-1)?.[1]).toMatchObject({
       status: "stories",
     });
@@ -2082,7 +2099,7 @@ describe("FeaturesView build action", () => {
 
     await waitFor(() => expect(startBuildMock).toHaveBeenCalledTimes(1));
     await waitFor(() => {
-      expect(useFeaturePlanStore.getState().features[0]?.status).toBe("stories");
+      expect(appCommandStore(featurePlanStore).getState().features[0]?.status).toBe("stories");
     });
     expect(updateFeatureMock.mock.calls.at(-1)?.[1]).toMatchObject({
       status: "stories",

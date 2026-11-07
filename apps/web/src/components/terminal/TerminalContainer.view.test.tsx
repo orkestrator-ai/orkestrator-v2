@@ -18,9 +18,9 @@ import { environmentStore } from "@/stores/environmentStore";
 
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 
-import { useNativeComposeStore } from "@/stores/nativeComposeStore";
+import { nativeComposeStore } from "@/stores/nativeComposeStore";
 
-import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { buildPipelineStore } from "@/stores/buildPipelineStore";
 import { multiReviewStore } from "@/stores/multiReviewStore";
 import { filesPanelStore } from "@/stores/filesPanelStore";
 
@@ -32,7 +32,7 @@ import {
 
 import { startPaneLayoutPersistence } from "@/lib/pane-layout-persistence";
 
-import { createSessionKey, useTerminalSessionStore } from "@/stores/terminalSessionStore";
+import { createSessionKey, terminalSessionStore } from "@/stores/terminalSessionStore";
 
 import {
   LEGACY_PANE_LAYOUT_VERSION,
@@ -536,13 +536,13 @@ describe("TerminalContainer", () => {
       error: null,
       deletingEnvironments: new Set(),
     });
-    useTerminalSessionStore.setState({
+    appCommandStore(terminalSessionStore).setState({
       sessions: new Map(),
       composeDraftText: new Map(),
       composeDraftImages: new Map(),
     });
-    useNativeComposeStore.setState({ drafts: new Map() });
-    useBuildPipelineStore.setState({
+    appCommandStore(nativeComposeStore).setState({ drafts: new Map() });
+    appCommandStore(buildPipelineStore).setState({
       pipelines: new Map(),
       buildEnvironmentIds: new Set(),
     });
@@ -1571,7 +1571,7 @@ describe("TerminalContainer", () => {
       environmentId: "env-hidden",
       environmentType: "containerized",
     });
-    useBuildPipelineStore.getState().replacePipeline(pipeline);
+    appCommandStore(buildPipelineStore).getState().replacePipeline(pipeline);
     usePaneLayoutStore.getState().initialize("container-hidden", "env-hidden");
     usePaneLayoutStore.getState().addTab(
       "default",
@@ -1641,7 +1641,7 @@ describe("TerminalContainer", () => {
       environmentId: "env-hidden",
       environmentType: "containerized",
     });
-    useBuildPipelineStore.getState().replacePipeline(pipeline);
+    appCommandStore(buildPipelineStore).getState().replacePipeline(pipeline);
     getPaneLayoutMock.mockResolvedValue({
       version: PANE_LAYOUT_VERSION,
       environmentId: "env-hidden",
@@ -1704,7 +1704,7 @@ describe("TerminalContainer", () => {
       environmentId: "env-hidden",
       environmentType: "containerized",
     });
-    useBuildPipelineStore.getState().replacePipeline(pipeline);
+    appCommandStore(buildPipelineStore).getState().replacePipeline(pipeline);
     // Exactly what ensureBuildTab does: create the pane state, then add the tab.
     // No initialize(), because no container has mounted for this environment.
     usePaneLayoutStore.getState().setActiveEnvironment("env-hidden");
@@ -2109,7 +2109,7 @@ describe("TerminalContainer", () => {
 
     await waitFor(() => {
       expect(
-        useTerminalSessionStore
+        appCommandStore(terminalSessionStore)
           .getState()
           .sessions.get(createSessionKey(null, "default", "env-hidden"))?.sessionId,
       ).toBe("env-hidden:setup");
@@ -2171,7 +2171,7 @@ describe("TerminalContainer", () => {
 
     await waitFor(() => {
       expect(
-        useTerminalSessionStore
+        appCommandStore(terminalSessionStore)
           .getState()
           .sessions.get(createSessionKey(null, "default", "env-hidden"))?.sessionId,
       ).toBe("env-hidden:setup");
@@ -2219,7 +2219,7 @@ describe("TerminalContainer", () => {
       expect(setupTabIds()).toEqual([]);
     });
     expect(
-      useTerminalSessionStore
+      appCommandStore(terminalSessionStore)
         .getState()
         .sessions.get(createSessionKey(null, "default", "env-hidden")),
     ).toEqual({ serializedBuffer: "cloning repository...\r\nsetup complete\r\n" });
@@ -2243,7 +2243,7 @@ describe("TerminalContainer", () => {
 
     await waitFor(() => {
       expect(
-        useTerminalSessionStore
+        appCommandStore(terminalSessionStore)
           .getState()
           .sessions.get(createSessionKey(null, "default", "env-hidden"))?.sessionId,
       ).toBe("env-hidden:setup");
@@ -2256,10 +2256,12 @@ describe("TerminalContainer", () => {
     // `hasOutput` goes false while PersistentTerminal can still paint the
     // transcript from `serializedBuffer`. Demotion must keep that buffer while
     // removing the dead setup-session id.
-    useTerminalSessionStore.getState().setSession(createSessionKey(null, "default", "env-hidden"), {
-      sessionId: "env-hidden:setup",
-      serializedBuffer: "cloning repository...\r\nsetup complete\r\n",
-    });
+    appCommandStore(terminalSessionStore)
+      .getState()
+      .setSession(createSessionKey(null, "default", "env-hidden"), {
+        sessionId: "env-hidden:setup",
+        serializedBuffer: "cloning repository...\r\nsetup complete\r\n",
+      });
     getEnvironmentSetupSessionMock.mockResolvedValue({
       environmentId: "env-hidden",
       sessionId: "env-hidden:setup",
@@ -2280,7 +2282,7 @@ describe("TerminalContainer", () => {
       expect(setupTabIds()).toEqual([]);
     });
     expect(
-      useTerminalSessionStore
+      appCommandStore(terminalSessionStore)
         .getState()
         .sessions.get(createSessionKey(null, "default", "env-hidden")),
     ).toEqual({ serializedBuffer: "cloning repository...\r\nsetup complete\r\n" });
@@ -2335,7 +2337,7 @@ describe("TerminalContainer", () => {
 
     await waitFor(() => {
       expect(
-        useTerminalSessionStore
+        appCommandStore(terminalSessionStore)
           .getState()
           .sessions.get(createSessionKey(null, "default", "env-hidden")),
       ).toMatchObject({
@@ -2387,10 +2389,12 @@ describe("TerminalContainer", () => {
     // A restarted backend can lose the session record for an environment whose
     // `setupSessionId` was never persisted. That is not evidence the transcript
     // this renderer already holds is worthless.
-    useTerminalSessionStore.getState().setSession(createSessionKey(null, "default", "env-hidden"), {
-      sessionId: "env-hidden:setup",
-      serializedBuffer: "setup complete\r\n",
-    });
+    appCommandStore(terminalSessionStore)
+      .getState()
+      .setSession(createSessionKey(null, "default", "env-hidden"), {
+        sessionId: "env-hidden:setup",
+        serializedBuffer: "setup complete\r\n",
+      });
     getEnvironmentSetupSessionMock.mockResolvedValue(null);
 
     restoreBackendSetupTabLayout();
@@ -2402,7 +2406,7 @@ describe("TerminalContainer", () => {
       expect(setupTabIds()).toEqual([]);
     });
     expect(
-      useTerminalSessionStore
+      appCommandStore(terminalSessionStore)
         .getState()
         .sessions.get(createSessionKey(null, "default", "env-hidden")),
     ).toEqual({ serializedBuffer: "setup complete\r\n" });
@@ -2492,7 +2496,7 @@ describe("TerminalContainer", () => {
     await waitFor(() => {
       for (const tabId of ["default", "setup-2"]) {
         expect(
-          useTerminalSessionStore
+          appCommandStore(terminalSessionStore)
             .getState()
             .sessions.get(createSessionKey(null, tabId, "env-hidden"))?.sessionId,
         ).toBe("env-hidden:setup");
@@ -2564,7 +2568,7 @@ describe("TerminalContainer", () => {
       environmentType: "containerized",
       taskId: "task-restored",
     });
-    useBuildPipelineStore.getState().replacePipeline(pipeline);
+    appCommandStore(buildPipelineStore).getState().replacePipeline(pipeline);
     getPaneLayoutMock.mockResolvedValue({
       version: PANE_LAYOUT_VERSION,
       environmentId: "env-hidden",
@@ -4795,7 +4799,7 @@ describe("TerminalContainer", () => {
       expect(envHidden.root.tabs[0]?.isSetupTab).toBe(true);
       expect(envHidden.root.tabs[0]?.initialCommands).toBeUndefined();
       expect(
-        useTerminalSessionStore
+        appCommandStore(terminalSessionStore)
           .getState()
           .sessions.get(createSessionKey("container-hidden", "default", "env-hidden"))?.sessionId,
       ).toBe("env-hidden:setup");
@@ -4829,7 +4833,7 @@ describe("TerminalContainer", () => {
       { timeout: 2_000 },
     );
     expect(
-      useTerminalSessionStore
+      appCommandStore(terminalSessionStore)
         .getState()
         .sessions.get(createSessionKey("container-hidden", "default", "env-hidden")),
     ).toBeUndefined();
@@ -4865,7 +4869,7 @@ describe("TerminalContainer", () => {
       () => {
         expect(awaitEnvironmentSetupSessionMock).toHaveBeenCalledTimes(2);
         expect(
-          useTerminalSessionStore
+          appCommandStore(terminalSessionStore)
             .getState()
             .sessions.get(createSessionKey("container-hidden", "default", "env-hidden"))?.sessionId,
         ).toBe("env-hidden:setup");
@@ -4984,7 +4988,7 @@ describe("TerminalContainer", () => {
         () => {
           expect(awaitEnvironmentSetupSessionMock).toHaveBeenCalledTimes(2);
           expect(
-            useTerminalSessionStore
+            appCommandStore(terminalSessionStore)
               .getState()
               .sessions.get(createSessionKey("container-hidden", "default", "env-hidden"))
               ?.sessionId,
@@ -5058,7 +5062,7 @@ describe("TerminalContainer", () => {
       () => {
         expect(awaitEnvironmentSetupSessionMock).toHaveBeenCalledTimes(2);
         expect(
-          useTerminalSessionStore
+          appCommandStore(terminalSessionStore)
             .getState()
             .sessions.get(createSessionKey("container-hidden", "default", "env-hidden"))?.sessionId,
         ).toBe("env-hidden:setup");
@@ -5095,7 +5099,7 @@ describe("TerminalContainer", () => {
         expect.any(Function),
       );
       expect(
-        useTerminalSessionStore
+        appCommandStore(terminalSessionStore)
           .getState()
           .sessions.get(createSessionKey("container-hidden", "default", "env-hidden"))?.sessionId,
       ).toBe("env-hidden:setup");
@@ -5187,14 +5191,14 @@ describe("TerminalContainer", () => {
 
       await waitFor(() => {
         expect(
-          useTerminalSessionStore
+          appCommandStore(terminalSessionStore)
             .getState()
             .sessions.get(createSessionKey("container-visible", "default", "env-visible"))
             ?.sessionId,
         ).toBe("env-visible:setup");
       });
       expect(
-        useTerminalSessionStore
+        appCommandStore(terminalSessionStore)
           .getState()
           .sessions.get(createSessionKey("container-hidden", "default", "env-hidden")),
       ).toBeUndefined();
@@ -5256,7 +5260,7 @@ describe("TerminalContainer", () => {
     // its result would resurrect a session key for an environment this container
     // no longer renders.
     expect(
-      useTerminalSessionStore
+      appCommandStore(terminalSessionStore)
         .getState()
         .sessions.get(createSessionKey("container-hidden", "default", "env-hidden")),
     ).toBeUndefined();
@@ -5514,7 +5518,7 @@ describe("TerminalContainer", () => {
     });
 
     expect(
-      useTerminalSessionStore
+      appCommandStore(terminalSessionStore)
         .getState()
         .sessions.get(createSessionKey(null, "default", "env-hidden"))?.sessionId,
     ).toBe("env-hidden:setup");

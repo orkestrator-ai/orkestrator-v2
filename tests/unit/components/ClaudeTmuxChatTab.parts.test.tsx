@@ -6,7 +6,7 @@ import { forwardRef, useEffect, useImperativeHandle, useRef as useReactRef } fro
 
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 
-import { createClaudeTmuxStateKey, useClaudeTmuxStore } from "@/stores/claudeTmuxStore";
+import { claudeTmuxStore, createClaudeTmuxStateKey } from "@/stores/claudeTmuxStore";
 
 import { environmentStore } from "@/stores/environmentStore";
 
@@ -16,7 +16,7 @@ import { agentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 
 import { uiStore } from "@/stores/uiStore";
 
-import { tmuxElicitationDraftKey, usePromptDraftStore } from "@/stores/promptDraftStore";
+import { promptDraftStore, tmuxElicitationDraftKey } from "@/stores/promptDraftStore";
 
 import { clearPersistedVirtuosoState } from "@/hooks/useVirtuosoScrollState";
 
@@ -136,14 +136,16 @@ const deleteComposeDraftMock = mock(async () => undefined);
 const enqueuePromptQueueMessageMock = mock(
   async (queueKey: string, environmentId: string, message: { id: string }) =>
     promptQueueSnapshot(queueKey, environmentId, [
-      ...useClaudeTmuxStore.getState().getQueuedMessages(promptQueueSessionKey(queueKey)),
+      ...appCommandStore(claudeTmuxStore)
+        .getState()
+        .getQueuedMessages(promptQueueSessionKey(queueKey)),
       message,
     ]),
 );
 
 const removePromptQueueMessageMock = mock(
   async (queueKey: string, environmentId: string, messageId: string) => {
-    const current = useClaudeTmuxStore
+    const current = appCommandStore(claudeTmuxStore)
       .getState()
       .getQueuedMessages(promptQueueSessionKey(queueKey));
     return {
@@ -160,7 +162,9 @@ const removePromptQueueMessageMock = mock(
 const movePromptQueueMessageMock = mock(
   async (queueKey: string, environmentId: string, messageId: string, direction: "up" | "down") => {
     const messages = [
-      ...useClaudeTmuxStore.getState().getQueuedMessages(promptQueueSessionKey(queueKey)),
+      ...appCommandStore(claudeTmuxStore)
+        .getState()
+        .getQueuedMessages(promptQueueSessionKey(queueKey)),
     ];
     const index = messages.findIndex((message) => message.id === messageId);
     const target = direction === "up" ? index - 1 : index + 1;
@@ -192,7 +196,7 @@ const retryPromptQueueDispatchMock = mock(async (queueKey: string) => {
   return promptQueueSnapshot(
     queueKey,
     "env-1",
-    useClaudeTmuxStore.getState().getQueuedMessages(sessionKey),
+    appCommandStore(claudeTmuxStore).getState().getQueuedMessages(sessionKey),
   );
 });
 
@@ -530,7 +534,9 @@ function deferred<T>() {
 
 async function adoptMockedPaneObservation(revision = 1) {
   const pane = await capturePaneMock();
-  useClaudeTmuxStore.getState().setObservation("tab-1", generatedObservation(pane, revision));
+  appCommandStore(claudeTmuxStore)
+    .getState()
+    .setObservation("tab-1", generatedObservation(pane, revision));
 }
 
 function expectSelectionAnswer(optionIndex: number) {
@@ -724,14 +730,16 @@ describe("ClaudeTmuxChatTab", () => {
     enqueuePromptQueueMessageMock.mockImplementation(
       async (queueKey: string, environmentId: string, message: { id: string }) =>
         promptQueueSnapshot(queueKey, environmentId, [
-          ...useClaudeTmuxStore.getState().getQueuedMessages(promptQueueSessionKey(queueKey)),
+          ...appCommandStore(claudeTmuxStore)
+            .getState()
+            .getQueuedMessages(promptQueueSessionKey(queueKey)),
           message,
         ]),
     );
     removePromptQueueMessageMock.mockReset();
     removePromptQueueMessageMock.mockImplementation(
       async (queueKey: string, environmentId: string, messageId: string) => {
-        const current = useClaudeTmuxStore
+        const current = appCommandStore(claudeTmuxStore)
           .getState()
           .getQueuedMessages(promptQueueSessionKey(queueKey));
         return {
@@ -753,7 +761,9 @@ describe("ClaudeTmuxChatTab", () => {
         direction: "up" | "down",
       ) => {
         const messages = [
-          ...useClaudeTmuxStore.getState().getQueuedMessages(promptQueueSessionKey(queueKey)),
+          ...appCommandStore(claudeTmuxStore)
+            .getState()
+            .getQueuedMessages(promptQueueSessionKey(queueKey)),
         ];
         const index = messages.findIndex((message) => message.id === messageId);
         const target = direction === "up" ? index - 1 : index + 1;
@@ -769,7 +779,7 @@ describe("ClaudeTmuxChatTab", () => {
       return promptQueueSnapshot(
         queueKey,
         "env-1",
-        useClaudeTmuxStore.getState().getQueuedMessages(sessionKey),
+        appCommandStore(claudeTmuxStore).getState().getQueuedMessages(sessionKey),
       );
     });
     startSessionMock.mockClear();
@@ -819,7 +829,7 @@ describe("ClaudeTmuxChatTab", () => {
         message_count: 7,
       },
     ]);
-    useClaudeTmuxStore.setState({
+    appCommandStore(claudeTmuxStore).setState({
       tabs: new Map(),
       attachments: new Map(),
       draftText: new Map(),
@@ -827,7 +837,7 @@ describe("ClaudeTmuxChatTab", () => {
       messageQueue: new Map(),
       effortLevels: new Map(),
     });
-    usePromptDraftStore.getState().reset();
+    appCommandStore(promptDraftStore).getState().reset();
     // The tmux tab prefers the live SDK model list shared via the claude
     // store; keep it empty by default so tests exercise the fallback list.
     appCommandStore(agentModelCatalogStore).setState({
@@ -969,7 +979,7 @@ describe("ClaudeTmuxChatTab", () => {
       });
     });
 
-    expect(useClaudeTmuxStore.getState().getTab(stateKey)).toMatchObject({
+    expect(appCommandStore(claudeTmuxStore).getState().getTab(stateKey)).toMatchObject({
       running: true,
       sessionId: "session-from-event",
       resumed: true,
@@ -977,7 +987,7 @@ describe("ClaudeTmuxChatTab", () => {
     expect(screen.getByRole("button", { name: /speed unknown|⚡/ })).toBeTruthy();
 
     act(() => {
-      useClaudeTmuxStore.getState().setBusy(stateKey, true);
+      appCommandStore(claudeTmuxStore).getState().setBusy(stateKey, true);
       subscribedHandler?.({
         kind: "stopped",
         tab_id: "tab-1",
@@ -985,7 +995,7 @@ describe("ClaudeTmuxChatTab", () => {
       });
     });
 
-    expect(useClaudeTmuxStore.getState().getTab(stateKey)).toMatchObject({
+    expect(appCommandStore(claudeTmuxStore).getState().getTab(stateKey)).toMatchObject({
       running: false,
       sessionId: null,
       busy: false,
@@ -1412,7 +1422,7 @@ describe("ClaudeTmuxChatTab", () => {
   });
 
   test("auto-allows AskUserQuestion PermissionRequest hooks without rendering the legacy permission card", async () => {
-    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+    appCommandStore(claudeTmuxStore).getState().setRunning("tab-1", true, {
       environmentId: "env-1",
       sessionId: "session-1",
     });
@@ -1468,7 +1478,9 @@ describe("ClaudeTmuxChatTab", () => {
         "env-1",
       );
     });
-    expect(useClaudeTmuxStore.getState().getTab("tab-1").pendingPermissions).toEqual([]);
+    expect(appCommandStore(claudeTmuxStore).getState().getTab("tab-1").pendingPermissions).toEqual(
+      [],
+    );
     expect(screen.queryByText("Claude needs permission") === null).toBe(true);
   });
 
@@ -1516,7 +1528,7 @@ describe("ClaudeTmuxChatTab", () => {
     );
 
     await waitFor(() => {
-      const tab = useClaudeTmuxStore.getState().getTab("tab-1");
+      const tab = appCommandStore(claudeTmuxStore).getState().getTab("tab-1");
       expect(tab.pendingPermissions).toHaveLength(1);
       expect(tab.pendingPermissions[0]!.eventId).toBe("question-permission-hook");
     });
@@ -1527,7 +1539,7 @@ describe("ClaudeTmuxChatTab", () => {
     replyHookMock.mockImplementationOnce(async () => {
       throw new Error("bridge unavailable");
     });
-    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+    appCommandStore(claudeTmuxStore).getState().setRunning("tab-1", true, {
       environmentId: "env-1",
       sessionId: "session-1",
     });
@@ -1568,7 +1580,7 @@ describe("ClaudeTmuxChatTab", () => {
     });
 
     await waitFor(() => {
-      const tab = useClaudeTmuxStore.getState().getTab("tab-1");
+      const tab = appCommandStore(claudeTmuxStore).getState().getTab("tab-1");
       expect(tab.pendingPermissions).toHaveLength(1);
       expect(tab.pendingPermissions[0]!.eventId).toBe("question-permission-hook");
     });
@@ -1577,7 +1589,7 @@ describe("ClaudeTmuxChatTab", () => {
 
   test("normalizes default informational hook messages and timestamps", async () => {
     dateNowSpy = spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
-    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+    appCommandStore(claudeTmuxStore).getState().setRunning("tab-1", true, {
       environmentId: "env-1",
       sessionId: "session-1",
     });
@@ -1613,7 +1625,7 @@ describe("ClaudeTmuxChatTab", () => {
       });
     });
 
-    expect(useClaudeTmuxStore.getState().getTab("tab-1").infoEvents).toEqual([
+    expect(appCommandStore(claudeTmuxStore).getState().getTab("tab-1").infoEvents).toEqual([
       {
         id: "default-notification",
         kind: "Notification",
@@ -1693,7 +1705,7 @@ describe("ClaudeTmuxChatTab", () => {
         fireEvent.click(input);
         fireEvent.keyUp(input, { key: "Home" });
         expect(input.value).toBe(draft);
-        expect(useClaudeTmuxStore.getState().getDraftMentions("tab-1")).toEqual([]);
+        expect(appCommandStore(claudeTmuxStore).getState().getDraftMentions("tab-1")).toEqual([]);
         expect(
           screen.queryByText(menu === "slash" ? "Slash Commands" : "Button.tsx") === null,
         ).toBe(true);
@@ -1712,7 +1724,7 @@ describe("ClaudeTmuxChatTab", () => {
   }
 
   test("autofocuses the compose input on desktop but not on mobile", () => {
-    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+    appCommandStore(claudeTmuxStore).getState().setRunning("tab-1", true, {
       environmentId: "env-1",
       sessionId: "session-1",
     });
@@ -1742,7 +1754,7 @@ describe("ClaudeTmuxChatTab", () => {
   });
 
   test("typing / opens the built-in slash command menu and selecting one fills the input", async () => {
-    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+    appCommandStore(claudeTmuxStore).getState().setRunning("tab-1", true, {
       environmentId: "env-1",
       sessionId: "session-1",
     });
@@ -1778,7 +1790,7 @@ describe("ClaudeTmuxChatTab", () => {
   });
 
   test("supports slash command keyboard navigation, Tab selection, and Escape dismissal", async () => {
-    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+    appCommandStore(claudeTmuxStore).getState().setRunning("tab-1", true, {
       environmentId: "env-1",
       sessionId: "session-1",
     });
@@ -1825,7 +1837,7 @@ describe("ClaudeTmuxChatTab", () => {
   });
 
   test("inserts a selected @ file mention into the tmux compose input", async () => {
-    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+    appCommandStore(claudeTmuxStore).getState().setRunning("tab-1", true, {
       environmentId: "env-1",
       sessionId: "session-1",
     });
@@ -1874,14 +1886,14 @@ describe("ClaudeTmuxChatTab", () => {
     await waitFor(() => {
       expect(textarea.value).toBe("Review @src/components/Button.tsx ");
     });
-    expect(useClaudeTmuxStore.getState().getDraftMentions("tab-1")[0]?.id).toMatch(
+    expect(appCommandStore(claudeTmuxStore).getState().getDraftMentions("tab-1")[0]?.id).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
     );
     expect(screen.queryByText("Button.tsx") === null).toBe(true);
   });
 
   test("serializes tmux @ file references to full environment paths before submit", async () => {
-    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+    appCommandStore(claudeTmuxStore).getState().setRunning("tab-1", true, {
       environmentId: "env-1",
       sessionId: "session-1",
     });
@@ -1942,7 +1954,7 @@ describe("ClaudeTmuxChatTab", () => {
 
   test("preserves and escapes absolute tmux @ file references before submit", async () => {
     const stateKey = createClaudeTmuxStateKey("env-1", "tab-1");
-    const store = useClaudeTmuxStore.getState();
+    const store = appCommandStore(claudeTmuxStore).getState();
     store.setRunning(stateKey, true, {
       environmentId: "env-1",
       sessionId: "session-1",
@@ -1973,7 +1985,7 @@ describe("ClaudeTmuxChatTab", () => {
 
   test("deduplicates selected file mentions and removes metadata when mention text is deleted", async () => {
     const stateKey = createClaudeTmuxStateKey("env-1", "tab-1");
-    const store = useClaudeTmuxStore.getState();
+    const store = appCommandStore(claudeTmuxStore).getState();
     store.setRunning(stateKey, true, {
       environmentId: "env-1",
       sessionId: "session-1",
@@ -2011,7 +2023,7 @@ describe("ClaudeTmuxChatTab", () => {
     fireEvent.keyDown(textarea, { key: "Enter" });
 
     await waitFor(() => {
-      expect(useClaudeTmuxStore.getState().getDraftMentions(stateKey)).toEqual([
+      expect(appCommandStore(claudeTmuxStore).getState().getDraftMentions(stateKey)).toEqual([
         {
           id: "existing-file",
           filename: "Button.tsx",
@@ -2031,12 +2043,12 @@ describe("ClaudeTmuxChatTab", () => {
       },
     });
 
-    expect(useClaudeTmuxStore.getState().getDraftMentions(stateKey)).toEqual([]);
+    expect(appCommandStore(claudeTmuxStore).getState().getDraftMentions(stateKey)).toEqual([]);
   });
 
   test("removes a staged tmux attachment from the compose bar", async () => {
     const stateKey = createClaudeTmuxStateKey("env-1", "tab-1");
-    const store = useClaudeTmuxStore.getState();
+    const store = appCommandStore(claudeTmuxStore).getState();
     store.setRunning(stateKey, true, {
       environmentId: "env-1",
       sessionId: "session-1",
@@ -2061,11 +2073,11 @@ describe("ClaudeTmuxChatTab", () => {
     fireEvent.click(screen.getByTitle("Remove attachment"));
 
     expect(screen.queryByAltText("diagram.png") === null).toBe(true);
-    expect(useClaudeTmuxStore.getState().getAttachments(stateKey)).toEqual([]);
+    expect(appCommandStore(claudeTmuxStore).getState().getAttachments(stateKey)).toEqual([]);
   });
 
   test("reopens file mention detection when cursor navigation enters an @ token", async () => {
-    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+    appCommandStore(claudeTmuxStore).getState().setRunning("tab-1", true, {
       environmentId: "env-1",
       sessionId: "session-1",
     });
@@ -2105,7 +2117,7 @@ describe("ClaudeTmuxChatTab", () => {
   });
 
   test("loads @ file suggestions from a local worktree when no container is present", async () => {
-    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+    appCommandStore(claudeTmuxStore).getState().setRunning("tab-1", true, {
       environmentId: "env-1",
       sessionId: "session-1",
     });
@@ -2159,7 +2171,7 @@ describe("ClaudeTmuxChatTab", () => {
   });
 
   test("keeps Enter from submitting while an empty @ file mention menu is open", async () => {
-    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+    appCommandStore(claudeTmuxStore).getState().setRunning("tab-1", true, {
       environmentId: "env-1",
       sessionId: "session-1",
     });
@@ -2189,7 +2201,7 @@ describe("ClaudeTmuxChatTab", () => {
   });
 
   test("switches the running tmux model through Claude's slash command", async () => {
-    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+    appCommandStore(claudeTmuxStore).getState().setRunning("tab-1", true, {
       environmentId: "env-1",
       sessionId: "session-1",
     });
@@ -2222,7 +2234,7 @@ describe("ClaudeTmuxChatTab", () => {
   });
 
   test("switches a running tmux session to the Default model", async () => {
-    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+    appCommandStore(claudeTmuxStore).getState().setRunning("tab-1", true, {
       environmentId: "env-1",
       sessionId: "session-1",
     });
@@ -2607,7 +2619,7 @@ describe("ClaudeTmuxChatTab", () => {
           resolveSubmit = resolve;
         }),
     );
-    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+    appCommandStore(claudeTmuxStore).getState().setRunning("tab-1", true, {
       environmentId: "env-1",
       sessionId: "session-1",
     });
@@ -2658,7 +2670,7 @@ describe("ClaudeTmuxChatTab", () => {
     switchModelMock.mockImplementationOnce(async () => {
       throw new Error("tmux unavailable");
     });
-    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+    appCommandStore(claudeTmuxStore).getState().setRunning("tab-1", true, {
       environmentId: "env-1",
       sessionId: "session-1",
     });
@@ -2737,7 +2749,9 @@ describe("ClaudeTmuxChatTab", () => {
 
     expect(await screen.findByRole("button", { name: /Fable/ })).toBeTruthy();
     await waitFor(() => {
-      expect(useClaudeTmuxStore.getState().effortLevels.get("env:env-1:tab:tab-1")).toBe("max");
+      expect(
+        appCommandStore(claudeTmuxStore).getState().effortLevels.get("env:env-1:tab:tab-1"),
+      ).toBe("max");
       expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]).toMatchObject({
         initialAgentModel: undefined,
         initialReasoningEffort: undefined,
@@ -2759,7 +2773,7 @@ describe("ClaudeTmuxChatTab", () => {
         },
       },
     }));
-    useClaudeTmuxStore.getState().setEffortLevel("env:env-1:tab:tab-1", "low");
+    appCommandStore(claudeTmuxStore).getState().setEffortLevel("env:env-1:tab:tab-1", "low");
     firstMount.unmount();
 
     render(
@@ -2872,7 +2886,7 @@ describe("ClaudeTmuxChatTab", () => {
   });
 
   test("switches the running session effort through Claude's /effort command", async () => {
-    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+    appCommandStore(claudeTmuxStore).getState().setRunning("tab-1", true, {
       environmentId: "env-1",
       sessionId: "session-1",
     });
@@ -2908,7 +2922,7 @@ describe("ClaudeTmuxChatTab", () => {
     switchEffortMock.mockImplementationOnce(async () => {
       throw new Error("tmux unavailable");
     });
-    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+    appCommandStore(claudeTmuxStore).getState().setRunning("tab-1", true, {
       environmentId: "env-1",
       sessionId: "session-1",
     });
@@ -2951,7 +2965,7 @@ describe("ClaudeTmuxChatTab", () => {
         },
       },
     }));
-    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+    appCommandStore(claudeTmuxStore).getState().setRunning("tab-1", true, {
       environmentId: "env-1",
       sessionId: "session-1",
     });
@@ -2999,7 +3013,7 @@ describe("ClaudeTmuxChatTab", () => {
         },
       },
     }));
-    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+    appCommandStore(claudeTmuxStore).getState().setRunning("tab-1", true, {
       environmentId: "env-1",
       sessionId: "session-1",
     });
@@ -3144,11 +3158,11 @@ describe("ClaudeTmuxChatTab", () => {
       },
     }));
     const stateKey = createClaudeTmuxStateKey("env-1", "tab-1");
-    useClaudeTmuxStore.getState().setRunning(stateKey, true, {
+    appCommandStore(claudeTmuxStore).getState().setRunning(stateKey, true, {
       environmentId: "env-1",
       sessionId: "session-1",
     });
-    useClaudeTmuxStore.getState().setBusy(stateKey, true);
+    appCommandStore(claudeTmuxStore).getState().setBusy(stateKey, true);
 
     render(
       <ClaudeTmuxChatTab
@@ -3184,7 +3198,7 @@ describe("ClaudeTmuxChatTab", () => {
         },
       },
     }));
-    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+    appCommandStore(claudeTmuxStore).getState().setRunning("tab-1", true, {
       environmentId: "env-1",
       sessionId: "session-1",
     });
@@ -3238,7 +3252,7 @@ describe("ClaudeTmuxChatTab", () => {
         },
       },
     }));
-    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+    appCommandStore(claudeTmuxStore).getState().setRunning("tab-1", true, {
       environmentId: "env-1",
       sessionId: "session-1",
     });
@@ -3297,7 +3311,7 @@ describe("ClaudeTmuxChatTab", () => {
         },
       },
     }));
-    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+    appCommandStore(claudeTmuxStore).getState().setRunning("tab-1", true, {
       environmentId: "env-1",
       sessionId: "session-1",
     });
@@ -3353,7 +3367,7 @@ describe("ClaudeTmuxChatTab", () => {
         },
       },
     }));
-    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+    appCommandStore(claudeTmuxStore).getState().setRunning("tab-1", true, {
       environmentId: "env-1",
       sessionId: "session-1",
     });
@@ -3721,7 +3735,7 @@ describe("ClaudeTmuxChatTab", () => {
           resolveSwitch = resolve;
         }),
     );
-    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+    appCommandStore(claudeTmuxStore).getState().setRunning("tab-1", true, {
       environmentId: "env-1",
       sessionId: "session-1",
     });
@@ -3758,7 +3772,7 @@ describe("ClaudeTmuxChatTab", () => {
 
   test("uses the backend's returned permission mode instead of the requested toggle", async () => {
     switchPlanModeMock.mockImplementationOnce(async () => "acceptEdits");
-    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+    appCommandStore(claudeTmuxStore).getState().setRunning("tab-1", true, {
       environmentId: "env-1",
       sessionId: "session-1",
     });
@@ -3781,7 +3795,7 @@ describe("ClaudeTmuxChatTab", () => {
   });
 
   test("tracks permission events, transcript updates, and stopped sessions", async () => {
-    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+    appCommandStore(claudeTmuxStore).getState().setRunning("tab-1", true, {
       environmentId: "env-1",
       sessionId: "session-1",
     });
@@ -3924,7 +3938,7 @@ describe("ClaudeTmuxChatTab", () => {
 
   test("clicking a queued tmux prompt restores its text and attachments for editing", async () => {
     const stateKey = createClaudeTmuxStateKey("env-1", "tab-1");
-    const store = useClaudeTmuxStore.getState();
+    const store = appCommandStore(claudeTmuxStore).getState();
     store.setRunning(stateKey, true, {
       environmentId: "env-1",
       sessionId: "session-1",
@@ -3960,7 +3974,7 @@ describe("ClaudeTmuxChatTab", () => {
         (screen.getByPlaceholderText(/Ask Claude anything/) as HTMLTextAreaElement).value,
       ).toBe("edit queued with image");
       expect(screen.getByAltText("diagram.png")).toBeTruthy();
-      expect(useClaudeTmuxStore.getState().getQueuedMessages(stateKey)).toEqual([]);
+      expect(appCommandStore(claudeTmuxStore).getState().getQueuedMessages(stateKey)).toEqual([]);
     });
   });
 
@@ -3968,7 +3982,7 @@ describe("ClaudeTmuxChatTab", () => {
     submitMock.mockImplementationOnce(async () => {
       throw new Error("tmux unavailable");
     });
-    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+    appCommandStore(claudeTmuxStore).getState().setRunning("tab-1", true, {
       environmentId: "env-1",
       sessionId: "session-1",
     });
@@ -4012,8 +4026,8 @@ describe("ClaudeTmuxChatTab", () => {
         modelId: "claude-test-model",
       },
     ];
-    const current = useClaudeTmuxStore.getState().getTab("tab-1");
-    useClaudeTmuxStore.setState({
+    const current = appCommandStore(claudeTmuxStore).getState().getTab("tab-1");
+    appCommandStore(claudeTmuxStore).setState({
       tabs: new Map([
         [
           "tab-1",
@@ -4097,11 +4111,13 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
 
 Enter to select · Tab/Arrow keys to navigate · Esc to cancel
 `;
-    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+    appCommandStore(claudeTmuxStore).getState().setRunning("tab-1", true, {
       environmentId: "env-1",
       sessionId: "session-1",
     });
-    useClaudeTmuxStore.getState().setObservation("tab-1", generatedObservation(pane, 1));
+    appCommandStore(claudeTmuxStore)
+      .getState()
+      .setObservation("tab-1", generatedObservation(pane, 1));
 
     render(
       <ClaudeTmuxChatTab
@@ -4134,21 +4150,14 @@ Which framework?
 Enter to select · Tab/Arrow keys to navigate · Esc to cancel
 `,
     );
-    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+    appCommandStore(claudeTmuxStore).getState().setRunning("tab-1", true, {
       environmentId: "env-1",
       sessionId: "session-1",
     });
-    useClaudeTmuxStore.getState().addPendingQuestion("tab-1", {
-      eventId: "q-hook",
-      questions: [
-        {
-          question: "Which framework?",
-          header: "Framework",
-          options: [{ label: "React" }, { label: "Vue" }],
-          multiSelect: false,
-        },
-      ],
-      toolInput: {
+    appCommandStore(claudeTmuxStore)
+      .getState()
+      .addPendingQuestion("tab-1", {
+        eventId: "q-hook",
         questions: [
           {
             question: "Which framework?",
@@ -4157,10 +4166,19 @@ Enter to select · Tab/Arrow keys to navigate · Esc to cancel
             multiSelect: false,
           },
         ],
-      },
-      payload: {},
-      receivedAt: new Date().toISOString(),
-    });
+        toolInput: {
+          questions: [
+            {
+              question: "Which framework?",
+              header: "Framework",
+              options: [{ label: "React" }, { label: "Vue" }],
+              multiSelect: false,
+            },
+          ],
+        },
+        payload: {},
+        receivedAt: new Date().toISOString(),
+      });
 
     render(
       <ClaudeTmuxChatTab
@@ -4187,7 +4205,7 @@ https://code.claude.com/docs/en/security
 Enter to confirm · Esc to cancel
 `,
     );
-    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+    appCommandStore(claudeTmuxStore).getState().setRunning("tab-1", true, {
       environmentId: "env-1",
       sessionId: "session-1",
     });
@@ -4226,7 +4244,7 @@ https://code.claude.com/docs/en/security
 Enter to confirm · Esc to cancel
 `,
     );
-    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+    appCommandStore(claudeTmuxStore).getState().setRunning("tab-1", true, {
       environmentId: "env-1",
       sessionId: "session-1",
     });
@@ -4264,7 +4282,7 @@ Two staged files look like they shouldn't be in the PR. How should I handle them
 Enter to select · ↑/↓ to navigate · Esc to cancel
 `,
     );
-    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+    appCommandStore(claudeTmuxStore).getState().setRunning("tab-1", true, {
       environmentId: "env-1",
       sessionId: "session-1",
     });
@@ -4338,7 +4356,7 @@ https://code.claude.com/docs/en/security
 Enter to confirm · Esc to cancel
 `,
     );
-    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+    appCommandStore(claudeTmuxStore).getState().setRunning("tab-1", true, {
       environmentId: "env-1",
       sessionId: "session-1",
     });
@@ -4374,7 +4392,7 @@ Choose the retry scope
 Enter to confirm · Esc to cancel
 `,
     );
-    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+    appCommandStore(claudeTmuxStore).getState().setRunning("tab-1", true, {
       environmentId: "env-1",
       sessionId: "session-1",
     });
@@ -4413,7 +4431,7 @@ Choose an action
 Enter to confirm · ↑/↓ to navigate · Esc to cancel
 `,
     );
-    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+    appCommandStore(claudeTmuxStore).getState().setRunning("tab-1", true, {
       environmentId: "env-1",
       sessionId: "session-1",
     });
@@ -4447,7 +4465,7 @@ Enter to confirm · ↑/↓ to navigate · Esc to cancel
 Enter to confirm · Esc to cancel
 `,
     );
-    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+    appCommandStore(claudeTmuxStore).getState().setRunning("tab-1", true, {
       environmentId: "env-1",
       sessionId: "session-1",
     });
@@ -4479,11 +4497,13 @@ Enter to confirm · Esc to cancel
 
 Enter to confirm · Esc to cancel
 `;
-    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+    appCommandStore(claudeTmuxStore).getState().setRunning("tab-1", true, {
       environmentId: "env-1",
       sessionId: "session-1",
     });
-    useClaudeTmuxStore.getState().setObservation("tab-1", generatedObservation(pane, 1));
+    appCommandStore(claudeTmuxStore)
+      .getState()
+      .setObservation("tab-1", generatedObservation(pane, 1));
 
     render(
       <ClaudeTmuxChatTab
@@ -4529,7 +4549,7 @@ Enter to confirm · Esc to cancel
     }
     pane += "\nEnter to confirm · Esc to cancel\n";
     capturePaneMock.mockImplementation(async () => pane);
-    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+    appCommandStore(claudeTmuxStore).getState().setRunning("tab-1", true, {
       environmentId: "env-1",
       sessionId: "session-1",
     });
@@ -4635,21 +4655,14 @@ Enter to confirm · Esc to cancel
   });
 
   test("preserves an AskUserQuestion option plus custom answer in updatedInput", async () => {
-    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+    appCommandStore(claudeTmuxStore).getState().setRunning("tab-1", true, {
       environmentId: "env-1",
       sessionId: "session-1",
     });
-    useClaudeTmuxStore.getState().addPendingQuestion("tab-1", {
-      eventId: "q-hook",
-      questions: [
-        {
-          question: "Which framework?",
-          header: "Framework",
-          options: [{ label: "React" }, { label: "Vue" }],
-          multiSelect: false,
-        },
-      ],
-      toolInput: {
+    appCommandStore(claudeTmuxStore)
+      .getState()
+      .addPendingQuestion("tab-1", {
+        eventId: "q-hook",
         questions: [
           {
             question: "Which framework?",
@@ -4658,10 +4671,19 @@ Enter to confirm · Esc to cancel
             multiSelect: false,
           },
         ],
-      },
-      payload: {},
-      receivedAt: new Date().toISOString(),
-    });
+        toolInput: {
+          questions: [
+            {
+              question: "Which framework?",
+              header: "Framework",
+              options: [{ label: "React" }, { label: "Vue" }],
+              multiSelect: false,
+            },
+          ],
+        },
+        payload: {},
+        receivedAt: new Date().toISOString(),
+      });
 
     render(
       <ClaudeTmuxChatTab
@@ -4699,27 +4721,14 @@ Enter to confirm · Esc to cancel
   });
 
   test("maps multi-question and multi-select AskUserQuestion answers", async () => {
-    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+    appCommandStore(claudeTmuxStore).getState().setRunning("tab-1", true, {
       environmentId: "env-1",
       sessionId: "session-1",
     });
-    useClaudeTmuxStore.getState().addPendingQuestion("tab-1", {
-      eventId: "q-hook",
-      questions: [
-        {
-          question: "Which frameworks?",
-          header: "Frameworks",
-          options: [{ label: "React" }, { label: "Vue" }],
-          multiSelect: true,
-        },
-        {
-          question: "Any notes?",
-          header: "Notes",
-          options: [],
-          multiSelect: false,
-        },
-      ],
-      toolInput: {
+    appCommandStore(claudeTmuxStore)
+      .getState()
+      .addPendingQuestion("tab-1", {
+        eventId: "q-hook",
         questions: [
           {
             question: "Which frameworks?",
@@ -4734,10 +4743,25 @@ Enter to confirm · Esc to cancel
             multiSelect: false,
           },
         ],
-      },
-      payload: {},
-      receivedAt: new Date().toISOString(),
-    });
+        toolInput: {
+          questions: [
+            {
+              question: "Which frameworks?",
+              header: "Frameworks",
+              options: [{ label: "React" }, { label: "Vue" }],
+              multiSelect: true,
+            },
+            {
+              question: "Any notes?",
+              header: "Notes",
+              options: [],
+              multiSelect: false,
+            },
+          ],
+        },
+        payload: {},
+        receivedAt: new Date().toISOString(),
+      });
 
     render(
       <ClaudeTmuxChatTab
@@ -4776,21 +4800,14 @@ Enter to confirm · Esc to cancel
   });
 
   test("keeps AskUserQuestion pending when replyHook fails", async () => {
-    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+    appCommandStore(claudeTmuxStore).getState().setRunning("tab-1", true, {
       environmentId: "env-1",
       sessionId: "session-1",
     });
-    useClaudeTmuxStore.getState().addPendingQuestion("tab-1", {
-      eventId: "q-hook",
-      questions: [
-        {
-          question: "Which framework?",
-          header: "Framework",
-          options: [{ label: "React" }],
-          multiSelect: false,
-        },
-      ],
-      toolInput: {
+    appCommandStore(claudeTmuxStore)
+      .getState()
+      .addPendingQuestion("tab-1", {
+        eventId: "q-hook",
         questions: [
           {
             question: "Which framework?",
@@ -4799,10 +4816,19 @@ Enter to confirm · Esc to cancel
             multiSelect: false,
           },
         ],
-      },
-      payload: {},
-      receivedAt: new Date().toISOString(),
-    });
+        toolInput: {
+          questions: [
+            {
+              question: "Which framework?",
+              header: "Framework",
+              options: [{ label: "React" }],
+              multiSelect: false,
+            },
+          ],
+        },
+        payload: {},
+        receivedAt: new Date().toISOString(),
+      });
     replyHookMock.mockImplementationOnce(async () => {
       throw new Error("bridge down");
     });
@@ -4820,26 +4846,21 @@ Enter to confirm · Esc to cancel
 
     await waitFor(() => {
       expect(screen.getByText("Error: bridge down")).toBeTruthy();
-      expect(useClaudeTmuxStore.getState().getTab("tab-1").pendingQuestions).toHaveLength(1);
+      expect(
+        appCommandStore(claudeTmuxStore).getState().getTab("tab-1").pendingQuestions,
+      ).toHaveLength(1);
     });
   });
 
   test("dismisses AskUserQuestion hooks with a PreToolUse denial", async () => {
-    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+    appCommandStore(claudeTmuxStore).getState().setRunning("tab-1", true, {
       environmentId: "env-1",
       sessionId: "session-1",
     });
-    useClaudeTmuxStore.getState().addPendingQuestion("tab-1", {
-      eventId: "q-hook",
-      questions: [
-        {
-          question: "Which framework?",
-          header: "Framework",
-          options: [{ label: "React" }],
-          multiSelect: false,
-        },
-      ],
-      toolInput: {
+    appCommandStore(claudeTmuxStore)
+      .getState()
+      .addPendingQuestion("tab-1", {
+        eventId: "q-hook",
         questions: [
           {
             question: "Which framework?",
@@ -4848,10 +4869,19 @@ Enter to confirm · Esc to cancel
             multiSelect: false,
           },
         ],
-      },
-      payload: {},
-      receivedAt: new Date().toISOString(),
-    });
+        toolInput: {
+          questions: [
+            {
+              question: "Which framework?",
+              header: "Framework",
+              options: [{ label: "React" }],
+              multiSelect: false,
+            },
+          ],
+        },
+        payload: {},
+        receivedAt: new Date().toISOString(),
+      });
 
     render(
       <ClaudeTmuxChatTab
@@ -4876,26 +4906,21 @@ Enter to confirm · Esc to cancel
         }),
         "env-1",
       );
-      expect(useClaudeTmuxStore.getState().getTab("tab-1").pendingQuestions).toEqual([]);
+      expect(appCommandStore(claudeTmuxStore).getState().getTab("tab-1").pendingQuestions).toEqual(
+        [],
+      );
     });
   });
 
   test("keeps AskUserQuestion pending when dismissal delivery fails", async () => {
-    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+    appCommandStore(claudeTmuxStore).getState().setRunning("tab-1", true, {
       environmentId: "env-1",
       sessionId: "session-1",
     });
-    useClaudeTmuxStore.getState().addPendingQuestion("tab-1", {
-      eventId: "question-retry",
-      questions: [
-        {
-          question: "Which framework?",
-          header: "Framework",
-          options: [{ label: "React" }],
-          multiSelect: false,
-        },
-      ],
-      toolInput: {
+    appCommandStore(claudeTmuxStore)
+      .getState()
+      .addPendingQuestion("tab-1", {
+        eventId: "question-retry",
         questions: [
           {
             question: "Which framework?",
@@ -4904,10 +4929,19 @@ Enter to confirm · Esc to cancel
             multiSelect: false,
           },
         ],
-      },
-      payload: {},
-      receivedAt: new Date().toISOString(),
-    });
+        toolInput: {
+          questions: [
+            {
+              question: "Which framework?",
+              header: "Framework",
+              options: [{ label: "React" }],
+              multiSelect: false,
+            },
+          ],
+        },
+        payload: {},
+        receivedAt: new Date().toISOString(),
+      });
     replyHookMock.mockImplementationOnce(async () => {
       throw new Error("bridge down");
     });
@@ -4923,33 +4957,39 @@ Enter to confirm · Esc to cancel
     fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
 
     expect(await screen.findByText("Error: bridge down")).toBeTruthy();
-    expect(useClaudeTmuxStore.getState().getTab("tab-1").pendingQuestions).toHaveLength(1);
+    expect(
+      appCommandStore(claudeTmuxStore).getState().getTab("tab-1").pendingQuestions,
+    ).toHaveLength(1);
     expect(screen.getByRole("button", { name: "Dismiss" })).toBeTruthy();
   });
 
   test("answers plan approvals and change requests", async () => {
-    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+    appCommandStore(claudeTmuxStore).getState().setRunning("tab-1", true, {
       environmentId: "env-1",
       sessionId: "session-1",
     });
-    useClaudeTmuxStore.getState().addPendingPlan("tab-1", {
-      eventId: "plan-hook",
-      plan: "## Update the tests\n\n- **Add** edge-case coverage",
-      planFilePath: "/tmp/plan.md",
-      allowedPrompts: [],
-      toolInput: { plan: "Update the tests" },
-      payload: {},
-      receivedAt: new Date().toISOString(),
-    });
-    useClaudeTmuxStore.getState().addPendingPlan("tab-1", {
-      eventId: "plan-hook-2",
-      plan: "Ship it",
-      planFilePath: null,
-      allowedPrompts: [],
-      toolInput: { plan: "Ship it" },
-      payload: {},
-      receivedAt: new Date().toISOString(),
-    });
+    appCommandStore(claudeTmuxStore)
+      .getState()
+      .addPendingPlan("tab-1", {
+        eventId: "plan-hook",
+        plan: "## Update the tests\n\n- **Add** edge-case coverage",
+        planFilePath: "/tmp/plan.md",
+        allowedPrompts: [],
+        toolInput: { plan: "Update the tests" },
+        payload: {},
+        receivedAt: new Date().toISOString(),
+      });
+    appCommandStore(claudeTmuxStore)
+      .getState()
+      .addPendingPlan("tab-1", {
+        eventId: "plan-hook-2",
+        plan: "Ship it",
+        planFilePath: null,
+        allowedPrompts: [],
+        toolInput: { plan: "Ship it" },
+        payload: {},
+        receivedAt: new Date().toISOString(),
+      });
 
     render(
       <ClaudeTmuxChatTab
@@ -5006,19 +5046,21 @@ Enter to confirm · Esc to cancel
   });
 
   test("opens plan markdown links externally and renders plan permission counts", async () => {
-    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+    appCommandStore(claudeTmuxStore).getState().setRunning("tab-1", true, {
       environmentId: "env-1",
       sessionId: "session-1",
     });
-    useClaudeTmuxStore.getState().addPendingPlan("tab-1", {
-      eventId: "plan-link",
-      plan: "Read [the docs](https://example.com/docs).",
-      planFilePath: null,
-      allowedPrompts: [{ tool: "Bash" }, { tool: "Read" }],
-      toolInput: {},
-      payload: {},
-      receivedAt: new Date().toISOString(),
-    });
+    appCommandStore(claudeTmuxStore)
+      .getState()
+      .addPendingPlan("tab-1", {
+        eventId: "plan-link",
+        plan: "Read [the docs](https://example.com/docs).",
+        planFilePath: null,
+        allowedPrompts: [{ tool: "Bash" }, { tool: "Read" }],
+        toolInput: {},
+        payload: {},
+        receivedAt: new Date().toISOString(),
+      });
 
     render(
       <ClaudeTmuxChatTab
@@ -5036,17 +5078,19 @@ Enter to confirm · Esc to cancel
   });
 
   test("answers legacy PreToolUse approval cards", async () => {
-    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+    appCommandStore(claudeTmuxStore).getState().setRunning("tab-1", true, {
       environmentId: "env-1",
       sessionId: "session-1",
     });
-    useClaudeTmuxStore.getState().addPendingApproval("tab-1", {
-      eventId: "approval-hook",
-      toolName: "Bash",
-      toolInput: { command: "bun test" },
-      payload: {},
-      receivedAt: new Date().toISOString(),
-    });
+    appCommandStore(claudeTmuxStore)
+      .getState()
+      .addPendingApproval("tab-1", {
+        eventId: "approval-hook",
+        toolName: "Bash",
+        toolInput: { command: "bun test" },
+        payload: {},
+        receivedAt: new Date().toISOString(),
+      });
 
     render(
       <ClaudeTmuxChatTab
@@ -5067,24 +5111,28 @@ Enter to confirm · Esc to cancel
         "env-1",
       );
     });
-    expect(useClaudeTmuxStore.getState().getTab("tab-1").pendingApprovals).toEqual([]);
+    expect(appCommandStore(claudeTmuxStore).getState().getTab("tab-1").pendingApprovals).toEqual(
+      [],
+    );
   });
 
   test("renders file-oriented approval paths and content previews", async () => {
-    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+    appCommandStore(claudeTmuxStore).getState().setRunning("tab-1", true, {
       environmentId: "env-1",
       sessionId: "session-1",
     });
-    useClaudeTmuxStore.getState().addPendingApproval("tab-1", {
-      eventId: "file-approval",
-      toolName: "Edit",
-      toolInput: {
-        file_path: "/workspace/src/Button.tsx",
-        new_string: "export function Button() {}",
-      },
-      payload: {},
-      receivedAt: new Date().toISOString(),
-    });
+    appCommandStore(claudeTmuxStore)
+      .getState()
+      .addPendingApproval("tab-1", {
+        eventId: "file-approval",
+        toolName: "Edit",
+        toolInput: {
+          file_path: "/workspace/src/Button.tsx",
+          new_string: "export function Button() {}",
+        },
+        payload: {},
+        receivedAt: new Date().toISOString(),
+      });
 
     render(
       <ClaudeTmuxChatTab
@@ -5100,17 +5148,19 @@ Enter to confirm · Esc to cancel
   });
 
   test("keeps a legacy PreToolUse approval pending when delivery fails", async () => {
-    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+    appCommandStore(claudeTmuxStore).getState().setRunning("tab-1", true, {
       environmentId: "env-1",
       sessionId: "session-1",
     });
-    useClaudeTmuxStore.getState().addPendingApproval("tab-1", {
-      eventId: "approval-retry",
-      toolName: "Bash",
-      toolInput: { command: "bun test" },
-      payload: {},
-      receivedAt: new Date().toISOString(),
-    });
+    appCommandStore(claudeTmuxStore)
+      .getState()
+      .addPendingApproval("tab-1", {
+        eventId: "approval-retry",
+        toolName: "Bash",
+        toolInput: { command: "bun test" },
+        payload: {},
+        receivedAt: new Date().toISOString(),
+      });
     answerPreToolUseMock.mockImplementationOnce(async () => {
       throw new Error("bridge down");
     });
@@ -5126,24 +5176,28 @@ Enter to confirm · Esc to cancel
     fireEvent.click(screen.getByRole("button", { name: "Allow" }));
 
     expect(await screen.findByText("Error: bridge down")).toBeTruthy();
-    expect(useClaudeTmuxStore.getState().getTab("tab-1").pendingApprovals).toHaveLength(1);
+    expect(
+      appCommandStore(claudeTmuxStore).getState().getTab("tab-1").pendingApprovals,
+    ).toHaveLength(1);
     expect(screen.getByText("Claude wants to use a tool")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Allow" })).toBeTruthy();
   });
 
   test("answers PermissionRequest hooks with nested permission decision", async () => {
-    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+    appCommandStore(claudeTmuxStore).getState().setRunning("tab-1", true, {
       environmentId: "env-1",
       sessionId: "session-1",
     });
-    useClaudeTmuxStore.getState().addPendingPermission("tab-1", {
-      eventId: "perm-hook",
-      toolName: "Bash",
-      toolInput: { command: "bun test", description: "Run tests" },
-      permissionSuggestions: [],
-      payload: {},
-      receivedAt: new Date().toISOString(),
-    });
+    appCommandStore(claudeTmuxStore)
+      .getState()
+      .addPendingPermission("tab-1", {
+        eventId: "perm-hook",
+        toolName: "Bash",
+        toolInput: { command: "bun test", description: "Run tests" },
+        permissionSuggestions: [],
+        payload: {},
+        receivedAt: new Date().toISOString(),
+      });
 
     render(
       <ClaudeTmuxChatTab
@@ -5175,18 +5229,20 @@ Enter to confirm · Esc to cancel
   });
 
   test("keeps a denied PermissionRequest pending when delivery fails", async () => {
-    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+    appCommandStore(claudeTmuxStore).getState().setRunning("tab-1", true, {
       environmentId: "env-1",
       sessionId: "session-1",
     });
-    useClaudeTmuxStore.getState().addPendingPermission("tab-1", {
-      eventId: "permission-retry",
-      toolName: "Bash",
-      toolInput: { command: "bun test" },
-      permissionSuggestions: [],
-      payload: {},
-      receivedAt: new Date().toISOString(),
-    });
+    appCommandStore(claudeTmuxStore)
+      .getState()
+      .addPendingPermission("tab-1", {
+        eventId: "permission-retry",
+        toolName: "Bash",
+        toolInput: { command: "bun test" },
+        permissionSuggestions: [],
+        payload: {},
+        receivedAt: new Date().toISOString(),
+      });
     replyHookMock.mockImplementationOnce(async () => {
       throw new Error("bridge down");
     });
@@ -5219,24 +5275,28 @@ Enter to confirm · Esc to cancel
       );
     });
     expect(await screen.findByText("Error: bridge down")).toBeTruthy();
-    expect(useClaudeTmuxStore.getState().getTab("tab-1").pendingPermissions).toHaveLength(1);
+    expect(
+      appCommandStore(claudeTmuxStore).getState().getTab("tab-1").pendingPermissions,
+    ).toHaveLength(1);
     expect(screen.getByText("Claude needs permission")).toBeTruthy();
   });
 
   test("answers PermissionRequest suggestions as persistent permission updates", async () => {
     const suggestion = { tool: "Bash", command: "bun test" };
-    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+    appCommandStore(claudeTmuxStore).getState().setRunning("tab-1", true, {
       environmentId: "env-1",
       sessionId: "session-1",
     });
-    useClaudeTmuxStore.getState().addPendingPermission("tab-1", {
-      eventId: "perm-suggestion",
-      toolName: "Bash",
-      toolInput: { command: "bun test" },
-      permissionSuggestions: [suggestion],
-      payload: {},
-      receivedAt: new Date().toISOString(),
-    });
+    appCommandStore(claudeTmuxStore)
+      .getState()
+      .addPendingPermission("tab-1", {
+        eventId: "perm-suggestion",
+        toolName: "Bash",
+        toolInput: { command: "bun test" },
+        permissionSuggestions: [suggestion],
+        payload: {},
+        receivedAt: new Date().toISOString(),
+      });
 
     render(
       <ClaudeTmuxChatTab
@@ -5267,25 +5327,27 @@ Enter to confirm · Esc to cancel
   });
 
   test("answers MCP Elicitation hooks with form content", async () => {
-    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+    appCommandStore(claudeTmuxStore).getState().setRunning("tab-1", true, {
       environmentId: "env-1",
       sessionId: "session-1",
     });
-    useClaudeTmuxStore.getState().addPendingElicitation("tab-1", {
-      eventId: "elicit-hook",
-      mcpServerName: "docs-mcp",
-      message: "Provide credentials",
-      mode: "form",
-      url: null,
-      requestedSchema: {
-        type: "object",
-        properties: {
-          username: { type: "string", title: "Username" },
+    appCommandStore(claudeTmuxStore)
+      .getState()
+      .addPendingElicitation("tab-1", {
+        eventId: "elicit-hook",
+        mcpServerName: "docs-mcp",
+        message: "Provide credentials",
+        mode: "form",
+        url: null,
+        requestedSchema: {
+          type: "object",
+          properties: {
+            username: { type: "string", title: "Username" },
+          },
         },
-      },
-      payload: {},
-      receivedAt: new Date().toISOString(),
-    });
+        payload: {},
+        receivedAt: new Date().toISOString(),
+      });
 
     render(
       <ClaudeTmuxChatTab
@@ -5319,31 +5381,33 @@ Enter to confirm · Esc to cancel
 
   test("keeps sensitive MCP elicitation fields out of remountable drafts", async () => {
     const scopedKey = createClaudeTmuxStateKey("env-1", "tab-1");
-    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+    appCommandStore(claudeTmuxStore).getState().setRunning("tab-1", true, {
       environmentId: "env-1",
       sessionId: "session-1",
     });
-    useClaudeTmuxStore.getState().addPendingElicitation("tab-1", {
-      eventId: "elicit-secret",
-      mcpServerName: "credentials-mcp",
-      message: "Provide credentials",
-      mode: "form",
-      url: null,
-      requestedSchema: {
-        type: "object",
-        properties: {
-          username: { type: "string", title: "Username" },
-          apiKey: { type: "string", title: "API key" },
-          opaque: { type: "string", title: "Opaque secret", writeOnly: true },
-          titleOnly: { type: "string", title: "Access token" },
-          passphrase: { type: "string", title: "Passphrase" },
+    appCommandStore(claudeTmuxStore)
+      .getState()
+      .addPendingElicitation("tab-1", {
+        eventId: "elicit-secret",
+        mcpServerName: "credentials-mcp",
+        message: "Provide credentials",
+        mode: "form",
+        url: null,
+        requestedSchema: {
+          type: "object",
+          properties: {
+            username: { type: "string", title: "Username" },
+            apiKey: { type: "string", title: "API key" },
+            opaque: { type: "string", title: "Opaque secret", writeOnly: true },
+            titleOnly: { type: "string", title: "Access token" },
+            passphrase: { type: "string", title: "Passphrase" },
+          },
         },
-      },
-      payload: {},
-      receivedAt: new Date().toISOString(),
-    });
+        payload: {},
+        receivedAt: new Date().toISOString(),
+      });
     const draftKey = tmuxElicitationDraftKey(scopedKey, "elicit-secret");
-    usePromptDraftStore.getState().setDraftValue(draftKey, "values", {
+    appCommandStore(promptDraftStore).getState().setDraftValue(draftKey, "values", {
       username: "alice",
       opaque: "legacy-secret",
     });
@@ -5365,14 +5429,14 @@ Enter to confirm · Esc to cancel
     expect(titleOnly.type).toBe("password");
     expect(passphrase.type).toBe("password");
     await waitFor(() => {
-      expect(usePromptDraftStore.getState().drafts.get(draftKey)).toEqual({
+      expect(appCommandStore(promptDraftStore).getState().drafts.get(draftKey)).toEqual({
         values: { username: "alice" },
       });
     });
 
     fireEvent.change(apiKey, { target: { value: "live-api-secret" } });
     fireEvent.change(opaque, { target: { value: "live-opaque-secret" } });
-    expect(usePromptDraftStore.getState().drafts.get(draftKey)).toEqual({
+    expect(appCommandStore(promptDraftStore).getState().drafts.get(draftKey)).toEqual({
       values: { username: "alice" },
     });
 
@@ -5390,11 +5454,11 @@ Enter to confirm · Esc to cancel
   });
 
   test("keeps an MCP Elicitation pending when delivery fails", async () => {
-    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+    appCommandStore(claudeTmuxStore).getState().setRunning("tab-1", true, {
       environmentId: "env-1",
       sessionId: "session-1",
     });
-    useClaudeTmuxStore.getState().addPendingElicitation("tab-1", {
+    appCommandStore(claudeTmuxStore).getState().addPendingElicitation("tab-1", {
       eventId: "elicitation-retry",
       mcpServerName: "docs-mcp",
       message: "Provide credentials",
@@ -5419,16 +5483,18 @@ Enter to confirm · Esc to cancel
     fireEvent.click(screen.getByRole("button", { name: "Decline" }));
 
     expect(await screen.findByText("Error: bridge down")).toBeTruthy();
-    expect(useClaudeTmuxStore.getState().getTab("tab-1").pendingElicitations).toHaveLength(1);
+    expect(
+      appCommandStore(claudeTmuxStore).getState().getTab("tab-1").pendingElicitations,
+    ).toHaveLength(1);
     expect(screen.getByText("MCP server requested input")).toBeTruthy();
   });
 
   test("declines and cancels MCP Elicitation hooks", async () => {
-    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+    appCommandStore(claudeTmuxStore).getState().setRunning("tab-1", true, {
       environmentId: "env-1",
       sessionId: "session-1",
     });
-    useClaudeTmuxStore.getState().addPendingElicitation("tab-1", {
+    appCommandStore(claudeTmuxStore).getState().addPendingElicitation("tab-1", {
       eventId: "elicit-decline",
       mcpServerName: "docs-mcp",
       message: "Provide credentials",
@@ -5438,7 +5504,7 @@ Enter to confirm · Esc to cancel
       payload: {},
       receivedAt: new Date().toISOString(),
     });
-    useClaudeTmuxStore.getState().addPendingElicitation("tab-1", {
+    appCommandStore(claudeTmuxStore).getState().addPendingElicitation("tab-1", {
       eventId: "elicit-cancel",
       mcpServerName: "docs-mcp",
       message: "Provide credentials",

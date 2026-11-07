@@ -1,13 +1,14 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import {
   BUILD_PIPELINE_VERSION,
+  type BuildPhase,
+  type BuildPipeline,
+  buildPipelineStore,
   isActiveBuildPhase,
   isBuildPipeline,
   isWorkingBuildPipeline,
-  useBuildPipelineStore,
-  type BuildPhase,
-  type BuildPipeline,
 } from "../../../apps/web/src/stores/buildPipelineStore";
+import { appCommandStore } from "../../../apps/web/src/test/app-command-store";
 
 const NOW = "2026-07-29T08:00:00.000Z";
 
@@ -42,7 +43,7 @@ function pipeline(overrides: Partial<BuildPipeline> = {}): BuildPipeline {
 
 describe("buildPipelineStore backend projection", () => {
   beforeEach(() => {
-    useBuildPipelineStore.setState({
+    appCommandStore(buildPipelineStore).setState({
       pipelines: new Map(),
       buildEnvironmentIds: new Set(),
       activeBuildEnvironmentIds: new Set(),
@@ -51,8 +52,8 @@ describe("buildPipelineStore backend projection", () => {
   });
 
   test("starts empty and exposes the current snapshot version", () => {
-    expect(useBuildPipelineStore.getState().pipelines.size).toBe(0);
-    expect(useBuildPipelineStore.getState().buildEnvironmentIds.size).toBe(0);
+    expect(appCommandStore(buildPipelineStore).getState().pipelines.size).toBe(0);
+    expect(appCommandStore(buildPipelineStore).getState().buildEnvironmentIds.size).toBe(0);
     expect(BUILD_PIPELINE_VERSION).toBeGreaterThan(0);
   });
 
@@ -95,10 +96,16 @@ describe("buildPipelineStore backend projection", () => {
     });
 
     expect(isBuildPipeline(snapshot)).toBe(true);
-    useBuildPipelineStore.getState().replacePipeline(snapshot);
-    expect(useBuildPipelineStore.getState().pipelines.get(snapshot.id)).toBe(snapshot);
-    expect(useBuildPipelineStore.getState().buildEnvironmentIds).toEqual(new Set(["env-1"]));
-    expect(useBuildPipelineStore.getState().activeBuildEnvironmentIds).toEqual(new Set(["env-1"]));
+    appCommandStore(buildPipelineStore).getState().replacePipeline(snapshot);
+    expect(appCommandStore(buildPipelineStore).getState().pipelines.get(snapshot.id)).toBe(
+      snapshot,
+    );
+    expect(appCommandStore(buildPipelineStore).getState().buildEnvironmentIds).toEqual(
+      new Set(["env-1"]),
+    );
+    expect(appCommandStore(buildPipelineStore).getState().activeBuildEnvironmentIds).toEqual(
+      new Set(["env-1"]),
+    );
   });
 
   test.each([
@@ -148,190 +155,232 @@ describe("buildPipelineStore backend projection", () => {
 
   test("replacePipeline rejects an invalid trust-boundary snapshot", () => {
     expect(() =>
-      useBuildPipelineStore
+      appCommandStore(buildPipelineStore)
         .getState()
         .replacePipeline(pipeline({ controller: "renderer" as "backend" })),
     ).toThrow("Invalid backend build pipeline snapshot");
   });
 
   test("ignores an older revision for the same pipeline", () => {
-    useBuildPipelineStore
+    appCommandStore(buildPipelineStore)
       .getState()
       .replacePipeline(pipeline({ backendRevision: 5, taskTitle: "new" }));
-    const mapBefore = useBuildPipelineStore.getState().pipelines;
+    const mapBefore = appCommandStore(buildPipelineStore).getState().pipelines;
 
-    useBuildPipelineStore
+    appCommandStore(buildPipelineStore)
       .getState()
       .replacePipeline(pipeline({ backendRevision: 4, taskTitle: "stale" }));
 
-    expect(useBuildPipelineStore.getState().pipelines).toBe(mapBefore);
-    expect(useBuildPipelineStore.getState().getPipelineById("pipeline-1")?.taskTitle).toBe("new");
+    expect(appCommandStore(buildPipelineStore).getState().pipelines).toBe(mapBefore);
+    expect(
+      appCommandStore(buildPipelineStore).getState().getPipelineById("pipeline-1")?.taskTitle,
+    ).toBe("new");
   });
 
   test("accepts an equal revision as an authoritative refresh", () => {
-    useBuildPipelineStore
+    appCommandStore(buildPipelineStore)
       .getState()
       .replacePipeline(pipeline({ backendRevision: 5, taskTitle: "before" }));
-    useBuildPipelineStore
+    appCommandStore(buildPipelineStore)
       .getState()
       .replacePipeline(pipeline({ backendRevision: 5, taskTitle: "after" }));
-    expect(useBuildPipelineStore.getState().getPipelineById("pipeline-1")?.taskTitle).toBe("after");
+    expect(
+      appCommandStore(buildPipelineStore).getState().getPipelineById("pipeline-1")?.taskTitle,
+    ).toBe("after");
   });
 
   test("rebuilds environment ids when a snapshot changes association", () => {
-    useBuildPipelineStore.getState().replacePipeline(pipeline());
-    useBuildPipelineStore.getState().replacePipeline(
-      pipeline({
-        environmentId: "env-2",
-        backendRevision: 2,
-      }),
+    appCommandStore(buildPipelineStore).getState().replacePipeline(pipeline());
+    appCommandStore(buildPipelineStore)
+      .getState()
+      .replacePipeline(
+        pipeline({
+          environmentId: "env-2",
+          backendRevision: 2,
+        }),
+      );
+    expect(appCommandStore(buildPipelineStore).getState().buildEnvironmentIds).toEqual(
+      new Set(["env-2"]),
     );
-    expect(useBuildPipelineStore.getState().buildEnvironmentIds).toEqual(new Set(["env-2"]));
-    expect(useBuildPipelineStore.getState().activeBuildEnvironmentIds).toEqual(new Set(["env-2"]));
+    expect(appCommandStore(buildPipelineStore).getState().activeBuildEnvironmentIds).toEqual(
+      new Set(["env-2"]),
+    );
 
-    useBuildPipelineStore.getState().replacePipeline(
-      pipeline({
-        environmentId: "",
-        backendRevision: 3,
-      }),
-    );
-    expect(useBuildPipelineStore.getState().buildEnvironmentIds.size).toBe(0);
-    expect(useBuildPipelineStore.getState().activeBuildEnvironmentIds.size).toBe(0);
+    appCommandStore(buildPipelineStore)
+      .getState()
+      .replacePipeline(
+        pipeline({
+          environmentId: "",
+          backendRevision: 3,
+        }),
+      );
+    expect(appCommandStore(buildPipelineStore).getState().buildEnvironmentIds.size).toBe(0);
+    expect(appCommandStore(buildPipelineStore).getState().activeBuildEnvironmentIds.size).toBe(0);
   });
 
   test.each(["complete", "failed", "paused"] as const)(
     "drops activeBuildEnvironmentIds when the pipeline becomes %s",
     (phase) => {
-      useBuildPipelineStore.getState().replacePipeline(pipeline());
-      expect(useBuildPipelineStore.getState().activeBuildEnvironmentIds).toEqual(
+      appCommandStore(buildPipelineStore).getState().replacePipeline(pipeline());
+      expect(appCommandStore(buildPipelineStore).getState().activeBuildEnvironmentIds).toEqual(
         new Set(["env-1"]),
       );
 
-      useBuildPipelineStore.getState().replacePipeline(
-        pipeline({
-          phase,
-          backendRevision: 2,
-        }),
-      );
+      appCommandStore(buildPipelineStore)
+        .getState()
+        .replacePipeline(
+          pipeline({
+            phase,
+            backendRevision: 2,
+          }),
+        );
 
-      expect(useBuildPipelineStore.getState().buildEnvironmentIds).toEqual(new Set(["env-1"]));
-      expect(useBuildPipelineStore.getState().activeBuildEnvironmentIds.size).toBe(0);
+      expect(appCommandStore(buildPipelineStore).getState().buildEnvironmentIds).toEqual(
+        new Set(["env-1"]),
+      );
+      expect(appCommandStore(buildPipelineStore).getState().activeBuildEnvironmentIds.size).toBe(0);
     },
   );
 
   test.each(["waiting-for-setup", "creating-environment", "starting-environment"] as const)(
     "does not treat setup phase %s as a working environment",
     (phase) => {
-      useBuildPipelineStore.getState().replacePipeline(pipeline({ phase }));
+      appCommandStore(buildPipelineStore).getState().replacePipeline(pipeline({ phase }));
       expect(isWorkingBuildPipeline(pipeline({ phase }))).toBe(false);
-      expect(useBuildPipelineStore.getState().buildEnvironmentIds).toEqual(new Set(["env-1"]));
-      expect(useBuildPipelineStore.getState().activeBuildEnvironmentIds.size).toBe(0);
+      expect(appCommandStore(buildPipelineStore).getState().buildEnvironmentIds).toEqual(
+        new Set(["env-1"]),
+      );
+      expect(appCommandStore(buildPipelineStore).getState().activeBuildEnvironmentIds.size).toBe(0);
     },
   );
 
   test("drops activeBuildEnvironmentIds when the pipeline carries a stallWarning", () => {
-    useBuildPipelineStore.getState().replacePipeline(pipeline());
-    useBuildPipelineStore.getState().replacePipeline(
-      pipeline({
-        backendRevision: 2,
-        stallWarning: { sessionId: "session-1", detectedAt: NOW },
-      }),
+    appCommandStore(buildPipelineStore).getState().replacePipeline(pipeline());
+    appCommandStore(buildPipelineStore)
+      .getState()
+      .replacePipeline(
+        pipeline({
+          backendRevision: 2,
+          stallWarning: { sessionId: "session-1", detectedAt: NOW },
+        }),
+      );
+    expect(appCommandStore(buildPipelineStore).getState().buildEnvironmentIds).toEqual(
+      new Set(["env-1"]),
     );
-    expect(useBuildPipelineStore.getState().buildEnvironmentIds).toEqual(new Set(["env-1"]));
-    expect(useBuildPipelineStore.getState().activeBuildEnvironmentIds.size).toBe(0);
+    expect(appCommandStore(buildPipelineStore).getState().activeBuildEnvironmentIds.size).toBe(0);
   });
 
   test("removes one pipeline and no-ops for an unknown id", () => {
-    useBuildPipelineStore.getState().replacePipeline(pipeline());
-    useBuildPipelineStore.getState().replacePipeline(
-      pipeline({
-        id: "pipeline-2",
-        taskId: "task-2",
-        environmentId: "env-2",
-      }),
-    );
-    useBuildPipelineStore.getState().setViewedSessionId("pipeline-1", "session-1");
-    useBuildPipelineStore.getState().setViewedSessionId("pipeline-2", "session-2");
+    appCommandStore(buildPipelineStore).getState().replacePipeline(pipeline());
+    appCommandStore(buildPipelineStore)
+      .getState()
+      .replacePipeline(
+        pipeline({
+          id: "pipeline-2",
+          taskId: "task-2",
+          environmentId: "env-2",
+        }),
+      );
+    appCommandStore(buildPipelineStore).getState().setViewedSessionId("pipeline-1", "session-1");
+    appCommandStore(buildPipelineStore).getState().setViewedSessionId("pipeline-2", "session-2");
 
-    useBuildPipelineStore.getState().removePipeline("pipeline-1");
-    expect([...useBuildPipelineStore.getState().pipelines.keys()]).toEqual(["pipeline-2"]);
-    expect(useBuildPipelineStore.getState().buildEnvironmentIds).toEqual(new Set(["env-2"]));
-    expect(useBuildPipelineStore.getState().viewedSessionIds).toEqual(
+    appCommandStore(buildPipelineStore).getState().removePipeline("pipeline-1");
+    expect([...appCommandStore(buildPipelineStore).getState().pipelines.keys()]).toEqual([
+      "pipeline-2",
+    ]);
+    expect(appCommandStore(buildPipelineStore).getState().buildEnvironmentIds).toEqual(
+      new Set(["env-2"]),
+    );
+    expect(appCommandStore(buildPipelineStore).getState().viewedSessionIds).toEqual(
       new Map([["pipeline-2", "session-2"]]),
     );
 
-    const stateBefore = useBuildPipelineStore.getState();
-    useBuildPipelineStore.getState().removePipeline("missing");
-    expect(useBuildPipelineStore.getState()).toBe(stateBefore);
+    const stateBefore = appCommandStore(buildPipelineStore).getState();
+    appCommandStore(buildPipelineStore).getState().removePipeline("missing");
+    expect(appCommandStore(buildPipelineStore).getState()).toBe(stateBefore);
   });
 
   test("removes all task projections while retaining unrelated pipelines", () => {
-    useBuildPipelineStore.getState().replacePipeline(pipeline());
-    useBuildPipelineStore.getState().replacePipeline(
-      pipeline({
-        id: "pipeline-2",
-        environmentId: "env-2",
-        backendRevision: 2,
-      }),
-    );
-    useBuildPipelineStore.getState().replacePipeline(
-      pipeline({
-        id: "pipeline-3",
-        taskId: "task-3",
-        environmentId: "env-3",
-      }),
-    );
-    useBuildPipelineStore.getState().setViewedSessionId("pipeline-1", "session-1");
-    useBuildPipelineStore.getState().setViewedSessionId("pipeline-2", "session-2");
-    useBuildPipelineStore.getState().setViewedSessionId("pipeline-3", "session-3");
+    appCommandStore(buildPipelineStore).getState().replacePipeline(pipeline());
+    appCommandStore(buildPipelineStore)
+      .getState()
+      .replacePipeline(
+        pipeline({
+          id: "pipeline-2",
+          environmentId: "env-2",
+          backendRevision: 2,
+        }),
+      );
+    appCommandStore(buildPipelineStore)
+      .getState()
+      .replacePipeline(
+        pipeline({
+          id: "pipeline-3",
+          taskId: "task-3",
+          environmentId: "env-3",
+        }),
+      );
+    appCommandStore(buildPipelineStore).getState().setViewedSessionId("pipeline-1", "session-1");
+    appCommandStore(buildPipelineStore).getState().setViewedSessionId("pipeline-2", "session-2");
+    appCommandStore(buildPipelineStore).getState().setViewedSessionId("pipeline-3", "session-3");
 
-    useBuildPipelineStore.getState().removePipelinesForTask("task-1");
-    expect([...useBuildPipelineStore.getState().pipelines.keys()]).toEqual(["pipeline-3"]);
-    expect(useBuildPipelineStore.getState().buildEnvironmentIds).toEqual(new Set(["env-3"]));
-    expect(useBuildPipelineStore.getState().viewedSessionIds).toEqual(
+    appCommandStore(buildPipelineStore).getState().removePipelinesForTask("task-1");
+    expect([...appCommandStore(buildPipelineStore).getState().pipelines.keys()]).toEqual([
+      "pipeline-3",
+    ]);
+    expect(appCommandStore(buildPipelineStore).getState().buildEnvironmentIds).toEqual(
+      new Set(["env-3"]),
+    );
+    expect(appCommandStore(buildPipelineStore).getState().viewedSessionIds).toEqual(
       new Map([["pipeline-3", "session-3"]]),
     );
   });
 
   test("removes all projections for a deleted environment", () => {
-    useBuildPipelineStore.getState().replacePipeline(pipeline());
-    useBuildPipelineStore.getState().replacePipeline(
-      pipeline({
-        id: "pipeline-2",
-        taskId: "task-2",
-        environmentId: "env-1",
-      }),
-    );
-    useBuildPipelineStore.getState().replacePipeline(
-      pipeline({
-        id: "pipeline-3",
-        taskId: "task-3",
-        environmentId: "env-3",
-      }),
-    );
-    useBuildPipelineStore.getState().setViewedSessionId("pipeline-1", "session-1");
-    useBuildPipelineStore.getState().setViewedSessionId("pipeline-2", "session-2");
-    useBuildPipelineStore.getState().setViewedSessionId("pipeline-3", "session-3");
+    appCommandStore(buildPipelineStore).getState().replacePipeline(pipeline());
+    appCommandStore(buildPipelineStore)
+      .getState()
+      .replacePipeline(
+        pipeline({
+          id: "pipeline-2",
+          taskId: "task-2",
+          environmentId: "env-1",
+        }),
+      );
+    appCommandStore(buildPipelineStore)
+      .getState()
+      .replacePipeline(
+        pipeline({
+          id: "pipeline-3",
+          taskId: "task-3",
+          environmentId: "env-3",
+        }),
+      );
+    appCommandStore(buildPipelineStore).getState().setViewedSessionId("pipeline-1", "session-1");
+    appCommandStore(buildPipelineStore).getState().setViewedSessionId("pipeline-2", "session-2");
+    appCommandStore(buildPipelineStore).getState().setViewedSessionId("pipeline-3", "session-3");
 
-    useBuildPipelineStore.getState().removePipelinesForEnvironment("env-1");
-    expect([...useBuildPipelineStore.getState().pipelines.keys()]).toEqual(["pipeline-3"]);
-    expect(useBuildPipelineStore.getState().viewedSessionIds).toEqual(
+    appCommandStore(buildPipelineStore).getState().removePipelinesForEnvironment("env-1");
+    expect([...appCommandStore(buildPipelineStore).getState().pipelines.keys()]).toEqual([
+      "pipeline-3",
+    ]);
+    expect(appCommandStore(buildPipelineStore).getState().viewedSessionIds).toEqual(
       new Map([["pipeline-3", "session-3"]]),
     );
   });
 
   test("sets, preserves, and clears the viewed session for one pipeline", () => {
-    useBuildPipelineStore.getState().setViewedSessionId("pipeline-1", "session-1");
-    expect(useBuildPipelineStore.getState().viewedSessionIds).toEqual(
+    appCommandStore(buildPipelineStore).getState().setViewedSessionId("pipeline-1", "session-1");
+    expect(appCommandStore(buildPipelineStore).getState().viewedSessionIds).toEqual(
       new Map([["pipeline-1", "session-1"]]),
     );
 
-    const stateBefore = useBuildPipelineStore.getState();
-    useBuildPipelineStore.getState().setViewedSessionId("pipeline-1", "session-1");
-    expect(useBuildPipelineStore.getState()).toBe(stateBefore);
+    const stateBefore = appCommandStore(buildPipelineStore).getState();
+    appCommandStore(buildPipelineStore).getState().setViewedSessionId("pipeline-1", "session-1");
+    expect(appCommandStore(buildPipelineStore).getState()).toBe(stateBefore);
 
-    useBuildPipelineStore.getState().setViewedSessionId("pipeline-1", null);
-    expect(useBuildPipelineStore.getState().viewedSessionIds.size).toBe(0);
+    appCommandStore(buildPipelineStore).getState().setViewedSessionId("pipeline-1", null);
+    expect(appCommandStore(buildPipelineStore).getState().viewedSessionIds.size).toBe(0);
   });
 
   test("queries by task, id, and active environment", () => {
@@ -342,10 +391,10 @@ describe("buildPipelineStore backend projection", () => {
       environmentId: "env-2",
       phase: "complete",
     });
-    useBuildPipelineStore.getState().replacePipeline(active);
-    useBuildPipelineStore.getState().replacePipeline(complete);
+    appCommandStore(buildPipelineStore).getState().replacePipeline(active);
+    appCommandStore(buildPipelineStore).getState().replacePipeline(complete);
 
-    const state = useBuildPipelineStore.getState();
+    const state = appCommandStore(buildPipelineStore).getState();
     expect(state.getPipelineByTaskId("task-1")).toBe(active);
     expect(state.getPipelineByTaskId("missing")).toBeUndefined();
     expect(state.getPipelineById("pipeline-2")).toBe(complete);
@@ -380,10 +429,10 @@ describe("buildPipelineStore backend projection", () => {
         status: "In progress",
       },
     });
-    useBuildPipelineStore.getState().replacePipeline(oldComplete);
-    useBuildPipelineStore.getState().replacePipeline(active);
+    appCommandStore(buildPipelineStore).getState().replacePipeline(oldComplete);
+    appCommandStore(buildPipelineStore).getState().replacePipeline(active);
 
-    const state = useBuildPipelineStore.getState();
+    const state = appCommandStore(buildPipelineStore).getState();
     expect(state.getPipelineForGitHubIssue("acme", "widget", 42)).toBe(oldComplete);
     expect(state.getPipelineForGitHubIssue("acme", "widget", 42, true)).toBeUndefined();
     expect(state.getPipelineForGitHubIssue("acme", "widget", 43, true)).toBe(active);

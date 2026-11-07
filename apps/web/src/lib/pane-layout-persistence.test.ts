@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import * as backend from "@/lib/backend";
-import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { buildPipelineStore } from "@/stores/buildPipelineStore";
 import { environmentStore } from "@/stores/environmentStore";
 import { type EnvironmentPaneState, usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { Environment } from "@/types";
@@ -2180,14 +2180,14 @@ describe("pane layout persistence", () => {
     expect(withoutPipeline.storeTabIds).toEqual(["base", "local"]);
 
     resetStore();
-    useBuildPipelineStore.setState({
+    appCommandStore(buildPipelineStore).setState({
       pipelines: new Map([["pipeline-1", { id: "pipeline-1" } as never]]),
       buildEnvironmentIds: new Set(),
     });
     const withPipeline = await runRebase();
     expect(withPipeline.savedTabIds).toEqual(["base", "remote-build", "local"]);
     expect(withPipeline.storeTabIds).toEqual(["base", "remote-build", "local"]);
-    useBuildPipelineStore.setState({
+    appCommandStore(buildPipelineStore).setState({
       pipelines: new Map(),
       buildEnvironmentIds: new Set(),
     });
@@ -2383,7 +2383,7 @@ describe("pane layout persistence", () => {
           },
         ],
       });
-      useBuildPipelineStore.setState({
+      appCommandStore(buildPipelineStore).setState({
         pipelines: new Map([["pipeline-1", {} as never]]),
         buildEnvironmentIds: new Set(["env-1"]),
       });

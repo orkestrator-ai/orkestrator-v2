@@ -26,7 +26,7 @@ import { tabLaunchStore } from "@/stores/tabLaunchStore";
 import { getAllLeaves, usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { prMonitorStore } from "@/stores/prMonitorStore";
 import { useAppDialogStore } from "@/stores/appDialogStore";
-import { useCoordinatorActivityStore } from "@/stores/coordinatorActivityStore";
+import { coordinatorActivityStore } from "@/stores/coordinatorActivityStore";
 import { useMergePrRequestStore } from "@/stores/mergePrRequestStore";
 import type { Environment, PrState, Project } from "@/types";
 import type { ProjectBoardTab } from "@/stores";
@@ -1424,11 +1424,11 @@ describe("ActionBar grid presentation", () => {
 describe("ActionBar coordinator tab activity", () => {
   afterEach(() => {
     cleanup();
-    useCoordinatorActivityStore.getState().reset();
+    appCommandStore(coordinatorActivityStore).getState().reset();
   });
 
   const renderTab = (state?: "working" | "waiting") => {
-    useCoordinatorActivityStore.setState({
+    appCommandStore(coordinatorActivityStore).setState({
       projects: new Map(state ? [[selectedProject.id, state]] : []),
     });
     renderInAppCommandScope(<ActionBar presentation="grid" />);

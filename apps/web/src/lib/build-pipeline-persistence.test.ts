@@ -14,12 +14,13 @@ import {
 } from "./build-pipeline-persistence";
 import {
   BUILD_PIPELINE_VERSION,
-  useBuildPipelineStore,
   type BuildPipeline,
+  buildPipelineStore,
 } from "@/stores/buildPipelineStore";
 import type { PersistedBuildPipeline } from "@/types";
 import { isBuildPipeline } from "@orkestrator/protocol/build-pipeline";
 import { workflowVocabularyFixtures } from "./workflow-vocabulary.test-support";
+import { appCommandStore } from "@/test/app-command-store";
 
 const invokeMock = invoke as ReturnType<typeof mock>;
 
@@ -80,7 +81,7 @@ describe("build pipeline read model", () => {
   beforeEach(() => {
     invokeMock.mockReset();
     resetBuildPipelineUnavailableMarkersForTests();
-    useBuildPipelineStore.setState({
+    appCommandStore(buildPipelineStore).setState({
       pipelines: new Map(),
       buildEnvironmentIds: new Set(),
     });
@@ -121,16 +122,20 @@ describe("build pipeline read model", () => {
     expect(isBuildPipeline(futurePipeline)).toBe(false);
     // The transport is unknown at runtime; its static type describes this build's vocabulary.
     const incoming = JSON.parse(JSON.stringify(futurePipeline)) as BuildPipeline;
-    useBuildPipelineStore.getState().replacePipeline(incoming);
-    expect<unknown>(useBuildPipelineStore.getState().pipelines.get(pipeline.id)).toEqual(pipeline);
+    appCommandStore(buildPipelineStore).getState().replacePipeline(incoming);
+    expect<unknown>(
+      appCommandStore(buildPipelineStore).getState().pipelines.get(pipeline.id),
+    ).toEqual(pipeline);
 
-    useBuildPipelineStore.setState({ pipelines: new Map() });
+    appCommandStore(buildPipelineStore).setState({ pipelines: new Map() });
     const restored = await hydrateBuildPipeline(pipeline.id, async () => record(incoming, 8));
     expect(restored).toEqual({ ...pipeline, backendRevision: 8 });
     expect(isBuildPipeline(restored)).toBe(true);
-    expect<unknown>(useBuildPipelineStore.getState().pipelines.get(pipeline.id)).toEqual(restored);
+    expect<unknown>(
+      appCommandStore(buildPipelineStore).getState().pipelines.get(pipeline.id),
+    ).toEqual(restored);
 
-    useBuildPipelineStore.setState({ pipelines: new Map() });
+    appCommandStore(buildPipelineStore).setState({ pipelines: new Map() });
     const listed = await hydrateBuildPipelinesForProject(pipeline.projectId, async () => [
       record(incoming, 9),
     ]);
@@ -144,11 +149,11 @@ describe("build pipeline read model", () => {
       ...futurePipeline,
       sessions: [{ ...futurePipeline.sessions[0], status: "invalid" }],
     } as unknown as BuildPipeline;
-    expect(() => useBuildPipelineStore.getState().replacePipeline(incoming)).toThrow(
+    expect(() => appCommandStore(buildPipelineStore).getState().replacePipeline(incoming)).toThrow(
       "Invalid backend build pipeline snapshot",
     );
     expect(await hydrateBuildPipeline(incoming.id, async () => record(incoming, 8))).toBeNull();
-    expect(useBuildPipelineStore.getState().pipelines.has(incoming.id)).toBe(false);
+    expect(appCommandStore(buildPipelineStore).getState().pipelines.has(incoming.id)).toBe(false);
   });
 
   test("hydrates an authoritative backend snapshot", async () => {
@@ -187,7 +192,7 @@ describe("build pipeline read model", () => {
       ],
       backendRevision: 7,
     };
-    useBuildPipelineStore.getState().replacePipeline(local);
+    appCommandStore(buildPipelineStore).getState().replacePipeline(local);
     invokeMock.mockResolvedValueOnce({ unchanged: true, revision: 7 });
 
     const restored = await hydrateBuildPipeline("pipeline-1", undefined, { transcripts: true });
@@ -234,7 +239,7 @@ describe("build pipeline read model", () => {
       ],
       backendRevision: 7,
     };
-    useBuildPipelineStore.getState().replacePipeline(local);
+    appCommandStore(buildPipelineStore).getState().replacePipeline(local);
     // The backend's record carries each session's committed revision, never its body.
     const remote = {
       ...local,
@@ -290,7 +295,7 @@ describe("build pipeline read model", () => {
       ],
       backendRevision: 7,
     };
-    useBuildPipelineStore.getState().replacePipeline(local);
+    appCommandStore(buildPipelineStore).getState().replacePipeline(local);
     const remote = {
       ...local,
       backendRevision: 0,
@@ -359,12 +364,14 @@ describe("build pipeline read model", () => {
       label: "Build",
       messageRevision: 3,
     };
-    useBuildPipelineStore.getState().replacePipeline({
-      ...snapshot(),
-      currentSessionIndex: 0,
-      sessions: [{ ...session, messages: held }],
-      backendRevision: 2,
-    });
+    appCommandStore(buildPipelineStore)
+      .getState()
+      .replacePipeline({
+        ...snapshot(),
+        currentSessionIndex: 0,
+        sessions: [{ ...session, messages: held }],
+        backendRevision: 2,
+      });
     // The list carries control state only; the session's committed revision moved on.
     invokeMock.mockResolvedValueOnce({
       ids: ["pipeline-1"],
@@ -430,15 +437,17 @@ describe("build pipeline read model", () => {
       startedAt: "2026-07-29T00:00:00.000Z",
       label: "Build",
     };
-    useBuildPipelineStore.getState().replacePipeline({
-      ...snapshot(),
-      currentSessionIndex: 1,
-      sessions: [
-        { ...base, sessionKey: "deferred", messages: held, messageRevision: 1 },
-        { ...base, sessionKey: "unreadable", sdkSessionId: "sdk-2", messageRevision: 1 },
-      ],
-      backendRevision: 2,
-    });
+    appCommandStore(buildPipelineStore)
+      .getState()
+      .replacePipeline({
+        ...snapshot(),
+        currentSessionIndex: 1,
+        sessions: [
+          { ...base, sessionKey: "deferred", messages: held, messageRevision: 1 },
+          { ...base, sessionKey: "unreadable", sdkSessionId: "sdk-2", messageRevision: 1 },
+        ],
+        backendRevision: 2,
+      });
     invokeMock.mockResolvedValueOnce({
       unchanged: false,
       record: record(
@@ -470,9 +479,9 @@ describe("build pipeline read model", () => {
     const unchanged = { ...snapshot("unchanged"), backendRevision: 4 };
     const changedLocal = { ...snapshot("changed"), backendRevision: 2 };
     const deleted = { ...snapshot("deleted"), backendRevision: 3 };
-    useBuildPipelineStore.getState().replacePipeline(unchanged);
-    useBuildPipelineStore.getState().replacePipeline(changedLocal);
-    useBuildPipelineStore.getState().replacePipeline(deleted);
+    appCommandStore(buildPipelineStore).getState().replacePipeline(unchanged);
+    appCommandStore(buildPipelineStore).getState().replacePipeline(changedLocal);
+    appCommandStore(buildPipelineStore).getState().replacePipeline(deleted);
     invokeMock.mockResolvedValueOnce({
       ids: ["unchanged", "changed"],
       records: [
@@ -513,12 +522,14 @@ describe("build pipeline read model", () => {
       label: "Build",
       messageRevision: 3,
     };
-    useBuildPipelineStore.getState().replacePipeline({
-      ...snapshot(),
-      currentSessionIndex: 0,
-      sessions: [{ ...session, messages: held }],
-      backendRevision: 2,
-    });
+    appCommandStore(buildPipelineStore)
+      .getState()
+      .replacePipeline({
+        ...snapshot(),
+        currentSessionIndex: 0,
+        sessions: [{ ...session, messages: held }],
+        backendRevision: 2,
+      });
     invokeMock.mockResolvedValueOnce(
       record(
         { ...snapshot(), currentSessionIndex: 0, sessions: [{ ...session, messageRevision: 4 }] },
@@ -538,7 +549,7 @@ describe("build pipeline read model", () => {
 
     invokeMock.mockResolvedValueOnce({ unchanged: true, revision: 3 });
     expect(await hydrateBuildPipeline("pipeline-1")).toBe(
-      useBuildPipelineStore.getState().pipelines.get("pipeline-1")!,
+      appCommandStore(buildPipelineStore).getState().pipelines.get("pipeline-1")!,
     );
   });
 
@@ -599,7 +610,7 @@ describe("build pipeline read model", () => {
       sessions: [{ ...session, messages: held }],
       backendRevision: 7,
     };
-    useBuildPipelineStore.getState().replacePipeline(local);
+    appCommandStore(buildPipelineStore).getState().replacePipeline(local);
     const authoritative = [...held, { id: "row-50", content: "appended" }];
     authoritative[47] = { id: "row-47", content: "late result" };
     invokeMock.mockResolvedValueOnce({
@@ -742,21 +753,23 @@ describe("build pipeline read model", () => {
     ];
 
     for (const invalid of invalidRecords) {
-      useBuildPipelineStore.setState({
+      appCommandStore(buildPipelineStore).setState({
         pipelines: new Map(),
         buildEnvironmentIds: new Set(),
       });
       expect(await hydrateBuildPipeline("pipeline-1", async () => invalid)).toBeNull();
-      expect(useBuildPipelineStore.getState().pipelines.size).toBe(0);
+      expect(appCommandStore(buildPipelineStore).getState().pipelines.size).toBe(0);
     }
   });
 
   test("keeps a newer local revision when a stale point read completes", async () => {
-    useBuildPipelineStore.getState().replacePipeline({
-      ...snapshot(),
-      phase: "reviewing",
-      backendRevision: 9,
-    });
+    appCommandStore(buildPipelineStore)
+      .getState()
+      .replacePipeline({
+        ...snapshot(),
+        phase: "reviewing",
+        backendRevision: 9,
+      });
 
     const restored = await hydrateBuildPipeline("pipeline-1", async () =>
       record({ ...snapshot(), phase: "building" }, 4),
@@ -774,11 +787,11 @@ describe("build pipeline read model", () => {
     );
 
     expect(await hydrateBuildPipeline("pipeline-1", async () => null)).toBeNull();
-    useBuildPipelineStore.getState().removePipeline("pipeline-1");
+    appCommandStore(buildPipelineStore).getState().removePipeline("pipeline-1");
     listing.resolve([record(snapshot(), 3)]);
 
     expect(await projectHydration).toEqual([]);
-    expect(useBuildPipelineStore.getState().pipelines.has("pipeline-1")).toBe(false);
+    expect(appCommandStore(buildPipelineStore).getState().pipelines.has("pipeline-1")).toBe(false);
   });
 
   test("ignores an older project response that finishes after a newer response", async () => {
@@ -793,7 +806,7 @@ describe("build pipeline read model", () => {
 
     expect(second.map(({ id }) => id)).toEqual(["new"]);
     expect(staleResult.map(({ id }) => id)).toEqual(["new"]);
-    expect(useBuildPipelineStore.getState().pipelines.has("old")).toBe(false);
+    expect(appCommandStore(buildPipelineStore).getState().pipelines.has("old")).toBe(false);
   });
 
   test("a superseded point read cannot remove a newer point-read result", async () => {
@@ -808,7 +821,9 @@ describe("build pipeline read model", () => {
 
     expect(second?.phase).toBe("verifying");
     expect(staleResult?.phase).toBe("verifying");
-    expect(useBuildPipelineStore.getState().pipelines.get("pipeline-1")?.phase).toBe("verifying");
+    expect(appCommandStore(buildPipelineStore).getState().pipelines.get("pipeline-1")?.phase).toBe(
+      "verifying",
+    );
   });
 });
 
@@ -857,7 +872,7 @@ describe("legacy build pipeline migration", () => {
     ]);
     expect(result).toEqual({ importedIds: ["pipeline-1"], skipped: 0 });
     expect(storage.getItem(LEGACY_BUILD_PIPELINE_STORAGE_KEY)).toBeNull();
-    expect(useBuildPipelineStore.getState().pipelines.has("pipeline-1")).toBe(true);
+    expect(appCommandStore(buildPipelineStore).getState().pipelines.has("pipeline-1")).toBe(true);
   });
 
   test("groups imports by project and counts malformed entries", async () => {
@@ -968,7 +983,7 @@ describe("legacy build pipeline migration", () => {
 
 describe("structured review normalization on hydrate", () => {
   beforeEach(() => {
-    useBuildPipelineStore.setState({
+    appCommandStore(buildPipelineStore).setState({
       pipelines: new Map(),
       buildEnvironmentIds: new Set(),
     });
@@ -1059,7 +1074,7 @@ describe("structured review normalization on hydrate", () => {
 
 describe("hydration generation bookkeeping", () => {
   beforeEach(() => {
-    useBuildPipelineStore.setState({
+    appCommandStore(buildPipelineStore).setState({
       pipelines: new Map(),
       buildEnvironmentIds: new Set(),
     });
@@ -1083,6 +1098,6 @@ describe("hydration generation bookkeeping", () => {
     const restored = await projectHydration;
 
     expect(restored.map((pipeline) => pipeline.id)).not.toContain("pipeline-1");
-    expect(useBuildPipelineStore.getState().pipelines.has("pipeline-1")).toBe(false);
+    expect(appCommandStore(buildPipelineStore).getState().pipelines.has("pipeline-1")).toBe(false);
   });
 });

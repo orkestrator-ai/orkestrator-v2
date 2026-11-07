@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { useKanbanStore } from "@/stores/kanbanStore";
+import { kanbanStore } from "@/stores/kanbanStore";
 import { build, session } from "./pipeline-test-fixture";
 import { pipelineCriteriaStatusWord } from "@orkestrator/protocol/build-pipeline-criteria";
 import { PipelineTicketView, ticketChangedSinceStart, ticketImageUrl } from "./PipelineTicketView";
+import { appCommandStore } from "@/test/app-command-store";
 
 const snapshot = {
   title: "Original ticket",
@@ -24,7 +25,7 @@ const snapshot = {
 
 afterEach(() => {
   cleanup();
-  useKanbanStore.setState({ tasks: [] });
+  appCommandStore(kanbanStore).setState({ tasks: [] });
 });
 
 describe("pipeline ticket references", () => {
@@ -71,7 +72,7 @@ describe("pipeline ticket references", () => {
   });
 
   test("shows edits to the live ticket while retaining the started-with snapshot", () => {
-    useKanbanStore.setState({
+    appCommandStore(kanbanStore).setState({
       tasks: [
         {
           id: "task-1",

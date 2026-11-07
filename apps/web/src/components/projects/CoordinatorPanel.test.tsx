@@ -13,17 +13,17 @@ import type { Environment } from "@/types";
 import * as realBackend from "@/lib/backend";
 import * as realNativeAgent from "@/components/native-agent";
 import type { AgentMailMailboxSnapshot } from "@orkestrator/protocol/agent-mail";
-import { useAgentMailStore } from "@/stores/agentMailStore";
+import { agentMailStore } from "@/stores/agentMailStore";
 import { environmentStore } from "@/stores/environmentStore";
 import { configStore } from "@/stores/configStore";
-import { useNativeComposeStore } from "@/stores/nativeComposeStore";
+import { nativeComposeStore } from "@/stores/nativeComposeStore";
 import { useActiveCoordinatorConversationStore } from "@/stores/activeCoordinatorConversationStore";
 import { projectStore } from "@/stores/projectStore";
-import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
+import { nativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { useNativeNoticeDismissalStore } from "@/stores/nativeNoticeDismissalStore";
 import {
+  coordinatorPaneLayoutStore,
   selectCoordinatorPaneLayout,
-  useCoordinatorPaneLayoutStore,
 } from "@/stores/coordinatorPaneLayoutStore";
 import { resetClientStateCapabilitiesForTests } from "@/lib/client-state-capabilities";
 import {
@@ -192,7 +192,9 @@ const firstUpstreamTip = "b".repeat(40);
 const checkUpstream = mock(async (): Promise<unknown> => null);
 
 function storedLayout() {
-  return selectCoordinatorPaneLayout("project-1")(useCoordinatorPaneLayoutStore.getState())!;
+  return selectCoordinatorPaneLayout("project-1")(
+    appCommandStore(coordinatorPaneLayoutStore).getState(),
+  )!;
 }
 const runCommand = mock(async () => undefined);
 const launchEnvironmentId = coordinatorRuntimeId("coordinator-1", "conversation-1");
@@ -385,7 +387,7 @@ describe("CoordinatorPanel", () => {
       requestId: input.requestId,
     }));
     appCommandStore(configStore).setState({ config: initialConfig });
-    useNativeComposeStore
+    appCommandStore(nativeComposeStore)
       .getState()
       .clearDraft(createSessionKey("coordinator:coordinator-1:conversation-1", "coordinator-tab"));
     pause.mockClear();
@@ -423,9 +425,9 @@ describe("CoordinatorPanel", () => {
       ],
     });
     appCommandStore(uiStore).setState({ projectBoardTab: "coordinator" });
-    useNativeAgentProjectionStore.getState().reset();
+    appCommandStore(nativeAgentProjectionStore).getState().reset();
     useNativeNoticeDismissalStore.getState().clear();
-    useCoordinatorPaneLayoutStore.getState().reset();
+    appCommandStore(coordinatorPaneLayoutStore).getState().reset();
     clearLegacyPersistedState(LEGACY_UPSTREAM_DECLINE_KEY);
     resetUpstreamCheckForTests();
     resetClientStateCapabilitiesForTests();
@@ -508,7 +510,7 @@ describe("CoordinatorPanel", () => {
       };
       const environmentId = coordinatorRuntimeId(snapshot.workspace.id, conversation.id);
       const mailboxId = `${environmentId}\0${conversation.tabId}`;
-      useAgentMailStore.setState({
+      appCommandStore(agentMailStore).setState({
         summary: new Map([
           [
             mailboxId,
@@ -558,7 +560,7 @@ describe("CoordinatorPanel", () => {
           ),
         ).toBeTruthy();
       } finally {
-        useAgentMailStore.setState(useAgentMailStore.getInitialState());
+        appCommandStore(agentMailStore).setState(appCommandStore(agentMailStore).getInitialState());
       }
     },
   );
@@ -636,7 +638,7 @@ describe("CoordinatorPanel", () => {
       let revision = 0;
       for (const placeholder of ["idle", "recovering", "error", "recovering"] as const) {
         act(() => {
-          useNativeAgentProjectionStore
+          appCommandStore(nativeAgentProjectionStore)
             .getState()
             .setProjection(launchSessionKey, launchProjection(placeholder, [], ++revision));
         });
@@ -646,14 +648,14 @@ describe("CoordinatorPanel", () => {
       expectPrompt(openingPrompt);
 
       act(() => {
-        useNativeAgentProjectionStore
+        appCommandStore(nativeAgentProjectionStore)
           .getState()
           .setProjection(launchSessionKey, launchProjection(phase, messages, ++revision));
       });
       await waitFor(() => expectPrompt(""));
       // Releasing is permanent even when the next snapshot is quiet again.
       act(() => {
-        useNativeAgentProjectionStore
+        appCommandStore(nativeAgentProjectionStore)
           .getState()
           .setProjection(launchSessionKey, launchProjection("idle", [], ++revision));
       });
@@ -704,7 +706,7 @@ describe("CoordinatorPanel", () => {
     await refreshCoordinator(assignedSnapshot, 4);
     panel.rerender(<CoordinatorPanel projectId="project-1" />);
     act(() => {
-      useNativeAgentProjectionStore
+      appCommandStore(nativeAgentProjectionStore)
         .getState()
         .setProjection(launchSessionKey, launchProjection("running", [], 2));
     });
@@ -1141,22 +1143,24 @@ describe("CoordinatorPanel", () => {
       await renderAssigned();
       await fetchesAfterOpen();
       act(() =>
-        useNativeAgentProjectionStore.getState().setProjection(launchSessionKey, {
-          ...launchProjection(
-            "idle",
-            [
-              {
-                id: "previous",
-                role: "assistant",
-                content: "Ready",
-                parts: [],
-                createdAt: new Date(0).toISOString(),
-              },
-            ],
-            50,
-          ),
-          suggestedPrompt: "Also run the tests",
-        }),
+        appCommandStore(nativeAgentProjectionStore)
+          .getState()
+          .setProjection(launchSessionKey, {
+            ...launchProjection(
+              "idle",
+              [
+                {
+                  id: "previous",
+                  role: "assistant",
+                  content: "Ready",
+                  parts: [],
+                  createdAt: new Date(0).toISOString(),
+                },
+              ],
+              50,
+            ),
+            suggestedPrompt: "Also run the tests",
+          }),
       );
       let finishFetch!: (value: ProjectGitStatus) => void;
       fetchGit.mockImplementationOnce(
@@ -1174,9 +1178,9 @@ describe("CoordinatorPanel", () => {
         ),
       ).toBeTruthy();
       expect(dispatchIntent).not.toHaveBeenCalled();
-      expect(useNativeComposeStore.getState().drafts.get(launchSessionKey)?.text).toBe(
-        "Inspect this\n\nAlso run the tests",
-      );
+      expect(
+        appCommandStore(nativeComposeStore).getState().drafts.get(launchSessionKey)?.text,
+      ).toBe("Inspect this\n\nAlso run the tests");
       fireEvent.keyDown(await screen.findByRole("textbox"), { key: "Enter" });
       await waitFor(() => expect(sentPrompts()).toEqual(["Inspect this\n\nAlso run the tests"]));
     });
@@ -1197,9 +1201,9 @@ describe("CoordinatorPanel", () => {
       await act(async () => finishFetch(behindGit()));
       expect(dispatchIntent).not.toHaveBeenCalled();
       expect(syncGit).not.toHaveBeenCalled();
-      expect(useNativeComposeStore.getState().drafts.get(launchSessionKey)?.text).toBe(
-        "Keep across remount",
-      );
+      expect(
+        appCommandStore(nativeComposeStore).getState().drafts.get(launchSessionKey)?.text,
+      ).toBe("Keep across remount");
       await renderAssigned();
       expect(dispatchIntent).not.toHaveBeenCalled();
       fireEvent.keyDown(await screen.findByRole("textbox"), { key: "Enter" });
@@ -1257,7 +1261,8 @@ describe("CoordinatorPanel", () => {
       await sendFollowUp("  ");
       await act(async () => {});
       expect(
-        useNativeComposeStore.getState().drafts.get(launchSessionKey)?.submissionError,
+        appCommandStore(nativeComposeStore).getState().drafts.get(launchSessionKey)
+          ?.submissionError,
       ).toBeUndefined();
       expect(fetchGit.mock.calls.length).toBe(fetches);
       expect(syncGit).not.toHaveBeenCalled();
@@ -1279,22 +1284,27 @@ describe("CoordinatorPanel", () => {
         const fetches = await fetchesAfterOpen();
         if (kind === "attachment")
           act(() =>
-            useNativeComposeStore.getState().updateDraft(launchSessionKey, {
-              attachments: [
-                { id: "unsupported", name: "notes.pdf", path: "/notes.pdf", type: "file" },
-              ],
-            }),
+            appCommandStore(nativeComposeStore)
+              .getState()
+              .updateDraft(launchSessionKey, {
+                attachments: [
+                  { id: "unsupported", name: "notes.pdf", path: "/notes.pdf", type: "file" },
+                ],
+              }),
           );
         if (kind === "command")
           act(() =>
-            useNativeComposeStore.getState().updateDraft(launchSessionKey, {
-              annotations: [{ id: "a1", text: "Reference", comment: "" }],
-            }),
+            appCommandStore(nativeComposeStore)
+              .getState()
+              .updateDraft(launchSessionKey, {
+                annotations: [{ id: "a1", text: "Reference", comment: "" }],
+              }),
           );
         await sendFollowUp(kind === "command" ? "!git status" : "Read the attachment");
         await waitFor(() =>
           expect(
-            useNativeComposeStore.getState().drafts.get(launchSessionKey)?.submissionError,
+            appCommandStore(nativeComposeStore).getState().drafts.get(launchSessionKey)
+              ?.submissionError,
           ).toBeTruthy(),
         );
         expect(fetchGit.mock.calls.length).toBe(fetches);
@@ -1332,7 +1342,7 @@ describe("CoordinatorPanel", () => {
         },
       };
       ensuredGit = behindGit();
-      useNativeAgentProjectionStore
+      appCommandStore(nativeAgentProjectionStore)
         .getState()
         .setProjection(
           createSessionKey(coordinatorRuntimeId("coordinator-1", "recovering"), "recovering-tab"),
@@ -1358,7 +1368,7 @@ describe("CoordinatorPanel", () => {
         try {
           act(() => {
             if (kind === "recovering") {
-              useNativeAgentProjectionStore
+              appCommandStore(nativeAgentProjectionStore)
                 .getState()
                 .setProjection(launchSessionKey, launchProjection("recovering", [], 50));
             } else {
@@ -1374,7 +1384,7 @@ describe("CoordinatorPanel", () => {
                   } as never,
                 ],
               });
-              useNativeAgentProjectionStore
+              appCommandStore(nativeAgentProjectionStore)
                 .getState()
                 .setProjection(createSessionKey("home", "home-tab"), {
                   ...launchProjection("running"),
@@ -1490,7 +1500,7 @@ describe("CoordinatorPanel", () => {
       ensuredGit = behindGit();
       await renderAssigned();
       act(() => {
-        useNativeAgentProjectionStore
+        appCommandStore(nativeAgentProjectionStore)
           .getState()
           .setProjection(launchSessionKey, launchProjection("running", [], 50));
       });
@@ -1851,18 +1861,20 @@ describe("CoordinatorPanel", () => {
       coordinatorRuntimeId("coordinator-1", "conversation-1"),
       "coordinator-tab",
     );
-    useNativeAgentProjectionStore.getState().setProjection(sessionKey, {
-      platform: "codex",
-      environmentId: "coordinator:coordinator-1:conversation-1",
-      connection: "connected",
-      turn: { phase: "running" },
-      messages: [],
-      interactions: [],
-      composerControls: [],
-      capabilities: {},
-      revision: 1,
-      generation: "test",
-    } as never);
+    appCommandStore(nativeAgentProjectionStore)
+      .getState()
+      .setProjection(sessionKey, {
+        platform: "codex",
+        environmentId: "coordinator:coordinator-1:conversation-1",
+        connection: "connected",
+        turn: { phase: "running" },
+        messages: [],
+        interactions: [],
+        composerControls: [],
+        capabilities: {},
+        revision: 1,
+        generation: "test",
+      } as never);
 
     render(<CoordinatorPanel projectId="project-1" />);
     await screen.findByTestId("native-agent");
@@ -1871,11 +1883,13 @@ describe("CoordinatorPanel", () => {
     cleanup();
 
     act(() => {
-      useNativeAgentProjectionStore.getState().setProjection(sessionKey, {
-        ...useNativeAgentProjectionStore.getState().projections.get(sessionKey)!,
-        turn: { phase: "idle" },
-        revision: 2,
-      });
+      appCommandStore(nativeAgentProjectionStore)
+        .getState()
+        .setProjection(sessionKey, {
+          ...appCommandStore(nativeAgentProjectionStore).getState().projections.get(sessionKey)!,
+          turn: { phase: "idle" },
+          revision: 2,
+        });
     });
     render(<CoordinatorPanel projectId="project-1" />);
     await screen.findByTestId("native-agent");
@@ -2181,7 +2195,7 @@ describe("CoordinatorPanel", () => {
       "side-1",
       single.activePaneId,
     );
-    useCoordinatorPaneLayoutStore.getState().setLayout("project-1", split);
+    appCommandStore(coordinatorPaneLayoutStore).getState().setLayout("project-1", split);
 
     render(<CoordinatorPanel projectId="project-1" />);
 
@@ -2248,7 +2262,7 @@ describe("CoordinatorPanel", () => {
       "side-1",
       single.activePaneId,
     );
-    useCoordinatorPaneLayoutStore.getState().setLayout("project-1", split);
+    appCommandStore(coordinatorPaneLayoutStore).getState().setLayout("project-1", split);
     return split;
   }
 
@@ -2448,7 +2462,7 @@ describe("CoordinatorPanel", () => {
       coordinatorRuntimeId(snapshot.workspace.id, "side-typed"),
       "tab-side-typed",
     );
-    useNativeComposeStore.getState().updateDraft(typedKey, { text: "Not sent yet" });
+    appCommandStore(nativeComposeStore).getState().updateDraft(typedKey, { text: "Not sent yet" });
     createConversation.mockImplementationOnce(async () => ensuredSnapshot);
     try {
       render(<CoordinatorPanel projectId="project-1" />);
@@ -2464,7 +2478,7 @@ describe("CoordinatorPanel", () => {
         ["side-empty"],
       ]);
     } finally {
-      useNativeComposeStore.getState().clearDraft(typedKey);
+      appCommandStore(nativeComposeStore).getState().clearDraft(typedKey);
     }
   });
 
@@ -2487,7 +2501,7 @@ describe("CoordinatorPanel", () => {
     };
     ensuredSnapshot = both;
     const single = reconcileCoordinatorLayout(null, ["conversation-1", "side-1"]);
-    useCoordinatorPaneLayoutStore
+    appCommandStore(coordinatorPaneLayoutStore)
       .getState()
       .setLayout(
         "project-1",

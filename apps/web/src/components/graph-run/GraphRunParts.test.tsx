@@ -9,11 +9,12 @@ import {
   type CreateTabOptions,
 } from "@/contexts/TerminalContext";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
-import { useGraphRunStore } from "@/stores/graphRunStore";
+import { graphRunStore } from "@/stores/graphRunStore";
 import { graphArtifactRendering, graphArtifactTypeDefinition } from "./GraphArtifactView";
 import { GraphQuestionAnswerForm } from "./GraphQuestionAnswerForm";
 import { GraphRunsList } from "./GraphRunsList";
 import { examplePlan, runOf } from "./graph-run.test-fixtures";
+import { appCommandStore } from "@/test/app-command-store";
 
 const invokeMock = nativeInvoke as unknown as ReturnType<typeof mock>;
 
@@ -166,7 +167,7 @@ describe("GraphRunsList", () => {
 
   beforeEach(() => {
     createTab = mock(() => true);
-    useGraphRunStore.setState({
+    appCommandStore(graphRunStore).setState({
       runs: new Map(),
       lists: new Map(),
       transcripts: new Map(),

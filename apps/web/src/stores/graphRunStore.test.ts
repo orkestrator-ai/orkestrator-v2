@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { graphRunSummary } from "@orkestrator/protocol/graphs/run-view";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
 import { act, runOf } from "@/components/graph-run/graph-run.test-fixtures";
-import { MAX_CACHED_ARTIFACTS, graphRunCacheKey, useGraphRunStore } from "./graphRunStore";
+import { graphRunCacheKey, graphRunStore, MAX_CACHED_ARTIFACTS } from "./graphRunStore";
+import { appCommandStore } from "@/test/app-command-store";
 
 const invokeMock = nativeInvoke as unknown as ReturnType<typeof mock>;
 type Handler = (args: Record<string, unknown>) => unknown;
@@ -24,7 +25,7 @@ function calls(command: string) {
 }
 
 beforeEach(() => {
-  useGraphRunStore.setState({
+  appCommandStore(graphRunStore).setState({
     runs: new Map(),
     lists: new Map(),
     transcripts: new Map(),
@@ -45,30 +46,30 @@ describe("graphRunStore", () => {
           ? { status: "unchanged", revision: stored.revision }
           : { status: "changed", run: stored },
     });
-    await useGraphRunStore.getState().loadRun("run-1");
-    expect(useGraphRunStore.getState().runs.get("run-1")).toMatchObject({
+    await appCommandStore(graphRunStore).getState().loadRun("run-1");
+    expect(appCommandStore(graphRunStore).getState().runs.get("run-1")).toMatchObject({
       status: "ready",
       run: { revision: 3 },
     });
     expect(calls("graph_run_get")).toEqual([{ runId: "run-1" }]);
 
-    await useGraphRunStore.getState().loadRun("run-1");
+    await appCommandStore(graphRunStore).getState().loadRun("run-1");
     expect(calls("graph_run_get")[1]).toEqual({ runId: "run-1", knownRevision: 3 });
-    expect(useGraphRunStore.getState().runs.get("run-1")!.run!.revision).toBe(3);
+    expect(appCommandStore(graphRunStore).getState().runs.get("run-1")!.run!.revision).toBe(3);
 
     stored = runOf("multi-review", { revision: 4, status: "complete" });
-    await useGraphRunStore.getState().loadRun("run-1");
-    expect(useGraphRunStore.getState().runs.get("run-1")!.run).toMatchObject({
+    await appCommandStore(graphRunStore).getState().loadRun("run-1");
+    expect(appCommandStore(graphRunStore).getState().runs.get("run-1")!.run).toMatchObject({
       revision: 4,
       status: "complete",
     });
   });
 
   test("never moves a run backwards to an older snapshot", () => {
-    const store = useGraphRunStore.getState();
+    const store = appCommandStore(graphRunStore).getState();
     store.applyRun(runOf("multi-review", { revision: 5, status: "paused" }));
     store.applyRun(runOf("multi-review", { revision: 4, status: "running" }));
-    expect(useGraphRunStore.getState().runs.get("run-1")!.run).toMatchObject({
+    expect(appCommandStore(graphRunStore).getState().runs.get("run-1")!.run).toMatchObject({
       revision: 5,
       status: "paused",
     });
@@ -80,20 +81,22 @@ describe("graphRunStore", () => {
         throw new Error("The graph run does not exist");
       },
     });
-    await useGraphRunStore.getState().loadRun("gone");
-    expect(useGraphRunStore.getState().runs.get("gone")).toMatchObject({
+    await appCommandStore(graphRunStore).getState().loadRun("gone");
+    expect(appCommandStore(graphRunStore).getState().runs.get("gone")).toMatchObject({
       status: "missing",
       run: null,
     });
 
-    useGraphRunStore.getState().applyRun(runOf("multi-review", { revision: 2 }));
+    appCommandStore(graphRunStore)
+      .getState()
+      .applyRun(runOf("multi-review", { revision: 2 }));
     install({
       graph_run_get: () => {
         throw new Error("Backend offline");
       },
     });
-    await useGraphRunStore.getState().loadRun("run-1");
-    expect(useGraphRunStore.getState().runs.get("run-1")).toMatchObject({
+    await appCommandStore(graphRunStore).getState().loadRun("run-1");
+    expect(appCommandStore(graphRunStore).getState().runs.get("run-1")).toMatchObject({
       status: "ready",
       error: "Backend offline",
       run: { revision: 2 },
@@ -108,9 +111,9 @@ describe("graphRunStore", () => {
           resolve = () => done({ status: "changed", run: runOf("multi-review") });
         }),
     });
-    const first = useGraphRunStore.getState().loadRun("run-1");
-    void useGraphRunStore.getState().loadRun("run-1");
-    void useGraphRunStore.getState().loadRun("run-1");
+    const first = appCommandStore(graphRunStore).getState().loadRun("run-1");
+    void appCommandStore(graphRunStore).getState().loadRun("run-1");
+    void appCommandStore(graphRunStore).getState().loadRun("run-1");
     expect(calls("graph_run_get")).toHaveLength(1);
     resolve!();
     await new Promise((done) => setTimeout(done, 0));
@@ -122,11 +125,15 @@ describe("graphRunStore", () => {
   test("lists an environment's runs and keeps a listed run current", async () => {
     const run = runOf("multi-review", { revision: 1 });
     install({ graph_runs_list: () => [graphRunSummary(run)] });
-    await useGraphRunStore.getState().loadList("env-1");
+    await appCommandStore(graphRunStore).getState().loadList("env-1");
     expect(calls("graph_runs_list")).toEqual([{ environmentId: "env-1" }]);
-    expect(useGraphRunStore.getState().lists.get("env-1")!.runs[0]!.status).toBe("running");
-    useGraphRunStore.getState().applyRun({ ...run, revision: 2, status: "complete" });
-    expect(useGraphRunStore.getState().lists.get("env-1")!.runs[0]).toMatchObject({
+    expect(appCommandStore(graphRunStore).getState().lists.get("env-1")!.runs[0]!.status).toBe(
+      "running",
+    );
+    appCommandStore(graphRunStore)
+      .getState()
+      .applyRun({ ...run, revision: 2, status: "complete" });
+    expect(appCommandStore(graphRunStore).getState().lists.get("env-1")!.runs[0]).toMatchObject({
       status: "complete",
       revision: 2,
     });
@@ -144,13 +151,13 @@ describe("graphRunStore", () => {
       }),
     });
     const key = act({ nodeId: "plan" }).key;
-    await useGraphRunStore.getState().loadTranscript("run-1", key, 1);
-    await useGraphRunStore.getState().loadTranscript("run-1", key, 1);
+    await appCommandStore(graphRunStore).getState().loadTranscript("run-1", key, 1);
+    await appCommandStore(graphRunStore).getState().loadTranscript("run-1", key, 1);
     expect(calls("graph_run_transcript")).toEqual([{ runId: "run-1", activationKey: key }]);
-    await useGraphRunStore.getState().loadTranscript("run-1", key, 2);
+    await appCommandStore(graphRunStore).getState().loadTranscript("run-1", key, 2);
     expect(calls("graph_run_transcript")).toHaveLength(2);
     expect(
-      useGraphRunStore.getState().transcripts.get(graphRunCacheKey("run-1", key)),
+      appCommandStore(graphRunStore).getState().transcripts.get(graphRunCacheKey("run-1", key)),
     ).toMatchObject({ status: "ready", revision: 2 });
   });
 
@@ -161,15 +168,15 @@ describe("graphRunStore", () => {
         value: { headRef: "a" },
       }),
     });
-    await useGraphRunStore.getState().loadArtifact("run-1", "a-1");
-    await useGraphRunStore.getState().loadArtifact("run-1", "a-1");
+    await appCommandStore(graphRunStore).getState().loadArtifact("run-1", "a-1");
+    await appCommandStore(graphRunStore).getState().loadArtifact("run-1", "a-1");
     expect(calls("graph_run_artifact")).toHaveLength(1);
-    await useGraphRunStore.getState().loadArtifact("run-1", "a-1", { force: true });
+    await appCommandStore(graphRunStore).getState().loadArtifact("run-1", "a-1", { force: true });
     expect(calls("graph_run_artifact")).toHaveLength(2);
     for (let index = 0; index < MAX_CACHED_ARTIFACTS + 5; index++) {
-      await useGraphRunStore.getState().loadArtifact("run-1", `b-${index}`);
+      await appCommandStore(graphRunStore).getState().loadArtifact("run-1", `b-${index}`);
     }
-    const artifacts = useGraphRunStore.getState().artifacts;
+    const artifacts = appCommandStore(graphRunStore).getState().artifacts;
     expect(artifacts.size).toBe(MAX_CACHED_ARTIFACTS);
     expect(artifacts.has(graphRunCacheKey("run-1", "a-1"))).toBe(false);
   });

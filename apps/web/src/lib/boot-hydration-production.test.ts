@@ -6,9 +6,9 @@ import { hydrateBootPromptQueues, hydrateBootMultiReviewWorkflows } from "./boot
 import { createPromptQueueSources } from "./prompt-queue-sources";
 import { promptQueueKey, resetPromptQueueRevisions } from "./prompt-queue-persistence";
 import { hydrateBuildPipelinesForProject } from "./build-pipeline-persistence";
-import { useClaudeTmuxStore } from "@/stores/claudeTmuxStore";
+import { claudeTmuxStore } from "@/stores/claudeTmuxStore";
 import { multiReviewStore } from "@/stores/multiReviewStore";
-import { BUILD_PIPELINE_VERSION, useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { BUILD_PIPELINE_VERSION, buildPipelineStore } from "@/stores/buildPipelineStore";
 import { workflowVocabularyFixtures } from "./workflow-vocabulary.test-support";
 import { environmentRequests, hydrationRequests } from "./hydration-request-limiter";
 import { appCommandStore } from "@/test/app-command-store";
@@ -17,9 +17,9 @@ const nextTask = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 afterEach(() => {
   cleanup();
   resetPromptQueueRevisions();
-  useClaudeTmuxStore.setState({ messageQueue: new Map() });
+  appCommandStore(claudeTmuxStore).setState({ messageQueue: new Map() });
   appCommandStore(multiReviewStore).setState({ workflows: new Map() });
-  useBuildPipelineStore.setState({ pipelines: new Map() });
+  appCommandStore(buildPipelineStore).setState({ pipelines: new Map() });
 });
 
 test("six pending environment loads leave shared slots for snapshots and pipelines", async () => {
@@ -129,7 +129,7 @@ for (const failedPart of ["promptQueues", "multiReviewWorkflows"] as const) {
     );
     try {
       // Keep an existing queue when its authoritative list is unavailable.
-      useClaudeTmuxStore.setState({
+      appCommandStore(claudeTmuxStore).setState({
         messageQueue: new Map([
           ["env:e0:tab:t", [{ id: "retained", text: "fixture", attachments: [] }]],
         ]),
@@ -156,7 +156,7 @@ for (const failedPart of ["promptQueues", "multiReviewWorkflows"] as const) {
       expect(calls.filter((c) => c === "list_environment_hydration")).toHaveLength(2);
       expect(calls).not.toContain("list_prompt_queues");
       expect(calls).not.toContain("list_multi_review_workflows");
-      expect(useClaudeTmuxStore.getState().messageQueue.get("env:e0:tab:t")).toEqual([
+      expect(appCommandStore(claudeTmuxStore).getState().messageQueue.get("env:e0:tab:t")).toEqual([
         {
           id: failedPart === "promptQueues" ? "retained" : "message-e0",
           text: "fixture",
@@ -164,9 +164,9 @@ for (const failedPart of ["promptQueues", "multiReviewWorkflows"] as const) {
         },
       ]);
       for (const id of ids.slice(1)) {
-        expect(useClaudeTmuxStore.getState().messageQueue.get(`env:${id}:tab:t`)).toEqual([
-          { id: `message-${id}`, text: "fixture", attachments: [] },
-        ]);
+        expect(
+          appCommandStore(claudeTmuxStore).getState().messageQueue.get(`env:${id}:tab:t`),
+        ).toEqual([{ id: `message-${id}`, text: "fixture", attachments: [] }]);
       }
       expect(appCommandStore(multiReviewStore).getState().workflows.size).toBe(
         failedPart === "multiReviewWorkflows" ? 119 : 120,
@@ -179,8 +179,8 @@ for (const failedPart of ["promptQueues", "multiReviewWorkflows"] as const) {
           backendRevision: 5,
         });
       }
-      expect(useBuildPipelineStore.getState().pipelines.size).toBe(10);
-      expect(useBuildPipelineStore.getState().pipelines.get("pipeline-p0")).toEqual({
+      expect(appCommandStore(buildPipelineStore).getState().pipelines.size).toBe(10);
+      expect(appCommandStore(buildPipelineStore).getState().pipelines.get("pipeline-p0")).toEqual({
         ...pipeline,
         id: "pipeline-p0",
         projectId: "p0",

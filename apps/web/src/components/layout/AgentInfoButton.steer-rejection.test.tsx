@@ -16,10 +16,11 @@ import {
 import type { TabInfo } from "@/types/paneLayout";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
 import { createSessionKey } from "@/lib/utils";
-import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
+import { nativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { mockToastError, mockToastSuccess } from "../../../../../tests/mocks/sonner";
 import { AgentInfoButton } from "./AgentInfoButton";
 import { AgentRuntimePanel } from "./AgentInfoButton.panels";
+import { appCommandStore } from "@/test/app-command-store";
 
 const ENVIRONMENT_ID = "env-steer";
 const TAB_ID = "tab-steer";
@@ -38,19 +39,21 @@ const codexTab = {
 } as TabInfo;
 
 function seedRunningCodex() {
-  useNativeAgentProjectionStore.getState().setProjection(SESSION_KEY, {
-    platform: "codex",
-    environmentId: ENVIRONMENT_ID,
-    sessionId: "codex-steer",
-    connection: "connected",
-    turn: { phase: "running" },
-    messages: [],
-    interactions: [],
-    composerControls: [],
-    capabilities: nativeAgentCapabilities("codex"),
-    revision: 1,
-    generation: "codex-generation",
-  });
+  appCommandStore(nativeAgentProjectionStore)
+    .getState()
+    .setProjection(SESSION_KEY, {
+      platform: "codex",
+      environmentId: ENVIRONMENT_ID,
+      sessionId: "codex-steer",
+      connection: "connected",
+      turn: { phase: "running" },
+      messages: [],
+      interactions: [],
+      composerControls: [],
+      capabilities: nativeAgentCapabilities("codex"),
+      revision: 1,
+      generation: "codex-generation",
+    });
 }
 
 function steerOutcome(outcome: NativeAgentSessionActionOutcome) {
@@ -71,7 +74,7 @@ async function sendSteer(text: string): Promise<HTMLInputElement> {
 }
 
 beforeEach(() => {
-  useNativeAgentProjectionStore.getState().reset();
+  appCommandStore(nativeAgentProjectionStore).getState().reset();
   nativeInvokeMock.mockClear();
   mockToastError.mockClear();
   mockToastSuccess.mockClear();
@@ -79,7 +82,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
-  useNativeAgentProjectionStore.getState().reset();
+  appCommandStore(nativeAgentProjectionStore).getState().reset();
   nativeInvokeMock.mockImplementation(() => Promise.resolve());
 });
 

@@ -423,7 +423,7 @@ mock.module("@/components/terminal/ComposeBar", () => ({
 }));
 
 // --- Real stores: import directly and control via setState in beforeEach ---
-import { createSessionKey, useTerminalSessionStore } from "@/stores/terminalSessionStore";
+import { createSessionKey, terminalSessionStore } from "@/stores/terminalSessionStore";
 import { configStore } from "@/stores/configStore";
 import { environmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
@@ -534,11 +534,11 @@ function createTerminalData(options?: {
   } as unknown as Parameters<typeof PersistentTerminal>[0]["terminalData"];
 }
 
-const originalSetTerminalSession = useTerminalSessionStore.getState().setSession;
+const originalSetTerminalSession = appCommandStore(terminalSessionStore).getState().setSession;
 
 /** Keep a fresh PTY from becoming a restored-session shortcut during readiness assertions. */
 function holdSessionPersistence(): void {
-  useTerminalSessionStore.setState({ setSession: mock(() => {}) });
+  appCommandStore(terminalSessionStore).setState({ setSession: mock(() => {}) });
 }
 
 describe("PersistentTerminal", () => {
@@ -602,7 +602,7 @@ describe("PersistentTerminal", () => {
     persistentSessionStore.sessionSnapshotGenerations = new Map([["env-1", 1]]);
 
     // Reset real stores to controlled state
-    useTerminalSessionStore.setState({
+    appCommandStore(terminalSessionStore).setState({
       sessions: new Map(),
       composeDraftText: new Map(),
       composeDraftImages: new Map(),
@@ -692,7 +692,7 @@ describe("PersistentTerminal", () => {
 
   afterEach(() => {
     cleanup();
-    useTerminalSessionStore.setState({ setSession: originalSetTerminalSession });
+    appCommandStore(terminalSessionStore).setState({ setSession: originalSetTerminalSession });
     terminalClocks?.restore();
     terminalClocks = undefined;
     delete window.orkestrator;
@@ -1037,7 +1037,7 @@ describe("PersistentTerminal", () => {
 
     useTerminalSessionId = "replacement-session";
     act(() => {
-      useTerminalSessionStore
+      appCommandStore(terminalSessionStore)
         .getState()
         .setSession(createSessionKey("container-1", "tab-1", "env-1"), {
           sessionId: "replacement-session",
@@ -1161,7 +1161,7 @@ describe("PersistentTerminal", () => {
     });
     expect(connectMock).toHaveBeenCalledTimes(1);
     expect(
-      useTerminalSessionStore
+      appCommandStore(terminalSessionStore)
         .getState()
         .sessions.get(createSessionKey("container-1", "tab-1", "env-1"))?.sessionId,
     ).toBe("session-1");
@@ -1189,7 +1189,7 @@ describe("PersistentTerminal", () => {
     // it sets an error, leaves isConnected false and flips isConnecting back to
     // false -- rather than throwing, which is the shape that flooded the log.
     act(() => {
-      useTerminalSessionStore
+      appCommandStore(terminalSessionStore)
         .getState()
         .setSession(createSessionKey("container-1", "tab-1", "env-1"), {
           sessionId: "dead-setup-session",
@@ -1260,7 +1260,7 @@ describe("PersistentTerminal", () => {
 
   it("attaches a backend-managed terminal to the authoritative pane session", async () => {
     act(() => {
-      useTerminalSessionStore
+      appCommandStore(terminalSessionStore)
         .getState()
         .setSession(createSessionKey("container-1", "tab-1", "env-1"), {
           sessionId: "stale-renderer-session",
@@ -1293,7 +1293,7 @@ describe("PersistentTerminal", () => {
   it("waits for a pane-published backend session instead of adopting renderer-local state", async () => {
     const sessionKey = createSessionKey("container-1", "tab-1", "env-1");
     act(() => {
-      useTerminalSessionStore.getState().setSession(sessionKey, {
+      appCommandStore(terminalSessionStore).getState().setSession(sessionKey, {
         sessionId: "stale-renderer-session",
       });
     });
@@ -1927,7 +1927,7 @@ describe("PersistentTerminal", () => {
 
   it("replays backend setup output even when a setup tab has a serialized xterm buffer", async () => {
     const setupSessionKey = createSessionKey(null, "tab-1", "env-1");
-    useTerminalSessionStore.getState().setSession(setupSessionKey, {
+    appCommandStore(terminalSessionStore).getState().setSession(setupSessionKey, {
       sessionId: "env-1:setup",
       serializedBuffer: "\u001b[?25h",
     });
@@ -2006,7 +2006,7 @@ describe("PersistentTerminal", () => {
 
   it("treats an empty authoritative replay as a valid cleared transcript", async () => {
     const sessionKey = createSessionKey("container-1", "tab-1", "env-1");
-    useTerminalSessionStore.getState().setSession(sessionKey, {
+    appCommandStore(terminalSessionStore).getState().setSession(sessionKey, {
       sessionId: "existing-session",
       serializedBuffer: "durable history that must be replaced",
     });
@@ -2045,7 +2045,7 @@ describe("PersistentTerminal", () => {
 
   it("prepends durable history when replaying a newly-created replacement session", async () => {
     const sessionKey = createSessionKey("container-1", "tab-1", "env-1");
-    useTerminalSessionStore.getState().setSession(sessionKey, {
+    appCommandStore(terminalSessionStore).getState().setSession(sessionKey, {
       sessionId: "exited-session",
       serializedBuffer: "durable history\r\n",
     });
@@ -2160,7 +2160,7 @@ describe("PersistentTerminal", () => {
 
   it("restores durable history and keeps live output visible when snapshot synchronization fails", async () => {
     const sessionKey = createSessionKey("container-1", "tab-1", "env-1");
-    useTerminalSessionStore.getState().setSession(sessionKey, {
+    appCommandStore(terminalSessionStore).getState().setSession(sessionKey, {
       sessionId: "existing-session",
       serializedBuffer: "\u001b[32mdurable terminal view\u001b[0m\r\n",
     });
@@ -2249,7 +2249,7 @@ describe("PersistentTerminal", () => {
 
   it("preserves newer rendered output when snapshot synchronization fails with an older durable checkpoint", async () => {
     const sessionKey = createSessionKey("container-1", "tab-1", "env-1");
-    useTerminalSessionStore.getState().setSession(sessionKey, {
+    appCommandStore(terminalSessionStore).getState().setSession(sessionKey, {
       sessionId: "existing-session",
       serializedBuffer: "older durable checkpoint\r\n",
     });
@@ -2294,7 +2294,7 @@ describe("PersistentTerminal", () => {
 
   it("uses only valid durable serialization when the backend snapshot is truncated", async () => {
     const sessionKey = createSessionKey("container-1", "tab-1", "env-1");
-    useTerminalSessionStore.getState().setSession(sessionKey, {
+    appCommandStore(terminalSessionStore).getState().setSession(sessionKey, {
       sessionId: "existing-session",
       serializedBuffer: "\u001b[?25hvalid \u{1F642} checkpoint\r\n",
     });
@@ -2566,7 +2566,7 @@ describe("PersistentTerminal", () => {
           }),
         }));
         const sessionKey = createSessionKey("container-1", "tab-1", "env-1");
-        useTerminalSessionStore.getState().setSession(sessionKey, {
+        appCommandStore(terminalSessionStore).getState().setSession(sessionKey, {
           sessionId: "env-1:setup",
         });
         const terminalData = createTerminalData({ serializedBuffer: "saved setup output\r\n" });
@@ -2585,11 +2585,12 @@ describe("PersistentTerminal", () => {
           { id: "tab-1", type: "plain" },
         ]);
         expect(
-          useTerminalSessionStore.getState().sessions.get(sessionKey)?.sessionId,
+          appCommandStore(terminalSessionStore).getState().sessions.get(sessionKey)?.sessionId,
         ).toBeUndefined();
-        expect(useTerminalSessionStore.getState().sessions.get(sessionKey)?.serializedBuffer).toBe(
-          "saved setup output\r\n",
-        );
+        expect(
+          appCommandStore(terminalSessionStore).getState().sessions.get(sessionKey)
+            ?.serializedBuffer,
+        ).toBe("saved setup output\r\n");
       } finally {
         timer.restore();
       }
@@ -2936,7 +2937,8 @@ describe("PersistentTerminal", () => {
 
     await waitFor(() => {
       expect(
-        useTerminalSessionStore.getState().sessions.get("container-1:tab-1")?.serializedBuffer,
+        appCommandStore(terminalSessionStore).getState().sessions.get("container-1:tab-1")
+          ?.serializedBuffer,
       ).toBe("late history");
     });
     expect(terminal.reset).toHaveBeenCalledTimes(resetCountBeforeResolution);
@@ -3968,7 +3970,7 @@ describe("PersistentTerminal", () => {
     const onReady = mock(
       (_payload: { persistSetupComplete: boolean; workspaceReady?: boolean }) => {},
     );
-    useTerminalSessionStore.setState({
+    appCommandStore(terminalSessionStore).setState({
       sessions: new Map([
         [
           "container-1:tab-1",
@@ -4015,7 +4017,7 @@ describe("PersistentTerminal", () => {
     const onReady = mock(
       (_payload: { persistSetupComplete: boolean; workspaceReady?: boolean }) => {},
     );
-    useTerminalSessionStore.setState({
+    appCommandStore(terminalSessionStore).setState({
       sessions: new Map([
         [
           "container-1:tab-1",
@@ -4057,7 +4059,7 @@ describe("PersistentTerminal", () => {
   });
 
   it("stores a replacement PTY session id over a stale existing id", async () => {
-    useTerminalSessionStore.setState({
+    appCommandStore(terminalSessionStore).setState({
       sessions: new Map([
         [
           "container-1:tab-1",
@@ -4087,9 +4089,10 @@ describe("PersistentTerminal", () => {
     );
 
     await waitFor(() => {
-      expect(useTerminalSessionStore.getState().sessions.get("container-1:tab-1")?.sessionId).toBe(
-        "session-1",
-      );
+      expect(
+        appCommandStore(terminalSessionStore).getState().sessions.get("container-1:tab-1")
+          ?.sessionId,
+      ).toBe("session-1");
     });
   });
 
@@ -4380,7 +4383,7 @@ describe("PersistentTerminal", () => {
   it("does not replace a durable buffer with a substantially shorter cleanup snapshot", async () => {
     const sessionKey = createSessionKey("container-1", "tab-1", "env-1");
     const durableBuffer = "x".repeat(100);
-    useTerminalSessionStore.setState({
+    appCommandStore(terminalSessionStore).setState({
       sessions: new Map([
         [
           sessionKey,
@@ -4410,9 +4413,9 @@ describe("PersistentTerminal", () => {
     await waitFor(() => expect(persistentSessionStore.createSession).toHaveBeenCalled());
     view.unmount();
 
-    expect(useTerminalSessionStore.getState().sessions.get(sessionKey)?.serializedBuffer).toBe(
-      durableBuffer,
-    );
+    expect(
+      appCommandStore(terminalSessionStore).getState().sessions.get(sessionKey)?.serializedBuffer,
+    ).toBe(durableBuffer);
     expect(persistentSessionStore.saveSessionBuffer).not.toHaveBeenCalled();
   });
 
@@ -4454,7 +4457,7 @@ describe("PersistentTerminal", () => {
     });
 
     await waitFor(() => {
-      const sessions = useTerminalSessionStore.getState().sessions;
+      const sessions = appCommandStore(terminalSessionStore).getState().sessions;
       const session = sessions.get("container-1:tab-1");
       expect(session?.serializedBuffer).toBe("restored-buffer");
     });
@@ -4464,7 +4467,7 @@ describe("PersistentTerminal", () => {
     useTerminalSessionId = null;
     useTerminalIsConnected = false;
     act(() => {
-      useTerminalSessionStore
+      appCommandStore(terminalSessionStore)
         .getState()
         .setSession(createSessionKey("container-1", "tab-1", "env-1"), {
           sessionId: "stale-renderer-session",
@@ -4510,7 +4513,7 @@ describe("PersistentTerminal", () => {
       });
       expect(persistentSessionStore.loadSessionBuffer).toHaveBeenCalledWith("saved-job-session");
       expect(
-        useTerminalSessionStore
+        appCommandStore(terminalSessionStore)
           .getState()
           .sessions.get(createSessionKey("container-1", "tab-1", "env-1"))?.serializedBuffer,
       ).toBe("completed job output\r\n");
@@ -4584,7 +4587,7 @@ describe("PersistentTerminal", () => {
     // paint resets the parser, so repeating it would wipe the visible output.
     const resetsAfterPaint = terminal.reset.mock.calls.length;
     act(() => {
-      useTerminalSessionStore
+      appCommandStore(terminalSessionStore)
         .getState()
         .setSerializedBuffer(
           createSessionKey("container-1", "tab-1", "env-1"),
@@ -5101,7 +5104,7 @@ describe("PersistentTerminal", () => {
     );
 
     await waitFor(() => {
-      const sessions = useTerminalSessionStore.getState().sessions;
+      const sessions = appCommandStore(terminalSessionStore).getState().sessions;
       const session = sessions.get("container-1:tab-1");
       expect(session?.persistentSessionId).toBe("launched-session-1");
     });
@@ -5109,7 +5112,7 @@ describe("PersistentTerminal", () => {
 
   it("shows Address all and writes the complete shared prompt as one terminal line", async () => {
     useTerminalBootstrapped = true;
-    useTerminalSessionStore.setState({
+    appCommandStore(terminalSessionStore).setState({
       sessions: new Map([["container-1:tab-1", { sessionId: "session-1" }]]),
       composeDraftText: new Map(),
       composeDraftImages: new Map(),
@@ -5144,7 +5147,7 @@ describe("PersistentTerminal", () => {
 
   it("flattens multiline compose text before writing it to Claude Code", async () => {
     useTerminalBootstrapped = true;
-    useTerminalSessionStore.setState({
+    appCommandStore(terminalSessionStore).setState({
       sessions: new Map([["container-1:tab-1", { sessionId: "session-1" }]]),
       composeDraftText: new Map(),
       composeDraftImages: new Map(),

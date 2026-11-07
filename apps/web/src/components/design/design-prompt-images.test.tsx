@@ -7,7 +7,7 @@ import { toast } from "sonner";
 // Registered once in tests/setup.ts; this file only varies its behavior.
 import { invoke } from "@/lib/native/backend";
 import { environmentStore } from "@/stores/environmentStore";
-import { nativeComposeDraft, useNativeComposeStore } from "@/stores/nativeComposeStore";
+import { nativeComposeDraft, nativeComposeStore } from "@/stores/nativeComposeStore";
 import type { Environment } from "@/types";
 import {
   deferred,
@@ -97,7 +97,7 @@ let restorePaste: () => void = () => undefined;
 
 beforeEach(() => {
   restorePaste = installImagePasteSupport();
-  useNativeComposeStore.setState({ drafts: new Map() });
+  appCommandStore(nativeComposeStore).setState({ drafts: new Map() });
   invokeMock.mockReset();
   invokeMock.mockImplementation(async (command, args) =>
     command === "write_local_file" ? `${args?.worktreePath}/${args?.filePath}` : undefined,
@@ -115,11 +115,13 @@ afterEach(() => {
 describe("addDesignImagesToDraft", () => {
   test("appends images to the draft without duplicating ones already there", () => {
     const key = "env-1:tab-1";
-    useNativeComposeStore.getState().updateDraft(key, { text: "keep", attachments: [image("a")] });
+    appCommandStore(nativeComposeStore)
+      .getState()
+      .updateDraft(key, { text: "keep", attachments: [image("a")] });
 
     expect(addDesignImagesToDraft(key, [image("a"), image("b")])).toBe(true);
 
-    const draft = nativeComposeDraft(useNativeComposeStore.getState(), key);
+    const draft = nativeComposeDraft(appCommandStore(nativeComposeStore).getState(), key);
     expect(draft.text).toBe("keep");
     expect(draft.attachments.map((attachment) => attachment.id)).toEqual(["a", "b"]);
   });
@@ -129,12 +131,12 @@ describe("addDesignImagesToDraft", () => {
     const full = Array.from({ length: DESIGN_PROMPT_IMAGE_LIMIT }, (_, index) =>
       image(`i${index}`),
     );
-    useNativeComposeStore.getState().updateDraft(key, { attachments: full });
+    appCommandStore(nativeComposeStore).getState().updateDraft(key, { attachments: full });
 
     expect(addDesignImagesToDraft(key, [image("extra")])).toBe(false);
-    expect(nativeComposeDraft(useNativeComposeStore.getState(), key).attachments).toHaveLength(
-      DESIGN_PROMPT_IMAGE_LIMIT,
-    );
+    expect(
+      nativeComposeDraft(appCommandStore(nativeComposeStore).getState(), key).attachments,
+    ).toHaveLength(DESIGN_PROMPT_IMAGE_LIMIT);
   });
 });
 

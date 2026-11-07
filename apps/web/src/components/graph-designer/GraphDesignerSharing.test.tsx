@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen, within } from "@testing-librar
 import { graphTemplateExample } from "@orkestrator/protocol/graphs/examples";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
 import { environmentStore } from "@/stores/environmentStore";
-import { useGraphDesignerStore } from "@/stores/graphDesignerStore";
+import { graphDesignerStore } from "@/stores/graphDesignerStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { Environment } from "@/types";
 import { GraphDesignerTab } from "./GraphDesignerTab";
@@ -62,7 +62,7 @@ beforeEach(() => {
     }
   });
   window.orkestrator = { invoke: invokeMock, listen: () => () => undefined } as never;
-  useGraphDesignerStore.setState({ libraries: new Map(), tabs: new Map() });
+  appCommandStore(graphDesignerStore).setState({ libraries: new Map(), tabs: new Map() });
   appCommandStore(environmentStore).setState({
     environments: [{ id: ENVIRONMENT_ID, projectId: "project-1" } as Environment],
   });

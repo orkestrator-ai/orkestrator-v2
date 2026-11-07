@@ -3,7 +3,7 @@ import { act, cleanup, renderHook } from "@testing-library/react";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
 import { environmentStore } from "@/stores/environmentStore";
 import { agentActivityStore } from "@/stores/agentActivityStore";
-import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { buildPipelineStore } from "@/stores/buildPipelineStore";
 import { prMonitorStore } from "@/stores/prMonitorStore";
 import type { Environment } from "@/types";
 import { useEnvironmentIdNameSignal } from "./useEnvironmentNameSignal";
@@ -29,7 +29,7 @@ const environment: Environment = {
 };
 const initialEnvironment = appCommandStore(environmentStore).getState();
 const initialActivity = appCommandStore(agentActivityStore).getState();
-const initialBuild = useBuildPipelineStore.getState();
+const initialBuild = appCommandStore(buildPipelineStore).getState();
 const initialMonitor = appCommandStore(prMonitorStore).getState();
 beforeEach(() => {
   appCommandStore(environmentStore).setState({
@@ -40,7 +40,7 @@ beforeEach(() => {
     containerStates: {},
     containerStateUpdatedAt: {},
   });
-  useBuildPipelineStore.setState({ activeBuildEnvironmentIds: new Set() });
+  appCommandStore(buildPipelineStore).setState({ activeBuildEnvironmentIds: new Set() });
   appCommandStore(prMonitorStore).setState({
     syncStatus: "current",
     states: new Map([
@@ -66,16 +66,18 @@ afterEach(() => {
   cleanup();
   appCommandStore(environmentStore).setState(initialEnvironment, true);
   appCommandStore(agentActivityStore).setState(initialActivity, true);
-  useBuildPipelineStore.setState(initialBuild, true);
+  appCommandStore(buildPipelineStore).setState(initialBuild, true);
   appCommandStore(prMonitorStore).setState(initialMonitor, true);
 });
 
 test("pipeline-only changes override waiting and restore it when work ends", () => {
   const { result } = renderHook(() => useEnvironmentIdNameSignal("env"));
   expect(result.current).toBe("needs-answer");
-  act(() => useBuildPipelineStore.setState({ activeBuildEnvironmentIds: new Set(["env"]) }));
+  act(() =>
+    appCommandStore(buildPipelineStore).setState({ activeBuildEnvironmentIds: new Set(["env"]) }),
+  );
   expect(result.current).toBe("merge-ready");
-  act(() => useBuildPipelineStore.setState({ activeBuildEnvironmentIds: new Set() }));
+  act(() => appCommandStore(buildPipelineStore).setState({ activeBuildEnvironmentIds: new Set() }));
   expect(result.current).toBe("needs-answer");
 });
 

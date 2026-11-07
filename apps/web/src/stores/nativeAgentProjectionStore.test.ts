@@ -12,10 +12,11 @@ import {
 import { appCommandScope } from "@/lib/node-scope-slots";
 import {
   evictNativeAgentHistoryCaches,
-  recomputeNativeAgentProjectionTotals,
-  useNativeAgentProjectionStore,
+  nativeAgentProjectionStore,
   type NativeAgentSyncCacheEntry,
+  recomputeNativeAgentProjectionTotals,
 } from "./nativeAgentProjectionStore";
+import { appCommandStore } from "@/test/app-command-store";
 
 /** The command node's retained-history reservations in the window budget. */
 function reservedHistoryBytes(): number {
@@ -69,7 +70,7 @@ function projection(id: string, messages: unknown[] = []): NativeAgentSessionPro
 
 function seedSession(key: string, historyBytes: number): void {
   const live = projection(`${key}-live`, [{ id: `${key}-live-message` }]);
-  useNativeAgentProjectionStore
+  appCommandStore(nativeAgentProjectionStore)
     .getState()
     .setProjection(
       key,
@@ -93,7 +94,7 @@ function syncCache(
   return { liveProjection, historyComplete: false, historyMessages, historyBytes };
 }
 
-afterEach(() => useNativeAgentProjectionStore.getState().reset());
+afterEach(() => appCommandStore(nativeAgentProjectionStore).getState().reset());
 
 describe("native agent projection history cache", () => {
   test("evicts inactive history while retaining its bounded live projection", () => {
@@ -101,7 +102,7 @@ describe("native agent projection history cache", () => {
 
     evictNativeAgentHistoryCaches("session-c", 5, 20);
 
-    const state = useNativeAgentProjectionStore.getState();
+    const state = appCommandStore(nativeAgentProjectionStore).getState();
     expect([...state.syncCaches.keys()]).toEqual(["session-c"]);
     expect(state.projections.get("session-a")?.sessionId).toBe("session-a-live");
     expect(state.projections.get("session-b")?.sessionId).toBe("session-b-live");
@@ -113,14 +114,20 @@ describe("native agent projection history cache", () => {
     seedSession("session-b", 8);
 
     evictNativeAgentHistoryCaches("session-b", 8, 12);
-    expect(useNativeAgentProjectionStore.getState().historyEvictions.get("session-a")).toBe(1);
-    expect(useNativeAgentProjectionStore.getState().historyEvictions.has("session-b")).toBe(false);
+    expect(
+      appCommandStore(nativeAgentProjectionStore).getState().historyEvictions.get("session-a"),
+    ).toBe(1);
+    expect(
+      appCommandStore(nativeAgentProjectionStore).getState().historyEvictions.has("session-b"),
+    ).toBe(false);
 
     // A later mount repopulates the cache; the next eviction must be visible as
     // a change rather than repeating a value the reader already honoured.
     seedSession("session-a", 8);
     evictNativeAgentHistoryCaches("session-b", 8, 12);
-    expect(useNativeAgentProjectionStore.getState().historyEvictions.get("session-a")).toBe(2);
+    expect(
+      appCommandStore(nativeAgentProjectionStore).getState().historyEvictions.get("session-a"),
+    ).toBe(2);
   });
 
   test("does nothing when the retained history already fits", () => {
@@ -128,8 +135,10 @@ describe("native agent projection history cache", () => {
 
     evictNativeAgentHistoryCaches("session-b", 1, 100);
 
-    expect([...useNativeAgentProjectionStore.getState().syncCaches.keys()]).toEqual(["session-a"]);
-    expect(useNativeAgentProjectionStore.getState().historyEvictions.size).toBe(0);
+    expect([...appCommandStore(nativeAgentProjectionStore).getState().syncCaches.keys()]).toEqual([
+      "session-a",
+    ]);
+    expect(appCommandStore(nativeAgentProjectionStore).getState().historyEvictions.size).toBe(0);
   });
 
   test("retains a progressive entry that carries no token or paging epoch", () => {
@@ -137,7 +146,7 @@ describe("native agent projection history cache", () => {
     // minted by the sync-v1 surfaces, which such a session never touches. The
     // entry still has to survive so a remount can inherit its retained pages.
     const live = projection("session-a-live", [{ id: "session-a-live-message" }]);
-    useNativeAgentProjectionStore
+    appCommandStore(nativeAgentProjectionStore)
       .getState()
       .setProjection(
         "session-a",
@@ -151,7 +160,9 @@ describe("native agent projection history cache", () => {
         },
       );
 
-    const cached = useNativeAgentProjectionStore.getState().syncCaches.get("session-a");
+    const cached = appCommandStore(nativeAgentProjectionStore)
+      .getState()
+      .syncCaches.get("session-a");
     expect(cached?.token).toBeUndefined();
     expect(cached?.historyEpoch).toBeUndefined();
     expect(cached?.historyBootstrap).toBe(true);
@@ -159,7 +170,7 @@ describe("native agent projection history cache", () => {
   });
 
   test("drops a progressive transcript token when its projection is evicted", () => {
-    const store = useNativeAgentProjectionStore.getState();
+    const store = appCommandStore(nativeAgentProjectionStore).getState();
     const identity: NativeAgentViewIdentity = {
       backendInstanceId: "backend-1",
       environmentId: "env-1",
@@ -187,7 +198,7 @@ describe("native agent projection history cache", () => {
       store.setProjection(`session-${index}`, projection(`s${index}`, [{ id: "m" }]));
     }
 
-    const next = useNativeAgentProjectionStore.getState();
+    const next = appCommandStore(nativeAgentProjectionStore).getState();
     expect(next.projections.has("session-old")).toBe(false);
     expect(next.progressiveCaches.get("session-old")?.transcriptToken).toBeUndefined();
     expect(next.progressiveCaches.get("session-old")?.transcriptHistoryEpoch).toBeUndefined();
@@ -195,7 +206,7 @@ describe("native agent projection history cache", () => {
   });
 
   test("drops a progressive transcript token when its projection is cleared", () => {
-    const store = useNativeAgentProjectionStore.getState();
+    const store = appCommandStore(nativeAgentProjectionStore).getState();
     store.setProgressiveCache("session-a", {
       transcriptToken: "tok-a",
       transcriptHistoryEpoch: "epoch-1",
@@ -207,7 +218,8 @@ describe("native agent projection history cache", () => {
     store.setProjection("session-a", null);
 
     expect(
-      useNativeAgentProjectionStore.getState().progressiveCaches.get("session-a")?.transcriptToken,
+      appCommandStore(nativeAgentProjectionStore).getState().progressiveCaches.get("session-a")
+        ?.transcriptToken,
     ).toBeUndefined();
   });
 
@@ -215,11 +227,15 @@ describe("native agent projection history cache", () => {
     seedSession("session-a", 8);
     seedSession("session-b", 8);
     evictNativeAgentHistoryCaches("session-b", 8, 12);
-    expect(useNativeAgentProjectionStore.getState().historyEvictions.has("session-a")).toBe(true);
+    expect(
+      appCommandStore(nativeAgentProjectionStore).getState().historyEvictions.has("session-a"),
+    ).toBe(true);
 
-    useNativeAgentProjectionStore.getState().setProjection("session-a", null, null);
+    appCommandStore(nativeAgentProjectionStore).getState().setProjection("session-a", null, null);
 
-    expect(useNativeAgentProjectionStore.getState().historyEvictions.has("session-a")).toBe(false);
+    expect(
+      appCommandStore(nativeAgentProjectionStore).getState().historyEvictions.has("session-a"),
+    ).toBe(false);
   });
 });
 
@@ -236,7 +252,7 @@ describe("native agent projection byte accounting", () => {
   }
 
   function expectExactTotals(): void {
-    const state = useNativeAgentProjectionStore.getState();
+    const state = appCommandStore(nativeAgentProjectionStore).getState();
     const slow = recomputeNativeAgentProjectionTotals(state);
     expect(state.projectionBytesTotal).toBe(slow.projectionBytesTotal);
     expect(reservedHistoryBytes()).toBe(slow.historyBytesTotal);
@@ -265,12 +281,12 @@ describe("native agent projection byte accounting", () => {
       text: "x".repeat(4_000),
     }));
     let liveMessage = { id: "live", text: "" };
-    const store = useNativeAgentProjectionStore.getState();
+    const store = appCommandStore(nativeAgentProjectionStore).getState();
     store.setProjection("session-a", projection("a", [...history, liveMessage]));
     expect(measured).toHaveLength(2_001);
-    expect(useNativeAgentProjectionStore.getState().projectionBytesTotal).toBeGreaterThan(
-      7.5 * 1024 * 1024,
-    );
+    expect(
+      appCommandStore(nativeAgentProjectionStore).getState().projectionBytesTotal,
+    ).toBeGreaterThan(7.5 * 1024 * 1024);
 
     for (let update = 0; update < 20; update += 1) {
       measured.length = 0;
@@ -290,7 +306,7 @@ describe("native agent projection byte accounting", () => {
     let nextId = 0;
     const fresh = () => ({ id: `m${nextId++}`, text: "é😀".repeat(Math.floor(random() * 20)) });
     const keys = ["a", "b", "c", "d"];
-    const store = useNativeAgentProjectionStore.getState();
+    const store = appCommandStore(nativeAgentProjectionStore).getState();
     for (let step = 0; step < 300; step += 1) {
       const key = keys[Math.floor(random() * keys.length)]!;
       const operation = Math.floor(random() * 6);
@@ -303,7 +319,7 @@ describe("native agent projection byte accounting", () => {
           syncEntry(live, history),
         );
       } else if (operation === 2) {
-        const current = useNativeAgentProjectionStore.getState().projections.get(key);
+        const current = appCommandStore(nativeAgentProjectionStore).getState().projections.get(key);
         // Same array identity: bytes are reused without measuring anything.
         if (current) store.setProjection(key, { ...current, revision: current.revision + 1 });
       } else if (operation === 3) {
@@ -327,7 +343,7 @@ describe("native agent projection byte accounting", () => {
     seedSession("session-b", 8);
     evictNativeAgentHistoryCaches("session-b", 8, 12);
 
-    const state = useNativeAgentProjectionStore.getState();
+    const state = appCommandStore(nativeAgentProjectionStore).getState();
     expect(state.projectionBytes.get("session-a")).toBe(
       slowEncodedBytes([{ id: "session-a-live-message" }]),
     );
@@ -337,13 +353,17 @@ describe("native agent projection byte accounting", () => {
 
   test("does not evict a session that retains no history", () => {
     const live = projection("a-live", [{ id: "live" }]);
-    useNativeAgentProjectionStore.getState().setProjection("a", live, syncEntry(live, []));
+    appCommandStore(nativeAgentProjectionStore)
+      .getState()
+      .setProjection("a", live, syncEntry(live, []));
     seedSession("b", 30);
 
     evictNativeAgentHistoryCaches("b", 10, 20);
 
-    expect(useNativeAgentProjectionStore.getState().historyEvictions.has("a")).toBe(false);
-    expect(useNativeAgentProjectionStore.getState().syncCaches.has("a")).toBe(true);
+    expect(appCommandStore(nativeAgentProjectionStore).getState().historyEvictions.has("a")).toBe(
+      false,
+    );
+    expect(appCommandStore(nativeAgentProjectionStore).getState().syncCaches.has("a")).toBe(true);
   });
 
   test("measures discovery once per object and ignores unchanged patches", () => {
@@ -355,10 +375,10 @@ describe("native agent projection byte accounting", () => {
       stateAvailability: "current" as const,
       discovery,
     };
-    const store = useNativeAgentProjectionStore.getState();
+    const store = appCommandStore(nativeAgentProjectionStore).getState();
     store.setProgressiveCache("session-a", entry);
     let notifications = 0;
-    const unsubscribe = useNativeAgentProjectionStore.subscribe(() => {
+    const unsubscribe = appCommandStore(nativeAgentProjectionStore).subscribe(() => {
       notifications += 1;
     });
     try {
@@ -386,16 +406,16 @@ describe("native agent projection byte accounting", () => {
     } finally {
       unsubscribe();
     }
-    expect(useNativeAgentProjectionStore.getState().progressiveCacheBytes.get("session-a")).toBe(
-      slowEncodedBytes(discoveryView()) + 4_096,
-    );
+    expect(
+      appCommandStore(nativeAgentProjectionStore).getState().progressiveCacheBytes.get("session-a"),
+    ).toBe(slowEncodedBytes(discoveryView()) + 4_096);
     expectExactTotals();
   });
 });
 
 describe("native agent projection writes copy only what they change", () => {
   const identities = () => {
-    const state = useNativeAgentProjectionStore.getState();
+    const state = appCommandStore(nativeAgentProjectionStore).getState();
     return {
       projections: state.projections,
       projectionBytes: state.projectionBytes,
@@ -419,7 +439,7 @@ describe("native agent projection writes copy only what they change", () => {
   } as const;
 
   test("a new projection with the same messages changes only the projections Map", () => {
-    const { setProjection } = useNativeAgentProjectionStore.getState();
+    const { setProjection } = appCommandStore(nativeAgentProjectionStore).getState();
     const messages = [{ id: "m1" }];
     setProjection("a", projection("a", messages));
     setProjection("b", projection("b", messages));
@@ -427,11 +447,16 @@ describe("native agent projection writes copy only what they change", () => {
     setProjection("a", projection("a", messages));
     expect(changedMaps(before)).toEqual(["projections"]);
     // The LRU still moved: "a" is now the most recent.
-    expect([...useNativeAgentProjectionStore.getState().projections.keys()]).toEqual(["b", "a"]);
+    expect([...appCommandStore(nativeAgentProjectionStore).getState().projections.keys()]).toEqual([
+      "b",
+      "a",
+    ]);
   });
 
   test("changed messages also change the byte Map, and nothing else", () => {
-    const { setProjection, setProgressiveCache } = useNativeAgentProjectionStore.getState();
+    const { setProjection, setProgressiveCache } = appCommandStore(
+      nativeAgentProjectionStore,
+    ).getState();
     setProgressiveCache("a", progressive);
     setProjection("a", projection("a", [{ id: "m1" }]));
     const before = identities();
@@ -440,7 +465,7 @@ describe("native agent projection writes copy only what they change", () => {
   });
 
   test("a sync cache write adds only the sync Map", () => {
-    const { setProjection } = useNativeAgentProjectionStore.getState();
+    const { setProjection } = appCommandStore(nativeAgentProjectionStore).getState();
     const live = projection("a");
     setProjection("a", live);
     const before = identities();
@@ -450,7 +475,9 @@ describe("native agent projection writes copy only what they change", () => {
   });
 
   test("a projection write keeps the sync and progressive Maps while both hold entries", () => {
-    const { setProjection, setProgressiveCache } = useNativeAgentProjectionStore.getState();
+    const { setProjection, setProgressiveCache } = appCommandStore(
+      nativeAgentProjectionStore,
+    ).getState();
     for (const key of ["a", "b"]) {
       const live = projection(key, [{ id: `${key}-1` }]);
       setProjection(key, live, syncCache(live, [{ id: `${key}-history` }], 20));
@@ -465,14 +492,16 @@ describe("native agent projection writes copy only what they change", () => {
     setProjection("a", projection("a", [{ id: "a-1" }, { id: "a-2" }]));
 
     expect(changedMaps(before)).toEqual(["projections", "projectionBytes"]);
-    const state = useNativeAgentProjectionStore.getState();
+    const state = appCommandStore(nativeAgentProjectionStore).getState();
     expect(state.syncCaches.get("a")).toBe(entries.sync);
     expect(state.progressiveCaches.get("a")).toBe(entries.progressive);
     expect([...state.projections.keys()]).toEqual(["b", "a"]);
   });
 
   test("the count ceiling still evicts the oldest session from all three Maps", () => {
-    const { setProjection, setProgressiveCache } = useNativeAgentProjectionStore.getState();
+    const { setProjection, setProgressiveCache } = appCommandStore(
+      nativeAgentProjectionStore,
+    ).getState();
     const oldLive = projection("old", [{ id: "old-1" }]);
     setProjection("old", oldLive, syncCache(oldLive, [{ id: "old-history" }], 40));
     setProgressiveCache("old", progressive);
@@ -484,7 +513,7 @@ describe("native agent projection writes copy only what they change", () => {
 
     setProjection("s127", projection("s127", [{ id: "m" }]));
 
-    const state = useNativeAgentProjectionStore.getState();
+    const state = appCommandStore(nativeAgentProjectionStore).getState();
     expect(state.projections.size).toBe(128);
     expect(state.projections.has("old")).toBe(false);
     expect(state.projectionBytes.has("old")).toBe(false);
@@ -510,7 +539,9 @@ describe("native agent projection writes copy only what they change", () => {
       (value as { big?: boolean } | null)?.big ? 20 * 1024 * 1024 : measureEncodedValue(value),
     );
     try {
-      const { setProjection, setProgressiveCache } = useNativeAgentProjectionStore.getState();
+      const { setProjection, setProgressiveCache } = appCommandStore(
+        nativeAgentProjectionStore,
+      ).getState();
       const oldLive = projection("old", [{ id: "old-1", big: true }]);
       setProjection("old", oldLive, syncCache(oldLive, [{ id: "old-history" }], 40));
       setProgressiveCache("old", progressive);
@@ -520,7 +551,7 @@ describe("native agent projection writes copy only what they change", () => {
 
       setProjection("new", projection("new", [{ id: "new-1", big: true }]));
 
-      const state = useNativeAgentProjectionStore.getState();
+      const state = appCommandStore(nativeAgentProjectionStore).getState();
       expect([...state.projections.keys()]).toEqual(["kept", "new"]);
       expect([...state.projectionBytes.keys()].sort()).toEqual(["kept", "new"]);
       expect([...state.syncCaches.keys()]).toEqual(["kept"]);
@@ -539,18 +570,20 @@ describe("native agent projection writes copy only what they change", () => {
   });
 
   test("rewriting the newest projection publishes nothing", () => {
-    const { setProjection } = useNativeAgentProjectionStore.getState();
+    const { setProjection } = appCommandStore(nativeAgentProjectionStore).getState();
     const live = projection("a");
     const cache = syncCache(live, [], 0);
     setProjection("a", live, cache);
-    const state = useNativeAgentProjectionStore.getState();
+    const state = appCommandStore(nativeAgentProjectionStore).getState();
     setProjection("a", live);
     setProjection("a", live, cache);
-    expect(useNativeAgentProjectionStore.getState()).toBe(state);
+    expect(appCommandStore(nativeAgentProjectionStore).getState()).toBe(state);
   });
 
   test("clearing a session touches its progressive entry only when it holds a token", () => {
-    const { setProjection, setProgressiveCache } = useNativeAgentProjectionStore.getState();
+    const { setProjection, setProgressiveCache } = appCommandStore(
+      nativeAgentProjectionStore,
+    ).getState();
     setProjection("a", projection("a"));
     setProgressiveCache("other", progressive);
     const before = identities();
@@ -565,7 +598,7 @@ describe("native agent projection writes copy only what they change", () => {
   });
 
   test("a progressive patch with the same discovery keeps the byte Map", () => {
-    const { setProgressiveCache } = useNativeAgentProjectionStore.getState();
+    const { setProgressiveCache } = appCommandStore(nativeAgentProjectionStore).getState();
     const discovery = discoveryView();
     setProgressiveCache("a", { ...progressive, discovery });
     const before = identities();
@@ -574,18 +607,18 @@ describe("native agent projection writes copy only what they change", () => {
   });
 
   test("clearing an absent progressive entry publishes nothing", () => {
-    const state = useNativeAgentProjectionStore.getState();
+    const state = appCommandStore(nativeAgentProjectionStore).getState();
     state.setProgressiveCache("absent", null);
-    expect(useNativeAgentProjectionStore.getState()).toBe(state);
+    expect(appCommandStore(nativeAgentProjectionStore).getState()).toBe(state);
   });
 
   test("an eviction that finds nothing to release publishes nothing", () => {
-    const { setProjection } = useNativeAgentProjectionStore.getState();
+    const { setProjection } = appCommandStore(nativeAgentProjectionStore).getState();
     const live = projection("a");
     setProjection("a", live, syncCache(live, [{ id: "m" }], 2_000));
-    const state = useNativeAgentProjectionStore.getState();
+    const state = appCommandStore(nativeAgentProjectionStore).getState();
     // Over budget, but the only history belongs to the excepted session.
     evictNativeAgentHistoryCaches("a", 1_000, 1_000);
-    expect(useNativeAgentProjectionStore.getState()).toBe(state);
+    expect(appCommandStore(nativeAgentProjectionStore).getState()).toBe(state);
   });
 });

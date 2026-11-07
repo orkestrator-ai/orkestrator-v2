@@ -1,6 +1,6 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
+import { type BuildPipeline, buildPipelineStore } from "@/stores/buildPipelineStore";
 import * as realHooks from "@/hooks";
 import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
 import {
@@ -9,6 +9,7 @@ import {
   setMobileViewport,
 } from "../../../../../tests/mocks/match-media";
 import { TEST_STRUCTURED_REVIEW_REPORT } from "./structured-review-test-fixture";
+import { appCommandStore } from "@/test/app-command-store";
 
 const realHooksSnapshot = { ...realHooks };
 const realVirtualizedMessageListSnapshot = { ...realVirtualizedMessageList };
@@ -170,7 +171,7 @@ const reviewed: BuildPipeline = {
 };
 
 function renderPipeline(next: BuildPipeline, layout?: "graph" | "stacked") {
-  useBuildPipelineStore.setState({
+  appCommandStore(buildPipelineStore).setState({
     pipelines: new Map([[next.id, next]]),
     buildEnvironmentIds: new Set([next.environmentId]),
   });
@@ -213,7 +214,7 @@ function lastScrollState(): ScrollStateOptions {
 beforeEach(() => {
   cleanup();
   scrollStateOptions.length = 0;
-  useBuildPipelineStore.setState({
+  appCommandStore(buildPipelineStore).setState({
     pipelines: new Map([[pipeline.id, pipeline]]),
     buildEnvironmentIds: new Set([pipeline.environmentId]),
   });

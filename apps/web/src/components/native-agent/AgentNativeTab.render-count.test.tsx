@@ -27,8 +27,8 @@ import * as realBackend from "@/lib/backend";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 import { configStore } from "@/stores/configStore";
 import { environmentStore } from "@/stores/environmentStore";
-import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
-import { useNativeComposeStore } from "@/stores/nativeComposeStore";
+import { nativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
+import { nativeComposeStore } from "@/stores/nativeComposeStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { createSessionKey } from "@/lib/utils";
 import type { Environment } from "@/types";
@@ -298,8 +298,8 @@ beforeEach(() => {
   ensureMock.mockClear();
   getLocalFileTreeMock.mockClear();
   clearTabInitialPromptMock.mockClear();
-  useNativeComposeStore.setState({ drafts: new Map() });
-  useNativeAgentProjectionStore.getState().reset();
+  appCommandStore(nativeComposeStore).setState({ drafts: new Map() });
+  appCommandStore(nativeAgentProjectionStore).getState().reset();
   appCommandStore(environmentStore).setState({ environments: [environment()] });
   usePaneLayoutStore.setState({
     environments: new Map(),
@@ -311,7 +311,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
-  useNativeAgentProjectionStore.getState().reset();
+  appCommandStore(nativeAgentProjectionStore).getState().reset();
   usePaneLayoutStore.setState({ clearTabInitialPrompt: realClearTabInitialPrompt });
   appCommandStore(configStore).getState().updateGlobalConfig(initialGlobalConfig);
   appCommandStore(configStore).setState((state) => ({
@@ -668,7 +668,9 @@ test("a render that changes none of the send's inputs does not re-run the openin
 /** Puts text in the tab's draft and presses Enter in its composer. */
 async function sendFromComposer(tabId: string, text: string): Promise<void> {
   await act(async () => {
-    useNativeComposeStore.getState().updateDraft(createSessionKey("env-1", tabId), { text });
+    appCommandStore(nativeComposeStore)
+      .getState()
+      .updateDraft(createSessionKey("env-1", tabId), { text });
   });
   await act(async () => {
     fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
@@ -863,7 +865,7 @@ test.each(["locked", "unassigned"] as const)(
         fireEvent.click(await screen.findByRole("button", { name: /image.png/ }));
       });
       await waitFor(() => {
-        const draft = useNativeComposeStore
+        const draft = appCommandStore(nativeComposeStore)
           .getState()
           .drafts.get(createSessionKey("env-1", OWN_TAB));
         expect(draft?.attachments.at(-1)).toMatchObject({

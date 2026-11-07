@@ -1,7 +1,7 @@
 import { afterEach, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { projectStore, uiStore } from "@/stores";
-import { useKanbanStore } from "@/stores/kanbanStore";
+import { kanbanStore } from "@/stores/kanbanStore";
 import type { Project } from "@/types";
 import { ProjectWorkspace } from "./ProjectWorkspace";
 import { appCommandStore } from "@/test/app-command-store";
@@ -29,7 +29,7 @@ test("Home placeholder exposes its panel, loading, error and no-checkout states"
 
 test("Notes tab shows the project notes editor in its own panel", () => {
   const loadNotes = mock(async (_projectId: string) => {});
-  useKanbanStore.setState({ loadNotes });
+  appCommandStore(kanbanStore).setState({ loadNotes });
   appCommandStore(uiStore).setState({ projectBoardTab: "notes" });
   appCommandStore(projectStore).setState({
     projects: [{ id: "project", name: "Acme" } as Project],

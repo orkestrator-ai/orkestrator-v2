@@ -1,14 +1,15 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import {
-  nativeComposePersistenceStore,
   nativeComposeDraftPersistValue,
+  nativeComposePersistenceStore,
+  nativeComposeStore,
   unassignedNativeComposePersistenceStore,
-  useNativeComposeStore,
 } from "./nativeComposeStore";
+import { appCommandStore } from "@/test/app-command-store";
 
 describe("nativeComposeStore", () => {
   beforeEach(() => {
-    useNativeComposeStore.setState({ drafts: new Map() });
+    appCommandStore(nativeComposeStore).setState({ drafts: new Map() });
   });
 
   test("held sends survive in memory without persisting send intent across a restart", () => {
@@ -21,15 +22,17 @@ describe("nativeComposeStore", () => {
       platform: "codex" as const,
       sessionId: "session-A",
     };
-    const store = useNativeComposeStore.getState();
+    const store = appCommandStore(nativeComposeStore).getState();
     store.updateDraft(sessionKey, { text: heldSubmit.text, heldSubmit });
-    const draft = useNativeComposeStore.getState().drafts.get(sessionKey)!;
+    const draft = appCommandStore(nativeComposeStore).getState().drafts.get(sessionKey)!;
     expect(draft.heldSubmit).toBe(heldSubmit);
     expect(nativeComposeDraftPersistValue(draft).metadata).not.toHaveProperty("heldSubmit");
     const metadata = nativeComposePersistenceStore.getState().draftMetadata?.get(sessionKey);
     store.clearDraft(sessionKey);
     nativeComposePersistenceStore.getState().setDraftMetadata?.(sessionKey, metadata);
-    expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.heldSubmit).toBeUndefined();
+    expect(
+      appCommandStore(nativeComposeStore).getState().drafts.get(sessionKey)?.heldSubmit,
+    ).toBeUndefined();
   });
 
   test("round-trips a provider's own execution profile name", () => {
@@ -43,7 +46,7 @@ describe("nativeComposeStore", () => {
       platform: "opencode",
       executionProfileId: "custom-reviewer",
     });
-    expect(useNativeComposeStore.getState().drafts.get(sessionKey)).toMatchObject({
+    expect(appCommandStore(nativeComposeStore).getState().drafts.get(sessionKey)).toMatchObject({
       platform: "opencode",
       executionProfileId: "custom-reviewer",
     });
@@ -52,7 +55,7 @@ describe("nativeComposeStore", () => {
       platform: "opencode",
       executionProfileId: "plan",
     });
-    expect(useNativeComposeStore.getState().drafts.get(sessionKey)).toMatchObject({
+    expect(appCommandStore(nativeComposeStore).getState().drafts.get(sessionKey)).toMatchObject({
       platform: "opencode",
       executionProfileId: "plan",
     });
@@ -77,7 +80,7 @@ describe("nativeComposeStore", () => {
         executionProfileId,
       });
       expect(
-        useNativeComposeStore.getState().drafts.get(sessionKey)?.executionProfileId,
+        appCommandStore(nativeComposeStore).getState().drafts.get(sessionKey)?.executionProfileId,
       ).toBeUndefined();
     }
 
@@ -87,7 +90,8 @@ describe("nativeComposeStore", () => {
       executionProfileId: "x".repeat(256),
     });
     expect(
-      useNativeComposeStore.getState().drafts.get("env-env-1:tab-max")?.executionProfileId,
+      appCommandStore(nativeComposeStore).getState().drafts.get("env-env-1:tab-max")
+        ?.executionProfileId,
     ).toBe("x".repeat(256));
   });
 
@@ -96,29 +100,31 @@ describe("nativeComposeStore", () => {
     unassignedNativeComposePersistenceStore.getState().setDraftMetadata?.(sessionKey, {
       executionProfileId: "plan",
     });
-    expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.executionProfileId).toBe(
-      "plan",
-    );
+    expect(
+      appCommandStore(nativeComposeStore).getState().drafts.get(sessionKey)?.executionProfileId,
+    ).toBe("plan");
   });
 
   test("content edits keep dispatch ownership while a first submission is pending", () => {
     const sessionKey = "env-env-1:tab-pending-edit";
-    useNativeComposeStore.getState().updateDraft(sessionKey, {
-      text: "original",
-      requestId: "request-1",
-      submissionPending: true,
-      pendingTranscriptConfirmation: {
+    appCommandStore(nativeComposeStore)
+      .getState()
+      .updateDraft(sessionKey, {
+        text: "original",
         requestId: "request-1",
-        sessionId: "",
-        priorMessageIds: [],
-      },
-    });
+        submissionPending: true,
+        pendingTranscriptConfirmation: {
+          requestId: "request-1",
+          sessionId: "",
+          priorMessageIds: [],
+        },
+      });
 
-    useNativeComposeStore.getState().updateDraft(sessionKey, {
+    appCommandStore(nativeComposeStore).getState().updateDraft(sessionKey, {
       text: "typed while pending",
     });
 
-    expect(useNativeComposeStore.getState().drafts.get(sessionKey)).toMatchObject({
+    expect(appCommandStore(nativeComposeStore).getState().drafts.get(sessionKey)).toMatchObject({
       text: "typed while pending",
       requestId: "request-1",
       submissionPending: true,
@@ -132,7 +138,7 @@ describe("nativeComposeStore", () => {
 
   test("locked persistence includes a request id without default-only metadata", () => {
     const sessionKey = "env-env-1:tab-locked-request";
-    useNativeComposeStore.getState().updateDraft(sessionKey, {
+    appCommandStore(nativeComposeStore).getState().updateDraft(sessionKey, {
       text: "pending first prompt",
       requestId: "request-locked",
     });
@@ -141,7 +147,7 @@ describe("nativeComposeStore", () => {
     });
 
     const emptyKey = "env-env-1:tab-locked-empty";
-    useNativeComposeStore.getState().updateDraft(emptyKey, { text: "just text" });
+    appCommandStore(nativeComposeStore).getState().updateDraft(emptyKey, { text: "just text" });
     expect(nativeComposePersistenceStore.getState().draftMetadata?.has(emptyKey)).toBe(false);
   });
 
@@ -156,7 +162,7 @@ describe("nativeComposeStore", () => {
       },
     });
 
-    expect(useNativeComposeStore.getState().drafts.get(sessionKey)).toMatchObject({
+    expect(appCommandStore(nativeComposeStore).getState().drafts.get(sessionKey)).toMatchObject({
       requestId: "request-9",
       pendingTranscriptConfirmation: {
         requestId: "request-9",
@@ -168,25 +174,32 @@ describe("nativeComposeStore", () => {
 
   test("annotation edits invalidate dispatch ownership", () => {
     const sessionKey = "env-env-1:tab-annotations";
-    useNativeComposeStore.getState().updateDraft(sessionKey, {
-      requestId: "request-1",
-      pendingTranscriptConfirmation: {
+    appCommandStore(nativeComposeStore)
+      .getState()
+      .updateDraft(sessionKey, {
         requestId: "request-1",
-        sessionId: "session-1",
-        priorMessageIds: ["older-message"],
-      },
-    });
+        pendingTranscriptConfirmation: {
+          requestId: "request-1",
+          sessionId: "session-1",
+          priorMessageIds: ["older-message"],
+        },
+      });
 
-    useNativeComposeStore.getState().updateDraft(sessionKey, {
+    appCommandStore(nativeComposeStore)
+      .getState()
+      .updateDraft(sessionKey, {
+        annotations: [{ id: "reference-1", text: "selected text", comment: "" }],
+      });
+
+    expect(appCommandStore(nativeComposeStore).getState().drafts.get(sessionKey)).toMatchObject({
       annotations: [{ id: "reference-1", text: "selected text", comment: "" }],
     });
-
-    expect(useNativeComposeStore.getState().drafts.get(sessionKey)).toMatchObject({
-      annotations: [{ id: "reference-1", text: "selected text", comment: "" }],
-    });
-    expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.requestId).toBeUndefined();
     expect(
-      useNativeComposeStore.getState().drafts.get(sessionKey)?.pendingTranscriptConfirmation,
+      appCommandStore(nativeComposeStore).getState().drafts.get(sessionKey)?.requestId,
+    ).toBeUndefined();
+    expect(
+      appCommandStore(nativeComposeStore).getState().drafts.get(sessionKey)
+        ?.pendingTranscriptConfirmation,
     ).toBeUndefined();
   });
 
@@ -204,31 +217,37 @@ describe("nativeComposeStore", () => {
       comment: "Keep this",
     };
     for (const sessionKey of ["env-env-1:tab-a", "env-env-1:tab-b", "env-env-2:tab-c"]) {
-      useNativeComposeStore.getState().updateDraft(sessionKey, {
-        text: `draft for ${sessionKey}`,
-        annotations: [browserAnnotation, transcriptAnnotation],
-        attachments: [
-          {
-            id: `screen-${sessionKey}`,
-            annotationId: browserAnnotation.id,
-            type: "image",
-            path: browserAnnotation.screenshotPath,
-            name: "save.png",
-          },
-        ],
-      });
+      appCommandStore(nativeComposeStore)
+        .getState()
+        .updateDraft(sessionKey, {
+          text: `draft for ${sessionKey}`,
+          annotations: [browserAnnotation, transcriptAnnotation],
+          attachments: [
+            {
+              id: `screen-${sessionKey}`,
+              annotationId: browserAnnotation.id,
+              type: "image",
+              path: browserAnnotation.screenshotPath,
+              name: "save.png",
+            },
+          ],
+        });
     }
 
-    useNativeComposeStore.getState().consumeBrowserAnnotations("env-1", [browserAnnotation.id]);
+    appCommandStore(nativeComposeStore)
+      .getState()
+      .consumeBrowserAnnotations("env-1", [browserAnnotation.id]);
 
     for (const sessionKey of ["env-env-1:tab-a", "env-env-1:tab-b"]) {
-      expect(useNativeComposeStore.getState().drafts.get(sessionKey)).toMatchObject({
+      expect(appCommandStore(nativeComposeStore).getState().drafts.get(sessionKey)).toMatchObject({
         text: `draft for ${sessionKey}`,
         annotations: [transcriptAnnotation],
         attachments: [],
       });
     }
-    expect(useNativeComposeStore.getState().drafts.get("env-env-2:tab-c")).toMatchObject({
+    expect(
+      appCommandStore(nativeComposeStore).getState().drafts.get("env-env-2:tab-c"),
+    ).toMatchObject({
       annotations: [browserAnnotation, transcriptAnnotation],
       attachments: [expect.objectContaining({ annotationId: browserAnnotation.id })],
     });
@@ -248,25 +267,29 @@ describe("nativeComposeStore", () => {
       comment: "Legacy",
     };
     for (const sessionKey of ["env-env-3:tab-a", "env-env-3:tab-b"]) {
-      useNativeComposeStore.getState().updateDraft(sessionKey, {
-        text: "draft",
-        annotations: [migrated, legacy],
-        attachments: [
-          {
-            id: `migrated-${sessionKey}`,
-            annotationId: migrated.id,
-            type: "image",
-            path: "/workspace/.orkestrator/annotations/migrated.png",
-            name: "migrated.png",
-          },
-        ],
-      });
+      appCommandStore(nativeComposeStore)
+        .getState()
+        .updateDraft(sessionKey, {
+          text: "draft",
+          annotations: [migrated, legacy],
+          attachments: [
+            {
+              id: `migrated-${sessionKey}`,
+              annotationId: migrated.id,
+              type: "image",
+              path: "/workspace/.orkestrator/annotations/migrated.png",
+              name: "migrated.png",
+            },
+          ],
+        });
     }
 
-    useNativeComposeStore.getState().consumeBrowserAnnotations("env-3", [migrated.id, legacy.id]);
+    appCommandStore(nativeComposeStore)
+      .getState()
+      .consumeBrowserAnnotations("env-3", [migrated.id, legacy.id]);
 
     for (const sessionKey of ["env-env-3:tab-a", "env-env-3:tab-b"]) {
-      const draft = useNativeComposeStore.getState().drafts.get(sessionKey);
+      const draft = appCommandStore(nativeComposeStore).getState().drafts.get(sessionKey);
       expect(draft?.annotations).toEqual([migrated]);
       expect(draft?.attachments).toEqual([expect.objectContaining({ annotationId: migrated.id })]);
     }
@@ -282,7 +305,7 @@ describe("nativeComposeStore", () => {
 
     test("survives argument edits byte-for-byte and drops when the token changes", () => {
       const sessionKey = "env-env-1:tab-select";
-      const store = useNativeComposeStore.getState();
+      const store = appCommandStore(nativeComposeStore).getState();
       store.updateDraft(sessionKey, { text: "/review ", commandSelection: selection });
 
       for (const text of [
@@ -291,52 +314,52 @@ describe("nativeComposeStore", () => {
         '/review "quoted"\nsecond line\n',
         "  /review keeps leading space",
       ]) {
-        useNativeComposeStore.getState().updateDraft(sessionKey, { text });
-        const draft = useNativeComposeStore.getState().drafts.get(sessionKey);
+        appCommandStore(nativeComposeStore).getState().updateDraft(sessionKey, { text });
+        const draft = appCommandStore(nativeComposeStore).getState().drafts.get(sessionKey);
         expect(draft?.text).toBe(text);
         expect(draft?.commandSelection).toEqual(selection);
       }
 
       for (const text of ["/reviews x", "/reviewx", "review x", "/Review x"]) {
-        useNativeComposeStore
+        appCommandStore(nativeComposeStore)
           .getState()
           .updateDraft(sessionKey, { text: "/review ", commandSelection: selection });
-        useNativeComposeStore.getState().updateDraft(sessionKey, { text });
+        appCommandStore(nativeComposeStore).getState().updateDraft(sessionKey, { text });
         expect(
-          useNativeComposeStore.getState().drafts.get(sessionKey)?.commandSelection,
+          appCommandStore(nativeComposeStore).getState().drafts.get(sessionKey)?.commandSelection,
         ).toBeUndefined();
       }
     });
 
     test("an explicit clear wins and non-text edits leave it alone", () => {
       const sessionKey = "env-env-1:tab-select-clear";
-      const store = useNativeComposeStore.getState();
+      const store = appCommandStore(nativeComposeStore).getState();
       store.updateDraft(sessionKey, { text: "/review ", commandSelection: selection });
       store.updateDraft(sessionKey, { attachments: [] });
-      expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.commandSelection).toEqual(
-        selection,
-      );
+      expect(
+        appCommandStore(nativeComposeStore).getState().drafts.get(sessionKey)?.commandSelection,
+      ).toEqual(selection);
       store.updateDraft(sessionKey, { commandSelection: undefined });
       expect(
-        useNativeComposeStore.getState().drafts.get(sessionKey)?.commandSelection,
+        appCommandStore(nativeComposeStore).getState().drafts.get(sessionKey)?.commandSelection,
       ).toBeUndefined();
     });
 
     test("persists with the draft and restores a valid identity", () => {
       const sessionKey = "env-env-1:tab-select-persist";
-      useNativeComposeStore
+      appCommandStore(nativeComposeStore)
         .getState()
         .updateDraft(sessionKey, { text: "/review x", commandSelection: selection });
       const metadata = nativeComposePersistenceStore.getState().draftMetadata?.get(sessionKey);
       expect(metadata).toMatchObject({ commandSelection: selection });
 
-      useNativeComposeStore.setState({ drafts: new Map() });
+      appCommandStore(nativeComposeStore).setState({ drafts: new Map() });
       const persistence = nativeComposePersistenceStore.getState();
       persistence.setDraftText(sessionKey, "/review x");
       persistence.setDraftMetadata?.(sessionKey, metadata);
-      expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.commandSelection).toEqual(
-        selection,
-      );
+      expect(
+        appCommandStore(nativeComposeStore).getState().drafts.get(sessionKey)?.commandSelection,
+      ).toEqual(selection);
     });
 
     test("refuses malformed persisted identities", () => {
@@ -354,7 +377,7 @@ describe("nativeComposeStore", () => {
         const sessionKey = `env-env-1:tab-bad-${index}`;
         persistence.setDraftMetadata?.(sessionKey, { mode: "build", commandSelection });
         expect(
-          useNativeComposeStore.getState().drafts.get(sessionKey)?.commandSelection,
+          appCommandStore(nativeComposeStore).getState().drafts.get(sessionKey)?.commandSelection,
         ).toBeUndefined();
       });
     });

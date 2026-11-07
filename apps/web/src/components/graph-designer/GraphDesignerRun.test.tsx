@@ -5,7 +5,7 @@ import type { GraphTemplateDetail } from "@orkestrator/protocol/graphs/library";
 import type { GraphTemplateV1 } from "@orkestrator/protocol/graphs/template";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
 import { environmentStore } from "@/stores/environmentStore";
-import { useGraphDesignerStore } from "@/stores/graphDesignerStore";
+import { graphDesignerStore } from "@/stores/graphDesignerStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { Environment } from "@/types";
 import type { GraphDesignerTabData } from "@/types/paneLayout";
@@ -70,7 +70,7 @@ function installBackend() {
 }
 
 function renderTab(data: GraphDesignerTabData) {
-  useGraphDesignerStore.setState({ libraries: new Map(), tabs: new Map() });
+  appCommandStore(graphDesignerStore).setState({ libraries: new Map(), tabs: new Map() });
   appCommandStore(environmentStore).setState({
     environments: [{ id: ENVIRONMENT_ID, projectId: "project-1" } as Environment],
   });
@@ -117,7 +117,7 @@ describe("GraphDesignerTab Run", () => {
     renderTab({ selected: pipeline.summary.ref });
     await screen.findByRole("button", { name: /Duplicate/ });
     await waitFor(() =>
-      expect(useGraphDesignerStore.getState().tabs.get(TAB_ID)?.compile).toBeTruthy(),
+      expect(appCommandStore(graphDesignerStore).getState().tabs.get(TAB_ID)?.compile).toBeTruthy(),
     );
     expect(runButton().disabled).toBe(true);
   });
@@ -146,10 +146,10 @@ describe("GraphDesignerTab Run", () => {
     await screen.findByRole("button", { name: "Edit" });
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     await waitFor(() =>
-      expect(useGraphDesignerStore.getState().tabs.get(TAB_ID)?.editor).toBeTruthy(),
+      expect(appCommandStore(graphDesignerStore).getState().tabs.get(TAB_ID)?.editor).toBeTruthy(),
     );
     act(() => {
-      useGraphDesignerStore
+      appCommandStore(graphDesignerStore)
         .getState()
         .edit(TAB_ID, "Rename", (template) => ({ ...template, name: "Panel review, edited" }));
     });

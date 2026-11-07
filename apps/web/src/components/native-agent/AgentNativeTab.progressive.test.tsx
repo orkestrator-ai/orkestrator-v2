@@ -29,8 +29,8 @@ import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessag
 import { environmentStore } from "@/stores/environmentStore";
 import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
 import { installFakeReadCoordinator } from "@/lib/testing/read-coordinator";
-import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
-import { useNativeComposeStore, nativeComposeDraft } from "@/stores/nativeComposeStore";
+import { nativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
+import { nativeComposeDraft, nativeComposeStore } from "@/stores/nativeComposeStore";
 import {
   createAgentHandoffSnapshot,
   resetAgentHandoffCache,
@@ -281,12 +281,14 @@ function seedProjection(messages: TestMessage[]): NativeAgentSessionProjection<T
 function seedTranscriptCache(
   transcriptAvailability: "unavailable" | "cached" | "current" | "empty",
 ) {
-  useNativeAgentProjectionStore.getState().setProgressiveCache(identity.logicalSessionKey, {
-    identity,
-    transcriptAvailability,
-    transcriptRefreshing: true,
-    stateAvailability: "refreshing",
-  });
+  appCommandStore(nativeAgentProjectionStore)
+    .getState()
+    .setProgressiveCache(identity.logicalSessionKey, {
+      identity,
+      transcriptAvailability,
+      transcriptRefreshing: true,
+      stateAvailability: "refreshing",
+    });
 }
 
 function neverSettlingTranscript(): () => Promise<NativeAgentTranscriptUpdate<TestMessage>> {
@@ -337,7 +339,7 @@ beforeEach(() => {
   authStatusRead = undefined;
   accountLogin = { state: "idle" };
   replacementSessionId = undefined;
-  useNativeComposeStore.setState({ drafts: new Map() });
+  appCommandStore(nativeComposeStore).setState({ drafts: new Map() });
   resumeSessionMock.mockClear();
   dispatchNativeAgentIntentMock.mockClear();
   stopNativeAgentBackgroundTaskMock.mockClear();
@@ -357,12 +359,12 @@ beforeEach(() => {
     hydration: new Map(),
     activeEnvironmentId: null,
   });
-  useNativeAgentProjectionStore.getState().reset();
+  appCommandStore(nativeAgentProjectionStore).getState().reset();
 });
 
 afterEach(() => {
   cleanup();
-  useNativeAgentProjectionStore.getState().reset();
+  appCommandStore(nativeAgentProjectionStore).getState().reset();
 });
 
 function renderTab() {
@@ -382,7 +384,10 @@ function deferred<T>() {
 }
 
 function currentDraft() {
-  return nativeComposeDraft(useNativeComposeStore.getState(), identity.logicalSessionKey);
+  return nativeComposeDraft(
+    appCommandStore(nativeComposeStore).getState(),
+    identity.logicalSessionKey,
+  );
 }
 
 async function holdMessage(text: string) {
@@ -1103,7 +1108,7 @@ describe("AgentNativeTab progressive controller", () => {
     adoptionRead = () => adoption.promise;
     replacementSessionId = "replacement-session";
     // Cached A enables the split read alongside the adoption check.
-    useNativeAgentProjectionStore
+    appCommandStore(nativeAgentProjectionStore)
       .getState()
       .setProjection(identity.logicalSessionKey, seedProjection([message("m1", "Readable")]));
     seedTranscriptCache("cached");
@@ -1139,9 +1144,11 @@ describe("AgentNativeTab progressive controller", () => {
       async () => transcriptSnapshot("transcript-1", [message("m1", "Readable")]),
     ];
     stateUpdates = [() => heldState.promise];
-    useNativeComposeStore.getState().updateDraft(identity.logicalSessionKey, {
-      attachments: [{ id: "image-1", type: "image", path: "/tmp/image.png", name: "image.png" }],
-    });
+    appCommandStore(nativeComposeStore)
+      .getState()
+      .updateDraft(identity.logicalSessionKey, {
+        attachments: [{ id: "image-1", type: "image", path: "/tmp/image.png", name: "image.png" }],
+      });
     renderTab();
     await holdMessage("inspect this image");
     await act(async () => {
@@ -1298,7 +1305,7 @@ describe("AgentNativeTab progressive controller", () => {
   });
 
   test("does not shimmer while session state connects over an authoritative empty transcript", async () => {
-    useNativeAgentProjectionStore
+    appCommandStore(nativeAgentProjectionStore)
       .getState()
       .setProjection(identity.logicalSessionKey, seedProjection([]));
     seedTranscriptCache("empty");
@@ -1315,7 +1322,7 @@ describe("AgentNativeTab progressive controller", () => {
   });
 
   test("shimmers while a state-only empty projection's transcript is unproven", async () => {
-    useNativeAgentProjectionStore
+    appCommandStore(nativeAgentProjectionStore)
       .getState()
       .setProjection(identity.logicalSessionKey, seedProjection([]));
     seedTranscriptCache("unavailable");
@@ -1331,7 +1338,7 @@ describe("AgentNativeTab progressive controller", () => {
   });
 
   test("keeps the visible shimmer on remount of a cached transcript until it is proved", async () => {
-    useNativeAgentProjectionStore
+    appCommandStore(nativeAgentProjectionStore)
       .getState()
       .setProjection(identity.logicalSessionKey, seedProjection([message("m1", "Cached")]));
     seedTranscriptCache("current");
@@ -1463,7 +1470,7 @@ describe("AgentNativeTab progressive controller", () => {
       ).toBe(true);
       view.unmount();
       // A reload starts from nothing but what the backend answers.
-      useNativeAgentProjectionStore.getState().reset();
+      appCommandStore(nativeAgentProjectionStore).getState().reset();
       resetNativeAgentSyncCapabilityForTests();
     }
   });
@@ -1521,14 +1528,14 @@ describe("AgentNativeTab progressive controller", () => {
         );
         view.unmount();
         // A reload starts from nothing but what the backend answers.
-        useNativeAgentProjectionStore.getState().reset();
+        appCommandStore(nativeAgentProjectionStore).getState().reset();
         resetNativeAgentSyncCapabilityForTests();
       }
     },
   );
 
   test("does not announce refresh on every idle poll of an unavailable transcript", async () => {
-    useNativeAgentProjectionStore
+    appCommandStore(nativeAgentProjectionStore)
       .getState()
       .setProjection(identity.logicalSessionKey, seedProjection([]));
     seedTranscriptCache("unavailable");

@@ -115,10 +115,10 @@ import {
   resolveEnvironmentAgentActivity,
 } from "../../../apps/web/src/components/environments/EnvironmentItem";
 import { agentActivityStore } from "../../../apps/web/src/stores/agentActivityStore";
-import { useBuildPipelineStore } from "../../../apps/web/src/stores/buildPipelineStore";
+import { buildPipelineStore } from "../../../apps/web/src/stores/buildPipelineStore";
 import { environmentDiffStore } from "../../../apps/web/src/stores/environmentDiffStore";
 import { environmentStore } from "../../../apps/web/src/stores/environmentStore";
-import { useAgentMailStore } from "../../../apps/web/src/stores/agentMailStore";
+import { agentMailStore } from "../../../apps/web/src/stores/agentMailStore";
 import { configStore } from "../../../apps/web/src/stores/configStore";
 import { uiStore } from "../../../apps/web/src/stores/uiStore";
 import { projectStore } from "../../../apps/web/src/stores/projectStore";
@@ -236,11 +236,11 @@ beforeEach(() => {
     environments: [],
   });
   appCommandStore(environmentDiffStore).setState({ stats: new Map() });
-  useBuildPipelineStore.setState({
+  appCommandStore(buildPipelineStore).setState({
     buildEnvironmentIds: new Set<string>(),
     activeBuildEnvironmentIds: new Set<string>(),
   });
-  useAgentMailStore.setState(useAgentMailStore.getInitialState());
+  appCommandStore(agentMailStore).setState(appCommandStore(agentMailStore).getInitialState());
   const config = structuredClone(appCommandStore(configStore).getInitialState().config);
   config.global.agentMessaging = { ...config.global.agentMessaging!, enabled: true };
   appCommandStore(configStore).setState({ config });
@@ -268,7 +268,7 @@ test("does no hover-card formatting while the card is closed", () => {
 });
 
 test("shows authoritative unseen and failed agent-mail badges", () => {
-  useAgentMailStore.setState({
+  appCommandStore(agentMailStore).setState({
     summary: new Map([
       [
         "env-1\0agent",
@@ -1589,7 +1589,7 @@ describe("EnvironmentItem transitioning state", () => {
 
 describe("EnvironmentItem build pipeline naming", () => {
   test("strips the Build: prefix and marks build environments with a pipe icon", () => {
-    useBuildPipelineStore.setState({ buildEnvironmentIds: new Set(["env-1"]) });
+    appCommandStore(buildPipelineStore).setState({ buildEnvironmentIds: new Set(["env-1"]) });
 
     const { container } = renderItem(makeEnvironment({ name: "Build: checkout-flow" }));
 

@@ -1,9 +1,10 @@
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { usePromptDraftStore } from "@/stores/promptDraftStore";
+import { promptDraftStore } from "@/stores/promptDraftStore";
 import { mockToastError } from "../../../../../tests/mocks/sonner";
 import { QuestionCard, type QuestionCardQuestion } from "./QuestionCard";
+import { appCommandStore } from "@/test/app-command-store";
 
 /**
  * Covers the shared card directly. `ClaudeQuestionCard.test.tsx` exercises it
@@ -37,7 +38,7 @@ afterEach(() => {
   cleanup();
   // Drafts are keyed by request id and survive unmount by design, so tests
   // reusing an id would otherwise inherit the previous test's answers.
-  usePromptDraftStore.getState().reset();
+  appCommandStore(promptDraftStore).getState().reset();
 });
 
 function deferred<T>() {
@@ -682,7 +683,9 @@ describe("QuestionCard multi-question navigation", () => {
 
   test("falls back to the first question when a persisted index is out of range", () => {
     const draftKey = "test-question:out-of-range";
-    usePromptDraftStore.getState().setDraftValue(draftKey, "currentQuestionIndex", 99);
+    appCommandStore(promptDraftStore)
+      .getState()
+      .setDraftValue(draftKey, "currentQuestionIndex", 99);
 
     renderCard(TWO_QUESTIONS, { draftKey });
 
@@ -830,7 +833,7 @@ describe("QuestionCard draft persistence", () => {
     fireEvent.click(screen.getByRole("button", { name: "1b" }));
     unmount();
 
-    usePromptDraftStore.getState().clearDraft(DRAFT_KEY);
+    appCommandStore(promptDraftStore).getState().clearDraft(DRAFT_KEY);
 
     render(
       <QuestionCard
@@ -856,7 +859,7 @@ describe("QuestionCard draft persistence", () => {
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: "1b" }));
-    expect(usePromptDraftStore.getState().drafts.size).toBe(0);
+    expect(appCommandStore(promptDraftStore).getState().drafts.size).toBe(0);
   });
 });
 
@@ -879,7 +882,9 @@ describe("QuestionCard secret handling", () => {
     const input = screen.getByPlaceholderText("Type your answer") as HTMLInputElement;
     expect(input.type).toBe("password");
     fireEvent.change(input, { target: { value: "not-for-the-store" } });
-    expect(usePromptDraftStore.getState().drafts.has("provider:session:request:token")).toBe(false);
+    expect(
+      appCommandStore(promptDraftStore).getState().drafts.has("provider:session:request:token"),
+    ).toBe(false);
     fireEvent.click(screen.getByRole("button", { name: "Submit" }));
     await waitFor(() => expect(onSubmit).toHaveBeenCalledWith([["not-for-the-store"]]));
 
@@ -937,7 +942,9 @@ describe("QuestionCard secret handling", () => {
       screen.getByRole("button", { name: "Secret option one" }).getAttribute("aria-pressed"),
     ).toBe("true");
     fireEvent.click(screen.getByRole("button", { name: "Secret option two" }));
-    expect(usePromptDraftStore.getState().drafts.get(draftKey)?.answersByQuestion).toBeUndefined();
+    expect(
+      appCommandStore(promptDraftStore).getState().drafts.get(draftKey)?.answersByQuestion,
+    ).toBeUndefined();
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
     fireEvent.click(screen.getByRole("button", { name: "Yes" }));
     fireEvent.click(screen.getByRole("button", { name: "Back" }));

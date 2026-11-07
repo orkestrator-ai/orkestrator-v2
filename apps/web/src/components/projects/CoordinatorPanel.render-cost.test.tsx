@@ -23,11 +23,11 @@ import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
 import type { Environment } from "@/types";
 import * as realBackend from "@/lib/backend";
 import * as realNativeAgent from "@/components/native-agent";
-import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { buildPipelineStore } from "@/stores/buildPipelineStore";
 import { environmentStore } from "@/stores/environmentStore";
 import { multiReviewStore } from "@/stores/multiReviewStore";
 import { projectStore } from "@/stores/projectStore";
-import { useCoordinatorPaneLayoutStore } from "@/stores/coordinatorPaneLayoutStore";
+import { coordinatorPaneLayoutStore } from "@/stores/coordinatorPaneLayoutStore";
 import {
   reconcileCoordinatorLayout,
   splitCoordinatorPaneAtEdge,
@@ -186,7 +186,7 @@ async function renderPanel() {
 
 describe("CoordinatorPanel render cost", () => {
   const previousEnvironments = appCommandStore(environmentStore).getState().environments;
-  const previousPipelines = useBuildPipelineStore.getState().pipelines;
+  const previousPipelines = appCommandStore(buildPipelineStore).getState().pipelines;
   const previousReviews = appCommandStore(multiReviewStore).getState().workflows;
 
   beforeEach(() => {
@@ -194,10 +194,10 @@ describe("CoordinatorPanel render cost", () => {
     workerPrompts = [];
     resetUpstreamCheckForTests();
     resetClientStateCapabilitiesForTests();
-    useCoordinatorPaneLayoutStore.getState().reset();
+    appCommandStore(coordinatorPaneLayoutStore).getState().reset();
     // Two groups, so both conversations' tabs are mounted.
     const single = reconcileCoordinatorLayout(null, ["conversation-1", "side-1"]);
-    useCoordinatorPaneLayoutStore
+    appCommandStore(coordinatorPaneLayoutStore)
       .getState()
       .setLayout(
         "project-1",
@@ -227,7 +227,7 @@ describe("CoordinatorPanel render cost", () => {
     cleanup();
     resetReadCoordinatorForTests();
     appCommandStore(environmentStore).setState({ environments: previousEnvironments });
-    useBuildPipelineStore.setState({ pipelines: previousPipelines });
+    appCommandStore(buildPipelineStore).setState({ pipelines: previousPipelines });
     appCommandStore(multiReviewStore).setState({ workflows: previousReviews });
   });
   afterAll(() => {
@@ -257,7 +257,7 @@ describe("CoordinatorPanel render cost", () => {
         })),
       );
       act(() =>
-        useBuildPipelineStore.setState((state) => ({
+        appCommandStore(buildPipelineStore).setState((state) => ({
           pipelines: new Map(state.pipelines).set(`pipeline-${index}`, {
             id: `pipeline-${index}`,
             environmentId: unrelated.id,

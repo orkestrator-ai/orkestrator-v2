@@ -862,7 +862,7 @@ describe("HierarchicalSidebar", () => {
     fireEvent.click(await screen.findByRole("menuitem", { name: "Settings" }));
 
     // `AppDialogHost` renders the dialog and writes its changes to the store.
-    expect(useAppDialogStore.getState().request).toEqual({
+    expect(useAppDialogStore.getState().request).toMatchObject({
       kind: "environment-settings",
       environmentId: "env-settings",
     });

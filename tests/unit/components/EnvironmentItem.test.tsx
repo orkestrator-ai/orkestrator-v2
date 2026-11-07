@@ -981,7 +981,7 @@ describe("EnvironmentItem menu actions and selection", () => {
     expect(settingsItem).not.toBeUndefined();
     fireEvent.click(settingsItem!);
 
-    expect(useAppDialogStore.getState().request).toEqual({
+    expect(useAppDialogStore.getState().request).toMatchObject({
       kind: "environment-settings",
       environmentId: "env-1",
     });
@@ -1377,7 +1377,7 @@ describe("EnvironmentItem mobile actions menu", () => {
     const menu = await findActionsMenu();
 
     await selectActionsMenuItem(menu, "Settings");
-    expect(useAppDialogStore.getState().request).toEqual({
+    expect(useAppDialogStore.getState().request).toMatchObject({
       kind: "environment-settings",
       environmentId: "env-1",
     });

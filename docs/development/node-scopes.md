@@ -19,6 +19,9 @@ is the worked example (plan item 3001).
 | `scopedStoreHook(def)` | `lib/node-scope/scoped-store-shim.ts` | The migration hook. It is called like the old zustand hook, reads the nearest node scope, and falls back to the command scope outside a provider. It keeps `getState`, `setState`, `subscribe` and `getInitialState` as `@deprecated` statics on the **command scope's** instance. |
 | `noteShimUse(store, via)` | `lib/node-scope/scoped-store-shim.ts` | Called by every shim use: each static, and the hook when it falls back. It does nothing until plan item 4004 installs the runtime guard (`setShimUseObserver`). |
 | `scoped-store-shim` guard | `tests/source-guards/scoped-store-shim.ts` | Counts static calls on a converted hook, per store and per file. Its baseline only falls. |
+| `createXApi(client)` | every `lib/backend/<x>.ts` | That file's command functions on `client`'s node (plan item 3002). `client` is anything with `invokeRaw` (a `NodeClient`). The file's named exports are `createXApi(commandBackendClient)`: the command-scope shim. |
+| `scopeBackendClient(scope)`, `backendApiForScope(scope, createXApi, { getX })` | `lib/backend/client.ts` | A scope as a factory client (through `invokeInScope`, so the scope's prefetched cache applies), and one factory's functions for a scope, made once per scope. On the app's command scope both return the command-bound path, so suites that mock `@/lib/backend` still see the call. |
+| `lib-backend-command-default` guard | `tests/source-guards/lib-backend-command-default.ts` | Counts uses of a `lib/backend` named export inside a module that defines a scoped store, service or slot, per `lib/backend` file and module. Its baseline only falls. |
 | `renderInNodeScope`, `FakeNodeClient` | `apps/web/src/test/render-in-node-scope.tsx` | Renders a component inside a fresh window scope and node scope ([testing guide](testing-guide.md#rendering-inside-a-node-scope)). |
 
 ## Converting one store
@@ -51,11 +54,13 @@ steps in one change.
      `environment`). It must be unique: a second def with the same name throws
      when both are used in one scope.
    - Inside the creator, call this node with `scope.client`, not with the
-     global `invoke`/`listen` or a `lib/backend` function that ignores the
-     scope. Until plan item 3002 gives the `lib/backend` clients a client
-     parameter, a creator may keep calling them. They reach the command node,
-     which is correct for the command scope, but write it down in the item's
-     Notes.
+     global `invoke`/`listen` or a `lib/backend` named export, which is the
+     command-scope shim. Build the file's functions for the scope instead:
+     `const api = createEnvironmentsApi(scopeBackendClient(scope))` (or
+     `createEnvironmentsApi(scope.client)`, which skips the scope's prefetched
+     cache), then `api.listEnvironments()`. A named export left in the module
+     is counted by the `lib-backend-command-default` guard (see
+     [Rules the guards hold](#rules-the-guards-hold)).
    - A creator that starts its own work (a timer, a listener) registers its
      stop with `scope.onDispose(name, stop)` (invariant 15). Long-running work
      belongs in a scoped service (`defineScopedService`).
@@ -194,6 +199,18 @@ the point.
   other re-exporting modules (`export { … } from`, `export * from`, import
   then export), namespace imports and the store module's calls on itself are
   all counted. Test files and test-support modules are not.
+- The `lib-backend-command-default` source guard counts each use of a
+  `lib/backend` named export (the command-scope shim of plan item 3002) in a
+  production module that defines a scoped store, service or slot, keyed
+  `[lib/backend file] module`. It reads the shim names from the `lib/backend`
+  sources (an exported `const` bound with `commandBackendClient` or
+  `portalBackendClient`) and follows the import through `@/lib/backend` or any
+  re-export. Factories, types and helpers that send nothing are not counted,
+  nor is the command-scope fallback handed to `backendApiForScope`. A module
+  enters the guard when it first defines scoped state, so the item converting
+  it either moves its calls onto `createXApi(...)` or regenerates with
+  `bun tests/source-guards/update-baseline.ts --guard lib-backend-command-default`
+  and says why in its Notes.
 - At runtime, plan item 4004 turns `noteShimUse` into a guard. A shim use for
   a store the shown leaf's workspace uses throws in development and tests
   while an in-tree leaf is mounted. Phase 4 cannot mount a leaf in-tree until

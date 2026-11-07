@@ -19,7 +19,7 @@ import {
   type NoticeDismissalSession,
   type NoticeDismissalSnapshot,
 } from "@orkestrator/protocol/notice-dismissals";
-import { invoke } from "@/lib/native/backend";
+import { clientInvoke, commandBackendClient, type BackendClient } from "./client";
 
 /**
  * Shared presentation state the backend owns (formerly browser-local). Every
@@ -27,46 +27,75 @@ import { invoke } from "@/lib/native/backend";
  * being trusted.
  */
 
-/** Unknown command on an older backend: every capability off. */
-/** `call` sends the command to a node other than the command node (a scope's invoker). */
-export const getClientStateCapabilities = async (
-  call: typeof invoke = invoke,
-): Promise<ClientStateCapabilities> =>
-  parseClientStateCapabilities(await call(CLIENT_STATE_CAPABILITIES_COMMAND));
+/**
+ * This file's commands on `client`'s node (plan item 3002). A scoped store or
+ * service passes its own node's client; the named exports below are this
+ * over the window's command scope.
+ */
+export function createClientStateApi(client: BackendClient) {
+  const invoke = clientInvoke(client);
 
-export const getCoordinatorPaneLayout = async (
-  projectId: string,
-): Promise<CoordinatorPaneLayoutRecord | null> =>
-  parseCoordinatorPaneLayoutRecord(await invoke("get_coordinator_pane_layout", { projectId }));
+  /** Unknown command on an older backend: every capability off. */
+  const getClientStateCapabilities = async (): Promise<ClientStateCapabilities> =>
+    parseClientStateCapabilities(await invoke(CLIENT_STATE_CAPABILITIES_COMMAND));
 
-export const saveCoordinatorPaneLayout = async (
-  projectId: string,
-  layout: CoordinatorPaneLayout,
-  expectedRevision: number,
-): Promise<CoordinatorPaneLayoutSaveResult | null> =>
-  parseCoordinatorPaneLayoutSaveResult(
-    await invoke("save_coordinator_pane_layout", { projectId, layout, expectedRevision }),
-  );
+  const getCoordinatorPaneLayout = async (
+    projectId: string,
+  ): Promise<CoordinatorPaneLayoutRecord | null> =>
+    parseCoordinatorPaneLayoutRecord(await invoke("get_coordinator_pane_layout", { projectId }));
 
-export const checkCoordinatorUpstreamMerge = async (
-  projectId: string,
-): Promise<CoordinatorUpstreamMergeCheck | null> =>
-  parseCoordinatorUpstreamMergeCheck(
-    await invoke("check_coordinator_upstream_merge", { projectId }),
-  );
+  const saveCoordinatorPaneLayout = async (
+    projectId: string,
+    layout: CoordinatorPaneLayout,
+    expectedRevision: number,
+  ): Promise<CoordinatorPaneLayoutSaveResult | null> =>
+    parseCoordinatorPaneLayoutSaveResult(
+      await invoke("save_coordinator_pane_layout", { projectId, layout, expectedRevision }),
+    );
 
-export const listNoticeDismissals = async (): Promise<NoticeDismissalSnapshot | null> =>
-  parseNoticeDismissalSnapshot(await invoke("list_notice_dismissals"));
+  const checkCoordinatorUpstreamMerge = async (
+    projectId: string,
+  ): Promise<CoordinatorUpstreamMergeCheck | null> =>
+    parseCoordinatorUpstreamMergeCheck(
+      await invoke("check_coordinator_upstream_merge", { projectId }),
+    );
 
-export const dismissNotices = async (
-  sessions: readonly NoticeDismissalSession[],
-): Promise<NoticeDismissalSnapshot | null> =>
-  parseNoticeDismissalSnapshot(await invoke("dismiss_notices", { sessions }));
+  const listNoticeDismissals = async (): Promise<NoticeDismissalSnapshot | null> =>
+    parseNoticeDismissalSnapshot(await invoke("list_notice_dismissals"));
 
-export const reconcileNoticeDismissals = async (
-  sessionIdentity: string,
-  activeOccurrenceIds: readonly string[],
-): Promise<NoticeDismissalSnapshot | null> =>
-  parseNoticeDismissalSnapshot(
-    await invoke("reconcile_notice_dismissals", { sessionIdentity, activeOccurrenceIds }),
-  );
+  const dismissNotices = async (
+    sessions: readonly NoticeDismissalSession[],
+  ): Promise<NoticeDismissalSnapshot | null> =>
+    parseNoticeDismissalSnapshot(await invoke("dismiss_notices", { sessions }));
+
+  const reconcileNoticeDismissals = async (
+    sessionIdentity: string,
+    activeOccurrenceIds: readonly string[],
+  ): Promise<NoticeDismissalSnapshot | null> =>
+    parseNoticeDismissalSnapshot(
+      await invoke("reconcile_notice_dismissals", { sessionIdentity, activeOccurrenceIds }),
+    );
+
+  return {
+    getClientStateCapabilities,
+    getCoordinatorPaneLayout,
+    saveCoordinatorPaneLayout,
+    checkCoordinatorUpstreamMerge,
+    listNoticeDismissals,
+    dismissNotices,
+    reconcileNoticeDismissals,
+  };
+}
+
+export type ClientStateApi = ReturnType<typeof createClientStateApi>;
+
+/** The window's command-scope binding (the counted shim, plan item 3002). */
+export const {
+  getClientStateCapabilities,
+  getCoordinatorPaneLayout,
+  saveCoordinatorPaneLayout,
+  checkCoordinatorUpstreamMerge,
+  listNoticeDismissals,
+  dismissNotices,
+  reconcileNoticeDismissals,
+} = createClientStateApi(commandBackendClient);

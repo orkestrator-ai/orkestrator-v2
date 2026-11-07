@@ -476,5 +476,6 @@
   },
   "scoped-store-shim": {
     "[claude-options] apps/web/src/App.tsx": 1
-  }
+  },
+  "lib-backend-command-default": {}
 }

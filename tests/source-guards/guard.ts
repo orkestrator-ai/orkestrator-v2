@@ -8,6 +8,7 @@ export const GUARD_IDS = [
   "window-orkestrator-direct",
   "direct-transport-import",
   "scoped-store-shim",
+  "lib-backend-command-default",
 ] as const;
 
 export type GuardId = (typeof GUARD_IDS)[number];

@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
 import type { TranscriptArtifactCapabilities } from "@orkestrator/protocol/transcript-artifact-commands";
 import { isProvisionalBackendId, type BackendId } from "@orkestrator/protocol/federation";
-import { getTranscriptArtifactCapabilities } from "@/lib/backend/transcript-artifacts";
+import { backendApiForScope } from "@/lib/backend/client";
+import {
+  createTranscriptArtifactsApi,
+  getTranscriptArtifactCapabilities,
+} from "@/lib/backend/transcript-artifacts";
 import type { RichTranscriptScope } from "@/lib/chat/rich-identity";
 import {
   noteRichBackendIdentity,
@@ -10,9 +14,16 @@ import {
 } from "@/lib/chat/rich-content-reset";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
-import { defineScopedSlot, scopeInvoker } from "@/lib/node-scope-slots";
+import { defineScopedSlot } from "@/lib/node-scope-slots";
 
 const RETRY_DELAYS = [10_000, 20_000, 40_000, 60_000];
+
+/** `scope`'s node's answer (the command-bound read on the command scope, which suites mock). */
+function readCapabilities(scope: NodeScope): Promise<TranscriptArtifactCapabilities> {
+  return backendApiForScope(scope, createTranscriptArtifactsApi, {
+    getTranscriptArtifactCapabilities,
+  }).getTranscriptArtifactCapabilities();
+}
 
 const retryDelay = (failures: number) =>
   RETRY_DELAYS[Math.min(Math.max(failures - 1, 0), RETRY_DELAYS.length - 1)]!;
@@ -82,7 +93,7 @@ class TranscriptCapabilities {
     const generation = this.readGeneration;
     // Promise.resolve: a backend shim that answers synchronously must not break rendering.
     const request: Promise<void> = Promise.resolve()
-      .then(() => getTranscriptArtifactCapabilities(scopeInvoker(this.scope)))
+      .then(() => readCapabilities(this.scope))
       .then((value) => {
         if (generation !== this.readGeneration) return;
         const next = value && typeof value.backendId === "string" ? value : null;
@@ -136,7 +147,7 @@ class TranscriptCapabilities {
   refresh(): Promise<void> {
     const generation = this.readGeneration;
     return Promise.resolve()
-      .then(() => getTranscriptArtifactCapabilities(scopeInvoker(this.scope)))
+      .then(() => readCapabilities(this.scope))
       .then((value) => {
         if (generation !== this.readGeneration || !value || typeof value.backendId !== "string") {
           return;

@@ -48,6 +48,10 @@ import {
   repositoryModules,
   type ShimmedStore,
 } from "../source-guards/scoped-store-shim";
+import {
+  LibBackendShimResolver,
+  createLibBackendCommandDefaultGuard,
+} from "../source-guards/lib-backend-command-default";
 import { mergeBaseline, selectedGuards, subjectTotals } from "../source-guards/update-baseline";
 import { moduleIdOfFile, resolveWebModule } from "../source-guards/web-modules";
 import {
@@ -774,6 +778,133 @@ describe("scoped-store-shim", () => {
     const resolver = new ShimmedStoreResolver(SHIMMED_STORES, repositoryModules(ROOT));
     for (const store of SHIMMED_STORES)
       expect(resolver.storeOf("apps/web/src/stores", store.hook)?.store).toBe(store.store);
+  });
+});
+
+describe("lib-backend-command-default", () => {
+  /** An in-memory renderer: the `@/lib/backend` barrel and three of its files. */
+  const modules: Record<string, { file: string; source: string }> = {
+    "apps/web/src/lib/backend": {
+      file: "apps/web/src/lib/backend.ts",
+      source: [
+        'export * from "./backend/kanban";',
+        'export * from "./backend/agent-accounts";',
+      ].join("\n"),
+    },
+    "apps/web/src/lib/backend/kanban": {
+      file: "apps/web/src/lib/backend/kanban.ts",
+      source: [
+        'import { clientInvoke, commandBackendClient, type BackendClient } from "./client";',
+        "export type KanbanStatus = 'done';",
+        "export function isDone(status: string) { return status === 'done'; }",
+        "export function createKanbanApi(client: BackendClient) {",
+        "  const invoke = clientInvoke(client);",
+        "  const listTasks = () => invoke('list_tasks');",
+        "  const moveTask = (id: string) => invoke('move_task', { id });",
+        "  return { listTasks, moveTask };",
+        "}",
+        "export const { listTasks, moveTask } = createKanbanApi(commandBackendClient);",
+      ].join("\n"),
+    },
+    "apps/web/src/lib/backend/agent-accounts": {
+      file: "apps/web/src/lib/backend/agent-accounts.ts",
+      source: "export const machineInvoke = machineInvoker(commandBackendClient);",
+    },
+    "apps/web/src/lib/backend/command-nodes": {
+      file: "apps/web/src/lib/backend/command-nodes.ts",
+      source: "export const { getNodeStatus } = createCommandNodesApi(portalBackendClient);",
+    },
+  };
+  const guard = createLibBackendCommandDefaultGuard({
+    readModule: (moduleId) => modules[moduleId] ?? null,
+  });
+  const file = "apps/web/src/stores/kanbanStore.ts";
+  const scoped = "export const kanbanStore = defineScopedStore<State>('kanban', () => () => ({}));";
+  const found = (source: string, path = file) =>
+    scanSource({ path, source, isBunTest: /\.test\./.test(path) }, [guard]).map(
+      ({ line, subject }) => [line, subject],
+    );
+
+  test("counts command-bound uses through the barrel, a file, an alias and a namespace", () => {
+    const source = [
+      'import { listTasks, machineInvoke } from "@/lib/backend";',
+      'import { moveTask as move } from "@/lib/backend/kanban";',
+      'import * as backend from "@/lib/backend";',
+      'import { getNodeStatus } from "../lib/backend/command-nodes";',
+      scoped,
+      "await listTasks();",
+      "await move('a');",
+      "await backend.moveTask('b');",
+      "const calls = { listTasks, status: getNodeStatus };",
+      "await machineInvoke(null, 'x');",
+    ].join("\n");
+    expect(found(source)).toEqual([
+      [6, "kanban"],
+      [7, "kanban"],
+      [8, "kanban"],
+      [9, "kanban"],
+      [9, "command-nodes"],
+      [10, "agent-accounts"],
+    ]);
+  });
+
+  test("ignores factories, types, helpers, key names and the scoped fallback", () => {
+    const source = [
+      'import { createKanbanApi, isDone, listTasks, type KanbanStatus } from "@/lib/backend";',
+      'import { backendApiForScope, scopeBackendClient } from "@/lib/backend/client";',
+      'import { moveTask } from "@/lib/elsewhere";',
+      scoped,
+      "const api = createKanbanApi(scopeBackendClient(scope));",
+      "await api.listTasks();",
+      "const done: KanbanStatus = 'done'; isDone(done);",
+      "type Lister = typeof listTasks;",
+      "const keyed = { listTasks: 1 };",
+      "await backendApiForScope(scope, createKanbanApi, { listTasks }).listTasks();",
+      "await moveTask('a');",
+    ].join("\n");
+    expect(found(source)).toEqual([]);
+  });
+
+  test("counts only modules that hold per-node state, outside tests", () => {
+    const uses = 'import { listTasks } from "@/lib/backend";\nawait listTasks();';
+    expect(found(uses)).toEqual([]);
+    for (const definition of [
+      scoped,
+      "export const sync = defineScopedService('sync', () => ({ stop() {} }));",
+      "const slot = defineScopedSlot('caps', () => ({}));",
+    ])
+      expect(found(`${uses}\n${definition}`)).toEqual([[2, "kanban"]]);
+    const store = `${uses}\n${scoped}`;
+    expect(found(store, "apps/web/src/stores/kanbanStore.test.ts")).toEqual([]);
+    expect(found(store, "apps/web/src/stores/kanban-test-support.ts")).toEqual([]);
+    expect(found(store, "apps/web/src/test/render-in-node-scope.tsx")).toEqual([]);
+    expect(found(store, "apps/web/src/lib/node-scope/thing.ts")).toEqual([]);
+  });
+
+  test("keys the baseline per lib/backend file and module", () => {
+    const findings = emptyFindings();
+    const source = `import { listTasks } from "@/lib/backend";\n${scoped}\nlistTasks();`;
+    for (const finding of scanSource({ path: file, source, isBunTest: false }, [guard]))
+      (findings[finding.guard][baselineKey(finding)] ??= []).push(finding);
+    const key = `[kanban] ${file}`;
+    expect(Object.keys(findings["lib-backend-command-default"])).toEqual([key]);
+    const { regressions } = compareWithBaseline(findings, baselineFromFindings(emptyFindings()));
+    expect(formatRegressions(regressions, ADVICE)).toContain("createXApi(scope.client)");
+  });
+
+  test("reads the real shim: every lib/backend factory's named exports, not its factory", () => {
+    const resolver = new LibBackendShimResolver(repositoryModules(ROOT));
+    expect(resolver.shimOf("apps/web/src/lib/backend", "readFileBase64")).toBe("kanban");
+    expect(resolver.shimOf("apps/web/src/lib/backend", "getNativeAgentSyncCapabilities")).toBe(
+      "workflows",
+    );
+    expect(resolver.shimOf("apps/web/src/lib/backend", "machineInvoke")).toBe("agent-accounts");
+    expect(resolver.shimOf("apps/web/src/lib/backend/command-nodes", "getNodeStatus")).toBe(
+      "command-nodes",
+    );
+    expect(resolver.shimOf("apps/web/src/lib/backend", "createKanbanApi")).toBeNull();
+    // Sent through the desktop host, not a command: not part of the shim.
+    expect(resolver.shimOf("apps/web/src/lib/backend", "getWebClientStatus")).toBeNull();
   });
 });
 

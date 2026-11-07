@@ -2217,8 +2217,11 @@ describe("backend command wrapper coverage", () => {
       "getBackendProfile",
       "updateBackendProfile",
     ]);
+    // `createXApi(client)` factories (plan item 3002) are covered per client in
+    // `backend/factories.test.ts`; their named exports are the wrappers swept here.
+    const isFactory = (name: string) => /^create[A-Z]\w*Api$/.test(name);
     const commandWrappers = Object.entries(backendWrappers).flatMap(([name, value]) =>
-      typeof value === "function" && !specialWrappers.has(name)
+      typeof value === "function" && !specialWrappers.has(name) && !isFactory(name)
         ? [[name, value as (...args: unknown[]) => Promise<unknown>] as const]
         : [],
     );

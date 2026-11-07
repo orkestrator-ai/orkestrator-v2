@@ -102,7 +102,8 @@ Some guards read production sources instead of tests (`SourceGuard.productionRoo
 the walk is `listProductionSources`, which skips test files and test-support
 modules). They hold the node-scope boundaries of the unified federation work and
 are described in [Transports only through a scope](#transports-only-through-a-scope):
-`window-orkestrator-direct`, `direct-transport-import` and `scoped-store-shim`.
+`window-orkestrator-direct`, `direct-transport-import`, `scoped-store-shim` and
+`lib-backend-command-default`.
 
 Existing offenders are tolerated by a ratchet, not fixed in bulk:
 `tests/source-guards/baseline.json` holds a count per guard and file. The test
@@ -302,6 +303,17 @@ baseline:
   are counted; a store enters when its item converts it. Regenerate with
   `--guard scoped-store-shim`, which prints the total per store. The
   conversion recipe is [node-scopes.md](node-scopes.md).
+
+- **`lib-backend-command-default`** (source guard, plan item 3002). Uses of a
+  `lib/backend` named export in an `apps/web/src` production module that
+  defines a scoped store, service or slot (`defineScopedStore`,
+  `defineScopedService`, `defineScopedSlot`). Every `lib/backend/<x>.ts`
+  exports `createXApi(client)`, and its named exports are that factory over
+  the window's command scope, so a named export in per-node code reaches the
+  command node whichever node the code serves. The guard counts per
+  `lib/backend` file and per module (`[file] module`), reads the shim names
+  from the `lib/backend` sources, and follows imports through `@/lib/backend`
+  and other re-exports. Regenerate with `--guard lib-backend-command-default`.
 
 To retire an importer, route it through a scope, then regenerate only this
 guard's entries with

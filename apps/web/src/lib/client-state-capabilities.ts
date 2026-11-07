@@ -4,15 +4,11 @@ import {
   type ClientStateCapabilities,
 } from "@orkestrator/protocol/client-state";
 import { isUnknownViewCommandError } from "@orkestrator/protocol/view-sync";
-import { getClientStateCapabilities } from "@/lib/backend/client-state";
+import { backendApiForScope } from "@/lib/backend/client";
+import { createClientStateApi, getClientStateCapabilities } from "@/lib/backend/client-state";
 import { NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
-import {
-  appCommandScope,
-  defineScopedSlot,
-  listenInScope,
-  scopeInvoker,
-} from "@/lib/node-scope-slots";
+import { appCommandScope, defineScopedSlot, listenInScope } from "@/lib/node-scope-slots";
 
 /** How long an "unsupported" answer is trusted before the backend is asked again. */
 const UNSUPPORTED_RECHECK_MS = 30_000;
@@ -85,7 +81,8 @@ export async function clientStateCapabilities(scope?: NodeScope): Promise<Client
     return cached.value;
   }
   if (state.request?.generation === current) return state.request.promise;
-  const promise = getClientStateCapabilities(scopeInvoker(target)).then(
+  const api = backendApiForScope(target, createClientStateApi, { getClientStateCapabilities });
+  const promise = api.getClientStateCapabilities().then(
     (value) => {
       if (current === state.generation) {
         state.cached = { generation: current, value, checkedAt: Date.now() };

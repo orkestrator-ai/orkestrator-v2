@@ -13,8 +13,11 @@ import { NATIVE_AGENT_LIVE_UPDATE_VERSION } from "@orkestrator/protocol/native-a
 import { NATIVE_AGENT_OBSERVATION_EVENT_VERSION } from "@orkestrator/protocol/native-agent-observation";
 import { NATIVE_AGENT_TRANSCRIPT_PATCH_VERSION } from "@orkestrator/protocol/native-agent-transcript-patch";
 import { getNativeAgentSyncCapabilities } from "@/lib/backend";
+import { backendApiForScope } from "@/lib/backend/client";
+// The factory from its own module: suites replace the barrel with partial mocks.
+import { createWorkflowsApi } from "@/lib/backend/workflows";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
-import { appCommandScope, defineScopedSlot, scopeInvoker } from "@/lib/node-scope-slots";
+import { appCommandScope, defineScopedSlot } from "@/lib/node-scope-slots";
 
 /** How long an "unsupported" answer is trusted before the backend is asked again. */
 const UNSUPPORTED_RECHECK_MS = 30_000;
@@ -66,7 +69,9 @@ export async function nativeAgentSyncSupported(scope?: NodeScope): Promise<boole
   if (state.request?.generation === generation) return state.request.promise;
   const promise = (async () => {
     try {
-      const capabilities = await getNativeAgentSyncCapabilities(scopeInvoker(target));
+      const capabilities = await backendApiForScope(target, createWorkflowsApi, {
+        getNativeAgentSyncCapabilities,
+      }).getNativeAgentSyncCapabilities();
       const supported = capabilities.projectionSyncVersions?.includes(1) === true;
       if (generation === state.generation) {
         state.value = {

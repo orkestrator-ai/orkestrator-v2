@@ -2,7 +2,7 @@ import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import * as backend from "@/lib/backend";
 import { environmentStore } from "@/stores/environmentStore";
-import { useUIStore } from "@/stores/uiStore";
+import { uiStore } from "@/stores/uiStore";
 import type { Environment } from "@/types";
 import { mockToast, resetSonnerMocks } from "../../../../tests/mocks/sonner";
 import { useUnreadEnvironmentSync } from "./useUnreadEnvironmentSync";
@@ -28,7 +28,7 @@ let setUnread: ReturnType<typeof spyOn>;
 beforeEach(() => {
   persistResolvers = [];
   appCommandStore(environmentStore).setState({ environments: [environment()] });
-  useUIStore.setState({ selectedEnvironmentId: "env-1", projectBoardTab: "home" });
+  appCommandStore(uiStore).setState({ selectedEnvironmentId: "env-1", projectBoardTab: "home" });
   setUnread = spyOn(backend, "setEnvironmentUnread").mockImplementation(
     () =>
       new Promise<Environment>((resolve) => {
@@ -42,7 +42,7 @@ afterEach(() => {
   resetSonnerMocks();
   setUnread.mockRestore();
   appCommandStore(environmentStore).setState({ environments: [] });
-  useUIStore.setState({ selectedEnvironmentId: null });
+  appCommandStore(uiStore).setState({ selectedEnvironmentId: null });
 });
 
 describe("useUnreadEnvironmentSync", () => {
@@ -138,7 +138,7 @@ describe("activation toast", () => {
     renderHook(() => useUnreadEnvironmentSync());
     expect(mockToast).not.toHaveBeenCalled();
 
-    act(() => useUIStore.setState({ selectedEnvironmentId: "env-2" }));
+    act(() => appCommandStore(uiStore).setState({ selectedEnvironmentId: "env-2" }));
 
     expect(mockToast).toHaveBeenCalledTimes(1);
     expect(mockToast.mock.calls[0]?.[0]).toBe("Agent needs your input");
@@ -188,12 +188,12 @@ test("an obscured home toasts and clears unread work only when Home becomes visi
       environment({ name: "project-home", projectHome: true, unreadReason: "agent_ready" }),
     ],
   });
-  useUIStore.setState({ projectBoardTab: "kanban" });
+  appCommandStore(uiStore).setState({ projectBoardTab: "kanban" });
   renderHook(() => useUnreadEnvironmentSync());
   expect(setUnread).not.toHaveBeenCalled();
   expect(mockToast).not.toHaveBeenCalled();
   expect(appCommandStore(environmentStore).getState().environments[0]?.hasUnreadWork).toBe(true);
-  act(() => useUIStore.getState().setProjectBoardTab("home"));
+  act(() => appCommandStore(uiStore).getState().setProjectBoardTab("home"));
   expect(setUnread).toHaveBeenCalledTimes(1);
   expect(mockToast).toHaveBeenCalledTimes(1);
   expect(mockToast.mock.calls[0]?.[0]).toBe("Agent ready for input");

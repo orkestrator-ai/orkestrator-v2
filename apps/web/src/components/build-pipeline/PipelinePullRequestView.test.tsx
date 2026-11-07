@@ -2,8 +2,8 @@ import { afterEach, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { invoke } from "@/lib/native/backend";
 import { environmentStore } from "@/stores/environmentStore";
-import { useFilesPanelStore } from "@/stores/filesPanelStore";
-import { useUIStore } from "@/stores/uiStore";
+import { filesPanelStore } from "@/stores/filesPanelStore";
+import { uiStore } from "@/stores/uiStore";
 import type { Environment } from "@/types";
 import {
   PipelinePullRequestChecks,
@@ -19,7 +19,7 @@ const invokeMock = invoke as unknown as ReturnType<typeof mock>;
 
 afterEach(() => {
   cleanup();
-  useUIStore.setState({ selectedProjectId: null, selectedEnvironmentId: null });
+  appCommandStore(uiStore).setState({ selectedProjectId: null, selectedEnvironmentId: null });
   appCommandStore(environmentStore).setState({ environments: [] });
   setFilesPanelTestState({ isOpen: false, activeTab: "changes", pullRequestTabs: {} });
 });
@@ -29,7 +29,10 @@ function renderShippedPullRequest() {
   appCommandStore(environmentStore).setState({
     environments: [{ id: "pipeline-env", projectId: "project-1", prUrl: url } as Environment],
   });
-  useUIStore.setState({ selectedProjectId: "project-1", selectedEnvironmentId: "pipeline-env" });
+  appCommandStore(uiStore).setState({
+    selectedProjectId: "project-1",
+    selectedEnvironmentId: "pipeline-env",
+  });
   render(
     <PipelinePullRequestView
       environmentId="pipeline-env"
@@ -48,12 +51,14 @@ test.each([
   renderShippedPullRequest();
   fireEvent.click(target());
   await waitFor(() => expect(useFilesPanelChromeStore.getState().isOpen).toBe(true));
-  expect(useFilesPanelStore.getState().pullRequestTabs["pipeline-env"]?.[0]?.ref).toEqual({
+  expect(
+    appCommandStore(filesPanelStore).getState().pullRequestTabs["pipeline-env"]?.[0]?.ref,
+  ).toEqual({
     owner: "acme",
     repo: "app",
     number: 1,
   });
-  expect(useUIStore.getState().selectedEnvironmentId).toBe("pipeline-env");
+  expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("pipeline-env");
   expect(invokeMock).not.toHaveBeenCalledWith("open_in_browser", expect.anything());
 });
 

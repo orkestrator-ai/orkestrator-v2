@@ -2,9 +2,9 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
 import { environmentStore } from "@/stores/environmentStore";
-import { useAgentActivityStore } from "@/stores/agentActivityStore";
+import { agentActivityStore } from "@/stores/agentActivityStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
-import { usePrMonitorStore } from "@/stores/prMonitorStore";
+import { prMonitorStore } from "@/stores/prMonitorStore";
 import type { Environment } from "@/types";
 import { useEnvironmentIdNameSignal } from "./useEnvironmentNameSignal";
 import { appCommandStore } from "@/test/app-command-store";
@@ -28,17 +28,20 @@ const environment: Environment = {
   agentActivityUpdatedAt: "2026-10-28T10:00:00Z",
 };
 const initialEnvironment = appCommandStore(environmentStore).getState();
-const initialActivity = useAgentActivityStore.getState();
+const initialActivity = appCommandStore(agentActivityStore).getState();
 const initialBuild = useBuildPipelineStore.getState();
-const initialMonitor = usePrMonitorStore.getState();
+const initialMonitor = appCommandStore(prMonitorStore).getState();
 beforeEach(() => {
   appCommandStore(environmentStore).setState({
     environments: [environment],
     deletingEnvironments: new Set(),
   });
-  useAgentActivityStore.setState({ containerStates: {}, containerStateUpdatedAt: {} });
+  appCommandStore(agentActivityStore).setState({
+    containerStates: {},
+    containerStateUpdatedAt: {},
+  });
   useBuildPipelineStore.setState({ activeBuildEnvironmentIds: new Set() });
-  usePrMonitorStore.setState({
+  appCommandStore(prMonitorStore).setState({
     syncStatus: "current",
     states: new Map([
       [
@@ -62,9 +65,9 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   appCommandStore(environmentStore).setState(initialEnvironment, true);
-  useAgentActivityStore.setState(initialActivity, true);
+  appCommandStore(agentActivityStore).setState(initialActivity, true);
   useBuildPipelineStore.setState(initialBuild, true);
-  usePrMonitorStore.setState(initialMonitor, true);
+  appCommandStore(prMonitorStore).setState(initialMonitor, true);
 });
 
 test("pipeline-only changes override waiting and restore it when work ends", () => {
@@ -98,7 +101,7 @@ test("stopped containers suppress signals and live activity updates restore prio
       { ...environment, status: "stopped", hasMergeConflicts: true, prMergeability: "dirty" },
     ],
   });
-  usePrMonitorStore.setState((state) => ({
+  appCommandStore(prMonitorStore).setState((state) => ({
     states: new Map([["env", { ...state.states.get("env")!, hasMergeConflicts: true }]]),
   }));
   const { result } = renderHook(() => useEnvironmentIdNameSignal("env"));
@@ -110,7 +113,7 @@ test("stopped containers suppress signals and live activity updates restore prio
   );
   expect(result.current).toBe("needs-answer");
   act(() =>
-    useAgentActivityStore.setState({
+    appCommandStore(agentActivityStore).setState({
       containerStates: { container: "working" },
       containerStateUpdatedAt: { container: "2026-10-28T11:00:00Z" },
     }),
@@ -132,7 +135,7 @@ for (const signal of ["waiting", "ready", "conflicts"] as const) {
         ],
       });
     if (signal === "conflicts")
-      usePrMonitorStore.setState((state) => ({
+      appCommandStore(prMonitorStore).setState((state) => ({
         states: new Map([["env", { ...state.states.get("env")!, hasMergeConflicts: true }]]),
       }));
     const { result } = renderHook(() => useEnvironmentIdNameSignal("env"));

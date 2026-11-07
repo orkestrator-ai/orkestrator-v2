@@ -20,10 +20,10 @@ import {
   type CreateTabOptions,
 } from "@/contexts";
 import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore";
-import { useMultiReviewStore } from "@/stores/multiReviewStore";
+import { multiReviewStore } from "@/stores/multiReviewStore";
 import { environmentStore } from "@/stores/environmentStore";
-import { useFilesPanelStore } from "@/stores/filesPanelStore";
-import { useUIStore } from "@/stores/uiStore";
+import { filesPanelStore } from "@/stores/filesPanelStore";
+import { uiStore } from "@/stores/uiStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { createSessionKey } from "@/lib/utils";
@@ -302,7 +302,7 @@ function ReviewMountDuringPointerGesture({
 }
 
 beforeEach(() => {
-  useMultiReviewStore.setState({ workflows: new Map() });
+  appCommandStore(multiReviewStore).setState({ workflows: new Map() });
   useMessagePartExpansionStore.getState().reset();
 });
 afterEach(cleanup);
@@ -450,7 +450,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       ],
     });
     try {
-      useMultiReviewStore.getState().replaceWorkflow(workflow);
+      appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow);
       renderInAppCommandScope(
         <MultiReviewTab
           data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
@@ -463,11 +463,16 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       expect(within(pr).getByText(`#42 · into ${workflow.targetBranch}`)).toBeTruthy();
       fireEvent.click(pr);
       // It opens in the right-hand PR pane; the review stays the main view.
-      useUIStore.setState({ selectedProjectId: null, selectedEnvironmentId: "env-1" });
+      appCommandStore(uiStore).setState({
+        selectedProjectId: null,
+        selectedEnvironmentId: "env-1",
+      });
       setFilesPanelTestState({ isOpen: false, activeTab: "changes", pullRequestTabs: {} });
       fireEvent.click(screen.getByRole("button", { name: "View pull request" }));
       await waitFor(() =>
-        expect(useFilesPanelStore.getState().pullRequestTabs["env-1"]?.[0]?.ref).toEqual({
+        expect(
+          appCommandStore(filesPanelStore).getState().pullRequestTabs["env-1"]?.[0]?.ref,
+        ).toEqual({
           owner: "o",
           repo: "r",
           number: 42,
@@ -500,7 +505,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       ).toBe(true);
     } finally {
       appCommandStore(environmentStore).setState({ environments });
-      useUIStore.setState({ selectedEnvironmentId: null });
+      appCommandStore(uiStore).setState({ selectedEnvironmentId: null });
       setFilesPanelTestState({ isOpen: false, pullRequestTabs: {} });
     }
   });
@@ -546,7 +551,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       autoPr: true,
       autoPrLaunch: { state: "launched", requestId, tabId: "agent-job-pr" },
     };
-    useMultiReviewStore.getState().replaceWorkflow(workflow);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow);
     renderInAppCommandScope(
       <MultiReviewTab
         data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
@@ -578,7 +583,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
         autoPr: true,
         autoPrLaunch: launch,
       };
-      useMultiReviewStore.getState().replaceWorkflow(workflow);
+      appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow);
       renderInAppCommandScope(
         <MultiReviewTab
           data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
@@ -606,7 +611,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
           tabId: "agent-job-pr",
         },
       };
-      useMultiReviewStore.getState().replaceWorkflow(workflow);
+      appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow);
       const view = renderInAppCommandScope(
         <MultiReviewTab
           data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
@@ -618,7 +623,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
         "The review found nothing to fix",
       );
       const moved = { ...workflow, phase, consolidatedReport: report };
-      act(() => useMultiReviewStore.getState().replaceWorkflow(moved));
+      act(() => appCommandStore(multiReviewStore).getState().replaceWorkflow(moved));
       expect(screen.queryByTestId("multi-review-auto-pr-notice") === null).toBe(true);
       const assertCurrentReview = () => {
         expect(flowNode("Pull request,").dataset.flowState).toBe("not-started");
@@ -657,7 +662,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
         consolidatedReport: { ...report, issues: [], testCoverageGaps: [] },
         autoPrLaunch: { basis: "clean-review", state: "launched", requestId: "pr" },
       };
-      useMultiReviewStore.getState().replaceWorkflow(workflow);
+      appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow);
       renderInAppCommandScope(
         <MultiReviewTab
           data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
@@ -706,7 +711,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     const reviewing = reviewingWorkflow();
     reviewing.reviewers[0]!.startedAt = "2026-08-14T00:00:00.000Z";
     reviewing.reviewers[0]!.tokenCount = 12_345;
-    useMultiReviewStore.getState().replaceWorkflow(reviewing);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(reviewing);
     try {
       renderInAppCommandScope(
         <MultiReviewTab
@@ -733,7 +738,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     ready.reviewers[0]!.startedAt = "2026-08-14T00:00:00.000Z";
     ready.reviewers[0]!.completedAt = "2026-08-14T00:02:00.000Z";
     ready.reviewers[0]!.tokenCount = 23_456;
-    useMultiReviewStore.getState().replaceWorkflow(ready);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(ready);
 
     renderInAppCommandScope(
       <MultiReviewTab
@@ -756,7 +761,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       issues: [...report.issues, { ...report.issues[0]!, title: "Second finding" }],
       testCoverageGaps: [],
     };
-    useMultiReviewStore.getState().replaceWorkflow(ready);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(ready);
 
     renderInAppCommandScope(
       <MultiReviewTab
@@ -792,7 +797,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
 
   test("does not show finding counts before a reviewer has produced a report", () => {
     const reviewing = reviewingWorkflow();
-    useMultiReviewStore.getState().replaceWorkflow(reviewing);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(reviewing);
 
     renderInAppCommandScope(
       <MultiReviewTab
@@ -813,7 +818,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     reviewing.reviewers[0]!.resultSubmission = "preparing";
     reviewing.reviewers[1]!.resultTransport = "tool-v1";
     reviewing.reviewers[1]!.resultSubmission = "correcting";
-    useMultiReviewStore.getState().replaceWorkflow(reviewing);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(reviewing);
 
     renderInAppCommandScope(
       <MultiReviewTab
@@ -847,7 +852,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     reviewing.reviewers[0]!.resultSubmission = "received";
     reviewing.reviewers[1]!.resultTransport = "tool-v1";
     reviewing.reviewers[1]!.resultSubmission = "needs-attention";
-    useMultiReviewStore.getState().replaceWorkflow(reviewing);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(reviewing);
 
     renderInAppCommandScope(
       <MultiReviewTab
@@ -890,7 +895,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
         resultSubmission: "preparing",
       },
     ];
-    useMultiReviewStore.getState().replaceWorkflow(settled);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(settled);
 
     renderInAppCommandScope(
       <MultiReviewTab
@@ -914,7 +919,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       { ...settled.reviewers[0]!, status: "failed", error: "Reviewer failed after reporting" },
       { ...settled.reviewers[1]!, status: "cancelled" },
     ];
-    useMultiReviewStore.getState().replaceWorkflow(settled);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(settled);
 
     renderInAppCommandScope(
       <MultiReviewTab
@@ -947,7 +952,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     let now = Date.parse("2026-08-14T00:01:35.000Z");
     Date.now = () => now;
     const reviewing = reviewingWorkflow();
-    useMultiReviewStore.getState().replaceWorkflow(reviewing);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(reviewing);
 
     const view = renderInAppCommandScope(
       <MultiReviewTab
@@ -1052,7 +1057,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
         },
       ],
     };
-    useMultiReviewStore.getState().replaceWorkflow(workflow);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow);
 
     const view = renderInAppCommandScope(
       <MultiReviewTab
@@ -1094,7 +1099,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
 
   test("places validation and the package transcript in separate split columns", () => {
     const workflow = validatingWorkflow();
-    useMultiReviewStore.getState().replaceWorkflow(workflow);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow);
 
     renderInAppCommandScope(
       <MultiReviewTab
@@ -1146,7 +1151,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
           ? { ...snapshot, transcript: "unchanged" as const, messages: [] }
           : snapshot,
     );
-    useMultiReviewStore.getState().replaceWorkflow(workflow);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow);
     renderInAppCommandScope(
       <MultiReviewTab
         data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
@@ -1161,11 +1166,13 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     expect(screen.queryByLabelText("Review validation") === null).toBe(true);
 
     act(() => {
-      useMultiReviewStore.getState().replaceWorkflow({
-        ...workflow,
-        validationRun: validated.validationRun,
-        backendRevision: workflow.backendRevision + 1,
-      });
+      appCommandStore(multiReviewStore)
+        .getState()
+        .replaceWorkflow({
+          ...workflow,
+          validationRun: validated.validationRun,
+          backendRevision: workflow.backendRevision + 1,
+        });
     });
 
     await waitFor(() =>
@@ -1183,7 +1190,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
 
   test("stops validation while keeping Multi Review on course for the reviewer step", async () => {
     const workflow = validatingWorkflow();
-    useMultiReviewStore.getState().replaceWorkflow(workflow);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow);
     const stopping = {
       ...workflow,
       validationStopRequested: true,
@@ -1208,7 +1215,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Stop tests and continue" }));
     await waitFor(() => expect(stopValidation).toHaveBeenCalledWith(workflow.id));
-    expect(useMultiReviewStore.getState().workflows.get(workflow.id)).toMatchObject({
+    expect(appCommandStore(multiReviewStore).getState().workflows.get(workflow.id)).toMatchObject({
       validationStopRequested: true,
     });
     expect(screen.getByText("Stopping")).toBeTruthy();
@@ -1219,7 +1226,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
 
   test("surfaces a stop-validation failure and makes the control usable again", async () => {
     const workflow = validatingWorkflow();
-    useMultiReviewStore.getState().replaceWorkflow(workflow);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow);
     const stopValidation = mock(async () => {
       throw new Error("Validation cancellation failed");
     });
@@ -1249,7 +1256,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
 
   test("suppresses stop validation while another workflow command is pending", async () => {
     const workflow = validatingWorkflow();
-    useMultiReviewStore.getState().replaceWorkflow(workflow);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow);
     let finishCancel!: (value: MultiReviewWorkflow) => void;
     const cancel = mock(
       () =>
@@ -1288,7 +1295,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     workflow.validationStopRequested = true;
     workflow.validationRun!.status = "cancelled";
     workflow.validationRun!.completedAt = "2026-09-08T20:00:10.000Z";
-    useMultiReviewStore.getState().replaceWorkflow(workflow);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow);
 
     renderInAppCommandScope(
       <MultiReviewTab
@@ -1355,7 +1362,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
         },
       ],
     };
-    useMultiReviewStore.getState().replaceWorkflow(workflow);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow);
 
     const view = renderInAppCommandScope(
       <MultiReviewTab
@@ -1380,7 +1387,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
 
   test("opens a reviewer transcript in a separate tab intent", () => {
     const ready = readyWorkflow();
-    useMultiReviewStore.getState().replaceWorkflow(ready);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(ready);
     const openReviewer = mock((_reviewerId: string, _index: number) => undefined);
 
     renderInAppCommandScope(
@@ -1407,7 +1414,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
   test("shows a node's report in a tab beside its transcript", () => {
     const ready = readyWorkflow();
     ready.reviewers[1] = { ...ready.reviewers[1]!, report: undefined };
-    useMultiReviewStore.getState().replaceWorkflow(ready);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(ready);
 
     renderInAppCommandScope(
       <MultiReviewTab
@@ -1446,7 +1453,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
 
   test("navigates inspector views from the keyboard without changing the pipeline selection", async () => {
     const ready = readyWorkflow();
-    useMultiReviewStore.getState().replaceWorkflow(ready);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(ready);
     renderInAppCommandScope(
       <MultiReviewTab
         data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
@@ -1484,7 +1491,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
   test("shows the focus each reviewer was launched with", () => {
     const ready = readyWorkflow();
     ready.reviewers[0]!.lens = { label: "Security", instruction: "Trace untrusted input." };
-    useMultiReviewStore.getState().replaceWorkflow(ready);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(ready);
     renderInAppCommandScope(
       <MultiReviewTab
         data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
@@ -1499,7 +1506,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
   test("cannot open a reviewer that never opened a provider session", () => {
     const ready = readyWorkflow();
     delete ready.reviewers[0]!.providerSessionId;
-    useMultiReviewStore.getState().replaceWorkflow(ready);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(ready);
     const openReviewer = mock((_reviewerId: string, _index: number) => undefined);
 
     renderInAppCommandScope(
@@ -1531,7 +1538,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
 
   test("cannot open any reviewer without an intent or a terminal context", () => {
     const ready = readyWorkflow();
-    useMultiReviewStore.getState().replaceWorkflow(ready);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(ready);
 
     renderInAppCommandScope(
       <MultiReviewTab
@@ -1563,7 +1570,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       status: "failed",
       error: "The reviewer session no longer exists",
     };
-    useMultiReviewStore.getState().replaceWorkflow(ready);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(ready);
 
     renderInAppCommandScope(
       <MultiReviewTab
@@ -1598,7 +1605,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       startFailed: true,
     };
     delete ready.reviewers[1]!.providerSessionId;
-    useMultiReviewStore.getState().replaceWorkflow(ready);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(ready);
 
     renderInAppCommandScope(
       <MultiReviewTab
@@ -1623,7 +1630,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
   test("a reviewer that failed after it started raises no start notice", async () => {
     const ready = readyWorkflow();
     ready.reviewers[0] = { ...ready.reviewers[0]!, status: "failed", error: "Session failed" };
-    useMultiReviewStore.getState().replaceWorkflow(ready);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(ready);
 
     renderInAppCommandScope(
       <MultiReviewTab
@@ -1647,7 +1654,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       status: "failed",
       error: longReviewerError,
     };
-    useMultiReviewStore.getState().replaceWorkflow(ready);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(ready);
 
     renderInAppCommandScope(
       <MultiReviewTab
@@ -1683,7 +1690,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
         commandSandboxOff: reason,
       },
     };
-    useMultiReviewStore.getState().replaceWorkflow(ready);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(ready);
 
     renderInAppCommandScope(
       <MultiReviewTab
@@ -1711,7 +1718,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
 
   test("records the handoff and opens its backend-owned session after delivery", async () => {
     const ready = readyWorkflow();
-    useMultiReviewStore.getState().replaceWorkflow(ready);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(ready);
     const pending: MultiReviewWorkflow = {
       ...ready,
       phase: "interactive",
@@ -1781,7 +1788,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       error: "The provider is temporarily unavailable; delivery will retry",
       backendRevision: 9,
     };
-    act(() => useMultiReviewStore.getState().replaceWorkflow(retrying));
+    act(() => appCommandStore(multiReviewStore).getState().replaceWorkflow(retrying));
     expect(createTab).not.toHaveBeenCalled();
 
     const delivered: MultiReviewWorkflow = {
@@ -1791,7 +1798,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       error: undefined,
       backendRevision: 10,
     };
-    act(() => useMultiReviewStore.getState().replaceWorkflow(delivered));
+    act(() => appCommandStore(multiReviewStore).getState().replaceWorkflow(delivered));
 
     await waitFor(() =>
       expect(createTab).toHaveBeenCalledWith(
@@ -1818,7 +1825,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
 
   test("does not steal focus when delivery completes after the review tab becomes inactive", async () => {
     const ready = readyWorkflow();
-    useMultiReviewStore.getState().replaceWorkflow(ready);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(ready);
     const pending: MultiReviewWorkflow = {
       ...ready,
       phase: "interactive",
@@ -1858,7 +1865,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
         <MultiReviewTab {...props} isActive={false} />
       </TerminalProvider>,
     );
-    act(() => useMultiReviewStore.getState().replaceWorkflow(delivered));
+    act(() => appCommandStore(multiReviewStore).getState().replaceWorkflow(delivered));
 
     expect(
       await screen.findByRole("button", { name: "Open Address Findings session" }),
@@ -1879,7 +1886,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
 
   test("opens a custom Address Findings dialog with the selected Address Findings model and default prompt", async () => {
     const ready = readyWorkflow();
-    useMultiReviewStore.getState().replaceWorkflow(ready);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(ready);
     const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => true);
     const customAddressFindings = mock(
       async (
@@ -1938,7 +1945,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     // The renderer records intent only. Session creation, tab publication and
     // prompt delivery continue in the backend after this component unmounts.
     expect(createTab).not.toHaveBeenCalled();
-    expect(useMultiReviewStore.getState().workflows.get(ready.id)).toMatchObject({
+    expect(appCommandStore(multiReviewStore).getState().workflows.get(ready.id)).toMatchObject({
       phase: "interactive",
       addressPromptPending: true,
     });
@@ -1949,7 +1956,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
 
   test("keeps custom Address Findings launch failures visible inside the dialog", async () => {
     const ready = readyWorkflow();
-    useMultiReviewStore.getState().replaceWorkflow(ready);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(ready);
     const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => false);
     const customAddressFindings = mock(async () => {
       throw new Error("The environment is not ready or the maximum tab count was reached.");
@@ -1986,7 +1993,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
 
   test("disables custom Address Findings submission while the backend command is pending", async () => {
     const ready = readyWorkflow();
-    useMultiReviewStore.getState().replaceWorkflow(ready);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(ready);
     let resolveCustomAddressFindings!: (workflow: MultiReviewWorkflow) => void;
     const customAddressFindings = mock(
       () =>
@@ -2043,7 +2050,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
         "The Address Findings request was delivered, but its tab could not be opened. Close another tab if needed, then use Open Address Findings session.",
       backendRevision: 8,
     };
-    useMultiReviewStore.getState().replaceWorkflow(interactive);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(interactive);
 
     renderInAppCommandScope(
       <MultiReviewTab
@@ -2059,7 +2066,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
 
   test("leaves a custom Address Findings command running when the review tab unmounts", async () => {
     const ready = readyWorkflow();
-    useMultiReviewStore.getState().replaceWorkflow(ready);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(ready);
     const pending: MultiReviewWorkflow = {
       ...ready,
       phase: "interactive",
@@ -2105,12 +2112,14 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     });
 
     expect(createTab).not.toHaveBeenCalled();
-    expect(useMultiReviewStore.getState().workflows.get(ready.id)?.phase).toBe("interactive");
+    expect(appCommandStore(multiReviewStore).getState().workflows.get(ready.id)?.phase).toBe(
+      "interactive",
+    );
   });
 
   test("does not open an Address Findings tab when the backend refuses the handoff", async () => {
     const ready = readyWorkflow();
-    useMultiReviewStore.getState().replaceWorkflow(ready);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(ready);
     const address = mock(async () => {
       throw new Error("The consolidation session is no longer available");
     });
@@ -2137,12 +2146,14 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     expect(await screen.findByText(/consolidation session is no longer available/)).toBeTruthy();
     // Nothing may reach the provider session when the handoff was refused.
     expect(createTab).not.toHaveBeenCalled();
-    expect(useMultiReviewStore.getState().workflows.get(ready.id)?.phase).toBe("ready");
+    expect(appCommandStore(multiReviewStore).getState().workflows.get(ready.id)?.phase).toBe(
+      "ready",
+    );
   });
 
   test("does not open when pending delivery reports that the provider session is missing", async () => {
     const ready = readyWorkflow();
-    useMultiReviewStore.getState().replaceWorkflow(ready);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(ready);
     const pending: MultiReviewWorkflow = {
       ...ready,
       phase: "interactive",
@@ -2175,13 +2186,15 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     ).toBeTruthy();
     const { fixSession: _missing, ...withoutSession } = pending;
     act(() =>
-      useMultiReviewStore.getState().replaceWorkflow({
-        ...withoutSession,
-        phase: "failed",
-        addressPromptPending: undefined,
-        error: "The consolidation session is no longer available",
-        backendRevision: 9,
-      }),
+      appCommandStore(multiReviewStore)
+        .getState()
+        .replaceWorkflow({
+          ...withoutSession,
+          phase: "failed",
+          addressPromptPending: undefined,
+          error: "The consolidation session is no longer available",
+          backendRevision: 9,
+        }),
     );
 
     expect(
@@ -2192,7 +2205,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
 
   test("surfaces an acknowledged interactive handoff with no Address Findings session", async () => {
     const ready = readyWorkflow();
-    useMultiReviewStore.getState().replaceWorkflow(ready);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(ready);
     const { fixSession: _missing, ...withoutSession } = ready;
     const unavailable: MultiReviewWorkflow = {
       ...withoutSession,
@@ -2228,7 +2241,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
 
   test("keeps a retry affordance when automatic tab presentation is unavailable", async () => {
     const ready = readyWorkflow();
-    useMultiReviewStore.getState().replaceWorkflow(ready);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(ready);
     const pending: MultiReviewWorkflow = {
       ...ready,
       phase: "interactive",
@@ -2267,10 +2280,12 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       await screen.findByText(/Address Findings request was recorded and is being delivered/),
     ).toBeTruthy();
     await waitFor(() => expect(address).toHaveBeenCalledWith(ready.id));
-    expect(useMultiReviewStore.getState().workflows.get(ready.id)?.phase).toBe("interactive");
+    expect(appCommandStore(multiReviewStore).getState().workflows.get(ready.id)?.phase).toBe(
+      "interactive",
+    );
     expect(createTab).not.toHaveBeenCalled();
 
-    act(() => useMultiReviewStore.getState().replaceWorkflow(interactive));
+    act(() => appCommandStore(multiReviewStore).getState().replaceWorkflow(interactive));
     expect(
       await screen.findByText(
         /Address Findings request was delivered, but its tab could not be opened/i,
@@ -2294,7 +2309,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
 
   test("does not attempt presentation after the review view unmounts", async () => {
     const ready = readyWorkflow();
-    useMultiReviewStore.getState().replaceWorkflow(ready);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(ready);
     const pending: MultiReviewWorkflow = {
       ...ready,
       phase: "interactive",
@@ -2338,7 +2353,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       addressPromptPending: undefined,
       backendRevision: 9,
     };
-    act(() => useMultiReviewStore.getState().replaceWorkflow(delivered));
+    act(() => appCommandStore(multiReviewStore).getState().replaceWorkflow(delivered));
     renderInAppCommandScope(
       <TerminalProvider>
         <TabRegistrar createTab={createTab} />
@@ -2365,7 +2380,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       addressPromptAttempts: 1,
       backendRevision: 8,
     };
-    useMultiReviewStore.getState().replaceWorkflow(pending);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(pending);
     const address = mock(async (_id: string) => pending);
     const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => true);
 
@@ -2412,13 +2427,15 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     );
     expect(address).not.toHaveBeenCalled();
     expect(createTab).not.toHaveBeenCalled();
-    expect(useMultiReviewStore.getState().workflows.get(ready.id)?.addressPromptPending).toBe(true);
+    expect(
+      appCommandStore(multiReviewStore).getState().workflows.get(ready.id)?.addressPromptPending,
+    ).toBe(true);
   });
 
   test("reopens an interactive Address Findings session without sending the address prompt again", async () => {
     const ready = readyWorkflow();
     const interactive = { ...ready, phase: "interactive" as const, backendRevision: 8 };
-    useMultiReviewStore.getState().replaceWorkflow(interactive);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(interactive);
     const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => true);
 
     renderInAppCommandScope(
@@ -2448,7 +2465,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
 
   test("records Address all even when no native tab can be created", async () => {
     const ready = readyWorkflow();
-    useMultiReviewStore.getState().replaceWorkflow(ready);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(ready);
     const pending = {
       ...ready,
       phase: "interactive" as const,
@@ -2480,11 +2497,13 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     ).toBeTruthy();
 
     act(() =>
-      useMultiReviewStore.getState().replaceWorkflow({
-        ...pending,
-        addressPromptPending: undefined,
-        backendRevision: 9,
-      }),
+      appCommandStore(multiReviewStore)
+        .getState()
+        .replaceWorkflow({
+          ...pending,
+          addressPromptPending: undefined,
+          backendRevision: 9,
+        }),
     );
     expect(await screen.findByText(/cannot open agent tabs right now/i)).toBeTruthy();
   });
@@ -2524,7 +2543,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
   test("rehydrates from the authoritative backend when activated", async () => {
     const ready = readyWorkflow();
     const hydrate = mock(async () => {
-      useMultiReviewStore.getState().replaceWorkflow(ready);
+      appCommandStore(multiReviewStore).getState().replaceWorkflow(ready);
       return ready;
     });
     const view = renderInAppCommandScope(
@@ -2547,7 +2566,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
 
   test("lets users abandon ready and failed workflows", async () => {
     const ready = readyWorkflow();
-    useMultiReviewStore.getState().replaceWorkflow(ready);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(ready);
     const cancelled = { ...ready, phase: "cancelled" as const, backendRevision: 8 };
     const cancel = mock(async () => cancelled);
     const view = renderInAppCommandScope(
@@ -2574,7 +2593,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       backendRevision: 10,
     }));
     act(() => {
-      useMultiReviewStore.setState({ workflows: new Map([[ready.id, failed]]) });
+      appCommandStore(multiReviewStore).setState({ workflows: new Map([[ready.id, failed]]) });
     });
     view.rerender(
       <MultiReviewTab
@@ -2597,14 +2616,16 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     fireEvent.click(screen.getByRole("button", { name: "Retry failed stage" }));
     await waitFor(() => expect(retry).toHaveBeenCalledWith(ready.id));
     await waitFor(() =>
-      expect(useMultiReviewStore.getState().workflows.get(ready.id)?.phase).toBe("reviewing"),
+      expect(appCommandStore(multiReviewStore).getState().workflows.get(ready.id)?.phase).toBe(
+        "reviewing",
+      ),
     );
     expect(screen.queryByRole("button", { name: "Retry failed stage" }) === null).toBe(true);
   });
 
   test("stops one reviewer and leaves the rest of the panel running", async () => {
     const reviewing = reviewingWorkflow();
-    useMultiReviewStore.getState().replaceWorkflow(reviewing);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(reviewing);
     const withoutFirst: MultiReviewWorkflow = {
       ...reviewing,
       backendRevision: 8,
@@ -2648,9 +2669,10 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     // The other reviewer keeps working: stopping one is not cancelling the run.
     selectFlowNode("Reviewer 2 ·");
     expect(inspector().getByRole("button", { name: "Stop Reviewer 2" })).toBeTruthy();
-    expect(useMultiReviewStore.getState().workflows.get(reviewing.id)?.reviewers[0]?.status).toBe(
-      "cancelled",
-    );
+    expect(
+      appCommandStore(multiReviewStore).getState().workflows.get(reviewing.id)?.reviewers[0]
+        ?.status,
+    ).toBe("cancelled");
   });
 
   test("offers reviewer-scoped restart and unstick actions from the card context menu", async () => {
@@ -2660,7 +2682,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       requestId: "request-1",
       dispatchState: "sent",
     };
-    useMultiReviewStore.getState().replaceWorkflow(reviewing);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(reviewing);
     const restartReviewer = mock(async () => reviewing);
     const unstickReviewer = mock(async () => reviewing);
 
@@ -2701,7 +2723,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
         fix: { startedAt: ready.createdAt, completedAt: ready.updatedAt },
       },
     };
-    useMultiReviewStore.getState().replaceWorkflow(completed);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(completed);
     const restartStep = mock(async () => completed);
 
     renderInAppCommandScope(
@@ -2737,7 +2759,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       model: "gpt-5.4",
       reasoningEffort: "medium",
     };
-    useMultiReviewStore.getState().replaceWorkflow(ready);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(ready);
     const restartStep = mock(
       async (_workflowId: string, _kind: MultiReviewStepKind, _model?: MultiReviewModelSelection) =>
         ready,
@@ -2804,7 +2826,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
         fix: { startedAt: ready.createdAt, completedAt: ready.updatedAt },
       };
     }
-    useMultiReviewStore.getState().replaceWorkflow(ready);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(ready);
     const restartStep = mock(
       async (_workflowId: string, _kind: MultiReviewStepKind, _model?: MultiReviewModelSelection) =>
         ready,
@@ -2849,7 +2871,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       startedAt: ready.createdAt,
       completedAt: ready.updatedAt,
     };
-    useMultiReviewStore.getState().replaceWorkflow(ready);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(ready);
 
     renderInAppCommandScope(
       <MultiReviewTab
@@ -2897,7 +2919,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       pausedFromPhase: undefined,
       pausedStep: undefined,
     };
-    useMultiReviewStore.getState().replaceWorkflow(preparing);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(preparing);
     const pauseStep = mock(async (_workflowId: string, _kind: MultiReviewStepKind) => paused);
     const resumeStep = mock(async (_workflowId: string, _kind: MultiReviewStepKind) => resumed);
 
@@ -2939,7 +2961,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     workflow.fixSession = { ...workflow.fixSession!, status: "running" };
     workflow.fixLaunch = { kind: "default" };
     workflow.stepRuntimes = { fix: { startedAt: workflow.createdAt } };
-    useMultiReviewStore.getState().replaceWorkflow(workflow);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow);
 
     renderInAppCommandScope(
       <MultiReviewTab
@@ -2964,7 +2986,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
 
   test("offers step restart from a touch long press", async () => {
     const ready = readyWorkflow();
-    useMultiReviewStore.getState().replaceWorkflow(ready);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(ready);
     const restartStep = mock(async () => ready);
     renderInAppCommandScope(
       <MultiReviewTab
@@ -3000,7 +3022,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
 
   test("shows a repository-change note and allows reviewer restart", async () => {
     const stale = { ...readyWorkflow(), reviewSnapshotStale: true };
-    useMultiReviewStore.getState().replaceWorkflow(stale);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(stale);
     const restartReviewer = mock(async () => stale);
 
     renderInAppCommandScope(
@@ -3051,7 +3073,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
         limitations: [],
       },
     };
-    useMultiReviewStore.getState().replaceWorkflow(stale);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(stale);
     const restartReviewer = mock(async () => stale);
 
     renderInAppCommandScope(
@@ -3086,7 +3108,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       dispatchState: "sent",
       report,
     };
-    useMultiReviewStore.getState().replaceWorkflow(reviewing);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(reviewing);
     const unstickReviewer = mock(async () => reviewing);
 
     renderInAppCommandScope(
@@ -3120,7 +3142,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
 
   test("can restart a completed reviewer before fix work begins", async () => {
     const ready = readyWorkflow();
-    useMultiReviewStore.getState().replaceWorkflow(ready);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(ready);
     const restarted = { ...reviewingWorkflow(), backendRevision: 8 };
     const restartReviewer = mock(async () => restarted);
 
@@ -3143,18 +3165,22 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     fireEvent.contextMenu(flowNode("Reviewer 1 ·"));
     fireEvent.click(await screen.findByRole("menuitem", { name: "Restart" }));
     await waitFor(() => expect(restartReviewer).toHaveBeenCalledWith(ready.id, "reviewer-1"));
-    expect(useMultiReviewStore.getState().workflows.get(ready.id)?.phase).toBe("reviewing");
+    expect(appCommandStore(multiReviewStore).getState().workflows.get(ready.id)?.phase).toBe(
+      "reviewing",
+    );
   });
 
   test("surfaces a stalled reviewer without claiming it failed", () => {
     const reviewing = reviewingWorkflow();
-    useMultiReviewStore.getState().replaceWorkflow({
-      ...reviewing,
-      reviewers: [
-        { ...reviewing.reviewers[0]!, stalledSince: "2026-08-14T00:20:00.000Z" },
-        reviewing.reviewers[1]!,
-      ],
-    });
+    appCommandStore(multiReviewStore)
+      .getState()
+      .replaceWorkflow({
+        ...reviewing,
+        reviewers: [
+          { ...reviewing.reviewers[0]!, stalledSince: "2026-08-14T00:20:00.000Z" },
+          reviewing.reviewers[1]!,
+        ],
+      });
 
     renderInAppCommandScope(
       <MultiReviewTab
@@ -3261,7 +3287,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
             }
           : {}),
       };
-      useMultiReviewStore.setState({ workflows: new Map([[stalled.id, stalled]]) });
+      appCommandStore(multiReviewStore).setState({ workflows: new Map([[stalled.id, stalled]]) });
       const view = renderInAppCommandScope(
         <MultiReviewTab
           data={{ environmentId: "env-1", workflowId: stalled.id, isLocal: true }}
@@ -3287,7 +3313,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       ...ready,
       fixSession: { ...ready.fixSession!, stalledSince: "2026-08-14T00:20:00.000Z" },
     };
-    useMultiReviewStore.getState().replaceWorkflow(settled);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(settled);
     renderInAppCommandScope(
       <MultiReviewTab
         data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
@@ -3309,7 +3335,7 @@ test("renders backend-owned package preparation after remount with cancel availa
     status: "pending",
     providerSessionId: undefined,
   }));
-  useMultiReviewStore.getState().replaceWorkflow(workflow);
+  appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow);
   const view = renderInAppCommandScope(
     <MultiReviewTab
       data={{ environmentId: workflow.environmentId, workflowId: workflow.id, isLocal: true }}
@@ -3365,7 +3391,7 @@ describe("MultiReviewTab pipeline step cards", () => {
 
   test("opens the live preparation session only after direct tile activation", () => {
     const workflow = preparingWorkflow();
-    useMultiReviewStore.getState().replaceWorkflow(workflow);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow);
     const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => true);
 
     renderInAppCommandScope(
@@ -3409,7 +3435,7 @@ describe("MultiReviewTab pipeline step cards", () => {
     "keeps a %s activation armed through the post-pointerup leave events",
     (pointerType) => {
       const workflow = preparingWorkflow();
-      useMultiReviewStore.getState().replaceWorkflow(workflow);
+      appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow);
       const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => true);
 
       renderInAppCommandScope(
@@ -3437,7 +3463,7 @@ describe("MultiReviewTab pipeline step cards", () => {
 
   test("keeps a pointer activation armed when it leaves, re-enters, and releases on the tile", () => {
     const workflow = preparingWorkflow();
-    useMultiReviewStore.getState().replaceWorkflow(workflow);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow);
     const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => true);
 
     renderInAppCommandScope(
@@ -3464,7 +3490,7 @@ describe("MultiReviewTab pipeline step cards", () => {
 
   test("disarms pointer activation when the gesture is cancelled or released outside", () => {
     const workflow = preparingWorkflow();
-    useMultiReviewStore.getState().replaceWorkflow(workflow);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow);
     const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => true);
 
     renderInAppCommandScope(
@@ -3508,7 +3534,7 @@ describe("MultiReviewTab pipeline step cards", () => {
 
   test("focus loss disarms keyboard activation without cancelling a pointer activation", () => {
     const workflow = preparingWorkflow();
-    useMultiReviewStore.getState().replaceWorkflow(workflow);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow);
     const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => true);
 
     renderInAppCommandScope(
@@ -3546,7 +3572,7 @@ describe("MultiReviewTab pipeline step cards", () => {
 
   test("rejects click-through when the coordinator tile mounts during another gesture", () => {
     const workflow = preparingWorkflow();
-    useMultiReviewStore.getState().replaceWorkflow(workflow);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow);
     const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => true);
 
     renderInAppCommandScope(
@@ -3597,7 +3623,7 @@ describe("MultiReviewTab pipeline step cards", () => {
         createdAt: "2026-08-14T00:05:00.000Z",
       },
     };
-    useMultiReviewStore.getState().replaceWorkflow(workflow);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow);
     const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => true);
 
     renderInAppCommandScope(
@@ -3662,7 +3688,7 @@ describe("MultiReviewTab pipeline step cards", () => {
         createdAt: "2026-08-14T00:04:00.000Z",
       },
     };
-    useMultiReviewStore.getState().replaceWorkflow(workflow);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow);
     const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => true);
 
     renderInAppCommandScope(
@@ -3722,7 +3748,7 @@ describe("MultiReviewTab pipeline step cards", () => {
       },
       fixSession: { ...legacy.fixSession!, openedFor: "consolidate" },
     };
-    useMultiReviewStore.getState().replaceWorkflow(workflow);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow);
     const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => true);
 
     renderInAppCommandScope(
@@ -3752,7 +3778,7 @@ describe("MultiReviewTab pipeline step cards", () => {
   test("stays disabled until the review model has opened a provider session", () => {
     const workflow = preparingWorkflow();
     delete workflow.fixSession;
-    useMultiReviewStore.getState().replaceWorkflow(workflow);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow);
     const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => true);
 
     renderInAppCommandScope(
@@ -4084,7 +4110,7 @@ describe("MultiReviewTab pipeline step cards", () => {
         createdAt: "2026-08-14T00:00:00.000Z",
       },
     };
-    useMultiReviewStore.getState().replaceWorkflow(workflow);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow);
     renderInAppCommandScope(
       <MultiReviewTab
         data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
@@ -4125,7 +4151,7 @@ describe("MultiReviewTab pipeline step cards", () => {
       error: "The preparation session produced no activity for 20 minutes",
       fixSession: { ...preparing.fixSession!, status: "failed" },
     };
-    useMultiReviewStore.getState().replaceWorkflow(workflow);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow);
     const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => true);
 
     renderInAppCommandScope(
@@ -4168,7 +4194,7 @@ describe("MultiReviewTab pipeline step cards", () => {
         createdAt: "2026-08-14T00:00:00.000Z",
       },
     };
-    useMultiReviewStore.getState().replaceWorkflow(workflow);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow);
     const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => true);
 
     renderInAppCommandScope(
@@ -4206,7 +4232,7 @@ describe("MultiReviewTab pipeline step cards", () => {
         createdAt: "2026-08-14T00:00:00.000Z",
       },
     };
-    useMultiReviewStore.getState().replaceWorkflow(workflow);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow);
     const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => true);
 
     renderInAppCommandScope(
@@ -4251,7 +4277,7 @@ describe("MultiReviewTab pipeline step cards", () => {
         },
       },
     };
-    useMultiReviewStore.getState().replaceWorkflow(workflow);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow);
 
     renderInAppCommandScope(
       <MultiReviewTab
@@ -4286,7 +4312,7 @@ describe("MultiReviewTab pipeline step cards", () => {
         fix: { startedAt: "2026-08-14T00:10:00.000Z" },
       },
     };
-    useMultiReviewStore.getState().replaceWorkflow(workflow);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow);
 
     renderInAppCommandScope(
       <MultiReviewTab
@@ -4316,7 +4342,7 @@ describe("MultiReviewTab pipeline step cards", () => {
         ...(error ? { error } : {}),
       },
     };
-    useMultiReviewStore.getState().replaceWorkflow(workflow);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow);
 
     renderInAppCommandScope(
       <MultiReviewTab
@@ -4351,7 +4377,7 @@ describe("MultiReviewTab pipeline step cards", () => {
         stalledSince: "2026-08-14T00:10:00.000Z",
       },
     };
-    useMultiReviewStore.getState().replaceWorkflow(workflow);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow);
     renderInAppCommandScope(
       <MultiReviewTab
         data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
@@ -4509,7 +4535,7 @@ describe("MultiReviewTab pipeline step cards", () => {
         },
       },
     };
-    useMultiReviewStore.getState().replaceWorkflow(workflow);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow);
 
     renderInAppCommandScope(
       <MultiReviewTab
@@ -4615,7 +4641,7 @@ describe("PR background state and review clock", () => {
     let sessionState: NativeAgentSessionStateUpdate = snapshot("running");
     const loadPrSessionState = mock(async () => sessionState);
     const workflow = launchedWorkflow();
-    useMultiReviewStore.getState().replaceWorkflow(workflow);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow);
     const view = renderInAppCommandScope(
       <MultiReviewTab
         data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
@@ -4686,7 +4712,7 @@ describe("PR background state and review clock", () => {
       fixSession: undefined,
       consolidatedReport: { ...report, issues: [], testCoverageGaps: [] },
     };
-    useMultiReviewStore.getState().replaceWorkflow(workflow);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow);
     try {
       renderInAppCommandScope(
         <MultiReviewTab
@@ -4719,7 +4745,7 @@ describe("PR background state and review clock", () => {
     Date.now = () => now;
     const workflow = launchedWorkflow();
     const loadPrSessionState = mock(async () => snapshot("running"));
-    useMultiReviewStore.getState().replaceWorkflow(workflow);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow);
     const props = {
       data: { environmentId: "env-1", workflowId: workflow.id, isLocal: true },
       isActive: true,

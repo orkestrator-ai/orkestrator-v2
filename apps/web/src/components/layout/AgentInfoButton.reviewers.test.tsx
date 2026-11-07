@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { useMultiReviewStore } from "@/stores/multiReviewStore";
+import { multiReviewStore } from "@/stores/multiReviewStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { environmentStore } from "@/stores/environmentStore";
 import { configStore } from "@/stores/configStore";
@@ -69,7 +69,7 @@ function open() {
 }
 const originalGlobalConfig = appCommandStore(configStore).getState().config.global;
 beforeEach(() => {
-  useMultiReviewStore.setState({ workflows: new Map() });
+  appCommandStore(multiReviewStore).setState({ workflows: new Map() });
   useNativeAgentProjectionStore.getState().reset();
   appCommandStore(environmentStore).setState({ environments: [] });
   nativeInvokeMock.mockClear();
@@ -78,7 +78,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   resetReadCoordinatorForTests();
-  useMultiReviewStore.setState({ workflows: new Map() });
+  appCommandStore(multiReviewStore).setState({ workflows: new Map() });
   useNativeAgentProjectionStore.getState().reset();
   appCommandStore(environmentStore).setState({ environments: [] });
   appCommandStore(configStore).setState((state) => ({
@@ -128,7 +128,7 @@ function multiReviewWorkflow(overrides: Partial<MultiReviewWorkflow> = {}): Mult
 
 describe("AgentInfoButton Multi Review reviewer tabs", () => {
   test("reports a reviewer tab's provider session read-only", async () => {
-    useMultiReviewStore.getState().replaceWorkflow(multiReviewWorkflow());
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(multiReviewWorkflow());
     nativeInvokeMock.mockImplementation((command: string) =>
       command === "get_multi_review_reviewer_projection"
         ? Promise.resolve(
@@ -171,7 +171,7 @@ describe("AgentInfoButton Multi Review reviewer tabs", () => {
 
   test("does not reinspect an unchanged reviewer on workflow revisions", async () => {
     const workflow = multiReviewWorkflow();
-    useMultiReviewStore.getState().replaceWorkflow(workflow);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow);
     nativeInvokeMock.mockImplementation((command: string) =>
       command === "get_multi_review_reviewer_projection"
         ? Promise.resolve(nativeProjection("claude", "reviewer-provider-session"))
@@ -189,14 +189,16 @@ describe("AgentInfoButton Multi Review reviewer tabs", () => {
     await waitFor(() => expect(reviewerReads()).toHaveLength(1));
 
     act(() => {
-      useMultiReviewStore.getState().replaceWorkflow({
-        ...workflow,
-        backendRevision: 2,
-        reviewers: workflow.reviewers.map((entry) => ({
-          ...entry,
-          progressAt: "2026-09-08T10:05:00.000Z",
-        })),
-      });
+      appCommandStore(multiReviewStore)
+        .getState()
+        .replaceWorkflow({
+          ...workflow,
+          backendRevision: 2,
+          reviewers: workflow.reviewers.map((entry) => ({
+            ...entry,
+            progressAt: "2026-09-08T10:05:00.000Z",
+          })),
+        });
     });
     await act(async () => Promise.resolve());
 
@@ -204,7 +206,7 @@ describe("AgentInfoButton Multi Review reviewer tabs", () => {
   });
 
   test("leaves the Multi Review overview without an agent session", () => {
-    useMultiReviewStore.getState().replaceWorkflow(multiReviewWorkflow());
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(multiReviewWorkflow());
     render(
       <AgentInfoButton
         activeTab={reviewerTab({
@@ -272,7 +274,7 @@ describe("reviewer session boundaries", () => {
   test("keeps actionable OpenCode MCP inventory read-only", async () => {
     const workflow = multiReviewWorkflow();
     workflow.reviewers[0]!.agent = "opencode";
-    useMultiReviewStore.getState().replaceWorkflow(workflow);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow);
     nativeInvokeMock.mockImplementation(async (command: string) =>
       command === "get_multi_review_reviewer_projection"
         ? nativeProjection("opencode", "reviewer-provider-session", {
@@ -317,7 +319,7 @@ describe("reviewer session boundaries", () => {
 
   for (const shared of [false, true]) {
     test(`Claude container reviewer ${shared ? "offers shared-host sign-in" : "suppresses host sign-in for isolated credentials"}`, async () => {
-      useMultiReviewStore.getState().replaceWorkflow(multiReviewWorkflow());
+      appCommandStore(multiReviewStore).getState().replaceWorkflow(multiReviewWorkflow());
       appCommandStore(environmentStore).setState({
         environments: [
           { id: ENVIRONMENT_ID, containerId: "review-container", environmentType: "container" },
@@ -350,7 +352,7 @@ describe("reviewer session boundaries", () => {
   test("uses the backend fallback key when the reviewer has no session key", async () => {
     const workflow = multiReviewWorkflow();
     delete workflow.reviewers[0]!.sessionKey;
-    useMultiReviewStore.getState().replaceWorkflow(workflow);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow);
     nativeInvokeMock.mockImplementation(async (command: string) =>
       command === "get_multi_review_reviewer_projection"
         ? nativeProjection("claude", "reviewer-provider-session")
@@ -370,7 +372,7 @@ describe("reviewer session boundaries", () => {
   test("does not inspect a reviewer without a provider session, even with a cached projection", async () => {
     const workflow = multiReviewWorkflow();
     delete workflow.reviewers[0]!.providerSessionId;
-    useMultiReviewStore.getState().replaceWorkflow(workflow);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow);
     useNativeAgentProjectionStore
       .getState()
       .setProjection("reviewer-session-key", nativeProjection("claude", "old-session"));
@@ -385,7 +387,7 @@ describe("reviewer session boundaries", () => {
   });
 
   test("leaves pipeline-pass reviewer tabs on the empty placeholder", async () => {
-    useMultiReviewStore.getState().replaceWorkflow(multiReviewWorkflow());
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(multiReviewWorkflow());
     const tab = reviewerTab();
     tab.multiReviewTabData!.pipelinePass = "pass-1";
     render(<AgentInfoButton activeTab={tab} />);
@@ -402,7 +404,7 @@ describe("reviewer session boundaries", () => {
   for (const rotateKey of [false, true]) {
     test(`refreshes a restarted reviewer with ${rotateKey ? "a rotated key" : "the same key and a new provider session"}`, async () => {
       const workflow = multiReviewWorkflow();
-      useMultiReviewStore.getState().replaceWorkflow(workflow);
+      appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow);
       let providerSessionId = "reviewer-provider-session";
       nativeInvokeMock.mockImplementation(async (command: string) =>
         command === "get_multi_review_reviewer_projection"
@@ -420,15 +422,17 @@ describe("reviewer session boundaries", () => {
       providerSessionId = "restarted-provider-session";
       const key = rotateKey ? "rotated-reviewer-key" : "reviewer-session-key";
       act(() =>
-        useMultiReviewStore.getState().replaceWorkflow({
-          ...workflow,
-          backendRevision: 2,
-          reviewers: workflow.reviewers.map((reviewer) => ({
-            ...reviewer,
-            sessionKey: key,
-            providerSessionId,
-          })),
-        }),
+        appCommandStore(multiReviewStore)
+          .getState()
+          .replaceWorkflow({
+            ...workflow,
+            backendRevision: 2,
+            reviewers: workflow.reviewers.map((reviewer) => ({
+              ...reviewer,
+              sessionKey: key,
+              providerSessionId,
+            })),
+          }),
       );
       // Changing ownership closes the old panel. Reopening must inspect the new identity.
       open();

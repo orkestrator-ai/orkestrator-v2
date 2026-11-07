@@ -22,9 +22,9 @@ import * as realMultiReviewPersistence from "@/lib/multi-review-persistence";
 import * as realUseFileSearch from "@/hooks/useFileSearch";
 import * as realPaneLayoutAuthoritative from "@/lib/pane-layout-authoritative";
 import { resetTabLaunches } from "@/lib/tab-launch";
-import { useTabLaunchStore } from "@/stores/tabLaunchStore";
+import { tabLaunchStore } from "@/stores/tabLaunchStore";
 import { getAllLeaves, usePaneLayoutStore } from "@/stores/paneLayoutStore";
-import { usePrMonitorStore } from "@/stores/prMonitorStore";
+import { prMonitorStore } from "@/stores/prMonitorStore";
 import { useAppDialogStore } from "@/stores/appDialogStore";
 import { useCoordinatorActivityStore } from "@/stores/coordinatorActivityStore";
 import { useMergePrRequestStore } from "@/stores/mergePrRequestStore";
@@ -51,6 +51,7 @@ import {
   type ControlledTimeout,
 } from "../../../../../tests/helpers/controlled-timeout";
 import { getWindowScope } from "@/lib/node-scope/app-window-scope";
+import { appCommandStore } from "@/test/app-command-store";
 
 /** Outside a node scope provider, components act for the app's command node. */
 const commandNodeId = () => getWindowScope().commandScope().nodeId;
@@ -1055,7 +1056,7 @@ beforeEach(() => {
     isLoading: false,
     error: null,
   });
-  usePrMonitorStore.setState({ states: new Map() });
+  appCommandStore(prMonitorStore).setState({ states: new Map() });
   currentSelectedEnvironmentId = currentEnvironment.id;
   currentSelectedProjectId = selectedProject.id;
   currentOtherEnvironments = [];
@@ -1945,7 +1946,7 @@ describe("ActionBar editor and run commands", () => {
       fireEvent.click(screen.getByRole("button", { name: "Push Changes" }));
       // Each press has focus at once, and the later press holds it.
       expect(
-        useTabLaunchStore
+        appCommandStore(tabLaunchStore)
           .getState()
           .launches.get("env-1")
           ?.map(({ focused }) => focused),
@@ -2234,7 +2235,7 @@ describe("ActionBar editor and run commands", () => {
     // Focus moves to the placeholder on the press; the thrown launch names no
     // tab of its own to activate and withdraws the placeholder.
     expect(requestPaneTabActivationMock.mock.calls).toEqual([["env-1", placeholderTabId]]);
-    expect(useTabLaunchStore.getState().launches.size).toBe(0);
+    expect(appCommandStore(tabLaunchStore).getState().launches.size).toBe(0);
   });
 
   test("opens script configuration on long press without also running commands", async () => {
@@ -3117,7 +3118,7 @@ describe("ActionBar workflow tabs", () => {
         expect.objectContaining({ description: "backend unavailable" }),
       ),
     );
-    expect(useTabLaunchStore.getState().launches.size).toBe(0);
+    expect(appCommandStore(tabLaunchStore).getState().launches.size).toBe(0);
     expect(createTabMock).not.toHaveBeenCalled();
   });
 
@@ -3279,7 +3280,7 @@ describe("ActionBar workflow tabs", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Push Changes" }));
 
-    const [launch] = useTabLaunchStore.getState().launches.get("env-1") ?? [];
+    const [launch] = appCommandStore(tabLaunchStore).getState().launches.get("env-1") ?? [];
     expect(launch).toMatchObject({ focused: true, arrived: false, settled: false });
     await waitFor(() => expect(launchNativeAgentJobMock).toHaveBeenCalled());
     expect(launchNativeAgentJobMock.mock.calls[0]![0]).toMatchObject({ tabId: launch!.tabId });
@@ -3347,7 +3348,7 @@ describe("ActionBar workflow tabs", () => {
         expect.objectContaining({ description: "push backend offline" }),
       ),
     );
-    expect(useTabLaunchStore.getState().launches.size).toBe(0);
+    expect(appCommandStore(tabLaunchStore).getState().launches.size).toBe(0);
   });
 
   test("starts one backend-owned Resolve job and suppresses duplicate launches", async () => {
@@ -3536,7 +3537,7 @@ describe("ActionBar workflow tabs", () => {
         description: "backend offline",
       }),
     );
-    expect(useTabLaunchStore.getState().launches.size).toBe(0);
+    expect(appCommandStore(tabLaunchStore).getState().launches.size).toBe(0);
     expect((resolveButton as HTMLButtonElement).disabled).toBe(false);
   });
 
@@ -6001,7 +6002,7 @@ describe("ActionBar pull request actions", () => {
       isLoading: false,
       error: null,
     });
-    usePrMonitorStore.setState({
+    appCommandStore(prMonitorStore).setState({
       states: new Map([
         [
           currentEnvironment.id,
@@ -6025,13 +6026,15 @@ describe("ActionBar pull request actions", () => {
     expect(screen.getByRole("status").textContent).toBe("2 of 4 CI checks passed; 2 still running");
 
     act(() => {
-      usePrMonitorStore.getState().applyEvent({
-        environmentId: currentEnvironment.id,
-        state: {
-          ...usePrMonitorStore.getState().states.get(currentEnvironment.id)!,
-          checkSummary: { passed: 4, total: 4, pending: 0 },
-        },
-      });
+      appCommandStore(prMonitorStore)
+        .getState()
+        .applyEvent({
+          environmentId: currentEnvironment.id,
+          state: {
+            ...appCommandStore(prMonitorStore).getState().states.get(currentEnvironment.id)!,
+            checkSummary: { passed: 4, total: 4, pending: 0 },
+          },
+        });
     });
 
     expect(screen.getByRole("status").textContent).toBe(
@@ -6039,13 +6042,15 @@ describe("ActionBar pull request actions", () => {
     );
 
     act(() => {
-      usePrMonitorStore.getState().applyEvent({
-        environmentId: currentEnvironment.id,
-        state: {
-          ...usePrMonitorStore.getState().states.get(currentEnvironment.id)!,
-          checkSummary: null,
-        },
-      });
+      appCommandStore(prMonitorStore)
+        .getState()
+        .applyEvent({
+          environmentId: currentEnvironment.id,
+          state: {
+            ...appCommandStore(prMonitorStore).getState().states.get(currentEnvironment.id)!,
+            checkSummary: null,
+          },
+        });
     });
 
     expect(screen.queryByRole("status") === null).toBe(true);
@@ -6058,7 +6063,7 @@ describe("ActionBar pull request actions", () => {
       isLoading: false,
       error: null,
     });
-    usePrMonitorStore.setState({
+    appCommandStore(prMonitorStore).setState({
       syncStatus: "current",
       states: new Map([
         [
@@ -6084,18 +6089,18 @@ describe("ActionBar pull request actions", () => {
       const viewPrButton = screen.getByRole("button", { name: "View PR" });
       expect(viewPrButton.querySelector("[data-freshness]") === null).toBe(true);
 
-      act(() => usePrMonitorStore.getState().setSyncStatus("stale"));
+      act(() => appCommandStore(prMonitorStore).getState().setSyncStatus("stale"));
       expect(viewPrButton.querySelector('[data-freshness="stale"]')).toBeTruthy();
       // The icon is visual only: the button's name is unchanged.
       expect(screen.getByRole("button", { name: "View PR" })).toBe(viewPrButton);
 
-      act(() => usePrMonitorStore.getState().setSyncStatus("degraded"));
+      act(() => appCommandStore(prMonitorStore).getState().setSyncStatus("degraded"));
       expect(viewPrButton.querySelector('[data-freshness="degraded"]')).toBeTruthy();
 
-      act(() => usePrMonitorStore.getState().setSyncStatus("current"));
+      act(() => appCommandStore(prMonitorStore).getState().setSyncStatus("current"));
       expect(viewPrButton.querySelector("[data-freshness]") === null).toBe(true);
     } finally {
-      usePrMonitorStore.setState({ syncStatus: "idle", states: new Map() });
+      appCommandStore(prMonitorStore).setState({ syncStatus: "idle", states: new Map() });
     }
   });
 
@@ -6119,7 +6124,7 @@ describe("ActionBar pull request actions", () => {
         error: null,
       });
       const observedAt = "2026-10-25T10:07:00.000Z";
-      usePrMonitorStore.setState({
+      appCommandStore(prMonitorStore).setState({
         syncStatus,
         states: new Map([
           [
@@ -6158,7 +6163,7 @@ describe("ActionBar pull request actions", () => {
           expect(screen.queryByText(observedAt) === null).toBe(true);
         });
       } finally {
-        usePrMonitorStore.setState({ syncStatus: "idle", states: new Map() });
+        appCommandStore(prMonitorStore).setState({ syncStatus: "idle", states: new Map() });
       }
     },
   );

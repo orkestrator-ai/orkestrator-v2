@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { GitHubPullRequestDetail } from "@orkestrator/protocol/github-pull-requests";
-import { useUIStore } from "@/stores/uiStore";
+import { uiStore } from "@/stores/uiStore";
 import { mockWriteText } from "../../../../../tests/mocks/clipboard";
 import { mockToastSuccess } from "../../../../../tests/mocks/sonner";
 import { PullRequestView } from "./PullRequestView";
@@ -15,6 +15,7 @@ import {
   resetBackend,
   resetPullRequestsStore,
 } from "./pull-request-test-fixtures";
+import { appCommandStore } from "@/test/app-command-store";
 
 function renderView(detail: GitHubPullRequestDetail, props: { onSummaryLoaded?: () => void } = {}) {
   installBackend({
@@ -202,7 +203,7 @@ test("fork merges keep the head branch and never report skipped deletion as a fa
 
 test("both checkout actions copy the viewed repository regardless of project selection", async () => {
   mockWriteText.mockClear();
-  useUIStore.setState({ selectedProjectId: "unrelated-project" });
+  appCommandStore(uiStore).setState({ selectedProjectId: "unrelated-project" });
   renderView(makeDetail());
   const command = "gh pr checkout 42 --repo acme/widget";
   fireEvent.click(await screen.findByTitle("Copy checkout command"));

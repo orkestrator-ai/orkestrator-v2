@@ -2,7 +2,7 @@ import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import * as realBackend from "@/lib/backend";
 import { configStore } from "@/stores/configStore";
-import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
+import { agentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 import { appCommandStore } from "@/test/app-command-store";
 
 const realBackendSnapshot = { ...realBackend };
@@ -37,7 +37,7 @@ describe("useBuildLaunchOptions", () => {
     getCachedOpenCodeModelCatalogMock.mockImplementation(async () => null);
     getOpencodeModelPreferencesMock.mockImplementation(async () => undefined);
     appCommandStore(configStore).setState({ config: baseConfig });
-    useAgentModelCatalogStore.setState({
+    appCommandStore(agentModelCatalogStore).setState({
       cursorModels: [],
       grokModels: [],
       piModels: [],
@@ -220,18 +220,20 @@ describe("useBuildLaunchOptions", () => {
 
     expect(result.current.catalog.cursor?.map((model) => model.id)).toEqual(["default"]);
     act(() => {
-      useAgentModelCatalogStore.getState().setAcpModels([
-        {
-          platform: "cursor",
-          id: "composer-2.5",
-          label: "Composer 2.5",
-        },
-        {
-          platform: "pi",
-          id: "anthropic/claude-pi",
-          label: "Claude Pi",
-        },
-      ]);
+      appCommandStore(agentModelCatalogStore)
+        .getState()
+        .setAcpModels([
+          {
+            platform: "cursor",
+            id: "composer-2.5",
+            label: "Composer 2.5",
+          },
+          {
+            platform: "pi",
+            id: "anthropic/claude-pi",
+            label: "Claude Pi",
+          },
+        ]);
     });
 
     expect(result.current.catalog.cursor?.map((model) => model.id)).toEqual(["composer-2.5"]);

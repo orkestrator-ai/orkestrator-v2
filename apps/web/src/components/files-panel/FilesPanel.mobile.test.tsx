@@ -2,11 +2,12 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { useEffect, type ReactNode } from "react";
 import { TerminalProvider, useTerminalContext, type CreateFileTabOptions } from "@/contexts";
-import { useFilesPanelStore } from "@/stores";
+import { filesPanelStore } from "@/stores";
 import { AllFilesView } from "./AllFilesView";
 import { ChangesView } from "./ChangesView";
 import { setFilesPanelTestState } from "@/test/files-panel-state";
 import { useFilesPanelChromeStore } from "@/stores/filesPanelChromeStore";
+import { appCommandStore } from "@/test/app-command-store";
 
 const originalMatchMedia = window.matchMedia;
 
@@ -145,7 +146,7 @@ describe("mobile files panel", () => {
   });
 
   test("renders loading states for both views", () => {
-    useFilesPanelStore.setState({ isLoadingTree: true, isLoadingChanges: true });
+    appCommandStore(filesPanelStore).setState({ isLoadingTree: true, isLoadingChanges: true });
     renderWithoutFileTabs(
       <>
         <AllFilesView />
@@ -158,7 +159,7 @@ describe("mobile files panel", () => {
   });
 
   test("renders empty states for both views", () => {
-    useFilesPanelStore.setState({
+    appCommandStore(filesPanelStore).setState({
       fileTree: [],
       changes: [],
       isLoadingTree: false,

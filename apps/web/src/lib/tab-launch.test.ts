@@ -9,17 +9,18 @@ import {
   TAB_LAUNCH_CLAIM_MIN_MS,
 } from "@/lib/tab-launch";
 import { usePaneLayoutStore, type EnvironmentPaneState } from "@/stores/paneLayoutStore";
-import { useTabLaunchStore } from "@/stores/tabLaunchStore";
+
 import type { TabInfo } from "@/types/paneLayout";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { WindowScope } from "@/lib/node-scope/window-scope";
 import { tabLaunchStore } from "@/stores/tabLaunchStore";
 import { FakeNodeClient } from "@/test/render-in-node-scope";
+import { appCommandStore } from "@/test/app-command-store";
 
 const ENV = "env-launch";
 
-const launches = () => useTabLaunchStore.getState().launches.get(ENV) ?? [];
+const launches = () => appCommandStore(tabLaunchStore).getState().launches.get(ENV) ?? [];
 
 function paneState(tabs: TabInfo[], activeTabId: string): EnvironmentPaneState {
   return {

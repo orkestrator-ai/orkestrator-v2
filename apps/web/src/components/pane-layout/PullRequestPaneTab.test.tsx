@@ -10,14 +10,15 @@ import {
   resetBackend,
   resetPullRequestsStore,
 } from "@/components/pull-requests/pull-request-test-fixtures";
-import { useUIStore } from "@/stores/uiStore";
+import { uiStore } from "@/stores/uiStore";
 import { PullRequestPaneTab } from "./PullRequestPaneTab";
 import { filesPanelTestState, setFilesPanelTestState } from "@/test/files-panel-state";
+import { appCommandStore } from "@/test/app-command-store";
 
 beforeEach(() => {
   resetPullRequestsStore();
   setFilesPanelTestState({ isOpen: false, activeTab: "changes", pullRequestTabs: {} });
-  useUIStore.setState({ selectedProjectId: "project", selectedEnvironmentId: "env" });
+  appCommandStore(uiStore).setState({ selectedProjectId: "project", selectedEnvironmentId: "env" });
   installBackend({
     get_github_pull_request: () =>
       makeDetail({ body: "Follows [the API change](https://github.com/acme/api/pull/7)." }),
@@ -28,7 +29,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   resetBackend();
-  useUIStore.setState({ selectedProjectId: null, selectedEnvironmentId: null });
+  appCommandStore(uiStore).setState({ selectedProjectId: null, selectedEnvironmentId: null });
 });
 
 test("a pull request linked from a main-area pull request opens in the right-hand PR pane", async () => {
@@ -100,7 +101,7 @@ test("an inaccessible recognized PR falls back to its original URL only once", a
     </TooltipProvider>,
   );
   expect(calls).toEqual([url]);
-  expect(useUIStore.getState().selectedEnvironmentId).toBe("env");
+  expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("env");
 });
 
 test("reopening after failure waits for the pending new load and preserves a terminal deep link", async () => {

@@ -16,9 +16,9 @@ import { environmentStore } from "@/stores/environmentStore";
 
 import { configStore } from "@/stores/configStore";
 
-import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
+import { agentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 
-import { useUIStore } from "@/stores/uiStore";
+import { uiStore } from "@/stores/uiStore";
 
 import { usePromptDraftStore } from "@/stores/promptDraftStore";
 
@@ -105,7 +105,7 @@ const patchGlobalConfigMock = mock(async (global: any) => ({
 const getClaudeModelCatalogMock = mock(
   async (environmentId: string, _forceRefresh?: boolean): Promise<ClaudeModelCatalogSnapshot> => ({
     environmentId,
-    models: useAgentModelCatalogStore.getState().claudeModels,
+    models: appCommandStore(agentModelCatalogStore).getState().claudeModels,
     source: "fallback",
     fetchedAt: "2026-07-25T12:00:00.000Z",
     stale: false,
@@ -718,7 +718,7 @@ describe("ClaudeTmuxChatTab", () => {
     getClaudeModelCatalogMock.mockReset();
     getClaudeModelCatalogMock.mockImplementation(async (environmentId: string) => ({
       environmentId,
-      models: useAgentModelCatalogStore.getState().claudeModels,
+      models: appCommandStore(agentModelCatalogStore).getState().claudeModels,
       source: "fallback" as const,
       fetchedAt: "2026-07-25T12:00:00.000Z",
       stale: false,
@@ -854,7 +854,10 @@ describe("ClaudeTmuxChatTab", () => {
     usePromptDraftStore.getState().reset();
     // The tmux tab prefers the live SDK model list shared via the claude
     // store; keep it empty by default so tests exercise the fallback list.
-    useAgentModelCatalogStore.setState({ claudeModels: [], claudeModelCatalogs: new Map() });
+    appCommandStore(agentModelCatalogStore).setState({
+      claudeModels: [],
+      claudeModelCatalogs: new Map(),
+    });
     appCommandStore(configStore).setState((state) => ({
       ...state,
       config: {
@@ -874,7 +877,7 @@ describe("ClaudeTmuxChatTab", () => {
       error: null,
       deletingEnvironments: new Set(),
     });
-    useUIStore.setState({ selectedEnvironmentId: "env-1" });
+    appCommandStore(uiStore).setState({ selectedEnvironmentId: "env-1" });
     seedPane("Run the audit");
   });
 
@@ -895,7 +898,7 @@ describe("ClaudeTmuxChatTab", () => {
     const callsBeforeSwitch = virtuosoScrollToIndexMock.mock.calls.length;
     const scrollToCallsBeforeSwitch = virtuosoScrollToMock.mock.calls.length;
     act(() => {
-      useUIStore.setState({ selectedEnvironmentId: "env-2" });
+      appCommandStore(uiStore).setState({ selectedEnvironmentId: "env-2" });
     });
     rerender(
       <ClaudeTmuxChatTab
@@ -905,7 +908,7 @@ describe("ClaudeTmuxChatTab", () => {
       />,
     );
     act(() => {
-      useUIStore.setState({ selectedEnvironmentId: "env-1" });
+      appCommandStore(uiStore).setState({ selectedEnvironmentId: "env-1" });
     });
     rerender(
       <ClaudeTmuxChatTab
@@ -3098,7 +3101,7 @@ Running 1 Explore agent...
 
   test("offers Opus 5 in the tmux fallback catalog", async () => {
     seedPane();
-    useAgentModelCatalogStore.setState({ claudeModels: [] });
+    appCommandStore(agentModelCatalogStore).setState({ claudeModels: [] });
 
     render(
       <ClaudeTmuxChatTab
@@ -3148,8 +3151,10 @@ Running 1 Explore agent...
     });
 
     await waitFor(() => {
-      expect(useAgentModelCatalogStore.getState().claudeModels).toEqual([discoveredModel]);
-      expect(useAgentModelCatalogStore.getState().getClaudeModels("env-1")).toEqual([
+      expect(appCommandStore(agentModelCatalogStore).getState().claudeModels).toEqual([
+        discoveredModel,
+      ]);
+      expect(appCommandStore(agentModelCatalogStore).getState().getClaudeModels("env-1")).toEqual([
         discoveredModel,
       ]);
     });
@@ -3190,7 +3195,7 @@ Running 1 Explore agent...
       />,
     );
     await waitFor(() => {
-      expect(useAgentModelCatalogStore.getState().claudeModels).toEqual([newerModel]);
+      expect(appCommandStore(agentModelCatalogStore).getState().claudeModels).toEqual([newerModel]);
     });
 
     olderCatalog.resolve({
@@ -3205,12 +3210,12 @@ Running 1 Explore agent...
       await Promise.resolve();
     });
 
-    expect(useAgentModelCatalogStore.getState().claudeModels).toEqual([newerModel]);
+    expect(appCommandStore(agentModelCatalogStore).getState().claudeModels).toEqual([newerModel]);
   });
 
   test("uses the SDK list as-is when it already includes the Default sentinel", async () => {
     seedPane();
-    useAgentModelCatalogStore.setState({
+    appCommandStore(agentModelCatalogStore).setState({
       claudeModels: [
         {
           id: "default",

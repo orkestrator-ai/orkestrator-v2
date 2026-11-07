@@ -9,7 +9,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import * as realBackend from "@/lib/backend";
-import { environmentStore, projectStore, useUIStore } from "@/stores";
+import { environmentStore, projectStore, uiStore } from "@/stores";
 import { ProjectWorkspace } from "@/components/projects/ProjectWorkspace";
 import { activateProjectForEnvironmentCleanup } from "@/lib/environment-cleanup-selection";
 import { appCommandScope } from "@/lib/node-scope-slots";
@@ -54,7 +54,7 @@ beforeEach(() => {
       { id: "project-remote", localPath: null } as unknown as Project,
     ],
   });
-  useUIStore.setState({
+  appCommandStore(uiStore).setState({
     selectedEnvironmentId: null,
     selectedProjectId: null,
     projectBoardTab: "coordinator",
@@ -66,8 +66,10 @@ afterAll(() => mock.module("@/lib/backend", () => originalBackend));
 
 test("selecting a project creates and activates its home", async () => {
   renderHook(() => useProjectHomeActivation());
-  act(() => useUIStore.getState().selectProject("project-1"));
-  await waitFor(() => expect(useUIStore.getState().selectedEnvironmentId).toBe("home-1"));
+  act(() => appCommandStore(uiStore).getState().selectProject("project-1"));
+  await waitFor(() =>
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("home-1"),
+  );
   expect(ensureHome).toHaveBeenCalledTimes(1);
   expect(
     appCommandStore(environmentStore)
@@ -86,8 +88,8 @@ test("known homes activate immediately and retain PR metadata through reconcilia
       }),
   );
   const { result } = renderHook(() => useProjectHomeActivation());
-  act(() => useUIStore.getState().selectProject("project-1"));
-  expect(useUIStore.getState().selectedEnvironmentId).toBe("home-1");
+  act(() => appCommandStore(uiStore).getState().selectProject("project-1"));
+  expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("home-1");
   expect(appCommandStore(environmentStore).getState().environments[0]).toMatchObject({
     prUrl: home.prUrl,
     prState: "open",
@@ -108,7 +110,7 @@ test("a failure shows the backend's reason without Electron's invoke prefix", as
     new Error("Error invoking remote method 'orkestrator:invoke': Error: checkout does not exist"),
   );
   const { result } = renderHook(() => useProjectHomeActivation());
-  act(() => useUIStore.getState().selectProject("project-1"));
+  act(() => appCommandStore(uiStore).getState().selectProject("project-1"));
   await waitFor(() => expect(result.current.error).toBe("checkout does not exist"));
   expect(mockToastError).toHaveBeenCalledWith(
     "Could not open the project home",
@@ -128,18 +130,20 @@ test("failed Home creation replaces the spinner with a retryable error", async (
       />
     );
   }
-  useUIStore.setState({ selectedProjectId: "project-1", projectBoardTab: "home" });
+  appCommandStore(uiStore).setState({ selectedProjectId: "project-1", projectBoardTab: "home" });
   render(<Workspace />);
   await screen.findByRole("alert");
   expect(screen.queryByText("Opening project home…") === null).toBe(true);
   fireEvent.click(screen.getByRole("button", { name: "Retry opening Home" }));
-  await waitFor(() => expect(useUIStore.getState().selectedEnvironmentId).toBe("home-1"));
+  await waitFor(() =>
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("home-1"),
+  );
   expect(ensureHome).toHaveBeenCalledTimes(2);
 });
 
 test("checkout changes reconcile the selected home, and removal leaves Home", async () => {
   appCommandStore(environmentStore).setState({ environments: [home] });
-  useUIStore.setState({
+  appCommandStore(uiStore).setState({
     selectedProjectId: "project-1",
     selectedEnvironmentId: home.id,
     projectBoardTab: "home",
@@ -167,22 +171,27 @@ test("checkout changes reconcile the selected home, and removal leaves Home", as
   act(() =>
     appCommandStore(projectStore).getState().updateProject("project-1", { localPath: null }),
   );
-  expect(useUIStore.getState().selectedEnvironmentId).toBeNull();
-  expect(useUIStore.getState().projectBoardTab).toBe("coordinator");
+  expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBeNull();
+  expect(appCommandStore(uiStore).getState().projectBoardTab).toBe("coordinator");
   expect(ensureHome).toHaveBeenCalledTimes(2);
 });
 
 test("a regular environment selection is left alone", () => {
   renderHook(() => useProjectHomeActivation());
-  act(() => useUIStore.getState().selectProjectAndEnvironment("project-1", "worker-1"));
-  expect(useUIStore.getState().selectedEnvironmentId).toBe("worker-1");
+  act(() =>
+    appCommandStore(uiStore).getState().selectProjectAndEnvironment("project-1", "worker-1"),
+  );
+  expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("worker-1");
   expect(ensureHome).not.toHaveBeenCalled();
 });
 
 test("a project without a checkout leaves the Home tab", () => {
-  useUIStore.setState({ selectedProjectId: "project-remote", projectBoardTab: "home" });
+  appCommandStore(uiStore).setState({
+    selectedProjectId: "project-remote",
+    projectBoardTab: "home",
+  });
   renderHook(() => useProjectHomeActivation());
-  expect(useUIStore.getState().projectBoardTab).toBe("coordinator");
+  expect(appCommandStore(uiStore).getState().projectBoardTab).toBe("coordinator");
   expect(ensureHome).not.toHaveBeenCalled();
 });
 
@@ -201,8 +210,8 @@ for (const deleting of ["local", "lifecycle", "requested", "project"]) {
     if (deleting === "project")
       appCommandStore(projectStore).getState().setDeleting("project-1", true);
     renderHook(() => useProjectHomeActivation());
-    act(() => useUIStore.getState().selectProject("project-1"));
-    expect(useUIStore.getState().selectedEnvironmentId).toBeNull();
+    act(() => appCommandStore(uiStore).getState().selectProject("project-1"));
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBeNull();
     expect(ensureHome).not.toHaveBeenCalled();
   });
 }
@@ -212,13 +221,16 @@ test("cleanup leaves the selected Home without recreating it when its record dis
     environments: [home],
     deletingEnvironments: new Set([home.id]),
   });
-  useUIStore.setState({ selectedProjectId: "project-1", selectedEnvironmentId: home.id });
+  appCommandStore(uiStore).setState({
+    selectedProjectId: "project-1",
+    selectedEnvironmentId: home.id,
+  });
   renderHook(() => useProjectHomeActivation());
   act(() => {
     activateProjectForEnvironmentCleanup(home.id, appCommandScope());
     appCommandStore(environmentStore).getState().removeEnvironment(home.id);
   });
-  expect(useUIStore.getState().selectedEnvironmentId).toBeNull();
+  expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBeNull();
   expect(ensureHome).not.toHaveBeenCalled();
 });
 
@@ -230,12 +242,14 @@ test("late activation cannot steal selection after switching projects or choosin
         resolve = done;
       }),
   );
-  useUIStore.setState({ selectedProjectId: "project-1" });
+  appCommandStore(uiStore).setState({ selectedProjectId: "project-1" });
   renderHook(() => useProjectHomeActivation());
-  act(() => useUIStore.getState().selectProjectAndEnvironment("project-2", "worker-2"));
+  act(() =>
+    appCommandStore(uiStore).getState().selectProjectAndEnvironment("project-2", "worker-2"),
+  );
   await act(async () => resolve(home));
-  expect(useUIStore.getState().selectedEnvironmentId).toBe("worker-2");
-  expect(useUIStore.getState().selectedProjectId).toBe("project-2");
+  expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("worker-2");
+  expect(appCommandStore(uiStore).getState().selectedProjectId).toBe("project-2");
 });
 
 test("a late checkout response does not replace the new checkout record", async () => {
@@ -246,7 +260,7 @@ test("a late checkout response does not replace the new checkout record", async 
         resolve = done;
       }),
   );
-  useUIStore.setState({ selectedProjectId: "project-1" });
+  appCommandStore(uiStore).setState({ selectedProjectId: "project-1" });
   renderHook(() => useProjectHomeActivation());
   ensureHome.mockResolvedValueOnce({ ...home, worktreePath: "/second" });
   act(() =>
@@ -268,12 +282,14 @@ test("a project selected during cleanup does not recreate Home when the tombston
     environments: [{ ...home, lifecycleOperation: "deleting" }],
   });
   renderHook(() => useProjectHomeActivation());
-  act(() => useUIStore.getState().selectProject("project-1"));
+  act(() => appCommandStore(uiStore).getState().selectProject("project-1"));
   act(() => appCommandStore(environmentStore).getState().removeEnvironment(home.id));
   expect(ensureHome).not.toHaveBeenCalled();
-  expect(useUIStore.getState().selectedEnvironmentId).toBeNull();
-  act(() => useUIStore.getState().selectProject("project-1"));
-  await waitFor(() => expect(useUIStore.getState().selectedEnvironmentId).toBe(home.id));
+  expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBeNull();
+  act(() => appCommandStore(uiStore).getState().selectProject("project-1"));
+  await waitFor(() =>
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe(home.id),
+  );
   expect(ensureHome).toHaveBeenCalledTimes(1);
 });
 
@@ -284,12 +300,14 @@ test("automatic Home targeting leaves board unread work untouched until Home is 
     useProjectHomeActivation();
     useUnreadEnvironmentSync();
   });
-  act(() => useUIStore.getState().selectProject("project-1"));
-  await waitFor(() => expect(useUIStore.getState().selectedEnvironmentId).toBe(home.id));
-  expect(useUIStore.getState().projectBoardTab).toBe("coordinator");
+  act(() => appCommandStore(uiStore).getState().selectProject("project-1"));
+  await waitFor(() =>
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe(home.id),
+  );
+  expect(appCommandStore(uiStore).getState().projectBoardTab).toBe("coordinator");
   expect(appCommandStore(environmentStore).getState().environments[0]?.hasUnreadWork).toBe(true);
   expect(setUnread).not.toHaveBeenCalled();
-  act(() => useUIStore.getState().setProjectBoardTab("home"));
+  act(() => appCommandStore(uiStore).getState().setProjectBoardTab("home"));
   await waitFor(() => expect(setUnread).toHaveBeenCalledWith(home.id, false, null));
 });
 
@@ -301,9 +319,11 @@ test("a late rejection after switching projects does not surface a stale Home er
         reject = fail;
       }),
   );
-  useUIStore.setState({ selectedProjectId: "project-1" });
+  appCommandStore(uiStore).setState({ selectedProjectId: "project-1" });
   const { result } = renderHook(() => useProjectHomeActivation());
-  act(() => useUIStore.getState().selectProjectAndEnvironment("project-2", "worker-2"));
+  act(() =>
+    appCommandStore(uiStore).getState().selectProjectAndEnvironment("project-2", "worker-2"),
+  );
   await act(async () => reject(new Error("old checkout failed")));
   expect(result.current.error).toBeNull();
   expect(mockToastError).not.toHaveBeenCalled();
@@ -323,7 +343,7 @@ test("a PR opened before home creation stays visible after activation", async ()
   );
   useFilesPanelStore.setState({ pullRequestTabs: {} });
   renderHook(() => useProjectHomeActivation());
-  act(() => useUIStore.getState().selectProject("project-1"));
+  act(() => appCommandStore(uiStore).getState().selectProject("project-1"));
   act(() => {
     expect(openPullRequestInApp(ref)).toBe(true);
   });

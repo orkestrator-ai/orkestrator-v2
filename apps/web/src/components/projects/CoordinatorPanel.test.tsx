@@ -370,7 +370,7 @@ import { CoordinatorPanel } from "./CoordinatorPanel";
 import { COORDINATOR_FOCUS_PROBE_MIN_INTERVAL_MS } from "./useCoordinatorPanelData";
 import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
 import { ProjectWorkspace } from "./ProjectWorkspace";
-import { useUIStore } from "@/stores";
+import { uiStore } from "@/stores";
 import { appCommandStore } from "@/test/app-command-store";
 
 describe("CoordinatorPanel", () => {
@@ -422,7 +422,7 @@ describe("CoordinatorPanel", () => {
         },
       ],
     });
-    useUIStore.setState({ projectBoardTab: "coordinator" });
+    appCommandStore(uiStore).setState({ projectBoardTab: "coordinator" });
     useNativeAgentProjectionStore.getState().reset();
     useNativeNoticeDismissalStore.getState().clear();
     useCoordinatorPaneLayoutStore.getState().reset();
@@ -2032,7 +2032,9 @@ describe("CoordinatorPanel", () => {
           expect(document.querySelector("[data-coordinator-work]") === null).toBe(true);
           expect(screen.queryByText(/next wake/i) === null).toBe(true);
           fireEvent.click(screen.getByRole("button", { name: "Open api-fix" }));
-          await waitFor(() => expect(useUIStore.getState().selectedEnvironmentId).toBe(worker.id));
+          await waitFor(() =>
+            expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe(worker.id),
+          );
         } finally {
           cleanup();
           happyDOM.setURL(previousURL);
@@ -2145,7 +2147,9 @@ describe("CoordinatorPanel", () => {
       render(<CoordinatorPanel projectId="project-1" />);
       await screen.findByTestId("native-agent");
       fireEvent.click(await screen.findByRole("button", { name: "Open api-fix" }));
-      await waitFor(() => expect(useUIStore.getState().selectedEnvironmentId).toBe("worker-env"));
+      await waitFor(() =>
+        expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("worker-env"),
+      );
     });
   });
 

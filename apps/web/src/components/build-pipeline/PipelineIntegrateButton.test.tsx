@@ -4,7 +4,7 @@ import { toast } from "sonner";
 import { invoke } from "@/lib/native/backend";
 import type { PrMonitorEnvironmentState } from "@orkestrator/protocol/pr-monitor";
 import { environmentStore } from "@/stores";
-import { usePrMonitorStore } from "@/stores/prMonitorStore";
+import { prMonitorStore } from "@/stores/prMonitorStore";
 import type { Environment } from "@/types";
 import { PipelineIntegrateButton } from "./PipelineIntegrateButton";
 import { PipelineKeyInformationButton } from "./PipelineKeyInformation";
@@ -65,7 +65,7 @@ afterEach(() => {
   invokeMock.mockReset();
   invokeMock.mockImplementation(() => Promise.resolve());
   appCommandStore(environmentStore).getState().setEnvironments([]);
-  usePrMonitorStore.setState({ states: new Map(), syncStatus: "idle" });
+  appCommandStore(prMonitorStore).setState({ states: new Map(), syncStatus: "idle" });
 });
 
 /** A current monitor reading for env-1's pull request. */
@@ -85,7 +85,10 @@ function monitorReading(overrides: Partial<PrMonitorEnvironmentState> = {}) {
     mergeability: "clean",
     ...overrides,
   };
-  usePrMonitorStore.setState({ states: new Map([["env-1", state]]), syncStatus: "current" });
+  appCommandStore(prMonitorStore).setState({
+    states: new Map([["env-1", state]]),
+    syncStatus: "current",
+  });
 }
 
 describe("PipelineIntegrateButton", () => {

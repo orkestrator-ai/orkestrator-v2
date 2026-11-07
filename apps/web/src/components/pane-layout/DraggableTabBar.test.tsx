@@ -8,12 +8,13 @@ import type { PaneLeaf } from "@/types/paneLayout";
 import { createPaneTabElementId } from "@/types/paneLayout";
 import { useFileDirtyStore } from "@/stores/fileDirtyStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
-import { useMultiReviewStore } from "@/stores/multiReviewStore";
-import { useTabLaunchStore } from "@/stores/tabLaunchStore";
+import { multiReviewStore } from "@/stores/multiReviewStore";
+import { tabLaunchStore } from "@/stores/tabLaunchStore";
 import { createSessionKey } from "@/lib/utils";
 import { invoke } from "@/lib/native/backend";
 import { DraggableTabBar } from "./DraggableTabBar";
 import { TAB_STRIP_CLASS, WORKSPACE_BAR_HEIGHT_CLASS } from "./TabShell";
+import { appCommandStore } from "@/test/app-command-store";
 
 beforeEach(() => {
   useFileDirtyStore.setState({ dirtyFiles: new Map() });
@@ -22,7 +23,7 @@ beforeEach(() => {
     hydration: new Map(),
     activeEnvironmentId: null,
   });
-  useMultiReviewStore.setState({ workflows: new Map() });
+  appCommandStore(multiReviewStore).setState({ workflows: new Map() });
   (invoke as unknown as { mockClear: () => void }).mockClear();
   (
     invoke as unknown as {
@@ -275,7 +276,7 @@ describe("DraggableTabBar", () => {
           },
           environmentId,
         );
-        useMultiReviewStore.setState({
+        appCommandStore(multiReviewStore).setState({
           workflows: new Map([["failed-review", { phase: "cancelled" } as never]]),
         });
         await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(2));
@@ -376,7 +377,7 @@ describe("DraggableTabBar", () => {
     usePaneLayoutStore
       .getState()
       .addTab("default", { id: "terminal", type: "plain" }, environmentId);
-    useTabLaunchStore.setState({
+    appCommandStore(tabLaunchStore).setState({
       launches: new Map([
         [
           environmentId,
@@ -403,7 +404,7 @@ describe("DraggableTabBar", () => {
       expect(tabs[1]?.id).toBe(createPaneTabElementId(environmentId, "default", "launch"));
 
       for (const key of ["Enter", " "]) {
-        useTabLaunchStore.setState({
+        appCommandStore(tabLaunchStore).setState({
           launches: new Map([
             [
               environmentId,
@@ -412,10 +413,12 @@ describe("DraggableTabBar", () => {
           ]),
         });
         fireEvent.keyDown(screen.getByTestId("tab-launch-placeholder"), { key });
-        expect(useTabLaunchStore.getState().launches.get(environmentId)?.[0]?.focused).toBe(true);
+        expect(
+          appCommandStore(tabLaunchStore).getState().launches.get(environmentId)?.[0]?.focused,
+        ).toBe(true);
       }
     } finally {
-      useTabLaunchStore.setState({ launches: new Map() });
+      appCommandStore(tabLaunchStore).setState({ launches: new Map() });
     }
   });
 
@@ -533,7 +536,7 @@ describe("DraggableTabBar", () => {
       },
       environmentId,
     );
-    useMultiReviewStore.setState({
+    appCommandStore(multiReviewStore).setState({
       workflows: new Map([["workflow-1", { phase: "cancelled" } as never]]),
     });
     const pane = usePaneLayoutStore.getState().getPane("default", environmentId)!;
@@ -569,7 +572,7 @@ describe("DraggableTabBar", () => {
         },
         environmentId,
       );
-      useMultiReviewStore.setState({
+      appCommandStore(multiReviewStore).setState({
         workflows: new Map([["workflow-1", { phase } as never]]),
       });
       const pane = usePaneLayoutStore.getState().getPane("default", environmentId)!;
@@ -610,7 +613,7 @@ describe("DraggableTabBar", () => {
       },
       environmentId,
     );
-    useMultiReviewStore.setState({
+    appCommandStore(multiReviewStore).setState({
       workflows: new Map([["workflow-1", { phase: "cancelled" } as never]]),
     });
     const pane = usePaneLayoutStore.getState().getPane("default", environmentId)!;
@@ -803,7 +806,7 @@ describe("DraggableTabBar", () => {
       .getState()
       .addTab("default", { id: "terminal", type: "plain" }, environmentId);
     useFileDirtyStore.getState().hydrateDraft("dirty-file", "changed", "disk");
-    useMultiReviewStore.setState({
+    appCommandStore(multiReviewStore).setState({
       workflows: new Map([["workflow-1", { phase: "cancelled" } as never]]),
     });
     const pane = usePaneLayoutStore.getState().getPane("default", environmentId)!;

@@ -2,9 +2,9 @@ import { describe, test, expect, beforeEach, mock } from "bun:test";
 import { renderHook, act, waitFor } from "@testing-library/react";
 import type { PrMonitorEnvironmentState } from "@orkestrator/protocol/pr-monitor";
 import { environmentStore } from "../../../apps/web/src/stores/environmentStore";
-import { usePrMonitorStore } from "../../../apps/web/src/stores/prMonitorStore";
-import { useFilesPanelStore } from "../../../apps/web/src/stores/filesPanelStore";
-import { useUIStore } from "../../../apps/web/src/stores/uiStore";
+import { prMonitorStore } from "../../../apps/web/src/stores/prMonitorStore";
+import { filesPanelStore } from "../../../apps/web/src/stores/filesPanelStore";
+import { uiStore } from "../../../apps/web/src/stores/uiStore";
 import { createMockEnvironment } from "../utils/testFactories";
 import {
   filesPanelTestState,
@@ -70,10 +70,10 @@ describe("usePullRequest", () => {
       error: null,
     });
 
-    usePrMonitorStore.setState({ states: new Map() });
+    appCommandStore(prMonitorStore).setState({ states: new Map() });
     setFilesPanelTestState({ isOpen: false, activeTab: "changes", pullRequestTabs: {} });
     // The main view shows env-1, so its files panel is the right-hand PR pane.
-    useUIStore.setState({ selectedProjectId: null, selectedEnvironmentId: "env-1" });
+    appCommandStore(uiStore).setState({ selectedProjectId: null, selectedEnvironmentId: "env-1" });
 
     // Reset mocks
     mockGetEnvironmentPrUrl.mockClear();
@@ -131,7 +131,7 @@ describe("usePullRequest", () => {
       appCommandStore(environmentStore)
         .getState()
         .setEnvironmentPR("env-1", "https://github.com/test/repo/pull/789", "open", true);
-      usePrMonitorStore.setState({
+      appCommandStore(prMonitorStore).setState({
         states: new Map([["env-1", monitorState("env-1", { checkInProgress: true })]]),
       });
     });
@@ -194,9 +194,11 @@ describe("usePullRequest", () => {
 
     expect(mockGetEnvironmentPrUrl).toHaveBeenCalledWith("env-1");
     expect(mockOpenInBrowser).not.toHaveBeenCalled();
-    expect(useFilesPanelStore.getState().pullRequestTabs["env-1"]?.map((tab) => tab.ref)).toEqual([
-      { owner: "test", repo: "repo", number: 456 },
-    ]);
+    expect(
+      appCommandStore(filesPanelStore)
+        .getState()
+        .pullRequestTabs["env-1"]?.map((tab) => tab.ref),
+    ).toEqual([{ owner: "test", repo: "repo", number: 456 }]);
   });
 
   test("viewPR opens the PR in the environment's files panel by default", async () => {
@@ -220,7 +222,7 @@ describe("usePullRequest", () => {
   });
 
   test("viewPR falls back to GitHub when nothing is shown to host the pane", async () => {
-    useUIStore.setState({ selectedProjectId: null, selectedEnvironmentId: null });
+    appCommandStore(uiStore).setState({ selectedProjectId: null, selectedEnvironmentId: null });
     appCommandStore(environmentStore).setState({
       environments: [
         createMockEnvironment({ id: "env-1", prUrl: "https://github.com/test/repo/pull/123" }),
@@ -258,7 +260,7 @@ describe("usePullRequest", () => {
     expect(mockOpenInBrowser).toHaveBeenCalledWith(
       "https://gitlab.com/test/repo/-/merge_requests/1",
     );
-    expect(useFilesPanelStore.getState().pullRequestTabs).toEqual({});
+    expect(appCommandStore(filesPanelStore).getState().pullRequestTabs).toEqual({});
   });
 
   test("viewPR reports browser rejection after fetching a missing URL", async () => {
@@ -426,7 +428,7 @@ describe("usePullRequest", () => {
   });
 
   test("isDetecting mirrors the backend monitor's checkInProgress", () => {
-    usePrMonitorStore.setState({
+    appCommandStore(prMonitorStore).setState({
       states: new Map([["env-1", monitorState("env-1", { checkInProgress: true })]]),
     });
 
@@ -452,12 +454,14 @@ describe("usePullRequest", () => {
     expect(result.current.checkSummary).toBeNull();
 
     act(() => {
-      usePrMonitorStore.getState().applyEvent({
-        environmentId: "env-1",
-        state: monitorState("env-1", {
-          checkSummary: { passed: 2, total: 3, pending: 1 },
-        }),
-      });
+      appCommandStore(prMonitorStore)
+        .getState()
+        .applyEvent({
+          environmentId: "env-1",
+          state: monitorState("env-1", {
+            checkSummary: { passed: 2, total: 3, pending: 1 },
+          }),
+        });
     });
 
     expect(result.current.checkSummary).toEqual({ passed: 2, total: 3, pending: 1 });

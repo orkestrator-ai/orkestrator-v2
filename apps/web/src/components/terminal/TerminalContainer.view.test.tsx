@@ -1,5 +1,5 @@
 import { beginTabLaunch, resetTabLaunches } from "@/lib/tab-launch";
-import { useTabLaunchStore } from "@/stores/tabLaunchStore";
+import { tabLaunchStore } from "@/stores/tabLaunchStore";
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 
@@ -21,8 +21,8 @@ import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useNativeComposeStore } from "@/stores/nativeComposeStore";
 
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
-import { useMultiReviewStore } from "@/stores/multiReviewStore";
-import { useFilesPanelStore } from "@/stores/filesPanelStore";
+import { multiReviewStore } from "@/stores/multiReviewStore";
+import { filesPanelStore } from "@/stores/filesPanelStore";
 
 import {
   armWindowStartupAgentActivation,
@@ -615,7 +615,7 @@ describe("TerminalContainer", () => {
     listMultiReviewWorkflowsMock.mockResolvedValue([]);
     getMultiReviewWorkflowMock.mockReset();
     getMultiReviewWorkflowMock.mockResolvedValue(null);
-    useMultiReviewStore.setState({ workflows: new Map() });
+    appCommandStore(multiReviewStore).setState({ workflows: new Map() });
     deletePaneLayoutMock.mockReset();
     deletePaneLayoutMock.mockResolvedValue(undefined);
     teardownTabMock.mockReset();
@@ -5937,7 +5937,9 @@ describe("TerminalContainer", () => {
 
     beginTabLaunch("env-visible", { tabId: "delayed-agent", title: "Run", surface: "agent" });
     fireEvent.click(screen.getByRole("link", { name: "Open file" }));
-    expect(useTabLaunchStore.getState().launches.get("env-visible")?.[0]?.focused).toBe(false);
+    expect(
+      appCommandStore(tabLaunchStore).getState().launches.get("env-visible")?.[0]?.focused,
+    ).toBe(false);
     resetTabLaunches();
 
     await waitFor(() => {
@@ -5998,13 +6000,15 @@ describe("TerminalContainer", () => {
       environmentType: "local",
       worktreePath: "/tmp/env-visible-worktree",
     });
-    useFilesPanelStore.getState().requestFileOpen({
-      environmentId: "env-visible",
-      filePath: "src/App.tsx",
-      options: { isDiff: true, gitStatus: "?" },
-    });
+    appCommandStore(filesPanelStore)
+      .getState()
+      .requestFileOpen({
+        environmentId: "env-visible",
+        filePath: "src/App.tsx",
+        options: { isDiff: true, gitStatus: "?" },
+      });
 
-    useFilesPanelStore
+    appCommandStore(filesPanelStore)
       .getState()
       .requestFileOpen({ environmentId: "env-visible", filePath: "README.md" });
     renderInAppCommandScope(
@@ -6022,7 +6026,7 @@ describe("TerminalContainer", () => {
       );
     });
     await waitFor(() => {
-      expect(useFilesPanelStore.getState().pendingFileOpens).toEqual([]);
+      expect(appCommandStore(filesPanelStore).getState().pendingFileOpens).toEqual([]);
       expect(
         usePaneLayoutStore
           .getState()
@@ -6040,7 +6044,7 @@ describe("TerminalContainer", () => {
       worktreePath: "/tmp/env-visible-worktree",
     });
     const request = { environmentId: "env-other", filePath: "README.md" };
-    useFilesPanelStore.getState().requestFileOpen(request);
+    appCommandStore(filesPanelStore).getState().requestFileOpen(request);
 
     const view = renderInAppCommandScope(
       <TerminalProvider>
@@ -6051,7 +6055,7 @@ describe("TerminalContainer", () => {
     await waitFor(() => {
       expect(usePaneLayoutStore.getState().getAllTabs("env-visible").length).toBeGreaterThan(0);
     });
-    expect(useFilesPanelStore.getState().pendingFileOpens).toEqual([request]);
+    expect(appCommandStore(filesPanelStore).getState().pendingFileOpens).toEqual([request]);
     expect(
       usePaneLayoutStore
         .getState()
@@ -6059,7 +6063,7 @@ describe("TerminalContainer", () => {
         .some((tab) => tab.type === "file"),
     ).toBe(false);
     act(() => view.unmount());
-    useFilesPanelStore.getState().clearPendingFileOpen(request);
+    appCommandStore(filesPanelStore).getState().clearPendingFileOpen(request);
   });
 
   test("rejects a file tab path outside the active workspace", async () => {

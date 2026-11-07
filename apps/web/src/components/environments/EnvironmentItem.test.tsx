@@ -2,11 +2,11 @@ import { useState } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import type { AgentActivityState, Environment, EnvironmentType } from "@/types";
-import { useAgentActivityStore } from "@/stores/agentActivityStore";
+import { agentActivityStore } from "@/stores/agentActivityStore";
 import { claimSidebarAction, releaseSidebarAction } from "@/stores/sidebarActionStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
-import { useEnvironmentDiffStore } from "@/stores/environmentDiffStore";
+import { environmentDiffStore } from "@/stores/environmentDiffStore";
 import { useChangeProjectionStore } from "@/stores/changeProjectionStore";
 import {
   environmentProjectionFixture,
@@ -15,6 +15,7 @@ import {
   unknownCount,
 } from "@/components/files-panel/change-projection-test-fixture";
 import { EnvironmentItem } from "./EnvironmentItem";
+import { appCommandStore } from "@/test/app-command-store";
 
 function environmentFixture(overrides: Partial<Environment> & { name?: string } = {}): Environment {
   return {
@@ -98,7 +99,7 @@ function expectWaiting(halo: HTMLElement) {
 }
 
 beforeEach(() => {
-  useAgentActivityStore.setState({
+  appCommandStore(agentActivityStore).setState({
     containerStates: {},
     containerStateUpdatedAt: {},
   });
@@ -109,7 +110,7 @@ beforeEach(() => {
     viewedSessionIds: new Map(),
   });
   resetChangeProjectionStore();
-  useEnvironmentDiffStore.setState({ stats: new Map(), syncStatus: "idle" });
+  appCommandStore(environmentDiffStore).setState({ stats: new Map(), syncStatus: "idle" });
 });
 
 afterEach(cleanup);
@@ -314,7 +315,7 @@ describe("EnvironmentItem change badge", () => {
   }
 
   test("renders the backend projection's counters instead of the legacy mirror", () => {
-    useEnvironmentDiffStore.setState({ stats: new Map([["env-1", legacyStats]]) });
+    appCommandStore(environmentDiffStore).setState({ stats: new Map([["env-1", legacyStats]]) });
     useChangeProjectionStore.getState().applyProjection(environmentProjectionFixture("env-1"));
     renderItem();
 
@@ -361,7 +362,7 @@ describe("EnvironmentItem change badge", () => {
   });
 
   test("the backend's hidden badge stays hidden even when the legacy mirror has numbers", () => {
-    useEnvironmentDiffStore.setState({ stats: new Map([["env-1", legacyStats]]) });
+    appCommandStore(environmentDiffStore).setState({ stats: new Map([["env-1", legacyStats]]) });
     useChangeProjectionStore.getState().applyProjection(
       environmentProjectionFixture("env-1", {
         badge: { visible: false, mode: "none" },
@@ -375,14 +376,14 @@ describe("EnvironmentItem change badge", () => {
   });
 
   test("an older backend without a projection falls back to the legacy mirror", () => {
-    useEnvironmentDiffStore.setState({ stats: new Map([["env-1", legacyStats]]) });
+    appCommandStore(environmentDiffStore).setState({ stats: new Map([["env-1", legacyStats]]) });
     renderItem();
     expect(badge()).toBeNull();
     expect(document.body.textContent).toContain("+99-98");
   });
 
   test("marks the legacy counts while their mirror is stale, and clears it when current", () => {
-    useEnvironmentDiffStore.setState({
+    appCommandStore(environmentDiffStore).setState({
       stats: new Map([["env-1", legacyStats]]),
       syncStatus: "current",
     });
@@ -390,17 +391,17 @@ describe("EnvironmentItem change badge", () => {
     const counts = () => screen.getByTestId("environment-diff-stats");
     expect(counts().querySelector("[data-freshness]") === null).toBe(true);
 
-    act(() => useEnvironmentDiffStore.getState().setSyncStatus("degraded"));
+    act(() => appCommandStore(environmentDiffStore).getState().setSyncStatus("degraded"));
     expect(counts().querySelector('[data-freshness="degraded"]')).toBeTruthy();
     // The counts themselves are kept: stale data stays visible.
     expect(counts().textContent).toContain("+99");
 
-    act(() => useEnvironmentDiffStore.getState().setSyncStatus("current"));
+    act(() => appCommandStore(environmentDiffStore).getState().setSyncStatus("current"));
     expect(counts().querySelector("[data-freshness]") === null).toBe(true);
   });
 
   test("the projection's own quality wins over the legacy mirror's freshness", () => {
-    useEnvironmentDiffStore.setState({ stats: new Map(), syncStatus: "degraded" });
+    appCommandStore(environmentDiffStore).setState({ stats: new Map(), syncStatus: "degraded" });
     useChangeProjectionStore.getState().applyProjection(environmentProjectionFixture("env-1"));
     renderItem();
     expect(document.querySelector("[data-freshness]") === null).toBe(true);

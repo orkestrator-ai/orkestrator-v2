@@ -5,7 +5,7 @@ import {
   useTerminalContext,
   type CreateFileTabOptions,
 } from "../../../apps/web/src/contexts/TerminalContext";
-import { useFilesPanelStore } from "../../../apps/web/src/stores/filesPanelStore";
+import { filesPanelStore } from "../../../apps/web/src/stores/filesPanelStore";
 import type { FileNode, GitFileChange } from "../../../apps/web/src/lib/backend";
 import { invoke } from "../../../apps/web/src/lib/native/backend";
 import { mockToastError } from "../../mocks/sonner";
@@ -21,6 +21,7 @@ import {
 } from "react";
 import { setFilesPanelTestState } from "../../../apps/web/src/test/files-panel-state";
 import { useFilesPanelChromeStore } from "../../../apps/web/src/stores/filesPanelChromeStore";
+import { appCommandStore } from "../../../apps/web/src/test/app-command-store";
 
 const realHooksSnapshot = { ...realHooks };
 const realContextMenuSnapshot = { ...realContextMenu };
@@ -213,7 +214,7 @@ describe("Files panel components", () => {
 
   for (const nextTarget of ["env-other", "project-root:other-project"]) {
     test(`cancels pending rename when switching to ${nextTarget}`, async () => {
-      useFilesPanelStore.setState({
+      appCommandStore(filesPanelStore).setState({
         activeTab: "all-files",
         isLoadingTree: false,
         fileTree: [{ name: "same.txt", path: "same.txt", isDirectory: false }],
@@ -395,7 +396,7 @@ describe("Files panel components", () => {
   });
 
   test("FilesPanelHeader shows changed count and refresh loading state", () => {
-    useFilesPanelStore.setState({
+    appCommandStore(filesPanelStore).setState({
       activeTab: "changes",
       changes: [change],
       isLoadingChanges: true,
@@ -424,7 +425,7 @@ describe("Files panel components", () => {
       button: 0,
       ctrlKey: false,
     });
-    expect(useFilesPanelStore.getState().activeTab).toBe("all-files");
+    expect(appCommandStore(filesPanelStore).getState().activeTab).toBe("all-files");
 
     fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
     fireEvent.click(screen.getByRole("button", { name: "Close panel" }));
@@ -433,7 +434,7 @@ describe("Files panel components", () => {
   });
 
   test("view components render loading and empty states", () => {
-    useFilesPanelStore.setState({ isLoadingTree: true, fileTree: [] });
+    appCommandStore(filesPanelStore).setState({ isLoadingTree: true, fileTree: [] });
     const { rerender } = render(
       <TerminalProvider>
         <AllFilesView />
@@ -441,7 +442,7 @@ describe("Files panel components", () => {
     );
     expect(screen.getByText("Loading files...")).toBeTruthy();
 
-    act(() => useFilesPanelStore.setState({ isLoadingTree: false, fileTree: [] }));
+    act(() => appCommandStore(filesPanelStore).setState({ isLoadingTree: false, fileTree: [] }));
     rerender(
       <TerminalProvider>
         <AllFilesView />
@@ -449,7 +450,7 @@ describe("Files panel components", () => {
     );
     expect(screen.getByText("No files found")).toBeTruthy();
 
-    act(() => useFilesPanelStore.setState({ isLoadingChanges: true, changes: [] }));
+    act(() => appCommandStore(filesPanelStore).setState({ isLoadingChanges: true, changes: [] }));
     rerender(
       <TerminalProvider>
         <ChangesView />
@@ -457,7 +458,7 @@ describe("Files panel components", () => {
     );
     expect(screen.getByText("Loading changes...")).toBeTruthy();
 
-    act(() => useFilesPanelStore.setState({ isLoadingChanges: false, changes: [] }));
+    act(() => appCommandStore(filesPanelStore).setState({ isLoadingChanges: false, changes: [] }));
     rerender(
       <TerminalProvider>
         <ChangesView />
@@ -599,7 +600,7 @@ describe("Files panel components", () => {
   });
 
   test("FilesPanel renders the panel surface and switches between tab views", () => {
-    useFilesPanelStore.setState({
+    appCommandStore(filesPanelStore).setState({
       activeTab: "all-files",
       fileTree: [],
       changes: [change],
@@ -615,7 +616,7 @@ describe("Files panel components", () => {
     expect(screen.getByText("No files found")).toBeTruthy();
 
     act(() => {
-      useFilesPanelStore.setState({ activeTab: "changes" });
+      appCommandStore(filesPanelStore).setState({ activeTab: "changes" });
     });
     rerender(
       <TerminalProvider>
@@ -627,7 +628,7 @@ describe("Files panel components", () => {
   });
 
   test("All files folders are collapsed by default and expand on click", () => {
-    useFilesPanelStore.setState({
+    appCommandStore(filesPanelStore).setState({
       activeTab: "all-files",
       expandedFolders: [],
       fileTree,
@@ -645,11 +646,11 @@ describe("Files panel components", () => {
     fireEvent.click(screen.getByRole("button", { name: /src/i }));
 
     expect(screen.getByText("App.tsx")).toBeTruthy();
-    expect(useFilesPanelStore.getState().expandedFolders).toEqual(["src"]);
+    expect(appCommandStore(filesPanelStore).getState().expandedFolders).toEqual(["src"]);
   });
 
   test("clicking an expanded folder collapses it and hides its children", () => {
-    useFilesPanelStore.setState({
+    appCommandStore(filesPanelStore).setState({
       activeTab: "all-files",
       expandedFolders: ["src"],
       fileTree,
@@ -667,11 +668,11 @@ describe("Files panel components", () => {
     fireEvent.click(screen.getByRole("button", { name: /src/i }));
 
     expect(screen.queryByText("App.tsx") === null).toBe(true);
-    expect(useFilesPanelStore.getState().expandedFolders).toEqual([]);
+    expect(appCommandStore(filesPanelStore).getState().expandedFolders).toEqual([]);
   });
 
   test("nested folders stay collapsed until their own parent row is clicked", () => {
-    useFilesPanelStore.setState({
+    appCommandStore(filesPanelStore).setState({
       activeTab: "all-files",
       expandedFolders: ["src"],
       fileTree: nestedFileTree,
@@ -691,11 +692,14 @@ describe("Files panel components", () => {
     fireEvent.click(screen.getByRole("button", { name: /components/i }));
 
     expect(screen.getByText("Button.tsx")).toBeTruthy();
-    expect(useFilesPanelStore.getState().expandedFolders).toEqual(["src", "src/components"]);
+    expect(appCommandStore(filesPanelStore).getState().expandedFolders).toEqual([
+      "src",
+      "src/components",
+    ]);
   });
 
   test("FilesPanel confirms actions and keeps failed actions open for retry", async () => {
-    useFilesPanelStore.setState({ activeTab: "changes", changes: [change] });
+    appCommandStore(filesPanelStore).setState({ activeTab: "changes", changes: [change] });
     const { rerender } = render(
       <TerminalProvider>
         <FilesPanel />
@@ -732,7 +736,7 @@ describe("Files panel components", () => {
   }, 20_000);
 
   test("confirms a multi-file delete from All Files with the full path list", async () => {
-    useFilesPanelStore.setState({
+    appCommandStore(filesPanelStore).setState({
       activeTab: "all-files",
       expandedFolders: ["src"],
       fileTree: [
@@ -772,7 +776,7 @@ describe("Files panel components", () => {
   });
 
   test("narrows a partial delete to the remaining paths for retry", async () => {
-    useFilesPanelStore.setState({
+    appCommandStore(filesPanelStore).setState({
       activeTab: "all-files",
       expandedFolders: ["src"],
       fileTree: [
@@ -823,7 +827,7 @@ describe("Files panel components", () => {
 
   test("FilesPanel does not queue destructive actions without an environment", () => {
     mockEnvironmentId = null;
-    useFilesPanelStore.setState({ activeTab: "changes", changes: [change] });
+    appCommandStore(filesPanelStore).setState({ activeTab: "changes", changes: [change] });
     render(
       <TerminalProvider>
         <FilesPanel />
@@ -839,7 +843,7 @@ describe("Files panel components", () => {
     mockEnvironmentId = "env-local";
     mockIsLocalEnvironment = true;
     mockWorktreePath = "/worktrees/feature/";
-    useFilesPanelStore.setState({ activeTab: "changes", changes: [change] });
+    appCommandStore(filesPanelStore).setState({ activeTab: "changes", changes: [change] });
     const { rerender } = render(
       <TerminalProvider>
         <FilesPanel />
@@ -868,7 +872,7 @@ describe("Files panel components", () => {
     mockIsLocalEnvironment = true;
     mockWorktreePath = "/worktrees/feature";
     invokeMock.mockRejectedValueOnce(new Error("file manager unavailable"));
-    useFilesPanelStore.setState({ activeTab: "changes", changes: [change] });
+    appCommandStore(filesPanelStore).setState({ activeTab: "changes", changes: [change] });
     render(
       <TerminalProvider>
         <FilesPanel />

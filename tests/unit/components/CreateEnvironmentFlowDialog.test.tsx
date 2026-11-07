@@ -6,10 +6,10 @@ import type { GitHubCredentialStatus } from "@/lib/backend";
 import type { CreateFeatureBuildResult } from "@orkestrator/protocol/feature-build";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { claudeOptionsStore } from "@/stores/claudeOptionsStore";
-import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
+import { agentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 import { configStore } from "@/stores/configStore";
 import { projectStore } from "@/stores/projectStore";
-import { useUIStore } from "@/stores/uiStore";
+import { uiStore } from "@/stores/uiStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { environmentStore } from "@/stores/environmentStore";
 import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
@@ -139,7 +139,7 @@ describe("CreateEnvironmentFlowDialog", () => {
       available: true,
     });
     appCommandStore(claudeOptionsStore).setState({ options: {} });
-    useAgentModelCatalogStore.setState({ claudeModels: [] });
+    appCommandStore(agentModelCatalogStore).setState({ claudeModels: [] });
     useBuildPipelineStore.setState({ pipelines: new Map(), buildEnvironmentIds: new Set() });
     appCommandStore(environmentStore).setState({ environments: [] });
     appCommandStore(configStore).setState({
@@ -159,7 +159,7 @@ describe("CreateEnvironmentFlowDialog", () => {
         },
       ],
     });
-    useUIStore.setState({
+    appCommandStore(uiStore).setState({
       selectedProjectId: "project-previous",
       selectedEnvironmentId: "env-previous",
       collapsedProjects: ["project-1"],
@@ -614,7 +614,7 @@ describe("CreateEnvironmentFlowDialog", () => {
     startFeatureBuild("Dark mode toggle");
 
     await waitFor(() => {
-      expect(useUIStore.getState()).toMatchObject({
+      expect(appCommandStore(uiStore).getState()).toMatchObject({
         selectedProjectId: "project-1",
         selectedEnvironmentId: "env-feature",
       });
@@ -628,7 +628,7 @@ describe("CreateEnvironmentFlowDialog", () => {
       }),
     );
     expect(getEnvironmentMock).toHaveBeenCalledWith("env-feature");
-    expect(useUIStore.getState().collapsedProjects).not.toContain("project-1");
+    expect(appCommandStore(uiStore).getState().collapsedProjects).not.toContain("project-1");
   });
 
   test("leaves null targeted hydration recoverable by resource synchronization", async () => {
@@ -658,7 +658,7 @@ describe("CreateEnvironmentFlowDialog", () => {
           }),
         ),
       );
-      expect(useUIStore.getState().selectedEnvironmentId).toBe("env-feature");
+      expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("env-feature");
       expect(
         appCommandStore(environmentStore).getState().getEnvironmentById("env-feature"),
       ).toBeUndefined();
@@ -713,7 +713,7 @@ describe("CreateEnvironmentFlowDialog", () => {
           }),
         ),
       );
-      expect(useUIStore.getState().selectedEnvironmentId).toBe("env-feature");
+      expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("env-feature");
       expect(
         appCommandStore(environmentStore).getState().getEnvironmentById("env-feature"),
       ).toBeUndefined();
@@ -767,7 +767,7 @@ describe("CreateEnvironmentFlowDialog", () => {
           }),
         ),
       );
-      expect(useUIStore.getState().selectedEnvironmentId).toBe("env-feature");
+      expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("env-feature");
       expect(
         appCommandStore(environmentStore).getState().getEnvironmentById("env-feature"),
       ).toBeUndefined();
@@ -807,7 +807,7 @@ describe("CreateEnvironmentFlowDialog", () => {
 
     startFeatureBuild("Dark mode toggle");
     await waitFor(() => expect(createFeatureBuildMock).toHaveBeenCalledTimes(1));
-    expect(useUIStore.getState().selectedEnvironmentId).toBe("env-previous");
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("env-previous");
 
     // The create dialog normally closes and unmounts after returning true. The
     // activation intent must remain alive in the app-level resource cache.
@@ -823,7 +823,7 @@ describe("CreateEnvironmentFlowDialog", () => {
       );
     });
 
-    expect(useUIStore.getState()).toMatchObject({
+    expect(appCommandStore(uiStore).getState()).toMatchObject({
       selectedProjectId: "project-1",
       selectedEnvironmentId: "env-eventual",
     });
@@ -835,7 +835,7 @@ describe("CreateEnvironmentFlowDialog", () => {
         projectId: "project-1",
       }),
     );
-    expect(useUIStore.getState().collapsedProjects).not.toContain("project-1");
+    expect(appCommandStore(uiStore).getState().collapsedProjects).not.toContain("project-1");
   });
 
   test("abandons a feature build when the credential warning is dismissed", async () => {
@@ -1255,7 +1255,7 @@ describe("CreateEnvironmentFlowDialog", () => {
     fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
 
     act(() => {
-      useAgentModelCatalogStore.setState({
+      appCommandStore(agentModelCatalogStore).setState({
         claudeModels: [
           {
             id: "late-claude",
@@ -1319,7 +1319,7 @@ describe("CreateEnvironmentFlowDialog", () => {
     // "selected model vanished" effect stays quiet. Only the re-apply effect can
     // move the dialog onto the newly resolvable configured model.
     act(() => {
-      useAgentModelCatalogStore.setState({
+      appCommandStore(agentModelCatalogStore).setState({
         claudeModels: [
           { id: "default", name: "Default (recommended)", supportsEffort: false },
           { id: "late-claude", name: "Late Claude", supportsEffort: false },

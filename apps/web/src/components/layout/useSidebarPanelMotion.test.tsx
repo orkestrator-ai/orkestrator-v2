@@ -2,11 +2,12 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, render } from "@testing-library/react";
 import { useLayoutEffect } from "react";
 import { SIDEBAR_WIDTH_TRANSITION_MS, type SidebarPanelMode } from "@/lib/sidebar-width";
-import { useUIStore } from "@/stores/uiStore";
+import { uiStore } from "@/stores/uiStore";
 import { useUIChromeStore } from "@/stores/uiChromeStore";
 import { useSidebarPanelMotion } from "./useSidebarPanelMotion";
+import { appCommandStore } from "@/test/app-command-store";
 
-const initialUI = useUIStore.getState();
+const initialUI = appCommandStore(uiStore).getState();
 
 type Motion = ReturnType<typeof useSidebarPanelMotion>;
 
@@ -84,7 +85,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
-  useUIStore.setState(initialUI, true);
+  appCommandStore(uiStore).setState(initialUI, true);
 });
 
 describe("animating a width change", () => {

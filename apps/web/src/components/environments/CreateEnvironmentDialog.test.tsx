@@ -12,7 +12,7 @@ import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { MODAL_MODEL_PICKER_TRIGGER_CLASS_NAME } from "@/components/ui/modal-theme";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
 import { configStore } from "@/stores/configStore";
-import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
+import { agentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 import { useHostPathPickerStore } from "@/lib/host-path-picker";
 import { CreateEnvironmentDialog, type ClaudeOptions } from "./CreateEnvironmentDialog";
 import { appCommandStore } from "@/test/app-command-store";
@@ -22,7 +22,11 @@ const baseConfig = appCommandStore(configStore).getState().config;
 afterEach(() => {
   cleanup();
   appCommandStore(configStore).setState({ config: baseConfig });
-  useAgentModelCatalogStore.setState({ cursorModels: [], grokModels: [], piModels: [] });
+  appCommandStore(agentModelCatalogStore).setState({
+    cursorModels: [],
+    grokModels: [],
+    piModels: [],
+  });
 });
 
 /**
@@ -57,7 +61,7 @@ describe("CreateEnvironmentDialog initial prompt attachments", () => {
         },
       },
     });
-    useAgentModelCatalogStore.setState({
+    appCommandStore(agentModelCatalogStore).setState({
       cursorModels: [
         {
           platform: "cursor",

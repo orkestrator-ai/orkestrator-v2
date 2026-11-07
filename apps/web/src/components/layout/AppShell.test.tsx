@@ -19,7 +19,7 @@ import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useActiveCoordinatorConversationStore } from "@/stores/activeCoordinatorConversationStore";
 import { configStore } from "@/stores/configStore";
-import { usePrMonitorStore } from "@/stores/prMonitorStore";
+import { prMonitorStore } from "@/stores/prMonitorStore";
 import { FederationProvider } from "@/components/federation/FederationProvider";
 import { portalStore } from "@/lib/portal/portal-store";
 import {
@@ -258,7 +258,7 @@ beforeEach(() => {
   filesPanelOpen = false;
   selectedEnvironmentPr = {};
   useBuildPipelineStore.setState({ activeBuildEnvironmentIds: new Set() });
-  usePrMonitorStore.setState({ states: new Map(), syncStatus: "idle" });
+  appCommandStore(prMonitorStore).setState({ states: new Map(), syncStatus: "idle" });
   useUIChromeStore.setState({ sidebarOpen: true });
   mountSearch = false;
   startDraggingMock.mockReset();
@@ -325,7 +325,7 @@ describe("AppShell", () => {
       environmentType: "local",
       status: "stopped",
     };
-    usePrMonitorStore.setState({
+    appCommandStore(prMonitorStore).setState({
       syncStatus: "current",
       states: new Map([
         [
@@ -353,7 +353,7 @@ describe("AppShell", () => {
     expect(document.title).toBe("pgstack1 - feature-auth");
 
     act(() =>
-      usePrMonitorStore.setState((state) => ({
+      appCommandStore(prMonitorStore).setState((state) => ({
         states: new Map(
           [...state.states].map(([id, reading]) => [id, { ...reading, hasMergeConflicts: true }]),
         ),
@@ -363,14 +363,14 @@ describe("AppShell", () => {
     // the still-clean environment snapshot on its own.
     expect(title.querySelector("[data-merge-ready]") === null).toBe(true);
     act(() =>
-      usePrMonitorStore.setState((state) => ({
+      appCommandStore(prMonitorStore).setState((state) => ({
         states: new Map(
           [...state.states].map(([id, reading]) => [id, { ...reading, hasMergeConflicts: false }]),
         ),
       })),
     );
     expect(title.querySelector("[data-merge-ready]")).toBeTruthy();
-    act(() => usePrMonitorStore.getState().setSyncStatus("stale"));
+    act(() => appCommandStore(prMonitorStore).getState().setSyncStatus("stale"));
     expect(
       screen
         .getByRole("button", { name: "pgstack1 - feature-auth", hidden: true })
@@ -393,7 +393,7 @@ describe("AppShell", () => {
       hasMergeConflicts: signal === "merge-conflicts",
       prMergeability: signal === "merge-conflicts" ? "dirty" : "clean",
     };
-    usePrMonitorStore.setState({
+    appCommandStore(prMonitorStore).setState({
       syncStatus: "current",
       states: new Map([
         [

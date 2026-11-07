@@ -6,8 +6,8 @@ import type { PluggableList } from "unified";
 import { TerminalProvider, useTerminalContext, type CreateFileTabOptions } from "@/contexts";
 import { invoke } from "@/lib/native/backend";
 import { PullRequestOpenerProvider } from "@/lib/pull-request-opener";
-import { environmentStore, projectStore, useUIStore } from "@/stores";
-import { useProjectPullRequestsStore } from "@/stores/projectPullRequestsStore";
+import { environmentStore, projectStore, uiStore } from "@/stores";
+import { projectPullRequestsStore } from "@/stores/projectPullRequestsStore";
 import type { Environment, Project } from "@/types";
 import { mockToastInfo } from "../../../../../tests/mocks/sonner";
 
@@ -387,7 +387,7 @@ describe("MessageMarkdown links", () => {
 describe("MessageMarkdown pull request links", () => {
   afterEach(() => {
     cleanup();
-    useUIStore.setState({ selectedEnvironmentId: null, selectedProjectId: null });
+    appCommandStore(uiStore).setState({ selectedEnvironmentId: null, selectedProjectId: null });
     appCommandStore(environmentStore).setState({ environments: [] });
     setFilesPanelTestState({ isOpen: false, activeTab: "changes", pullRequestTabs: {} });
   });
@@ -432,7 +432,10 @@ describe("MessageMarkdown pull request links", () => {
     appCommandStore(environmentStore).setState({
       environments: [{ id: "env-1", projectId: "project-1" } as Environment],
     });
-    useUIStore.setState({ selectedEnvironmentId: "env-1", selectedProjectId: "project-1" });
+    appCommandStore(uiStore).setState({
+      selectedEnvironmentId: "env-1",
+      selectedProjectId: "project-1",
+    });
     render(<MessageMarkdown content="[PR](https://github.com/acme/widgets/pull/42)" />);
 
     fireEvent.click(screen.getByRole("link", { name: "PR" }));
@@ -453,12 +456,12 @@ describe("MessageMarkdown pull request links", () => {
       appCommandStore(projectStore).setState({
         projects: [{ id: "project-1", name: "Project", localPath: "/repo" } as Project],
       });
-      useUIStore.setState({
+      appCommandStore(uiStore).setState({
         selectedEnvironmentId: null,
         selectedProjectId: "project-1",
         projectBoardTab,
       });
-      useProjectPullRequestsStore.setState({ projects: {} });
+      appCommandStore(projectPullRequestsStore).setState({ projects: {} });
       render(<MessageMarkdown content="[PR](https://github.com/acme/widgets/pull/42)" />);
 
       fireEvent.click(screen.getByRole("link", { name: "PR" }));
@@ -470,8 +473,8 @@ describe("MessageMarkdown pull request links", () => {
         { owner: "acme", repo: "widgets", number: 42 },
       ]);
       // The main view stays on the same page: no board switch, no project PR tab.
-      expect(useUIStore.getState().projectBoardTab).toBe(projectBoardTab);
-      expect(useProjectPullRequestsStore.getState().projects).toEqual({});
+      expect(appCommandStore(uiStore).getState().projectBoardTab).toBe(projectBoardTab);
+      expect(appCommandStore(projectPullRequestsStore).getState().projects).toEqual({});
       expect(invokeMock).not.toHaveBeenCalled();
       appCommandStore(projectStore).setState({ projects: [] });
     },

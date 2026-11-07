@@ -9,13 +9,14 @@ import type { StructuredReviewReport } from "@orkestrator/protocol/structured-re
 import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore";
 import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
 import { installFakeReadCoordinator } from "@/lib/testing/read-coordinator";
-import { useMultiReviewStore } from "@/stores/multiReviewStore";
+import { multiReviewStore } from "@/stores/multiReviewStore";
 import {
   MANUAL_REFRESH_TIMEOUT_MS,
   MultiReviewReviewerTab,
   REFRESH_INTERVAL_MS,
   toMultiReviewReviewerMessages,
 } from "./MultiReviewReviewerTab";
+import { appCommandStore } from "@/test/app-command-store";
 
 const report: StructuredReviewReport = {
   reviewScope: {
@@ -102,7 +103,7 @@ function reviewingWorkflow(): MultiReviewWorkflow {
 }
 
 beforeEach(() => {
-  useMultiReviewStore.setState({ workflows: new Map() });
+  appCommandStore(multiReviewStore).setState({ workflows: new Map() });
   useMessagePartExpansionStore.getState().reset();
 });
 afterEach(() => {
@@ -429,7 +430,9 @@ describe("MultiReviewReviewerTab", () => {
       messages: [],
     };
     const loadTranscript = mock(async () => running);
-    useMultiReviewStore.setState({ workflows: new Map([["multi-1", reviewingWorkflow()]]) });
+    appCommandStore(multiReviewStore).setState({
+      workflows: new Map([["multi-1", reviewingWorkflow()]]),
+    });
     renderInAppCommandScope(
       <MultiReviewReviewerTab
         data={{
@@ -461,7 +464,7 @@ describe("MultiReviewReviewerTab", () => {
 
     // A checkpoint reads at once and puts the poll back on its interval.
     act(() => {
-      useMultiReviewStore.setState({
+      appCommandStore(multiReviewStore).setState({
         workflows: new Map([["multi-1", { ...reviewingWorkflow(), backendRevision: 8 }]]),
       });
     });
@@ -1229,7 +1232,7 @@ describe("MultiReviewReviewerTab stop control", () => {
       current = { ...current, workflowPhase: "reviewing", status: "pending", messages: [] };
       return restartedWorkflow;
     });
-    useMultiReviewStore.getState().replaceWorkflow(failedWorkflow);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(failedWorkflow);
 
     renderInAppCommandScope(
       <MultiReviewReviewerTab
@@ -1248,7 +1251,9 @@ describe("MultiReviewReviewerTab stop control", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Restart reviewer" }));
     await waitFor(() => expect(restartReviewer).toHaveBeenCalledWith("multi-1", "reviewer-1"));
     await waitFor(() =>
-      expect(useMultiReviewStore.getState().workflows.get("multi-1")?.phase).toBe("reviewing"),
+      expect(appCommandStore(multiReviewStore).getState().workflows.get("multi-1")?.phase).toBe(
+        "reviewing",
+      ),
     );
     expect(screen.getByRole("button", { name: "Restart reviewer" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: /Refresh.*transcript/ }) === null).toBe(true);

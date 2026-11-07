@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
 import { appCommandScope } from "@/lib/node-scope-slots";
-import { environmentStore, useFilesPanelStore } from "@/stores";
+import { environmentStore, filesPanelStore } from "@/stores";
 import type { Environment } from "@/types";
 import { DiffBaseDialog, defaultDiffBaseRef, saveDiffBase } from "./DiffBaseDialog";
 import { DiffBaseNotice } from "./DiffBaseNotice";
@@ -27,7 +27,7 @@ function environment(overrides: Partial<Environment> = {}): Environment {
 
 beforeEach(() => {
   appCommandStore(environmentStore).setState({ environments: [environment()] });
-  useFilesPanelStore.setState({ activeTab: "changes", changes: [] });
+  appCommandStore(filesPanelStore).setState({ activeTab: "changes", changes: [] });
   invokeMock.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
     if (command === "list_environment_diff_base_branches") return BRANCHES;
     if (command === "list_environment_diff_base_commits") return COMMITS;

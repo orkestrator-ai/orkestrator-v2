@@ -11,7 +11,7 @@ import * as realNotificationSounds from "@/lib/notification-sounds";
 import { configStore } from "@/stores/configStore";
 import { environmentStore } from "@/stores/environmentStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
-import { useUIStore } from "@/stores/uiStore";
+import { uiStore } from "@/stores/uiStore";
 import type { Environment } from "@/types";
 import { getWindowScope } from "@/lib/node-scope/app-window-scope";
 import { appCommandStore } from "@/test/app-command-store";
@@ -76,7 +76,7 @@ beforeEach(() => {
   primeNotificationSounds.mockReset();
   primeNotificationSounds.mockResolvedValue(true);
   appCommandStore(environmentStore).setState({ environments: [] });
-  useUIStore.setState({ selectedEnvironmentId: null });
+  appCommandStore(uiStore).setState({ selectedEnvironmentId: null });
   appCommandStore(configStore)
     .getState()
     .updateGlobalConfig({
@@ -128,7 +128,10 @@ describe("when a coordinator is woken for its worker", () => {
     return view;
   }
   const showCoordinator = () => {
-    useUIStore.setState({ selectedProjectId: "project-1", projectBoardTab: "coordinator" });
+    appCommandStore(uiStore).setState({
+      selectedProjectId: "project-1",
+      projectBoardTab: "coordinator",
+    });
     useActiveCoordinatorConversationStore.setState({
       active: {
         nodeId: commandNodeId(),
@@ -142,7 +145,10 @@ describe("when a coordinator is woken for its worker", () => {
   beforeEach(() => {
     handlers.clear();
     useActiveCoordinatorConversationStore.setState({ active: null });
-    useUIStore.setState({ selectedProjectId: null, projectBoardTab: "board" as never });
+    appCommandStore(uiStore).setState({
+      selectedProjectId: null,
+      projectBoardTab: "board" as never,
+    });
     listenMock.mockImplementation(
       (event: string, handler: (event: { payload: unknown }) => void) => {
         if (event !== COORDINATOR_WAKE_ATTENTION_EVENT) return Promise.resolve(() => {});
@@ -249,7 +255,7 @@ describe("from the backend's attention events", () => {
   });
 
   test("stays quiet for the environment on screen, and for malformed payloads", async () => {
-    useUIStore.setState({ selectedEnvironmentId: "worker" });
+    appCommandStore(uiStore).setState({ selectedEnvironmentId: "worker" });
     await mounted();
     deliver(attention("worker", "a1"));
     deliver({ environmentId: "other" });
@@ -317,7 +323,7 @@ describe("from the backend's attention events", () => {
     });
 
     test("stays quiet only while that environment is on screen in a focused window", async () => {
-      useUIStore.setState({ selectedEnvironmentId: "worker" });
+      appCommandStore(uiStore).setState({ selectedEnvironmentId: "worker" });
       focus(true);
       await mounted();
       deliver(question("worker", "q1"));
@@ -401,8 +407,8 @@ describe("from the backend's attention events", () => {
       deliver(question("worker", "q1"));
       await act(async () => {});
       act(() => shownNotifications[0]!.listeners.get("click")!());
-      expect(useUIStore.getState().selectedEnvironmentId).toBe("worker");
-      expect(useUIStore.getState().selectedProjectId).toBe("project-1");
+      expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("worker");
+      expect(appCommandStore(uiStore).getState().selectedProjectId).toBe("project-1");
       expect(shownNotifications[0]!.closed).toBe(true);
     });
   });
@@ -472,7 +478,7 @@ describe("useNotificationSoundService", () => {
   });
 
   test("does not replay a cue when the selected environment unread clear is reconciled", () => {
-    useUIStore.setState({ selectedEnvironmentId: "worker" });
+    appCommandStore(uiStore).setState({ selectedEnvironmentId: "worker" });
     appCommandStore(environmentStore).setState({ environments: [environment("worker", true)] });
     renderHook(() => useNotificationSoundService());
 
@@ -550,7 +556,7 @@ describe("useNotificationSoundService", () => {
 test("Home completion sounds while the board obscures it, but not while Home is visible", () => {
   const home = { ...environment("home", false), projectHome: true };
   appCommandStore(environmentStore).setState({ environments: [home] });
-  useUIStore.setState({ selectedEnvironmentId: home.id, projectBoardTab: "kanban" });
+  appCommandStore(uiStore).setState({ selectedEnvironmentId: home.id, projectBoardTab: "kanban" });
   renderHook(() => useNotificationSoundService());
   act(() =>
     appCommandStore(environmentStore)
@@ -559,7 +565,7 @@ test("Home completion sounds while the board obscures it, but not while Home is 
   );
   expect(playConfiguredNotificationSound).toHaveBeenCalledTimes(1);
   act(() => {
-    useUIStore.getState().setProjectBoardTab("home");
+    appCommandStore(uiStore).getState().setProjectBoardTab("home");
     appCommandStore(environmentStore)
       .getState()
       .updateEnvironment(home.id, { hasUnreadWork: false });
@@ -583,7 +589,7 @@ test.each([false, true])(
         return Promise.resolve(() => handlers.delete(event));
       },
     );
-    useUIStore.setState({ selectedProjectId: null });
+    appCommandStore(uiStore).setState({ selectedProjectId: null });
     appCommandStore(configStore)
       .getState()
       .updateGlobalConfig({

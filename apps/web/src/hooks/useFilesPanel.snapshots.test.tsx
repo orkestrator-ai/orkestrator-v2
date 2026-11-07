@@ -7,9 +7,9 @@ import {
 import * as backend from "@/lib/backend";
 import * as nativeEvents from "@/lib/native/events";
 import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
-import { environmentStore, useFilesPanelStore, useUIStore } from "@/stores";
+import { environmentStore, filesPanelStore, uiStore } from "@/stores";
 import { configStore } from "@/stores/configStore";
-import { useWorktreeSnapshotStore } from "@/stores/worktreeSnapshotStore";
+import { worktreeSnapshotStore } from "@/stores/worktreeSnapshotStore";
 import type { Environment } from "@/types";
 import { installFakeReadCoordinator } from "@/lib/testing/read-coordinator";
 import { isAnnouncedNewer, useFilesPanel } from "./useFilesPanel";
@@ -70,8 +70,12 @@ beforeEach(() => {
   targetGeneration = 1;
   eventRevision = 1;
   legacy = false;
-  useWorktreeSnapshotStore.setState({ entries: new Map(), generation: null, syncStatus: "idle" });
-  useUIStore.setState({ selectedEnvironmentId: "env-1", selectedProjectId: null });
+  appCommandStore(worktreeSnapshotStore).setState({
+    entries: new Map(),
+    generation: null,
+    syncStatus: "idle",
+  });
+  appCommandStore(uiStore).setState({ selectedEnvironmentId: "env-1", selectedProjectId: null });
   appCommandStore(configStore).setState((state) => ({
     config: { ...state.config, repositories: {} },
   }));
@@ -161,9 +165,11 @@ describe("useFilesPanel worktree snapshot revisions", () => {
     announce();
     await flush();
     expect(listSpy).toHaveBeenCalledTimes(2);
-    expect(useFilesPanelStore.getState().changes.map((change) => change.path)).toEqual([
-      "file-2.ts",
-    ]);
+    expect(
+      appCommandStore(filesPanelStore)
+        .getState()
+        .changes.map((change) => change.path),
+    ).toEqual(["file-2.ts"]);
 
     // A duplicate or already-applied announcement reads nothing.
     announce();
@@ -174,7 +180,7 @@ describe("useFilesPanel worktree snapshot revisions", () => {
   });
 
   test("a tree revision re-reads only the tree on the all-files tab", async () => {
-    useFilesPanelStore.setState({ activeTab: "all-files" });
+    appCommandStore(filesPanelStore).setState({ activeTab: "all-files" });
     renderHook(() => useFilesPanel());
     await flush();
     expect(treeSpy).toHaveBeenCalledTimes(1);
@@ -185,11 +191,18 @@ describe("useFilesPanel worktree snapshot revisions", () => {
     await flush();
     expect(treeSpy).toHaveBeenCalledTimes(2);
     expect(listSpy).toHaveBeenCalledTimes(listReads);
-    expect(useFilesPanelStore.getState().fileTree.map((node) => node.path)).toEqual(["dir-2"]);
+    expect(
+      appCommandStore(filesPanelStore)
+        .getState()
+        .fileTree.map((node) => node.path),
+    ).toEqual(["dir-2"]);
   });
 
   test("tree revisions refresh expanded subtrees even when the bounded digest is unchanged", async () => {
-    useFilesPanelStore.setState({ activeTab: "all-files", expandedFolders: ["deferred"] });
+    appCommandStore(filesPanelStore).setState({
+      activeTab: "all-files",
+      expandedFolders: ["deferred"],
+    });
     treeSpy.mockImplementation(async () => ({
       unchanged: false,
       digest: "bounded",
@@ -206,7 +219,7 @@ describe("useFilesPanel worktree snapshot revisions", () => {
     spies.push(subtreeSpy);
     renderHook(() => useFilesPanel());
     await flush();
-    const originalTree = useFilesPanelStore.getState().fileTree;
+    const originalTree = appCommandStore(filesPanelStore).getState().fileTree;
     const reads = subtreeSpy.mock.calls.length;
     subtreeSpy.mockResolvedValue({
       unchanged: false,
@@ -219,11 +232,11 @@ describe("useFilesPanel worktree snapshot revisions", () => {
     treeRevision = 2;
     announce();
     await flush();
-    expect(useFilesPanelStore.getState().fileTree).toBe(originalTree);
+    expect(appCommandStore(filesPanelStore).getState().fileTree).toBe(originalTree);
     expect(subtreeSpy.mock.calls.length).toBeGreaterThan(reads);
-    expect(useFilesPanelStore.getState().fileSubtrees.deferred?.children[0]?.name).toBe(
-      "fresh.txt",
-    );
+    expect(
+      appCommandStore(filesPanelStore).getState().fileSubtrees.deferred?.children[0]?.name,
+    ).toBe("fresh.txt");
   });
 
   test("a retargeted lineage is re-read even at a lower revision", async () => {
@@ -259,14 +272,14 @@ describe("useFilesPanel worktree snapshot revisions", () => {
     legacy = true;
     renderHook(() => useFilesPanel());
     await flush();
-    expect(useWorktreeSnapshotStore.getState().syncStatus).toBe("unsupported");
+    expect(appCommandStore(worktreeSnapshotStore).getState().syncStatus).toBe("unsupported");
     expect(listSpy).toHaveBeenCalledTimes(1);
   });
 
   test("an unchanged read with the same stamp does not rewrite the store", async () => {
     renderHook(() => useFilesPanel());
     await flush();
-    const before = useFilesPanelStore.getState().changes;
+    const before = appCommandStore(filesPanelStore).getState().changes;
     listSpy.mockImplementation(async () => ({
       unchanged: true,
       digest: "list-1-1",
@@ -276,7 +289,7 @@ describe("useFilesPanel worktree snapshot revisions", () => {
     announce({ freshness: "stale" }); // state moved, revisions did not
     await flush();
     expect(listSpy).toHaveBeenCalledTimes(1);
-    expect(useFilesPanelStore.getState().changes).toBe(before);
+    expect(appCommandStore(filesPanelStore).getState().changes).toBe(before);
   });
 });
 
@@ -304,7 +317,10 @@ describe("useFilesPanel persisted diff baselines", () => {
       })),
     );
   }
-  const paths = () => useFilesPanelStore.getState().changes.map((change) => change.path);
+  const paths = () =>
+    appCommandStore(filesPanelStore)
+      .getState()
+      .changes.map((change) => change.path);
 
   beforeEach(() => {
     legacy = true;
@@ -332,7 +348,7 @@ describe("useFilesPanel persisted diff baselines", () => {
     update({ diffBaseline: { createdFromCommit: created, commit: advanced } });
     await flush();
     expect(listSpy.mock.calls.at(-1)?.[1]).toBe(advanced);
-    expect(useFilesPanelStore.getState().targetBranch).toBe(advanced);
+    expect(appCommandStore(filesPanelStore).getState().targetBranch).toBe(advanced);
     expect(paths()).toEqual(["own.txt"]);
     await act(async () => result.current.revertFile("own.txt"));
     expect(revert).toHaveBeenLastCalledWith("env-1", "own.txt", advanced);
@@ -340,7 +356,7 @@ describe("useFilesPanel persisted diff baselines", () => {
     update({ diffBaseline: null });
     await flush();
     expect(listSpy.mock.calls.at(-1)?.[1]).toBe(created);
-    expect(useFilesPanelStore.getState().targetBranch).toBe(created);
+    expect(appCommandStore(filesPanelStore).getState().targetBranch).toBe(created);
     expect(paths()).toEqual(["own.txt", "upstream.txt"]);
     await act(async () => result.current.revertFile("own.txt"));
     expect(revert).toHaveBeenLastCalledWith("env-1", "own.txt", created);
@@ -349,14 +365,14 @@ describe("useFilesPanel persisted diff baselines", () => {
   test("returning from an inactive environment and remounting recover the persisted selection", async () => {
     const first = renderHook(() => useFilesPanel());
     await flush();
-    act(() => useUIStore.setState({ selectedEnvironmentId: null }));
+    act(() => appCommandStore(uiStore).setState({ selectedEnvironmentId: null }));
     first.unmount();
     update({ diffBaseline: { createdFromCommit: created, commit: advanced } });
-    act(() => useUIStore.setState({ selectedEnvironmentId: "env-1" }));
+    act(() => appCommandStore(uiStore).setState({ selectedEnvironmentId: "env-1" }));
     const returned = renderHook(() => useFilesPanel());
     await flush();
     expect(paths()).toEqual(["own.txt"]);
-    expect(useFilesPanelStore.getState().targetBranch).toBe(advanced);
+    expect(appCommandStore(filesPanelStore).getState().targetBranch).toBe(advanced);
     returned.unmount();
     resetReadCoordinatorForTests();
     renderHook(() => useFilesPanel());
@@ -370,6 +386,6 @@ describe("useFilesPanel persisted diff baselines", () => {
     renderHook(() => useFilesPanel());
     await flush();
     expect(listSpy.mock.calls.at(-1)?.[1]).toBe(created);
-    expect(useFilesPanelStore.getState().targetBranch).toBe(created);
+    expect(appCommandStore(filesPanelStore).getState().targetBranch).toBe(created);
   });
 });

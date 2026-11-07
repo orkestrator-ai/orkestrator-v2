@@ -8,7 +8,7 @@ import { useSessionStore } from "@/stores/sessionStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useFileDirtyStore } from "@/stores";
-import { useMultiReviewStore } from "@/stores/multiReviewStore";
+import { multiReviewStore } from "@/stores/multiReviewStore";
 import { configStore } from "@/stores/configStore";
 import { useAgentMailStore } from "@/stores/agentMailStore";
 import { usePreviewServiceStore } from "@/stores/previewServiceStore";
@@ -95,7 +95,7 @@ describe("DraggableTab title precedence", () => {
     useNativeAgentProjectionStore.setState({ projections: new Map() });
     useBuildPipelineStore.setState({ pipelines: new Map() });
     useFileDirtyStore.setState({ dirtyFiles: new Map() });
-    useMultiReviewStore.setState({ workflows: new Map() });
+    appCommandStore(multiReviewStore).setState({ workflows: new Map() });
   });
 
   afterEach(() => {
@@ -571,7 +571,9 @@ describe("DraggableTab title precedence", () => {
       | "updatedAt"
       | "backendRevision"
     >;
-    useMultiReviewStore.getState().replaceWorkflow(workflow as MultiReviewWorkflow);
+    appCommandStore(multiReviewStore)
+      .getState()
+      .replaceWorkflow(workflow as MultiReviewWorkflow);
 
     renderTab({
       id: "multi-interactive",
@@ -690,7 +692,7 @@ describe("DraggableTab icons", () => {
     useNativeAgentProjectionStore.setState({ projections: new Map() });
     useBuildPipelineStore.setState({ pipelines: new Map() });
     useFileDirtyStore.setState({ dirtyFiles: new Map() });
-    useMultiReviewStore.setState({ workflows: new Map() });
+    appCommandStore(multiReviewStore).setState({ workflows: new Map() });
   });
 
   afterEach(() => {

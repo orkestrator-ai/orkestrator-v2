@@ -22,7 +22,7 @@ import { getWindowScope } from "@/lib/node-scope/app-window-scope";
 const viewKeyOf = (key: string) => flowGraphViewKey(getWindowScope().commandScope().nodeId, key);
 import { environmentStore } from "@/stores/environmentStore";
 import type { Environment } from "@/types";
-import { useMultiReviewStore } from "@/stores/multiReviewStore";
+import { multiReviewStore } from "@/stores/multiReviewStore";
 import { useUIChromeStore } from "@/stores/uiChromeStore";
 import { MultiReviewInspectorHeader } from "./MultiReviewInspector";
 import { MultiReviewTab } from "./MultiReviewTab";
@@ -406,7 +406,7 @@ for (const clean of [true, false]) {
 }
 
 function renderTab(target: MultiReviewWorkflow) {
-  useMultiReviewStore.getState().replaceWorkflow(target);
+  appCommandStore(multiReviewStore).getState().replaceWorkflow(target);
   return renderInAppCommandScope(
     <MultiReviewTab
       data={{ environmentId: target.environmentId, workflowId: target.id, isLocal: true }}
@@ -424,7 +424,7 @@ function edgeState(id: string): string | null {
 }
 
 beforeEach(() => {
-  useMultiReviewStore.setState({ workflows: new Map() });
+  appCommandStore(multiReviewStore).setState({ workflows: new Map() });
   useMultiReviewFlowViewStore.setState({ views: new Map() });
   useUIChromeStore.setState({ multiReviewGraphHeight: null });
   useMessagePartExpansionStore.getState().reset();
@@ -699,7 +699,7 @@ describe("flow graph nodes", () => {
       fixSession: { ...fixSession("running")!, requestIds: ["prepare-1"] },
       activeRequest: { kind: "prepare", requestId: "prepare-1", state: "sent", createdAt: STARTED },
     });
-    useMultiReviewStore.getState().replaceWorkflow(target);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(target);
     const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => true);
     function Registrar() {
       const terminal = useTerminalContext();
@@ -759,7 +759,7 @@ describe("flow graph nodes", () => {
       backendRevision: 2,
       activeRequest: { kind: "consolidate", requestId: "c-1", state: "sent", createdAt: STARTED },
     });
-    act(() => useMultiReviewStore.getState().replaceWorkflow(next));
+    act(() => appCommandStore(multiReviewStore).getState().replaceWorkflow(next));
     view.rerender(
       <MultiReviewTab
         data={{ environmentId: next.environmentId, workflowId: next.id, isLocal: true }}
@@ -1668,7 +1668,7 @@ describe("zoom and pan", () => {
     renderTab(first);
     expect(zoomLevel()).toBe("150%");
     // Nothing about the view reaches the workflow record.
-    expect(useMultiReviewStore.getState().workflows.get(first.id)).toEqual(first);
+    expect(appCommandStore(multiReviewStore).getState().workflows.get(first.id)).toEqual(first);
   });
 
   test("resets zoom and pan when the panel width changes", () => {
@@ -1723,7 +1723,7 @@ describe("zoom and pan", () => {
 
 describe("step transcript tails", () => {
   function renderWithStepTail(target: MultiReviewWorkflow) {
-    useMultiReviewStore.getState().replaceWorkflow(target);
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(target);
     const loadStepTranscript = mock(
       async (workflowId: string, step: "prepare" | "consolidate" | "fix") => ({
         workflowId,

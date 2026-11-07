@@ -1,13 +1,13 @@
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, renderHook } from "@testing-library/react";
-import { environmentStore, projectStore, useFilesPanelStore, useUIStore } from "@/stores";
+import { environmentStore, filesPanelStore, projectStore, uiStore } from "@/stores";
 import type { Environment, Project } from "@/types";
 import * as realBackend from "@/lib/backend";
 import { mockToastError, mockToastSuccess } from "../../../../tests/mocks/sonner";
 import type { ChangesRefreshResult } from "@orkestrator/protocol/change-resources";
 import { useChangeProjectionStore } from "@/stores/changeProjectionStore";
-import { useWorktreeSnapshotStore } from "@/stores/worktreeSnapshotStore";
+import { worktreeSnapshotStore } from "@/stores/worktreeSnapshotStore";
 import {
   environmentProjectionFixture,
   resetChangeProjectionStore,
@@ -101,7 +101,10 @@ beforeEach(() => {
   refreshChangesMock.mockClear();
   resetChangeProjectionStore();
   appCommandStore(projectStore).setState({ projects: [] });
-  useUIStore.setState({ selectedEnvironmentId: "environment-1", selectedProjectId: null });
+  appCommandStore(uiStore).setState({
+    selectedEnvironmentId: "environment-1",
+    selectedProjectId: null,
+  });
   appCommandStore(environmentStore).setState({
     environments: [
       {
@@ -254,7 +257,7 @@ describe("useFilesPanel external file copies", () => {
   });
 
   test("toasts when the selected environment is unavailable", async () => {
-    useUIStore.setState({ selectedEnvironmentId: null });
+    appCommandStore(uiStore).setState({ selectedEnvironmentId: null });
     const { result } = renderHook(() => useFilesPanel());
 
     await expect(
@@ -272,7 +275,10 @@ describe("useFilesPanel on the project root", () => {
     appCommandStore(projectStore).setState({
       projects: [{ id: "project-1", name: "Project", localPath: "/checkout" } as Project],
     });
-    useUIStore.setState({ selectedEnvironmentId: null, selectedProjectId: "project-1" });
+    appCommandStore(uiStore).setState({
+      selectedEnvironmentId: null,
+      selectedProjectId: "project-1",
+    });
     appCommandStore(environmentStore).setState({ environments: [] });
   });
 
@@ -392,7 +398,7 @@ describe("useFilesPanel on the project root", () => {
 
   test("opening from the project board starts on all files", () => {
     setFilesPanelTestState({ isOpen: false, activeTab: "changes" });
-    useFilesPanelStore.getState().openPanelOnAllFiles();
+    appCommandStore(filesPanelStore).getState().openPanelOnAllFiles();
     expect(filesPanelTestState()).toMatchObject({ isOpen: true, activeTab: "all-files" });
   });
 });
@@ -455,7 +461,7 @@ describe("useFilesPanel truncated folders", () => {
     await settle();
 
     expect(getLocalFileSubtreeMock.mock.calls).toEqual([["/worktree", "skills/release"]]);
-    expect(useFilesPanelStore.getState().fileSubtrees).toEqual({
+    expect(appCommandStore(filesPanelStore).getState().fileSubtrees).toEqual({
       "skills/release": {
         children: [
           {
@@ -468,14 +474,18 @@ describe("useFilesPanel truncated folders", () => {
         truncated: false,
       },
     });
-    expect(useFilesPanelStore.getState().loadingFolders).toEqual([]);
+    expect(appCommandStore(filesPanelStore).getState().loadingFolders).toEqual([]);
 
-    act(() => useFilesPanelStore.getState().setFolderExpanded("skills/release", false));
-    expect(useFilesPanelStore.getState().fileSubtrees).toEqual({});
+    act(() =>
+      appCommandStore(filesPanelStore).getState().setFolderExpanded("skills/release", false),
+    );
+    expect(appCommandStore(filesPanelStore).getState().fileSubtrees).toEqual({});
     await settle();
     expect(getLocalFileSubtreeMock).toHaveBeenCalledTimes(1);
 
-    act(() => useFilesPanelStore.getState().setFolderExpanded("skills/release", true));
+    act(() =>
+      appCommandStore(filesPanelStore).getState().setFolderExpanded("skills/release", true),
+    );
     await settle();
     expect(getLocalFileSubtreeMock).toHaveBeenCalledTimes(2);
   });
@@ -497,33 +507,39 @@ describe("useFilesPanel truncated folders", () => {
     }
 
     expect(getLocalFileSubtreeMock).toHaveBeenCalledTimes(1);
-    expect(useFilesPanelStore.getState().failedFolders).toEqual(["skills/release"]);
-    expect(useFilesPanelStore.getState().fileSubtrees).toEqual({});
+    expect(appCommandStore(filesPanelStore).getState().failedFolders).toEqual(["skills/release"]);
+    expect(appCommandStore(filesPanelStore).getState().fileSubtrees).toEqual({});
 
-    act(() => useFilesPanelStore.getState().setFolderExpanded("skills/release", false));
-    act(() => useFilesPanelStore.getState().setFolderExpanded("skills/release", true));
+    act(() =>
+      appCommandStore(filesPanelStore).getState().setFolderExpanded("skills/release", false),
+    );
+    act(() =>
+      appCommandStore(filesPanelStore).getState().setFolderExpanded("skills/release", true),
+    );
     await settle();
     expect(getLocalFileSubtreeMock).toHaveBeenCalledTimes(2);
-    expect(useFilesPanelStore.getState().failedFolders).toEqual([]);
-    expect(Object.keys(useFilesPanelStore.getState().fileSubtrees)).toEqual(["skills/release"]);
+    expect(appCommandStore(filesPanelStore).getState().failedFolders).toEqual([]);
+    expect(Object.keys(appCommandStore(filesPanelStore).getState().fileSubtrees)).toEqual([
+      "skills/release",
+    ]);
   });
 
   test("silent polling refreshes loaded contents with an unchanged bounded-tree digest", async () => {
     const { clock } = installFakeReadCoordinator();
     renderHook(() => useFilesPanel());
     await settle();
-    const originalTree = useFilesPanelStore.getState().fileTree;
+    const originalTree = appCommandStore(filesPanelStore).getState().fileTree;
     getLocalFileSubtreeMock.mockResolvedValueOnce({
       children: [{ name: "new.txt", path: "skills/release/new.txt", isDirectory: false }],
       truncated: false,
     });
     await act(() => clock.advance(5_000));
     await settle();
-    expect(useFilesPanelStore.getState().fileTree).toBe(originalTree);
+    expect(appCommandStore(filesPanelStore).getState().fileTree).toBe(originalTree);
     expect(getLocalFileSubtreeMock).toHaveBeenCalledTimes(2);
-    expect(useFilesPanelStore.getState().fileSubtrees["skills/release"]?.children[0]?.name).toBe(
-      "new.txt",
-    );
+    expect(
+      appCommandStore(filesPanelStore).getState().fileSubtrees["skills/release"]?.children[0]?.name,
+    ).toBe("new.txt");
   });
 
   for (const action of ["refresh", "copy"] as const) {
@@ -571,9 +587,10 @@ describe("useFilesPanel truncated folders", () => {
         await operation;
       });
       expect(complete).toBe(true);
-      expect(useFilesPanelStore.getState().fileSubtrees["skills/release"]?.children[0]?.name).toBe(
-        "new.txt",
-      );
+      expect(
+        appCommandStore(filesPanelStore).getState().fileSubtrees["skills/release"]?.children[0]
+          ?.name,
+      ).toBe("new.txt");
     });
   }
 
@@ -590,9 +607,9 @@ describe("useFilesPanel truncated folders", () => {
     await settle();
     const reads = getLocalFileSubtreeMock.mock.calls.length;
     expect(reads).toBeGreaterThan(1);
-    act(() => useFilesPanelStore.getState().setActiveTab("changes"));
+    act(() => appCommandStore(filesPanelStore).getState().setActiveTab("changes"));
     await settle();
-    act(() => useFilesPanelStore.getState().setActiveTab("all-files"));
+    act(() => appCommandStore(filesPanelStore).getState().setActiveTab("all-files"));
     await settle();
     expect(getLocalFileSubtreeMock.mock.calls.length).toBeGreaterThan(reads);
   });
@@ -600,9 +617,9 @@ describe("useFilesPanel truncated folders", () => {
   test("collapsing a parent invalidates descendant results and reopening fetches them again", async () => {
     renderHook(() => useFilesPanel());
     await settle();
-    act(() => useFilesPanelStore.getState().setFolderExpanded("skills", false));
-    expect(useFilesPanelStore.getState().fileSubtrees).toEqual({});
-    act(() => useFilesPanelStore.getState().setFolderExpanded("skills", true));
+    act(() => appCommandStore(filesPanelStore).getState().setFolderExpanded("skills", false));
+    expect(appCommandStore(filesPanelStore).getState().fileSubtrees).toEqual({});
+    act(() => appCommandStore(filesPanelStore).getState().setFolderExpanded("skills", true));
     await settle();
     expect(getLocalFileSubtreeMock).toHaveBeenCalledTimes(2);
   });
@@ -676,7 +693,7 @@ describe("useFilesPanel coordinated auto-refresh", () => {
   test("with data saving on, a watched worktree's poll backs off to 30 s and a refresh restores it", async () => {
     const { clock, coordinator } = installFakeReadCoordinator();
     coordinator.setDataSaving(true);
-    useWorktreeSnapshotStore.setState({
+    appCommandStore(worktreeSnapshotStore).setState({
       entries: new Map([
         [
           "environment-1",
@@ -705,7 +722,7 @@ describe("useFilesPanel coordinated auto-refresh", () => {
       await act(() => clock.advance(5_000));
       expect(snapshotCalls().tree).toBe(afterRefresh.tree + 1);
     } finally {
-      act(() => useWorktreeSnapshotStore.setState({ entries: new Map() }));
+      act(() => appCommandStore(worktreeSnapshotStore).setState({ entries: new Map() }));
     }
   });
 
@@ -731,7 +748,7 @@ describe("useFilesPanel coordinated auto-refresh", () => {
     await act(() => clock.advance(15_000));
     const setWatched = (watched: boolean) =>
       act(() =>
-        useWorktreeSnapshotStore.setState({
+        appCommandStore(worktreeSnapshotStore).setState({
           entries: new Map([
             [
               "environment-1",
@@ -765,7 +782,7 @@ describe("useFilesPanel coordinated auto-refresh", () => {
       await act(() => clock.advance(10_000));
       expect(snapshotCalls().tree).toBe(unwatchedReads.tree + 1);
     } finally {
-      act(() => useWorktreeSnapshotStore.setState({ entries: new Map() }));
+      act(() => appCommandStore(worktreeSnapshotStore).setState({ entries: new Map() }));
     }
   });
 
@@ -879,7 +896,10 @@ test("the board follows a changed checkout and stops reading or mutating when it
   appCommandStore(projectStore).setState({
     projects: [{ id: "project-1", localPath: "/checkout" } as Project],
   });
-  useUIStore.setState({ selectedProjectId: "project-1", selectedEnvironmentId: null });
+  appCommandStore(uiStore).setState({
+    selectedProjectId: "project-1",
+    selectedEnvironmentId: null,
+  });
   appCommandStore(environmentStore).setState({ environments: [projectHome] });
   setFilesPanelTestState({ isOpen: true });
   const { result } = renderHook(() => useFilesPanel());

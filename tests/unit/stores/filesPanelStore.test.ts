@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { useFilesPanelStore, filesPanelStore } from "../../../apps/web/src/stores/filesPanelStore";
+import { filesPanelStore } from "../../../apps/web/src/stores/filesPanelStore";
 import {
   FILES_PANEL_DEFAULT_WIDTH_PX,
   legacyFilesPanelWidth,
@@ -8,6 +8,7 @@ import {
 import { WindowScope } from "../../../apps/web/src/lib/node-scope/window-scope";
 import { FakeNodeClient } from "../../../apps/web/src/test/render-in-node-scope";
 import type { FileNode, GitFileChange } from "../../../apps/web/src/lib/backend";
+import { appCommandStore } from "../../../apps/web/src/test/app-command-store";
 
 const change: GitFileChange = {
   path: "src/App.tsx",
@@ -29,7 +30,7 @@ const tree: FileNode[] = [
 
 function resetStore() {
   useFilesPanelChromeStore.setState({ isOpen: false, panelWidth: FILES_PANEL_DEFAULT_WIDTH_PX });
-  useFilesPanelStore.setState({
+  appCommandStore(filesPanelStore).setState({
     activeTab: "changes",
     expandedFolders: [],
     changes: [],
@@ -59,7 +60,7 @@ describe("filesPanelStore", () => {
   });
 
   test("updates tab, panel width, loading flags, target branch, and loaded data", () => {
-    const store = useFilesPanelStore.getState();
+    const store = appCommandStore(filesPanelStore).getState();
 
     store.setActiveTab("all-files");
     useFilesPanelChromeStore.getState().setPanelWidth(480);
@@ -70,7 +71,7 @@ describe("filesPanelStore", () => {
     store.setTargetBranch("release");
 
     expect(useFilesPanelChromeStore.getState().panelWidth).toBe(480);
-    expect(useFilesPanelStore.getState()).toMatchObject({
+    expect(appCommandStore(filesPanelStore).getState()).toMatchObject({
       activeTab: "all-files",
       changes: [change],
       fileTree: tree,
@@ -81,31 +82,31 @@ describe("filesPanelStore", () => {
   });
 
   test("sets expanded folders idempotently by path", () => {
-    const store = useFilesPanelStore.getState();
+    const store = appCommandStore(filesPanelStore).getState();
 
     store.setFolderExpanded("src", true);
     store.setFolderExpanded("tests", true);
     store.setFolderExpanded("src", true);
-    expect(useFilesPanelStore.getState().expandedFolders).toEqual(["src", "tests"]);
+    expect(appCommandStore(filesPanelStore).getState().expandedFolders).toEqual(["src", "tests"]);
 
-    useFilesPanelStore.getState().setFolderExpanded("src", false);
-    expect(useFilesPanelStore.getState().expandedFolders).toEqual(["tests"]);
+    appCommandStore(filesPanelStore).getState().setFolderExpanded("src", false);
+    expect(appCommandStore(filesPanelStore).getState().expandedFolders).toEqual(["tests"]);
   });
 
   test("collapsing an already-collapsed folder is a no-op and preserves order", () => {
-    const store = useFilesPanelStore.getState();
+    const store = appCommandStore(filesPanelStore).getState();
 
     store.setFolderExpanded("a", true);
     store.setFolderExpanded("b", true);
     store.setFolderExpanded("c", true);
 
     // Removing a path that is not expanded leaves the list untouched.
-    useFilesPanelStore.getState().setFolderExpanded("missing", false);
-    expect(useFilesPanelStore.getState().expandedFolders).toEqual(["a", "b", "c"]);
+    appCommandStore(filesPanelStore).getState().setFolderExpanded("missing", false);
+    expect(appCommandStore(filesPanelStore).getState().expandedFolders).toEqual(["a", "b", "c"]);
 
     // Removing from the middle keeps the remaining order stable.
-    useFilesPanelStore.getState().setFolderExpanded("b", false);
-    expect(useFilesPanelStore.getState().expandedFolders).toEqual(["a", "c"]);
+    appCommandStore(filesPanelStore).getState().setFolderExpanded("b", false);
+    expect(appCommandStore(filesPanelStore).getState().expandedFolders).toEqual(["a", "c"]);
   });
 
   test("ignores legacy persisted collapsedFolders so folders default to collapsed", () => {

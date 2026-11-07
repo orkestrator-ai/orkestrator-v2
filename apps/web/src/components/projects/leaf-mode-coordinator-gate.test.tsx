@@ -2,7 +2,7 @@ import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { invoke } from "@/lib/native/backend";
 import { portalStore } from "@/lib/portal/portal-store";
-import { useUIStore } from "@/stores";
+
 import { uiStore } from "@/stores/uiStore";
 import { getWindowScope } from "@/lib/node-scope/app-window-scope";
 import type { Project } from "@/types";
@@ -32,7 +32,7 @@ afterEach(() => {
     error: null,
     isLoading: false,
   });
-  useUIStore.setState({ openedLeafCoordinators: [] });
+  appCommandStore(uiStore).setState({ openedLeafCoordinators: [] });
 });
 
 /** This node's own portal status: leaf mode under the given controllers. */
@@ -226,12 +226,16 @@ describe("0410 leaf-mode gate edge cases", () => {
     expect(screen.getByTestId("leaf-mode-coordinator-gate")).toBeTruthy();
     expect(screen.queryByTestId("coordinator-chat") === null).toBe(true);
 
-    expect(useUIStore.getState().openedLeafCoordinators).toEqual(["local:leaf-project"]);
+    expect(appCommandStore(uiStore).getState().openedLeafCoordinators).toEqual([
+      "local:leaf-project",
+    ]);
     // The command scope's instance carries the `persist` API the def's type leaves out.
     const instance = getWindowScope().commandScope().store(uiStore) as unknown as {
       persist: { getOptions(): { partialize?: (state: unknown) => object } };
     };
-    const persisted = instance.persist.getOptions().partialize?.(useUIStore.getState());
+    const persisted = instance.persist
+      .getOptions()
+      .partialize?.(appCommandStore(uiStore).getState());
     expect(Object.keys(persisted ?? {})).not.toContain("openedLeafCoordinators");
   });
 });

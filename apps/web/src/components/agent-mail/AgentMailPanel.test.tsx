@@ -10,8 +10,8 @@ import type {
 } from "@orkestrator/protocol/agent-mail";
 import { useAgentMailStore } from "@/stores/agentMailStore";
 import { configStore } from "@/stores/configStore";
-import { useFilesPanelStore } from "@/stores/filesPanelStore";
-import { useUIStore } from "@/stores/uiStore";
+import { filesPanelStore } from "@/stores/filesPanelStore";
+import { uiStore } from "@/stores/uiStore";
 import {
   mockToastError as toastError,
   mockToastInfo as toastInfo,
@@ -651,11 +651,16 @@ describe("pull request links in mail", () => {
   }
 
   test("open in the right-hand PR pane and close the mail sheet that covers it", async () => {
-    useUIStore.setState({ selectedProjectId: "project-1", selectedEnvironmentId: "env-1" });
+    appCommandStore(uiStore).setState({
+      selectedProjectId: "project-1",
+      selectedEnvironmentId: "env-1",
+    });
     setFilesPanelTestState({ isOpen: false, activeTab: "changes", pullRequestTabs: {} });
     try {
       fireEvent.click(await openMailWithPullRequestLink());
-      expect(useFilesPanelStore.getState().pullRequestTabs["env-1"]?.[0]?.ref).toEqual({
+      expect(
+        appCommandStore(filesPanelStore).getState().pullRequestTabs["env-1"]?.[0]?.ref,
+      ).toEqual({
         owner: "acme",
         repo: "widget",
         number: 42,
@@ -664,13 +669,13 @@ describe("pull request links in mail", () => {
       expect(useAgentMailStore.getState().panel).toBeNull();
       expect(openInBrowser).not.toHaveBeenCalled();
     } finally {
-      useUIStore.setState({ selectedProjectId: null, selectedEnvironmentId: null });
+      appCommandStore(uiStore).setState({ selectedProjectId: null, selectedEnvironmentId: null });
       setFilesPanelTestState({ isOpen: false, pullRequestTabs: {} });
     }
   });
 
   test("fall back to GitHub and keep the sheet open when nothing can host the pane", async () => {
-    useUIStore.setState({ selectedProjectId: null, selectedEnvironmentId: null });
+    appCommandStore(uiStore).setState({ selectedProjectId: null, selectedEnvironmentId: null });
     fireEvent.click(await openMailWithPullRequestLink());
     await waitFor(() =>
       expect(openInBrowser).toHaveBeenCalledWith("https://github.com/acme/widget/pull/42"),

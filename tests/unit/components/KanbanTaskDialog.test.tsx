@@ -1,6 +1,6 @@
 import { useState } from "react";
-import { useUIStore } from "@/stores/uiStore";
-import { useFilesPanelStore } from "@/stores/filesPanelStore";
+import { uiStore } from "@/stores/uiStore";
+import { filesPanelStore } from "@/stores/filesPanelStore";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { captureLogs, type LogCapture } from "@orkestrator/protocol/testing/log-capture";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -102,6 +102,7 @@ const deleteImageMock = mock(async (_taskId: string, _imageId: string) => {});
 import * as realUseBuildPipeline from "@/hooks/useBuildPipeline";
 import * as realBackend from "@/lib/backend";
 import * as realClipboard from "@/lib/native/clipboard";
+import { appCommandStore } from "../../../apps/web/src/test/app-command-store";
 const realUseBuildPipelineSnapshot = { ...realUseBuildPipeline };
 const realBackendSnapshot = { ...realBackend };
 const realClipboardSnapshot = { ...realClipboard };
@@ -414,9 +415,9 @@ describe("KanbanTaskDialog", () => {
   });
 
   test("ticket Markdown opens the pane and dismisses the full dialog", async () => {
-    const ui = useUIStore.getState();
-    const panel = useFilesPanelStore.getState();
-    useUIStore.setState({ selectedEnvironmentId: "env-pr" });
+    const ui = appCommandStore(uiStore).getState();
+    const panel = appCommandStore(filesPanelStore).getState();
+    appCommandStore(uiStore).setState({ selectedEnvironmentId: "env-pr" });
     setFilesPanelTestState({ isOpen: false, pullRequestTabs: {} });
     function Ticket() {
       const [open, setOpen] = useState(true);
@@ -433,19 +434,21 @@ describe("KanbanTaskDialog", () => {
       fireEvent.click(screen.getByRole("link", { name: "Review PR" }));
       await waitFor(() => expect(screen.queryByRole("dialog") === null).toBe(true));
       expect(useFilesPanelChromeStore.getState().isOpen).toBe(true);
-      expect(useFilesPanelStore.getState().pullRequestTabs["env-pr"]?.[0]?.ref.number).toBe(42);
+      expect(
+        appCommandStore(filesPanelStore).getState().pullRequestTabs["env-pr"]?.[0]?.ref.number,
+      ).toBe(42);
       expect(openInBrowserMock).not.toHaveBeenCalled();
     } finally {
       cleanup();
-      useUIStore.setState(ui);
-      useFilesPanelStore.setState(panel);
+      appCommandStore(uiStore).setState(ui);
+      appCommandStore(filesPanelStore).setState(panel);
     }
   });
 
   test("ticket comment opens the pane and dismisses the full dialog", async () => {
-    const ui = useUIStore.getState();
-    const panel = useFilesPanelStore.getState();
-    useUIStore.setState({ selectedEnvironmentId: "env-pr" });
+    const ui = appCommandStore(uiStore).getState();
+    const panel = appCommandStore(filesPanelStore).getState();
+    appCommandStore(uiStore).setState({ selectedEnvironmentId: "env-pr" });
     setFilesPanelTestState({ isOpen: false, pullRequestTabs: {} });
     function Ticket() {
       const [open, setOpen] = useState(true);
@@ -470,19 +473,21 @@ describe("KanbanTaskDialog", () => {
       fireEvent.click(screen.getByRole("button", { name: "https://github.com/o/r/pull/42" }));
       await waitFor(() => expect(screen.queryByRole("dialog") === null).toBe(true));
       expect(useFilesPanelChromeStore.getState().isOpen).toBe(true);
-      expect(useFilesPanelStore.getState().pullRequestTabs["env-pr"]?.[0]?.ref.number).toBe(42);
+      expect(
+        appCommandStore(filesPanelStore).getState().pullRequestTabs["env-pr"]?.[0]?.ref.number,
+      ).toBe(42);
       expect(openInBrowserMock).not.toHaveBeenCalled();
     } finally {
       cleanup();
-      useUIStore.setState(ui);
-      useFilesPanelStore.setState(panel);
+      appCommandStore(uiStore).setState(ui);
+      appCommandStore(filesPanelStore).setState(panel);
     }
   });
 
   test("editing comment PR links open externally and preserve the unsaved draft", async () => {
-    const ui = useUIStore.getState();
-    const panel = useFilesPanelStore.getState();
-    useUIStore.setState({ selectedEnvironmentId: "env-pr" });
+    const ui = appCommandStore(uiStore).getState();
+    const panel = appCommandStore(filesPanelStore).getState();
+    appCommandStore(uiStore).setState({ selectedEnvironmentId: "env-pr" });
     setFilesPanelTestState({ isOpen: false, pullRequestTabs: {} });
     const onOpenChange = mock(() => {});
     const url = "https://github.com/o/r/pull/42";
@@ -510,8 +515,8 @@ describe("KanbanTaskDialog", () => {
       expect(onOpenChange).not.toHaveBeenCalled();
     } finally {
       cleanup();
-      useUIStore.setState(ui);
-      useFilesPanelStore.setState(panel);
+      appCommandStore(uiStore).setState(ui);
+      appCommandStore(filesPanelStore).setState(panel);
     }
   });
 

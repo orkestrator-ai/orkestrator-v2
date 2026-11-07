@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { environmentStore } from "@/stores/environmentStore";
 import { projectStore } from "@/stores/projectStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
-import { useUIStore } from "@/stores/uiStore";
+import { uiStore } from "@/stores/uiStore";
 import type { Environment, Project } from "@/types";
 import {
   __testing,
@@ -65,7 +65,7 @@ beforeEach(() => {
   appCommandStore(projectStore).setState({
     projects: [{ id: "project-1", name: "webapp" } as Project],
   });
-  useUIStore.setState({ selectedEnvironmentId: null, selectedProjectId: null });
+  appCommandStore(uiStore).setState({ selectedEnvironmentId: null, selectedProjectId: null });
 });
 
 afterEach(() => {
@@ -120,8 +120,8 @@ describe("question desktop notifications", () => {
     expect(__testing.openNotifications()).toBe(1);
     shown[0]!.listeners.get("click")!();
     expect(useRemoteWorkspaceStore.getState().active).toBeNull();
-    expect(useUIStore.getState().selectedProjectId).toBe("project-1");
-    expect(useUIStore.getState().selectedEnvironmentId).toBe("env-1");
+    expect(appCommandStore(uiStore).getState().selectedProjectId).toBe("project-1");
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("env-1");
     expect(shown[0]!.closed).toBe(true);
     expect(__testing.openNotifications()).toBe(0);
   });
@@ -137,11 +137,11 @@ describe("question desktop notifications", () => {
         } as Environment,
       ],
     });
-    useUIStore.setState({ projectBoardTab: "coordinator" });
+    appCommandStore(uiStore).setState({ projectBoardTab: "coordinator" });
     showQuestionDesktopNotification(question);
     shown[0]!.listeners.get("click")!();
-    expect(useUIStore.getState().projectBoardTab).toBe("home");
-    expect(useUIStore.getState().selectedEnvironmentId).toBe("env-1");
+    expect(appCommandStore(uiStore).getState().projectBoardTab).toBe("home");
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("env-1");
   });
 
   test("keeps a bounded number of notifications reachable", () => {

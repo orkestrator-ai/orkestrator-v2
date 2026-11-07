@@ -5,7 +5,7 @@ import type { PeerMailPresentation } from "@/lib/chat/native-message-types";
 import { portalStore } from "@/lib/portal/portal-store";
 import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
-import { useUIStore } from "@/stores/uiStore";
+import { uiStore } from "@/stores/uiStore";
 import { useAgentMailStore } from "@/stores/agentMailStore";
 import { environmentStore } from "@/stores/environmentStore";
 import type { Environment } from "@/types";
@@ -87,8 +87,8 @@ describe("the Open action on a notice about a worker", () => {
     expect(button.closest("button[aria-expanded]") === null).toBe(true);
     expect(screen.getByRole("button", { name: "Open conversation" })).toBeTruthy();
     fireEvent.click(button);
-    expect(useUIStore.getState().selectedEnvironmentId).toBe("worker-env");
-    expect(useUIStore.getState().selectedProjectId).toBe("project-1");
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("worker-env");
+    expect(appCommandStore(uiStore).getState().selectedProjectId).toBe("project-1");
   });
 
   test("opening does not expand the tile", () => {
@@ -115,7 +115,7 @@ describe("the Open action on a notice about a worker", () => {
       />,
     );
     fireEvent.click(openButton()!);
-    expect(useUIStore.getState().selectedEnvironmentId).toBe("worker-env");
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("worker-env");
   });
 
   test("a worker on another node opens through that node", () => {

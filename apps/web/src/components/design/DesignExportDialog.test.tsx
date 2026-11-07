@@ -8,11 +8,12 @@ import type {
   DesignWorkspaceMeta,
 } from "@orkestrator/protocol/design-operations";
 import { emptyProjection, type DesignIntent, type DesignProjection } from "@/stores/designStore";
-import { useFilesPanelStore } from "@/stores";
+import { filesPanelStore } from "@/stores";
 import type { FileNode } from "@/lib/backend";
 import { DesignClientError } from "@/lib/design-client";
 import type { DesignCanvasController } from "./design-controller";
 import { DesignExportDialog, type DesignExportApi } from "./DesignExportDialog";
+import { appCommandStore } from "@/test/app-command-store";
 
 const environmentId = "env-1";
 const canvasId = "canvas-1";
@@ -122,7 +123,7 @@ beforeEach(() => {
   exportSave.mockReset();
   settleEdits.mockReset();
   refresh.mockClear();
-  useFilesPanelStore.setState({ fileTree: [] });
+  appCommandStore(filesPanelStore).setState({ fileTree: [] });
 });
 
 afterEach(() => cleanup());
@@ -158,7 +159,7 @@ describe("DesignExportDialog", () => {
   });
 
   test("folder suggestions include valid nested directories and omit files and hidden paths", async () => {
-    useFilesPanelStore.setState({
+    appCommandStore(filesPanelStore).setState({
       fileTree: [
         {
           name: "mocks",

@@ -1,9 +1,10 @@
 import { describe, test, expect, mock, beforeEach, afterEach } from "bun:test";
 import { render, screen, cleanup, fireEvent } from "@testing-library/react";
 import { CommentText } from "@/components/kanban/KanbanTaskDialog";
-import { useUIStore } from "@/stores/uiStore";
+import { uiStore } from "@/stores/uiStore";
 import { filesPanelTestState, setFilesPanelTestState } from "@/test/files-panel-state";
 import { useFilesPanelChromeStore } from "@/stores/filesPanelChromeStore";
+import { appCommandStore } from "../../../apps/web/src/test/app-command-store";
 
 // `openInBrowser` reaches the browser through the desktop shell; stand in for it.
 const mockOpenInBrowser = mock((_url: string) => Promise.resolve());
@@ -17,7 +18,10 @@ describe("CommentText", () => {
       ...originalOrkestrator,
       shell: { ...originalOrkestrator?.shell, openExternal: mockOpenInBrowser },
     } as never;
-    useUIStore.setState({ selectedProjectId: "project-1", selectedEnvironmentId: "env-1" });
+    appCommandStore(uiStore).setState({
+      selectedProjectId: "project-1",
+      selectedEnvironmentId: "env-1",
+    });
     setFilesPanelTestState({ isOpen: false, activeTab: "changes", pullRequestTabs: {} });
   });
 
@@ -89,7 +93,7 @@ describe("CommentText", () => {
     expect(panel.pullRequestTabs["env-1"]?.map((tab) => tab.ref)).toEqual([
       { owner: "org", repo: "repo", number: 42 },
     ]);
-    expect(useUIStore.getState().selectedEnvironmentId).toBe("env-1");
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("env-1");
   });
 
   test("Cmd-click keeps a pull request link on GitHub", () => {

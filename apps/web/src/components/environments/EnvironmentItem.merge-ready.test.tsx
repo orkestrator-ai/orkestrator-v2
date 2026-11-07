@@ -3,9 +3,10 @@ import { act, cleanup, fireEvent, render, screen, within } from "@testing-librar
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import type { PrMonitorEnvironmentState } from "@orkestrator/protocol/pr-monitor";
 import type { Environment } from "@/types";
-import { useAgentActivityStore } from "@/stores/agentActivityStore";
-import { usePrMonitorStore } from "@/stores/prMonitorStore";
+import { agentActivityStore } from "@/stores/agentActivityStore";
+import { prMonitorStore } from "@/stores/prMonitorStore";
 import { EnvironmentItem } from "./EnvironmentItem";
+import { appCommandStore } from "@/test/app-command-store";
 
 const PR = "https://github.com/acme/repo/pull/7";
 
@@ -80,16 +81,19 @@ function description(element: HTMLElement): string {
 
 beforeEach(() => {
   useBuildPipelineStore.setState({ activeBuildEnvironmentIds: new Set() });
-  usePrMonitorStore.setState({ states: new Map(), syncStatus: "idle" });
-  useAgentActivityStore.setState({ containerStates: {}, containerStateUpdatedAt: {} });
+  appCommandStore(prMonitorStore).setState({ states: new Map(), syncStatus: "idle" });
+  appCommandStore(agentActivityStore).setState({
+    containerStates: {},
+    containerStateUpdatedAt: {},
+  });
 });
 
 afterEach(cleanup);
 
 describe("EnvironmentItem ready-to-merge shimmer", () => {
   test("shimmers the name and describes the row while the PR is ready to merge", () => {
-    usePrMonitorStore.getState().applySnapshot([monitorState()]);
-    usePrMonitorStore.getState().setSyncStatus("current");
+    appCommandStore(prMonitorStore).getState().applySnapshot([monitorState()]);
+    appCommandStore(prMonitorStore).getState().setSyncStatus("current");
     renderItem(readyEnvironment());
 
     expect(nameElement().classList).toContain("text-shimmer");
@@ -104,8 +108,8 @@ describe("EnvironmentItem ready-to-merge shimmer", () => {
   });
 
   test("reduced motion gets a static indicator; the hover card says it in words", async () => {
-    usePrMonitorStore.getState().applySnapshot([monitorState()]);
-    usePrMonitorStore.getState().setSyncStatus("current");
+    appCommandStore(prMonitorStore).getState().applySnapshot([monitorState()]);
+    appCommandStore(prMonitorStore).getState().setSyncStatus("current");
     renderItem(readyEnvironment());
 
     // The icon is CSS-gated: hidden unless prefers-reduced-motion (or forced
@@ -122,8 +126,8 @@ describe("EnvironmentItem ready-to-merge shimmer", () => {
   });
 
   test("stops as soon as the PR is merged, conflicts, or a check fails", () => {
-    usePrMonitorStore.getState().applySnapshot([monitorState()]);
-    usePrMonitorStore.getState().setSyncStatus("current");
+    appCommandStore(prMonitorStore).getState().applySnapshot([monitorState()]);
+    appCommandStore(prMonitorStore).getState().setSyncStatus("current");
     const view = renderItem(readyEnvironment());
     expect(nameElement().classList).toContain("text-shimmer");
 
@@ -144,15 +148,19 @@ describe("EnvironmentItem ready-to-merge shimmer", () => {
     expect(nameElement().classList).toContain("text-shimmer");
 
     act(() => {
-      usePrMonitorStore.getState().applyEvent({
-        environmentId: "env-1",
-        state: monitorState({ checkSummary: { passed: 2, total: 3, pending: 0 } }),
-      });
+      appCommandStore(prMonitorStore)
+        .getState()
+        .applyEvent({
+          environmentId: "env-1",
+          state: monitorState({ checkSummary: { passed: 2, total: 3, pending: 0 } }),
+        });
     });
     expect(nameElement().classList).not.toContain("text-shimmer");
 
     act(() => {
-      usePrMonitorStore.getState().applyEvent({ environmentId: "env-1", state: monitorState() });
+      appCommandStore(prMonitorStore)
+        .getState()
+        .applyEvent({ environmentId: "env-1", state: monitorState() });
     });
     expect(nameElement().classList).toContain("text-shimmer");
 
@@ -167,25 +175,27 @@ describe("EnvironmentItem ready-to-merge shimmer", () => {
   });
 
   test("does not shimmer while the PR reading is stale or unconfirmed", () => {
-    usePrMonitorStore.getState().applySnapshot([monitorState()]);
-    usePrMonitorStore.getState().setSyncStatus("stale");
+    appCommandStore(prMonitorStore).getState().applySnapshot([monitorState()]);
+    appCommandStore(prMonitorStore).getState().setSyncStatus("stale");
     renderItem(readyEnvironment());
     expect(nameElement().classList).not.toContain("text-shimmer");
 
-    act(() => usePrMonitorStore.getState().setSyncStatus("current"));
+    act(() => appCommandStore(prMonitorStore).getState().setSyncStatus("current"));
     expect(nameElement().classList).toContain("text-shimmer");
 
     act(() => {
-      usePrMonitorStore.getState().applyEvent({
-        environmentId: "env-1",
-        state: monitorState({ consecutiveErrors: 1 }),
-      });
+      appCommandStore(prMonitorStore)
+        .getState()
+        .applyEvent({
+          environmentId: "env-1",
+          state: monitorState({ consecutiveErrors: 1 }),
+        });
     });
     expect(nameElement().classList).not.toContain("text-shimmer");
   });
 
   test("an environment without a PR never shimmers", () => {
-    usePrMonitorStore.getState().setSyncStatus("current");
+    appCommandStore(prMonitorStore).getState().setSyncStatus("current");
     renderItem(
       readyEnvironment({
         prUrl: null,
@@ -201,8 +211,10 @@ describe("EnvironmentItem ready-to-merge shimmer", () => {
 
 describe("EnvironmentItem merge-conflicts and needs-answer shimmers", () => {
   test("shimmers red while a current reading shows merge conflicts", () => {
-    usePrMonitorStore.getState().applySnapshot([monitorState({ hasMergeConflicts: true })]);
-    usePrMonitorStore.getState().setSyncStatus("current");
+    appCommandStore(prMonitorStore)
+      .getState()
+      .applySnapshot([monitorState({ hasMergeConflicts: true })]);
+    appCommandStore(prMonitorStore).getState().setSyncStatus("current");
     renderItem(readyEnvironment({ hasMergeConflicts: true, prMergeability: "dirty" }));
 
     expect(nameElement().classList).toContain("text-shimmer");
@@ -216,8 +228,8 @@ describe("EnvironmentItem merge-conflicts and needs-answer shimmers", () => {
   });
 
   test("pipeline-only transitions override waiting just as in title and search", () => {
-    usePrMonitorStore.getState().applySnapshot([monitorState()]);
-    usePrMonitorStore.getState().setSyncStatus("current");
+    appCommandStore(prMonitorStore).getState().applySnapshot([monitorState()]);
+    appCommandStore(prMonitorStore).getState().setSyncStatus("current");
     renderItem(
       readyEnvironment({
         agentActivityState: "waiting",
@@ -232,15 +244,17 @@ describe("EnvironmentItem merge-conflicts and needs-answer shimmers", () => {
   });
 
   test("a stale conflict reading does not shimmer", () => {
-    usePrMonitorStore.getState().applySnapshot([monitorState({ hasMergeConflicts: true })]);
-    usePrMonitorStore.getState().setSyncStatus("stale");
+    appCommandStore(prMonitorStore)
+      .getState()
+      .applySnapshot([monitorState({ hasMergeConflicts: true })]);
+    appCommandStore(prMonitorStore).getState().setSyncStatus("stale");
     renderItem(readyEnvironment({ hasMergeConflicts: true, prMergeability: "dirty" }));
     expect(nameElement().classList).not.toContain("text-shimmer");
   });
 
   test("shimmers yellow while the agent waits for an answer, over any PR state", async () => {
-    usePrMonitorStore.getState().applySnapshot([monitorState()]);
-    usePrMonitorStore.getState().setSyncStatus("current");
+    appCommandStore(prMonitorStore).getState().applySnapshot([monitorState()]);
+    appCommandStore(prMonitorStore).getState().setSyncStatus("current");
     const view = renderItem(
       readyEnvironment({
         agentActivityState: "waiting",

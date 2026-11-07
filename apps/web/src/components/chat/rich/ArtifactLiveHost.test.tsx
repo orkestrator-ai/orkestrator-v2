@@ -17,7 +17,7 @@ import { getWindowScope } from "@/lib/node-scope/app-window-scope";
 import { FakeNodeClient } from "@/test/render-in-node-scope";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import { environmentStore } from "@/stores/environmentStore";
-import { useUIStore } from "@/stores/uiStore";
+import { uiStore } from "@/stores/uiStore";
 import type { Environment } from "@/types";
 import { ArtifactLiveHost, ArtifactLivePlaceholder } from "./ArtifactLiveHost";
 import { appCommandStore } from "@/test/app-command-store";
@@ -507,7 +507,10 @@ describe("ArtifactLiveHost scope invalidation", () => {
         environments: [],
         deletingEnvironments: new Set(),
       });
-      useUIStore.setState({ selectedEnvironmentId: null, selectedEnvironmentIds: [] });
+      appCommandStore(uiStore).setState({
+        selectedEnvironmentId: null,
+        selectedEnvironmentIds: [],
+      });
     });
   });
 
@@ -516,7 +519,7 @@ describe("ArtifactLiveHost scope invalidation", () => {
       appCommandStore(environmentStore).setState({
         environments: [environment("env-1"), environment("env-2")],
       });
-      useUIStore.setState({ selectedEnvironmentId: "env-1" });
+      appCommandStore(uiStore).setState({ selectedEnvironmentId: "env-1" });
     });
     await startA();
     act(() => appCommandStore(environmentStore).getState().removeEnvironment("env-1"));
@@ -540,7 +543,7 @@ describe("ArtifactLiveHost scope invalidation", () => {
       appCommandStore(environmentStore).setState({
         environments: [environment("env-1"), environment("env-2")],
       });
-      useUIStore.setState({ selectedEnvironmentId: "env-1" });
+      appCommandStore(uiStore).setState({ selectedEnvironmentId: "env-1" });
     });
     await startA();
     // An unrelated environment update keeps the view.
@@ -548,7 +551,7 @@ describe("ArtifactLiveHost scope invalidation", () => {
       appCommandStore(environmentStore).getState().updateEnvironment("env-2", { name: "renamed" }),
     );
     expect(useArtifactLiveHostStore.getState().active).not.toBeNull();
-    act(() => useUIStore.setState({ selectedEnvironmentId: "env-2" }));
+    act(() => appCommandStore(uiStore).setState({ selectedEnvironmentId: "env-2" }));
     expect(useArtifactLiveHostStore.getState().active).toBeNull();
     expect(useArtifactLiveHostStore.getState().ended?.reason).toBe(
       LIVE_HOST_INVALIDATION_REASONS.environmentChanged,

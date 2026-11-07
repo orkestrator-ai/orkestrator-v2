@@ -33,7 +33,7 @@ import * as modelPicker from "@/components/chat/AgentModelPicker";
 import * as realPaneLayoutPersistence from "@/lib/pane-layout-persistence";
 import { configStore, useConfigStore } from "@/stores/configStore";
 import { environmentStore } from "@/stores/environmentStore";
-import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
+import { agentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import {
   nativeComposeDraft,
@@ -42,7 +42,7 @@ import {
 } from "@/stores/nativeComposeStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { useNativeNoticeDismissalStore } from "@/stores/nativeNoticeDismissalStore";
-import { useMultiReviewStore } from "@/stores/multiReviewStore";
+import { multiReviewStore } from "@/stores/multiReviewStore";
 import { TEST_STRUCTURED_REVIEW_REPORT } from "@/components/build-pipeline/structured-review-test-fixture";
 import { pipelineSessionTabOptions } from "@/components/build-pipeline/PipelineFlowView";
 import { build, session } from "@/components/build-pipeline/pipeline-test-fixture";
@@ -486,7 +486,11 @@ let configSnapshot: ReturnType<typeof useConfigStore.getState>["config"];
 beforeEach(() => {
   configSnapshot = appCommandStore(configStore).getState().config;
   useNativeNoticeDismissalStore.getState().clear();
-  useAgentModelCatalogStore.setState({ cursorModels: [], grokModels: [], piModels: [] });
+  appCommandStore(agentModelCatalogStore).setState({
+    cursorModels: [],
+    grokModels: [],
+    piModels: [],
+  });
   appCommandStore(environmentStore).setState({
     environments: [
       {
@@ -667,7 +671,7 @@ afterEach(() => {
   useNativeComposeStore.setState({ drafts: new Map() });
   useNativeAgentProjectionStore.getState().reset();
   useNativeNoticeDismissalStore.getState().clear();
-  useMultiReviewStore.setState({ workflows: new Map() });
+  appCommandStore(multiReviewStore).setState({ workflows: new Map() });
 });
 
 afterAll(() => {
@@ -4365,9 +4369,11 @@ describe("AgentNativeTab", () => {
     fireEvent.pointerDown(picker);
     fireEvent.click(screen.getByRole("button", { name: "cursor models" }));
     expect(screen.getByRole("menuitemradio", { name: /Composer 2.5/ })).toBeTruthy();
-    expect(useAgentModelCatalogStore.getState().cursorModels.map((model) => model.id)).toEqual([
-      "composer-2.5",
-    ]);
+    expect(
+      appCommandStore(agentModelCatalogStore)
+        .getState()
+        .cursorModels.map((model) => model.id),
+    ).toEqual(["composer-2.5"]);
   });
 
   test("requests a first-use Pi catalogue when the selected platform has no cached list", async () => {
@@ -4408,9 +4414,11 @@ describe("AgentNativeTab", () => {
 
     await waitFor(() => expect(getNativeAgentModelCatalogMock).toHaveBeenCalledWith("env-1", "pi"));
     expect((await screen.findByTitle(/Choose model/)).textContent).toContain("GPT-5.4");
-    expect(useAgentModelCatalogStore.getState().piModels.map((model) => model.id)).toEqual([
-      "openai-codex/gpt-5.4",
-    ]);
+    expect(
+      appCommandStore(agentModelCatalogStore)
+        .getState()
+        .piModels.map((model) => model.id),
+    ).toEqual(["openai-codex/gpt-5.4"]);
   });
 
   test("deduplicates the first-use request across StrictMode effect replay", async () => {
@@ -4465,9 +4473,11 @@ describe("AgentNativeTab", () => {
       await waitFor(() =>
         expect(screen.getByTitle(/Choose model/).textContent).toContain("GPT-5.4"),
       );
-      expect(useAgentModelCatalogStore.getState().piModels.map((model) => model.id)).toEqual([
-        "openai-codex/gpt-5.4",
-      ]);
+      expect(
+        appCommandStore(agentModelCatalogStore)
+          .getState()
+          .piModels.map((model) => model.id),
+      ).toEqual(["openai-codex/gpt-5.4"]);
       expect(logs.records()).toContainEqual(
         expect.objectContaining({
           level: "warn",
@@ -7271,7 +7281,7 @@ describe("AgentNativeTab", () => {
   });
 
   test("drops a configured speed default for a model that does not support it", async () => {
-    useAgentModelCatalogStore.setState({
+    appCommandStore(agentModelCatalogStore).setState({
       cursorModels: [
         {
           platform: "cursor",
@@ -9244,12 +9254,14 @@ describe("AgentNativeTab", () => {
   test("pins the consolidated review report above an Address Findings tab's opening prompt", async () => {
     renderVirtualizedMessages = true;
     const tabId = "multi-review-fix:multi-1:launch-1";
-    useMultiReviewStore.getState().replaceWorkflow({
-      id: "multi-1",
-      environmentId: "env-1",
-      consolidatedReport: TEST_STRUCTURED_REVIEW_REPORT,
-      backendRevision: 2,
-    } as never);
+    appCommandStore(multiReviewStore)
+      .getState()
+      .replaceWorkflow({
+        id: "multi-1",
+        environmentId: "env-1",
+        consolidatedReport: TEST_STRUCTURED_REVIEW_REPORT,
+        backendRevision: 2,
+      } as never);
     getNativeAgentProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input)),
       messages: [
@@ -9276,12 +9288,14 @@ describe("AgentNativeTab", () => {
     renderVirtualizedMessages = true;
     const tabId = "multi-review-fix:multi-1:legacy";
     const preparation = `${REVIEW_VALIDATION_DISCOVERY_PROMPT_PREFIX}"main"${REVIEW_VALIDATION_DISCOVERY_BRANCH_CLAUSE}\n\n${REVIEW_VALIDATION_DISCOVERY_PROMPT_SIGNATURE} Usually one batched inventory read`;
-    useMultiReviewStore.getState().replaceWorkflow({
-      id: "multi-1",
-      environmentId: "env-1",
-      consolidatedReport: TEST_STRUCTURED_REVIEW_REPORT,
-      backendRevision: 2,
-    } as never);
+    appCommandStore(multiReviewStore)
+      .getState()
+      .replaceWorkflow({
+        id: "multi-1",
+        environmentId: "env-1",
+        consolidatedReport: TEST_STRUCTURED_REVIEW_REPORT,
+        backendRevision: 2,
+      } as never);
     getNativeAgentProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input)),
       messages: [
@@ -9328,12 +9342,14 @@ describe("AgentNativeTab", () => {
   test("keeps the report on the opening prompt when a later follow-up is present", async () => {
     renderVirtualizedMessages = true;
     const tabId = "multi-review-fix:multi-1:follow-up";
-    useMultiReviewStore.getState().replaceWorkflow({
-      id: "multi-1",
-      environmentId: "env-1",
-      consolidatedReport: TEST_STRUCTURED_REVIEW_REPORT,
-      backendRevision: 2,
-    } as never);
+    appCommandStore(multiReviewStore)
+      .getState()
+      .replaceWorkflow({
+        id: "multi-1",
+        environmentId: "env-1",
+        consolidatedReport: TEST_STRUCTURED_REVIEW_REPORT,
+        backendRevision: 2,
+      } as never);
     getNativeAgentProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input)),
       messages: [
@@ -9380,12 +9396,14 @@ describe("AgentNativeTab", () => {
   test("does not pin the report above a later follow-up when earlier turns are still unloaded", async () => {
     renderVirtualizedMessages = true;
     const tabId = "multi-review-fix:multi-1:windowed";
-    useMultiReviewStore.getState().replaceWorkflow({
-      id: "multi-1",
-      environmentId: "env-1",
-      consolidatedReport: TEST_STRUCTURED_REVIEW_REPORT,
-      backendRevision: 2,
-    } as never);
+    appCommandStore(multiReviewStore)
+      .getState()
+      .replaceWorkflow({
+        id: "multi-1",
+        environmentId: "env-1",
+        consolidatedReport: TEST_STRUCTURED_REVIEW_REPORT,
+        backendRevision: 2,
+      } as never);
     getNativeAgentProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input)),
       messageWindow: {

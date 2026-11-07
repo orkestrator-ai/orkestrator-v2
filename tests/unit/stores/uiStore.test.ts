@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { uiStore, useUIStore } from "../../../apps/web/src/stores/uiStore";
+import { uiStore } from "../../../apps/web/src/stores/uiStore";
 import { createUIChromeStore } from "../../../apps/web/src/stores/uiChromeStore";
 import {
   COMMAND_STORAGE_NODE,
@@ -9,6 +9,7 @@ import {
 import { resetWindowScopeForTests } from "../../../apps/web/src/lib/node-scope/app-window-scope";
 import { WindowScope } from "../../../apps/web/src/lib/node-scope/window-scope";
 import { FakeNodeClient } from "../../../apps/web/src/test/render-in-node-scope";
+import { appCommandStore } from "../../../apps/web/src/test/app-command-store";
 
 // The window's chrome (sidebar, width, sort, zoom) is `uiChromeStore`, one per
 // window and persisted under the window key; a node's selection, collapsed
@@ -33,7 +34,7 @@ describe("uiStore", () => {
     resetWindowScopeForTests();
     chrome = createUIChromeStore();
     // Reset store between tests
-    useUIStore.setState({
+    appCommandStore(uiStore).setState({
       selectedProjectId: null,
       selectedEnvironmentId: null,
       recentProjectIds: [],
@@ -52,7 +53,7 @@ describe("uiStore", () => {
   });
 
   test("initial state has correct defaults", () => {
-    const state = useUIStore.getState();
+    const state = appCommandStore(uiStore).getState();
     expect(state.selectedProjectId).toBeNull();
     expect(state.selectedEnvironmentId).toBeNull();
     expect(state.recentProjectIds).toEqual([]);
@@ -90,14 +91,14 @@ describe("uiStore", () => {
   });
 
   test("selectProject sets project and clears environment and multi-selection", () => {
-    useUIStore.setState({
+    appCommandStore(uiStore).setState({
       selectedEnvironmentId: "env-1",
       selectedEnvironmentIds: ["env-1", "env-2"],
     });
 
-    useUIStore.getState().selectProject("project-1");
+    appCommandStore(uiStore).getState().selectProject("project-1");
 
-    const state = useUIStore.getState();
+    const state = appCommandStore(uiStore).getState();
     expect(state.selectedProjectId).toBe("project-1");
     expect(state.selectedEnvironmentId).toBeNull();
     expect(state.selectedEnvironmentIds).toEqual([]);
@@ -105,36 +106,36 @@ describe("uiStore", () => {
   });
 
   test("selectProject with null clears selection", () => {
-    useUIStore.setState({
+    appCommandStore(uiStore).setState({
       selectedProjectId: "project-1",
       selectedEnvironmentId: "env-1",
     });
 
-    useUIStore.getState().selectProject(null);
+    appCommandStore(uiStore).getState().selectProject(null);
 
-    const state = useUIStore.getState();
+    const state = appCommandStore(uiStore).getState();
     expect(state.selectedProjectId).toBeNull();
     expect(state.selectedEnvironmentId).toBeNull();
   });
 
   test("selectEnvironment sets environment id", () => {
-    useUIStore.getState().selectEnvironment("env-1");
-    expect(useUIStore.getState().selectedEnvironmentId).toBe("env-1");
+    appCommandStore(uiStore).getState().selectEnvironment("env-1");
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("env-1");
   });
 
   test("selectEnvironment with null clears environment", () => {
-    useUIStore.setState({ selectedEnvironmentId: "env-1" });
+    appCommandStore(uiStore).setState({ selectedEnvironmentId: "env-1" });
 
-    useUIStore.getState().selectEnvironment(null);
-    expect(useUIStore.getState().selectedEnvironmentId).toBeNull();
+    appCommandStore(uiStore).getState().selectEnvironment(null);
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBeNull();
   });
 
   test("setProjectBoardTab updates the board tab", () => {
-    useUIStore.setState({ projectBoardTab: "kanban" });
+    appCommandStore(uiStore).setState({ projectBoardTab: "kanban" });
 
-    useUIStore.getState().setProjectBoardTab("notes");
+    appCommandStore(uiStore).getState().setProjectBoardTab("notes");
 
-    expect(useUIStore.getState().projectBoardTab).toBe("notes");
+    expect(appCommandStore(uiStore).getState().projectBoardTab).toBe("notes");
   });
 
   test("setSidebarWidth updates the width", () => {
@@ -146,9 +147,9 @@ describe("uiStore", () => {
   });
 
   test("selectProjectAndEnvironment sets both", () => {
-    useUIStore.getState().selectProjectAndEnvironment("project-1", "env-1");
+    appCommandStore(uiStore).getState().selectProjectAndEnvironment("project-1", "env-1");
 
-    const state = useUIStore.getState();
+    const state = appCommandStore(uiStore).getState();
     expect(state.selectedProjectId).toBe("project-1");
     expect(state.selectedEnvironmentId).toBe("env-1");
     expect(state.recentProjectIds).toEqual(["project-1"]);
@@ -156,62 +157,78 @@ describe("uiStore", () => {
 
   test("keeps the five most recently opened projects without duplicates", () => {
     for (const projectId of ["p1", "p2", "p3", "p4", "p5", "p6", "p3"]) {
-      useUIStore.getState().selectProject(projectId);
+      appCommandStore(uiStore).getState().selectProject(projectId);
     }
 
-    expect(useUIStore.getState().recentProjectIds).toEqual(["p3", "p6", "p5", "p4", "p2"]);
+    expect(appCommandStore(uiStore).getState().recentProjectIds).toEqual([
+      "p3",
+      "p6",
+      "p5",
+      "p4",
+      "p2",
+    ]);
 
-    useUIStore.getState().selectProject(null);
-    expect(useUIStore.getState().recentProjectIds).toEqual(["p3", "p6", "p5", "p4", "p2"]);
+    appCommandStore(uiStore).getState().selectProject(null);
+    expect(appCommandStore(uiStore).getState().recentProjectIds).toEqual([
+      "p3",
+      "p6",
+      "p5",
+      "p4",
+      "p2",
+    ]);
   });
 
   test("toggleProjectCollapse adds and removes", () => {
-    useUIStore.getState().toggleProjectCollapse("project-1");
-    expect(useUIStore.getState().collapsedProjects).toEqual(["project-1"]);
+    appCommandStore(uiStore).getState().toggleProjectCollapse("project-1");
+    expect(appCommandStore(uiStore).getState().collapsedProjects).toEqual(["project-1"]);
 
-    useUIStore.getState().toggleProjectCollapse("project-1");
-    expect(useUIStore.getState().collapsedProjects).toEqual([]);
+    appCommandStore(uiStore).getState().toggleProjectCollapse("project-1");
+    expect(appCommandStore(uiStore).getState().collapsedProjects).toEqual([]);
   });
 
   test("setProjectCollapsed sets collapsed state", () => {
-    useUIStore.getState().setProjectCollapsed("project-1", true);
-    expect(useUIStore.getState().collapsedProjects).toEqual(["project-1"]);
+    appCommandStore(uiStore).getState().setProjectCollapsed("project-1", true);
+    expect(appCommandStore(uiStore).getState().collapsedProjects).toEqual(["project-1"]);
 
     // No duplicate when already collapsed
-    useUIStore.getState().setProjectCollapsed("project-1", true);
-    expect(useUIStore.getState().collapsedProjects).toEqual(["project-1"]);
+    appCommandStore(uiStore).getState().setProjectCollapsed("project-1", true);
+    expect(appCommandStore(uiStore).getState().collapsedProjects).toEqual(["project-1"]);
 
-    useUIStore.getState().setProjectCollapsed("project-1", false);
-    expect(useUIStore.getState().collapsedProjects).toEqual([]);
+    appCommandStore(uiStore).getState().setProjectCollapsed("project-1", false);
+    expect(appCommandStore(uiStore).getState().collapsedProjects).toEqual([]);
   });
 
   test("toggleEnvironmentSelection adds and removes", () => {
-    useUIStore.getState().toggleEnvironmentSelection("env-1");
-    expect(useUIStore.getState().selectedEnvironmentIds).toEqual(["env-1"]);
+    appCommandStore(uiStore).getState().toggleEnvironmentSelection("env-1");
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentIds).toEqual(["env-1"]);
 
-    useUIStore.getState().toggleEnvironmentSelection("env-2");
-    expect(useUIStore.getState().selectedEnvironmentIds).toEqual(["env-1", "env-2"]);
+    appCommandStore(uiStore).getState().toggleEnvironmentSelection("env-2");
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentIds).toEqual(["env-1", "env-2"]);
 
-    useUIStore.getState().toggleEnvironmentSelection("env-1");
-    expect(useUIStore.getState().selectedEnvironmentIds).toEqual(["env-2"]);
+    appCommandStore(uiStore).getState().toggleEnvironmentSelection("env-1");
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentIds).toEqual(["env-2"]);
   });
 
   test("setMultiSelection and clearMultiSelection", () => {
-    useUIStore.getState().setMultiSelection(["env-1", "env-2", "env-3"]);
-    expect(useUIStore.getState().selectedEnvironmentIds).toEqual(["env-1", "env-2", "env-3"]);
+    appCommandStore(uiStore).getState().setMultiSelection(["env-1", "env-2", "env-3"]);
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentIds).toEqual([
+      "env-1",
+      "env-2",
+      "env-3",
+    ]);
 
-    useUIStore.getState().clearMultiSelection();
-    expect(useUIStore.getState().selectedEnvironmentIds).toEqual([]);
+    appCommandStore(uiStore).getState().clearMultiSelection();
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentIds).toEqual([]);
   });
 
   test("toggleSessionsExpanded and isSessionsExpanded", () => {
-    expect(useUIStore.getState().isSessionsExpanded("env-1")).toBe(false);
+    expect(appCommandStore(uiStore).getState().isSessionsExpanded("env-1")).toBe(false);
 
-    useUIStore.getState().toggleSessionsExpanded("env-1");
-    expect(useUIStore.getState().isSessionsExpanded("env-1")).toBe(true);
+    appCommandStore(uiStore).getState().toggleSessionsExpanded("env-1");
+    expect(appCommandStore(uiStore).getState().isSessionsExpanded("env-1")).toBe(true);
 
-    useUIStore.getState().toggleSessionsExpanded("env-1");
-    expect(useUIStore.getState().isSessionsExpanded("env-1")).toBe(false);
+    appCommandStore(uiStore).getState().toggleSessionsExpanded("env-1");
+    expect(appCommandStore(uiStore).getState().isSessionsExpanded("env-1")).toBe(false);
   });
 
   test("sets and persists the environment sort mode", () => {
@@ -260,8 +277,8 @@ describe("uiStore", () => {
   });
 
   test("no longer persists unread activity, which the environment record owns", () => {
-    useUIStore.getState().selectEnvironment("env-1");
-    useUIStore.getState().setProjectCollapsed("project-1", true);
+    appCommandStore(uiStore).getState().selectEnvironment("env-1");
+    appCommandStore(uiStore).getState().setProjectCollapsed("project-1", true);
     chrome.getState().setZoomLevel(110);
 
     // Unread state moved onto the Environment record so every connected client
@@ -274,7 +291,7 @@ describe("uiStore", () => {
       expect(persisted.state).toBeDefined();
       expect(persisted.state).not.toHaveProperty("unreadEnvironmentIds");
     }
-    expect(useUIStore.getState()).not.toHaveProperty("unreadEnvironmentIds");
+    expect(appCommandStore(uiStore).getState()).not.toHaveProperty("unreadEnvironmentIds");
     expect(chrome.getState()).not.toHaveProperty("unreadEnvironmentIds");
   });
 
@@ -315,29 +332,31 @@ describe("uiStore", () => {
 
   test("collapseEmptyProjects collapses only empty projects", () => {
     const projectsWithEnvs = new Set(["project-2"]);
-    useUIStore
+    appCommandStore(uiStore)
       .getState()
       .collapseEmptyProjects(["project-1", "project-2", "project-3"], projectsWithEnvs);
 
-    const collapsed = useUIStore.getState().collapsedProjects;
+    const collapsed = appCommandStore(uiStore).getState().collapsedProjects;
     expect(collapsed).toContain("project-1");
     expect(collapsed).toContain("project-3");
     expect(collapsed).not.toContain("project-2");
   });
 
   test("collapseEmptyProjects is a no-op when every empty project is already collapsed", () => {
-    useUIStore.setState({ collapsedProjects: ["project-1"] });
-    const before = useUIStore.getState();
+    appCommandStore(uiStore).setState({ collapsedProjects: ["project-1"] });
+    const before = appCommandStore(uiStore).getState();
 
-    useUIStore.getState().collapseEmptyProjects(["project-1", "project-2"], new Set(["project-2"]));
+    appCommandStore(uiStore)
+      .getState()
+      .collapseEmptyProjects(["project-1", "project-2"], new Set(["project-2"]));
 
-    expect(useUIStore.getState()).toBe(before);
-    expect(useUIStore.getState().collapsedProjects).toEqual(["project-1"]);
+    expect(appCommandStore(uiStore).getState()).toBe(before);
+    expect(appCommandStore(uiStore).getState().collapsedProjects).toEqual(["project-1"]);
   });
 
   test("persists and rehydrates recent project history without transient selection", () => {
-    useUIStore.getState().selectProject("project-1");
-    useUIStore.getState().selectProject("project-2");
+    appCommandStore(uiStore).getState().selectProject("project-1");
+    appCommandStore(uiStore).getState().selectProject("project-2");
     chrome.getState().setEnvironmentSortMode("activity");
 
     const persistedRaw = localStorage.getItem(NODE_KEY) ?? "{}";
@@ -364,46 +383,46 @@ describe("uiStore", () => {
   });
 
   test("toggles and sets folder collapse independently of project collapse", () => {
-    useUIStore.setState({ collapsedProjectFolders: [], collapsedProjects: [] });
+    appCommandStore(uiStore).setState({ collapsedProjectFolders: [], collapsedProjects: [] });
 
-    useUIStore.getState().toggleProjectFolderCollapse("Work");
-    expect(useUIStore.getState().collapsedProjectFolders).toEqual(["Work"]);
-    expect(useUIStore.getState().collapsedProjects).toEqual([]);
+    appCommandStore(uiStore).getState().toggleProjectFolderCollapse("Work");
+    expect(appCommandStore(uiStore).getState().collapsedProjectFolders).toEqual(["Work"]);
+    expect(appCommandStore(uiStore).getState().collapsedProjects).toEqual([]);
 
-    useUIStore.getState().toggleProjectFolderCollapse("Work");
-    expect(useUIStore.getState().collapsedProjectFolders).toEqual([]);
+    appCommandStore(uiStore).getState().toggleProjectFolderCollapse("Work");
+    expect(appCommandStore(uiStore).getState().collapsedProjectFolders).toEqual([]);
 
-    useUIStore.getState().setProjectFolderCollapsed("Work", true);
-    useUIStore.getState().setProjectFolderCollapsed("Work", true);
-    expect(useUIStore.getState().collapsedProjectFolders).toEqual(["Work"]);
+    appCommandStore(uiStore).getState().setProjectFolderCollapsed("Work", true);
+    appCommandStore(uiStore).getState().setProjectFolderCollapsed("Work", true);
+    expect(appCommandStore(uiStore).getState().collapsedProjectFolders).toEqual(["Work"]);
 
-    useUIStore.getState().setProjectFolderCollapsed("Work", false);
-    expect(useUIStore.getState().collapsedProjectFolders).toEqual([]);
+    appCommandStore(uiStore).getState().setProjectFolderCollapsed("Work", false);
+    expect(appCommandStore(uiStore).getState().collapsedProjectFolders).toEqual([]);
   });
 
   test("matches a collapsed folder by identity, not by how the name is spelled", () => {
-    useUIStore.setState({ collapsedProjectFolders: ["Work"] });
+    appCommandStore(uiStore).setState({ collapsedProjectFolders: ["Work"] });
 
-    useUIStore.getState().setProjectFolderCollapsed("work", true);
-    expect(useUIStore.getState().collapsedProjectFolders).toEqual(["Work"]);
+    appCommandStore(uiStore).getState().setProjectFolderCollapsed("work", true);
+    expect(appCommandStore(uiStore).getState().collapsedProjectFolders).toEqual(["Work"]);
 
-    useUIStore.getState().setProjectFolderCollapsed("WORK", false);
-    expect(useUIStore.getState().collapsedProjectFolders).toEqual([]);
+    appCommandStore(uiStore).getState().setProjectFolderCollapsed("WORK", false);
+    expect(appCommandStore(uiStore).getState().collapsedProjectFolders).toEqual([]);
 
-    useUIStore.setState({ collapsedProjectFolders: ["Work"] });
-    useUIStore.getState().toggleProjectFolderCollapse("work");
-    expect(useUIStore.getState().collapsedProjectFolders).toEqual([]);
+    appCommandStore(uiStore).setState({ collapsedProjectFolders: ["Work"] });
+    appCommandStore(uiStore).getState().toggleProjectFolderCollapse("work");
+    expect(appCommandStore(uiStore).getState().collapsedProjectFolders).toEqual([]);
   });
 
   test("persists collapsed folders so a reload reopens the same tree", () => {
-    useUIStore.getState().setProjectFolderCollapsed("Work", true);
+    appCommandStore(uiStore).getState().setProjectFolderCollapsed("Work", true);
 
     const persistedRaw = localStorage.getItem(NODE_KEY) ?? "{}";
     expect((JSON.parse(persistedRaw) as { state?: Record<string, unknown> }).state).toMatchObject({
       collapsedProjectFolders: ["Work"],
     });
 
-    useUIStore.setState({ collapsedProjectFolders: [] });
+    appCommandStore(uiStore).setState({ collapsedProjectFolders: [] });
     localStorage.setItem(NODE_KEY, persistedRaw);
 
     expect(reloadedUI().getState().collapsedProjectFolders).toEqual(["Work"]);

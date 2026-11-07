@@ -5,15 +5,15 @@ import {
   resolveDefaultReviewTabType,
 } from "./review-launch-options";
 import { configStore } from "@/stores/configStore";
-import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
+import { agentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 import { firstModelFor } from "@/lib/agent-launch";
 import { appCommandStore } from "@/test/app-command-store";
 
-const originalClaudeModels = useAgentModelCatalogStore.getState().claudeModels;
-const originalCodexModels = useAgentModelCatalogStore.getState().codexModels;
+const originalClaudeModels = appCommandStore(agentModelCatalogStore).getState().claudeModels;
+const originalCodexModels = appCommandStore(agentModelCatalogStore).getState().codexModels;
 
 afterEach(() => {
-  useAgentModelCatalogStore.setState({
+  appCommandStore(agentModelCatalogStore).setState({
     claudeModels: originalClaudeModels,
     codexModels: originalCodexModels,
     cursorModels: [],
@@ -24,7 +24,7 @@ afterEach(() => {
 
 describe("buildReviewModelCatalog", () => {
   test("maps live models and effort metadata, with the unpinned OpenCode placeholder", () => {
-    useAgentModelCatalogStore.setState({
+    appCommandStore(agentModelCatalogStore).setState({
       claudeModels: [
         {
           id: "claude-live",
@@ -35,7 +35,7 @@ describe("buildReviewModelCatalog", () => {
         } as any,
       ],
     });
-    useAgentModelCatalogStore.setState({
+    appCommandStore(agentModelCatalogStore).setState({
       codexModels: [
         {
           id: "codex-live",
@@ -46,7 +46,7 @@ describe("buildReviewModelCatalog", () => {
       ],
     });
 
-    expect(buildReviewModelCatalog(useAgentModelCatalogStore.getState())).toEqual({
+    expect(buildReviewModelCatalog(appCommandStore(agentModelCatalogStore).getState())).toEqual({
       claude: [
         {
           id: "claude-live",
@@ -75,7 +75,7 @@ describe("buildReviewModelCatalog", () => {
   });
 
   test("derives Claude effort choices from live capability metadata", () => {
-    useAgentModelCatalogStore.setState({
+    appCommandStore(agentModelCatalogStore).setState({
       claudeModels: [
         {
           id: "supports-effort-without-levels",
@@ -102,7 +102,9 @@ describe("buildReviewModelCatalog", () => {
       ] as any,
     });
 
-    expect(buildReviewModelCatalog(useAgentModelCatalogStore.getState()).claude).toEqual([
+    expect(
+      buildReviewModelCatalog(appCommandStore(agentModelCatalogStore).getState()).claude,
+    ).toEqual([
       expect.objectContaining({
         id: "supports-effort-without-levels",
         reasoningEfforts: ["low", "medium", "high"],
@@ -123,7 +125,7 @@ describe("buildReviewModelCatalog", () => {
   });
 
   test("defaults omitted Claude speed capability to supported and honours explicit false", () => {
-    useAgentModelCatalogStore.setState({
+    appCommandStore(agentModelCatalogStore).setState({
       claudeModels: [
         { id: "default-allow", name: "Default allow" },
         { id: "explicit-deny", name: "Explicit deny", supportsFastMode: false },
@@ -131,42 +133,44 @@ describe("buildReviewModelCatalog", () => {
     });
 
     const [defaultAllow, explicitDeny] = buildReviewModelCatalog(
-      useAgentModelCatalogStore.getState(),
+      appCommandStore(agentModelCatalogStore).getState(),
     ).claude;
     expect(defaultAllow?.supportsSpeed).toBe(true);
     expect(explicitDeny?.supportsSpeed).toBeUndefined();
   });
 
   test("uses the shared backend-hydrated Cursor, Grok, and Pi catalogues", () => {
-    useAgentModelCatalogStore.getState().setAcpModels([
-      {
-        platform: "cursor",
-        id: "composer-2.5",
-        label: "Composer 2.5",
-        description: "Cursor model",
-        reasoning: [
-          { id: "default", label: "Default" },
-          { id: "high", label: "High" },
-          { id: "high", label: "High duplicate" },
-        ],
-        supportsSpeed: true,
-      },
-      {
-        platform: "grok",
-        id: "grok-4.6",
-        label: "Grok 4.6",
-        reasoning: [{ id: "xhigh", label: "Extra high" }],
-      },
-      {
-        platform: "pi",
-        id: "anthropic/claude-pi",
-        label: "Claude Pi",
-        description: "Pi model",
-        reasoning: [{ id: "high", label: "High" }],
-      },
-    ]);
+    appCommandStore(agentModelCatalogStore)
+      .getState()
+      .setAcpModels([
+        {
+          platform: "cursor",
+          id: "composer-2.5",
+          label: "Composer 2.5",
+          description: "Cursor model",
+          reasoning: [
+            { id: "default", label: "Default" },
+            { id: "high", label: "High" },
+            { id: "high", label: "High duplicate" },
+          ],
+          supportsSpeed: true,
+        },
+        {
+          platform: "grok",
+          id: "grok-4.6",
+          label: "Grok 4.6",
+          reasoning: [{ id: "xhigh", label: "Extra high" }],
+        },
+        {
+          platform: "pi",
+          id: "anthropic/claude-pi",
+          label: "Claude Pi",
+          description: "Pi model",
+          reasoning: [{ id: "high", label: "High" }],
+        },
+      ]);
 
-    const catalog = buildReviewModelCatalog(useAgentModelCatalogStore.getState());
+    const catalog = buildReviewModelCatalog(appCommandStore(agentModelCatalogStore).getState());
     expect(catalog.cursor).toEqual([
       {
         id: "composer-2.5",
@@ -197,18 +201,20 @@ describe("buildReviewModelCatalog", () => {
   });
 
   test("offers Pi's own default when no connected row is marked, and opens on it", () => {
-    useAgentModelCatalogStore.getState().setAcpModels([
-      { platform: "pi", id: "openai/gpt-4", label: "GPT-4" },
-      {
-        platform: "pi",
-        id: "openai/gpt-6.1-sol",
-        label: "GPT-6.1 Sol",
-        sessionDefault: true,
-        connected: false,
-      },
-    ]);
+    appCommandStore(agentModelCatalogStore)
+      .getState()
+      .setAcpModels([
+        { platform: "pi", id: "openai/gpt-4", label: "GPT-4" },
+        {
+          platform: "pi",
+          id: "openai/gpt-6.1-sol",
+          label: "GPT-6.1 Sol",
+          sessionDefault: true,
+          connected: false,
+        },
+      ]);
 
-    const catalog = buildReviewModelCatalog(useAgentModelCatalogStore.getState());
+    const catalog = buildReviewModelCatalog(appCommandStore(agentModelCatalogStore).getState());
     expect(catalog.pi?.map((model) => model.id)).toEqual([
       "default",
       "openai/gpt-4",
@@ -220,18 +226,20 @@ describe("buildReviewModelCatalog", () => {
   });
 
   test("carries Pi's session-default mark so the Multi Review button picks it (0172)", () => {
-    useAgentModelCatalogStore.getState().setAcpModels([
-      { platform: "pi", id: "openai/gpt-4", label: "GPT-4" },
-      { platform: "pi", id: "openai/gpt-6.1-sol", label: "GPT-6.1 Sol", sessionDefault: true },
-    ]);
+    appCommandStore(agentModelCatalogStore)
+      .getState()
+      .setAcpModels([
+        { platform: "pi", id: "openai/gpt-4", label: "GPT-4" },
+        { platform: "pi", id: "openai/gpt-6.1-sol", label: "GPT-6.1 Sol", sessionDefault: true },
+      ]);
 
-    const catalog = buildReviewModelCatalog(useAgentModelCatalogStore.getState());
+    const catalog = buildReviewModelCatalog(appCommandStore(agentModelCatalogStore).getState());
     expect(catalog.pi?.map((model) => model.sessionDefault ?? false)).toEqual([false, true]);
     expect(firstModelFor("pi", catalog)).toBe("openai/gpt-6.1-sol");
   });
 
   test("propagates the resolved Claude model used to match configured defaults", () => {
-    useAgentModelCatalogStore.setState({
+    appCommandStore(agentModelCatalogStore).setState({
       claudeModels: [
         {
           id: "sonnet",
@@ -242,7 +250,9 @@ describe("buildReviewModelCatalog", () => {
       ],
     });
 
-    expect(buildReviewModelCatalog(useAgentModelCatalogStore.getState()).claude).toEqual([
+    expect(
+      buildReviewModelCatalog(appCommandStore(agentModelCatalogStore).getState()).claude,
+    ).toEqual([
       expect.objectContaining({
         id: "sonnet",
         resolvedModel: "claude-sonnet-resolved",
@@ -251,7 +261,7 @@ describe("buildReviewModelCatalog", () => {
   });
 
   test("falls back to supported Codex efforts when live metadata omits them", () => {
-    useAgentModelCatalogStore.setState({
+    appCommandStore(agentModelCatalogStore).setState({
       codexModels: [
         {
           id: "codex-without-efforts",
@@ -260,7 +270,9 @@ describe("buildReviewModelCatalog", () => {
       ],
     });
 
-    expect(buildReviewModelCatalog(useAgentModelCatalogStore.getState()).codex).toEqual([
+    expect(
+      buildReviewModelCatalog(appCommandStore(agentModelCatalogStore).getState()).codex,
+    ).toEqual([
       expect.objectContaining({
         id: "codex-without-efforts",
         reasoningEfforts: ["medium", "high"],
@@ -269,9 +281,9 @@ describe("buildReviewModelCatalog", () => {
   });
 
   test("uses safe fallbacks and does not expose stale configured models", () => {
-    useAgentModelCatalogStore.setState({ claudeModels: [] });
+    appCommandStore(agentModelCatalogStore).setState({ claudeModels: [] });
 
-    const catalog = buildReviewModelCatalog(useAgentModelCatalogStore.getState());
+    const catalog = buildReviewModelCatalog(appCommandStore(agentModelCatalogStore).getState());
 
     expect(catalog.claude.length).toBeGreaterThan(0);
     expect(catalog.claude).toEqual(

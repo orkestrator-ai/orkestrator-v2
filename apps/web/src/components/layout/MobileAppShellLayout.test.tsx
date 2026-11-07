@@ -8,7 +8,7 @@ import { SidebarBottomBar } from "../sidebar/SidebarBottomBar";
 import { openMachineWorkspace } from "@/lib/federation/open-workspace";
 import { portalStore } from "@/lib/portal/portal-store";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
-import { useUIStore } from "@/stores/uiStore";
+import { uiStore } from "@/stores/uiStore";
 import { useMergePrRequestStore } from "@/stores/mergePrRequestStore";
 import { useAppDialogStore } from "@/stores/appDialogStore";
 import { useBugReportStore } from "@/stores/bugReportStore";
@@ -20,6 +20,7 @@ import {
   MobileAppShellLayout,
 } from "./MobileAppShellLayout";
 import { getWindowScope } from "@/lib/node-scope/app-window-scope";
+import { appCommandStore } from "@/test/app-command-store";
 
 /** Outside a node scope provider, components act for the app's command node. */
 const commandNodeId = () => getWindowScope().commandScope().nodeId;
@@ -805,11 +806,11 @@ for (const action of [
 ] as const) {
   test(`closes the drawer for a remote ${action} request with no local selection`, async () => {
     const remote = useRemoteWorkspaceStore.getState();
-    const ui = useUIStore.getState();
+    const ui = appCommandStore(uiStore).getState();
     const portal = portalStore.getState();
     try {
       portalStore.store.setState({ selfId: "bk_self" as never });
-      useUIStore.setState({ selectedProjectId: null, selectedEnvironmentId: null });
+      appCommandStore(uiStore).setState({ selectedProjectId: null, selectedEnvironmentId: null });
       renderLayout(
         { selectedProjectId: null, selectedEnvironmentId: null },
         { keepInitialDrawerOpen: true },
@@ -827,11 +828,11 @@ for (const action of [
       await waitFor(() =>
         expectDomAbsent(screen.queryByRole("dialog", { name: "Projects and environments" })),
       );
-      expect(useUIStore.getState().selectedProjectId).toBeNull();
+      expect(appCommandStore(uiStore).getState().selectedProjectId).toBeNull();
       expect(useRemoteWorkspaceStore.getState().active?.nodeId).toBe("bk_remote");
     } finally {
       useRemoteWorkspaceStore.setState(remote, true);
-      useUIStore.setState(ui, true);
+      appCommandStore(uiStore).setState(ui, true);
       portalStore.store.setState(portal, true);
     }
   });
@@ -843,7 +844,7 @@ for (const [label, dialog] of [
 ] as const) {
   test(`drawer bottom bar routes remote ${dialog} and yields with local selection cleared`, async () => {
     const remote = useRemoteWorkspaceStore.getState();
-    const ui = useUIStore.getState();
+    const ui = appCommandStore(uiStore).getState();
     try {
       useRemoteWorkspaceStore.getState().open("bk_remote", {
         projectId: "p",
@@ -865,7 +866,7 @@ for (const [label, dialog] of [
       expect(useAppDialogStore.getState().request).toBeNull();
     } finally {
       useRemoteWorkspaceStore.setState(remote, true);
-      useUIStore.setState(ui, true);
+      appCommandStore(uiStore).setState(ui, true);
     }
   });
 }

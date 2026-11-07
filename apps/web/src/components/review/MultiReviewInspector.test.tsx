@@ -11,13 +11,14 @@ import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
 import { installFakeReadCoordinator } from "@/lib/testing/read-coordinator";
-import { useMultiReviewStore } from "@/stores/multiReviewStore";
+import { multiReviewStore } from "@/stores/multiReviewStore";
 import {
   MultiReviewFindingsBadge,
   ReviewerTranscriptTail,
   StepTranscriptTail,
 } from "./MultiReviewInspector";
 import { reviewSeverityStyles } from "./StructuredReviewReportView";
+import { appCommandStore } from "@/test/app-command-store";
 
 const CREATED_AT = "2026-08-14T00:00:00.000Z";
 
@@ -78,14 +79,14 @@ function workflowRevision(revision: number): MultiReviewWorkflow {
 }
 
 beforeEach(() => {
-  useMultiReviewStore.setState({ workflows: new Map() });
+  appCommandStore(multiReviewStore).setState({ workflows: new Map() });
   useMessagePartExpansionStore.getState().reset();
 });
 afterEach(cleanup);
 
 describe("ReviewerTranscriptTail", () => {
   test("reads the reviewer's tail and echoes its token on the next read", async () => {
-    useMultiReviewStore.getState().replaceWorkflow(workflowRevision(1));
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(workflowRevision(1));
     const loadTranscript = mock(
       async (_workflowId: string, _reviewerId: string, options?: { knownSourceToken?: string }) =>
         options?.knownSourceToken === "token-1"
@@ -112,14 +113,14 @@ describe("ReviewerTranscriptTail", () => {
     ]);
 
     // A checkpoint reads again at once; an unchanged answer keeps the lines.
-    act(() => useMultiReviewStore.getState().replaceWorkflow(workflowRevision(2)));
+    act(() => appCommandStore(multiReviewStore).getState().replaceWorkflow(workflowRevision(2)));
     await waitFor(() => expect(loadTranscript).toHaveBeenCalledTimes(2));
     expect(loadTranscript.mock.calls[1]?.[2]).toEqual({ knownSourceToken: "token-1" });
     expect(tail.textContent).toContain("review.ts");
   });
 
   test("renders narrative and tool calls as the chat transcript does", async () => {
-    useMultiReviewStore.getState().replaceWorkflow(workflowRevision(1));
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(workflowRevision(1));
     const base = transcript();
     const loadTranscript = mock(async () =>
       transcript({
@@ -264,7 +265,7 @@ describe("StepTranscriptTail", () => {
   afterEach(() => resetReadCoordinatorForTests());
 
   test("reads the step's tail on selection and every checkpoint, echoing its token", async () => {
-    useMultiReviewStore.getState().replaceWorkflow(workflowRevision(1));
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(workflowRevision(1));
     const loadTranscript = mock(
       async (
         _workflowId: string,
@@ -287,7 +288,7 @@ describe("StepTranscriptTail", () => {
       { knownSourceToken: undefined },
     ]);
 
-    act(() => useMultiReviewStore.getState().replaceWorkflow(workflowRevision(2)));
+    act(() => appCommandStore(multiReviewStore).getState().replaceWorkflow(workflowRevision(2)));
     await waitFor(() => expect(loadTranscript).toHaveBeenCalledTimes(2));
     expect(loadTranscript.mock.calls[1]?.[2]).toEqual({ knownSourceToken: "step-token-1" });
     expect(tail.textContent).toContain("reviewer-1.json");
@@ -295,7 +296,7 @@ describe("StepTranscriptTail", () => {
 
   for (const trigger of ["completion", "reactivation"] as const) {
     test(`reads a fresh tail after ${trigger} during a pending read`, async () => {
-      useMultiReviewStore.getState().replaceWorkflow(workflowRevision(1));
+      appCommandStore(multiReviewStore).getState().replaceWorkflow(workflowRevision(1));
       let resolve!: (value: MultiReviewStepTranscript) => void;
       const pending = new Promise<MultiReviewStepTranscript>((done) => {
         resolve = done;
@@ -326,8 +327,8 @@ describe("StepTranscriptTail", () => {
         );
       if (trigger === "completion") {
         act(() => {
-          useMultiReviewStore.getState().replaceWorkflow(workflowRevision(2));
-          useMultiReviewStore.getState().replaceWorkflow(workflowRevision(3));
+          appCommandStore(multiReviewStore).getState().replaceWorkflow(workflowRevision(2));
+          appCommandStore(multiReviewStore).getState().replaceWorkflow(workflowRevision(3));
         });
         show(true);
       } else {
@@ -568,7 +569,7 @@ describe("deferred tail tool bodies", () => {
   }
 
   test("removes a pending deferred body when the step session is handed on", async () => {
-    useMultiReviewStore.getState().replaceWorkflow(workflowRevision(1));
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(workflowRevision(1));
     let resolve!: (value: { detailRef: string; toolOutput: string }) => void;
     const detailRef = "inspector-handoff";
     const loadToolDetails = mock(
@@ -598,7 +599,7 @@ describe("deferred tail tool bodies", () => {
     renderStepTail(loadTranscript, { loadToolDetails });
     fireEvent.click(await screen.findByRole("button", { name: /pwd/ }));
     await waitFor(() => expect(loadToolDetails).toHaveBeenCalledTimes(1));
-    act(() => useMultiReviewStore.getState().replaceWorkflow(workflowRevision(2)));
+    act(() => appCommandStore(multiReviewStore).getState().replaceWorkflow(workflowRevision(2)));
     await screen.findByText(/This step's session is now running Address Findings/);
     await act(async () => resolve({ detailRef, toolOutput: "Old session output" }));
     expect(screen.queryByText("Old session output") === null).toBe(true);

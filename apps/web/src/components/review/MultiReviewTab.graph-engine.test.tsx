@@ -13,7 +13,7 @@ import type {
 } from "@orkestrator/protocol/multi-review";
 import { onGraphRunViewRequested, type GraphRunViewRequest } from "@/lib/graph-run-navigation";
 import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore";
-import { useMultiReviewStore } from "@/stores/multiReviewStore";
+import { multiReviewStore } from "@/stores/multiReviewStore";
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 import { MultiReviewReviewerTab } from "./MultiReviewReviewerTab";
 import { MultiReviewTab } from "./MultiReviewTab";
@@ -23,6 +23,7 @@ import {
   addressFindingsStep,
   pullRequestStep,
 } from "./multi-review-steps";
+import { appCommandStore } from "@/test/app-command-store";
 
 const timestamp = "2026-10-29T00:00:00.000Z";
 
@@ -74,7 +75,7 @@ function commands(workflow: MultiReviewWorkflow) {
 }
 
 function mount(workflow: MultiReviewWorkflow) {
-  useMultiReviewStore.getState().replaceWorkflow(workflow);
+  appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow);
   return renderInAppCommandScope(
     <MultiReviewTab
       data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
@@ -86,7 +87,7 @@ function mount(workflow: MultiReviewWorkflow) {
 }
 
 beforeEach(() => {
-  useMultiReviewStore.setState({ workflows: new Map() });
+  appCommandStore(multiReviewStore).setState({ workflows: new Map() });
   useMessagePartExpansionStore.getState().reset();
 });
 afterEach(cleanup);
@@ -196,7 +197,7 @@ test("graph-engine steps: a failed Address Findings, and a pull request opened b
 });
 
 test("a graph-engine reviewer's tab offers no Stop, Restart or Unstick", async () => {
-  useMultiReviewStore.getState().replaceWorkflow(graphReviewing());
+  appCommandStore(multiReviewStore).getState().replaceWorkflow(graphReviewing());
   renderInAppCommandScope(
     <MultiReviewReviewerTab
       data={{

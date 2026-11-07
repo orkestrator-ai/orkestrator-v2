@@ -27,7 +27,7 @@ import { useNativeComposeStore } from "@/stores/nativeComposeStore";
 
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 
-import { useMultiReviewStore } from "@/stores/multiReviewStore";
+import { multiReviewStore } from "@/stores/multiReviewStore";
 
 import { useTerminalSessionStore } from "@/stores/terminalSessionStore";
 
@@ -395,7 +395,7 @@ describe("TerminalContainer", () => {
       composeDraftImages: new Map(),
     });
     useNativeComposeStore.setState({ drafts: new Map() });
-    useMultiReviewStore.setState({ workflows: new Map() });
+    appCommandStore(multiReviewStore).setState({ workflows: new Map() });
     useBuildPipelineStore.setState({
       pipelines: new Map(),
       buildEnvironmentIds: new Set(),
@@ -2261,7 +2261,7 @@ describe("TerminalContainer", () => {
           containerId: "container-visible",
         }),
       }));
-      useMultiReviewStore.setState({
+      appCommandStore(multiReviewStore).setState({
         workflows: new Map([["workflow-1", { phase: "reviewing" } as never]]),
       });
 
@@ -2323,7 +2323,7 @@ describe("TerminalContainer", () => {
           containerId: "container-visible",
         }),
       }));
-      useMultiReviewStore.setState({
+      appCommandStore(multiReviewStore).setState({
         workflows: new Map([["workflow-1", { phase: "cancelled" } as never]]),
       });
 
@@ -2386,7 +2386,7 @@ describe("TerminalContainer", () => {
           containerId: "container-visible",
         }),
       }));
-      useMultiReviewStore.setState({
+      appCommandStore(multiReviewStore).setState({
         workflows: new Map([["workflow-1", { phase: "cancelled" } as never]]),
       });
       mockToastError.mockClear();
@@ -2441,7 +2441,7 @@ describe("TerminalContainer", () => {
           containerId: "container-visible",
         }),
       }));
-      useMultiReviewStore.setState({
+      appCommandStore(multiReviewStore).setState({
         workflows: new Map([["workflow-1", { phase: "cancelled" } as never]]),
       });
 

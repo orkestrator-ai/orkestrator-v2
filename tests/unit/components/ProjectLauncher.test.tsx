@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "b
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as realUseProjects from "@/hooks/useProjects";
 import * as realCreateEnvironmentFlow from "@/components/environments/CreateEnvironmentFlowDialog";
-import { useUIStore } from "@/stores/uiStore";
+import { uiStore } from "@/stores/uiStore";
 import type { CreateEnvironmentFlowOperations } from "@/components/environments/CreateEnvironmentFlowDialog";
 import type { Project } from "@/types";
 
@@ -46,6 +46,7 @@ import {
   ProjectLauncherContent,
   resolveRecentProjects,
 } from "@/components/projects/ProjectLauncher";
+import { appCommandStore } from "../../../apps/web/src/test/app-command-store";
 
 function makeProject(
   index: number,
@@ -65,7 +66,7 @@ beforeEach(() => {
   projectsValue = [];
   isLoadingValue = false;
   flowProps = null;
-  useUIStore.setState({
+  appCommandStore(uiStore).setState({
     selectedProjectId: null,
     selectedEnvironmentId: null,
     recentProjectIds: [],
@@ -181,7 +182,7 @@ describe("ProjectLauncher", () => {
       startEnvironment: mock(async () => {}),
     } satisfies CreateEnvironmentFlowOperations;
     projectsValue = [makeProject(1), makeProject(2)];
-    useUIStore.setState({ recentProjectIds: ["project-2"] });
+    appCommandStore(uiStore).setState({ recentProjectIds: ["project-2"] });
 
     render(<ProjectLauncher {...operations} />);
 
@@ -192,8 +193,8 @@ describe("ProjectLauncher", () => {
     ]);
 
     fireEvent.click(screen.getByRole("button", { name: "Open Project 2" }));
-    expect(useUIStore.getState().selectedProjectId).toBe("project-2");
-    expect(useUIStore.getState().recentProjectIds[0]).toBe("project-2");
+    expect(appCommandStore(uiStore).getState().selectedProjectId).toBe("project-2");
+    expect(appCommandStore(uiStore).getState().recentProjectIds[0]).toBe("project-2");
 
     fireEvent.click(screen.getByRole("button", { name: "Create environment for Project 1" }));
     expect(screen.getByRole("button", { name: "Close create flow" })).toBeTruthy();

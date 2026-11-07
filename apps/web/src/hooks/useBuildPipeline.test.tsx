@@ -6,7 +6,7 @@ import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { configStore } from "@/stores/configStore";
 import { usePaneLayoutStore, getAllLeaves } from "@/stores/paneLayoutStore";
-import { useUIStore } from "@/stores/uiStore";
+import { uiStore } from "@/stores/uiStore";
 import type { KanbanTask } from "@/lib/backend";
 import { getWindowBuildPipelineActivation } from "@/lib/pane-selection-storage";
 import {
@@ -135,7 +135,7 @@ describe("useBuildPipeline", () => {
       hydration: new Map(),
       activeEnvironmentId: null,
     });
-    useUIStore.setState({
+    appCommandStore(uiStore).setState({
       selectedProjectId: null,
       selectedEnvironmentId: null,
       collapsedProjects: ["project-1"],
@@ -161,8 +161,8 @@ describe("useBuildPipeline", () => {
       comments: [{ text: "Remember tests" }],
       images: [{ filename: "good.png", data: "data:image-good" }],
     });
-    expect(useUIStore.getState().selectedEnvironmentId).toBe("env-new");
-    expect(useUIStore.getState().collapsedProjects).not.toContain("project-1");
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("env-new");
+    expect(appCommandStore(uiStore).getState().collapsedProjects).not.toContain("project-1");
     expect(buildTabs("env-new")).toEqual([]);
   });
 
@@ -208,7 +208,7 @@ describe("useBuildPipeline", () => {
       });
 
       expect(getWindowBuildPipelineActivation("env-later")).toBeNull();
-      expect(useUIStore.getState().selectedEnvironmentId).toBeNull();
+      expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBeNull();
 
       await act(async () => {
         useBuildPipelineStore.getState().replacePipeline(
@@ -222,8 +222,8 @@ describe("useBuildPipeline", () => {
       });
 
       expect(getWindowBuildPipelineActivation("env-later")).toBe("pipeline-pending");
-      expect(useUIStore.getState().selectedEnvironmentId).toBe("env-later");
-      expect(useUIStore.getState().selectedProjectId).toBe("project-1");
+      expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("env-later");
+      expect(appCommandStore(uiStore).getState().selectedProjectId).toBe("project-1");
     } finally {
       if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
       else delete window.orkestrator;
@@ -823,7 +823,7 @@ describe("useBuildPipeline", () => {
       await result.current.navigateToPipeline(pipeline);
     });
 
-    expect(useUIStore.getState().selectedProjectId).toBe("project-nav");
+    expect(appCommandStore(uiStore).getState().selectedProjectId).toBe("project-nav");
     expect(buildTabs("env-nav")).toHaveLength(0);
   });
 
@@ -963,7 +963,7 @@ describe("useBuildPipeline navigation", () => {
       hydration: new Map(),
       activeEnvironmentId: null,
     });
-    useUIStore.setState({
+    appCommandStore(uiStore).setState({
       selectedProjectId: null,
       selectedEnvironmentId: null,
       collapsedProjects: ["project-1"],
@@ -984,7 +984,7 @@ describe("useBuildPipeline navigation", () => {
       await result.current.navigateToBuild(task);
     });
 
-    expect(useUIStore.getState().selectedEnvironmentId).toBe("env-known");
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("env-known");
     expect(buildTabs("env-known")).toEqual([]);
   });
 
@@ -996,7 +996,7 @@ describe("useBuildPipeline navigation", () => {
     });
 
     // Silently opening an empty environment would be worse than doing nothing.
-    expect(useUIStore.getState().selectedEnvironmentId).toBeNull();
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBeNull();
     expect(usePaneLayoutStore.getState().environments.size).toBe(0);
   });
 
@@ -1042,8 +1042,8 @@ describe("useBuildPipeline navigation", () => {
     });
 
     expect(buildTabs("env-legacy")).toEqual([]);
-    expect(useUIStore.getState().selectedProjectId).toBe("project-legacy");
-    expect(useUIStore.getState().selectedEnvironmentId).toBe("env-legacy");
+    expect(appCommandStore(uiStore).getState().selectedProjectId).toBe("project-legacy");
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("env-legacy");
   });
 
   test("navigation never waits on a stalled pane hydration", async () => {
@@ -1063,7 +1063,7 @@ describe("useBuildPipeline navigation", () => {
       });
     });
 
-    expect(useUIStore.getState().selectedEnvironmentId).toBe("env-stalled");
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("env-stalled");
     expect(buildTabs("env-stalled")).toEqual([]);
   });
 });

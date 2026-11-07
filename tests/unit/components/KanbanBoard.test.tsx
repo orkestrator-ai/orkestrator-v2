@@ -4,7 +4,7 @@ import { KanbanBoard, canClearTaskBuildStatus } from "@/components/kanban/Kanban
 import { projectStore } from "@/stores/projectStore";
 import { useKanbanStore } from "@/stores/kanbanStore";
 import { useGitHubIssuesStore } from "@/stores/githubIssuesStore";
-import { useUIStore } from "@/stores/uiStore";
+import { uiStore } from "@/stores/uiStore";
 import { environmentStore } from "@/stores/environmentStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { configStore } from "@/stores/configStore";
@@ -39,7 +39,7 @@ beforeEach(() => {
     tasks: [],
     loadTasks: loadTasksMock as unknown as ReturnType<typeof useKanbanStore.getState>["loadTasks"],
   });
-  useUIStore.setState({ projectBoardTab: "kanban" });
+  appCommandStore(uiStore).setState({ projectBoardTab: "kanban" });
   appCommandStore(environmentStore).setState({ environments: [] });
   appCommandStore(configStore).setState({ config: initialConfig });
   useBuildPipelineStore.setState({ pipelines: new Map(), buildEnvironmentIds: new Set() });
@@ -183,7 +183,7 @@ describe("KanbanBoard ticket sources", () => {
   });
 
   test("mounts the GitHub issues view for the GitHub project-board tab", async () => {
-    useUIStore.setState({ projectBoardTab: "github" });
+    appCommandStore(uiStore).setState({ projectBoardTab: "github" });
 
     render(<KanbanBoard projectId="project-1" />);
 

@@ -7,17 +7,18 @@ import { createPromptQueueSources } from "./prompt-queue-sources";
 import { promptQueueKey, resetPromptQueueRevisions } from "./prompt-queue-persistence";
 import { hydrateBuildPipelinesForProject } from "./build-pipeline-persistence";
 import { useClaudeTmuxStore } from "@/stores/claudeTmuxStore";
-import { useMultiReviewStore } from "@/stores/multiReviewStore";
+import { multiReviewStore } from "@/stores/multiReviewStore";
 import { BUILD_PIPELINE_VERSION, useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { workflowVocabularyFixtures } from "./workflow-vocabulary.test-support";
 import { environmentRequests, hydrationRequests } from "./hydration-request-limiter";
+import { appCommandStore } from "@/test/app-command-store";
 
 const nextTask = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 afterEach(() => {
   cleanup();
   resetPromptQueueRevisions();
   useClaudeTmuxStore.setState({ messageQueue: new Map() });
-  useMultiReviewStore.setState({ workflows: new Map() });
+  appCommandStore(multiReviewStore).setState({ workflows: new Map() });
   useBuildPipelineStore.setState({ pipelines: new Map() });
 });
 
@@ -167,11 +168,11 @@ for (const failedPart of ["promptQueues", "multiReviewWorkflows"] as const) {
           { id: `message-${id}`, text: "fixture", attachments: [] },
         ]);
       }
-      expect(useMultiReviewStore.getState().workflows.size).toBe(
+      expect(appCommandStore(multiReviewStore).getState().workflows.size).toBe(
         failedPart === "multiReviewWorkflows" ? 119 : 120,
       );
       for (const id of failedPart === "multiReviewWorkflows" ? ids.slice(1) : ids) {
-        expect(useMultiReviewStore.getState().workflows.get(`review-${id}`)).toEqual({
+        expect(appCommandStore(multiReviewStore).getState().workflows.get(`review-${id}`)).toEqual({
           ...review,
           id: `review-${id}`,
           environmentId: id,

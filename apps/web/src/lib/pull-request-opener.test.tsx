@@ -1,10 +1,9 @@
 import { beforeEach, afterEach, expect, mock, test } from "bun:test";
 import { cleanup, renderHook } from "@testing-library/react";
 import type { Environment, Project } from "@/types";
-import { useUIStore } from "@/stores/uiStore";
+import { uiStore } from "@/stores/uiStore";
 
-import { useFilesPanelStore } from "@/stores/filesPanelStore";
-import { useProjectPullRequestsStore } from "@/stores/projectPullRequestsStore";
+import { projectPullRequestsStore } from "@/stores/projectPullRequestsStore";
 
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { getWindowScope, resetWindowScopeForTests } from "@/lib/node-scope/app-window-scope";
@@ -43,7 +42,7 @@ const environment: Environment = {
 const project = { id: "project", name: "Project", localPath: "/repo" } as Project;
 
 beforeEach(() => {
-  useUIStore.setState({
+  appCommandStore(uiStore).setState({
     selectedProjectId: null,
     selectedEnvironmentId: null,
     projectBoardTab: "home",
@@ -51,7 +50,7 @@ beforeEach(() => {
   appCommandStore(environmentStore).setState({ environments: [] });
   appCommandStore(projectStore).setState({ projects: [project] });
   setFilesPanelTestState({ pullRequestTabs: {}, isOpen: false, activeTab: "changes" });
-  useProjectPullRequestsStore.setState({ projects: {} });
+  appCommandStore(projectPullRequestsStore).setState({ projects: {} });
   useRemoteWorkspaceStore.setState({ active: null, openNodes: [], requests: {} });
 });
 afterEach(() => {
@@ -61,12 +60,12 @@ afterEach(() => {
 
 /** What the main view shows; opening a pull request must leave all of it alone. */
 function mainView() {
-  const ui = useUIStore.getState();
+  const ui = appCommandStore(uiStore).getState();
   return {
     selectedProjectId: ui.selectedProjectId,
     selectedEnvironmentId: ui.selectedEnvironmentId,
     projectBoardTab: ui.projectBoardTab,
-    projectPullRequests: useProjectPullRequestsStore.getState().projects,
+    projectPullRequests: appCommandStore(projectPullRequestsStore).getState().projects,
   };
 }
 
@@ -77,7 +76,10 @@ test("returns false for browser fallback without a selected host", () => {
 });
 
 test("a project page opens the pull request in the project root's pane, not its Pull requests tab", () => {
-  useUIStore.setState({ selectedProjectId: "project", projectBoardTab: "coordinator" as never });
+  appCommandStore(uiStore).setState({
+    selectedProjectId: "project",
+    projectBoardTab: "coordinator" as never,
+  });
   const before = mainView();
   expect(openPullRequestInApp(ref, "timeline")).toBe(true);
   const panel = filesPanelTestState();
@@ -88,7 +90,7 @@ test("a project page opens the pull request in the project root's pane, not its 
 });
 
 test("an unknown selected project has no pane to host the pull request", () => {
-  useUIStore.setState({ selectedProjectId: "missing" });
+  appCommandStore(uiStore).setState({ selectedProjectId: "missing" });
   expect(openPullRequestInApp(ref)).toBe(false);
 });
 
@@ -96,10 +98,10 @@ test.each([false, true])(
   "ordinary environments use their files panel (projectHome=%s on home)",
   (projectHome) => {
     appCommandStore(environmentStore).setState({ environments: [{ ...environment, projectHome }] });
-    useUIStore.setState({ selectedEnvironmentId: "env", selectedProjectId: "other" });
+    appCommandStore(uiStore).setState({ selectedEnvironmentId: "env", selectedProjectId: "other" });
     const before = mainView();
     expect(openPullRequestInApp(ref, "code")).toBe(true);
-    expect(useFilesPanelStore.getState().pullRequestTabs.env?.[0]?.view).toBe("code");
+    expect(appCommandStore(filesPanelStore).getState().pullRequestTabs.env?.[0]?.view).toBe("code");
     expect(useFilesPanelChromeStore.getState().isOpen).toBe(true);
     expect(mainView()).toEqual(before);
   },
@@ -109,30 +111,32 @@ test("project home on a board page opens in the pane and keeps the board tab", (
   appCommandStore(environmentStore).setState({
     environments: [{ ...environment, projectHome: true }],
   });
-  useUIStore.setState({
+  appCommandStore(uiStore).setState({
     selectedEnvironmentId: "env",
     selectedProjectId: "project",
     projectBoardTab: "features",
   });
   const before = mainView();
   expect(openPullRequestInApp(ref)).toBe(true);
-  expect(useFilesPanelStore.getState().pullRequestTabs.env).toHaveLength(1);
+  expect(appCommandStore(filesPanelStore).getState().pullRequestTabs.env).toHaveLength(1);
   expect(useFilesPanelChromeStore.getState().isOpen).toBe(true);
   expect(mainView()).toEqual(before);
 });
 
 test("a pull request from another project opens in the current view's pane", () => {
   appCommandStore(environmentStore).setState({ environments: [environment] });
-  useUIStore.setState({ selectedEnvironmentId: "env", selectedProjectId: "project" });
+  appCommandStore(uiStore).setState({ selectedEnvironmentId: "env", selectedProjectId: "project" });
   const foreign = { owner: "other-org", repo: "elsewhere", number: 3 };
   expect(openPullRequestInApp(foreign)).toBe(true);
-  expect(useFilesPanelStore.getState().pullRequestTabs.env?.[0]?.ref).toEqual(foreign);
-  expect(useUIStore.getState().selectedEnvironmentId).toBe("env");
+  expect(appCommandStore(filesPanelStore).getState().pullRequestTabs.env?.[0]?.ref).toEqual(
+    foreign,
+  );
+  expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("env");
 });
 
 test("another machine's workspace has its own pane, so the window falls back", () => {
   appCommandStore(environmentStore).setState({ environments: [environment] });
-  useUIStore.setState({ selectedEnvironmentId: "env", selectedProjectId: "project" });
+  appCommandStore(uiStore).setState({ selectedEnvironmentId: "env", selectedProjectId: "project" });
   // The window's selection moves to the other node, so this node's shows nothing.
   useRemoteWorkspaceStore.getState().open("node-2", {});
   expect(openPullRequestInApp(ref)).toBe(false);
@@ -142,7 +146,7 @@ test("another machine's workspace has its own pane, so the window falls back", (
 test("with a leaf shown in the window's tree, the pull request opens in the leaf's files panel", () => {
   // The command node has a selection of its own, which must not receive it.
   appCommandStore(environmentStore).setState({ environments: [environment] });
-  useUIStore.setState({ selectedEnvironmentId: "env", selectedProjectId: "project" });
+  appCommandStore(uiStore).setState({ selectedEnvironmentId: "env", selectedProjectId: "project" });
   const windowScope = getWindowScope();
   const leafId = "bk_leaf-pr" as BackendId;
   const leaf = windowScope.open({ role: "leaf", client: new FakeNodeClient({ nodeId: leafId }) });

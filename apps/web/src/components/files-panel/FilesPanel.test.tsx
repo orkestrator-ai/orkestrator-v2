@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeEach, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import * as realBackend from "@/lib/backend";
-import { environmentStore, projectStore, useFilesPanelStore, useUIStore } from "@/stores";
+import { environmentStore, filesPanelStore, projectStore, uiStore } from "@/stores";
 import { TerminalProvider } from "@/contexts/TerminalContext";
 import { mockToastError } from "../../../../../tests/mocks/sonner";
 import type { Environment, Project } from "@/types";
@@ -47,7 +47,10 @@ beforeEach(() => {
   appCommandStore(projectStore).setState({
     projects: [{ id: "project-1", localPath: "/checkout" } as Project],
   });
-  useUIStore.setState({ selectedEnvironmentId: null, selectedProjectId: "project-1" });
+  appCommandStore(uiStore).setState({
+    selectedEnvironmentId: null,
+    selectedProjectId: "project-1",
+  });
   appCommandStore(environmentStore).setState({ environments: [] });
   setFilesPanelTestState({
     isOpen: false,
@@ -71,7 +74,7 @@ test("two board file opens wait for home creation and retain their order", async
     </TerminalProvider>,
   );
   act(() =>
-    useFilesPanelStore.setState({
+    appCommandStore(filesPanelStore).setState({
       fileTree: [
         { name: "first.txt", path: "first.txt", isDirectory: false },
         { name: "second.txt", path: "second.txt", isDirectory: false },
@@ -81,7 +84,7 @@ test("two board file opens wait for home creation and retain their order", async
   fireEvent.click(screen.getByText("first.txt"));
   fireEvent.click(screen.getByText("second.txt"));
   expect(ensureHome).toHaveBeenCalledTimes(1);
-  expect(useUIStore.getState().selectedEnvironmentId).toBeNull();
+  expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBeNull();
   await act(async () =>
     resolveHome({
       id: "home-1",
@@ -92,11 +95,15 @@ test("two board file opens wait for home creation and retain their order", async
       status: "running",
     } as Environment),
   );
-  await waitFor(() => expect(useUIStore.getState().selectedEnvironmentId).toBe("home-1"));
-  expect(useUIStore.getState().projectBoardTab).toBe("home");
-  expect(useFilesPanelStore.getState().pendingFileOpens.map((request) => request.filePath)).toEqual(
-    ["first.txt", "second.txt"],
+  await waitFor(() =>
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("home-1"),
   );
+  expect(appCommandStore(uiStore).getState().projectBoardTab).toBe("home");
+  expect(
+    appCommandStore(filesPanelStore)
+      .getState()
+      .pendingFileOpens.map((request) => request.filePath),
+  ).toEqual(["first.txt", "second.txt"]);
   expect(
     appCommandStore(environmentStore)
       .getState()
@@ -106,7 +113,10 @@ test("two board file opens wait for home creation and retain their order", async
 
 test("shows delayed announcements and a container's remote freshness without hiding the lists", async () => {
   const { useWorktreeSnapshotStore } = await import("@/stores/worktreeSnapshotStore");
-  useUIStore.setState({ selectedEnvironmentId: "env-1", selectedProjectId: "project-1" });
+  appCommandStore(uiStore).setState({
+    selectedEnvironmentId: "env-1",
+    selectedProjectId: "project-1",
+  });
   setFilesPanelTestState({ isOpen: false, activeTab: "changes" });
   useWorktreeSnapshotStore.setState({
     syncStatus: "current",
@@ -149,7 +159,7 @@ test("shows delayed announcements and a container's remote freshness without hid
     expect(remote?.textContent).toContain("exact");
 
     // The remote baseline belongs to the Changes tab only.
-    act(() => useFilesPanelStore.setState({ activeTab: "all-files" }));
+    act(() => appCommandStore(filesPanelStore).setState({ activeTab: "all-files" }));
     expect(document.querySelector('[data-freshness="remote-stale"]') === null).toBe(true);
 
     act(() => useWorktreeSnapshotStore.getState().setSyncStatus("current"));
@@ -166,7 +176,7 @@ test("a failed board file open strips Electron's invoke prefix from its toast", 
     </TerminalProvider>,
   );
   act(() =>
-    useFilesPanelStore.setState({
+    appCommandStore(filesPanelStore).setState({
       fileTree: [{ name: "first.txt", path: "first.txt", isDirectory: false }],
     }),
   );
@@ -183,8 +193,8 @@ test("a failed board file open strips Electron's invoke prefix from its toast", 
       description: "checkout does not exist",
     }),
   );
-  expect(useUIStore.getState().selectedEnvironmentId).toBeNull();
-  expect(useFilesPanelStore.getState().pendingFileOpens).toEqual([]);
+  expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBeNull();
+  expect(appCommandStore(filesPanelStore).getState().pendingFileOpens).toEqual([]);
 });
 
 for (const fails of [false, true]) {
@@ -197,13 +207,18 @@ for (const fails of [false, true]) {
       status: "running",
     } as Environment;
     appCommandStore(environmentStore).setState({ environments: [environment] });
-    useUIStore.setState({ selectedEnvironmentId: environment.id });
+    appCommandStore(uiStore).setState({ selectedEnvironmentId: environment.id });
     render(
       <TerminalProvider>
         <FilesPanel />
       </TerminalProvider>,
     );
-    act(() => useFilesPanelStore.setState({ fileTree: folderTree, expandedFolders: ["docs"] }));
+    act(() =>
+      appCommandStore(filesPanelStore).setState({
+        fileTree: folderTree,
+        expandedFolders: ["docs"],
+      }),
+    );
     fireEvent.contextMenu(screen.getByRole("button", { name: "docs" }));
     fireEvent.click(await screen.findByText("Delete folder"));
     expect(await screen.findByRole("alertdialog")).toBeTruthy();
@@ -229,8 +244,8 @@ for (const fails of [false, true]) {
       fireEvent.click(screen.getByRole("button", { name: /^Delete folder$/ }));
     }
     await waitFor(() => expect(screen.queryByRole("alertdialog") === null).toBe(true));
-    expect(useFilesPanelStore.getState().expandedFolders).not.toContain("docs");
-    expect(useFilesPanelStore.getState().fileTree).toEqual([]);
+    expect(appCommandStore(filesPanelStore).getState().expandedFolders).not.toContain("docs");
+    expect(appCommandStore(filesPanelStore).getState().fileTree).toEqual([]);
     expect(deleteLocalFile).toHaveBeenCalledTimes(fails ? 2 : 1);
   });
 }

@@ -170,7 +170,7 @@ afterAll(() => {
 import { CODEX_MODELS } from "@/lib/codex-models";
 import { configStore } from "@/stores/configStore";
 import { getWindowScope } from "@/lib/node-scope/app-window-scope";
-import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
+import { agentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 import { RepositorySettings } from "../../../apps/web/src/components/settings/RepositorySettings";
 import type { AppConfig, Project } from "@/types";
 import { appCommandStore } from "../../../apps/web/src/test/app-command-store";
@@ -219,7 +219,7 @@ function resetStores(config = makeConfig()) {
     isLoading: false,
     error: null,
   });
-  useAgentModelCatalogStore.setState({
+  appCommandStore(agentModelCatalogStore).setState({
     claudeModels: [],
     codexModels: CODEX_MODELS,
     cursorModels: [],

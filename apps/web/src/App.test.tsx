@@ -11,9 +11,9 @@ import { configStore } from "@/stores/configStore";
 import { environmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { projectStore } from "@/stores/projectStore";
-import { useUIStore } from "@/stores/uiStore";
+import { uiStore } from "@/stores/uiStore";
 import { useUIChromeStore } from "@/stores/uiChromeStore";
-import { useMultiReviewStore } from "@/stores/multiReviewStore";
+import { multiReviewStore } from "@/stores/multiReviewStore";
 import type { AppConfig, Environment } from "@/types";
 import type { DockerAvailability } from "@orkestrator/protocol/docker-availability";
 import { PANE_LAYOUT_VERSION } from "@/types/paneLayout";
@@ -521,7 +521,7 @@ function resetStores({
     deletingEnvironments: new Set(),
   });
 
-  useUIStore.setState({
+  appCommandStore(uiStore).setState({
     selectedProjectId,
     selectedEnvironmentId,
     projectBoardTab: "coordinator",
@@ -570,7 +570,7 @@ function resetStores({
     messageQueue: new Map(),
   });
 
-  useMultiReviewStore.setState({ workflows: new Map() });
+  appCommandStore(multiReviewStore).setState({ workflows: new Map() });
 }
 
 function resetAppMocks() {
@@ -740,7 +740,7 @@ describe("App background processing mounts", () => {
         },
       ],
     });
-    useUIStore.setState({ projectBoardTab: "kanban" });
+    appCommandStore(uiStore).setState({ projectBoardTab: "kanban" });
     render(<App />);
     const terminal = screen.getByTestId("terminal-home");
     const panel = terminal.closest('[role="tabpanel"]');
@@ -749,7 +749,7 @@ describe("App background processing mounts", () => {
     expect(terminal.getAttribute("data-active")).toBe("true");
     expect(terminal.getAttribute("data-obscured")).toBe("true");
     fireEvent.click(screen.getByRole("button", { name: "Reveal Home", hidden: true }));
-    expect(useUIStore.getState().projectBoardTab).toBe("home");
+    expect(appCommandStore(uiStore).getState().projectBoardTab).toBe("home");
     expect(screen.getByTestId("terminal-home")).toBe(terminal);
     expect(terminal.getAttribute("data-obscured")).toBe("false");
     expect(panel?.getAttribute("aria-hidden")).toBe("false");
@@ -846,7 +846,7 @@ describe("App background processing mounts", () => {
       selectedProjectId: "project-1",
       selectedEnvironmentId: "env-a",
     });
-    expect(useMultiReviewStore.getState().workflows.size).toBe(0);
+    expect(appCommandStore(multiReviewStore).getState().workflows.size).toBe(0);
 
     render(<App />);
 
@@ -1062,7 +1062,7 @@ describe("App background processing mounts", () => {
       });
     });
 
-    expect(useUIStore.getState().selectedEnvironmentId).toBe(featureEnvironment.id);
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe(featureEnvironment.id);
     expect(screen.getByTestId("project-workspace").textContent).toBe("project-1");
 
     await act(async () => {

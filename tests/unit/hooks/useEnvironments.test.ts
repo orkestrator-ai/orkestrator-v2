@@ -6,7 +6,7 @@ import { configStore } from "../../../apps/web/src/stores/configStore";
 import { useBuildPipelineStore } from "../../../apps/web/src/stores/buildPipelineStore";
 import { environmentStore } from "../../../apps/web/src/stores/environmentStore";
 import { claudeOptionsStore } from "../../../apps/web/src/stores/claudeOptionsStore";
-import { useUIStore } from "../../../apps/web/src/stores/uiStore";
+import { uiStore } from "../../../apps/web/src/stores/uiStore";
 import { useErrorDialogStore } from "../../../apps/web/src/stores/errorDialogStore";
 import { projectStore } from "../../../apps/web/src/stores/projectStore";
 import { useSessionStore } from "../../../apps/web/src/stores/sessionStore";
@@ -171,7 +171,7 @@ describe("useEnvironments", () => {
       error: null,
       deletingEnvironments: new Set(),
     });
-    useUIStore.setState({
+    appCommandStore(uiStore).setState({
       selectedProjectId: null,
       selectedEnvironmentId: null,
       recentProjectIds: [],
@@ -628,7 +628,7 @@ describe("useEnvironments", () => {
       error: null,
     });
     mockGetEnvironments.mockImplementation(() => Promise.resolve([existingEnv]));
-    useUIStore.setState({
+    appCommandStore(uiStore).setState({
       selectedProjectId: "project-1",
       selectedEnvironmentId: "env-1",
       collapsedProjects: ["project-1"],
@@ -644,9 +644,9 @@ describe("useEnvironments", () => {
       deletePromise = result.current.deleteEnvironment("env-1");
     });
 
-    expect(useUIStore.getState().selectedEnvironmentId).toBeNull();
-    expect(useUIStore.getState().selectedProjectId).toBe("project-1");
-    expect(useUIStore.getState().collapsedProjects).toEqual([]);
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBeNull();
+    expect(appCommandStore(uiStore).getState().selectedProjectId).toBe("project-1");
+    expect(appCommandStore(uiStore).getState().collapsedProjects).toEqual([]);
 
     deferred.resolve();
     await act(async () => {
@@ -710,7 +710,7 @@ describe("useEnvironments", () => {
       error: null,
     });
     mockGetEnvironments.mockImplementation(() => Promise.resolve([existingEnv]));
-    useUIStore.setState({
+    appCommandStore(uiStore).setState({
       selectedProjectId: "project-1",
       selectedEnvironmentId: "env-1",
     });
@@ -743,8 +743,8 @@ describe("useEnvironments", () => {
     expect(useErrorDialogStore.getState().error?.message).toBe("Failed to delete");
     expect(appCommandStore(environmentStore).getState().getEnvironmentById("env-1")).toBeDefined();
     expect(useBuildPipelineStore.getState().pipelines.has(pipelineId)).toBe(true);
-    expect(useUIStore.getState().selectedEnvironmentId).toBe("env-1");
-    expect(useUIStore.getState().selectedProjectId).toBe("project-1");
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("env-1");
+    expect(appCommandStore(uiStore).getState().selectedProjectId).toBe("project-1");
   });
 
   test("deleteEnvironment leaves immediately even when a stale merge-cleanup error is present", async () => {
@@ -764,7 +764,7 @@ describe("useEnvironments", () => {
       error: null,
     });
     mockGetEnvironments.mockImplementation(() => Promise.resolve([existingEnv]));
-    useUIStore.setState({
+    appCommandStore(uiStore).setState({
       selectedProjectId: "project-1",
       selectedEnvironmentId: "env-1",
     });
@@ -779,8 +779,8 @@ describe("useEnvironments", () => {
       deletePromise = result.current.deleteEnvironment("env-1");
     });
 
-    expect(useUIStore.getState().selectedEnvironmentId).toBeNull();
-    expect(useUIStore.getState().selectedProjectId).toBe("project-1");
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBeNull();
+    expect(appCommandStore(uiStore).getState().selectedProjectId).toBe("project-1");
 
     deferred.resolve();
     await act(async () => {
@@ -856,7 +856,7 @@ describe("useEnvironments", () => {
         ],
       });
       appCommandStore(environmentStore).setState({ environments: [environment, otherEnvironment] });
-      useUIStore.setState({
+      appCommandStore(uiStore).setState({
         selectedProjectId: environment.projectId,
         selectedEnvironmentId: environment.id,
       });
@@ -892,7 +892,7 @@ describe("useEnvironments", () => {
       await waitFor(() => expect(failingBackend).toHaveBeenCalledWith(environment.id));
 
       act(() => {
-        useUIStore.setState({
+        appCommandStore(uiStore).setState({
           selectedProjectId: otherEnvironment.projectId,
           selectedEnvironmentId: otherEnvironment.id,
         });
@@ -2923,7 +2923,7 @@ describe("useEnvironments", () => {
       name: "test-env",
     });
     appCommandStore(environmentStore).setState({ environments: [environment] });
-    useUIStore.setState({
+    appCommandStore(uiStore).setState({
       selectedProjectId: "project-1",
       selectedEnvironmentId: "env-1",
       collapsedProjects: ["project-1"],
@@ -2938,9 +2938,9 @@ describe("useEnvironments", () => {
       });
     });
 
-    expect(useUIStore.getState().selectedEnvironmentId).toBeNull();
-    expect(useUIStore.getState().selectedProjectId).toBe("project-1");
-    expect(useUIStore.getState().collapsedProjects).toEqual([]);
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBeNull();
+    expect(appCommandStore(uiStore).getState().selectedProjectId).toBe("project-1");
+    expect(appCommandStore(uiStore).getState().collapsedProjects).toEqual([]);
   });
 
   test("can disable rename events while keeping setup lifecycle listeners", async () => {
@@ -2972,7 +2972,7 @@ describe("useEnvironments", () => {
       name: "Background work",
     });
     appCommandStore(environmentStore).setState({ environments: [environment] });
-    useUIStore.setState({ selectedEnvironmentId: "env-active" });
+    appCommandStore(uiStore).setState({ selectedEnvironmentId: "env-active" });
     renderHook(() => useEnvironmentLifecycleService());
     await waitFor(() => expect(callbacks.has("native-agent-async-question")).toBe(true));
 
@@ -2995,7 +2995,7 @@ describe("useEnvironments", () => {
       }
       return Promise.resolve(() => {});
     });
-    useUIStore.setState({ selectedEnvironmentId: "env-active" });
+    appCommandStore(uiStore).setState({ selectedEnvironmentId: "env-active" });
     usePaneLayoutStore.getState().initialize(null, "env-active");
     usePaneLayoutStore.getState().addTab(
       "default",
@@ -3032,7 +3032,7 @@ describe("useEnvironments", () => {
       name: "Current work",
     });
     appCommandStore(environmentStore).setState({ environments: [environment] });
-    useUIStore.setState({ selectedEnvironmentId: "env-active" });
+    appCommandStore(uiStore).setState({ selectedEnvironmentId: "env-active" });
     usePaneLayoutStore.getState().initialize(null, "env-active");
     usePaneLayoutStore
       .getState()

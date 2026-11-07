@@ -4,9 +4,9 @@ import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import * as realBackend from "@/lib/backend";
 import { configStore } from "../../../apps/web/src/stores/configStore";
 import { environmentStore } from "../../../apps/web/src/stores/environmentStore";
-import { useFilesPanelStore } from "../../../apps/web/src/stores/filesPanelStore";
+import { filesPanelStore } from "../../../apps/web/src/stores/filesPanelStore";
 import { usePaneLayoutStore } from "../../../apps/web/src/stores/paneLayoutStore";
-import { useUIStore } from "../../../apps/web/src/stores/uiStore";
+import { uiStore } from "../../../apps/web/src/stores/uiStore";
 import type { FileNode, GitFileChange } from "../../../apps/web/src/lib/backend";
 import type { Environment, RepositoryConfig } from "../../../apps/web/src/types";
 import { createMockEnvironment } from "../utils/testFactories";
@@ -182,7 +182,7 @@ function resetStores(
     deletingEnvironments: new Set(),
   });
 
-  useUIStore.setState({
+  appCommandStore(uiStore).setState({
     selectedProjectId: environment?.projectId ?? null,
     selectedEnvironmentId: environment?.id ?? null,
     selectedEnvironmentIds: [],
@@ -328,12 +328,12 @@ describe("useFilesPanel", () => {
 
     await waitFor(() => {
       expect(mockGetLocalGitStatus).toHaveBeenCalledWith("/tmp/worktree", "develop", true);
-      expect(useFilesPanelStore.getState().changes).toEqual([change]);
+      expect(appCommandStore(filesPanelStore).getState().changes).toEqual([change]);
     });
 
     expect(mockGetGitStatus).not.toHaveBeenCalled();
-    expect(useFilesPanelStore.getState().targetBranch).toBe("develop");
-    expect(useFilesPanelStore.getState().isLoadingChanges).toBe(false);
+    expect(appCommandStore(filesPanelStore).getState().targetBranch).toBe("develop");
+    expect(appCommandStore(filesPanelStore).getState().isLoadingChanges).toBe(false);
   });
 
   test("loads local changes against the environment creation commit when available", async () => {
@@ -353,7 +353,7 @@ describe("useFilesPanel", () => {
 
     await waitFor(() => {
       expect(mockGetLocalGitStatus).toHaveBeenCalledWith("/tmp/worktree", "abc123def456", true);
-      expect(useFilesPanelStore.getState().targetBranch).toBe("abc123def456");
+      expect(appCommandStore(filesPanelStore).getState().targetBranch).toBe("abc123def456");
     });
   });
 
@@ -374,14 +374,14 @@ describe("useFilesPanel", () => {
 
     await waitFor(() => {
       expect(mockGetFileTree).toHaveBeenCalledWith("container-1");
-      expect(useFilesPanelStore.getState().fileTree).toEqual(tree);
+      expect(appCommandStore(filesPanelStore).getState().fileTree).toEqual(tree);
       expect(mockGetGitStatus).toHaveBeenCalledWith("container-1", "develop", true);
-      expect(useFilesPanelStore.getState().changes).toEqual([change]);
+      expect(appCommandStore(filesPanelStore).getState().changes).toEqual([change]);
     });
 
     expect(result.current.isAvailable).toBe(true);
     expect(mockGetLocalFileTree).not.toHaveBeenCalled();
-    expect(useFilesPanelStore.getState().isLoadingTree).toBe(false);
+    expect(appCommandStore(filesPanelStore).getState().isLoadingTree).toBe(false);
   });
 
   test("loads container changes against the repository PR base branch", async () => {
@@ -400,11 +400,11 @@ describe("useFilesPanel", () => {
 
     await waitFor(() => {
       expect(mockGetGitStatus).toHaveBeenCalledWith("container-1", "develop", true);
-      expect(useFilesPanelStore.getState().changes).toEqual([change]);
+      expect(appCommandStore(filesPanelStore).getState().changes).toEqual([change]);
     });
 
     expect(mockGetLocalGitStatus).not.toHaveBeenCalled();
-    expect(useFilesPanelStore.getState().isLoadingChanges).toBe(false);
+    expect(appCommandStore(filesPanelStore).getState().isLoadingChanges).toBe(false);
   });
 
   test("does not republish structurally identical changes or file trees", async () => {
@@ -422,18 +422,18 @@ describe("useFilesPanel", () => {
 
     const { result } = renderHook(() => useFilesPanel());
     await waitFor(() => {
-      expect(useFilesPanelStore.getState().changes).toHaveLength(1);
-      expect(useFilesPanelStore.getState().fileTree).toHaveLength(1);
+      expect(appCommandStore(filesPanelStore).getState().changes).toHaveLength(1);
+      expect(appCommandStore(filesPanelStore).getState().fileTree).toHaveLength(1);
     });
-    const changesBefore = useFilesPanelStore.getState().changes;
-    const treeBefore = useFilesPanelStore.getState().fileTree;
+    const changesBefore = appCommandStore(filesPanelStore).getState().changes;
+    const treeBefore = appCommandStore(filesPanelStore).getState().fileTree;
 
     await act(async () => {
       await Promise.all([result.current.loadChanges(true), result.current.loadFileTree(true)]);
     });
 
-    expect(useFilesPanelStore.getState().changes).toBe(changesBefore);
-    expect(useFilesPanelStore.getState().fileTree).toBe(treeBefore);
+    expect(appCommandStore(filesPanelStore).getState().changes).toBe(changesBefore);
+    expect(appCommandStore(filesPanelStore).getState().fileTree).toBe(treeBefore);
   });
 
   test("reuses server digests after unchanged reads and publishes a later change", async () => {
@@ -487,11 +487,11 @@ describe("useFilesPanel", () => {
 
     const { result } = renderHook(() => useFilesPanel());
     await waitFor(() => {
-      expect(useFilesPanelStore.getState().changes).toEqual([change]);
-      expect(useFilesPanelStore.getState().fileTree).toEqual(tree);
+      expect(appCommandStore(filesPanelStore).getState().changes).toEqual([change]);
+      expect(appCommandStore(filesPanelStore).getState().fileTree).toEqual(tree);
     });
-    const changesBefore = useFilesPanelStore.getState().changes;
-    const treeBefore = useFilesPanelStore.getState().fileTree;
+    const changesBefore = appCommandStore(filesPanelStore).getState().changes;
+    const treeBefore = appCommandStore(filesPanelStore).getState().fileTree;
 
     await act(async () => {
       await Promise.all([result.current.loadChanges(true), result.current.loadFileTree(true)]);
@@ -504,8 +504,8 @@ describe("useFilesPanel", () => {
       "changes-v1",
     );
     expect(mockGetFileTreeSnapshot).toHaveBeenNthCalledWith(2, "container-1", "tree-v1");
-    expect(useFilesPanelStore.getState().changes).toBe(changesBefore);
-    expect(useFilesPanelStore.getState().fileTree).toBe(treeBefore);
+    expect(appCommandStore(filesPanelStore).getState().changes).toBe(changesBefore);
+    expect(appCommandStore(filesPanelStore).getState().fileTree).toBe(treeBefore);
 
     await act(async () => {
       await Promise.all([result.current.loadChanges(true), result.current.loadFileTree(true)]);
@@ -518,8 +518,8 @@ describe("useFilesPanel", () => {
       "changes-v1",
     );
     expect(mockGetFileTreeSnapshot).toHaveBeenNthCalledWith(3, "container-1", "tree-v1");
-    expect(useFilesPanelStore.getState().changes).toEqual([nextChange]);
-    expect(useFilesPanelStore.getState().fileTree).toEqual(nextTree);
+    expect(appCommandStore(filesPanelStore).getState().changes).toEqual([nextChange]);
+    expect(appCommandStore(filesPanelStore).getState().fileTree).toEqual(nextTree);
   });
 
   test("loads container changes against the environment creation commit when available", async () => {
@@ -539,7 +539,7 @@ describe("useFilesPanel", () => {
 
     await waitFor(() => {
       expect(mockGetGitStatus).toHaveBeenCalledWith("container-1", "abc123def456", true);
-      expect(useFilesPanelStore.getState().changes).toEqual([change]);
+      expect(appCommandStore(filesPanelStore).getState().changes).toEqual([change]);
     });
   });
 
@@ -559,12 +559,12 @@ describe("useFilesPanel", () => {
 
     await waitFor(() => {
       expect(mockGetLocalFileTree).toHaveBeenCalledWith("/tmp/worktree");
-      expect(useFilesPanelStore.getState().fileTree).toEqual(tree);
+      expect(appCommandStore(filesPanelStore).getState().fileTree).toEqual(tree);
     });
 
     expect(result.current.isLocalEnvironment).toBe(true);
     expect(mockGetFileTree).not.toHaveBeenCalled();
-    expect(useFilesPanelStore.getState().isLoadingTree).toBe(false);
+    expect(appCommandStore(filesPanelStore).getState().isLoadingTree).toBe(false);
   });
 
   test("falls back to a non-main repository default when there is no PR base branch", async () => {
@@ -584,7 +584,7 @@ describe("useFilesPanel", () => {
 
     await waitFor(() => {
       expect(mockGetLocalGitStatus).toHaveBeenCalledWith("/tmp/worktree", "trunk", true);
-      expect(useFilesPanelStore.getState().targetBranch).toBe("trunk");
+      expect(appCommandStore(filesPanelStore).getState().targetBranch).toBe("trunk");
     });
   });
 
@@ -606,7 +606,7 @@ describe("useFilesPanel", () => {
     renderHook(() => useFilesPanel());
     await waitFor(() => {
       expect(mockGetLocalGitStatus).toHaveBeenCalledWith("/tmp/worktree", "develop", true);
-      expect(useFilesPanelStore.getState().changes).toEqual([change]);
+      expect(appCommandStore(filesPanelStore).getState().changes).toEqual([change]);
     });
 
     act(() => {
@@ -626,8 +626,8 @@ describe("useFilesPanel", () => {
 
     await waitFor(() => {
       expect(mockGetLocalGitStatus).toHaveBeenCalledWith("/tmp/worktree", "release", true);
-      expect(useFilesPanelStore.getState().targetBranch).toBe("release");
-      expect(useFilesPanelStore.getState().changes).toEqual([releaseChange]);
+      expect(appCommandStore(filesPanelStore).getState().targetBranch).toBe("release");
+      expect(appCommandStore(filesPanelStore).getState().changes).toEqual([releaseChange]);
     });
   });
 
@@ -650,23 +650,23 @@ describe("useFilesPanel", () => {
     const { result } = renderHook(() => useFilesPanel());
 
     expect(result.current.isAvailable).toBe(false);
-    expect(useFilesPanelStore.getState().changes).toEqual([]);
-    expect(useFilesPanelStore.getState().fileTree).toEqual([]);
+    expect(appCommandStore(filesPanelStore).getState().changes).toEqual([]);
+    expect(appCommandStore(filesPanelStore).getState().fileTree).toEqual([]);
     expect(mockGetGitStatus).not.toHaveBeenCalled();
     expect(mockGetFileTree).not.toHaveBeenCalled();
   });
 
   test("manual loads clear their snapshots without calling the backend when unavailable", async () => {
     resetStores();
-    useFilesPanelStore.setState({ changes: [change], fileTree: tree });
+    appCommandStore(filesPanelStore).setState({ changes: [change], fileTree: tree });
     const { result } = renderHook(() => useFilesPanel());
 
     await act(async () => {
       await Promise.all([result.current.loadChanges(), result.current.loadFileTree()]);
     });
 
-    expect(useFilesPanelStore.getState().changes).toEqual([]);
-    expect(useFilesPanelStore.getState().fileTree).toEqual([]);
+    expect(appCommandStore(filesPanelStore).getState().changes).toEqual([]);
+    expect(appCommandStore(filesPanelStore).getState().fileTree).toEqual([]);
     expect(mockGetGitStatus).not.toHaveBeenCalled();
     expect(mockGetFileTree).not.toHaveBeenCalled();
   });
@@ -699,15 +699,15 @@ describe("useFilesPanel", () => {
     });
 
     expect(mockGetGitStatus).toHaveBeenCalledTimes(1);
-    expect(useFilesPanelStore.getState().isLoadingChanges).toBe(true);
+    expect(appCommandStore(filesPanelStore).getState().isLoadingChanges).toBe(true);
 
     await act(async () => {
       resolveChanges([change]);
       await Promise.all([firstLoad, secondLoad]);
     });
 
-    expect(useFilesPanelStore.getState().changes).toEqual([change]);
-    expect(useFilesPanelStore.getState().isLoadingChanges).toBe(false);
+    expect(appCommandStore(filesPanelStore).getState().changes).toEqual([change]);
+    expect(appCommandStore(filesPanelStore).getState().isLoadingChanges).toBe(false);
   });
 
   test("prevents overlapping manual tree loads for the same selected environment", async () => {
@@ -740,8 +740,8 @@ describe("useFilesPanel", () => {
       resolveTree(tree);
       await Promise.all([firstLoad, secondLoad]);
     });
-    expect(useFilesPanelStore.getState().fileTree).toEqual(tree);
-    expect(useFilesPanelStore.getState().isLoadingTree).toBe(false);
+    expect(appCommandStore(filesPanelStore).getState().fileTree).toEqual(tree);
+    expect(appCommandStore(filesPanelStore).getState().isLoadingTree).toBe(false);
   });
 
   test("manual changes load failure clears stale changes and resets loading", async () => {
@@ -756,14 +756,14 @@ describe("useFilesPanel", () => {
     mockGetGitStatus.mockImplementation(() => Promise.reject(new Error("git failed")));
 
     const { result } = renderHook(() => useFilesPanel());
-    act(() => useFilesPanelStore.setState({ changes: [change] }));
+    act(() => appCommandStore(filesPanelStore).setState({ changes: [change] }));
 
     await act(async () => {
       await result.current.loadChanges();
     });
 
-    expect(useFilesPanelStore.getState().changes).toEqual([]);
-    expect(useFilesPanelStore.getState().isLoadingChanges).toBe(false);
+    expect(appCommandStore(filesPanelStore).getState().changes).toEqual([]);
+    expect(appCommandStore(filesPanelStore).getState().isLoadingChanges).toBe(false);
   });
 
   test("silent changes load failure preserves existing changes and avoids loading indicator", async () => {
@@ -778,14 +778,14 @@ describe("useFilesPanel", () => {
     mockGetGitStatus.mockImplementation(() => Promise.reject(new Error("git failed")));
 
     const { result } = renderHook(() => useFilesPanel());
-    act(() => useFilesPanelStore.setState({ changes: [change] }));
+    act(() => appCommandStore(filesPanelStore).setState({ changes: [change] }));
 
     await act(async () => {
       await result.current.loadChanges(true);
     });
 
-    expect(useFilesPanelStore.getState().changes).toEqual([change]);
-    expect(useFilesPanelStore.getState().isLoadingChanges).toBe(false);
+    expect(appCommandStore(filesPanelStore).getState().changes).toEqual([change]);
+    expect(appCommandStore(filesPanelStore).getState().isLoadingChanges).toBe(false);
   });
 
   test("manual file tree load failure clears stale tree and resets loading", async () => {
@@ -800,14 +800,14 @@ describe("useFilesPanel", () => {
     mockGetLocalFileTree.mockImplementation(() => Promise.reject(new Error("tree failed")));
 
     const { result } = renderHook(() => useFilesPanel());
-    act(() => useFilesPanelStore.setState({ fileTree: tree }));
+    act(() => appCommandStore(filesPanelStore).setState({ fileTree: tree }));
 
     await act(async () => {
       await result.current.loadFileTree();
     });
 
-    expect(useFilesPanelStore.getState().fileTree).toEqual([]);
-    expect(useFilesPanelStore.getState().isLoadingTree).toBe(false);
+    expect(appCommandStore(filesPanelStore).getState().fileTree).toEqual([]);
+    expect(appCommandStore(filesPanelStore).getState().isLoadingTree).toBe(false);
   });
 
   test("silent file tree load failure preserves the existing tree", async () => {
@@ -822,14 +822,14 @@ describe("useFilesPanel", () => {
     mockGetLocalFileTree.mockImplementation(() => Promise.reject(new Error("tree failed")));
 
     const { result } = renderHook(() => useFilesPanel());
-    act(() => useFilesPanelStore.setState({ fileTree: tree }));
+    act(() => appCommandStore(filesPanelStore).setState({ fileTree: tree }));
 
     await act(async () => {
       await result.current.loadFileTree(true);
     });
 
-    expect(useFilesPanelStore.getState().fileTree).toEqual(tree);
-    expect(useFilesPanelStore.getState().isLoadingTree).toBe(false);
+    expect(appCommandStore(filesPanelStore).getState().fileTree).toEqual(tree);
+    expect(appCommandStore(filesPanelStore).getState().isLoadingTree).toBe(false);
   });
 
   test("ignores stale snapshots and starts fresh loads after switching environments", async () => {
@@ -882,14 +882,14 @@ describe("useFilesPanel", () => {
     });
 
     act(() => {
-      useUIStore.setState({ selectedEnvironmentId: "env-b" });
+      appCommandStore(uiStore).setState({ selectedEnvironmentId: "env-b" });
     });
 
     await waitFor(() => {
       expect(mockGetGitStatus).toHaveBeenCalledWith("container-b", "develop", true);
       expect(mockGetFileTree).toHaveBeenCalledWith("container-b");
-      expect(useFilesPanelStore.getState().changes).toEqual([secondChange]);
-      expect(useFilesPanelStore.getState().fileTree).toEqual(secondTree);
+      expect(appCommandStore(filesPanelStore).getState().changes).toEqual([secondChange]);
+      expect(appCommandStore(filesPanelStore).getState().fileTree).toEqual(secondTree);
       expect(result.current.environmentId).toBe("env-b");
     });
 
@@ -899,8 +899,8 @@ describe("useFilesPanel", () => {
       await Promise.resolve();
     });
 
-    expect(useFilesPanelStore.getState().changes).toEqual([secondChange]);
-    expect(useFilesPanelStore.getState().fileTree).toEqual(secondTree);
+    expect(appCommandStore(filesPanelStore).getState().changes).toEqual([secondChange]);
+    expect(appCommandStore(filesPanelStore).getState().fileTree).toEqual(secondTree);
   });
 
   test("waits for pre-mutation refreshes before publishing fresh post-mutation snapshots", async () => {
@@ -964,8 +964,8 @@ describe("useFilesPanel", () => {
 
     expect(mockGetGitStatus).toHaveBeenCalledTimes(2);
     expect(mockGetFileTree).toHaveBeenCalledTimes(2);
-    expect(useFilesPanelStore.getState().changes).toEqual([freshChange]);
-    expect(useFilesPanelStore.getState().fileTree).toEqual(freshTree);
+    expect(appCommandStore(filesPanelStore).getState().changes).toEqual([freshChange]);
+    expect(appCommandStore(filesPanelStore).getState().fileTree).toEqual(freshTree);
   });
 
   test("does not refresh or overwrite the new environment after switching during a mutation", async () => {
@@ -1007,12 +1007,12 @@ describe("useFilesPanel", () => {
     await waitFor(() => expect(result.current.fileActionPending).toBe("src"));
 
     act(() => {
-      useUIStore.setState({ selectedEnvironmentId: "env-b" });
+      appCommandStore(uiStore).setState({ selectedEnvironmentId: "env-b" });
     });
     await waitFor(() => expect(result.current.environmentId).toBe("env-b"));
     const pendingLoadToken = Symbol("env-b-load");
     act(() => {
-      useFilesPanelStore.setState({
+      appCommandStore(filesPanelStore).setState({
         changes: [secondChange],
         fileTree: secondTree,
         expandedFolders: ["src"],
@@ -1030,15 +1030,19 @@ describe("useFilesPanel", () => {
 
     expect(mockGetGitStatus).not.toHaveBeenCalled();
     expect(mockGetFileTree).not.toHaveBeenCalled();
-    expect(useFilesPanelStore.getState().changes).toEqual([secondChange]);
-    expect(useFilesPanelStore.getState().fileTree).toEqual(secondTree);
-    expect(useFilesPanelStore.getState().expandedFolders).toEqual(["src"]);
-    expect(useFilesPanelStore.getState().fileSubtrees.src?.children).toEqual(secondTree);
-    expect(useFilesPanelStore.getState().fileSubtreeDigests).toEqual({ src: "env-b-digest" });
-    expect(useFilesPanelStore.getState().folderLoadTokens.get("src/loading")).toBe(
+    expect(appCommandStore(filesPanelStore).getState().changes).toEqual([secondChange]);
+    expect(appCommandStore(filesPanelStore).getState().fileTree).toEqual(secondTree);
+    expect(appCommandStore(filesPanelStore).getState().expandedFolders).toEqual(["src"]);
+    expect(appCommandStore(filesPanelStore).getState().fileSubtrees.src?.children).toEqual(
+      secondTree,
+    );
+    expect(appCommandStore(filesPanelStore).getState().fileSubtreeDigests).toEqual({
+      src: "env-b-digest",
+    });
+    expect(appCommandStore(filesPanelStore).getState().folderLoadTokens.get("src/loading")).toBe(
       pendingLoadToken,
     );
-    expect(useFilesPanelStore.getState().loadingFolders).toEqual(["src/loading"]);
+    expect(appCommandStore(filesPanelStore).getState().loadingFolders).toEqual(["src/loading"]);
     expect(result.current.fileActionPending).toBeNull();
   });
 
@@ -1058,7 +1062,9 @@ describe("useFilesPanel", () => {
     resetStores(environment);
     setFilesPanelTestState({ isOpen: true, activeTab: "changes" });
     const { result } = renderHook(() => useFilesPanel());
-    await waitFor(() => expect(useFilesPanelStore.getState().targetBranch).toBe(advanced));
+    await waitFor(() =>
+      expect(appCommandStore(filesPanelStore).getState().targetBranch).toBe(advanced),
+    );
     act(() =>
       appCommandStore(environmentStore)
         .getState()
@@ -1082,7 +1088,9 @@ describe("useFilesPanel", () => {
         .getState()
         .updateEnvironment(environment.id, { diffBaseOverride: null }),
     );
-    await waitFor(() => expect(useFilesPanelStore.getState().targetBranch).toBe(advanced));
+    await waitFor(() =>
+      expect(appCommandStore(filesPanelStore).getState().targetBranch).toBe(advanced),
+    );
     await act(async () => {
       await result.current.revertFile("src/App.tsx");
     });
@@ -1614,7 +1622,7 @@ describe("useFilesPanel", () => {
       status: "running",
     });
     resetStores(environment);
-    useFilesPanelStore.setState({ expandedFolders: ["src", "docs"] });
+    appCommandStore(filesPanelStore).setState({ expandedFolders: ["src", "docs"] });
     const { result } = renderHook(() => useFilesPanel());
 
     await act(async () => {
@@ -1623,7 +1631,7 @@ describe("useFilesPanel", () => {
     expect(mockDeleteContainerFile).toHaveBeenCalledWith("env-container", "src");
     expect(mockGetFileTree).toHaveBeenCalled();
     expect(mockToastSuccess).toHaveBeenCalledWith("Folder deleted", { description: "src" });
-    expect(useFilesPanelStore.getState().expandedFolders).toEqual(["docs"]);
+    expect(appCommandStore(filesPanelStore).getState().expandedFolders).toEqual(["docs"]);
 
     // Model an I/O failure after git rm: root and subtree snapshots still
     // contain a file which has already been removed from the workspace/index.
@@ -1634,7 +1642,7 @@ describe("useFilesPanel", () => {
       children: [{ name: "vendor", path: "docs/vendor", isDirectory: true }],
       truncated: false,
     };
-    useFilesPanelStore.setState({
+    appCommandStore(filesPanelStore).setState({
       fileTree: survivingTree,
       fileSubtrees: { docs: { children: tree, truncated: false } },
     });
@@ -1659,11 +1667,11 @@ describe("useFilesPanel", () => {
     expect(mockGetFileTree).toHaveBeenCalled();
     expect(mockGetGitStatus).toHaveBeenCalled();
     expect(mockGetFileSubtreeSnapshot).toHaveBeenCalled();
-    expect(useFilesPanelStore.getState().fileTree).toEqual(survivingTree);
-    expect(useFilesPanelStore.getState().fileSubtrees.docs).toEqual(remaining);
-    expect(useFilesPanelStore.getState().changes[0]?.status).toBe("D");
+    expect(appCommandStore(filesPanelStore).getState().fileTree).toEqual(survivingTree);
+    expect(appCommandStore(filesPanelStore).getState().fileSubtrees.docs).toEqual(remaining);
+    expect(appCommandStore(filesPanelStore).getState().changes[0]?.status).toBe("D");
     // The surviving folder keeps its expansion and failure remains visible.
-    expect(useFilesPanelStore.getState().expandedFolders).toEqual(["docs"]);
+    expect(appCommandStore(filesPanelStore).getState().expandedFolders).toEqual(["docs"]);
   });
 
   test("rejects a batch move whose sources share a basename before any backend call", async () => {
@@ -1899,9 +1907,9 @@ describe("useFilesPanel", () => {
 
       await waitFor(() => {
         expect(mockGetGitStatus).toHaveBeenCalledTimes(2);
-        expect(useFilesPanelStore.getState().changes).toEqual([change]);
+        expect(appCommandStore(filesPanelStore).getState().changes).toEqual([change]);
       });
-      expect(useFilesPanelStore.getState().isLoadingChanges).toBe(false);
+      expect(appCommandStore(filesPanelStore).getState().isLoadingChanges).toBe(false);
 
       unmount();
       expect(clock.pending).toBe(0);
@@ -1942,8 +1950,8 @@ describe("useFilesPanel", () => {
       await waitFor(() => {
         expect(mockGetGitStatus).toHaveBeenCalledTimes(1);
         expect(mockGetFileTree).toHaveBeenCalledTimes(1);
-        expect(useFilesPanelStore.getState().isLoadingChanges).toBe(false);
-        expect(useFilesPanelStore.getState().isLoadingTree).toBe(false);
+        expect(appCommandStore(filesPanelStore).getState().isLoadingChanges).toBe(false);
+        expect(appCommandStore(filesPanelStore).getState().isLoadingTree).toBe(false);
       });
 
       await act(() => clock.advance(5_000));
@@ -1951,11 +1959,11 @@ describe("useFilesPanel", () => {
       await waitFor(() => {
         expect(mockGetGitStatus).toHaveBeenCalledTimes(2);
         expect(mockGetFileTree).toHaveBeenCalledTimes(2);
-        expect(useFilesPanelStore.getState().changes).toEqual([refreshedChange]);
-        expect(useFilesPanelStore.getState().fileTree).toEqual(refreshedTree);
+        expect(appCommandStore(filesPanelStore).getState().changes).toEqual([refreshedChange]);
+        expect(appCommandStore(filesPanelStore).getState().fileTree).toEqual(refreshedTree);
       });
-      expect(useFilesPanelStore.getState().isLoadingChanges).toBe(false);
-      expect(useFilesPanelStore.getState().isLoadingTree).toBe(false);
+      expect(appCommandStore(filesPanelStore).getState().isLoadingChanges).toBe(false);
+      expect(appCommandStore(filesPanelStore).getState().isLoadingTree).toBe(false);
     } finally {
       resetReadCoordinatorForTests();
     }

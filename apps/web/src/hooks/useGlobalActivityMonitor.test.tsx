@@ -1,13 +1,13 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { act, renderHook } from "@testing-library/react";
-import { useAgentActivityStore } from "@/stores/agentActivityStore";
+import { agentActivityStore } from "@/stores/agentActivityStore";
 import { environmentStore } from "@/stores/environmentStore";
 import { useGlobalActivityMonitor } from "./useGlobalActivityMonitor";
 import { appCommandStore } from "@/test/app-command-store";
 
 describe("backend-owned activity projection", () => {
   beforeEach(() => {
-    useAgentActivityStore.setState({
+    appCommandStore(agentActivityStore).setState({
       tabStates: {},
       containerStates: {},
       containerStateUpdatedAt: {},
@@ -16,31 +16,35 @@ describe("backend-owned activity projection", () => {
   });
 
   test("bulk replacement exactly projects the environment snapshot", () => {
-    useAgentActivityStore.getState().replaceActivitySnapshot([
-      {
-        id: "env-a",
-        agentActivityState: "working",
-        agentActivityUpdatedAt: "2026-08-04T10:00:00.000Z",
-      },
-      {
-        id: "env-b",
-        agentActivityState: "waiting",
-        agentActivityUpdatedAt: "2026-08-04T10:00:01.000Z",
-      },
-    ]);
-    expect(useAgentActivityStore.getState().containerStates).toEqual({
+    appCommandStore(agentActivityStore)
+      .getState()
+      .replaceActivitySnapshot([
+        {
+          id: "env-a",
+          agentActivityState: "working",
+          agentActivityUpdatedAt: "2026-08-04T10:00:00.000Z",
+        },
+        {
+          id: "env-b",
+          agentActivityState: "waiting",
+          agentActivityUpdatedAt: "2026-08-04T10:00:01.000Z",
+        },
+      ]);
+    expect(appCommandStore(agentActivityStore).getState().containerStates).toEqual({
       "env-a": "working",
       "env-b": "waiting",
     });
 
-    useAgentActivityStore.getState().replaceActivitySnapshot([
-      {
-        id: "env-a",
-        agentActivityState: "idle",
-        agentActivityUpdatedAt: "2026-08-04T10:00:02.000Z",
-      },
-    ]);
-    expect(useAgentActivityStore.getState().containerStates).toEqual({
+    appCommandStore(agentActivityStore)
+      .getState()
+      .replaceActivitySnapshot([
+        {
+          id: "env-a",
+          agentActivityState: "idle",
+          agentActivityUpdatedAt: "2026-08-04T10:00:02.000Z",
+        },
+      ]);
+    expect(appCommandStore(agentActivityStore).getState().containerStates).toEqual({
       "env-a": "idle",
     });
   });
@@ -57,7 +61,7 @@ describe("backend-owned activity projection", () => {
     });
     const first = renderHook(() => useGlobalActivityMonitor());
     await act(async () => undefined);
-    expect(useAgentActivityStore.getState().containerStates).toEqual({
+    expect(appCommandStore(agentActivityStore).getState().containerStates).toEqual({
       "env-a": "working",
     });
 
@@ -71,13 +75,13 @@ describe("backend-owned activity projection", () => {
         },
       ] as never,
     });
-    expect(useAgentActivityStore.getState().containerStates).toEqual({
+    expect(appCommandStore(agentActivityStore).getState().containerStates).toEqual({
       "env-a": "working",
     });
 
     const second = renderHook(() => useGlobalActivityMonitor());
     await act(async () => undefined);
-    expect(useAgentActivityStore.getState().containerStates).toEqual({
+    expect(appCommandStore(agentActivityStore).getState().containerStates).toEqual({
       "env-b": "waiting",
     });
     second.unmount();
@@ -95,7 +99,7 @@ describe("backend-owned activity projection", () => {
     });
     const observer = renderHook(() => useGlobalActivityMonitor());
     await act(async () => undefined);
-    expect(useAgentActivityStore.getState().containerStates).toEqual({
+    expect(appCommandStore(agentActivityStore).getState().containerStates).toEqual({
       "env-a": "working",
     });
 
@@ -111,7 +115,7 @@ describe("backend-owned activity projection", () => {
       });
     });
 
-    expect(useAgentActivityStore.getState().containerStates).toEqual({
+    expect(appCommandStore(agentActivityStore).getState().containerStates).toEqual({
       "env-b": "waiting",
     });
     observer.unmount();

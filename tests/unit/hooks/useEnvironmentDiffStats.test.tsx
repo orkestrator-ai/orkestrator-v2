@@ -6,7 +6,8 @@ import {
   type EnvironmentDiffStatsRemoval,
 } from "@orkestrator/protocol/diff-stats";
 import * as realBackend from "@/lib/backend";
-import { useEnvironmentDiffStore } from "../../../apps/web/src/stores/environmentDiffStore";
+import { environmentDiffStore } from "../../../apps/web/src/stores/environmentDiffStore";
+import { appCommandStore } from "../../../apps/web/src/test/app-command-store";
 
 const realBackendSnapshot = { ...realBackend };
 
@@ -105,7 +106,7 @@ describe("useEnvironmentDiffStats", () => {
     mockListen.mockImplementation(defaultListen);
     mockGetEnvironmentDiffStats.mockClear();
     mockGetEnvironmentDiffStats.mockImplementation(() => Promise.resolve({ entries: [] }));
-    useEnvironmentDiffStore.setState({ stats: new Map() });
+    appCommandStore(environmentDiffStore).setState({ stats: new Map() });
   });
 
   afterEach(() => {
@@ -129,9 +130,9 @@ describe("useEnvironmentDiffStats", () => {
     renderHook(() => useEnvironmentDiffStats());
 
     await waitFor(() => {
-      expect(useEnvironmentDiffStore.getState().stats.size).toBe(2);
+      expect(appCommandStore(environmentDiffStore).getState().stats.size).toBe(2);
     });
-    expect(useEnvironmentDiffStore.getState().stats.get("env-2")).toEqual({
+    expect(appCommandStore(environmentDiffStore).getState().stats.get("env-2")).toEqual({
       additions: 9,
       deletions: 0,
       filesChanged: 1,
@@ -151,7 +152,7 @@ describe("useEnvironmentDiffStats", () => {
     });
 
     await waitFor(() => {
-      expect(useEnvironmentDiffStore.getState().stats.get("env-1")).toEqual({
+      expect(appCommandStore(environmentDiffStore).getState().stats.get("env-1")).toEqual({
         additions: 12,
         deletions: 4,
         filesChanged: 3,
@@ -169,7 +170,9 @@ describe("useEnvironmentDiffStats", () => {
     });
 
     await waitFor(() => {
-      expect(useEnvironmentDiffStore.getState().stats.get("env-1")?.truncated).toBe(true);
+      expect(appCommandStore(environmentDiffStore).getState().stats.get("env-1")?.truncated).toBe(
+        true,
+      );
     });
   });
 
@@ -180,13 +183,15 @@ describe("useEnvironmentDiffStats", () => {
       }),
     );
     renderHook(() => useEnvironmentDiffStats());
-    await waitFor(() => expect(useEnvironmentDiffStore.getState().stats.has("env-1")).toBe(true));
+    await waitFor(() =>
+      expect(appCommandStore(environmentDiffStore).getState().stats.has("env-1")).toBe(true),
+    );
 
     act(() => {
       emitEvent(DIFF_STATS_CHANGED_EVENT, removal("env-1"));
     });
 
-    expect(useEnvironmentDiffStore.getState().stats.has("env-1")).toBe(false);
+    expect(appCommandStore(environmentDiffStore).getState().stats.has("env-1")).toBe(false);
   });
 
   // The payload crosses a process boundary and is the only thing driving the
@@ -221,7 +226,7 @@ describe("useEnvironmentDiffStats", () => {
     });
     await flush();
 
-    expect(useEnvironmentDiffStore.getState().stats.size).toBe(0);
+    expect(appCommandStore(environmentDiffStore).getState().stats.size).toBe(0);
   });
 
   // The stream has no replay buffer, so anything that happened while this client
@@ -241,7 +246,7 @@ describe("useEnvironmentDiffStats", () => {
     });
 
     await waitFor(() => {
-      expect(useEnvironmentDiffStore.getState().stats.get("env-late")).toEqual({
+      expect(appCommandStore(environmentDiffStore).getState().stats.get("env-late")).toEqual({
         additions: 5,
         deletions: 5,
         filesChanged: 2,
@@ -259,14 +264,14 @@ describe("useEnvironmentDiffStats", () => {
     act(() => {
       emitEvent(DIFF_STATS_CHANGED_EVENT, change("env-1", { additions: 12 }));
     });
-    expect(useEnvironmentDiffStore.getState().stats.has("env-1")).toBe(false);
+    expect(appCommandStore(environmentDiffStore).getState().stats.has("env-1")).toBe(false);
 
     await act(async () => {
       snapshot.resolve({ entries: [change("env-1", { additions: 2 })] });
       await snapshot.promise;
     });
 
-    expect(useEnvironmentDiffStore.getState().stats.get("env-1")?.additions).toBe(12);
+    expect(appCommandStore(environmentDiffStore).getState().stats.get("env-1")?.additions).toBe(12);
   });
 
   test("replays a removal over a snapshot that resolves later", async () => {
@@ -283,7 +288,7 @@ describe("useEnvironmentDiffStats", () => {
       await snapshot.promise;
     });
 
-    expect(useEnvironmentDiffStore.getState().stats.has("env-1")).toBe(false);
+    expect(appCommandStore(environmentDiffStore).getState().stats.has("env-1")).toBe(false);
   });
 
   test("serialises overlapping reconnect snapshots and applies the newest last", async () => {
@@ -312,7 +317,7 @@ describe("useEnvironmentDiffStats", () => {
       second.resolve({ entries: [change("env-1", { additions: 9 })] });
       await second.promise;
     });
-    expect(useEnvironmentDiffStore.getState().stats.get("env-1")?.additions).toBe(9);
+    expect(appCommandStore(environmentDiffStore).getState().stats.get("env-1")?.additions).toBe(9);
   });
 
   test("drops environments missing from a later snapshot", async () => {
@@ -322,7 +327,9 @@ describe("useEnvironmentDiffStats", () => {
       }),
     );
     renderHook(() => useEnvironmentDiffStats());
-    await waitFor(() => expect(useEnvironmentDiffStore.getState().stats.size).toBe(2));
+    await waitFor(() =>
+      expect(appCommandStore(environmentDiffStore).getState().stats.size).toBe(2),
+    );
 
     mockGetEnvironmentDiffStats.mockImplementation(() =>
       Promise.resolve({
@@ -334,7 +341,7 @@ describe("useEnvironmentDiffStats", () => {
     });
 
     await waitFor(() => {
-      expect([...useEnvironmentDiffStore.getState().stats.keys()]).toEqual(["env-1"]);
+      expect([...appCommandStore(environmentDiffStore).getState().stats.keys()]).toEqual(["env-1"]);
     });
   });
 
@@ -343,7 +350,9 @@ describe("useEnvironmentDiffStats", () => {
       Promise.resolve({ entries: [change("env-1")] }),
     );
     renderHook(() => useEnvironmentDiffStats());
-    await waitFor(() => expect(useEnvironmentDiffStore.getState().stats.size).toBe(1));
+    await waitFor(() =>
+      expect(appCommandStore(environmentDiffStore).getState().stats.size).toBe(1),
+    );
 
     mockGetEnvironmentDiffStats.mockImplementation(() => Promise.reject(new Error("backend down")));
     act(() => {
@@ -351,11 +360,11 @@ describe("useEnvironmentDiffStats", () => {
     });
     await flush();
 
-    expect(useEnvironmentDiffStore.getState().stats.get("env-1")).toBeDefined();
+    expect(appCommandStore(environmentDiffStore).getState().stats.get("env-1")).toBeDefined();
   });
 
   test("ignores a malformed snapshot from the process boundary", async () => {
-    useEnvironmentDiffStore.getState().applyChange(change("env-existing"));
+    appCommandStore(environmentDiffStore).getState().applyChange(change("env-existing"));
     mockGetEnvironmentDiffStats.mockImplementation(() =>
       Promise.resolve({
         entries: [change("env-bad", { additions: -1 })],
@@ -366,7 +375,9 @@ describe("useEnvironmentDiffStats", () => {
     await waitFor(() => expect(mockGetEnvironmentDiffStats).toHaveBeenCalledTimes(1));
     await flush();
 
-    expect([...useEnvironmentDiffStore.getState().stats.keys()]).toEqual(["env-existing"]);
+    expect([...appCommandStore(environmentDiffStore).getState().stats.keys()]).toEqual([
+      "env-existing",
+    ]);
   });
 
   test("still rehydrates when the change listener rejects", async () => {
@@ -382,7 +393,9 @@ describe("useEnvironmentDiffStats", () => {
 
     renderHook(() => useEnvironmentDiffStats());
 
-    await waitFor(() => expect(useEnvironmentDiffStore.getState().stats.has("env-1")).toBe(true));
+    await waitFor(() =>
+      expect(appCommandStore(environmentDiffStore).getState().stats.has("env-1")).toBe(true),
+    );
     expect(listenerCount(NATIVE_EVENT_STREAM_CONNECTED_EVENT)).toBe(1);
   });
 
@@ -445,6 +458,6 @@ describe("useEnvironmentDiffStats", () => {
       await Promise.resolve();
     });
 
-    expect(useEnvironmentDiffStore.getState().stats.size).toBe(0);
+    expect(appCommandStore(environmentDiffStore).getState().stats.size).toBe(0);
   });
 });

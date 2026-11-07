@@ -20,13 +20,7 @@ import type { CollisionDetection, DragEndEvent, DragStartEvent } from "@dnd-kit/
 import { mockReadImage } from "../../mocks/clipboard";
 import { restoreMatchMedia, setMobileViewport } from "../../mocks/match-media";
 import { mockToastWarning } from "../../mocks/sonner";
-import {
-  claudeOptionsStore,
-  configStore,
-  environmentStore,
-  projectStore,
-  useUIStore,
-} from "@/stores";
+import { claudeOptionsStore, configStore, environmentStore, projectStore, uiStore } from "@/stores";
 import type { Environment, Project } from "@/types";
 import { useAppDialogStore } from "@/stores/appDialogStore";
 import { useUIChromeStore } from "@/stores/uiChromeStore";
@@ -344,7 +338,7 @@ describe("HierarchicalSidebar", () => {
         ).toMatch(/^Collapse project /);
       }
       fireEvent.click(otherMember);
-      expect(useUIStore.getState().selectedProjectId).toBe(sameRepository.id);
+      expect(appCommandStore(uiStore).getState().selectedProjectId).toBe(sameRepository.id);
       fireEvent.click(within(list).getByRole("button", { name: "Collapse project Project One" }));
       await waitFor(() =>
         expect(within(list).queryByRole("button", { name: /^First worker, on / }) === null).toBe(
@@ -352,7 +346,7 @@ describe("HierarchicalSidebar", () => {
         ),
       );
       expect(within(list).getByRole("button", { name: /^Second worker, on / })).toBeTruthy();
-      expect(useUIStore.getState().selectedProjectId).toBe(sameRepository.id);
+      expect(appCommandStore(uiStore).getState().selectedProjectId).toBe(sameRepository.id);
       expect(
         within(list)
           .getByRole("button", { name: "Collapse folder acme/project-one" })
@@ -361,7 +355,7 @@ describe("HierarchicalSidebar", () => {
       fireEvent.click(within(list).getByRole("button", { name: "Expand project Project One" }));
       expect(await within(list).findByRole("button", { name: /^First worker, on / })).toBeTruthy();
       fireEvent.click(member);
-      expect(useUIStore.getState().selectedProjectId).toBe(project.id);
+      expect(appCommandStore(uiStore).getState().selectedProjectId).toBe(project.id);
       expect(member.getAttribute("aria-current")).toBe("page");
     } finally {
       view?.unmount();
@@ -496,7 +490,7 @@ describe("HierarchicalSidebar", () => {
     appCommandStore(claudeOptionsStore).setState({
       options: {},
     });
-    useUIStore.setState({
+    appCommandStore(uiStore).setState({
       projectBoardTab: "coordinator",
       selectedProjectId: null,
       selectedEnvironmentId: null,
@@ -612,7 +606,7 @@ describe("HierarchicalSidebar", () => {
     environmentsValue = [
       { ...createdEnvironment, id: "env-nested", name: "Nested Env", projectId: "project-1" },
     ];
-    useUIStore.setState({
+    appCommandStore(uiStore).setState({
       collapsedProjects: ["project-1"],
       collapsedProjectFolders: ["Work"],
     });
@@ -624,9 +618,9 @@ describe("HierarchicalSidebar", () => {
     fireEvent.click(await screen.findByTestId("project-search-item-project-1"));
 
     await waitFor(() => {
-      expect(useUIStore.getState().collapsedProjects).not.toContain("project-1");
-      expect(useUIStore.getState().collapsedProjectFolders).not.toContain("Work");
-      expect(useUIStore.getState().selectedProjectId).toBe("project-1");
+      expect(appCommandStore(uiStore).getState().collapsedProjects).not.toContain("project-1");
+      expect(appCommandStore(uiStore).getState().collapsedProjectFolders).not.toContain("Work");
+      expect(appCommandStore(uiStore).getState().selectedProjectId).toBe("project-1");
     });
     expect(screen.getByRole("button", { name: /^Project One/i })).toBeTruthy();
   });
@@ -645,7 +639,7 @@ describe("HierarchicalSidebar", () => {
         status: "stopped",
       },
     ];
-    useUIStore.setState({
+    appCommandStore(uiStore).setState({
       collapsedProjects: ["project-1"],
       collapsedProjectFolders: ["Work"],
     });
@@ -657,9 +651,9 @@ describe("HierarchicalSidebar", () => {
     fireEvent.click(await screen.findByTestId("project-search-item-env-needs-start"));
 
     await waitFor(() => {
-      expect(useUIStore.getState().collapsedProjects).not.toContain("project-1");
-      expect(useUIStore.getState().collapsedProjectFolders).not.toContain("Work");
-      expect(useUIStore.getState().selectedEnvironmentId).toBe("env-needs-start");
+      expect(appCommandStore(uiStore).getState().collapsedProjects).not.toContain("project-1");
+      expect(appCommandStore(uiStore).getState().collapsedProjectFolders).not.toContain("Work");
+      expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("env-needs-start");
       expect(startEnvironmentMock).toHaveBeenCalledWith("env-needs-start");
     });
     expect(screen.getByRole("button", { name: "Needs Start" })).toBeTruthy();
@@ -858,7 +852,7 @@ describe("HierarchicalSidebar", () => {
 
     // Clearing the badge is useUnreadEnvironmentSync's job now, because the
     // badge is backend state rather than something this sidebar owns.
-    expect(useUIStore.getState().selectedEnvironmentId).toBe("env-waiting");
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("env-waiting");
   });
 
   test("requests the settings dialog from an activity row", async () => {
@@ -902,7 +896,7 @@ describe("HierarchicalSidebar", () => {
     await waitFor(() => {
       expect(forkEnvironmentMock).toHaveBeenCalledWith("env-source", "local");
     });
-    expect(useUIStore.getState().selectedEnvironmentId).toBe("env-forked");
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("env-forked");
     expect(startEnvironmentMock).toHaveBeenCalledWith("env-forked", undefined, {
       background: true,
       silent: true,
@@ -930,7 +924,7 @@ describe("HierarchicalSidebar", () => {
     await waitFor(() => {
       expect(forkEnvironmentMock).toHaveBeenCalledWith("env-source", "local");
     });
-    expect(useUIStore.getState().selectedEnvironmentId).toBeNull();
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBeNull();
     expect(startEnvironmentMock).not.toHaveBeenCalled();
     expect(logs.records()).toContainEqual(
       expect.objectContaining({
@@ -1526,12 +1520,12 @@ describe("HierarchicalSidebar", () => {
       },
     ];
     useUIChromeStore.setState({ environmentSortMode: "activity" });
-    useUIStore.setState({ selectedEnvironmentId: "env-newest" });
+    appCommandStore(uiStore).setState({ selectedEnvironmentId: "env-newest" });
 
     render(<HierarchicalSidebar />);
     fireEvent.click(screen.getByRole("button", { name: /Oldest environment/ }), { shiftKey: true });
 
-    expect(useUIStore.getState().selectedEnvironmentIds).toEqual([
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentIds).toEqual([
       "env-newest",
       "env-middle",
       "env-oldest",
@@ -1575,14 +1569,14 @@ describe("HierarchicalSidebar", () => {
       { ...createdEnvironment, id: "env-1", name: "Environment One" },
       { ...createdEnvironment, id: "env-2", name: "Environment Two" },
     ];
-    useUIStore.setState({ selectedEnvironmentIds: ["env-1", "env-2"] });
+    appCommandStore(uiStore).setState({ selectedEnvironmentIds: ["env-1", "env-2"] });
     render(<HierarchicalSidebar />);
 
     fireEvent.keyDown(window, { key: "Enter" });
-    expect(useUIStore.getState().selectedEnvironmentIds).toEqual(["env-1", "env-2"]);
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentIds).toEqual(["env-1", "env-2"]);
 
     fireEvent.keyDown(window, { key: "Escape" });
-    expect(useUIStore.getState().selectedEnvironmentIds).toEqual([]);
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentIds).toEqual([]);
   });
 
   test("propagates initial prompt image attachments into launch options", async () => {
@@ -1818,7 +1812,7 @@ describe("HierarchicalSidebar", () => {
       );
       await screen.findByText(/^Create Ork \(Environment\)/);
       expect(createEnvironmentMock).not.toHaveBeenCalled();
-      expect(useUIStore.getState().selectedProjectId).toBeNull();
+      expect(appCommandStore(uiStore).getState().selectedProjectId).toBeNull();
     } finally {
       portalStore.store.setState({ selfId: null });
     }
@@ -2023,7 +2017,7 @@ describe("HierarchicalSidebar", () => {
       expect(createEnvironmentMock).toHaveBeenCalledTimes(1);
       expect(updateEnvironmentMock).not.toHaveBeenCalled();
       expect(startEnvironmentMock).not.toHaveBeenCalled();
-      expect(useUIStore.getState().selectedEnvironmentId).toBeNull();
+      expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBeNull();
       expect(screen.getByText(/^Create Ork \(Environment\)/)).toBeTruthy();
     } finally {
       logs.restore();
@@ -2067,14 +2061,17 @@ describe("HierarchicalSidebar", () => {
         "Rename after startup",
       );
       expect(renameEnvironmentFromPromptMock).not.toHaveBeenCalled();
-      expect(useUIStore.getState().selectedEnvironmentId).toBe("env-created");
+      expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("env-created");
     } finally {
       logs.restore();
     }
   });
 
   test("highlights the project header when the project is selected without an environment", () => {
-    useUIStore.setState({ selectedProjectId: "project-1", selectedEnvironmentId: null });
+    appCommandStore(uiStore).setState({
+      selectedProjectId: "project-1",
+      selectedEnvironmentId: null,
+    });
 
     render(<HierarchicalSidebar />);
 
@@ -2085,7 +2082,10 @@ describe("HierarchicalSidebar", () => {
   });
 
   test("does not highlight the project header when an environment is selected", () => {
-    useUIStore.setState({ selectedProjectId: "project-1", selectedEnvironmentId: "env-1" });
+    appCommandStore(uiStore).setState({
+      selectedProjectId: "project-1",
+      selectedEnvironmentId: "env-1",
+    });
 
     render(<HierarchicalSidebar />);
 
@@ -2142,7 +2142,7 @@ describe("HierarchicalSidebar", () => {
     render(<HierarchicalSidebar />);
 
     await waitFor(() => {
-      expect(useUIStore.getState().collapsedProjects).toContain("project-1");
+      expect(appCommandStore(uiStore).getState().collapsedProjects).toContain("project-1");
     });
   });
 
@@ -2204,17 +2204,24 @@ describe("HierarchicalSidebar", () => {
         status: "stopped",
       },
     ];
-    useUIStore.setState({ selectedProjectId: "project-1", selectedEnvironmentId: "env-1" });
+    appCommandStore(uiStore).setState({
+      selectedProjectId: "project-1",
+      selectedEnvironmentId: "env-1",
+    });
     render(<HierarchicalSidebar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Environment Three" }), { shiftKey: true });
-    expect(useUIStore.getState().selectedEnvironmentIds).toEqual(["env-1", "env-2", "env-3"]);
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentIds).toEqual([
+      "env-1",
+      "env-2",
+      "env-3",
+    ]);
 
     fireEvent.click(screen.getAllByRole("checkbox")[1]!);
-    expect(useUIStore.getState().selectedEnvironmentIds).toHaveLength(2);
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentIds).toHaveLength(2);
 
     act(() => {
-      useUIStore.getState().clearMultiSelection();
+      appCommandStore(uiStore).getState().clearMultiSelection();
     });
     fireEvent.click(screen.getByRole("button", { name: "Environment Three" }));
     await waitFor(() => expect(startEnvironmentMock).toHaveBeenCalledWith("env-3"));
@@ -2232,7 +2239,7 @@ describe("HierarchicalSidebar", () => {
       fireEvent.click(screen.getByRole("button", { name: "Mobile Environment" }));
 
       expect(document.activeElement).not.toBe(input);
-      expect(useUIStore.getState().selectedEnvironmentId).toBe("env-mobile");
+      expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("env-mobile");
     } finally {
       input.remove();
     }
@@ -2249,7 +2256,7 @@ describe("HierarchicalSidebar", () => {
       fireEvent.click(screen.getByRole("button", { name: "Desktop Environment" }));
 
       expect(document.activeElement).toBe(input);
-      expect(useUIStore.getState().selectedEnvironmentId).toBe("env-desktop");
+      expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("env-desktop");
     } finally {
       input.remove();
     }
@@ -2288,7 +2295,7 @@ describe("HierarchicalSidebar", () => {
           }),
         ),
       );
-      expect(useUIStore.getState().selectedEnvironmentId).toBe("env-local");
+      expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("env-local");
     } finally {
       logs.restore();
     }
@@ -2319,7 +2326,7 @@ describe("HierarchicalSidebar", () => {
     fireEvent.click(screen.getByRole("button", { name: "Creating Local" }));
 
     expect(startEnvironmentMock).not.toHaveBeenCalled();
-    expect(useUIStore.getState().selectedEnvironmentId).toBe("env-creating");
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("env-creating");
   });
 
   test("runs bulk stop, restart, and delete actions for eligible selected environments", async () => {
@@ -2327,7 +2334,7 @@ describe("HierarchicalSidebar", () => {
       { ...createdEnvironment, id: "env-running", name: "Running", order: 0, status: "running" },
       { ...createdEnvironment, id: "env-stopped", name: "Stopped", order: 1, status: "stopped" },
     ];
-    useUIStore.setState({ selectedEnvironmentIds: ["env-running", "env-stopped"] });
+    appCommandStore(uiStore).setState({ selectedEnvironmentIds: ["env-running", "env-stopped"] });
     render(<HierarchicalSidebar />);
 
     fireEvent.click(screen.getByTitle("Stop selected"));
@@ -2344,7 +2351,7 @@ describe("HierarchicalSidebar", () => {
       expect(deleteEnvironmentMock).toHaveBeenCalledWith("env-running");
       expect(deleteEnvironmentMock).toHaveBeenCalledWith("env-stopped");
     });
-    expect(useUIStore.getState().selectedEnvironmentIds).toEqual([]);
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentIds).toEqual([]);
   });
 
   test.each(["cleanupAfterMergeError", "deletionError"] as const)(
@@ -2359,7 +2366,7 @@ describe("HierarchicalSidebar", () => {
           deletionRequestedAt: "2026-01-02T00:00:00.000Z",
         },
       ];
-      useUIStore.setState({
+      appCommandStore(uiStore).setState({
         selectedProjectId: "project-1",
         selectedEnvironmentId: "env-failed-cleanup",
       });
@@ -2385,7 +2392,7 @@ describe("HierarchicalSidebar", () => {
         deletionRequestedAt: "2026-01-02T00:00:00.000Z",
       },
     ];
-    useUIStore.setState({
+    appCommandStore(uiStore).setState({
       selectedProjectId: "project-1",
       selectedEnvironmentId: "env-failed-cleanup",
       selectedEnvironmentIds: ["env-failed-cleanup"],
@@ -2424,11 +2431,13 @@ describe("HierarchicalSidebar", () => {
     render(<HierarchicalSidebar />);
 
     fireEvent.click(screen.getByRole("button", { name: /^In Flight/ }), { metaKey: true });
-    expect(useUIStore.getState().selectedEnvironmentIds).toEqual([]);
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentIds).toEqual([]);
 
     fireEvent.click(screen.getByRole("button", { name: /^Failed Cleanup/ }), { metaKey: true });
     await waitFor(() => {
-      expect(useUIStore.getState().selectedEnvironmentIds).toEqual(["env-failed-cleanup"]);
+      expect(appCommandStore(uiStore).getState().selectedEnvironmentIds).toEqual([
+        "env-failed-cleanup",
+      ]);
     });
   });
 
@@ -2451,7 +2460,7 @@ describe("HierarchicalSidebar", () => {
       status: "running" as const,
     };
     environmentsValue = [containerEnvironment, localEnvironment];
-    useUIStore.setState({
+    appCommandStore(uiStore).setState({
       selectedEnvironmentIds: [containerEnvironment.id, localEnvironment.id],
     });
     const renderSidebar = (available: boolean) => (
@@ -2480,7 +2489,7 @@ describe("HierarchicalSidebar", () => {
     environmentsValue = [
       { ...createdEnvironment, id: "env-running", name: "Running", order: 0, status: "running" },
     ];
-    useUIStore.setState({ selectedEnvironmentIds: ["env-running"] });
+    appCommandStore(uiStore).setState({ selectedEnvironmentIds: ["env-running"] });
     stopEnvironmentMock.mockImplementationOnce(async () => {
       throw new Error("stop failed");
     });
@@ -2537,7 +2546,7 @@ describe("HierarchicalSidebar", () => {
           }),
         ),
       );
-      expect(useUIStore.getState().selectedEnvironmentIds).toEqual([]);
+      expect(appCommandStore(uiStore).getState().selectedEnvironmentIds).toEqual([]);
     } finally {
       logs.restore();
     }
@@ -2874,7 +2883,7 @@ describe("HierarchicalSidebar", () => {
         }),
     );
     appCommandStore(projectStore).setState({ projects: [{ ...project, localPath: "/checkout" }] });
-    useUIStore.setState({
+    appCommandStore(uiStore).setState({
       selectedProjectId: project.id,
       selectedEnvironmentId: createdEnvironment.id,
     });
@@ -2887,9 +2896,9 @@ describe("HierarchicalSidebar", () => {
       removeProjectMock,
       appCommandScope(),
     );
-    expect(useUIStore.getState().selectedProjectId).toBeNull();
-    act(() => useUIStore.getState().selectProject(project.id));
-    expect(useUIStore.getState().selectedEnvironmentId).toBeNull();
+    expect(appCommandStore(uiStore).getState().selectedProjectId).toBeNull();
+    act(() => appCommandStore(uiStore).getState().selectProject(project.id));
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBeNull();
     await expect(ensureProjectHomeInStore(project.id)).rejects.toThrow("being deleted");
     const admittedHome = {
       ...createdEnvironment,
@@ -2922,7 +2931,7 @@ describe("HierarchicalSidebar", () => {
       agentActivityUpdatedAt: new Date(Date.now() - 1000).toISOString(),
     };
     environmentsValue = [home, createdEnvironment];
-    useUIStore.setState({
+    appCommandStore(uiStore).setState({
       selectedProjectId: project.id,
       selectedEnvironmentId: home.id,
       projectBoardTab: "home",
@@ -2932,15 +2941,15 @@ describe("HierarchicalSidebar", () => {
     const projectButton = screen.getByRole("button", { name: /Project One 1/ });
     expect(projectButton.getAttribute("aria-current")).toBe("page");
     fireEvent.click(projectButton);
-    expect(useUIStore.getState().projectBoardTab).toBe("coordinator");
+    expect(appCommandStore(uiStore).getState().projectBoardTab).toBe("coordinator");
     fireEvent.click(screen.getByRole("button", { name: "Project One Home needs attention" }));
-    expect(useUIStore.getState().selectedEnvironmentId).toBe("home");
-    expect(useUIStore.getState().projectBoardTab).toBe("home");
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("home");
+    expect(appCommandStore(uiStore).getState().projectBoardTab).toBe("home");
     act(() => useUIChromeStore.getState().setEnvironmentSortMode("activity"));
     expect(screen.getByLabelText("1 environment")).toBeTruthy();
     expect(screen.getByLabelText("1 waiting environment")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Project One Home needs attention" }));
-    expect(useUIStore.getState().projectBoardTab).toBe("home");
+    expect(appCommandStore(uiStore).getState().projectBoardTab).toBe("home");
     environmentsValue = [
       { ...home, hasUnreadWork: false, agentActivityState: "working" },
       createdEnvironment,
@@ -2981,14 +2990,14 @@ describe("HierarchicalSidebar", () => {
     projectsValue = [project, { ...project, id: "project-2", name: "Project Two", order: 1 }];
     render(<HierarchicalSidebar />);
     for (const name of ["Project One", "Project Two"]) {
-      act(() => useUIStore.setState({ projectBoardTab: "home" }));
+      act(() => appCommandStore(uiStore).setState({ projectBoardTab: "home" }));
       const row = screen.getByRole("button", { name });
       fireEvent.click(row);
-      expect(useUIStore.getState().projectBoardTab).toBe("coordinator");
-      act(() => useUIStore.setState({ projectBoardTab: "home" }));
+      expect(appCommandStore(uiStore).getState().projectBoardTab).toBe("coordinator");
+      act(() => appCommandStore(uiStore).setState({ projectBoardTab: "home" }));
       fireEvent.contextMenu(row);
       fireEvent.click(screen.getByText("Open Board"));
-      expect(useUIStore.getState().projectBoardTab).toBe("coordinator");
+      expect(appCommandStore(uiStore).getState().projectBoardTab).toBe("coordinator");
     }
   });
 
@@ -3163,7 +3172,7 @@ describe("HierarchicalSidebar", () => {
 
       const collapsed = await screen.findByTitle("Expand folder Work");
       expect(collapsed.getAttribute("aria-expanded")).toBe("false");
-      expect(useUIStore.getState().collapsedProjectFolders).toEqual(["Work"]);
+      expect(appCommandStore(uiStore).getState().collapsedProjectFolders).toEqual(["Work"]);
       expect(document.querySelector('[data-project-folder-content="Work"]') === null).toBe(true);
       expect(screen.queryByRole("button", { name: /^Project One/i }) === null).toBe(true);
       // The folder outside it is unaffected.
@@ -3172,7 +3181,7 @@ describe("HierarchicalSidebar", () => {
       fireEvent.click(collapsed);
       expect(await screen.findByTitle("Collapse folder Work")).toBeTruthy();
       expect(screen.getByRole("button", { name: /^Project One/i })).toBeTruthy();
-      expect(useUIStore.getState().collapsedProjectFolders).toEqual([]);
+      expect(appCommandStore(uiStore).getState().collapsedProjectFolders).toEqual([]);
     });
 
     test("the folder chevron toggles collapse without the drag handle intercepting the key", async () => {
@@ -3184,10 +3193,10 @@ describe("HierarchicalSidebar", () => {
       // collapse the folder with.
       const chevron = await screen.findByRole("button", { name: "Collapse folder Work" });
       fireEvent.click(chevron);
-      expect(useUIStore.getState().collapsedProjectFolders).toEqual(["Work"]);
+      expect(appCommandStore(uiStore).getState().collapsedProjectFolders).toEqual(["Work"]);
 
       fireEvent.click(await screen.findByRole("button", { name: "Expand folder Work" }));
-      expect(useUIStore.getState().collapsedProjectFolders).toEqual([]);
+      expect(appCommandStore(uiStore).getState().collapsedProjectFolders).toEqual([]);
     });
 
     test("dropping a project on a folder header moves it into that folder", async () => {
@@ -3300,7 +3309,7 @@ describe("HierarchicalSidebar", () => {
         { ...project, id: "project-zulu", name: "Zulu", folder: "Work", order: 0 },
         { ...secondProject, id: "project-alpha", name: "Alpha", folder: "Work", order: 1 },
       ];
-      useUIStore.setState({ collapsedProjectFolders: ["Work"] });
+      appCommandStore(uiStore).setState({ collapsedProjectFolders: ["Work"] });
       render(<HierarchicalSidebar />);
 
       expect(screen.queryByRole("button", { name: /^Zulu/i }) === null).toBe(true);
@@ -3313,7 +3322,7 @@ describe("HierarchicalSidebar", () => {
           folder: "Work",
         }),
       );
-      expect(useUIStore.getState().collapsedProjectFolders).toEqual(["Work"]);
+      expect(appCommandStore(uiStore).getState().collapsedProjectFolders).toEqual(["Work"]);
       expect(screen.getByTitle("Expand folder Work")).toBeTruthy();
     });
 
@@ -3375,7 +3384,7 @@ describe("HierarchicalSidebar", () => {
         { ...project, folder: "Work" },
         { ...secondProject, folder: "Work" },
       ];
-      useUIStore.setState({ collapsedProjectFolders: ["Work"] });
+      appCommandStore(uiStore).setState({ collapsedProjectFolders: ["Work"] });
       render(<HierarchicalSidebar />);
 
       fireEvent.contextMenu(await screen.findByTitle("Expand folder Work"));
@@ -3395,7 +3404,7 @@ describe("HierarchicalSidebar", () => {
         }),
       );
       await waitFor(() =>
-        expect(useUIStore.getState().collapsedProjectFolders).toEqual(["Team Work"]),
+        expect(appCommandStore(uiStore).getState().collapsedProjectFolders).toEqual(["Team Work"]),
       );
     });
 
@@ -3417,7 +3426,10 @@ describe("HierarchicalSidebar", () => {
           order: 0,
         },
       ];
-      useUIStore.setState({ collapsedProjectFolders: ["Work"], selectedEnvironmentId: "env-1" });
+      appCommandStore(uiStore).setState({
+        collapsedProjectFolders: ["Work"],
+        selectedEnvironmentId: "env-1",
+      });
       render(<HierarchicalSidebar />);
 
       // "Environment One" lives inside the collapsed folder and is not on
@@ -3425,7 +3437,7 @@ describe("HierarchicalSidebar", () => {
       expect(screen.queryByRole("button", { name: "Environment One" }) === null).toBe(true);
       fireEvent.click(screen.getByRole("button", { name: "Environment Two" }), { shiftKey: true });
 
-      expect(useUIStore.getState().selectedEnvironmentIds).toEqual(["env-2"]);
+      expect(appCommandStore(uiStore).getState().selectedEnvironmentIds).toEqual(["env-2"]);
     });
   });
 });

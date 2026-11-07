@@ -4,12 +4,13 @@ import { appCommandScope } from "@/lib/node-scope-slots";
 import { WindowScope } from "@/lib/node-scope/window-scope";
 import { FakeNodeClient } from "@/test/render-in-node-scope";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
-import { useUIStore } from "@/stores/uiStore";
+import { uiStore } from "@/stores/uiStore";
 import { onGraphRunViewRequested, takePendingGraphRunView } from "./graph-run-navigation";
 import {
   openCoordinatorWorkTarget,
   type CoordinatorWorkNavigation,
 } from "./coordinator-work-navigation";
+import { appCommandStore } from "@/test/app-command-store";
 
 function seedLayout() {
   usePaneLayoutStore.setState({
@@ -90,7 +91,7 @@ const activeTab = (paneId: string) =>
 describe("openCoordinatorWorkTarget", () => {
   beforeEach(() => {
     seedLayout();
-    useUIStore.setState({ selectedProjectId: null, selectedEnvironmentId: null });
+    appCommandStore(uiStore).setState({ selectedProjectId: null, selectedEnvironmentId: null });
   });
   afterEach(() => {
     takePendingGraphRunView();
@@ -101,8 +102,8 @@ describe("openCoordinatorWorkTarget", () => {
       { type: "worker-tab", projectId: "project-1", environmentId: "env-1", tabId: "worker-tab" },
       navigation(),
     );
-    expect(useUIStore.getState().selectedProjectId).toBe("project-1");
-    expect(useUIStore.getState().selectedEnvironmentId).toBe("env-1");
+    expect(appCommandStore(uiStore).getState().selectedProjectId).toBe("project-1");
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("env-1");
     expect(activeTab("pane-2")).toBe("worker-tab");
     expect(usePaneLayoutStore.getState().getActivePaneId("env-1")).toBe("pane-2");
   });
@@ -112,7 +113,7 @@ describe("openCoordinatorWorkTarget", () => {
       { type: "review", projectId: "project-1", environmentId: "env-1", workflowId: "review-1" },
       navigation(),
     );
-    expect(useUIStore.getState().selectedEnvironmentId).toBe("env-1");
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("env-1");
     expect(activeTab("pane-2")).toBe("review-main");
   });
 
@@ -190,7 +191,7 @@ describe("openCoordinatorWorkTarget", () => {
     } finally {
       off();
     }
-    expect(useUIStore.getState().selectedEnvironmentId).toBe("env-1");
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("env-1");
     expect(seen).toEqual([
       {
         runId: "run-1",
@@ -206,7 +207,7 @@ describe("openCoordinatorWorkTarget", () => {
     const nav = navigation();
     openCoordinatorWorkTarget({ type: "pull-request", url: "https://github.com/o/r/pull/4" }, nav);
     expect(nav.openPullRequest).toHaveBeenCalledWith("https://github.com/o/r/pull/4");
-    expect(useUIStore.getState().selectedEnvironmentId).toBeNull();
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBeNull();
   });
 
   test("work on another node opens through that node's workspace", () => {
@@ -220,7 +221,7 @@ describe("openCoordinatorWorkTarget", () => {
     };
     openCoordinatorWorkTarget(target, nav);
     expect(nav.openRemote).toHaveBeenCalledWith(target);
-    expect(useUIStore.getState().selectedEnvironmentId).toBeNull();
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBeNull();
   });
 });
 
@@ -277,7 +278,7 @@ test("a work selection back to the command node activates its surface locally", 
         tabId: "worker-tab",
       },
     });
-    expect(useUIStore.getState().selectedEnvironmentId).toBe("env-1");
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentId).toBe("env-1");
     expect(usePaneLayoutStore.getState().environments.get("env-1")?.activePaneId).toBe("pane-2");
   } finally {
     portalStore.store.setState(original, true);

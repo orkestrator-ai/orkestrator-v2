@@ -25,7 +25,7 @@ import * as realBackend from "@/lib/backend";
 import * as realNativeAgent from "@/components/native-agent";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { environmentStore } from "@/stores/environmentStore";
-import { useMultiReviewStore } from "@/stores/multiReviewStore";
+import { multiReviewStore } from "@/stores/multiReviewStore";
 import { projectStore } from "@/stores/projectStore";
 import { useCoordinatorPaneLayoutStore } from "@/stores/coordinatorPaneLayoutStore";
 import {
@@ -187,7 +187,7 @@ async function renderPanel() {
 describe("CoordinatorPanel render cost", () => {
   const previousEnvironments = appCommandStore(environmentStore).getState().environments;
   const previousPipelines = useBuildPipelineStore.getState().pipelines;
-  const previousReviews = useMultiReviewStore.getState().workflows;
+  const previousReviews = appCommandStore(multiReviewStore).getState().workflows;
 
   beforeEach(() => {
     tabRenders.clear();
@@ -228,7 +228,7 @@ describe("CoordinatorPanel render cost", () => {
     resetReadCoordinatorForTests();
     appCommandStore(environmentStore).setState({ environments: previousEnvironments });
     useBuildPipelineStore.setState({ pipelines: previousPipelines });
-    useMultiReviewStore.setState({ workflows: previousReviews });
+    appCommandStore(multiReviewStore).setState({ workflows: previousReviews });
   });
   afterAll(() => {
     mock.module("@/lib/backend", () => backendSnapshot);
@@ -265,7 +265,7 @@ describe("CoordinatorPanel render cost", () => {
         })),
       );
       act(() =>
-        useMultiReviewStore.setState((state) => ({
+        appCommandStore(multiReviewStore).setState((state) => ({
           workflows: new Map(state.workflows).set(`review-${index}`, {
             id: `review-${index}`,
             environmentId: unrelated.id,

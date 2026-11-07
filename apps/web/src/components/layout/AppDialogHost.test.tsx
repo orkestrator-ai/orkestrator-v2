@@ -10,7 +10,7 @@ import { useAppDialogStore } from "@/stores/appDialogStore";
 import { configStore } from "@/stores/configStore";
 import { environmentStore } from "@/stores/environmentStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
-import { useUIStore } from "@/stores/uiStore";
+import { uiStore } from "@/stores/uiStore";
 import { projectStore } from "@/stores/projectStore";
 import type { Environment, Project } from "@/types";
 import type { BackendId } from "@orkestrator/protocol/federation";
@@ -582,7 +582,7 @@ test("repository settings waits for saved config, saves through the owner's proj
 
 test("a local Rebuild requested before the environment snapshot arrives opens Container when it arrives", async () => {
   const originalPortal = portalStore.getState();
-  const originalUI = useUIStore.getState();
+  const originalUI = appCommandStore(uiStore).getState();
   const originalRemote = useRemoteWorkspaceStore.getState();
   try {
     portalStore.store.setState({ selfId: "self" as never });
@@ -607,7 +607,7 @@ test("a local Rebuild requested before the environment snapshot arrives opens Co
     expect(await screen.findByText("Section: container")).toBeTruthy();
   } finally {
     portalStore.store.setState(originalPortal, true);
-    useUIStore.setState(originalUI, true);
+    appCommandStore(uiStore).setState(originalUI, true);
     useRemoteWorkspaceStore.setState(originalRemote, true);
   }
 });

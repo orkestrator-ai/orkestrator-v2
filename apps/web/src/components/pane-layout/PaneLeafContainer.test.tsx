@@ -1,5 +1,5 @@
 import { beginTabLaunch, resetTabLaunches } from "@/lib/tab-launch";
-import { useTabLaunchStore } from "@/stores/tabLaunchStore";
+import { tabLaunchStore } from "@/stores/tabLaunchStore";
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
@@ -15,7 +15,7 @@ import { configStore } from "@/stores/configStore";
 import { environmentStore } from "@/stores/environmentStore";
 import { useAgentMailStore } from "@/stores/agentMailStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
-import { useMultiReviewStore } from "@/stores/multiReviewStore";
+import { multiReviewStore } from "@/stores/multiReviewStore";
 import type { ChangeDiffTarget, PaneLeaf } from "@/types/paneLayout";
 import { createPaneTabElementId } from "@/types/paneLayout";
 import { environmentChangeResourceKey } from "@orkestrator/protocol/change-resources";
@@ -508,7 +508,7 @@ describe("PaneLeafContainer", () => {
         repositories: {},
       },
     }));
-    useMultiReviewStore.setState({ workflows: new Map() });
+    appCommandStore(multiReviewStore).setState({ workflows: new Map() });
     useAgentMailStore.setState(useAgentMailStore.getInitialState());
     clearPersistedVirtuosoState.mockClear();
     nativeAgentTabFailureEnvironment = null;
@@ -587,7 +587,9 @@ describe("PaneLeafContainer", () => {
     expect(screen.getByTestId("tab-launch-shimmer")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Select tab 2" }));
     expect(screen.queryByTestId("tab-launch-shimmer") === null).toBe(true);
-    expect(useTabLaunchStore.getState().launches.get("env-hidden")?.[0]?.focused).toBe(false);
+    expect(
+      appCommandStore(tabLaunchStore).getState().launches.get("env-hidden")?.[0]?.focused,
+    ).toBe(false);
   });
 
   test("the content is the tabpanel its selected tab labels, launching or not", () => {
@@ -643,7 +645,9 @@ describe("PaneLeafContainer", () => {
 
     expect(container.firstElementChild?.hasAttribute("data-pane-leaf")).toBe(true);
     fireEvent.click(container.firstElementChild as HTMLElement);
-    expect(useTabLaunchStore.getState().launches.get("env-hidden")?.[0]?.focused).toBe(false);
+    expect(
+      appCommandStore(tabLaunchStore).getState().launches.get("env-hidden")?.[0]?.focused,
+    ).toBe(false);
     expect(screen.queryByTestId("tab-launch-shimmer") === null).toBe(true);
 
     expect(usePaneLayoutStore.getState().environments.get("env-hidden")?.activePaneId).toBe(
@@ -1430,7 +1434,7 @@ describe("PaneLeafContainer", () => {
       updatedAt: timestamp,
       backendRevision,
     });
-    useMultiReviewStore.getState().replaceWorkflow(workflow(1));
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow(1));
     multiReviewTabFailure = new TypeError("transient reviewer render failure");
     const originalError = console.error;
     console.error = mock(() => undefined) as typeof console.error;
@@ -1462,7 +1466,7 @@ describe("PaneLeafContainer", () => {
 
       expect(await screen.findByRole("alert")).toBeTruthy();
       multiReviewTabFailure = null;
-      act(() => useMultiReviewStore.getState().replaceWorkflow(workflow(2)));
+      act(() => appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow(2)));
       expect(await screen.findByTestId("multi-review-tab")).toBeTruthy();
       expect(screen.queryByRole("alert") === null).toBe(true);
     } finally {
@@ -1487,7 +1491,7 @@ describe("PaneLeafContainer", () => {
       updatedAt: timestamp,
       backendRevision,
     });
-    useMultiReviewStore.getState().replaceWorkflow(workflow(1));
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow(1));
     multiReviewTabFailure = new TypeError("poisoned reviewer scroll state");
     const originalError = console.error;
     console.error = mock(() => undefined) as typeof console.error;
@@ -1527,7 +1531,7 @@ describe("PaneLeafContainer", () => {
       );
 
       multiReviewTabFailure = null;
-      act(() => useMultiReviewStore.getState().replaceWorkflow(workflow(2)));
+      act(() => appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow(2)));
       expect(await screen.findByTestId("multi-review-tab")).toBeTruthy();
       expect(clearPersistedVirtuosoState).toHaveBeenCalledTimes(1);
     } finally {
@@ -1620,8 +1624,8 @@ describe("PaneLeafContainer", () => {
     // refreshes, so a pane-level subscription would re-render every pane in
     // every environment on any Multi Review event.
     const rendersBefore = paneRenderCount;
-    act(() => useMultiReviewStore.getState().replaceWorkflow(workflow(1)));
-    act(() => useMultiReviewStore.getState().replaceWorkflow(workflow(2)));
+    act(() => appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow(1)));
+    act(() => appCommandStore(multiReviewStore).getState().replaceWorkflow(workflow(2)));
     expect(paneRenderCount).toBe(rendersBefore);
   });
 

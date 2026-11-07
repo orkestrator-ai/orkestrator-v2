@@ -3,7 +3,7 @@ import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { configStore } from "@/stores/configStore";
 import { projectStore } from "@/stores/projectStore";
-import { useUIStore } from "@/stores/uiStore";
+import { uiStore } from "@/stores/uiStore";
 import { PLATFORM_ICON_CLASS } from "@/components/icons/AgentIcons";
 import { AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
 import { mockWriteText } from "../../mocks/clipboard";
@@ -363,7 +363,7 @@ describe("GlobalSettings", () => {
     }));
     window.orkestratorGateway = { enabled: true };
     appCommandStore(projectStore).setState({ projects: [], isLoading: false, error: null });
-    useUIStore.setState({ selectedProjectId: null });
+    appCommandStore(uiStore).setState({ selectedProjectId: null });
 
     appCommandStore(configStore).setState({
       config: {

@@ -5,7 +5,7 @@ import type { ChangesGetFilesResult } from "@orkestrator/protocol/change-resourc
 import { TerminalProvider, useTerminalContext } from "@/contexts";
 import { invoke } from "@/lib/native/backend";
 import { resetChangeSubscriptionsForTests } from "@/lib/changes/subscriptions";
-import { useFilesPanelStore } from "@/stores";
+import { filesPanelStore } from "@/stores";
 import { useChangeProjectionStore } from "@/stores/changeProjectionStore";
 import type { Environment } from "@/types";
 import { EnvironmentItem } from "@/components/environments/EnvironmentItem";
@@ -21,6 +21,7 @@ import {
 import { ChangesView } from "./ChangesView";
 import { FilesPanelHeader } from "./FilesPanelHeader";
 import { setFilesPanelTestState } from "@/test/files-panel-state";
+import { appCommandStore } from "@/test/app-command-store";
 
 const invokeMock = invoke as unknown as ReturnType<typeof mock>;
 const RESOURCE_KEY = "environment-net/environment/env-1/live";
@@ -390,7 +391,7 @@ describe("ChangesView on the environment change projection", () => {
 
   test("without a projection (older backend) the legacy list is shown", async () => {
     act(() =>
-      useFilesPanelStore.setState({
+      appCommandStore(filesPanelStore).setState({
         changes: [
           {
             path: "src/App.tsx",

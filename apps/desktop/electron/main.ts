@@ -976,9 +976,12 @@ async function createWindow(connectionId?: string): Promise<void> {
   // one that misbehaves can be left for a new one on the other transport.
   const localGatewayTransport =
     backend !== null && readLocalWindowGatewayTransport(app.getPath("userData"));
+  // One authorizer for the window's renderer over its command scope and every
+  // node scope it opens later (the same `nodes` map the context holds).
+  const nodes = new Map<string, NodeScopeRecord>();
   const requestAuth = createWindowRequestAuthorization(
     connectionManager,
-    scope,
+    { scope, nodes },
     localGatewayTransport ? (url) => backend?.directTransportAuthorization(url) ?? null : null,
   );
   let registered = false;
@@ -1025,7 +1028,7 @@ async function createWindow(connectionId?: string): Promise<void> {
           portalScope: null,
           target: null,
           realm: null,
-          nodes: new Map(),
+          nodes,
           localGatewayTransport,
         });
         registered = true;

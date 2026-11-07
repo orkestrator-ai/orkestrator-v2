@@ -216,10 +216,15 @@ because a ticket being built again keeps its earlier pull request until the new
 build raises one.
 
 The closure happens once per pull request. The ticket records the merged pull
-request that closed it (`prMergeDoneUrl`). A ticket the user moves back out of
+request that closed it (`prMergeDoneUrl`), even if it was already done when the
+merge was observed. Recording that merge leaves a done ticket’s order alone.
+The marker travels with status in sync snapshots and outbox changes, sharing
+its revision and conflict rules. A ticket the user moves back out of
 done afterwards stays where they put it, until a different pull request merges.
 Separately, a build or graph run ending (`complete`, `failed`) never moves a
-ticket that is already done. A new build starting still moves it to in progress.
+ticket that is already done: storage checks this under the same mutation lease
+as the write, so a terminal writer cannot race the monitor and reopen it.
+A new build starting still moves it to in progress.
 
 ## Views
 

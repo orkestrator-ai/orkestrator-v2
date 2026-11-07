@@ -436,7 +436,7 @@ export class KanbanRepository {
     updates: Partial<Omit<KanbanTask, "sections" | "sectionsBasis" | "sync">> &
       KanbanTaskContentInput,
     expectedProjectId?: string,
-    options: { notifyDeliveryPolicyChange?: boolean } = {},
+    options: { notifyDeliveryPolicyChange?: boolean; preserveDoneStatus?: boolean } = {},
   ): Promise<KanbanTask> {
     if (
       updates.status !== undefined &&
@@ -454,6 +454,12 @@ export class KanbanRepository {
         throw new Error(`Kanban task not found: ${taskId}`);
       }
 
+      // Terminal writers may have read before the monitor closed this ticket.
+      // Check under the same lease as the write; user edits remain unconditional.
+      if (options.preserveDoneStatus && task.status === "done") {
+        const { status: _status, ...remaining } = updates;
+        updates = remaining;
+      }
       const before = normalizeKanbanTask(structuredClone(task));
       const oldStatus = task.status;
       const oldDeliveryPolicy = before.sections?.delivery?.policy;
@@ -534,14 +540,12 @@ export class KanbanRepository {
     });
   }
 
-  // A deletion retains only the last publication restriction, not ticket content.
-  // Save it before removing the row so Verify can read it without the pipeline lock.
   /**
    * Moves tickets whose linked pull request merged to done, once per pull
    * request (`kanban-merge-closure.ts`). With `closures`, those tickets for
    * those URLs; without, every board's recorded merges not yet applied.
-   * A missing ticket, or one already done or already closed by that URL, is
-   * skipped. Returns the ids moved.
+   * A missing ticket or one already marked for that URL is skipped. Already
+   * done tickets are marked without reordering. Returns only the ids moved.
    */
   async closeKanbanTasksForMergedPullRequests(
     closures?: readonly KanbanMergeClosure[],
@@ -550,23 +554,27 @@ export class KanbanRepository {
       const tasks = await this.context.loadJson<KanbanTask[]>(this.files.kanbanFile(), () => []);
       const due = closures ?? pendingMergeClosures(tasks.map(normalizeKanbanTask));
       const changes: Array<{ before: KanbanTask; stored: KanbanTask }> = [];
+      const moved: string[] = [];
       for (const { taskId, prUrl } of due) {
         const task = tasks.find((candidate) => candidate.id === taskId);
         if (!task || !kanbanTaskAwaitsMergeClosure(task, prUrl)) continue;
         const before = normalizeKanbanTask(structuredClone(task));
-        task.order =
-          Math.max(
-            -1,
-            ...tasks
-              .filter(
-                (candidate) =>
-                  candidate.projectId === task.projectId &&
-                  candidate.status === "done" &&
-                  candidate.id !== taskId,
-              )
-              .map((candidate) => candidate.order),
-          ) + 1;
-        task.status = "done";
+        if (task.status !== "done") {
+          moved.push(task.id);
+          task.order =
+            Math.max(
+              -1,
+              ...tasks
+                .filter(
+                  (candidate) =>
+                    candidate.projectId === task.projectId &&
+                    candidate.status === "done" &&
+                    candidate.id !== taskId,
+                )
+                .map((candidate) => candidate.order),
+            ) + 1;
+          task.status = "done";
+        }
         task.prMergeDoneUrl = prUrl;
         changes.push({ before, stored: task });
       }
@@ -575,10 +583,12 @@ export class KanbanRepository {
       for (const projectId of new Set(changes.map(({ stored }) => stored.projectId))) {
         this.context.changes.announce("kanban", projectId);
       }
-      return changes.map(({ stored }) => stored.id);
+      return moved;
     });
   }
 
+  // A deletion retains only the last publication restriction, not ticket content.
+  // Save it before removing the row so Verify can read it without the pipeline lock.
   private deletedDeliveryFile(taskId: string): string {
     const key = createHash("sha256").update(taskId).digest("hex");
     return `${this.files.kanbanFile()}.delivery/${key}.json`;
@@ -911,6 +921,7 @@ export class KanbanRepository {
               title: item.title,
               ...content,
               status: item.status,
+              ...(item.prMergeDoneUrl ? { prMergeDoneUrl: item.prMergeDoneUrl } : {}),
               comments: item.comments,
               images: [],
               createdAt: item.createdAt,
@@ -935,9 +946,13 @@ export class KanbanRepository {
           delete updated.sectionsBasis;
           Object.assign(updated, content);
         }
-        if (!pending.fields.has("status") && updated.status !== item.status) {
-          updated.status = item.status;
-          updated.order = orderIn(item.status, row.id);
+        if (!pending.fields.has("status")) {
+          if (updated.status !== item.status) {
+            updated.status = item.status;
+            updated.order = orderIn(item.status, row.id);
+          }
+          // Older peers omit the marker; they must not erase one already known.
+          if (item.prMergeDoneUrl) updated.prMergeDoneUrl = item.prMergeDoneUrl;
         }
         const authority = new Set(item.comments.map((comment) => comment.id));
         updated.comments = [
@@ -1167,6 +1182,7 @@ export class KanbanRepository {
             title: op.ticket.title,
             ...ticketContentValue({ ...op.ticket } as KanbanTask),
             status: op.ticket.status,
+            ...(op.ticket.prMergeDoneUrl ? { prMergeDoneUrl: op.ticket.prMergeDoneUrl } : {}),
             comments: op.ticket.comments,
             images: [],
             createdAt: op.ticket.createdAt,
@@ -1195,7 +1211,11 @@ export class KanbanRepository {
                   ? row.status
                   : ticketContentValue(normalizeKanbanTask(row));
             const incoming = op.value;
-            if (JSON.stringify(current) === JSON.stringify(incoming)) break;
+            const mergeChanged =
+              op.kind === "set-status" &&
+              op.prMergeDoneUrl !== undefined &&
+              row.prMergeDoneUrl !== op.prMergeDoneUrl;
+            if (JSON.stringify(current) === JSON.stringify(incoming) && !mergeChanged) break;
             if (!acceptsFieldChange(row.sync, field, op.baseRev, input.nodeId)) {
               conflict(
                 item,
@@ -1209,8 +1229,9 @@ export class KanbanRepository {
             track(row);
             if (op.kind === "set-title") row.title = op.value;
             if (op.kind === "set-status") {
+              if (row.status !== op.value) row.order = orderIn(row.projectId, op.value, row.id);
               row.status = op.value;
-              row.order = orderIn(row.projectId, op.value, row.id);
+              if (op.prMergeDoneUrl) row.prMergeDoneUrl = op.prMergeDoneUrl;
             }
             if (op.kind === "set-content") {
               delete row.kind;

@@ -72,7 +72,7 @@ describe("mergedPullRequestOnTicket", () => {
 describe("kanbanTaskAwaitsMergeClosure", () => {
   test("closes once per pull request", () => {
     expect(kanbanTaskAwaitsMergeClosure({ status: "backlog" }, PR1)).toBe(true);
-    expect(kanbanTaskAwaitsMergeClosure({ status: "done" }, PR1)).toBe(false);
+    expect(kanbanTaskAwaitsMergeClosure({ status: "done" }, PR1)).toBe(true);
     expect(kanbanTaskAwaitsMergeClosure({ status: "backlog", prMergeDoneUrl: PR1 }, PR1)).toBe(
       false,
     );
@@ -98,6 +98,7 @@ describe("pendingMergeClosures", () => {
       { taskId: "backlog", prUrl: PR1 },
       { taskId: "review", prUrl: PR1 },
       { taskId: "commented", prUrl: PR2 },
+      { taskId: "done", prUrl: PR1 },
     ]);
   });
 });
@@ -138,6 +139,29 @@ describe("closeKanbanTasksForMergedPullRequests", () => {
     expect(
       await store.kanban.closeKanbanTasksForMergedPullRequests([{ taskId: "gone", prUrl: PR1 }]),
     ).toEqual([]);
+  });
+
+  test("marks an already-done merge without reordering, and preserves a later reopen", async () => {
+    const store = await storage();
+    const ticket = await store.kanban.addKanbanTask("p1", "Done", "");
+    await store.kanban.updateKanbanTask(ticket.id, {
+      status: "done",
+      prUrl: PR1,
+      prState: "merged",
+    });
+    const before = await store.kanban.getKanbanTask(ticket.id);
+    expect(await store.kanban.closeKanbanTasksForMergedPullRequests()).toEqual([]);
+    expect(await store.kanban.getKanbanTask(ticket.id)).toMatchObject({
+      status: "done",
+      order: before!.order,
+      prMergeDoneUrl: PR1,
+    });
+    await store.kanban.updateKanbanTask(ticket.id, { status: "review" });
+    expect(await store.kanban.closeKanbanTasksForMergedPullRequests()).toEqual([]);
+    expect(await store.kanban.getKanbanTask(ticket.id)).toMatchObject({
+      status: "review",
+      prMergeDoneUrl: PR1,
+    });
   });
 
   test("without names, sweeps every board for recorded merges", async () => {

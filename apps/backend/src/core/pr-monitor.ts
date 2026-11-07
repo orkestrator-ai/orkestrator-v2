@@ -1692,7 +1692,7 @@ export class PrMonitorService {
         // A merged pull request finishes its task, from whichever column it is
         // in, once: a task this PR already closed and the user reopened stays
         // open. A pipeline-located task (status unknown) is left to the store.
-        if (task.status !== "done" && task.prMergeDoneUrl !== detection.url) {
+        if (task.prMergeDoneUrl !== detection.url) {
           await this.options.effects.closeTaskForMerge(task.taskId, detection.url);
           if (!this.isCurrent(entry, generation)) return false;
         }

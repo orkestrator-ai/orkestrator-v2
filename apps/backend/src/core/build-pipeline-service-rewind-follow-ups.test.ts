@@ -771,7 +771,7 @@ describe("rewinding the code to a step", () => {
                 .slice(invocationCount)
                 .filter((call) => call.command === "update_kanban_task")
                 .map((call) => call.args),
-            ).toEqual([{ taskId, status: "backlog" }]);
+            ).toEqual([{ taskId, status: "backlog", preserveDoneStatus: true }]);
             expect(
               invocations
                 .slice(invocationCount)

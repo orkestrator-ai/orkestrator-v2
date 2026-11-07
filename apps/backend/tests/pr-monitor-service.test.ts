@@ -814,7 +814,7 @@ describe("PrMonitorService", () => {
     });
   }
 
-  test("a merge leaves a done task, and one it already closed and the user reopened, alone", async () => {
+  test("a merge marks done tasks and leaves previously closed reopened tasks alone", async () => {
     for (const task of [
       inProgressTask({ status: "done" }),
       inProgressTask({
@@ -833,7 +833,7 @@ describe("PrMonitorService", () => {
 
       await harness.fireNext();
 
-      expect(harness.calls.done).toEqual([]);
+      expect(harness.calls.done).toEqual(task.status === "done" ? ["task-1"] : []);
     }
   });
 

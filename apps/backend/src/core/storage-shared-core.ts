@@ -172,7 +172,7 @@ export type KanbanTask = {
   prState?: PrState;
   prMergeCommented?: boolean;
   /**
-   * The merged pull request that moved this ticket to done
+   * The merged pull request applied to this ticket (including one already done)
    * (`kanban-merge-closure.ts`). Its merge never closes the ticket again, so
    * a ticket reopened afterwards stays open.
    */

@@ -689,6 +689,7 @@ export class BuildPipelineRecovery {
     ) {
       await this.ctx.invoke("update_kanban_task", {
         taskId: task.id,
+        ...(options.terminal ? { preserveDoneStatus: true } : {}),
         ...(updates.status ? { status: updates.status } : {}),
         ...(updates.prUrl ? { prUrl: updates.prUrl } : {}),
         ...(updates.prState ? { prState: updates.prState } : {}),

@@ -361,8 +361,10 @@ export async function withService(
     if (command === "update_kanban_task") {
       const taskId = String(args.taskId);
       if (options.realKanban) {
-        const { taskId: _taskId, ...updates } = args;
-        return (await storage.kanban.updateKanbanTask(taskId, updates)) as T;
+        const { taskId: _taskId, preserveDoneStatus, ...updates } = args;
+        return (await storage.kanban.updateKanbanTask(taskId, updates, undefined, {
+          preserveDoneStatus: preserveDoneStatus === true,
+        })) as T;
       }
       const task = kanbanTasks.get(taskId) ?? {
         id: taskId,

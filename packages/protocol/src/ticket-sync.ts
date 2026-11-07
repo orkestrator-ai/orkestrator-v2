@@ -124,6 +124,8 @@ export interface TicketSnapshot extends TicketContentValue {
   revs: TicketFieldRevisions;
   title: string;
   status: TicketSyncStatus;
+  /** The merge already applied, retained when a user reopens the ticket. */
+  prMergeDoneUrl?: string;
   comments: TicketSyncComment[];
   createdAt: string;
   work?: TicketWorkLocation;
@@ -149,13 +151,14 @@ export type TicketSyncOp =
       ticket: TicketContentValue & {
         title: string;
         status: TicketSyncStatus;
+        prMergeDoneUrl?: string;
         comments: TicketSyncComment[];
         createdAt: string;
       };
     }
   | { kind: "set-title"; value: string; baseRev: number }
   | { kind: "set-content"; value: TicketContentValue; baseRev: number }
-  | { kind: "set-status"; value: TicketSyncStatus; baseRev: number }
+  | { kind: "set-status"; value: TicketSyncStatus; baseRev: number; prMergeDoneUrl?: string }
   | {
       kind: "checks";
       checks: Array<{ id: string; text: string; check: AcceptanceCriterionCheck }>;
@@ -327,6 +330,14 @@ function parseWork(value: unknown): TicketWorkLocation {
   return work;
 }
 
+function parseMergeDone(value: Record<string, unknown>): { prMergeDoneUrl?: string } {
+  if (value.prMergeDoneUrl === undefined) return {};
+  if (!isBoundedString(value.prMergeDoneUrl, 4_000) || !value.prMergeDoneUrl) {
+    throw new Error("Invalid ticket merge closure URL.");
+  }
+  return { prMergeDoneUrl: value.prMergeDoneUrl };
+}
+
 export function parseTicketSyncItem(value: unknown): TicketSyncItem {
   if (!isRecord(value) || !isBoundedString(value.id, 200) || !value.id || !isSeq(value.seq)) {
     throw new Error("Invalid ticket sync item.");
@@ -354,6 +365,7 @@ export function parseTicketSyncItem(value: unknown): TicketSyncItem {
     revs: parseRevisions(value.revs ?? {}),
     title: value.title,
     status: value.status,
+    ...parseMergeDone(value),
     comments: value.comments.map(parseComment),
     createdAt: value.createdAt,
     ...parseContent(value),
@@ -381,6 +393,7 @@ export function parseTicketSyncOp(value: unknown): TicketSyncOp {
         ticket: {
           title: ticket.title,
           status: ticket.status,
+          ...parseMergeDone(ticket),
           comments: ticket.comments.map(parseComment),
           createdAt: ticket.createdAt,
           ...parseContent(ticket),
@@ -395,7 +408,12 @@ export function parseTicketSyncOp(value: unknown): TicketSyncOp {
       return { kind: "set-content", value: parseContent(value.value), baseRev: value.baseRev };
     case "set-status":
       if (!isTicketSyncStatus(value.value) || !isSeq(value.baseRev)) break;
-      return { kind: "set-status", value: value.value, baseRev: value.baseRev };
+      return {
+        kind: "set-status",
+        value: value.value,
+        baseRev: value.baseRev,
+        ...parseMergeDone(value),
+      };
     case "checks": {
       if (!Array.isArray(value.checks) || value.checks.length > 500) break;
       const checks = value.checks.map((entry) => {

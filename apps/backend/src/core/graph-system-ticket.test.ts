@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { GRAPH_TICKET_LIFECYCLE_EVENTS } from "@orkestrator/protocol/graphs/system-actions";
 import { buildPipelineKanbanUpdate } from "./build-pipeline-kanban-lifecycle.js";
 import type { GraphActivationReport } from "./graph-run-executors.js";
@@ -136,3 +136,33 @@ describe("update-ticket", () => {
     expect((report as { error: string }).error).toContain("No Kanban ticket is linked");
   });
 });
+
+for (const node of ["completed", "failed"]) {
+  test(`merge closure between ${node} reads and write stays done`, async () => {
+    const { w, taskId } = await world();
+    complete(await w.executor().start(w.context(w.activation("started"))));
+    const kanban = w.storage.kanban;
+    const original = kanban.updateKanbanTask.bind(kanban);
+    let resume!: () => void;
+    let reached!: () => void;
+    const gate = new Promise<void>((resolve) => (resume = resolve));
+    const entered = new Promise<void>((resolve) => (reached = resolve));
+    const write = spyOn(kanban, "updateKanbanTask").mockImplementation(async (...args) => {
+      reached();
+      await gate;
+      return original(...args);
+    });
+    const ending = w.executor().start(w.context(w.activation(node)));
+    try {
+      await entered;
+      await kanban.closeKanbanTasksForMergedPullRequests([{ taskId, prUrl: PR }]);
+      resume();
+      complete(await ending);
+      expect(await ticket(w, taskId)).toMatchObject({ status: "done", prMergeDoneUrl: PR });
+    } finally {
+      resume();
+      await ending;
+      write.mockRestore();
+    }
+  });
+}

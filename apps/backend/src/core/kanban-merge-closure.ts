@@ -60,12 +60,12 @@ export function mergedPullRequestOnTicket(
   return null;
 }
 
-/** Whether merging `prUrl` still has to move this ticket to done. */
+/** Whether `prUrl` still needs recording (including a ticket already done). */
 export function kanbanTaskAwaitsMergeClosure(
   task: Pick<KanbanTask, "status" | "prMergeDoneUrl">,
   prUrl: string,
 ): boolean {
-  return task.status !== "done" && task.prMergeDoneUrl !== prUrl;
+  return task.prMergeDoneUrl !== prUrl;
 }
 
 /**

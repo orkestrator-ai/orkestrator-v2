@@ -120,11 +120,16 @@ export const updateTicketAction: GraphSystemActionHandler = {
         (update.prUrl !== undefined && task.prUrl !== update.prUrl) ||
         (update.prState !== undefined && task.prState !== update.prState);
       if (moves) {
-        await kanban.updateKanbanTask(task.id, {
-          ...(update.status ? { status: update.status } : {}),
-          ...(update.prUrl ? { prUrl: update.prUrl } : {}),
-          ...(update.prState ? { prState: update.prState } : {}),
-        });
+        await kanban.updateKanbanTask(
+          task.id,
+          {
+            ...(update.status ? { status: update.status } : {}),
+            ...(update.prUrl ? { prUrl: update.prUrl } : {}),
+            ...(update.prState ? { prState: update.prState } : {}),
+          },
+          undefined,
+          { preserveDoneStatus: ending },
+        );
       }
       const comment =
         update.comment !== undefined &&

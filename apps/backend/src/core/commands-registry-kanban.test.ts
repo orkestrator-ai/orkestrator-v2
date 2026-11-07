@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { CommandHandler } from "./commands-context.js";
 import type { RegistryDependencies } from "./commands-registry-types.js";
 import { registerKanbanCommands } from "./commands-registry-kanban.js";
+import { withTemporaryStorage } from "./storage-test-support.js";
 import { StorageService } from "./storage.js";
 
 const commands = new Map<string, CommandHandler>();
@@ -75,5 +76,26 @@ describe("Kanban content commands", () => {
     } finally {
       await rm(dataDir, { recursive: true, force: true });
     }
+  });
+});
+
+test("terminal status updates preserve done under storage's lease, while users can reopen", async () => {
+  await withTemporaryStorage(async (storage) => {
+    const task = await storage.kanban.addKanbanTask("project-1", "Done", "");
+    const prUrl = "https://github.com/acme/repo/pull/1";
+    await storage.kanban.closeKanbanTasksForMergedPullRequests([{ taskId: task.id, prUrl }]);
+    const update = commands.get("update_kanban_task")!;
+    await update({ taskId: task.id, status: "backlog", preserveDoneStatus: true }, {
+      storage,
+    } as never);
+    expect(await storage.kanban.getKanbanTask(task.id)).toMatchObject({
+      status: "done",
+      prMergeDoneUrl: prUrl,
+    });
+    await update({ taskId: task.id, status: "backlog" }, { storage } as never);
+    expect(await storage.kanban.getKanbanTask(task.id)).toMatchObject({
+      status: "backlog",
+      prMergeDoneUrl: prUrl,
+    });
   });
 });

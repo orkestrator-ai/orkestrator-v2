@@ -49,6 +49,7 @@ function fakeCommandNode() {
     const url = new URL(String(input));
     if (url.pathname.endsWith("/__orkestrator/status")) return new Response("{}");
     const isMux = url.pathname === "/__orkestrator/nodes/events";
+    if (isMux && state.muxStatus === 0) throw new TypeError("Failed to fetch");
     if (isMux && state.muxStatus !== 200) return new Response(null, { status: state.muxStatus });
     if (!isMux && !url.pathname.endsWith("/__orkestrator/events")) {
       return new Response(null, { status: 404 });
@@ -306,6 +307,16 @@ describe("multiplexed relay streams", () => {
     relayedNode(later, B);
     await waitFor(() => other.openOwn(B).length === 1, "own streams after a 503");
     expect(later.snapshot().groups[0]?.unsupported).toBe(false);
+
+    // No answer at all (a blocked path) is the same: own streams, not a stall.
+    const blocked = fakeCommandNode();
+    blocked.state.muxStatus = 0;
+    const third = relayStreams();
+    const a = relayedNode(third, A);
+    relayedNode(third, B);
+    await waitFor(() => blocked.openOwn(A).length === 1 && blocked.openOwn(B).length === 1, "own");
+    blocked.openOwn(A)[0]!.push(frame("g:1", "environment-changed", { id: "a" }));
+    await waitFor(() => a.received.length === 1, "A delivered on its own stream");
   });
 
   test("one node down: only its transport sees the outage, and it re-attaches without a reopen", async () => {

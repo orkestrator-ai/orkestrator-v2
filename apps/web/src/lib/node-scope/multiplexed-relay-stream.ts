@@ -26,7 +26,8 @@
  * - **Older command node.** A 404 or 405 means it predates the route: every
  *   node of that command node uses its own stream for the rest of the page
  *   (register row "Command nodes without the multiplexed relay stream").
- *   Another failure answer falls back the same way for a while
+ *   Another failure answer, or none (a blocked path, a connect timeout),
+ *   falls back the same way for a while
  *   ({@link MULTIPLEXED_FALLBACK_COOLDOWN_MS}), then tries again.
  * - **Refused node.** A node the command node refuses (no workspace for it)
  *   uses its own stream until its workspace changes.
@@ -621,11 +622,15 @@ export function createMultiplexedRelayStreams(
           ...(group.init.headers ? { headers: group.init.headers } : {}),
           signal: abort.signal,
         });
-      } catch (error) {
+      } catch {
         clearTimeout(connectTimer);
-        if (!shared.planned) {
-          sharedFailed(group, shared, error instanceof Error ? error : new Error(String(error)));
-        }
+        if (shared.planned || group.shared !== shared) return;
+        // No answer at all (the path is blocked, or the command node is down):
+        // the nodes' own streams find out which, on their own backoff, and the
+        // shared request is tried again after the cooldown.
+        group.shared = null;
+        group.cooldownUntil = now() + fallbackCooldownMs;
+        fallBackAll(group);
         return;
       }
       clearTimeout(connectTimer);

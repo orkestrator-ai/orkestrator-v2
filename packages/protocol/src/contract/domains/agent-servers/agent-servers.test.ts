@@ -56,7 +56,7 @@ describe("agent-servers definitions", () => {
         `stop_local_${kind}_server_cmd`,
         `get_local_${kind}_server_status`,
       ]) {
-        expect(names).toContain(name);
+        expect(names as readonly string[]).toContain(name);
       }
     }
   });
@@ -180,7 +180,7 @@ describe("agent-servers client", () => {
       args: { containerId: "c1", previous: true },
       envelope: { domain: "agent-servers", version: 1, critical: ["previous"] },
     });
-    await expect(api.get_codex_server_status({ containerId: "c1" })).resolves.toEqual({
+    await expect(api.get_codex_server_status({ containerId: "c1" })).resolves.toEqual<unknown>({
       running: true,
       hostPort: 4000,
       extra: 1,
@@ -202,7 +202,9 @@ describe("agent-servers client", () => {
     const node = fakeNode(undefined, () => legacy);
     const client = createDomainClient(agentServersClient, node.options);
     expect(client.version()).toBe(0);
-    await expect(client.api().get_pi_server_status({ containerId: "c1" })).resolves.toBe(legacy);
+    await expect(client.api().get_pi_server_status({ containerId: "c1" })).resolves.toBe(
+      legacy as never,
+    );
     expect(node.invoked).toEqual([
       { command: "get_pi_server_status", args: { containerId: "c1" } },
     ]);

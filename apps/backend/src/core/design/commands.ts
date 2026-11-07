@@ -1,6 +1,73 @@
 import { extname, isAbsolute } from "node:path";
-import { z } from "zod";
-import { DESIGN_MAX_DOCUMENT_BYTES } from "@orkestrator/protocol/design-canvas";
+import type { AnyCommandDef, ArgsOf, ResultOf } from "@orkestrator/protocol/contract/command";
+import {
+  DesignCapturePrioritySchema,
+  DesignCheckpointSideSchema,
+  DesignCursorSchema,
+  DesignEntryIdSchema,
+  DesignEnvironmentIdSchema,
+  DesignFingerprintSchema,
+  DesignGenerationSchema,
+  DesignHistoryLimitSchema,
+  DesignIdSchema,
+  DesignLibraryQuerySchema,
+  DesignLinkIdSchema,
+  DesignMaxDepthSchema,
+  DesignMaxNodesSchema,
+  DesignOffsetSchema,
+  DesignRelativePathSchema,
+  DesignReplaceLinkIdSchema,
+  DesignRevisionSchema,
+  DesignRootSelectorSchema,
+  DesignSessionLinkInputSchema,
+  DesignStatusVersionSchema,
+  DesignTabIdSchema,
+  DesignTokenSchema,
+  DesignWaitMsSchema,
+  designActionCommand,
+  designCancelCommand,
+  designCapabilitiesCommand,
+  designCaptureCommand,
+  designChangesCommand,
+  designCheckpointCommand,
+  designExecuteCommand,
+  designExportPreviewCommand,
+  designExportReconcileCommand,
+  designExportSaveCommand,
+  designHierarchyCommand,
+  designHistoryCommand,
+  designImportCommand,
+  designImportHostFileCommand,
+  designIntentDiscardCommand,
+  designIntentImportCommand,
+  designIntentResumeCommand,
+  designIntentRunCommand,
+  designIntentSaveCommand,
+  designIntentsCommand,
+  designLibraryCommand,
+  designOpenFileCommand,
+  designOperationStatusCommand,
+  designPrepareCommand,
+  designPurgeCommand,
+  designReadinessCommand,
+  designSaveCommand,
+  designSessionLinkCommand,
+  designSessionLinkStatesCommand,
+  designSessionResumeCommand,
+  designSessionUnlinkCommand,
+  designSnapshotCommand,
+  designStatusCommand,
+  designSyncCommand,
+  designValidateCommand,
+} from "@orkestrator/protocol/contract/domains/design";
+import * as Result from "effect/Result";
+import * as Schema from "effect/Schema";
+import type { CommandContext } from "../commands-context.js";
+import {
+  contractCommandHandler,
+  contractResultValidationDefault,
+} from "../commands-registry-contracts.js";
+import type { CommandRegistrar, DefinedCommandHandler } from "../commands-registry-types.js";
 import {
   BUILD_PIPELINE_AGENTS,
   type BuildPipelineAgent,
@@ -26,15 +93,34 @@ import {
   runIntent,
   saveIntentDrafts,
 } from "./intents.js";
-import { designId, revision } from "./schemas.js";
 import { purge } from "./service-lifecycle.js";
 import type { DesignService } from "./service.js";
 import type { DesignSessionResumer } from "./session-links.js";
 import { runDesignAction } from "./tools.js";
 import { validate as validateFrame } from "./validation.js";
 
-const environmentIdSchema = z.string().min(1).max(256);
-const tokenSchema = z.string().min(1).max(100);
+/**
+ * One argument of a v2 command, decoded with its precise schema inside the
+ * typed envelope: a failure is the same `invalid-input` failure today's
+ * per-field parse gave (`toDesignFailure`), never a thrown schema error.
+ */
+function arg<T>(schema: Schema.Codec<T, unknown, never, never>, value: unknown, name: string): T {
+  const decoded = Schema.decodeUnknownResult(schema)(value);
+  if (Result.isSuccess(decoded)) return decoded.success;
+  throw new DesignError("invalid-input", `Invalid design input: ${name}`, {
+    retry: "never",
+    details: { fields: [name] },
+  });
+}
+
+/** An optional argument: absent stays absent. */
+function optionalArg<T>(
+  schema: Schema.Codec<T, unknown, never, never>,
+  value: unknown,
+  name: string,
+): T | undefined {
+  return value === undefined ? undefined : arg(schema, value, name);
+}
 
 /** Typed envelope: new clients branch on `failure.code`, never on message text. */
 async function typed<T>(work: () => Promise<T>): Promise<DesignCommandResult<T>> {
@@ -163,441 +249,481 @@ function nativeResumer(
   };
 }
 
-export type DesignCommandRegistrar = (
-  name: string,
-  handler: (args: Record<string, unknown>, context: DesignCommandContext) => Promise<unknown>,
-) => void;
-
-async function authorized(args: Record<string, unknown>, context: DesignCommandContext) {
+async function authorized(
+  args: { readonly environmentId?: unknown },
+  context: DesignCommandContext,
+) {
   if (!context.design)
     throw new DesignError("unsupported", "Design service unavailable", {
       retry: "after-delay",
     });
-  const environmentId = environmentIdSchema.parse(args.environmentId);
+  const environmentId = arg(DesignEnvironmentIdSchema, args.environmentId, "environmentId");
   // Typed so v2 envelopes report not-found rather than a generic storage failure.
   if (!(await context.storage.getEnvironment(environmentId)))
     throw new DesignError("not-found", "Environment not found");
   return { design: context.design as DesignService, environmentId };
 }
 
-export function registerDesignCommandHandlers(
-  register: DesignCommandRegistrar,
-  options: DesignCommandOptions = {},
-) {
-  // Legacy v1 surface: untyped errors, legacy shapes. The UI acts as the user.
-  register("design_action", async (args, context) => {
-    const { design, environmentId } = await authorized(args, context);
-    return runDesignAction(design, environmentId, z.string().parse(args.action), args.input, {
-      actor: "user",
-      resolveDestination: () => resolveDesignDestination(context.storage, environmentId),
-    });
-  });
-  register("design_status", async (_args, context) => {
-    if (!context.design) return { ready: false, error: "Design service unavailable" };
-    return context.design.renderer.status();
-  });
-  register("design_changes", async (args, context) => {
-    if (!context.design) throw new Error("Design service unavailable");
-    return context.design.changes(
-      designId.parse(args.canvasId),
-      environmentIdSchema.parse(args.environmentId),
-      z.string().max(100).optional().parse(args.generation),
-      revision.parse(args.after),
-    );
-  });
-  register("design_import", async (args, context) => {
-    const { design, environmentId } = await authorized(args, context);
-    const document = z
-      .string()
-      .refine((value) => Buffer.byteLength(value) <= DESIGN_MAX_DOCUMENT_BYTES)
-      .parse(args.document);
-    return design.create(environmentId, "Imported design", document, "user");
-  });
-  // Imports an .orkdes file chosen in the host path picker, which browses the
-  // machine the backend runs on, so the document is read here rather than by
-  // the client.
-  register("design_import_host_file", async (args, context) => {
-    const { design, environmentId } = await authorized(args, context);
-    const filePath = z.string().min(1).max(4096).parse(args.path);
-    if (!isAbsolute(filePath) || extname(filePath).toLowerCase() !== ".orkdes")
-      throw new DesignError("invalid-input", "Choose an .orkdes design file.");
-    const document = await readDesignHostFile(filePath);
-    return design.create(environmentId, "Imported design", document, "user");
-  });
-  register("design_save", async (args, context) => {
-    const { design, environmentId } = await authorized(args, context);
-    const canvasId = designId.parse(args.canvasId);
-    const destination = await resolveDesignDestination(context.storage, environmentId);
-    const filePath = z.string().max(240).parse(args.filePath);
-    // Legacy save never overwrites: a collision is reported, not resolved.
-    const receipt = await exportSave(
-      design,
-      environmentId,
-      canvasId,
-      { destination },
-      {
-        relativePath: filePath,
-        revision: revision.parse(args.expectedRevision),
-        expected: { state: "absent" },
-      },
-    ).catch(async (error) => {
-      const failure = toDesignFailure(error);
-      if (failure.code !== "export-collision") throw error;
-      const preview = await exportPreview(
+/** The narrow name-based registrar the component harnesses and tests drive. */
+export type DesignCommandRegistrar = (
+  name: string,
+  handler: (args: Record<string, unknown>, context: DesignCommandContext) => Promise<unknown>,
+) => void;
+
+/** One design command: its definition and its handler over the decoded arguments. */
+export interface DesignCommandEntry<C extends AnyCommandDef = AnyCommandDef> {
+  readonly def: C;
+  readonly handler: (args: ArgsOf<C>, context: DesignCommandContext) => Promise<ResultOf<C>>;
+}
+
+function entry<C extends AnyCommandDef>(
+  def: C,
+  handler: (args: ArgsOf<C>, context: DesignCommandContext) => Promise<ResultOf<C>>,
+): DesignCommandEntry {
+  return { def, handler } as unknown as DesignCommandEntry;
+}
+
+/** Every design command (`@orkestrator/protocol/contract/domains/design`) with its handler. */
+export function designCommandEntries(options: DesignCommandOptions = {}): DesignCommandEntry[] {
+  return [
+    // Legacy v1 surface: untyped errors, legacy shapes. The UI acts as the user.
+    entry(designActionCommand, async (args, context) => {
+      const { design, environmentId } = await authorized(args, context);
+      return (await runDesignAction(design, environmentId, args.action, args.input, {
+        actor: "user",
+        resolveDestination: () => resolveDesignDestination(context.storage, environmentId),
+      })) as ResultOf<typeof designActionCommand>;
+    }),
+    entry(designStatusCommand, async (_args, context) => {
+      if (!context.design) return { ready: false as const, error: "Design service unavailable" };
+      return context.design.renderer.status();
+    }),
+    entry(designChangesCommand, async (args, context) => {
+      if (!context.design) throw new Error("Design service unavailable");
+      return context.design.changes(args.canvasId, args.environmentId, args.generation, args.after);
+    }),
+    entry(designImportCommand, async (args, context) => {
+      const { design, environmentId } = await authorized(args, context);
+      return design.create(environmentId, "Imported design", args.document, "user");
+    }),
+    // Imports an .orkdes file chosen in the host path picker, which browses the
+    // machine the backend runs on, so the document is read here rather than by
+    // the client.
+    entry(designImportHostFileCommand, async (args, context) => {
+      const { design, environmentId } = await authorized(args, context);
+      const filePath = args.path;
+      if (!isAbsolute(filePath) || extname(filePath).toLowerCase() !== ".orkdes")
+        throw new DesignError("invalid-input", "Choose an .orkdes design file.");
+      const document = await readDesignHostFile(filePath);
+      return design.create(environmentId, "Imported design", document, "user");
+    }),
+    entry(designSaveCommand, async (args, context) => {
+      const { design, environmentId } = await authorized(args, context);
+      const canvasId = args.canvasId;
+      const destination = await resolveDesignDestination(context.storage, environmentId);
+      const filePath = args.filePath;
+      // Legacy save never overwrites: a collision is reported, not resolved.
+      const receipt = await exportSave(
         design,
         environmentId,
         canvasId,
         { destination },
-        filePath,
-      );
-      if (!preview.target.needsReplaceConfirmation && preview.target.fingerprint)
-        return exportSave(
+        { relativePath: filePath, revision: args.expectedRevision, expected: { state: "absent" } },
+      ).catch(async (error) => {
+        const failure = toDesignFailure(error);
+        if (failure.code !== "export-collision") throw error;
+        const preview = await exportPreview(
           design,
           environmentId,
           canvasId,
           { destination },
-          {
-            relativePath: filePath,
-            revision: revision.parse(args.expectedRevision),
-            expected: { state: "present", digest: preview.target.fingerprint },
-          },
+          filePath,
         );
-      throw error;
-    });
-    return { filePath: receipt.relativePath, revision: receipt.revision };
-  });
+        if (!preview.target.needsReplaceConfirmation && preview.target.fingerprint)
+          return exportSave(
+            design,
+            environmentId,
+            canvasId,
+            { destination },
+            {
+              relativePath: filePath,
+              revision: args.expectedRevision,
+              expected: { state: "present", digest: preview.target.fingerprint },
+            },
+          );
+        throw error;
+      });
+      return { filePath: receipt.relativePath, revision: receipt.revision };
+    }),
 
-  // Protocol v2 surface: typed envelopes, capability negotiated.
-  register("design_capabilities", async (_args, context) =>
-    typed(async () => {
-      if (!context.design) throw new Error("Design service unavailable");
-      return { ...context.design.capabilities(), intents: true };
-    }),
-  );
-  register("design_readiness", async (args, context) =>
-    typed(async () => {
-      if (!context.design) throw new Error("Design service unavailable");
-      return context.design.readiness(z.boolean().optional().parse(args.probe) ?? false);
-    }),
-  );
-  register("design_snapshot", async (args, context) =>
-    typed(async () => {
-      const { design, environmentId } = await authorized(args, context);
-      return design.snapshot(environmentId, designId.parse(args.canvasId));
-    }),
-  );
-  register("design_sync", async (args, context) =>
-    typed(async () => {
-      const { design, environmentId } = await authorized(args, context);
-      return design.sync(
-        environmentId,
-        designId.parse(args.canvasId),
-        z.string().max(100).optional().parse(args.generation),
-        revision.parse(args.after),
-        z.number().int().nonnegative().optional().parse(args.statusVersion),
-      );
-    }),
-  );
-  register("design_prepare", async (args, context) =>
-    typed(async () => {
-      const { design, environmentId } = await authorized(args, context);
-      return design.prepare(environmentId, "user", args.descriptor);
-    }),
-  );
-  register("design_execute", async (args, context) =>
-    typed(async () => {
-      const { design, environmentId } = await authorized(args, context);
-      return design.execute(
-        environmentId,
-        designId.parse(args.canvasId),
-        tokenSchema.parse(args.token),
-        {
-          waitMs: z.number().int().min(0).max(60_000).optional().parse(args.waitMs),
-        },
-      );
-    }),
-  );
-  register("design_operation_status", async (args, context) =>
-    typed(async () => {
-      const { design, environmentId } = await authorized(args, context);
-      return design.status(
-        environmentId,
-        designId.parse(args.canvasId),
-        tokenSchema.parse(args.token),
-      );
-    }),
-  );
-  register("design_cancel", async (args, context) =>
-    typed(async () => {
-      const { design, environmentId } = await authorized(args, context);
-      return design.cancel(
-        environmentId,
-        designId.parse(args.canvasId),
-        tokenSchema.parse(args.token),
-      );
-    }),
-  );
-  // Backend-owned intent queue: any client lists, runs, resumes or discards.
-  register("design_intents", async (args, context) =>
-    typed(async () => {
-      const { design, environmentId } = await authorized(args, context);
-      return listIntents(design, environmentId, designId.parse(args.canvasId));
-    }),
-  );
-  register("design_intent_save", async (args, context) =>
-    typed(async () => {
-      const { design, environmentId } = await authorized(args, context);
-      return saveIntentDrafts(
-        design,
-        environmentId,
-        designId.parse(args.canvasId),
-        args.clientId,
-        args.drafts,
-      );
-    }),
-  );
-  register("design_intent_import", async (args, context) =>
-    typed(async () => {
-      const { design, environmentId } = await authorized(args, context);
-      return importIntents(
-        design,
-        environmentId,
-        designId.parse(args.canvasId),
-        args.clientId,
-        args.intents,
-      );
-    }),
-  );
-  register("design_intent_run", async (args, context) =>
-    typed(async () => {
-      const { design, environmentId } = await authorized(args, context);
-      return runIntent(
-        design,
-        environmentId,
-        designId.parse(args.canvasId),
-        args.intent,
-        z.number().int().min(0).max(60_000).optional().parse(args.waitMs),
-      );
-    }),
-  );
-  register("design_intent_resume", async (args, context) =>
-    typed(async () => {
-      const { design, environmentId } = await authorized(args, context);
-      return resumeIntent(
-        design,
-        environmentId,
-        designId.parse(args.canvasId),
-        args.intentId,
-        args.clientId,
-        args.rebaseTo,
-      );
-    }),
-  );
-  register("design_intent_discard", async (args, context) =>
-    typed(async () => {
-      const { design, environmentId } = await authorized(args, context);
-      return discardIntent(design, environmentId, designId.parse(args.canvasId), args.intentId);
-    }),
-  );
-  register("design_library", async (args, context) =>
-    typed(async () => {
-      const { design, environmentId } = await authorized(args, context);
-      return design.libraryPage(
-        environmentId,
-        z
-          .object({
-            search: z.string().max(120).optional(),
-            filter: z.enum(["live", "deleted", "all"]).optional(),
-            sort: z.enum(["modified", "name"]).optional(),
-            offset: z.number().int().nonnegative().optional(),
-            limit: z.number().int().min(1).max(50).optional(),
-          })
-          .strict()
-          .parse(args.query ?? {}),
-      );
-    }),
-  );
-  register("design_purge", async (args, context) =>
-    typed(async () => {
-      const { design, environmentId } = await authorized(args, context);
-      await purge(design, environmentId, designId.parse(args.canvasId));
-      return { purged: true };
-    }),
-  );
-  register("design_history", async (args, context) =>
-    typed(async () => {
-      const { design, environmentId } = await authorized(args, context);
-      return design.historyPage(
-        environmentId,
-        designId.parse(args.canvasId),
-        z.number().int().nonnegative().optional().parse(args.offset),
-        z.number().int().min(1).max(100).optional().parse(args.limit),
-      );
-    }),
-  );
-  register("design_checkpoint", async (args, context) =>
-    typed(async () => {
-      const { design, environmentId } = await authorized(args, context);
-      return design.checkpoint(
-        environmentId,
-        designId.parse(args.canvasId),
-        z.string().min(1).max(64).parse(args.entryId),
-        z.enum(["before", "after"]).parse(args.side),
-      );
-    }),
-  );
-  register("design_export_preview", async (args, context) =>
-    typed(async () => {
-      const { design, environmentId } = await authorized(args, context);
-      const destination = await resolveDesignDestination(context.storage, environmentId);
-      return exportPreview(
-        design,
-        environmentId,
-        designId.parse(args.canvasId),
-        { destination },
-        z.string().max(240).optional().parse(args.relativePath),
-      );
-    }),
-  );
-  register("design_export_save", async (args, context) =>
-    typed(async () => {
-      const { design, environmentId } = await authorized(args, context);
-      const destination = await resolveDesignDestination(context.storage, environmentId);
-      const replace = z.string().max(80).optional().parse(args.replaceFingerprint);
-      return exportSave(
-        design,
-        environmentId,
-        designId.parse(args.canvasId),
-        { destination },
-        {
-          relativePath: z.string().max(240).parse(args.relativePath),
-          revision: revision.parse(args.revision),
-          expected: replace ? { state: "present", digest: replace } : { state: "absent" },
-        },
-      );
-    }),
-  );
-  register("design_open_file", async (args, context) =>
-    typed(async () => {
-      const { design, environmentId } = await authorized(args, context);
-      const destination = await resolveDesignDestination(context.storage, environmentId);
-      return openDesignFile(
-        design,
-        environmentId,
-        { destination },
-        z.string().max(240).parse(args.relativePath),
-      );
-    }),
-  );
-  register("design_export_reconcile", async (args, context) =>
-    typed(async () => {
-      const { design, environmentId } = await authorized(args, context);
-      const destination = await resolveDesignDestination(context.storage, environmentId);
-      return reconcileExport(design, environmentId, designId.parse(args.canvasId), { destination });
-    }),
-  );
-  register("design_validate", async (args, context) =>
-    typed(async () => {
-      const { design, environmentId } = await authorized(args, context);
-      return (
-        (await validateFrame(
+    // Protocol v2 surface: typed envelopes, capability negotiated.
+    entry(designCapabilitiesCommand, async (_args, context) =>
+      typed(async () => {
+        if (!context.design) throw new Error("Design service unavailable");
+        return { ...context.design.capabilities(), intents: true };
+      }),
+    ),
+    entry(designReadinessCommand, async (args, context) =>
+      typed(async () => {
+        if (!context.design) throw new Error("Design service unavailable");
+        return context.design.readiness(optionalArg(Schema.Boolean, args.probe, "probe") ?? false);
+      }),
+    ),
+    entry(designSnapshotCommand, async (args, context) =>
+      typed(async () => {
+        const { design, environmentId } = await authorized(args, context);
+        return design.snapshot(environmentId, arg(DesignIdSchema, args.canvasId, "canvasId"));
+      }),
+    ),
+    entry(designSyncCommand, async (args, context) =>
+      typed(async () => {
+        const { design, environmentId } = await authorized(args, context);
+        return design.sync(
+          environmentId,
+          arg(DesignIdSchema, args.canvasId, "canvasId"),
+          optionalArg(DesignGenerationSchema, args.generation, "generation"),
+          arg(DesignRevisionSchema, args.after, "after"),
+          optionalArg(DesignStatusVersionSchema, args.statusVersion, "statusVersion"),
+        );
+      }),
+    ),
+    entry(designPrepareCommand, async (args, context) =>
+      typed(async () => {
+        const { design, environmentId } = await authorized(args, context);
+        // The descriptor is validated by the service (`descriptorSchema`).
+        return design.prepare(environmentId, "user", args.descriptor);
+      }),
+    ),
+    entry(designExecuteCommand, async (args, context) =>
+      typed(async () => {
+        const { design, environmentId } = await authorized(args, context);
+        return design.execute(
+          environmentId,
+          arg(DesignIdSchema, args.canvasId, "canvasId"),
+          arg(DesignTokenSchema, args.token, "token"),
+          { waitMs: optionalArg(DesignWaitMsSchema, args.waitMs, "waitMs") },
+        );
+      }),
+    ),
+    entry(designOperationStatusCommand, async (args, context) =>
+      typed(async () => {
+        const { design, environmentId } = await authorized(args, context);
+        return design.status(
+          environmentId,
+          arg(DesignIdSchema, args.canvasId, "canvasId"),
+          arg(DesignTokenSchema, args.token, "token"),
+        );
+      }),
+    ),
+    entry(designCancelCommand, async (args, context) =>
+      typed(async () => {
+        const { design, environmentId } = await authorized(args, context);
+        return design.cancel(
+          environmentId,
+          arg(DesignIdSchema, args.canvasId, "canvasId"),
+          arg(DesignTokenSchema, args.token, "token"),
+        );
+      }),
+    ),
+    // Backend-owned intent queue: any client lists, runs, resumes or discards.
+    // Drafts, intents, client ids and rebase targets are validated by
+    // `intents.ts` (the descriptor schema it shares with the design tools).
+    entry(designIntentsCommand, async (args, context) =>
+      typed(async () => {
+        const { design, environmentId } = await authorized(args, context);
+        return listIntents(design, environmentId, arg(DesignIdSchema, args.canvasId, "canvasId"));
+      }),
+    ),
+    entry(designIntentSaveCommand, async (args, context) =>
+      typed(async () => {
+        const { design, environmentId } = await authorized(args, context);
+        return saveIntentDrafts(
           design,
           environmentId,
-          designId.parse(args.canvasId),
-          designId.parse(args.frameId),
-        )) ?? null
-      );
-    }),
-  );
-  register("design_hierarchy", async (args, context) =>
-    typed(async () => {
-      const { design, environmentId } = await authorized(args, context);
-      return design.hierarchy(
-        environmentId,
-        designId.parse(args.canvasId),
-        designId.parse(args.frameId),
-        {
-          ...(args.rootSelector
-            ? { rootSelector: z.string().max(2048).parse(args.rootSelector) }
-            : {}),
-          ...(args.cursor ? { cursor: z.string().max(200).parse(args.cursor) } : {}),
-          maxNodes: z.number().int().min(1).max(200).optional().parse(args.maxNodes) ?? 200,
-          maxDepth: z.number().int().min(1).max(32).optional().parse(args.maxDepth) ?? 1,
-        },
-      );
-    }),
-  );
-  register("design_capture", async (args, context) =>
-    typed(async () => {
-      const { design, environmentId } = await authorized(args, context);
-      return design.capture(
-        environmentId,
-        designId.parse(args.canvasId),
-        designId.parse(args.frameId),
-        z.enum(["interactive", "background"]).optional().parse(args.priority) ?? "interactive",
-      );
-    }),
-  );
-  register("design_session_link", async (args, context) =>
-    typed(async () => {
-      const { design, environmentId } = await authorized(args, context);
-      const link = z
-        .object({
-          tabId: z.string().min(1).max(200),
-          sessionId: z.string().min(1).max(200).optional(),
-          platform: z.string().min(1).max(40),
-          role: z.enum(["design", "implementation"]),
-          checkpointId: z.string().max(64).optional(),
-          label: z.string().max(120).optional(),
-        })
-        .strict()
-        .parse(args.link);
-      return design.linkSession(
-        environmentId,
-        designId.parse(args.canvasId),
-        link,
-        z.string().max(40).optional().parse(args.replaceId),
-      );
-    }),
-  );
-  register("design_session_link_states", async (args, context) =>
-    typed(async () => {
-      const { design, environmentId } = await authorized(args, context);
-      const read = nativeSessionReader(context, options, environmentId);
-      return design.sessionLinkStates(
-        environmentId,
-        designId.parse(args.canvasId),
-        async (link) => {
-          const providerSessionId = await read(link, link.tabId);
-          return providerSessionId ? { providerSessionId } : null;
-        },
-      );
-    }),
-  );
-  register("design_session_resume", async (args, context) =>
-    typed(async () => {
-      const { design, environmentId } = await authorized(args, context);
-      return design.resumeSessionLink(
-        environmentId,
-        designId.parse(args.canvasId),
-        {
-          linkId: z.string().min(1).max(40).parse(args.linkId),
-          expectedTabId: z.string().min(1).max(200).parse(args.expectedTabId),
-          tabId: z.string().min(1).max(200).parse(args.tabId),
-        },
-        nativeResumer(context, options, environmentId),
-      );
-    }),
-  );
-  register("design_session_unlink", async (args, context) =>
-    typed(async () => {
-      const { design, environmentId } = await authorized(args, context);
-      await design.unlinkSession(
-        environmentId,
-        designId.parse(args.canvasId),
-        z.string().max(40).parse(args.linkId),
-      );
-      return { unlinked: true };
-    }),
-  );
+          arg(DesignIdSchema, args.canvasId, "canvasId"),
+          args.clientId,
+          args.drafts,
+        );
+      }),
+    ),
+    entry(designIntentImportCommand, async (args, context) =>
+      typed(async () => {
+        const { design, environmentId } = await authorized(args, context);
+        return importIntents(
+          design,
+          environmentId,
+          arg(DesignIdSchema, args.canvasId, "canvasId"),
+          args.clientId,
+          args.intents,
+        );
+      }),
+    ),
+    entry(designIntentRunCommand, async (args, context) =>
+      typed(async () => {
+        const { design, environmentId } = await authorized(args, context);
+        return runIntent(
+          design,
+          environmentId,
+          arg(DesignIdSchema, args.canvasId, "canvasId"),
+          args.intent,
+          optionalArg(DesignWaitMsSchema, args.waitMs, "waitMs"),
+        );
+      }),
+    ),
+    entry(designIntentResumeCommand, async (args, context) =>
+      typed(async () => {
+        const { design, environmentId } = await authorized(args, context);
+        return resumeIntent(
+          design,
+          environmentId,
+          arg(DesignIdSchema, args.canvasId, "canvasId"),
+          args.intentId,
+          args.clientId,
+          args.rebaseTo,
+        );
+      }),
+    ),
+    entry(designIntentDiscardCommand, async (args, context) =>
+      typed(async () => {
+        const { design, environmentId } = await authorized(args, context);
+        return discardIntent(
+          design,
+          environmentId,
+          arg(DesignIdSchema, args.canvasId, "canvasId"),
+          args.intentId,
+        );
+      }),
+    ),
+    entry(designLibraryCommand, async (args, context) =>
+      typed(async () => {
+        const { design, environmentId } = await authorized(args, context);
+        // Unknown query keys are dropped (the query was `.strict()` before).
+        return design.libraryPage(
+          environmentId,
+          arg(DesignLibraryQuerySchema, args.query ?? {}, "query"),
+        );
+      }),
+    ),
+    entry(designPurgeCommand, async (args, context) =>
+      typed(async () => {
+        const { design, environmentId } = await authorized(args, context);
+        await purge(design, environmentId, arg(DesignIdSchema, args.canvasId, "canvasId"));
+        return { purged: true as const };
+      }),
+    ),
+    entry(designHistoryCommand, async (args, context) =>
+      typed(async () => {
+        const { design, environmentId } = await authorized(args, context);
+        return design.historyPage(
+          environmentId,
+          arg(DesignIdSchema, args.canvasId, "canvasId"),
+          optionalArg(DesignOffsetSchema, args.offset, "offset"),
+          optionalArg(DesignHistoryLimitSchema, args.limit, "limit"),
+        );
+      }),
+    ),
+    entry(designCheckpointCommand, async (args, context) =>
+      typed(async () => {
+        const { design, environmentId } = await authorized(args, context);
+        return design.checkpoint(
+          environmentId,
+          arg(DesignIdSchema, args.canvasId, "canvasId"),
+          arg(DesignEntryIdSchema, args.entryId, "entryId"),
+          arg(DesignCheckpointSideSchema, args.side, "side"),
+        );
+      }),
+    ),
+    entry(designExportPreviewCommand, async (args, context) =>
+      typed(async () => {
+        const { design, environmentId } = await authorized(args, context);
+        const destination = await resolveDesignDestination(context.storage, environmentId);
+        return exportPreview(
+          design,
+          environmentId,
+          arg(DesignIdSchema, args.canvasId, "canvasId"),
+          { destination },
+          optionalArg(DesignRelativePathSchema, args.relativePath, "relativePath"),
+        );
+      }),
+    ),
+    entry(designExportSaveCommand, async (args, context) =>
+      typed(async () => {
+        const { design, environmentId } = await authorized(args, context);
+        const destination = await resolveDesignDestination(context.storage, environmentId);
+        const replace = optionalArg(
+          DesignFingerprintSchema,
+          args.replaceFingerprint,
+          "replaceFingerprint",
+        );
+        return exportSave(
+          design,
+          environmentId,
+          arg(DesignIdSchema, args.canvasId, "canvasId"),
+          { destination },
+          {
+            relativePath: arg(DesignRelativePathSchema, args.relativePath, "relativePath"),
+            revision: arg(DesignRevisionSchema, args.revision, "revision"),
+            expected: replace ? { state: "present", digest: replace } : { state: "absent" },
+          },
+        );
+      }),
+    ),
+    entry(designOpenFileCommand, async (args, context) =>
+      typed(async () => {
+        const { design, environmentId } = await authorized(args, context);
+        const destination = await resolveDesignDestination(context.storage, environmentId);
+        return openDesignFile(
+          design,
+          environmentId,
+          { destination },
+          arg(DesignRelativePathSchema, args.relativePath, "relativePath"),
+        );
+      }),
+    ),
+    entry(designExportReconcileCommand, async (args, context) =>
+      typed(async () => {
+        const { design, environmentId } = await authorized(args, context);
+        const destination = await resolveDesignDestination(context.storage, environmentId);
+        return reconcileExport(
+          design,
+          environmentId,
+          arg(DesignIdSchema, args.canvasId, "canvasId"),
+          {
+            destination,
+          },
+        );
+      }),
+    ),
+    entry(designValidateCommand, async (args, context) =>
+      typed(async () => {
+        const { design, environmentId } = await authorized(args, context);
+        return (
+          (await validateFrame(
+            design,
+            environmentId,
+            arg(DesignIdSchema, args.canvasId, "canvasId"),
+            arg(DesignIdSchema, args.frameId, "frameId"),
+          )) ?? null
+        );
+      }),
+    ),
+    entry(designHierarchyCommand, async (args, context) =>
+      typed(async () => {
+        const { design, environmentId } = await authorized(args, context);
+        return design.hierarchy(
+          environmentId,
+          arg(DesignIdSchema, args.canvasId, "canvasId"),
+          arg(DesignIdSchema, args.frameId, "frameId"),
+          {
+            ...(args.rootSelector
+              ? { rootSelector: arg(DesignRootSelectorSchema, args.rootSelector, "rootSelector") }
+              : {}),
+            ...(args.cursor ? { cursor: arg(DesignCursorSchema, args.cursor, "cursor") } : {}),
+            maxNodes: optionalArg(DesignMaxNodesSchema, args.maxNodes, "maxNodes") ?? 200,
+            maxDepth: optionalArg(DesignMaxDepthSchema, args.maxDepth, "maxDepth") ?? 1,
+          },
+        );
+      }),
+    ),
+    entry(designCaptureCommand, async (args, context) =>
+      typed(async () => {
+        const { design, environmentId } = await authorized(args, context);
+        return design.capture(
+          environmentId,
+          arg(DesignIdSchema, args.canvasId, "canvasId"),
+          arg(DesignIdSchema, args.frameId, "frameId"),
+          optionalArg(DesignCapturePrioritySchema, args.priority, "priority") ?? "interactive",
+        );
+      }),
+    ),
+    entry(designSessionLinkCommand, async (args, context) =>
+      typed(async () => {
+        const { design, environmentId } = await authorized(args, context);
+        // Unknown link keys are dropped (the link was `.strict()` before).
+        const link = arg(DesignSessionLinkInputSchema, args.link, "link");
+        return design.linkSession(
+          environmentId,
+          arg(DesignIdSchema, args.canvasId, "canvasId"),
+          link,
+          optionalArg(DesignReplaceLinkIdSchema, args.replaceId, "replaceId"),
+        );
+      }),
+    ),
+    entry(designSessionLinkStatesCommand, async (args, context) =>
+      typed(async () => {
+        const { design, environmentId } = await authorized(args, context);
+        const read = nativeSessionReader(context, options, environmentId);
+        return design.sessionLinkStates(
+          environmentId,
+          arg(DesignIdSchema, args.canvasId, "canvasId"),
+          async (link) => {
+            const providerSessionId = await read(link, link.tabId);
+            return providerSessionId ? { providerSessionId } : null;
+          },
+        );
+      }),
+    ),
+    entry(designSessionResumeCommand, async (args, context) =>
+      typed(async () => {
+        const { design, environmentId } = await authorized(args, context);
+        return design.resumeSessionLink(
+          environmentId,
+          arg(DesignIdSchema, args.canvasId, "canvasId"),
+          {
+            linkId: arg(DesignLinkIdSchema, args.linkId, "linkId"),
+            expectedTabId: arg(DesignTabIdSchema, args.expectedTabId, "expectedTabId"),
+            tabId: arg(DesignTabIdSchema, args.tabId, "tabId"),
+          },
+          nativeResumer(context, options, environmentId),
+        );
+      }),
+    ),
+    entry(designSessionUnlinkCommand, async (args, context) =>
+      typed(async () => {
+        const { design, environmentId } = await authorized(args, context);
+        await design.unlinkSession(
+          environmentId,
+          arg(DesignIdSchema, args.canvasId, "canvasId"),
+          arg(DesignReplaceLinkIdSchema, args.linkId, "linkId"),
+        );
+        return { unlinked: true as const };
+      }),
+    ),
+  ];
+}
+
+/**
+ * Registers the design commands with their definitions (the backend
+ * registry, `commands-registry-design.ts`), so the registry decodes their
+ * arguments tolerantly and validates their results in development and tests.
+ */
+export function registerDefinedDesignCommands(
+  register: CommandRegistrar,
+  options: DesignCommandOptions = {},
+): void {
+  for (const { def, handler } of designCommandEntries(options)) {
+    register(def, handler as unknown as DefinedCommandHandler<AnyCommandDef>);
+  }
+}
+
+/**
+ * Registers the design commands by name on a narrow registrar (the component
+ * browser harness, `e2e/design-service-host.ts`, and focused tests). Each
+ * handler decodes its arguments and checks its result exactly as the backend
+ * registry does (`contractCommandHandler`), so these harnesses see the same
+ * contract.
+ */
+export function registerDesignCommandHandlers(
+  register: DesignCommandRegistrar,
+  options: DesignCommandOptions = {},
+): void {
+  const validateResults = contractResultValidationDefault();
+  for (const { def, handler } of designCommandEntries(options)) {
+    const run = contractCommandHandler(
+      def,
+      handler as unknown as DefinedCommandHandler<AnyCommandDef>,
+      { validateResults },
+    );
+    register(def.name, async (args, context) => run(args, context as unknown as CommandContext));
+  }
 }

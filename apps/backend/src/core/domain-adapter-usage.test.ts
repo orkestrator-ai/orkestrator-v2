@@ -9,6 +9,7 @@ import {
   RECORD_DOMAIN_ADAPTER_USAGE_COMMAND,
   recordDomainAdapterUsageCommand,
 } from "@orkestrator/protocol/contract/client-usage";
+import { createCommandRegistry } from "./commands-registry.js";
 import type { CommandContext, CommandHandler } from "./commands-context.js";
 import { CommandRegistry, createRegistryRegistrar } from "./commands-registry-contracts.js";
 import { registerSystemCommands } from "./commands-registry-system.js";
@@ -143,8 +144,11 @@ describe("the record_domain_adapter_usage command", () => {
 });
 
 test("each legacy capability command belongs to the domain that lists it", () => {
+  // A string command's domain is in the map; a converted one's is its definition's.
   const domains = contractDomainsByCommand();
+  const defined = createCommandRegistry().contracts;
   for (const [domain, commands] of Object.entries(LEGACY_CAPABILITY_COMMANDS)) {
-    for (const command of commands ?? []) expect(domains.get(command)).toBe(domain as never);
+    for (const command of commands ?? [])
+      expect(domains.get(command) ?? defined.get(command)?.domain.name).toBe(domain as never);
   }
 });

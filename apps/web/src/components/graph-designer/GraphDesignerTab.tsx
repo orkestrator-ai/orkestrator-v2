@@ -35,6 +35,7 @@ import {
 import { Button } from "@/components/ui/button";
 import * as graphMock from "@/lib/backend/graph-mock";
 import { requestGraphRunView } from "@/lib/graph-run-navigation";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import {
   Dialog,
   DialogContent,
@@ -140,6 +141,8 @@ export function GraphDesignerTab({
   isActive: boolean;
 }) {
   const nodeGraphMock = useScopeApi(graphMock.createGraphMockApi, graphMock);
+  // The template's node: its runs open in its own pane layout (plan item 4007).
+  const graphScope = useScopesWithCommandFallback().scope;
   const projectId = useEnvironmentStore(
     (state) =>
       state.environments.find((environment) => environment.id === environmentId)?.projectId ?? null,
@@ -421,13 +424,16 @@ export function GraphDesignerTab({
         projectId,
         stepMs: GRAPH_DESIGNER_MOCK_STEP_MS,
       });
-      const opened = requestGraphRunView({
-        runId: result.run.id,
-        projectId,
-        environmentId,
-        mock: true,
-        ...(summary?.name ? { title: summary.name } : {}),
-      });
+      const opened = requestGraphRunView(
+        {
+          runId: result.run.id,
+          projectId,
+          environmentId,
+          mock: true,
+          ...(summary?.name ? { title: summary.name } : {}),
+        },
+        graphScope,
+      );
       toast.success("Mock run started", {
         description: `${opened ? "" : `Run ${result.run.id.slice(0, 8)}. `}No provider sessions, no tokens, no pull requests or ticket changes.`,
       });
@@ -912,7 +918,9 @@ export function GraphDesignerTab({
           projectId={projectId}
           template={launchRef}
           environmentId={environmentId}
-          onLaunched={(result) => openLaunchedGraphRun({ result, environmentId })}
+          onLaunched={(result) =>
+            openLaunchedGraphRun({ result, environmentId, scope: graphScope })
+          }
         />
       )}
     </div>

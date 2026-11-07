@@ -210,13 +210,16 @@ export function openCoordinatorWorkTarget(
     }
     case "graph-run":
       selectEnvironment(scope, target.projectId, target.environmentId);
-      requestGraphRunView({
-        runId: target.runId,
-        projectId: target.projectId,
-        environmentId: target.environmentId,
-        mock: false,
-        ...(target.title ? { title: target.title } : {}),
-      });
+      requestGraphRunView(
+        {
+          runId: target.runId,
+          projectId: target.projectId,
+          environmentId: target.environmentId,
+          mock: false,
+          ...(target.title ? { title: target.title } : {}),
+        },
+        scope,
+      );
       return;
     case "pull-request":
       navigation.openPullRequest(target.url);

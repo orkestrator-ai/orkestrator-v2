@@ -30,6 +30,7 @@ import { FeaturesView } from "./FeaturesView";
 import { ProjectPullRequestsView } from "@/components/pull-requests";
 import { LinearTicketsView } from "@/components/linear";
 import { GitHubIssuesView } from "@/components/github";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 
 const COLUMNS: { id: KanbanStatus; label: string; color: string }[] = [
   { id: "backlog", label: "Backlog", color: "bg-zinc-500" },
@@ -142,6 +143,8 @@ function DroppableColumn({
 }
 
 export function KanbanBoard({ projectId }: KanbanBoardProps) {
+  // The board's node: a launched run opens in its pane layout (plan item 4007).
+  const launchScope = useScopesWithCommandFallback().scope;
   const tasks = useKanbanStore((s) => s.tasks);
   const loadTasks = useKanbanStore((s) => s.loadTasks);
   const moveTask = useKanbanStore((s) => s.moveTask);
@@ -383,6 +386,7 @@ export function KanbanBoard({ projectId }: KanbanBoardProps) {
         onLaunched={(result) =>
           openLaunchedGraphRun({
             result,
+            scope: launchScope,
             ...(result.environmentId
               ? {
                   environmentName: environmentNames.find(

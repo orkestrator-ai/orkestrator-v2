@@ -1973,13 +1973,16 @@ function MultiReviewOverviewTab({
           variant="outline"
           size="sm"
           onClick={() =>
-            requestGraphRunView({
-              runId,
-              projectId: workflow.projectId,
-              environmentId: workflow.environmentId,
-              mock: false,
-              title: "Multi Review",
-            })
+            requestGraphRunView(
+              {
+                runId,
+                projectId: workflow.projectId,
+                environmentId: workflow.environmentId,
+                mock: false,
+                title: "Multi Review",
+              },
+              workflowScope,
+            )
           }
         >
           Open graph run

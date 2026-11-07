@@ -3,6 +3,7 @@ import { GraphPlayIcon } from "@/components/icons/GraphPlayIcon";
 import { Button } from "@/components/ui/button";
 import { GraphLaunchDialog } from "./GraphLaunchDialog";
 import { openLaunchedGraphRun } from "./open-launched-run";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 
 /**
  * "Run graph…" in the environment action bar (item 214, D17): opens the
@@ -19,6 +20,8 @@ export function RunGraphButton({
   projectId?: string | null;
   showLabel?: boolean;
 }) {
+  // The environment's node: the launched run opens in its pane layout (plan item 4007).
+  const launchScope = useScopesWithCommandFallback().scope;
   const [open, setOpen] = useState(false);
   const [used, setUsed] = useState(false);
   return (
@@ -44,7 +47,9 @@ export function RunGraphButton({
           onOpenChange={setOpen}
           projectId={projectId}
           environmentId={environmentId}
-          onLaunched={(result) => openLaunchedGraphRun({ result, environmentId })}
+          onLaunched={(result) =>
+            openLaunchedGraphRun({ result, environmentId, scope: launchScope })
+          }
         />
       )}
     </>

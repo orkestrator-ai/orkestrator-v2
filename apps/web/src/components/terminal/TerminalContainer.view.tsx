@@ -2051,9 +2051,10 @@ export function TerminalContainer({
       handleCreateTab("graph-run", {
         graphRun: { runId: request.runId, ...(request.title ? { title: request.title } : {}) },
       });
-    const pending = takePendingGraphRunView(environmentId);
+    // This node's requests only (plan item 4007).
+    const pending = takePendingGraphRunView(environmentId, paneLayoutScope);
     if (pending) open(pending);
-    return onGraphRunViewRequested(open);
+    return onGraphRunViewRequested(open, paneLayoutScope);
   }, [
     isActive,
     isEnvironmentRunning,
@@ -2061,6 +2062,7 @@ export function TerminalContainer({
     isLocalEnvironmentReady,
     environmentId,
     handleCreateTab,
+    paneLayoutScope,
   ]);
 
   // A file opened from the project board's files panel names this

@@ -4,7 +4,9 @@ Checked against `main` at `bf49a751` (2026-10-25).
 
 ## Task analysis
 
-Analysed 2026-10-27 against `main` at `863b5782`. Tasks 2 to 5 worked on
+Analysed 2026-11-07 against unified-federation-b4c9ee65814d at `ae492c20c`. The open tasks (1, 2 for 0672, 6 and 7) do not depend on realms and still apply. The done task 4 names `workspace-realm-electron.spec.ts`, which plan item 6003 deleted with workspace realms (node scopes replaced them, 6002 and 6003); that part of task 4 is obsolete, noted where the spec is named. Mentions of `RealmContexts` and realms in the dated Current state are history.
+
+Previously analysed 2026-10-27 against `main` at `863b5782`. Tasks 2 to 5 worked on
 2026-10-31 against `main` at `931e5541` (see "Round of 2026-10-31" under
 Current state).
 
@@ -13,7 +15,7 @@ Current state).
 1. **Apply the required-check ruleset**: once `main` has three green `CI` runs in a row, the maintainer applies the prepared ruleset (item 1). Status: open (the precondition is now met; maintainer action).
 2. **Open CI flakes 0182 and 0672**: the Cursor HTTP readiness timeout and the Chromium page crash in the interactive preview case. Status: done for 0182 (cause shown and fixed, resolved); 0672 open with crash diagnostics in place, waiting for a CI recurrence (2026-10-31).
 3. **Owner flake cases from the triage**: create the cases the 2026-10-25 triage suggested but did not number. Status: done (2026-10-31): 1530 to 1535; `media-stream.browser.test.ts` already had 1108.
-4. **Failures that are not flakes**: give `workspace-realm-electron.spec.ts:409`, the annotation Notes focus check, the `AgentLaunchDialog` branch suggestion and the 0723 exit-before-stderr race their own bug or todo. Status: done (2026-10-31): todos 1170, 1171 and 1172.
+4. **Failures that are not flakes**: give `workspace-realm-electron.spec.ts:409`, the annotation Notes focus check, the `AgentLaunchDialog` branch suggestion and the 0723 exit-before-stderr race their own bug or todo. Status: done (2026-10-31): todos 1170, 1171 and 1172. The `workspace-realm-electron.spec.ts:409` part is obsolete since 6003 deleted the spec with realms (2026-11-07).
 5. **Live hung-`close()` Electron check**: run a real Electron spec whose `close()` hangs and confirm `closeElectronWithin` cleans up. Status: done (2026-10-31): `"killed"` after 20,066 ms, nothing left running.
 6. **Watch the workspace group margin and the runner shutdowns** (Needs verification). Status: open (margin currently comfortable).
 7. **Deferred measurement work**: ACP transcript matrix, longest-first bridge scheduling, splitting backend `test:workspace`, and any resumed speed work. Status: deferred (until measured).
@@ -92,7 +94,7 @@ Item 1's evidence, items 2 to 6 and 8 to 10, and the flake triage are done; 0145
 
 **Problem.** Some failures the triage found fail alone too, so they are bugs, but they have no owner file.
 
-**Context.** `workspace-realm-electron.spec.ts:409` and the annotation Notes focus check (0740, 0772, 0789, 0790), the `AgentLaunchDialog.spec.ts` branch suggestion (only in 0493), and 0723's likely race at `commands-servers.ts`.
+**Context.** `workspace-realm-electron.spec.ts:409` (deleted with workspace realms by plan item 6003, 2026-11-07) and the annotation Notes focus check (0740, 0772, 0789, 0790), the `AgentLaunchDialog.spec.ts` branch suggestion (only in 0493), and 0723's likely race at `commands-servers.ts`.
 
 **Investigation.** The 0723 race is still present: the OpenCode server start decides its error in the `exit` listener (`child.once("exit", onExit)`, `apps/backend/src/core/commands-servers.ts:301`) from `stderrTail`, and stderr data can arrive after `exit` (Node and Bun emit `close` after the streams end). The locked-database message at `:292`-`:295` therefore depends on timing. The line number in the file (295) is now the message construction, not the decision.
 
@@ -491,7 +493,7 @@ one live check (an Electron spec with a hung `close()`).
      (`review-validation-worker.test.ts`) failed once in a baseline run and
      passed alone and in three full runs; its message was not captured.
    - Not flakes, found by the triage: `workspace-realm-electron.spec.ts:409`
-     and the annotation Notes focus check fail alone too (0740, 0772, 0789,
+     (spec deleted with realms by 6003, 2026-11-07) and the annotation Notes focus check fail alone too (0740, 0772, 0789,
      0790), and `AgentLaunchDialog.spec.ts`'s branch suggestion fails on
      `main` (tracked only in 0493). They need a bug or todo of their own.
      0723 points at a likely product race: `commands-servers.ts:295` decides

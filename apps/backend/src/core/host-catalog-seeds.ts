@@ -8,13 +8,14 @@ const log = createLogger("models");
  *
  * A signed-out host, or a platform whose CLI answers with an empty list (Grok
  * on a host where it is enabled but unusable), fails every time, and each
- * attempt spawns a whole bridge and its CLI. Every realm boot asks for a seed
- * in the background, and a window reopens an evicted realm whenever the user
- * goes back to that node, so a 30-second cooldown let almost every cold open
- * pay for a doomed download (2026-11-06: every `download.deferred` line for
- * Grok sat at a realm open). Fifteen minutes caps a broken platform at four
- * attempts an hour while still retrying on its own within one working
- * session. Nothing waits on it: the realm renders from the cached catalogues
+ * attempt spawns a whole bridge and its CLI. Every renderer start asks for a
+ * seed in the background (`startApp`), and before plan items 6002 and 6003
+ * retired workspace realms a window also rebooted an evicted realm whenever
+ * the user went back to that node, so a 30-second cooldown let almost every
+ * cold open pay for a doomed download (2026-11-06: every `download.deferred`
+ * line for Grok sat at a realm open). Fifteen minutes caps a broken platform
+ * at four attempts an hour while still retrying on its own within one working
+ * session. Nothing waits on it: the renderer draws from the cached catalogues
  * first. A completed sign-in clears it (`resetCooldown`), and Settings'
  * Refresh downloads directly without consulting it.
  */

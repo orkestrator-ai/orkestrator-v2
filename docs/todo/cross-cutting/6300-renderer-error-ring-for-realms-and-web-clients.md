@@ -1,29 +1,33 @@
-# Renderer error ring for realms, the web client and iOS
+# Renderer error ring for the web client and iOS
 
 ## Task analysis
 
-Analysed 2026-11-05 against `main` at `1a66d95c3`. From efficiency report part `0790` (E16), its open question on the remote web client's ring and iOS.
+Analysed 2026-11-07 against unified-federation-b4c9ee65814d at `ae492c20c`. Task 1 is obsolete: plan items 6002 and 6003 deleted workspace realms, and node scopes render every node's workspace in the window's own renderer. Tasks 2 and 3 still apply unchanged.
+
+Previously analysed 2026-11-05 against `main` at `1a66d95c3`. From efficiency report part `0790` (E16), its open question on the remote web client's ring and iOS.
 
 ### Tasks
 
-1. **Workspace realms**: decide whose essential log a realm's renderer failures belong in. Status: open.
+1. **Workspace realms**: decide whose essential log a realm's renderer failures belong in. Status: done (obsolete, 2026-11-07): realms no longer exist (6002, 6003); another node's workspace fails in the window's own renderer, whose ring already goes to the window's backend.
 2. **The remote web client**: decide whether a browser tab sends its ring, and to which backend. Status: open.
 3. **iOS**: decide whether the iOS shell needs any logging of its own (`os_log`, `isInspectable`). Status: open (depends on 2).
 
 ### 1. Workspace realms
 
-**Problem.** A workspace realm (another machine's workspace shown inside a desktop window) records failures in its own renderer error ring, but never sends them, so a realm failure leaves no trace on any machine.
+Done (obsolete, 2026-11-07).
 
-**Context.** E16 built the ring (`apps/web/src/lib/renderer-error-ring.ts`) and a desktop window's upload (`renderer-error-upload.ts`, started by `renderer-diagnostics.ts` from `renderer-bootstrap.ts` only when `rendererErrorRoute()` is `window`). The backend command `record_renderer_errors` is in `WORKSPACE_ADMINISTRATION_COMMANDS`, so a realm, which reaches its node through a workspace grant, is refused. An entry already carries `route: "realm"`, so the backend can tell one apart. See `docs/architecture/logging.md`, "Renderer failures in the essential log".
+**Problem.** A workspace realm (another machine's workspace shown inside a desktop window) recorded failures in its own renderer error ring but never sent them, so a realm failure left no trace on any machine.
 
-**Investigation.** A realm's `invoke` goes to the realm's own node, not the window's command node. The failure is in the window's process, but it concerns the remote node's workspace, and the user exporting diagnostics usually does it on the command node.
+**Context.** E16 built the ring (`apps/web/src/lib/renderer-error-ring.ts`) and a desktop window's upload (`renderer-error-upload.ts`, started by `startRendererDiagnostics` in `renderer-diagnostics.ts` only when `rendererErrorRoute()` is `window`). Plan items 6002 (web) and 6003 (desktop) deleted the realms, `workspace-realm.ts` included, with the user's approval of 2026-11-07. Another node's workspace now renders in the window's own renderer through its node scope ([node scopes](../../architecture/federation.md#node-scopes-one-scope-per-node-in-the-windows-tree)).
+
+**Investigation.** Checked on the branch: `rendererErrorRoute()` answers only `window` or `browser`, and no client code sends `route: "realm"`; the protocol keeps the value so older renderers' reports still parse (`RENDERER_ERROR_ROUTES`, `packages/protocol/src/renderer-errors.ts`). A failure in a leaf's workspace is caught by the window renderer's boundaries and recorded in that renderer's ring, which the window uploads to its own backend, the command node ([logging](../../architecture/logging.md#renderer-failures-in-the-essential-log)). That is the outcome the recommended option below asked for, with no realm-to-shell message.
 
 **Decisions.**
 
-- **Where do a realm's entries go?**
-  - **To the window's command node, through the window's shell renderer, which already sends its own ring (recommended).**
+- **Where do a realm's entries go?** Settled by the realms' removal: to the window's command node, in the window's own ring.
+  - **To the window's command node, through the window's shell renderer, which already sends its own ring (recommended, and now what happens).**
     - Pros: one machine's log holds everything that window showed; no workspace client gains a write on a remote machine's log.
-    - Cons: needs a realm-to-shell message (the realm channel exists in `workspace-realm.ts`), and a failure is logged away from the node it concerns.
+    - Cons: a failure is logged away from the node it concerns.
   - **To the realm's own node, by allowing the command for workspace grants.**
     - Pros: the entry sits beside that node's other logs.
     - Cons: lets a workspace client write to another machine's always-on log, which the grant scope deliberately refuses; still rate-bound and content-free, but a new surface.
@@ -69,6 +73,10 @@ Analysed 2026-11-05 against `main` at `1a66d95c3`. From efficiency report part `
 ### Task 1: desktop upload reference
 
 Corrected the upload startup reference to `renderer-diagnostics.ts`, invoked by `renderer-bootstrap.ts`. This documentation correction leaves the three follow-up tasks open.
+
+### Task 1: closed as obsolete (2026-11-07)
+
+Realms were deleted by plan items 6002 and 6003 (node scopes replaced them), so there is no separate realm renderer whose ring could go unsent. Marked done rather than deleted: tasks 2 and 3 keep the file open. The file name keeps "realms" so the links to it (`docs/architecture/logging.md`, 6301) keep working.
 
 ## Related
 

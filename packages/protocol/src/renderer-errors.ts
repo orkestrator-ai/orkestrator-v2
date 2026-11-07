@@ -63,8 +63,10 @@ export type RendererErrorBoundary = (typeof RENDERER_ERROR_BOUNDARIES)[number];
 
 /**
  * The renderer surface the failure happened in. The app has no URL router, so
- * its "route" is which renderer this is: a desktop window's own, a workspace
- * realm inside one, or a browser tab on the web client.
+ * its "route" is which renderer this is: a desktop window's own or a browser
+ * tab on the web client. `realm` named a workspace realm inside a window;
+ * plan items 6002 and 6003 retired realms, so the current app never sends it,
+ * and it stays accepted for reports from older renderers.
  */
 export const RENDERER_ERROR_ROUTES = ["browser", "realm", "window"] as const;
 

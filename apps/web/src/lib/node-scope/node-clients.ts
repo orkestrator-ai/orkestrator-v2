@@ -34,7 +34,10 @@
  * capped exponential retry (`Schedule`); interrupting it (a release while it
  * runs) revokes a grant that arrives late. Callers see promises only.
  *
- * Nothing in the app acquires a leaf yet (plan item 2013 proves it).
+ * In a browser or the iOS app, a workspace shown in the window's own tree
+ * acquires its leaf here through `openLeafScope` (plan item 4001,
+ * `lib/federation/in-tree-scopes.ts`); the desktop opens leaves through main's
+ * node scopes instead.
  */
 
 import * as Data from "effect/Data";

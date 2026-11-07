@@ -1,7 +1,8 @@
 /**
- * Per-node module state for code that is not a store yet (plan item 3016,
- * report §7.4 and Appendix B): capability caches and the rich-content
- * identity notes.
+ * Per-node module state for code that is not a store (plan item 3016,
+ * report §7.4 and Appendix B): caches, timers and identity notes held per
+ * node scope (capability caches, the rich-content identity notes, the
+ * persistence and subscription modules that 3003-3013 converted).
  *
  * Such state used to be module `let`s holding one answer per backend, so a
  * second live node would overwrite (or be answered with) the first node's.
@@ -10,10 +11,13 @@
  * names no scope gets the app's command scope, which is today's single
  * backend; scoped callers pass theirs.
  *
- * Reads and events follow the same rule: the app's command scope keeps the
- * `@/lib/native/backend` `invoke` and `@/lib/native/events` `listen` paths
+ * Raw commands and events follow the same rule: the app's command scope keeps
+ * the `@/lib/native/backend` `invoke` and `@/lib/native/events` `listen` paths
  * (which are that scope's client and prefetched cache, plan item 2010, and
  * are what suites mock), and any other scope goes through its own client.
+ * `lib/backend` factory calls do not use `scopeInvoker`: they take
+ * `scopeBackendClient(scope)` or `backendApiForScope` from
+ * `@/lib/backend/client` (plan item 3002), which apply the same rule.
  */
 
 import { invoke } from "@/lib/native/backend";
@@ -48,13 +52,17 @@ export function defineScopedSlot<T>(name: string, create: (scope: NodeScope) => 
   return (scope = appCommandScope()) => scope.store(def).getState();
 }
 
-/** The `invoke` shape `lib/backend` reads take. */
+/** A raw command call in `@/lib/native/backend` `invoke`'s shape. */
 export type ScopeInvoke = <T = unknown>(
   command: string,
   args?: Record<string, unknown>,
 ) => Promise<T>;
 
-/** How to send a command to `scope`'s node (see the module comment). */
+/**
+ * How to send a raw command, one with no `lib/backend` factory function, to
+ * `scope`'s node (see the module comment). Today only the portal's
+ * `invokeOnMachine` (`lib/portal/machine-scope.ts`) needs it.
+ */
 export function scopeInvoker(scope: NodeScope): ScopeInvoke {
   if (isAppCommandScope(scope)) return invoke;
   return (command, args) => invokeInScope(scope, command, args);

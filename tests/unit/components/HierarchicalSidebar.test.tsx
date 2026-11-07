@@ -28,6 +28,9 @@ import {
 } from "@/stores";
 import type { Environment, Project } from "@/types";
 import { useAppDialogStore } from "@/stores/appDialogStore";
+import { useUIChromeStore } from "@/stores/uiChromeStore";
+// Suites seed through the statics, which are the app command scope's stores.
+import { appCommandScope } from "@/lib/node-scope-slots";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
 import {
   dispatchResourceChange,
@@ -494,6 +497,9 @@ describe("HierarchicalSidebar", () => {
       collapsedProjectFolders: [],
       selectedEnvironmentIds: [],
       expandedSessionsEnvironments: [],
+    });
+    // The sort and zoom are the window's chrome (3006), shared by every node.
+    useUIChromeStore.setState({
       environmentSortMode: "project",
       activitySortOrder: "priority",
       zoomLevel: 100,
@@ -658,7 +664,7 @@ describe("HierarchicalSidebar", () => {
     fireEvent.click(screen.getByRole("menuitemradio", { name: "By activity" }));
 
     await waitFor(() => {
-      expect(useUIStore.getState().environmentSortMode).toBe("activity");
+      expect(useUIChromeStore.getState().environmentSortMode).toBe("activity");
       expect(screen.getByRole("button", { name: "Sort environments: By activity" })).toBeTruthy();
     });
   });
@@ -686,7 +692,7 @@ describe("HierarchicalSidebar", () => {
     expect(screen.queryByRole("menuitemradio", { name: "Oldest first" }) === null).toBe(true);
     view.unmount();
 
-    useUIStore.getState().setEnvironmentSortMode("activity");
+    useUIChromeStore.getState().setEnvironmentSortMode("activity");
     render(<HierarchicalSidebar />);
     fireEvent.pointerDown(screen.getByRole("button", { name: "Sort environments: By activity" }));
     expect(
@@ -697,7 +703,7 @@ describe("HierarchicalSidebar", () => {
     fireEvent.click(screen.getByRole("menuitemradio", { name: "Oldest first" }));
 
     await waitFor(() => {
-      expect(useUIStore.getState().activitySortOrder).toBe("oldest");
+      expect(useUIChromeStore.getState().activitySortOrder).toBe("oldest");
       const rows = Array.from(
         screen.getByTestId("activity-environment-list").querySelectorAll("[data-environment-id]"),
       );
@@ -726,7 +732,7 @@ describe("HierarchicalSidebar", () => {
         lastActivityAt: "2026-07-22T10:00:00.000Z",
       },
     ];
-    useUIStore.getState().setEnvironmentSortMode("activity");
+    useUIChromeStore.getState().setEnvironmentSortMode("activity");
 
     render(<HierarchicalSidebar />);
 
@@ -746,7 +752,7 @@ describe("HierarchicalSidebar", () => {
 
   test("aligns the activity controls with the main tab bar and evenly insets the rows", () => {
     environmentsValue = [createdEnvironment];
-    useUIStore.getState().setEnvironmentSortMode("activity");
+    useUIChromeStore.getState().setEnvironmentSortMode("activity");
 
     render(<HierarchicalSidebar />);
 
@@ -763,7 +769,7 @@ describe("HierarchicalSidebar", () => {
     expect(screen.getByTestId("sidebar-list-content").className).toBe("py-2");
 
     projectsValue = [];
-    act(() => useUIStore.getState().setEnvironmentSortMode("activity"));
+    act(() => useUIChromeStore.getState().setEnvironmentSortMode("activity"));
     view.rerender(<HierarchicalSidebar />);
     expect(screen.getByTestId("sidebar-list-content").className).toBe("py-2");
     expect(screen.getByText("No projects yet")).toBeTruthy();
@@ -800,7 +806,7 @@ describe("HierarchicalSidebar", () => {
         lastActivityAt: "2026-07-20T10:00:00.000Z",
       },
     ];
-    useUIStore.setState({ environmentSortMode: "activity" });
+    useUIChromeStore.setState({ environmentSortMode: "activity" });
 
     render(<HierarchicalSidebar />);
 
@@ -829,7 +835,7 @@ describe("HierarchicalSidebar", () => {
         lastActivityAt: "2026-07-22T10:00:00.000Z",
       },
     ];
-    useUIStore.setState({ environmentSortMode: "activity" });
+    useUIChromeStore.setState({ environmentSortMode: "activity" });
 
     render(<HierarchicalSidebar />);
 
@@ -855,7 +861,7 @@ describe("HierarchicalSidebar", () => {
         lastActivityAt: "2026-07-22T10:00:00.000Z",
       },
     ];
-    useUIStore.getState().setEnvironmentSortMode("activity");
+    useUIChromeStore.getState().setEnvironmentSortMode("activity");
     render(<HierarchicalSidebar />);
 
     fireEvent.contextMenu(screen.getByRole("button", { name: /Settings environment/ }));
@@ -878,7 +884,7 @@ describe("HierarchicalSidebar", () => {
         lastActivityAt: "2026-07-22T10:00:00.000Z",
       },
     ];
-    useUIStore.getState().setEnvironmentSortMode("activity");
+    useUIChromeStore.getState().setEnvironmentSortMode("activity");
     render(<HierarchicalSidebar />);
 
     fireEvent.contextMenu(screen.getByRole("button", { name: /Source environment/ }));
@@ -905,7 +911,7 @@ describe("HierarchicalSidebar", () => {
       },
     ];
     forkEnvironmentMock.mockRejectedValueOnce(new Error("published to a remote"));
-    useUIStore.getState().setEnvironmentSortMode("activity");
+    useUIChromeStore.getState().setEnvironmentSortMode("activity");
     const logs = captureLogs();
     render(<HierarchicalSidebar />);
 
@@ -963,7 +969,7 @@ describe("HierarchicalSidebar", () => {
         lastActivityAt: "2026-07-22T10:00:00.000Z",
       },
     ];
-    useUIStore.getState().setEnvironmentSortMode("activity");
+    useUIChromeStore.getState().setEnvironmentSortMode("activity");
     render(<HierarchicalSidebar />);
 
     fireEvent.contextMenu(screen.getByRole("button", { name: /Source environment/ }));
@@ -1151,7 +1157,7 @@ describe("HierarchicalSidebar", () => {
           lastActivityAt: "2026-07-23T10:00:00.000Z",
         },
       ];
-      useUIStore.getState().setEnvironmentSortMode("activity");
+      useUIChromeStore.getState().setEnvironmentSortMode("activity");
 
       const view = render(<HierarchicalSidebar />);
       const list = screen.getByTestId("activity-environment-list");
@@ -1235,7 +1241,7 @@ describe("HierarchicalSidebar", () => {
         { ...createdEnvironment, id: "env-b", lastActivityAt: "2026-07-23T11:00:00.000Z" },
         { ...createdEnvironment, id: "env-c", lastActivityAt: "2026-07-23T10:00:00.000Z" },
       ];
-      useUIStore.getState().setEnvironmentSortMode("activity");
+      useUIChromeStore.getState().setEnvironmentSortMode("activity");
       const view = render(<HierarchicalSidebar />);
 
       // The first row grows, moving later rows without changing their indices.
@@ -1308,7 +1314,7 @@ describe("HierarchicalSidebar", () => {
         { ...createdEnvironment, id: "env-a", lastActivityAt: "2026-07-23T12:00:00.000Z" },
         { ...createdEnvironment, id: "env-b", lastActivityAt: "2026-07-23T11:00:00.000Z" },
       ];
-      useUIStore.getState().setEnvironmentSortMode("activity");
+      useUIChromeStore.getState().setEnvironmentSortMode("activity");
       const view = render(<HierarchicalSidebar />);
 
       environmentsValue = environmentsValue.map((environment) =>
@@ -1363,7 +1369,7 @@ describe("HierarchicalSidebar", () => {
         { ...createdEnvironment, id: "env-a", lastActivityAt: "2026-07-23T12:00:00.000Z" },
         { ...createdEnvironment, id: "env-b", lastActivityAt: "2026-07-23T11:00:00.000Z" },
       ];
-      useUIStore.getState().setEnvironmentSortMode("activity");
+      useUIChromeStore.getState().setEnvironmentSortMode("activity");
       const view = render(<HierarchicalSidebar />);
 
       environmentsValue = [
@@ -1510,10 +1516,8 @@ describe("HierarchicalSidebar", () => {
         lastActivityAt: "2026-07-21T10:00:00.000Z",
       },
     ];
-    useUIStore.setState({
-      environmentSortMode: "activity",
-      selectedEnvironmentId: "env-newest",
-    });
+    useUIChromeStore.setState({ environmentSortMode: "activity" });
+    useUIStore.setState({ selectedEnvironmentId: "env-newest" });
 
     render(<HierarchicalSidebar />);
     fireEvent.click(screen.getByRole("button", { name: /Oldest environment/ }), { shiftKey: true });
@@ -2839,6 +2843,7 @@ describe("HierarchicalSidebar", () => {
       [createdEnvironment],
       deleteEnvironmentMock,
       removeProjectMock,
+      appCommandScope(),
     );
     expect(deleteEnvironmentMock.mock.calls.map(([id]) => id)).toEqual([
       createdEnvironment.id,
@@ -2870,6 +2875,7 @@ describe("HierarchicalSidebar", () => {
       [createdEnvironment],
       deleteEnvironmentMock,
       removeProjectMock,
+      appCommandScope(),
     );
     expect(useUIStore.getState().selectedProjectId).toBeNull();
     act(() => useUIStore.getState().selectProject(project.id));
@@ -2920,7 +2926,7 @@ describe("HierarchicalSidebar", () => {
     fireEvent.click(screen.getByRole("button", { name: "Project One Home needs attention" }));
     expect(useUIStore.getState().selectedEnvironmentId).toBe("home");
     expect(useUIStore.getState().projectBoardTab).toBe("home");
-    act(() => useUIStore.getState().setEnvironmentSortMode("activity"));
+    act(() => useUIChromeStore.getState().setEnvironmentSortMode("activity"));
     expect(screen.getByLabelText("1 environment")).toBeTruthy();
     expect(screen.getByLabelText("1 waiting environment")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Project One Home needs attention" }));
@@ -2986,6 +2992,7 @@ describe("HierarchicalSidebar", () => {
       environments,
       deleteEnvironmentMock,
       removeProjectMock,
+      appCommandScope(),
     );
     expect(deleteEnvironmentMock.mock.calls.map(([id]) => id)).toEqual(["env-1", "env-2"]);
     expect(removeProjectMock).toHaveBeenCalledWith("project-1");
@@ -3001,6 +3008,7 @@ describe("HierarchicalSidebar", () => {
         environments,
         deleteEnvironmentMock,
         removeProjectMock,
+        appCommandScope(),
       ),
     ).rejects.toThrow("Failed to delete some environments: First");
     expect(deleteEnvironmentMock).toHaveBeenCalledTimes(2);
@@ -3008,7 +3016,13 @@ describe("HierarchicalSidebar", () => {
   });
 
   test("removes empty projects and propagates project removal failures", async () => {
-    await deleteProjectAndEnvironments("project-1", [], deleteEnvironmentMock, removeProjectMock);
+    await deleteProjectAndEnvironments(
+      "project-1",
+      [],
+      deleteEnvironmentMock,
+      removeProjectMock,
+      appCommandScope(),
+    );
     expect(deleteEnvironmentMock).not.toHaveBeenCalled();
     expect(removeProjectMock).toHaveBeenCalledWith("project-1");
 
@@ -3017,7 +3031,13 @@ describe("HierarchicalSidebar", () => {
       throw new Error("remove failed");
     });
     await expect(
-      deleteProjectAndEnvironments("project-1", [], deleteEnvironmentMock, removeProjectMock),
+      deleteProjectAndEnvironments(
+        "project-1",
+        [],
+        deleteEnvironmentMock,
+        removeProjectMock,
+        appCommandScope(),
+      ),
     ).rejects.toThrow("remove failed");
   });
 
@@ -3041,6 +3061,7 @@ describe("HierarchicalSidebar", () => {
           environments,
           deleteEnvironmentMock,
           removeProjectMock,
+          appCommandScope(),
         ),
       ).rejects.toThrow("Failed to delete some environments: First, Second");
       expect(deleteEnvironmentMock).toHaveBeenCalledTimes(2);

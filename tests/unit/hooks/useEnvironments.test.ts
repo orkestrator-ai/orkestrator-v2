@@ -151,6 +151,9 @@ mock.module("@/lib/backend", () => ({
 import { listen } from "@/lib/native/events";
 const mockListen = listen as ReturnType<typeof mock>;
 
+// The suite seeds through the statics, which are the app command scope's stores.
+import { appCommandScope } from "@/lib/node-scope-slots";
+
 // Import hook AFTER mocking
 import {
   reconcileEnvironmentSetupSnapshots,
@@ -1964,7 +1967,7 @@ describe("useEnvironments", () => {
       setupPhase: "ready",
     });
 
-    await reconcileEnvironmentSetupSnapshots();
+    await reconcileEnvironmentSetupSnapshots(appCommandScope());
 
     const state = useEnvironmentStore.getState();
     expect(mockGetEnvironment).toHaveBeenCalledWith("env-1");
@@ -1997,7 +2000,7 @@ describe("useEnvironments", () => {
       lifecycleError: "Docker provisioning failed",
     });
 
-    await reconcileEnvironmentSetupSnapshots();
+    await reconcileEnvironmentSetupSnapshots(appCommandScope());
     useProjectStore.setState({ projects: previousProjects });
 
     const state = useEnvironmentStore.getState();
@@ -2181,7 +2184,7 @@ describe("useEnvironments", () => {
     delete (healthy as { lifecycleError?: string | null }).lifecycleError;
     mockGetEnvironment.mockResolvedValue(healthy);
 
-    await reconcileEnvironmentSetupSnapshots();
+    await reconcileEnvironmentSetupSnapshots(appCommandScope());
 
     expect(mockGetEnvironment).toHaveBeenCalledWith(environment.id);
     expect(
@@ -2190,7 +2193,7 @@ describe("useEnvironments", () => {
 
     // Left stale, the environment would stay a reconciliation target forever.
     mockGetEnvironment.mockClear();
-    await reconcileEnvironmentSetupSnapshots();
+    await reconcileEnvironmentSetupSnapshots(appCommandScope());
     expect(mockGetEnvironment).not.toHaveBeenCalled();
   });
 
@@ -2206,7 +2209,7 @@ describe("useEnvironments", () => {
     });
     mockGetEnvironment.mockResolvedValue(environment);
 
-    await reconcileEnvironmentSetupSnapshots();
+    await reconcileEnvironmentSetupSnapshots(appCommandScope());
 
     expect(mockGetEnvironment).toHaveBeenCalledWith(environment.id);
     // A failed start has no setup plan, so nothing reads a setup session.
@@ -2231,7 +2234,7 @@ describe("useEnvironments", () => {
       lifecycleError: "Docker provisioning failed",
     });
 
-    await reconcileEnvironmentSetupSnapshots();
+    await reconcileEnvironmentSetupSnapshots(appCommandScope());
 
     // A launch that can never happen must not survive, or it auto-dispatches
     // the original prompt the next time this env is started.
@@ -2447,7 +2450,7 @@ describe("useEnvironments", () => {
       ],
     });
 
-    await reconcileEnvironmentSetupSnapshots();
+    await reconcileEnvironmentSetupSnapshots(appCommandScope());
 
     expect(mockGetEnvironment).not.toHaveBeenCalled();
   });
@@ -2464,7 +2467,7 @@ describe("useEnvironments", () => {
       ],
     });
 
-    await reconcileEnvironmentSetupSnapshots();
+    await reconcileEnvironmentSetupSnapshots(appCommandScope());
 
     expect(mockGetEnvironment).not.toHaveBeenCalled();
   });
@@ -2477,7 +2480,7 @@ describe("useEnvironments", () => {
       setupScriptsComplete: false,
     });
     useEnvironmentStore.setState({ environments: [environment] });
-    await reconcileEnvironmentSetupSnapshots();
+    await reconcileEnvironmentSetupSnapshots(appCommandScope());
 
     expect(mockGetEnvironment).not.toHaveBeenCalled();
     expect(useEnvironmentStore.getState().getEnvironmentById("env-1")?.setupPhase).toBe(
@@ -2500,7 +2503,7 @@ describe("useEnvironments", () => {
       setupPhase: "ready",
     });
 
-    await reconcileEnvironmentSetupSnapshots();
+    await reconcileEnvironmentSetupSnapshots(appCommandScope());
 
     expect(mockGetEnvironment).toHaveBeenCalledWith("env-1");
   });
@@ -2531,7 +2534,7 @@ describe("useEnvironments", () => {
       },
     });
 
-    await reconcileEnvironmentSetupSnapshots();
+    await reconcileEnvironmentSetupSnapshots(appCommandScope());
 
     expect(mockGetEnvironment).toHaveBeenCalledWith("env-1");
     expect(
@@ -2555,7 +2558,7 @@ describe("useEnvironments", () => {
     useEnvironmentStore.setState({ environments: [environment] });
     mockGetEnvironment.mockResolvedValue(null);
 
-    await reconcileEnvironmentSetupSnapshots();
+    await reconcileEnvironmentSetupSnapshots(appCommandScope());
 
     expect(useEnvironmentStore.getState().getEnvironmentById("env-1")).toMatchObject({
       setupScriptsComplete: false,
@@ -2577,7 +2580,7 @@ describe("useEnvironments", () => {
     const logs = captureLogs();
     try {
       mockGetEnvironment.mockRejectedValueOnce(new Error("offline"));
-      await reconcileEnvironmentSetupSnapshots();
+      await reconcileEnvironmentSetupSnapshots(appCommandScope());
       expect(logs.records()).toContainEqual(
         expect.objectContaining({
           level: "warn",
@@ -2600,7 +2603,7 @@ describe("useEnvironments", () => {
       setupScriptsComplete: true,
       setupPhase: "ready",
     });
-    await reconcileEnvironmentSetupSnapshots();
+    await reconcileEnvironmentSetupSnapshots(appCommandScope());
     expect(useEnvironmentStore.getState().getEnvironmentById("env-1")?.setupPhase).toBe("ready");
   });
 
@@ -2620,7 +2623,7 @@ describe("useEnvironments", () => {
       setupPhase: "ready",
     });
 
-    await reconcileEnvironmentSetupSnapshots();
+    await reconcileEnvironmentSetupSnapshots(appCommandScope());
 
     expect(useEnvironmentStore.getState().getEnvironmentById("env-1")).toMatchObject({
       setupScriptsComplete: true,
@@ -2641,7 +2644,7 @@ describe("useEnvironments", () => {
     useEnvironmentStore.setState({ environments: [environment] });
     mockGetEnvironment.mockResolvedValue(environment);
 
-    await reconcileEnvironmentSetupSnapshots();
+    await reconcileEnvironmentSetupSnapshots(appCommandScope());
 
     expect(useEnvironmentStore.getState().getEnvironmentById("env-1")?.setupPhase).toBe("running");
   });
@@ -2658,7 +2661,7 @@ describe("useEnvironments", () => {
     useEnvironmentStore.setState({ environments: [environment] });
     mockGetEnvironment.mockResolvedValue({ ...environment, setupPhase: "failed" });
 
-    await reconcileEnvironmentSetupSnapshots();
+    await reconcileEnvironmentSetupSnapshots(appCommandScope());
 
     expect(useEnvironmentStore.getState().getEnvironmentById("env-1")?.setupPhase).toBe("failed");
   });
@@ -2676,7 +2679,7 @@ describe("useEnvironments", () => {
     mockGetEnvironment.mockResolvedValue(environment);
     mockGetEnvironmentSetupSession.mockResolvedValue(null);
 
-    await reconcileEnvironmentSetupSnapshots();
+    await reconcileEnvironmentSetupSnapshots(appCommandScope());
 
     expect(useEnvironmentStore.getState().getEnvironmentById("env-1")?.setupPhase).toBe("running");
     expect(mockGetEnvironmentSetupSession).not.toHaveBeenCalled();
@@ -2698,7 +2701,7 @@ describe("useEnvironments", () => {
       setupPhase: "running",
     });
 
-    await reconcileEnvironmentSetupSnapshots();
+    await reconcileEnvironmentSetupSnapshots(appCommandScope());
 
     const state = useEnvironmentStore.getState();
     expect(state.getEnvironmentById("env-1")).toMatchObject({
@@ -2732,7 +2735,7 @@ describe("useEnvironments", () => {
       }),
     );
 
-    await reconcileEnvironmentSetupSnapshots();
+    await reconcileEnvironmentSetupSnapshots(appCommandScope());
 
     expect(mockGetEnvironment).toHaveBeenCalledWith("env-1");
     expect(mockGetEnvironment).toHaveBeenCalledWith("env-2");
@@ -2757,8 +2760,8 @@ describe("useEnvironments", () => {
       Promise.resolve({ ...environment, setupScriptsComplete: true, setupPhase: "ready" }),
     );
 
-    const first = reconcileEnvironmentSetupSnapshots();
-    const second = reconcileEnvironmentSetupSnapshots();
+    const first = reconcileEnvironmentSetupSnapshots(appCommandScope());
+    const second = reconcileEnvironmentSetupSnapshots(appCommandScope());
     // Both callers share the in-flight pass rather than issuing duplicate reads.
     expect(second).toBe(first);
     expect(mockGetEnvironment).toHaveBeenCalledTimes(1);
@@ -2793,8 +2796,10 @@ describe("useEnvironments", () => {
       setupPhase: "ready",
     });
     const listened: string[] = [];
-    let connectedCallback: (() => void) | undefined;
-    mockListen.mockImplementation((eventName: string, callback: () => void) => {
+    // `listen` hands every handler a native event; the stream-connected one has no payload.
+    type ConnectedHandler = (event: { payload: undefined }) => void;
+    let connectedCallback: ConnectedHandler | undefined;
+    mockListen.mockImplementation((eventName: string, callback: ConnectedHandler) => {
       listened.push(eventName);
       if (eventName === "native-event-stream-connected") connectedCallback = callback;
       return Promise.resolve(() => {});
@@ -2805,7 +2810,7 @@ describe("useEnvironments", () => {
     expect(connectedCallback).toBeDefined();
 
     await act(async () => {
-      connectedCallback?.();
+      connectedCallback?.({ payload: undefined });
       await Promise.resolve();
     });
     await waitFor(() => expect(mockGetEnvironment).toHaveBeenCalledWith("env-1"));
@@ -2830,7 +2835,7 @@ describe("useEnvironments", () => {
 
     // After unmount the DOM listeners must be gone.
     await act(async () => {
-      await reconcileEnvironmentSetupSnapshots();
+      await reconcileEnvironmentSetupSnapshots(appCommandScope());
     });
     unmount();
     mockGetEnvironment.mockClear();

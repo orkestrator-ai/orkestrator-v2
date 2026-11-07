@@ -41,7 +41,18 @@ export interface LeafWorkspace extends WorkspaceConnectionPath {
   /** The grant for a direct connection; a relayed one uses this client's own session. */
   token?: string;
   expiresAt: number;
+  /**
+   * The command node's relay base for this node, whichever path is in use:
+   * element loads (media, previews) cannot carry the grant, so they go here.
+   */
+  relayBaseUrl?: string;
 }
+
+/** The command node's commands; production uses `portalInvoke`. */
+export type CommandNodeInvoke = <T = unknown>(
+  command: string,
+  args?: Record<string, unknown>,
+) => Promise<T>;
 
 const DIRECT_PROBE_TIMEOUT_MS = 3_000;
 /** Renew well before the 15-minute grant lapses. */
@@ -73,10 +84,16 @@ async function reachable(origin: string, token: string, nodeId: string): Promise
  */
 export async function openLeafWorkspace(
   nodeId: BackendId,
-  options: { commandNodeName: string; probe?: typeof reachable } = { commandNodeName: "" },
+  options: {
+    commandNodeName: string;
+    probe?: typeof reachable;
+    invoke?: CommandNodeInvoke;
+  } = { commandNodeName: "" },
 ): Promise<LeafWorkspace> {
-  const opened = await portalInvoke<OpenedNodeWorkspace>("open_node_workspace", { nodeId });
+  const invoke = options.invoke ?? portalInvoke;
+  const opened = await invoke<OpenedNodeWorkspace>("open_node_workspace", { nodeId });
   const probe = options.probe ?? reachable;
+  const relayBaseUrl = `${window.location.origin}${opened.relayBase}`;
   for (const origin of opened.directOrigins) {
     if (await probe(origin, opened.grant.token, opened.nodeId)) {
       return {
@@ -86,6 +103,7 @@ export async function openLeafWorkspace(
         baseUrl: origin,
         token: opened.grant.token,
         expiresAt: opened.grant.expiresAt,
+        relayBaseUrl,
         path: "direct",
         routeKind: "https",
       };
@@ -95,19 +113,34 @@ export async function openLeafWorkspace(
     workspaceId: opened.workspaceId,
     nodeId,
     nodeName: opened.nodeName,
-    baseUrl: `${window.location.origin}${opened.relayBase}`,
+    baseUrl: relayBaseUrl,
     expiresAt: opened.grant.expiresAt,
+    relayBaseUrl,
     path: "relay",
     ...(opened.commandRouteKind ? { routeKind: opened.commandRouteKind } : {}),
     ...(options.commandNodeName ? { via: options.commandNodeName } : {}),
   };
 }
 
+export interface KeepWorkspaceAliveOptions {
+  invoke?: CommandNodeInvoke;
+  /** How often the renewal is checked; defaults to 5 s. */
+  tickMs?: number;
+  /** How long a renewal holds before the next; defaults to `WORKSPACE_RENEW_INTERVAL_MS`. */
+  renewIntervalMs?: number;
+  /** Where `online` and `focus` are heard; defaults to `window`. */
+  events?: Pick<Window, "addEventListener" | "removeEventListener">;
+}
+
 /** Renew on a bounded tick, retry failed recovery, and reconcile after sleep/reconnect. */
 export function keepWorkspaceAlive(
   workspaceId: string,
   onLapsed?: () => Promise<void> | void,
+  options: KeepWorkspaceAliveOptions = {},
 ): () => void {
+  const invoke = options.invoke ?? portalInvoke;
+  const renewIntervalMs = options.renewIntervalMs ?? WORKSPACE_RENEW_INTERVAL_MS;
+  const events = options.events ?? window;
   let stopped = false;
   let running = false;
   let recovered = false;
@@ -115,11 +148,11 @@ export function keepWorkspaceAlive(
   let renewedAt = Date.now();
   const tick = async (force = false) => {
     if (stopped || running || recovered) return;
-    if (!force && !failed && Date.now() - renewedAt < WORKSPACE_RENEW_INTERVAL_MS) return;
+    if (!force && !failed && Date.now() - renewedAt < renewIntervalMs) return;
     running = true;
     try {
       if (failed) throw new Error("Workspace needs recovery");
-      await portalInvoke("renew_node_workspace", { workspaceId });
+      await invoke("renew_node_workspace", { workspaceId });
       renewedAt = Date.now();
     } catch {
       failed = true;
@@ -140,18 +173,21 @@ export function keepWorkspaceAlive(
   };
   const timer = setInterval(() => {
     void tick();
-  }, 5_000);
-  window.addEventListener("online", reconcile);
-  window.addEventListener("focus", reconcile);
+  }, options.tickMs ?? 5_000);
+  events.addEventListener("online", reconcile);
+  events.addEventListener("focus", reconcile);
   return () => {
     stopped = true;
     clearInterval(timer);
-    window.removeEventListener("online", reconcile);
-    window.removeEventListener("focus", reconcile);
+    events.removeEventListener("online", reconcile);
+    events.removeEventListener("focus", reconcile);
   };
 }
 
 /** Closing revokes the grant; nothing on the node stops. */
-export async function closeLeafWorkspace(workspaceId: string): Promise<void> {
-  await portalInvoke("close_node_workspace", { workspaceId }).catch(() => undefined);
+export async function closeLeafWorkspace(
+  workspaceId: string,
+  invoke: CommandNodeInvoke = portalInvoke,
+): Promise<void> {
+  await invoke("close_node_workspace", { workspaceId }).catch(() => undefined);
 }

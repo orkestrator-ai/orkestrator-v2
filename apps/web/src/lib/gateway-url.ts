@@ -40,7 +40,21 @@ export function resolveGatewayApiUrl(pathname: string): string {
 
 export function resolveGatewayLoopbackBaseUrl(baseUrl: string): string {
   if (typeof window === "undefined" || !window.orkestratorGateway?.enabled) return baseUrl;
+  return resolveNodeLoopbackBaseUrl(getGatewayBaseUrl(), baseUrl);
+}
 
+/**
+ * The URL of a gateway path on one node, from that node's base: a node
+ * origin, or a relay base (`<command origin>/__orkestrator/nodes/<id>`). The
+ * command node's own paths use `resolveGatewayApiUrl`.
+ */
+export function resolveNodeGatewayUrl(nodeBaseUrl: string, pathname: string): string {
+  const normalizedPath = pathname.startsWith("/") ? pathname : `/${pathname}`;
+  return `${nodeBaseUrl.replace(/\/+$/, "")}${normalizedPath}`;
+}
+
+/** `resolveGatewayLoopbackBaseUrl` for one node: a loopback URL through that node's proxy. */
+export function resolveNodeLoopbackBaseUrl(nodeBaseUrl: string, baseUrl: string): string {
   try {
     const url = new URL(baseUrl);
     if (!isLoopbackHost(url.hostname)) return baseUrl;
@@ -49,7 +63,10 @@ export function resolveGatewayLoopbackBaseUrl(baseUrl: string): string {
     if (!port) return baseUrl;
 
     const basePath = url.pathname === "/" ? "" : url.pathname.replace(/\/$/, "");
-    return `${getGatewayBaseUrl()}/__orkestrator/proxy/loopback/${port}${basePath}${url.search}${url.hash}`;
+    return resolveNodeGatewayUrl(
+      nodeBaseUrl,
+      `/__orkestrator/proxy/loopback/${port}${basePath}${url.search}${url.hash}`,
+    );
   } catch {
     return baseUrl;
   }
@@ -152,13 +169,20 @@ export function isBackendOnAnotherDevice(node?: DeviceCheckNode): boolean {
 /** Resolve a loopback page through the gateway's browser-preview namespace. */
 export function resolveGatewayBrowserPreviewUrl(baseUrl: string): string {
   if (typeof window === "undefined" || !window.orkestratorGateway?.enabled) return baseUrl;
+  return resolveNodeBrowserPreviewUrl(getGatewayBaseUrl(), baseUrl);
+}
 
+/** `resolveGatewayBrowserPreviewUrl` for one node: a loopback page through that node's preview namespace. */
+export function resolveNodeBrowserPreviewUrl(nodeBaseUrl: string, baseUrl: string): string {
   try {
     const url = new URL(baseUrl);
     if (!isLoopbackHost(url.hostname) || url.protocol !== "http:") return baseUrl;
     const port = url.port || "80";
     const targetPath = `${url.pathname}${url.search}${url.hash}`;
-    return `${getGatewayBaseUrl()}/__orkestrator/browser/loopback/${port}${targetPath}`;
+    return resolveNodeGatewayUrl(
+      nodeBaseUrl,
+      `/__orkestrator/browser/loopback/${port}${targetPath}`,
+    );
   } catch {
     return baseUrl;
   }

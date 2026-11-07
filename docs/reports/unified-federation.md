@@ -3,10 +3,11 @@
 Analysis and implementation plan, 2026-11-06, against `main` at `f7d345f65`.
 Status: **being implemented** in one combined branch from 2026-11-07; progress is
 tracked in [`plans/unified/`](../../plans/unified/0000-index.md), which has
-the status of each item. As of 2026-11-07: Phase 1 is done; Phases 0, 2, 3
-and 7 are done apart from live checks and a few open boxes (7013 waits for its
-date); Phase 4 has started (4001); in Phase 5 only 5006 is done; Phase 6 has
-not started. Every
+the status of each item. As of 2026-11-07, every phase is built: realms are
+deleted (6002, 6003) and every other machine renders in the window's own tree.
+What remains open is listed on the board: iPad measurements (no iPad was
+reachable), 7013's date-gated retirements, and the items added during the work
+(3018, 5007). Every
 count below was taken from this tree with `grep`/`wc` or by loading the
 command registry under Bun; anything inferred rather than read is marked
 *(inferred)*, and everything that needs a live run is collected in
@@ -1504,10 +1505,10 @@ Exit: shim baseline is zero for every store the workspace subtree touches;
 
 ### Phase 4 — in-tree workspace behind a per-node flag (M)
 
-*Status (2026-11-07):* the seam ([4001](../../plans/unified/4001-in-tree-workspace-seam.md)) is
-in progress; its live check of a flagged leaf is open. 4002–4007 have not
-started; [4007](../../plans/unified/4007-workspace-calls-its-node.md) was added on
-2026-11-07.
+*Status (2026-11-07):* built (4001–4005, [4007](../../plans/unified/4007-workspace-calls-its-node.md),
+added on 2026-11-07). [4006](../../plans/unified/4006-multi-node-qualification.md)'s
+multi-node e2e passes on desktop and browser with six leaves; its iPad memory
+measurement is not done (no iPad reachable), so 4006 stays open.
 
 1. The seam: `RemoteWorkspaceRegion` already chooses a renderer per node
    (`kind === "desktop" ? <NativeRealm> : <FrameRealm>`). Add `<InTreeWorkspace
@@ -1531,8 +1532,12 @@ measured memory with six nodes warm is within budget on the iPad.
 
 ### Phase 5 — cross-node services (M)
 
-*Status (2026-11-07):* fleet currency ([5006](../../plans/unified/5006-fleet-currency.md),
-§11.6) is done; 5001–5005 have not started.
+*Status (2026-11-07):* built (5001–5006). The multiplexed relay
+([5005](../../plans/unified/5005-multiplexed-relay-stream.md)) was built because
+0004 measured connection pressure; with three relayed leaves it took stalled
+requests from 12 to 0. The summary overlay of §9's Sidebar row was not assigned
+to an item, so [5007](../../plans/unified/5007-summary-overlay.md) was added on
+2026-11-07.
 
 1. Attention, sounds and desktop notifications per scope plus the relayed
    prefix for summary-tier nodes; notification clicks open the node.
@@ -1543,9 +1548,13 @@ measured memory with six nodes warm is within budget on the iPad.
 
 ### Phase 6 — retire realms (M)
 
-*Status (2026-11-07):* not started. The user approved deleting realm code
-without waiting one release after 6001 (6002, 6003): approved by the user on
-2026-11-07, in one combined PR.
+*Status (2026-11-07):* built. In-tree became the default (6001) and the realm
+code was deleted on the web (6002, net −8,047 lines) and the desktop (6003,
+including startup removal of `persist:orkestrator-realm-*` partitions). The
+user approved deleting realm code without waiting one release after 6001, and
+waived the one-release partition wait: approved by the user on 2026-11-07, in
+one combined PR. [6004](../../plans/unified/6004-documentation.md) updated the
+living docs; archiving this report waits for 7013.
 
 1. Default `inTreeNodes` to all; keep realms one release as a rollback setting
    (a rollback switch, not version skew, per `version-compatibility.md`).

@@ -1,3 +1,4 @@
+import { registrarFrom } from "../commands-registry-contracts.js";
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 
 import { createHash } from "node:crypto";
@@ -522,7 +523,7 @@ describe("a command node's deliverNow on this leaf", () => {
     const recipient = await world.addEnvironment("worker", worker);
     const { instance } = coordination(world, [{ id: "bk_cmd", name: "Office desktop" }]);
     const commands = new Map<string, CommandHandler>();
-    registerNodeCommands((name, handler) => commands.set(name, handler));
+    registerNodeCommands(registrarFrom((name, handler) => commands.set(name, handler)));
     const context = {
       storage: world.storage,
       nodeCoordination: instance,

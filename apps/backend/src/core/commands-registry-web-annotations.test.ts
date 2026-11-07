@@ -1,3 +1,4 @@
+import { registrarFrom } from "./commands-registry-contracts.js";
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   WEB_ANNOTATION_COMMANDS,
@@ -26,7 +27,7 @@ afterEach(async () => {
 
 function registry() {
   const commands = new Map<string, CommandHandler>();
-  registerWebAnnotationCommands((name, handler) => commands.set(name, handler));
+  registerWebAnnotationCommands(registrarFrom((name, handler) => commands.set(name, handler)));
   return commands;
 }
 

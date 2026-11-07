@@ -1,3 +1,4 @@
+import { registrarFrom } from "./commands-registry-contracts.js";
 import { registerAgentMailCommands } from "./commands-registry-mail.js";
 import type { CommandContext, CommandHandler } from "./commands-context.js";
 import { describe, expect, test } from "bun:test";
@@ -178,9 +179,11 @@ describe("AgentRegistry", () => {
         tmux: () => "waiting",
       });
       const commands = new Map<string, CommandHandler>();
-      registerAgentMailCommands((name, handler) => {
-        commands.set(name, handler);
-      });
+      registerAgentMailCommands(
+        registrarFrom((name, handler) => {
+          commands.set(name, handler);
+        }),
+      );
       const context = { agentRegistry: registry } as CommandContext;
       const command = commands.get("get_agent_registry")!;
       // Two snapshots taken in turn can straddle a millisecond, so their clock

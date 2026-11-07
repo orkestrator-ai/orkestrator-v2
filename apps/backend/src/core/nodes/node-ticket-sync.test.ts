@@ -1,3 +1,4 @@
+import { registrarFrom } from "../commands-registry-contracts.js";
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -47,7 +48,7 @@ async function fleet(options: { capability?: boolean } = {}) {
   const commandProject = await command.addProject(createProject(REPO));
   const leafProject = await leaf.addProject(createProject(REPO));
   const handlers = new Map<string, CommandHandler>();
-  registerTicketSyncCommands((name, handler) => handlers.set(name, handler));
+  registerTicketSyncCommands(registrarFrom((name, handler) => handlers.set(name, handler)));
   const leafContext = {
     storage: leaf,
     nodes: { listControllers: () => [{ controllerId: COMMAND_ID, displayName: "Command" }] },

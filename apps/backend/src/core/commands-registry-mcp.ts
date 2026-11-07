@@ -19,6 +19,7 @@ import {
 
 import type { CommandContext } from "./commands-context.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
+import { wrapRegistrar } from "./commands-registry-contracts.js";
 import { getLocalServerStatus } from "./commands-servers.js";
 import { runCommandBuffer } from "./shell.js";
 import {
@@ -568,15 +569,25 @@ function parseProviders(value: unknown, field: string): AgentPlatform[] | undefi
   return AGENT_PLATFORMS.filter((provider) => value.includes(provider));
 }
 
+/** Runs every handler under an MCP correlation id, forwarding both registration forms. */
+export function mcpCorrelatedRegistrar(register: CommandRegistrar): CommandRegistrar {
+  return wrapRegistrar(
+    register,
+    (name, handler) => (args, context, invocation) =>
+      withMcpCorrelation(name, async () => await handler(args, context, invocation)),
+  );
+}
+
 /**
  * MCP configuration management. Administrative UI commands only: they are not
  * exposed as Control MCP tools, and none of them accepts a filesystem path.
  */
 export function registerMcpManagementCommands(register: CommandRegistrar): void {
+  const correlated = mcpCorrelatedRegistrar(register);
   const route = (
     name: string,
     run: (args: Record<string, unknown>, context: CommandContext) => Promise<unknown>,
-  ) => register(name, (args, context) => withMcpCorrelation(name, () => run(args, context)));
+  ) => correlated(name, run);
   route("list_mcp_management_targets", (args, context) => mcpManagement(context).listTargets(args));
   route("get_mcp_management_snapshot", (args, context) => mcpManagement(context).snapshot(args));
   route("get_mcp_definition", (args, context) => mcpManagement(context).getDefinition(args));

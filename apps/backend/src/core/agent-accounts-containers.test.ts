@@ -1,3 +1,4 @@
+import { registrarFrom } from "./commands-registry-contracts.js";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -1503,7 +1504,7 @@ describe("container start credential hand-off", () => {
     await write(runningFile, String(options.running ?? false));
     const commands = new Map<string, CommandHandler>();
     registerDockerCommands(
-      (name, handler) => commands.set(name, handler),
+      registrarFrom((name, handler) => commands.set(name, handler)),
       {} as RegistryDependencies,
     );
     // Exercise the real registry, lifecycle queue, restaging and Docker command

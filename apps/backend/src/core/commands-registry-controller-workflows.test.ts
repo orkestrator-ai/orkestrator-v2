@@ -1,3 +1,4 @@
+import { registrarFrom } from "./commands-registry-contracts.js";
 import { describe, expect, test } from "bun:test";
 import { COORDINATOR_DELEGATION_PRESENTATION } from "@orkestrator/protocol/review-evidence-frames";
 
@@ -14,9 +15,12 @@ function harness(options: { environment?: Record<string, unknown> } = {}) {
     return { id: "env-new", projectId: "p-leaf", status: "stopped" };
   });
   const registered = new Map<string, CommandHandler>();
-  registerControllerWorkflowCommands((name, handler) => registered.set(name, handler), {
-    commands,
-  });
+  registerControllerWorkflowCommands(
+    registrarFrom((name, handler) => registered.set(name, handler)),
+    {
+      commands,
+    },
+  );
   const context = {
     storage: {
       getProject: async (id: string) => (id === "p-leaf" ? { id, localPath: "/x" } : null),

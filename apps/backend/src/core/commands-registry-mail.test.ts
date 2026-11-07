@@ -1,3 +1,4 @@
+import { registrarFrom } from "./commands-registry-contracts.js";
 import { describe, expect, mock, test } from "bun:test";
 import {
   AGENT_MAIL_MAX_LIST_LIMIT,
@@ -14,7 +15,7 @@ function fixture(enabled = true) {
     markAgentMailConversationSeen: mock(async (_a: string, _b: string, _ids: string[]) => 2),
   };
   const handlers = new Map<string, CommandHandler>();
-  registerAgentMailCommands((name, handler) => handlers.set(name, handler));
+  registerAgentMailCommands(registrarFrom((name, handler) => handlers.set(name, handler)));
   const call = (name: string, args: Record<string, unknown> = {}) =>
     handlers.get(name)!(args, { storage } as unknown as CommandContext);
   return { call, storage };
@@ -86,7 +87,7 @@ describe("retry_agent_mail_inject", () => {
     };
     const drainAgentMail = mock(async () => undefined);
     const handlers = new Map<string, CommandHandler>();
-    registerAgentMailCommands((name, handler) => handlers.set(name, handler));
+    registerAgentMailCommands(registrarFrom((name, handler) => handlers.set(name, handler)));
     const call = (args: Record<string, unknown>) =>
       handlers.get("retry_agent_mail_inject")!(args, {
         storage,
@@ -123,7 +124,7 @@ describe("update_agent_messaging_settings", () => {
     });
     const storage = { loadConfig: async () => config, patchGlobalConfig };
     const handlers = new Map<string, CommandHandler>();
-    registerAgentMailCommands((name, handler) => handlers.set(name, handler));
+    registerAgentMailCommands(registrarFrom((name, handler) => handlers.set(name, handler)));
 
     const answer = await handlers.get("update_agent_messaging_settings")!(
       { settings: { wakePeers: true } },

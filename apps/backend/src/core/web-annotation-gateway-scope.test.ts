@@ -15,6 +15,7 @@
  * capture, asset, draft, request) is confined to that environment, so naming
  * a different environment can never reach another environment's records.
  */
+import { registrarFrom } from "./commands-registry-contracts.js";
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -53,7 +54,7 @@ const TOKEN = "gateway-scope-token-1234567890";
 async function start() {
   harness = await createHarness();
   const commands = new Map<string, CommandHandler>();
-  registerWebAnnotationCommands((name, handler) => commands.set(name, handler));
+  registerWebAnnotationCommands(registrarFrom((name, handler) => commands.set(name, handler)));
   const environments = new Set([ENV_A, ENV_B]);
   const context = {
     storage: {

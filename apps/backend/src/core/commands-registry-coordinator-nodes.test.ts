@@ -3,6 +3,7 @@
  * store: receipts, associations and delegations are kept here with the
  * node's ID, and the work is routed to the node (simulated).
  */
+import { registrarFrom } from "./commands-registry-contracts.js";
 import { afterEach, describe, expect, test } from "bun:test";
 
 import { MailWorld } from "./agent-mail-world-test-support.js";
@@ -127,7 +128,7 @@ async function setup(
     },
   } as unknown as CommandContext;
   const commands = new Map<string, CommandHandler>();
-  registerCoordinatorNodeCommands((name, handler) => commands.set(name, handler));
+  registerCoordinatorNodeCommands(registrarFrom((name, handler) => commands.set(name, handler)));
   const scope = {
     projectId: world.projectId,
     coordinatorId: world.coordinatorId,
@@ -575,9 +576,12 @@ describe("workflows on a node", () => {
   for (const taskId of ["missing", "other-project"]) {
     test(`a ${taskId} ticket refusal releases the reservation for a corrected retry`, async () => {
       const leafCommands = new Map<string, CommandHandler>();
-      registerControllerWorkflowCommands((name, handler) => leafCommands.set(name, handler), {
-        commands: new Map(),
-      });
+      registerControllerWorkflowCommands(
+        registrarFrom((name, handler) => leafCommands.set(name, handler)),
+        {
+          commands: new Map(),
+        },
+      );
       let starts = 0;
       const leafContext = {
         storage: {
@@ -954,7 +958,7 @@ describe("deliverNow through a linked command and leaf handler", () => {
         emit: () => {},
       });
       const commands = new Map<string, CommandHandler>();
-      registerNodeCommands((name, handler) => commands.set(name, handler));
+      registerNodeCommands(registrarFrom((name, handler) => commands.set(name, handler)));
       const leafContext = {
         storage: leaf.storage,
         nodeCoordination,

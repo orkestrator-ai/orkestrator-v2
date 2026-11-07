@@ -3,6 +3,7 @@
  * refuses another environment's container, and answers with the first bytes
  * a message showed after the file is overwritten.
  */
+import { registrarFrom } from "./commands-registry-contracts.js";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -18,7 +19,7 @@ const readerCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
 let containerBytes = "container round 1";
 
 registerTranscriptMediaCommands(
-  (name, handler) => commands.set(name, handler),
+  registrarFrom((name, handler) => commands.set(name, handler)),
   (name) => commands.get(name),
 );
 commands.set("read_file_base64", async (args) => {

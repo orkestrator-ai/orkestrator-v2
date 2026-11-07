@@ -1,3 +1,4 @@
+import { registrarFrom } from "./commands-registry-contracts.js";
 import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -9,7 +10,10 @@ import { withTemporaryStorage } from "./storage-test-support.js";
 import { StorageService } from "./storage.js";
 
 const commands = new Map<string, CommandHandler>();
-registerKanbanCommands((name, handler) => commands.set(name, handler), {} as RegistryDependencies);
+registerKanbanCommands(
+  registrarFrom((name, handler) => commands.set(name, handler)),
+  {} as RegistryDependencies,
+);
 const check = {
   status: "passed",
   evidence: "Checked",

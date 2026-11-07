@@ -1,3 +1,4 @@
+import { registrarFrom } from "./commands-registry-contracts.js";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -98,7 +99,7 @@ describe("list_nodes over Control MCP", () => {
       await sampler.sample();
     }
     const commands = new Map<string, CommandHandler>();
-    registerSystemCommands((name, handler) => commands.set(name, handler));
+    registerSystemCommands(registrarFrom((name, handler) => commands.set(name, handler)));
     const context = { machineLoad: sampler } as unknown as CommandContext;
     server = new ControlMcpServer(
       dataDir,

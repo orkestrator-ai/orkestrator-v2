@@ -153,6 +153,7 @@ import {
   tmuxLocalClaudeConfigDirectory,
   type BackendEmit,
   type CommandContext,
+  type CommandInvocation,
 } from "./commands.js";
 import { reapOrphanedClaudeTmuxRuntimes, reapOrphanedLocalServers } from "./local-server-reaper.js";
 import {
@@ -3030,11 +3031,19 @@ export class OrkestratorBackend {
     return this.controlMcp.getSettings();
   }
 
-  async invoke<T>(command: string, args: Record<string, unknown> = {}): Promise<T> {
+  /**
+   * Runs a registered command. `invocation` is the invoke envelope's contract
+   * fields (plan item 1003) when a transport received them.
+   */
+  async invoke<T>(
+    command: string,
+    args: Record<string, unknown> = {},
+    invocation?: CommandInvocation,
+  ): Promise<T> {
     if (this.shuttingDown) throw new Error("Backend is shutting down");
     const handler = this.commands.get(command);
     if (!handler) throw new Error(`Unknown backend command: ${command}`);
-    return (await handler(args, this.context)) as T;
+    return (await handler(args, this.context, invocation)) as T;
   }
 
   private startLogPolicy(): void {

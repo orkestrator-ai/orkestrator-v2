@@ -1,3 +1,4 @@
+import { registrarFrom } from "./commands-registry-contracts.js";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import type { LogFields } from "@orkestrator/protocol/logger";
 import { describe, expect, mock, test } from "bun:test";
@@ -136,7 +137,7 @@ describe("container host reachability commands", () => {
   function dockerCommands(): Map<string, CommandHandler> {
     const commands = new Map<string, CommandHandler>();
     registerDockerCommands(
-      (name, handler) => commands.set(name, handler),
+      registrarFrom((name, handler) => commands.set(name, handler)),
       {} as RegistryDependencies,
     );
     return commands;

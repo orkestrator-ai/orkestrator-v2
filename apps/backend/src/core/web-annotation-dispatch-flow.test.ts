@@ -4,6 +4,7 @@
  * by in-memory activity. Crash points are simulated by driving the storage
  * the drain would use and replacing the annotation service instance.
  */
+import { registrarFrom } from "./commands-registry-contracts.js";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
@@ -488,9 +489,12 @@ describe("web annotation request flow (real queue and adapter)", () => {
 
   test("the chat's queue commands route annotation items through their request", async () => {
     const commands = new Map<string, CommandHandler>();
-    registerPromptCommands((name, handler) => commands.set(name, handler), {
-      conditionalManifestSnapshot: async () => undefined,
-    } as never);
+    registerPromptCommands(
+      registrarFrom((name, handler) => commands.set(name, handler)),
+      {
+        conditionalManifestSnapshot: async () => undefined,
+      } as never,
+    );
     const context = { storage, webAnnotations: service } as unknown as CommandContext;
     const call = (name: string, args: Record<string, unknown>) =>
       commands.get(name)!(args, context) as Promise<any>;

@@ -50,6 +50,10 @@ import type {
 import { compatibilityPathUsage } from "./core/compatibility-path-usage.js";
 import { isSpliceableResult, spliceEncodedJson } from "./core/native-agent-projection-encoding.js";
 import { backendMetricsSnapshot } from "./core/backend-metrics.js";
+import type { CommandInvocation } from "./core/commands-context.js";
+import { decodeInvokeEnvelope } from "@orkestrator/protocol/contract/envelope";
+import { isIncompatibilityError, toWire } from "@orkestrator/protocol/contract/errors";
+import * as Result from "effect/Result";
 
 const KEEPALIVE_EVENT_FRAME = `event: ${GATEWAY_KEEPALIVE_EVENT}\ndata: 1\n\n`;
 
@@ -107,6 +111,14 @@ export class GatewayHandlers {
       jsonResponse(response, 400, { error: "Expected command to be a string" });
       return;
     }
+    // The envelope's contract fields travel next to `command` and `args`
+    // (plan item 1003). A body without them is today's call, unchanged.
+    const envelope = invocationFromBody(body);
+    if (envelope.refused !== undefined) {
+      jsonResponse(response, 400, { error: envelope.refused });
+      return;
+    }
+    const invocation = envelope.invocation;
     if (options.refuseCommand?.(command)) {
       // A refused settings write that would change nothing is answered with
       // the current settings: an older realm sends one when it saves a model
@@ -148,12 +160,13 @@ export class GatewayHandlers {
     );
 
     try {
-      const result = await this.ctx.backend.invoke(
-        command,
+      const invokeArgs =
         command === "public_action" && options.controllerId
           ? withRelayController(safeArgs, options.controllerId)
-          : safeArgs,
-      );
+          : safeArgs;
+      const result = await (invocation === undefined
+        ? this.ctx.backend.invoke(command, invokeArgs)
+        : this.ctx.backend.invoke(command, invokeArgs, invocation));
       // A transcript answer's rows were each encoded already to size and hash
       // them; splice those encodings in rather than serializing them again.
       const responseBody = isSpliceableResult(result)
@@ -170,10 +183,16 @@ export class GatewayHandlers {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const code = (error as { code?: unknown } | null)?.code;
-      const responseBody = JSON.stringify({
-        error: message,
-        ...(typeof code === "string" && /^[a-z][a-z0-9-]{0,63}$/.test(code) ? { code } : {}),
-      });
+      // A typed incompatibility also names its bounded details (the domain
+      // and range, or the critical field), never an argument value.
+      const responseBody = JSON.stringify(
+        isIncompatibilityError(error)
+          ? toWire(error)
+          : {
+              error: message,
+              ...(typeof code === "string" && /^[a-z][a-z0-9-]{0,63}$/.test(code) ? { code } : {}),
+            },
+      );
       // Never retain the rejected, network-supplied value: a syntactically
       // valid token-like string is just as sensitive as an obviously malformed
       // label. Gate on registry membership rather than on the error text, so a
@@ -509,4 +528,28 @@ function legacyPreviewRefusal(access: Exclude<LegacyLoopbackPortAccess, "allowed
     case "unknown":
       return `Port ${port} is not an available preview service of this environment. Add it as a service to preview it.`;
   }
+}
+
+const ENVELOPE_FIELDS = ["domain", "version", "critical"] as const;
+
+/**
+ * The invoke envelope's contract fields from a body, decoded with the
+ * protocol's bounded guard. A body that carries none of them yields no
+ * invocation; a malformed one is refused with a value-free message.
+ */
+export function invocationFromBody(body: Record<string, unknown>): {
+  readonly invocation?: CommandInvocation;
+  readonly refused?: string;
+} {
+  if (!ENVELOPE_FIELDS.some((key) => Object.hasOwn(body, key))) return {};
+  const decoded = decodeInvokeEnvelope(body);
+  if (Result.isFailure(decoded)) return { refused: decoded.failure.message };
+  const { domain, version, critical } = decoded.success;
+  return {
+    invocation: {
+      ...(domain === undefined ? {} : { domain }),
+      ...(version === undefined ? {} : { version }),
+      ...(critical === undefined ? {} : { critical }),
+    },
+  };
 }

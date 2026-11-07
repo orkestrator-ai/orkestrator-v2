@@ -1,3 +1,4 @@
+import { registrarFrom } from "./commands-registry-contracts.js";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -56,12 +57,17 @@ const commands = new Map<
   (args: Record<string, unknown>, context: CommandContext) => unknown
 >();
 
-registerAgentAccountCommands((name, handler) => {
-  commands.set(name, handler as never);
-}, {} as RegistryDependencies);
-registerNodeCommands((name, handler) => {
-  commands.set(name, handler as never);
-});
+registerAgentAccountCommands(
+  registrarFrom((name, handler) => {
+    commands.set(name, handler as never);
+  }),
+  {} as RegistryDependencies,
+);
+registerNodeCommands(
+  registrarFrom((name, handler) => {
+    commands.set(name, handler as never);
+  }),
+);
 
 function account(
   id: string,

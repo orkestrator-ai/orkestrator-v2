@@ -1,3 +1,4 @@
+import type { CommandInvocation } from "./core/commands-context.js";
 import type { DatabaseStats } from "@orkestrator/protocol/backend-diagnostics";
 import { mkdir, open, readFile, rename, rm, writeFile } from "node:fs/promises";
 import {
@@ -32,7 +33,15 @@ import {
 } from "@orkestrator/protocol/gateway-token";
 
 export type BackendInvoker = {
-  invoke(command: string, args: Record<string, unknown>): Promise<unknown> | unknown;
+  /**
+   * Runs a command. `invocation` carries the invoke envelope's `domain`,
+   * `version` and `critical` (plan item 1003), only when the body had them.
+   */
+  invoke(
+    command: string,
+    args: Record<string, unknown>,
+    invocation?: CommandInvocation,
+  ): Promise<unknown> | unknown;
   /**
    * Whether `command` is in the registry. Metric labels are gated on this so a
    * rejected, network-supplied name can never be retained — testing the error

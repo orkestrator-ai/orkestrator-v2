@@ -1,3 +1,4 @@
+import { registrarFrom } from "./commands-registry-contracts.js";
 import { describe, expect, mock, test } from "bun:test";
 import { createCommandRegistry } from "./commands.js";
 import type { CommandContext } from "./commands-context.js";
@@ -136,10 +137,13 @@ describe("projectless bug report catalogue", () => {
       },
     } as unknown as CommandContext;
     const commands = new Map();
-    registerProjectCommands((name, handler) => commands.set(name, handler), {
-      commands,
-      refreshHostModelCatalog: refresh,
-    } as never);
+    registerProjectCommands(
+      registrarFrom((name, handler) => commands.set(name, handler)),
+      {
+        commands,
+        refreshHostModelCatalog: refresh,
+      } as never,
+    );
     const result = await commands.get("get_native_agent_model_catalog")(
       { environmentId: "bug-report:r1", ensureAgent: "opencode" },
       context,

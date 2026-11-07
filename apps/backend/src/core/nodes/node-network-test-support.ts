@@ -1,3 +1,4 @@
+import { registrarFrom } from "../commands-registry-contracts.js";
 import { withRelayController } from "../public-api/relay-context.js";
 import type { BackendProfile } from "@orkestrator/protocol/backend-profile";
 import { BACKEND_HELLO_PATH, CLIENT_API_VERSION } from "@orkestrator/protocol/backend-profile";
@@ -151,7 +152,7 @@ export class TestNodeNetwork {
   private readonly commands = new Map<string, CommandHandler>();
 
   constructor() {
-    registerNodeCommands((name, handler) => this.commands.set(name, handler));
+    registerNodeCommands(registrarFrom((name, handler) => this.commands.set(name, handler)));
   }
 
   readonly fetch = (async (input: string | URL | Request, init?: RequestInit) => {

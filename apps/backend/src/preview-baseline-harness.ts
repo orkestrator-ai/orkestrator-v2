@@ -1,3 +1,4 @@
+import { registrarFrom } from "./core/commands-registry-contracts.js";
 import { configureLogger } from "@orkestrator/protocol/logger";
 /**
  * Test-only isolated backend for the preview latency baseline self-test
@@ -102,7 +103,7 @@ export async function startPreviewBaselineHarness(): Promise<PreviewBaselineHarn
     await manager.start();
 
     const handlers = new Map<string, CommandHandler>();
-    registerPreviewCommands((name, handler) => handlers.set(name, handler));
+    registerPreviewCommands(registrarFrom((name, handler) => handlers.set(name, handler)));
     const context = { previews: preview.runtime } as unknown as CommandContext;
     gateway = new OrkestratorGateway({
       backend: {

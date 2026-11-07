@@ -4,6 +4,7 @@
  * per-criterion results, the status and PR moves and the delivery policy's
  * "too late" comment all reach the ticket.
  */
+import { registrarFrom } from "./commands-registry-contracts.js";
 import { describe, expect, test } from "bun:test";
 import type { BuildPipeline } from "@orkestrator/protocol/build-pipeline";
 import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
@@ -77,9 +78,12 @@ async function startAsCoordinator(
 ): Promise<BuildPipeline> {
   await storage.updateEnvironment("env-1", { createdFromCommit: HEAD });
   const registered = new Map<string, CommandHandler>();
-  registerControllerWorkflowCommands((name, handler) => registered.set(name, handler), {
-    commands: new Map(),
-  } as never);
+  registerControllerWorkflowCommands(
+    registrarFrom((name, handler) => registered.set(name, handler)),
+    {
+      commands: new Map(),
+    } as never,
+  );
   const context = {
     storage: {
       getProject: async (id: string) => (id === "project-1" ? { id } : null),

@@ -1,3 +1,4 @@
+import { registrarFrom } from "./commands-registry-contracts.js";
 import { afterEach, expect, test } from "bun:test";
 import path from "node:path";
 import { MailWorld } from "./agent-mail-world-test-support.js";
@@ -94,7 +95,7 @@ async function setup() {
     runtime: { coordinatorRequests: world.coordinatorRequests },
   } as unknown as CommandContext;
   const commands = new Map<string, CommandHandler>();
-  registerCoordinatorNodeCommands((name, handler) => commands.set(name, handler));
+  registerCoordinatorNodeCommands(registrarFrom((name, handler) => commands.set(name, handler)));
   const localLookups: string[] = [];
   const invoke: ControlMcpInvoker = async <T>(
     command: string,

@@ -34,8 +34,9 @@ import {
   validateWebAnnotationCaptureInput,
 } from "@orkestrator/protocol/web-annotations-validation";
 import { maxBase64Chars } from "./web-annotation-assets.js";
-import type { CommandContext } from "./commands-context.js";
+import type { CommandContext, CommandHandler } from "./commands-context.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
+import { wrapRegistrar } from "./commands-registry-contracts.js";
 import { WebAnnotationMetrics } from "./web-annotation-metrics.js";
 import {
   webAnnotationAccessAllowed,
@@ -389,27 +390,30 @@ const FALLBACK_METRICS = new WebAnnotationMetrics();
  * Wrap a registrar so every web annotation command passes the rollout switch
  * and records a content-free outcome (command name + typed error code).
  */
-function gatedRegistrar(register: CommandRegistrar): CommandRegistrar {
-  return (name, handler) =>
-    register(name, async (args, context) => {
-      const startedAt = Date.now();
-      const service = context.webAnnotations;
-      const metrics =
-        service?.metrics instanceof WebAnnotationMetrics ? service.metrics : FALLBACK_METRICS;
-      try {
-        const reported: unknown = service?.rolloutMode;
-        const mode = isWebAnnotationRolloutMode(reported) ? reported : "enabled";
-        if (!webAnnotationAccessAllowed(mode, webAnnotationCommandAccess(name))) {
-          throw rolloutError(mode);
+export function gatedRegistrar(register: CommandRegistrar): CommandRegistrar {
+  return wrapRegistrar(
+    register,
+    (name, handler): CommandHandler =>
+      async (args, context, invocation) => {
+        const startedAt = Date.now();
+        const service = context.webAnnotations;
+        const metrics =
+          service?.metrics instanceof WebAnnotationMetrics ? service.metrics : FALLBACK_METRICS;
+        try {
+          const reported: unknown = service?.rolloutMode;
+          const mode = isWebAnnotationRolloutMode(reported) ? reported : "enabled";
+          if (!webAnnotationAccessAllowed(mode, webAnnotationCommandAccess(name))) {
+            throw rolloutError(mode);
+          }
+          const result = await handler(args, context, invocation);
+          metrics.recordCommand(name, "ok", Math.max(0, Date.now() - startedAt));
+          return result;
+        } catch (error) {
+          metrics.recordCommand(name, errorOutcome(error), Math.max(0, Date.now() - startedAt));
+          throw error;
         }
-        const result = await handler(args, context);
-        metrics.recordCommand(name, "ok", Math.max(0, Date.now() - startedAt));
-        return result;
-      } catch (error) {
-        metrics.recordCommand(name, errorOutcome(error), Math.max(0, Date.now() - startedAt));
-        throw error;
-      }
-    });
+      },
+  );
 }
 
 function rolloutSnapshot(context: CommandContext): WebAnnotationRolloutSnapshot {

@@ -1,3 +1,4 @@
+import { registrarFrom } from "./commands-registry-contracts.js";
 import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -23,7 +24,10 @@ import { readStoredValue, seedStore } from "./storage-test-support.js";
  */
 
 const commands = new Map<string, CommandHandler>();
-registerKanbanCommands((name, handler) => commands.set(name, handler), {} as RegistryDependencies);
+registerKanbanCommands(
+  registrarFrom((name, handler) => commands.set(name, handler)),
+  {} as RegistryDependencies,
+);
 
 const CREATED_AT = "2026-01-01T00:00:00.000Z";
 

@@ -1,3 +1,4 @@
+import { registrarFrom } from "./commands-registry-contracts.js";
 import { describe, expect, mock, spyOn, test } from "bun:test";
 import { registerAgentAccountCommands } from "./commands-registry-accounts.js";
 import type { CommandHandler } from "./commands-context.js";
@@ -144,9 +145,12 @@ describe("get_agent_sign_in_status", () => {
 
 function harness() {
   const commands = new Map<string, CommandHandler>();
-  registerAgentAccountCommands((name, handler) => commands.set(name, handler), {
-    commands,
-  } as RegistryDependencies);
+  registerAgentAccountCommands(
+    registrarFrom((name, handler) => commands.set(name, handler)),
+    {
+      commands,
+    } as RegistryDependencies,
+  );
   const context = {
     storage: {
       loadEnvironments: async () => [

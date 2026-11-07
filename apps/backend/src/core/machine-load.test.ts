@@ -1,3 +1,4 @@
+import { registrarFrom } from "./commands-registry-contracts.js";
 import { describe, expect, test } from "bun:test";
 import type { CpuInfo } from "node:os";
 import { parseMachineLoadReport } from "@orkestrator/protocol/machine-load";
@@ -569,7 +570,7 @@ describe("what the machine reports about itself", () => {
 describe("the get_machine_load command", () => {
   function command(): CommandHandler {
     const commands = new Map<string, CommandHandler>();
-    registerSystemCommands((name, handler) => commands.set(name, handler));
+    registerSystemCommands(registrarFrom((name, handler) => commands.set(name, handler)));
     return commands.get("get_machine_load")!;
   }
 

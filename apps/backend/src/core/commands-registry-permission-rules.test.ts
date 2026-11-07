@@ -1,10 +1,11 @@
+import { registrarFrom } from "./commands-registry-contracts.js";
 import { expect, mock, test } from "bun:test";
 import type { CommandContext, CommandHandler } from "./commands-context.js";
 import { registerPermissionRuleCommands } from "./commands-registry-permission-rules.js";
 
 test("remember command validates arguments before resolving a session", async () => {
   const commands = new Map<string, CommandHandler>();
-  registerPermissionRuleCommands((name, handler) => commands.set(name, handler));
+  registerPermissionRuleCommands(registrarFrom((name, handler) => commands.set(name, handler)));
   const approve = mock(async () => ({ outcome: { result: "applied" } }));
   const context = {
     nativeAgents: { approveProjectionInteractionAndRemember: approve },

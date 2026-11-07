@@ -1,3 +1,4 @@
+import { registrarFrom } from "./commands-registry-contracts.js";
 import { expect, mock, test } from "bun:test";
 import {
   emptyPortalLayout,
@@ -8,9 +9,11 @@ import { registerNodeCommands } from "./commands-registry-nodes.js";
 
 function setup() {
   const handlers = new Map<string, CommandHandler>();
-  registerNodeCommands((name, handler) => {
-    handlers.set(name, handler);
-  });
+  registerNodeCommands(
+    registrarFrom((name, handler) => {
+      handlers.set(name, handler);
+    }),
+  );
   const layout = { ...emptyPortalLayout(), revision: 1, machineOrder: ["bk_a"] };
   const updatePortalLayout = mock(async () => layout);
   const getPortalLayout = mock(async () => layout);

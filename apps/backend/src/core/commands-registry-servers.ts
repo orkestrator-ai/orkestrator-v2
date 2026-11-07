@@ -10,7 +10,12 @@ import {
   previousContainerLogFile,
 } from "./container-log-bounds.js";
 import { persistentStateExports } from "./container-state-layout.js";
-import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
+import type {
+  CommandRegistrar,
+  CommandTarget,
+  RegistryDependencies,
+} from "./commands-registry-types.js";
+import { registerTarget } from "./commands-registry-contracts.js";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import {
@@ -131,10 +136,10 @@ async function containerAgentHasLiveWork(
  * resends the logging settings to it: its `ORKESTRATOR_BRIDGE_DEBUG` is only the
  * startup default, and it may have missed a change while it was down.
  */
-function containerBridgeStartRegistrar(register: CommandRegistrar) {
-  return (name: string, agent: LocalServerKind, handler: CommandHandler): void => {
-    register(name, async (args, context) => {
-      const started = (await handler(args, context)) as {
+export function containerBridgeStartRegistrar(register: CommandRegistrar) {
+  return (target: CommandTarget, agent: LocalServerKind, handler: CommandHandler): void => {
+    registerTarget(register, target, async (args, context, invocation) => {
+      const started = (await handler(args, context, invocation)) as {
         hostPort?: number;
         authToken?: string;
       };

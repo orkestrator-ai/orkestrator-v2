@@ -1,3 +1,4 @@
+import { registrarFrom } from "./commands-registry-contracts.js";
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import os, { tmpdir } from "node:os";
@@ -103,7 +104,7 @@ describe("list_host_directory", () => {
 
   test("the registered command validates its arguments", async () => {
     const commands = new Map<string, CommandHandler>();
-    registerHostFileCommands((name, handler) => commands.set(name, handler));
+    registerHostFileCommands(registrarFrom((name, handler) => commands.set(name, handler)));
     const run = commands.get("list_host_directory")!;
 
     const listing = (await run({ path: root, includeFiles: true }, {} as never)) as Awaited<
@@ -195,7 +196,7 @@ describe("list_host_directory", () => {
 
   test("rejects supplied arguments with invalid types instead of changing their intent", async () => {
     const commands = new Map<string, CommandHandler>();
-    registerHostFileCommands((name, handler) => commands.set(name, handler));
+    registerHostFileCommands(registrarFrom((name, handler) => commands.set(name, handler)));
     const run = commands.get("list_host_directory")!;
     for (const [field, value, type] of [
       ["path", 42, "string"],
@@ -328,7 +329,7 @@ describe("create_host_directory", () => {
 
   test("the registered command validates its arguments", async () => {
     const commands = new Map<string, CommandHandler>();
-    registerHostFileCommands((name, handler) => commands.set(name, handler));
+    registerHostFileCommands(registrarFrom((name, handler) => commands.set(name, handler)));
     const run = commands.get("create_host_directory")!;
 
     expect(await run({ parent: root, name: "made" }, {} as never)).toEqual({
@@ -429,7 +430,7 @@ describe("read_host_image_file", () => {
 
   test("the registered commands validate their arguments", async () => {
     const commands = new Map<string, CommandHandler>();
-    registerHostFileCommands((name, handler) => commands.set(name, handler));
+    registerHostFileCommands(registrarFrom((name, handler) => commands.set(name, handler)));
     for (const [name, args, message] of [
       ["read_host_image_file", { path: root, extra: 1 }, "Unexpected arguments field: extra"],
       ["read_host_image_file", { path: 42 }, "Expected path to be a string"],

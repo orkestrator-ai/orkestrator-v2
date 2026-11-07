@@ -1,3 +1,4 @@
+import { registrarFrom } from "./commands-registry-contracts.js";
 import { expect, test } from "bun:test";
 import {
   environmentBaselineCommit,
@@ -124,13 +125,16 @@ test("stored overrides are validated and normalised", () => {
 function commandHarness(environment: Environment) {
   const handlers = new Map<string, CommandHandler>();
   const gitCalls: string[][] = [];
-  registerDiffBaseCommands((name, handler) => handlers.set(name, handler), {
-    gitFor: () => async (args) => {
-      gitCalls.push(args);
-      if (args[0] === "for-each-ref") return "refs/remotes/origin/main\n";
-      return "Tip subject\n";
+  registerDiffBaseCommands(
+    registrarFrom((name, handler) => handlers.set(name, handler)),
+    {
+      gitFor: () => async (args) => {
+        gitCalls.push(args);
+        if (args[0] === "for-each-ref") return "refs/remotes/origin/main\n";
+        return "Tip subject\n";
+      },
     },
-  });
+  );
   let stored: Environment = environment;
   const events: string[] = [];
   const context = {

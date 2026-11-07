@@ -99,8 +99,10 @@ test("overview and preferred identity clients use the command node from a leaf w
   expect(workspace).not.toHaveBeenCalled();
 });
 
-test("overview and preferred identity clients use the local backend without a workspace target", async () => {
+test("overview and preferred identity clients use the local backend on a page with no portal to another command node", async () => {
+  // The window's own command node: no settings parent, so nothing goes through a portal.
   delete window.orkestratorWorkspaceTarget;
+  delete window.orkestratorPortal;
   const overview = { machines: [], preferred: { claude: "work@example.com" } };
   workspace.mockResolvedValueOnce(overview);
   expect(await listMachineAgentAccounts()).toBe(overview);

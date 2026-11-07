@@ -14,9 +14,13 @@ import { listen, type UnlistenFn } from "@/lib/native/events";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { defineScopedService } from "@/lib/node-scope/scoped-service";
 import { appCommandScope, isAppCommandScope, listenInScope } from "@/lib/node-scope-slots";
-import { RESOURCE_CHANGED_EVENT, type ResourceKind } from "@orkestrator/protocol/resource-events";
-import { settingsOnCommandNode } from "@/lib/portal/command-node-config";
-import { portalListen } from "@/lib/portal/portal-transport";
+import type { ResourceKind } from "@orkestrator/protocol/resource-events";
+import { scopeBackendClient } from "@/lib/backend/client";
+import {
+  configTargetsFor,
+  runConfigCommand,
+  settingsParent,
+} from "@/lib/portal/command-node-config";
 import { adoptPersistedPaneLayout, onPaneLayoutWriteSettled } from "@/lib/pane-layout-persistence";
 import {
   commitBuildPipelineSetupHandoff,
@@ -37,7 +41,7 @@ import {
 import { hydratePromptQueuesForEnvironment } from "@/lib/prompt-queue-persistence";
 import { createPromptQueueSources } from "@/lib/prompt-queue-sources";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
-import { useConfigStore } from "@/stores/configStore";
+import { configStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useFeaturePlanStore } from "@/stores/featurePlanStore";
 import { useKanbanStore } from "@/stores/kanbanStore";
@@ -51,6 +55,7 @@ import { useSessionStore } from "@/stores/sessionStore";
 import { refreshObservedAgentMailMailboxes, useAgentMailStore } from "@/stores/agentMailStore";
 import type { ResourceManifestKind } from "@orkestrator/protocol/resource-events";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import type { AppConfig } from "@/types";
 
 const log = createLogger("web.resource-sync");
 
@@ -251,18 +256,41 @@ const environmentHandlers = defineStoreResourceHandlers(
   },
 );
 
-/** The config store, and clearing agent mail when messaging is turned off. */
-const configHandlers = defineStoreResourceHandlers("config", "command-scope", (context) => {
+/**
+ * The scope's config store (plan item 3005), and clearing agent mail when
+ * messaging is turned off.
+ *
+ * Every scope reads its own node's config. Under a parent scope (an in-tree
+ * leaf) the store lays the parent's preferences over it itself, and the
+ * parent's own sync keeps that layer current. Under a parent with no scope
+ * here (a realm document's portal) the read is the effective one, and the
+ * parent's config changes are followed too. Agent mail is still a
+ * command-scope store, so only a command scope clears it.
+ */
+const configHandlers = defineStoreResourceHandlers("config", "every-scope", (context) => {
+  const store = context.scope.store(configStore);
+  const parent = settingsParent(context.scope);
+  const readConfig = (): Promise<AppConfig> => {
+    if (context.options.getConfig) return context.options.getConfig();
+    // The app's command scope keeps the `@/lib/backend` read, which suites mock.
+    if (isAppCommandScope(context.scope)) return getConfig();
+    return runConfigCommand(
+      parent?.scope
+        ? { commandNode: scopeBackendClient(context.scope), node: null }
+        : configTargetsFor(context.scope),
+      "get_config",
+    );
+  };
   let configRequestGeneration = 0;
   const refreshConfig = async (): Promise<void> => {
     const generation = ++configRequestGeneration;
     try {
-      const config = await (context.options.getConfig ?? getConfig)();
+      const config = await readConfig();
       if (!context.disposed() && generation === configRequestGeneration) {
-        useConfigStore.getState().setConfig(config);
+        store.getState().setConfig(config);
         const messagingEnabled = (config as { global?: { agentMessaging?: { enabled?: boolean } } })
           ?.global?.agentMessaging?.enabled;
-        if (messagingEnabled === false) {
+        if (messagingEnabled === false && context.scope.role === "command") {
           useAgentMailStore.getState().clear();
         }
       }
@@ -275,27 +303,27 @@ const configHandlers = defineStoreResourceHandlers("config", "command-scope", (c
   context.onResync("dependents", (pass) => (pass.includes("config") ? refreshConfig() : undefined));
   context.onResourceChanged("config", () => refreshConfig());
 
-  // On a leaf window the settings are the command node's: follow its changes
-  // too. That is the window's own command node, so only its scope does.
-  if (isAppCommandScope(context.scope) && settingsOnCommandNode()) {
-    let stopCommandNodeConfig: UnlistenFn | null = null;
-    void portalListen<{ resource?: unknown }>(RESOURCE_CHANGED_EVENT, (event) => {
-      if (!context.disposed() && event.payload?.resource === "config") {
-        void refreshConfig().catch(() => undefined);
-      }
-    })
+  // A parent with no scope here has no sync of its own in this window:
+  // follow its config changes too.
+  if (parent?.onConfigChanged) {
+    let stopParentConfig: (() => void) | null = null;
+    void parent
+      .onConfigChanged(() => {
+        if (!context.disposed()) void refreshConfig().catch(() => undefined);
+      })
       .then((stop) => {
         if (context.disposed()) stop();
-        else stopCommandNodeConfig = stop;
+        else stopParentConfig = stop;
       })
       .catch(() => undefined);
-    context.onStop(() => stopCommandNodeConfig?.());
+    context.onStop(() => stopParentConfig?.());
   }
 });
 
 const agentMailHandlers = defineStoreResourceHandlers("agent-mail", "command-scope", (context) => {
   const refreshAgentMailSummary = async (): Promise<void> => {
-    const enabled = useConfigStore.getState().config?.global?.agentMessaging?.enabled;
+    const enabled = context.scope.store(configStore).getState().config?.global
+      ?.agentMessaging?.enabled;
     if (enabled === false) {
       useAgentMailStore.getState().clear();
       return;

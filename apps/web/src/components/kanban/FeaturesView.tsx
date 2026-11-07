@@ -42,10 +42,12 @@ import {
   loadComposeDraft,
   persistComposeDraft,
 } from "@/lib/compose-draft-persistence";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { cn } from "@/lib/utils";
 import {
+  configStore,
   useAgentModelCatalogStore,
-  useConfigStore,
   useFeaturePlanStore,
   useKanbanStore,
   useProjectStore,
@@ -124,8 +126,8 @@ function FeatureListItem({
   );
 }
 
-function getPreferredEnvironmentType(projectId: string): EnvironmentType {
-  const config = useConfigStore.getState().config;
+function getPreferredEnvironmentType(scope: NodeScope, projectId: string): EnvironmentType {
+  const config = scope.store(configStore).getState().config;
   const project = useProjectStore.getState().getProjectById(projectId);
   return (
     config.repositories[projectId]?.lastEnvironmentType ??
@@ -205,6 +207,7 @@ function featureBuildIsLocked(feature: FeaturePlan): boolean {
 }
 
 export function FeaturesView({ projectId }: FeaturesViewProps) {
+  const { scope } = useScopesWithCommandFallback();
   const features = useFeaturePlanStore((state) => state.features);
   const isLoading = useFeaturePlanStore((state) => state.isLoading);
   const loadFeatures = useFeaturePlanStore((state) => state.loadFeatures);
@@ -554,7 +557,7 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
         if (!started) {
           await legacyStartFeaturePlanBuild(feature, {
             projectId,
-            environmentType: getPreferredEnvironmentType(projectId),
+            environmentType: getPreferredEnvironmentType(scope, projectId),
             addTask,
             deleteTask,
             claimFeatureBuild,
@@ -596,6 +599,7 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
       hasBlockingConversation,
       loadFeatures,
       projectId,
+      scope,
       startBuild,
       updateFeature,
     ],

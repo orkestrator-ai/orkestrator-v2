@@ -136,13 +136,21 @@ There is no deeper hierarchy.
 Settings belong to the command node the client is connected to, and apply
 to everything it runs, on every machine it controls.
 
-- **In the client.** A leaf window keeps the leaf's per-project repository
+- **In the client.** A leaf's view keeps the leaf's per-project repository
   settings and machine-specific globals. Only inherited preferences are
-  overlaid from the command node over the portal channel
-  (`lib/portal/command-node-config.ts`). Whole-global saves send preference
-  changes to the command node and machine-specific changes to the workspace
-  backend, preserving the other node's values. Each settings section names
-  the owner of its preferences and machine-specific controls.
+  overlaid from the command node (`layerConfig` in
+  `lib/portal/command-node-config.ts`). Every read and save names its two
+  nodes (`ConfigTargets`: the command node, and the machine or `null`), so
+  layering never asks whether the renderer is a realm. A node scope's
+  settings parent (`settingsParent`) supplies them: a leaf scope inherits
+  from its window's command scope, and a realm document's command scope
+  from the page's portal channel. Each scope's `configStore` holds that
+  node's effective config (`effectiveConfig(scope)`), and a leaf's store
+  re-lays the command scope's preferences whenever they change. Whole-global
+  saves and patches send preference changes to the command node and
+  machine-specific changes to the machine, preserving the other node's
+  values (`runConfigCommand`, `runScopedConfigCommand`). Each settings
+  section names the owner of its preferences and machine-specific controls.
 - **Editing each machine.** With machines attached, the Settings header
   lists them (`SettingsMachineStrip`): the command node first, then each
   machine it controls, defaulting to the machine on screen. The choice is

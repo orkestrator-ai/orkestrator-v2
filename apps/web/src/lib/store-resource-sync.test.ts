@@ -3557,7 +3557,8 @@ describe("command-node config events in leaf windows", () => {
     let handler: ((payload: unknown) => unknown) | undefined;
     let ready!: () => void;
     const unlisten = mock(() => undefined);
-    window.orkestratorWorkspaceTarget = { nodeId: "bk_leaf", nodeName: "Leaf", path: "direct" };
+    // A realm document: its command scope's settings parent is the page's portal channel.
+    window.orkestratorPortal = { invoke: mock(), listen: mock() } as never;
     const portalListen = spyOn(portalTransport, "portalListen").mockImplementation(
       (_event, callback) => {
         handler = (payload) => callback({ payload } as never);
@@ -3587,7 +3588,7 @@ describe("command-node config events in leaf windows", () => {
       expect(unlisten).toHaveBeenCalledTimes(1);
     } finally {
       portalListen.mockRestore();
-      delete window.orkestratorWorkspaceTarget;
+      delete window.orkestratorPortal;
     }
   });
 });

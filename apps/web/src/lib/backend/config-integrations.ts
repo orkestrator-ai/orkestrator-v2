@@ -11,7 +11,6 @@ import type { PublicCapability } from "@orkestrator/protocol/public-api-inputs";
 import {
   invokeGlobalConfigCommand,
   invokeRepositoryConfigCommand,
-  settingsOnCommandNode,
 } from "@/lib/portal/command-node-config";
 import { getGatewayBaseUrl, resolveGatewayLoopbackBaseUrl } from "@/lib/gateway-url";
 import type {
@@ -409,10 +408,13 @@ export function createConfigIntegrationsApi(client: BackendClient) {
     return invoke("save_config", { config });
   }
 
+  /**
+   * The client's node's own global settings, without inherited preferences.
+   * The effective view is `getConfig()` (or `runConfigCommand` for explicit
+   * scopes).
+   */
   async function getGlobalConfig(): Promise<GlobalConfig> {
-    return settingsOnCommandNode()
-      ? (await getConfig()).global
-      : invoke<GlobalConfig>("get_global_config");
+    return invoke<GlobalConfig>("get_global_config");
   }
 
   /** Read one platform's plan/quota windows from the backend. */

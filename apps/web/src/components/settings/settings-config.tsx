@@ -3,7 +3,8 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 import type { ReactNode } from "react";
 import { Loader2 } from "lucide-react";
 import * as backend from "@/lib/backend";
-import { useConfigStore } from "@/stores";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
+import { configStore, useConfigStore } from "@/stores";
 import type { AppConfig } from "@/types";
 import { Button } from "@/components/ui/button";
 import { isWindowMachine } from "./account-machine";
@@ -53,6 +54,7 @@ function RemoteMachineConfig({
   const [config, setLocalConfig] = useState<AppConfig | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
+  const { scope } = useScopesWithCommandFallback();
 
   useEffect(() => {
     let cancelled = false;
@@ -71,12 +73,15 @@ function RemoteMachineConfig({
 
   // Re-read inherited preferences through the workspace split so leaf-owned
   // settings and repositories remain in the window store.
-  const setConfig = useCallback((next: AppConfig) => {
-    setLocalConfig(next);
-    backend.getConfig().then(useConfigStore.getState().setConfig, (cause: unknown) => {
-      log.error("config.reload-failed", { error: formatLogError(cause) });
-    });
-  }, []);
+  const setConfig = useCallback(
+    (next: AppConfig) => {
+      setLocalConfig(next);
+      backend.getConfig().then(scope.store(configStore).getState().setConfig, (cause: unknown) => {
+        log.error("config.reload-failed", { error: formatLogError(cause) });
+      });
+    },
+    [scope],
+  );
 
   const value = useMemo(() => (config ? { config, setConfig } : null), [config, setConfig]);
 

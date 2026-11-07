@@ -131,7 +131,10 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  // Back to tests/setup.ts's answer: a reset mock answers `undefined`, which a
+  // later file's `invoke(...).catch` in the same process cannot take.
   nativeInvoke.mockReset();
+  nativeInvoke.mockImplementation(() => Promise.resolve());
   useProjectStore.setState(initialProjects, true);
 });
 

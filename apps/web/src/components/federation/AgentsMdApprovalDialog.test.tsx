@@ -1,15 +1,19 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { invoke } from "@/lib/native/backend";
-import type { NodeActionRequestView } from "@/lib/portal/portal-store";
+import { portalStore, type NodeActionRequestView } from "@/lib/portal/portal-store";
 import { AgentsMdApprovalDialog } from "./AgentsMdApprovalDialog";
 import { FederationProvider } from "./FederationProvider";
 import { NodeActionRequestsDialog } from "./NodeActionRequestsDialog";
 
 const invokeMock = invoke as unknown as ReturnType<typeof mock>;
+// Restored after each test: the providers rendered here load the portal store,
+// and later files in the same process read it.
+const INITIAL_PORTAL = portalStore.getState();
 
 afterEach(() => {
   cleanup();
+  portalStore.store.setState(INITIAL_PORTAL, true);
   invokeMock.mockReset();
   invokeMock.mockImplementation(() => Promise.resolve());
 });

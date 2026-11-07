@@ -6,12 +6,17 @@ import { invoke } from "@/lib/native/backend";
 import { mock } from "bun:test";
 
 const original = window.orkestrator;
+// Restored after each test: later files in the same process read the portal
+// store and the shared `invoke` mock (tests/setup.ts answers `undefined`).
+const INITIAL_PORTAL = portalStore.getState();
 afterEach(() => {
   cleanup();
   window.orkestrator = original;
   delete window.orkestratorWorkspaceTarget;
   sessionStorage.clear();
+  portalStore.store.setState(INITIAL_PORTAL, true);
   (invoke as ReturnType<typeof mock>).mockReset();
+  (invoke as ReturnType<typeof mock>).mockImplementation(() => Promise.resolve());
 });
 
 function BoundMachine() {

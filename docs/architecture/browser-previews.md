@@ -253,8 +253,9 @@ connection, as before. Backends serve both.
   journal admits at most 1,024 entries until startup removes them, and the
   forgotten-key journal refuses admission at 1,024 keys without evicting
   earlier cleanup intent.
-- A workspace realm's previews are keyed to its node (`node:<nodeId>`), not
-  to a connection. Each time a realm opens, Electron records in
+- A node scope's previews (`node-previews.ts`) are keyed to its node
+  (`node:<nodeId>`), not to a connection. Each time a window opens a node's
+  preview runtime, Electron records in
   `preview-partitions-pending.json.nodes` which command connection it reached
   the node through. The same window schedule that reconciles services also
   fetches that command node's `list_nodes`; once every command connection

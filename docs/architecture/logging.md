@@ -1374,11 +1374,6 @@ flowchart LR
   is made of, and `application-logging.test.ts` covers the file: the tee is installed
   only for the production flavor, which no test may run against real data.
 
-One more exception carries timings rather than text: a desktop workspace realm sends
-its boot steps to the main process as a fixed-shape message, and the main process
-writes them as `[workspaces] realm.boot-step` with the realm's node. See
-[Realm boot](federation.md#realm-boot).
-
 Recommendation R8 in the review (`git show 413bd6219:docs/reports/2026-10-29-logging-and-database-efficiency.md`)
 asked whether more may be saved. The answer is the content-free error ring:
 [Renderer failures in the essential log](#renderer-failures-in-the-essential-log). The

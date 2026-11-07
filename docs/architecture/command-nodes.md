@@ -141,10 +141,9 @@ to everything it runs, on every machine it controls.
   overlaid from the command node (`layerConfig` in
   `lib/portal/command-node-config.ts`). Every read and save names its two
   nodes (`ConfigTargets`: the command node, and the machine or `null`), so
-  layering never asks whether the renderer is a realm. A node scope's
-  settings parent (`settingsParent`) supplies them: a leaf scope inherits
-  from its window's command scope, and a realm document's command scope
-  from the page's portal channel. Each scope's `configStore` holds that
+  layering never asks which renderer it runs in. A node scope's settings
+  parent (`settingsParent`) supplies them: a leaf scope inherits from its
+  window's command scope. Each scope's `configStore` holds that
   node's effective config (`effectiveConfig(scope)`), and a leaf's store
   re-lays the command scope's preferences whenever they change. Whole-global
   saves and patches send preference changes to the command node and
@@ -475,15 +474,15 @@ A command node attached to another command node operates in leaf mode:
     that stream from its cursor, so nothing is lost and nothing re-reads. A gap
     the ring cannot cover reaches each watched node as a `resync` frame.
   - *The desktop's relay does the same for its windows.* A renderer that takes
-    events through main (a realm's portal, or a window with
-    `localWindowGatewayTransport` off) keeps its listeners in the preload, which
+    events through main (a window with `localWindowGatewayTransport` off)
+    keeps its listeners in the preload, which
     tells main the per-node names it starts and stops listening to
     (`orkestrator:relayed-events:*`) and resets them when a new document loads.
     Main asks for none on its main stream and runs one filtered stream per
     connection (`BackendHttpClient.setRelayedEvents`) for the union of what the
-    renderers bound to that connection listen to, on the channel each listens
-    on (`DesktopWindowContexts.syncRelayedEvents`), and forwards a frame only to
-    those renderers. A window or realm closing drops its listens, and a window
+    windows bound to that connection listen to
+    (`DesktopWindowContexts.syncRelayedEvents`), and forwards a frame only to
+    those windows. A window closing drops its listens, and a window
     moving to another connection takes them along. A window on the direct gateway
     transport adds nothing: it has its own stream.
   - *Older peers.* A stream that does not ask for per-node names, which is what
@@ -514,33 +513,24 @@ command node.
 
 That workspace renders in the window's own tree, in the node's own scope
 (plan item 6001; [node scopes](../development/node-scopes.md#a-nodes-workspace-in-the-windows-tree)),
-on desktop, browser and iOS. The web client's realms are deleted (plan item
-6002); the desktop's realm views and IPC follow in plan item 6003, and the
-realm description below is retired with them.
+on desktop, browser and iOS. The separate workspace documents of earlier
+releases (realms: a child view per node on the desktop, a same-origin frame in
+a browser or the iOS app) are deleted (plan items 6002 and 6003), and with them
+the window-to-realm messages and the portal channel.
 
-- **Workspace realms.** The central region of another node is a *realm*: a
-  separate renderer of this client bound to that node's workspace and to
-  nothing else (`lib/federation/workspace-realm.ts`). On the desktop it is a
-  child view of the window with its own connection scope
-  (`apps/desktop/electron/workspace-views.ts`); in a browser or the iOS app it
-  is a same-origin frame of the page the command node served. Its stores,
-  events and credentials therefore reach only that node, by construction.
-  The realm shows no title bar or sidebar of its own.
-- **Two channels per realm.** The realm's *workspace* transport
-  (`window.orkestrator`) is bound to its node. Its *portal* channel
-  (`window.orkestratorPortal`; the portal APIs now call the command scope,
-  `lib/portal/command-scope.ts`, plan item 5004) stayed on the window's command node, for what a workspace needs from it
-  (the command node's inherited settings, coordinator links). A lint
-  boundary keeps multi-machine views off the workspace transport.
-- **Opening** asks the command node for a workspace grant. The desktop binds
-  the realm's scope in its main process (direct first, then the command
-  node's own route); a browser or iOS window keeps the grant in its tab's
-  session storage under the workspace's ID, which is all the frame's URL
-  carries, and the frame boots its gateway against the node (direct first,
-  then the relay). The window renews the grant while the realm is open and
-  revokes it when the realm closes. Removing a grant, by any route or because
-  it expired, closes the leaf's terminal sockets and event streams it authorized
-  and refuses their queued terminal operations
+- **A node scope.** The node's stores, events and credentials live in its own
+  scope of the window (`NodeScope`), so they reach only that node by
+  construction. On the desktop main opens the window's scope on the node
+  (`apps/desktop/electron/node-scopes.ts`, `node-ipc.ts`) and the renderer
+  reaches it through `window.orkestrator.node(nodeId)`; in a browser or the
+  iOS app the page's node client talks to the node's gateway. A lint
+  boundary keeps multi-machine views off a node's workspace transport.
+- **Opening** asks the command node for a workspace grant, direct first, then
+  over the command node's own route. The desktop holds it in main for the
+  window's node scope; a browser or iOS page holds it in its node client. It is
+  renewed while the scope is open and revoked when it is released. Removing a
+  grant, by any route or because it expired, closes the leaf's terminal sockets
+  and event streams it authorized and refuses their queued terminal operations
   ([terminal transport](remote-gateway.md#compression-and-terminal-transport)).
 - **Relayed event streams share one request.** Over plain HTTP/1.1 a browser
   holds at most six connections to the command node's origin, the window's
@@ -560,47 +550,32 @@ realm description below is retired with them.
   leaf frames up to 8 MiB; a response holding more than 16 MiB is closed and
   every node resumes from its own cursor. An older command node answers 404,
   and the browser keeps one stream per leaf.
-- **Switching** never reloads the window. Another environment of a node whose
-  realm is open is a message to that realm and an instant selection there.
-  The window keeps a few realms open, hidden (`MAX_OPEN_REALMS`), so going
-  back to a node is instant too. Selecting one of the command node's own
-  environments returns the central region to the window's own workspace,
-  whose selection was cleared while another node's was shown.
-- **What crosses between a window and its realm** is a handful of bounded
-  messages: what to show (a project, an environment, or one of the node's
-  dialogs: Add Project, New Environment, Repository Settings, Delete Project
-  or an environment's Settings), the realm's own selection (for the sidebar's
-  highlight), the sidebar's open state (the realm's toolbar toggles it),
-  whether the files panel is open (one state for the window and all its
-  realms, shared in both directions; the phone layout, where the panel is a
-  full-screen sheet of the window's own node, does not share it), requests to
-  open settings (they belong to the command node), and a ready handshake so
-  nothing asked while a realm loads is lost.
-- **Creating on another node** opens that node's New Environment dialog in
-  its realm, so the node's defaults — the command node's inherited settings
+- **Switching** never reloads the window. Another environment of a node
+  already held is a selection on that node's scope. The window keeps a few
+  node scopes warm (plan item 4002), so going back to a node is instant too.
+  Selecting one of the command node's own environments returns the central
+  region to the window's own workspace, whose selection was cleared while
+  another node's was shown.
+- **Creating on another node** opens that node's New Environment dialog on
+  its scope, so the node's defaults — the command node's inherited settings
   laid over its own — and start apply as they would there.
 - **Project and environment menus** of another node offer what the node's
   own sidebar does. Dialogs (Repository Settings, Delete Project, an
-  environment's Settings) open in the node's realm, so they read and write the
+  environment's Settings) open on the node's scope, so they read and write the
   node's own state and a project is deleted with its environments as there;
   Fork and Restart are routed commands; Open Repo on GitHub uses the
   project's repository hint; folders are arranged through the owner's
   sidebar layout.
 - **The title bar** shows the shown environment's name, host meters and agent
-  information trigger. For another node, the realm reports the readings and
-  renders the popovers under those triggers. The latest panel request waits
-  for readiness; Escape, outside presses and leaving the realm also cancel
-  pending opens. Sequence acknowledgments prevent late reports from reviving
-  dismissed panels. Opening transfers focus into the realm; a user dismissal
-  returns it to the corresponding title-bar trigger. Workspace switches and
-  panel replacements do not request return focus.
-- **Native views** a realm opens (browser previews, live artifacts) are
-  children of the window placed in the realm's coordinates, and shown only
-  while the realm is (`realmChildViewClass`). The window hides a realm while
-  one of its own dialogs or menus is open, as it does for previews.
+  information trigger; for another node the meters are that node's
+  (`useMachineSystemUsage(nodeId)`) and the popovers are ordinary ones with
+  the node's data.
+- **Native views** a node's workspace opens on the desktop (browser previews)
+  are the node scope's own preview runtime in main, placed in window
+  coordinates (`apps/desktop/electron/node-previews.ts`, plan item 2009).
 - **The sidebar is symmetric.** The command node is listed from the window's
   full stores with the ordinary rows; every other node is listed from the
-  portal's summaries. Both are drawn with the same row layout, so a row lines
+  command node's summaries. Both are drawn with the same row layout, so a row lines
   up the same whichever node owns it, and the row whose workspace the central
   region shows is the selected one, whichever node owns it.
 - **The sidebar order is the command node's.** The command node keeps the
@@ -625,23 +600,22 @@ realm description below is retired with them.
   node: a drag there is written to the owner (`arrange_projects`,
   `reorder_environments`), and moving a project into a folder of the merged
   list is recorded on the command node only.
-- **Presentation.** Per-node state (layouts) is namespaced by node identity;
-  window-level state (sidebar, zoom, and what is collapsed in the
+- **Presentation.** Per-node state (layouts, drafts) is namespaced by node
+  identity; window-level state (sidebar, zoom, and what is collapsed in the
   multi-machine sidebar, by machine-qualified key) stays with the window's own
-  machine. A realm's presentation state (layouts, drafts) is namespaced by its
-  node.
+  machine.
 - **One intentional difference.** A workspace grant cannot perform a
   node's administrative commands (gateway token, web-client access, control
   MCP token, node registry); those stay in the command node's
   Settings → Nodes.
-- **A realm can be this computer.** When the command node is another machine
-  and this computer is one of its leaves, a realm of this computer's own
-  environments still reaches its backend through a gateway. The desktop's main
-  process compares the realm's node with its local backend's installation ID
-  and says so in `orkestratorGateway.backendOnThisDevice`. What launches a
-  window on the backend's host (Open in VS Code or Cursor) follows
-  `isBackendOnAnotherDevice()`; what depends on the route itself (loopback
-  proxying, preview handoffs) keeps following `isRemoteGatewayConnection()`.
+- **A node can be this computer.** When the command node is another machine
+  and this computer is one of its leaves, this computer's own environments
+  are still reached through a gateway. The renderer compares the node with
+  this computer's installation ID (`localInstallationId`, from the desktop's
+  main process) in `backendOnThisDevice(node)`. What launches a window on the
+  backend's host (Open in VS Code or Cursor) follows
+  `isBackendOnAnotherDevice(node)`; what depends on the route itself (loopback
+  proxying, preview handoffs) keeps following `isRemoteGatewayConnection(node)`.
 
 ## Agent chat and the coordinator
 
@@ -994,7 +968,8 @@ command node:
   They are authorised by scoped grants from the command node instead of
   credentials the client holds, and fall back to a relay through the command
   node when the leaf is unreachable. (For a while the whole window moved to
-  the leaf and reloaded; that was replaced by realms.)
+  the leaf and reloaded; that was replaced by realms, separate documents per
+  node, and those by node scopes in the window's own tree, plan items 6001-6003.)
 - **Removed:** renderer-side multi-backend runtimes and registry, the
   client-owned machine catalogue (clients keep only their list of targets),
   and clients holding other nodes' gateway tokens.

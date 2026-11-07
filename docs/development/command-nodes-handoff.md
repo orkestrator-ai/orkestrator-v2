@@ -73,9 +73,10 @@ matrix with evidence for every row are in
     environment shows that node's workspace realm in the central region
     (`lib/federation/workspace-realm.ts`, `stores/remoteWorkspaceStore.ts`,
     `components/federation/RemoteWorkspaceRegion.tsx`), without reloading.
-    The desktop binds a realm's child view to the node in main
-    (`workspace-views.ts`, `setDesktopWorkspaceTarget`: direct first, then
-    the command node's own route); a browser or iOS window keeps each
+    The desktop bound a realm's child view to the node in main
+    (`workspace-views.ts`, `setDesktopWorkspaceTarget`; both deleted in plan
+    item 6003, replaced by the window's node scopes): direct first, then
+    the command node's own route; a browser or iOS window kept each
     realm's grant in session storage under its workspace ID
     (`workspaceTargetGatewayOptions` in the frame): direct first, then the
     relay.

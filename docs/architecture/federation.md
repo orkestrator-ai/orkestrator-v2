@@ -77,8 +77,9 @@ command nodes span all connected nodes.
 | Desktop | `electron/connection-manager.ts` (+ `connection-*.ts`, `backend-hello.ts`) | Catalogue, bindings, observations, routes, handover |
 | Desktop | `electron/connection-catalogue-store.ts` | Native catalogue file, backup, v1 snapshot |
 | Desktop | `electron/ssh/*` | OpenSSH tunnel supervisor |
-| Desktop | `electron/federation-ipc.ts`, `ssh-prompt-broker.ts` | IPC, portal channel, askpass prompts |
-| Desktop | `electron/workspace-views.ts`, `node-workspaces.ts`, `realm-contexts.ts` | Workspace realm views, their node workspace grants and per-realm resources |
+| Desktop | `electron/federation-ipc.ts`, `ssh-prompt-broker.ts` | IPC, per-node relayed listens, askpass prompts |
+| Desktop | `electron/node-scopes.ts`, `node-ipc.ts`, `node-previews.ts`, `node-workspaces.ts` | A window's node scopes: their workspace grants, node-addressed IPC and per-node previews |
+| Desktop | `electron/realm-partition-cleanup.ts` | Startup removal of the retired realms' `persist:orkestrator-realm-*` partitions (plan item 6003) |
 | Renderer | `apps/web/src/lib/portal/*` | Portal channel to the command node: summaries, `invoke_on_node`, outcomes, node workspaces |
 | Renderer | `apps/web/src/lib/federation/*` | Aggregation, sidebar layout, relayed node events, realm URL and messages, explicit-owner actions |
 | Renderer | `apps/web/src/components/federation/*` | Provider, machine views, filter, dots, rows, sections, realms, effects |
@@ -248,11 +249,12 @@ backend. It stays readable and writable while Local is stopped or crashed.
   command node. Its renderer, title, previews and request authorization all
   use that machine (`use`, `release`). The `default` scope follows
   `activeConnectionId`.
-- A workspace realm is its own scope, `realm:<viewId>`, pointed at another
-  node's workspace with the client grant the command node issued
-  (`retargetScopeToWorkspace`, connection ID `workspace:<workspaceId>`) and
-  back (`restoreScopeFrom`). The grant is held for that scope only and never
-  saved.
+- A window's node scope is its own scope, `<windowScope>:node:<nodeId>`
+  (`node-scopes.ts`), pointed at another node's workspace with the client
+  grant the command node issued (`retargetScopeToWorkspace`, connection ID
+  `workspace:<workspaceId>`). The grant is held for that scope only, never
+  saved, and revoked when the scope is released. The window's own scope never
+  moves off its command node.
 - There are no observation leases: other machines are seen through the
   command node, not through extra connections. `invokeOn(connectionId, …)`
   runs a command only on Local or a machine this device is connected to;
@@ -341,12 +343,12 @@ the epoch.
 
 A connection's events go to (`relayBackendEvent`, `desktop-window-contexts.ts`):
 
-- every window and realm whose scope is bound to that connection and listens
-  to the event, over `orkestrator:event`. A window on the direct gateway
-  transport to Local already has Local's events from its own stream, so they
-  are not relayed twice;
-- the portal channel of every realm whose portal scope is on that
-  connection (its window's command node), over `orkestrator:portal-event`.
+- every window whose scope is bound to that connection and listens to the
+  event, over `orkestrator:event`. A window on the direct gateway transport to
+  Local already has Local's events from its own stream, so they are not
+  relayed twice;
+- every window node scope on that connection, over `orkestrator:node-event`,
+  tagged with the node (`mapNodeConnection`).
 
 Which connection an event belongs to comes from the receiving connection,
 never from the payload. Per-node relayed events are listened to explicitly
@@ -498,21 +500,17 @@ the desktop main process all use.
   `InTreeWorkspace` keeps its views mounted only while it is warm, live or
   shown. The command node's selection survives a reload of the window
   (session storage).
-- **Desktop.** `WorkspaceViews` (`apps/desktop/electron/workspace-views.ts`)
-  opens a child `WebContentsView` per realm: the standard preload,
-  `contextIsolation`, no node integration, `sandbox`, a deny-all
-  window-open handler, navigation guards, the
-  [renderer permission policy](renderer-security.md#permissions) and its own
-  request-auth hook. Each realm binds its own connection scope
-  `realm:<viewId>` to the node through the command node (`bindScope`, which
-  opens the node's workspace grant with `open_node_workspace`), plus a portal
-  scope on the command node. Its storage partition is per window slot and
-  node, `persist:orkestrator-realm-<slot>-<hash(nodeId)>`
-  (`rendererPartitionForRealm`). Main allows at most 4 views per window
-  (`DEFAULT_MAX_VIEWS`, one more than the renderer keeps, for a realm being
-  replaced). A realm has its own native browser previews and artifact hosts
-  (`registerRealm`, `RealmContexts`). The window sends bounds, visibility and
-  messages; closing a realm, or its window, releases only its scopes.
+- **Desktop.** The node's workspace renders in the window's own renderer, on
+  the window's node scope in main (`node-scopes.ts`; opened with
+  `open_node_workspace` through the command node). The separate
+  `WebContentsView` per node, its portal channel and its storage partition
+  `persist:orkestrator-realm-<slot>-<hash(nodeId)>` are gone (plan item 6003,
+  [Decision 13.7](../reports/unified-federation.md#137-desktop-realm-partition-data)
+  A: their presentation state is abandoned). On startup, before any window
+  exists, main deletes every directory under its own `userData` `Partitions/`
+  whose whole name is `orkestrator-realm-<slot>-<16 hex>` (Electron's on-disk
+  name for that partition), and nothing else; it logs only counts
+  (`realm-partitions.removed`, `realm-partitions.remove-failed`).
 - **Browser and iOS.** `FrameRealm`
   (`components/federation/RemoteWorkspaceRegion.tsx`) renders a same-origin
   `<iframe>` of the app with the realm URL plus `workspace=<workspaceId>`. The
@@ -541,10 +539,9 @@ ready handshake, title-bar popovers and focus handoff). See
 [Planned: unified federation](#planned-unified-federation) for what is meant
 to replace them.
 
-### Realm boot
+### Workspace boot
 
-A window keeps a few realms open; reopening an evicted one boots it again from
-scratch. Three things keep that boot short and measurable (2026-11-06; cold
+A node's workspace that was disposed boots again from scratch when it is shown. Three things keep that boot short and measurable (2026-11-06; cold
 opens of omarchy-hp from mbp3 were slow, warm opens fast):
 
 - **Render does not wait on the catalogue seed.** `startApp`
@@ -579,38 +576,15 @@ opens of omarchy-hp from mbp3 were slow, warm opens fast):
   (`boot-hydration.test.ts`). The manifest resync's own per-environment reads
   (`store-resource-sync.ts`) are bounded but not batched.
 
-**Boot timing in the saved log.** Each realm boot writes content-free
-`[workspaces]` lines to the desktop's log (the Electron main process's, see
-[logging.md](logging.md)), each with `nodeId`, `nodeName` and `durationMs`:
+**Open timing in the saved log.** Opening a node's workspace writes
+content-free `[workspaces]` lines to the desktop's log (the Electron main
+process's, see [logging.md](logging.md)), each with `nodeId`, `nodeName` and
+`durationMs`:
 
 | Event | Written by | Step |
 | --- | --- | --- |
 | `workspace.opened` | main process (`node-workspaces.ts`) | The `open_node_workspace` call, which issues the node's client grant; `directRoutes` counts the routes to probe. |
 | `workspace.route-probed` | main process | One direct (or loopback) route probe: `route`, `attempt`, and an `outcome` from a fixed list (`hello`, `other-node`, `legacy`, `unreachable`, `timeout`, `authentication-required`, …). Never the origin. |
-| `realm.boot-step` | the realm, relayed | `step` is `catalogue-read`, `first-render`, `first-environments`, `fan-out-complete` (with `requests`, the hydration reads the document sent) or `catalogue-seed`, each with an `outcome` where it has one. `sinceStartMs` is from the realm document's start, `sinceOpenMs` from the window asking for the realm. |
-
-`fan-out-complete` waits for initial environment attempts, hydration requests
-and projection installation to settle. Its outcome includes rejected prompt
-queue, Multi Review, pipeline and snapshot restores, even when a batch RPC
-succeeds but one requested list fails. An older backend's unknown batch command
-is handled by per-environment fallback; successful fallback restores do not
-count as hydration failures. Tracking retains only counts and a failure flag.
-
-`first-render.durationMs` starts at the `startApp` entry point; `sinceStartMs`
-continues to measure time since document navigation. Fan-out completion waits
-for all initial environment attempts, including rejected reads, independently
-of the sidebar's successful-load readiness, and reports a failed outcome if any
-initial attempt failed. A resolved catalogue seed RPC reports duration only:
-the backend absorbs provider download failures, so RPC success cannot establish
-that seeding succeeded. A rejected seed RPC reports `failed`.
-
-Renderer logger lines do not reach the saved log, so the realm sends each step
-once as a `bootTiming` message over its window channel
-(`apps/web/src/lib/realm-boot-timing.ts`). The main process re-parses it
-against the fixed shape (`@orkestrator/protocol/realm-boot-timing`), adds the
-node from its own binding for that realm, writes it and does not forward it to
-the window. A browser or iOS frame has no such channel; there the steps are
-debug lines in the console only.
 
 ## Sidebar presentation
 
@@ -754,16 +728,13 @@ their panels (`sidebarMotionPins`). A hidden sidebar has no resize handle, so
 showing mounts it and hiding removes it on release; the main column's hold
 includes the handle's width for those changes, or the column would be laid out
 once more when the handle comes or goes. So a terminal or editor is laid out at most
-twice instead of on every frame, and its PTY is resized at most twice. A desktop
-realm's view follows the panel's edge every frame, and only its position changes:
-its width changes once, so everything inside it is laid out once. A frame after
+twice instead of on every frame, and its PTY is resized at most twice. A frame after
 the release one `resize` fires, because a native preview follows its host only on
 a resize. A native preview therefore stays put during the transition and moves
 when it ends. Waiting that frame makes a terminal's fit from this event and from
 its own `ResizeObserver` a single fit.
 `e2e/agent-testing/sidebar-width-consumers.spec.ts` measures a real terminal and
-Monaco editor, and `workspace-realm-electron.spec.ts` a real realm's bounds and
-window size, through these changes.
+Monaco editor through these changes.
 The handle is disabled in compact. The full width is kept in
 `uiChromeStore.sidebarWidth` (the window's chrome, shared by every node) while compact or hidden, so it returns on leaving, across
 reloads too.
@@ -960,8 +931,9 @@ reconnect.
   destination, `shell: false` and no remote command.
 - The bearer is injected only for the exact current origin of the scope's
   bound machine, and only under `/__orkestrator/`
-  (`getRendererRequestAuthorization`). Each workspace realm has its own hook
-  and scope.
+  (`getRendererRequestAuthorization`). A window's one hook covers its command
+  scope and every node scope it holds, longest matching gateway prefix first
+  (`window-request-authorization.ts`).
   Two tunnels on the same loopback host differ by port and never share a
   credential.
 - Backend-sourced strings (names, summaries, diagnostics) are bounded and
@@ -1014,10 +986,6 @@ Plan items that are not implemented, or only partly, as of this change.
   comes from separate realms, not from node-scoped store factories. Two
   nodes' workspaces are never in one React tree. See
   [Planned: unified federation](#planned-unified-federation).
-- **Desktop realms** are bound to one node for their life. While one of the
-  window's own overlays covers the central region, the native view is
-  replaced by a still of it (`capturePage`), because a native view always
-  draws over the page.
 - **Browser and iOS realms** are same-origin frames. A direct session needs
   the node to answer the page's probe (its gateway must accept the page's
   origin, `--allowed-origins`); otherwise the realm is relayed through the

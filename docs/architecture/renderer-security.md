@@ -38,7 +38,7 @@ What to keep in mind when changing it:
   app, so `connect-src` opens the `http:` and `ws:` schemes. `https:` already lets
   a script that does run send data anywhere, so this adds no new channel.
 - **Packaged file requests are confined to the real renderer web root.**
-  `installRendererFilePolicy` runs on renderer and realm sessions before load,
+  `installRendererFilePolicy` runs on renderer sessions before load,
   resolves symlinks and refuses paths outside that root. CSP file-origin
   `self` alone is not a directory boundary.
 - **Only `index.html` and the two frame documents get a policy.** Worker
@@ -71,8 +71,8 @@ unavailable (`staticHtmlPresentationSupported`) and shows saved previews.
 
 ## OS sandbox
 
-Every window and view with a preload runs `sandbox: true`: the main window,
-workspace realm views and the two toolchain bootstrap windows.
+Every window and view with a preload runs `sandbox: true`: the main window
+and the two toolchain bootstrap windows.
 
 Sandboxed Chromium evaluates a preload as a CommonJS function body. Since
 Electron 45 its `require` loads only `electron`, and `Buffer`, `setImmediate` and
@@ -85,7 +85,7 @@ in a browser context.
 ## Permissions
 
 `installRendererPermissionPolicy` replaces Electron's default handlers, which
-grant everything, on renderer and realm sessions. It runs before the document
+grant everything, on renderer sessions. It runs before the document
 loads. Only the renderer's own main frame gets anything, and only:
 
 - `clipboard-sanitized-write`, for `navigator.clipboard.writeText`
@@ -118,6 +118,6 @@ have their own, stricter handlers.
   if its definition declares `access: "workspace"`; everything else is refused
   server-side, failing closed (plan item 7012,
   [command-nodes.md](command-nodes.md#security)). This bounds injected script in
-  a leaf's realm or node scope to that leaf's workspace: never its settings,
+  a leaf's node scope to that leaf's workspace: never its settings,
   credentials, host updates, node registry or link plumbing. The window's own
   backend still answers its renderer's full command set.

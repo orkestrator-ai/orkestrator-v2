@@ -36,7 +36,6 @@ browser opens its own tab before the page sees the key.
 | View › Keyboard Shortcuts… and Settings… menu items | `apps/desktop/electron/application-menu.ts` |
 | Native input wiring and remembered menu focus | `apps/desktop/electron/keyboard-shortcuts-routing.ts` |
 | Native ownership, focus restoration, `requestAppShortcut` | `apps/desktop/electron/keyboard-shortcuts-menu.ts` |
-| Realm → window focus handoff | `apps/desktop/electron/workspace-views.ts` (`post`) |
 
 To add an app-level shortcut, add it to `APP_SHORTCUTS`, add its handler with
 `onAppShortcut(id, …)` in the component that owns its UI, and add its catalog
@@ -293,14 +292,12 @@ is the fallback on macOS.
   realm frame; real search above fullscreen settings and the shortcuts dialog,
   including pointer input, typing, the portalled filter menu, and Escape at
   desktop and phone widths.
-- Electron scenario (`workspace-realm-electron.spec.ts`): ⌘K in a realm's
-  composer opens the window's search.
 - Additional unit coverage checks Close Tab and shortcut ownership with live or cleared
   WebContents focus, per-window remembered focus, dismissal sender gating, preview
   hook delegation, repeat consumption, reopen/restoration races and expiry.
   Additional checks cover dismissal, disposal, hidden views, startup
   forwarding, keyDown/rawKeyDown and immediate second presses. Electron scenarios
-  cover realm preview ownership, search focus and restored typing after keyboard
+  cover a window's preview ownership, search focus and restored typing after keyboard
   and outside-pointer dismissal, accelerator toggles on already-open dialogs, artifact
   subframes, and design subframes. Windows/Linux coverage includes the menu
   layout and accelerators on `linux` and `win32`, Ctrl and AltGr Electron input,

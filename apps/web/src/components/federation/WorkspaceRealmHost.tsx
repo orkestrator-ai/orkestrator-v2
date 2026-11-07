@@ -131,9 +131,10 @@ export function WorkspaceRealmHost() {
         }
         // A frame or view the window hides still reads as visible here, so the
         // window says so and this realm's reads defer as a hidden window's do.
-        // In the window's own tree the document's visibility is the window's,
-        // which a hidden node must not change; its scope's tier does (4002).
-        if (message.type === "visibility" && channel.kind === "page") {
+        // In the window's own tree (where it is not sent, plan item 4005) the
+        // document's visibility is the window's, which a hidden node must not
+        // change; its scope's tier does (4002).
+        if (message.type === "visibility" && !inTree) {
           getReadCoordinator().setHostHidden(message.hidden);
         }
       }),

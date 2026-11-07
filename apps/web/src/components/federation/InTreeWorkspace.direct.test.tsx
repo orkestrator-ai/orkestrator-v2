@@ -22,6 +22,7 @@ import { closeInTreeScopes, configureInTreeScopes } from "@/lib/federation/in-tr
 import { observeRealmLoopbacks, type RealmLoopbackTraffic } from "@/lib/federation/realm-channel";
 import { getWindowScope, resetWindowScopeForTests } from "@/lib/node-scope/app-window-scope";
 import { WindowScopeProvider } from "@/lib/node-scope/providers";
+import { getReadCoordinator, resetReadCoordinatorForTests } from "@/lib/read-coordinator";
 import { useFilesPanelChromeStore } from "@/stores/filesPanelChromeStore";
 import { useInTreeNodesStore } from "@/stores/inTreeNodesStore";
 import { useMachineViewStore } from "@/stores/machineViewStore";
@@ -157,6 +158,7 @@ afterEach(() => {
   useUIChromeStore.setState(INITIAL_CHROME, true);
   useInTreeNodesStore.setState({ nodes: [] });
   setFilesPanelTestState({ isOpen: false });
+  resetReadCoordinatorForTests();
   resetWindowScopeForTests();
   document.body.innerHTML = "";
 });
@@ -193,4 +195,15 @@ test("grouping: the in-tree workspace reads machineViewStore; nothing is exchang
   act(() => useUIChromeStore.setState({ environmentSortMode: "activity" }));
   await settle();
   expect(directTraffic().filter((entry) => entry.endsWith(":grouping"))).toEqual([]);
+});
+
+test("visibility: hiding an in-tree node leaves the window's reads alone and sends nothing", async () => {
+  await openLeaf();
+  await settle();
+  // Showing the window's own node hides the in-tree one.
+  act(() => useRemoteWorkspaceStore.getState().showLocal());
+  await settle();
+  expect(screen.getByTestId("in-tree-workspace").className).toContain("hidden");
+  expect(getReadCoordinator().getDiagnostics().hostHidden).toBe(false);
+  expect(directTraffic().filter((entry) => entry.endsWith(":visibility"))).toEqual([]);
 });

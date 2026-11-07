@@ -54,7 +54,8 @@ function selectRequest(request: RealmRequest | undefined): Omit<RealmSelectReque
  * window's document and stores, so what the window's stores already hold is
  * read there directly and not sent (report Appendix C): the sidebar is
  * `uiChromeStore`'s, the files panel's open state `filesPanelChromeStore`'s,
- * and the grouping `useWindowGrouping`'s (`machineViewStore`).
+ * and the grouping `useWindowGrouping`'s (`machineViewStore`). Visibility is
+ * not sent either: a hidden node is the scope's tier (plan item 4002).
  */
 export interface RealmRequestsOptions {
   /** The node is shown in the window's own tree (`InTreeWorkspace`), over a loopback. */
@@ -116,9 +117,11 @@ export function useRealmRequests(
     if (send && ready.current && !inTree) send({ type: "grouping", grouping });
   }, [inTree, send, grouping]);
 
+  // In the window's tree the document's visibility is the window's; whether
+  // the node is shown is the window's selection, which its scope's tier follows (4002).
   useEffect(() => {
-    if (send && ready.current) send({ type: "visibility", hidden: !shown });
-  }, [send, shown]);
+    if (send && ready.current && !inTree) send({ type: "visibility", hidden: !shown });
+  }, [inTree, send, shown]);
 
   // Retain only the latest intent while a document is loading or restarting.
   const panelRequest = useRemoteWorkspaceStore((state) => state.panelRequests[nodeId]);
@@ -185,7 +188,7 @@ export function useRealmRequests(
           latest.current.send?.({ type: "filesPanel", open: latest.current.filesPanelOpen });
         }
         if (!inTree) latest.current.send?.({ type: "grouping", grouping: latest.current.grouping });
-        latest.current.send?.({ type: "visibility", hidden: !latest.current.shown });
+        if (!inTree) latest.current.send?.({ type: "visibility", hidden: !latest.current.shown });
         flush();
         flushPanel();
       } else if (message.type === "selection") {

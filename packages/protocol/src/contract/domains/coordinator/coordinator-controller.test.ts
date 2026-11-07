@@ -230,7 +230,8 @@ describe("coordinator client, controller commands", () => {
     const node = fakeNode(undefined, () => legacy);
     const client = createDomainClient(coordinatorClient, node.options);
     expect(client.version()).toBe(0);
-    await expect(client.api().get_control_mcp_settings(undefined as never)).resolves.toBe(legacy);
+    const answer: unknown = await client.api().get_control_mcp_settings(undefined as never);
+    expect(answer).toBe(legacy);
     expect(node.invoked).toEqual([{ command: "get_control_mcp_settings", args: undefined }]);
     expect(node.sent).toEqual([]);
     expect(node.usage).toEqual([["coordinator", 0]]);

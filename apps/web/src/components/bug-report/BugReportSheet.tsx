@@ -718,7 +718,8 @@ function useMachineLabel(own: string | null, ownDocument: boolean): string {
   const machine =
     (ownDocument ? machines.find((candidate) => candidate.bound) : undefined) ??
     machines.find((candidate) => candidate.connectionId === own || candidate.backendId === own);
-  return machine?.name ?? "This machine";
+  // Another node with no view yet is never called this machine.
+  return machine?.name ?? (ownDocument ? "This machine" : "another machine");
 }
 
 /**

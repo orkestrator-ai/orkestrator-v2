@@ -476,10 +476,15 @@ the desktop main process all use.
   node. `remoteWorkspaceStore` derives `active` from it (the selection while it
   is on an open realm's node, `null` for the window's own workspace) and keeps
   `realms`, the nodes with an open realm, least recently shown first. `open()`
-  moves the selection and the node to the end and keeps the last 3
+  moves the selection and the node to the end and keeps the last 3 realms
   (`MAX_OPEN_REALMS`). An evicted realm unmounts and ends this window's view of
   that node; work on the node continues. Realms that are not shown stay
-  mounted, hidden, so going back is instant. The command node's selection
+  mounted, hidden, so going back is instant. A node shown in the window's own
+  tree (`inTreeNodes`) is not counted: the window's node-scope lifecycle
+  (`WindowScope.lifecycle`, plan item 4002) moves it between warm, live,
+  suspended and summary by its memory and byte budgets instead, and
+  `InTreeWorkspace` keeps its views mounted only while it is warm, live or
+  shown. The command node's selection
   survives a reload of the window (session storage).
 - **Desktop.** `WorkspaceViews` (`apps/desktop/electron/workspace-views.ts`)
   opens a child `WebContentsView` per realm: the standard preload,

@@ -13,6 +13,12 @@ import type { DomainAdapterUsageRecorder } from "@orkestrator/protocol/contract/
 import { isProvisionalBackendId, type BackendId } from "@orkestrator/protocol/federation";
 import type { NodeClient, ReadableSignal } from "@orkestrator/protocol/node-client";
 import { createWindowByteBudgets, type WindowByteBudgets } from "./byte-budget";
+import { ScopeLifecycle, type ScopeLifecycleDeps } from "./lifecycle";
+import {
+  lifecycleConfigFor,
+  type LifecycleConfig,
+  type LifecycleConfigOverrides,
+} from "./lifecycle-config";
 import { Lifetime } from "./lifetime";
 import { NodeScope, type NodeScopeRole, type NodeScopeTier } from "./node-scope";
 import { createSignal, type WritableSignal } from "./signal";
@@ -52,8 +58,19 @@ export function windowScopeOf(scope: NodeScope): WindowScope | null {
 }
 
 export interface WindowScopeOptions {
-  /** Totals in bytes; omitted kinds use `DEFAULT_WINDOW_BYTE_BUDGETS`. */
+  /**
+   * Totals in bytes; omitted kinds use the host's lifecycle defaults
+   * (`HOST_LIFECYCLE_DEFAULTS[host].byteBudgets`, which on desktop and in a
+   * browser are `DEFAULT_WINDOW_BYTE_BUDGETS`).
+   */
   readonly budgets?: Partial<Record<keyof WindowByteBudgets, number>>;
+  /**
+   * The node-scope lifecycle's per-host settings (plan item 4002): the host
+   * (detected when omitted) and any of its defaults to override.
+   */
+  readonly lifecycle?: LifecycleConfigOverrides;
+  /** The lifecycle's clock, heap reader, visibility and memory warnings; tests pass fakes. */
+  readonly lifecycleDeps?: ScopeLifecycleDeps;
   /** Every scope's domain adapter usage recorder; defaults to the renderer ring. */
   readonly domainUsage?: DomainAdapterUsageRecorder;
 }
@@ -67,6 +84,8 @@ export interface OpenNodeScopeOptions {
 
 export class WindowScope {
   readonly budgets: WindowByteBudgets;
+  /** This window's per-host lifecycle settings (report §8.2). */
+  readonly lifecycleConfig: LifecycleConfig;
   readonly selection: ReadableSignal<NodeSelection | null>;
   /** Every open node scope, in opening order; a new array on each change. */
   readonly nodeScopes: ReadableSignal<readonly NodeScope[]>;
@@ -81,18 +100,38 @@ export class WindowScope {
   private readonly domainUsage: DomainAdapterUsageRecorder | undefined;
   private readonly selectionSignal: WritableSignal<NodeSelection | null>;
   private readonly scopesSignal: WritableSignal<readonly NodeScope[]>;
+  private readonly lifecycleDeps: ScopeLifecycleDeps;
+  private lifecycleInstance: ScopeLifecycle | null = null;
 
   constructor(options: WindowScopeOptions = {}) {
-    this.budgets = createWindowByteBudgets(options.budgets);
+    this.lifecycleConfig = lifecycleConfigFor(options.lifecycle);
+    this.lifecycleDeps = options.lifecycleDeps ?? {};
+    this.budgets = createWindowByteBudgets({
+      ...this.lifecycleConfig.byteBudgets,
+      ...options.budgets,
+    });
     this.domainUsage = options.domainUsage;
     this.selectionSignal = createSignal<NodeSelection | null>(null);
     this.scopesSignal = createSignal<readonly NodeScope[]>([]);
     this.selection = this.selectionSignal;
     this.nodeScopes = this.scopesSignal;
+    // Registered first, so it runs after every node scope has closed.
+    this.lifetime.onClose("lifecycle", () => this.lifecycleInstance?.dispose());
   }
 
   get disposed(): boolean {
     return this.lifetime.closed;
+  }
+
+  /**
+   * The window's node-scope lifecycle (plan item 4002, `lifecycle.ts`): tiers,
+   * suspension timers and memory pressure for the scopes handed to it.
+   * Created on first use; it runs nothing until a scope is managed.
+   */
+  get lifecycle(): ScopeLifecycle {
+    if (this.disposed) throw new Error("This window scope is disposed.");
+    this.lifecycleInstance ??= new ScopeLifecycle(this, this.lifecycleConfig, this.lifecycleDeps);
+    return this.lifecycleInstance;
   }
 
   /**

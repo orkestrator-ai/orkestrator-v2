@@ -56,9 +56,10 @@ const log = createLogger("web.node-scope");
 export type NodeScopeRole = "command" | "leaf";
 
 /**
- * The hydration tier (report §8.1). Only the lifecycle manager (plan item
- * 4002) moves a scope between tiers; until then the command scope is the
- * only scope and is always `live`.
+ * The hydration tier (report §8.1). Only the window's lifecycle manager
+ * (`WindowScope.lifecycle`, plan item 4002) moves a scope between tiers, and
+ * only the scopes handed to it; the command scope is always `live`. A scope
+ * the lifecycle disposes reads `summary` just before it goes.
  */
 export type NodeScopeTier = "summary" | "warm" | "live" | "suspended";
 

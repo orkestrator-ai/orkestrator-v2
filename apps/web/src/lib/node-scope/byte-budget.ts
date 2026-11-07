@@ -12,14 +12,17 @@
  *
  * 1. least-recently-used entries of nodes other than the reserving node and
  *    the shown node;
- * 2. then the reserving node's own older entries, unless it is the shown node;
- * 3. never an entry of the shown node.
+ * 2. then the reserving node's own older entries (the shown node's too, for
+ *    its own reservations: plan item 4002, so a window showing one node can
+ *    still page through that node's sessions);
+ * 3. never an entry of the shown node for another node's reservation.
  *
  * If that still cannot make room, the reservation is refused and nothing is
  * evicted, so the budget is a hard bound. Evicted owners hear about it through
  * the `onEvict` they passed when reserving; they drop the data and may reserve
  * again later. `setShownNode` is the policy hook the lifecycle manager (plan
- * item 4002) drives; until then the command scope is the only node.
+ * item 4002, `lifecycle.ts`) drives while it manages any scope; it also drops
+ * a hidden node's entries under pressure (`evictNode`).
  */
 
 import type { BackendId } from "@orkestrator/protocol/federation";
@@ -117,7 +120,8 @@ export class ByteBudget {
   /**
    * Best-effort room: evicts by the policy above, least recently used first,
    * until `usedBytes <= targetBytes` or nothing evictable is left. Never
-   * evicts `(nodeId, key)` itself or an entry of the shown node. Unlike
+   * evicts `(nodeId, key)` itself, nor an entry of the shown node unless
+   * `nodeId` is the shown node. Unlike
    * `reserve`, it evicts even when it cannot reach the target (a reader
    * freeing room before it asks for a page sized to what is left). Returns
    * the evicted entries; their owners hear through `onEvict`.
@@ -132,6 +136,28 @@ export class ByteBudget {
       used -= entry.bytes;
     }
     for (const victim of victims) this.remove(entryKey(victim.nodeId, victim.key));
+    const evicted: ByteBudgetEntry[] = [];
+    for (const victim of victims) {
+      const entry = { nodeId: victim.nodeId, key: victim.key, bytes: victim.bytes };
+      evicted.push(entry);
+      notifyEvicted(victim, entry);
+    }
+    return evicted;
+  }
+
+  /**
+   * Evicts every entry of `nodeId`, oldest first, and tells their owners
+   * through `onEvict` (the lifecycle's pressure path, plan item 4002: a
+   * hidden node's heavy data goes). Unlike `releaseNode`, owners hear about
+   * it. Returns the evicted entries.
+   */
+  evictNode(nodeId: BackendId): readonly ByteBudgetEntry[] {
+    const victims: Reservation[] = [];
+    for (const [id, entry] of Array.from(this.entries)) {
+      if (entry.nodeId !== nodeId) continue;
+      victims.push(entry);
+      this.remove(id);
+    }
     const evicted: ByteBudgetEntry[] = [];
     for (const victim of victims) {
       const entry = { nodeId: victim.nodeId, key: victim.key, bytes: victim.bytes };
@@ -199,7 +225,9 @@ export class ByteBudget {
     const others: Reservation[] = [];
     const own: Reservation[] = [];
     for (const [id, entry] of this.entries) {
-      if (id === reservingId || entry.nodeId === this.shownNode) continue;
+      if (id === reservingId) continue;
+      // The shown node gives way only to itself.
+      if (entry.nodeId === this.shownNode && nodeId !== this.shownNode) continue;
       (entry.nodeId === nodeId ? own : others).push(entry);
     }
     return [...others, ...own];

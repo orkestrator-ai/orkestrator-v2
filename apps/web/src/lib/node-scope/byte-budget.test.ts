@@ -70,6 +70,35 @@ describe("ByteBudget", () => {
     expect(budget.usedBytes).toBe(90);
   });
 
+  test("the shown node makes room from other nodes first, then from its own older entries", () => {
+    // Plan item 4002: a window showing one node can still page through its sessions.
+    const budget = new ByteBudget("transcripts", 100);
+    budget.setShownNode(SHOWN);
+    budget.reserve(SHOWN, "own-old", 40);
+    budget.reserve(WARM_1, "other", 30);
+    budget.reserve(SHOWN, "own-mid", 30);
+
+    expect(keysOf(budget.reserve(SHOWN, "own-new", 30).evicted)).toEqual([`${WARM_1}/other`]);
+    expect(keysOf(budget.reserve(SHOWN, "own-newest", 40).evicted)).toEqual([`${SHOWN}/own-old`]);
+    // Another node still cannot take the shown node's entries.
+    expect(budget.reserve(WARM_2, "w2", 10)).toEqual({ granted: false, evicted: [] });
+    expect(budget.usedBytes).toBe(100);
+  });
+
+  test("evictNode drops one node's entries and tells their owners", () => {
+    const budget = new ByteBudget("images", 100);
+    const notices: string[] = [];
+    const onEvict = (entry: { nodeId: BackendId; key: string }) =>
+      notices.push(`${entry.nodeId}/${entry.key}`);
+    budget.reserve(WARM_1, "a", 10, { onEvict });
+    budget.reserve(WARM_2, "b", 20, { onEvict });
+    budget.reserve(WARM_1, "c", 30, { onEvict });
+    expect(keysOf(budget.evictNode(WARM_1))).toEqual([`${WARM_1}/a`, `${WARM_1}/c`]);
+    expect(notices).toEqual([`${WARM_1}/a`, `${WARM_1}/c`]);
+    expect(budget.usedBytes).toBe(20);
+    expect(budget.evictNode(WARM_1)).toEqual([]);
+  });
+
   test("re-reserving a key replaces its size and keeps its eviction notice", () => {
     const budget = new ByteBudget("transcripts", 100);
     const notices: string[] = [];

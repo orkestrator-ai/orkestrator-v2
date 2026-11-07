@@ -239,6 +239,15 @@ the point.
 - **Testing the shim itself**: `setShimUseObserver((use) => uses.push(use))`
   returns a restore function. Call it in `afterEach`.
 
+- **Tiers** (plan item 4002): build the window with `new WindowScope({
+  lifecycle: { host, suspendAfterMs, … }, lifecycleDeps: { clock, visibility,
+  memoryWarnings, readHeap } })`, using `FakeLifecycleClock`, `FakeVisibility`
+  and `FakeMemoryWarnings` from `lib/node-scope/lifecycle.test-support.ts`,
+  and move the shown node with `windowScope.select(…)`. After
+  `windowScope.dispose()` the clock has no pending timers. A component test on
+  the app's window scope can drive the pressure path with
+  `window.dispatchEvent(new Event("orkestrator:memory-warning"))`.
+
 ## Services, change feeds and reads per scope
 
 Background work runs as scoped services (plan item 3014;
@@ -299,7 +308,8 @@ keeps its realm. The pieces:
 
 | Piece | Where | What it does |
 | --- | --- | --- |
-| `holdInTreeScope(nodeId)` | `lib/federation/in-tree-scopes.ts` | Opens the node's leaf scope in the app's window scope (browser: the node-client registry; desktop: main's node scope through `window.orkestrator.node`), starts `WARM_SCOPE_SERVICES`, and counts holds. The last release keeps the scope for `IN_TREE_RELEASE_GRACE_MS`, then stops the services and disposes it. Releasing never cancels work on the node. `configureInTreeScopes` replaces the host and services in tests. |
+| `holdInTreeScope(nodeId)` | `lib/federation/in-tree-scopes.ts` | Opens the node's leaf scope in the app's window scope (browser: the node-client registry; desktop: main's node scope through `window.orkestrator.node`), hands it to the window's lifecycle (below), which starts `WARM_SCOPE_SERVICES`, and counts holds. Releasing the last hold leaves the scope to its tiers. Nothing here cancels work on the node. `configureInTreeScopes` replaces the host, services and read hooks in tests. |
+| `WindowScope.lifecycle` (`ScopeLifecycle`) | `lib/node-scope/lifecycle.ts`, `lifecycle-config.ts` | Tiers of managed scopes (plan item 4002, report §8.1): `warm` (hidden; reads paused through `setReadCoordinatorScopeHidden`), `live` (shown), `suspended` (hidden past the host's `suspendAfterMs`: services stopped, `client.suspend()`), back to `warm`/`live` with a resync when shown, and `summary` (disposed under pressure). Pressure order: a hidden node's byte-budget entries (`ByteBudget.evictNode`), then suspend, then dispose; never the shown node. Per-host defaults in `HOST_LIFECYCLE_DEFAULTS` (desktop 15 min, browser 5 min, iOS 2 min and on hidden), overridable through `WindowScopeOptions.lifecycle`. Hook points: `onScopeOpen` (snapshot hydration, 4003), `onTransition` and `tiers` (attention sources, 5001). The command scope is never managed and stays `live`. |
 | `createRealmLoopback(request)`, `RealmChannelContext` | `lib/federation/realm-channel.ts` | The realm protocol in memory. The window's side is the same `useRealmRequests` a realm uses (`components/federation/realm-requests.tsx`). The realm side (`WorkspaceRealmHost`, `RealmTitleBarPanels`) reads its channel from context, and the page's channel is the default. For an in-tree node (`useRealmRequests(…, { inTree: true })`, `channel.kind === "loopback"`) the navigation messages are direct (plan item 4005): the host reads the window's `remoteWorkspaceStore.requests[nodeId]` instead of `select` and gates dialogs on the node's stores (`dialogHydrated`), the sidebar, files panel and grouping are the window's stores (`useWindowGrouping`), there is no `visibility` or `ready`, and the node's `uiStore` is the window's one selection. `observeRealmLoopbacks` (test seam) records what still crosses. |
 | `NodeErrorBoundary` | `components/federation/NodeErrorBoundary.tsx` | One node's workspace shows a per-node error with Try again. It wraps the command node's content too. |
 | `WorkspaceContent`, `useNodeWorkspaceServices`, `useNodeBootHydration` | `components/layout/WorkspaceContent.tsx` | The central region's content, its overlay start handlers, and the per-node background hooks. `App` and `InTreeWorkspace` both render them, each inside its own `NodeScopeProvider`. |

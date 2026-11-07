@@ -19,6 +19,17 @@ import {
  * node hold two grants. Nothing in the renderer uses these yet.
  */
 
+/**
+ * How long main keeps a node scope no renderer holds before it releases it
+ * (plan item 4002): the desktop's `NODE_SUSPEND_AFTER_MS` (report §8.2). A
+ * scope a renderer opened (`orkestrator:nodes:open`, a hold) is released when
+ * that renderer disposes its node scope (`orkestrator:nodes:release`, which
+ * its lifecycle does when memory pressure takes the node back to summary), on
+ * reload or window close; one opened only by node-addressed invokes holds
+ * nothing and goes after this long unused.
+ */
+export const NODE_SCOPE_IDLE_RELEASE_MS = 15 * 60_000;
+
 /** Where a scope bound to another node's workspace is reached. */
 export type WorkspaceTarget = {
   nodeId: string;
@@ -188,8 +199,8 @@ export interface DesktopNodeScopesOptions {
   manager(): WorkspaceScopeManager | null;
   scopes(): NodeWorkspaceScopes;
   /**
-   * Release a scope with no holds after this long unused. Null (the default)
-   * never releases on idle; the budget comes from item 4002.
+   * Release a scope with no holds after this long unused. Null (the default
+   * here) never releases on idle; main passes `NODE_SCOPE_IDLE_RELEASE_MS`.
    */
   idleMs?: number | null;
   now?: () => number;

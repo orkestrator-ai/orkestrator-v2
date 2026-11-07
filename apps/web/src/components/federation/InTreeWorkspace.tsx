@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AgentMailPanel } from "@/components/agent-mail/AgentMailPanel";
 import { NodeWorkspaceLayout } from "@/components/layout/NodeWorkspaceLayout";
 import { OpenFileDialog } from "@/components/layout/OpenFileDialog";
@@ -19,8 +19,14 @@ import {
   type RealmLoopback,
 } from "@/lib/federation/realm-channel";
 import { MOBILE_SHELL_MEDIA_QUERY } from "@/lib/mobile-shell";
-import type { NodeScope } from "@/lib/node-scope/node-scope";
-import { NodeScopeProvider, useNodeScope } from "@/lib/node-scope/providers";
+import type { NodeScope, NodeScopeHealth, NodeScopeTier } from "@/lib/node-scope/node-scope";
+import {
+  NodeScopeProvider,
+  useNodeScope,
+  useSignal,
+  useWindowScope,
+} from "@/lib/node-scope/providers";
+import { constantSignal } from "@/lib/node-scope/signal";
 import { useInTreeLeafMount } from "@/lib/node-scope/shim-under-leaf-guard";
 import { cn } from "@/lib/utils";
 import { useFilesPanelChromeStore } from "@/stores/filesPanelChromeStore";
@@ -74,6 +80,10 @@ function InTreeNodeWorkspace({ shown }: { shown: boolean }) {
   );
 }
 
+/** Before a scope is open: no tier, no health. */
+const NO_TIER = constantSignal<NodeScopeTier>("summary");
+const NO_HEALTH = constantSignal<NodeScopeHealth>({ state: "disposed" });
+
 /**
  * Another node's workspace in this window's own React tree (plan item 4001,
  * report §5.2), in place of its realm while the window's `inTreeNodes`
@@ -89,7 +99,11 @@ function InTreeNodeWorkspace({ shown }: { shown: boolean }) {
  *
  * Fixed-position descendants are placed in this region (it is their
  * containing block), as they are in a realm's own viewport. A hidden node
- * stays mounted, as a hidden realm does, so switching back is instant.
+ * stays mounted while its scope is warm, as a hidden realm does, so
+ * switching back is instant. Its tier (plan item 4002, the window's
+ * lifecycle) decides the rest: a suspended hidden node unmounts its views
+ * (its light stores stay; showing it again opens a fresh document on them),
+ * and a node pressure took back to summary is reopened when it is shown.
  */
 interface OpenedWorkspace {
   readonly scope: NodeScope;
@@ -108,6 +122,9 @@ export function InTreeWorkspace({ nodeId, shown }: { nodeId: string; shown: bool
     null,
   );
   const [failure, setFailure] = useState<{ attempt: number; message: string } | null>(null);
+  /** The document whose views went while the node was suspended and hidden (4002). */
+  const [parked, setParked] = useState<RealmLoopback | null>(null);
+  const windowScope = useWindowScope();
   const workspace = opened?.attempt === attempt ? opened.workspace : null;
   const send = useMemo(() => (workspace ? workspace.pair.send : null), [workspace]);
   const { restart, onMessage } = useRealmRequests(nodeId, send, shown, { inTree: true });
@@ -145,13 +162,53 @@ export function InTreeWorkspace({ nodeId, shown }: { nodeId: string; shown: bool
   useLayoutEffect(() => workspace?.pair.onRealmMessage(onMessage), [workspace, onMessage]);
 
   /** Try again after a crash: a new document on the same scope, as a realm reload. */
-  const reopenDocument = () => {
+  const reopenDocument = useCallback(() => {
     if (!workspace) return;
     workspace.pair.close();
     const pair = createRealmLoopback(restart());
     pairRef.current = pair;
     setOpened({ attempt, workspace: { ...workspace, pair, generation: workspace.generation + 1 } });
-  };
+  }, [attempt, restart, workspace]);
+
+  // The scope's tier (4002): views mount while it is warm or live, or shown.
+  const tier = useSignal(workspace?.scope.tier ?? NO_TIER);
+  const health = useSignal(workspace?.scope.health ?? NO_HEALTH);
+  const evicted = workspace !== null && (tier === "summary" || health.state === "disposed");
+  const showViews =
+    workspace !== null &&
+    !evicted &&
+    parked !== workspace.pair &&
+    (shown || tier === "warm" || tier === "live");
+  // Follows the scope's tier and the window's selection (the lifecycle's
+  // inputs): suspended and hidden, the document goes and the scope's light
+  // stores stay; resumed, a fresh document opens on them; taken back to
+  // summary, the node opens afresh once it is the shown node again.
+  useEffect(() => {
+    if (!workspace) return;
+    const { scope, pair } = workspace;
+    const apply = () => {
+      const tierNow = scope.tier.get();
+      const shownNow = windowScope.selection.get()?.nodeId === nodeId;
+      if (scope.disposed || tierNow === "summary") {
+        if (shownNow) setAttempt((value) => value + 1);
+      } else if (tierNow === "suspended" && !shownNow) {
+        if (parked !== pair) {
+          pair.close();
+          setParked(pair);
+        }
+      } else if ((tierNow === "warm" || tierNow === "live") && parked === pair) {
+        reopenDocument();
+      }
+    };
+    const stops = [
+      scope.tier.subscribe(apply),
+      scope.health.subscribe(apply),
+      windowScope.selection.subscribe(apply),
+    ];
+    return () => {
+      for (const stop of stops) stop();
+    };
+  }, [workspace, parked, windowScope, nodeId, reopenDocument]);
 
   // Plan item 4003: the node's local snapshot paints at once, read-only and
   // marked stale, until the scope's first authoritative read has landed.
@@ -184,6 +241,10 @@ export function InTreeWorkspace({ nodeId, shown }: { nodeId: string; shown: bool
         ) : (
           <RealmStatus failure={null} machine={machine} onRetry={() => undefined} />
         )
+      ) : !showViews ? (
+        shown ? (
+          <RealmStatus failure={null} machine={machine} onRetry={() => undefined} />
+        ) : null
       ) : (
         <RealmChannelContext.Provider key={workspace.generation} value={workspace.pair.realm}>
           <NodeScopeProvider scope={workspace.scope}>

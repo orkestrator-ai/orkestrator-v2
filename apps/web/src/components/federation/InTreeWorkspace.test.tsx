@@ -228,3 +228,50 @@ test("a node whose scope cannot open shows its failure with Try again, and the o
   await waitFor(() => expect(screen.queryByText("The machine did not answer.")).toBeNull());
   expect(attempts).toBe(2);
 });
+
+test("a hidden node follows its tier: suspended it unmounts its views, back to summary it reopens when shown", async () => {
+  install();
+  const OTHER = "bk_b" as BackendId;
+  useInTreeNodesStore.setState({ nodes: [LEAF, OTHER] });
+  renderRegion();
+  act(() => useRemoteWorkspaceStore.getState().open(OTHER, { projectId: project.id }));
+  act(() => useRemoteWorkspaceStore.getState().open(LEAF, { projectId: project.id }));
+  await waitFor(() => expect(screen.getAllByTestId("in-tree-workspace")).toHaveLength(2));
+  const region = (nodeId: string) =>
+    screen
+      .getAllByTestId("in-tree-workspace")
+      .find((el) => el.getAttribute("data-node") === nodeId)!;
+  const hidden = getWindowScope().get(OTHER)!;
+  // Hidden but warm: mounted, as a hidden realm is.
+  await waitFor(() => expect(hidden.tier.get()).toBe("warm"));
+  await waitFor(() => expect(region(OTHER).childElementCount).toBeGreaterThan(0));
+  expect(getWindowScope().get(LEAF)!.tier.get()).toBe("live");
+
+  // The iOS app's memory warning (or the suspend timer) suspends it: its
+  // views go, its scope and light stores stay.
+  act(() => {
+    window.dispatchEvent(new Event("orkestrator:memory-warning"));
+  });
+  expect(hidden.tier.get()).toBe("suspended");
+  await waitFor(() => expect(region(OTHER).childElementCount).toBe(0));
+  expect(hidden.disposed).toBe(false);
+
+  // A second warning takes it back to summary; the shown node is untouched.
+  act(() => {
+    window.dispatchEvent(new Event("orkestrator:memory-warning"));
+  });
+  expect(hidden.disposed).toBe(true);
+  expect(getWindowScope().get(LEAF)!.tier.get()).toBe("live");
+  expect(region(LEAF).childElementCount).toBeGreaterThan(0);
+
+  // Shown again, it opens afresh (summary → warm → live) with a new client.
+  const clientsBefore = leafClients.length;
+  act(() => useRemoteWorkspaceStore.getState().open(OTHER, { projectId: project.id }));
+  await waitFor(() => expect(getWindowScope().get(OTHER)?.tier.get()).toBe("live"));
+  expect(leafClients.length).toBe(clientsBefore + 1);
+  await waitFor(() => expect(region(OTHER).childElementCount).toBeGreaterThan(0));
+  // Nothing on either node was asked to stop.
+  for (const client of leafClients) {
+    expect(workStoppingCalls(client.invocations.map((call) => call.command))).toEqual([]);
+  }
+});

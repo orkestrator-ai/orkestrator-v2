@@ -51,7 +51,11 @@ import {
   type WorkspaceViewRecord,
 } from "./workspace-views.js";
 import { NodeWorkspaceScopes } from "./node-workspaces.js";
-import { DesktopNodeScopes, type NodeScopeRecord } from "./node-scopes.js";
+import {
+  DesktopNodeScopes,
+  NODE_SCOPE_IDLE_RELEASE_MS,
+  type NodeScopeRecord,
+} from "./node-scopes.js";
 import { DesktopNodeIpc } from "./node-ipc.js";
 import {
   NodePreviewRuntimes,
@@ -321,6 +325,8 @@ let workspaceViews: WorkspaceViews | null = null;
 /** Per-(window, node) scopes, opened by the window renderer through `nodeIpc`. */
 const nodeScopes = new DesktopNodeScopes({
   manager: () => connectionManager,
+  // Plan item 4002: an unheld node scope goes after the desktop's suspend time.
+  idleMs: NODE_SCOPE_IDLE_RELEASE_MS,
   scopes: () => {
     const manager = connectionManager;
     if (!manager) throw new Error("Connections are not initialized");

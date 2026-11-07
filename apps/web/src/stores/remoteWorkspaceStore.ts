@@ -7,6 +7,7 @@ import type {
 } from "@/lib/federation/workspace-realm";
 import { getWindowScope } from "@/lib/node-scope/app-window-scope";
 import type { NodeSelection } from "@/lib/node-scope/window-scope";
+import { isInTreeNode, useInTreeNodesStore } from "./inTreeNodesStore";
 import { isCommandNodeSelection, noteNodeSelectionRecents } from "./windowSelectionStore";
 
 /**
@@ -28,7 +29,11 @@ import { isCommandNodeSelection, noteNodeSelectionRecents } from "./windowSelect
  * with realms (plan item 6002).
  */
 
-/** Realms kept open per window, the shown one included. */
+/**
+ * Realms kept open per window, the shown one included. Nodes shown in the
+ * window's own tree are not counted: the window's node-scope lifecycle (plan
+ * item 4002) bounds them by its memory and byte budgets instead.
+ */
 export const MAX_OPEN_REALMS = 3;
 
 export interface RemoteWorkspaceSelection {
@@ -164,9 +169,10 @@ export const useRemoteWorkspaceStore = create<RemoteWorkspaceState>()((set, get)
     titleBars: {},
     panelRequests: {},
     open: (nodeId, request) => {
-      const realms = [...get().realms.filter((id) => id !== nodeId), nodeId].slice(
-        -MAX_OPEN_REALMS,
-      );
+      const order = [...get().realms.filter((id) => id !== nodeId), nodeId];
+      const inTree = useInTreeNodesStore.getState().nodes;
+      const keptRealms = order.filter((id) => !isInTreeNode(id, inTree)).slice(-MAX_OPEN_REALMS);
+      const realms = order.filter((id) => isInTreeNode(id, inTree) || keptRealms.includes(id));
       const requests: Record<string, RealmRequest> = {};
       for (const id of realms) {
         const existing = get().requests[id];

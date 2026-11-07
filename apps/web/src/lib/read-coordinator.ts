@@ -271,9 +271,10 @@ export interface ReadCoordinatorOptions {
 export interface ReadCoordinatorDiagnostics {
   paused: boolean;
   dataSaving: boolean;
-  /** The document is hidden, or its host has said so. */
+  /** The document is hidden, or its host has said so, or this node's scope is hidden. */
   hidden: boolean;
   hostHidden: boolean;
+  scopeHidden: boolean;
   disconnected: boolean;
   connectionId: string | null;
   connectionGeneration: number;
@@ -324,6 +325,13 @@ export interface ReadCoordinator {
    * Window-wide, like `setDataSaving`.
    */
   setHostHidden(hidden: boolean): void;
+  /**
+   * This node's scope is hidden in the window's own tree: not the shown node,
+   * or suspended (plan item 4002). Defers and resumes this coordinator's
+   * automatic reads exactly as a hidden document does, without touching the
+   * window policy or any other node's reads.
+   */
+  setScopeHidden(hidden: boolean): void;
   /** Invalidates every key matching the predicate. */
   invalidateMatching(predicate: (key: ReadKey) => boolean): void;
   getDiagnostics(): ReadCoordinatorDiagnostics;
@@ -478,6 +486,7 @@ export function createReadCoordinator(options: ReadCoordinatorOptions = {}): Rea
   let connectionId = options.connectionId ?? null;
   let connectionGeneration = 0;
   let disconnected = false;
+  let scopeHidden = false;
   let paused = false;
   let reconnectWhilePaused = false;
   let pendingReconcile: "resume" | "reconnect" | null = null;
@@ -487,7 +496,7 @@ export function createReadCoordinator(options: ReadCoordinatorOptions = {}): Rea
   let readsStarted = 0;
   let disposed = false;
 
-  const isHidden = () => policy.isHidden();
+  const isHidden = () => scopeHidden || policy.isHidden();
   const computePaused = () => isHidden() || disconnected;
   paused = computePaused();
 
@@ -1141,6 +1150,11 @@ export function createReadCoordinator(options: ReadCoordinatorOptions = {}): Rea
     setHostHidden(next) {
       if (!disposed) policy.setHostHidden(next);
     },
+    setScopeHidden(next) {
+      if (disposed || scopeHidden === next) return;
+      scopeHidden = next;
+      onVisibilityChange();
+    },
     invalidateMatching(predicate) {
       for (const entry of Array.from(entries.values())) {
         if (predicate(entry.key)) invalidateEntry(entry);
@@ -1152,6 +1166,7 @@ export function createReadCoordinator(options: ReadCoordinatorOptions = {}): Rea
         dataSaving: policy.dataSaving(),
         hidden: isHidden(),
         hostHidden: policy.hostHidden(),
+        scopeHidden,
         disconnected,
         connectionId,
         connectionGeneration,
@@ -1192,10 +1207,12 @@ interface CoordinatorSlot {
   coordinator: ReadCoordinator | null;
   /** False for a test factory's coordinator, which its test disposes. */
   owned: boolean;
+  /** `setReadCoordinatorScopeHidden`'s value, applied to a coordinator made later too. */
+  hidden: boolean;
 }
 
 const readCoordinatorSlot = defineScopedStore<CoordinatorSlot>("read-coordinator", (scope) => {
-  const slot: CoordinatorSlot = { coordinator: null, owned: true };
+  const slot: CoordinatorSlot = { coordinator: null, owned: true, hidden: false };
   scope.onDispose("read-coordinator", () => {
     if (slot.owned) slot.coordinator?.dispose();
     slot.coordinator = null;
@@ -1232,7 +1249,20 @@ export function readCoordinatorFor(scope: NodeScope): ReadCoordinator {
     slot.coordinator = createReadCoordinator({ policy: getReadWindowPolicy() });
     slot.owned = true;
   }
+  if (slot.hidden) slot.coordinator.setScopeHidden(true);
   return slot.coordinator;
+}
+
+/**
+ * Tells `scope`'s reads that its scope is hidden in the window (plan item
+ * 4002: not shown, or suspended) or shown again. Kept for a coordinator
+ * created later. Does nothing for a disposed scope.
+ */
+export function setReadCoordinatorScopeHidden(scope: NodeScope, hidden: boolean): void {
+  if (scope.disposed) return;
+  const slot = slotOf(scope);
+  slot.hidden = hidden;
+  slot.coordinator?.setScopeHidden(hidden);
 }
 
 /**

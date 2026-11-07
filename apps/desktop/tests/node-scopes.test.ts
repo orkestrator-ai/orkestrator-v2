@@ -7,6 +7,7 @@ import {
 import {
   DesktopNodeScopes,
   NODE_SCOPE_CHANGED_EVENT,
+  NODE_SCOPE_IDLE_RELEASE_MS,
   onNodeScopeRelease,
   type NodeScopeWindow,
 } from "../electron/node-scopes";
@@ -418,6 +419,28 @@ describe("releasing node scopes", () => {
     expect(h.revoked).toEqual(["grant-1-A"]);
     expect(h.routes.get(record.scope)).toBe("grant-2-A");
     expect(w.context.nodes.get("A")).toBe(record);
+  });
+
+  test("plan item 4002: a held scope goes when its renderer releases it; an unheld one after the desktop's suspend time", async () => {
+    expect(NODE_SCOPE_IDLE_RELEASE_MS).toBe(15 * 60_000);
+    let now = 0;
+    const h = harness({ idleMs: NODE_SCOPE_IDLE_RELEASE_MS, now: () => now });
+    const w = h.window("w1");
+    // The renderer's in-tree scope opens with a hold; an invoke-only open has none.
+    await h.nodeScopes.ensureNodeScope(w.context, "A", { hold: true });
+    await h.nodeScopes.ensureNodeScope(w.context, "B");
+    now = NODE_SCOPE_IDLE_RELEASE_MS - 1;
+    h.nodeScopes.sweepIdle();
+    expect(w.context.nodes.size).toBe(2);
+    now = NODE_SCOPE_IDLE_RELEASE_MS;
+    h.nodeScopes.sweepIdle();
+    expect([...w.context.nodes.keys()]).toEqual(["A"]);
+    // Pressure took A back to summary: the renderer disposed its scope, whose
+    // client sends `orkestrator:nodes:release`. Main releases it at once,
+    // hold or not.
+    h.nodeScopes.releaseNodeScope(w.context, "A");
+    expect(w.context.nodes.size).toBe(0);
+    expect(h.revoked).toEqual(["grant-2-B", "grant-1-A"]);
   });
 
   test("idle release is off by default", async () => {

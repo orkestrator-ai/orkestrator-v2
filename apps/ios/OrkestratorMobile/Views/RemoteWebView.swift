@@ -152,9 +152,35 @@ struct RemoteWebView: UIViewRepresentable {
         /// reaching the network. Nil in production.
         var loginProtocolClasses: [AnyClass]?
 
+        /// The web app's lifecycle maps this event to its memory-pressure path
+        /// (plan item 4002, `apps/web/src/lib/node-scope/lifecycle.ts`): hidden
+        /// node scopes drop their heavy data and suspend, and scopes already
+        /// suspended are disposed. The shown node is never touched.
+        static let memoryWarningScript =
+            #"window.dispatchEvent(new Event("orkestrator:memory-warning"));"#
+
+        private var memoryWarningObserver: NSObjectProtocol?
+
         init(model: ConnectionModel, state: Binding<WebViewState>) {
             self.model = model
             self.state = state
+            super.init()
+            memoryWarningObserver = NotificationCenter.default.addObserver(
+                forName: UIApplication.didReceiveMemoryWarningNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in self?.forwardMemoryWarning() }
+            }
+        }
+
+        /// Tells the page the app received a memory warning. Content free: the
+        /// script carries no data, and a page that does not listen ignores it.
+        func forwardMemoryWarning() {
+            guard javaScriptEvaluator != nil || webView != nil else { return }
+            Task { @MainActor [weak self] in
+                _ = try? await self?.evaluateJavaScript(Self.memoryWarningScript)
+            }
         }
 
         /// The body of `updateUIView`, kept on the coordinator because a
@@ -247,6 +273,10 @@ struct RemoteWebView: UIViewRepresentable {
         }
 
         func teardown() {
+            if let memoryWarningObserver {
+                NotificationCenter.default.removeObserver(memoryWarningObserver)
+            }
+            memoryWarningObserver = nil
             authenticationGeneration = UUID()
             authenticationTask?.cancel()
             invalidateReadiness()

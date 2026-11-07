@@ -7,33 +7,43 @@
  * through the node-client registry (2004: a workspace grant from the command
  * node, direct first then the relay), on the desktop through main's node
  * scope (`window.orkestrator.node(nodeId)`, `orkestrator:nodes:open`). It
- * then starts the scope's warm services (`WARM_SCOPE_SERVICES`, 3014): the
- * node's change feed, store bindings, connectivity, pane-layout persistence
- * and completion notes.
+ * then hands the scope to the window's lifecycle (`WindowScope.lifecycle`,
+ * plan item 4002), which starts its warm services (`WARM_SCOPE_SERVICES`,
+ * 3014: the node's change feed, store bindings, connectivity, pane-layout
+ * persistence and completion notes) and moves it between tiers:
  *
- * Holds are counted. The last release keeps the scope for a grace period
- * (`IN_TREE_RELEASE_GRACE_MS`), so a remount or a switch back is instant,
- * then stops its services and disposes it, which closes this window's
- * streams and revokes its grant. That never cancels work on the node
- * (invariant 2): the node's agents, terminals and pipelines keep running.
- * Plan item 4002's lifecycle manager replaces the grace timer with tiers and
- * budgets.
+ * - shown: `live`; hidden: `warm`, with its reads paused;
+ * - hidden past the host's `suspendAfterMs`: `suspended` (services stopped,
+ *   streams closed with their cursors kept), resumed with a resync when it is
+ *   shown again;
+ * - under memory pressure: its heavy data goes, then it suspends, then it is
+ *   disposed back to `summary`, which closes this window's streams and
+ *   revokes its grant (on the desktop main then releases its node scope).
+ *
+ * None of it cancels work on the node (invariant 2): the node's agents,
+ * terminals and pipelines keep running. Holds are counted for the views that
+ * show the node; releasing the last one leaves the scope to its tiers (this
+ * replaced 4001's 60 s grace timer). A disposed scope's next hold reopens it.
  *
  * A scope this module did not open (one already in the window scope) is
- * reused and never disposed here; only its services are started.
+ * reused and never disposed here: pressure gives it back with its services
+ * stopped instead.
  */
 
 import type { BackendId } from "@orkestrator/protocol/federation";
 import { getWindowScope } from "@/lib/node-scope/app-window-scope";
 import { createDesktopNodeClient } from "@/lib/node-scope/desktop-node-client";
+import type { ManagedScope, ManagedScopeHooks } from "@/lib/node-scope/lifecycle";
 import { createNodeClientRegistry, type NodeClientRegistry } from "@/lib/node-scope/node-clients";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import type { WindowScope } from "@/lib/node-scope/window-scope";
 import { prepareScopeSnapshot, type ScopeSnapshotPreparation } from "@/lib/node-snapshots";
+import { attentionHandoff } from "@/lib/federation/window-attention";
+import {
+  notifyReadCoordinatorReconnected,
+  setReadCoordinatorScopeHidden,
+} from "@/lib/read-coordinator";
 import { startScopeServices, WARM_SCOPE_SERVICES } from "@/lib/scope-services";
-
-/** How long a released in-tree scope stays open, until plan item 4002's tiers. */
-export const IN_TREE_RELEASE_GRACE_MS = 60_000;
 
 /** How one host opens a leaf scope in a window scope. */
 export interface InTreeScopeHost {
@@ -50,9 +60,20 @@ export interface InTreeScopeOptions {
    * defaults to `prepareScopeSnapshot`. `null`: no snapshot.
    */
   readonly prepare?: ((nodeId: BackendId) => ScopeSnapshotPreparation) | null;
-  readonly graceMs?: number;
   /** Starts the scope's services and returns the stop; defaults to `WARM_SCOPE_SERVICES`. */
   readonly startServices?: (scope: NodeScope) => () => void;
+  /**
+   * The scope's reads pause while it is hidden and reconcile after a resume;
+   * defaults to its read coordinator (`setReadCoordinatorScopeHidden`,
+   * `notifyReadCoordinatorReconnected`).
+   */
+  readonly readHooks?: Pick<ManagedScopeHooks, "setHidden" | "resync">;
+  /**
+   * Before a suspend closes the scope's streams: moves the window's attention
+   * for the node to the command node's relay (plan item 5001); defaults to
+   * `attentionHandoff`.
+   */
+  readonly handoff?: (scope: NodeScope) => Promise<void>;
 }
 
 export interface InTreeScopeHold {
@@ -67,9 +88,8 @@ interface Entry {
   readonly scope: Promise<NodeScope>;
   opened: NodeScope | null;
   owned: boolean;
-  stopServices: (() => void) | null;
-  timer: ReturnType<typeof setTimeout> | null;
-  readonly graceMs: number;
+  /** The lifecycle's handle, once the scope is open. */
+  managed: ManagedScope | null;
 }
 
 const entries = new WeakMap<WindowScope, Map<string, Entry>>();
@@ -79,7 +99,7 @@ let defaults: Omit<InTreeScopeOptions, "windowScope"> = {};
 
 /**
  * Replaces the defaults of `holdInTreeScope` (the host, the services it
- * starts, the grace period) until the returned restore runs. For tests that
+ * starts, the read hooks) until the returned restore runs. For tests that
  * render `InTreeWorkspace` on a fake node.
  */
 export function configureInTreeScopes(next: Omit<InTreeScopeOptions, "windowScope">): () => void {
@@ -156,12 +176,16 @@ function windowEntries(windowScope: WindowScope): Map<string, Entry> {
 
 function close(map: Map<string, Entry>, nodeId: string, entry: Entry): void {
   if (map.get(nodeId) === entry) map.delete(nodeId);
-  if (entry.timer) clearTimeout(entry.timer);
-  entry.timer = null;
-  entry.stopServices?.();
-  entry.stopServices = null;
+  // Out of the lifecycle first: its services stop and its client resumes.
+  entry.managed?.release();
+  entry.managed = null;
   if (entry.owned && entry.opened && !entry.opened.disposed) entry.opened.dispose();
 }
+
+const defaultReadHooks: Pick<ManagedScopeHooks, "setHidden" | "resync"> = {
+  setHidden: (scope, hidden) => setReadCoordinatorScopeHidden(scope, hidden),
+  resync: (scope) => notifyReadCoordinatorReconnected(scope),
+};
 
 /**
  * `opening`, hydrated from the node's snapshot (read alongside, within its
@@ -197,14 +221,13 @@ export function holdInTreeScope(
     const start =
       options.startServices ??
       ((scope: NodeScope) => startScopeServices(scope, WARM_SCOPE_SERVICES));
+    const readHooks = options.readHooks ?? defaultReadHooks;
     const existing = windowScope.get(nodeId as BackendId);
     const created: Entry = {
       refs: 0,
       opened: null,
       owned: existing === null,
-      stopServices: null,
-      timer: null,
-      graceMs: options.graceMs ?? IN_TREE_RELEASE_GRACE_MS,
+      managed: null,
       scope: (existing
         ? Promise.resolve(existing)
         : openHydrated(
@@ -216,12 +239,30 @@ export function holdInTreeScope(
       ).then(
         (scope) => {
           created.opened = scope;
-          // Every hold went away while it opened, past the grace period.
+          // The window's in-tree scopes were closed while it opened.
           if (map.get(nodeId) !== created) {
             if (created.owned) scope.dispose();
             throw new Error("This workspace was closed while it opened.");
           }
-          created.stopServices = start(scope);
+          const handoff =
+            options.handoff ??
+            ((handed: NodeScope) => attentionHandoff(windowScope, handed.nodeId));
+          created.managed = windowScope.lifecycle.manage(scope, {
+            startServices: start,
+            ...readHooks,
+            handoff,
+            toSummary: (summarised) => {
+              // Pressure took it back to summary; the next hold reopens it.
+              created.managed = null;
+              if (map.get(nodeId) === created) map.delete(nodeId);
+              if (created.owned) {
+                summarised.dispose();
+              } else {
+                summarised.client.resume();
+                readHooks.setHidden?.(summarised, false);
+              }
+            },
+          });
           return scope;
         },
         (error: unknown) => {
@@ -237,27 +278,20 @@ export function holdInTreeScope(
   }
   const held = entry;
   held.refs += 1;
-  if (held.timer) {
-    clearTimeout(held.timer);
-    held.timer = null;
-  }
   let released = false;
   return {
     scope: held.scope,
     release() {
       if (released) return;
       released = true;
+      // The scope stays in the lifecycle: hidden, it suspends on its timer
+      // and pressure may take it back to summary.
       held.refs -= 1;
-      if (held.refs > 0 || map.get(nodeId) !== held) return;
-      held.timer = setTimeout(() => {
-        held.timer = null;
-        if (held.refs === 0) close(map, nodeId, held);
-      }, held.graceMs);
     },
   };
 }
 
-/** Holds (or a pending grace release) of `nodeId` in `windowScope`; for tests and diagnostics. */
+/** Holds of `nodeId` in `windowScope`; for tests and diagnostics. */
 export function inTreeScopeHolds(nodeId: string, windowScope = getWindowScope()): number {
   return entries.get(windowScope)?.get(nodeId)?.refs ?? 0;
 }

@@ -35,6 +35,7 @@ const HANDLER_KEYS: Record<string, readonly string[]> = {
     "projectId",
     "title",
     "description",
+    "labels",
   ],
   update_kanban_task: [
     "taskId",
@@ -50,6 +51,8 @@ const HANDLER_KEYS: Record<string, readonly string[]> = {
     "prUrl",
     "prState",
     "prMergeCommented",
+    "labels",
+    "preserveDoneStatus",
   ],
   record_kanban_criteria_checks: ["taskId", "checks"],
   delete_kanban_task: ["taskId"],

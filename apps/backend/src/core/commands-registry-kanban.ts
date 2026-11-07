@@ -11,6 +11,30 @@ import { normalizeTicketLabels } from "@orkestrator/protocol/ticket-labels";
 import type { KanbanTaskContentInput } from "./storage-kanban.js";
 import { parseKanbanLabelInput } from "./storage-kanban-labels.js";
 import {
+  addKanbanCommentCommand,
+  addKanbanImageCommand,
+  addKanbanTaskCommand,
+  appendFeaturePlanMessageCommand,
+  appendFeatureStoryMessageCommand,
+  cancelFeaturePlanningCommand,
+  claimFeaturePlanBuildCommand,
+  createFeaturePlanCommand,
+  deleteKanbanCommentCommand,
+  deleteKanbanImageCommand,
+  deleteKanbanTaskCommand,
+  getFeaturePlanningSnapshotCommand,
+  getFeaturePlansCommand,
+  getKanbanImageDataCommand,
+  getKanbanTasksCommand,
+  getProjectNotesCommand,
+  recordKanbanCriteriaChecksCommand,
+  retryFeaturePlanningCommand,
+  saveProjectNotesCommand,
+  startFeaturePlanningCommand,
+  updateFeaturePlanCommand,
+  updateKanbanTaskCommand,
+} from "@orkestrator/protocol/contract/domains/kanban";
+import {
   asString,
   asFeaturePlanUpdates,
   asFeaturePlanRole,
@@ -53,17 +77,24 @@ function asTicketLabelsInput(args: Record<string, unknown>): { labels?: string[]
   return { labels: normalizeTicketLabels(args.labels) };
 }
 
+/**
+ * The `kanban` domain's ticket, notes and feature-plan commands, registered
+ * with their definitions (plan item 7008). Arguments decode tolerantly; the
+ * handlers keep their own checks and messages, and the nested `checks` items
+ * and plan `updates` stay strict (values whose unknown parts would be stored
+ * or silently lost, not argument keys).
+ */
 export function registerKanbanCommands(
   register: CommandRegistrar,
   dependencies: RegistryDependencies,
 ): void {
   const { conditionalManifestSnapshot } = dependencies;
-  register("get_kanban_tasks", (args, { storage }) =>
+  register(getKanbanTasksCommand, (args, { storage }) =>
     conditionalManifestSnapshot(args, storage, "kanban", () =>
       storage.kanban.getKanbanTasks(asString(args.projectId, "projectId")),
     ),
   );
-  register("add_kanban_task", (args, { storage }) => {
+  register(addKanbanTaskCommand, (args, { storage }) => {
     const { projectId, title, description, acceptanceCriteria, status, requestId } = args;
     const parsedRequestId = asOptionalMutationRequestId(requestId);
     const initial = {
@@ -85,7 +116,7 @@ export function registerKanbanCommands(
       ? storage.kanban.addKanbanTask(...required, initial)
       : storage.kanban.addKanbanTask(...required);
   });
-  register("update_kanban_task", (args, { storage }) => {
+  register(updateKanbanTaskCommand, (args, { storage }) => {
     const {
       taskId,
       title,
@@ -131,8 +162,7 @@ export function registerKanbanCommands(
     ]);
     return { closed: moved.length > 0 };
   });
-  register("record_kanban_criteria_checks", (args, { storage }) => {
-    assertOnlyKeys(args, ["taskId", "checks"], "arguments");
+  register(recordKanbanCriteriaChecksCommand, (args, { storage }) => {
     if (
       !Array.isArray(args.checks) ||
       args.checks.length > TICKET_SECTION_LIMITS.maxAcceptanceCriteria
@@ -192,10 +222,10 @@ export function registerKanbanCommands(
       args.projectId === undefined ? undefined : asNonBlankString(args.projectId, "projectId"),
     );
   });
-  register("delete_kanban_task", ({ taskId }, { storage }) =>
+  register(deleteKanbanTaskCommand, ({ taskId }, { storage }) =>
     storage.kanban.deleteKanbanTask(asString(taskId, "taskId")),
   );
-  register("add_kanban_comment", ({ taskId, text, projectId, requestId }, { storage }) => {
+  register(addKanbanCommentCommand, ({ taskId, text, projectId, requestId }, { storage }) => {
     const parsedRequestId = asOptionalMutationRequestId(requestId);
     const required = [asString(taskId, "taskId"), asString(text, "text")] as const;
     if (projectId === undefined && parsedRequestId === undefined) {
@@ -207,56 +237,55 @@ export function registerKanbanCommands(
       parsedRequestId,
     );
   });
-  register("delete_kanban_comment", ({ taskId, commentId }, { storage }) =>
+  register(deleteKanbanCommentCommand, ({ taskId, commentId }, { storage }) =>
     storage.kanban.deleteKanbanComment(
       asString(taskId, "taskId"),
       asString(commentId, "commentId"),
     ),
   );
-  register("add_kanban_image", ({ taskId, filename, data }, { storage }) =>
+  register(addKanbanImageCommand, ({ taskId, filename, data }, { storage }) =>
     storage.kanban.addKanbanImage(
       asString(taskId, "taskId"),
       asString(filename, "filename"),
       asString(data, "data"),
     ),
   );
-  register("delete_kanban_image", ({ taskId, imageId }, { storage }) =>
+  register(deleteKanbanImageCommand, ({ taskId, imageId }, { storage }) =>
     storage.kanban.deleteKanbanImage(asString(taskId, "taskId"), asString(imageId, "imageId")),
   );
-  register("get_kanban_image_data", ({ imageId }, { storage }) =>
+  register(getKanbanImageDataCommand, ({ imageId }, { storage }) =>
     storage.kanban.getKanbanImageData(asString(imageId, "imageId")),
   );
-  register("get_project_notes", (args, { storage }) =>
+  register(getProjectNotesCommand, (args, { storage }) =>
     conditionalManifestSnapshot(args, storage, "project-notes", () =>
       storage.kanban.getProjectNotes(asString(args.projectId, "projectId")),
     ),
   );
-  register("save_project_notes", ({ projectId, content }, { storage }) =>
+  register(saveProjectNotesCommand, ({ projectId, content }, { storage }) =>
     storage.kanban.saveProjectNotes(asString(projectId, "projectId"), asString(content, "content")),
   );
-  register("get_feature_plans", (args, { storage }) =>
+  register(getFeaturePlansCommand, (args, { storage }) =>
     conditionalManifestSnapshot(args, storage, "feature-plan", () =>
       storage.kanban.getFeaturePlans(asString(args.projectId, "projectId")),
     ),
   );
-  register("create_feature_plan", ({ projectId }, { storage }) =>
+  register(createFeaturePlanCommand, ({ projectId }, { storage }) =>
     storage.kanban.createFeaturePlan(asString(projectId, "projectId")),
   );
-  register("update_feature_plan", (args, { storage }) => {
-    assertOnlyKeys(args, ["featureId", "updates"], "arguments");
+  register(updateFeaturePlanCommand, (args, { storage }) => {
     return storage.kanban.updateFeaturePlan(
       asNonBlankString(args.featureId, "featureId"),
       asFeaturePlanUpdates(args.updates),
     );
   });
-  register("claim_feature_plan_build", ({ featureId, taskId }, { storage }) =>
+  register(claimFeaturePlanBuildCommand, ({ featureId, taskId }, { storage }) =>
     storage.kanban.claimFeaturePlanBuild(
       asString(featureId, "featureId"),
       asString(taskId, "taskId"),
     ),
   );
   register(
-    "append_feature_plan_message",
+    appendFeaturePlanMessageCommand,
     ({ featureId, role, content, stateApplication, modelId }, { storage }) =>
       storage.kanban.appendFeaturePlanMessage(
         asString(featureId, "featureId"),
@@ -267,7 +296,7 @@ export function registerKanbanCommands(
       ),
   );
   register(
-    "append_feature_story_message",
+    appendFeatureStoryMessageCommand,
     ({ featureId, storyId, role, content, stateApplication, modelId }, { storage }) =>
       storage.kanban.appendFeatureStoryMessage(
         asString(featureId, "featureId"),
@@ -282,24 +311,16 @@ export function registerKanbanCommands(
   // Backend-owned planning workflow. The renderer sends the user's message and
   // then renders the record; every step after this — environment, bridge,
   // session, dispatch, reply, parse, persist — happens without it.
-  register("start_feature_planning", (args, context) => {
-    assertOnlyKeys(
-      args,
-      ["featureId", "kind", "storyId", "userMessage", "operationId"],
-      "arguments",
-    );
+  register(startFeaturePlanningCommand, (args, context) => {
     return requireFeaturePlanning(context).start(asStartFeaturePlanningInput(args));
   });
-  register("get_feature_planning_snapshot", (args, context) => {
-    assertOnlyKeys(args, ["projectId"], "arguments");
+  register(getFeaturePlanningSnapshotCommand, (args, context) => {
     return requireFeaturePlanning(context).snapshot(asNonBlankString(args.projectId, "projectId"));
   });
-  register("retry_feature_planning", (args, context) => {
-    assertOnlyKeys(args, ["featureId"], "arguments");
+  register(retryFeaturePlanningCommand, (args, context) => {
     return requireFeaturePlanning(context).retry(asNonBlankString(args.featureId, "featureId"));
   });
-  register("cancel_feature_planning", (args, context) => {
-    assertOnlyKeys(args, ["featureId"], "arguments");
+  register(cancelFeaturePlanningCommand, (args, context) => {
     return requireFeaturePlanning(context).cancel(asNonBlankString(args.featureId, "featureId"));
   });
 }

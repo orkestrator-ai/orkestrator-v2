@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:bf2baaf448f09268a1df8835935bbf8f647ea2b446700c7b9501af1d5893b9e1",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "commentId": {
+          "type": "string"
+        },
+        "taskId": {
+          "type": "string"
+        }
+      },
+      "required": ["commentId", "taskId"],
+      "type": "object"
+    }
+  }
+}

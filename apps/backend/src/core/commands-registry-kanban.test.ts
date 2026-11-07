@@ -24,7 +24,6 @@ const entry = { id: "ac-1", text: "Criterion", check };
 
 describe("Kanban content commands", () => {
   test.each([
-    ["unknown argument", { taskId: "task", checks: [], extra: true }],
     ["oversized array", { taskId: "task", checks: Array(101).fill(entry) }],
     ["missing array", { taskId: "task" }],
     ["null item", { taskId: "task", checks: [null] }],
@@ -71,15 +70,29 @@ describe("Kanban content commands", () => {
         summary: "Summary",
         acceptanceCriteria: [{ id: "ac-1", text: "Criterion" }],
       });
-      await commands.get("record_kanban_criteria_checks")!({ taskId: task.id, checks: [entry] }, {
-        storage,
-      } as never);
+      // A defined command drops an unknown argument key (plan item 7008) instead of refusing it.
+      await commands.get("record_kanban_criteria_checks")!(
+        { taskId: task.id, checks: [entry], extra: true },
+        { storage } as never,
+      );
       expect(
         (await storage.kanban.getKanbanTask(task.id))?.sections?.acceptanceCriteria?.[0]?.check,
       ).toEqual(check);
     } finally {
       await rm(dataDir, { recursive: true, force: true });
     }
+  });
+
+  test("keeps the handlers' wording for a missing or mistyped argument", () => {
+    expect(() => commands.get("get_kanban_tasks")!({}, {} as never)).toThrow(
+      "Expected projectId to be a string",
+    );
+    expect(() => commands.get("delete_kanban_task")!({ taskId: 7 }, {} as never)).toThrow(
+      "Expected taskId to be a string",
+    );
+    expect(() =>
+      commands.get("start_feature_planning")!({ featureId: "f", kind: "feature" }, {} as never),
+    ).toThrow("Expected userMessage to be a string");
   });
 });
 

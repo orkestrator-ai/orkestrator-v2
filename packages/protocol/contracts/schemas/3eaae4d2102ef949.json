@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:3eaae4d2102ef949f215d92204ff7d5dce7eb29cbb92d3102eeff18f31c82efa",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "featureId": {
+          "type": "string"
+        },
+        "kind": {},
+        "operationId": {},
+        "storyId": {},
+        "userMessage": {
+          "type": "string"
+        }
+      },
+      "required": ["featureId", "userMessage"],
+      "type": "object"
+    }
+  }
+}

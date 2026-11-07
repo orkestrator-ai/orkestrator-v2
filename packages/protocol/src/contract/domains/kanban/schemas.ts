@@ -10,10 +10,14 @@
  * Records are **open structs** (`openStruct`, `modelRecord`): the listed
  * fields are checked and typed, every other key the backend sends is kept, so
  * a domain client's tolerant decode never strips a field the renderer reads.
- * Fields every stored record has (ids, the ticket's text mirrors, its status,
- * comments and images) are required; fields older rows or older backends may
- * omit are optional. Values a newer backend may extend (statuses, kinds, PR
- * states) are `Schema.String`, so an older client still reads them.
+ * A record's identity (`id`, the notes' `projectId`, the planning exchange's
+ * `operationId`/`featureId`/`phase`) and the connection's two flags are
+ * required; the other fields are optional (a present one is still checked),
+ * as in 7001: the storage behind these commands is faked in tests with
+ * partial records and results are validated there. Which fields are always
+ * present converges with the models in 7010. Values a newer backend may
+ * extend (statuses, kinds, PR states) are `Schema.String`, so an older client
+ * still reads them.
  *
  * Browser-safe.
  */
@@ -60,35 +64,35 @@ export function snapshotRead<S extends Schema.Top>(snapshot: S) {
 /** `KanbanComment`. */
 export const KanbanCommentSchema = openStruct({
   id: Schema.String,
-  text: Schema.String,
-  createdAt: Schema.String,
+  text: Schema.optional(Schema.String),
+  createdAt: Schema.optional(Schema.String),
 }).annotate({ identifier: "KanbanComment" });
 
 /** `KanbanImage`: the stored image's metadata; its bytes are `get_kanban_image_data`. */
 export const KanbanImageSchema = openStruct({
   id: Schema.String,
-  filename: Schema.String,
-  createdAt: Schema.String,
+  filename: Schema.optional(Schema.String),
+  createdAt: Schema.optional(Schema.String),
 }).annotate({ identifier: "KanbanImage" });
 
 /** `KanbanTask`: one ticket on this node's board. */
 export const KanbanTaskSchema = openStruct({
   id: Schema.String,
-  projectId: Schema.String,
-  title: Schema.String,
+  projectId: Schema.optional(Schema.String),
+  title: Schema.optional(Schema.String),
   // Text mirrors of `sections`, kept for readers that predate sections.
-  description: Schema.String,
-  acceptanceCriteria: Schema.String,
+  description: Schema.optional(Schema.String),
+  acceptanceCriteria: Schema.optional(Schema.String),
   // `TicketKind`; absent on tickets written before kinds (a feature ticket).
   kind: optionalString,
   // `TicketSections`; absent on legacy rows (derived from the mirrors).
   sections: Schema.optional(OpenObject),
   sectionsBasis: optionalString,
   // `KanbanStatus`.
-  status: Schema.String,
-  comments: mutableArray(KanbanCommentSchema),
-  images: mutableArray(KanbanImageSchema),
-  createdAt: Schema.String,
+  status: Schema.optional(Schema.String),
+  comments: Schema.optional(mutableArray(KanbanCommentSchema)),
+  images: Schema.optional(mutableArray(KanbanImageSchema)),
+  createdAt: Schema.optional(Schema.String),
   order: optionalNumber,
   environmentId: optionalString,
   buildPipelineId: optionalString,
@@ -106,8 +110,8 @@ export const KanbanTaskListSchema = mutableArray(KanbanTaskSchema);
 /** `ProjectNotes`. */
 export const ProjectNotesSchema = openStruct({
   projectId: Schema.String,
-  content: Schema.String,
-  updatedAt: Schema.String,
+  content: Schema.optional(Schema.String),
+  updatedAt: Schema.optional(Schema.String),
 }).annotate({ identifier: "ProjectNotes" });
 
 // --- Feature plans and planning -------------------------------------------------
@@ -116,9 +120,9 @@ export const ProjectNotesSchema = openStruct({
 export const FeaturePlanMessageSchema = openStruct({
   id: Schema.String,
   // `user`, `assistant` or `system`.
-  role: Schema.String,
-  content: Schema.String,
-  createdAt: Schema.String,
+  role: Schema.optional(Schema.String),
+  content: Schema.optional(Schema.String),
+  createdAt: Schema.optional(Schema.String),
   modelId: optionalString,
   // `pending`, `applied` or `superseded`.
   stateApplication: optionalString,
@@ -127,44 +131,44 @@ export const FeaturePlanMessageSchema = openStruct({
 /** `FeatureStoryCard`. */
 export const FeatureStoryCardSchema = openStruct({
   id: Schema.String,
-  title: Schema.String,
-  description: Schema.String,
-  acceptanceCriteria: mutableArray(Schema.String),
-  messages: mutableArray(FeaturePlanMessageSchema),
-  createdAt: Schema.String,
-  updatedAt: Schema.String,
+  title: Schema.optional(Schema.String),
+  description: Schema.optional(Schema.String),
+  acceptanceCriteria: Schema.optional(mutableArray(Schema.String)),
+  messages: Schema.optional(mutableArray(FeaturePlanMessageSchema)),
+  createdAt: Schema.optional(Schema.String),
+  updatedAt: Schema.optional(Schema.String),
 }).annotate({ identifier: "FeatureStoryCard" });
 
 /** `FeaturePlanningRecord` (`feature-planning.ts`): one backend-owned planning exchange. */
 export const FeaturePlanningRecordSchema = modelRecord<FeaturePlanningRecord>()({
-  version: Schema.Finite,
+  version: Schema.optional(Schema.Finite),
   operationId: Schema.String,
   featureId: Schema.String,
-  projectId: Schema.String,
+  projectId: Schema.optional(Schema.String),
   // `feature` or `story`.
-  kind: Schema.String,
+  kind: Schema.optional(Schema.String),
   storyId: optionalString,
-  userMessage: Schema.String,
+  userMessage: Schema.optional(Schema.String),
   // `FeaturePlanningPhase`.
   phase: Schema.String,
   failure: Schema.optional(OpenObject),
-  startedAt: Schema.String,
-  updatedAt: Schema.String,
-  backendRevision: Schema.Finite,
+  startedAt: Schema.optional(Schema.String),
+  updatedAt: Schema.optional(Schema.String),
+  backendRevision: Schema.optional(Schema.Finite),
 }).annotate({ identifier: "FeaturePlanningRecord" });
 
 /** `FeaturePlan`. */
 export const FeaturePlanSchema = openStruct({
   id: Schema.String,
-  projectId: Schema.String,
-  title: Schema.String,
+  projectId: Schema.optional(Schema.String),
+  title: Schema.optional(Schema.String),
   // `FeaturePlanStatus`.
-  status: Schema.String,
-  summary: Schema.String,
-  messages: mutableArray(FeaturePlanMessageSchema),
-  stories: mutableArray(FeatureStoryCardSchema),
-  createdAt: Schema.String,
-  updatedAt: Schema.String,
+  status: Schema.optional(Schema.String),
+  summary: Schema.optional(Schema.String),
+  messages: Schema.optional(mutableArray(FeaturePlanMessageSchema)),
+  stories: Schema.optional(mutableArray(FeatureStoryCardSchema)),
+  createdAt: Schema.optional(Schema.String),
+  updatedAt: Schema.optional(Schema.String),
   order: optionalNumber,
   codexEnvironmentId: optionalString,
   codexSessionId: optionalString,
@@ -186,7 +190,7 @@ export const FeaturePlanBuildClaimSchema = Schema.Struct({
 /** `LinearViewer`: who the stored key belongs to. Never the key. */
 export const LinearViewerSchema = openStruct({
   id: Schema.String,
-  name: Schema.String,
+  name: Schema.optional(Schema.String),
   email: optionalString,
 }).annotate({ identifier: "LinearViewer" });
 
@@ -200,15 +204,15 @@ export const LinearConnectionStatusSchema = openStruct({
 
 const linearIssueFields = {
   id: Schema.String,
-  identifier: Schema.String,
-  title: Schema.String,
-  status: Schema.String,
+  identifier: Schema.optional(Schema.String),
+  title: Schema.optional(Schema.String),
+  status: Schema.optional(Schema.String),
   statusType: optionalString,
   statusPosition: optionalNumber,
   sortOrder: optionalNumber,
   priority: optionalNumber,
   prioritySortOrder: optionalNumber,
-  updatedAt: Schema.String,
+  updatedAt: Schema.optional(Schema.String),
   createdAt: optionalString,
   url: optionalString,
   teamKey: optionalString,
@@ -225,8 +229,8 @@ export const LinearIssueListItemSchema = openStruct(linearIssueFields).annotate(
 /** `LinearIssueComment`. */
 export const LinearIssueCommentSchema = openStruct({
   id: Schema.String,
-  body: Schema.String,
-  createdAt: Schema.String,
+  body: Schema.optional(Schema.String),
+  createdAt: Schema.optional(Schema.String),
   updatedAt: optionalString,
   authorName: optionalString,
 }).annotate({ identifier: "LinearIssueComment" });
@@ -234,18 +238,18 @@ export const LinearIssueCommentSchema = openStruct({
 /** `LinearIssueDetail`. */
 export const LinearIssueDetailSchema = openStruct({
   ...linearIssueFields,
-  description: Schema.String,
+  description: Schema.optional(Schema.String),
   creatorName: optionalString,
   projectName: optionalString,
   cycleName: optionalString,
-  labels: mutableArray(Schema.String),
-  comments: mutableArray(LinearIssueCommentSchema),
+  labels: Schema.optional(mutableArray(Schema.String)),
+  comments: Schema.optional(mutableArray(LinearIssueCommentSchema)),
 }).annotate({ identifier: "LinearIssueDetail" });
 
 /** `LinearCompletionCommentResult`, or the earlier post a retry found. */
 export const LinearCompletionCommentResultSchema = openStruct({
   // `posted` or `already-posted`.
   status: Schema.String,
-  commentId: Schema.String,
+  commentId: Schema.optional(Schema.String),
   postedAt: optionalString,
 }).annotate({ identifier: "LinearCompletionCommentResult" });

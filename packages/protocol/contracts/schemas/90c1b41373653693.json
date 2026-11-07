@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:90c1b413736536938f0f25e71bf71a89287c15f4f63c4b1095bd6f049731cf44",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "content": {
+          "type": "string"
+        },
+        "featureId": {
+          "type": "string"
+        },
+        "modelId": {},
+        "role": {},
+        "stateApplication": {}
+      },
+      "required": ["content", "featureId"],
+      "type": "object"
+    }
+  }
+}

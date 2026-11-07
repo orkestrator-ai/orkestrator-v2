@@ -167,7 +167,7 @@ and `environment-row-model.parity.test.ts` keep the two presentations aligned.
 | P2 | **The cap is not tied to any constraint.** Introduced with realms in #1166 (2026-10-22) with no stated rationale; renderer (3) and main (4) must be changed together. | `git log -S MAX_OPEN_REALMS` |
 | P3 | **iPad: N full clients in one process.** Same-origin iframes share one WebContent process; jetsam kills the whole page, shell included. No iOS memory handling beyond `webViewWebContentProcessDidTerminate`. | `apps/ios/OrkestratorMobile/Views/RemoteWebView.swift:432-435` |
 | P4 | **Hidden iframes are not hidden.** Page Visibility is decided by the top-level document, so the hidden-window deferrals added in #1964 never apply to a hidden realm frame. | `RemoteWorkspaceRegion.tsx` uses `hidden` (display:none) |
-| P5 | **HTTP/1.1 connection budget on the relay path.** The gateway is Node `http` (HTTP/1.1 unless fronted by HTTP/2 TLS). Window (2–3 long-lived requests) + 3 relayed realms (1–2 each) = 5–9 on one origin, beyond Chromium's ~6 per host, so `/invoke` queues. | `docs/architecture/remote-gateway.md:474-482`; `web-gateway.ts:976-979` |
+| P5 | **HTTP/1.1 connection budget on the relay path.** The gateway is Node `http` (HTTP/1.1 unless fronted by HTTP/2 TLS). Window (2–3 long-lived requests) + 3 relayed realms (1–2 each) = 5–9 on one origin, beyond Chromium's ~6 per host, so `/invoke` queues. *Measured 2026-11-07: each relayed realm holds 3 long-lived streams, and 2 relayed realms already stall the window ([measurements](unified-federation-measurements.md)).* | `docs/architecture/remote-gateway.md:474-482`; `web-gateway.ts:976-979` |
 | P6 | **Complexity that exists only for the boundary.** Message protocol, ready handshake, popover sequencing and focus handoff, still capture of a native view so page dialogs can draw over it, overlay avoidance, two hand-maintained URL parsers (one already drifted, see §1). | Appendix C |
 | P7 | **The isolation is correctness, not authority.** `orkestrator:portal:invoke` gives every realm unrestricted command-node invoke (`main.ts:1446`), and the command node has full control of leaves. A compromised realm can already reach every node. | `docs/architecture/renderer-security.md:113-115` |
 | P8 | **Gaps for nodes without a realm.** No attention sounds/notifications *(inferred)*; `openPullRequestInApp` returns false while any realm is active (`lib/pull-request-opener.tsx:77`); a notification click from a hidden realm selects in the window's own store instead of bringing the realm forward *(inferred, `question-desktop-notification.ts:58-69`)*. | |
@@ -621,6 +621,15 @@ granularity (one environment's transcript), not whole-app granularity.
 | iOS / iPad | budget-bound, lower | 2 min, and on `visibilitychange` hidden | fixed conservative budget until measured |
 
 These numbers are placeholders until Phase 0 measures per-scope cost.
+
+**Status after the wave 0 measurements (2026-11-07):** kept as placeholders.
+[unified-federation-measurements.md](unified-federation-measurements.md)
+measured realm cost on one Mac (desktop realm about 340–410 MB per view in a
+development build, an upper bound; Chromium iframe realm +60–90 MB each; WebKit
++44–171 MB each in one shared WebContent process). Those are per-realm costs,
+not per-scope costs, so they cannot set a per-scope byte budget, and the iPad
+and packaged-build numbers are missing. [4002](../../plans/unified/4002-hydration-tiers-and-budgets.md)
+uses these placeholders and takes measured values when they exist.
 
 ### 8.3 Snapshot-first rehydration
 
@@ -1355,22 +1364,33 @@ taking it changes this decision and needs the user's approval.
 
 Wave 0 measurements (2026-11-07, one Mac; no iPad): [unified-federation-measurements.md](unified-federation-measurements.md).
 
-None of the following was observed; each is required before the phase that
-depends on it.
+Observed live on 2026-11-07 (one Mac, loopback, `dev:test` profiles):
 
-- Memory per realm (desktop) and per iframe realm (browser, iPad); the iPad
-  jetsam threshold; request rate from hidden realm frames (Phase 0).
-- Whether a hidden desktop `WebContentsView` reports `visibilityState: hidden`
-  and throttles timers.
-- Which HTTP version real routes negotiate (`nextHopProtocol`); todo 5380 notes
-  this has never been observed.
-- That attention events are absent from the node relay (read from code; not
-  reproduced).
-- The desktop `realmSearch` drift: confirmed by reading both functions, not by
-  running a cold realm.
+- Memory per realm on desktop (development build) and per iframe realm in
+  Chromium and WebKit; hidden-realm request rate (13/min before
+  [0003](../../plans/unified/0003-hidden-realm-visibility.md), 0 after).
+- A hidden desktop `WebContentsView` (`setVisible(false)`) still reports
+  `visible` and its timers are not slowed, so the `visibility` message is needed.
+- `nextHopProtocol` is `http/1.1` on direct loopback and on the relay. **P5 is
+  confirmed and worse than estimated:** each relayed realm holds three
+  long-lived streams; two relayed realms stalled 50 requests for over 30 s (13
+  of them the window's own) and a third realm never rendered.
+- Attention for a leaf with no realm was silent (reproduced with the fix
+  reverted) and alerts once with [0002](../../plans/unified/0002-attention-without-realm.md).
+- The cold desktop realm request now carries `home`, a work target, `bugReport`
+  and `environment-rebuild` ([0001](../../plans/unified/0001-realm-request-drift.md)).
+- Grant command scope between two real backends, direct and relayed, and a
+  v2.35.1-beta command node against a current leaf (todo 5740, closed).
+
+Still not observed; each is required before the phase that depends on it:
+
+- Memory on the iPad and its jetsam threshold; Safari itself (only Playwright
+  WebKit); a packaged desktop build; a realm with a non-empty transcript.
+- `nextHopProtocol` on a real LAN and over Tailscale Serve (todo 5380 task 2).
 - That a notification click from a hidden realm fails to bring it forward
-  (inferred from `question-desktop-notification.ts:58-69`).
-- Grant command scope between two real backends (todo 5740, task 1).
+  (inferred from `question-desktop-notification.ts:58-69`); the question
+  notification path of 0002 needs an agent that asks, which needs a provider
+  turn.
 - Parse time of the Effect Schema and runtime code on iPad Safari. The bundle
   size was measured (§13.8); the parse time needs an iPad.
 - All effort sizes in §12 are estimates, not measurements.

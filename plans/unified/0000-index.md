@@ -6,7 +6,7 @@ holds one item: its goal, the verified current state of the code, a checklist,
 tests, and a record of the work.
 
 - **Report status:** being implemented in one combined branch (`unified-federation-b4c9ee65814d`), started 2026-11-07. The row statuses below are current.
-- **Plan verified against:** `main` at `521f734a9`, on 2026-11-07. Every item has a "Current state" section re-checked against that commit. Where the report has drifted, the item says so; [Corrections to the report](#corrections-to-the-report) lists the material ones.
+- **Plan verified against:** `main` at `521f734a9`, on 2026-11-07; rebased onto `main` at `7329d2490` on 2026-11-07. Every item has a "Current state" section re-checked against that commit. Where the report has drifted, the item says so; [Corrections to the report](#corrections-to-the-report) lists the material ones.
 - **Item count:** 82 items in 8 phases, on 3 tracks (78 planned, plus [3018](3018-retire-command-scope-shim.md), [4007](4007-workspace-calls-its-node.md), [5007](5007-summary-overlay.md) and [7014](7014-remaining-zod-to-effect-schema.md) added on 2026-11-07).
 
 ## How to use this board

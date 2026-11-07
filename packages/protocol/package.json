@@ -337,6 +337,9 @@
     "./testing/artifact-tool-fixtures": "./src/testing/artifact-tool-fixtures.ts",
     "./testing/static-html-fixtures": "./src/testing/static-html-fixtures.ts"
   },
+  "dependencies": {
+    "effect": "4.1.2"
+  },
   "scripts": {
     "build": "bun check -p tsconfig.json",
     "test": "bun test --preload ../../tests/setup-node.ts src --parallel",

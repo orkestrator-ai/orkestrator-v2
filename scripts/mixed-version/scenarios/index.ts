@@ -12,9 +12,11 @@ import environments from "./environments.ts";
 import files from "./files.ts";
 import git from "./git.ts";
 import graphs from "./graphs.ts";
+import multiReview from "./multi-review.ts";
 import nativeSessions from "./native-sessions.ts";
 import nodeFiles from "./node-files.ts";
 import nodeMail from "./node-mail.ts";
+import pipelines from "./pipelines.ts";
 import previews from "./previews.ts";
 import nodes from "./nodes.ts";
 import pullRequests from "./pull-requests.ts";
@@ -49,6 +51,8 @@ export const SCENARIOS: readonly ScenarioModule[] = [
   environments,
   docker,
   graphs,
+  pipelines,
+  multiReview,
   git,
   pullRequests,
   projects,

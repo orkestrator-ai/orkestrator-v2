@@ -7,11 +7,20 @@ import {
   type TerminalBrowserTabRequest,
 } from "@/lib/terminal-links";
 import { createXtermTerminal } from "@/lib/terminal-xterm";
+import type { BackendId } from "@orkestrator/protocol/federation";
+import { createElement, useLayoutEffect } from "react";
+import { WindowScope } from "@/lib/node-scope/window-scope";
+import { cleanupNodeScopes, FakeNodeClient, renderInNodeScope } from "@/test/render-in-node-scope";
 import {
+  bindTerminalPortalsToScope,
+  createPortalTargetKey,
   createTerminalKey,
+  useTerminalPortalNodeId,
   useTerminalPortalStore,
   type PersistentTerminalData,
 } from "./terminalPortalStore";
+
+const NODE = "bk_node-a" as BackendId;
 
 type WebLinkHandler = (event: MouseEvent, uri: string) => void;
 
@@ -43,6 +52,7 @@ function createTerminal(
 ): PersistentTerminalData {
   return useTerminalPortalStore.getState().createTerminal(
     {
+      nodeId: NODE,
       tabId,
       environmentId,
       containerId: options.containerId === undefined ? "container-1" : options.containerId,
@@ -64,6 +74,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  cleanupNodeScopes();
   useTerminalPortalStore.getState().clearAllTerminals();
   useTerminalPortalStore.setState({
     paneHosts: new Map(),
@@ -78,18 +89,24 @@ describe("terminal creation and lookup", () => {
     const replacement = document.createElement("div");
     const otherEnvironment = document.createElement("div");
 
-    useTerminalPortalStore.getState().registerPaneHost("env-a", "pane-1", first);
-    useTerminalPortalStore.getState().registerPaneHost("env-b", "pane-1", otherEnvironment);
-    useTerminalPortalStore.getState().registerPaneHost("env-a", "pane-1", replacement);
+    useTerminalPortalStore.getState().registerPaneHost(NODE, "env-a", "pane-1", first);
+    useTerminalPortalStore.getState().registerPaneHost(NODE, "env-b", "pane-1", otherEnvironment);
+    useTerminalPortalStore.getState().registerPaneHost(NODE, "env-a", "pane-1", replacement);
 
-    expect(useTerminalPortalStore.getState().getPaneHost("env-a", "pane-1")).toBe(replacement);
-    expect(useTerminalPortalStore.getState().getPaneHost("env-b", "pane-1")).toBe(otherEnvironment);
-    expect(useTerminalPortalStore.getState().getPaneHost("env-a", "missing")).toBeUndefined();
+    expect(useTerminalPortalStore.getState().getPaneHost(NODE, "env-a", "pane-1")).toBe(
+      replacement,
+    );
+    expect(useTerminalPortalStore.getState().getPaneHost(NODE, "env-b", "pane-1")).toBe(
+      otherEnvironment,
+    );
+    expect(useTerminalPortalStore.getState().getPaneHost(NODE, "env-a", "missing")).toBeUndefined();
 
-    useTerminalPortalStore.getState().unregisterPaneHost("env-a", "missing");
-    useTerminalPortalStore.getState().unregisterPaneHost("env-a", "pane-1");
-    expect(useTerminalPortalStore.getState().getPaneHost("env-a", "pane-1")).toBeUndefined();
-    expect(useTerminalPortalStore.getState().getPaneHost("env-b", "pane-1")).toBe(otherEnvironment);
+    useTerminalPortalStore.getState().unregisterPaneHost(NODE, "env-a", "missing");
+    useTerminalPortalStore.getState().unregisterPaneHost(NODE, "env-a", "pane-1");
+    expect(useTerminalPortalStore.getState().getPaneHost(NODE, "env-a", "pane-1")).toBeUndefined();
+    expect(useTerminalPortalStore.getState().getPaneHost(NODE, "env-b", "pane-1")).toBe(
+      otherEnvironment,
+    );
   });
 
   test("creates a terminal with default settings and all addons", () => {
@@ -135,6 +152,7 @@ describe("terminal creation and lookup", () => {
     });
     const duplicate = useTerminalPortalStore.getState().createTerminal(
       {
+        nodeId: NODE,
         tabId: "custom",
         environmentId: "env-1",
         containerId: "different-container",
@@ -156,10 +174,12 @@ describe("terminal creation and lookup", () => {
     const data = createTerminal("same-tab", "env-a");
     createTerminal("same-tab", "env-b");
 
-    expect(useTerminalPortalStore.getState().getTerminal("env-a", "same-tab")).toBe(data);
-    expect(useTerminalPortalStore.getState().hasTerminal("env-a", "same-tab")).toBe(true);
-    expect(useTerminalPortalStore.getState().hasTerminal("env-a", "missing")).toBe(false);
-    expect(useTerminalPortalStore.getState().getTerminal("missing", "same-tab")).toBeUndefined();
+    expect(useTerminalPortalStore.getState().getTerminal(NODE, "env-a", "same-tab")).toBe(data);
+    expect(useTerminalPortalStore.getState().hasTerminal(NODE, "env-a", "same-tab")).toBe(true);
+    expect(useTerminalPortalStore.getState().hasTerminal(NODE, "env-a", "missing")).toBe(false);
+    expect(
+      useTerminalPortalStore.getState().getTerminal(NODE, "missing", "same-tab"),
+    ).toBeUndefined();
   });
 });
 
@@ -269,21 +289,21 @@ describe("terminal lifecycle mutations", () => {
     const container = document.createElement("div");
     const initialMap = useTerminalPortalStore.getState().terminals;
 
-    useTerminalPortalStore.getState().setTerminalPane("missing", "tab-1", "pane-x");
-    useTerminalPortalStore.getState().markTerminalOpened("missing", "tab-1");
-    useTerminalPortalStore.getState().setTerminalContainer("missing", "tab-1", container);
+    useTerminalPortalStore.getState().setTerminalPane(NODE, "missing", "tab-1", "pane-x");
+    useTerminalPortalStore.getState().markTerminalOpened(NODE, "missing", "tab-1");
+    useTerminalPortalStore.getState().setTerminalContainer(NODE, "missing", "tab-1", container);
     expect(useTerminalPortalStore.getState().terminals).toBe(initialMap);
 
-    useTerminalPortalStore.getState().setTerminalPane("env-1", "tab-1", "pane-2");
-    useTerminalPortalStore.getState().markTerminalOpened("env-1", "tab-1");
-    useTerminalPortalStore.getState().setTerminalContainer("env-1", "tab-1", container);
+    useTerminalPortalStore.getState().setTerminalPane(NODE, "env-1", "tab-1", "pane-2");
+    useTerminalPortalStore.getState().markTerminalOpened(NODE, "env-1", "tab-1");
+    useTerminalPortalStore.getState().setTerminalContainer(NODE, "env-1", "tab-1", container);
 
-    expect(useTerminalPortalStore.getState().getTerminal("env-1", "tab-1")).toMatchObject({
+    expect(useTerminalPortalStore.getState().getTerminal(NODE, "env-1", "tab-1")).toMatchObject({
       currentPaneId: "pane-2",
       isOpened: true,
       containerElement: container,
     });
-    expect(useTerminalPortalStore.getState().getTerminal("env-1", "tab-1")).not.toBe(data);
+    expect(useTerminalPortalStore.getState().getTerminal(NODE, "env-1", "tab-1")).not.toBe(data);
   });
 
   test("disposes attached and detached terminals and ignores missing keys", () => {
@@ -296,9 +316,9 @@ describe("terminal lifecycle mutations", () => {
     const parent = document.createElement("div");
     parent.appendChild(attached.portalElement);
 
-    useTerminalPortalStore.getState().disposeTerminal("missing", "missing");
-    useTerminalPortalStore.getState().disposeTerminal("env-1", "attached");
-    useTerminalPortalStore.getState().disposeTerminal("env-1", "detached");
+    useTerminalPortalStore.getState().disposeTerminal(NODE, "missing", "missing");
+    useTerminalPortalStore.getState().disposeTerminal(NODE, "env-1", "attached");
+    useTerminalPortalStore.getState().disposeTerminal(NODE, "env-1", "detached");
 
     expect(attachedDispose).toHaveBeenCalledTimes(1);
     expect(detachedDispose).toHaveBeenCalledTimes(1);
@@ -319,15 +339,15 @@ describe("terminal lifecycle mutations", () => {
     const parent = document.createElement("div");
     parent.appendChild(attached.portalElement);
 
-    useTerminalPortalStore.getState().clearTerminalsForEnvironment("missing");
-    useTerminalPortalStore.getState().clearTerminalsForEnvironment("env-a");
+    useTerminalPortalStore.getState().clearTerminalsForEnvironment(NODE, "missing");
+    useTerminalPortalStore.getState().clearTerminalsForEnvironment(NODE, "env-a");
 
     expect(attachedDispose).toHaveBeenCalledTimes(1);
     expect(detachedDispose).toHaveBeenCalledTimes(1);
     expect(retainedDispose).not.toHaveBeenCalled();
     expect(parent.childElementCount).toBe(0);
     expect(useTerminalPortalStore.getState().terminals).toEqual(
-      new Map([[createTerminalKey("env-b", "retained"), retained]]),
+      new Map([[createTerminalKey(NODE, "env-b", "retained"), retained]]),
     );
   });
 
@@ -353,7 +373,9 @@ describe("terminal lifecycle mutations", () => {
 describe("terminal recreation", () => {
   test("returns null when the terminal does not exist", () => {
     expect(
-      useTerminalPortalStore.getState().recreateTerminal("missing", "missing", createXtermTerminal),
+      useTerminalPortalStore
+        .getState()
+        .recreateTerminal(NODE, "missing", "missing", createXtermTerminal),
     ).toBeNull();
   });
 
@@ -367,11 +389,13 @@ describe("terminal recreation", () => {
       },
       scrollback: 9876,
     });
-    useTerminalPortalStore.getState().setTerminalPane("env-custom", "tab-custom", "pane-custom");
-    useTerminalPortalStore.getState().markTerminalOpened("env-custom", "tab-custom");
     useTerminalPortalStore
       .getState()
-      .setTerminalContainer("env-custom", "tab-custom", document.createElement("div"));
+      .setTerminalPane(NODE, "env-custom", "tab-custom", "pane-custom");
+    useTerminalPortalStore.getState().markTerminalOpened(NODE, "env-custom", "tab-custom");
+    useTerminalPortalStore
+      .getState()
+      .setTerminalContainer(NODE, "env-custom", "tab-custom", document.createElement("div"));
     const oldDispose = mock(() => undefined);
     old.terminal.dispose = oldDispose;
     const parent = document.createElement("div");
@@ -379,7 +403,7 @@ describe("terminal recreation", () => {
 
     const recreated = useTerminalPortalStore
       .getState()
-      .recreateTerminal("env-custom", "tab-custom", createXtermTerminal);
+      .recreateTerminal(NODE, "env-custom", "tab-custom", createXtermTerminal);
 
     expect(recreated).not.toBeNull();
     if (!recreated) {
@@ -402,7 +426,7 @@ describe("terminal recreation", () => {
     expect(recreated.terminal.options.theme?.background).toBe("#102030");
     expect(recreated.terminal.options.scrollback).toBe(9876);
     expect(recreated.portalElement.className).toBe("absolute inset-0 pointer-events-auto");
-    expect(useTerminalPortalStore.getState().getTerminal("env-custom", "tab-custom")).toBe(
+    expect(useTerminalPortalStore.getState().getTerminal(NODE, "env-custom", "tab-custom")).toBe(
       recreated,
     );
   });
@@ -421,7 +445,7 @@ describe("terminal recreation", () => {
 
     const recreated = useTerminalPortalStore
       .getState()
-      .recreateTerminal("env-error", "tab-error", createXtermTerminal);
+      .recreateTerminal(NODE, "env-error", "tab-error", createXtermTerminal);
 
     expect(recreated).not.toBeNull();
     expect(recreated?.containerId).toBeNull();
@@ -433,5 +457,123 @@ describe("terminal recreation", () => {
       DEFAULT_TERMINAL_APPEARANCE.backgroundColor,
     );
     expect(recreated?.terminal.options.scrollback).toBe(DEFAULT_TERMINAL_SCROLLBACK);
+  });
+});
+
+describe("node-qualified keys", () => {
+  const NODE_A = "bk_node-a" as BackendId;
+  const NODE_B = "bk_node-b" as BackendId;
+  let windowScope: WindowScope | null = null;
+
+  afterEach(() => {
+    windowScope?.dispose();
+    windowScope = null;
+  });
+
+  function openTwoNodes() {
+    windowScope = new WindowScope();
+    const a = windowScope.open({ role: "command", client: new FakeNodeClient({ nodeId: NODE_A }) });
+    const b = windowScope.open({ role: "leaf", client: new FakeNodeClient({ nodeId: NODE_B }) });
+    return { a, b };
+  }
+
+  function terminalOn(nodeId: BackendId): PersistentTerminalData {
+    // Same environment, tab and container on both nodes: the ids are node-local.
+    return useTerminalPortalStore
+      .getState()
+      .createTerminal(
+        { nodeId, tabId: "default", environmentId: "env-1", containerId: "container-1" },
+        createXtermTerminal,
+      );
+  }
+
+  test("two nodes with the same container-derived key get two portals", () => {
+    const { a, b } = openTwoNodes();
+    const onA = terminalOn(bindTerminalPortalsToScope(a));
+    const onB = terminalOn(bindTerminalPortalsToScope(b));
+    const hostA = document.createElement("div");
+    const hostB = document.createElement("div");
+    useTerminalPortalStore.getState().registerPaneHost(NODE_A, "env-1", "default", hostA);
+    useTerminalPortalStore.getState().registerPaneHost(NODE_B, "env-1", "default", hostB);
+
+    expect(onA).not.toBe(onB);
+    expect(onA.portalElement).not.toBe(onB.portalElement);
+    expect(onA.nodeId).toBe(NODE_A);
+    expect(onB.nodeId).toBe(NODE_B);
+    expect(useTerminalPortalStore.getState().terminals.size).toBe(2);
+    expect(useTerminalPortalStore.getState().getTerminal(NODE_A, "env-1", "default")).toBe(onA);
+    expect(useTerminalPortalStore.getState().getTerminal(NODE_B, "env-1", "default")).toBe(onB);
+    expect(useTerminalPortalStore.getState().getPaneHost(NODE_A, "env-1", "default")).toBe(hostA);
+    expect(useTerminalPortalStore.getState().getPaneHost(NODE_B, "env-1", "default")).toBe(hostB);
+    expect(createTerminalKey(NODE_A, "env-1", "default")).toBe("bk_node-a\u0000env-1::default");
+    expect(createPortalTargetKey(NODE_B, "env-1", "default")).toBe("bk_node-b\u0000env-1::default");
+  });
+
+  test("disposing one node's scope releases only its own terminals and pane hosts", () => {
+    const { a, b } = openTwoNodes();
+    const onA = terminalOn(bindTerminalPortalsToScope(a));
+    const onB = terminalOn(bindTerminalPortalsToScope(b));
+    // Binding twice registers one release.
+    bindTerminalPortalsToScope(b);
+    const disposeA = mock(() => undefined);
+    const disposeB = mock(() => undefined);
+    onA.terminal.dispose = disposeA;
+    onB.terminal.dispose = disposeB;
+    const parent = document.createElement("div");
+    parent.appendChild(onB.portalElement);
+    useTerminalPortalStore
+      .getState()
+      .registerPaneHost(NODE_A, "env-1", "default", document.createElement("div"));
+    useTerminalPortalStore
+      .getState()
+      .registerPaneHost(NODE_B, "env-1", "default", document.createElement("div"));
+
+    b.dispose();
+
+    expect(disposeB).toHaveBeenCalledTimes(1);
+    expect(disposeA).not.toHaveBeenCalled();
+    expect(parent.childElementCount).toBe(0);
+    expect(useTerminalPortalStore.getState().hasTerminal(NODE_B, "env-1", "default")).toBe(false);
+    expect(useTerminalPortalStore.getState().getTerminal(NODE_A, "env-1", "default")).toBe(onA);
+    expect(
+      useTerminalPortalStore.getState().getPaneHost(NODE_B, "env-1", "default"),
+    ).toBeUndefined();
+    expect(useTerminalPortalStore.getState().getPaneHost(NODE_A, "env-1", "default")).toBeDefined();
+  });
+
+  test("clearing one node's environment leaves the same environment id on another node", () => {
+    terminalOn(NODE_A);
+    const onB = terminalOn(NODE_B);
+
+    useTerminalPortalStore.getState().clearTerminalsForEnvironment(NODE_A, "env-1");
+
+    expect(useTerminalPortalStore.getState().terminals).toEqual(
+      new Map([[createTerminalKey(NODE_B, "env-1", "default"), onB]]),
+    );
+  });
+
+  test("a producer keys by its node scope and is released when that scope is disposed", () => {
+    const host = document.createElement("div");
+    const seen: BackendId[] = [];
+    function PaneHostProbe() {
+      const nodeId = useTerminalPortalNodeId();
+      useLayoutEffect(() => {
+        seen.push(nodeId);
+        useTerminalPortalStore.getState().registerPaneHost(nodeId, "env-1", "default", host);
+      }, [nodeId]);
+      return null;
+    }
+
+    const { scope } = renderInNodeScope(createElement(PaneHostProbe), {
+      nodeId: NODE_B,
+      role: "leaf",
+    });
+
+    expect(seen).toEqual([NODE_B]);
+    expect(useTerminalPortalStore.getState().getPaneHost(NODE_B, "env-1", "default")).toBe(host);
+    scope.dispose();
+    expect(
+      useTerminalPortalStore.getState().getPaneHost(NODE_B, "env-1", "default"),
+    ).toBeUndefined();
   });
 });

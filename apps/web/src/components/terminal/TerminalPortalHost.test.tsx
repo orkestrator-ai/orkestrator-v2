@@ -18,9 +18,11 @@ let terminalStoreHasTerminal = true;
 let terminalStorePaneHosts = new Map<string, HTMLDivElement>();
 let terminalStoreVersion = 0;
 const terminalStoreListeners = new Set<() => void>();
+const TEST_NODE = "bk_terminal-host-node";
 let terminalStoreTerminals: Map<
   string,
   {
+    nodeId: string;
     environmentId: string;
     tabId: string;
     portalElement: HTMLDivElement;
@@ -63,7 +65,7 @@ const terminalPortalStoreState = () => ({
   disposeTerminal: disposeTerminalMock,
   clearTerminalsForEnvironment: clearTerminalsForEnvironmentMock,
   hasTerminal: () => terminalStoreHasTerminal,
-  getPaneHost: (environmentId: string, paneId: string) =>
+  getPaneHost: (_nodeId: string, environmentId: string, paneId: string) =>
     terminalStorePaneHosts.get(`${environmentId}::${paneId}`),
 });
 
@@ -73,6 +75,7 @@ const useTerminalPortalStoreMock = (<T,>(
     terminals: Map<
       string,
       {
+        nodeId: string;
         environmentId: string;
         tabId: string;
         portalElement: HTMLDivElement;
@@ -83,8 +86,12 @@ const useTerminalPortalStoreMock = (<T,>(
     createTerminal: typeof createTerminalMock;
     disposeTerminal: typeof disposeTerminalMock;
     clearTerminalsForEnvironment: typeof clearTerminalsForEnvironmentMock;
-    hasTerminal: (environmentId: string, tabId: string) => boolean;
-    getPaneHost: (environmentId: string, paneId: string) => HTMLDivElement | undefined;
+    hasTerminal: (nodeId: string, environmentId: string, tabId: string) => boolean;
+    getPaneHost: (
+      nodeId: string,
+      environmentId: string,
+      paneId: string,
+    ) => HTMLDivElement | undefined;
   }) => T,
 ) => {
   useSyncExternalStore(
@@ -102,7 +109,12 @@ const useTerminalPortalStoreMock = (<T,>(
 useTerminalPortalStoreMock.getState = terminalPortalStoreState;
 
 mock.module("@/stores/terminalPortalStore", () => ({
-  createPortalTargetKey: (environmentId: string, paneId: string) => `${environmentId}::${paneId}`,
+  // The keys ignore the node: every terminal here is on TEST_NODE.
+  createPortalTargetKey: (_nodeId: string, environmentId: string, paneId: string) =>
+    `${environmentId}::${paneId}`,
+  createTerminalKey: (_nodeId: string, environmentId: string, tabId: string) =>
+    `${environmentId}::${tabId}`,
+  useTerminalPortalNodeId: () => TEST_NODE,
   useTerminalPortalStore: useTerminalPortalStoreMock,
 }));
 
@@ -126,6 +138,7 @@ describe("TerminalPortalHost", () => {
       [
         "env-1::default",
         {
+          nodeId: TEST_NODE,
           environmentId: "env-1",
           tabId: "default",
           portalElement: document.createElement("div"),
@@ -222,6 +235,7 @@ describe("TerminalPortalHost", () => {
     await waitFor(() => {
       expect(createTerminalMock).toHaveBeenCalledWith(
         expect.objectContaining({
+          nodeId: TEST_NODE,
           environmentId: "env-1",
           tabId: "default",
           containerId: "container-1",

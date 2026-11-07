@@ -22,7 +22,7 @@ import {
   // container id.
   createSessionKey as createTerminalSessionKey,
 } from "./terminalSessionStore";
-import { useTerminalPortalStore } from "./terminalPortalStore";
+import { commandTerminalPortalNodeId, useTerminalPortalStore } from "./terminalPortalStore";
 import { createClaudeTmuxStateKey, useClaudeTmuxStore } from "./claudeTmuxStore";
 import { useNativeComposeStore } from "./nativeComposeStore";
 import * as backend from "@/lib/backend";
@@ -485,7 +485,7 @@ function cleanupLocalTabResources(
   tab: TabInfo,
   permanent = false,
 ): void {
-  useTerminalPortalStore.getState().disposeTerminal(envId, tab.id);
+  useTerminalPortalStore.getState().disposeTerminal(commandTerminalPortalNodeId(), envId, tab.id);
 
   if (tab.type === "browser") {
     destroyBrowserPreview(tab.id).catch((err) => {
@@ -658,7 +658,7 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
 
     // Clear all terminal instances from portal store for this environment
     log.debug("environment.terminals-cleared", () => ({ environmentId: envId }));
-    terminalPortalStore.clearTerminalsForEnvironment(envId);
+    terminalPortalStore.clearTerminalsForEnvironment(commandTerminalPortalNodeId(), envId);
 
     const newEnvs = new Map(state.environments);
     newEnvs.set(envId, {
@@ -851,7 +851,9 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
         get().closePane(paneId, envId);
       } else {
         cleanupTabResources(envId, envState.containerId, closedTab);
-        useTerminalPortalStore.getState().disposeTerminal(envId, tabId);
+        useTerminalPortalStore
+          .getState()
+          .disposeTerminal(commandTerminalPortalNodeId(), envId, tabId);
         const newRoot = updateLeaf(envState.root, paneId, () => ({
           ...leaf,
           tabs: [],
@@ -866,7 +868,7 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     }
 
     cleanupTabResources(envId, envState.containerId, closedTab);
-    useTerminalPortalStore.getState().disposeTerminal(envId, tabId);
+    useTerminalPortalStore.getState().disposeTerminal(commandTerminalPortalNodeId(), envId, tabId);
 
     // Update the leaf with remaining tabs
     const newActiveTabId =
@@ -1757,7 +1759,9 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
 
     pane.tabs.forEach((tab) => {
       cleanupTabResources(envId, envState.containerId, tab);
-      useTerminalPortalStore.getState().disposeTerminal(envId, tab.id);
+      useTerminalPortalStore
+        .getState()
+        .disposeTerminal(commandTerminalPortalNodeId(), envId, tab.id);
     });
 
     // Find the sibling

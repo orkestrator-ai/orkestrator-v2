@@ -78,7 +78,8 @@ const { useTerminalSessionStore, createSessionKey: createTerminalSessionKey } =
   await import("./terminalSessionStore");
 const { useEnvironmentStore } = await import("./environmentStore");
 const { useNativeComposeStore } = await import("./nativeComposeStore");
-const { createTerminalKey, useTerminalPortalStore } = await import("./terminalPortalStore");
+const { commandTerminalPortalNodeId, createTerminalKey, useTerminalPortalStore } =
+  await import("./terminalPortalStore");
 const { createClaudeTmuxStateKey, useClaudeTmuxStore } = await import("./claudeTmuxStore");
 
 function resetStores() {
@@ -517,8 +518,9 @@ describe("paneLayoutStore tab cleanup", () => {
     useTerminalPortalStore.setState({
       terminals: new Map([
         [
-          createTerminalKey("env-close-pane", "terminal-tab"),
+          createTerminalKey(commandTerminalPortalNodeId(), "env-close-pane", "terminal-tab"),
           {
+            nodeId: commandTerminalPortalNodeId(),
             environmentId: "env-close-pane",
             tabId: "terminal-tab",
             terminal: { dispose: terminalDispose },
@@ -540,9 +542,11 @@ describe("paneLayoutStore tab cleanup", () => {
     );
     expect(useTerminalSessionStore.getState().sessions.has(terminalKey)).toBe(false);
     expect(terminalDispose).toHaveBeenCalledTimes(1);
-    expect(useTerminalPortalStore.getState().hasTerminal("env-close-pane", "terminal-tab")).toBe(
-      false,
-    );
+    expect(
+      useTerminalPortalStore
+        .getState()
+        .hasTerminal(commandTerminalPortalNodeId(), "env-close-pane", "terminal-tab"),
+    ).toBe(false);
     expect(usePaneLayoutStore.getState().getRoot("env-close-pane")).toMatchObject({
       kind: "leaf",
       id: "remaining-pane",
@@ -718,8 +722,9 @@ describe("paneLayoutStore tab cleanup", () => {
     useTerminalPortalStore.setState({
       terminals: new Map([
         [
-          createTerminalKey("env-setup-root", "setup-tab"),
+          createTerminalKey(commandTerminalPortalNodeId(), "env-setup-root", "setup-tab"),
           {
+            nodeId: commandTerminalPortalNodeId(),
             environmentId: "env-setup-root",
             tabId: "setup-tab",
             terminal: { dispose: terminalDispose },
@@ -732,9 +737,11 @@ describe("paneLayoutStore tab cleanup", () => {
     usePaneLayoutStore.getState().removeTab("default", "setup-tab", "env-setup-root");
 
     expect(terminalDispose).toHaveBeenCalledTimes(1);
-    expect(useTerminalPortalStore.getState().hasTerminal("env-setup-root", "setup-tab")).toBe(
-      false,
-    );
+    expect(
+      useTerminalPortalStore
+        .getState()
+        .hasTerminal(commandTerminalPortalNodeId(), "env-setup-root", "setup-tab"),
+    ).toBe(false);
     expect(usePaneLayoutStore.getState().getRoot("env-setup-root")).toMatchObject({
       kind: "leaf",
       id: "default",
@@ -761,8 +768,9 @@ describe("paneLayoutStore tab cleanup", () => {
     useTerminalPortalStore.setState({
       terminals: new Map([
         [
-          createTerminalKey("env-setup-siblings", "setup-tab"),
+          createTerminalKey(commandTerminalPortalNodeId(), "env-setup-siblings", "setup-tab"),
           {
+            nodeId: commandTerminalPortalNodeId(),
             environmentId: "env-setup-siblings",
             tabId: "setup-tab",
             terminal: { dispose: terminalDispose },
@@ -775,9 +783,11 @@ describe("paneLayoutStore tab cleanup", () => {
     usePaneLayoutStore.getState().removeTab("default", "setup-tab", "env-setup-siblings");
 
     expect(terminalDispose).toHaveBeenCalledTimes(1);
-    expect(useTerminalPortalStore.getState().hasTerminal("env-setup-siblings", "setup-tab")).toBe(
-      false,
-    );
+    expect(
+      useTerminalPortalStore
+        .getState()
+        .hasTerminal(commandTerminalPortalNodeId(), "env-setup-siblings", "setup-tab"),
+    ).toBe(false);
     expect(usePaneLayoutStore.getState().getRoot("env-setup-siblings")).toMatchObject({
       kind: "leaf",
       id: "default",
@@ -1004,8 +1014,9 @@ describe("paneLayoutStore authoritative cleanup", () => {
     useTerminalPortalStore.setState({
       terminals: new Map([
         [
-          createTerminalKey(environmentId, "removed-terminal"),
+          createTerminalKey(commandTerminalPortalNodeId(), environmentId, "removed-terminal"),
           {
+            nodeId: commandTerminalPortalNodeId(),
             environmentId,
             tabId: "removed-terminal",
             terminal: { dispose: removedTerminalDispose },
@@ -1013,8 +1024,9 @@ describe("paneLayoutStore authoritative cleanup", () => {
           } as never,
         ],
         [
-          createTerminalKey(environmentId, "retained-terminal"),
+          createTerminalKey(commandTerminalPortalNodeId(), environmentId, "retained-terminal"),
           {
+            nodeId: commandTerminalPortalNodeId(),
             environmentId,
             tabId: "retained-terminal",
             terminal: { dispose: retainedTerminalDispose },
@@ -1058,12 +1070,16 @@ describe("paneLayoutStore authoritative cleanup", () => {
     expect(useTerminalSessionStore.getState().sessions.has(retainedTerminalKey)).toBe(true);
     expect(removedTerminalDispose).toHaveBeenCalledTimes(1);
     expect(retainedTerminalDispose).not.toHaveBeenCalled();
-    expect(useTerminalPortalStore.getState().hasTerminal(environmentId, "removed-terminal")).toBe(
-      false,
-    );
-    expect(useTerminalPortalStore.getState().hasTerminal(environmentId, "retained-terminal")).toBe(
-      true,
-    );
+    expect(
+      useTerminalPortalStore
+        .getState()
+        .hasTerminal(commandTerminalPortalNodeId(), environmentId, "removed-terminal"),
+    ).toBe(false);
+    expect(
+      useTerminalPortalStore
+        .getState()
+        .hasTerminal(commandTerminalPortalNodeId(), environmentId, "retained-terminal"),
+    ).toBe(true);
     expect(destroy).toHaveBeenCalledWith("removed-browser");
     expect(useClaudeTmuxStore.getState().getTab(scopedTmuxKey).running).toBe(false);
     expect(useClaudeTmuxStore.getState().getDraftText(scopedTmuxKey)).toBe("");
@@ -1248,8 +1264,9 @@ describe("paneLayoutStore authoritative cleanup", () => {
     useTerminalPortalStore.setState({
       terminals: new Map([
         [
-          createTerminalKey(environmentId, "moving"),
+          createTerminalKey(commandTerminalPortalNodeId(), environmentId, "moving"),
           {
+            nodeId: commandTerminalPortalNodeId(),
             environmentId,
             tabId: "moving",
             terminal: { dispose: terminalDispose },
@@ -1274,7 +1291,11 @@ describe("paneLayoutStore authoritative cleanup", () => {
     });
 
     expect(useTerminalSessionStore.getState().sessions.has(sessionKey)).toBe(true);
-    expect(useTerminalPortalStore.getState().hasTerminal(environmentId, "moving")).toBe(true);
+    expect(
+      useTerminalPortalStore
+        .getState()
+        .hasTerminal(commandTerminalPortalNodeId(), environmentId, "moving"),
+    ).toBe(true);
     expect(terminalDispose).not.toHaveBeenCalled();
     expect(closeLocalTerminalSession).not.toHaveBeenCalled();
     expect(detachTerminal).not.toHaveBeenCalled();
@@ -1339,8 +1360,9 @@ describe("paneLayoutStore authoritative cleanup", () => {
     useTerminalPortalStore.setState({
       terminals: new Map([
         [
-          createTerminalKey(environmentId, "file-tab"),
+          createTerminalKey(commandTerminalPortalNodeId(), environmentId, "file-tab"),
           {
+            nodeId: commandTerminalPortalNodeId(),
             environmentId,
             tabId: "file-tab",
             terminal: { dispose: fileDispose },
@@ -1348,8 +1370,9 @@ describe("paneLayoutStore authoritative cleanup", () => {
           } as never,
         ],
         [
-          createTerminalKey(environmentId, "review-tab"),
+          createTerminalKey(commandTerminalPortalNodeId(), environmentId, "review-tab"),
           {
+            nodeId: commandTerminalPortalNodeId(),
             environmentId,
             tabId: "review-tab",
             terminal: { dispose: reviewDispose },
@@ -1374,8 +1397,16 @@ describe("paneLayoutStore authoritative cleanup", () => {
 
     expect(fileDispose).toHaveBeenCalledTimes(1);
     expect(reviewDispose).toHaveBeenCalledTimes(1);
-    expect(useTerminalPortalStore.getState().hasTerminal(environmentId, "file-tab")).toBe(false);
-    expect(useTerminalPortalStore.getState().hasTerminal(environmentId, "review-tab")).toBe(false);
+    expect(
+      useTerminalPortalStore
+        .getState()
+        .hasTerminal(commandTerminalPortalNodeId(), environmentId, "file-tab"),
+    ).toBe(false);
+    expect(
+      useTerminalPortalStore
+        .getState()
+        .hasTerminal(commandTerminalPortalNodeId(), environmentId, "review-tab"),
+    ).toBe(false);
     expect(usePaneLayoutStore.getState().getAllTabs(environmentId)).toEqual([]);
     expect(closeLocalTerminalSession).not.toHaveBeenCalled();
     expect(detachTerminal).not.toHaveBeenCalled();
@@ -2815,8 +2846,9 @@ describe("paneLayoutStore pane and tab actions", () => {
     useTerminalPortalStore.setState({
       terminals: new Map([
         [
-          createTerminalKey("env-move-portal", "terminal-moving"),
+          createTerminalKey(commandTerminalPortalNodeId(), "env-move-portal", "terminal-moving"),
           {
+            nodeId: commandTerminalPortalNodeId(),
             environmentId: "env-move-portal",
             tabId: "terminal-moving",
             terminal: { dispose: terminalDispose },
@@ -2832,7 +2864,9 @@ describe("paneLayoutStore pane and tab actions", () => {
 
     expect(terminalDispose).not.toHaveBeenCalled();
     expect(
-      useTerminalPortalStore.getState().hasTerminal("env-move-portal", "terminal-moving"),
+      useTerminalPortalStore
+        .getState()
+        .hasTerminal(commandTerminalPortalNodeId(), "env-move-portal", "terminal-moving"),
     ).toBe(true);
     expect(
       usePaneLayoutStore
@@ -2872,8 +2906,13 @@ describe("paneLayoutStore pane and tab actions", () => {
     useTerminalPortalStore.setState({
       terminals: new Map([
         [
-          createTerminalKey("env-move-portal-collapse", "terminal-moving"),
+          createTerminalKey(
+            commandTerminalPortalNodeId(),
+            "env-move-portal-collapse",
+            "terminal-moving",
+          ),
           {
+            nodeId: commandTerminalPortalNodeId(),
             environmentId: "env-move-portal-collapse",
             tabId: "terminal-moving",
             terminal: { dispose: terminalDispose },
@@ -2889,7 +2928,9 @@ describe("paneLayoutStore pane and tab actions", () => {
 
     expect(terminalDispose).not.toHaveBeenCalled();
     expect(
-      useTerminalPortalStore.getState().hasTerminal("env-move-portal-collapse", "terminal-moving"),
+      useTerminalPortalStore
+        .getState()
+        .hasTerminal(commandTerminalPortalNodeId(), "env-move-portal-collapse", "terminal-moving"),
     ).toBe(true);
     expect(usePaneLayoutStore.getState().getRoot("env-move-portal-collapse")).toMatchObject({
       kind: "leaf",
@@ -3988,8 +4029,9 @@ describe("paneLayoutStore remaining branch coverage", () => {
     useTerminalPortalStore.setState({
       terminals: new Map([
         [
-          createTerminalKey("env-reset-portals", "target"),
+          createTerminalKey(commandTerminalPortalNodeId(), "env-reset-portals", "target"),
           {
+            nodeId: commandTerminalPortalNodeId(),
             environmentId: "env-reset-portals",
             tabId: "target",
             terminal: { dispose: targetDispose },
@@ -3997,8 +4039,9 @@ describe("paneLayoutStore remaining branch coverage", () => {
           } as never,
         ],
         [
-          createTerminalKey("env-retained", "retained"),
+          createTerminalKey(commandTerminalPortalNodeId(), "env-retained", "retained"),
           {
+            nodeId: commandTerminalPortalNodeId(),
             environmentId: "env-retained",
             tabId: "retained",
             terminal: { dispose: retainedDispose },
@@ -4012,10 +4055,16 @@ describe("paneLayoutStore remaining branch coverage", () => {
 
     expect(targetDispose).toHaveBeenCalledTimes(1);
     expect(retainedDispose).not.toHaveBeenCalled();
-    expect(useTerminalPortalStore.getState().hasTerminal("env-reset-portals", "target")).toBe(
-      false,
-    );
-    expect(useTerminalPortalStore.getState().hasTerminal("env-retained", "retained")).toBe(true);
+    expect(
+      useTerminalPortalStore
+        .getState()
+        .hasTerminal(commandTerminalPortalNodeId(), "env-reset-portals", "target"),
+    ).toBe(false);
+    expect(
+      useTerminalPortalStore
+        .getState()
+        .hasTerminal(commandTerminalPortalNodeId(), "env-retained", "retained"),
+    ).toBe(true);
   });
 
   test("removeTab disposes the removed tab's portal terminal", () => {
@@ -4027,8 +4076,9 @@ describe("paneLayoutStore remaining branch coverage", () => {
     useTerminalPortalStore.setState({
       terminals: new Map([
         [
-          createTerminalKey("env-remove-portal", "terminal-tab"),
+          createTerminalKey(commandTerminalPortalNodeId(), "env-remove-portal", "terminal-tab"),
           {
+            nodeId: commandTerminalPortalNodeId(),
             environmentId: "env-remove-portal",
             tabId: "terminal-tab",
             terminal: { dispose: terminalDispose },
@@ -4041,9 +4091,11 @@ describe("paneLayoutStore remaining branch coverage", () => {
     usePaneLayoutStore.getState().removeTab("default", "terminal-tab", "env-remove-portal");
 
     expect(terminalDispose).toHaveBeenCalledTimes(1);
-    expect(useTerminalPortalStore.getState().hasTerminal("env-remove-portal", "terminal-tab")).toBe(
-      false,
-    );
+    expect(
+      useTerminalPortalStore
+        .getState()
+        .hasTerminal(commandTerminalPortalNodeId(), "env-remove-portal", "terminal-tab"),
+    ).toBe(false);
   });
 
   test("addTab ignores missing environments and pane ids", () => {
@@ -4103,8 +4155,9 @@ describe("paneLayoutStore remaining branch coverage", () => {
     useTerminalPortalStore.setState({
       terminals: new Map([
         [
-          createTerminalKey("env-remove-guards", "right-tab"),
+          createTerminalKey(commandTerminalPortalNodeId(), "env-remove-guards", "right-tab"),
           {
+            nodeId: commandTerminalPortalNodeId(),
             environmentId: "env-remove-guards",
             tabId: "right-tab",
             terminal: { dispose: rightTerminalDispose },
@@ -4120,9 +4173,11 @@ describe("paneLayoutStore remaining branch coverage", () => {
 
     expect(usePaneLayoutStore.getState().getRoot("env-remove-guards")).toBe(originalRoot);
     expect(rightTerminalDispose).not.toHaveBeenCalled();
-    expect(useTerminalPortalStore.getState().hasTerminal("env-remove-guards", "right-tab")).toBe(
-      true,
-    );
+    expect(
+      useTerminalPortalStore
+        .getState()
+        .hasTerminal(commandTerminalPortalNodeId(), "env-remove-guards", "right-tab"),
+    ).toBe(true);
   });
 
   test("reorderTabs ignores missing scopes, panes, and unchanged indexes", () => {

@@ -309,11 +309,18 @@ mock.module("@/components/build-pipeline/BuildChatTab", () => ({
 }));
 
 mock.module("@/stores/terminalPortalStore", () => ({
-  createTerminalKey: (environmentId: string, tabId: string) => `${environmentId}::${tabId}`,
+  createTerminalKey: (nodeId: string, environmentId: string, tabId: string) =>
+    `${nodeId}\u0000${environmentId}::${tabId}`,
+  useTerminalPortalNodeId: () => "bk_pane-leaf-node",
   useTerminalPortalStore: <T,>(
     selector: (state: {
-      registerPaneHost: (environmentId: string, paneId: string, host: HTMLDivElement) => void;
-      unregisterPaneHost: (environmentId: string, paneId: string) => void;
+      registerPaneHost: (
+        nodeId: string,
+        environmentId: string,
+        paneId: string,
+        host: HTMLDivElement,
+      ) => void;
+      unregisterPaneHost: (nodeId: string, environmentId: string, paneId: string) => void;
       terminals: Map<string, unknown>;
     }) => T,
   ) =>

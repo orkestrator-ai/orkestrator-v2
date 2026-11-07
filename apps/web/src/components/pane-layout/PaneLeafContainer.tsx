@@ -12,7 +12,7 @@ import { useDroppable } from "@dnd-kit/core";
 import { useShallow } from "zustand/react/shallow";
 import { usePaneLayoutStore } from "@/stores";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
-import { useTerminalPortalStore } from "@/stores/terminalPortalStore";
+import { useTerminalPortalNodeId, useTerminalPortalStore } from "@/stores/terminalPortalStore";
 import type { MultiReviewTabData, PaneLeaf } from "@/types/paneLayout";
 import {
   createPaneTabElementId,
@@ -196,6 +196,7 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
 
   // Pane host for terminal rendering (tab targets are moved here)
   const portalHostRef = useRef<HTMLDivElement>(null);
+  const terminalNodeId = useTerminalPortalNodeId();
   const { registerPaneHost, unregisterPaneHost } = useTerminalPortalStore(
     useShallow((state) => ({
       registerPaneHost: state.registerPaneHost,
@@ -208,12 +209,12 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
     const host = portalHostRef.current;
     if (!host) return;
 
-    registerPaneHost(environmentId, pane.id, host);
+    registerPaneHost(terminalNodeId, environmentId, pane.id, host);
 
     return () => {
-      unregisterPaneHost(environmentId, pane.id);
+      unregisterPaneHost(terminalNodeId, environmentId, pane.id);
     };
-  }, [environmentId, pane.id, registerPaneHost, unregisterPaneHost]);
+  }, [terminalNodeId, environmentId, pane.id, registerPaneHost, unregisterPaneHost]);
 
   // Handle clicking on the pane to focus it
   const handlePaneClick = useCallback(() => {

@@ -42,9 +42,11 @@ import {
 import { sanitizeSvg } from "@/lib/chat/svg-sanitize";
 import { artifactBodySearchText } from "@/lib/chat/rich-search-text";
 import { useTranscriptArtifactCapabilities } from "@/hooks/useTranscriptArtifactCapabilities";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { useRichViewField, type RichViewChoice } from "@/stores/richContentViewStore";
 import {
   LIVE_HOST_INVALIDATION_REASONS,
+  isLiveOccurrence,
   useArtifactLiveHostStore,
 } from "@/stores/artifactLiveHostStore";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
@@ -560,11 +562,14 @@ export function HtmlArtifactBody({
   const liveEnabled = Boolean(
     capabilities?.liveInteractive && capabilities.rolloutFlags.liveInteractive,
   );
+  // The live host is window-owned; this occurrence is keyed by its node scope's id.
+  const { scope: nodeScope } = useScopesWithCommandFallback();
+  const nodeId = nodeScope.nodeId;
   const live = useArtifactLiveHostStore((state) =>
-    state.active?.target.occurrenceKey === occurrenceKey ? state.active : null,
+    isLiveOccurrence(state.active?.target, nodeId, occurrenceKey) ? state.active : null,
   );
   const ended = useArtifactLiveHostStore((state) =>
-    state.ended?.occurrenceKey === occurrenceKey ? state.ended : null,
+    isLiveOccurrence(state.ended, nodeId, occurrenceKey) ? state.ended : null,
   );
   const request = useArtifactLiveHostStore((state) => state.request);
   const stop = useArtifactLiveHostStore((state) => state.stop);
@@ -579,7 +584,7 @@ export function HtmlArtifactBody({
   }, [invalidate, live, scope.generation]);
 
   const runInteractive = () => {
-    request({
+    request(nodeScope, {
       occurrenceKey,
       publicationId: artifactRef.publicationId,
       artifactId: artifactRef.artifactId,
@@ -764,7 +769,7 @@ export function HtmlArtifactBody({
                 <button
                   type="button"
                   className="underline"
-                  onClick={() => clearEnded(occurrenceKey)}
+                  onClick={() => clearEnded(nodeId, occurrenceKey)}
                 >
                   Dismiss
                 </button>

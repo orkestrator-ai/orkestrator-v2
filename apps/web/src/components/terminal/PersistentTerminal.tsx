@@ -346,7 +346,8 @@ export function PersistentTerminal({
 
   // Subscribe to containerElement and isOpened from store to ensure we have the latest values
   // (props might be stale if store was updated after TerminalPortalHost rendered)
-  const terminalKey = createTerminalKey(environmentId, tabId);
+  const terminalNodeId = terminalData.nodeId;
+  const terminalKey = createTerminalKey(terminalNodeId, environmentId, tabId);
   const storedContainerElement = useTerminalPortalStore(
     (state) => state.terminals.get(terminalKey)?.containerElement ?? null,
   );
@@ -1342,8 +1343,8 @@ export function PersistentTerminal({
 
       terminal.open(containerElement);
 
-      markTerminalOpened(environmentId, tabId);
-      setTerminalContainer(environmentId, tabId, containerElement);
+      markTerminalOpened(terminalNodeId, environmentId, tabId);
+      setTerminalContainer(terminalNodeId, environmentId, tabId, containerElement);
 
       // Initial fit and font loading
       fitToLaidOutPane(fitAddon, terminalRef.current);
@@ -1405,7 +1406,12 @@ export function PersistentTerminal({
         // This can happen when the container was detached from DOM for too long and xterm disposed itself
         if (!hasXtermBefore) {
           // Recreate the terminal - this will trigger a re-render with new terminalData
-          const newTerminalData = recreateTerminal(environmentId, tabId, createXtermTerminal);
+          const newTerminalData = recreateTerminal(
+            terminalNodeId,
+            environmentId,
+            tabId,
+            createXtermTerminal,
+          );
           if (newTerminalData) {
             // Terminal was disposed and recreated - return empty cleanup since no handlers
             // were set up. The effect will re-run with the new terminalData from the store.
@@ -1478,7 +1484,7 @@ export function PersistentTerminal({
     }
 
     // Always update pane tracking
-    setTerminalPane(environmentId, tabId, paneId);
+    setTerminalPane(terminalNodeId, environmentId, tabId, paneId);
 
     // Handle user input. The xterm instance persists across portal moves, so
     // defensively remove any older input handler before installing this owner.
@@ -1632,6 +1638,7 @@ export function PersistentTerminal({
     paneId,
     containerId,
     environmentId,
+    terminalNodeId,
     isReconnecting,
     markTerminalOpened,
     setTerminalContainer,

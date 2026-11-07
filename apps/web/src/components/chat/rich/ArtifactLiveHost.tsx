@@ -23,12 +23,20 @@ import { ARTIFACT_FRAME_CHANNEL } from "@orkestrator/protocol/artifact-frame-cha
 import { useTranscriptArtifactCapabilities } from "@/hooks/useTranscriptArtifactCapabilities";
 import { useBlockingOverlay } from "@/components/browser/browser-tab-hooks";
 import {
+  artifactLiveHostOwner,
+  isLiveOccurrence,
   LIVE_HOST_INVALIDATION_REASONS,
+  liveAnchorKey,
   liveHostScopeInvalidation,
   useArtifactLiveHostStore,
   type LiveHostSession,
   type LivePlacement,
 } from "@/stores/artifactLiveHostStore";
+import {
+  NodeScopeProvider,
+  useScopesWithCommandFallback,
+  WindowScopeProvider,
+} from "@/lib/node-scope/providers";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useUIStore } from "@/stores/uiStore";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
@@ -221,10 +229,20 @@ export function ArtifactLiveHost() {
   const pendingSwitch = useArtifactLiveHostStore((state) => state.pendingSwitch);
   const confirmSwitch = useArtifactLiveHostStore((state) => state.confirmSwitch);
   const cancelSwitch = useArtifactLiveHostStore((state) => state.cancelSwitch);
+  const { windowScope } = useScopesWithCommandFallback();
+  // The surface renders inside its target's node scope, so what it reads
+  // (capabilities, the backend identity) is that node's, not the command node's.
+  const owner = active ? artifactLiveHostOwner(active.target.nodeId) : null;
 
   return (
     <>
-      {active ? <LiveHostSurface key={active.hostId} active={active} /> : null}
+      {active && owner ? (
+        <WindowScopeProvider windowScope={windowScope}>
+          <NodeScopeProvider key={owner.nodeId} scope={owner}>
+            <LiveHostSurface key={active.hostId} active={active} />
+          </NodeScopeProvider>
+        </WindowScopeProvider>
+      ) : null}
       {pendingSwitch && active ? (
         <Dialog open onOpenChange={(open) => (open ? undefined : cancelSwitch())}>
           <DialogContent size="md" data-artifact-live-switch="true">
@@ -249,7 +267,7 @@ export function ArtifactLiveHost() {
 function LiveHostSurface({ active }: { active: LiveHostSession }) {
   const { hostId, target, phase, session, placement, linkRequest } = active;
   const anchor = useArtifactLiveHostStore(
-    (state) => state.anchors.get(target.occurrenceKey) ?? null,
+    (state) => state.anchors.get(liveAnchorKey(target.nodeId, target.occurrenceKey)) ?? null,
   );
   const setPlacement = useArtifactLiveHostStore((state) => state.setPlacement);
   const stop = useArtifactLiveHostStore((state) => state.stop);
@@ -591,19 +609,26 @@ function PlacementButton({
  * draws the document over it. It never owns the document.
  */
 export function ArtifactLivePlaceholder({ occurrenceKey }: { occurrenceKey: string }) {
+  // Anchors are keyed by node: the same occurrence key on another node is another anchor.
+  const { scope } = useScopesWithCommandFallback();
+  const nodeId = scope.nodeId;
   const registerAnchor = useArtifactLiveHostStore((state) => state.registerAnchor);
   const placement = useArtifactLiveHostStore((state) =>
-    state.active?.target.occurrenceKey === occurrenceKey ? state.active.placement : null,
+    state.active && isLiveOccurrence(state.active.target, nodeId, occurrenceKey)
+      ? state.active.placement
+      : null,
   );
   const frameHeight = useArtifactLiveHostStore((state) =>
-    state.active?.target.occurrenceKey === occurrenceKey ? state.active.frameHeight : null,
+    state.active && isLiveOccurrence(state.active.target, nodeId, occurrenceKey)
+      ? state.active.frameHeight
+      : null,
   );
   const setPlacement = useArtifactLiveHostStore((state) => state.setPlacement);
   const [element, setElement] = useState<HTMLDivElement | null>(null);
   useLayoutEffect(() => {
     if (!element) return;
-    return registerAnchor(occurrenceKey, element);
-  }, [element, occurrenceKey, registerAnchor]);
+    return registerAnchor(scope, occurrenceKey, element);
+  }, [element, scope, occurrenceKey, registerAnchor]);
   const detached = placement !== null && placement !== "inline";
   return (
     <div

@@ -4,6 +4,7 @@ import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { StrictMode, useCallback, useState } from "react";
 import * as realSessionStore from "@/stores/sessionStore";
+import * as realTerminalPortalStore from "@/stores/terminalPortalStore";
 import * as realClipboardImagePaste from "@/hooks/useClipboardImagePaste";
 import { invoke } from "@/lib/native/backend";
 import { mockReadText, mockWriteText } from "../../../../../tests/mocks/clipboard";
@@ -182,6 +183,7 @@ const persistentSessionStore = {
 };
 
 const realSessionStoreSnapshot = { ...realSessionStore };
+const realTerminalPortalStoreSnapshot = { ...realTerminalPortalStore };
 // The component reads the store through narrow selectors, so the mock has to
 // honor them — and through `getState()`, which the session-list retry uses to
 // ask whether a snapshot actually landed.
@@ -196,6 +198,7 @@ mock.module("@/stores/sessionStore", () => ({
 
 afterAll(() => {
   mock.module("@/stores/sessionStore", () => realSessionStoreSnapshot);
+  mock.module("@/stores/terminalPortalStore", () => realTerminalPortalStoreSnapshot);
   mock.module("@/hooks/useClipboardImagePaste", () => realClipboardImagePasteSnapshot);
   restoreMatchMedia();
 });
@@ -208,7 +211,7 @@ const portalStoreActions = {
     portalTerminalIsOpened = true;
   }),
   setTerminalContainer: mock(
-    (_environmentId: string, _tabId: string, containerElement: HTMLDivElement) => {
+    (_nodeId: string, _environmentId: string, _tabId: string, containerElement: HTMLDivElement) => {
       storedContainerElement = containerElement;
     },
   ),
@@ -361,7 +364,8 @@ useTerminalPortalStoreMock.getState = () => ({
 });
 
 mock.module("@/stores/terminalPortalStore", () => ({
-  createTerminalKey: (environmentId: string, tabId: string) => `${environmentId}::${tabId}`,
+  createTerminalKey: (_nodeId: string, environmentId: string, tabId: string) =>
+    `${environmentId}::${tabId}`,
   useTerminalPortalStore: useTerminalPortalStoreMock,
 }));
 
@@ -506,6 +510,7 @@ function createTerminalData(options?: {
   storedContainerElement.appendChild(xtermNode);
 
   return {
+    nodeId: "bk_persistent-terminal-node",
     tabId: "tab-1",
     containerId: options?.containerId ?? "container-1",
     environmentId: options?.environmentId ?? "env-1",
@@ -883,8 +888,13 @@ describe("PersistentTerminal", () => {
 
     await waitFor(() => {
       expect(terminal.open).toHaveBeenCalledTimes(1);
-      expect(portalStoreActions.markTerminalOpened).toHaveBeenCalledWith("env-1", "tab-1");
+      expect(portalStoreActions.markTerminalOpened).toHaveBeenCalledWith(
+        "bk_persistent-terminal-node",
+        "env-1",
+        "tab-1",
+      );
       expect(portalStoreActions.setTerminalContainer).toHaveBeenCalledWith(
+        "bk_persistent-terminal-node",
         "env-1",
         "tab-1",
         expect.any(HTMLDivElement),
@@ -3676,6 +3686,7 @@ describe("PersistentTerminal", () => {
 
     await waitFor(() => {
       expect(portalStoreActions.recreateTerminal).toHaveBeenCalledWith(
+        "bk_persistent-terminal-node",
         "env-1",
         "tab-1",
         createXtermTerminal,

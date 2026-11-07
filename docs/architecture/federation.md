@@ -889,8 +889,31 @@ environments..." field open the same dialog, so they behave identically.
 
 ## Storage namespacing
 
-`desktopConnectionStorageKey` (`apps/web/src/lib/desktop-storage-key.ts`)
-applies in Electron renderers (`isolatedViewState`). The namespace comes from
+`desktopConnectionStorageKey(baseKey, node)`
+(`apps/web/src/lib/desktop-storage-key.ts`) takes the node the data belongs
+to, a `StorageNode` (`{ nodeId, role }`; a `NodeScope` is one, and
+`COMMAND_STORAGE_NODE` names the window's command node). Stores call
+`nodeStorageKey(baseKey, node)` (`apps/web/src/lib/persistence-keys.ts`), which
+adds any one-time move from a legacy key (`PERSISTENCE_KEY_MIGRATIONS`).
+
+- **A leaf** gets `<base>:machine:<hash("machine:" + nodeId)>` in every
+  renderer: the key a browser or iOS realm on that leaf already wrote in
+  shared origin storage. On desktop that form is new (realm partitions are
+  abandoned, [Decision 13.7](../reports/unified-federation.md#137-desktop-realm-partition-data)).
+  A leaf key never adopts the un-namespaced legacy value, which is the
+  command node's.
+- **The command node** keeps the key it had before nodes were named: in a
+  browser the base key (or the `:machine:` key in a hosted-browser realm on a
+  leaf), and in Electron renderers (`isolatedViewState`) the identity key
+  below, with its adoptions. It ignores the node id, so the key is the same
+  before and after the command scope proves its id.
+
+Web annotation local drafts moved to
+`orkestrator.web-annotations.local-drafts.v2`, namespaced per node; the
+un-namespaced v1 value moves once into the command node's key (plan item
+[3015](../../plans/unified/3015-persistence-keys-per-node.md)).
+
+On desktop the command node's namespace comes from
 `window.orkestratorDesktopIdentity`, which the preload reads by synchronous
 IPC at page load:
 

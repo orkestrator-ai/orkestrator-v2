@@ -46,9 +46,11 @@ association kind.
 workers on its leaf nodes, but cannot open a terminal or browser in them, edit
 their tabs, run a custom fix or open a reviewer's tab.
 
-**Context.** Every surface command is on `NODE_EXCLUDED_COMMANDS`
-(`apps/backend/src/core/nodes/node-routing.ts:71-84`), so none crosses a node
-link. The coordinator reaches a leaf through dedicated controller commands
+**Context.** Every surface command is on `NODE_ROUTING_EXCLUDED_COMMANDS`
+(`apps/backend/src/core/nodes/node-routing.ts`; called `NODE_EXCLUDED_COMMANDS`
+until 2026-11-07, when plan item
+[7012](../../../plans/unified/7012-allow-listed-grants.md) renamed it), so none
+crosses a node link. The coordinator reaches a leaf through dedicated controller commands
 instead: `launch_coordinator_node_multi_review`
 (`apps/backend/src/core/commands-registry-coordinator-nodes.ts:604`),
 `coordinator_node_multi_review_surface` (`:748`, surfaces `root`, `fix` and
@@ -56,9 +58,11 @@ instead: `launch_coordinator_node_multi_review`
 calls `create_controller_pr` on the leaf through `remote.call` inside
 `withCoordinatorReceipt`
 (`apps/backend/src/core/coordinator-surface-actions.ts:438-470`). The leaf
-controller commands are workspace-excluded
-(`node-routing.ts:123-130`), so only a command node's coordinator can call
-them.
+controller commands are defined with `access: "internal"`, which no workspace
+grant or relayed call admits (the grant allow-list replaced the old
+workspace exclusions on 2026-11-07,
+[7012](../../../plans/unified/7012-allow-listed-grants.md)), so only a command
+node's coordinator can call them.
 
 **Investigation.** Four tools take no `nodeId`:
 `launch_terminal`, `open_worker_browser` and `edit_worker_tab` in
@@ -83,7 +87,7 @@ never resubmits it (`node-routing.ts:17-18`, `NodeOutcomeUnknownError` in
     - Cons: three new leaf commands to keep in step with the local ones; an older leaf refuses them, so the tool must report "update that node".
   - **A generic relay that forwards the local surface command to the leaf.**
     - Pros: one code path for every surface.
-    - Cons: the local commands check coordinator scope against this node's store, which the leaf does not have; it would re-open the commands `NODE_EXCLUDED_COMMANDS` keeps closed.
+    - Cons: the local commands check coordinator scope against this node's store, which the leaf does not have; it would re-open the commands `NODE_ROUTING_EXCLUDED_COMMANDS` keeps closed.
 - **What happens when the leaf's answer is lost?**
   - **Return outcome-unknown and let the coordinator retry with the same `requestId` (recommended).** The leaf request ID derives from the receipt key, so the retry replays the leaf's receipt. `edit_worker_tab` has no receipt but states an end state, so a retry is a no-op there too.
     - Pros: matches the node-link rule (never resubmit automatically) and `create_pr`.
@@ -277,9 +281,10 @@ works on the new kind unless it is filtered out.
 
 - The tools and their backend commands are described in
   [`coordinator.md`, "Worker surfaces"](../../architecture/coordinator.md#worker-surfaces).
-- The backend surface commands are still on `NODE_EXCLUDED_COMMANDS`
-  (`apps/backend/src/core/nodes/node-routing.ts`), so none of them crosses a
-  node link itself. Since task 1, `launch_terminal`, `open_worker_browser`,
+- The backend surface commands are still on `NODE_ROUTING_EXCLUDED_COMMANDS`
+  (`apps/backend/src/core/nodes/node-routing.ts`, the `invoke_on_node`
+  exclusions, named `NODE_EXCLUDED_COMMANDS` before 2026-11-07), so none of
+  them crosses a node link itself. Since task 1, `launch_terminal`, `open_worker_browser`,
   `edit_worker_tab`, `create_pr`, `custom_fix_multi_review` and
   `open_multi_review` (with or without `reviewerId`) take `nodeId`. The
   command node keeps the receipt and calls the leaf's own controller

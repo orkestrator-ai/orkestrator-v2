@@ -284,6 +284,34 @@ describe("automatic switching argument validation", () => {
   });
 });
 
+describe("an unsupported platform is reported before the other fields", () => {
+  // Two wrong fields: the handler checked the platform first before the
+  // definitions, so its message wins over the decode failure of the other.
+  const registry = createCommandRegistry();
+  test.each([
+    ["set_active_agent_account", { platform: "grok", accountId: 1 }],
+    ["set_agent_account_auto_switch", { platform: "grok", enabled: "yes" }],
+    ["set_agent_account_auto_switch", { platform: "grok", included: "yes" }],
+    ["set_coordinator_account_switch_grant", { platform: "grok", enabled: "yes" }],
+    ["rename_agent_account", { platform: "grok", accountId: 1, label: 2 }],
+    ["remove_agent_account", { platform: "grok", accountId: 1 }],
+    ["get_agent_account_usage", { platform: "grok", accountId: 1, force: "yes" }],
+    ["start_agent_account_login", { platform: "grok", reauthenticate: "yes" }],
+  ] as const)("%s %j", async (name, args) => {
+    await expect(
+      registry.get(name)!(args as Record<string, unknown>, {} as CommandContext),
+    ).rejects.toThrow("Agent accounts are not supported for grok");
+  });
+  test("a platform that is not a string keeps its wording", async () => {
+    await expect(
+      registry.get("set_active_agent_account")!(
+        { platform: 1, accountId: 1 },
+        {} as CommandContext,
+      ),
+    ).rejects.toThrow("Expected platform to be a string");
+  });
+});
+
 describe("preferred identity argument validation", () => {
   const setPreferred = createCommandRegistry().get("set_preferred_agent_identity")!;
   test.each([

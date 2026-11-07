@@ -26,3 +26,23 @@ function rejectDecodeFailures(run: CommandHandler): CommandHandler {
 export const ASYNC_HANDLER: DefinedCommandOptions = Object.freeze({
   beforeDecode: rejectDecodeFailures,
 });
+
+/**
+ * `ASYNC_HANDLER`, with the handler's own first check run before the
+ * arguments are decoded (plan item 7008). A handler that refused, say, an
+ * unsupported platform before it looked at its other arguments keeps that
+ * order: a call with two wrong fields still reports the handler's message,
+ * not the decode failure of the later field. `first` throws to refuse; the
+ * handler repeats it (it is cheap and keeps the handler self-contained).
+ */
+export function asyncHandlerCheckingFirst(
+  first: (args: Readonly<Record<string, unknown>>) => void,
+): DefinedCommandOptions {
+  return Object.freeze({
+    beforeDecode: (run: CommandHandler): CommandHandler =>
+      rejectDecodeFailures((args, context, invocation) => {
+        first(typeof args === "object" && args !== null ? (args as Record<string, unknown>) : {});
+        return run(args, context, invocation);
+      }),
+  });
+}

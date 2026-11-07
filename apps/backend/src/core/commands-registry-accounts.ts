@@ -35,7 +35,7 @@ import {
 } from "@orkestrator/protocol/contract/domains/accounts";
 
 import type { AnyCommandDef } from "@orkestrator/protocol/contract/command";
-import { ASYNC_HANDLER } from "./commands-registry-async-decode.js";
+import { ASYNC_HANDLER, asyncHandlerCheckingFirst } from "./commands-registry-async-decode.js";
 import type {
   CommandRegistrar,
   DefinedCommandHandler,
@@ -73,9 +73,9 @@ import { openCodeProviderLogin, openCodeProviderLoginProgress } from "./opencode
  * definition refuses is a rejection, as the handler's own checks were
  * (`commands-registry-async-decode.ts`).
  */
-function asyncRegistrar(register: CommandRegistrar) {
+function asyncRegistrar(register: CommandRegistrar, options = ASYNC_HANDLER) {
   return <C extends AnyCommandDef>(def: C, handler: DefinedCommandHandler<C>): void =>
-    register(def, handler, ASYNC_HANDLER);
+    register(def, handler, options);
 }
 
 function asAccountPlatform(value: unknown): AgentAccountPlatform {
@@ -87,6 +87,16 @@ function asAccountPlatform(value: unknown): AgentAccountPlatform {
 }
 
 /**
+ * For handlers that check the account platform before their other arguments:
+ * the platform check runs before the decode, so a call with an unsupported
+ * platform and another wrong field reports the platform, as it did before the
+ * definitions (plan item 7008).
+ */
+const ACCOUNT_PLATFORM_FIRST = asyncHandlerCheckingFirst((args) => {
+  asAccountPlatform(args.platform);
+});
+
+/**
  * Additional Claude and Codex logins. Nothing here returns a credential: the
  * summaries carry identity and sign-in state only, and each login lives in its
  * own account directory or Keychain entry.
@@ -96,6 +106,7 @@ export function registerAgentAccountCommands(
   dependencies: RegistryDependencies,
 ): void {
   const define = asyncRegistrar(register);
+  const definePlatformFirst = asyncRegistrar(register, ACCOUNT_PLATFORM_FIRST);
   define(listAgentAccountsCommand, async (_args, context) => {
     return listAgentAccounts(context);
   });
@@ -151,7 +162,7 @@ export function registerAgentAccountCommands(
       asNonBlankString(args.agent, "agent"),
     );
   });
-  define(setActiveAgentAccountCommand, async (args, context) => {
+  definePlatformFirst(setActiveAgentAccountCommand, async (args, context) => {
     return setActiveAgentAccount(
       context,
       asAccountPlatform(args.platform),
@@ -163,7 +174,7 @@ export function registerAgentAccountCommands(
    * never writes them, so a settings form holding an older config or a
    * coordinator's change cannot undo the other.
    */
-  define(setAgentAccountAutoSwitchCommand, async (args, context) => {
+  definePlatformFirst(setAgentAccountAutoSwitchCommand, async (args, context) => {
     const platform = asAccountPlatform(args.platform);
     const enabled =
       args.enabled === undefined ? undefined : asRequiredBoolean(args.enabled, "enabled");
@@ -207,7 +218,7 @@ export function registerAgentAccountCommands(
       args.platform === undefined ? undefined : asAccountPlatform(args.platform),
     );
   });
-  define(setCoordinatorAccountSwitchGrantCommand, async (args, context) => {
+  definePlatformFirst(setCoordinatorAccountSwitchGrantCommand, async (args, context) => {
     const platform = asAccountPlatform(args.platform);
     await context.storage.setCoordinatorAccountSwitchGrant(
       platform,
@@ -221,7 +232,7 @@ export function registerAgentAccountCommands(
       platform,
     );
   });
-  define(renameAgentAccountCommand, async (args, context) => {
+  definePlatformFirst(renameAgentAccountCommand, async (args, context) => {
     return renameAgentAccount(
       context,
       asAccountPlatform(args.platform),
@@ -229,7 +240,7 @@ export function registerAgentAccountCommands(
       asNonBlankString(args.label, "label"),
     );
   });
-  define(removeAgentAccountCommand, async (args, context) => {
+  definePlatformFirst(removeAgentAccountCommand, async (args, context) => {
     return removeAgentAccount(
       context,
       asAccountPlatform(args.platform),
@@ -249,7 +260,7 @@ export function registerAgentAccountCommands(
       asNonBlankString(args.projectId, "projectId"),
     );
   });
-  define(getAgentAccountUsageCommand, async (args, context) => {
+  definePlatformFirst(getAgentAccountUsageCommand, async (args, context) => {
     return readAgentAccountUsage(
       context,
       asAccountPlatform(args.platform),
@@ -264,7 +275,7 @@ export function registerAgentAccountCommands(
    * Split into start, poll, code and cancel like the Cursor sign-in: the flow
    * is human-paced and must not hold a request open.
    */
-  define(startAgentAccountLoginCommand, async (args, context) => {
+  definePlatformFirst(startAgentAccountLoginCommand, async (args, context) => {
     return startAgentAccountLogin(context, asAccountPlatform(args.platform), {
       reauthenticate:
         args.reauthenticate === undefined

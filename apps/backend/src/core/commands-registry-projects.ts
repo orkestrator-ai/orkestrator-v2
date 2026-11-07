@@ -26,7 +26,7 @@ import {
   cursorSdkLogoutCommand,
   getPlanUsageCommand,
 } from "@orkestrator/protocol/contract/domains/accounts";
-import { ASYNC_HANDLER } from "./commands-registry-async-decode.js";
+import { ASYNC_HANDLER, asyncHandlerCheckingFirst } from "./commands-registry-async-decode.js";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import {
   addProjectCommand,
@@ -1055,15 +1055,23 @@ export function registerProjectCommands(
   register(getGlobalConfigCommand, async (_args, { storage }) =>
     redactGlobalConfig((await storage.loadConfig()).global),
   );
+  // The platform is checked before the decode, so an unknown platform with a
+  // wrong `force` still reports the platform (plan item 7008).
+  const planUsagePlatform = (value: unknown) => {
+    const platform = asNonBlankString(value, "platform");
+    if (!isAgentPlatform(platform)) throw new Error(`Unknown agent platform: ${platform}`);
+    return platform;
+  };
   register(
     getPlanUsageCommand,
     async (args, context) => {
-      const platform = asNonBlankString(args.platform, "platform");
-      if (!isAgentPlatform(platform)) throw new Error(`Unknown agent platform: ${platform}`);
+      const platform = planUsagePlatform(args.platform);
       const force = args.force === undefined ? false : asRequiredBoolean(args.force, "force");
       return planUsageReader(context, platform, { force });
     },
-    ASYNC_HANDLER,
+    asyncHandlerCheckingFirst((args) => {
+      planUsagePlatform(args.platform);
+    }),
   );
   const afterGlobalConfigSaved = async (updated: AppConfig, context: CommandContext) => {
     context.runtime.terminals.history.configureRetention({

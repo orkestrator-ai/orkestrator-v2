@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 1,
+  "maintainedBy": "hand (plan item 7013); checked by scripts/contract-ci.ts (mise run contract:ci). The schedule with dates: mise run contract:ci -- --retirements [--json]",
+  "adapters": "Every adapter in adapters.json below its domain's current version. Adapter v is deleted when the support floor passes the first Stable release that advertises the domain at v + 1 or higher (adapter 0: the first Stable release that advertises the domain).",
+  "capabilityCommands": {
+    "get_client_state_capabilities": {
+      "domain": "config",
+      "retireAtDomainVersion": 1,
+      "why": "Kept registered for renderers before config v1 (pre-contract), which ask it; a renderer with config answers it from the version."
+    },
+    "get_native_agent_sync_capabilities": {
+      "domain": "native-sessions",
+      "retireAtDomainVersion": 1,
+      "why": "Kept registered for renderers before native-sessions v1 (pre-contract), which ask it; a renderer with native-sessions answers it from the version."
+    },
+    "get_agent_handoff_capabilities": {
+      "domain": "native-sessions",
+      "retireAtDomainVersion": 1,
+      "why": "Kept registered for renderers before native-sessions v1 (pre-contract), which ask it; a renderer with native-sessions answers it from the version."
+    },
+    "changes_get_capabilities": {
+      "domain": "git",
+      "retireAtDomainVersion": null,
+      "why": "Partly folded (plan item 7006): git v1 implies change-tracking-v1, but restore, strictCheckpoints and policyVersion are the backend's policy, which version 1 still asks."
+    },
+    "design_capabilities": {
+      "domain": "design",
+      "retireAtDomainVersion": null,
+      "why": "Reports the design service's readiness at run time (plan item 7004); version 1 answers only the support flags itself."
+    },
+    "get_preview_capabilities": {
+      "domain": "previews",
+      "retireAtDomainVersion": null,
+      "why": "Reports preview surfaces and the access kill switch at run time (plan item 7004); every version reads it."
+    },
+    "transcript_artifact_capabilities": {
+      "domain": "transcripts",
+      "retireAtDomainVersion": null,
+      "why": "Reports the artifact renderer and rollout flags at run time (plan item 7004); every version reads it."
+    },
+    "web_annotations_capabilities": {
+      "domain": "web-annotations",
+      "retireAtDomainVersion": null,
+      "why": "Reports annotation storage and rollout mode at run time (plan item 7004); version 1 answers only the contract-version check itself."
+    }
+  }
+}

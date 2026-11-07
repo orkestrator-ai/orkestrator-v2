@@ -930,10 +930,33 @@ export const nodeMailClient = domainClient(nodeMail, {
   with `record_domain_adapter_usage` to its own backend, which adds the listed
   pairs as `domain-adapter.renderer.<domain>.v<version>`. Read them with
   `get_compatibility_path_usage` like any other path.
-- **Retirement:** the adapter for version *v* is deleted when the support
-  floor passes the first Stable release with *v + 1*, the register's usual
-  rule. The legacy adapter 0 goes when the floor passes the first Stable
-  release that advertises the domain.
+- **Retirement** (plan item
+  [7013](../../plans/unified/7013-retire-legacy-adapters.md)): the adapter for
+  version *v* is deleted when the support floor passes (is at or above) the
+  first Stable release that advertises the domain at *v + 1* or higher, the
+  register's usual rule: 60 days after that release, or a later Stable
+  release, is published. The legacy adapter 0 goes when the floor passes the
+  first Stable release that advertises the domain, and with it the
+  client-side capability gating it packaged. A per-domain capability command
+  the backend keeps for pre-contract renderers (`get_client_state_capabilities`,
+  `get_native_agent_sync_capabilities`, `get_agent_handoff_capabilities`)
+  goes at the same time; the five that report runtime state
+  (`changes_get_capabilities`, `design_capabilities`,
+  `get_preview_capabilities`, `transcript_artifact_capabilities`,
+  `web_annotations_capabilities`) stay, and only leave
+  `LEGACY_CAPABILITY_COMMANDS` with their adapter 0.
+  `packages/protocol/contracts/retirements.json` (kept by hand) classifies
+  every capability command: `retireAtDomainVersion` is the domain version
+  whose first Stable release retires it, `null` when it stays, and `why`;
+  `retired` (a date) once it is deleted, kept while an in-window release
+  still has the command.
+  Contract CI fails on the day an adapter or command becomes unreachable, and
+  prints the schedule on request (see
+  [Retirement schedule](#the-manifest-the-ratchet-and-ci)). **As of
+  2026-11-07 nothing can be deleted:** no Stable release advertises
+  `domains` yet (v2.36.1 is pre-contract), so every adapter 0 and the three
+  kept commands wait for "60 days after the first Stable release that
+  advertises `domains`".
 
 ### The manifest, the ratchet and CI
 
@@ -1012,7 +1035,45 @@ export const nodeMailClient = domainClient(nodeMail, {
     row names an adapter `adapters.json` no longer has (move it to Retired),
     or a domain is below an in-window release's version;
   - a defined command's argument schema (current manifest or an in-window
-    release) is not in the schema store.
+    release) is not in the schema store;
+  - an adapter or capability command is due: "adapter `<domain>` v`<n>` is
+    unreachable: delete it and move its register rows to Retired" once the
+    floor has passed the first Stable release that advertises the domain at
+    *n + 1* (the same for a capability command whose `retireAtDomainVersion`
+    the floor has passed), or `retirements.json` does not list a
+    `LEGACY_CAPABILITY_COMMANDS` command, lists one that is no longer
+    registered (without `retired`) or under another domain, marks one
+    `retired` that is still registered or whose condition the floor has not
+    passed, or retires one no register row names. The job reads every Stable
+    snapshot, also below the floor, to date it. A command marked `retired`
+    after its condition needs no domain bump in the removed-command check:
+    every in-window renderer has the domain and never calls it.
+
+  **Retirement schedule.** `mise run contract:ci -- --retirements` prints,
+  without checking, every adapter below its domain's current version and
+  every capability command of `retirements.json`, grouped by status: `due`
+  (the job fails until it is deleted), `scheduled` (the first qualifying
+  Stable release is published; the line gives the earliest date and that
+  release), `waiting` (no qualifying Stable release published yet: "60 days
+  after the first Stable release that advertises `<domain>`; not yet
+  shipped") and `kept`, with the register rows (by line) that move to
+  Retired with it. `--json` gives the same as data (`entries[]`: `kind`,
+  `domain`, `adapter` or `command`, `domainVersion`, `condition`,
+  `firstRelease`, `earliest`, `status`, `counters`, `registerRows`, `why`);
+  `--now <date>` shows another day. The first Stable release that advertises
+  `domains` turns every `waiting` entry into `scheduled` with its date. The
+  usage counters are not read: they are local to each backend, so before
+  deleting a due adapter read its `counters`
+  (`domain-adapter.<renderer|backend>.<domain>.v<n>`) with
+  `get_compatibility_path_usage` on the machines you can reach, as for any
+  register row ([Usage counters](#usage-counters)); the kept capability
+  commands have no counter (their callers are older renderers), so only the
+  floor retires them. Deleting one: remove the adapter from its client and
+  its domain's entry from `LEGACY_CAPABILITY_COMMANDS` with adapter 0 (or the
+  command from the registry, marking it `"retired": "<date>"` in
+  `retirements.json`), run `mise run contract:adapters` (and
+  `contract:manifest`), and move its rows to Retired; the job's register
+  check fails on a row that still names a deleted adapter.
 
   **Argument schema store.** Manifests and snapshots keep only digests, so
   `scripts/contract-ci-schemas.ts` (the last step of `contract:manifest`)

@@ -7,6 +7,7 @@
  *   bun scripts/contract-ci.ts                 # stage 1 (mise run contract:ci, every PR)
  *   bun scripts/contract-ci.ts --stage2        # stage 2 (on by default since plan item 7001)
  *   bun scripts/contract-ci.ts --now <iso>     # as on another day
+ *   bun scripts/contract-ci.ts --retirements [--json]  # the retirement schedule, no checks
  *
  * The support floor is the newest Stable release published at least 60 days
  * before `now`, otherwise v2.21.0 (`docs/architecture/version-compatibility.md`,
@@ -39,13 +40,19 @@
  * 5. **Schema store:** every defined command's argument schema (current
  *    manifest and in-window releases) is stored (`scripts/contract-ci-schemas.ts`),
  *    so stage 2 has the older schemas when it is turned on.
+ * 6. **Retirements** (plan item 7013, `scripts/contract-ci-retirements.ts`):
+ *    an adapter whose version no in-window peer speaks any more (the floor
+ *    has passed the first Stable release that advertises the domain at
+ *    `v + 1`), or a capability command whose retirement condition the floor
+ *    has passed, fails as unreachable; `contracts/retirements.json` lists
+ *    every legacy capability command.
  *
  * Stage 2 ({@link CONTRACT_CI_STAGE_2}, on since plan item 7001):
  *
- * 6. **New required fields:** a defined command whose argument schema
+ * 7. **New required fields:** a defined command whose argument schema
  *    requires a field an in-window release's schema did not, while its domain
  *    is at the same version.
- * 7. **Argument fixtures:** fixtures generated from each in-window defined
+ * 8. **Argument fixtures:** fixtures generated from each in-window defined
  *    command's older schema (`effect/Arbitrary`) are decoded by the current
  *    registry's parser, in a sandboxed child.
  *
@@ -76,6 +83,18 @@ import {
   type FixtureCase,
   type FixtureReport,
 } from "./contract-ci-schemas.ts";
+import {
+  checkRetirementList,
+  checkRetirements,
+  formatRetirementSchedule,
+  parseRetirementList,
+  retiredCommands,
+  retirementSchedule,
+  RETIREMENT_LIST_PATH,
+  SUPPORT_WINDOW_DAYS,
+  type RetirementList,
+  type StableRelease,
+} from "./contract-ci-retirements.ts";
 import { CONTRACT_DOCS } from "./contract-check.ts";
 import {
   compareVersions,
@@ -96,8 +115,7 @@ const repoRoot = join(import.meta.dir, "..");
  */
 export const CONTRACT_CI_STAGE_2 = true;
 
-/** A Stable release becomes the floor this long after it is published. */
-export const SUPPORT_WINDOW_DAYS = 60;
+export { SUPPORT_WINDOW_DAYS };
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** The parts of the committed manifest the job reads. */
@@ -245,11 +263,17 @@ function rowsNaming(register: RegisterDocument, name: string): boolean {
   return [...register.register, ...register.retired].some((row) => row.names.has(name));
 }
 
-/** Check 3: no command of an in-window release disappeared without a bump and a row. */
+/**
+ * Check 3: no command of an in-window release disappeared without a bump and
+ * a row. A capability command retired on schedule (`retired`, plan item
+ * 7013) needs no bump: every in-window renderer has the domain and never
+ * calls it.
+ */
 export function checkRemovedCommands(
   window: readonly ReleaseContract[],
   manifest: CiManifest,
   register: RegisterDocument,
+  retired: ReadonlySet<string> = new Set(),
 ): string[] {
   const removed = grouped<{
     command: string;
@@ -265,7 +289,7 @@ export function checkRemovedCommands(
       if (domain !== null) {
         const was = releaseDomainVersion(release, domain);
         const now = currentDomainVersion(manifest, domain);
-        if ((was > 0 || now > 0) && now <= was)
+        if ((was > 0 || now > 0) && now <= was && !retired.has(command))
           unbumped = `${domain} is v${now}, as in the release`;
       }
       const named = rowsNaming(register, command);
@@ -456,6 +480,10 @@ export interface ContractCiOptions {
   readonly stage2?: boolean;
   /** Counter ids the register may name. Defaults to `COMPATIBILITY_PATH_IDS`. */
   readonly counterIds?: Iterable<string>;
+  /** The capability commands the list must classify. Defaults to `LEGACY_CAPABILITY_COMMANDS`. */
+  readonly legacyCapabilityCommands?: Readonly<Partial<Record<string, readonly string[]>>>;
+  /** Print the retirement schedule instead of checking (`--retirements`). */
+  readonly retirements?: "text" | "json";
   /** Runs the fixtures. Defaults to the sandboxed registry child. */
   readonly runFixtures?: (cases: readonly FixtureCase[]) => Promise<FixtureReport>;
   readonly log?: (line: string) => void;
@@ -498,6 +526,16 @@ export async function runContractCi(options: ContractCiOptions = {}): Promise<nu
     return fatal(error instanceof Error ? error.message : String(error));
   }
   if (adapters === null) return fatal(`${ADAPTER_LIST_PATH} is not a valid adapter list.`);
+  let retirementList: RetirementList | string;
+  try {
+    const listText = readText(join(root, RETIREMENT_LIST_PATH));
+    retirementList =
+      listText === null
+        ? `${RETIREMENT_LIST_PATH} is missing.`
+        : parseRetirementList(JSON.parse(listText));
+  } catch (error) {
+    retirementList = `${RETIREMENT_LIST_PATH}: ${error instanceof Error ? error.message : String(error)}`;
+  }
 
   const releasesDirectory = join(contractsDirectory, "releases");
   const snapshotVersions = existsSync(releasesDirectory)
@@ -519,6 +557,47 @@ export async function runContractCi(options: ContractCiOptions = {}): Promise<nu
     }
   }
   sections.push(["Release snapshots", unreadable]);
+
+  // Every Stable release, also below the floor: the first one that advertises
+  // a domain version dates its older adapter's retirement.
+  const stable: StableRelease[] = [];
+  for (const entry of index.releases) {
+    if (entry.channel !== "stable") continue;
+    const snapshot =
+      window.find((release) => release.version === entry.version) ??
+      (() => {
+        try {
+          return readReleaseSnapshot(contractsDirectory, entry.version);
+        } catch {
+          return null; // reported by the index check when the file is missing
+        }
+      })();
+    if (snapshot !== null) {
+      stable.push({
+        version: entry.version,
+        publishedAt: entry.publishedAt,
+        domains: snapshot.domains,
+      });
+    }
+  }
+  const schedule =
+    typeof retirementList === "string"
+      ? null
+      : retirementSchedule({
+          adapters,
+          list: retirementList,
+          stable,
+          floor: floor.version,
+          now,
+          register,
+        });
+  if (options.retirements !== undefined) {
+    if (schedule === null) return fatal(retirementList as string);
+    if (options.retirements === "json") log(JSON.stringify(schedule, null, 2));
+    else for (const line of formatRetirementSchedule(schedule)) log(line);
+    return 0;
+  }
+
   const unpublished = inWindow.filter((entry) => entry.publishedAt === null).length;
   log(
     `Support floor on ${now.toISOString().slice(0, 10)}: v${floor.version} (${floor.release ? `the newest Stable release published at least ${SUPPORT_WINDOW_DAYS} days earlier, ${floor.release.publishedAt}` : `no Stable release is ${SUPPORT_WINDOW_DAYS} days old yet`}). In the window: ${inWindow.length} snapshotted releases${inWindow.length > 0 ? `, v${inWindow[0]!.version} to v${inWindow.at(-1)!.version}` : ""}${unpublished > 0 ? `, ${unpublished} not yet published` : ""}.`,
@@ -526,7 +605,15 @@ export async function runContractCi(options: ContractCiOptions = {}): Promise<nu
 
   const knownIds = new Set<string>(options.counterIds ?? COMPATIBILITY_PATH_IDS);
   sections.push(["Client adapters", checkAdapters(window, adapters)]);
-  sections.push(["Removed commands", checkRemovedCommands(window, manifest, register)]);
+  sections.push([
+    "Removed commands",
+    checkRemovedCommands(
+      window,
+      manifest,
+      register,
+      schedule === null ? undefined : retiredCommands(schedule),
+    ),
+  ]);
   sections.push([
     "Register",
     [
@@ -537,6 +624,20 @@ export async function runContractCi(options: ContractCiOptions = {}): Promise<nu
   sections.push([
     "Argument schema store",
     checkSchemaStore(contractsDirectory, neededArgumentDigests(window, manifest)),
+  ]);
+  sections.push([
+    "Retirements",
+    typeof retirementList === "string"
+      ? [retirementList]
+      : [
+          ...checkRetirementList(
+            retirementList,
+            manifest.commands,
+            register,
+            options.legacyCapabilityCommands,
+          ),
+          ...checkRetirements(schedule!),
+        ],
   ]);
 
   if (stage2) {
@@ -574,21 +675,29 @@ export async function runContractCi(options: ContractCiOptions = {}): Promise<nu
 export function parseArguments(args: readonly string[]): {
   readonly now?: Date;
   readonly stage2?: boolean;
+  readonly retirements?: "text" | "json";
 } {
-  const usage = "usage: bun scripts/contract-ci.ts [--stage2] [--now <ISO date>]";
+  const usage =
+    "usage: bun scripts/contract-ci.ts [--stage2] [--now <ISO date>] [--retirements [--json]]";
   let now: Date | undefined;
   let stage2: boolean | undefined;
+  let retirements = false;
+  let json = false;
   for (let index = 0; index < args.length; index++) {
     const arg = args[index];
     if (arg === "--stage2" && stage2 === undefined) stage2 = true;
+    else if (arg === "--retirements" && !retirements) retirements = true;
+    else if (arg === "--json" && !json) json = true;
     else if (arg === "--now" && now === undefined && args[index + 1] !== undefined) {
       now = new Date(args[++index]!);
       if (!Number.isFinite(now.getTime())) throw new Error(`${usage}\nbad date ${args[index]}`);
     } else throw new Error(usage);
   }
+  if (json && !retirements) throw new Error(`${usage}\n--json needs --retirements`);
   return {
     ...(now === undefined ? {} : { now }),
     ...(stage2 === undefined ? {} : { stage2 }),
+    ...(retirements ? { retirements: json ? ("json" as const) : ("text" as const) } : {}),
   };
 }
 

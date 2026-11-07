@@ -38,6 +38,8 @@ import {
 } from "@orkestrator/protocol/node-summaries";
 import type { MachineRelease } from "@orkestrator/protocol/fleet-currency";
 import { invoke } from "@/lib/native/backend";
+import { coordinatorApi } from "@/lib/node-scope/domains/coordinator";
+import { backendClientOver } from "@/lib/node-scope/domains/invoke-over";
 import { NO_ARGS, nodesApiOver, portalNodesApi } from "@/lib/node-scope/domains/nodes";
 import { listen, NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
 import { portalInvoke, portalListen, workspaceTarget } from "./portal-transport";
@@ -486,7 +488,10 @@ export async function previewAgentsMdUpdate(requestId: string): Promise<AgentsMd
  * to a worker when approving an `apply-root-changes` request. Read-only.
  */
 export async function listProjectRootChanges(projectId: string): Promise<RootChangesListing> {
-  return portalInvoke<RootChangesListing>("list_project_root_changes", { projectId });
+  // The listing's own shape is the web's; the definition keeps its records open.
+  return coordinatorApi(backendClientOver(portalInvoke)).list_project_root_changes({
+    projectId,
+  }) as Promise<RootChangesListing>;
 }
 
 export interface RootChangesListing {

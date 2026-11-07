@@ -3,6 +3,8 @@ import {
   type FleetUpdatePolicy,
 } from "@orkestrator/protocol/fleet-currency";
 import type { HostUpdateChannel } from "@orkestrator/protocol/host-maintenance";
+import { backendClientOver } from "@/lib/node-scope/domains/invoke-over";
+import { systemApi } from "@/lib/node-scope/domains/system";
 import { portalInvoke } from "./portal-transport";
 
 /**
@@ -11,7 +13,9 @@ import { portalInvoke } from "./portal-transport";
  * portal channel whichever machine the window works on.
  */
 export async function getFleetUpdatePolicy(): Promise<FleetUpdatePolicy> {
-  return parseFleetUpdatePolicy(await portalInvoke<unknown>("get_fleet_update_policy", {}));
+  return parseFleetUpdatePolicy(
+    await systemApi(backendClientOver(portalInvoke)).get_fleet_update_policy({}),
+  );
 }
 
 export async function setFleetUpdatePolicyChannel(
@@ -19,6 +23,6 @@ export async function setFleetUpdatePolicyChannel(
   enabled: boolean,
 ): Promise<FleetUpdatePolicy> {
   return parseFleetUpdatePolicy(
-    await portalInvoke<unknown>("set_fleet_update_policy", { channel, enabled }),
+    await systemApi(backendClientOver(portalInvoke)).set_fleet_update_policy({ channel, enabled }),
   );
 }

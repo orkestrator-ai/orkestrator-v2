@@ -15,6 +15,7 @@ import { nodesClient, type NodesApi } from "@orkestrator/protocol/contract/domai
 import type { BackendClient } from "@/lib/backend/client";
 import { portalInvoke } from "@/lib/portal/portal-transport";
 import { domainApi } from "./domain-api";
+import { backendClientOver, type CommandInvoke } from "./invoke-over";
 
 export type { NodesApi } from "@orkestrator/protocol/contract/domains/nodes";
 
@@ -23,26 +24,11 @@ export function nodesApi(client: BackendClient): NodesApi {
 }
 
 /** A command call in `portalInvoke`'s shape. */
-export type NodesInvoke = <T = unknown>(
-  command: string,
-  args?: Record<string, unknown>,
-) => Promise<T>;
-
-const overInvoke = new WeakMap<NodesInvoke, BackendClient>();
+export type NodesInvoke = CommandInvoke;
 
 /** The `nodes` API over a bare command call (version 0: today's untyped call). */
 export function nodesApiOver(invoke: NodesInvoke): NodesApi {
-  let client = overInvoke.get(invoke);
-  if (!client) {
-    client = {
-      invokeRaw: <T>(command: string, args?: Readonly<Record<string, unknown>>) =>
-        args === undefined
-          ? invoke<T>(command)
-          : invoke<T>(command, args as Record<string, unknown>),
-    } as BackendClient;
-    overInvoke.set(invoke, client);
-  }
-  return nodesApi(client);
+  return nodesApi(backendClientOver(invoke));
 }
 
 /** The `nodes` API on the window's command node, over the portal channel. */
@@ -50,5 +36,4 @@ export function portalNodesApi(): NodesApi {
   return nodesApiOver(portalInvoke);
 }
 
-/** A call made today without an arguments object; version 0 sends exactly that. */
-export const NO_ARGS = undefined as never;
+export { NO_ARGS } from "./invoke-over";

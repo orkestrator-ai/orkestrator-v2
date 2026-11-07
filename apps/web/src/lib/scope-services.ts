@@ -42,7 +42,8 @@ import {
   type ScopedServiceDef,
   type ScopedServiceHandle,
 } from "@/lib/node-scope/scoped-service";
-import { invokeInScope } from "@/lib/node-scope/scope-transport";
+import { scopeBackendClient } from "@/lib/backend/client";
+import { systemApi } from "@/lib/node-scope/domains/system";
 import { isAppCommandScope } from "@/lib/node-scope-slots";
 import { paneLayoutPersistenceService } from "@/lib/pane-layout-persistence";
 import { startResourceSync, type ResourceSyncOptions } from "@/lib/resource-sync";
@@ -68,35 +69,44 @@ export function scopeResourceSyncOptions(scope: NodeScope): ResourceSyncOptions 
       loadScopedSnapshots: getScopedResourceSnapshots,
     };
   }
+  // Version 1 for a node that advertises `system`; today's call otherwise.
+  const system = () => systemApi(scopeBackendClient(scope));
   const read = async <T>(
     command: string,
-    args: Record<string, unknown>,
+    response: Promise<unknown>,
     valid: (value: unknown) => value is T,
   ): Promise<T> => {
-    const response = await invokeInScope<unknown>(scope, command, args);
-    if (!valid(response)) throw new Error(`Invalid ${command} response`);
-    return response;
+    const value = await response;
+    if (!valid(value)) throw new Error(`Invalid ${command} response`);
+    return value;
   };
   return {
     loadManifest: (knownGeneration, knownRevisions = {}) =>
       read(
         "get_resource_revision_manifest",
-        { ...(knownGeneration === undefined ? {} : { knownGeneration }), knownRevisions },
+        system().get_resource_revision_manifest({
+          ...(knownGeneration === undefined ? {} : { knownGeneration }),
+          knownRevisions,
+        }),
         isResourceRevisionManifest,
       ),
     loadScopedManifest: (knownGeneration, cursor, knownRevisions, highWater) =>
       read(
         "get_scoped_resource_revision_manifest",
-        {
+        system().get_scoped_resource_revision_manifest({
           ...(knownGeneration === undefined ? {} : { knownGeneration }),
           cursor,
           knownRevisions,
           ...(highWater === undefined ? {} : { highWater }),
-        },
+        }),
         isScopedResourceRevisionManifest,
       ),
     loadScopedSnapshots: (changes) =>
-      read("get_scoped_resource_snapshots", { changes }, isScopedResourceSnapshotBatch),
+      read(
+        "get_scoped_resource_snapshots",
+        system().get_scoped_resource_snapshots({ changes }),
+        isScopedResourceSnapshotBatch,
+      ),
   };
 }
 

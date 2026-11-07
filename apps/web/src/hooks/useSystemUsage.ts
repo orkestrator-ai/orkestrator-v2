@@ -6,6 +6,8 @@ import {
   type EnvironmentProcessUsageSnapshot,
   type SystemUsageSnapshot,
 } from "@/lib/backend";
+import { backendClientOver, NO_ARGS } from "@/lib/node-scope/domains/invoke-over";
+import { asSystemModel, systemApi } from "@/lib/node-scope/domains/system";
 import { portalStore } from "@/lib/portal/portal-store";
 import {
   getReadCoordinator,
@@ -236,9 +238,25 @@ export function useMachineSystemUsage({
     intervalMs,
     read: bound
       ? getSystemUsage
-      : () => portalStore.invokeOnNode<SystemUsageSnapshot>(nodeId, "get_system_usage"),
+      : () =>
+          asSystemModel<SystemUsageSnapshot>(
+            systemApi(routedClient(nodeId)).get_system_usage(NO_ARGS),
+          ),
     isSample: isSystemUsageSnapshot,
   });
+}
+
+/**
+ * `nodeId` through the command node (`invoke_on_node`), as the `system`
+ * domain's client: today's call, `invokeOnNode(nodeId, command)` for a read
+ * without arguments.
+ */
+function routedClient(nodeId: BackendId) {
+  return backendClientOver(<T>(command: string, args?: Record<string, unknown>) =>
+    args === undefined
+      ? portalStore.invokeOnNode<T>(nodeId, command)
+      : portalStore.invokeOnNode<T>(nodeId, command, args),
+  );
 }
 
 /** Per-environment process list; only read while a panel shows it. */

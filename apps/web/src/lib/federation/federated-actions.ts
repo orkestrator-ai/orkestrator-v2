@@ -13,6 +13,7 @@ import { dockerClient } from "@orkestrator/protocol/contract/domains/docker";
 import { environmentsClient } from "@orkestrator/protocol/contract/domains/environments";
 import type { BackendId, EnvironmentRef, ProjectRef } from "@orkestrator/protocol/federation";
 import { backendDomainApi, routedBackendClient } from "@/lib/backend/domain-client";
+import { nodesApi } from "@/lib/node-scope/domains/nodes";
 import type { PortalStore } from "@/lib/portal/portal-store";
 
 /** The `environments` domain on `backendId`, through the command node (plan item 7003). */
@@ -96,5 +97,5 @@ export async function updateFederatedMachineProfile(
   backendRef: { backendId: ProjectRef["backendId"] },
   update: { expectedRevision: number; displayName?: string; colorToken?: string },
 ): Promise<unknown> {
-  return portal.invokeOnNode(backendRef.backendId, "update_backend_profile", update);
+  return nodesApi(routedBackendClient(portal, backendRef.backendId)).update_backend_profile(update);
 }

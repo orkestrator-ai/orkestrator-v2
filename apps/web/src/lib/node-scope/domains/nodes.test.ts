@@ -22,7 +22,7 @@ describe("nodes over a lib/backend client", () => {
       detached: true,
       newer: "kept",
     }));
-    await expect(
+    await expect<unknown>(
       nodesApi(client).forget_node({ nodeId: "bk_a", withoutDetach: true }),
     ).resolves.toEqual({ forgotten: true, detached: true, newer: "kept" });
     expect(client.invokeRaw).toHaveBeenCalledWith(
@@ -35,7 +35,7 @@ describe("nodes over a lib/backend client", () => {
   test("a pre-contract node gets today's calls, answered as sent", async () => {
     const answer = { older: true };
     const client = fakeClient(null, () => answer);
-    await expect(nodesApi(client).get_node_status(NO_ARGS)).resolves.toBe(answer);
+    await expect<unknown>(nodesApi(client).get_node_status(NO_ARGS)).resolves.toBe(answer);
     expect(client.invokeRaw.mock.calls.at(-1)).toEqual(["get_node_status"]);
     await nodesApi(client).reconnect_node({ nodeId: "bk_a" });
     expect(client.invokeRaw).toHaveBeenLastCalledWith("reconnect_node", { nodeId: "bk_a" });

@@ -10,7 +10,7 @@
 import { transcriptsClient } from "@orkestrator/protocol/contract/domains/transcripts";
 import path from "node:path";
 import { defineScenario } from "../scenario.ts";
-import { expectedRendererAdapter, pairNodes, rendererClient } from "./renderer-client-7004.ts";
+import { expectedRendererAdapter, pairNodes, rendererClient } from "./renderer-client.ts";
 
 const COMMANDS = [
   "transcript_artifact_capabilities",

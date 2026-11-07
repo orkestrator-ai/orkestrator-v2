@@ -8,7 +8,7 @@
  */
 import { designClient, designLibraryCommand } from "@orkestrator/protocol/contract/domains/design";
 import { defineScenario } from "../scenario.ts";
-import { expectedRendererAdapter, pairNodes, rendererClient } from "./renderer-client-7004.ts";
+import { expectedRendererAdapter, pairNodes, rendererClient } from "./renderer-client.ts";
 
 const COMMANDS = ["design_capabilities", "design_library"];
 

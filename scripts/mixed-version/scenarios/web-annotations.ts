@@ -9,7 +9,7 @@
 import { WEB_ANNOTATION_CONTRACT_VERSION } from "@orkestrator/protocol/web-annotations";
 import { webAnnotationsClient } from "@orkestrator/protocol/contract/domains/web-annotations";
 import { defineScenario } from "../scenario.ts";
-import { expectedRendererAdapter, pairNodes, rendererClient } from "./renderer-client-7004.ts";
+import { expectedRendererAdapter, pairNodes, rendererClient } from "./renderer-client.ts";
 
 const COMMANDS = [
   "web_annotations_capabilities",

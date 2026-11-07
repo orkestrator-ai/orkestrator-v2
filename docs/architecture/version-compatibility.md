@@ -659,6 +659,31 @@ export const nodeMailClient = domainClient(nodeMail, {
   file writes, `digest` on `delete_container_annotation_evidence`, and the
   expected prompt on `claude_tmux_answer_selection_prompt`. The terminal
   WebSocket protocol is separate and unchanged.
+- **Environments and Docker**
+  ([7003](../../plans/unified/7003-domain-environments-docker.md)):
+  `environments` (63 commands: environments, their container lifecycle,
+  setup and its approval, recovery copies, resources, network policy,
+  portable inputs, logs, extensions and tab teardown) and `docker` (29), both
+  at version 1 (min 1). The environment model is one schema set,
+  `domains/environments/models.ts` (`ClientEnvironmentSchema`, the detail
+  read, the snapshot row, the lifecycle snapshot), field for field with
+  `ClientEnvironment` in `models.ts`; other results are in `results.ts` and
+  `docker/models.ts`. Optional result fields are `Schema.optional`, because
+  handlers return records with fields set to `undefined`. Each client's API
+  is one method per command (`environmentsClient`, `dockerClient`); version 1
+  sends the envelope and decodes results, version 0 sends today's call and
+  answers as sent (`answeredAsSent`). The web calls them through
+  `backendDomainApi(client, def)` (`lib/backend/domain-client.ts`), with
+  `machineBackendClient`/`routedBackendClient` for another node. Critical
+  keys: the launch's `controlRequestId`/`controlRequestFingerprint` and the
+  delegation base on `create_environment`; `operationId`/`expectedRevision`
+  on start, stop, recovery-copy discard and restore, recreate and
+  `provision_environment`; `expectedContainerId` and `keepRecoveryCopy` on
+  recreate and restore; `selectionToken` on `docker_cleanup_execute`. The
+  register rows these domains serve (`get_environment_snapshot`'s
+  fallback, `builtInDefault`, `legacyRuntimes`, `egressFilter`) are
+  unaffected: their fields are optional in the schemas and their fallbacks
+  read the typed `unknown-command` as before.
 - **Hot path.** A definition with `hotPath: true` (terminal input and
   resize, terminal output and history reads, the tmux interactive
   terminal's input and resize) has its result decoded by a domain client

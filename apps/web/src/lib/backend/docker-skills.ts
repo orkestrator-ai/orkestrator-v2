@@ -18,12 +18,12 @@ import type {
   PreferredEditor,
   ClaudeModelCatalogSnapshot,
 } from "@/types";
-import { systemApi } from "@/lib/node-scope/domains/system";
 import { type AccountMachine } from "./agent-accounts";
 import type { AgentExtensionCatalog } from "./files-sessions";
 import { dockerClient } from "@orkestrator/protocol/contract/domains/docker";
+import { environmentsClient } from "@orkestrator/protocol/contract/domains/environments";
 import { clientInvoke, commandBackendClient, machineInvoker, type BackendClient } from "./client";
-import { backendDomainApi, machineBackendClient } from "./domain-client";
+import { backendDomainApi, machineBackendClient, withArgumentsObject } from "./domain-client";
 /** PR detection result containing URL, state, and merge conflict status */
 
 /** Docker system statistics */
@@ -295,21 +295,6 @@ export interface GitHubCliLoginProgress {
 
 /** Represents a file changed in git */
 
-/** `client`, sending `{}` where a call has no arguments (the `machineInvoke` shape). */
-function withArgumentsObject(client: BackendClient): BackendClient {
-  return {
-    ...client,
-    invokeRaw: <T>(
-      command: string,
-      args?: Readonly<Record<string, unknown>>,
-      options?: Parameters<BackendClient["invokeRaw"]>[2],
-    ) =>
-      options === undefined
-        ? client.invokeRaw<T>(command, args ?? {})
-        : client.invokeRaw<T>(command, args ?? {}, options),
-  };
-}
-
 /**
  * This file's commands on `client`'s node (plan item 3002). A scoped store or
  * service passes its own node's client; the named exports below are this
@@ -328,6 +313,13 @@ export function createDockerSkillsApi(client: BackendClient) {
     machine === undefined
       ? ownMachineDocker()
       : backendDomainApi(machineBackendClient(client, machine), dockerClient)();
+  // The `environments` domain's commands here (plan item 7003).
+  const environments = backendDomainApi(client, environmentsClient);
+  const ownMachineEnvironments = backendDomainApi(withArgumentsObject(client), environmentsClient);
+  const environmentsOn = (machine: AccountMachine) =>
+    machine === undefined
+      ? ownMachineEnvironments()
+      : backendDomainApi(machineBackendClient(client, machine), environmentsClient)();
 
   async function checkDocker(machine?: AccountMachine): Promise<DockerAvailability> {
     return dockerOn(machine).checkDocker();
@@ -647,7 +639,7 @@ export function createDockerSkillsApi(client: BackendClient) {
   }
 
   async function greet(name: string): Promise<string> {
-    return systemApi(client).greet({ name });
+    return invoke<string>("greet", { name });
   }
 
   async function validateGitUrl(url: string): Promise<boolean> {
@@ -670,21 +662,21 @@ export function createDockerSkillsApi(client: BackendClient) {
   }
 
   async function addEnvironmentDomains(environmentId: string, domains: string[]): Promise<string> {
-    return invoke<string>("add_environment_domains", { environmentId, domains });
+    return environments().addEnvironmentDomains({ environmentId, domains });
   }
 
   async function removeEnvironmentDomains(
     environmentId: string,
     domains: string[],
   ): Promise<string> {
-    return invoke<string>("remove_environment_domains", { environmentId, domains });
+    return environments().removeEnvironmentDomains({ environmentId, domains });
   }
 
   async function updateEnvironmentAllowedDomains(
     environmentId: string,
     domains: string[],
   ): Promise<Environment> {
-    return invoke<Environment>("update_environment_allowed_domains", { environmentId, domains });
+    return environments().updateEnvironmentAllowedDomains({ environmentId, domains });
   }
 
   /** Open an editor (VS Code or Cursor) attached to a running container */
@@ -753,7 +745,7 @@ export function createDockerSkillsApi(client: BackendClient) {
     /** Saved, but this backend's Docker cannot enforce these axes (older backends omit it). */
     unenforceable?: Array<keyof ContainerResourceLimits>;
   }> {
-    return machineInvoke(machine, "set_container_resource_limits", { limits });
+    return environmentsOn(machine).setContainerResourceLimits({ limits });
   }
 
   return {

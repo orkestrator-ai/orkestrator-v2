@@ -31,6 +31,28 @@ import type {
 import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
 import type { TrustedUserPromptPresentation } from "@orkestrator/protocol/review-evidence-frames";
+// The environment vocabularies are the protocol schemas' types (plan item 7003).
+import type {
+  EnvironmentStatus,
+  PrState,
+  NetworkAccessMode,
+  EnvironmentType,
+  EnvironmentLifecycleOperation,
+  EnvironmentSetupPhase,
+  PortProtocol,
+  EnvironmentUnreadReason,
+} from "@orkestrator/protocol/contract/domains/environments";
+export type {
+  EnvironmentStatus,
+  PrState,
+  NetworkAccessMode,
+  EnvironmentType,
+  EnvironmentLifecycleOperation,
+  EnvironmentSetupPhase,
+  PortProtocol,
+  EnvironmentUnreadReason,
+};
+
 
 export type {
   AgentActivitySource,
@@ -59,11 +81,6 @@ export interface Project {
   icon?: string | null;
 }
 
-export type EnvironmentStatus = "running" | "stopped" | "error" | "creating" | "stopping";
-export type PrState = "open" | "merged" | "closed";
-export type NetworkAccessMode = "full" | "restricted";
-export type EnvironmentType = "containerized" | "local";
-export type EnvironmentLifecycleOperation = "deleting" | "merging" | "moving";
 /**
  * Durable progress of an environment move. `moving`: the worktree may still
  * be at `from` (git renames it atomically; a copy to another disk goes to
@@ -94,8 +111,6 @@ export interface WorktreeMoveSubmodule {
   /** Absolute git dir of the submodule checkout. */
   gitDir: string;
 }
-export type EnvironmentSetupPhase = "pending" | "running" | "ready" | "failed";
-export type PortProtocol = "tcp" | "udp";
 
 export interface PortMapping {
   containerPort: number;
@@ -242,32 +257,6 @@ export interface StartupAgentSessionSnapshot {
  * source's working-to-idle edge says the work finished.
  */
 export type AgentActivityCompletionOutcome = "failed" | "none";
-
-/**
- * Content-free cause of an environment's unread badge.
- *
- * - `agent_finished`: an agent turn ended.
- * - `agent_failed`: an agent turn ended with the provider's terminal error
- *   (a refused login, a provider error, a restart mid-turn), not an answer.
- * - `agent_ready`: no longer recorded; rows written before the readiness bell
- *   was retired may still carry it (the composer was free while background
- *   work continued).
- * - `agent_waiting`: an agent stopped to wait on the user (approval, plan, prompt).
- * - `agent_question`: an agent asked a question that needs an answer.
- * - `terminal_finished`: a terminal-hosted agent finished.
- * - `marked_unread`: a client marked the environment unread.
- * - `setup_approval`: a local environment's setup commands differ from what
- *   this machine trusts and wait for the user to approve them.
- */
-export type EnvironmentUnreadReason =
-  | "agent_finished"
-  | "agent_failed"
-  | "agent_ready"
-  | "agent_waiting"
-  | "agent_question"
-  | "terminal_finished"
-  | "marked_unread"
-  | "setup_approval";
 
 export interface Environment {
   /** Monotonic fence for mail-triggered starts across explicit stop transitions. */

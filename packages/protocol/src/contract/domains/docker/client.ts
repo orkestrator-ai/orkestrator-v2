@@ -8,8 +8,9 @@
  * `provision_environment` and `selectionToken` on `docker_cleanup_execute`
  * are critical); version 0, for a node that advertises no `docker` range (a
  * pre-contract node, or a renderer client without negotiation), sends today's
- * `{ command, args }`. Results are decoded with the commands' schemas either
- * way.
+ * `{ command, args }` and answers the result as sent, like the environments
+ * client's version 0: an older node's answers are the shapes callers already
+ * handle. Version 1 decodes results with the commands' schemas.
  *
  * Retirement: adapter 0 goes when the support floor passes the first Stable
  * release that advertises the `docker` domain.
@@ -50,6 +51,7 @@ import {
   streamContainerLogsCommand,
 } from "./commands.js";
 import { dockerDomain } from "./domain.js";
+import { answeredAsSent } from "../environments/client.js";
 
 type Call<C extends AnyCommandDef> = (args: ArgsOf<C>) => Promise<ResultOf<C>>;
 type NoArgsCall<C extends AnyCommandDef> = () => Promise<ResultOf<C>>;
@@ -123,5 +125,6 @@ export function dockerApi(call: CommandCall): DockerApi {
 
 export const dockerClient = domainClient(dockerDomain, {
   1: dockerApi,
-  0: dockerApi,
+  // Today's call, answered as sent (`answeredAsSent`, as the environments client).
+  0: (_call, context) => dockerApi(answeredAsSent(context)),
 });

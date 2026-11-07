@@ -6149,22 +6149,23 @@ describe("pr monitor commands", () => {
           },
           "Expected hasMergeConflicts to be a boolean or null",
         ],
-        [
-          {
-            environmentId: "e1",
-            prUrl: "https://github.com/acme/repo/pull/7",
-            prState: "open",
-            hasMergeConflicts: false,
-            extra: true,
-          },
-          "Unexpected arguments field: extra",
-        ],
       ] as const) {
         await expect(invoke("set_environment_pr", args)).rejects.toThrow(message);
         expect((await storage.getEnvironment("e1"))?.prRecheckAfterAgentCompletionArmedAt).toBe(
           armedAt,
         );
       }
+      // A defined command drops an unknown key (plan item 7003, §11.4) instead
+      // of refusing the call; the open, conflict-free PR then clears the arm.
+      await expect(
+        invoke("set_environment_pr", {
+          environmentId: "e1",
+          prUrl: "https://github.com/acme/repo/pull/7",
+          prState: "open",
+          hasMergeConflicts: false,
+          extra: true,
+        }),
+      ).resolves.not.toHaveProperty("extra");
     });
   });
 

@@ -17,7 +17,10 @@ import {
   terminalWriteWasDelivered,
   type TerminalSessionCreateResult,
 } from "./shared";
+import { InvalidCommandResultError } from "@orkestrator/protocol/contract/command";
+import { environmentsClient } from "@orkestrator/protocol/contract/domains/environments";
 import { clientInvoke, commandBackendClient, type BackendClient } from "./client";
+import { backendDomainApi } from "./domain-client";
 import { terminals } from "@/lib/node-scope/domains/terminals";
 import type { ResultOf } from "@orkestrator/protocol/contract/command";
 import type {
@@ -69,6 +72,8 @@ export function createTerminalsApi(client: BackendClient) {
   // The `terminals` domain client (plan item 7002): typed results, and the
   // envelope for a node that advertises the domain.
   const domain = () => terminals(client);
+  // The `environments` domain's commands here (plan item 7003).
+  const environments = backendDomainApi(client, environmentsClient);
 
   /**
    * The persisted Claude tmux state for a container, or null when none has been
@@ -78,9 +83,14 @@ export function createTerminalsApi(client: BackendClient) {
   async function getClaudeTerminalState(
     containerId: string,
   ): Promise<ClaudeTerminalStateSnapshot | null> {
-    const snapshot = await invoke<ClaudeTerminalStateSnapshot | null>("get_claude_terminal_state", {
-      containerId,
-    });
+    let snapshot: ClaudeTerminalStateSnapshot | null;
+    try {
+      snapshot = await environments().getClaudeTerminalState({ containerId });
+    } catch (error) {
+      // A malformed answer reads as "none observed": decoded (version 1) or not.
+      if (error instanceof InvalidCommandResultError) return null;
+      throw error;
+    }
     return snapshot && typeof snapshot.state === "string" && typeof snapshot.occurredAt === "string"
       ? snapshot
       : null;
@@ -215,10 +225,7 @@ export function createTerminalsApi(client: BackendClient) {
     environmentId: string,
     timeoutMs = 15_000,
   ): Promise<EnvironmentSetupSession | null> {
-    return invoke<EnvironmentSetupSession | null>("await_environment_setup_session", {
-      environmentId,
-      timeoutMs,
-    });
+    return environments().awaitEnvironmentSetupSession({ environmentId, timeoutMs });
   }
 
   async function detachTerminal(sessionId: string): Promise<void> {
@@ -226,7 +233,7 @@ export function createTerminalsApi(client: BackendClient) {
   }
 
   async function teardownTab(input: TabTeardownInput): Promise<{ completed: boolean }> {
-    return invoke("teardown_tab", { ...input });
+    return environments().teardownTab({ ...input });
   }
 
   async function writeTerminal(sessionId: string, data: string): Promise<boolean> {

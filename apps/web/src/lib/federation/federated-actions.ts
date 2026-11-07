@@ -9,14 +9,22 @@
  * outcome-unknown and surfaces as `OutcomeUnknownError`; it is never resent.
  */
 
-import type { EnvironmentRef, ProjectRef } from "@orkestrator/protocol/federation";
+import { dockerClient } from "@orkestrator/protocol/contract/domains/docker";
+import { environmentsClient } from "@orkestrator/protocol/contract/domains/environments";
+import type { BackendId, EnvironmentRef, ProjectRef } from "@orkestrator/protocol/federation";
+import { backendDomainApi, routedBackendClient } from "@/lib/backend/domain-client";
 import type { PortalStore } from "@/lib/portal/portal-store";
+
+/** The `environments` domain on `backendId`, through the command node (plan item 7003). */
+function nodeEnvironments(portal: PortalStore, backendId: BackendId) {
+  return backendDomainApi(routedBackendClient(portal, backendId), environmentsClient)();
+}
 
 export async function startFederatedEnvironment(
   portal: PortalStore,
   ref: EnvironmentRef,
 ): Promise<void> {
-  await portal.invokeOnNode(ref.backendId, "start_environment_background", {
+  await nodeEnvironments(portal, ref.backendId).startEnvironmentBackground({
     environmentId: ref.environmentId,
   });
 }
@@ -25,7 +33,7 @@ export async function stopFederatedEnvironment(
   portal: PortalStore,
   ref: EnvironmentRef,
 ): Promise<void> {
-  await portal.invokeOnNode(ref.backendId, "stop_environment", {
+  await nodeEnvironments(portal, ref.backendId).stopEnvironment({
     environmentId: ref.environmentId,
   });
 }
@@ -48,14 +56,16 @@ export async function forkFederatedEnvironment(
   environmentType: "local" | "containerized",
 ): Promise<{ environmentId: string; projectId: string; name: string }> {
   if (environmentType === "containerized") {
-    const docker = await portal.invokeOnNode<{ available: boolean }>(ref.backendId, "check_docker");
+    const docker = await backendDomainApi(
+      routedBackendClient(portal, ref.backendId),
+      dockerClient,
+    )().checkDocker();
     if (!docker.available) throw new Error("Docker is unavailable on the owning machine");
   }
-  const fork = await portal.invokeOnNode<{ id: string; projectId: string; name: string }>(
-    ref.backendId,
-    "fork_environment",
-    { environmentId: ref.environmentId, environmentType },
-  );
+  const fork = await nodeEnvironments(portal, ref.backendId).forkEnvironment({
+    environmentId: ref.environmentId,
+    environmentType,
+  });
   return { environmentId: fork.id, projectId: fork.projectId, name: fork.name };
 }
 
@@ -65,7 +75,7 @@ export async function reorderFederatedEnvironments(
   ref: ProjectRef,
   environmentIds: readonly string[],
 ): Promise<void> {
-  await portal.invokeOnNode(ref.backendId, "reorder_environments", {
+  await nodeEnvironments(portal, ref.backendId).reorderEnvironments({
     projectId: ref.projectId,
     environmentIds: [...environmentIds],
   });
@@ -76,7 +86,7 @@ export async function deleteFederatedEnvironment(
   portal: PortalStore,
   ref: EnvironmentRef,
 ): Promise<void> {
-  await portal.invokeOnNode(ref.backendId, "delete_environment", {
+  await nodeEnvironments(portal, ref.backendId).deleteEnvironment({
     environmentId: ref.environmentId,
   });
 }

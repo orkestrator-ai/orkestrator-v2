@@ -21,7 +21,6 @@ export interface Project {
 }
 
 // Environment types
-export type EnvironmentStatus = "running" | "stopped" | "error" | "creating" | "stopping";
 // Shared with the backend: both sides order the same activity reports, so a
 // second definition of the vocabulary is a drift waiting to happen.
 import type {
@@ -41,21 +40,28 @@ import type {
 } from "@orkestrator/protocol/agent-interactions";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
+// The environment vocabularies are the protocol schemas' types (plan item 7003).
+import type {
+  EnvironmentStatus,
+  PrState,
+  NetworkAccessMode,
+  EnvironmentType,
+  EnvironmentLifecycleOperation,
+  PortProtocol,
+  EnvironmentUnreadReason,
+} from "@orkestrator/protocol/contract/domains/environments";
+export type {
+  EnvironmentStatus,
+  PrState,
+  NetworkAccessMode,
+  EnvironmentType,
+  EnvironmentLifecycleOperation,
+  PortProtocol,
+  EnvironmentUnreadReason,
+};
+
 
 export type { AgentActivityState };
-
-/** Pull request state from GitHub */
-export type PrState = "open" | "merged" | "closed";
-
-/** Network access mode for environment containers */
-export type NetworkAccessMode = "full" | "restricted";
-
-/** Type of environment - containerized (Docker) or local (git worktree) */
-export type EnvironmentType = "containerized" | "local";
-export type EnvironmentLifecycleOperation = "deleting" | "merging" | "moving";
-
-/** Port protocol type for port mappings */
-export type PortProtocol = "tcp" | "udp";
 
 /** Port mapping configuration for container ports */
 export interface PortMapping {
@@ -93,17 +99,6 @@ export interface ClaudeModelCatalogSnapshot {
   stale: boolean;
   error?: string;
 }
-
-/** Content-free cause of an environment's unread badge; mirrors the backend model. */
-export type EnvironmentUnreadReason =
-  | "agent_finished"
-  | "agent_failed"
-  | "agent_ready"
-  | "agent_waiting"
-  | "agent_question"
-  | "terminal_finished"
-  | "marked_unread"
-  | "setup_approval";
 
 export interface Environment {
   id: string;
@@ -185,9 +180,9 @@ export interface Environment {
   /** Port mappings for container (require restart to apply changes) */
   portMappings?: PortMapping[];
   /** Container entry port (e.g. 3000 for a web server), copied from project settings */
-  entryPort?: number;
+  entryPort?: number | null;
   /** Dynamically allocated host port mapped to the project's entry port */
-  hostEntryPort?: number;
+  hostEntryPort?: number | null;
 
   // === Local environment fields ===
 
@@ -215,15 +210,15 @@ export interface Environment {
    */
   projectHome?: boolean;
   /** Host port for opencode server (local mode) */
-  localOpencodePort?: number;
+  localOpencodePort?: number | null;
   /** Host port for claude-bridge server (local mode) */
-  localClaudePort?: number;
+  localClaudePort?: number | null;
   /** Host port for codex-bridge server (local mode) */
-  localCodexPort?: number;
+  localCodexPort?: number | null;
   /** Host port for Cursor's SDK bridge (local mode) */
-  localCursorPort?: number;
+  localCursorPort?: number | null;
   /** Host port for Grok Build's ACP bridge (local mode) */
-  localGrokPort?: number;
+  localGrokPort?: number | null;
 
   // === Agent settings overrides ===
   /**

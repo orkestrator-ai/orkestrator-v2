@@ -47,20 +47,25 @@ describe("log storage commands", () => {
     expect(await fs.readdir(logDirectory)).toEqual([]);
   });
 
-  test("rejects arguments neither command accepts", async () => {
+  test("ignores arguments neither command reads", async () => {
     const dataDir = await createTempDir("ork-log-storage-args-");
-    const context = logStorageContext(path.join(dataDir, "logs"));
+    const logDirectory = path.join(dataDir, "logs");
+    await fs.mkdir(logDirectory, { recursive: true });
+    await fs.writeFile(path.join(logDirectory, "app.log"), "app");
+    const context = logStorageContext(logDirectory);
     const commands = createCommandRegistry();
 
-    // Both take no arguments, so an unexpected key is a caller bug rather than
-    // something to silently ignore against a destructive command. Validation is
-    // synchronous, so it rejects before any filesystem work is scheduled.
-    expect(() => commands.get("get_log_storage_stats")?.({ path: "/etc" }, context)).toThrow(
-      /Unexpected arguments field: path/,
-    );
-    expect(() => commands.get("cleanup_logs")?.({ path: "/etc" }, context)).toThrow(
-      /Unexpected arguments field: path/,
-    );
+    // Both are defined commands with no arguments (plan item 7003): an unknown
+    // key is dropped (§11.4), never read as a path, so only the log
+    // directory is measured and cleaned.
+    await expect(
+      commands.get("get_log_storage_stats")?.({ path: "/etc" }, context),
+    ).resolves.toMatchObject({ totalBytes: 3, fileCount: 1 });
+    await expect(commands.get("cleanup_logs")?.({ path: "/etc" }, context)).resolves.toMatchObject({
+      totalBytes: 0,
+      fileCount: 0,
+    });
+    expect(await fs.readdir(logDirectory)).toEqual([]);
   });
 
   test("surfaces a cleanup the process is not permitted to perform", async () => {

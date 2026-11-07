@@ -5,6 +5,8 @@
 import type { ScenarioModule } from "../scenario.ts";
 import claudeTmux from "./claude-tmux.ts";
 import design from "./design.ts";
+import docker from "./docker.ts";
+import environments from "./environments.ts";
 import files from "./files.ts";
 import graphs from "./graphs.ts";
 import nativeSessions from "./native-sessions.ts";
@@ -28,5 +30,7 @@ export const SCENARIOS: readonly ScenarioModule[] = [
   transcriptArtifacts,
   design,
   webAnnotations,
+  environments,
+  docker,
   graphs,
 ];

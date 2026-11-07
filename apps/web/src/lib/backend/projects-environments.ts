@@ -1,6 +1,5 @@
 import { environmentRequests, hydrationRequests } from "@/lib/hydration-request-limiter";
 import { hydrationActivity } from "@/lib/hydration-activity";
-import { systemApi } from "@/lib/node-scope/domains/system";
 import { type AccountMachine } from "./agent-accounts";
 import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import type {
@@ -43,7 +42,9 @@ import {
   type ResourceRevisionManifest,
   type ResourceRevisionMap,
 } from "@orkestrator/protocol/resource-events";
+import { environmentsClient } from "@orkestrator/protocol/contract/domains/environments";
 import { clientInvoke, commandBackendClient, machineInvoker, type BackendClient } from "./client";
+import { backendDomainApi, machineBackendClient } from "./domain-client";
 /** PR detection result containing URL, state, and merge conflict status */
 
 export interface PrDetectionResult {
@@ -84,12 +85,18 @@ export interface RecreateEnvironmentOptions {
 export function createProjectsEnvironmentsApi(client: BackendClient) {
   const invoke = clientInvoke(client);
   const machineInvoke = machineInvoker(client);
+  // The `environments` domain (plan item 7003): typed, decoded results.
+  const environments = backendDomainApi(client, environmentsClient);
+  const environmentsOn = (machine: AccountMachine) =>
+    machine === undefined
+      ? environments()
+      : backendDomainApi(machineBackendClient(client, machine), environmentsClient)();
 
   async function getResourceRevisionManifest(
     knownGeneration?: string,
     knownRevisions: Partial<ResourceRevisionMap> = {},
   ): Promise<ResourceRevisionManifest> {
-    const response = await systemApi(client).get_resource_revision_manifest({
+    const response = await invoke<unknown>("get_resource_revision_manifest", {
       ...(knownGeneration === undefined ? {} : { knownGeneration }),
       knownRevisions,
     });
@@ -105,7 +112,7 @@ export function createProjectsEnvironmentsApi(client: BackendClient) {
     knownRevisions: Partial<ResourceRevisionMap> = {},
     highWater?: number,
   ): Promise<ScopedResourceRevisionManifest> {
-    const response = await systemApi(client).get_scoped_resource_revision_manifest({
+    const response = await invoke<unknown>("get_scoped_resource_revision_manifest", {
       ...(knownGeneration === undefined ? {} : { knownGeneration }),
       cursor,
       knownRevisions,
@@ -120,7 +127,7 @@ export function createProjectsEnvironmentsApi(client: BackendClient) {
   async function getScopedResourceSnapshots(
     changes: ResourceChange[],
   ): Promise<ScopedResourceSnapshotBatch> {
-    const response = await systemApi(client).get_scoped_resource_snapshots({ changes });
+    const response = await invoke<unknown>("get_scoped_resource_snapshots", { changes });
     if (
       new TextEncoder().encode(JSON.stringify(response)).byteLength >
       SCOPED_RESOURCE_SNAPSHOT_BATCH_MAX_BYTES
@@ -216,7 +223,7 @@ export function createProjectsEnvironmentsApi(client: BackendClient) {
   /** Bounded with the other hydration reads (`hydration-request-limiter.ts`). */
   async function getEnvironments(projectId: string): Promise<Environment[]> {
     return environmentRequests.run(() =>
-      hydrationRequests.run(() => invoke<Environment[]>("get_environments", { projectId })),
+      hydrationRequests.run(() => environments().getEnvironments({ projectId })),
     );
   }
 
@@ -227,9 +234,13 @@ export function createProjectsEnvironmentsApi(client: BackendClient) {
    */
   async function getEnvironmentSnapshots(projectId: string): Promise<Environment[]> {
     return hydrationActivity.track(() =>
-      hydrationRequests.run(() =>
-        invoke<Environment[]>("get_environment_snapshots", { projectId }),
-      ),
+      hydrationRequests.run(async () => {
+        const snapshot = await environments().getEnvironmentSnapshots({ projectId });
+        // Without a known revision the backend always answers the list.
+        if (Array.isArray(snapshot)) return snapshot;
+        if (snapshot.status === "changed") return snapshot.snapshot;
+        throw new Error("get_environment_snapshots answered unchanged without a known revision");
+      }),
     );
   }
 
@@ -238,18 +249,20 @@ export function createProjectsEnvironmentsApi(client: BackendClient) {
    * when it no longer exists. Backends before this command reject it as unknown.
    */
   async function getEnvironmentSnapshot(environmentId: string): Promise<Environment | null> {
-    return invoke<Environment | null>("get_environment_snapshot", { environmentId });
+    return environments().getEnvironmentSnapshot({ environmentId });
   }
 
   async function reorderEnvironments(
     projectId: string,
     environmentIds: string[],
   ): Promise<Environment[]> {
-    return invoke<Environment[]>("reorder_environments", { projectId, environmentIds });
+    return environments().reorderEnvironments({ projectId, environmentIds });
   }
 
   async function getEnvironment(environmentId: string): Promise<Environment | null> {
-    return invoke<Environment | null>("get_environment", { environmentId });
+    const environment = await environments().getEnvironment({ environmentId });
+    // A final PR record answers only `includeFinalPrState`, which this read never sends.
+    return environment === null || "finalPrState" in environment ? null : environment;
   }
 
   async function createEnvironment(
@@ -264,7 +277,7 @@ export function createProjectsEnvironmentsApi(client: BackendClient) {
     /** Parent folder for a local environment's worktree; omitted uses the default. */
     worktreeBaseDir?: string,
   ): Promise<Environment> {
-    return invoke<Environment>("create_environment", {
+    return environments().createEnvironment({
       projectId,
       name,
       networkAccessMode,
@@ -281,7 +294,7 @@ export function createProjectsEnvironmentsApi(client: BackendClient) {
     environmentId: string,
     environmentType: EnvironmentType,
   ): Promise<Environment> {
-    return invoke<Environment>("fork_environment", { environmentId, environmentType });
+    return environments().forkEnvironment({ environmentId, environmentType });
   }
 
   /**
@@ -290,15 +303,15 @@ export function createProjectsEnvironmentsApi(client: BackendClient) {
    * stored branch from the checkout on every call.
    */
   async function ensureProjectHomeEnvironment(projectId: string): Promise<Environment> {
-    return invoke<Environment>("ensure_project_home_environment", { projectId });
+    return environments().ensureProjectHomeEnvironment({ projectId });
   }
 
   async function deleteEnvironment(environmentId: string): Promise<void> {
-    return invoke("delete_environment", { environmentId });
+    return environments().deleteEnvironment({ environmentId });
   }
 
   async function startEnvironment(environmentId: string): Promise<StartEnvironmentResult> {
-    return invoke<StartEnvironmentResult>("start_environment", { environmentId });
+    return environments().startEnvironment({ environmentId });
   }
 
   /**
@@ -307,11 +320,11 @@ export function createProjectsEnvironmentsApi(client: BackendClient) {
    * authoritative environment snapshot and setup lifecycle events.
    */
   async function startEnvironmentInBackground(environmentId: string): Promise<void> {
-    return invoke<void>("start_environment_background", { environmentId });
+    return environments().startEnvironmentBackground({ environmentId });
   }
 
   async function stopEnvironment(environmentId: string): Promise<void> {
-    return invoke("stop_environment", { environmentId });
+    return environments().stopEnvironment({ environmentId });
   }
 
   /** Earlier states this environment keeps (rebuild, reset and restore sources). */
@@ -319,7 +332,7 @@ export function createProjectsEnvironmentsApi(client: BackendClient) {
     environmentId: string,
     options: { measureSize?: boolean } = {},
   ): Promise<RecoveryCopyList> {
-    return invoke<RecoveryCopyList>("list_recovery_copies", { environmentId, ...options });
+    return environments().listRecoveryCopies({ environmentId, ...options });
   }
 
   /** Permanently deletes one recovery copy, bound to the reviewed list revision. */
@@ -335,7 +348,7 @@ export function createProjectsEnvironmentsApi(client: BackendClient) {
       }
     | undefined
   > {
-    return invoke("discard_recovery_copy", { environmentId, copyId, expectedRevision });
+    return environments().discardRecoveryCopy({ environmentId, copyId, expectedRevision });
   }
 
   /**
@@ -348,7 +361,7 @@ export function createProjectsEnvironmentsApi(client: BackendClient) {
     expectedContainerId: string | null,
     expectedRevision: number,
   ): Promise<void> {
-    return invoke("restore_recovery_copy", {
+    await environments().restoreRecoveryCopy({
       environmentId,
       copyId,
       expectedContainerId,
@@ -361,9 +374,7 @@ export function createProjectsEnvironmentsApi(client: BackendClient) {
     environmentId: string,
     machine?: AccountMachine,
   ): Promise<ContainerLifecycleSnapshot> {
-    return machineInvoke<ContainerLifecycleSnapshot>(machine, "get_container_lifecycle_snapshot", {
-      environmentId,
-    });
+    return environmentsOn(machine).getContainerLifecycleSnapshot({ environmentId });
   }
 
   /** What a preserving rebuild would keep, and whether it is possible now. */
@@ -371,7 +382,7 @@ export function createProjectsEnvironmentsApi(client: BackendClient) {
     environmentId: string,
     machine?: AccountMachine,
   ): Promise<RebuildPreview> {
-    return machineInvoke<RebuildPreview>(machine, "get_rebuild_preview", { environmentId });
+    return environmentsOn(machine).getRebuildPreview({ environmentId });
   }
 
   /**
@@ -383,7 +394,7 @@ export function createProjectsEnvironmentsApi(client: BackendClient) {
     environmentId: string,
     operationId: string,
   ): Promise<{ cancelled: boolean; pending?: boolean }> {
-    return invoke("cancel_container_operation", { environmentId, operationId });
+    return environments().cancelContainerOperation({ environmentId, operationId });
   }
 
   /**
@@ -396,11 +407,11 @@ export function createProjectsEnvironmentsApi(client: BackendClient) {
     options: RecreateEnvironmentOptions,
     machine?: AccountMachine,
   ): Promise<void> {
-    return machineInvoke(machine, "recreate_environment", { environmentId, ...options });
+    await environmentsOn(machine).recreateEnvironment({ environmentId, ...options });
   }
 
   async function syncEnvironmentStatus(environmentId: string): Promise<Environment> {
-    return invoke<Environment>("sync_environment_status", { environmentId });
+    return environments().syncEnvironmentStatus({ environmentId });
   }
 
   /**
@@ -409,11 +420,11 @@ export function createProjectsEnvironmentsApi(client: BackendClient) {
    * Returns an array of environment IDs that had their container references cleared.
    */
   async function syncAllEnvironmentsWithDocker(): Promise<string[]> {
-    return invoke<string[]>("sync_all_environments_with_docker");
+    return environments().syncAllEnvironmentsWithDocker({});
   }
 
   async function renameEnvironment(environmentId: string, name: string): Promise<Environment> {
-    return invoke<Environment>("rename_environment", { environmentId, name });
+    return environments().renameEnvironment({ environmentId, name });
   }
 
   /**
@@ -425,16 +436,16 @@ export function createProjectsEnvironmentsApi(client: BackendClient) {
     environmentId: string,
     destinationDir: string,
   ): Promise<Environment> {
-    return invoke<Environment>("move_environment", { environmentId, destinationDir });
+    return environments().moveEnvironment({ environmentId, destinationDir });
   }
 
   async function getEnvironmentStatus(environmentId: string): Promise<EnvironmentStatus> {
-    return invoke<EnvironmentStatus>("get_environment_status", { environmentId });
+    return environments().getEnvironmentStatus({ environmentId });
   }
 
   /** Which agent inputs the environment's container was given, and whether they are current. */
   async function getEnvironmentInputs(environmentId: string): Promise<EnvironmentInputStatus> {
-    return invoke<EnvironmentInputStatus>("get_environment_inputs", { environmentId });
+    return environments().getEnvironmentInputs({ environmentId });
   }
 
   /** Removes one provider's imported credentials from the environment's container. */
@@ -442,10 +453,7 @@ export function createProjectsEnvironmentsApi(client: BackendClient) {
     environmentId: string,
     provider: string,
   ): Promise<CredentialRevocationResult> {
-    return invoke<CredentialRevocationResult>("revoke_provider_credentials", {
-      environmentId,
-      provider,
-    });
+    return environments().revokeProviderCredentials({ environmentId, provider });
   }
 
   /** Allows a revoked provider again; its configuration returns with the next rebuild. */
@@ -453,14 +461,14 @@ export function createProjectsEnvironmentsApi(client: BackendClient) {
     environmentId: string,
     provider: string,
   ): Promise<{ provider: string; pendingRebuild: boolean }> {
-    return invoke("restore_provider_credentials", { environmentId, provider });
+    return environments().restoreProviderCredentials({ environmentId, provider });
   }
 
   /** The configured network policy and what the container's firewall applied. */
   async function getEnvironmentNetworkPolicy(
     environmentId: string,
   ): Promise<EnvironmentNetworkPolicy> {
-    return invoke<EnvironmentNetworkPolicy>("get_environment_network_policy", { environmentId });
+    return environments().getEnvironmentNetworkPolicy({ environmentId });
   }
 
   /** Applies the saved allowlist to the running container in place, when it can. */
@@ -468,14 +476,14 @@ export function createProjectsEnvironmentsApi(client: BackendClient) {
     kind: "applied" | "not-applicable" | "rebuild-required" | "not-running" | "failed";
     policy: EnvironmentNetworkPolicy;
   }> {
-    return invoke("apply_environment_allowed_domains", { environmentId });
+    return environments().applyEnvironmentAllowedDomains({ environmentId });
   }
 
   /** Requested budget, its source, and what Docker applied to the current runtime. */
   async function getEnvironmentResources(
     environmentId: string,
   ): Promise<import("@orkestrator/protocol/container-resources").EnvironmentResourcePolicy> {
-    return invoke("get_environment_resources", { environmentId });
+    return environments().getEnvironmentResources({ environmentId });
   }
 
   /**
@@ -490,7 +498,7 @@ export function createProjectsEnvironmentsApi(client: BackendClient) {
       allowBelowUsage?: boolean;
     },
   ): Promise<import("@orkestrator/protocol/container-resources").EnvironmentResourcePolicy> {
-    return invoke("update_environment_resources", { environmentId, ...options });
+    return environments().updateEnvironmentResources({ environmentId, ...options });
   }
 
   return {

@@ -13,6 +13,8 @@ import {
 } from "@orkestrator/protocol/native-agent-observation";
 import { RESOURCE_CHANGED_EVENT } from "@orkestrator/protocol/resource-events";
 import type { AgentSummarySource } from "@/components/environments/EnvironmentAgentSummary";
+import { environmentsClient } from "@orkestrator/protocol/contract/domains/environments";
+import { backendDomainApi, routedBackendClient } from "@/lib/backend/domain-client";
 import { portalStore } from "@/lib/portal/portal-store";
 import type { Environment } from "@/types";
 import { subscribeNodeEvents } from "./node-events";
@@ -78,10 +80,12 @@ export function useNodeEnvironment(ref: EnvironmentRef, open: boolean): Environm
     let timer: ReturnType<typeof setTimeout> | undefined;
     const read = () => {
       const request = ++latest;
-      void portalStore
-        .invokeOnNode<Environment | null>(nodeId, "get_environment", { environmentId })
+      void backendDomainApi(routedBackendClient(portalStore, nodeId), environmentsClient)()
+        .getEnvironment({ environmentId })
         .then((value) => {
-          if (!cancelled && request === latest) setEnvironment(value ?? null);
+          // A final PR record answers only `includeFinalPrState`, which this read never sends.
+          const record = value === null || "finalPrState" in value ? null : value;
+          if (!cancelled && request === latest) setEnvironment(record);
         })
         .catch(() => undefined);
     };

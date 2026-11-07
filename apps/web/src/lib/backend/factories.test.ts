@@ -15,7 +15,8 @@ const commandInvoke = invoke as unknown as ReturnType<typeof mock>;
 const directory = import.meta.dir;
 const modules = readdirSync(directory)
   .filter((file) => file.endsWith(".ts") && !file.endsWith(".test.ts"))
-  .filter((file) => file !== "client.ts" && file !== "shared.ts")
+  // `domain-client.ts` builds domain clients over a factory's client (plan item 7003); it has no commands of its own.
+  .filter((file) => file !== "client.ts" && file !== "shared.ts" && file !== "domain-client.ts")
   .sort();
 
 /**

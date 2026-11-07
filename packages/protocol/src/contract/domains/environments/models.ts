@@ -25,7 +25,10 @@
 import * as Schema from "effect/Schema";
 import { AGENT_PLATFORMS, type AgentPlatform } from "../../../agent-platforms.js";
 import type { AgentSettingsTier } from "../../../agent-settings.js";
-import { CONTAINER_OPERATION_KINDS } from "../../../container-lifecycle.js";
+import {
+  CONTAINER_LIFECYCLE_ERROR_CODES,
+  CONTAINER_OPERATION_KINDS,
+} from "../../../container-lifecycle.js";
 import { ENVIRONMENT_DELETION_STEPS } from "../../../node-summaries.js";
 import { STARTUP_AGENT_TAB_ID } from "../../../tab-initial-prompt.js";
 
@@ -94,7 +97,22 @@ export type EnvironmentSetupPhase = typeof EnvironmentSetupPhaseSchema.Type;
 export const PortProtocolSchema = Schema.Literals(["tcp", "udp"]);
 export type PortProtocol = typeof PortProtocolSchema.Type;
 
-/** `models.ts` `EnvironmentUnreadReason`; `agent_ready` stays for older rows. */
+/**
+ * Content-free cause of an environment's unread badge.
+ *
+ * - `agent_finished`: an agent turn ended.
+ * - `agent_failed`: an agent turn ended with the provider's terminal error
+ *   (a refused login, a provider error, a restart mid-turn), not an answer.
+ * - `agent_ready`: no longer recorded; rows written before the readiness bell
+ *   was retired may still carry it (the composer was free while background
+ *   work continued).
+ * - `agent_waiting`: an agent stopped to wait on the user (approval, plan, prompt).
+ * - `agent_question`: an agent asked a question that needs an answer.
+ * - `terminal_finished`: a terminal-hosted agent finished.
+ * - `marked_unread`: a client marked the environment unread.
+ * - `setup_approval`: a local environment's setup commands differ from what
+ *   this machine trusts and wait for the user to approve them.
+ */
 export const EnvironmentUnreadReasonSchema = Schema.Literals([
   "agent_finished",
   "agent_failed",
@@ -188,17 +206,15 @@ export const ContainerBootPhaseSchema = Schema.Literals([
   "stopped",
 ]);
 
-/**
- * `ContainerOperationOutcome`. `failureCode` is the content-free category; it
- * stays a string here because the vocabulary grows with the lifecycle error
- * codes and only its presence is read.
- */
+/** `ContainerOperationOutcome`: `failureCode` is the content-free failure category. */
 export const ContainerOperationOutcomeSchema = Schema.Struct({
   operationId: Schema.String,
   kind: ContainerOperationKindSchema,
   status: ContainerOperationStatusSchema,
   completedAt: Schema.String,
-  failureCode: optionalString,
+  failureCode: Schema.optional(
+    Schema.Literals([...CONTAINER_LIFECYCLE_ERROR_CODES, "interrupted", "setup-failed", "unknown"]),
+  ),
   durationMs: optionalNumber,
   phases: Schema.optional(mutableArray(Schema.Struct({ phase: Schema.String, ms: Schema.Finite }))),
 });

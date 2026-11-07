@@ -71,7 +71,7 @@ function fakeNode(domains: NegotiatedDomains | null, answers: Record<string, unk
 
 describe("docker commands", () => {
   it("defines every docker command once, at version 1", () => {
-    expect(DOCKER_COMMANDS.map((def) => def.name).sort()).toEqual(DOCKER_COMMAND_NAMES);
+    expect(DOCKER_COMMANDS.map((def) => def.name as string).sort()).toEqual(DOCKER_COMMAND_NAMES);
     for (const def of DOCKER_COMMANDS) {
       expect(def.domain.name).toBe("docker");
       expect(def.since).toBe(1);
@@ -194,20 +194,20 @@ describe("docker client", () => {
     ]);
   });
 
-  it("sends today's body to a node without the domain and still decodes", async () => {
-    const node = fakeNode(null, {
-      docker_cleanup_execute: {
-        outcomes: [{ kind: "container", id: "c1", outcome: "removed" }],
-        removed: 1,
-        alreadyAbsent: 0,
-        skipped: 0,
-        conflicts: 0,
-        failed: 0,
-        reclaimedBytes: 10,
-      },
+  it("sends today's body to a node without the domain and answers as it was sent", async () => {
+    const invoked: Array<{ command: string; args: unknown }> = [];
+    const answers: Record<string, unknown> = {
+      docker_cleanup_execute: { removed: 1, extra: "kept" },
       check_docker: { available: true },
+    };
+    const node = fakeNode(null, {});
+    const client = createDomainClient(dockerClient, {
+      ...node.options,
+      invoke: async (command, args) => {
+        invoked.push({ command, args });
+        return answers[command];
+      },
     });
-    const client = createDomainClient(dockerClient, node.options);
     expect(client.version()).toBe(0);
     const docker = client.api();
     const result = await docker.cleanupExecute({
@@ -215,15 +215,12 @@ describe("docker client", () => {
       containerIds: ["c1"],
       volumeNames: [],
     });
-    expect(result.removed).toBe(1);
-    expect(node.sent[0]).toEqual({
+    // A pre-contract node's answer is the shape its callers already handle.
+    expect(result).toEqual({ removed: 1, extra: "kept" } as never);
+    expect(invoked[0]).toEqual({
       command: "docker_cleanup_execute",
       args: { selectionToken: "token", containerIds: ["c1"], volumeNames: [] },
-      envelope: undefined,
     });
-    // A malformed answer is a typed failure, not a silently wrong value.
-    await expect(docker.checkDocker()).rejects.toMatchObject({
-      _tag: "InvalidCommandResultError",
-    });
+    expect(node.sent).toEqual([]);
   });
 });

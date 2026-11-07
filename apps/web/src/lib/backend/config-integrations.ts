@@ -1,5 +1,4 @@
 import { asWebModel, nativeSessions } from "@/lib/node-scope/domains/native-sessions";
-import { asKanbanModel, kanban, NO_ARGS } from "@/lib/node-scope/domains/kanban";
 import type {
   DatabaseStats,
   DiagnosticsBundleChunk,
@@ -49,10 +48,11 @@ import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
 /** PR detection result containing URL, state, and merge conflict status */
 
 import type { PrDetectionResult } from "./projects-environments";
-import { systemApiOn } from "@/lib/node-scope/domains/system";
 import { type AccountMachine } from "./agent-accounts";
 import { incompatibility } from "@orkestrator/protocol/contract/errors";
+import { environmentsClient } from "@orkestrator/protocol/contract/domains/environments";
 import { clientInvoke, commandBackendClient, machineInvoker, type BackendClient } from "./client";
+import { backendDomainApi, machineBackendClient, withArgumentsObject } from "./domain-client";
 
 /**
  * Workspace machine settings with the command node's inherited preferences.
@@ -313,6 +313,15 @@ export interface MergeEnvironmentPrResult extends MergePrResult {
  */
 export function createConfigIntegrationsApi(client: BackendClient) {
   const invoke = clientInvoke(client);
+  // The `environments` domain's commands here (plan item 7003).
+  const environments = backendDomainApi(client, environmentsClient);
+  // The machine-aware functions sent through `machineInvoke`, which always
+  // passes an arguments object; their calls keep that shape.
+  const ownMachineEnvironments = backendDomainApi(withArgumentsObject(client), environmentsClient);
+  const environmentsOn = (machine: AccountMachine) =>
+    machine === undefined
+      ? ownMachineEnvironments()
+      : backendDomainApi(machineBackendClient(client, machine), environmentsClient)();
   const native = () => nativeSessions(client);
   const machineInvoke = machineInvoker(client);
 
@@ -488,24 +497,24 @@ export function createConfigIntegrationsApi(client: BackendClient) {
   }
 
   async function getLogDirectory(machine?: AccountMachine): Promise<string> {
-    return machineInvoke<string>(machine, "get_log_directory");
+    return environmentsOn(machine).getLogDirectory({});
   }
 
   async function getLogStorageStats(machine?: AccountMachine): Promise<LogStorageStats> {
-    return machineInvoke<LogStorageStats>(machine, "get_log_storage_stats");
+    return environmentsOn(machine).getLogStorageStats({});
   }
 
   async function cleanupLogs(machine?: AccountMachine): Promise<LogStorageStats> {
-    return machineInvoke<LogStorageStats>(machine, "cleanup_logs");
+    return environmentsOn(machine).cleanupLogs({});
   }
 
   async function getDatabaseStats(machine?: AccountMachine): Promise<DatabaseStats> {
-    return systemApiOn(client, machine).get_database_stats({});
+    return machineInvoke<DatabaseStats>(machine, "get_database_stats");
   }
 
   /** Builds the bundle on the backend and answers with the manifest of exactly that bundle. */
   async function planDiagnosticsBundle(machine?: AccountMachine): Promise<DiagnosticsBundlePlan> {
-    return systemApiOn(client, machine).plan_diagnostics_bundle({});
+    return machineInvoke<DiagnosticsBundlePlan>(machine, "plan_diagnostics_bundle");
   }
 
   async function readDiagnosticsBundle(
@@ -513,39 +522,37 @@ export function createConfigIntegrationsApi(client: BackendClient) {
     offset: number,
     machine?: AccountMachine,
   ): Promise<DiagnosticsBundleChunk> {
-    return systemApiOn(client, machine).read_diagnostics_bundle({
+    return machineInvoke<DiagnosticsBundleChunk>(machine, "read_diagnostics_bundle", {
       planId,
       offset,
     });
   }
 
   async function getLinearConnection(): Promise<LinearConnectionStatus> {
-    return asKanbanModel<LinearConnectionStatus>(kanban(client).get_linear_connection(NO_ARGS));
+    return invoke<LinearConnectionStatus>("get_linear_connection");
   }
 
   async function connectLinear(apiKey: string): Promise<LinearConnectionStatus> {
-    return asKanbanModel<LinearConnectionStatus>(kanban(client).connect_linear({ apiKey }));
+    return invoke<LinearConnectionStatus>("connect_linear", { apiKey });
   }
 
   async function disconnectLinear(): Promise<LinearConnectionStatus> {
-    return asKanbanModel<LinearConnectionStatus>(kanban(client).disconnect_linear(NO_ARGS));
+    return invoke<LinearConnectionStatus>("disconnect_linear");
   }
 
   async function getLinearIssues(): Promise<LinearIssueListItem[]> {
-    return asKanbanModel<LinearIssueListItem[]>(kanban(client).get_linear_issues(NO_ARGS));
+    return invoke<LinearIssueListItem[]>("get_linear_issues");
   }
 
   async function getLinearIssue(issueId: string): Promise<LinearIssueDetail> {
-    return asKanbanModel<LinearIssueDetail>(kanban(client).get_linear_issue({ issueId }));
+    return invoke<LinearIssueDetail>("get_linear_issue", { issueId });
   }
 
   async function postLinearIssueComment(
     issueId: string,
     body: string,
   ): Promise<LinearIssueComment> {
-    return asKanbanModel<LinearIssueComment>(
-      kanban(client).post_linear_issue_comment({ issueId, body }),
-    );
+    return invoke<LinearIssueComment>("post_linear_issue_comment", { issueId, body });
   }
 
   async function postLinearCompletionComment(
@@ -553,9 +560,11 @@ export function createConfigIntegrationsApi(client: BackendClient) {
     issueId: string,
     body: string,
   ): Promise<LinearCompletionCommentResult> {
-    return asKanbanModel<LinearCompletionCommentResult>(
-      kanban(client).post_linear_completion_comment({ pipelineId, issueId, body }),
-    );
+    return invoke<LinearCompletionCommentResult>("post_linear_completion_comment", {
+      pipelineId,
+      issueId,
+      body,
+    });
   }
 
   async function getGitHubIssues(projectId: string): Promise<GitHubIssuesSnapshot> {
@@ -649,7 +658,7 @@ export function createConfigIntegrationsApi(client: BackendClient) {
   }
 
   async function getEnvironmentPrUrl(environmentId: string): Promise<string | null> {
-    return invoke<string | null>("get_environment_pr_url", { environmentId });
+    return environments().getEnvironmentPrUrl({ environmentId });
   }
 
   async function verifyEnvironmentPr(
@@ -665,7 +674,7 @@ export function createConfigIntegrationsApi(client: BackendClient) {
   }
 
   async function clearEnvironmentPr(environmentId: string): Promise<void> {
-    return invoke("clear_environment_pr", { environmentId });
+    return environments().clearEnvironmentPr({ environmentId });
   }
 
   async function setEnvironmentPr(
@@ -674,7 +683,7 @@ export function createConfigIntegrationsApi(client: BackendClient) {
     prState: PrState,
     hasMergeConflicts: boolean | null,
   ): Promise<Environment> {
-    return invoke<Environment>("set_environment_pr", {
+    return environments().setEnvironmentPr({
       environmentId,
       prUrl,
       prState,
@@ -683,17 +692,17 @@ export function createConfigIntegrationsApi(client: BackendClient) {
   }
 
   async function overrideEnvironmentSetup(environmentId: string): Promise<Environment> {
-    return invoke<Environment>("override_environment_setup", { environmentId });
+    return environments().overrideEnvironmentSetup({ environmentId });
   }
 
   async function runEnvironmentSetup(environmentId: string): Promise<Environment> {
-    return invoke<Environment>("run_environment_setup", { environmentId });
+    return environments().runEnvironmentSetup({ environmentId });
   }
 
   async function getEnvironmentSetupApproval(
     environmentId: string,
   ): Promise<EnvironmentSetupApproval> {
-    return invoke<EnvironmentSetupApproval>("get_environment_setup_approval", { environmentId });
+    return environments().getEnvironmentSetupApproval({ environmentId });
   }
 
   /**
@@ -705,13 +714,13 @@ export function createConfigIntegrationsApi(client: BackendClient) {
     hash: string,
     remember: boolean,
   ): Promise<Environment> {
-    return invoke<Environment>("approve_environment_setup", { environmentId, hash, remember });
+    return environments().approveEnvironmentSetup({ environmentId, hash, remember });
   }
 
   async function ensureEnvironmentSetup(
     environmentId: string,
   ): Promise<EnsureEnvironmentSetupResult> {
-    return invoke<EnsureEnvironmentSetupResult>("ensure_environment_setup", { environmentId });
+    return environments().ensureEnvironmentSetup({ environmentId });
   }
 
   /** Detect PR URL and state for the environment's branch (uses --head to check correct branch) */

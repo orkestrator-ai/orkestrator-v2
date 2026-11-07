@@ -868,6 +868,49 @@ export const nodeMailClient = domainClient(nodeMail, {
   feature-plan build fallback, the self-reminder carrier, the MCP bridge
   report and the usage-limit text rows are renderer or bridge paths and are
   unaffected.
+- **Build pipelines, graphs and Multi Review**
+  ([7007](../../plans/unified/7007-domain-pipelines-graphs-multi-review.md)):
+  `pipelines` (35 commands: build launches, controls, reads, the unread
+  badge and the workflow result rollout), `graphs` (39: the template
+  library, sharing, describe jobs, launches, runs and mock runs) and
+  `multi-review` (30: workflows and review validation runs), all at version 1
+  (min 1). Model records are `modelRecord`s typed as the protocol's own
+  interfaces. **The graph guards are reused, not duplicated:** a graph
+  template's and a run's result schema is refined by `validateGraphTemplate`
+  and `validateGraphRun` (`guardedRecord`, `domains/graphs/schemas.ts`),
+  read tolerantly: the guards refuse unknown fields and values outside their
+  closed lists, so the refinement ignores the `unknown_field` and `enum`
+  codes (a newer backend's added field or status still decodes) and fails on
+  any other error; the run guard skips its plan digest check, the backend's
+  integrity check on load. The build pipeline and Multi Review guards
+  (`isBuildPipeline`, `isMultiReviewWorkflow`) are not used in a decode: the
+  renderer runs them after rewriting the Rework and Address Findings
+  vocabulary (`workflow-vocabulary.ts`), and the stored `snapshot` stays
+  `unknown`. Handlers keep their own validators (coded `Graph*Error`s, the
+  start-request guards) on `optionalKey(Unknown)` keys, so codes and text are
+  unchanged; the graph handlers' `Unknown arguments` refusals are gone
+  (tolerant), and the start requests also declare the newer vocabulary's
+  keys (`autoAddressFindings`, `addressFindingsModel`) for the handler to
+  rewrite. Critical: `requestId` on `create_feature_build`, `graph_run_launch`,
+  `graph_run_restart` and `graph_run_rewind_code`; `existingEnvironmentId`
+  and `deliveryPolicy` on the build launches (and `deliveryPolicy` on a
+  feature build); `expectedRevision` on the graph template and ceiling
+  writes; `expectedLastActivityAt` on `set_environment_unread`; the
+  "Restart in…" `selection`/`model`; `digest` on `graph_template_duplicate`;
+  an edited `value` on `graph_run_answer`. `access` is `workspace` apart from
+  the workflow result rollout (`admin`) and the review validation lifecycle
+  the supervisors drive in-process (`internal`). No command was
+  capability-gated, so nothing is folded into a version; each client is one
+  function per command (`commandApi`), version 0 today's call by name. The
+  web calls them through `lib/node-scope/domains/{pipelines,graphs,multi-review}.ts`;
+  `lib/backend/workflows.ts` is split into `build-pipelines.ts` and
+  `multi-reviews.ts`, which `createWorkflowsApi` and its named exports still
+  include. Register rows: the renderer fallbacks for backends without
+  `launch_build_pipeline` or `start_feature_plan_build`, the Rework and
+  Address Findings vocabulary, the Address session text report and the
+  hydration fallback are **unaffected** (a pre-contract node's
+  `unknown-command` reaches the caller through version 0, as before); none
+  retires.
 - **Adapter list.** Every domain client is defined under
   `packages/protocol/src/contract/domains/`, one per domain, and listed in
   `DOMAIN_CLIENTS` (`contract/client-adapters.ts`).

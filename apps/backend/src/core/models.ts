@@ -1,4 +1,5 @@
 import type { StartupAgentTabId } from "@orkestrator/protocol/tab-initial-prompt";
+import type { BuildPipelineRecord } from "@orkestrator/protocol/contract/domains/pipelines";
 // Re-exported rather than redeclared: the renderer orders activity reports
 // against the same vocabulary, and two copies of it drift silently.
 import type {
@@ -610,19 +611,10 @@ export interface PersistedMultiReviewWorkflow {
  *
  * `environmentId` is blank between a pipeline being created and its environment
  * existing. That window is exactly when a crash used to orphan the pipeline, so
- * the record must be storable before it can be linked.
+ * the record must be storable before it can be linked. The shape is the
+ * `pipelines` contract domain's `BuildPipelineRecord` (plan item 7007).
  */
-export interface PersistedBuildPipeline {
-  version: number;
-  id: string;
-  projectId: string;
-  environmentId: string;
-  snapshot: unknown;
-  updatedAt: string;
-  /** Entry into the current complete/failed/paused phase; metadata saves keep it. */
-  activityEndedAt?: string;
-  revision: number;
-}
+export type PersistedBuildPipeline = BuildPipelineRecord;
 
 export type NativeAgentProvider = "claude" | "codex" | "opencode" | "cursor" | "grok" | "pi";
 export const NATIVE_AGENT_SESSION_VERSION = 1 as const;

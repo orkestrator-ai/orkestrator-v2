@@ -445,7 +445,12 @@ A command node attached to another command node operates in leaf mode:
     example `changes_get_view`, `get_environment`, `get_agent_registry`).
     `isNodeReadCommand` treats a read verb at the start of the name, or
     after one namespace (`changes_get_…`), as a read: it is never recorded
-    as outcome-unknown and does not refresh the summaries.
+    as outcome-unknown and does not refresh the summaries. Reads that name
+    their subject first (`graph_run_get`, `graph_template_get`, the code
+    rewind previews) are listed by name, and so are the writes the verb rule
+    would misread (`graph_describe_start`, `_cancel`, `_dismiss`), so the
+    classifier agrees with each defined command's `read`
+    ([7007](../../plans/unified/7007-domain-pipelines-graphs-multi-review.md)).
   - *Events* are relayed on request. A client leases a watch on a node for
     some event prefixes (`watch_node_events`, renewed every 30 s, expiring
     after 90 s; `unwatch_node_events`). The command node keeps one stream

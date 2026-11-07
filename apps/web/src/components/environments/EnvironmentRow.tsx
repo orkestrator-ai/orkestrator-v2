@@ -60,6 +60,11 @@ import { EnvironmentStatusMarker } from "./EnvironmentStatusMarker";
 import { EnvironmentTooltipBody, type EnvironmentTooltipDetails } from "./EnvironmentTooltipBody";
 import { UnreadBellIcon } from "./UnreadBellIcon";
 import {
+  armRowDeleteShortcut,
+  DELETE_ROW_KEYSHORTCUTS,
+  isDeleteRowChord,
+} from "./row-delete-shortcut";
+import {
   environmentRowModel,
   type EnvironmentRowFacts,
   type EnvironmentRowModel,
@@ -511,9 +516,31 @@ export function EnvironmentRow({
   const multiSelectActive = multiSelect?.active === true;
   const menuItems = environmentRowMenuItems(model, actions, () => setDeleteOpen(true));
 
+  // A multi-selection has its own bulk delete, so the chord never deletes just this row.
+  const canRequestDelete = !model.menu.deleteDisabled && !multiSelectActive;
+  const disarmDeleteShortcutRef = useRef<(() => void) | null>(null);
+  const disarmDeleteShortcut = () => {
+    disarmDeleteShortcutRef.current?.();
+    disarmDeleteShortcutRef.current = null;
+  };
+  useEffect(() => {
+    if (canRequestDelete) return;
+    disarmDeleteShortcutRef.current?.();
+    disarmDeleteShortcutRef.current = null;
+  }, [canRequestDelete]);
+  useEffect(() => () => disarmDeleteShortcutRef.current?.(), []);
+
   const activate = (event: React.MouseEvent | React.KeyboardEvent) => {
-    if (!model.selectable && (event.shiftKey || event.metaKey || event.ctrlKey)) return;
+    const modified = event.shiftKey || event.metaKey || event.ctrlKey;
+    if (!model.selectable && modified) return;
     onActivate({ shiftKey: event.shiftKey, metaKey: event.metaKey || event.ctrlKey });
+    disarmDeleteShortcut();
+    // The environment's terminal or composer takes focus next, so the chord
+    // is caught briefly at the window until the user does anything else.
+    // Normal activation clears multi-select; use the resulting single-row eligibility.
+    if (!model.menu.deleteDisabled && !modified) {
+      disarmDeleteShortcutRef.current = armRowDeleteShortcut(() => setDeleteOpen(true));
+    }
   };
 
   return (
@@ -560,8 +587,16 @@ export function EnvironmentRow({
                 if (event.key === "Enter" || event.key === " ") {
                   event.preventDefault();
                   activate(event);
+                  return;
+                }
+                if (isDeleteRowChord(event)) {
+                  event.preventDefault();
+                  // Opens the same confirmation as the menu's Delete; holding
+                  // the keys must not reopen it behind the dialog.
+                  if (canRequestDelete && !event.repeat) setDeleteOpen(true);
                 }
               }}
+              aria-keyshortcuts={canRequestDelete ? DELETE_ROW_KEYSHORTCUTS : undefined}
               onMouseEnter={tooltip.show}
               onMouseLeave={tooltip.hide}
               onFocus={tooltip.show}

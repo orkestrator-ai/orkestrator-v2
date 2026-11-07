@@ -146,3 +146,47 @@ test("pending restart disables bulk controls and marks its row busy", async ({
     (await writes(page)).filter(({ args }) => args.command === "start_environment_background"),
   ).toHaveLength(1);
 });
+
+test("remote row arming expires and child-frame focus revokes it", async ({ page }, testInfo) => {
+  await page.goto("/sidebar-drag?cross-machine");
+  const remote = row(page, "remote-feature");
+  await expect(remote).toBeVisible();
+  await page.evaluate(() => {
+    const field = document.createElement("textarea");
+    field.setAttribute("aria-label", "Editing surface");
+    field.value = "existing text";
+    document.body.append(field);
+    const frame = document.createElement("iframe");
+    frame.title = "Child workspace";
+    frame.srcdoc = '<textarea aria-label="Child terminal">existing text</textarea>';
+    document.body.append(frame);
+  });
+  await page.screenshot({
+    path: `output/visual-previews/delete-arm-before-${testInfo.project.name}.png`,
+  });
+  // Leaving multi-select through a plain click must still arm the remote row.
+  await row(page, "p-env-1").click(toggle);
+  await remote.click();
+  await page.getByRole("textbox", { name: "Editing surface" }).focus();
+  await page.keyboard.press("Control+Backspace");
+  await expect(page.getByRole("alertdialog")).toBeVisible();
+  await page.screenshot({
+    path: `output/visual-previews/delete-arm-confirmation-${testInfo.project.name}.png`,
+  });
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  await page.clock.install();
+  await remote.click();
+  await page.getByRole("textbox", { name: "Editing surface" }).focus();
+  // Advance the browser clock past the short arming window without a wall-clock sleep.
+  await page.clock.fastForward(1600);
+  await page.keyboard.press("Control+Backspace");
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
+  await expect(page.getByRole("textbox", { name: "Editing surface" })).toHaveValue("existing ");
+  await remote.click();
+  await page.frameLocator('iframe[title="Child workspace"]').getByRole("textbox").focus();
+  await page.keyboard.press("Control+Backspace");
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
+  await page.getByRole("textbox", { name: "Editing surface" }).focus();
+  await page.keyboard.press("Control+Backspace");
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
+});

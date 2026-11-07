@@ -10,6 +10,13 @@ if (runtimeProfile) {
   document.body.dataset.orkestratorDevProfile = runtimeProfile;
   document.title = `Orkestrator AI — DEV [${runtimeProfile}]`;
 }
+// Plan item 2013's scope proof, for agent-test (`dev:test`) dev renderers only;
+// a production build drops this branch and its chunk.
+if (import.meta.env.DEV && import.meta.env.VITE_ORKESTRATOR_PROFILE_FLAVOR === "agent-test") {
+  void import("./lib/node-scope/scope-proof-harness").then(({ installScopeProofHarness }) =>
+    installScopeProofHarness(),
+  );
+}
 
 function renderApp(reportStartupError?: () => void): void {
   renderReactRoot({

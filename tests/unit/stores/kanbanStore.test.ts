@@ -74,6 +74,8 @@ mock.module("@/lib/backend", () => ({
 const { useKanbanStore, findTaskForEnvironment } =
   (await import("../../../apps/web/src/stores/kanbanStore.ts?kanban-store-test")) as typeof import("../../../apps/web/src/stores/kanbanStore");
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+// The statics seed the app command scope's stores; the lookup reads that scope.
+import { appCommandScope } from "@/lib/node-scope-slots";
 import type { KanbanTask } from "@/lib/backend";
 
 afterAll(() => {
@@ -410,7 +412,7 @@ describe("findTaskForEnvironment", () => {
     const task = createTask({ environmentId: "env-1" });
     useKanbanStore.setState({ tasks: [task] });
 
-    const result = findTaskForEnvironment("env-1");
+    const result = findTaskForEnvironment("env-1", appCommandScope());
     expect(result.task).toBeDefined();
     expect(result.taskId).toBe("task-1");
   });
@@ -448,7 +450,7 @@ describe("findTaskForEnvironment", () => {
       ]),
     });
 
-    const result = findTaskForEnvironment("env-2");
+    const result = findTaskForEnvironment("env-2", appCommandScope());
     expect(result.task).toBeUndefined();
     expect(result.taskId).toBe("task-99");
   });
@@ -491,7 +493,7 @@ describe("findTaskForEnvironment", () => {
       ]),
     });
 
-    const result = findTaskForEnvironment("env-linear");
+    const result = findTaskForEnvironment("env-linear", appCommandScope());
     expect(result.task).toBeUndefined();
     expect(result.taskId).toBeUndefined();
   });
@@ -537,14 +539,14 @@ describe("findTaskForEnvironment", () => {
       ]),
     });
 
-    expect(findTaskForEnvironment("env-github")).toEqual({
+    expect(findTaskForEnvironment("env-github", appCommandScope())).toEqual({
       task: undefined,
       taskId: undefined,
     });
   });
 
   test("returns undefined when environment has no associated task", () => {
-    const result = findTaskForEnvironment("env-nonexistent");
+    const result = findTaskForEnvironment("env-nonexistent", appCommandScope());
     expect(result.task).toBeUndefined();
     expect(result.taskId).toBeUndefined();
   });
@@ -585,7 +587,7 @@ describe("findTaskForEnvironment", () => {
       ]),
     });
 
-    const result = findTaskForEnvironment("env-1");
+    const result = findTaskForEnvironment("env-1", appCommandScope());
     expect(result.task).toBeDefined();
     expect(result.taskId).toBe("kanban-task");
   });

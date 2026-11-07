@@ -9,6 +9,7 @@ import {
   createTerminalKey,
   useTerminalPortalStore,
 } from "../../../apps/web/src/stores/terminalPortalStore";
+import type { BackendId } from "@orkestrator/protocol/federation";
 
 afterEach(() => {
   useAgentActivityStore.setState({
@@ -245,13 +246,18 @@ describe("local session and terminal portal state", () => {
     expect(useSessionStore.getState().sessions.size).toBe(0);
   });
 
-  test("keys and manages environment-scoped pane hosts", () => {
-    expect(createPortalTargetKey("env", "pane")).toBe("env::pane");
-    expect(createTerminalKey("env", "tab")).toBe("env::tab");
+  test("keys and manages node- and environment-scoped pane hosts", () => {
+    // Keys are node-qualified (3008): the same environment and pane on two nodes differ.
+    const node = "bk_node-a" as BackendId;
+    expect(createPortalTargetKey(node, "env", "pane")).toBe("bk_node-a\u0000env::pane");
+    expect(createTerminalKey(node, "env", "tab")).toBe("bk_node-a\u0000env::tab");
     const element = document.createElement("div");
-    useTerminalPortalStore.getState().registerPaneHost("env", "pane", element);
-    expect(useTerminalPortalStore.getState().getPaneHost("env", "pane")).toBe(element);
-    useTerminalPortalStore.getState().unregisterPaneHost("env", "pane");
-    expect(useTerminalPortalStore.getState().getPaneHost("env", "pane")).toBeUndefined();
+    useTerminalPortalStore.getState().registerPaneHost(node, "env", "pane", element);
+    expect(useTerminalPortalStore.getState().getPaneHost(node, "env", "pane")).toBe(element);
+    expect(
+      useTerminalPortalStore.getState().getPaneHost("bk_node-b" as BackendId, "env", "pane"),
+    ).toBeUndefined();
+    useTerminalPortalStore.getState().unregisterPaneHost(node, "env", "pane");
+    expect(useTerminalPortalStore.getState().getPaneHost(node, "env", "pane")).toBeUndefined();
   });
 });

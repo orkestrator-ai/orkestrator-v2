@@ -1,10 +1,5 @@
 import { describe, test, expect, beforeEach } from "bun:test";
-import {
-  applyProjectSnapshot,
-  getProjectMutationVersion,
-  invalidateProjectSnapshots,
-  useProjectStore,
-} from "../../../apps/web/src/stores/projectStore";
+import { useProjectStore } from "../../../apps/web/src/stores/projectStore";
 import type { Project } from "../../../apps/web/src/types";
 
 describe("projectStore", () => {
@@ -173,10 +168,10 @@ describe("projectStore", () => {
 
     const assertMutationRejectsSnapshot = (mutate: () => void) => {
       useProjectStore.getState().setProjects([original]);
-      const snapshotVersion = getProjectMutationVersion();
+      const snapshotVersion = useProjectStore.getState().getMutationVersion();
       mutate();
 
-      expect(applyProjectSnapshot([replacement], snapshotVersion)).toBe(false);
+      expect(useProjectStore.getState().applySnapshot([replacement], snapshotVersion)).toBe(false);
       expect(useProjectStore.getState().projects.some((project) => project.id === "stale")).toBe(
         false,
       );
@@ -191,11 +186,11 @@ describe("projectStore", () => {
     );
     assertMutationRejectsSnapshot(() => useProjectStore.getState().reorderProjects(["original"]));
     assertMutationRejectsSnapshot(() => useProjectStore.getState().setProjects([]));
-    assertMutationRejectsSnapshot(() => invalidateProjectSnapshots());
+    assertMutationRejectsSnapshot(() => useProjectStore.getState().invalidateSnapshots());
   });
 
   test("applies and sorts a snapshot when its mutation version is current", () => {
-    const currentVersion = getProjectMutationVersion();
+    const currentVersion = useProjectStore.getState().getMutationVersion();
     const later = {
       id: "later",
       name: "later",
@@ -206,7 +201,7 @@ describe("projectStore", () => {
     } satisfies Project;
     const earlier = { ...later, id: "earlier", name: "earlier", order: 1 };
 
-    expect(applyProjectSnapshot([later, earlier], currentVersion)).toBe(true);
+    expect(useProjectStore.getState().applySnapshot([later, earlier], currentVersion)).toBe(true);
     expect(useProjectStore.getState().projects.map((project) => project.id)).toEqual([
       "earlier",
       "later",

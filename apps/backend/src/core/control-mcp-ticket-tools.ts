@@ -111,7 +111,9 @@ export function registerTicketTools(
         Schema.Struct({
           projectId: str({ trim: true, min: 1, max: 200 }),
           status: Schema.optionalKey(Schema.Literals(["backlog", "in-progress", "review", "done"])),
-          label: Schema.optionalKey(describe(ticketLabelNameField, "Only tickets with this label.")),
+          label: Schema.optionalKey(
+            describe(ticketLabelNameField, "Only tickets with this label."),
+          ),
           nodeId: nodeIdField,
         }),
       ),

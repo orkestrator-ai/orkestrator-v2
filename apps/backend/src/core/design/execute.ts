@@ -28,6 +28,7 @@ import {
 } from "./history.js";
 import type { DesignPrivateRecord, DesignRecordStore } from "./records.js";
 import { frameSchema } from "./schemas.js";
+import { decodeSync } from "../tool-schema.js";
 
 export type RenderPriority = "interactive" | "validation" | "background";
 export type RenderFn = (
@@ -244,7 +245,7 @@ export async function computeOperation(ctx: ComputeContext): Promise<ComputedOpe
           retry: "never",
         });
       const validation = await validateRaw(ctx, input.frame.html, input.frame);
-      const frame = frameSchema.parse({ ...input.frame, id: randomUUID(), revision: 0 });
+      const frame = decodeSync(frameSchema, { ...input.frame, id: randomUUID(), revision: 0 });
       result.frames.push(
         change(null, frame, ["name", "geometry", "viewport", "content", "structure"], {
           index: record.document.frames.length,
@@ -299,7 +300,7 @@ async function computeFrameOperation(
   result.history = { kind: input.kind, label, scope: "frame" };
   switch (input.kind) {
     case "update_frame": {
-      const next = frameSchema.parse({ ...frame, ...input.patch, id: frame.id });
+      const next = decodeSync(frameSchema, { ...frame, ...input.patch, id: frame.id });
       const fields = geometryFields(frame, input.patch);
       if (!fields.length) return { ...result, noop: true, history: undefined };
       result.frames.push(change(frame, next, fields));
@@ -339,7 +340,7 @@ async function computeFrameOperation(
         };
       result.unchangedProperties = styled.unchanged;
       result.frames.push(
-        change(frame, frameSchema.parse({ ...frame, html: styled.html }), ["content"], {
+        change(frame, decodeSync(frameSchema, { ...frame, html: styled.html }), ["content"], {
           preserveStructure: true,
           carryValidation: true,
         }),
@@ -368,7 +369,7 @@ async function computeFrameOperation(
       const html = (await ctx.render(frame, operation, "interactive")) as string;
       if (html === frame.html) return { ...result, noop: true, history: undefined };
       result.frames.push(
-        change(frame, frameSchema.parse({ ...frame, html }), ["content", "structure"]),
+        change(frame, decodeSync(frameSchema, { ...frame, html }), ["content", "structure"]),
       );
       result.validateAfter.push(frame.id);
       return result;
@@ -386,7 +387,7 @@ async function computeFrameOperation(
         throw new DesignError("capacity", `Frame limit reached (${DESIGN_MAX_FRAMES})`, {
           retry: "never",
         });
-      const copy = frameSchema.parse({
+      const copy = decodeSync(frameSchema, {
         ...frame,
         id: randomUUID(),
         name: (input.name ?? `${frame.name} copy`).slice(0, 120),
@@ -492,7 +493,11 @@ async function computeBatch(
             retry: "never",
           });
         const validation = await validateRaw(ctx, operation.frame.html, operation.frame);
-        const frame = frameSchema.parse({ ...operation.frame, id: randomUUID(), revision: 0 });
+        const frame = decodeSync(frameSchema, {
+          ...operation.frame,
+          id: randomUUID(),
+          revision: 0,
+        });
         working.set(frame.id, frame);
         order.push(frame.id);
         structural.add(frame.id);
@@ -506,7 +511,7 @@ async function computeBatch(
       case "update_frame": {
         const frame = working.get(operation.frameId);
         if (!frame) throw new DesignError("not-found", "Frame not found in batch");
-        const next = frameSchema.parse({ ...frame, ...operation.patch, id: frame.id });
+        const next = decodeSync(frameSchema, { ...frame, ...operation.patch, id: frame.id });
         const fields = geometryFields(frame, operation.patch);
         working.set(frame.id, next);
         if (fields.length) touch(frame.id, fields);

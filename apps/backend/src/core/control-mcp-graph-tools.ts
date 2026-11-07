@@ -1,5 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/server";
-import { z } from "zod";
+import { Schema } from "effect";
+import { describe, list, str, strictObject, toolInput, type Infer } from "./tool-schema.js";
 import { workflowStatusWakeResult } from "./control-mcp-review-actions.js";
 import { isRecord, readAnnotations, toolResult } from "./control-mcp-tool-support.js";
 import type { CoordinatorControlScope } from "./control-mcp-tools.js";
@@ -17,41 +18,41 @@ import type { ControlMcpInvoker } from "./control-shared-actions.js";
  * each time it waits for a person. Results are content-free.
  */
 
-const AGENT_PLATFORM = z.enum(["claude", "codex", "cursor", "grok", "opencode", "pi"]);
+const AGENT_PLATFORM = Schema.Literals(["claude", "codex", "cursor", "grok", "opencode", "pi"]);
 
-const modelBinding = z
-  .object({
-    platform: AGENT_PLATFORM,
-    model: z.string().trim().min(1).max(256).optional(),
-    reasoningEffort: z.string().trim().min(1).max(256).optional(),
-    fastMode: z.boolean().optional(),
-    lens: z
-      .object({
-        label: z.string().trim().min(1).max(64),
-        instruction: z.string().trim().min(1).max(4096),
-      })
-      .strict()
-      .optional()
-      .describe("A panel member's review focus, copied into the run."),
-  })
-  .strict();
+const modelBinding = strictObject({
+  platform: AGENT_PLATFORM,
+  model: Schema.optionalKey(str({ trim: true, min: 1, max: 256 })),
+  reasoningEffort: Schema.optionalKey(str({ trim: true, min: 1, max: 256 })),
+  fastMode: Schema.optionalKey(Schema.Boolean),
+  lens: Schema.optionalKey(
+    describe(
+      strictObject({
+        label: str({ trim: true, min: 1, max: 64 }),
+        instruction: str({ trim: true, min: 1, max: 4096 }),
+      }),
+      "A panel member's review focus, copied into the run.",
+    ),
+  ),
+});
 
-const templateRef = z
-  .object({
-    scope: z.enum(["builtin", "user", "project"]),
-    id: z.string().trim().min(1).max(64).optional().describe("builtin and user templates."),
-    path: z
-      .string()
-      .trim()
-      .min(1)
-      .max(300)
-      .optional()
-      .describe("project templates: the file under .orkestrator/graphs/."),
-  })
-  .strict()
-  .describe("The template, as list_graph_templates reports its ref.");
+const templateRef = describe(
+  strictObject({
+    scope: Schema.Literals(["builtin", "user", "project"]),
+    id: Schema.optionalKey(
+      describe(str({ trim: true, min: 1, max: 64 }), "builtin and user templates."),
+    ),
+    path: Schema.optionalKey(
+      describe(
+        str({ trim: true, min: 1, max: 300 }),
+        "project templates: the file under .orkestrator/graphs/.",
+      ),
+    ),
+  }),
+  "The template, as list_graph_templates reports its ref.",
+);
 
-function refArgument(ref: z.infer<typeof templateRef>, projectId: string): Record<string, unknown> {
+function refArgument(ref: Infer<typeof templateRef>, projectId: string): Record<string, unknown> {
   if (ref.scope === "project") return { scope: "project", projectId, path: ref.path };
   return { scope: ref.scope, id: ref.id };
 }
@@ -78,16 +79,17 @@ export function registerCoordinatorGraphTools(
       title: "List saved graph templates",
       description:
         "List the graph templates this project can run (built-in, user and trusted project templates) with whether each is launchable. With ref, read that template's launch options instead: its roles (with the providers each may run on, their enforcement tier and why one is unavailable), parameters, inputs, environment default and cost estimate. Built-in templates run on their own engines and cannot be launched as graphs; untrusted project templates cannot be launched until the user approves them.",
-      inputSchema: z.object({
-        ref: templateRef.optional(),
-        environmentId: z
-          .string()
-          .trim()
-          .min(1)
-          .max(200)
-          .optional()
-          .describe("With ref: judge the launch as on this existing environment."),
-      }),
+      inputSchema: toolInput(
+        Schema.Struct({
+          ref: Schema.optionalKey(templateRef),
+          environmentId: Schema.optionalKey(
+            describe(
+              str({ trim: true, min: 1, max: 200 }),
+              "With ref: judge the launch as on this existing environment.",
+            ),
+          ),
+        }),
+      ),
       annotations: readAnnotations(),
     },
     async ({ ref, environmentId }) =>
@@ -109,53 +111,63 @@ export function registerCoordinatorGraphTools(
       title: "Launch a saved graph",
       description:
         "Launch a saved graph template as a run, in a new worktree or container the run creates, or in an existing worker environment (one environment per run). Omit roles and params to use the defaults saved for this template, else the user's saved action defaults. Read list_graph_templates with ref first to see the roles, providers and inputs. ticket fills the template's ticket input from a Kanban ticket. You get one status wake when the run ends and one when it waits for a person; finish your turn instead of polling. You cannot create or edit templates.",
-      inputSchema: z.object({
-        requestId: z
-          .string()
-          .trim()
-          .min(1)
-          .max(256)
-          .describe("Idempotency key: retrying with it returns the same run."),
-        template: templateRef,
-        environment: z
-          .object({
-            kind: z.enum(["new", "existing"]),
-            create: z
-              .enum(["worktree", "container"])
-              .optional()
-              .describe("kind new: what the run creates."),
-            environmentId: z
-              .string()
-              .trim()
-              .min(1)
-              .max(200)
-              .optional()
-              .describe("kind existing: a worker environment of this project."),
-          })
-          .strict(),
-        roles: z
-          .record(z.string(), z.union([modelBinding, z.array(modelBinding).min(1).max(32)]))
-          .optional()
-          .describe(
-            "Optional per-role models: one binding, or a list for a panel role. Omitted roles keep their defaults.",
+      inputSchema: toolInput(
+        Schema.Struct({
+          requestId: describe(
+            str({ trim: true, min: 1, max: 256 }),
+            "Idempotency key: retrying with it returns the same run.",
           ),
-        params: z
-          .record(z.string(), z.union([z.string().max(4096), z.number(), z.boolean(), z.null()]))
-          .optional()
-          .describe("Optional parameter values by key; omitted ones keep their defaults."),
-        inputs: z
-          .record(z.string(), z.unknown())
-          .optional()
-          .describe("Run input values by name (value inputs only)."),
-        ticket: z
-          .object({
-            taskId: z.string().trim().min(1).max(200),
-            input: z.string().trim().min(1).max(64).optional(),
-          })
-          .strict()
-          .optional()
-          .describe("A Kanban ticket of this project as the template's ticket input."),
-      }),
+          template: templateRef,
+          environment: strictObject({
+            kind: Schema.Literals(["new", "existing"]),
+            create: Schema.optionalKey(
+              describe(
+                Schema.Literals(["worktree", "container"]),
+                "kind new: what the run creates.",
+              ),
+            ),
+            environmentId: Schema.optionalKey(
+              describe(
+                str({ trim: true, min: 1, max: 200 }),
+                "kind existing: a worker environment of this project.",
+              ),
+            ),
+          }),
+          roles: Schema.optionalKey(
+            describe(
+              Schema.Record(
+                Schema.String,
+                Schema.Union([modelBinding, list(modelBinding, { min: 1, max: 32 })]),
+              ),
+              "Optional per-role models: one binding, or a list for a panel role. Omitted roles keep their defaults.",
+            ),
+          ),
+          params: Schema.optionalKey(
+            describe(
+              Schema.Record(
+                Schema.String,
+                Schema.Union([str({ max: 4096 }), Schema.Finite, Schema.Boolean, Schema.Null]),
+              ),
+              "Optional parameter values by key; omitted ones keep their defaults.",
+            ),
+          ),
+          inputs: Schema.optionalKey(
+            describe(
+              Schema.Record(Schema.String, Schema.Unknown),
+              "Run input values by name (value inputs only).",
+            ),
+          ),
+          ticket: Schema.optionalKey(
+            describe(
+              strictObject({
+                taskId: str({ trim: true, min: 1, max: 200 }),
+                input: Schema.optionalKey(str({ trim: true, min: 1, max: 64 })),
+              }),
+              "A Kanban ticket of this project as the template's ticket input.",
+            ),
+          ),
+        }),
+      ),
       annotations: {
         readOnlyHint: false,
         destructiveHint: true,
@@ -208,7 +220,7 @@ export function registerCoordinatorGraphTools(
       title: "Get a graph run",
       description:
         "Read a graph run of this project: status, usage, activation counts, the steps waiting for a person and the failed steps.",
-      inputSchema: z.object({ runId: z.string().trim().min(1).max(128) }),
+      inputSchema: toolInput(Schema.Struct({ runId: str({ trim: true, min: 1, max: 128 }) })),
       annotations: readAnnotations(),
     },
     async ({ runId }) =>
@@ -225,7 +237,7 @@ export function registerCoordinatorGraphTools(
       title: "Cancel a graph run",
       description:
         "Cancel a graph run of this project. Running steps are stopped; artifacts and the run record are kept.",
-      inputSchema: z.object({ runId: z.string().trim().min(1).max(128) }),
+      inputSchema: toolInput(Schema.Struct({ runId: str({ trim: true, min: 1, max: 128 }) })),
       annotations: {
         readOnlyHint: false,
         destructiveHint: true,

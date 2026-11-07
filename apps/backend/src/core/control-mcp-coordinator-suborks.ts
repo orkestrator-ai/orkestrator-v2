@@ -7,6 +7,7 @@ import {
 } from "./agent-tools-subork-schema.js";
 import type { CoordinatorControlScope } from "./control-mcp-tools.js";
 import { toolResult, type JsonRecord } from "./control-mcp-tool-support.js";
+import { toolInput } from "./tool-schema.js";
 import type { ControlMcpInvoker } from "./control-shared-actions.js";
 
 /**
@@ -30,7 +31,7 @@ export function registerCoordinatorSuborkTool(
     {
       title: "Ask other agents",
       description: SUBORK_TOOL_DESCRIPTION,
-      inputSchema: SUBORK_TOOL_INPUT_SCHEMA,
+      inputSchema: toolInput(SUBORK_TOOL_INPUT_SCHEMA),
       annotations: SUBORK_TOOL_ANNOTATIONS,
     },
     // `tabId` names a tab on a shared credential; a conversation's own is never shared.

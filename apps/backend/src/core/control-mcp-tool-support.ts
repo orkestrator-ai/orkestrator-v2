@@ -5,7 +5,8 @@
  * reuse.
  */
 
-import { z } from "zod";
+import { Schema } from "effect";
+import { describe, refine, str, strictObject } from "./tool-schema.js";
 import {
   MAX_BUILD_STEP_INSTRUCTIONS_BYTES,
   buildStepInstructionsBytes,
@@ -25,13 +26,12 @@ import type { ControlMcpInvoker } from "./control-shared-actions.js";
  * Kept short: it is on dozens of tools in every turn, and a coordinator's
  * context already says that a node means that node's copy of its project.
  */
-export const nodeIdField = z
-  .string()
-  .trim()
-  .min(1)
-  .max(200)
-  .optional()
-  .describe("A nodeId from list_nodes to act on that machine; omit for this one.");
+export const nodeIdField = Schema.optionalKey(
+  describe(
+    str({ trim: true, min: 1, max: 200 }),
+    "A nodeId from list_nodes to act on that machine; omit for this one.",
+  ),
+);
 
 export type JsonRecord = Record<string, unknown>;
 
@@ -94,19 +94,21 @@ export function toolResult(value: JsonRecord, summary: JsonRecord = value) {
 }
 
 const buildStepFields = {
-  agent: z.enum(["claude", "codex", "cursor", "grok", "opencode", "pi"]),
-  model: z.string().trim().min(1).max(500).optional(),
-  reasoningEffort: z.string().trim().min(1).max(100).optional(),
-  fastMode: z.boolean().optional(),
-  instructions: z
-    .string()
-    .refine(isBuildStepInstructions, {
-      error: `instructions must be at most ${MAX_BUILD_STEP_INSTRUCTIONS_BYTES} bytes of UTF-8 (16 KiB).`,
-    })
-    .optional()
-    .describe(
+  agent: Schema.Literals(["claude", "codex", "cursor", "grok", "opencode", "pi"]),
+  model: Schema.optionalKey(str({ trim: true, min: 1, max: 500 })),
+  reasoningEffort: Schema.optionalKey(str({ trim: true, min: 1, max: 100 })),
+  fastMode: Schema.optionalKey(Schema.Boolean),
+  instructions: Schema.optionalKey(
+    describe(
+      Schema.String.check(
+        refine(
+          isBuildStepInstructions,
+          `instructions must be at most ${MAX_BUILD_STEP_INSTRUCTIONS_BYTES} bytes of UTF-8 (16 KiB).`,
+        ),
+      ),
       "Optional. The user's own instructions for this step, at most 16 KiB. The step's prompt carries them after its own contract; Rework uses the build step's. Set only when the user asks for them.",
     ),
+  ),
 };
 
 /**
@@ -114,39 +116,45 @@ const buildStepFields = {
  * protocol's (`review-lens.ts`), checked here so the tool refuses before the
  * launch does.
  */
-export const reviewLensSchema = z
-  .object({
-    label: z.string().refine((label) => reviewLensLabelError(label) === null, {
-      error: `lens.label must be one non-blank line of at most ${REVIEW_LENS_LABEL_MAX_CHARS} characters.`,
-    }),
-    instruction: z.string().refine((text) => reviewLensInstructionError(text) === null, {
-      error: `lens.instruction must be non-blank and at most ${REVIEW_LENS_INSTRUCTION_MAX_BYTES} bytes of UTF-8 (4 KiB).`,
-    }),
-  })
-  .strict()
-  .describe(
-    "Optional. This reviewer's focus: a short label (at most 64 characters) and an instruction (at most 4 KiB) saying what to look at hardest. The reviewer still reports critical issues outside it. Omit to use the saved focus for this position (only when reviewers are omitted) or none. Set only when the user asks for a focus.",
-  );
+export const reviewLensSchema = describe(
+  strictObject({
+    label: Schema.String.check(
+      refine(
+        (label) => reviewLensLabelError(label) === null,
+        `lens.label must be one non-blank line of at most ${REVIEW_LENS_LABEL_MAX_CHARS} characters.`,
+      ),
+    ),
+    instruction: Schema.String.check(
+      refine(
+        (text) => reviewLensInstructionError(text) === null,
+        `lens.instruction must be non-blank and at most ${REVIEW_LENS_INSTRUCTION_MAX_BYTES} bytes of UTF-8 (4 KiB).`,
+      ),
+    ),
+  }),
+  "Optional. This reviewer's focus: a short label (at most 64 characters) and an instruction (at most 4 KiB) saying what to look at hardest. The reviewer still reports critical issues outside it. Omit to use the saved focus for this position (only when reviewers are omitted) or none. Set only when the user asks for a focus.",
+);
 
 /**
  * One build step's harness and model. Unlike a Multi Review row the model is
  * optional: naming only an agent runs that agent's own saved model.
  */
-export const buildStepSchema = z.object(buildStepFields).strict();
+export const buildStepSchema = strictObject(buildStepFields);
 
 /** A Build Pipeline reviewer row: a step that may also carry a focus. */
-export const buildReviewerSchema = z
-  .object({ ...buildStepFields, lens: reviewLensSchema.optional() })
-  .strict();
+export const buildReviewerSchema = strictObject({
+  ...buildStepFields,
+  lens: Schema.optionalKey(reviewLensSchema),
+});
 
 /**
  * A named pipeline step. The agent is optional so that a step naming only
  * `instructions` keeps its saved agent and model
  * (`buildPipelineInputWithDefaults`).
  */
-export const buildStepOverrideSchema = z
-  .object({ ...buildStepFields, agent: buildStepFields.agent.optional() })
-  .strict();
+export const buildStepOverrideSchema = strictObject({
+  ...buildStepFields,
+  agent: Schema.optionalKey(buildStepFields.agent),
+});
 
 /**
  * A step as the start result reports it: the caller already has the text of
@@ -208,15 +216,16 @@ export function buildPipelineSelection(
   };
 }
 
-export const agentSelectionSchema = z.object({
-  agent: z.enum(["claude", "codex", "cursor", "grok", "opencode", "pi"]),
-  model: z.string().trim().min(1).max(500),
-  reasoningEffort: z.string().trim().min(1).max(100).optional(),
+export const agentSelectionSchema = Schema.Struct({
+  agent: Schema.Literals(["claude", "codex", "cursor", "grok", "opencode", "pi"]),
+  model: str({ trim: true, min: 1, max: 500 }),
+  reasoningEffort: Schema.optionalKey(str({ trim: true, min: 1, max: 100 })),
 });
 
 /** A Multi Review reviewer row: a selection that may carry the reviewer's focus. */
-export const reviewerSelectionSchema = agentSelectionSchema.extend({
-  lens: reviewLensSchema.optional(),
+export const reviewerSelectionSchema = Schema.Struct({
+  ...agentSelectionSchema.fields,
+  lens: Schema.optionalKey(reviewLensSchema),
 });
 
 export function readAnnotations() {
@@ -229,6 +238,7 @@ export function readAnnotations() {
 }
 
 /** `nodeId` of a list that can also span every machine. */
-export const listNodeIdField = nodeIdField.describe(
+export const listNodeIdField = describe(
+  nodeIdField,
   "A nodeId from list_nodes: list that machine. all: this machine and every node it controls, each item tagged with its nodeId. Omit for this machine.",
 );

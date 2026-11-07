@@ -1,5 +1,6 @@
 import { join } from "node:path";
-import { z } from "zod";
+import { Schema } from "effect";
+import { decodeSync, int, list, num, str, strictObject } from "../tool-schema.js";
 import {
   DESIGN_LIMITS,
   type DesignLibraryEntry,
@@ -40,33 +41,34 @@ export interface DesignSummary {
   exportPending?: boolean;
 }
 
-const summarySchema = z
-  .object({
-    id: z.string().uuid(),
-    environmentId: z.string().min(1).max(256),
-    name: z.string().max(200),
-    revision: z.number().int().nonnegative(),
-    createdAt: z.string().max(40),
-    modifiedAt: z.string().max(40),
-    frameCount: z.number().int().nonnegative(),
-    state: z.enum(["live", "deleted", "provisional", "problem"]),
-    deletedAt: z.string().max(40).optional(),
-    exportPath: z.string().max(256).optional(),
-    exportRevision: z.number().int().nonnegative().optional(),
-    invalid: z.number().int().nonnegative(),
-    unvalidated: z.number().int().nonnegative(),
-    problem: z.enum(["corrupt", "unsupported-version"]).optional(),
-    historyBytes: z.number().nonnegative(),
-    recordBytes: z.number().nonnegative(),
-    fileSize: z.number().nonnegative(),
-    fileMtimeMs: z.number().nonnegative(),
-    fileKey: z.string().max(200).optional(),
-    legacy: z.boolean().optional(),
-    exportPending: z.boolean().optional(),
-    historyPrunable: z.boolean().optional(),
-  })
-  .strict();
-const indexSchema = z.object({ version: z.literal(1), entries: z.array(summarySchema).max(4096) });
+const summarySchema = strictObject({
+  id: str({ uuid: true }),
+  environmentId: str({ min: 1, max: 256 }),
+  name: str({ max: 200 }),
+  revision: int({ min: 0 }),
+  createdAt: str({ max: 40 }),
+  modifiedAt: str({ max: 40 }),
+  frameCount: int({ min: 0 }),
+  state: Schema.Literals(["live", "deleted", "provisional", "problem"]),
+  deletedAt: Schema.optionalKey(str({ max: 40 })),
+  exportPath: Schema.optionalKey(str({ max: 256 })),
+  exportRevision: Schema.optionalKey(int({ min: 0 })),
+  invalid: int({ min: 0 }),
+  unvalidated: int({ min: 0 }),
+  problem: Schema.optionalKey(Schema.Literals(["corrupt", "unsupported-version"])),
+  historyBytes: num({ min: 0 }),
+  recordBytes: num({ min: 0 }),
+  fileSize: num({ min: 0 }),
+  fileMtimeMs: num({ min: 0 }),
+  fileKey: Schema.optionalKey(str({ max: 200 })),
+  legacy: Schema.optionalKey(Schema.Boolean),
+  exportPending: Schema.optionalKey(Schema.Boolean),
+  historyPrunable: Schema.optionalKey(Schema.Boolean),
+});
+const indexSchema = Schema.Struct({
+  version: Schema.Literal(1),
+  entries: list(summarySchema, { max: 4096 }),
+});
 
 export function summarizeRecord(
   record: DesignPrivateRecord,
@@ -124,7 +126,7 @@ export class DesignLibraryIndex {
   async load(): Promise<Map<string, DesignSummary>> {
     try {
       const raw = await readBounded(this.file, 16 * 1024 * 1024);
-      const parsed = indexSchema.parse(JSON.parse(raw.toString("utf8")));
+      const parsed = decodeSync(indexSchema, JSON.parse(raw.toString("utf8")));
       return new Map(parsed.entries.map((entry) => [entry.id, entry as DesignSummary]));
     } catch {
       // A missing or corrupt index is rebuilt from the records.

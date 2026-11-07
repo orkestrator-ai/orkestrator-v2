@@ -13,7 +13,17 @@
  * result is trimmed by `fitToolResult`, never turned into an error.
  */
 import type { McpServer } from "@modelcontextprotocol/server";
-import { z } from "zod";
+import { Schema } from "effect";
+import {
+  describe,
+  int,
+  list,
+  looseObject,
+  refine,
+  str,
+  strictObject,
+  toolInput,
+} from "../tool-schema.js";
 import { AGENT_CHART_SPEC_SHAPES } from "@orkestrator/protocol/agent-system-instructions";
 import {
   ARTIFACT_TOOL_POLICY,
@@ -82,62 +92,61 @@ export function artifactAuthoringNotice(status: ArtifactAuthoringAvailability | 
   return "";
 }
 
-const requestKey = z
-  .string()
-  .min(1)
-  .max(ARTIFACT_TOOL_POLICY.maxRequestKeyCharacters)
-  .refine((value) => utf8ByteLength(value) <= MAX_REQUEST_KEY_BYTES, {
-    message: `At most ${MAX_REQUEST_KEY_BYTES} bytes of UTF-8`,
-  })
-  .describe("Caller-generated idempotency key; reuse it only to retry this exact call.");
-const scopeCapability = z
-  .string()
-  .max(1_024)
-  .optional()
-  .describe("Artifact scope capability from this turn's Orkestrator instructions, when provided.");
-const artifactId = z.string().min(1).max(80);
-const positiveInteger = z.number().int().min(1);
+const requestKey = describe(
+  str({ min: 1, max: ARTIFACT_TOOL_POLICY.maxRequestKeyCharacters }).check(
+    refine(
+      (value) => utf8ByteLength(value) <= MAX_REQUEST_KEY_BYTES,
+      `At most ${MAX_REQUEST_KEY_BYTES} bytes of UTF-8`,
+    ),
+  ),
+  "Caller-generated idempotency key; reuse it only to retry this exact call.",
+);
+const scopeCapability = Schema.optionalKey(
+  describe(
+    str({ max: 1_024 }),
+    "Artifact scope capability from this turn's Orkestrator instructions, when provided.",
+  ),
+);
+const artifactId = str({ min: 1, max: 80 });
+const positiveInteger = int({ min: 1 });
 
-const payloadSchema = z
-  .object({
-    kind: z.enum(ARTIFACT_KINDS),
-  })
-  .loose()
-  .describe(
-    'html-static: {kind, html} (self-contained HTML, CSS and inline SVG; displayed as a document in the transcript). html-interactive: {kind, html, dependencyIds? (from "d3@7.9.0", "chart.js@4.5.1"; classic scripts read the globals d3/Chart, module scripts import "d3", "chart.js" or "chart.js/auto"), probes?}. ' +
-      "probes: up to 20 of {op:'click',target} | {op:'set-number',target,value} | {op:'fill',target,text} | " +
-      "{op:'expect-text',target,equals} | {op:'expect-number',target,equals,tolerance?} | {op:'wait-visible',target,timeoutMs?}; " +
-      "target is the value of a unique data-artifact-test attribute. mermaid: {kind, source}. " +
-      `chart: {kind, spec} where spec = {schemaVersion:1, kind:'bar'|'line'|'area'|'scatter'|'donut', title, description, sourceNotes?, ...}; ${AGENT_CHART_SPEC_SHAPES}. ` +
-      "workflow-snapshot: {kind, workflowId: multi-review|build-pipeline, runId, expectedWorkflowRevision?}.",
-  );
+const payloadSchema = describe(
+  looseObject({
+    kind: Schema.Literals(ARTIFACT_KINDS),
+  }),
+  'html-static: {kind, html} (self-contained HTML, CSS and inline SVG; displayed as a document in the transcript). html-interactive: {kind, html, dependencyIds? (from "d3@7.9.0", "chart.js@4.5.1"; classic scripts read the globals d3/Chart, module scripts import "d3", "chart.js" or "chart.js/auto"), probes?}. ' +
+    "probes: up to 20 of {op:'click',target} | {op:'set-number',target,value} | {op:'fill',target,text} | " +
+    "{op:'expect-text',target,equals} | {op:'expect-number',target,equals,tolerance?} | {op:'wait-visible',target,timeoutMs?}; " +
+    "target is the value of a unique data-artifact-test attribute. mermaid: {kind, source}. " +
+    `chart: {kind, spec} where spec = {schemaVersion:1, kind:'bar'|'line'|'area'|'scatter'|'donut', title, description, sourceNotes?, ...}; ${AGENT_CHART_SPEC_SHAPES}. ` +
+    "workflow-snapshot: {kind, workflowId: multi-review|build-pipeline, runId, expectedWorkflowRevision?}.",
+);
 
-const draftSchema = z
-  .object({
-    title: z.string().describe("At most 120 characters."),
-    summary: z.string().describe("Plain-language summary, at most 400 characters."),
-    payload: payloadSchema,
-    assets: z
-      .array(z.object({ name: z.string(), assetRef: z.string() }).loose())
-      .max(32)
-      .optional()
-      .describe(
-        "HTML only: {name, assetRef}. assetRef is a staged upload id (stg-…) the user attached to this conversation. Never a path or URL.",
-      ),
-  })
-  .loose();
+const draftSchema = looseObject({
+  title: describe(Schema.String, "At most 120 characters."),
+  summary: describe(Schema.String, "Plain-language summary, at most 400 characters."),
+  payload: payloadSchema,
+  assets: Schema.optionalKey(
+    describe(
+      list(looseObject({ name: Schema.String, assetRef: Schema.String }), { max: 32 }),
+      "HTML only: {name, assetRef}. assetRef is a staged upload id (stg-…) the user attached to this conversation. Never a path or URL.",
+    ),
+  ),
+});
 
-const profileSchema = z
-  .object({
-    theme: z.enum(["light", "dark"]),
-    viewport: z.object({
-      width: z.number().int(),
-      height: z.number().int(),
-      deviceScaleFactor: z.literal(1),
+const profileSchema = Schema.optionalKey(
+  describe(
+    Schema.Struct({
+      theme: Schema.Literals(["light", "dark"]),
+      viewport: Schema.Struct({
+        width: Schema.Int,
+        height: Schema.Int,
+        deviceScaleFactor: Schema.Literal(1),
+      }),
     }),
-  })
-  .optional()
-  .describe("Defaults to light, 960×640, scale 1.");
+    "Defaults to light, 960×640, scale 1.",
+  ),
+);
 
 const MUTATION = {
   readOnlyHint: false,
@@ -272,7 +281,7 @@ export function registerTranscriptArtifactTools(
       title: "Create a transcript artifact",
       description:
         "Create a draft artifact (revision 1). Validates the draft and stores it; does not publish. Returns artifactId and revision. Next: preview_artifact.",
-      inputSchema: z.object({ requestKey, draft: draftSchema, scopeCapability }).strict(),
+      inputSchema: toolInput(strictObject({ requestKey, draft: draftSchema, scopeCapability })),
       annotations: MUTATION,
     },
     async (args, ctx) => run("create_artifact", args as Record<string, unknown>, ctx),
@@ -284,15 +293,15 @@ export function registerTranscriptArtifactTools(
       title: "Update a transcript artifact",
       description:
         "Replace the whole draft as revision expectedRevision + 1 (compare-and-swap; kind is fixed). Older revisions never change. Use this to repair a failed preview.",
-      inputSchema: z
-        .object({
+      inputSchema: toolInput(
+        strictObject({
           requestKey,
           artifactId,
           expectedRevision: positiveInteger,
           draft: draftSchema,
           scopeCapability,
-        })
-        .strict(),
+        }),
+      ),
       annotations: MUTATION,
     },
     async (args, ctx) => run("update_artifact", args as Record<string, unknown>, ctx),
@@ -304,15 +313,15 @@ export function registerTranscriptArtifactTools(
       title: "Verify a transcript artifact revision",
       description:
         "Start asynchronous verification of one exact revision and return its operationId immediately. Poll get_artifact_operation; a successful operation carries the receiptId publish_artifact needs.",
-      inputSchema: z
-        .object({
+      inputSchema: toolInput(
+        strictObject({
           requestKey,
           artifactId,
           revision: positiveInteger,
           profile: profileSchema,
           scopeCapability,
-        })
-        .strict(),
+        }),
+      ),
       annotations: MUTATION,
     },
     async (args, ctx) => run("preview_artifact", args as Record<string, unknown>, ctx),
@@ -324,15 +333,15 @@ export function registerTranscriptArtifactTools(
       title: "Publish a transcript artifact",
       description:
         "Publish exactly expectedRevision (it must be the current head) into this conversation using a successful receipt for that revision. Returns the durable reference. Retrying returns the same publication.",
-      inputSchema: z
-        .object({
+      inputSchema: toolInput(
+        strictObject({
           requestKey,
           artifactId,
           expectedRevision: positiveInteger,
-          receiptId: z.string().min(1).max(80),
+          receiptId: str({ min: 1, max: 80 }),
           scopeCapability,
-        })
-        .strict(),
+        }),
+      ),
       annotations: MUTATION,
     },
     async (args, ctx) => run("publish_artifact", args as Record<string, unknown>, ctx),
@@ -344,19 +353,19 @@ export function registerTranscriptArtifactTools(
       title: "Read a transcript artifact",
       description:
         "Read artifact metadata (default) and optionally a bounded UTF-8 source slice: sourceRange {offsetBytes, limitBytes ≤ 8192}; continue with nextOffsetBytes until it is null.",
-      inputSchema: z
-        .object({
+      inputSchema: toolInput(
+        strictObject({
           artifactId,
-          revision: positiveInteger.optional(),
-          sourceRange: z
-            .object({
-              offsetBytes: z.number().int().min(0),
-              limitBytes: z.number().int().min(1).max(ARTIFACT_TOOL_POLICY.maxSourceSliceBytes),
-            })
-            .optional(),
+          revision: Schema.optionalKey(positiveInteger),
+          sourceRange: Schema.optionalKey(
+            Schema.Struct({
+              offsetBytes: int({ min: 0 }),
+              limitBytes: int({ min: 1, max: ARTIFACT_TOOL_POLICY.maxSourceSliceBytes }),
+            }),
+          ),
           scopeCapability,
-        })
-        .strict(),
+        }),
+      ),
       annotations: READ,
     },
     async (args, ctx) => run("get_artifact", args as Record<string, unknown>, ctx),
@@ -368,14 +377,14 @@ export function registerTranscriptArtifactTools(
       title: "Read a verification operation",
       description:
         "Read-only status of a preview operation: status, bounded diagnostics, probe results and evidence references. includePreviewImage adds one capture image (captureIndex, default 0); seeing it is not an assessment.",
-      inputSchema: z
-        .object({
-          operationId: z.string().min(1).max(80),
-          includePreviewImage: z.boolean().optional(),
-          captureIndex: z.number().int().min(0).optional(),
+      inputSchema: toolInput(
+        strictObject({
+          operationId: str({ min: 1, max: 80 }),
+          includePreviewImage: Schema.optionalKey(Schema.Boolean),
+          captureIndex: Schema.optionalKey(int({ min: 0 })),
           scopeCapability,
-        })
-        .strict(),
+        }),
+      ),
       annotations: READ,
     },
     async (args, ctx) => run("get_artifact_operation", args as Record<string, unknown>, ctx),
@@ -387,13 +396,13 @@ export function registerTranscriptArtifactTools(
       title: "Cancel a verification operation",
       description:
         "Request cancellation of a queued or running preview. Returns the actual status; a completed operation stays completed. Never affects publications.",
-      inputSchema: z
-        .object({
+      inputSchema: toolInput(
+        strictObject({
           requestKey,
-          operationId: z.string().min(1).max(80),
+          operationId: str({ min: 1, max: 80 }),
           scopeCapability,
-        })
-        .strict(),
+        }),
+      ),
       annotations: MUTATION,
     },
     async (args, ctx) => run("cancel_artifact_operation", args as Record<string, unknown>, ctx),

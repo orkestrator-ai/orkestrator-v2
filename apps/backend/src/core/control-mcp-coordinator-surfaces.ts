@@ -9,7 +9,8 @@ import {
   MAX_AGENTS_MD_ENTRY_CHARS,
   MAX_AGENTS_MD_REASON_CHARS,
 } from "@orkestrator/protocol/agents-md-orkestrator";
-import { z } from "zod";
+import { Schema } from "effect";
+import { describe, list, str, strictObject, toolInput, withDefault } from "./tool-schema.js";
 import { createNodeTargets } from "./control-mcp-nodes.js";
 import type { CoordinatorControlScope } from "./control-mcp-tools.js";
 import type { ControlMcpInvoker } from "./control-shared-actions.js";
@@ -30,20 +31,17 @@ import {
  * a connected node (todo 0395).
  */
 
-const requestId = z
-  .string()
-  .trim()
-  .min(1)
-  .max(256)
-  .describe("Stable key for this action; reuse it only to retry the same call.");
-const environmentId = z.string().trim().min(1).max(200);
-const workerNodeId = z
-  .string()
-  .trim()
-  .min(1)
-  .max(200)
-  .optional()
-  .describe("The worker's nodeId from list_nodes; omit for this node.");
+const requestId = describe(
+  str({ trim: true, min: 1, max: 256 }),
+  "Stable key for this action; reuse it only to retry the same call.",
+);
+const environmentId = str({ trim: true, min: 1, max: 200 });
+const workerNodeId = Schema.optionalKey(
+  describe(
+    str({ trim: true, min: 1, max: 200 }),
+    "The worker's nodeId from list_nodes; omit for this node.",
+  ),
+);
 
 const WRITE = {
   readOnlyHint: false,
@@ -94,29 +92,23 @@ export function registerCoordinatorSurfaceTools(
       title: "Open a terminal or tmux tab in a worker",
       description:
         "Open a terminal tab in a worker environment of this project and run one command in it (tabType plain), or start an agent CLI there (claude, codex, grok, opencode, pi, or claude-tmux for Claude under tmux) with an optional prompt (grok supports a bare launch only; prompt, model and reasoningEffort are refused). The tab opens selected in the worker's active pane, as a terminal the user opened would. Never the project checkout. Read its output later with get_tab_transcript. Omit model and reasoningEffort to use the CLI's own defaults. Pass nodeId for a worker on another connected node; if its answer is lost, retry with the same requestId, which reattaches to the same terminal there.",
-      inputSchema: z
-        .object({
+      inputSchema: toolInput(
+        strictObject({
           requestId,
           environmentId,
-          tabType: z.enum(COORDINATOR_TERMINAL_TAB_TYPES).default("plain"),
-          command: z
-            .string()
-            .min(1)
-            .max(100_000)
-            .optional()
-            .describe("plain only: the shell command to run."),
-          prompt: z
-            .string()
-            .min(1)
-            .max(100_000)
-            .optional()
-            .describe("Agent CLIs except grok: the first prompt."),
-          model: z.string().trim().min(1).max(512).optional(),
-          reasoningEffort: z.string().trim().min(1).max(128).optional(),
-          title: z.string().trim().min(1).max(200).optional(),
+          tabType: withDefault(Schema.Literals(COORDINATOR_TERMINAL_TAB_TYPES), "plain"),
+          command: Schema.optionalKey(
+            describe(str({ min: 1, max: 100_000 }), "plain only: the shell command to run."),
+          ),
+          prompt: Schema.optionalKey(
+            describe(str({ min: 1, max: 100_000 }), "Agent CLIs except grok: the first prompt."),
+          ),
+          model: Schema.optionalKey(str({ trim: true, min: 1, max: 512 })),
+          reasoningEffort: Schema.optionalKey(str({ trim: true, min: 1, max: 128 })),
+          title: Schema.optionalKey(str({ trim: true, min: 1, max: 200 })),
           nodeId: workerNodeId,
-        })
-        .strict(),
+        }),
+      ),
       annotations: { ...WRITE, destructiveHint: true, openWorldHint: true },
     },
     async (input) => toolResult(await call("launch_coordinator_terminal", { input })),
@@ -128,22 +120,21 @@ export function registerCoordinatorSurfaceTools(
       title: "Open or navigate a worker's browser preview",
       description:
         "Open a browser tab in a worker environment at a loopback address of a service that worker runs (http://localhost:3000/path), or navigate the existing browser tab tabId there. The address resolves to the worker's own service, local or container. Only http(s) loopback addresses; this is not a way to browse the web. Works while the worker is not on screen. Pass nodeId for a worker on another connected node.",
-      inputSchema: z
-        .object({
+      inputSchema: toolInput(
+        strictObject({
           requestId,
           environmentId,
-          url: z.string().trim().min(1).max(2048),
-          tabId: z
-            .string()
-            .trim()
-            .min(1)
-            .max(200)
-            .optional()
-            .describe("An existing browser tab (list_tabs) to navigate instead of opening one."),
-          title: z.string().trim().min(1).max(200).optional(),
+          url: str({ trim: true, min: 1, max: 2048 }),
+          tabId: Schema.optionalKey(
+            describe(
+              str({ trim: true, min: 1, max: 200 }),
+              "An existing browser tab (list_tabs) to navigate instead of opening one.",
+            ),
+          ),
+          title: Schema.optionalKey(str({ trim: true, min: 1, max: 200 })),
           nodeId: workerNodeId,
-        })
-        .strict(),
+        }),
+      ),
       annotations: WRITE,
     },
     async (input) => toolResult(await call("open_coordinator_browser", { input })),
@@ -155,15 +146,15 @@ export function registerCoordinatorSurfaceTools(
       title: "Focus, close or move a worker's tab",
       description:
         "Edit a worker environment's tabs: focus selects a tab, move puts it in another pane (pane IDs from list_tabs), close closes it. Closing a tab never deletes its conversation; it is refused while a native agent tab's turn is running or waiting on a person, and while a coordinator waits on that tab's report; a terminal tab closes with whatever it is running. Closing a tab that is already gone succeeds. Open tabs with launch_job, launch_terminal, open_worker_browser and open_multi_review. Pass nodeId for a worker on another connected node (list_tabs with the same nodeId gives its pane and tab IDs).",
-      inputSchema: z
-        .object({
+      inputSchema: toolInput(
+        strictObject({
           environmentId,
-          tabId: z.string().trim().min(1).max(200),
-          operation: z.enum(COORDINATOR_TAB_EDIT_OPERATIONS),
-          toPaneId: z.string().trim().min(1).max(200).optional(),
+          tabId: str({ trim: true, min: 1, max: 200 }),
+          operation: Schema.Literals(COORDINATOR_TAB_EDIT_OPERATIONS),
+          toPaneId: Schema.optionalKey(str({ trim: true, min: 1, max: 200 })),
           nodeId: workerNodeId,
-        })
-        .strict(),
+        }),
+      ),
       annotations: { ...WRITE, destructiveHint: true },
     },
     async (input) => toolResult(await call("edit_coordinator_worker_tab", { input })),
@@ -175,18 +166,19 @@ export function registerCoordinatorSurfaceTools(
       title: "Ask the user to copy uncommitted checkout changes into a worker",
       description:
         "Ask the user to apply some of the project checkout's uncommitted changes (edits, new and deleted files) to a worker environment on this node, for when the user wants a worker to start from work they have not committed. The user picks the files in Orkestrator; files you name are only pre-selected. Nothing is read or copied until they approve. The patch applies whole or not at all, and you are woken by mail with the outcome.",
-      inputSchema: z
-        .object({
+      inputSchema: toolInput(
+        strictObject({
           requestId,
           environmentId,
-          files: z
-            .array(z.string().trim().min(1).max(512))
-            .max(200)
-            .optional()
-            .describe("Checkout-relative paths to pre-select."),
-          reason: z.string().trim().min(1).max(500).describe("Why, in the user's words."),
-        })
-        .strict(),
+          files: Schema.optionalKey(
+            describe(
+              list(str({ trim: true, min: 1, max: 512 }), { max: 200 }),
+              "Checkout-relative paths to pre-select.",
+            ),
+          ),
+          reason: describe(str({ trim: true, min: 1, max: 500 }), "Why, in the user's words."),
+        }),
+      ),
       annotations: WRITE,
     },
     async (input) =>
@@ -200,49 +192,41 @@ export function registerCoordinatorSurfaceTools(
 
   registerWorkerQuestionTools(server, call);
 
-  const entryText = z.string().min(1).max(MAX_AGENTS_MD_ENTRY_CHARS);
+  const entryText = str({ min: 1, max: MAX_AGENTS_MD_ENTRY_CHARS });
   server.registerTool(
     "propose_agents_md_update",
     {
       title: "Propose saving decisions to AGENTS.md (## Orkestrator)",
       description:
         "Propose adding, replacing or removing entries in the ## Orkestrator section of the project's root AGENTS.md: durable decisions, rules and preferences the user agreed that future workers and conversations must follow. Ask the user first, and batch every decision into one call. You write nothing: the user sees the change as a diff against the base branch, may edit it, and approves or declines; only an approval makes Orkestrator open a pull request (never merged automatically). Each entry is one plain line; headings, lists, fences, HTML and line breaks are refused, and only that section of AGENTS.md can change. You are woken by mail with the outcome and the pull request URL. If the user declines, do not propose those entries again in this conversation unless they ask.",
-      inputSchema: z
-        .object({
+      inputSchema: toolInput(
+        strictObject({
           requestId,
-          changes: z
-            .array(
-              z
-                .object({
-                  action: z.enum(["add", "replace", "remove"]),
-                  text: entryText.describe(
-                    "The entry (one line, no leading bullet), or for replace the new text.",
-                  ),
-                  replaces: entryText
-                    .optional()
-                    .describe("replace only: the existing entry's text, as it appears now."),
-                })
-                .strict(),
-            )
-            .min(1)
-            .max(MAX_AGENTS_MD_CHANGES),
-          reason: z
-            .string()
-            .trim()
-            .min(1)
-            .max(MAX_AGENTS_MD_REASON_CHARS)
-            .describe("Why, in the user's words; shown to the user and in the pull request."),
-          nodeId: z
-            .string()
-            .trim()
-            .min(1)
-            .max(200)
-            .optional()
-            .describe(
+          changes: list(
+            strictObject({
+              action: Schema.Literals(["add", "replace", "remove"]),
+              text: describe(
+                entryText,
+                "The entry (one line, no leading bullet), or for replace the new text.",
+              ),
+              replaces: Schema.optionalKey(
+                describe(entryText, "replace only: the existing entry's text, as it appears now."),
+              ),
+            }),
+            { min: 1, max: MAX_AGENTS_MD_CHANGES },
+          ),
+          reason: describe(
+            str({ trim: true, min: 1, max: MAX_AGENTS_MD_REASON_CHARS }),
+            "Why, in the user's words; shown to the user and in the pull request.",
+          ),
+          nodeId: Schema.optionalKey(
+            describe(
+              str({ trim: true, min: 1, max: 200 }),
               "Only for the project's copy on another node (from list_nodes); the pull request is opened there. Omit for this node.",
             ),
-        })
-        .strict(),
+          ),
+        }),
+      ),
       annotations: WRITE,
     },
     async ({ nodeId, ...input }) => {
@@ -274,14 +258,14 @@ export function registerCoordinatorSurfaceTools(
       title: "Raise a worker's pull request (PR tab)",
       description:
         "The Create PR button: open the worker's PR tab, whose agent commits, pushes and opens a pull request against targetBranch (default: the repository's PR base branch). It never merges. This is how a coordinator raises a pull request: call it only after the review and its fix have finished, and only when the review did not run with auto-PR. Refused while the worker's build pipeline still owns publication; skipped when the worker already has a pull request. You are woken when the pull request opens and when it later conflicts, fails its checks, becomes ready to merge, or is merged or closed. Omit targetBranch to use the owning node's PR base branch. Pass nodeId for a worker on another connected node.",
-      inputSchema: z
-        .object({
+      inputSchema: toolInput(
+        strictObject({
           requestId,
           environmentId,
           nodeId: workerNodeId,
-          targetBranch: z.string().trim().min(1).max(500).optional(),
-        })
-        .strict(),
+          targetBranch: Schema.optionalKey(str({ trim: true, min: 1, max: 500 })),
+        }),
+      ),
       annotations: { ...WRITE, destructiveHint: true, openWorldHint: true },
     },
     async (input) => {
@@ -305,14 +289,14 @@ export function registerCoordinatorSurfaceTools(
       title: "Resolve a worker's pull request conflicts (Resolve tab)",
       description:
         "The Resolve Conflicts button: open the worker's Resolve tab, whose agent merges the pull request's base branch into the worker's branch, resolves the conflicts, validates, commits and pushes. It never merges the pull request. Only for a worker whose pull request is open and conflicts with its base, or whose mergeability GitHub has not computed yet; refused when the worker has no pull request, when it is merged or closed, when GitHub reports no conflicts, or while the worker's build pipeline owns it. Omit targetBranch to use the pull request's own base branch, else the repository's PR base branch. You are woken once when the Resolve tab finishes, with the refreshed pull request state. Pass nodeId for a worker on another connected node.",
-      inputSchema: z
-        .object({
+      inputSchema: toolInput(
+        strictObject({
           requestId,
           environmentId,
           nodeId: workerNodeId,
-          targetBranch: z.string().trim().min(1).max(500).optional(),
-        })
-        .strict(),
+          targetBranch: Schema.optionalKey(str({ trim: true, min: 1, max: 500 })),
+        }),
+      ),
       annotations: { ...WRITE, destructiveHint: true, openWorldHint: true },
     },
     async (input) =>
@@ -330,13 +314,13 @@ export function registerCoordinatorSurfaceTools(
       title: "Plan a feature",
       description:
         "Start feature planning, as New feature and Send on the Features board do: a planning agent in its own environment turns the message into a feature summary and stories. Omit featureId to start a new plan, or name one (from get_feature_plan) to send it another message. This conversation is woken when the reply is ready or planning fails. It never writes the project checkout. Building from a plan stays the user's Build button.",
-      inputSchema: z
-        .object({
+      inputSchema: toolInput(
+        strictObject({
           requestId,
-          message: z.string().trim().min(1).max(100_000),
-          featureId: z.string().trim().min(1).max(200).optional(),
-        })
-        .strict(),
+          message: str({ trim: true, min: 1, max: 100_000 }),
+          featureId: Schema.optionalKey(str({ trim: true, min: 1, max: 200 })),
+        }),
+      ),
       annotations: { ...WRITE, openWorldHint: true },
     },
     async (input) =>
@@ -352,7 +336,7 @@ export function registerCoordinatorSurfaceTools(
       title: "Get a feature plan",
       description:
         "Read a feature plan's title, status, summary, stories, planning phase and latest reply.",
-      inputSchema: z.object({ featureId: z.string().trim().min(1).max(200) }).strict(),
+      inputSchema: toolInput(strictObject({ featureId: str({ trim: true, min: 1, max: 200 }) })),
       annotations: readAnnotations(),
     },
     async ({ featureId }) => toolResult(await call("get_coordinator_feature_plan", { featureId })),

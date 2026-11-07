@@ -3,7 +3,8 @@ import type { McpServer } from "@modelcontextprotocol/server";
 import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 import type { NodeStatus } from "@orkestrator/protocol/command-nodes";
 import { repositoryHint, type NodeSummariesResult } from "@orkestrator/protocol/node-summaries";
-import { z } from "zod";
+import { Schema } from "effect";
+import { describe, int, list, str, toolInput, withDefault } from "./tool-schema.js";
 
 import { APP_VERSION, BUILD_COMMIT } from "./constants.js";
 import { readNodeMachineLoad, readOwnMachineLoad } from "./control-mcp-machine-load.js";
@@ -67,7 +68,7 @@ const WRITE = {
 };
 const MAX_TRANSCRIPT_MESSAGES = 100;
 
-const nodeIdSchema = z.string().trim().min(1).max(200).describe("A nodeId from list_nodes.");
+const nodeIdSchema = describe(str({ trim: true, min: 1, max: 200 }), "A nodeId from list_nodes.");
 
 export class LeafModeError extends Error {
   constructor(controllers: string) {
@@ -218,7 +219,7 @@ export function registerNodeTools(
       title: "List connected nodes",
       description:
         "This command node and the nodes it controls, with availability, mode, version, buildCommit, whether each has a copy of this project, and in machine its OS, size and average CPU and RAM percent over 5 minutes, 1 hour and 24 hours. version is the Orkestrator version the machine is running now, from its current connection; null means the node is not connected (disconnected, disabled or reconnecting), so its version is unknown, not that it is old. Builds can share a version number and hold different code, so a version alone does not prove a specific fix is on that machine. buildCommit is the Git commit the machine's running backend was built from. null means that commit is unknown: the node is not connected, runs an Orkestrator that does not report one, or runs a development, test or modified build. It does not mean a fix is missing. coveredSeconds below windowSeconds means that average rests on less history than its window. status unavailable means the load is unknown, not that the machine is idle.",
-      inputSchema: z.object({}),
+      inputSchema: toolInput(Schema.Struct({})),
       annotations: READ,
     },
     async () => {
@@ -267,23 +268,18 @@ export function registerNodeTools(
       title: "Read an environment on a connected node",
       description:
         "Read a text file (include file, with path) of an environment on another node, with its state and tabs; include diff and tests add its Git status and diff and its build pipeline results. Read-only. For state, tabs and transcripts use get_environment, list_tabs, get_tab_state and get_tab_transcript with nodeId; for a worker's changes, get_worker_changes with nodeId.",
-      inputSchema: z.object({
-        nodeId: nodeIdSchema,
-        environmentId: z.string().trim().min(1).max(200),
-        tabId: z.string().trim().min(1).max(200).optional(),
-        limit: z.number().int().min(1).max(MAX_TRANSCRIPT_MESSAGES).default(30),
-        include: z
-          .array(z.enum(["diff", "file", "tests"]))
-          .max(3)
-          .optional(),
-        path: z
-          .string()
-          .trim()
-          .min(1)
-          .max(1024)
-          .optional()
-          .describe("The file to read with include file."),
-      }),
+      inputSchema: toolInput(
+        Schema.Struct({
+          nodeId: nodeIdSchema,
+          environmentId: str({ trim: true, min: 1, max: 200 }),
+          tabId: Schema.optionalKey(str({ trim: true, min: 1, max: 200 })),
+          limit: withDefault(int({ min: 1, max: MAX_TRANSCRIPT_MESSAGES }), 30),
+          include: Schema.optionalKey(list(Schema.Literals(["diff", "file", "tests"]), { max: 3 })),
+          path: Schema.optionalKey(
+            describe(str({ trim: true, min: 1, max: 1024 }), "The file to read with include file."),
+          ),
+        }),
+      ),
       annotations: READ,
     },
     async ({ nodeId, environmentId, tabId, limit, include, path }) => {
@@ -327,13 +323,19 @@ export function registerNodeTools(
       title: "Ask the user to confirm deleting an environment",
       description:
         "Only when the user asked you to delete an environment: create a deletion request the user confirms in Orkestrator, naming the node and the environment. Never call this on your own initiative. Nothing is deleted until the user approves; you are told the outcome by mail.",
-      inputSchema: z.object({
-        nodeId: nodeIdSchema.describe(
-          "The environment's node; use this node's ID from list_nodes for a local one.",
-        ),
-        environmentId: z.string().trim().min(1).max(200),
-        reason: z.string().trim().min(1).max(500).describe("What the user asked, in their words."),
-      }),
+      inputSchema: toolInput(
+        Schema.Struct({
+          nodeId: describe(
+            nodeIdSchema,
+            "The environment's node; use this node's ID from list_nodes for a local one.",
+          ),
+          environmentId: str({ trim: true, min: 1, max: 200 }),
+          reason: describe(
+            str({ trim: true, min: 1, max: 500 }),
+            "What the user asked, in their words.",
+          ),
+        }),
+      ),
       annotations: WRITE,
     },
     async ({ nodeId, environmentId, reason }) => {

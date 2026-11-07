@@ -21,7 +21,8 @@
  */
 import { createHash } from "node:crypto";
 import type { McpServer } from "@modelcontextprotocol/server";
-import { z } from "zod";
+import { Schema } from "effect";
+import { list, str, strictObject, toolInput } from "./tool-schema.js";
 import type { NativeAgentOrkestratorCapabilityGroup } from "@orkestrator/protocol/native-agent";
 import { canonicalJson } from "@orkestrator/protocol/canonical-json";
 import type { GraphPlanAgentNode } from "@orkestrator/protocol/graphs/compile";
@@ -325,12 +326,10 @@ export class GraphAgentToolHost implements GraphActivationToolHost {
     };
     // Broker tools take the signed capability as an argument; a per-activation
     // server's bearer already is the capability.
-    const schema = (shape: z.ZodRawShape) =>
-      z
-        .object(
-          options.withCapability ? { ...shape, capability: z.string().min(32).max(2_048) } : shape,
-        )
-        .strict();
+    const schema = <const F extends Schema.Struct.Fields>(shape: F) =>
+      strictObject(
+        options.withCapability ? { ...shape, capability: str({ min: 32, max: 2_048 }) } : shape,
+      );
     const annotations = (readOnly: boolean) => ({
       readOnlyHint: readOnly,
       destructiveHint: false,
@@ -345,10 +344,12 @@ export class GraphAgentToolHost implements GraphActivationToolHost {
           title: "Report progress",
           description:
             "Report one finished entry of an output's list (the output named by resultKey) as provisional progress while you work. The user sees it marked provisional; it is never passed to later steps, and the result you submit must still list every entry. Report each entry once.",
-          inputSchema: schema({
-            resultKey: z.string().min(1).max(128),
-            item: z.record(z.string(), z.unknown()),
-          }),
+          inputSchema: toolInput(
+            schema({
+              resultKey: str({ min: 1, max: 128 }),
+              item: Schema.Record(Schema.String, Schema.Unknown),
+            }),
+          ),
           annotations: annotations(false),
         },
         async (input: Record<string, unknown>) => {
@@ -367,10 +368,12 @@ export class GraphAgentToolHost implements GraphActivationToolHost {
         {
           title: "Read an input artifact",
           description: `Read one of the input artifacts listed in your instructions by its id, optionally only a part of it by a field path such as "issues.0.title". Returns at most ${GRAPH_READ_ARTIFACT_MAX_BYTES} bytes of JSON; for a larger part it returns the part's shape so you can read a narrower path. Only the artifacts this step was given can be read.`,
-          inputSchema: schema({
-            id: z.string().regex(/^[a-f0-9]{64}$/),
-            path: z.string().max(512).optional(),
-          }),
+          inputSchema: toolInput(
+            schema({
+              id: str({ pattern: /^[a-f0-9]{64}$/ }),
+              path: Schema.optionalKey(str({ max: 512 })),
+            }),
+          ),
           annotations: annotations(true),
         },
         async (input: Record<string, unknown>) => {
@@ -386,14 +389,17 @@ export class GraphAgentToolHost implements GraphActivationToolHost {
           title: "Ask the user",
           description:
             "Ask the user one question when you cannot continue without their answer. The step pauses until they answer; the answer comes back as this tool's result, or, if it takes longer, as your next message after you end your turn. Ask only what you cannot decide yourself, and keep the question short and self-contained.",
-          inputSchema: schema({
-            question: z.string().min(1).max(GRAPH_AGENT_QUESTION_BOUNDS.maxQuestionChars),
-            choices: z
-              .array(z.string().min(1).max(GRAPH_AGENT_QUESTION_BOUNDS.maxChoiceChars))
-              .min(2)
-              .max(GRAPH_AGENT_QUESTION_BOUNDS.maxChoices)
-              .optional(),
-          }),
+          inputSchema: toolInput(
+            schema({
+              question: str({ min: 1, max: GRAPH_AGENT_QUESTION_BOUNDS.maxQuestionChars }),
+              choices: Schema.optionalKey(
+                list(str({ min: 1, max: GRAPH_AGENT_QUESTION_BOUNDS.maxChoiceChars }), {
+                  min: 2,
+                  max: GRAPH_AGENT_QUESTION_BOUNDS.maxChoices,
+                }),
+              ),
+            }),
+          ),
           annotations: { ...annotations(false), idempotentHint: false },
         },
         async (input: Record<string, unknown>, context: { mcpReq: { signal: AbortSignal } }) => {

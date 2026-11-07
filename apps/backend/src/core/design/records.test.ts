@@ -21,6 +21,7 @@ import {
   type DesignPrivateRecord,
 } from "./records.js";
 import { canvasSchema } from "./schemas.js";
+import { decodeSync } from "../tool-schema.js";
 import {
   createDesignHarness,
   trackUnhandledRejections,
@@ -464,7 +465,7 @@ describe("design private records, legacy migration and recovery states", () => {
       "incarnation",
     ])
       expect(text).not.toContain(secret);
-    expect(canvasSchema.parse(JSON.parse(text))).toMatchObject({
+    expect(decodeSync(canvasSchema, JSON.parse(text))).toMatchObject({
       id: canvas.id,
       frames: [{ id: frame.id }],
     });

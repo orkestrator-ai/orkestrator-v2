@@ -5,7 +5,8 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import { COORDINATOR_WORKER_PROMPT_FORMAT_RULE } from "@orkestrator/protocol/coordinator";
 import { isPipelineWorkerTabId } from "@orkestrator/protocol/pipeline-worker-mail";
-import { z } from "zod";
+import { Schema } from "effect";
+import { describe, int, str, toolInput, withDefault } from "./tool-schema.js";
 import {
   agentRegistryFingerprint,
   environmentFingerprint,
@@ -87,7 +88,7 @@ export function registerProjectTools(
     {
       title: "List Orkestrator projects",
       description: "List safe summaries of the projects configured in Orkestrator.",
-      inputSchema: z.object({ nodeId: operator ? listNodeIdField : nodeIdField }),
+      inputSchema: toolInput(Schema.Struct({ nodeId: operator ? listNodeIdField : nodeIdField })),
       annotations: readAnnotations(),
     },
     async ({ nodeId }) => {
@@ -122,11 +123,15 @@ export function registerEnvironmentTools(
       description:
         "List environment lifecycle and agent activity summaries." +
         (coordinatorScope ? COORDINATOR_PR_FIELDS_NOTE : ""),
-      inputSchema: z.object({
-        projectId: z.string().trim().min(1).max(200).optional(),
-        status: z.enum(["running", "stopped", "error", "creating", "stopping"]).optional(),
-        nodeId: operator ? listNodeIdField : nodeIdField,
-      }),
+      inputSchema: toolInput(
+        Schema.Struct({
+          projectId: Schema.optionalKey(str({ trim: true, min: 1, max: 200 })),
+          status: Schema.optionalKey(
+            Schema.Literals(["running", "stopped", "error", "creating", "stopping"]),
+          ),
+          nodeId: operator ? listNodeIdField : nodeIdField,
+        }),
+      ),
       annotations: readAnnotations(),
     },
     async ({ projectId, status, nodeId }) => {
@@ -255,10 +260,12 @@ export function registerEnvironmentTools(
       description:
         "Read the authoritative lifecycle and activity state of one environment." +
         (coordinatorScope ? COORDINATOR_PR_FIELDS_NOTE : ""),
-      inputSchema: z.object({
-        environmentId: z.string().trim().min(1).max(200),
-        nodeId: nodeIdField,
-      }),
+      inputSchema: toolInput(
+        Schema.Struct({
+          environmentId: str({ trim: true, min: 1, max: 200 }),
+          nodeId: nodeIdField,
+        }),
+      ),
       annotations: readAnnotations(),
     },
     async ({ environmentId, nodeId }) => {
@@ -294,10 +301,12 @@ export function registerEnvironmentTools(
     {
       title: "List environment tabs",
       description: "List tabs from the backend-owned pane layout of an environment.",
-      inputSchema: z.object({
-        environmentId: z.string().trim().min(1).max(200),
-        nodeId: nodeIdField,
-      }),
+      inputSchema: toolInput(
+        Schema.Struct({
+          environmentId: str({ trim: true, min: 1, max: 200 }),
+          nodeId: nodeIdField,
+        }),
+      ),
       annotations: readAnnotations(),
     },
     async ({ environmentId, nodeId }) => {
@@ -318,11 +327,13 @@ export function registerEnvironmentTools(
       title: "List agents",
       description:
         "Every agent tab in the project's environments, and its coordinator conversations, with what each is doing now: working, waiting (on a person), idle, stopped (its environment is not running) or unknown. Native tabs carry the sessionId the session tools take. Includes per-environment counts. Read it to answer a one-off question, not to wait: re-reading an unchanged answer is polling, and a delegated worker's answer comes back to you without it.",
-      inputSchema: z.object({
-        projectId: z.string().trim().min(1).max(200).optional(),
-        environmentId: z.string().trim().min(1).max(200).optional(),
-        nodeId: nodeIdField,
-      }),
+      inputSchema: toolInput(
+        Schema.Struct({
+          projectId: Schema.optionalKey(str({ trim: true, min: 1, max: 200 })),
+          environmentId: Schema.optionalKey(str({ trim: true, min: 1, max: 200 })),
+          nodeId: nodeIdField,
+        }),
+      ),
       annotations: readAnnotations(),
     },
     async ({ projectId, environmentId, nodeId }) => {
@@ -377,11 +388,13 @@ export function registerEnvironmentTools(
       title: "Get tab state",
       description:
         "Read native-agent state for a tab without returning its transcript. state.interactions lists what the tab is waiting on: each pending question or approval with its id, kind, questions and options (a coordinator may propose an answer to a question with answer_worker_question).",
-      inputSchema: z.object({
-        environmentId: z.string().trim().min(1).max(200),
-        tabId: z.string().trim().min(1).max(200),
-        nodeId: nodeIdField,
-      }),
+      inputSchema: toolInput(
+        Schema.Struct({
+          environmentId: str({ trim: true, min: 1, max: 200 }),
+          tabId: str({ trim: true, min: 1, max: 200 }),
+          nodeId: nodeIdField,
+        }),
+      ),
       annotations: readAnnotations(),
     },
     async ({ environmentId, tabId, nodeId }) => {
@@ -447,12 +460,14 @@ export function registerEnvironmentTools(
       title: "Read a tab transcript",
       description:
         "Read a bounded normalized transcript for a native tab, a bounded terminal-output tail for a terminal tab, or a build pipeline worker's own transcript when tabId is a worker's mailbox address (pipeline-worker:…, from list_mailboxes or get_build_pipeline), running or finished.",
-      inputSchema: z.object({
-        environmentId: z.string().trim().min(1).max(200),
-        tabId: z.string().trim().min(1).max(200),
-        limit: z.number().int().min(1).max(MAX_TRANSCRIPT_MESSAGES).default(50),
-        nodeId: nodeIdField,
-      }),
+      inputSchema: toolInput(
+        Schema.Struct({
+          environmentId: str({ trim: true, min: 1, max: 200 }),
+          tabId: str({ trim: true, min: 1, max: 200 }),
+          limit: withDefault(int({ min: 1, max: MAX_TRANSCRIPT_MESSAGES }), 50),
+          nodeId: nodeIdField,
+        }),
+      ),
       annotations: readAnnotations(),
     },
     async ({ environmentId, tabId, limit, nodeId }) => {
@@ -562,19 +577,19 @@ export function registerPromptTool(
       description:
         "Dispatch an exactly-once prompt to an autonomous coding agent that can execute commands, modify workspace files, and use configured network access." +
         (coordinatorScope ? ` ${COORDINATOR_WORKER_PROMPT_NOTE}` : ""),
-      inputSchema: z.object({
-        requestId: z.string().trim().min(1).max(256),
-        environmentId: z.string().trim().min(1).max(200),
-        tabId: z.string().trim().min(1).max(200),
-        prompt: z
-          .string()
-          .trim()
-          .min(1)
-          .max(MAX_PROMPT_LENGTH)
-          .describe(COORDINATOR_WORKER_PROMPT_FORMAT_RULE),
-        conversationMode: z.enum(["plan", "build"]).optional(),
-        nodeId: nodeIdField,
-      }),
+      inputSchema: toolInput(
+        Schema.Struct({
+          requestId: str({ trim: true, min: 1, max: 256 }),
+          environmentId: str({ trim: true, min: 1, max: 200 }),
+          tabId: str({ trim: true, min: 1, max: 200 }),
+          prompt: describe(
+            str({ trim: true, min: 1, max: MAX_PROMPT_LENGTH }),
+            COORDINATOR_WORKER_PROMPT_FORMAT_RULE,
+          ),
+          conversationMode: Schema.optionalKey(Schema.Literals(["plan", "build"])),
+          nodeId: nodeIdField,
+        }),
+      ),
       annotations: {
         readOnlyHint: false,
         destructiveHint: true,

@@ -1,6 +1,15 @@
 import { randomUUID } from "node:crypto";
 import { unlink } from "node:fs/promises";
-import { z } from "zod";
+import { Schema } from "effect";
+import {
+  decodeResult,
+  decodeSync,
+  int,
+  list,
+  looseObject,
+  str,
+  strictObject,
+} from "../tool-schema.js";
 import {
   DESIGN_INTENT_LIMITS,
   DESIGN_NOT_RUN_STATES,
@@ -31,60 +40,48 @@ import type { DesignService } from "./service.js";
  * the canvas lane, so it shares the cross-process lease of every edit.
  */
 
-const opaqueId = z
-  .string()
-  .min(1)
-  .max(100)
-  .regex(/^[a-zA-Z0-9._:-]+$/);
+const opaqueId = str({ min: 1, max: 100, pattern: /^[a-zA-Z0-9._:-]+$/ });
 
 /** Presentation only: bounded, but never a reason to refuse the edit it decorates. */
-const previewSchema = z
-  .object({
-    frameId: z.string().min(1).max(100),
-    patch: z.record(z.string().max(20), z.union([z.number(), z.string().max(200)])),
-  })
-  .strict();
+const previewSchema = strictObject({
+  frameId: str({ min: 1, max: 100 }),
+  patch: Schema.Record(str({ max: 20 }), Schema.Union([Schema.Finite, str({ max: 200 })])),
+});
 
-export const intentDraftSchema = z
-  .object({
-    id: opaqueId,
-    lane: z.string().min(1).max(100),
-    label: z.string().max(200),
-    createdAt: z.number().int().nonnegative(),
-    descriptor: descriptorSchema,
-    preview: previewSchema.optional(),
-    gestureKey: z.string().max(200).optional(),
-  })
-  .strict();
+export const intentDraftSchema = strictObject({
+  id: opaqueId,
+  lane: str({ min: 1, max: 100 }),
+  label: str({ max: 200 }),
+  createdAt: int({ min: 0 }),
+  descriptor: descriptorSchema,
+  preview: Schema.optionalKey(previewSchema),
+  gestureKey: Schema.optionalKey(str({ max: 200 })),
+});
 
-const storedSchema = z
-  .array(
-    z
-      .object({
-        id: z.string(),
-        clientId: z.string(),
-        phase: z.enum(["draft", "preparing", "admitted", "settled"]),
-      })
-      .passthrough(),
-  )
-  .max(DESIGN_INTENT_LIMITS.perCanvas + DESIGN_INTENT_LIMITS.settledSuccesses);
+const storedSchema = list(
+  looseObject({
+    id: Schema.String,
+    clientId: Schema.String,
+    phase: Schema.Literals(["draft", "preparing", "admitted", "settled"]),
+  }),
+  { max: DESIGN_INTENT_LIMITS.perCanvas + DESIGN_INTENT_LIMITS.settledSuccesses },
+);
 
 /** A legacy per-browser entry (`orkestrator.design.intents.v1`); read leniently. */
-const legacySchema = z.object({
+const legacySchema = Schema.Struct({
   id: opaqueId,
-  lane: z.string().min(1).max(100),
-  label: z.string().max(200),
-  createdAt: z.number().int().nonnegative(),
+  lane: str({ min: 1, max: 100 }),
+  label: str({ max: 200 }),
+  createdAt: int({ min: 0 }),
   descriptor: descriptorSchema,
-  phase: z.string().max(20),
-  token: operationToken.optional(),
-  outcome: z.string().max(20).optional(),
-  failure: z
-    .object({ code: z.string().max(40), message: z.string().max(2000), retry: z.string().max(20) })
-    .passthrough()
-    .optional(),
-  preview: previewSchema.optional(),
-  gestureKey: z.string().max(200).optional(),
+  phase: str({ max: 20 }),
+  token: Schema.optionalKey(operationToken),
+  outcome: Schema.optionalKey(str({ max: 20 })),
+  failure: Schema.optionalKey(
+    looseObject({ code: str({ max: 40 }), message: str({ max: 2000 }), retry: str({ max: 20 }) }),
+  ),
+  preview: Schema.optionalKey(previewSchema),
+  gestureKey: Schema.optionalKey(str({ max: 200 })),
 });
 
 const RESUME_WAIT_MS = 30_000;
@@ -126,7 +123,8 @@ export async function readIntents(
 ): Promise<DesignStoredIntent[]> {
   try {
     const bytes = await readBounded(service.store.intentsFile(canvasId), MAX_LEGACY_QUEUE_BYTES);
-    return storedSchema.parse(
+    return decodeSync(
+      storedSchema,
       JSON.parse(bytes.toString("utf8")),
     ) as unknown as DesignStoredIntent[];
   } catch (error) {
@@ -373,8 +371,11 @@ export async function saveIntentDrafts(
   rawClientId: unknown,
   rawDrafts: unknown,
 ): Promise<{ saved: string[] }> {
-  const clientId = opaqueId.parse(rawClientId);
-  const drafts = z.array(intentDraftSchema).max(DESIGN_INTENT_LIMITS.perClient).parse(rawDrafts);
+  const clientId = decodeSync(opaqueId, rawClientId);
+  const drafts = decodeSync(
+    list(intentDraftSchema, { max: DESIGN_INTENT_LIMITS.perClient }),
+    rawDrafts,
+  );
   return mutate(service, environmentId, canvasId, async (intents) => {
     const now = service.now().getTime();
     const next = [...intents];
@@ -410,15 +411,15 @@ export async function importIntents(
   rawClientId: unknown,
   rawEntries: unknown,
 ): Promise<{ imported: number; skipped: number; retained: number[] }> {
-  const fallbackClient = opaqueId.parse(rawClientId);
-  const entries = z.array(z.unknown()).max(64).parse(rawEntries);
+  const fallbackClient = decodeSync(opaqueId, rawClientId);
+  const entries = decodeSync(list(Schema.Unknown, { max: 64 }), rawEntries);
   return mutate(service, environmentId, canvasId, async (intents) => {
     const now = service.now().getTime();
     const next = [...intents];
     let imported = 0;
     const retained: number[] = [];
     for (const [index, raw] of entries.entries()) {
-      const parsed = legacySchema.safeParse(raw);
+      const parsed = decodeResult(legacySchema, raw);
       if (!parsed.success || next.some((intent) => intent.id === parsed.data.id)) continue;
       const entry = parsed.data;
       const outcome = entry.outcome as DesignStoredIntent["outcome"];
@@ -519,7 +520,7 @@ export async function runIntent(
   rawDraft: unknown,
   waitMs: number | undefined,
 ): Promise<DesignIntentRunResult> {
-  const draft = intentDraftSchema.parse(rawDraft);
+  const draft = decodeSync(intentDraftSchema, rawDraft);
   const clientId = draft.descriptor.clientId;
   if (!clientId || !draft.descriptor.correlationId)
     throw new DesignError("invalid-input", "An intent needs a client and correlation id");
@@ -647,12 +648,12 @@ export async function resumeIntent(
   rawClientId: unknown,
   rawRebaseTo: unknown,
 ): Promise<DesignIntentResumeResult> {
-  const id = opaqueId.parse(rawId);
-  const clientId = opaqueId.parse(rawClientId);
+  const id = decodeSync(opaqueId, rawId);
+  const clientId = decodeSync(opaqueId, rawClientId);
   const rebaseTo =
     rawRebaseTo === undefined
       ? undefined
-      : (preconditionsSchema.parse(rawRebaseTo) as DesignPreconditions);
+      : (decodeSync(preconditionsSchema, rawRebaseTo) as DesignPreconditions);
   const resumed = await mutate(service, environmentId, canvasId, async (intents) => {
     const now = service.now().getTime();
     const current = intents.find((intent) => intent.id === id);
@@ -726,7 +727,7 @@ export async function discardIntent(
   canvasId: string,
   rawId: unknown,
 ): Promise<DesignIntentDiscardResult> {
-  const id = opaqueId.parse(rawId);
+  const id = decodeSync(opaqueId, rawId);
   await service.initialize();
   await service.loadFor(canvasId, environmentId, { allowDeleted: true });
   const current = (await readIntents(service, canvasId)).find((intent) => intent.id === id);

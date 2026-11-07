@@ -28,6 +28,7 @@ import {
 import { canvasSchema, designName } from "./schemas.js";
 import type { DesignService } from "./service.js";
 import * as validation from "./validation.js";
+import { decodeSync, decodeResult } from "../tool-schema.js";
 
 const LIFECYCLE = new Set(["create_canvas", "delete_canvas", "restore_canvas", "duplicate_canvas"]);
 
@@ -55,7 +56,7 @@ function parseImport(document: string) {
     throw new DesignError("unsupported", "This design file version is not supported", {
       retry: "never",
     });
-  const result = canvasSchema.safeParse(parsed);
+  const result = decodeResult(canvasSchema, parsed);
   if (!result.success)
     throw new DesignError("invalid-input", "The design file is malformed or exceeds a limit", {
       retry: "never",
@@ -257,7 +258,7 @@ async function executeCreate(service: DesignService, entry: DesignPendingOperati
       version: 1,
       id: record.canvasId,
       environmentId: record.environmentId,
-      name: designName.parse(imported?.name ?? input.name),
+      name: decodeSync(designName, imported?.name ?? input.name),
       revision: 1,
       frames: (imported?.frames ?? []).map((frame) => ({
         ...frame,
@@ -479,7 +480,7 @@ async function executeDuplicate(
     const copy = newRecord(destinationId, source.environmentId, now, "live");
     copy.document = {
       ...copy.document,
-      name: designName.parse((input.name ?? `${source.document.name} copy`).slice(0, 120)),
+      name: decodeSync(designName, (input.name ?? `${source.document.name} copy`).slice(0, 120)),
       revision: 1,
       frames: source.document.frames.map((frame) => ({ ...frame, id: randomUUID(), revision: 1 })),
     };

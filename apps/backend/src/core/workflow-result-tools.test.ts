@@ -14,6 +14,14 @@ import {
 } from "./workflow-result-contracts.js";
 import { WorkflowResultService } from "./workflow-result-service.js";
 
+/** Whether a registered tool's input schema (a Standard Schema) accepts `value`. */
+function parses(schema: unknown, value: unknown): boolean {
+  const result = (
+    schema as { "~standard": { validate: (value: unknown) => { issues?: unknown } } }
+  )["~standard"].validate(value);
+  return !result.issues;
+}
+
 const report: StructuredReviewReport = {
   reviewScope: {
     targetBranch: "main",
@@ -461,18 +469,15 @@ describe("workflow result broker tools", () => {
     const registration = registrations.get("validate_workflow_result");
     if (!registration) throw new Error("missing validation tool");
 
-    expect(registration.meta.inputSchema.safeParse({ resultKey, result: {} }).success).toBe(false);
+    expect(parses(registration.meta.inputSchema, { resultKey, result: {} })).toBe(false);
     expect(
-      registration.meta.inputSchema.safeParse({ resultKey, capability: "short", result: {} })
-        .success,
+      parses(registration.meta.inputSchema, { resultKey, capability: "short", result: {} }),
     ).toBe(false);
     expect(
-      registration.meta.inputSchema.safeParse({ resultKey, capability, result: undefined }).success,
+      parses(registration.meta.inputSchema, { resultKey, capability, result: undefined }),
     ).toBe(false);
     const result = { nested: [true, null, 1, "value"] };
-    expect(registration.meta.inputSchema.safeParse({ resultKey, capability, result }).success).toBe(
-      true,
-    );
+    expect(parses(registration.meta.inputSchema, { resultKey, capability, result })).toBe(true);
 
     expect(
       await registration.handler({
@@ -932,9 +937,7 @@ describe("committing a submission by validated digest", () => {
 
   test("a digest commits the held payload without a result", async () => {
     const { submit, resultKey, calls, scope } = await register();
-    expect(submit.meta.inputSchema.safeParse({ resultKey, validatedDigest: digest }).success).toBe(
-      true,
-    );
+    expect(parses(submit.meta.inputSchema, { resultKey, validatedDigest: digest })).toBe(true);
     expect(await submit.handler({ resultKey, validatedDigest: digest })).toMatchObject({
       structuredContent: { ok: true },
     });
@@ -970,7 +973,7 @@ describe("committing a submission by validated digest", () => {
   test("a malformed digest is rejected by the published schema", async () => {
     const { submit, resultKey } = await register();
     for (const validatedDigest of ["short", "A".repeat(64), `${"a".repeat(63)}z`]) {
-      expect(submit.meta.inputSchema.safeParse({ resultKey, validatedDigest }).success).toBe(false);
+      expect(parses(submit.meta.inputSchema, { resultKey, validatedDigest })).toBe(false);
     }
   });
 
@@ -1008,7 +1011,7 @@ describe("committing a submission by validated digest", () => {
     const submit = registrations.get("submit_review_report");
     if (!submit) throw new Error("missing broker submission tool");
     expect(
-      submit.meta.inputSchema.safeParse({ resultKey, capability, validatedDigest: digest }).success,
+      parses(submit.meta.inputSchema, { resultKey, capability, validatedDigest: digest }),
     ).toBe(true);
     await submit.handler({ resultKey, capability, validatedDigest: digest });
     await submit.handler({ resultKey, capability, result: report });

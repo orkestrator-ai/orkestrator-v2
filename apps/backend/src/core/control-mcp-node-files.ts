@@ -3,7 +3,8 @@ import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 import type { NodeStatus } from "@orkestrator/protocol/command-nodes";
 import type { NodeSummariesResult } from "@orkestrator/protocol/node-summaries";
 import { repositoryHint } from "@orkestrator/protocol/node-summaries";
-import { z } from "zod";
+import { Schema } from "effect";
+import { describe, list, str, toolInput, withDefault, type Infer } from "./tool-schema.js";
 
 import { LeafModeError, type NodeToolScope } from "./control-mcp-nodes.js";
 import type { ControlMcpInvoker } from "./control-shared-actions.js";
@@ -44,27 +45,22 @@ const READ = {
   idempotentHint: true,
   openWorldHint: true,
 };
-const pathSchema = z.string().trim().min(1).max(1024);
-const nodeIdSchema = z.string().trim().min(1).max(200);
-const endpointSchema = z.object({
-  nodeId: nodeIdSchema.describe("A nodeId from list_nodes (this node's own ID for local files)."),
-  environmentId: z
-    .string()
-    .trim()
-    .min(1)
-    .max(200)
-    .optional()
-    .describe("An environment's workspace."),
-  projectRoot: z
-    .boolean()
-    .optional()
-    .describe("The node's copy of this project instead of an environment."),
-  attachments: z
-    .boolean()
-    .optional()
-    .describe(
+const pathSchema = str({ trim: true, min: 1, max: 1024 });
+const nodeIdSchema = str({ trim: true, min: 1, max: 200 });
+const endpointSchema = Schema.Struct({
+  nodeId: describe(nodeIdSchema, "A nodeId from list_nodes (this node's own ID for local files)."),
+  environmentId: Schema.optionalKey(
+    describe(str({ trim: true, min: 1, max: 200 }), "An environment's workspace."),
+  ),
+  projectRoot: Schema.optionalKey(
+    describe(Schema.Boolean, "The node's copy of this project instead of an environment."),
+  ),
+  attachments: Schema.optionalKey(
+    describe(
+      Schema.Boolean,
       "As from: images the user pasted into this conversation, on this node, named in files. To message someone about one, attachments on send_message does this too.",
     ),
+  ),
 });
 
 export function registerNodeFileTools(
@@ -126,7 +122,7 @@ export function registerNodeFileTools(
   };
 
   const endpoint = async (
-    input: z.infer<typeof endpointSchema>,
+    input: Infer<typeof endpointSchema>,
     self: NodeStatus,
     destination = false,
   ) => {
@@ -165,13 +161,15 @@ export function registerNodeFileTools(
       title: "Transfer files between nodes",
       description:
         "Copy files between environments (or project roots) on this node and connected nodes. Content moves backend to backend and is never shown to you; the result is a receipt with sizes and hashes. Existing files are kept unless overwrite is true. from can also be this conversation's own pasted images (attachments: true, your own nodeId, each path or name in files): each lands in a Git-excluded folder of the environment, and the receipt's destination says where.",
-      inputSchema: z.object({
-        from: endpointSchema,
-        to: endpointSchema,
-        files: z.array(pathSchema).min(1).max(1000),
-        toDirectory: pathSchema.optional(),
-        overwrite: z.boolean().default(false),
-      }),
+      inputSchema: toolInput(
+        Schema.Struct({
+          from: endpointSchema,
+          to: endpointSchema,
+          files: list(pathSchema, { min: 1, max: 1000 }),
+          toDirectory: Schema.optionalKey(pathSchema),
+          overwrite: withDefault(Schema.Boolean, false),
+        }),
+      ),
       annotations: WRITE,
     },
     async (input) => {
@@ -210,7 +208,9 @@ export function registerNodeFileTools(
       title: "Compare project files across nodes",
       description:
         "For each node with this project: which of its .env and selected files are missing, extra, the same or different from this node's, and for .env files which keys were added, removed or changed. Values are compared by fingerprint and never shown.",
-      inputSchema: z.object({ nodeIds: z.array(nodeIdSchema).max(64).optional() }),
+      inputSchema: toolInput(
+        Schema.Struct({ nodeIds: Schema.optionalKey(list(nodeIdSchema, { max: 64 })) }),
+      ),
       annotations: READ,
     },
     async ({ nodeIds }) => {
@@ -229,12 +229,14 @@ export function registerNodeFileTools(
       title: "Ask the user to update project files on nodes",
       description:
         "Ask the user to push this node's version of chosen project files (or only chosen .env keys) to some or all nodes. The user approves a list of nodes and files; the content is copied node to node without passing through you.",
-      inputSchema: z.object({
-        nodeIds: z.array(nodeIdSchema).min(1).max(64),
-        files: z.array(pathSchema).min(1).max(200),
-        keys: z.array(z.string().trim().min(1).max(200)).max(200).optional(),
-        reason: z.string().trim().min(1).max(500),
-      }),
+      inputSchema: toolInput(
+        Schema.Struct({
+          nodeIds: list(nodeIdSchema, { min: 1, max: 64 }),
+          files: list(pathSchema, { min: 1, max: 200 }),
+          keys: Schema.optionalKey(list(str({ trim: true, min: 1, max: 200 }), { max: 200 })),
+          reason: str({ trim: true, min: 1, max: 500 }),
+        }),
+      ),
       annotations: { ...WRITE, destructiveHint: false },
     },
     async ({ nodeIds, files, keys, reason }) => {
@@ -271,12 +273,17 @@ export function registerNodeFileTools(
       title: "Ask the user to show .env values",
       description:
         "Only when the user explicitly asks to see a value in plain text: ask for one or more .env keys from a node. If the user approves, the values arrive in this conversation by mail.",
-      inputSchema: z.object({
-        nodeId: nodeIdSchema,
-        file: pathSchema,
-        keys: z.array(z.string().trim().min(1).max(200)).min(1).max(20),
-        reason: z.string().trim().min(1).max(500).describe("What the user asked, in their words."),
-      }),
+      inputSchema: toolInput(
+        Schema.Struct({
+          nodeId: nodeIdSchema,
+          file: pathSchema,
+          keys: list(str({ trim: true, min: 1, max: 200 }), { min: 1, max: 20 }),
+          reason: describe(
+            str({ trim: true, min: 1, max: 500 }),
+            "What the user asked, in their words.",
+          ),
+        }),
+      ),
       annotations: { ...WRITE, destructiveHint: false },
     },
     async ({ nodeId, file, keys, reason }) => {
@@ -301,24 +308,24 @@ export function registerNodeFileTools(
       title: "Ask the user to copy this project to a node",
       description:
         "Ask the user to copy this project to a connected node: a clone of its Git remote, plus the untracked or ignored files the user picks there (the files you suggest are pre-selected; dependency folders such as node_modules are meant to be installed on that node, not copied). Omit location to use that node's default projects folder. The user approves the location and files in Orkestrator; you are told the outcome by mail. Never create a project on a node without this approval.",
-      inputSchema: z.object({
-        nodeId: nodeIdSchema,
-        location: z
-          .string()
-          .trim()
-          .min(1)
-          .max(1024)
-          .optional()
-          .describe("Absolute directory on that node; omit for its default projects folder."),
-        files: z
-          .array(pathSchema)
-          .max(200)
-          .optional()
-          .describe(
-            "Untracked or ignored paths of this project to suggest copying (a directory ends with /), such as .env files.",
+      inputSchema: toolInput(
+        Schema.Struct({
+          nodeId: nodeIdSchema,
+          location: Schema.optionalKey(
+            describe(
+              str({ trim: true, min: 1, max: 1024 }),
+              "Absolute directory on that node; omit for its default projects folder.",
+            ),
           ),
-        reason: z.string().trim().min(1).max(500),
-      }),
+          files: Schema.optionalKey(
+            describe(
+              list(pathSchema, { max: 200 }),
+              "Untracked or ignored paths of this project to suggest copying (a directory ends with /), such as .env files.",
+            ),
+          ),
+          reason: str({ trim: true, min: 1, max: 500 }),
+        }),
+      ),
       annotations: { ...WRITE, destructiveHint: false },
     },
     async ({ nodeId, location, files, reason }) => {

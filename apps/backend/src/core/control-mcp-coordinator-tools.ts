@@ -1,6 +1,7 @@
 import { hostTimeZone, isValidTimeZone } from "@orkestrator/protocol/schedule-time";
 import type { McpServer } from "@modelcontextprotocol/server";
-import { z } from "zod";
+import { Schema } from "effect";
+import { describe, int, list, str, strictObject, toolInput, withDefault } from "./tool-schema.js";
 import { coordinatorReplayFields } from "./control-mcp-results.js";
 import {
   pollKey,
@@ -135,7 +136,7 @@ export function registerCoordinatorWorkflowTools(
       title: "Get project repository context",
       description:
         "Read current branch, immutable HEAD commit, dirty state, and upstream freshness. This tool cannot mutate Git. With nodeId, of that node's copy of the project.",
-      inputSchema: z.object({ nodeId: nodeIdField }),
+      inputSchema: toolInput(Schema.Struct({ nodeId: nodeIdField })),
       annotations: readAnnotations(),
     },
     async ({ nodeId }) => {
@@ -155,12 +156,16 @@ export function registerCoordinatorWorkflowTools(
       title: "List coordinator workflows",
       description:
         "List durable worker, build-pipeline, multi-review, graph-run, feature-plan and pull-request associations for this project with bounded authoritative summaries. A feature-plan association is one launch_feature_plan request: its resource is the plan as get_feature_plan reads it, and its follow says whether the reply was reported. A pull-request association is a worker's pull request this conversation follows for status wakes: its follow (what started it, the PR URL, whether it is still followed, the last state reported, a Resolve tab's progress) and the worker with its PR fields (prHasMergeConflicts, prMergeability, prChecks, prReadyToMerge). A worker association carries its delegation: state, bucket (needs-you, running or finished), workerTabId and waitingSince. To answer \"what am I waiting on?\", call this with openOnly instead of polling list_environments or list_agents.",
-      inputSchema: z.object({
-        openOnly: z
-          .boolean()
-          .optional()
-          .describe("List only the workers this project's coordinator is still waiting on."),
-      }),
+      inputSchema: toolInput(
+        Schema.Struct({
+          openOnly: Schema.optionalKey(
+            describe(
+              Schema.Boolean,
+              "List only the workers this project's coordinator is still waiting on.",
+            ),
+          ),
+        }),
+      ),
       annotations: readAnnotations(),
     },
     async ({ openOnly }) => {
@@ -282,7 +287,9 @@ export function registerCoordinatorWorkflowTools(
       title: "Adopt a coordinator workflow",
       description:
         "Associate an orphaned or closed-tab workflow with this conversation so terminal notifications can be delivered here.",
-      inputSchema: z.object({ associationId: z.string().trim().min(1).max(200) }),
+      inputSchema: toolInput(
+        Schema.Struct({ associationId: str({ trim: true, min: 1, max: 200 }) }),
+      ),
       annotations: {
         readOnlyHint: false,
         destructiveHint: false,
@@ -327,10 +334,12 @@ export function registerCoordinatorWorkflowTools(
       {
         title,
         description: `${title} that belongs to this coordinator's project.`,
-        inputSchema: z.object({
-          environmentId: z.string().trim().min(1).max(200),
-          nodeId: nodeIdField,
-        }),
+        inputSchema: toolInput(
+          Schema.Struct({
+            environmentId: str({ trim: true, min: 1, max: 200 }),
+            nodeId: nodeIdField,
+          }),
+        ),
         annotations: {
           readOnlyHint: false,
           destructiveHint: tool === "stop_environment",
@@ -353,82 +362,80 @@ export function registerCoordinatorWorkflowTools(
       title: "Start a structured build pipeline",
       description:
         "Start Orkestrator's durable build/review/verify/PR workflow, the build pipeline, in a new pipeline environment. This is the default for any work whose whole spec is known (a ticket, or settled with the user). Omit agentType, steps, reviewers and reviewPreparation to run the Build button's saved defaults: the same build agent, Multi Review reviewers, preparation/consolidation, fix, verify, PR and conflict-resolution models. Override one only when the user has asked for a specific agent, model, effort or reviewer set, or has given instructions for a step; any field you leave out keeps its saved default. Delivery follows the ticket's delivery policy when Verify passes (none means open-pr): set it on the ticket; push-no-pr pushes and stops, with no automatic review.",
-      inputSchema: z.object({
-        requestId: z.string().trim().min(1).max(256),
-        taskId: z
-          .string()
-          .trim()
-          .min(1)
-          .max(200)
-          .describe(
+      inputSchema: toolInput(
+        Schema.Struct({
+          requestId: str({ trim: true, min: 1, max: 256 }),
+          taskId: describe(
+            str({ trim: true, min: 1, max: 200 }),
             "The id of a ticket in this project. The build is linked to it and records its criteria results, status and pull request there. Create the ticket with create_ticket first if there is none. With nodeId, a ticket of this board is synced to that node first and built there under the same id (no relay through that node's coordinator); a ticket made only on that node works too.",
           ),
-        environmentType: z.enum(["local", "containerized"]).default("local"),
-        baseBranch: z.string().trim().min(1).max(500),
-        baseCommit: z.string().regex(/^[0-9a-f]{40}$/i),
-        agentType: z
-          .enum(["claude", "codex", "cursor", "grok", "opencode", "pi"])
-          .optional()
-          .describe(
-            "Optional. Omit to use the user's saved build agent. Set only when the user asks for a specific agent.",
+          environmentType: withDefault(Schema.Literals(["local", "containerized"]), "local"),
+          baseBranch: str({ trim: true, min: 1, max: 500 }),
+          baseCommit: str({ pattern: /^[0-9a-f]{40}$/i }),
+          agentType: Schema.optionalKey(
+            describe(
+              Schema.Literals(["claude", "codex", "cursor", "grok", "opencode", "pi"]),
+              "Optional. Omit to use the user's saved build agent. Set only when the user asks for a specific agent.",
+            ),
           ),
-        steps: z
-          .object({
-            build: buildStepOverrideSchema.optional(),
-            review: buildStepOverrideSchema.optional(),
-            address: buildStepOverrideSchema.optional(),
-            verify: buildStepOverrideSchema.optional(),
-            pr: buildStepOverrideSchema.optional(),
-            "resolve-conflicts": buildStepOverrideSchema.optional(),
-          })
-          .strict()
-          .optional()
-          .describe(
-            "Optional per-step overrides. Each step you name replaces only that step's saved default; omitted steps keep theirs. Set only when the user asks for a specific agent, model or effort for a step, or gives instructions for it. A step that names only instructions keeps its saved agent and model.",
+          steps: Schema.optionalKey(
+            describe(
+              strictObject({
+                build: Schema.optionalKey(buildStepOverrideSchema),
+                review: Schema.optionalKey(buildStepOverrideSchema),
+                address: Schema.optionalKey(buildStepOverrideSchema),
+                verify: Schema.optionalKey(buildStepOverrideSchema),
+                pr: Schema.optionalKey(buildStepOverrideSchema),
+                "resolve-conflicts": Schema.optionalKey(buildStepOverrideSchema),
+              }),
+              "Optional per-step overrides. Each step you name replaces only that step's saved default; omitted steps keep theirs. Set only when the user asks for a specific agent, model or effort for a step, or gives instructions for it. A step that names only instructions keeps its saved agent and model.",
+            ),
           ),
-        reviewers: z
-          .array(buildReviewerSchema)
-          .min(1)
-          .max(32)
-          .optional()
-          .describe(
-            "Optional. Replaces the saved Multi Review reviewer rows (and their saved focus) for the review step. Omit to use them. Set only when the user asks for specific reviewers, for a focus (lens) per reviewer, or for instructions per reviewer.",
+          reviewers: Schema.optionalKey(
+            describe(
+              list(buildReviewerSchema, { min: 1, max: 32 }),
+              "Optional. Replaces the saved Multi Review reviewer rows (and their saved focus) for the review step. Omit to use them. Set only when the user asks for specific reviewers, for a focus (lens) per reviewer, or for instructions per reviewer.",
+            ),
           ),
-        reviewPreparation: buildStepOverrideSchema
-          .optional()
-          .describe(
-            "Optional. Replaces the saved preparation/consolidation model for a multi-reviewer review step. Omit to use it. Set only when the user asks for one, or for instructions for it; naming only instructions keeps the saved model.",
+          reviewPreparation: Schema.optionalKey(
+            describe(
+              buildStepOverrideSchema,
+              "Optional. Replaces the saved preparation/consolidation model for a multi-reviewer review step. Omit to use it. Set only when the user asks for one, or for instructions for it; naming only instructions keeps the saved model.",
+            ),
           ),
-        taskTitle: z.string().trim().min(1).max(500),
-        taskSnapshot: z.object({
-          title: z.string().max(500),
-          description: z.string().max(100_000),
-          acceptanceCriteria: z.string().max(100_000),
-          comments: z
-            .array(z.object({ text: z.string().max(20_000) }))
-            .max(200)
-            .default([]),
-          images: z
-            .array(z.object({ filename: z.string().max(500), data: z.string().max(5_000_000) }))
-            .max(20)
-            .default([]),
+          taskTitle: str({ trim: true, min: 1, max: 500 }),
+          taskSnapshot: Schema.Struct({
+            title: str({ max: 500 }),
+            description: str({ max: 100_000 }),
+            acceptanceCriteria: str({ max: 100_000 }),
+            comments: withDefault(
+              list(Schema.Struct({ text: str({ max: 20_000 }) }), { max: 200 }),
+              [],
+            ),
+            images: withDefault(
+              list(Schema.Struct({ filename: str({ max: 500 }), data: str({ max: 5_000_000 }) }), {
+                max: 20,
+              }),
+              [],
+            ),
+          }),
+          existingEnvironmentId: Schema.optionalKey(str({ trim: true, min: 1, max: 200 })),
+          maxIterations: Schema.optionalKey(
+            describe(
+              int({
+                min: 1,
+                max: MAX_BUILD_PIPELINE_ITERATIONS,
+                maxMessage: `maxIterations must be at most ${MAX_BUILD_PIPELINE_ITERATIONS}, the Build Pipeline's iteration limit.`,
+              }),
+              `Optional. Review/fix/verify rounds before the pipeline gives up, from 1 to ${MAX_BUILD_PIPELINE_ITERATIONS}. Omit for the default.`,
+            ),
+          ),
+          nodeId: describe(
+            nodeIdField,
+            "Optional: run the build on that node's copy of this project (a nodeId from list_nodes); take baseBranch and baseCommit from get_launch_options with the same nodeId. Omit for this node.",
+          ),
         }),
-        existingEnvironmentId: z.string().trim().min(1).max(200).optional(),
-        maxIterations: z
-          .number()
-          .int()
-          .min(1)
-          .max(MAX_BUILD_PIPELINE_ITERATIONS, {
-            error: `maxIterations must be at most ${MAX_BUILD_PIPELINE_ITERATIONS}, the Build Pipeline's iteration limit.`,
-          })
-          .optional()
-          .describe(
-            `Optional. Review/fix/verify rounds before the pipeline gives up, from 1 to ${MAX_BUILD_PIPELINE_ITERATIONS}. Omit for the default.`,
-          ),
-        nodeId: nodeIdField.describe(
-          "Optional: run the build on that node's copy of this project (a nodeId from list_nodes); take baseBranch and baseCommit from get_launch_options with the same nodeId. Omit for this node.",
-        ),
-      }),
+      ),
       annotations: {
         readOnlyHint: false,
         destructiveHint: true,
@@ -483,10 +490,12 @@ export function registerCoordinatorWorkflowTools(
       title: "Get a build pipeline",
       description:
         "Read authoritative state for a coordinator-associated build pipeline, including workers: every agent session it has started (build, each reviewer, preparation, consolidation, address, verify, fix, PR, conflict resolution, every round), each with its mailbox address, step, round, slot, label, agent, model and status (running, idle, finished, failed, cancelled). Message one worker with send_message (toEnvironmentId the pipeline environment, toTabId its address) and read its transcript with get_tab_transcript (tabId its address).",
-      inputSchema: z.object({
-        pipelineId: z.string().trim().min(1).max(200),
-        nodeId: nodeIdField,
-      }),
+      inputSchema: toolInput(
+        Schema.Struct({
+          pipelineId: str({ trim: true, min: 1, max: 200 }),
+          nodeId: nodeIdField,
+        }),
+      ),
       annotations: readAnnotations(),
     },
     async ({ pipelineId, nodeId }) => {
@@ -514,10 +523,12 @@ export function registerCoordinatorWorkflowTools(
           tool === "resume_build_pipeline"
             ? `${title} in this coordinator's project. Only a paused pipeline resumes; any other phase is refused with the phase. To carry on after a failed step, use restart_build_pipeline_step.`
             : `${title} in this coordinator's project.`,
-        inputSchema: z.object({
-          pipelineId: z.string().trim().min(1).max(200),
-          nodeId: nodeIdField,
-        }),
+        inputSchema: toolInput(
+          Schema.Struct({
+            pipelineId: str({ trim: true, min: 1, max: 200 }),
+            nodeId: nodeIdField,
+          }),
+        ),
         annotations: {
           readOnlyHint: false,
           destructiveHint: tool === "cancel_build_pipeline",
@@ -549,34 +560,31 @@ export function registerCoordinatorWorkflowTools(
       title: "Restart a build pipeline step",
       description:
         "Restart one step of a build pipeline in this project, as the step's Restart in the UI does, so a pipeline that failed for a passing reason (a usage limit, an unreachable agent) carries on without the user. Omit stepId to restart the step a failed pipeline failed in, or the current step of a paused, stalled or running one; or name a step by its worker address from get_build_pipeline. Earlier rounds and the work already committed are kept: the step reruns on the code as it is now, and that step's old session and any after it stay readable as a previous attempt. Set selection to rerun the step on another agent or model (the UI's Restart in…); the step keeps it for later rounds. A cancelled or completed pipeline, a failure before any step started, and an unknown step are refused. Code rewind and skipping a step are not offered here: they discard or bypass work, so they stay the user's. Retry with the same requestId after a lost answer: it never restarts twice. Pass nodeId for a pipeline on another connected node.",
-      inputSchema: z
-        .object({
-          requestId: z
-            .string()
-            .trim()
-            .min(1)
-            .max(256)
-            .describe("Stable key for this restart; reuse it only to retry the same call."),
-          pipelineId: z.string().trim().min(1).max(200),
-          stepId: z
-            .string()
-            .trim()
-            .min(1)
-            .max(300)
-            .optional()
-            .describe(
+      inputSchema: toolInput(
+        strictObject({
+          requestId: describe(
+            str({ trim: true, min: 1, max: 256 }),
+            "Stable key for this restart; reuse it only to retry the same call.",
+          ),
+          pipelineId: str({ trim: true, min: 1, max: 200 }),
+          stepId: Schema.optionalKey(
+            describe(
+              str({ trim: true, min: 1, max: 300 }),
               "A worker address from get_build_pipeline (workers[].address). Omit for the failed or current step.",
             ),
-          selection: agentSelectionSchema
-            .extend({ fastMode: z.boolean().optional() })
-            .strict()
-            .optional()
-            .describe(
+          ),
+          selection: Schema.optionalKey(
+            describe(
+              strictObject({
+                ...agentSelectionSchema.fields,
+                fastMode: Schema.optionalKey(Schema.Boolean),
+              }),
               "Optional. Rerun the step on this agent and model (and reasoning effort, speed) from now on. Omit to keep the step's own selection.",
             ),
+          ),
           nodeId: nodeIdField,
-        })
-        .strict(),
+        }),
+      ),
       annotations: {
         readOnlyHint: false,
         destructiveHint: true,
@@ -621,10 +629,12 @@ export function registerCoordinatorWorkflowTools(
     {
       title: "Get a multi-review",
       description: "Read authoritative state for a multi-review in this project.",
-      inputSchema: z.object({
-        workflowId: z.string().trim().min(1).max(200),
-        nodeId: nodeIdField,
-      }),
+      inputSchema: toolInput(
+        Schema.Struct({
+          workflowId: str({ trim: true, min: 1, max: 200 }),
+          nodeId: nodeIdField,
+        }),
+      ),
       annotations: readAnnotations(),
     },
     async ({ workflowId, nodeId }) => {
@@ -647,10 +657,12 @@ export function registerCoordinatorWorkflowTools(
       {
         title,
         description: `${title} in the associated worker environment.`,
-        inputSchema: z.object({
-          workflowId: z.string().trim().min(1).max(200),
-          nodeId: nodeIdField,
-        }),
+        inputSchema: toolInput(
+          Schema.Struct({
+            workflowId: str({ trim: true, min: 1, max: 200 }),
+            nodeId: nodeIdField,
+          }),
+        ),
         annotations: {
           readOnlyHint: false,
           destructiveHint: true,

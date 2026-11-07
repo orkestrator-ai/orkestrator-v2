@@ -1,5 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/server";
-import { z } from "zod";
+import { Schema } from "effect";
+import { describe, list, str, strictObject, toolInput } from "./tool-schema.js";
 import { coordinatorReplayFields } from "./control-mcp-results.js";
 import type { CoordinatorControlScope, ControlMcpInvoker } from "./control-mcp-server.js";
 import { COORDINATOR_WORKFLOW_STATUS_WAKE } from "@orkestrator/protocol/coordinator";
@@ -9,17 +10,18 @@ import { normalizeAgentMessagingSettings } from "@orkestrator/protocol/agent-mai
 import type { MultiReviewActionResult } from "@orkestrator/protocol/multi-review";
 
 const selectionFields = {
-  agent: z.enum(["claude", "codex", "cursor", "grok", "opencode", "pi"]),
-  model: z.string().trim().min(1).max(512),
-  reasoningEffort: z.string().trim().min(1).max(128).optional(),
+  agent: Schema.Literals(["claude", "codex", "cursor", "grok", "opencode", "pi"]),
+  model: str({ trim: true, min: 1, max: 512 }),
+  reasoningEffort: Schema.optionalKey(str({ trim: true, min: 1, max: 128 })),
 };
 
-const selection = z.object(selectionFields).strict();
+const selection = strictObject(selectionFields);
 
 /** A reviewer row, which alone may carry a focus. */
-const reviewerSelection = z
-  .object({ ...selectionFields, lens: reviewLensSchema.optional() })
-  .strict();
+const reviewerSelection = strictObject({
+  ...selectionFields,
+  lens: Schema.optionalKey(reviewLensSchema),
+});
 
 /** The async contract for a coordinator-started workflow; see `COORDINATOR_WORKFLOW_STATUS_WAKE`. */
 export async function workflowStatusWakeResult(invoke: ControlMcpInvoker) {
@@ -132,15 +134,12 @@ async function response(
   };
 }
 
-const nodeId = z
-  .string()
-  .trim()
-  .min(1)
-  .max(200)
-  .optional()
-  .describe(
+const nodeId = Schema.optionalKey(
+  describe(
+    str({ trim: true, min: 1, max: 200 }),
     "Optional: a nodeId from list_nodes, for a review on that node's copy of this project. Omit for this node.",
-  );
+  ),
+);
 
 export function registerControlReviewActions(
   server: McpServer,
@@ -163,35 +162,37 @@ export function registerControlReviewActions(
         "Omit reviewers, reviewModel and fixModel to use the user's saved Multi Review defaults, exactly as the Multi Review button does; set them only when the user asks for specific models (get_launch_options lists them). " +
         MULTI_REVIEW_AUTOMATION_DESCRIPTION +
         " The result's selection reports the rows and auto-actions that will run and which were requested; a reused active review keeps its own.",
-      inputSchema: z
-        .object({
-          requestId: z.string().trim().min(1).max(256),
-          environmentId: z.string().trim().min(1).max(200),
-          reviewers: z
-            .array(reviewerSelection)
-            .min(1)
-            .max(32)
-            .optional()
-            .describe(
+      inputSchema: toolInput(
+        strictObject({
+          requestId: str({ trim: true, min: 1, max: 256 }),
+          environmentId: str({ trim: true, min: 1, max: 200 }),
+          reviewers: Schema.optionalKey(
+            describe(
+              list(reviewerSelection, { min: 1, max: 32 }),
               "Optional. Omit to use the user's saved reviewer rows and their saved focus. Set only when the user asks for specific reviewers or a focus (lens) per reviewer.",
             ),
-          reviewModel: selection
-            .optional()
-            .describe(
+          ),
+          reviewModel: Schema.optionalKey(
+            describe(
+              selection,
               "Optional. Omit to use the user's saved preparation/consolidation model. Set only when the user asks for one.",
             ),
-          fixModel: selection
-            .optional()
-            .describe(
+          ),
+          fixModel: Schema.optionalKey(
+            describe(
+              selection,
               "Optional. Omit to use the user's saved Address Findings model. Set only when the user asks for one.",
             ),
-          autoFix: z.boolean().optional().describe(AUTO_ADDRESS_FINDINGS_FIELD_DESCRIPTION),
-          autoPr: z.boolean().optional().describe(AUTO_PR_FIELD_DESCRIPTION),
-          targetBranch: z.string().trim().min(1).max(500).optional(),
-          reviewInstruction: z.string().max(100_000).optional(),
+          ),
+          autoFix: Schema.optionalKey(
+            describe(Schema.Boolean, AUTO_ADDRESS_FINDINGS_FIELD_DESCRIPTION),
+          ),
+          autoPr: Schema.optionalKey(describe(Schema.Boolean, AUTO_PR_FIELD_DESCRIPTION)),
+          targetBranch: Schema.optionalKey(str({ trim: true, min: 1, max: 500 })),
+          reviewInstruction: Schema.optionalKey(str({ max: 100_000 })),
           nodeId,
-        })
-        .strict(),
+        }),
+      ),
       annotations: {
         readOnlyHint: false,
         destructiveHint: true,
@@ -243,25 +244,22 @@ export function registerControlReviewActions(
           name === "address_multi_review"
             ? "Complete Address findings action: open the root review, persist an idempotent Address Findings handoff, then publish Address Findings after dispatch. The foreground action selects Address Findings, while background retry or restart recovery preserves current focus. A pending result means queued, not delivered; inspect get_multi_review for addressPromptPending/presentationError and use open_multi_review_fix for presentation recovery. Adopt another conversation's associated workflow first; unassociated workflows in this project remain addressable."
             : `${title}. Complete durable UI action; no workflow or turn is launched. Works in inactive environments and survives reload. Adopt workflows owned by another conversation first. Inspect outcome/ui/recovery for presentation failure.`,
-        inputSchema: z
-          .object({
-            workflowId: z.string().trim().min(1).max(200),
+        inputSchema: toolInput(
+          strictObject({
+            workflowId: str({ trim: true, min: 1, max: 200 }),
             ...(name === "open_multi_review"
               ? {
-                  reviewerId: z
-                    .string()
-                    .trim()
-                    .min(1)
-                    .max(200)
-                    .optional()
-                    .describe(
+                  reviewerId: Schema.optionalKey(
+                    describe(
+                      str({ trim: true, min: 1, max: 200 }),
                       "Open this reviewer's read-only transcript tab instead of the review (reviewer IDs are in get_multi_review).",
                     ),
+                  ),
                 }
               : {}),
             nodeId,
-          })
-          .strict(),
+          }),
+        ),
         annotations: {
           readOnlyHint: false,
           destructiveHint: name === "address_multi_review",
@@ -307,15 +305,15 @@ export function registerControlReviewActions(
       title: "Start a custom Address Findings for a ready Multi Review",
       description:
         "The review tab's Custom Address Findings prompt: start Address Findings with your instruction and, optionally, another model (fixModel, from get_launch_options) instead of address_multi_review's default fix. The review must be ready (consolidated). Omit fixModel to keep the review's own Address Findings model; set it only when the user asks for a different one. A custom Address Findings never starts an automatic PR. Reuse requestId only to retry the same call, including after a lost answer from another node; a pending outcome means queued, not delivered.",
-      inputSchema: z
-        .object({
-          requestId: z.string().trim().min(1).max(256),
-          workflowId: z.string().trim().min(1).max(200),
-          instruction: z.string().trim().min(1).max(100_000),
-          fixModel: selection.optional(),
+      inputSchema: toolInput(
+        strictObject({
+          requestId: str({ trim: true, min: 1, max: 256 }),
+          workflowId: str({ trim: true, min: 1, max: 200 }),
+          instruction: str({ trim: true, min: 1, max: 100_000 }),
+          fixModel: Schema.optionalKey(selection),
           nodeId,
-        })
-        .strict(),
+        }),
+      ),
       annotations: {
         readOnlyHint: false,
         destructiveHint: true,

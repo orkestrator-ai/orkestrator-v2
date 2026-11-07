@@ -2,7 +2,8 @@ import { createHash, randomUUID } from "node:crypto";
 import type { BigIntStats } from "node:fs";
 import { mkdir, open, readdir, rename, stat, unlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { z } from "zod";
+import { Schema } from "effect";
+import { decodeResult, decodeSync, int, list, looseObject, num, str } from "../tool-schema.js";
 import {
   DESIGN_MAX_DOCUMENT_BYTES,
   DESIGN_RUNTIME_VERSION,
@@ -116,38 +117,36 @@ export interface DesignPrivateRecord {
   migratedFromLegacy?: boolean;
 }
 
-const isoDate = z.string().min(10).max(40);
-const recordHeaderSchema = z.object({
-  kind: z.literal(RECORD_KIND),
-  recordVersion: z.number().int().positive(),
+const isoDate = str({ min: 10, max: 40 });
+const recordHeaderSchema = Schema.Struct({
+  kind: Schema.Literal(RECORD_KIND),
+  recordVersion: int({ min: 1 }),
 });
-const recordSchema = z
-  .object({
-    kind: z.literal(RECORD_KIND),
-    recordVersion: z.literal(RECORD_VERSION),
-    canvasId: designId,
-    environmentId: z.string().min(1).max(256),
-    state: z.enum(["live", "deleted", "provisional"]),
-    sequence: z.number().int().nonnegative(),
-    statusVersion: z.number().int().nonnegative(),
-    incarnation: z.string().min(1).max(64),
-    identityCounter: z.number().int().nonnegative(),
-    createdAt: isoDate,
-    modifiedAt: isoDate,
-    document: z.unknown(),
-    frames: z.record(z.string(), z.unknown()),
-    changes: z.array(z.unknown()).max(DESIGN_LIMITS.changeDescriptors),
-    receipts: z.array(z.unknown()).max(DESIGN_LIMITS.receiptsPerCanvas),
-    receiptDigests: z.record(z.string(), z.unknown()).optional(),
-    history: z.object({ entries: z.array(z.unknown()).max(512), bytes: z.number().nonnegative() }),
-    export: z.unknown().optional(),
-    pendingExport: z.unknown().optional(),
-    sessions: z.array(z.unknown()).max(DESIGN_LIMITS.sessionLinksPerCanvas),
-    deleted: z.unknown().optional(),
-    provisional: z.unknown().optional(),
-    migratedFromLegacy: z.boolean().optional(),
-  })
-  .passthrough();
+const recordSchema = looseObject({
+  kind: Schema.Literal(RECORD_KIND),
+  recordVersion: Schema.Literal(RECORD_VERSION),
+  canvasId: designId,
+  environmentId: str({ min: 1, max: 256 }),
+  state: Schema.Literals(["live", "deleted", "provisional"]),
+  sequence: int({ min: 0 }),
+  statusVersion: int({ min: 0 }),
+  incarnation: str({ min: 1, max: 64 }),
+  identityCounter: int({ min: 0 }),
+  createdAt: isoDate,
+  modifiedAt: isoDate,
+  document: Schema.Unknown,
+  frames: Schema.Record(Schema.String, Schema.Unknown),
+  changes: list(Schema.Unknown, { max: DESIGN_LIMITS.changeDescriptors }),
+  receipts: list(Schema.Unknown, { max: DESIGN_LIMITS.receiptsPerCanvas }),
+  receiptDigests: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
+  history: Schema.Struct({ entries: list(Schema.Unknown, { max: 512 }), bytes: num({ min: 0 }) }),
+  export: Schema.optionalKey(Schema.Unknown),
+  pendingExport: Schema.optionalKey(Schema.Unknown),
+  sessions: list(Schema.Unknown, { max: DESIGN_LIMITS.sessionLinksPerCanvas }),
+  deleted: Schema.optionalKey(Schema.Unknown),
+  provisional: Schema.optionalKey(Schema.Unknown),
+  migratedFromLegacy: Schema.optionalKey(Schema.Boolean),
+});
 
 export type DesignRecordRead =
   | { kind: "record"; record: DesignPrivateRecord; bytes: number; key: string }
@@ -354,7 +353,7 @@ export function serializeRecord(record: DesignPrivateRecord): Buffer {
 
 /** Strict version-1 export bytes: no private metadata, pretty printed as before. */
 export function portableBytes(canvas: DesignCanvas): Buffer {
-  const portable = canvasSchema.parse({
+  const portable = decodeSync(canvasSchema, {
     format: canvas.format,
     version: canvas.version,
     id: canvas.id,
@@ -384,26 +383,26 @@ export class DesignRecordStore {
     this.root = join(dataDir, "design-canvases");
   }
   recordFile(id: string) {
-    return join(this.root, `${designId.parse(id)}${RECORD_EXTENSION}`);
+    return join(this.root, `${decodeSync(designId, id)}${RECORD_EXTENSION}`);
   }
   legacyFile(id: string) {
-    return join(this.root, `${designId.parse(id)}${LEGACY_EXTENSION}`);
+    return join(this.root, `${decodeSync(designId, id)}${LEGACY_EXTENSION}`);
   }
   legacyBackupFile(id: string) {
-    return join(this.root, "legacy-backups", `${designId.parse(id)}${LEGACY_EXTENSION}`);
+    return join(this.root, "legacy-backups", `${decodeSync(designId, id)}${LEGACY_EXTENSION}`);
   }
   historyDir(id: string) {
-    return join(this.root, "history", designId.parse(id));
+    return join(this.root, "history", decodeSync(designId, id));
   }
   exportBackupDir(id: string) {
-    return join(this.root, "export-backups", designId.parse(id));
+    return join(this.root, "export-backups", decodeSync(designId, id));
   }
   pendingFile(id: string) {
-    return join(this.root, "pending", `${designId.parse(id)}.json`);
+    return join(this.root, "pending", `${decodeSync(designId, id)}.json`);
   }
   /** The document's backend-owned intent queue (`design/intents.ts`). */
   intentsFile(id: string) {
-    return join(this.root, "intents", `${designId.parse(id)}.json`);
+    return join(this.root, "intents", `${decodeSync(designId, id)}.json`);
   }
   async ensure() {
     await mkdir(this.root, { recursive: true, mode: 0o700 });
@@ -412,7 +411,7 @@ export class DesignRecordStore {
     const ids = new Set<string>();
     for (const file of await readdir(this.root)) {
       const match = /^([0-9a-f-]{36})\.(orkrec|orkdes)$/.exec(file);
-      if (match && designId.safeParse(match[1]).success) ids.add(match[1]!);
+      if (match && decodeResult(designId, match[1]).success) ids.add(match[1]!);
     }
     return Array.from(ids);
   }
@@ -482,7 +481,7 @@ export class DesignRecordStore {
           backupAvailable: await this.hasBackup(id),
         };
       }
-      const header = recordHeaderSchema.safeParse(parsed);
+      const header = decodeResult(recordHeaderSchema, parsed);
       if (header.success && header.data.recordVersion > RECORD_VERSION)
         return {
           kind: "problem",
@@ -490,8 +489,10 @@ export class DesignRecordStore {
           message: "This design was saved by a newer Orkestrator and is read-only here",
           backupAvailable: await this.hasBackup(id),
         };
-      const record = recordSchema.safeParse(parsed);
-      const document = record.success ? canvasSchema.safeParse(record.data.document) : undefined;
+      const record = decodeResult(recordSchema, parsed);
+      const document = record.success
+        ? decodeResult(canvasSchema, record.data.document)
+        : undefined;
       if (!record.success || !document?.success || record.data.canvasId !== id)
         return {
           kind: "problem",
@@ -501,7 +502,10 @@ export class DesignRecordStore {
         };
       return {
         kind: "record",
-        record: { ...(record.data as unknown as DesignPrivateRecord), document: document.data },
+        record: {
+          ...(record.data as unknown as DesignPrivateRecord),
+          document: document.data as DesignCanvas,
+        },
         bytes: raw.byteLength,
         key,
       };
@@ -509,7 +513,7 @@ export class DesignRecordStore {
     try {
       const file = this.legacyFile(id);
       const bytes = await readBounded(file, DESIGN_MAX_DOCUMENT_BYTES);
-      const canvas = canvasSchema.parse(JSON.parse(bytes.toString("utf8")));
+      const canvas = decodeSync(canvasSchema, JSON.parse(bytes.toString("utf8"))) as DesignCanvas;
       if (canvas.id !== id) throw new Error("Canvas id does not match its filename");
       return { kind: "legacy", canvas, bytes: bytes.byteLength, mtime: (await stat(file)).mtime };
     } catch (error) {
@@ -569,12 +573,13 @@ export class DesignRecordStore {
         this.pendingFile(id),
         DESIGN_LIMITS.admittedPayloadBytes + 64 * 1024,
       );
-      return z
-        .array(
-          z.object({ token: z.string(), state: z.enum(["prepared", "executing"]) }).passthrough(),
-        )
-        .max(DESIGN_LIMITS.preparedPerCanvas)
-        .parse(JSON.parse(bytes.toString("utf8"))) as unknown as DesignPendingOperation[];
+      return decodeSync(
+        list(
+          looseObject({ token: Schema.String, state: Schema.Literals(["prepared", "executing"]) }),
+          { max: DESIGN_LIMITS.preparedPerCanvas },
+        ),
+        JSON.parse(bytes.toString("utf8")),
+      ) as unknown as DesignPendingOperation[];
     } catch (error) {
       if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return [];
       // Never read an unreadable file as empty: the next prepare would

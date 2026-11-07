@@ -20,7 +20,8 @@ import {
   scheduleAccountSwitchGrant,
   type ScheduledJob,
 } from "@orkestrator/protocol/scheduled-jobs";
-import { z } from "zod";
+import { Schema } from "effect";
+import { describe, str, toolInput } from "./tool-schema.js";
 import { createNodeTargets, type NodeTarget } from "./control-mcp-nodes.js";
 import {
   nodeIdField,
@@ -391,7 +392,7 @@ export function registerAccountTools(server: McpServer, context: AccountToolCont
       title: "Find usage-limited workers",
       description:
         "Which agent tabs in this project's environments stopped because their provider account ran out of plan usage (from each tab's last recorded turn; no transcript or bridge reads), and the active accounts' last-known quota windows on that machine (exhaustedWindows lists those used up until resetsAt). Cheap; call it instead of reading every tab. A turn typed into a terminal CLI is not recorded; get_tab_state reads one tab live. With nodeId, of that node's copy of the project.",
-      inputSchema: z.object({ nodeId: nodeIdField }),
+      inputSchema: toolInput(Schema.Struct({ nodeId: nodeIdField })),
       annotations: readAnnotations(),
     },
     async ({ nodeId }) => {
@@ -429,11 +430,17 @@ export function registerAccountTools(server: McpServer, context: AccountToolCont
       description:
         "List the Claude and Codex logins on this machine (or another with nodeId), which one is active per provider, and each one's plan usage: quota windows with usedPercent, remainingPercent and resetsAt, exhausted, and hasAllocationLeft (true, false, or unknown when no current reading exists: an idle Claude account's usage can only be read while it is in use, so it may show a stale reading). Reads usage endpoints, never runs a model turn. " +
         NO_ACCOUNTS_NOTE,
-      inputSchema: z.object({
-        nodeId: nodeIdField.describe("A machine from list_nodes; omit for this one."),
-        platform: z.enum(AGENT_ACCOUNT_PLATFORMS).optional().describe("Only this provider."),
-        includeUsage: z.boolean().optional().describe("Default true. false skips the usage reads."),
-      }),
+      inputSchema: toolInput(
+        Schema.Struct({
+          nodeId: describe(nodeIdField, "A machine from list_nodes; omit for this one."),
+          platform: Schema.optionalKey(
+            describe(Schema.Literals(AGENT_ACCOUNT_PLATFORMS), "Only this provider."),
+          ),
+          includeUsage: Schema.optionalKey(
+            describe(Schema.Boolean, "Default true. false skips the usage reads."),
+          ),
+        }),
+      ),
       annotations: { ...readAnnotations(), openWorldHint: true },
     },
     async ({ nodeId, platform, includeUsage }) => {
@@ -489,21 +496,23 @@ export function registerAccountTools(server: McpServer, context: AccountToolCont
       title: "Change automatic account switching",
       description:
         "Turn automatic account switching on or off for a provider, or change whether one account is included. When on, the backend keeps the machine on the included signed-in account with room whose general weekly limit resets soonest, staying put unless another login resets more than an hour sooner and counting entries with the same email as one login. It moves on at 98% of that limit or of the 5-hour limit, or when a fresh reading confirms a limit error used one up, comes back when that 5-hour limit resets, and resends the work either limit stopped. The ticks apply on every machine this one controls, matched by email; an account with no email has its tick on its own machine only and stays out until ticked. With enabled true it also ends this machine's pin, or the pin on nodeId, left by a manual switch, and no other machine's. A machine with a command node takes the shared ticks from it and refuses to change them, but can still end its own pin and change the tick of an account with no email. list_provider_accounts shows the state. The coordinator is authorized to change email-matched ticks and end pins only when the user explicitly asked; these changes can move subscriptions and trigger automatic recovery. No-email accounts must be included by the user in Settings.",
-      inputSchema: z.object({
-        platform: z.enum(AGENT_ACCOUNT_PLATFORMS),
-        enabled: z.boolean().optional().describe("The provider's main tick."),
-        accountId: z
-          .string()
-          .trim()
-          .min(1)
-          .max(100)
-          .optional()
-          .describe("One account from list_provider_accounts, with included."),
-        included: z.boolean().optional().describe("That account's own tick."),
-        nodeId: nodeIdField.describe(
-          "The machine the account or pin is on; omit for this one. The ticks themselves stay here.",
-        ),
-      }),
+      inputSchema: toolInput(
+        Schema.Struct({
+          platform: Schema.Literals(AGENT_ACCOUNT_PLATFORMS),
+          enabled: Schema.optionalKey(describe(Schema.Boolean, "The provider's main tick.")),
+          accountId: Schema.optionalKey(
+            describe(
+              str({ trim: true, min: 1, max: 100 }),
+              "One account from list_provider_accounts, with included.",
+            ),
+          ),
+          included: Schema.optionalKey(describe(Schema.Boolean, "That account's own tick.")),
+          nodeId: describe(
+            nodeIdField,
+            "The machine the account or pin is on; omit for this one. The ticks themselves stay here.",
+          ),
+        }),
+      ),
       annotations: {
         readOnlyHint: false,
         destructiveHint: false,
@@ -627,34 +636,27 @@ export function registerAccountTools(server: McpServer, context: AccountToolCont
       description:
         "Make another signed-in Claude or Codex login the active account for that provider on this machine (or another with nodeId), through the same switch as Settings. Machine-wide: every session of that provider on that machine moves to it on its next turn; a turn already running finishes on the current account; no restart. " +
         `It changes which subscription is billed, so it needs the user's permission, in one of three forms. (1) With scheduleId of the self-timer that woke you, whose reminder says it carries the user's permission, it switches at once. (2) When the user turned on "Let coordinators switch accounts without asking" for that provider in Settings on this machine, it switches at once with no approval, on this machine and on machines this one controls (state switched, authorizedBy standing-grant); the user is shown each such switch, but you still tell them what you did. Even then it refuses a signed-out account or one whose usage reading says it is used up, and after ${COORDINATOR_ACCOUNT_SWITCH_LIMIT.switches} switches of one provider on one machine within an hour it asks the user instead and says why. (3) Otherwise it creates a request the user approves in Orkestrator and you are told the outcome by mail. Read state in the result: only pending means the user must approve; never ask the user to approve a switch that already ran. Only switch when the user asked for switches, never on your own initiative; the standing permission is that request made in advance. Take accountId from list_provider_accounts and prefer one with hasAllocationLeft true. Like any manual switch, it pins the account while automatic switching is on. A switch that ran lists limitedTabs, this project's tabs on that machine whose last turn stopped on that provider's usage limit: nothing restarts them, so send each one short prompt with send_prompt_to_tab (resumeStep says so).`,
-      inputSchema: z.object({
-        requestId: z
-          .string()
-          .trim()
-          .min(1)
-          .max(200)
-          .describe("Stable key for this switch; reuse it only to retry the same call."),
-        platform: z.enum(AGENT_ACCOUNT_PLATFORMS),
-        accountId: z.string().trim().min(1).max(100),
-        reason: z
-          .string()
-          .trim()
-          .min(1)
-          .max(500)
-          .describe(
+      inputSchema: toolInput(
+        Schema.Struct({
+          requestId: describe(
+            str({ trim: true, min: 1, max: 200 }),
+            "Stable key for this switch; reuse it only to retry the same call.",
+          ),
+          platform: Schema.Literals(AGENT_ACCOUNT_PLATFORMS),
+          accountId: str({ trim: true, min: 1, max: 100 }),
+          reason: describe(
+            str({ trim: true, min: 1, max: 500 }),
             "What the user asked, in their words, and why this account now. Shown to the user with the switch.",
           ),
-        nodeId: nodeIdField.describe("A machine from list_nodes; omit for this one."),
-        scheduleId: z
-          .string()
-          .trim()
-          .min(1)
-          .max(100)
-          .optional()
-          .describe(
-            "The self-timer whose reminder carries the user's permission to switch, so no approval is needed. Not needed when Settings already lets coordinators switch without asking.",
+          nodeId: describe(nodeIdField, "A machine from list_nodes; omit for this one."),
+          scheduleId: Schema.optionalKey(
+            describe(
+              str({ trim: true, min: 1, max: 100 }),
+              "The self-timer whose reminder carries the user's permission to switch, so no approval is needed. Not needed when Settings already lets coordinators switch without asking.",
+            ),
           ),
-      }),
+        }),
+      ),
       annotations: {
         readOnlyHint: false,
         destructiveHint: false,

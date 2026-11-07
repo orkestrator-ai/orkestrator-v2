@@ -27,7 +27,7 @@ One definition of each core model. `apps/backend/src/core/models.ts` (1,334 line
 ## Work
 
 - [ ] For each type in both files, record its owner domain and status (moved / local-only / pending) in a table in Notes. Update the table as each domain item lands.
-- [ ] Replace the duplicated types with `z.infer` or `z.output` of the protocol schemas. Where the web needs a narrower or derived view type, derive it from the protocol type.
+- [ ] Replace the duplicated types with the inferred types of the protocol's Effect Schemas (`typeof X.Type`, or `Schema.Schema.Type<typeof X>`; Decision 13.8 changed from Zod to Effect on 2026-11-07). Where the web needs a narrower or derived view type, derive it from the protocol type.
 - [ ] A test that fails if a type exported from both `models.ts` and `types/index.ts` under the same name is not the same protocol type.
 
 ## Done when

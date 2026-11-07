@@ -5,7 +5,7 @@ into work items. The report holds the analysis and the design. Each file here
 holds one item: its goal, the verified current state of the code, a checklist,
 tests, and a record of the work.
 
-- **Report status:** proposal. Nothing has been implemented.
+- **Report status:** being implemented in one combined branch (`unified-federation-b4c9ee65814d`), started 2026-11-07. The row statuses below are current.
 - **Plan verified against:** `main` at `521f734a9`, on 2026-11-07. Every item has a "Current state" section re-checked against that commit. Where the report has drifted, the item says so; [Corrections to the report](#corrections-to-the-report) lists the material ones.
 - **Item count:** 78 items in 8 phases, on 3 tracks.
 
@@ -351,13 +351,13 @@ All independent; start now. Report: [§12 Phase 0](../../docs/reports/unified-fe
 
 | ID | File | Phase | Status | Depends on | Summary |
 | --- | --- | --- | --- | --- | --- |
-| 0001 | [0001-realm-request-drift.md](0001-realm-request-drift.md) | 0 | not-started | — | One shared `packages/protocol` definition of the realm open request. A cold desktop realm stops dropping `home`, work targets, `bugReport` and `environment-rebuild`. |
-| 0002 | [0002-attention-without-realm.md](0002-attention-without-realm.md) | 0 | not-started | — | The shell subscribes to `environment-attention` through `subscribeNodeEvents` for nodes without a realm. The relay needs no change, contrary to the report. |
-| 0003 | [0003-hidden-realm-visibility.md](0003-hidden-realm-visibility.md) | 0 | not-started | — | A `visibility` shell→realm message plus `ReadCoordinator.setHostHidden`, so hidden realms get #1964's deferrals. |
+| 0001 | [0001-realm-request-drift.md](0001-realm-request-drift.md) | 0 | in-progress | — | One shared `packages/protocol` definition of the realm open request. A cold desktop realm stops dropping `home`, work targets, `bugReport` and `environment-rebuild`. |
+| 0002 | [0002-attention-without-realm.md](0002-attention-without-realm.md) | 0 | in-progress | — | The shell subscribes to `environment-attention` through `subscribeNodeEvents` for nodes without a realm. The relay needs no change, contrary to the report. |
+| 0003 | [0003-hidden-realm-visibility.md](0003-hidden-realm-visibility.md) | 0 | in-progress | — | A `visibility` shell→realm message plus `ReadCoordinator.setHostHidden`, so hidden realms get #1964's deferrals. |
 | 0004 | [0004-measurement-report.md](0004-measurement-report.md) | 0 | not-started | — | Measure memory per realm on each host, the iPad jetsam point, hidden-realm request rate, `nextHopProtocol` and connection counts, and write a report. |
-| 0005 | [0005-documentation-corrections.md](0005-documentation-corrections.md) | 0 | not-started | — | Fix `federation.md`'s removed renderer runtime and `version-compatibility.md`'s handshake and floor lines. |
+| 0005 | [0005-documentation-corrections.md](0005-documentation-corrections.md) | 0 | done | — | Fix `federation.md`'s removed renderer runtime and `version-compatibility.md`'s handshake and floor lines. |
 | 0006 | [0006-grant-scope-live-evidence.md](0006-grant-scope-live-evidence.md) | 0 | not-started | — | Todo 5740: two real backends prove grants keep workspace features and refuse administration. This seeds `access` for the allow-list. |
-| 0007 | [0007-unknown-command-helper.md](0007-unknown-command-helper.md) | 0 | not-started | — | `lib/portal/unknown-command.ts` never matches what backends send. Fix it and check its five callers' fallbacks. |
+| 0007 | [0007-unknown-command-helper.md](0007-unknown-command-helper.md) | 0 | done | — | `lib/portal/unknown-command.ts` never matches what backends send. Fix it and check its five callers' fallbacks. |
 
 Exit criteria:
 
@@ -372,7 +372,7 @@ Report: [§11](../../docs/reports/unified-federation.md#11-versioned-interfaces)
 
 | ID | File | Phase | Status | Depends on | Summary |
 | --- | --- | --- | --- | --- | --- |
-| 1001 | [1001-schema-library-spike.md](1001-schema-library-spike.md) | 1 | not-started | — | Measure the renderer bundle cost of Zod 4, `zod/mini` and hand-written guards, record Decision 13.8, and add the library to protocol. |
+| 1001 | [1001-schema-library-spike.md](1001-schema-library-spike.md) | 1 | done | — | Measure the renderer bundle cost of Effect Schema against Zod 4, `zod/mini` and hand-written guards, record Decision 13.8 (Effect, the user's choice), and add `effect` to protocol. |
 | 1002 | [1002-contract-primitives.md](1002-contract-primitives.md) | 1 | not-started | 1001 | `defineDomain`, `defineCommand`, `defineEvent`, the invoke envelope, typed error codes and `domainClient` types in `packages/protocol/src/contract/`. |
 | 1003 | [1003-backend-register-overload.md](1003-backend-register-overload.md) | 1 | not-started | 1002 | `register(def, handler)` with tolerant parsing and critical fields, through every wrapping registrar; the envelope on HTTP, IPC and the relay. |
 | 1004 | [1004-hello-domains.md](1004-hello-domains.md) | 1 | not-started | 1002, 1003 | A new top-level hello field, `domains: {min, max}` per domain, parsed explicitly with bounds. Pre-contract nodes are detected. |
@@ -397,12 +397,12 @@ Report: [§5](../../docs/reports/unified-federation.md#5-target-architecture), [
 
 | ID | File | Phase | Status | Depends on | Summary |
 | --- | --- | --- | --- | --- | --- |
-| 2001 | [2001-node-scope-core.md](2001-node-scope-core.md) | 2 | not-started | — | `NodeClient` types, `NodeScope`, `WindowScope` with shared byte budgets, `defineScopedStore`/`defineScopedService`, providers, and the `renderInNodeScope` test helper. |
+| 2001 | [2001-node-scope-core.md](2001-node-scope-core.md) | 2 | in-progress | — | `NodeClient` types, `NodeScope`, `WindowScope` with shared byte budgets, `defineScopedStore`/`defineScopedService`, providers, and the `renderInNodeScope` test helper. |
 | 2002 | [2002-browser-transport-split.md](2002-browser-transport-split.md) | 2 | not-started | 2001 | Move `createNodeTransport` out of `web-gateway.ts` (1,743 lines) and cut its couplings to the window shell. Two transports coexist. |
 | 2003 | [2003-browser-credentials-and-auth-transport.md](2003-browser-credentials-and-auth-transport.md) | 2 | not-started | 2002 | `setCredential` on reopen, rich-content cleared per node, no global `fetch`/`EventSource` patch for node clients, and an `acp-client.ts` fix. |
 | 2004 | [2004-browser-node-clients-registry.md](2004-browser-node-clients-registry.md) | 2 | not-started | 2002, 2003 | `node-clients.ts`: in-memory grants, direct then relay, reopen without reload, a `pagehide` close, per-node URLs, WebSocket terminals for leaves. |
-| 2005 | [2005-relay-status-and-session.md](2005-relay-status-and-session.md) | 2 | not-started | — | Relay `/status` so a relayed client can diagnose a 401; node transports skip `/session`. |
-| 2006 | [2006-desktop-node-scopes.md](2006-desktop-node-scopes.md) | 2 | not-started | — | Main-process `node-scopes.ts`: single-flight `ensureNodeScope` per (window, node), reusing `NodeWorkspaceScopes`; release triggers. |
+| 2005 | [2005-relay-status-and-session.md](2005-relay-status-and-session.md) | 2 | in-progress | — | Relay `/status` so a relayed client can diagnose a 401; node transports skip `/session`. |
+| 2006 | [2006-desktop-node-scopes.md](2006-desktop-node-scopes.md) | 2 | done | — | Main-process `node-scopes.ts`: single-flight `ensureNodeScope` per (window, node), reusing `NodeWorkspaceScopes`; release triggers. |
 | 2007 | [2007-desktop-node-ipc-and-events.md](2007-desktop-node-ipc-and-events.md) | 2 | not-started | 2006 | `orkestrator:invoke(..., { nodeId })`, admin refusal by node, `orkestrator:node-event`, and a preload `node(nodeId)` API. |
 | 2008 | [2008-desktop-request-auth.md](2008-desktop-request-auth.md) | 2 | not-started | 2006 | One longest-prefix request-auth resolver over the command scope and every node scope of a window. |
 | 2009 | [2009-desktop-previews-and-gateway-snapshot.md](2009-desktop-previews-and-gateway-snapshot.md) | 2 | not-started | 2007 | A preview runtime per node scope (`orkestrator:browser-preview:*` resolved by tab); `localInstallationId` and `backendOnThisDevice(nodeId)`. |
@@ -506,7 +506,7 @@ Report: [§10.2](../../docs/reports/unified-federation.md#102-tighten-the-grant-
 | 7001 | [7001-domain-native-sessions.md](7001-domain-native-sessions.md) | 7 | not-started | 1008, 1010, 1011 | Native agent sessions and prompts (87 commands). Turns on CI stage 2. |
 | 7002 | [7002-domain-terminals-files-tmux.md](7002-domain-terminals-files-tmux.md) | 7 | not-started | 1008, 1010, 1011 | Terminals and files (59) and Claude tmux (28). |
 | 7003 | [7003-domain-environments-docker.md](7003-domain-environments-docker.md) | 7 | not-started | 1008, 1010, 1011 | Environments and container lifecycle (63) and Docker (29). |
-| 7004 | [7004-domain-previews-annotations-artifacts-design.md](7004-domain-previews-annotations-artifacts-design.md) | 7 | not-started | 1008, 1010, 1011 | Previews, web annotations and design (already Zod) and transcript artifacts. |
+| 7004 | [7004-domain-previews-annotations-artifacts-design.md](7004-domain-previews-annotations-artifacts-design.md) | 7 | not-started | 1008, 1010, 1011 | Previews, web annotations and design (Zod today, converted to Effect Schema) and transcript artifacts. |
 | 7005 | [7005-domain-projects-config.md](7005-domain-projects-config.md) | 7 | not-started | 1008, 1010, 1011 | Projects, config and settings (71), keeping the config-echo compatibility path. |
 | 7006 | [7006-domain-git-pull-requests.md](7006-domain-git-pull-requests.md) | 7 | not-started | 1008, 1010, 1011 | Git, GitHub, PRs and the changes ledger (81). |
 | 7007 | [7007-domain-pipelines-graphs-multi-review.md](7007-domain-pipelines-graphs-multi-review.md) | 7 | not-started | 1008, 1010, 1011 | Build pipelines and graphs (76) and Multi Review (30), reusing the graph guards. |
@@ -559,7 +559,7 @@ the user's approval and an entry in the report.
 | 13.5 Grants | A: one per (window, node) | [2004](2004-browser-node-clients-registry.md), [2006](2006-desktop-node-scopes.md) |
 | 13.6 Adaptation | C: both sides, each within the window | [1009](1009-domain-clients-and-adapters.md), [1008](1008-contract-ci-job.md) |
 | 13.7 Realm partition data | A: abandon, then delete partitions after a release | [6003](6003-delete-desktop-realm-code.md) |
-| 13.8 Schema library | A: Zod 4, **subject to [1001](1001-schema-library-spike.md)'s bundle measurement** | [1001](1001-schema-library-spike.md) |
+| 13.8 Schema library | Effect Schema (`effect/Schema`): the user's choice on 2026-11-07, replacing the Zod 4 recommendation; measured in [1001](1001-schema-library-spike.md) | [1001](1001-schema-library-spike.md) |
 | 13.9 Domain granularity | C: about 25 domains | [1002](1002-contract-primitives.md), [1006](1006-contract-manifest-generator.md) |
 
 ## Needs live evidence or user approval

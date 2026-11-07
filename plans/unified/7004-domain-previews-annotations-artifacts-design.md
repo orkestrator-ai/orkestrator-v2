@@ -28,7 +28,7 @@ updated: 2026-11-07
 ## Current state (verified 2026-11-07)
 
 - Previews: 17 registered, 15 web. Web annotations: 37 and 37. Transcript artifacts and media: 16 and 15. Design: 35 and 32.
-- Web annotations already have a Zod schema map (`commands-registry-web-annotations.ts:310`, all `.strict()`). Design handlers use Zod `.strict()` too (`core/design/commands.ts`). These are mostly re-wrapping, plus relaxing `.strict()` to strip.
+- Web annotations already have a Zod schema map (`commands-registry-web-annotations.ts:310`, all `.strict()`). Design handlers use Zod `.strict()` too (`core/design/commands.ts`). Decision 13.8 is now Effect Schema (2026-11-07), so these are a conversion from Zod to Effect Schema (or a Standard Schema bridge where a conversion is not worth it), plus relaxing `.strict()` to strip.
 - Capability commands: `get_preview_capabilities`, `web_annotations_capabilities`, `transcript_artifact_capabilities` and `design_capabilities`. Design already does floor-based retirement (Appendix F).
 - Preview services carry `protocolVersion`, per-surface availability and an epoch. Keep that response-level versioning.
 

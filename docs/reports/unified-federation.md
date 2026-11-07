@@ -1,7 +1,8 @@
 # Unified federation: one renderer for every machine, with versioned interfaces
 
 Analysis and implementation plan, 2026-11-06, against `main` at `f7d345f65`.
-Status: **proposal**. Nothing in this document has been implemented. Every
+Status: **being implemented** in one combined branch from 2026-11-07; progress is
+tracked in [`plans/unified/`](../../plans/unified/0000-index.md). Every
 count below was taken from this tree with `grep`/`wc` or by loading the
 command registry under Bun; anything inferred rather than read is marked
 *(inferred)*, and everything that needs a live run is collected in

@@ -77,7 +77,7 @@ import { useScopedStoreApi } from "@/lib/node-scope/scoped-store-shim";
 import { tmuxQuestionDraftKey } from "@/stores/promptDraftStore";
 import { resolvedPlatformSettings } from "@/lib/agent-settings";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { environmentStore, useEnvironmentStore } from "@/stores/environmentStore";
 import { useConfigStore } from "@/stores/configStore";
 import { enqueueAgentPrompt, removeAgentPrompt } from "@/lib/prompt-queue-sources";
 import { getClaudeModelCatalog } from "@/lib/backend";
@@ -203,6 +203,7 @@ export function ClaudeTmuxChatTab({
   const [error, setError] = useState<string | null>(null);
   const [interactiveMode, setInteractiveMode] = useState(false);
   const modelCatalog = useScopedStoreApi(agentModelCatalogStore);
+  const environments = useScopedStoreApi(environmentStore);
   const sdkModels = useAgentModelCatalogStore(
     (s) => s.claudeModelCatalogs.get(environmentId)?.models ?? s.claudeModels,
   );
@@ -231,7 +232,7 @@ export function ClaudeTmuxChatTab({
   );
   const [selectedModel, setSelectedModel] = useState<string>(() => {
     const snapshot = useConfigStore.getState().config;
-    const env = useEnvironmentStore.getState().getEnvironmentById(environmentId);
+    const env = environments.getState().getEnvironmentById(environmentId);
     return resolveTmuxModelPreference(
       initialLaunchModel ?? resolvedPlatformSettings(snapshot, env?.projectId, env, "claude").model,
       tmuxModelList(modelCatalog.getState().getClaudeModels(environmentId)),

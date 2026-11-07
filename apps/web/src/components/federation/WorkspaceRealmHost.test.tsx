@@ -711,6 +711,7 @@ for (const scenario of ["empty", "success", "partial failure"] as const) {
 test("a failed project list cannot log successful completion; a successful retry completes once", async () => {
   const { resetRealmBootTimingForTests } = await import("@/lib/realm-boot-timing");
   const { loadProjectsFromBackend } = await import("@/hooks/useProjects");
+  const { appCommandScope } = await import("@/lib/node-scope-slots");
   resetRealmBootTimingForTests();
   const post = mock((_message: unknown) => {});
   window.orkestrator = {
@@ -731,7 +732,7 @@ test("a failed project list cannot log successful completion; a successful retry
     await waitFor(() => expect(useProjectStore.getState().error).toBe("project list unavailable"));
     expect(reports()).toEqual([]);
     nativeInvoke.mockImplementation(async () => []);
-    await act(async () => loadProjectsFromBackend());
+    await act(async () => loadProjectsFromBackend(appCommandScope()));
     await waitFor(() => expect(reports()).toHaveLength(1));
     tree.rerender(<WorkspaceRealmHost />);
     await new Promise((resolve) => setTimeout(resolve, 10));

@@ -180,6 +180,7 @@ function ServicePreview({
     useEnvironmentServices(serviceRef.environmentId, isActive);
   const retarget = useRetarget(tabId, environmentId);
   const environment = useEnvironmentStore((state) => state.getEnvironmentById(environmentId));
+  const updateEnvironment = useEnvironmentStore((state) => state.updateEnvironment);
   const service =
     services.find((candidate) => candidate.definition.serviceId === serviceRef.serviceId) ?? null;
   const nativeBrowserPreview = hasNativeBrowserPreview();
@@ -1057,9 +1058,7 @@ function ServicePreview({
             open
             onOpenChange={(open) => !open && setDialog(null)}
             environment={environment}
-            onUpdate={(updated) =>
-              useEnvironmentStore.getState().updateEnvironment(updated.id, updated)
-            }
+            onUpdate={(updated) => updateEnvironment(updated.id, updated)}
             onRestart={backend.recreateEnvironment}
           />
         </LazyLoadBoundary>

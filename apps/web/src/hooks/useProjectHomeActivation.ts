@@ -1,7 +1,7 @@
 import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { errorText } from "@/components/settings/machines/machine-ui";
-import { useEnvironmentStore, useProjectStore, useUIStore } from "@/stores";
+import { environmentStore, useEnvironmentStore, useProjectStore, useUIStore } from "@/stores";
 import { ensureProjectHomeInStore, isProjectHomeDeletionInProgress } from "@/hooks/useFilesPanel";
 import { filesPanelStore, projectRootFilesTargetId } from "@/stores/filesPanelStore";
 import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
@@ -88,7 +88,7 @@ export function useProjectHomeActivation() {
       return;
     }
     const known = findProjectHomeEnvironment(
-      useEnvironmentStore.getState().environments,
+      scope.store(environmentStore).getState().environments,
       selectedProjectId,
     );
     if (!selectedEnvironmentId && known) {
@@ -109,7 +109,7 @@ export function useProjectHomeActivation() {
           cancelled ||
           scope.disposed ||
           ui.selectedProjectId !== selectedProjectId ||
-          isProjectHomeDeletionInProgress(selectedProjectId)
+          isProjectHomeDeletionInProgress(selectedProjectId, scope)
         )
           return;
         reconciled.current = key;
@@ -125,7 +125,12 @@ export function useProjectHomeActivation() {
         }
       })
       .catch((error: unknown) => {
-        if (cancelled || isProjectHomeDeletionInProgress(selectedProjectId)) return;
+        if (
+          cancelled ||
+          scope.disposed ||
+          isProjectHomeDeletionInProgress(selectedProjectId, scope)
+        )
+          return;
         const message = errorText(error);
         setFailure({ key, message });
         toast.error("Could not open the project home", {

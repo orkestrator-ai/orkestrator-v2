@@ -51,7 +51,15 @@ import {
   displayedActivityResolver,
   sortEnvironmentsByActivity,
 } from "@/lib/environment-activity-sort";
-import { useUIStore, useProjectStore, useEnvironmentStore } from "@/stores";
+import {
+  environmentStore,
+  projectStore,
+  useUIStore,
+  useProjectStore,
+  useEnvironmentStore,
+} from "@/stores";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
 import { drainProjectHomeEnsures } from "@/hooks/useFilesPanel";
 import { useEnvironmentDiffStats } from "@/hooks/useEnvironmentDiffStats";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
@@ -246,15 +254,17 @@ export async function deleteProjectAndEnvironments(
   environments: Environment[],
   deleteEnvironment: (environmentId: string) => Promise<unknown>,
   removeProject: (projectId: string) => Promise<unknown>,
+  scope: NodeScope,
 ): Promise<void> {
-  const projectStore = useProjectStore.getState();
-  projectStore.setDeleting(projectId, true);
+  const projects = scope.store(projectStore).getState();
+  projects.setDeleting(projectId, true);
   if (useUIStore.getState().selectedProjectId === projectId) {
     useUIStore.getState().selectProject(null);
   }
   try {
-    const admittedHomes = await drainProjectHomeEnsures(projectId);
-    const currentEnvironments = useEnvironmentStore
+    const admittedHomes = await drainProjectHomeEnsures(projectId, scope);
+    const currentEnvironments = scope
+      .store(environmentStore)
       .getState()
       .environments.filter((environment) => environment.projectId === projectId);
     const toDelete = new Map(
@@ -280,7 +290,7 @@ export async function deleteProjectAndEnvironments(
     if (useUIStore.getState().selectedProjectId === projectId) {
       useUIStore.getState().selectProject(null);
     }
-    projectStore.setDeleting(projectId, false);
+    projects.setDeleting(projectId, false);
   }
 }
 
@@ -322,6 +332,8 @@ export function HierarchicalSidebar() {
     reorderEnvironments,
     updateEnvironment,
   } = useEnvironments(null);
+  // The node this sidebar lists: the one the hooks above read.
+  const scope = useShimNodeScope("environment");
 
   useEnvironmentListSync(
     projects.map((project) => project.id),
@@ -681,7 +693,13 @@ export function HierarchicalSidebar() {
       (environment) => environment.projectId === projectId,
     );
     try {
-      await deleteProjectAndEnvironments(projectId, projectEnvs, deleteEnvironment, removeProject);
+      await deleteProjectAndEnvironments(
+        projectId,
+        projectEnvs,
+        deleteEnvironment,
+        removeProject,
+        scope,
+      );
     } catch (err) {
       log.error("project.delete-failed", { projectId, error: formatLogError(err) });
       throw err;

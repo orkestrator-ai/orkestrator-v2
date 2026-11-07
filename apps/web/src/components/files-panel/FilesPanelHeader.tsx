@@ -8,7 +8,8 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import { useEnvironmentStore, useFilesPanelStore } from "@/stores";
+import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import { environmentStore, useEnvironmentStore, useFilesPanelStore } from "@/stores";
 import { useFilesPanelChromeStore } from "@/stores/filesPanelChromeStore";
 import type { FilesPanelTab } from "@/stores";
 import { isFilesPanelFileTab } from "@/stores/filesPanelStore";
@@ -36,6 +37,7 @@ export function FilesPanelHeader({
   targetId = null,
   onChooseDiffBase,
 }: FilesPanelHeaderProps) {
+  const scope = useShimNodeScope(environmentStore.name);
   const hasDiffBaseOverride = useEnvironmentStore((state) =>
     changeEnvironmentId
       ? !!state.environments.find((environment) => environment.id === changeEnvironmentId)
@@ -100,7 +102,9 @@ export function FilesPanelHeader({
                 Compare against…
               </ContextMenuItem>
               {hasDiffBaseOverride && changeEnvironmentId && (
-                <ContextMenuItem onSelect={() => void saveDiffBase(changeEnvironmentId, null)}>
+                <ContextMenuItem
+                  onSelect={() => void saveDiffBase(changeEnvironmentId, null, scope)}
+                >
                   Use automatic base
                 </ContextMenuItem>
               )}

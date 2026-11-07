@@ -17,6 +17,7 @@ import { ProjectLauncher } from "@/components/projects";
 import { TerminalProvider } from "@/contexts";
 import {
   claudeOptionsStore,
+  environmentStore,
   useUIStore,
   useEnvironmentStore,
   useConfigStore,
@@ -1158,7 +1159,10 @@ function ConnectedApp() {
             fastMode: launchOptions.fastMode,
             attachments: launchOptions.initialPromptAttachments,
           });
-          useEnvironmentStore.getState().updateEnvironment(environmentId, prepared);
+          commandScope
+            .store(environmentStore)
+            .getState()
+            .updateEnvironment(environmentId, prepared);
         } catch (error) {
           log.error("startup-launch.persist-failed", {
             environmentId,

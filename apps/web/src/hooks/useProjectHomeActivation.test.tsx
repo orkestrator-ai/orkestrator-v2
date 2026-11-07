@@ -12,6 +12,7 @@ import * as realBackend from "@/lib/backend";
 import { useEnvironmentStore, useProjectStore, useUIStore } from "@/stores";
 import { ProjectWorkspace } from "@/components/projects/ProjectWorkspace";
 import { activateProjectForEnvironmentCleanup } from "@/lib/environment-cleanup-selection";
+import { appCommandScope } from "@/lib/node-scope-slots";
 import { mockToastError } from "../../../../tests/mocks/sonner";
 import type { Environment, Project } from "@/types";
 
@@ -199,7 +200,7 @@ test("cleanup leaves the selected Home without recreating it when its record dis
   useUIStore.setState({ selectedProjectId: "project-1", selectedEnvironmentId: home.id });
   renderHook(() => useProjectHomeActivation());
   act(() => {
-    activateProjectForEnvironmentCleanup(home.id);
+    activateProjectForEnvironmentCleanup(home.id, appCommandScope());
     useEnvironmentStore.getState().removeEnvironment(home.id);
   });
   expect(useUIStore.getState().selectedEnvironmentId).toBeNull();

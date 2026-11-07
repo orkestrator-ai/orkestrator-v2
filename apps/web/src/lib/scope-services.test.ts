@@ -451,9 +451,17 @@ describe("per-node change feeds", () => {
 describe("store resource handler registrations", () => {
   test("a non-command scope runs only every-scope registrations", () => {
     expect(storeResourceHandlersFor(command)).toEqual([...STORE_RESOURCE_HANDLERS]);
-    expect(storeResourceHandlersFor(leaf)).toEqual([]);
+    const everyScope = STORE_RESOURCE_HANDLERS.filter(({ runsOn }) => runsOn === "every-scope");
+    expect(storeResourceHandlersFor(leaf)).toEqual(everyScope);
+    // Converted stores' bindings (plan item 3004: projects and environments).
+    expect(everyScope.map(({ name }) => name)).toEqual(
+      expect.arrayContaining(["projects", "environments"]),
+    );
     const scoped = defineStoreResourceHandlers("scoped-test", "every-scope", () => undefined);
-    expect(storeResourceHandlersFor(leaf, [...STORE_RESOURCE_HANDLERS, scoped])).toEqual([scoped]);
+    expect(storeResourceHandlersFor(leaf, [...STORE_RESOURCE_HANDLERS, scoped])).toEqual([
+      ...everyScope,
+      scoped,
+    ]);
   });
 
   test("registrations join the resync in phase order and can requeue", async () => {

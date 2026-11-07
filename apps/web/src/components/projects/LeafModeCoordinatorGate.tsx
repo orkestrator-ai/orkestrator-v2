@@ -6,6 +6,7 @@ import { loadProjectsFromBackend } from "@/hooks/useProjects";
 import { repositoryHint } from "@/lib/federation/summaries";
 import { openMachineWorkspace } from "@/lib/federation/open-workspace";
 import { realmCoordinatorDefers } from "@/lib/federation/workspace-realm";
+import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
 import { portalStore } from "@/lib/portal/portal-store";
 import { workspaceTarget } from "@/lib/portal/portal-transport";
 import { useProjectStore, useUIStore } from "@/stores";
@@ -59,6 +60,7 @@ export function LeafModeCoordinatorGate({
   const self = useStore(portalStore.store, (state) => state.self);
   const selfId = useStore(portalStore.store, (state) => state.selfId);
   const portalLoaded = useStore(portalStore.store, (state) => state.loaded);
+  const scope = useShimNodeScope("project");
   const projectsLoaded = useProjectStore((state) => state.hasLoaded);
   const projectsLoading = useProjectStore((state) => state.isLoading);
   const projectsError = useProjectStore((state) => state.error);
@@ -126,7 +128,7 @@ export function LeafModeCoordinatorGate({
                   try {
                     await Promise.all([
                       portalStore.refresh(),
-                      ...(!projectsLoaded ? [loadProjectsFromBackend()] : []),
+                      ...(!projectsLoaded ? [loadProjectsFromBackend(scope)] : []),
                     ]);
                   } finally {
                     setRetrying(false);

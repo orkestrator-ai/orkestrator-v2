@@ -47,10 +47,10 @@ import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { cn } from "@/lib/utils";
 import {
   configStore,
+  projectStore,
   useAgentModelCatalogStore,
   useFeaturePlanStore,
   useKanbanStore,
-  useProjectStore,
 } from "@/stores";
 import { isActiveFeaturePlanningPhase } from "@/stores/featurePlanStore";
 import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
@@ -128,7 +128,7 @@ function FeatureListItem({
 
 function getPreferredEnvironmentType(scope: NodeScope, projectId: string): EnvironmentType {
   const config = scope.store(configStore).getState().config;
-  const project = useProjectStore.getState().getProjectById(projectId);
+  const project = scope.store(projectStore).getState().getProjectById(projectId);
   return (
     config.repositories[projectId]?.lastEnvironmentType ??
     (project?.localPath ? "local" : "containerized")

@@ -33,7 +33,8 @@ import {
 } from "@/lib/tab-initial-prompt";
 import { createSessionKey } from "@/lib/utils";
 import { useConfigStore } from "@/stores";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { environmentStore } from "@/stores/environmentStore";
+import type { Environment } from "@/types";
 import { useNativeComposeStore } from "@/stores/nativeComposeStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { createUniqueTabId } from "@/components/terminal/TerminalContainer.helpers";
@@ -123,12 +124,11 @@ const errorText = (error: unknown) => failureOf(error).message;
  * backend queue and the renderer fallback start the same session.
  */
 function designInitialPromptOptions(
-  environmentId: string,
+  environment: Environment | undefined,
   platform: DesignAgent,
   images: readonly DesignPromptImage[],
   models: ReviewCatalogModels,
 ): TabInitialPromptOptions {
-  const environment = useEnvironmentStore.getState().getEnvironmentById(environmentId);
   const configured = resolvedPlatformSettings(
     useConfigStore.getState().config,
     environment?.projectId,
@@ -171,6 +171,7 @@ export function DesignWorkspaceDialog({
   // Browses the host of the node this component renders in.
   const pickHostPath = usePickHostPath();
   const modelCatalog = useScopedStoreApi(agentModelCatalogStore);
+  const environments = useScopedStoreApi(environmentStore);
   const backendKey = designBackendKey();
   const scope = `${backendKey}\u0000${environmentId}`;
   const scopeRef = useRef(scope);
@@ -404,7 +405,7 @@ export function DesignWorkspaceDialog({
               "Too many images for this conversation. Remove some images and try again.",
             );
           const promptOptions = designInitialPromptOptions(
-            environmentId,
+            environments.getState().getEnvironmentById(environmentId),
             platform,
             images,
             modelCatalog.getState(),

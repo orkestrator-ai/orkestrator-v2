@@ -36,7 +36,8 @@ import {
 } from "@orkestrator/protocol/pr-monitor";
 import { readViewRevisionStamp, type ViewRevisionStamp } from "@orkestrator/protocol/view-sync";
 import { usePrMonitorStore } from "@/stores/prMonitorStore";
-import { useEnvironmentStore } from "@/stores";
+import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import { environmentStore } from "@/stores";
 import * as backend from "@/lib/backend";
 import {
   BoundedKeySet,
@@ -91,6 +92,8 @@ export function usePrMonitorService(options: PrMonitorServiceOptions = {}): void
   const applyEvent = usePrMonitorStore((s) => s.applyEvent);
   const setSyncStatus = usePrMonitorStore((s) => s.setSyncStatus);
   const { clock, limits } = options;
+  // The node whose environments name the merged branches.
+  const scope = useShimNodeScope("environment");
 
   useEffect(() => {
     let disposed = false;
@@ -120,7 +123,10 @@ export function usePrMonitorService(options: PrMonitorServiceOptions = {}): void
       if (!transition || transition.state !== "merged") return;
       const key = [event.environmentId, transition.url, transition.state].join("\0");
       if (!notifiedTransitions.add(key)) return;
-      const environment = useEnvironmentStore.getState().getEnvironmentById(event.environmentId);
+      const environment = scope
+        .store(environmentStore)
+        .getState()
+        .getEnvironmentById(event.environmentId);
       toast.success("Branch merged", {
         description: environment?.branch,
         id: `branch-merged-${event.environmentId}`,
@@ -183,5 +189,5 @@ export function usePrMonitorService(options: PrMonitorServiceOptions = {}): void
       stopChanges?.();
       for (const unlisten of unlisteners) unlisten();
     };
-  }, [applySnapshot, applyEvent, setSyncStatus, clock, limits]);
+  }, [applySnapshot, applyEvent, setSyncStatus, clock, limits, scope]);
 }

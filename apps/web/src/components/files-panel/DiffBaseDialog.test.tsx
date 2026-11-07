@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
+import { appCommandScope } from "@/lib/node-scope-slots";
 import { useEnvironmentStore, useFilesPanelStore } from "@/stores";
 import type { Environment } from "@/types";
 import { DiffBaseDialog, defaultDiffBaseRef, saveDiffBase } from "./DiffBaseDialog";
@@ -238,11 +239,11 @@ test("Reset and Change saves are serialized and superseded responses never repla
     saves.push(args);
     return args?.commit ? changeResponse.promise : resetResponse.promise;
   });
-  const reset = saveDiffBase("env-1", null);
+  const reset = saveDiffBase("env-1", null, appCommandScope());
   await act(async () => {
     await Promise.resolve();
   });
-  const change = saveDiffBase("env-1", { ref: BRANCHES[1]!.ref, commit: TIP });
+  const change = saveDiffBase("env-1", { ref: BRANCHES[1]!.ref, commit: TIP }, appCommandScope());
   expect(saves).toHaveLength(1);
   // Even if the newer answer is ready first, its request waits for Reset.
   changeResponse.resolve(environment({ diffBaseOverride: { ref: BRANCHES[1]!.ref, commit: TIP } }));
@@ -256,8 +257,10 @@ test("Reset and Change saves are serialized and superseded responses never repla
 
 test("a failed save releases the queue for the next choice", async () => {
   invokeMock.mockRejectedValueOnce(new Error("Offline"));
-  expect(await saveDiffBase("env-1", null)).toBe(false);
-  expect(await saveDiffBase("env-1", { ref: BRANCHES[1]!.ref, commit: TIP })).toBe(true);
+  expect(await saveDiffBase("env-1", null, appCommandScope())).toBe(false);
+  expect(
+    await saveDiffBase("env-1", { ref: BRANCHES[1]!.ref, commit: TIP }, appCommandScope()),
+  ).toBe(true);
   expect(useEnvironmentStore.getState().environments[0]!.diffBaseOverride?.commit).toBe(TIP);
 });
 

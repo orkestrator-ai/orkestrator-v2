@@ -2,8 +2,9 @@ import {
   environmentDeletionFailure,
   environmentHasDeletionTombstone,
 } from "@orkestrator/protocol/node-summaries";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
 import type { Environment } from "@/types";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { environmentStore } from "@/stores/environmentStore";
 import { useUIStore } from "@/stores/uiStore";
 
 /**
@@ -12,12 +13,13 @@ import { useUIStore } from "@/stores/uiStore";
  */
 export function activateProjectForEnvironmentCleanup(
   environmentId: string,
+  scope: NodeScope,
   previousEnvironment?: Environment,
 ): boolean {
   const ui = useUIStore.getState();
   if (ui.selectedEnvironmentId !== environmentId) return false;
 
-  const envStore = useEnvironmentStore.getState();
+  const envStore = scope.store(environmentStore).getState();
   const environment = envStore.getEnvironmentById(environmentId) ?? previousEnvironment;
   // A fresh renderer-local deletion overrides a stale merge-cleanup error so
   // sidebar and bulk-delete can leave the workspace immediately. A backend
@@ -50,12 +52,12 @@ export function activateProjectForEnvironmentCleanup(
  * deletion actually starts, so an explicit re-selection after a failed delete
  * survives.
  */
-export function reconcileSelectedEnvironmentCleanupSelection(): boolean {
+export function reconcileSelectedEnvironmentCleanupSelection(scope: NodeScope): boolean {
   const ui = useUIStore.getState();
   const selectedEnvironmentId = ui.selectedEnvironmentId;
   if (!selectedEnvironmentId) return false;
 
-  const envStore = useEnvironmentStore.getState();
+  const envStore = scope.store(environmentStore).getState();
   const environment = envStore.getEnvironmentById(selectedEnvironmentId);
   if (!environment) return false;
 
@@ -63,11 +65,12 @@ export function reconcileSelectedEnvironmentCleanupSelection(): boolean {
   if (environmentDeletionFailure(environment) && !locallyDeleting) return false;
   if (!locallyDeleting && !envStore.isDeleting(selectedEnvironmentId)) return false;
 
-  return activateProjectForEnvironmentCleanup(selectedEnvironmentId);
+  return activateProjectForEnvironmentCleanup(selectedEnvironmentId, scope);
 }
 
-export function startEnvironmentCleanupSelectionSync(): () => void {
-  const unsubscribeEnvironment = useEnvironmentStore.subscribe((state, previous) => {
+/** Watches `scope`'s environments for the selected one being torn down. */
+export function startEnvironmentCleanupSelectionSync(scope: NodeScope): () => void {
+  const unsubscribeEnvironment = scope.store(environmentStore).subscribe((state, previous) => {
     const selectedEnvironmentId = useUIStore.getState().selectedEnvironmentId;
     if (!selectedEnvironmentId) return;
 
@@ -83,12 +86,12 @@ export function startEnvironmentCleanupSelectionSync(): () => void {
     const wasLocallyDeleting = previous.deletingEnvironments.has(selectedEnvironmentId);
 
     if (locallyDeleting && !wasLocallyDeleting) {
-      activateProjectForEnvironmentCleanup(selectedEnvironmentId);
+      activateProjectForEnvironmentCleanup(selectedEnvironmentId, scope);
       return;
     }
 
     if (previousEnvironment && !environment) {
-      activateProjectForEnvironmentCleanup(selectedEnvironmentId, previousEnvironment);
+      activateProjectForEnvironmentCleanup(selectedEnvironmentId, scope, previousEnvironment);
       return;
     }
 
@@ -101,11 +104,11 @@ export function startEnvironmentCleanupSelectionSync(): () => void {
       environmentHasDeletionTombstone(environment) &&
       (!previousEnvironment || !environmentHasDeletionTombstone(previousEnvironment))
     ) {
-      activateProjectForEnvironmentCleanup(selectedEnvironmentId);
+      activateProjectForEnvironmentCleanup(selectedEnvironmentId, scope);
     }
   });
 
-  reconcileSelectedEnvironmentCleanupSelection();
+  reconcileSelectedEnvironmentCleanupSelection(scope);
   return () => {
     unsubscribeEnvironment();
   };

@@ -1,8 +1,9 @@
 import { Bell, Loader2 } from "lucide-react";
 import { useAgentActivityStore } from "@/stores/agentActivityStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
-import { useEnvironmentStore } from "@/stores/environmentStore";
-import { useProjectStore } from "@/stores/projectStore";
+import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import { environmentStore, useEnvironmentStore } from "@/stores/environmentStore";
+import { projectStore, useProjectStore } from "@/stores/projectStore";
 import { useUIStore } from "@/stores/uiStore";
 import { resolveEnvironmentAgentActivity } from "@/lib/environment-agent-activity";
 import type { Environment } from "@/types";
@@ -78,6 +79,8 @@ export function ProjectHomeActivity({
   projectName: string;
   compact?: boolean;
 }) {
+  // The node this home belongs to: the one the selectors below read.
+  const scope = useShimNodeScope("environment");
   const projectDeleting = useProjectStore((state) => state.deletingProjects.has(home.projectId));
   const deleting = useEnvironmentStore((state) => state.isDeleting(home.id));
   const activity = useAgentActivityStore((state) =>
@@ -100,8 +103,8 @@ export function ProjectHomeActivity({
       compact={compact}
       onOpen={() => {
         if (
-          useProjectStore.getState().deletingProjects.has(home.projectId) ||
-          useEnvironmentStore.getState().isDeleting(home.id)
+          scope.store(projectStore).getState().deletingProjects.has(home.projectId) ||
+          scope.store(environmentStore).getState().isDeleting(home.id)
         )
           return;
         const ui = useUIStore.getState();

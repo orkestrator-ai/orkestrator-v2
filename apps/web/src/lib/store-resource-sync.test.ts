@@ -83,7 +83,7 @@ const { useFeaturePlanStore } = await import("@/stores/featurePlanStore");
 const { useKanbanStore } = await import("@/stores/kanbanStore");
 const { useMultiReviewStore } = await import("@/stores/multiReviewStore");
 const { usePaneLayoutStore } = await import("@/stores/paneLayoutStore");
-const { invalidateProjectSnapshots, useProjectStore } = await import("@/stores/projectStore");
+const { useProjectStore } = await import("@/stores/projectStore");
 const { useSessionStore } = await import("@/stores/sessionStore");
 const { useAgentMailStore } = await import("@/stores/agentMailStore");
 const { PANE_LAYOUT_VERSION } = await import("@/types/paneLayout");
@@ -2989,8 +2989,8 @@ describe("authoritative resync", () => {
     requestResourceResync();
     await tick(0);
     // Leave the array identity alone so this specifically exercises the
-    // applyProjectSnapshot mutation-version rejection path.
-    invalidateProjectSnapshots();
+    // applySnapshot mutation-version rejection path.
+    useProjectStore.getState().invalidateSnapshots();
     resolveProjects([stale]);
     await tick();
 

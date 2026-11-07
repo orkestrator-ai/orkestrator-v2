@@ -20,7 +20,8 @@ import {
   persistComposeDraft,
 } from "@/lib/compose-draft-persistence";
 import { useConfigStore } from "@/stores/configStore";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import { environmentStore } from "@/stores/environmentStore";
 import { createSessionKey } from "@/lib/utils";
 import {
   nativeComposeDraftPersistValue,
@@ -99,6 +100,8 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
     () => (props.data.platform ? findNativeAgentAdapter(props.data.platform) : undefined),
     [props.data.platform],
   );
+  // The node whose environment this tab belongs to: the one `useEnvironmentStore` reads.
+  const scope = useShimNodeScope("environment");
   const persistLockedPane = useCallback(
     async (operation: "send" | "resume") => {
       setAwaitingDurability(true);
@@ -220,7 +223,8 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
       const draft = composeStore.drafts.get(sessionKey);
       if (draft?.submissionPending) return;
       const requestId = draft?.requestId ?? crypto.randomUUID();
-      const environment = useEnvironmentStore
+      const environment = scope
+        .store(environmentStore)
         .getState()
         .environments.find((candidate) => candidate.id === props.data.environmentId);
       const configured = resolvedPlatformSettings(
@@ -289,7 +293,7 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
       }
       await persistLockedPane("send");
     },
-    [persistLockedPane, props.data.environmentId, props.tabId],
+    [persistLockedPane, props.data.environmentId, props.tabId, scope],
   );
   /**
    * Bind a coordinator conversation to the platform its first prompt chose.

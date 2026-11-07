@@ -10,6 +10,7 @@ import { useProjects } from "@/hooks/useProjects";
 import * as backend from "@/lib/backend";
 import {
   NodeScopeProvider,
+  useNodeScope,
   useScopesWithCommandFallback,
   useSignal,
   WindowScopeProvider,
@@ -164,6 +165,7 @@ function DeleteProjectHost({ projectId }: { projectId: string }) {
   const { project, close } = useRequestedProject(projectId);
   const { removeProject } = useProjects();
   const { deleteEnvironment } = useEnvironments(null);
+  const scope = useNodeScope();
   // Includes the project home, which has no sidebar row and is not counted.
   const environments = useEnvironmentStore((state) => state.environments);
   const projectEnvironments = environments.filter(
@@ -190,6 +192,7 @@ function DeleteProjectHost({ projectId }: { projectId: string }) {
             await backend.getEnvironmentSnapshots(projectId),
             deleteEnvironment,
             removeProject,
+            scope,
           );
         } catch (error) {
           log.error("project.delete-failed", { projectId, error: formatLogError(error) });

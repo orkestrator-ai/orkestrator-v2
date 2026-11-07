@@ -42,15 +42,15 @@ import { hydratePromptQueuesForEnvironment } from "@/lib/prompt-queue-persistenc
 import { createPromptQueueSources } from "@/lib/prompt-queue-sources";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { configStore } from "@/stores/configStore";
-import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useFeaturePlanStore } from "@/stores/featurePlanStore";
 import { useKanbanStore } from "@/stores/kanbanStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { environmentStore } from "@/stores/environmentStore";
+import { projectStore } from "@/stores/projectStore";
 import {
-  applyProjectSnapshot,
-  getProjectMutationVersion,
-  useProjectStore,
-} from "@/stores/projectStore";
+  environmentResourceHandlers,
+  projectResourceHandlers,
+} from "@/lib/project-environment-resource-handlers";
 import { useSessionStore } from "@/stores/sessionStore";
 import { refreshObservedAgentMailMailboxes, useAgentMailStore } from "@/stores/agentMailStore";
 import type { ResourceManifestKind } from "@orkestrator/protocol/resource-events";
@@ -210,52 +210,6 @@ interface DeferredPaneLayoutRefresh {
   reject: (error: unknown) => void;
 }
 
-const projectHandlers = defineStoreResourceHandlers("projects", "command-scope", (context) => {
-  context.onResync("projects", async (pass) => {
-    if (!pass.includes("project")) return;
-    const projectsAtRequest = useProjectStore.getState().projects;
-    const mutationVersion = getProjectMutationVersion();
-    const projects = await (context.options.getProjects ?? getProjects)();
-    // A live refresh, local mutation, or newer manifest read may have
-    // installed a newer collection while this request was in flight. Both
-    // guards are needed: the mutation version covers optimistic writes,
-    // while array identity orders concurrent authoritative reads.
-    const accepted =
-      !context.disposed() &&
-      useProjectStore.getState().projects === projectsAtRequest &&
-      applyProjectSnapshot(projects, mutationVersion);
-    if (!context.disposed() && !accepted) pass.requeue("project");
-  });
-});
-
-const environmentHandlers = defineStoreResourceHandlers(
-  "environments",
-  "command-scope",
-  (context) => {
-    context.onResync("environments", async (pass) => {
-      if (!pass.includes("environment")) return;
-      const environmentsAtRequest = useEnvironmentStore.getState().environments;
-      // This phase runs after the project phase, so it sees projects added or
-      // removed while the renderer was inactive. Install all project scopes
-      // atomically: one failed read must not leave a half-new environment set.
-      const projectIds = useProjectStore.getState().projects.map(({ id }) => id);
-      const snapshots = await Promise.all(
-        projectIds.map((projectId) =>
-          (context.options.getEnvironmentSnapshots ?? getEnvironmentSnapshots)(projectId),
-        ),
-      );
-      const accepted =
-        !context.disposed() &&
-        useEnvironmentStore.getState().environments === environmentsAtRequest;
-      if (accepted) {
-        useEnvironmentStore.getState().setEnvironments(snapshots.flat());
-      } else if (!context.disposed()) {
-        pass.requeue("environment");
-      }
-    });
-  },
-);
-
 /**
  * The scope's config store (plan item 3005), and clearing agent mail when
  * messaging is turned off.
@@ -372,7 +326,8 @@ const promptQueueHandlers = defineStoreResourceHandlers(
     const promptQueueSources = createPromptQueueSources();
     context.onResync("dependents", (pass) =>
       pass.includes("prompt-queue")
-        ? useEnvironmentStore
+        ? context.scope
+            .store(environmentStore)
             .getState()
             .environments.map(({ id }) => hydratePromptQueuesForEnvironment(id, promptQueueSources))
         : undefined,
@@ -381,7 +336,8 @@ const promptQueueHandlers = defineStoreResourceHandlers(
       // Queues announce against their environment rather than their tab, so this
       // refetches every queue the environment owns. That is deliberate: a client
       // that has never opened a tab still needs its queue if it opens one next.
-      if (!useEnvironmentStore.getState().getEnvironmentById(environmentId)) return;
+      if (!context.scope.store(environmentStore).getState().getEnvironmentById(environmentId))
+        return;
       return hydratePromptQueuesForEnvironment(environmentId, promptQueueSources).catch((error) => {
         log.warn("prompt-queues.refresh-failed", {
           environmentId,
@@ -396,14 +352,15 @@ const promptQueueHandlers = defineStoreResourceHandlers(
 const sessionHandlers = defineStoreResourceHandlers("sessions", "command-scope", (context) => {
   context.onResync("dependents", (pass) =>
     pass.includes("session")
-      ? useEnvironmentStore
+      ? context.scope
+          .store(environmentStore)
           .getState()
           .environments.map(({ id }) => useSessionStore.getState().loadSessionsForEnvironment(id))
       : undefined,
   );
   context.onResourceChanged("session", ({ id: environmentId }) => {
     // Sessions are only meaningful for environments this client has loaded.
-    if (!useEnvironmentStore.getState().getEnvironmentById(environmentId)) return;
+    if (!context.scope.store(environmentStore).getState().getEnvironmentById(environmentId)) return;
     return useSessionStore.getState().loadSessionsForEnvironment(environmentId);
   });
 });
@@ -453,12 +410,12 @@ const workflowHandlers = defineStoreResourceHandlers("workflows", "command-scope
   context.onResync("dependents", (pass) => {
     const work: Promise<unknown>[] = [];
     if (pass.includes("multi-review")) {
-      for (const { id } of useEnvironmentStore.getState().environments) {
+      for (const { id } of context.scope.store(environmentStore).getState().environments) {
         work.push(hydrateMultiReviewWorkflowsForEnvironment(id));
       }
     }
     if (pass.includes("build-pipeline")) {
-      for (const { id } of useProjectStore.getState().projects) {
+      for (const { id } of context.scope.store(projectStore).getState().projects) {
         work.push(refreshBuildPipelinesForProject(id));
       }
     }
@@ -641,7 +598,10 @@ const paneLayoutHandlers = defineStoreResourceHandlers(
       }
       if (hydration !== "done") return;
 
-      const environment = useEnvironmentStore.getState().getEnvironmentById(environmentId);
+      const environment = context.scope
+        .store(environmentStore)
+        .getState()
+        .getEnvironmentById(environmentId);
       if (!environment) return;
       const requestedContainerId =
         environment.environmentType === "local" ? null : environment.containerId;
@@ -664,7 +624,10 @@ const paneLayoutHandlers = defineStoreResourceHandlers(
 
       const latestPaneStore = usePaneLayoutStore.getState();
       const current = latestPaneStore.environments.get(environmentId);
-      const latestEnvironment = useEnvironmentStore.getState().getEnvironmentById(environmentId);
+      const latestEnvironment = context.scope
+        .store(environmentStore)
+        .getState()
+        .getEnvironmentById(environmentId);
       if (latestPaneStore.hydration.get(environmentId) !== "done" || !latestEnvironment) {
         return;
       }
@@ -781,7 +744,10 @@ const paneLayoutHandlers = defineStoreResourceHandlers(
     let layoutEnvironmentIds: string[] = [];
     context.onResync("dependents", (pass) => {
       layoutEnvironmentIds = pass.includes("pane-layout")
-        ? useEnvironmentStore.getState().environments.map(({ id }) => id)
+        ? context.scope
+            .store(environmentStore)
+            .getState()
+            .environments.map(({ id }) => id)
         : [];
     });
     context.onResync("layouts", () => {
@@ -791,7 +757,8 @@ const paneLayoutHandlers = defineStoreResourceHandlers(
     });
 
     context.onResourceChanged("pane-layout", ({ id: environmentId }) => {
-      if (!useEnvironmentStore.getState().getEnvironmentById(environmentId)) return;
+      if (!context.scope.store(environmentStore).getState().getEnvironmentById(environmentId))
+        return;
       return refreshPaneLayout(environmentId).catch((error) => {
         log.warn("pane-layout.refresh-failed", { environmentId, error: formatLogError(error) });
         throw error;
@@ -816,8 +783,8 @@ const paneLayoutHandlers = defineStoreResourceHandlers(
  * Projects and environments come first: later phases read those collections.
  */
 export const STORE_RESOURCE_HANDLERS: readonly StoreResourceHandlers[] = [
-  projectHandlers,
-  environmentHandlers,
+  projectResourceHandlers,
+  environmentResourceHandlers,
   configHandlers,
   agentMailHandlers,
   promptQueueHandlers,

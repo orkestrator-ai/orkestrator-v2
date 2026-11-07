@@ -10,7 +10,8 @@ import {
   projectHomeEnvironmentIds,
 } from "@/lib/coordinator-active-turn";
 import { checkUpstreamMergeOffer } from "@/lib/coordinator-upstream-check";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import { environmentStore } from "@/stores/environmentStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import type { RunCoordinatorAction } from "./useCoordinatorActions";
 
@@ -33,6 +34,8 @@ export function useCoordinatorGitActions({
   refreshView,
   runAction,
 }: UseCoordinatorGitActionsOptions) {
+  // The node whose project this is: the one `useEnvironmentStore` reads.
+  const scope = useShimNodeScope("environment");
   const upstreamCheckLifetimeRef = useRef<AbortController | null>(null);
   useEffect(() => {
     const lifetime = new AbortController();
@@ -124,7 +127,7 @@ export function useCoordinatorGitActions({
         activeCoordinatorTurnLabel({
           workspace: snapshotRef.current?.workspace,
           homeEnvironmentIds: projectHomeEnvironmentIds(
-            useEnvironmentStore.getState().environments,
+            scope.store(environmentStore).getState().environments,
             projectId,
           ),
           projections: useNativeAgentProjectionStore.getState().projections,
@@ -180,7 +183,7 @@ export function useCoordinatorGitActions({
         lifetime.signal.removeEventListener("abort", cancel);
       }
     },
-    [projectId, refreshView, rereadStatus, runAction, setGit],
+    [projectId, refreshView, rereadStatus, runAction, scope, setGit],
   );
   return { runGit, prepareSwitch, confirmUpstreamMerge };
 }

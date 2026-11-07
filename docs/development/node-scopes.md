@@ -240,6 +240,14 @@ export const fooResourceHandlers = defineStoreResourceHandlers("foo", "every-sco
 ```
 
 Then import it into `STORE_RESOURCE_HANDLERS` in place of the old one.
+Calling `defineStoreResourceHandlers` from a module that `store-resource-sync.ts`
+imports back is an import cycle (`import/no-cycle`). Such a module imports the
+framework's types only (`import type { StoreResourceHandlers }`) and exports a
+frozen `{ name, runsOn, register }` object, the shape the function returns:
+see `lib/project-environment-resource-handlers.ts` (plan item 3004), which also
+keeps the backend out of the store modules. Inside a registration, read with
+`backendApiForScope(context.scope, createXApi, backend)` (`* as backend` from
+`@/lib/backend`) and let a test's `context.options` override win.
 `context` also gives `listen` (the scope's events), `onStop`, `disposed()`,
 `requestResync` and `signal`. Resync phases run in order: `projects`, then
 `environments` (one participant after another), then `dependents` (all at

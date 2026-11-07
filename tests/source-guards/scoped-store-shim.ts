@@ -46,6 +46,16 @@ export const SHIMMED_STORES: readonly ShimmedStore[] = [
     module: "apps/web/src/stores/configStore",
     hook: "useConfigStore",
   },
+  {
+    store: "environment",
+    module: "apps/web/src/stores/environmentStore",
+    hook: "useEnvironmentStore",
+  },
+  {
+    store: "project",
+    module: "apps/web/src/stores/projectStore",
+    hook: "useProjectStore",
+  },
   // Plan item 3007: the files panel's per-node state (its chrome is a window store).
   {
     store: "files-panel",

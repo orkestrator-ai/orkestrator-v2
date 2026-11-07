@@ -3,7 +3,7 @@ import { useEffect, useCallback, useLayoutEffect, useRef, useState } from "react
 import { useShallow } from "zustand/react/shallow";
 import { toast } from "sonner";
 import { useFilesPanelStore, useConfigStore, usePaneLayoutStore } from "@/stores";
-import { useUIStore, useEnvironmentStore, useProjectStore } from "@/stores";
+import { projectStore, useUIStore, useEnvironmentStore, useProjectStore } from "@/stores";
 import {
   filesPanelStore,
   isFilesPanelFileTab,
@@ -291,7 +291,8 @@ export function useFilesPanel() {
       if (!selectedEnvironmentId) throw new Error("The selected environment is not available");
       return selectedEnvironmentId;
     }
-    const currentPath = useProjectStore
+    const currentPath = scope
+      .store(projectStore)
       .getState()
       .projects.find((project) => project.id === projectId)
       ?.localPath?.trim();

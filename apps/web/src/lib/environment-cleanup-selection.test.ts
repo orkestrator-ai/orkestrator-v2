@@ -7,6 +7,7 @@ import {
   reconcileSelectedEnvironmentCleanupSelection,
   startEnvironmentCleanupSelectionSync,
 } from "./environment-cleanup-selection";
+import { appCommandScope } from "@/lib/node-scope-slots";
 
 import * as realBackend from "@/lib/backend";
 
@@ -78,7 +79,7 @@ describe("activateProjectForEnvironmentCleanup", () => {
       collapsedProjects: ["project-1"],
     });
 
-    expect(activateProjectForEnvironmentCleanup("env-1")).toBe(true);
+    expect(activateProjectForEnvironmentCleanup("env-1", appCommandScope())).toBe(true);
 
     const ui = useUIStore.getState();
     expect(ui.selectedProjectId).toBe("project-1");
@@ -97,7 +98,7 @@ describe("activateProjectForEnvironmentCleanup", () => {
       selectedEnvironmentId: "env-2",
     });
 
-    expect(activateProjectForEnvironmentCleanup("env-1")).toBe(false);
+    expect(activateProjectForEnvironmentCleanup("env-1", appCommandScope())).toBe(false);
     expect(useUIStore.getState().selectedEnvironmentId).toBe("env-2");
   });
 
@@ -117,7 +118,7 @@ describe("activateProjectForEnvironmentCleanup", () => {
         selectedEnvironmentId: "env-1",
       });
 
-      expect(activateProjectForEnvironmentCleanup("env-1")).toBe(false);
+      expect(activateProjectForEnvironmentCleanup("env-1", appCommandScope())).toBe(false);
       expect(useUIStore.getState().selectedEnvironmentId).toBe("env-1");
     },
   );
@@ -141,7 +142,7 @@ describe("activateProjectForEnvironmentCleanup", () => {
         selectedEnvironmentId: "env-1",
       });
 
-      expect(activateProjectForEnvironmentCleanup("env-1")).toBe(true);
+      expect(activateProjectForEnvironmentCleanup("env-1", appCommandScope())).toBe(true);
       expect(useUIStore.getState().selectedEnvironmentId).toBeNull();
       expect(useUIStore.getState().selectedProjectId).toBe("project-1");
     },
@@ -162,7 +163,7 @@ describe("reconcileSelectedEnvironmentCleanupSelection", () => {
       selectedEnvironmentId: "env-1",
     });
 
-    expect(reconcileSelectedEnvironmentCleanupSelection()).toBe(true);
+    expect(reconcileSelectedEnvironmentCleanupSelection(appCommandScope())).toBe(true);
     expect(useUIStore.getState().selectedEnvironmentId).toBeNull();
     expect(useUIStore.getState().selectedProjectId).toBe("project-1");
   });
@@ -181,7 +182,7 @@ describe("reconcileSelectedEnvironmentCleanupSelection", () => {
       selectedEnvironmentId: "env-1",
     });
 
-    expect(reconcileSelectedEnvironmentCleanupSelection()).toBe(true);
+    expect(reconcileSelectedEnvironmentCleanupSelection(appCommandScope())).toBe(true);
     expect(useUIStore.getState().selectedEnvironmentId).toBeNull();
   });
 
@@ -196,7 +197,7 @@ describe("reconcileSelectedEnvironmentCleanupSelection", () => {
       selectedEnvironmentId: "env-1",
     });
 
-    expect(reconcileSelectedEnvironmentCleanupSelection()).toBe(false);
+    expect(reconcileSelectedEnvironmentCleanupSelection(appCommandScope())).toBe(false);
     expect(useUIStore.getState().selectedEnvironmentId).toBe("env-1");
   });
 
@@ -206,7 +207,7 @@ describe("reconcileSelectedEnvironmentCleanupSelection", () => {
       selectedEnvironmentId: "env-not-loaded",
     });
 
-    expect(reconcileSelectedEnvironmentCleanupSelection()).toBe(false);
+    expect(reconcileSelectedEnvironmentCleanupSelection(appCommandScope())).toBe(false);
     expect(useUIStore.getState().selectedEnvironmentId).toBe("env-not-loaded");
     expect(useUIStore.getState().selectedProjectId).toBe("project-1");
   });
@@ -218,7 +219,7 @@ describe("reconcileSelectedEnvironmentCleanupSelection", () => {
       selectedEnvironmentId: "env-not-loaded",
     });
 
-    expect(reconcileSelectedEnvironmentCleanupSelection()).toBe(false);
+    expect(reconcileSelectedEnvironmentCleanupSelection(appCommandScope())).toBe(false);
     expect(useUIStore.getState().selectedEnvironmentId).toBe("env-not-loaded");
   });
 });
@@ -236,7 +237,7 @@ describe("startEnvironmentCleanupSelectionSync", () => {
       collapsedProjects: ["project-1"],
     });
 
-    const stop = startEnvironmentCleanupSelectionSync();
+    const stop = startEnvironmentCleanupSelectionSync(appCommandScope());
     try {
       useEnvironmentStore.getState().setDeleting("env-1", true);
       expect(useUIStore.getState().selectedEnvironmentId).toBeNull();
@@ -258,7 +259,7 @@ describe("startEnvironmentCleanupSelectionSync", () => {
       selectedEnvironmentId: "env-1",
     });
 
-    const stop = startEnvironmentCleanupSelectionSync();
+    const stop = startEnvironmentCleanupSelectionSync(appCommandScope());
     try {
       useEnvironmentStore.getState().updateEnvironment("env-1", {
         lifecycleOperation: "deleting",
@@ -281,7 +282,7 @@ describe("startEnvironmentCleanupSelectionSync", () => {
       selectedEnvironmentId: "env-1",
     });
 
-    const stop = startEnvironmentCleanupSelectionSync();
+    const stop = startEnvironmentCleanupSelectionSync(appCommandScope());
     try {
       useEnvironmentStore.getState().removeEnvironment("env-1");
       expect(useUIStore.getState().selectedEnvironmentId).toBeNull();
@@ -297,7 +298,7 @@ describe("startEnvironmentCleanupSelectionSync", () => {
       selectedEnvironmentId: null,
     });
 
-    const stop = startEnvironmentCleanupSelectionSync();
+    const stop = startEnvironmentCleanupSelectionSync(appCommandScope());
     try {
       useUIStore.getState().selectProjectAndEnvironment("project-1", "e-not-loaded");
       expect(useUIStore.getState().selectedEnvironmentId).toBe("e-not-loaded");
@@ -325,7 +326,7 @@ describe("startEnvironmentCleanupSelectionSync", () => {
         }),
     );
 
-    const stop = startEnvironmentCleanupSelectionSync();
+    const stop = startEnvironmentCleanupSelectionSync(appCommandScope());
     try {
       activateFeatureBuildEnvironment("project-1", {
         taskId: "task-feature",
@@ -366,7 +367,7 @@ describe("startEnvironmentCleanupSelectionSync", () => {
       selectedEnvironmentId: null,
     });
 
-    const stop = startEnvironmentCleanupSelectionSync();
+    const stop = startEnvironmentCleanupSelectionSync(appCommandScope());
     try {
       useUIStore.getState().selectProjectAndEnvironment("project-1", "env-1");
       expect(useUIStore.getState().selectedEnvironmentId).toBe("env-1");
@@ -385,7 +386,7 @@ test("a removed Home snapshot leaves the project before activation can recreate 
   const home = makeEnvironment({ projectHome: true });
   useEnvironmentStore.setState({ environments: [home] });
   useUIStore.setState({ selectedProjectId: home.projectId, selectedEnvironmentId: home.id });
-  const stop = startEnvironmentCleanupSelectionSync();
+  const stop = startEnvironmentCleanupSelectionSync(appCommandScope());
   try {
     useEnvironmentStore.getState().removeEnvironment(home.id);
     expect(useUIStore.getState().selectedEnvironmentId).toBeNull();

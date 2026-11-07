@@ -2,6 +2,7 @@ import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { useEnvironments } from "./useEnvironments";
 import * as backend from "@/lib/backend";
+import { appCommandScope } from "@/lib/node-scope-slots";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import type { Environment } from "@/types";
 import {
@@ -101,7 +102,7 @@ describe("cleanupDeletedEnvironmentSubscriptions", () => {
         armWindowStartupAgentActivation(id);
       }
 
-      cleanupSubscriptionsRemovedByProjectSnapshot("project-1", [surviving]);
+      cleanupSubscriptionsRemovedByProjectSnapshot("project-1", [surviving], appCommandScope());
 
       expect(consumeWindowStartupAgentActivation("removed")).toBe(false);
       expect(consumeWindowStartupAgentActivation("surviving")).toBe(true);
@@ -132,7 +133,7 @@ describe("startup-agent handoff failure cleanup", () => {
       });
       armWindowStartupAgentActivation("env-1");
 
-      reconcileEnvironmentLifecycleErrors();
+      reconcileEnvironmentLifecycleErrors(appCommandScope());
 
       expect(consumeWindowStartupAgentActivation("env-1")).toBe(false);
       expect(useEnvironmentStore.getState().environments[0]?.pendingAgentLaunch).toBe(false);
@@ -154,7 +155,7 @@ describe("startup-agent handoff failure cleanup", () => {
       });
       armWindowStartupAgentActivation("env-1");
 
-      applyEnvironmentSetupComplete({ environment_id: "env-1", success: false });
+      applyEnvironmentSetupComplete({ environment_id: "env-1", success: false }, appCommandScope());
 
       expect(consumeWindowStartupAgentActivation("env-1")).toBe(false);
       expect(useEnvironmentStore.getState().environments[0]?.pendingAgentLaunch).toBe(false);
@@ -185,7 +186,7 @@ describe("pipeline handoff failure cleanup", () => {
       armWindowBuildPipelineActivation("env-1", "pipeline-1");
       markWindowBuildPipelineHandoffResolved("env-1", "pipeline-1");
 
-      reconcileEnvironmentLifecycleErrors();
+      reconcileEnvironmentLifecycleErrors(appCommandScope());
 
       expect(getWindowBuildPipelineActivation("env-1")).toBeNull();
       expect(hasWindowBuildPipelineHandoffResolved("env-1", "pipeline-1")).toBe(true);
@@ -208,7 +209,7 @@ describe("pipeline handoff failure cleanup", () => {
       armWindowBuildPipelineActivation("env-1", "pipeline-1");
       markWindowBuildPipelineHandoffResolved("env-1", "pipeline-1");
 
-      applyEnvironmentSetupComplete({ environment_id: "env-1", success: false });
+      applyEnvironmentSetupComplete({ environment_id: "env-1", success: false }, appCommandScope());
 
       expect(getWindowBuildPipelineActivation("env-1")).toBeNull();
       expect(hasWindowBuildPipelineHandoffResolved("env-1", "pipeline-1")).toBe(true);
@@ -230,7 +231,7 @@ describe("pipeline handoff failure cleanup", () => {
       });
       armWindowBuildPipelineActivation("env-1", "pipeline-1");
 
-      applyEnvironmentSetupComplete({ environment_id: "env-1", success: true });
+      applyEnvironmentSetupComplete({ environment_id: "env-1", success: true }, appCommandScope());
 
       expect(getWindowBuildPipelineActivation("env-1")).toBe("pipeline-1");
     } finally {
@@ -253,7 +254,7 @@ describe("refreshEnvironmentSnapshot", () => {
     const list = spyOn(backend, "getEnvironmentSnapshots");
     const read = reads({ ...environment("env-1", "project-1"), status: "running" });
 
-    expect(await refreshEnvironmentSnapshot("project-1", "env-1")).toBe(true);
+    expect(await refreshEnvironmentSnapshot("project-1", "env-1", appCommandScope())).toBe(true);
 
     const [first, second] = useEnvironmentStore.getState().environments;
     expect(first!.status).toBe("running");
@@ -267,14 +268,14 @@ describe("refreshEnvironmentSnapshot", () => {
   test("removes an environment the backend no longer has", async () => {
     useEnvironmentStore.setState({ environments: [environment("env-1", "project-1")] });
     const read = reads(null);
-    expect(await refreshEnvironmentSnapshot("project-1", "env-1")).toBe(true);
+    expect(await refreshEnvironmentSnapshot("project-1", "env-1", appCommandScope())).toBe(true);
     expect(useEnvironmentStore.getState().environments).toEqual([]);
     read.mockRestore();
   });
 
   test("adds one another client created", async () => {
     const read = reads(environment("env-new", "project-1"));
-    expect(await refreshEnvironmentSnapshot("project-1", "env-new")).toBe(true);
+    expect(await refreshEnvironmentSnapshot("project-1", "env-new", appCommandScope())).toBe(true);
     expect(useEnvironmentStore.getState().environments.map(({ id }) => id)).toEqual(["env-new"]);
     read.mockRestore();
   });
@@ -302,12 +303,14 @@ describe("refreshEnvironmentSnapshot", () => {
         const { result } = renderHook(() =>
           useEnvironments(null, { listenForRenameEvents: false }),
         );
-        let snapshot = settled ? refreshEnvironmentSnapshot(pid, created.id) : undefined;
+        let snapshot = settled
+          ? refreshEnvironmentSnapshot(pid, created.id, appCommandScope())
+          : undefined;
         let creation!: Promise<Environment>;
         act(() => {
           creation = result.current.createEnvironment(pid);
         });
-        if (!settled) snapshot = refreshEnvironmentSnapshot(pid, created.id);
+        if (!settled) snapshot = refreshEnvironmentSnapshot(pid, created.id, appCommandScope());
         const other = environment("env-other", pid);
         if (settled) {
           await act(async () => {
@@ -341,14 +344,16 @@ describe("refreshEnvironmentSnapshot", () => {
     const held = environment("env-1", "project-1");
     useEnvironmentStore.setState({ environments: [held] });
     const read = reads(new Error("Unknown backend command: get_environment_snapshot"));
-    expect(await refreshEnvironmentSnapshot("project-1", "env-1")).toBe(false);
+    expect(await refreshEnvironmentSnapshot("project-1", "env-1", appCommandScope())).toBe(false);
     expect(useEnvironmentStore.getState().environments[0]).toBe(held);
     read.mockRestore();
   });
 
   test("a failed read is not mistaken for a missing command", async () => {
     const read = reads(new Error("backend down"));
-    await expect(refreshEnvironmentSnapshot("project-1", "env-1")).rejects.toThrow("backend down");
+    await expect(
+      refreshEnvironmentSnapshot("project-1", "env-1", appCommandScope()),
+    ).rejects.toThrow("backend down");
     read.mockRestore();
   });
 });

@@ -8,6 +8,7 @@ import {
   approveSetupCommandsOnNodes,
   type SetupApprovalNodeResult,
 } from "@/lib/portal/setup-approvals";
+import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
 import { approveSetupRuntime, forceResolveSetupRuntime } from "@/lib/setup-commands";
 
 type Operation = "once" | "project" | "everywhere" | "skip";
@@ -37,6 +38,8 @@ function CommandList({ commands }: { commands: readonly string[] }) {
  */
 export function SetupApprovalPanel({ environmentId }: { environmentId: string }) {
   const federation = useFederation();
+  // The node whose environment this is.
+  const scope = useShimNodeScope("environment");
   const [approval, setApproval] = useState<EnvironmentSetupApproval | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [operation, setOperation] = useState<Operation | null>(null);
@@ -67,7 +70,7 @@ export function SetupApprovalPanel({ environmentId }: { environmentId: string })
     setOperation(kind);
     try {
       if (kind === "skip") {
-        await forceResolveSetupRuntime(environmentId);
+        await forceResolveSetupRuntime(environmentId, scope);
         return;
       }
       if (!approval) return;
@@ -78,7 +81,7 @@ export function SetupApprovalPanel({ environmentId }: { environmentId: string })
         setNodeResults(result.nodes);
         return;
       }
-      await approveSetupRuntime(environmentId, approval.hash, kind !== "once");
+      await approveSetupRuntime(environmentId, approval.hash, kind !== "once", scope);
     } catch (operationError) {
       setError(operationError instanceof Error ? operationError.message : "Setup approval failed");
       // Never retry a rejected hash automatically. Show the current commands

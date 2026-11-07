@@ -28,6 +28,7 @@ mock.module("@/lib/backend", () => ({
 }));
 
 const { useEnvironmentStore } = await import("@/stores/environmentStore");
+const { appCommandScope } = await import("@/lib/node-scope-slots");
 const {
   approveSetupRuntime,
   forceResolveSetupRuntime,
@@ -58,7 +59,7 @@ test("forceResolveSetupRuntime persists and projects the backend override", asyn
     environments: [{ id: "env-1", setupPhase: "running" } as Environment],
   });
 
-  await forceResolveSetupRuntime("env-1");
+  await forceResolveSetupRuntime("env-1", appCommandScope());
 
   expect(overrideEnvironmentSetup).toHaveBeenCalledWith("env-1");
   expect(useEnvironmentStore.getState().getEnvironmentById("env-1")).toEqual(
@@ -67,7 +68,7 @@ test("forceResolveSetupRuntime persists and projects the backend override", asyn
 });
 
 test("forceResolveSetupRuntime ignores unknown environments", async () => {
-  await forceResolveSetupRuntime("missing");
+  await forceResolveSetupRuntime("missing", appCommandScope());
   expect(overrideEnvironmentSetup).not.toHaveBeenCalled();
 });
 
@@ -77,7 +78,9 @@ test("forceResolveSetupRuntime rejects when the backend override fails", async (
   });
   overrideEnvironmentSetup.mockRejectedValueOnce(new Error("backend unavailable"));
 
-  await expect(forceResolveSetupRuntime("env-1")).rejects.toThrow("backend unavailable");
+  await expect(forceResolveSetupRuntime("env-1", appCommandScope())).rejects.toThrow(
+    "backend unavailable",
+  );
   expect(useEnvironmentStore.getState().getEnvironmentById("env-1")?.setupPhase).toBe("failed");
 });
 
@@ -86,7 +89,7 @@ test("retrySetupRuntime runs setup and projects the authoritative result", async
     environments: [{ id: "env-1", setupPhase: "failed" } as Environment],
   });
 
-  await retrySetupRuntime("env-1");
+  await retrySetupRuntime("env-1", appCommandScope());
 
   expect(runEnvironmentSetup).toHaveBeenCalledWith("env-1");
   expect(useEnvironmentStore.getState().getEnvironmentById("env-1")).toEqual(
@@ -95,7 +98,7 @@ test("retrySetupRuntime runs setup and projects the authoritative result", async
 });
 
 test("retrySetupRuntime ignores unknown environments", async () => {
-  await retrySetupRuntime("missing");
+  await retrySetupRuntime("missing", appCommandScope());
   expect(runEnvironmentSetup).not.toHaveBeenCalled();
 });
 
@@ -105,14 +108,16 @@ test("retrySetupRuntime leaves the failed phase intact when retry rejects", asyn
   });
   runEnvironmentSetup.mockRejectedValueOnce(new Error("retry unavailable"));
 
-  await expect(retrySetupRuntime("env-1")).rejects.toThrow("retry unavailable");
+  await expect(retrySetupRuntime("env-1", appCommandScope())).rejects.toThrow("retry unavailable");
   expect(useEnvironmentStore.getState().getEnvironmentById("env-1")?.setupPhase).toBe("failed");
 });
 
 test("approveSetupRuntime approves nothing for an unknown environment, and says so", async () => {
   const capture = captureLogs();
   try {
-    await expect(approveSetupRuntime("missing", "hash", false)).resolves.toBeUndefined();
+    await expect(
+      approveSetupRuntime("missing", "hash", false, appCommandScope()),
+    ).resolves.toBeUndefined();
     expect(approveEnvironmentSetup).not.toHaveBeenCalled();
     expect(capture.records()).toEqual([
       expect.objectContaining({

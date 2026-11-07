@@ -12,7 +12,8 @@ import {
 } from "@orkestrator/protocol/federation";
 import { requestGlobalSettings } from "@/lib/settings-navigation";
 import type { MachineView } from "@/lib/federation/aggregate";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import { environmentStore } from "@/stores/environmentStore";
 import { useUIStore } from "@/stores";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useFederation } from "./FederationProvider";
@@ -49,6 +50,8 @@ function FederationEffectsActive() {
  * project, and a repository heading's highlight.
  */
 function useRecentSelections(backendId: BackendId | null) {
+  // This window's own node, whose selection the UI store holds.
+  const scope = useShimNodeScope("environment");
   useEffect(() => {
     if (!backendId) return;
     return useUIStore.subscribe((state, previous) => {
@@ -74,7 +77,8 @@ function useRecentSelections(backendId: BackendId | null) {
           (state.selectedProjectId
             ? projectKey(projectRef(backendId, state.selectedProjectId))
             : null) &&
-        useEnvironmentStore
+        scope
+          .store(environmentStore)
           .getState()
           .environments.some(
             (environment) =>
@@ -84,7 +88,7 @@ function useRecentSelections(backendId: BackendId | null) {
           );
       if (!continuesHeading) views.noteRepositoryOpened(null);
     });
-  }, [backendId]);
+  }, [backendId, scope]);
 }
 
 /** `?resource=` names a machine and a resource; never a route, port or token. */

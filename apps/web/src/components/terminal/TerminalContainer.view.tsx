@@ -34,6 +34,7 @@ import {
 } from "@/contexts";
 import {
   createSessionKey,
+  environmentStore,
   useClaudeOptionsStore,
   usePaneLayoutStore,
   useEnvironmentStore,
@@ -139,6 +140,8 @@ export function TerminalContainer({
   // This node's Multi Review workflows and tab launches (plan item 3003).
   const multiReviewScope = useShimNodeScope(multiReviewStore.name);
   const tabLaunchScope = useShimNodeScope(tabLaunchStore.name);
+  // This node's environments (plan item 3004).
+  const environments = useScopedStoreApi(environmentStore);
   const activeWriteRef = useRef<((data: string) => Promise<void>) | null>(null);
   const obscuredRef = useRef(obscured);
   const onRevealRef = useRef(onReveal);
@@ -904,7 +907,7 @@ export function TerminalContainer({
             error: formatLogError(multiReviewResult.reason),
           });
         }
-        const latestEnvironment = useEnvironmentStore.getState().getEnvironmentById(environmentId);
+        const latestEnvironment = environments.getState().getEnvironmentById(environmentId);
         const latestContainerId = latestEnvironment
           ? latestEnvironment.environmentType === "local"
             ? null
@@ -1090,6 +1093,7 @@ export function TerminalContainer({
     piMode,
     worktreePath,
     multiReviewScope,
+    environments,
   ]);
 
   // Reset pane layout when container changes within the same environment
@@ -1234,7 +1238,7 @@ export function TerminalContainer({
         // Loopback links are interpreted in this environment (a container's
         // localhost:3000 is its own port 3000), not as a backend host port.
         const target = linkBrowserTarget(
-          useEnvironmentStore.getState().getEnvironmentById(environmentId),
+          environments.getState().getEnvironmentById(environmentId),
           request.url,
           request.origin ?? "terminal",
         );
@@ -1242,7 +1246,7 @@ export function TerminalContainer({
           usePaneLayoutStore.getState().setActivePane(pane.id, environmentId);
         }
       }),
-    [createBrowserTab, environmentId],
+    [createBrowserTab, environmentId, environments],
   );
 
   // Handler for creating new terminal tabs

@@ -1,7 +1,7 @@
 export { useUIStore } from "./uiStore";
 export type { ProjectBoardTab } from "./uiStore";
-export { useProjectStore } from "./projectStore";
-export { useEnvironmentStore } from "./environmentStore";
+export { projectStore, useProjectStore } from "./projectStore";
+export { environmentStore, useEnvironmentStore } from "./environmentStore";
 export { configStore, useConfigStore } from "./configStore";
 export { claudeOptionsStore, useClaudeOptionsStore } from "./claudeOptionsStore";
 export type { ClaudeOptions, AgentType } from "./claudeOptionsStore";

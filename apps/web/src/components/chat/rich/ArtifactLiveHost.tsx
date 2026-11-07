@@ -37,7 +37,9 @@ import {
   useScopesWithCommandFallback,
   WindowScopeProvider,
 } from "@/lib/node-scope/providers";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import type { StoreApi } from "zustand";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { environmentStore, type EnvironmentState } from "@/stores/environmentStore";
 import { useUIStore } from "@/stores/uiStore";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -186,8 +188,8 @@ const PHASE_TEXT: Record<LiveHostSession["phase"], string> = {
   error: "Could not start",
 };
 
-function environmentScopeSnapshot() {
-  const environments = useEnvironmentStore.getState();
+function environmentScopeSnapshot(environmentsStore: StoreApi<EnvironmentState>) {
+  const environments = environmentsStore.getState();
   const ui = useUIStore.getState();
   return {
     environmentIds: new Set(environments.environments.map((environment) => environment.id)),
@@ -200,13 +202,16 @@ function environmentScopeSnapshot() {
 /**
  * Dispose the live view when its conversation's environment is deleted or
  * the user switches the active environment away from it. The saved preview
- * is shown in the transcript card with the reason.
+ * is shown in the transcript card with the reason. The environment is the
+ * live target's node's: environment ids are node-local (plan item 3004).
  */
-function useLiveHostScopeGuard(): void {
+function useLiveHostScopeGuard(owner: NodeScope | null): void {
   useEffect(() => {
-    let previous = environmentScopeSnapshot();
+    if (!owner) return;
+    const environments = owner.store(environmentStore);
+    let previous = environmentScopeSnapshot(environments);
     const check = () => {
-      const next = environmentScopeSnapshot();
+      const next = environmentScopeSnapshot(environments);
       const active = useArtifactLiveHostStore.getState().active;
       const reason = active
         ? liveHostScopeInvalidation(active.target.scope.environmentId, previous, next)
@@ -214,17 +219,16 @@ function useLiveHostScopeGuard(): void {
       previous = next;
       if (reason) useArtifactLiveHostStore.getState().invalidate(reason);
     };
-    const offEnvironments = useEnvironmentStore.subscribe(check);
+    const offEnvironments = environments.subscribe(check);
     const offUi = useUIStore.subscribe(check);
     return () => {
       offEnvironments();
       offUi();
     };
-  }, []);
+  }, [owner]);
 }
 
 export function ArtifactLiveHost() {
-  useLiveHostScopeGuard();
   const active = useArtifactLiveHostStore((state) => state.active);
   const pendingSwitch = useArtifactLiveHostStore((state) => state.pendingSwitch);
   const confirmSwitch = useArtifactLiveHostStore((state) => state.confirmSwitch);
@@ -233,6 +237,7 @@ export function ArtifactLiveHost() {
   // The surface renders inside its target's node scope, so what it reads
   // (capabilities, the backend identity) is that node's, not the command node's.
   const owner = active ? artifactLiveHostOwner(active.target.nodeId) : null;
+  useLiveHostScopeGuard(owner);
 
   return (
     <>

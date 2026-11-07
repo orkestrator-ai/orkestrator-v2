@@ -4,6 +4,7 @@ import { invoke } from "@/lib/native/backend";
 import type { Mock } from "bun:test";
 import type { Environment } from "@/types";
 import { useEnvironmentStore } from "@/stores/environmentStore";
+import { appCommandScope } from "@/lib/node-scope-slots";
 import * as realSetupCommands from "@/lib/setup-commands";
 
 const invokeMock = invoke as unknown as Mock<typeof invoke>;
@@ -109,7 +110,7 @@ describe("SetupPendingOverlay", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: /^skip setup wait$/i }));
     fireEvent.click(screen.getByRole("button", { name: /^skip anyway$/i }));
-    expect(forceResolveSetupRuntime).toHaveBeenCalledWith("env-1");
+    expect(forceResolveSetupRuntime).toHaveBeenCalledWith("env-1", appCommandScope());
     expect(await screen.findByRole("button", { name: /^skip setup wait$/i })).toBeTruthy();
 
     rerender(
@@ -123,7 +124,7 @@ describe("SetupPendingOverlay", () => {
     expect(screen.getByText("Environment setup failed.")).toBeTruthy();
     expect(screen.getByTestId("setup-pending-prompt").textContent).toContain("Fix the login bug");
     fireEvent.click(screen.getByRole("button", { name: /^retry setup$/i }));
-    await waitFor(() => expect(retrySetupRuntime).toHaveBeenCalledWith("env-1"));
+    await waitFor(() => expect(retrySetupRuntime).toHaveBeenCalledWith("env-1", appCommandScope()));
   });
 
   test("held setup keeps the queued prompt above the approval panel instead of retry actions", async () => {
@@ -191,7 +192,7 @@ describe("SetupPendingOverlay", () => {
       expect(busyButton.disabled).toBe(true);
       fireEvent.click(busyButton);
       expect(command).toHaveBeenCalledTimes(1);
-      expect(command).toHaveBeenCalledWith("env-1");
+      expect(command).toHaveBeenCalledWith("env-1", appCommandScope());
       if (kind === "override") {
         expect((screen.getByRole("button", { name: "Cancel" }) as HTMLButtonElement).disabled).toBe(
           true,
@@ -322,7 +323,7 @@ describe("SetupPendingOverlay", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /^retry setup$/i }));
 
-    expect(retrySetupRuntime).toHaveBeenCalledWith("env-1");
+    expect(retrySetupRuntime).toHaveBeenCalledWith("env-1", appCommandScope());
     expect(
       (screen.getByRole("button", { name: /retrying setup/i }) as HTMLButtonElement).disabled,
     ).toBe(true);
@@ -340,7 +341,7 @@ describe("SetupPendingOverlay", () => {
     fireEvent.click(screen.getByRole("button", { name: /^skip setup$/i }));
     fireEvent.click(screen.getByRole("button", { name: /^skip anyway$/i }));
 
-    expect(forceResolveSetupRuntime).toHaveBeenCalledWith("env-1");
+    expect(forceResolveSetupRuntime).toHaveBeenCalledWith("env-1", appCommandScope());
     expect((await screen.findByRole("alert")).textContent).toContain("Backend unavailable");
     expect(
       (screen.getByRole("button", { name: /^skip anyway$/i }) as HTMLButtonElement).disabled,

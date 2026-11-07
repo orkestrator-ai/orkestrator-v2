@@ -23,6 +23,7 @@ export function useAutoMergeToggle(
   const cleanup = enabled && environment?.autoMergeCleanup === true;
   const [savingEnvironmentId, setSavingEnvironmentId] = useState<string | null>(null);
   const saving = savingEnvironmentId !== null && savingEnvironmentId === environmentId;
+  const updateEnvironment = useEnvironmentStore((state) => state.updateEnvironment);
 
   /** Resolves to whether auto-merge is on afterwards, as the backend answered. */
   const set = useCallback(
@@ -36,7 +37,7 @@ export function useAutoMergeToggle(
           cleanupAfterMerge,
         );
         const on = updated?.autoMerge === true;
-        useEnvironmentStore.getState().updateEnvironment(environmentId, {
+        updateEnvironment(environmentId, {
           autoMerge: on,
           autoMergeCleanup: on && updated?.autoMergeCleanup === true,
         });
@@ -60,7 +61,7 @@ export function useAutoMergeToggle(
         setSavingEnvironmentId((current) => (current === environmentId ? null : current));
       }
     },
-    [environmentId, savingEnvironmentId],
+    [environmentId, savingEnvironmentId, updateEnvironment],
   );
 
   const toggle = useCallback(() => set(!enabled), [enabled, set]);

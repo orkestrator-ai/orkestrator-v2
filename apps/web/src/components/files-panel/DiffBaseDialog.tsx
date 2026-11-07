@@ -22,7 +22,9 @@ import {
 } from "@/components/ui/select";
 import * as backend from "@/lib/backend";
 import { formatRelativeTime } from "@/lib/format-relative-time";
-import { useConfigStore, useEnvironmentStore } from "@/stores";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { useShimNodeScope } from "@/lib/node-scope/scoped-store-shim";
+import { environmentStore, useConfigStore, useEnvironmentStore } from "@/stores";
 import type { Environment } from "@/types";
 
 interface DiffBaseDialogProps {
@@ -42,6 +44,7 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** In-flight saves by node and environment: environment ids are node-local. */
 const pendingSaves = new Map<string, Promise<boolean>>();
 
 /**
@@ -52,14 +55,17 @@ const pendingSaves = new Map<string, Promise<boolean>>();
 export function saveDiffBase(
   environmentId: string,
   base: { ref: string; commit: string } | null,
+  scope: NodeScope,
 ): Promise<boolean> {
-  const previous = pendingSaves.get(environmentId);
+  const key = `${scope.nodeId}\0${environmentId}`;
+  const environments = scope.store(environmentStore);
+  const previous = pendingSaves.get(key);
   const save = async (): Promise<boolean> => {
     try {
       const updated = await backend.setEnvironmentDiffBase(environmentId, base);
       // Requests and response updates run in order, across every entry point.
       // Apply successful earlier saves even if a later queued save might fail.
-      useEnvironmentStore.getState().updateEnvironment(environmentId, {
+      environments.getState().updateEnvironment(environmentId, {
         diffBaseOverride: updated.diffBaseOverride ?? null,
       });
       return true;
@@ -69,9 +75,9 @@ export function saveDiffBase(
     }
   };
   const task = (previous ?? Promise.resolve(true)).then(save);
-  pendingSaves.set(environmentId, task);
+  pendingSaves.set(key, task);
   void task.finally(() => {
-    if (pendingSaves.get(environmentId) === task) pendingSaves.delete(environmentId);
+    if (pendingSaves.get(key) === task) pendingSaves.delete(key);
   });
   return task;
 }
@@ -126,6 +132,7 @@ export function DiffBaseDialog({ environmentId, open, onOpenChange }: DiffBaseDi
 }
 
 function DiffBaseForm({ environment, onDone }: { environment: Environment; onDone: () => void }) {
+  const scope = useShimNodeScope(environmentStore.name);
   const mounted = useRef(false);
   useEffect(() => {
     mounted.current = true;
@@ -201,7 +208,7 @@ function DiffBaseForm({ environment, onDone }: { environment: Environment; onDon
   const [saving, setSaving] = useState(false);
   const save = async (base: { ref: string; commit: string } | null) => {
     setSaving(true);
-    const saved = await saveDiffBase(environment.id, base);
+    const saved = await saveDiffBase(environment.id, base, scope);
     if (mounted.current) {
       setSaving(false);
       if (saved) onDone();

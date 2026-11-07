@@ -8,7 +8,7 @@ import * as realEnvironmentSettingsDialog from "@/components/environments/Enviro
 import { invoke } from "@/lib/native/backend";
 import { useAppDialogStore } from "@/stores/appDialogStore";
 import { useConfigStore } from "@/stores/configStore";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { environmentStore, useEnvironmentStore } from "@/stores/environmentStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { useUIStore } from "@/stores/uiStore";
 import { useProjectStore } from "@/stores/projectStore";
@@ -279,6 +279,8 @@ describe("a dialog request names its node", () => {
     });
     windowScope.open({ role: "command", client: clientA });
     const nodeB = windowScope.open({ role: "leaf", client: clientB });
+    // Environment ids are node-local: the dialog reads node B's own environments.
+    nodeB.store(environmentStore).setState({ environments: [environment("env-1", "on-node-b")] });
     render(
       <WindowScopeProvider windowScope={windowScope}>
         <AppDialogHost />

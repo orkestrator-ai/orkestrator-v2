@@ -158,6 +158,7 @@ describe("parsing: tolerant arguments and must-understand fields", () => {
       code: "unsupported-field",
       domain: "system",
       field: "steer",
+      command: "contract_probe_echo",
     });
   });
 
@@ -279,6 +280,7 @@ describe("domain version range", () => {
         code: "unsupported-version",
         domain: "system",
         range: { min: 2, max: 3 },
+        command: name,
       });
       expect((caught as Error).message).toContain("accepts versions 2 to 3");
     }

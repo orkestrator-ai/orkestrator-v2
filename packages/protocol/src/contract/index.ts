@@ -12,4 +12,5 @@ export * from "./domain.js";
 export * from "./envelope.js";
 export * from "./errors.js";
 export * from "./event.js";
+export * from "./ipc-error.js";
 export * from "./json-schema.js";

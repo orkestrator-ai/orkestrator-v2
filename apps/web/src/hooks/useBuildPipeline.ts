@@ -14,7 +14,7 @@ import { useConfigStore } from "@/stores";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useUIStore } from "@/stores/uiStore";
 import * as backend from "@/lib/backend";
-import { isUnsupportedBackendCommand } from "@/lib/backend/shared";
+import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import { scheduleBuildPipelineTabActivation } from "@/lib/feature-build-activation";
 import type { DeliveryPolicy } from "@orkestrator/protocol/ticket-sections";
 import { legacyBuildPipelineStartInput } from "@/lib/build-pipeline-launch-compat";
@@ -94,7 +94,8 @@ export function useBuildPipeline() {
           featurePlanId: options.featurePlanId,
         };
         const authoritative = await backend.launchBuildPipeline(request).catch((error: unknown) => {
-          if (!isUnsupportedBackendCommand(error, "launch_build_pipeline")) throw error;
+          if (incompatibility(error, "launch_build_pipeline")?.code !== "unknown-command")
+            throw error;
           return backend.startBuildPipeline(legacyBuildPipelineStartInput(config, request));
         });
         const pipeline = authoritative as BuildPipeline;

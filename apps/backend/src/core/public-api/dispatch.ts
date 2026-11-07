@@ -1,3 +1,4 @@
+import { unknownCommand } from "@orkestrator/protocol/contract/errors";
 import { relayController } from "./relay-context.js";
 import {
   isPublicActionName,
@@ -128,7 +129,7 @@ export function createPublicActionContext(
     now: () => Date.now(),
     invoke: async <T>(name: string, args: Record<string, unknown> = {}): Promise<T> => {
       const handler = dependencies.commands.get(name);
-      if (!handler) throw new Error(`Unknown backend command: ${name}`);
+      if (!handler) throw unknownCommand(name);
       return (await handler(args, command)) as T;
     },
   };

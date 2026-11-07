@@ -5,7 +5,7 @@ import {
   type RecordRendererErrorsResult,
   type RendererErrorEntry,
 } from "@orkestrator/protocol/renderer-errors";
-import { isUnsupportedBackendCommand } from "./backend/shared";
+import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import type { RendererErrorRing } from "./renderer-error-ring";
 
 /** How often new counts go to the backend, and the longest a failing backend waits. */
@@ -104,7 +104,7 @@ export function startRendererErrorUpload({
         delay = intervalMs;
       } catch (error) {
         ring.restore(batch);
-        if (isUnsupportedBackendCommand(error, RECORD_RENDERER_ERRORS_COMMAND)) {
+        if (incompatibility(error, RECORD_RENDERER_ERRORS_COMMAND)?.code === "unknown-command") {
           stopped = true;
         }
         delay = Math.min(delay * 2, maxIntervalMs);

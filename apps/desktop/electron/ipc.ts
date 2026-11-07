@@ -57,6 +57,7 @@ import {
 } from "./browser-preview-capture-validation.js";
 import { registerArtifactHostIpc, type ArtifactHostController } from "./artifact-host-ipc.js";
 import { parseNodeId } from "./node-ipc.js";
+import { incompatibilityIpcMessage } from "@orkestrator/protocol/contract/errors";
 
 /**
  * The contract envelope (`{ command, args, domain?, version?, critical? }`,
@@ -412,40 +413,50 @@ export function registerMainIpc({
   const draftSenders = new Set<number>();
 
   // `options` is `{ nodeId?, envelope? }`; an older renderer sends two arguments.
-  handle(
-    "orkestrator:invoke",
-    async (event, command: unknown, args?: unknown, options?: unknown) => {
-      if (typeof command !== "string") throw new Error("Expected command to be a string");
-      const { nodeId, envelope } = parseInvokeOptions(options);
-      const backend = await (nodeId === undefined ? getBackend(event) : getBackend(event, nodeId));
-      if (!backend) throw new Error("Backend is not initialized");
-      const safeArgs =
-        args && typeof args === "object" && !Array.isArray(args)
-          ? (args as Record<string, unknown>)
-          : {};
-      if (command === "desktop_file_draft_release") {
-        if (!event.sender) throw new Error("Draft sender is unavailable");
-        fileDraftWrites.releaseClient(event.sender.id, safeArgs.clientId);
-        return;
+  const invokeCommand = async (
+    event: IpcEventLike,
+    command: unknown,
+    args?: unknown,
+    options?: unknown,
+  ): Promise<unknown> => {
+    if (typeof command !== "string") throw new Error("Expected command to be a string");
+    const { nodeId, envelope } = parseInvokeOptions(options);
+    const backend = await (nodeId === undefined ? getBackend(event) : getBackend(event, nodeId));
+    if (!backend) throw new Error("Backend is not initialized");
+    const safeArgs =
+      args && typeof args === "object" && !Array.isArray(args)
+        ? (args as Record<string, unknown>)
+        : {};
+    if (command === "desktop_file_draft_release") {
+      if (!event.sender) throw new Error("Draft sender is unavailable");
+      fileDraftWrites.releaseClient(event.sender.id, safeArgs.clientId);
+      return;
+    }
+    if (command === "desktop_file_draft_write") {
+      const sender = event.sender;
+      if (!sender) throw new Error("Draft sender is unavailable");
+      if (!draftSenders.has(sender.id)) {
+        draftSenders.add(sender.id);
+        const release = () => {
+          draftSenders.delete(sender.id);
+          fileDraftWrites.releaseSender(sender.id);
+        };
+        sender.once?.("destroyed", release);
+        sender.on?.("did-navigate", () => fileDraftWrites.releaseSender(sender.id));
       }
-      if (command === "desktop_file_draft_write") {
-        const sender = event.sender;
-        if (!sender) throw new Error("Draft sender is unavailable");
-        if (!draftSenders.has(sender.id)) {
-          draftSenders.add(sender.id);
-          const release = () => {
-            draftSenders.delete(sender.id);
-            fileDraftWrites.releaseSender(sender.id);
-          };
-          sender.once?.("destroyed", release);
-          sender.on?.("did-navigate", () => fileDraftWrites.releaseSender(sender.id));
-        }
-        return fileDraftWrites.write(sender.id, safeArgs, backend);
-      }
-      return envelope
-        ? backend.invoke(command, safeArgs, { envelope })
-        : backend.invoke(command, safeArgs);
-    },
+      return fileDraftWrites.write(sender.id, safeArgs, backend);
+    }
+    return envelope
+      ? backend.invoke(command, safeArgs, { envelope })
+      : backend.invoke(command, safeArgs);
+  };
+  // Only an error's message crosses IPC, so a typed incompatibility is sent in
+  // its message form (`[code key=value …] text`, plan item 1005).
+  handle("orkestrator:invoke", (event, command: unknown, args?: unknown, options?: unknown) =>
+    invokeCommand(event, command, args, options).catch((error: unknown) => {
+      const coded = incompatibilityIpcMessage(error);
+      throw coded === null ? error : new Error(coded);
+    }),
   );
 
   const nodeScopes = (): NodeScopeIpc => {

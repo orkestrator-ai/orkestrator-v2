@@ -1,3 +1,4 @@
+import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import {
   isResourceChange,
   isResourceManifestKind,
@@ -350,8 +351,7 @@ export function startResourceSync(options: ResourceSyncOptions = {}): () => void
             ),
           );
         } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          if (message.includes("Unknown backend command: get_scoped_resource_snapshots")) {
+          if (incompatibility(error, "get_scoped_resource_snapshots")?.code === "unknown-command") {
             scopedSnapshotsDisabled = true;
             break;
           }
@@ -468,9 +468,9 @@ export function startResourceSync(options: ResourceSyncOptions = {}): () => void
               if (pageSucceeded) continue;
               continue;
             } catch (error) {
-              const message = error instanceof Error ? error.message : String(error);
               if (
-                message.includes("Unknown backend command: get_scoped_resource_revision_manifest")
+                incompatibility(error, "get_scoped_resource_revision_manifest")?.code ===
+                "unknown-command"
               ) {
                 scopedDisabled = true;
               } else {

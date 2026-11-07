@@ -1,4 +1,5 @@
 import { findCoordinatorCheckoutTurn } from "./coordinator-checkout-turn.js";
+import { unknownCommand } from "@orkestrator/protocol/contract/errors";
 import { agentTestTerminalSurvival } from "./agent-test-fixtures.js";
 import { closeContainerTerminalShell } from "./container-terminal-shell.js";
 import { combineWorkerMailPorts } from "./build-pipeline-worker-mail.js";
@@ -1005,7 +1006,7 @@ export class OrkestratorBackend {
       storage,
       async <T>(command: string, args: Record<string, unknown> = {}) => {
         const handler = this.commands.get(command);
-        if (!handler) throw new Error(`Unknown backend command: ${command}`);
+        if (!handler) throw unknownCommand(command);
         return (await handler(args, context)) as T;
       },
       {
@@ -1370,7 +1371,7 @@ export class OrkestratorBackend {
       storage,
       async <T>(command: string, args: Record<string, unknown> = {}) => {
         const handler = this.commands.get(command);
-        if (!handler) throw new Error(`Unknown backend command: ${command}`);
+        if (!handler) throw unknownCommand(command);
         return (await handler(args, context)) as T;
       },
       {
@@ -1429,7 +1430,7 @@ export class OrkestratorBackend {
       storage,
       async <T>(command: string, args: Record<string, unknown> = {}) => {
         const handler = this.commands.get(command);
-        if (!handler) throw new Error(`Unknown backend command: ${command}`);
+        if (!handler) throw unknownCommand(command);
         return (await handler(args, context)) as T;
       },
       {
@@ -1484,7 +1485,7 @@ export class OrkestratorBackend {
     // Node executors (items 204–208) register on `graphRuns.executors`.
     const invokeCommand = async <T>(command: string, args: Record<string, unknown> = {}) => {
       const handler = this.commands.get(command);
-      if (!handler) throw new Error(`Unknown backend command: ${command}`);
+      if (!handler) throw unknownCommand(command);
       return (await handler(args, context)) as T;
     };
     const graphArtifacts = new GraphArtifactStore({
@@ -1757,7 +1758,7 @@ export class OrkestratorBackend {
       storage,
       async <T>(command: string, args: Record<string, unknown> = {}) => {
         const handler = this.commands.get(command);
-        if (!handler) throw new Error(`Unknown backend command: ${command}`);
+        if (!handler) throw unknownCommand(command);
         return (await handler(args, context)) as T;
       },
       {
@@ -1778,7 +1779,7 @@ export class OrkestratorBackend {
       storage,
       async <T>(command: string, args: Record<string, unknown> = {}) => {
         const handler = this.commands.get(command);
-        if (!handler) throw new Error(`Unknown backend command: ${command}`);
+        if (!handler) throw unknownCommand(command);
         return (await handler(args, context)) as T;
       },
     );
@@ -3045,7 +3046,8 @@ export class OrkestratorBackend {
   ): Promise<T> {
     if (this.shuttingDown) throw new Error("Backend is shutting down");
     const handler = this.commands.get(command);
-    if (!handler) throw new Error(`Unknown backend command: ${command}`);
+    // Coded (plan item 1005), with the legacy text, so older clients still match it.
+    if (!handler) throw unknownCommand(command, invocation?.domain);
     return (await handler(args, this.context, invocation)) as T;
   }
 

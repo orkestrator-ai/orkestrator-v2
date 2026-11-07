@@ -6,6 +6,7 @@
  * for this page only.
  */
 
+import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import { useEffect } from "react";
 import { useStore } from "zustand";
 import { createStore } from "zustand/vanilla";
@@ -47,8 +48,11 @@ function apply(next: PortalLayout): void {
   );
 }
 
-function unsupportedCommand(error: unknown): boolean {
-  return /unknown command|not available in this backend/i.test(String(error));
+/** A backend older than `command`, or one without the command-node portal. */
+function unsupportedCommand(error: unknown, command: string): boolean {
+  return (
+    incompatibility(error, command) !== null || /not available in this backend/i.test(String(error))
+  );
 }
 
 async function read(): Promise<void> {
@@ -58,7 +62,8 @@ async function read(): Promise<void> {
     if (request === readRevision) apply(layout);
   } catch (error) {
     if (request !== readRevision || writing > 0) return;
-    if (unsupportedCommand(error)) store.setState({ loaded: true, error: null });
+    if (unsupportedCommand(error, "get_portal_layout"))
+      store.setState({ loaded: true, error: null });
     else
       store.setState({
         loaded: false,
@@ -121,7 +126,7 @@ export async function updatePortalLayout(update: PortalLayoutUpdate): Promise<vo
   try {
     await portalInvoke<unknown>("update_portal_layout", { ...update });
   } catch (error) {
-    unsupported = unsupportedCommand(error);
+    unsupported = unsupportedCommand(error, "update_portal_layout");
     if (!unsupported) throw error;
   } finally {
     writing -= 1;

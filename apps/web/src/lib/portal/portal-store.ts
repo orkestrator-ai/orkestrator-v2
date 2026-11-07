@@ -11,6 +11,7 @@
  * (`invoke_on_node`), which routes them to the owner.
  */
 
+import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import type { AgentsMdChange, AgentsMdSection } from "@orkestrator/protocol/agents-md-orkestrator";
 import type { RootChangeFile } from "@orkestrator/protocol/coordinator-surfaces";
 import type { AgentInteractionQuestionAnswer } from "@orkestrator/protocol/agent-interactions";
@@ -172,7 +173,10 @@ export class PortalStore {
       nodes: summariesValue?.nodes ?? state.nodes,
       self: summariesValue ? (summariesValue.self ?? null) : state.self,
       loaded: true,
-      unsupported: /unknown command|not available in this backend/i.test(message),
+      // A backend older than the portal commands, or one without the portal.
+      unsupported:
+        incompatibility(failure, "get_node_status") !== null ||
+        /not available in this backend/i.test(message),
     }));
   }
 

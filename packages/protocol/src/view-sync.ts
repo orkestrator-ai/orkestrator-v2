@@ -25,7 +25,7 @@
  * reconnect hydration rather than revision-aware convergence.
  */
 
-import { isUnknownCommandError } from "./unknown-command.js";
+import { incompatibility } from "./contract/errors.js";
 
 /** Opaque owner generation. Printable, bounded, compared only for equality. */
 export type ViewGeneration = string;
@@ -271,9 +271,11 @@ export function classifyViewSnapshotResponse<T>(
 }
 
 /**
- * Whether an error is the backend's "unknown command" answer for `command`.
- * This is the only error that selects the `unsupported` capability.
+ * Whether an error is the backend's "unknown command" answer for `command`:
+ * its `unknown-command` code, or a pre-contract backend's legacy text (plan
+ * item 1005, `incompatibility`). This is the only error that selects the
+ * `unsupported` capability.
  */
 export function isUnknownViewCommandError(error: unknown, command: string): boolean {
-  return isUnknownCommandError(error, command);
+  return incompatibility(error, command)?.code === "unknown-command";
 }

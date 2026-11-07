@@ -46,8 +46,8 @@ import { createUniqueTabId } from "@/components/terminal/TerminalContainer.helpe
 import {
   classifyTransportError,
   designAction,
-  designApi,
-  designBackendKey,
+  designApiFor,
+  designBackendKeyFor,
   failureOf,
   getCapabilities,
   importDesignDocument,
@@ -63,6 +63,7 @@ import {
   DESIGN_NAME_MAX,
   DesignLaunchError,
   launchDesignWorkspace,
+  designReadinessDeps,
   loadDesignReadiness,
   rendererUnavailable,
   readDesignImport,
@@ -166,7 +167,7 @@ export function DesignWorkspaceDialog({
   onOpenChange,
   environmentId,
   createTab,
-  loadReadiness = loadDesignReadiness,
+  loadReadiness: loadReadinessOverride,
   initialMode = "new",
 }: {
   open: boolean;
@@ -186,7 +187,15 @@ export function DesignWorkspaceDialog({
   // This node's pane layouts (plan item 3013).
   const nodeScope = useShimNodeScope(paneLayoutStore.name);
   const paneLayouts = nodeScope.store(paneLayoutStore);
-  const backendKey = designBackendKey();
+  // Every design call goes to this node, the one that holds the canvas (plan item 4007).
+  const nodeDesign = designApiFor(nodeScope);
+  const loadReadiness = useMemo(
+    () =>
+      loadReadinessOverride ??
+      ((probe: boolean) => loadDesignReadiness(probe, designReadinessDeps(nodeScope))),
+    [loadReadinessOverride, nodeScope],
+  );
+  const backendKey = designBackendKeyFor(nodeScope);
   const scope = `${backendKey}\u0000${environmentId}`;
   const scopeRef = useRef(scope);
   useLayoutEffect(() => {
@@ -378,7 +387,7 @@ export function DesignWorkspaceDialog({
       const sessions = view
         ? view.protocol === "v2" && Boolean(view.capabilities?.sessions)
         : withAgent &&
-          (await getCapabilities().then(
+          (await getCapabilities(backendKey, nodeScope).then(
             (capabilities) => Boolean(capabilities.sessions),
             () => false,
           ));
@@ -392,17 +401,19 @@ export function DesignWorkspaceDialog({
         canvasTabId: createUniqueTabId("design"),
         agentTabId: createUniqueTabId("design-agent"),
         createCanvas: (canvasName) =>
-          designAction<DesignCanvas>(environmentId, "create_canvas", {
-            name: canvasName,
-          }),
+          designAction<DesignCanvas>(
+            environmentId,
+            "create_canvas",
+            { name: canvasName },
+            nodeScope,
+          ),
         createFrame: (canvas, frame) =>
-          designAction<{ canvasRevision: number }>(environmentId, "create_frame", {
-            canvasId: canvas.id,
-            expectedRevision: canvas.revision,
-            x: 0,
-            y: 0,
-            ...frame,
-          }),
+          designAction<{ canvasRevision: number }>(
+            environmentId,
+            "create_frame",
+            { canvasId: canvas.id, expectedRevision: canvas.revision, x: 0, y: 0, ...frame },
+            nodeScope,
+          ),
         openCanvas: (canvasId, tabId, placement) =>
           createTab("design-canvas", {
             canvasId,
@@ -473,11 +484,12 @@ export function DesignWorkspaceDialog({
             {
               canvasRevision: revision,
             },
+            nodeDesign,
           ),
         ...(sessions
           ? {
               linkSession: (canvasId: string, tabId: string, platform: DesignAgent) =>
-                designApi.linkSession(environmentId, canvasId, {
+                nodeDesign.linkSession(environmentId, canvasId, {
                   tabId,
                   platform,
                   role: "design",
@@ -557,7 +569,11 @@ export function DesignWorkspaceDialog({
       setBusy(false);
       return;
     }
-    await importFile(() => importDesignHostFile(environmentId, path), epoch, importScope);
+    await importFile(
+      () => importDesignHostFile(environmentId, path, nodeScope),
+      epoch,
+      importScope,
+    );
   };
 
   const uploadFile = async (file: File) => {
@@ -570,7 +586,7 @@ export function DesignWorkspaceDialog({
         const document = await readDesignImport(file);
         if (epoch !== importEpoch.current || importScope !== scopeRef.current)
           throw new Error("Design workspace changed.");
-        return importDesignDocument(environmentId, document);
+        return importDesignDocument(environmentId, document, nodeScope);
       },
       epoch,
       importScope,

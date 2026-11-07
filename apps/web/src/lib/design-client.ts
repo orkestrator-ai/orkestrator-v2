@@ -49,7 +49,7 @@ import {
 import type { ArgsOf, ResultOf } from "@orkestrator/protocol/contract/command";
 import { scopeBackendClient } from "@/lib/backend/client";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
-import { appCommandScope, defineScopedSlot } from "@/lib/node-scope-slots";
+import { appCommandScope, defineScopedSlot, isAppCommandScope } from "@/lib/node-scope-slots";
 import { getGatewayBaseUrl } from "@/lib/gateway-url";
 import { domainApi } from "@/lib/node-scope/domains/domain-api";
 
@@ -160,6 +160,14 @@ export function designBackendKey(): string {
 }
 
 /**
+ * Identity of `scope`'s backend: the window's gateway on the app's command
+ * scope (unchanged), the node id elsewhere (plan items 3012, 4007).
+ */
+export function designBackendKeyFor(scope: NodeScope): string {
+  return isAppCommandScope(scope) ? designBackendKey() : scope.nodeId;
+}
+
+/**
  * One node's answers, held on its scope (plan item 3016), by backend key: the
  * command scope's backend key moves with the window's gateway.
  */
@@ -209,31 +217,37 @@ export function resetCapabilities(scope?: NodeScope) {
 export async function designAction<T>(
   environmentId: string,
   action: string,
-  input: Record<string, unknown> = {},
-  /** The node (plan item 3012); the command node's when omitted. */
-  scope?: NodeScope,
+  input: Record<string, unknown>,
+  /** The canvas's node (plan items 3012, 4007). */
+  scope: NodeScope,
 ): Promise<T> {
   return (await design(scope).command(designActionCommand, { environmentId, action, input })) as T;
 }
-/** Imports a serialized `.orkdes` document as a new canvas. */
+/** Imports a serialized `.orkdes` document as a new canvas on `scope`'s node. */
 export function importDesignDocument(
   environmentId: string,
   document: string,
+  scope: NodeScope,
 ): Promise<DesignCanvas> {
-  return design().command(designImportCommand, { environmentId, document });
+  return design(scope).command(designImportCommand, { environmentId, document });
 }
-/** Imports an `.orkdes` file the backend reads from the host. */
-export function importDesignHostFile(environmentId: string, path: string): Promise<DesignCanvas> {
-  return design().command(designImportHostFileCommand, { environmentId, path });
+/** Imports an `.orkdes` file `scope`'s backend reads from its host. */
+export function importDesignHostFile(
+  environmentId: string,
+  path: string,
+  scope: NodeScope,
+): Promise<DesignCanvas> {
+  return design(scope).command(designImportHostFileCommand, { environmentId, path });
 }
 
 // Protocol v2.
 /**
- * The v2 design commands on `scope`'s node (plan item 3012); the command
- * node's when omitted. A scoped caller (the canvas controller) uses
- * `designApiFor(scope)`.
+ * The v2 design commands on `scope`'s node (plan item 3012). Every caller
+ * names its canvas's node through `designApiFor(scope)`; there is no
+ * command-bound default (plan item 4007), so one canvas never splits its
+ * operations across two nodes.
  */
-function createDesignApi(scope?: NodeScope) {
+function createDesignApi(scope: NodeScope) {
   const call = <C extends DesignCommandDef>(def: C, args: ArgsOf<C>) => v2(def, args, scope);
   return {
     readiness: (probe = false) => call(designReadinessCommand, { probe }),
@@ -448,9 +462,6 @@ function createDesignApi(scope?: NodeScope) {
 }
 
 export type DesignV2Api = ReturnType<typeof createDesignApi>;
-
-/** The command node's v2 design commands. */
-export const designApi: DesignV2Api = createDesignApi();
 
 const scopeDesignApis = defineScopedSlot("design-v2-api", (scope) => createDesignApi(scope));
 

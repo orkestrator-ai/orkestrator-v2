@@ -33,7 +33,8 @@ import {
 } from "@/stores/paneLayoutStore";
 import type { StoreApi } from "zustand/vanilla";
 import type { TabInfo } from "@/types/paneLayout";
-import { designApi, designBackendKey, failureOf } from "@/lib/design-client";
+import { designBackendKeyFor, failureOf } from "@/lib/design-client";
+import { useDesignApi, useDesignScope } from "./design-scope";
 import {
   boundDesignContextReference,
   buildDesignContextAnnotation,
@@ -148,11 +149,13 @@ export function DesignAgentDialog({
   onOpenChange,
   onLinksChanged,
 }: DesignAgentDialogProps) {
+  // The canvas's node (plan item 4007).
+  const designScope = useDesignScope();
   return (
     <Dialog open={context !== null} onOpenChange={onOpenChange}>
       {context ? (
         <DesignAgentDialogBody
-          key={`${designBackendKey()}:${context.environmentId}:${context.canvasId}:${context.frameId ?? ""}:${context.scope}:${context.checkpointId ?? ""}:${context.canvasRevision}`}
+          key={`${designBackendKeyFor(designScope)}:${context.environmentId}:${context.canvasId}:${context.frameId ?? ""}:${context.scope}:${context.checkpointId ?? ""}:${context.canvasRevision}`}
           context={context}
           projection={projection}
           onClose={() => onOpenChange(false)}
@@ -175,6 +178,9 @@ function DesignAgentDialogBody({
   onLinksChanged?: () => void;
 }) {
   const environmentId = context.environmentId;
+  // The canvas's node: links, history and resumes go there (plan item 4007).
+  const designScope = useDesignScope();
+  const nodeDesign = useDesignApi();
   const terminal = useOptionalTerminalContext();
   const createTab = terminal?.createTab ?? null;
   const updateDraft = useNativeComposeStore((state) => state.updateDraft);
@@ -211,7 +217,7 @@ function DesignAgentDialogBody({
   const imagePaste = useDesignPromptImagePaste({
     containerRef: promptRef,
     environmentId,
-    scopeKey: designBackendKey(),
+    scopeKey: designBackendKeyFor(designScope),
     enabled: !pending,
     images,
     onImagesChange: setImages,
@@ -223,7 +229,7 @@ function DesignAgentDialogBody({
     const checkpointId = context.checkpointId;
     if (!checkpointId) return;
     let cancelled = false;
-    designApi
+    nodeDesign
       .history(environmentId, context.canvasId, 0, 50)
       .then((page) => {
         const entry = page?.entries?.find((candidate) => candidate.id === checkpointId);
@@ -235,7 +241,7 @@ function DesignAgentDialogBody({
     return () => {
       cancelled = true;
     };
-  }, [context.canvasId, context.checkpointId, environmentId]);
+  }, [context.canvasId, context.checkpointId, environmentId, nodeDesign]);
 
   const tabs = useMemo(() => {
     const map = new Map<string, TabInfo>();
@@ -284,7 +290,7 @@ function DesignAgentDialogBody({
     const deadline = setTimeout(() => {
       if (!cancelled) setCheck(DESIGN_LINK_CHECK_TIMED_OUT);
     }, DESIGN_LINK_CHECK_DEADLINE_MS);
-    designApi
+    nodeDesign
       .sessionLinkStates(environmentId, context.canvasId)
       .then((result) => {
         if (cancelled) return;
@@ -307,7 +313,7 @@ function DesignAgentDialogBody({
       cancelled = true;
       clearTimeout(deadline);
     };
-  }, [checkGeneration, context.canvasId, environmentId, hasLinks]);
+  }, [checkGeneration, context.canvasId, environmentId, hasLinks, nodeDesign]);
 
   const statusOf = (link: DesignSessionLink): DesignLinkStatus =>
     designLinkStatus(link, {
@@ -431,7 +437,7 @@ function DesignAgentDialogBody({
           ]);
           onLinksChanged?.();
         },
-        claim: (input) => designApi.resumeSessionLink(environmentId, context.canvasId, input),
+        claim: (input) => nodeDesign.resumeSessionLink(environmentId, context.canvasId, input),
         hasTab: hasAgentTab,
         createTab,
         focus: (tabId) => focusTab(paneLayouts, environmentId, tabId),
@@ -500,7 +506,7 @@ function DesignAgentDialogBody({
     }
     if (!applyDraft(tabId, addition)) return;
     try {
-      const link = await designApi.linkSession(
+      const link = await nodeDesign.linkSession(
         environmentId,
         context.canvasId,
         {
@@ -556,7 +562,7 @@ function DesignAgentDialogBody({
     setPending(true);
     setError(null);
     try {
-      await designApi.unlinkSession(environmentId, context.canvasId, link.id);
+      await nodeDesign.unlinkSession(environmentId, context.canvasId, link.id);
       setRemovedLinks((current) => new Set([...current, link.id]));
       onLinksChanged?.();
     } catch (reason) {

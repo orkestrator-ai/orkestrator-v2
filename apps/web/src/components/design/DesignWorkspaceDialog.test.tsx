@@ -16,7 +16,7 @@ import { nativeComposeDraft, useNativeComposeStore } from "@/stores/nativeCompos
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { Environment } from "@/types";
 import type { CreatableTabType, CreateTabOptions } from "@/contexts/TerminalContext";
-import { loadDesignReadiness, type DesignReadinessView } from "./design-launch";
+import type { DesignReadinessView } from "./design-launch";
 import { DesignWorkspaceDialog } from "./DesignWorkspaceDialog";
 import {
   deferred,
@@ -1102,7 +1102,6 @@ describe("DesignWorkspaceDialog", () => {
         onOpenChange={() => {}}
         environmentId="env-1"
         createTab={() => true}
-        loadReadiness={loadDesignReadiness}
       />,
     );
     await flush();

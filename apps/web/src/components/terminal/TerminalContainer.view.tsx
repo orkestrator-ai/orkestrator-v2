@@ -50,6 +50,7 @@ import { useShallow } from "zustand/react/shallow";
 import { toast } from "sonner";
 import { showTabLimitReachedToast } from "@/lib/tab-limit-toast";
 import { isDesignFilePath, openDesignFile } from "@/components/design/design-open-file";
+import { designApiFor } from "@/lib/design-client";
 import { openDesignCanvasTab } from "@/components/design/design-open-tab";
 import { openGraphDesignerTab } from "@/components/graph-designer/graph-designer-open-tab";
 import { openGraphRunTab } from "@/components/graph-run/graph-run-open-tab";
@@ -1759,7 +1760,9 @@ export function TerminalContainer({
 
       // Accepted design paths open in the canvas; other paths use the text editor.
       if (!changeDiff && isDesignFilePath(relativeFilePath)) {
-        void openDesignFile(environmentId, relativeFilePath, handleCreateTab);
+        void openDesignFile(environmentId, relativeFilePath, handleCreateTab, {
+          openFile: designApiFor(paneLayoutScope).openFile,
+        });
         return;
       }
 
@@ -1845,6 +1848,7 @@ export function TerminalContainer({
       environmentId,
       handleCreateTab,
       tabLaunchScope,
+      paneLayoutScope,
     ],
   );
 

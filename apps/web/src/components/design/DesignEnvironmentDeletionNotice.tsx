@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { designApi, getCapabilities } from "@/lib/design-client";
+import { designApiFor, designBackendKeyFor, getCapabilities } from "@/lib/design-client";
+import { useDesignScope } from "./design-scope";
 
 interface Summary {
   total: number;
@@ -20,6 +21,8 @@ export function DesignEnvironmentDeletionNotice({
   environmentId: string;
   open: boolean;
 }) {
+  // The environment's node: its designs (plan item 4007).
+  const designScope = useDesignScope();
   const [summary, setSummary] = useState<Summary | null>(null);
   // Closing forgets the summary, so reopening never shows a stale count.
   const [prevOpen, setPrevOpen] = useState(open);
@@ -32,8 +35,11 @@ export function DesignEnvironmentDeletionNotice({
     let active = true;
     void (async () => {
       try {
-        if (!(await getCapabilities()).library) return;
-        const page = await designApi.library(environmentId, { filter: "all", limit: 50 });
+        if (!(await getCapabilities(designBackendKeyFor(designScope), designScope)).library) return;
+        const page = await designApiFor(designScope).library(environmentId, {
+          filter: "all",
+          limit: 50,
+        });
         if (!active) return;
         const live = page.entries.filter((entry) => entry.state !== "deleted");
         setSummary({
@@ -48,7 +54,7 @@ export function DesignEnvironmentDeletionNotice({
     return () => {
       active = false;
     };
-  }, [environmentId, open]);
+  }, [environmentId, open, designScope]);
   if (!summary || summary.total === 0) return null;
   const designs = summary.total === 1 ? "1 design" : `${summary.total} designs`;
   const notExported =

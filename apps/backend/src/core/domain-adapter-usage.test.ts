@@ -68,7 +68,9 @@ describe("recordRendererDomainAdapterUsage", () => {
         [
           { domain: "node-mail", version: 0, count: 1 },
           { domain: "node-mail", version: 1, count: 1 },
-          { domain: "git", version: 0, count: 1 },
+          // Every domain has a client since 7006-7009: a version no adapter
+          // list holds is the unlisted pair.
+          { domain: "git", version: 7, count: 1 },
         ],
         { usage },
       ),

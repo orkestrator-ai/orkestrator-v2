@@ -1,9 +1,7 @@
 import { configureLogger, resetLogger, type LogRecord } from "@orkestrator/protocol/logger";
 import { expect, mock, spyOn, test } from "bun:test";
-import {
-  PR_MONITOR_CHANGED_EVENT,
-  type PrMonitorEnvironmentState,
-} from "@orkestrator/protocol/pr-monitor";
+import { prMonitorChangedEvent } from "@orkestrator/protocol/contract/domains/events";
+import type { PrMonitorEnvironmentState } from "@orkestrator/protocol/pr-monitor";
 import type { PrMonitorEffects } from "./pr-monitor.js";
 import { BackendRuntime } from "./backend-runtime.js";
 import type { CommandContext } from "./commands-context.js";
@@ -235,11 +233,13 @@ test("a change in relayed monitor inputs announces a content-free health hint", 
     appRoot: "",
     resourceRoot: "",
   } as CommandContext;
+  // The monitor announces with the event's definition (7011, typed backend events).
   const announce = (payload: unknown) =>
-    (runtime.prMonitor as unknown as { announce(event: string, payload: unknown): void }).announce(
-      PR_MONITOR_CHANGED_EVENT,
-      payload,
-    );
+    (
+      runtime.prMonitor as unknown as {
+        announce(event: typeof prMonitorChangedEvent, payload: unknown): void;
+      }
+    ).announce(prMonitorChangedEvent, payload);
   const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
   try {
     await runtime.prMonitor.sync(context);

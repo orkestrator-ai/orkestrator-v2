@@ -50,6 +50,7 @@ function contractBackend() {
         return handler(args, {} as CommandContext, rest[0] as never);
       },
       hasCommand: (command: string) => commands.has(command),
+      commandAccess: (command: string) => commands.contracts.get(command)?.access,
     },
   };
 }
@@ -213,7 +214,10 @@ describe("relay through the command node", () => {
   test("forwards the envelope unchanged to the leaf's registry", async () => {
     const leafBackend = contractBackend();
     const leaf = await startGateway({ backend: leafBackend.backend });
+    // The relay admits only commands the command node itself defines with
+    // `access: "workspace"` (7012): it runs a build with the same probe.
     const commandNode = await startGateway({
+      backend: contractBackend().backend,
       backendHello: async () => leafIdentity,
       nodeHooks: {
         isPortalOriginAllowed: () => false,

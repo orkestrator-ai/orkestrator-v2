@@ -1,4 +1,5 @@
 import { expect, mock, spyOn, test } from "bun:test";
+import { claudeTmuxEvent } from "@orkestrator/protocol/contract/domains/events";
 import { TmuxBackend } from "./tmux-backend.js";
 import { TmuxSession } from "./tmux-session-manager.js";
 import type { CommandContext } from "./commands.js";
@@ -61,8 +62,9 @@ test("transcript discovery backs off at 2/4/8/10 seconds, resets on a hook, then
     snapshot.mockResolvedValue({ pending: [], timeouts: [], transcriptSize: bytes.length });
     await step(37001);
     expect(read).toHaveBeenCalledWith("/fixture/transcript.jsonl", 0);
+    // Emitted with the event's definition (7011, typed backend events).
     expect(emit).toHaveBeenCalledWith(
-      expect.any(String),
+      claudeTmuxEvent,
       expect.objectContaining({
         kind: "transcript-line",
         line: expect.objectContaining({ type: "assistant" }),

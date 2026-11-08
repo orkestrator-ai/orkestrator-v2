@@ -11,6 +11,7 @@ import path from "node:path";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
 import { normalizeOpenCodeModelProviders } from "@orkestrator/protocol/native-agent";
+import { hostOpenCodeDatabaseEnvironment } from "./opencode-host-database.js";
 import type { CommandContext } from "./commands-context.js";
 import {
   resolveBunBinary,
@@ -353,6 +354,7 @@ export async function withHostOpenCodeServer<T>(
       env: {
         ...process.env,
         ...OPENCODE_PINNED_RUNTIME_ENV,
+        ...hostOpenCodeDatabaseEnvironment(process.env),
         OPENCODE_SERVER_USERNAME: "opencode",
         OPENCODE_SERVER_PASSWORD: token,
         ORKESTRATOR_PARENT_PID: String(process.pid),
@@ -371,6 +373,8 @@ async function refreshOpenCode(
   await dependencies.runCommand(resolveOpenCodeBinary(context), ["models", "--refresh"], {
     cwd,
     timeoutMs: 45_000,
+    // `models` opens OpenCode's database too.
+    env: { ...process.env, ...OPENCODE_PINNED_RUNTIME_ENV, ...hostOpenCodeDatabaseEnvironment() },
   });
   const allowedProviders = normalizeOpenCodeModelProviders(
     (await context.storage.loadConfig()).global.openCodeModelProviders,

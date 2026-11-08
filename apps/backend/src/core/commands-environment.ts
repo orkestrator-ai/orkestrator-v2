@@ -3,6 +3,7 @@ import {
   environmentSetupStartedEvent,
 } from "@orkestrator/protocol/contract/domains/events";
 import { ROOTLESSKIT_HOST_LOOPBACK_ADDRESS } from "@orkestrator/protocol/container-host-reachability";
+import { hostOpenCodeDatabaseEnvironment } from "./opencode-host-database.js";
 import { isEnvironmentSetupSettled } from "@orkestrator/protocol/environment-readiness";
 import {
   assertWorktreePathUnlinked,
@@ -692,8 +693,10 @@ export async function spawnSetupTerminal(
     }
     const shellPath = resolveLocalShellPath();
     const setupCommand = buildSetupTerminalCommand(commands, `${quoteShell(shellPath)} -l`);
+    const setupEnvironment = envWithManagedBinaries(context);
     terminals.rememberSession(sessionId, {
       kind: "local",
+      openCodeDatabase: hostOpenCodeDatabaseEnvironment(setupEnvironment).OPENCODE_DB,
       environmentId: environment.id,
       cols: 80,
       rows: 24,
@@ -713,7 +716,7 @@ export async function spawnSetupTerminal(
         cwd: environment.worktreePath,
         cols: 80,
         rows: 24,
-        env: envWithManagedBinaries(context),
+        env: setupEnvironment,
       },
       context,
       { onData: tracker.onData, onExit: tracker.onExit },

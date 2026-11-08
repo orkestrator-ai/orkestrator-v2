@@ -1,3 +1,5 @@
+import { Database } from "bun:sqlite";
+import { ORKESTRATOR_OPENCODE_DB_FILE } from "./opencode-host-database.js";
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
@@ -356,6 +358,52 @@ describe("host model catalogue refresh", () => {
       expect.objectContaining({ timeoutMs: 45_000 }),
     );
     expect(children[0]?.exited).toBe(true);
+  });
+
+  test("isolates both the models command and catalogue server from an incompatible database", async () => {
+    const previousDataHome = process.env.XDG_DATA_HOME;
+    const previousDatabase = process.env.OPENCODE_DB;
+    process.env.XDG_DATA_HOME = path.join(appRoot, "xdg");
+    delete process.env.OPENCODE_DB;
+    try {
+      const directory = path.join(process.env.XDG_DATA_HOME, "opencode");
+      await fs.mkdir(directory, { recursive: true });
+      const database = new Database(path.join(directory, "opencode.db"), { create: true });
+      database.run("CREATE TABLE session_v2 (id TEXT PRIMARY KEY)");
+      database.close();
+      const run = mock(async () => ({ stdout: "", stderr: "" }));
+      stubBridgeSpawn((spawned) => listenAsBridge(Number(spawned.env.PORT)));
+      const refresh = refreshTesting.createHostModelCatalogRefresher({
+        runCommand: run as never,
+        createOpenCodeClient: (() => ({
+          provider: {
+            list: async () => ({
+              data: {
+                all: [{ id: "openai", name: "OpenAI", models: { "gpt-5": { name: "GPT-5" } } }],
+                connected: [],
+              },
+            }),
+          },
+        })) as never,
+      });
+      await refresh(context(), "opencode");
+      expect(run).toHaveBeenCalledWith(
+        "opencode",
+        ["models", "--refresh"],
+        expect.objectContaining({
+          env: expect.objectContaining({ OPENCODE_DB: ORKESTRATOR_OPENCODE_DB_FILE }),
+        }),
+      );
+      expect(spawns).toHaveLength(1);
+      expect(spawns[0]?.env.OPENCODE_DB).toBe(ORKESTRATOR_OPENCODE_DB_FILE);
+      expect(children[0]?.exited).toBe(true);
+      expect(process.env.OPENCODE_DB).toBeUndefined();
+    } finally {
+      if (previousDataHome === undefined) delete process.env.XDG_DATA_HOME;
+      else process.env.XDG_DATA_HOME = previousDataHome;
+      if (previousDatabase === undefined) delete process.env.OPENCODE_DB;
+      else process.env.OPENCODE_DB = previousDatabase;
+    }
   });
 
   test("aborts a stalled OpenCode provider request and releases the child", async () => {

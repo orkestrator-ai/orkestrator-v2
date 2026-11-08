@@ -649,6 +649,21 @@ reporting a locked database is retried twice (0.5 s, then 2 s) before the
 dispatch that asked for it is refused with that reason. Container servers have
 their own database and are not serialised.
 
+That shared database is the user's, and their own OpenCode 2 may have written
+it. OpenCode 1.x refuses to start on a database whose tables include no
+`session` ("Database is not empty and has no session table"), which is what 2.x
+migration `20260804233008_loose_psylocke` leaves in a database first written
+by an early 2.x build: it renames `session` to `session_v2`. Before every host
+OpenCode start (local servers, the catalogue and sign-in servers,
+`opencode models --refresh`, and the environment's host terminals, where an
+OpenCode tab types `opencode`), `opencode-host-database.ts` applies 1.x's own
+test to `opencode.db`, read-only. When it fails, the process gets
+`OPENCODE_DB=opencode-orkestrator.db`, which OpenCode resolves beside the
+shared file. The user's database is never moved, rewritten or deleted. Once
+`opencode-orkestrator.db` exists it is always used, because Orkestrator's
+sessions live in it; an `OPENCODE_DB` the environment already sets is left
+alone. A 1.x database that 2.2.5 migrates keeps `session` and stays shared.
+
 `apps/backend/src/core/native-agent-provider.ts` is where the split happens —
 `createNativeAgentProvider()` returns an `OpenCodeProvider` for `opencode` and
 an `HttpBridgeProvider` for every other platform. Both satisfy the same

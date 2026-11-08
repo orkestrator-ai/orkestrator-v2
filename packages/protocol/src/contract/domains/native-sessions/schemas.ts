@@ -476,6 +476,12 @@ const nativeAgentSessionFields = {
   agent: NativeAgentProviderSchema,
   logicalSessionKey: Schema.String,
   providerSessionId: Schema.String,
+  /**
+   * The OpenCode line serving `providerSessionId`: `v2` for an OpenCode 2.x
+   * session. Absent means legacy (1.x), as for every record written before
+   * the 2.x preview. Set once, at creation; never changes.
+   */
+  openCodeProtocol: Schema.optional(Schema.Literal("v2")),
   origin: Schema.Literals(AGENT_INTERACTION_ORIGINS),
   interactionPolicy: protocolObject<AgentInteractionPolicy>(),
   /** Provider-neutral interactive choices that survive renderer and backend restarts. */

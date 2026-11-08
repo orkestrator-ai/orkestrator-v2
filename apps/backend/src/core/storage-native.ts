@@ -526,11 +526,18 @@ export class NativeAgentSessionsRepository {
           | "executionPolicy"
           | "policy"
           | "initialPromptPresentation"
+          | "openCodeProtocol"
         >
       >,
     createProviderSession: () => Promise<string>,
   ): Promise<PersistedNativeAgentSession> {
     const interactionMetadata = resolveNativeAgentInteractionMetadata(input);
+    if (
+      input.openCodeProtocol !== undefined &&
+      (input.openCodeProtocol !== "v2" || input.agent !== "opencode")
+    ) {
+      throw new Error("Native agent session input is invalid");
+    }
     if (
       !isNonBlankString(input.key) ||
       !isNonBlankString(input.environmentId) ||

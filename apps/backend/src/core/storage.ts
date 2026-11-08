@@ -1059,6 +1059,7 @@ export class StorageService {
           | "executionPolicy"
           | "policy"
           | "initialPromptPresentation"
+          | "openCodeProtocol"
         >
       >,
     createProviderSession: () => Promise<string>,

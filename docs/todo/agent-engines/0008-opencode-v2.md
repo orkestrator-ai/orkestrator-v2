@@ -1,6 +1,6 @@
 # OpenCode 2.x migration
 
-Checked against `main` at `cd7bbe3e5` (2026-10-30).
+Checked against `main` at `8598abfe4` (2026-11-08).
 
 ## Task analysis
 
@@ -8,16 +8,18 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 ### Tasks
 
-Status rechecked 2026-10-30 against `main` at `cd7bbe3e5`, and task 2 again on 2026-11-06 against `main` at `ee2cc8423` (2.2.5); see "Assumptions and decisions" and [1031](1031-provider-upgrade-2026-11-06.md) task 7.
+Status rechecked 2026-10-30 against `main` at `cd7bbe3e5`, and task 2 again on 2026-11-06 against `main` at `ee2cc8423` (2.2.5); see "Assumptions and decisions" and [1031](1031-provider-upgrade-2026-11-06.md) task 7. Upstream rechecked again on 2026-11-08 against `main` at `8598abfe4` (2.2.6), and task 9 added; see "Upstream recheck at 2.2.6".
 
 1. **Upstream recheck**: rerun the recheck procedure against the current 1.x and 2.x releases (the "Needs verification" item). Status: done (2026-10-30, against 2.2.2 and the 1.19.4 pin; see "Upstream recheck at 2.2.2").
-2. **Readiness gate and start decision**: decide when the 2.x work may start, using the gate's open conditions. Status: open (trigger decided; still blocked at 2.2.2 by storage policy, per-prompt model/agent/tools and structured output, runtime-context gaps, stale-turn guard, bounded inbox and experimental MCP endpoints; rechecked at the 1.19.5 upgrade on 2026-10-30, still 2.2.2 and unchanged, see [1020](1020-provider-upgrade-2026-10-30.md) task 8; rechecked 2026-11-06 against 2.2.5, still closed, see [1031](1031-provider-upgrade-2026-11-06.md) task 7).
+2. **Readiness gate and start decision**: decide when the 2.x work may start, using the gate's open conditions. Status: open (trigger decided; still blocked at 2.2.2 by storage policy, per-prompt model/agent/tools and structured output, runtime-context gaps, stale-turn guard, bounded inbox and experimental MCP endpoints; rechecked at the 1.19.5 upgrade on 2026-10-30, still 2.2.2 and unchanged, see [1020](1020-provider-upgrade-2026-10-30.md) task 8; rechecked 2026-11-06 against 2.2.5, still closed, see [1031](1031-provider-upgrade-2026-11-06.md) task 7; rechecked 2026-11-08 against 2.2.6, unchanged. On 2026-11-08 the owner asked to move: steering is required and undo may be dropped. Accepting the other open conditions with the mitigations under "Task 2: owner decision" is proposed but not yet confirmed).
 3. **Legacy 1.x session policy**: keep, migrate or retire existing 1.x sessions when 2.x arrives (open question 1, code item 5). Status: done as a decision (keep on a pinned 1.x binary with its own database); the routing code is open (depends on 5).
 4. **Losses to decide**: rebuild, capability-gate or drop each of the eight listed losses (code item 3, open question 2). Status: done as decisions (share dropped with 1.19.1; the rest decided below); the code is open (depends on 5).
-5. **`opencode2` provider**: a second provider with its own binary pin, `OPENCODE_DB`, `@opencode/client`, persisted protocol marker, snapshot-plus-hints projection and native steer/queue (code items 1, 2 and 4). Status: open (depends on 2).
+5. **`opencode2` provider**: a second provider with its own binary pin, `OPENCODE_DB`, `@opencode/client`, persisted protocol marker, snapshot-plus-hints projection and native steer/queue (code items 1, 2 and 4). Status: open (depends on 2 and 10; steer is now required in the first release, see task 10).
 6. **Changes that must ship with the first 2.x pin**: health probe on `/api/info` rejecting HTML, isolated `OPENCODE_DB` on host and container, GitHub-token plugin ported to `@opencode/plugin`, provider sign-in moved to `/api/credential`, live tests off `serve --pure`. Status: partly done (`checkHttpHealth` refuses HTML since 2026-10-30; the compatibility probe no longer uses `--pure`; since 2026-11-08 the 1.x host falls back to its own `OPENCODE_DB` when the shared database has no `session` table); the rest is open (depends on 5).
 7. **Qualification of the first 2.x pin**: the live probe, background, replay and capability checks listed under "Qualification". Status: open (depends on 5).
 8. **Session V2 features after the move**: steer/queue, `switchAgent`/`switchModel`, context, log replay, staged revert, saved rules, credential/integration sign-in, `reference.list`. Status: open (depends on 5).
+9. **Transport for the 2.x provider: `opencode acp` behind the ACP bridge, or the `/api/*` HTTP server**: the existing plan assumed the HTTP API; 2.x also ships a full ACP agent. Status: done (2026-11-08): ACP is ruled out because it cannot steer and the owner requires steering; the provider uses the HTTP API.
+10. **Steer spike on 2.2.6**: prove the backend-held steer guard (task 5) against the real binary before the provider is built. Status: open (the next step; needs the owner's go-ahead).
 
 ### 1. Upstream recheck
 
@@ -206,6 +208,82 @@ Status rechecked 2026-10-30 against `main` at `cd7bbe3e5`, and task 2 again on 2
   - **Adopt queued input or saved rules early through `client.v2.*`.**
     - Pros: earlier user value.
     - Cons: experimental surface on a line upstream is no longer developing; the code would be rewritten for `@opencode/client` anyway.
+
+### 9. Transport for the 2.x provider
+
+**Problem.** Tasks 2 to 8 assume a 2.x provider written against the `/api/*` HTTP server. Most of the gate conditions that keep it closed (no storage policy, experimental MCP add/remove, no per-prompt model or tools, an "Experimental HttpApi surface" label) are properties of that HTTP API. 2.x also ships `opencode acp`, an Agent Client Protocol agent over stdio, and Orkestrator already has an ACP bridge.
+
+**Context.** `bridges/acp-bridge` serves the shared bridge contract (dispatch journal and `/dispatch`, retaining close, transcript v2, approvals that deny on timeout, one row per model response) and is used only by Grok; its non-test sources mention Grok about 390 times, so it is not yet generic. Cursor moved off ACP to its own SDK bridge. OpenCode today runs bridge-less (see agent-engines.md, "Why OpenCode has no bridge"), and that section already says to revisit the decision if fault isolation keeps biting. The current OpenCode provider is about 13,200 non-test lines in 43 `opencode-*.ts` files plus 42 test files.
+
+**Investigation.** Read at tag `v2.2.6`, `packages/cli/src/acp/` (20 files):
+- `initialize` advertises `loadSession`, `mcpCapabilities: { http: true, sse: false }`, `promptCapabilities: { embeddedContext, image }` and `sessionCapabilities` with `list`, `resume`, `fork`, `close`, `delete` and `additionalDirectories` (`service.ts:134-141`).
+- `session/new`, `load`, `resume` and `fork` each take `mcpServers` (stdio and HTTP). That is a stable way to give a session the Orkestrator agent MCP and the workflow-result tool without the experimental `/api/experimental/mcp/:server` routes.
+- Config options `model`, `effort` (the model's variants, category `thought_level`) and `mode` (`config-option.ts`), and `available_commands_update` and `config_option_update` (`sessions.ts`).
+- `session/request_permission` for permissions, and questions as `elicitation/create` forms when the client declares form elicitation (`elicitation.ts`; credential prompts are deliberately never elicited).
+- `usage_update`, `agent_thought_chunk`, `tool_call_update`, `session_info_update`, and history replay on `session/load` (`replay.ts`).
+- Not seen: `plan` updates (2.x has no todo tool by default), any revert/undo, and steer (ACP has no mid-turn input).
+
+**Decisions.**
+
+- **Which transport should the 2.x provider use?**
+  - **`opencode acp` behind a generalized ACP bridge (recommended, after a spike).**
+    - Pros: ACP is a versioned protocol rather than an API upstream labels experimental, so most of task 2's gate stops applying; MCP per session is stable; the bridge contract (dispatch evidence, close, approvals, transcript v2, row boundaries) already exists and is tested; it gives OpenCode the fault isolation the bridge-less design gave up; the renderer and backend see one more ACP platform instead of a new projection.
+    - Cons: the ACP bridge must be made multi-agent (it is Grok-shaped today); Orkestrator owns the transcript instead of reading OpenCode's history, so history paging, change evidence and usage come from the bridge's own records; undo/revert and native steer are lost until ACP or a side channel provides them; questions depend on the bridge declaring form elicitation.
+  - **The `/api/*` HTTP server through `@opencode/client` (tasks 5 to 8 as written).**
+    - Pros: the richest surface (steer/queue inbox, staged revert, durable session log, `switchModel`, saved permission rules, credentials); closest to today's bridge-less provider.
+    - Cons: the API is still labelled experimental and its MCP routes are experimental; the gate has stayed closed through five rechecks; a new ~13,000-line provider against a moving target; no fault isolation.
+  - **Stay on 1.x.**
+    - Pros: no work; nothing lost.
+    - Cons: upstream development is on 2.x (1.x gets backports only); Homebrew, Arch and the README install 2.x, so users' own CLI and sign-ins drift from what Orkestrator runs; the issues that prompted this recheck continue.
+
+**Steering decides it (2026-11-08).** The owner requires steering and accepts losing undo. `opencode acp` cannot steer:
+- `turn.ts` refuses a second `session/prompt` while one is active ("Session already has an active ACP prompt").
+- ACP has no mid-turn input method.
+- `opencode acp` starts its own `opencode serve --stdio --port 0` with a random password (`services/standalone.ts`) and publishes neither the URL nor the password. A side channel to that server for `delivery: "steer"` is therefore not possible without an upstream change.
+- A second server of our own on the same `OPENCODE_DB` would rely on cross-process inbox wake-up, which upstream does not describe.
+
+The ACP route is ruled out. The provider uses the `/api/*` HTTP server (task 5), which also keeps staged revert, so undo need not be lost after all.
+
+### 10. Steer spike on 2.2.6
+
+**Problem.** 2.x has no expected-turn precondition, and Orkestrator's steer contract requires one: every bridge answers `409 { outcome: "mismatch" | "idle" }` when `expectedRunId` is not the running turn, and the backend shows "The active turn changed before the instruction could be delivered" (`native-agent-service.ts`). Without a guard, a steer that misses the end of its turn is not refused.
+
+**Context.** Upstream semantics (`specs/v2/session.md` at 2.2.6):
+- `steer` delivers in enqueue order at the next safe step boundary. At the idle boundary that ends a run, pending steers deliver before the run settles, so the run continues with them.
+- A successful steer wakes execution. A steer admitted to an idle session therefore starts a new run with the steer as its input, rather than being refused.
+- `queue` does not wake execution. Pending items can be cancelled (`session.inbox.cancelled`) or changed between `steer` and `queue` (`session.inbox.delivery.changed`).
+- Inbox and execution events (`session.inbox.enqueued`/`delivered`, `session.execution.started`/`succeeded`/`failed`/`interrupted`) are durable, ordered by a per-session aggregate sequence. That sequence can be read with `GET /api/experimental/session/:id/log?after=&follow=`. The execution events carry no run id.
+
+Pi has the same shape of problem (its SDK steers without a precondition). It is solved in the bridge, `bridges/pi-bridge/src/http.ts` around the `expectedRunId` checks.
+
+**Investigation.** Source reading only; nothing has been run. The proposed guard, in `OpenCodeProvider` v2:
+1. Take the session's dispatch lock, so that Orkestrator itself cannot start another turn in the window.
+2. Define the run id as the aggregate sequence of the latest `session.execution.started`. Refuse with `mismatch`, or with `idle` when no execution is open, before sending anything.
+3. Journal the steer, then `POST /api/session/:id/prompt` with `delivery: "steer"` and `id` set to the Orkestrator request id. That makes a retry of the same request idempotent upstream (`409 LifecycleConflict` on a conflicting reuse).
+4. Settle from the ordered log. `inbox.delivered` before that run's terminal event means `applied`. `inbox.delivered` after a terminal event, inside a newer `execution.started`, means the steer woke a new run. That run is adopted as an ordinary dispatched turn, recorded against the same request id, so the message reaches the agent exactly once either way.
+
+The remaining window is a run OpenCode starts by itself between step 2 and step 3: background-job results continuing a session, or schedules. Schedules are kept off by never setting `experimental.schedules`.
+
+**Decisions.**
+
+- **How should a steer that misses its turn behave?**
+  - **Adopt the woken run as a dispatched turn (recommended; the owner's rule for every provider since 2026-11-08, see [0005](0005-mid-turn-steer-and-interrupt.md) task 10).**
+    - Pros: matches OpenCode's own semantics and the cross-provider rule; nothing is lost or duplicated; the user sees their message answered.
+    - Cons: needs the ordered log to tell `applied` from a new turn.
+  - **Enqueue as `queue` and promote to `steer` only after confirming the run.**
+    - Pros: an item admitted to an idle session sits pending and can be cancelled, which gives a true refusal.
+    - Cons: two calls, so the race moves rather than closes; it relies on `delivery.changed` timing that has not been verified.
+- **What must the spike prove?**
+  - **The following, on the pinned 2.2.6 binary, in an isolated `HOME`/`XDG_*`/`OPENCODE_DB`, with the scripted local model the 1.x live tests use (recommended):**
+    - mid-run delivery at a step boundary;
+    - delivery at the idle boundary, where the run continues rather than ending;
+    - wake on an idle session;
+    - an exact retry of the same id;
+    - a conflicting reuse of the id;
+    - the ordering of inbox and execution events in the session log;
+    - whether `/api/event` frames carry the aggregate sequence, or whether the log route is needed.
+    - Pros: settles the only requirement the owner named before any provider code is written.
+    - Cons: needs a fake OpenAI-compatible model endpoint for 2.x; the 1.x fixture may not carry over.
 
 This is the deferred checkpoint for moving from the OpenCode 1.x line to
 OpenCode 2.x. The decision is still: do not bump the OpenCode binary or SDK to
@@ -411,6 +489,63 @@ tarballs for both versions, in a temporary `HOME`/`XDG_*`, with no sign-in.
 - 1.x live check: `mise run verify:opencode:live` passed against the pinned
   1.19.4 binary (archive and executable digests matched the manifest): 1 + 3
   tests.
+
+### Upstream recheck at 2.2.6
+
+Run on 2026-11-08 by reading the source: tags `v2.2.5` → `v2.2.6` (515 commits),
+plus `dev` at `3ce4ca464d` (79 commits past 2.2.6). The 2.x binary was not run.
+
+- Versions: `@opencode/cli`, `@opencode/client` and `@opencode/plugin` latest
+  are `2.2.6` (2026-11-06). `@opencode-ai/sdk` latest is still `1.19.5`
+  (2026-10-28), which is the pin. The `v1` branch is still maintained, but with
+  backports only (the last is "cap images re-sent from history", 2026-11-07).
+  No dated 1.x end-of-life notice.
+- Storage: no new migrations in 2.2.6. `dev` changes one line of an existing
+  migration (`import_legacy_credentials`). Still no written storage policy.
+- Prompt input: `packages/schema/src/prompt-input.ts` is unchanged in 2.2.6 and
+  on `dev`. Still no per-prompt model, agent, tools or structured output, and
+  no expected-turn field.
+- `specs/v2/session.md` is unchanged. The inbox refactor in
+  `core/session/inbox.ts` changes no behaviour: still no length cap and no
+  stale-turn guard.
+- MCP: add, remove, connect and disconnect are still under
+  `/api/experimental/mcp/:server` (`packages/protocol/src/groups/mcp.ts`). New
+  in 2.2.6: opt-in `pool: true` MCP connection sharing.
+- `migrate-v1.mdx` moved from `services/www` to `services/site` with no change
+  to its text, so the runtime-context gaps stand.
+- Upstream `AGENTS.md` adds a feature-flag policy. Flags are off in releases,
+  and `experimental.<key>` or `OPENCODE_FLAGS` turns them on. A 2.x provider
+  should set `OPENCODE_FLAGS` explicitly so that a flag shipping or flipping
+  cannot change behaviour without a pin change.
+- Other 2.2.6 changes for the future provider:
+  - `/api/*` now refuses cross-site navigations and requests from disallowed
+    origins;
+  - `opencode run --archived` and `--worktree`;
+  - `client.experimental.job.list()` for background jobs;
+  - the ACP agent removes a session that is created and closed without a
+    prompt.
+- Runtime-context losses, read in the 2.2.6 source on 2026-11-08:
+  - **LSP**: the `lsp` config is accepted but no language server runs, and
+    there are no LSP tools or diagnostics (`migrate-v1.mdx`, "Supported fields
+    without direct native equivalents"). Upstream suggests the project's lint,
+    typecheck or compiler commands instead. `core/file-mutation.ts:138` and
+    `core/tool/plugin/edit.ts:258` carry "after LSP runtime exists" TODOs, so
+    LSP is planned but has no date. This is the one real loss.
+  - **Formatters still run** (`core/formatter.ts`; `formatter` config needs no
+    migration). Only the status route is gone, and Orkestrator uses it just
+    for the count in the runtime summary (`opencode-discovery-metadata.ts`).
+  - **Todos**: `OPENCODE_FLAGS=todo` turns on the `todowrite` tool
+    (`schema/config/flag.ts`). It is experimental.
+  - **`CLAUDE.md` fallback**: 2.x discovers only `AGENTS.md`, but the
+    `instructions` config is unchanged, so the provider can list `CLAUDE.md`
+    there.
+  - **Compaction tuning** (`tail_turns`, `prune`) and **agent temperature and
+    options** are ignored. Orkestrator sets none of them.
+- Gate: unchanged, all six conditions still open. Task 9 records that most of
+  them belong to the HTTP API and would not apply to an ACP transport.
+- Host data: the development host's `opencode.db` (2.3 GB) has no
+  `session_v2` table, so no 2.x has migrated it. Its `session_message` table
+  is empty. No `opencode` is on `PATH`.
 
 ## Outstanding work
 
@@ -643,10 +778,14 @@ Before any 2.x pin reaches production:
 
 ## Needs verification
 
-- Upstream state since 2026-10-30 (2.2.2): a storage compatibility policy, a
+- Upstream state since 2026-11-08 (2.2.6): a storage compatibility policy, a
   steer precondition, a bounded inbox, MCP endpoints leaving experimental, or a
   dated 1.x end-of-life. Run the recheck procedure above before picking this
   up, and at each new 2.x minor.
+- Task 10: the 2.x steer semantics (delivery at step and idle boundaries, wake
+  on idle, idempotent ids, event ordering in the session log) come from reading
+  the spec and source, and none of them has been run. The task 9 ACP findings
+  were also read, not run; they matter only if steering stops being required.
 
 ## Assumptions and decisions
 
@@ -788,6 +927,31 @@ Chose the recommended option: keep the rule and adopt Session V2 features on
 the 2.x provider only. The 1.x line still gets fixes, but upstream development
 is on `dev`/2.x, so experimental 1.x V2 routes are an even worse base than when
 the analysis was written.
+
+### Task 2: owner decision (2026-11-08)
+
+Worked 2026-11-08 against `main` at `8598abfe4`. The owner reported that
+staying on 1.x is causing problems, and set two requirements: undo may be
+dropped, and steering may not. That ends "wait for the gate". What remains to
+confirm is whether the owner accepts the open conditions, each with a
+mitigation:
+
+- storage policy: an exact pin, `OPENCODE_DISABLE_AUTOUPDATE`, and an isolated
+  `OPENCODE_DB`, so only Orkestrator's own sessions see a migration;
+- per-prompt model, agent and tools: `switchModel`/`switchAgent` and session
+  permissions, applied under the session dispatch lock (task 4);
+- runtime-context gaps (no LSP, no `CLAUDE.md` fallback): accepted as losses;
+- stale-turn guard: the backend-held guard in task 10;
+- bounded inbox: Orkestrator bounds its own steer journal by count and bytes,
+  as the Cursor and Pi bridges do;
+- experimental MCP and log routes: used at the exact pin, and rechecked on
+  every bump.
+
+### Task 9: HTTP API, not ACP
+
+Chose the HTTP API. ACP was the cheaper route and would have closed most of the
+gate, but it cannot steer (see task 9), and steering is the owner's one hard
+requirement.
 
 ## Related
 

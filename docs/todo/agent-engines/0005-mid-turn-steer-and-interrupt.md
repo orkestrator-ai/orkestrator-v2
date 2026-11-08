@@ -14,11 +14,12 @@ Analysed 2026-10-27 against `main` at `863b5782`; tasks 1, 2, 3 and 9 rechecked
 2. **Live Claude model catalogue**: read models from the live runtime instead of a separate control-only probe. Status: done (live read landed in #1331; the probe cache and its bound added 2026-11-01).
 3. **Warm first Claude turn**: avoid the cold spawn on an environment's first turn, then measure. Status: closed, not adopted (measured 2026-11-01; see "`prewarm()` not adopted").
 4. **Cursor `SendOptions.local.force`**: use it for a wedged agent. Status: deferred (until wedged agents are seen).
-5. **OpenCode steer**: needs OpenCode 2.x and an expected-turn precondition. Status: blocked (OpenCode 2.x; pin is `1.19.4`).
+5. **OpenCode steer**: needs OpenCode 2.x. Status: blocked (on [0008](0008-opencode-v2.md) tasks 5 and 10). Since task 10 below, an expected-turn precondition is no longer needed: OpenCode 2.x starts a new run for a steer that reaches an idle session, which is the behaviour the owner wants everywhere.
 6. **Grok steer**: ACP has no mid-turn input; interjection stays behind its unsafe flag. Status: blocked (ACP / Grok).
 7. **Inactive-path steer qualification on Claude and Cursor**: steer, switch away, return, reload. Status: open.
 8. **Warm Claude CLI app-path qualification**: follow-up, mode and permission changes, parked approval and MCP change on one CLI through the app. Status: open.
 9. **Re-measure the first turn**: after task 3. Status: open (task 3 changed nothing to re-measure; what is left is the split with a real login, which needs a billed turn).
+10. **A steer that misses its turn starts a new turn, on every provider**: the owner's rule (2026-11-08). Today the direct `/steer`, the Agent Info steer box and the CLI report an error and leave the resend to the user. Status: open (decided; not built).
 
 ### 1. Collapse Claude task-to-process maps
 
@@ -195,6 +196,62 @@ running CLI before spawning a probe. What is left is live qualification
 through the app and the browser. OpenCode and Grok steer are blocked upstream
 and are recorded here; the Cursor `force` send is deferred until a wedged
 agent is seen.
+
+### 10. A steer that misses its turn starts a new turn
+
+**Problem.** A steer can lose the race with the end of its turn. The owner's
+rule (2026-11-08) is that it must then start a new turn, on every provider,
+rather than being refused and left for the user to resend.
+
+**Context.** A provider answers `idle` (no turn is running) or `mismatch` (a
+different turn is running), and both are definitive "not sent" answers. Each
+entry point handles them differently:
+
+| Entry point | `idle` today | `mismatch` today |
+| --- | --- | --- |
+| Agent mail (`agent-mail-service.ts`) | delivered as a turn at once | held, delivered after the running turn |
+| Queue Steer button and Auto-steer (`steerQueuedPrompt`) | stays queued, sent when the queue drains | stays queued |
+| Composer `/steer` (`AgentNativeTab.controller.tsx`) | error, draft restored | error, draft restored |
+| Agent Info steer box (`AgentInfoButton.tsx`) | error | error |
+| Public CLI steer (`public-api/actions-session-controls.ts`) | fails, `session-idle` | fails, `target-mismatch` |
+| Recovery retry of a parked steer (`retryRecoverableDispatch`) | "There is no active turn to steer." | "The active turn changed…" |
+
+Agent mail already follows the rule and is the model. The queue paths end up
+there too.
+
+**Investigation.** All the refusals come from one backend function,
+`performProjectionSteer` (`native-agent-service.ts`), and from the recovery
+retry. That makes a backend-owned fix possible, which the renderer, Agent Info
+and the CLI then share. `idle` and `mismatch` are both proven "not sent"
+answers: the bridge clears its steer record before answering, and the
+backend's pre-check sends nothing. So sending the text again cannot deliver it
+twice, provided it goes out under its own request id through the ordinary
+at-most-once dispatch.
+
+**Decisions.**
+
+- **Where does the fallback live?**
+  - **In the backend, beside `performProjectionSteer` and the recovery retry (recommended).**
+    - Pros: one rule for every caller, CLI and remote nodes included; reuses the mail path's "deliver it the ordinary way" dispatch.
+    - Cons: the backend has to choose the turn's controls (model, effort, mode) itself, from the session's persisted controls, as mail does.
+  - **In each caller.**
+    - Pros: callers keep the composer's own controls.
+    - Cons: four implementations; the CLI and remote nodes would each need their own.
+- **What does `mismatch` do?**
+  - **Queue the text as the next turn (recommended).**
+    - Pros: never interrupts the turn that is now running, which the user may not have seen start; matches mail and the queue paths.
+    - Cons: the message waits for that turn to finish.
+  - **Steer it into the turn that is now running.**
+    - Pros: delivered sooner.
+    - Cons: the instruction lands in a turn it was not written for, which is what the expected-run check exists to prevent.
+- **How is the result reported?**
+  - **Keep `applied` and add an optional `deliveredAs: "new-turn" | "queued"` (recommended).**
+    - Pros: older renderers and remote peers still see success; no new outcome variant to version.
+    - Cons: an older client says "Sent to the active turn" for a message that started a new one.
+  - **A new outcome variant.**
+    - Pros: explicit.
+    - Cons: a contract change that every peer in the support window must understand ([version-compatibility.md](../../architecture/version-compatibility.md)).
+- **CLI.** The public steer action admits a request key and settles on its own records ([public-cli.md](../../architecture/public-cli.md)). Starting a turn under it means its receipt has to report the dispatched request, and the `session-idle`/`target-mismatch` failures change meaning. Recommended: do it in the same change, with the contract change recorded per version-compatibility.md, rather than leaving the CLI on the old rule.
 
 ## Current state
 

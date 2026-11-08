@@ -4,14 +4,18 @@ import { formatSampleTime, useMachineSystemUsage } from "@/hooks/useSystemUsage"
 import { machineTextClass } from "@/lib/federation/machine-colors";
 import { inMachineOrder } from "@/lib/federation/sidebar-layout";
 import { usePortalLayout } from "@/lib/portal/portal-layout";
-import type { NodeScope } from "@/lib/node-scope/node-scope";
+import type { NodeScope, NodeScopeTier } from "@/lib/node-scope/node-scope";
 import { useScopesWithCommandFallback, useSignal } from "@/lib/node-scope/providers";
+import { constantSignal } from "@/lib/node-scope/signal";
 import { cn } from "@/lib/utils";
 import { useFederation } from "./FederationProvider";
 import { useMachineViews } from "./useMachineViews";
 
 /** The cadence of the title bar's own meters, which the window's machine shares a read with. */
 const MACHINE_CPU_POLL_INTERVAL_MS = 5_000;
+
+/** The tier read for a machine the window holds no scope for. */
+const NO_SCOPE_TIER = constantSignal<NodeScopeTier>("summary");
 
 /**
  * Each machine's CPU use for the title bar, beside the meters of the machine on
@@ -34,7 +38,8 @@ function Readings() {
     [machineOrder, portalState.selfId, views],
   );
   // A machine shown in this window's tree is read on its own scope, the read
-  // the title bar's meters join while it is shown (plan item 5002).
+  // the title bar's meters join while it is shown (plan item 5002). Each
+  // reading uses that scope only while its tier is live (below).
   const { windowScope } = useScopesWithCommandFallback();
   const scopes = useSignal(windowScope.nodeScopes);
   if (machines.length < 2) return null;
@@ -84,12 +89,19 @@ const MachineCpuReading = memo(function MachineCpuReading({
   connected: boolean;
   scope: NodeScope | null;
 }) {
+  // A scope's reads pause while it is not shown (warm, suspended), and the
+  // window keeps the scope of every machine opened in it. Reading a hidden
+  // machine on its own scope would leave its figure stale ("—") until it is
+  // shown again, so only a live scope is read on; any other machine is read
+  // through the command node, which keeps polling.
+  const tier = useSignal(scope?.tier ?? NO_SCOPE_TIER);
+  const shownScope = scope && !scope.disposed && tier === "live" ? scope : null;
   const usage = useMachineSystemUsage({
     nodeId,
     bound,
     intervalMs: MACHINE_CPU_POLL_INTERVAL_MS,
     active: connected,
-    scope,
+    scope: shownScope,
   });
   const cpu = usage.sample && !usage.stale ? usage.sample.cpuPercent : null;
   const reading = cpu === null ? "—" : `${Math.round(cpu)}%`;

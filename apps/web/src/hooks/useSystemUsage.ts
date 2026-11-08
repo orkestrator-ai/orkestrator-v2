@@ -235,11 +235,13 @@ export function useSystemUsage({
 /**
  * One machine's host sample, for a view of several machines. The machine this
  * window is on shares the title-bar meters' read, so both show the same figure.
- * A machine this window has a node scope for (one shown in the window's own
- * tree, plan items 4001 and 5002) is read on that scope, the same read its
- * title-bar meters and popovers join (`useSystemUsage({ scope })`). Every
- * other machine has a read of its own through the command node, so a slow or
- * unreachable machine holds up nothing but its own figure.
+ * A machine passed with its node scope (one shown in the window's own tree,
+ * plan items 4001 and 5002) is read on that scope, the same read its
+ * title-bar meters and popovers join (`useSystemUsage({ scope })`). Pass a
+ * scope only while it is live: a hidden scope's reads pause, so its figure
+ * would go stale. Every other machine has a read of its own through the
+ * command node, so a slow or unreachable machine holds up nothing but its own
+ * figure.
  */
 export function useMachineSystemUsage({
   nodeId,
@@ -252,7 +254,7 @@ export function useMachineSystemUsage({
   bound: boolean;
   intervalMs: number;
   active?: boolean;
-  /** `nodeId`'s scope in this window, when it has one. */
+  /** `nodeId`'s scope in this window, only while it is shown (tier `live`). */
   scope?: NodeScope | null;
 }): UsageView<SystemUsageSnapshot> {
   const nodeBackend = useScopeBackend();

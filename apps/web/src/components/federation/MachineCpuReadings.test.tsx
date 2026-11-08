@@ -2,14 +2,22 @@ import { afterEach, beforeEach, expect, mock, test } from "bun:test";
 import { act, cleanup, screen, waitFor } from "@testing-library/react";
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
-import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
+import type { BackendId } from "@orkestrator/protocol/federation";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
 import {
+  resetReadCoordinatorForTests,
+  setReadCoordinatorScopeHidden,
+} from "@/lib/read-coordinator";
+import {
+  flushMicrotasks,
   installFakeReadCoordinator,
   type FakeReadEnvironment,
 } from "@/lib/testing/read-coordinator";
 import { portalLayoutStore } from "@/lib/portal/portal-layout";
 import { portalStore } from "@/lib/portal/portal-store";
 import { emptyPortalLayout } from "@orkestrator/protocol/portal-layout";
+import { FakeNodeClient } from "@/test/render-in-node-scope";
+import { getWindowScope } from "@/lib/node-scope/app-window-scope";
 import { FederationProvider } from "./FederationProvider";
 import { MachineCpuReadings } from "./MachineCpuReadings";
 
@@ -37,6 +45,8 @@ let nodes: ReturnType<typeof summary>[];
 let machineOrder: string[];
 let usageCalls: string[];
 let unreachable: Set<string>;
+let leafScopes: NodeScope[];
+let pendingRoutedSamples: Map<string, Promise<ReturnType<typeof sample>>>;
 
 function sample(cpuPercent: number) {
   return {
@@ -54,6 +64,8 @@ beforeEach(() => {
   machineOrder = [];
   usageCalls = [];
   unreachable = new Set();
+  leafScopes = [];
+  pendingRoutedSamples = new Map();
   portalStore.store.setState({ selfId: null, status: null, nodes: [], loaded: false });
   portalLayoutStore.setState({ layout: emptyPortalLayout(), loaded: false, error: null });
   invokeMock.mockReset();
@@ -74,7 +86,10 @@ beforeEach(() => {
         const nodeId = String(args.nodeId);
         usageCalls.push(nodeId);
         if (unreachable.has(nodeId)) throw new Error("node-unavailable");
-        return { outcome: "ok", result: sample(nodeId === "bk_a" ? 7 : 93) };
+        return {
+          outcome: "ok",
+          result: await (pendingRoutedSamples.get(nodeId) ?? sample(nodeId === "bk_a" ? 7 : 93)),
+        };
       }
       default:
         return undefined;
@@ -84,6 +99,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  for (const scope of leafScopes) scope.dispose();
   resetReadCoordinatorForTests();
   portalStore.store.setState({ selfId: null, status: null, nodes: [], loaded: false });
 });
@@ -185,3 +201,86 @@ test("CPU readings merge a new first registry machine like Settings", async () =
     ]),
   );
 });
+
+/** A leaf scope for `nodeId` in the app's window, as `InTreeWorkspace` opens one. */
+function openLeafScope(nodeId: string, cpuPercent: number): NodeScope {
+  const client = new FakeNodeClient({
+    nodeId: nodeId as BackendId,
+    invoke: { get_system_usage: () => sample(cpuPercent) },
+  });
+  const scope = getWindowScope().open({ role: "leaf", client, tier: "live" });
+  leafScopes.push(scope);
+  return scope;
+}
+
+test("a machine shown in the window is read on its own scope", async () => {
+  const scope = openLeafScope("bk_b", 55);
+  renderReadings();
+  await waitFor(() => expect(labels()).toContain("bk_b CPU usage: 55%"));
+  expect(usageCalls).not.toContain("bk_b");
+  expect(scope.client.nodeId).toBe("bk_b" as BackendId);
+});
+
+test("a machine whose scope is hidden keeps its figure, read through the command node", async () => {
+  const scope = openLeafScope("bk_b", 55);
+  renderReadings();
+  await waitFor(() => expect(labels()).toContain("bk_b CPU usage: 55%"));
+  // Switching away, as the scope lifecycle does: the scope's reads pause.
+  act(() => {
+    scope.setTier("warm");
+    setReadCoordinatorScopeHidden(scope, true);
+  });
+  await waitFor(() => expect(labels()).toContain("bk_b CPU usage: 93%"));
+  // Still current past the staleness window: the command node keeps polling.
+  await act(async () => {
+    await reads.clock.advance(11_000);
+  });
+  expect(labels()).toContain("bk_b CPU usage: 93%");
+  expect(usageCalls.filter((id) => id === "bk_b").length).toBeGreaterThan(1);
+});
+
+for (const tier of ["warm", "suspended"] as const) {
+  test(`a ${tier} machine returning live uses its leaf sample and stops routed polling`, async () => {
+    const scope = openLeafScope("bk_b", 55);
+    scope.setTier(tier);
+    setReadCoordinatorScopeHidden(scope, true);
+    renderReadings();
+    await waitFor(() => expect(labels()).toContain("bk_b CPU usage: 93%"));
+
+    // Hold the next command-node refresh open across the return to the leaf.
+    let release!: (value: ReturnType<typeof sample>) => void;
+    pendingRoutedSamples.set(
+      "bk_b",
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+    );
+    await act(async () => {
+      await reads.clock.advance(5_000);
+    });
+    expect(usageCalls.filter((id) => id === "bk_b")).toHaveLength(2);
+    expect(labels()).toContain("bk_b CPU usage: 93%");
+
+    act(() => {
+      scope.setTier("live");
+      setReadCoordinatorScopeHidden(scope, false);
+    });
+    await waitFor(() => expect(labels()).toContain("bk_b CPU usage: 55%"));
+
+    await act(async () => {
+      release(sample(12));
+      await flushMicrotasks();
+    });
+    expect(labels()).toContain("bk_b CPU usage: 55%");
+
+    // Several routed polling intervals pass; only the other machines keep reading.
+    pendingRoutedSamples.delete("bk_b");
+    const commandReads = usageCalls.filter((id) => id === "bk_self").length;
+    await act(async () => {
+      await reads.clock.advance(11_000);
+    });
+    expect(usageCalls.filter((id) => id === "bk_b")).toHaveLength(2);
+    expect(usageCalls.filter((id) => id === "bk_self").length).toBeGreaterThan(commandReads);
+    expect(labels()).toContain("bk_b CPU usage: 55%");
+  });
+}

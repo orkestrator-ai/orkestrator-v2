@@ -112,7 +112,10 @@ liveTest(
       // Live durable events arrive strictly in order. 2.2.6 never broadcasts a
       // few durable sequence numbers (about two per run), so a gap is only a
       // hint to re-read the snapshot, never proof of loss on its own.
-      await Bun.sleep(500);
+      // Both runs have settled (the history shows two idle rows), so wait for
+      // the stream to have delivered their events rather than for a fixed time.
+      const deadline = Date.now() + 10_000;
+      while (verdicts.length <= 10 && Date.now() < deadline) await Bun.sleep(50);
       expect(verdicts[0]).toBe("first");
       expect(verdicts.length).toBeGreaterThan(10);
       expect(verdicts).not.toContain("stale");

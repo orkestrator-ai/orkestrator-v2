@@ -68,9 +68,37 @@ describe("resolveToolchainSelection", () => {
     expect(selection.tools).toEqual(["codex", "gh"]);
   });
 
-  test("an installation that predates platform selection keeps its three", async () => {
+  test("an installation that predates platform selection keeps its three platforms", async () => {
     const selection = await resolveToolchainSelection({ dataDir: await dataDir({ global: {} }) });
-    expect(selection).toEqual({ tools: ["claude", "codex", "opencode", "gh"], source: "config" });
+    expect(selection).toEqual({
+      tools: ["claude", "codex", "opencode", "opencode2", "gh"],
+      source: "config",
+    });
+  });
+
+  test("an enabled OpenCode brings both of its binaries; an explicit tool stays exact", async () => {
+    const directory = await dataDir({ global: { enabledAgentPlatforms: ["opencode"] } });
+    expect(await resolveToolchainSelection({ dataDir: directory })).toEqual({
+      tools: ["opencode", "opencode2", "gh"],
+      source: "config",
+    });
+    // A tool name is not a platform: `--tool opencode` is the 1.x binary only.
+    expect(await resolveToolchainSelection({ dataDir: directory, tools: ["opencode"] })).toEqual({
+      tools: ["opencode", "gh"],
+      source: "explicit",
+    });
+    expect(await resolveToolchainSelection({ dataDir: directory, tools: ["opencode2"] })).toEqual({
+      tools: ["opencode2", "gh"],
+      source: "explicit",
+    });
+    // `opencode2` is not a platform id, so enabling it selects nothing.
+    const platformOnly = await dataDir({
+      global: { enabledAgentPlatforms: ["opencode2", "claude"] },
+    });
+    expect((await resolveToolchainSelection({ dataDir: platformOnly })).tools).toEqual([
+      "claude",
+      "gh",
+    ]);
   });
 
   test("an explicit list wins over config and is validated", async () => {
@@ -133,12 +161,14 @@ describe("installPinnedToolchains", () => {
       "claude",
       "gh",
       "opencode",
+      "opencode2",
     ]);
     expect(result.source).toBe("config");
     expect(result.versions).toEqual({
       claude: PINNED_TOOLCHAIN_VERSIONS.claude,
       gh: PINNED_TOOL_VERSIONS.gh,
       opencode: PINNED_TOOLCHAIN_VERSIONS.opencode,
+      opencode2: PINNED_TOOLCHAIN_VERSIONS.opencode2,
     });
     expect(result.currentBinDir).toBe(currentToolchainBinDir(directory));
     // Relative, so a moved data directory does not leave a dangling link.

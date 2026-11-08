@@ -2,7 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
-import { PINNED_TOOLCHAIN_VERSIONS } from "@orkestrator/toolchain/manifest";
+import {
+  PINNED_TOOLCHAIN_VERSIONS,
+  agentPlatformForToolchain,
+} from "@orkestrator/toolchain/manifest";
 import {
   PROVIDER_PRESERVATION,
   PROVIDER_STATE_LAYOUT,
@@ -24,8 +27,16 @@ describe("provider state layout re-trace", () => {
   // docs/development/upgrade-agents.md, then record the new version.
   test("was traced against every pinned provider version", () => {
     expect(Object.keys(PROVIDER_STATE_TRACED_VERSIONS).sort()).toEqual([...AGENT_PLATFORMS].sort());
-    expect(PROVIDER_STATE_TRACED_VERSIONS).toEqual({
-      ...PINNED_TOOLCHAIN_VERSIONS,
+    // Only each platform's own binary. `opencode2` is pinned beside 1.x before
+    // any provider runs it; its state is traced when the 2.x provider lands
+    // (docs/todo/agent-engines/0008-opencode-v2.md, build plan phase 3).
+    const platformPins: Record<string, string> = Object.fromEntries(
+      Object.entries(PINNED_TOOLCHAIN_VERSIONS).filter(
+        ([name]) => agentPlatformForToolchain(name) === name,
+      ),
+    );
+    expect<Record<string, string>>(PROVIDER_STATE_TRACED_VERSIONS).toEqual({
+      ...platformPins,
       cursor: cursorSdkPin(),
     });
   });

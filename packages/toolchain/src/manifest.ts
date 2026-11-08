@@ -1,13 +1,18 @@
 /**
- * The agent CLIs. Each is installed only when its agent platform is enabled,
- * and the container image carries the same versions (see
- * `tests/unit/version-drift.test.ts`).
+ * The agent CLIs. Each is installed only when its agent platform is enabled
+ * (see `agentPlatformForToolchain`), and the container image carries the same
+ * versions (see `tests/unit/version-drift.test.ts`).
+ *
+ * `opencode2` is OpenCode 2.x, pinned beside the 1.x `opencode` while the
+ * OpenCode platform moves to it (docs/todo/agent-engines/0008-opencode-v2.md).
+ * It is a second binary of the `opencode` platform, not a platform of its own.
  */
 export const PINNED_TOOLCHAIN_VERSIONS = {
   claude: "2.1.319",
   codex: "0.167.0",
   grok: "1.0.77",
   opencode: "1.19.5",
+  opencode2: "2.2.6",
   pi: "1.5.0",
 } as const;
 
@@ -40,6 +45,36 @@ export function isToolchainName(value: string): value is ToolchainName {
 
 export function isSupportToolName(value: string): value is SupportToolName {
   return Object.hasOwn(PINNED_SUPPORT_TOOL_VERSIONS, value);
+}
+
+/**
+ * Agent toolchains whose name is not an agent platform id, with the platform
+ * that installs them. Every other agent toolchain is named after its platform.
+ */
+const TOOLCHAIN_PLATFORM_OVERRIDES: Readonly<Partial<Record<AgentToolchainName, string>>> = {
+  opencode2: "opencode",
+};
+
+/**
+ * The agent platform whose selection installs this tool.
+ *
+ * Toolchain names and agent platform ids used to coincide, and the selection
+ * filters compared them directly. OpenCode needs two binaries (1.x and 2.x)
+ * under one platform, so every such filter goes through this instead:
+ * enabling `opencode` installs both `opencode` and `opencode2`. Support tools
+ * and unknown names map to themselves; no platform has their id.
+ */
+export function agentPlatformForToolchain(name: string): string {
+  return Object.hasOwn(TOOLCHAIN_PLATFORM_OVERRIDES, name)
+    ? TOOLCHAIN_PLATFORM_OVERRIDES[name as AgentToolchainName]!
+    : name;
+}
+
+/** The agent toolchains a platform installs, in manifest order; empty for SDK-only platforms. */
+export function agentToolchainsForPlatform(platform: string): AgentToolchainName[] {
+  return (Object.keys(PINNED_TOOLCHAIN_VERSIONS) as AgentToolchainName[]).filter(
+    (name) => agentPlatformForToolchain(name) === platform,
+  );
 }
 export type ToolchainPlatform = "darwin" | "linux";
 export type ToolchainArchitecture = "arm64" | "x64";
@@ -208,6 +243,42 @@ function ghArtifact(
 function claudeArchiveUrl(target: string): string {
   const pkg = `claude-code-${target}`;
   return `https://registry.npmjs.org/@anthropic-ai/${pkg}/-/${pkg}-${PINNED_TOOLCHAIN_VERSIONS.claude}.tgz`;
+}
+
+/**
+ * OpenCode 2.x publishes each platform's native binary as its own npm package
+ * (`@opencode/cli-<target>`, the optional dependencies of `@opencode/cli`),
+ * with the executable at `package/bin/opencode`. It is installed as
+ * `opencode2` so it can share an activation directory with the 1.x
+ * `opencode`. These are the glibc builds; upstream also publishes `-musl` and
+ * `-baseline` variants, which nothing here uses.
+ *
+ * The darwin binaries are published with a valid signature, so unlike the 1.x
+ * release zips they need no local re-signing.
+ */
+function openCode2Artifact(
+  platform: ToolchainPlatform,
+  architecture: ToolchainArchitecture,
+  archive: { size: number; sha256: string },
+  executable: { size: number; sha256: string },
+): ToolchainArtifact {
+  const version = PINNED_TOOLCHAIN_VERSIONS.opencode2;
+  const pkg = `cli-${platform}-${architecture}`;
+  return {
+    name: "opencode2",
+    version,
+    platform,
+    architecture,
+    archive: {
+      format: "tar.gz",
+      url: `https://registry.npmjs.org/@opencode/${pkg}/-/${pkg}-${version}.tgz`,
+      entryPath: "package/bin/opencode",
+      size: archive.size,
+      sha256: archive.sha256,
+      allowedHosts: NPM_REGISTRY_HOSTS,
+    },
+    executable: { fileName: "opencode2", ...executable },
+  };
 }
 
 export const PINNED_TOOLCHAIN_ARTIFACTS: readonly ToolchainArtifact[] = [
@@ -417,6 +488,54 @@ export const PINNED_TOOLCHAIN_ARTIFACTS: readonly ToolchainArtifact[] = [
       sha256: "7df4e4136301f16589b0f30bf91a61380fca5f8ef22dd36570f5ebe1d4ec802c",
     },
   },
+  openCode2Artifact(
+    "darwin",
+    "arm64",
+    {
+      size: 108_258_354,
+      sha256: "613ebb74dd8eff767bb9d442a37b40c4d9946ba27f1538985068a1b9678137a3",
+    },
+    {
+      size: 231_791_968,
+      sha256: "90e4d03597b03d2051b65b4d793467764e55bacd8e22bf4824479c7233ea0e15",
+    },
+  ),
+  openCode2Artifact(
+    "darwin",
+    "x64",
+    {
+      size: 113_659_134,
+      sha256: "4f1475c0b642ece32681dbd4a2fd5f7c1ef6183dced0ecac3861cb3d18a49a15",
+    },
+    {
+      size: 246_528_608,
+      sha256: "6273561d1f9b3ff20d350aba47874fd12b2c4aed7ee62c1979f579c9570ef1fc",
+    },
+  ),
+  openCode2Artifact(
+    "linux",
+    "arm64",
+    {
+      size: 119_688_147,
+      sha256: "22352e200630ec61a48a65b9f5c2b627328ae5002658d81c067f67c5fb689898",
+    },
+    {
+      size: 253_873_144,
+      sha256: "ce4f5e7502b6e32ccd8b05654410e8e8607b9660737222b0b1279621bcea2b03",
+    },
+  ),
+  openCode2Artifact(
+    "linux",
+    "x64",
+    {
+      size: 121_218_733,
+      sha256: "dfcd69f1d511ae10ed626768b41d84b8100cc4aa64cecb69da38ba7a29d33551",
+    },
+    {
+      size: 258_824_368,
+      sha256: "50503d24577fa4117a7c95ee85b2cd679606a87eacf20ca54ed5db5c9e1cf895",
+    },
+  ),
   {
     name: "claude",
     version: PINNED_TOOLCHAIN_VERSIONS.claude,
@@ -771,8 +890,8 @@ export function pinnedToolchainArtifacts(
  * tools. An empty selection downloads nothing at all; any other selection,
  * even an SDK-only one such as Cursor, gets the support tools.
  *
- * Agent artifact names and agent platform ids coincide, and this is the one
- * place that relies on it — keeping the filter here means the
+ * Each artifact reaches its platform through `agentPlatformForToolchain`, so
+ * `opencode` selects both OpenCode binaries. Keeping the filter here means the
  * selection-to-download mapping is testable without starting Electron.
  */
 export function pinnedArtifactsForPlatforms(
@@ -783,6 +902,7 @@ export function pinnedArtifactsForPlatforms(
   const selected = new Set(enabled);
   if (selected.size === 0) return [];
   return pinnedToolchainArtifacts(platform, architecture).filter(
-    (artifact) => selected.has(artifact.name) || isSupportToolName(artifact.name),
+    (artifact) =>
+      selected.has(agentPlatformForToolchain(artifact.name)) || isSupportToolName(artifact.name),
   );
 }

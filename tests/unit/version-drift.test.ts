@@ -9,9 +9,12 @@ import {
   PINNED_TOOLCHAIN_ARTIFACTS,
   PINNED_TOOLCHAIN_VERSIONS,
   PINNED_TOOL_VERSIONS,
+  agentPlatformForToolchain,
+  agentToolchainsForPlatform,
   pinnedToolchainArtifacts,
   selectPinnedToolchainArtifacts,
 } from "@orkestrator/toolchain/manifest";
+import { AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
 import { DEFAULT_ALLOWED_DOMAINS } from "@orkestrator/protocol/network-allowlist";
 import {
   DEFAULT_ALLOWED_DOMAINS_FILE,
@@ -229,7 +232,8 @@ function findCrossArtifactIntegrityCollisions(artifacts: ArtifactIntegrityValues
  * a hand-edited `GROK_SHA` would have shipped
  * unnoticed. The tests that follow iterate this table, and one of them asserts
  * the table covers every name in `PINNED_TOOLCHAIN_VERSIONS`, so another
- * managed CLI cannot be added with less coverage than the five here.
+ * managed CLI cannot be added with less coverage than the six here (OpenCode
+ * counts twice: its 1.x and 2.x binaries are pinned separately).
  */
 interface AgentPins {
   /** `ARG <name>=` in docker/Dockerfile. */
@@ -290,6 +294,13 @@ const AGENT_PINS: Record<string, AgentPins> = {
     // it. `OpenCode: the renderer does not depend on the SDK` keeps it the only
     // pin.
     sdkPins: [{ file: "apps/backend/package.json", dep: "@opencode-ai/sdk", tracksCli: true }],
+  },
+  // OpenCode 2.x, installed beside 1.x for the same platform. No SDK pin: the
+  // 2.x client is the backend's own (`apps/backend/src/core/opencode2/`), not
+  // `@opencode/client`.
+  opencode2: {
+    dockerArg: "OPENCODE2_CLI_VERSION",
+    containerInstall: "pinned-archive",
   },
   grok: {
     dockerArg: "GROK_BUILD_VERSION",
@@ -894,6 +905,41 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     }
   });
 
+  test("OpenCode 2.x: every managed artifact is the pinned npm tarball, installed as opencode2", () => {
+    // 2.x is fetched from `@opencode/cli-<target>`, not the 1.x release page.
+    // It shares the OpenCode platform with 1.x, so its activation name must
+    // differ: two `opencode` executables in one activation directory would
+    // collide, and the 1.x provider would start whichever won.
+    const artifacts = PINNED_TOOLCHAIN_ARTIFACTS.filter((entry) => entry.name === "opencode2");
+    expect(artifacts.length).toBe(4);
+    for (const artifact of artifacts) {
+      const pkg = `cli-${artifact.platform}-${artifact.architecture}`;
+      expect(artifact.archive.url).toBe(
+        `https://registry.npmjs.org/@opencode/${pkg}/-/${pkg}-${PINNED_TOOLCHAIN_VERSIONS.opencode2}.tgz`,
+      );
+      expect(artifact.archive.allowedHosts).toEqual(["registry.npmjs.org"]);
+      expect(artifact.archive.entryPath).toBe("package/bin/opencode");
+      expect(artifact.archive.format).toBe("tar.gz");
+      expect(artifact.executable.fileName).toBe("opencode2");
+      expect(artifact.activationAliases ?? []).not.toContain("opencode");
+    }
+    expect(PINNED_TOOLCHAIN_VERSIONS.opencode2).toMatch(/^2\./);
+    expect(PINNED_TOOLCHAIN_VERSIONS.opencode).toMatch(/^1\./);
+  });
+
+  test("OpenCode 2.x belongs to the opencode platform and is not a platform itself", () => {
+    expect(agentPlatformForToolchain("opencode2")).toBe("opencode");
+    expect(agentToolchainsForPlatform("opencode")).toEqual(["opencode", "opencode2"]);
+    expect(agentToolchainsForPlatform("opencode2")).toEqual([]);
+    expect<readonly string[]>(AGENT_PLATFORMS).not.toContain("opencode2");
+    // Every other agent toolchain is its own platform's only binary.
+    for (const name of Object.keys(PINNED_TOOLCHAIN_VERSIONS)) {
+      if (name === "opencode2") continue;
+      expect(agentPlatformForToolchain(name)).toBe(name);
+      expect<readonly string[]>(AGENT_PLATFORMS).toContain(name);
+    }
+  });
+
   test("Codex: every managed platform ships the code-mode host next to codex", () => {
     // Codex spawns `codex-code-mode-host` from its own directory for every
     // code-mode turn. 0.147.0 shipped without it, which made every model that
@@ -1050,6 +1096,18 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     expect(dockerfile).toContain('RUN "$CLAUDE_CLI_PATH" --version');
     expect(dockerfile).toContain('&& "$CODEX_CLI_PATH" --version');
     expect(dockerfile).toContain('&& "$OPENCODE_CLI_PATH" --version');
+    // OpenCode 2.x beside 1.x: the npm platform tarball, digest-checked, installed
+    // under its own name, and proven runnable at build time.
+    expect(dockerfile).toContain(
+      "https://registry.npmjs.org/@opencode/cli-${OPENCODE2_TARGET}/-/cli-${OPENCODE2_TARGET}-${OPENCODE2_CLI_VERSION}.tgz",
+    );
+    expect(dockerfile).toMatch(/amd64\) OPENCODE2_TARGET=linux-x64; OPENCODE2_SHA=[a-f0-9]{64}/);
+    expect(dockerfile).toMatch(/arm64\) OPENCODE2_TARGET=linux-arm64; OPENCODE2_SHA=[a-f0-9]{64}/);
+    expect(dockerfile).toContain("printf '%s  %s\\n' \"$OPENCODE2_SHA\" /tmp/opencode2.tgz");
+    expect(dockerfile).toContain("ENV OPENCODE2_CLI_PATH=/home/node/.opencode/bin/opencode2");
+    expect(dockerfile).toContain('&& "$OPENCODE2_CLI_PATH" --version');
+    // 2.x must not self-update past its pin either; the one setting covers both.
+    expect(dockerfile).toContain("ENV OPENCODE_DISABLE_AUTOUPDATE=1");
   });
 
   test("mise: Docker version and Linux checksums match the independent pin", () => {

@@ -201,12 +201,14 @@ ENV VISUAL=nano
 # tests/unit/version-drift.test.ts is what stops the two drifting.
 #   CODEX_CLI_VERSION     ↔ config/codex-version.json and the generated app-server protocol
 #   OPENCODE_CLI_VERSION  ↔ @opencode-ai/sdk in apps/backend/package.json
+#   OPENCODE2_CLI_VERSION ↔ PINNED_TOOLCHAIN_VERSIONS.opencode2 (OpenCode 2.x, beside 1.x)
 #   PI_CLI_VERSION        ↔ the four @earendil-works/pi-* pins in bridges/pi-bridge/package.json
 # Claude CLI has its own release train, distinct from
 # @anthropic-ai/claude-agent-sdk.
 ARG CLAUDE_CLI_VERSION=2.1.319
 ARG CODEX_CLI_VERSION=0.167.0
 ARG OPENCODE_CLI_VERSION=1.19.5
+ARG OPENCODE2_CLI_VERSION=2.2.6
 ARG GROK_BUILD_VERSION=1.0.77
 ARG PI_CLI_VERSION=1.5.0
 
@@ -241,6 +243,26 @@ RUN ARCH="$(dpkg --print-architecture)" && \
 ENV OPENCODE_CLI_PATH=/home/node/.opencode/bin/opencode
 # Never offer /update: it would replace the pinned binary with OpenCode 2.
 ENV OPENCODE_DISABLE_AUTOUPDATE=1
+
+# OpenCode 2.x, installed beside the 1.x binary as `opencode2`: the same npm
+# platform tarball and digests as the desktop toolchain's `opencode2` entry
+# (glibc build; the image is Debian). Nothing launches it until the 2.x
+# provider exists (docs/todo/agent-engines/0008-opencode-v2.md).
+RUN ARCH="$(dpkg --print-architecture)" && \
+  case "$ARCH" in \
+    amd64) OPENCODE2_TARGET=linux-x64; OPENCODE2_SHA=dfcd69f1d511ae10ed626768b41d84b8100cc4aa64cecb69da38ba7a29d33551 ;; \
+    arm64) OPENCODE2_TARGET=linux-arm64; OPENCODE2_SHA=22352e200630ec61a48a65b9f5c2b627328ae5002658d81c067f67c5fb689898 ;; \
+    *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;; \
+  esac && \
+  mkdir -p /home/node/.opencode/bin /tmp/opencode2 && \
+  curl -fsSL --retry 5 --retry-max-time 300 --connect-timeout 30 --max-time 300 \
+    "https://registry.npmjs.org/@opencode/cli-${OPENCODE2_TARGET}/-/cli-${OPENCODE2_TARGET}-${OPENCODE2_CLI_VERSION}.tgz" -o /tmp/opencode2.tgz && \
+  printf '%s  %s\n' "$OPENCODE2_SHA" /tmp/opencode2.tgz | sha256sum -c - && \
+  tar -xzf /tmp/opencode2.tgz -C /tmp/opencode2 --no-same-owner package/bin/opencode && \
+  mv /tmp/opencode2/package/bin/opencode /home/node/.opencode/bin/opencode2 && \
+  chmod 755 /home/node/.opencode/bin/opencode2 && \
+  rm -rf /tmp/opencode2 /tmp/opencode2.tgz
+ENV OPENCODE2_CLI_PATH=/home/node/.opencode/bin/opencode2
 
 # Install Codex CLI
 RUN npm install -g "@openai/codex@${CODEX_CLI_VERSION}" \
@@ -287,6 +309,7 @@ ENV PI_CLI_PATH=/usr/local/bin/pi
 RUN "$CLAUDE_CLI_PATH" --version \
  && "$CODEX_CLI_PATH" --version \
  && "$OPENCODE_CLI_PATH" --version \
+ && "$OPENCODE2_CLI_PATH" --version \
  && grok --version \
  && "$PI_CLI_PATH" --version
 

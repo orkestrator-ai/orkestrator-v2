@@ -1345,6 +1345,7 @@ describe("AgentNativeTab", () => {
       };
       getAgentAccountLoginMock.mockClear();
       startAgentAccountLoginMock.mockClear();
+      listAgentAccountsMock.mockClear();
       renderVirtualizedMessages = true;
       appCommandStore(configStore)
         .getState()
@@ -1377,6 +1378,7 @@ describe("AgentNativeTab", () => {
       expect(screen.queryByLabelText("Sign-in code") === null).toBe(true);
       expect(getAgentAccountLoginMock).not.toHaveBeenCalled();
       expect(startAgentAccountLoginMock).not.toHaveBeenCalled();
+      expect(listAgentAccountsMock).not.toHaveBeenCalled();
       expect(createTab).toHaveBeenCalledWith("plain", {
         displayTitle: "Claude sign-in",
         initialCommands: [CLAUDE_CONTAINER_AUTH_LOGIN_COMMAND],
@@ -2559,7 +2561,9 @@ describe("AgentNativeTab", () => {
       <AgentNativeTab tabId="tab-claude-readiness" data={identity("claude")} isActive />,
     );
 
-    expect(await screen.findByRole("region", { name: "Sign in to Claude" })).toBeTruthy();
+    const readinessCard = await screen.findByRole("region", { name: "Sign in to Claude" });
+    expect(screen.getAllByRole("region", { name: "Sign in to Claude" })).toHaveLength(1);
+    expect(screen.getByTestId("compose-dock").contains(readinessCard)).toBe(true);
     expect(
       (screen.getByTitle("Sign in to Claude before sending") as HTMLButtonElement).disabled,
     ).toBe(true);

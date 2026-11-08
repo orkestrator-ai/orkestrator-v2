@@ -1368,6 +1368,10 @@ exit 1
           ...taskUpdates,
         }),
       );
+      context.storage.kanban.closeKanbanTasksForMergedPullRequests = mock(
+        async (closures?: readonly { taskId: string; prUrl: string }[]) =>
+          (closures ?? []).map((closure) => closure.taskId),
+      );
       context.storage.kanban.addKanbanComment = mock(async (_taskId: string, text: string) => ({
         ...task,
         comments: [{ id: "comment-1", text, createdAt: new Date(0).toISOString() }],
@@ -1444,9 +1448,10 @@ exit 1
           );
           expect(captured).toEqual([{ prState: "merged", present: true }]);
           expect(await context.storage.getEnvironment(environment.id)).toBeNull();
-          expect(context.storage.kanban.updateKanbanTask).toHaveBeenCalledWith(task.id, {
-            status: "review",
-          });
+          // A merged pull request closes its ticket (kanban-merge-closure.ts).
+          expect(context.storage.kanban.closeKanbanTasksForMergedPullRequests).toHaveBeenCalledWith(
+            [{ taskId: task.id, prUrl: environment.prUrl }],
+          );
           expect(context.storage.kanban.addKanbanComment).toHaveBeenCalledWith(
             task.id,
             `🎉 PR merged: ${environment.prUrl}`,

@@ -551,7 +551,7 @@ describe("ChartFenceBlock", () => {
       "error",
     );
     expect(container.textContent).toContain(source);
-    expect(container.querySelector("svg[data-chart-kind]")).toBeNull();
+    expect(container.querySelector("svg[data-chart-kind]") === null).toBe(true);
   });
 
   test("no network request, evaluation or markup can originate from a chart spec", () => {

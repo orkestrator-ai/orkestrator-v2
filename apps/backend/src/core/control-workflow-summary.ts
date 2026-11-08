@@ -1,6 +1,7 @@
 import { multiReviewAddressFindingsIdentity } from "./multi-review-address-findings-identity.js";
 import type { BuildPipeline } from "@orkestrator/protocol/build-pipeline";
 import { pipelineWorkers } from "@orkestrator/protocol/pipeline-worker-mail";
+import { buildPipelineCriteriaReport } from "./build-pipeline-criteria-report.js";
 
 /**
  * A build pipeline's workers, each with the mailbox address a coordinator
@@ -25,6 +26,12 @@ function buildPipelineWorkers(workflow: Record<string, unknown>): Record<string,
   }
 }
 
+function buildPipelineCriteria(workflow: Record<string, unknown>): Record<string, unknown> {
+  if (!Array.isArray(workflow.sessions)) return {};
+  const criteria = buildPipelineCriteriaReport(workflow);
+  return criteria ? { criteria } : {};
+}
+
 /** Bounded control response; never include provider configuration or controller fences. */
 export function workflowSummary(workflow: Record<string, unknown>): Record<string, unknown> {
   return {
@@ -41,6 +48,13 @@ export function workflowSummary(workflow: Record<string, unknown>): Record<strin
     // Build pipelines: one mailbox per worker; send_message with toTabId set
     // to `address` reaches that worker only.
     ...(Array.isArray(workflow.sessions) ? { workers: buildPipelineWorkers(workflow) } : {}),
+    // Build pipelines: the newest verdict, and each criterion's result with
+    // its evidence and the commit Verify judged, so a completion handoff can
+    // say what was proved on which code without reading the ticket.
+    ...(workflow.verificationResult === "pass" || workflow.verificationResult === "fail"
+      ? { verificationResult: workflow.verificationResult }
+      : {}),
+    ...buildPipelineCriteria(workflow),
     ...("autoFix" in workflow || "autoPr" in workflow
       ? { automation: multiReviewAutomation(workflow) }
       : {}),

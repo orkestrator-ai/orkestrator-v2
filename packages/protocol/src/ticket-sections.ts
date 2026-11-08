@@ -74,6 +74,62 @@ export interface AcceptanceCriterionCheck {
   source: "verify" | "manual";
   /** The pipeline whose Verify step recorded it. */
   pipelineId?: string;
+  /**
+   * The commit Verify judged: the HEAD its read-only guard held the worktree
+   * to for the whole turn. Absent on a manual tick and on a check recorded
+   * before this field existed, which reads as "commit not recorded", never as
+   * the current code. See {@link criterionCheckBasis}.
+   */
+  commit?: string;
+  /** Verify judged `commit` plus uncommitted changes in the worktree. */
+  uncommittedChanges?: boolean;
+}
+
+/** A Git object id as a check stores it: 40 (SHA-1) or 64 (SHA-256) lower-case hex. */
+export function isCriterionCommit(value: unknown): value is string {
+  return typeof value === "string" && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(value);
+}
+
+/** Which code a Verify check judged, and whether that code is still current. */
+export interface CriterionCheckBasis {
+  /** The judged commit, when the check recorded one. */
+  commit?: string;
+  uncommittedChanges: boolean;
+  /** The branch's HEAD differs from `commit`. False when either is unknown. */
+  moved: boolean;
+  /**
+   * One phrase for beside the status: "on abc1234", "on abc1234 with
+   * uncommitted changes; the branch has moved since", or "commit not recorded".
+   */
+  text: string;
+}
+
+/**
+ * Which code a Verify check describes, or undefined for a hand tick (it judged
+ * no code). `currentHead` is the build environment's HEAD now, when known; a
+ * check with no commit never reads as current.
+ */
+export function criterionCheckBasis(
+  check: AcceptanceCriterionCheck | undefined,
+  currentHead?: string,
+): CriterionCheckBasis | undefined {
+  if (!check || check.source !== "verify") return undefined;
+  if (!isCriterionCommit(check.commit)) {
+    return { uncommittedChanges: false, moved: false, text: "commit not recorded" };
+  }
+  const uncommittedChanges = check.uncommittedChanges === true;
+  const head = currentHead?.toLowerCase();
+  const moved = isCriterionCommit(head) && head !== check.commit;
+  return {
+    commit: check.commit,
+    uncommittedChanges,
+    moved,
+    text: [
+      `on ${check.commit.slice(0, 7)}`,
+      uncommittedChanges ? " with uncommitted changes" : "",
+      moved ? "; the branch has moved since" : "",
+    ].join(""),
+  };
 }
 
 export interface AcceptanceCriterion {
@@ -979,7 +1035,9 @@ export function isAcceptanceCriterionCheck(value: unknown): value is AcceptanceC
     value.evidence.length <= TICKET_SECTION_LIMITS.maxEvidenceLength &&
     typeof value.checkedAt === "string" &&
     (value.source === "verify" || value.source === "manual") &&
-    isOptionalString(value.pipelineId)
+    isOptionalString(value.pipelineId) &&
+    (value.commit === undefined || isCriterionCommit(value.commit)) &&
+    (value.uncommittedChanges === undefined || typeof value.uncommittedChanges === "boolean")
   );
 }
 
@@ -1165,16 +1223,32 @@ export interface TicketCriterionSummary {
   text: string;
   status?: AcceptanceCriterionStatus;
   evidence?: string;
+  /** The commit Verify judged, when recorded. */
+  commit?: string;
+  uncommittedChanges?: boolean;
+  /** {@link CriterionCheckBasis.text}, for a Verify check: which code it describes. */
+  judged?: string;
 }
 
+/**
+ * Each criterion as a tool reports it. `currentHead` is the build
+ * environment's HEAD now, when known, so a pass on older code says so.
+ */
 export function ticketCriteriaSummary(
   sections: TicketSections | undefined,
+  currentHead?: string,
 ): TicketCriterionSummary[] {
-  return (sections?.acceptanceCriteria ?? []).map((item) => ({
-    id: item.id,
-    text: item.text,
-    ...(item.check ? { status: item.check.status, evidence: item.check.evidence } : {}),
-  }));
+  return (sections?.acceptanceCriteria ?? []).map((item) => {
+    const basis = criterionCheckBasis(item.check, currentHead);
+    return {
+      id: item.id,
+      text: item.text,
+      ...(item.check ? { status: item.check.status, evidence: item.check.evidence } : {}),
+      ...(basis?.commit ? { commit: basis.commit } : {}),
+      ...(basis?.uncommittedChanges ? { uncommittedChanges: true } : {}),
+      ...(basis ? { judged: basis.text } : {}),
+    };
+  });
 }
 
 /** What a tool's `kind` field says; models read it when they choose. */

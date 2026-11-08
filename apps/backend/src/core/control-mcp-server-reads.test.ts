@@ -648,6 +648,68 @@ describe("Orkestrator control MCP server", () => {
     }
   });
 
+  test("get_ticket says which commit each Verify check judged and whether the branch moved", async () => {
+    const judged = `abc1234${"0".repeat(33)}`;
+    const check = (commit?: string) => ({
+      status: "passed",
+      evidence: "bun test passes",
+      checkedAt: new Date(0).toISOString(),
+      source: "verify",
+      ...(commit ? { commit } : {}),
+    });
+    const ticket = {
+      id: "ticket-1",
+      projectId: "project-1",
+      title: "Investigate",
+      description: "",
+      acceptanceCriteria: "- One\n- Two",
+      status: "review",
+      comments: [],
+      images: [],
+      createdAt: new Date(0).toISOString(),
+      order: 0,
+      environmentId: "env-1",
+      sections: {
+        acceptanceCriteria: [
+          { id: "ac-1", text: "One", check: check(judged) },
+          { id: "ac-2", text: "Two", check: check() },
+        ],
+      },
+    };
+    overrides.set("get_kanban_tasks", () => [ticket]);
+    let head: unknown = `def5678${"0".repeat(33)}`;
+    overrides.set("get_environment_uncommitted_paths", ({ environmentId }) => {
+      if (environmentId !== "env-1") throw new Error("Environment not found");
+      if (head instanceof Error) throw head;
+      return { head, paths: [] };
+    });
+    const descriptor = coordinatorCredential(["discovery", "tickets"]);
+    const read = async () =>
+      (
+        await rpc(descriptor.url, descriptor.token, "tools/call", {
+          name: "get_ticket",
+          arguments: { projectId: "project-1", ticketId: "ticket-1" },
+        })
+      ).body.result?.structuredContent as { ticket: { criteria: Array<Record<string, unknown>> } };
+
+    expect((await read()).ticket.criteria).toEqual([
+      expect.objectContaining({
+        id: "ac-1",
+        commit: judged,
+        judged: "on abc1234; the branch has moved since",
+      }),
+      expect.objectContaining({ id: "ac-2", judged: "commit not recorded" }),
+    ]);
+    head = judged;
+    expect((await read()).ticket.criteria[0]).toMatchObject({ judged: "on abc1234" });
+    // A deleted or unreachable environment answers without a comparison.
+    head = new Error("Environment not found");
+    expect((await read()).ticket.criteria[0]).toMatchObject({
+      commit: judged,
+      judged: "on abc1234",
+    });
+  });
+
   test("scopes ticket tools and forwards durable request IDs", async () => {
     const ticket = {
       id: "ticket-1",

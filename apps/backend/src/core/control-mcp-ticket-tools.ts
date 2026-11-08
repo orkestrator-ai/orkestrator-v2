@@ -2,6 +2,7 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import { Schema } from "effect";
 import { normalizeTicketLabelName, ticketLabelKey } from "@orkestrator/protocol/ticket-labels";
+import { isCriterionCommit } from "@orkestrator/protocol/ticket-sections";
 import { describe, refine, str, toolInput, withDefault } from "./tool-schema.js";
 import {
   ticketKindField,
@@ -82,14 +83,59 @@ function nodeTicketTag(result: JsonRecord): JsonRecord {
   };
 }
 
-function ticketDetail(task: JsonRecord): JsonRecord {
+function ticketDetail(task: JsonRecord, environmentHead?: string): JsonRecord {
   return {
     ...ticketSummary(task),
-    ...ticketStructuredOutput(task as Parameters<typeof ticketStructuredOutput>[0]),
+    ...ticketStructuredOutput(
+      task as Parameters<typeof ticketStructuredOutput>[0],
+      environmentHead,
+    ),
     description: task.description,
     acceptanceCriteria: task.acceptanceCriteria,
     comments: Array.isArray(task.comments) ? task.comments.slice(-50) : [],
   };
+}
+
+/** How long `get_ticket` waits for the build environment's HEAD before answering without it. */
+const CRITERIA_HEAD_TIMEOUT_MS = 5_000;
+
+/**
+ * The HEAD of the ticket's build environment, when a recorded Verify check
+ * names a commit to compare it with. Best effort: a deleted, stopped or slow
+ * environment answers undefined, and the criteria then show their commit
+ * with no claim either way about the current code.
+ */
+async function criteriaEnvironmentHead(
+  invoke: ControlMcpToolContext["invoke"],
+  task: JsonRecord,
+): Promise<string | undefined> {
+  const environmentId = typeof task.environmentId === "string" ? task.environmentId : "";
+  if (!environmentId || !hasRecordedCommit(task)) return undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const result = await Promise.race([
+      invoke<{ head?: unknown }>("get_environment_uncommitted_paths", { environmentId }),
+      new Promise<undefined>((resolve) => {
+        timer = setTimeout(() => resolve(undefined), CRITERIA_HEAD_TIMEOUT_MS);
+      }),
+    ]);
+    const head = isRecord(result) && typeof result.head === "string" ? result.head : "";
+    return isCriterionCommit(head.toLowerCase()) ? head.toLowerCase() : undefined;
+  } catch {
+    return undefined;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function hasRecordedCommit(task: JsonRecord): boolean {
+  const sections = isRecord(task.sections) ? task.sections : null;
+  const criteria =
+    sections && Array.isArray(sections.acceptanceCriteria) ? sections.acceptanceCriteria : [];
+  return criteria.some(
+    (criterion) =>
+      isRecord(criterion) && isRecord(criterion.check) && isCriterionCommit(criterion.check.commit),
+  );
 }
 
 /**
@@ -146,7 +192,7 @@ export function registerTicketTools(
     {
       title: "Read a Kanban ticket",
       description:
-        "Read one ticket after verifying it belongs to the selected project. Ticket ids are the same on every machine that syncs this board; with nodeId, read that machine's copy.",
+        "Read one ticket after verifying it belongs to the selected project. Ticket ids are the same on every machine that syncs this board; with nodeId, read that machine's copy. A criterion Verify checked says in judged which commit it was judged on and whether the branch has moved since.",
       inputSchema: toolInput(
         Schema.Struct({
           projectId: str({ trim: true, min: 1, max: 200 }),
@@ -164,7 +210,13 @@ export function registerTicketTools(
         remote ? remote.tickets : await invoke("get_kanban_tasks", { projectId }),
       ).find((candidate) => candidate.id === ticketId);
       if (!task) throw new Error(`Kanban ticket not found in project: ${ticketId}`);
-      return toolResult({ ticket: ticketDetail(task), ...(remote ? nodeTicketTag(remote) : {}) });
+      // Another machine's environment cannot be read from here; its criteria
+      // still name their commit, just without the comparison.
+      const head = remote ? undefined : await criteriaEnvironmentHead(invoke, task);
+      return toolResult({
+        ticket: ticketDetail(task, head),
+        ...(remote ? nodeTicketTag(remote) : {}),
+      });
     },
   );
 

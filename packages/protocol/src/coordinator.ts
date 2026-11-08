@@ -821,6 +821,22 @@ export const COORDINATOR_VALIDATION_RULE =
   "Validation: Multi Review and build pipelines start by running the project's full validation once against the committed branch, so when review comes next never ask a worker for a full test suite, typecheck, lint or build pass, including in a last message before you start the review. Ask for the focused checks that cover its changes and for those results in its report. State in every worker prompt whether review follows. When no review follows, explicitly ask the worker to run all validation required by the repository before handoff. When review follows, ask for a full run only if the user asks for one or that run's result is what you need to learn, such as when diagnosing a suite failure.";
 
 /**
+ * How a coordinator closes finished work, sent verbatim as the last line of a
+ * terminal build pipeline or Multi Review status wake
+ * (`renderCoordinatorStatusNotice`).
+ *
+ * A finished task otherwise ended with whatever the coordinator happened to
+ * write. It rides on the wake rather than in the context block because it
+ * applies only then, and the block is paid for on every turn. The facts it
+ * asks for are in the same notice (a completed or failed build names each
+ * criterion's result and the commit Verify judged,
+ * `coordinator-build-pipeline-status.ts`) and in `get_build_pipeline`, so the
+ * model reports rather than guesses.
+ */
+export const COORDINATOR_HANDOFF_RULE =
+  'This work has ended. Close it for the user in one message: Delivered (what changed and where: commits kept, branch pushed, or the PR link); Criteria (for a build: passed, failed and not checked, with the commit Verify judged them on, from this notice or get_build_pipeline; say "commit not recorded" when it was not); Open (failed or unchecked criteria, findings, errors); Needs you (what the user must review, merge or decide). Ready for review, all criteria verified and merged are different claims: never state one for another.';
+
+/**
  * Self-timers and provider accounts, told to every main coordinator verbatim.
  *
  * "Check the workers in 2 hours and switch accounts if they hit a usage

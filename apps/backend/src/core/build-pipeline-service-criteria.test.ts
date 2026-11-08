@@ -113,15 +113,69 @@ describe("build pipeline acceptance criteria", () => {
           {
             id: "ac-4",
             text: "No renderer orchestration",
-            check: { status: "passed", source: "verify", pipelineId: started.id },
+            check: {
+              status: "passed",
+              source: "verify",
+              pipelineId: started.id,
+              // The HEAD the read-only guard held the worktree to.
+              commit: controls.currentHead,
+            },
           },
           {
             id: "ac-5",
             text: "Ticks show on the ticket",
-            check: { status: "failed", source: "verify", pipelineId: started.id },
+            check: {
+              status: "failed",
+              source: "verify",
+              pipelineId: started.id,
+              commit: controls.currentHead,
+            },
           },
         ],
       });
+      const checks = (recorded!.args.checks as Array<{ check: Record<string, unknown> }>).map(
+        (entry) => entry.check,
+      );
+      expect(checks.every((check) => !("uncommittedChanges" in check))).toBe(true);
+    });
+  });
+
+  test("a check judged on a dirty worktree says so beside its commit", async () => {
+    await withService(async (service, storage, provider, invocations, controls) => {
+      controls.kanbanTasks.set(TICKET.id, TICKET as never);
+      controls.uncommittedPaths = ["src/runner.ts"];
+      verdictWith(provider, {
+        complete: false,
+        rationale: "One criterion is unmet.",
+        acceptanceCriteria: [
+          { id: "ac-4", status: "passed", evidence: "bun test runner.test.ts passes" },
+          { id: "ac-5", status: "failed", evidence: "The ticket view shows no ticks." },
+        ],
+      });
+      const started = await service.start(
+        startInput({
+          maxIterations: 1,
+          source: { type: "kanban", taskId: TICKET.id },
+          taskSnapshot: {
+            title: "Backend pipeline",
+            description: TICKET.description,
+            acceptanceCriteria: TICKET.acceptanceCriteria,
+            comments: [],
+            images: [],
+          },
+        }),
+      );
+      await untilVerified(service, storage, started.id);
+      const recorded = invocations.find(
+        (invocation) => invocation.command === "record_kanban_criteria_checks",
+      );
+      const checks = (recorded!.args.checks as Array<{ check: Record<string, unknown> }>).map(
+        (entry) => entry.check,
+      );
+      expect(checks).toHaveLength(2);
+      for (const check of checks) {
+        expect(check).toMatchObject({ commit: controls.currentHead, uncommittedChanges: true });
+      }
     });
   });
 

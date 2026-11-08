@@ -1,9 +1,11 @@
 import {
   acceptanceCriteriaTally,
+  criterionCheckBasis,
   DELIVERY_POLICY_LABELS,
   TICKET_KIND_LABELS,
   TICKET_SECTION_DEFINITIONS,
   type AcceptanceCriterion,
+  type AcceptanceCriterionCheck,
   type DeliveryPolicy,
   type TicketKind,
   type TicketSections,
@@ -77,7 +79,52 @@ function CriteriaTally({ items }: { items: readonly AcceptanceCriterion[] }) {
   );
 }
 
-export function AcceptanceCriteriaList({ items }: { items: readonly AcceptanceCriterion[] }) {
+/**
+ * Which code a Verify check judged: its commit, whether the worktree also had
+ * uncommitted changes, and whether the branch has moved since. A check stored
+ * before commits were recorded says so rather than reading as current.
+ */
+function CriterionCommit({
+  check,
+  environmentHead,
+}: {
+  check: AcceptanceCriterionCheck | undefined;
+  environmentHead?: string;
+}) {
+  const basis = criterionCheckBasis(check, environmentHead);
+  if (!basis) return null;
+  return (
+    <p
+      data-testid="ticket-criterion-commit"
+      data-moved={basis.moved ? "true" : undefined}
+      className="mt-0.5 text-xs break-words text-muted-foreground"
+    >
+      {basis.commit ? (
+        <>
+          Judged on{" "}
+          <code className="font-mono" title={basis.commit}>
+            {basis.commit.slice(0, 7)}
+          </code>
+          {basis.uncommittedChanges ? " with uncommitted changes" : ""}
+          {basis.moved ? (
+            <span className="text-amber-600 dark:text-amber-400">; the branch has moved since</span>
+          ) : null}
+        </>
+      ) : (
+        "Commit not recorded"
+      )}
+    </p>
+  );
+}
+
+export function AcceptanceCriteriaList({
+  items,
+  environmentHead,
+}: {
+  items: readonly AcceptanceCriterion[];
+  /** The build environment's HEAD now, so a check on older code says so. */
+  environmentHead?: string;
+}) {
   return (
     <ul className="flex flex-col gap-2">
       {items.map((item) => {
@@ -104,6 +151,7 @@ export function AcceptanceCriteriaList({ items }: { items: readonly AcceptanceCr
                   {item.check.evidence}
                 </p>
               ) : null}
+              <CriterionCommit check={item.check} environmentHead={environmentHead} />
             </div>
           </li>
         );
@@ -122,9 +170,12 @@ export function TicketSectionsGrid({
   className,
   empty,
   deliveryControl,
+  environmentHead,
 }: {
   sections: TicketSections;
   className?: string;
+  /** The build environment's HEAD now, when known; see {@link AcceptanceCriteriaList}. */
+  environmentHead?: string;
   /** Shown when every section is empty. */
   empty?: React.ReactNode;
   /**
@@ -161,7 +212,7 @@ export function TicketSectionsGrid({
             wide="double"
             aside={<CriteriaTally items={items} />}
           >
-            <AcceptanceCriteriaList items={items} />
+            <AcceptanceCriteriaList items={items} environmentHead={environmentHead} />
           </Tile>,
         );
       }

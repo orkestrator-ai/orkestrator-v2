@@ -53,6 +53,7 @@ const detectPrLocalMock = mock(
     } | null,
 );
 const openInBrowserMock = mock(async () => {});
+const getEnvironmentHeadMock = mock(async (_environmentId: string) => null as string | null);
 const getCachedOpenCodeModelCatalogMock = mock(
   async (_projectId: string) =>
     null as Awaited<ReturnType<typeof realBackend.getCachedOpenCodeModelCatalog>>,
@@ -122,6 +123,7 @@ mock.module("@/lib/backend", () => ({
   detectPr: detectPrMock,
   detectPrLocal: detectPrLocalMock,
   openInBrowser: openInBrowserMock,
+  getEnvironmentHead: getEnvironmentHeadMock,
   getCachedOpenCodeModelCatalog: getCachedOpenCodeModelCatalogMock,
   getComposeDraft: getComposeDraftMock,
   saveComposeDraft: saveComposeDraftMock,
@@ -358,6 +360,8 @@ describe("KanbanTaskDialog", () => {
     detectPrLocalMock.mockClear();
     detectPrLocalMock.mockImplementation(async () => null);
     openInBrowserMock.mockClear();
+    getEnvironmentHeadMock.mockReset();
+    getEnvironmentHeadMock.mockImplementation(async () => null);
     getCachedOpenCodeModelCatalogMock.mockReset();
     getCachedOpenCodeModelCatalogMock.mockResolvedValue(null);
     getComposeDraftMock.mockReset();
@@ -959,6 +963,97 @@ describe("KanbanTaskDialog", () => {
       "1/4 passed · 1 failed · 1 not checked",
     );
     expect(screen.getByText("still broken", { exact: false })).toBeTruthy();
+  });
+
+  describe("which commit a criterion was judged on", () => {
+    const JUDGED = `abc1234${"0".repeat(33)}`;
+    const verifyCheck = (extra: Record<string, unknown> = {}) => ({
+      status: "passed" as const,
+      evidence: "bun test a",
+      checkedAt: "2026-10-28T00:00:00.000Z",
+      source: "verify" as const,
+      ...extra,
+    });
+    const renderTicket = () =>
+      renderInAppCommandScope(
+        <KanbanTaskDialog
+          task={makeTask({
+            environmentId: "env-1",
+            acceptanceCriteria: "- Judged\n- Dirty\n- Older\n- By hand",
+            sections: {
+              acceptanceCriteria: [
+                { id: "ac-1", text: "Judged", check: verifyCheck({ commit: JUDGED }) },
+                {
+                  id: "ac-2",
+                  text: "Dirty",
+                  check: verifyCheck({ commit: JUDGED, uncommittedChanges: true }),
+                },
+                { id: "ac-3", text: "Older", check: verifyCheck() },
+                {
+                  id: "ac-4",
+                  text: "By hand",
+                  check: { ...verifyCheck(), source: "manual", evidence: "Ticked by hand." },
+                },
+              ],
+            },
+          })}
+          open
+          onOpenChange={() => {}}
+        />,
+      );
+    const commitLines = () =>
+      screen.getAllByTestId("ticket-criterion").map((item) => {
+        const line = within(item).queryByTestId("ticket-criterion-commit");
+        return line
+          ? `${line.textContent}${line.getAttribute("data-moved") ? " [moved]" : ""}`
+          : null;
+      });
+
+    test("names the commit, a dirty worktree, and a check from before commits were recorded", async () => {
+      renderTicket();
+      await waitFor(() => expect(getEnvironmentHeadMock).toHaveBeenCalledWith("env-1"));
+      expect(commitLines()).toEqual([
+        "Judged on abc1234",
+        "Judged on abc1234 with uncommitted changes",
+        "Commit not recorded",
+        null,
+      ]);
+    });
+
+    test("says the branch has moved when the build environment's HEAD differs", async () => {
+      getEnvironmentHeadMock.mockImplementation(async () => `def5678${"0".repeat(33)}`);
+      renderTicket();
+      await waitFor(() =>
+        expect(commitLines()[0]).toBe("Judged on abc1234; the branch has moved since [moved]"),
+      );
+      expect(commitLines()[1]).toBe(
+        "Judged on abc1234 with uncommitted changes; the branch has moved since [moved]",
+      );
+      expect(commitLines()[2]).toBe("Commit not recorded");
+    });
+
+    test("an unchanged HEAD is not called moved", async () => {
+      getEnvironmentHeadMock.mockImplementation(async () => JUDGED);
+      renderTicket();
+      await waitFor(() => expect(getEnvironmentHeadMock).toHaveBeenCalled());
+      await act(async () => {});
+      expect(commitLines()[0]).toBe("Judged on abc1234");
+    });
+
+    test("does not read HEAD when no check names a commit", async () => {
+      renderInAppCommandScope(
+        <KanbanTaskDialog
+          task={makeTask({
+            environmentId: "env-1",
+            sections: { acceptanceCriteria: [{ id: "ac-1", text: "Old", check: verifyCheck() }] },
+          })}
+          open
+          onOpenChange={() => {}}
+        />,
+      );
+      await act(async () => {});
+      expect(getEnvironmentHeadMock).not.toHaveBeenCalled();
+    });
   });
 
   describe("Delivery tile", () => {

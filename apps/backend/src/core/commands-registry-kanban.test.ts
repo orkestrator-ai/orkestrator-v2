@@ -40,6 +40,14 @@ describe("Kanban content commands", () => {
     ],
     ["missing evidence", { taskId: "task", checks: [{ ...entry, check: { status: "passed" } }] }],
     [
+      "malformed commit",
+      { taskId: "task", checks: [{ ...entry, check: { ...check, commit: "abc1234" } }] },
+    ],
+    [
+      "non-boolean uncommittedChanges",
+      { taskId: "task", checks: [{ ...entry, check: { ...check, uncommittedChanges: "yes" } }] },
+    ],
+    [
       "oversized evidence",
       { taskId: "task", checks: [{ ...entry, check: { ...check, evidence: "x".repeat(2001) } }] },
     ],
@@ -78,6 +86,15 @@ describe("Kanban content commands", () => {
       expect(
         (await storage.kanban.getKanbanTask(task.id))?.sections?.acceptanceCriteria?.[0]?.check,
       ).toEqual(check);
+      // The commit Verify judged, and a dirty worktree, are stored with it.
+      const judged = { ...check, commit: "a".repeat(40), uncommittedChanges: true };
+      await commands.get("record_kanban_criteria_checks")!(
+        { taskId: task.id, checks: [{ ...entry, check: judged }] },
+        { storage } as never,
+      );
+      expect(
+        (await storage.kanban.getKanbanTask(task.id))?.sections?.acceptanceCriteria?.[0]?.check,
+      ).toEqual(judged);
     } finally {
       await rm(dataDir, { recursive: true, force: true });
     }

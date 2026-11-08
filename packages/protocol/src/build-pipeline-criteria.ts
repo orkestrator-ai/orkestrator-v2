@@ -15,6 +15,7 @@ import {
 } from "./build-pipeline.js";
 import {
   acceptanceCriteriaTally,
+  isCriterionCommit,
   sectionsFromTicketText,
   TICKET_SECTION_LIMITS,
   type AcceptanceCriterion,
@@ -25,6 +26,29 @@ export interface PipelineCriteriaView {
   criteria: AcceptanceCriterion[];
   /** The verify session the results came from, if any reported criteria. */
   verifySession?: PipelineSession;
+}
+
+/**
+ * The commit a Verify session judged: the HEAD its read-only guard held the
+ * worktree to for the whole turn, so the verdict describes exactly that code.
+ * Empty when the baseline was not recorded (the probe could not read the
+ * worktree, or the session predates it); callers then say "commit not
+ * recorded" rather than assuming the current code.
+ */
+export function verifySessionJudgedCode(
+  session: Pick<
+    PipelineSession,
+    | "validationHeadAtStart"
+    | "validationWorktreeStatusAtStart"
+    | "validationUncommittedPathsAtStart"
+  >,
+): { commit?: string; uncommittedChanges?: boolean } {
+  const commit = session.validationHeadAtStart?.toLowerCase();
+  if (!isCriterionCommit(commit)) return {};
+  const dirty =
+    session.validationWorktreeStatusAtStart === "dirty" ||
+    (session.validationUncommittedPathsAtStart?.length ?? 0) > 0;
+  return dirty ? { commit, uncommittedChanges: true } : { commit };
 }
 
 /**
@@ -46,6 +70,7 @@ export function pipelineCriteriaView(pipeline: BuildPipeline): PipelineCriteriaV
     (verifySession?.acceptanceCriteriaResults ?? []).map((result) => [result.id, result]),
   );
   const checkedAt = verifySession?.completedAt ?? verifySession?.startedAt ?? pipeline.createdAt;
+  const judged = verifySession ? verifySessionJudgedCode(verifySession) : {};
   const verifiedCriteria = taskSnapshotCriteria(snapshot);
   const reservedIds = new Set(verifiedCriteria.map(({ id }) => id));
   const allCriteria =
@@ -78,6 +103,7 @@ export function pipelineCriteriaView(pipeline: BuildPipeline): PipelineCriteriaV
             checkedAt,
             source: "verify" as const,
             pipelineId: pipeline.id,
+            ...judged,
           },
         }
       : { id, text };

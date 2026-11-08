@@ -599,9 +599,16 @@ export function MultiReviewLaunchDialog({
                       : "mb-4 text-xs text-zinc-500"
                   }
                 >
-                  {defaultsError
-                    ? `Could not read this machine's saved review defaults: ${defaultsError} Close and reopen to try again.`
-                    : "Loading this machine's saved review defaults…"}
+                  {defaultsError ? (
+                    <>
+                      <span>
+                        Could not read this machine's saved review defaults: {defaultsError}
+                      </span>
+                      <span className="block">Close and reopen to try again.</span>
+                    </>
+                  ) : (
+                    "Loading this machine's saved review defaults…"
+                  )}
                 </p>
               )}
               <div className="mb-3 flex items-center justify-between gap-3">

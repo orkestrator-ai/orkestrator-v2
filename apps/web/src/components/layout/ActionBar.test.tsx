@@ -184,7 +184,9 @@ const getMultiReviewLaunchDefaultsMock = mock(unknownLaunchDefaultsCommand);
  */
 async function openConfiguredMultiReview() {
   fireEvent.contextMenu(screen.getByRole("button", { name: "Multi Review" }));
-  await waitFor(() => expect(screen.queryByTestId("multi-review-defaults-status")).toBeNull());
+  await waitFor(() =>
+    expect(screen.queryByTestId("multi-review-defaults-status") === null).toBe(true),
+  );
 }
 const cancelMultiReviewMock = mock(
   async (_workflowId: string): Promise<{ id: string; phase: "cancelled" | "cancelling" }> => ({

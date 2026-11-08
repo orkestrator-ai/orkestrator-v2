@@ -940,3 +940,125 @@ describe("MultiReviewLaunchDialog focus", () => {
     expect(screen.getByTestId("multi-review-duplicate-warning").textContent).toBe("");
   });
 });
+
+describe("node-resolved defaults", () => {
+  const selection: MultiReviewLaunchSelection = {
+    reviewers: [
+      { agent: "codex", model: "gpt-5.6", reasoningEffort: "low" },
+      { agent: "claude", model: "opus", reasoningEffort: "high", fastMode: true },
+      { agent: "codex", model: "gpt-5.5", reasoningEffort: "medium" },
+    ],
+    reviewModel: { agent: "claude", model: "opus", fastMode: true },
+    fixModel: { agent: "codex", model: "gpt-5.5", reasoningEffort: "high" },
+    autoFix: true,
+    autoPr: true,
+  };
+
+  test("replaces the window reviewer count and exact resolved choices", () => {
+    const onConfirm = mock((_selection: MultiReviewLaunchSelection) => undefined);
+    const props = {
+      open: true,
+      onOpenChange: () => undefined,
+      defaultAgent: "claude" as const,
+      catalog: speedCatalog,
+      onConfirm,
+    };
+    const { rerender } = renderInAppCommandScope(
+      <MultiReviewLaunchDialog {...props} resolvedDefaults={{ status: "loading" }} />,
+    );
+    expect(
+      screen.getByRole("button", { name: "Start 2-model review" }).hasAttribute("disabled"),
+    ).toBe(true);
+    rerender(
+      <MultiReviewLaunchDialog {...props} resolvedDefaults={{ status: "ready", selection }} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Start 3-model review" }));
+    expect(onConfirm.mock.calls[0]?.[0]).toEqual(selection);
+  });
+
+  test("seeds once per open and preserves edits until the next open", () => {
+    const onConfirm = mock((_selection: MultiReviewLaunchSelection) => undefined);
+    const props = {
+      onOpenChange: () => undefined,
+      defaultAgent: "claude" as const,
+      catalog: speedCatalog,
+      onConfirm,
+    };
+    const { rerender } = renderInAppCommandScope(
+      <MultiReviewLaunchDialog {...props} open resolvedDefaults={{ status: "ready", selection }} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Remove reviewer 3" }));
+    rerender(
+      <MultiReviewLaunchDialog
+        {...props}
+        open
+        resolvedDefaults={{ status: "ready", selection: { ...selection } }}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Start 2-model review" }));
+    expect(onConfirm.mock.calls[0]?.[0].reviewers).toEqual(selection.reviewers.slice(0, 2));
+    rerender(<MultiReviewLaunchDialog {...props} open={false} />);
+    const next = { ...selection, reviewers: selection.reviewers.slice(0, 1) };
+    rerender(
+      <MultiReviewLaunchDialog
+        {...props}
+        open
+        resolvedDefaults={{ status: "ready", selection: next }}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Start 1-model review" }));
+    expect(onConfirm.mock.calls[1]?.[0]).toEqual(next);
+  });
+
+  test("keeps platform reasoning and speed preferences when switching a resolved row", () => {
+    setFavorites([{ platform: "claude", modelId: "opus" }]);
+    const onConfirm = mock((_selection: MultiReviewLaunchSelection) => undefined);
+    renderInAppCommandScope(
+      <MultiReviewLaunchDialog
+        open
+        onOpenChange={() => undefined}
+        defaultAgent="codex"
+        catalog={speedCatalog}
+        preferredReasoningEfforts={{ claude: "high", codex: "low" }}
+        preferredFastModes={{ claude: true }}
+        resolvedDefaults={{ status: "ready", selection }}
+        onConfirm={onConfirm}
+      />,
+    );
+    // Reviewer 3 has no corresponding window-built row; it inherits the fallback preferences.
+    chooseFavorite("Reviewer 3", /Opus/);
+    chooseFavorite("Preparation & consolidation model", /Opus/);
+    chooseFavorite("Address Findings model", /Opus/);
+    fireEvent.click(screen.getByRole("button", { name: "Start 3-model review" }));
+    const submitted = onConfirm.mock.calls[0]![0];
+    for (const row of [submitted.reviewers[2], submitted.reviewModel, submitted.fixModel]) {
+      expect(row).toMatchObject({
+        agent: "claude",
+        model: "opus",
+        reasoningEffort: "high",
+        fastMode: true,
+      });
+    }
+  });
+
+  test("renders an unpunctuated read error separately from its retry hint", () => {
+    renderInAppCommandScope(
+      <MultiReviewLaunchDialog
+        open
+        onOpenChange={() => undefined}
+        defaultAgent="claude"
+        catalog={catalog}
+        onConfirm={() => undefined}
+        resolvedDefaults={{ status: "failed", message: "node unavailable" }}
+      />,
+    );
+    const alert = screen.getByRole("alert");
+    expect(within(alert).getByText("Close and reopen to try again.").className).toBe("block");
+    expect(within(alert).getByText(/saved review defaults: node unavailable/).textContent).toBe(
+      "Could not read this machine's saved review defaults: node unavailable",
+    );
+    expect(
+      screen.getByRole("button", { name: "Start 2-model review" }).hasAttribute("disabled"),
+    ).toBe(true);
+  });
+});

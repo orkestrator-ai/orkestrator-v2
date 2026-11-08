@@ -887,6 +887,7 @@ const ROOT_TEST_PATHS = [
   "./e2e/agent-testing/bridge-builds-setup.test.ts",
   "./e2e/agent-testing/packaged-electron-app.test.ts",
   "./e2e/agent-testing/process-tree.test.ts",
+  "./e2e/agent-testing/session-history-environment.test.ts",
   "./e2e/agent-testing/network-churn-report.test.ts",
   "./e2e/agent-testing/electron-startup-recovery.test.ts",
   "./e2e/agent-testing/browser-test.test.ts",

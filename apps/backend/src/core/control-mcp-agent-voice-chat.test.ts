@@ -243,13 +243,15 @@ describe("agent voice chat tools", () => {
   });
 
   test("listen speaks pending and failed status instead of an older answer", async () => {
-    let reject!: (error: Error) => void;
+    // The reply starts only after the project digest is read, which can be
+    // after `say` and `listen` have returned, so wait for it before failing it.
+    const started = Promise.withResolvers<(error: Error) => void>();
     let count = 0;
     const harness = await open(async () =>
       ++count === 1
         ? "Old answer."
         : new Promise<string>((_resolve, fail) => {
-            reject = fail;
+            started.resolve(fail);
           }),
     );
     const voice = await harness.credential("voice");
@@ -270,7 +272,7 @@ describe("agent voice chat tools", () => {
     expect(
       spoken(await harness.call(voice.token, "agent_voice_chat_listen", { chatId, waitMs: 0 })),
     ).toStartWith("Still thinking.");
-    reject(new Error("private"));
+    (await started.promise)(new Error("private"));
     expect(
       spoken(await harness.call(voice.token, "agent_voice_chat_listen", { chatId, waitMs: 1000 })),
     ).toStartWith("No reply:");

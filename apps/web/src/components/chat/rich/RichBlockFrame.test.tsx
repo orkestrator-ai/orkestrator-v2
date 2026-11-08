@@ -24,7 +24,7 @@ describe("RichBlockFrame", () => {
     expect(screen.getByRole("note").getAttribute("data-rich-notice-tone")).toBe("warning");
     expect(screen.getByText("exact source")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
-    expect(screen.queryByText("hidden body")).toBeNull();
+    expect(screen.queryByText("hidden body") === null).toBe(true);
   });
 
   test("logs a failed renderer without its message, source or location", () => {

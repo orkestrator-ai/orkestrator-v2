@@ -741,16 +741,21 @@ describe("storage-backed command delegation", () => {
       },
       context,
     );
-    expect(storage.kanban.updateKanbanTask).toHaveBeenCalledWith("task-1", {
-      title: "Fixed",
-      acceptanceCriteria: "Tests pass",
-      status: "done",
-      environmentId: undefined,
-      buildPipelineId: undefined,
-      prUrl: undefined,
-      prState: "merged",
-      prMergeCommented: false,
-    });
+    expect(storage.kanban.updateKanbanTask).toHaveBeenCalledWith(
+      "task-1",
+      {
+        title: "Fixed",
+        acceptanceCriteria: "Tests pass",
+        status: "done",
+        environmentId: undefined,
+        buildPipelineId: undefined,
+        prUrl: undefined,
+        prState: "merged",
+        prMergeCommented: false,
+      },
+      undefined,
+      { preserveDoneStatus: false },
+    );
   });
 
   test("keeps the task linked when build-pipeline cleanup fails", async () => {

@@ -268,7 +268,70 @@ export interface FixtureFailure {
 
 export interface FixtureReport {
   readonly checked: number;
+  /**
+   * Fixtures refused only inside a value the older schema left unconstrained
+   * (`{}`): see {@link isUnconstrainedRefusal}. Counted, not failed.
+   */
+  readonly unconstrained: number;
   readonly failures: readonly FixtureFailure[];
+}
+
+/** What the current parser said about one fixture. */
+export interface FixtureRefusal {
+  readonly message: string;
+  /** Where each issue is, as keys from the arguments object. */
+  readonly paths: readonly (readonly (string | number)[])[];
+}
+
+/**
+ * Property paths, from the arguments object, whose schema in `document` is
+ * unconstrained (`{}` or `true`). Follows nested `properties` only.
+ */
+export function unconstrainedPaths(document: JsonSchemaDocument): string[][] {
+  const found: string[][] = [];
+  const walk = (schema: Json, path: string[], depth: number): void => {
+    if (depth > 32 || schema === null || typeof schema !== "object" || Array.isArray(schema))
+      return;
+    const properties = (schema as JsonObject).properties;
+    if (properties === null || typeof properties !== "object" || Array.isArray(properties)) return;
+    for (const [key, child] of Object.entries(properties as JsonObject)) {
+      const at = [...path, key];
+      if (
+        child === true ||
+        (child !== null &&
+          typeof child === "object" &&
+          !Array.isArray(child) &&
+          Object.keys(child).length === 0)
+      )
+        found.push(at);
+      else walk(child, at, depth + 1);
+    }
+  };
+  walk(document.schema, [], 0);
+  return found;
+}
+
+/**
+ * A refusal is no evidence against an older release when every issue lies in
+ * a value its schema left unconstrained. Such a value is checked by a
+ * validator the JSON Schema cannot express (a web annotation's `capture`), so
+ * a generated fixture is arbitrary JSON the older release would have refused
+ * too.
+ */
+export function isUnconstrainedRefusal(
+  refusal: FixtureRefusal,
+  unconstrained: readonly (readonly string[])[],
+): boolean {
+  return (
+    unconstrained.length > 0 &&
+    refusal.paths.length > 0 &&
+    refusal.paths.every((path) =>
+      unconstrained.some(
+        (prefix) =>
+          prefix.length <= path.length && prefix.every((key, index) => String(path[index]) === key),
+      ),
+    )
+  );
 }
 
 /** What fixture generation needs from `effect`, resolved from `packages/protocol`. */
@@ -284,8 +347,36 @@ interface EffectFixtureModules {
   };
   readonly Effect: { runSync(effect: unknown): readonly unknown[] };
   readonly SchemaRepresentation: {
-    fromJsonSchemaDocument(document: unknown, options: { patterns: "apply" }): unknown;
+    fromJsonSchemaDocument(
+      document: unknown,
+      options: { patterns: "apply"; onEnter: (schema: JsonObject) => JsonObject },
+    ): unknown;
   };
+}
+
+/** The five JSON types other than `null`, as an importable union. */
+const NON_NULL_SCHEMA: JsonObject = Object.freeze({
+  anyOf: ["object", "array", "string", "number", "boolean"].map((type) => ({ type })),
+});
+
+/**
+ * Rewrites what Effect's importer refuses into an equivalent it accepts.
+ * `Schema.Struct({})`, the arguments of every command that takes none, exports
+ * as `{ not: { type: "null" } }` (any value but `null`), and the importer has
+ * no `not`. Only that exact node is rewritten; any other `not` still fails.
+ */
+export function importableSchemaNode(schema: JsonObject): JsonObject {
+  const not = schema.not;
+  if (
+    not === null ||
+    typeof not !== "object" ||
+    Array.isArray(not) ||
+    Object.keys(not).length !== 1 ||
+    (not as JsonObject).type !== "null"
+  )
+    return schema;
+  const { not: _not, ...rest } = schema;
+  return Object.keys(rest).length === 0 ? NON_NULL_SCHEMA : { allOf: [rest, NON_NULL_SCHEMA] };
 }
 
 /**
@@ -304,6 +395,7 @@ export async function loadFixtureGenerator(): Promise<FixtureGenerator> {
     sample(document, count, seed) {
       const schema = modules.SchemaRepresentation.fromJsonSchemaDocument(document, {
         patterns: "apply",
+        onEnter: importableSchemaNode,
       });
       return modules.Effect.runSync(
         modules.Arbitrary.sampleEffect(modules.Arbitrary.schema(schema), { count, seed }),
@@ -319,13 +411,15 @@ export async function loadFixtureGenerator(): Promise<FixtureGenerator> {
  */
 export function runArgumentFixtures(
   cases: readonly FixtureCase[],
-  decode: (command: string, args: unknown) => string | null,
+  decode: (command: string, args: unknown) => string | FixtureRefusal | null,
   generator: FixtureGenerator,
   count = FIXTURES_PER_SCHEMA,
 ): FixtureReport {
   let checked = 0;
+  let unconstrained = 0;
   const failures: FixtureFailure[] = [];
   for (const entry of cases) {
+    const opaque = unconstrainedPaths(entry.document);
     const { command, digest, releases } = entry;
     let samples: readonly unknown[];
     try {
@@ -344,13 +438,17 @@ export function runArgumentFixtures(
       const fixture = JSON.stringify(sample);
       checked += 1;
       const refusal = decode(command, JSON.parse(fixture));
-      if (refusal !== null) {
-        failures.push({ command, digest, releases, fixture, message: refusal });
-        break;
+      if (refusal === null) continue;
+      if (typeof refusal !== "string" && isUnconstrainedRefusal(refusal, opaque)) {
+        unconstrained += 1;
+        continue;
       }
+      const message = typeof refusal === "string" ? refusal : refusal.message;
+      failures.push({ command, digest, releases, fixture, message });
+      break;
     }
   }
-  return { checked, failures };
+  return { checked, unconstrained, failures };
 }
 
 // ---------------------------------------------------------------------------
@@ -440,7 +538,7 @@ export function runFixturesInChild(
   cases: readonly FixtureCase[],
   count?: number,
 ): Promise<FixtureReport> {
-  if (cases.length === 0) return Promise.resolve({ checked: 0, failures: [] });
+  if (cases.length === 0) return Promise.resolve({ checked: 0, unconstrained: 0, failures: [] });
   return runChild<FixtureReport>({
     mode: "fixtures",
     cases,
@@ -466,6 +564,14 @@ async function childMain(input: string, output: string): Promise<void> {
     return;
   }
   const { decodeCommandArgs } = await import("@orkestrator/protocol/contract/command");
+  const { SchemaIssue } = (await import(Bun.resolveSync("effect", protocolDirectory))) as {
+    SchemaIssue: {
+      makeFormatterStandardSchemaV1(): (issue: unknown) => {
+        issues: readonly { path?: readonly PropertyKey[] }[];
+      };
+    };
+  };
+  const standardIssues = SchemaIssue.makeFormatterStandardSchemaV1();
   const generator = await loadFixtureGenerator();
   const report = runArgumentFixtures(
     request.cases,
@@ -473,7 +579,17 @@ async function childMain(input: string, output: string): Promise<void> {
       const def = registry.contracts.get(command);
       if (!def) return `${command} is not defined in the current registry.`;
       const decoded = decodeCommandArgs(def, args);
-      return decoded._tag === "Success" ? null : decoded.failure.message;
+      if (decoded._tag === "Success") return null;
+      const { message, cause } = decoded.failure as {
+        message: string;
+        cause?: { issue?: unknown };
+      };
+      // An unsupported critical field has no schema issue, so no path: it is always evidence.
+      if (cause?.issue === undefined) return message;
+      const paths = standardIssues(cause.issue).issues.map((issue) =>
+        (issue.path ?? []).map((key) => (typeof key === "number" ? key : String(key))),
+      );
+      return { message, paths };
     },
     generator,
     request.count,

@@ -271,6 +271,8 @@ describe("test suite ownership", () => {
       // Deferred backend references must survive the browser's normalization.
       "tests/unit/native-agent-deferred-normalization.test.ts",
       "tests/unit/test-host-isolation.test.ts",
+      // The mail benchmark script reads the agent-accounts store the backend writes.
+      "tests/unit/tmux-mail-benchmark.test.ts",
       "tests/unit/user-prompt-display-contract.test.ts",
       "tests/unit/workspace-setup-preserve.test.ts",
     ]);

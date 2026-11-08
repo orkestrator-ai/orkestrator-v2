@@ -649,7 +649,9 @@ export async function runContractCi(options: ContractCiOptions = {}): Promise<nu
     try {
       const cases = fixtureCases(window, manifest, contractsDirectory);
       const report = await (options.runFixtures ?? runFixturesInChild)(cases);
-      log(`Argument fixtures: ${report.checked} decoded from ${cases.length} older schemas.`);
+      log(
+        `Argument fixtures: ${report.checked} decoded from ${cases.length} older schemas${report.unconstrained > 0 ? `, ${report.unconstrained} refused only inside a value the older schema left unconstrained` : ""}.`,
+      );
       fixtures = fixtureProblems(report);
     } catch (error) {
       fixtures = [error instanceof Error ? error.message : String(error)];

@@ -34,6 +34,8 @@ import {
 import {
   checkSchemaStore,
   documentDigest,
+  importableSchemaNode,
+  isUnconstrainedRefusal,
   loadFixtureGenerator,
   newRequiredFields,
   readStoredSchema,
@@ -41,6 +43,7 @@ import {
   runFixturesInChild,
   schemaStoreFile,
   storedSchemaText,
+  unconstrainedPaths,
   writeSchemaStore,
   type JsonSchemaDocument,
 } from "../../scripts/contract-ci-schemas";
@@ -479,7 +482,7 @@ describe("argument schemas", () => {
       { command: "send", digest: documentDigest(before), releases: ["2.40.0"], document: before },
     ];
     const tolerant = runArgumentFixtures(cases, () => null, generator, 10);
-    expect(tolerant).toEqual({ checked: 10, failures: [] });
+    expect(tolerant).toEqual({ checked: 10, unconstrained: 0, failures: [] });
     const requiresBody = runArgumentFixtures(
       cases,
       (_command, args) =>
@@ -493,6 +496,49 @@ describe("argument schemas", () => {
     expect(requiresBody.failures[0]!.message).toBe("Expected body to be a string");
     // Seeded: the same fixtures every run.
     expect(generator.sample(before, 5, "seed")).toEqual(generator.sample(before, 5, "seed"));
+  });
+
+  test("Schema.Struct({}) arguments, exported as any value but null, generate fixtures", async () => {
+    const generator = await loadFixtureGenerator();
+    const noArgs: JsonSchemaDocument = {
+      dialect: "draft-2020-12",
+      schema: { not: { type: "null" } },
+      definitions: {},
+    };
+    const samples = generator.sample(noArgs, 25, "no-args");
+    expect(samples).toHaveLength(25);
+    expect(samples.some((sample) => sample === null)).toBe(false);
+    expect(importableSchemaNode({ not: { type: "string" } })).toEqual({ not: { type: "string" } });
+    // Any other `not` still fails rather than being silently widened.
+    expect(() =>
+      generator.sample({ ...noArgs, schema: { not: { type: "string" } } }, 1, "other"),
+    ).toThrow('"not"');
+  });
+
+  test("a refusal only inside an unconstrained value is counted, not failed (stage 2)", async () => {
+    const generator = await loadFixtureGenerator();
+    const opaque = objectSchema({ to: { type: "string" }, capture: {} }, ["to", "capture"]);
+    expect(unconstrainedPaths(opaque)).toEqual([["capture"]]);
+    const cases = [
+      { command: "send", digest: documentDigest(opaque), releases: ["2.40.0"], document: opaque },
+    ];
+    const inCapture = runArgumentFixtures(
+      cases,
+      () => ({ message: "Capture must be an object", paths: [["capture"], ["capture", "kind"]] }),
+      generator,
+      5,
+    );
+    expect(inCapture).toEqual({ checked: 5, unconstrained: 5, failures: [] });
+    const elsewhere = runArgumentFixtures(
+      cases,
+      () => ({ message: "Expected to", paths: [["capture"], ["to"]] }),
+      generator,
+      5,
+    );
+    expect(elsewhere.unconstrained).toBe(0);
+    expect(elsewhere.failures.map((failure) => failure.message)).toEqual(["Expected to"]);
+    // A refusal with no path (an unsupported critical field) is always evidence.
+    expect(isUnconstrainedRefusal({ message: "critical", paths: [] }, [["capture"]])).toBe(false);
   });
 
   test("fixtures run through the real registry's parser in a sandboxed child", async () => {
@@ -611,7 +657,7 @@ describe("runContractCi", () => {
       counterIds: [],
       runFixtures: async (cases) => {
         ran = true;
-        return { checked: cases.length, failures: [] };
+        return { checked: cases.length, unconstrained: 0, failures: [] };
       },
       log: (line) => lines.push(line),
     });

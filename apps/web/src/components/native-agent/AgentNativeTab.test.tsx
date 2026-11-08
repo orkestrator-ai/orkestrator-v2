@@ -17,7 +17,10 @@ import {
   AGENT_INTERACTION_CONTRACT_VERSION,
   type AgentInteractionRequest,
 } from "@orkestrator/protocol/agent-interactions";
-import type { AgentAccountLoginProgress } from "@orkestrator/protocol/agent-accounts";
+import type {
+  AgentAccountLoginProgress,
+  AgentAccountsSnapshot,
+} from "@orkestrator/protocol/agent-accounts";
 import type {
   NativeAgentAuthStatus,
   NativeAgentDispatchOutcome,
@@ -342,6 +345,13 @@ const startAgentAccountLoginMock = mock(
   },
 );
 const getAgentAccountLoginMock = mock(async () => accountLoginProgress);
+// The machine's accounts, which the Claude sign-in card names the active one of.
+const EMPTY_AGENT_ACCOUNTS: AgentAccountsSnapshot = {
+  accounts: [],
+  active: { claude: "default", codex: "default" } as AgentAccountsSnapshot["active"],
+};
+let agentAccounts: AgentAccountsSnapshot = EMPTY_AGENT_ACCOUNTS;
+const listAgentAccountsMock = mock(async () => agentAccounts);
 const cancelAgentAccountLoginMock = mock(async () => {
   accountLoginProgress = { state: "idle" };
   return accountLoginProgress;
@@ -435,6 +445,7 @@ mock.module("@/lib/backend", () => ({
   getNativeAgentAuthStatus: getNativeAgentAuthStatusMock,
   startAgentAccountLogin: startAgentAccountLoginMock,
   getAgentAccountLogin: getAgentAccountLoginMock,
+  listAgentAccounts: listAgentAccountsMock,
   cancelAgentAccountLogin: cancelAgentAccountLoginMock,
   openInBrowser: openInBrowserMock,
   ensureNativeAgentSession: ensureNativeAgentSessionMock,
@@ -577,6 +588,7 @@ afterEach(() => {
     readCoordinatorFaked = false;
   }
   renderVirtualizedMessages = false;
+  agentAccounts = EMPTY_AGENT_ACCOUNTS;
   latestTranscriptAnnotationProps = undefined;
   appCommandStore(configStore).getState().setConfig(configSnapshot);
   flushPaneLayoutNowMock.mockClear();
@@ -11877,10 +11889,10 @@ describe("AgentNativeTab", () => {
       expect(screen.queryByTitle("Sign in to Claude before sending") === null).toBe(true);
     });
 
-    test("pins Claude's sign-in card for a turn-time auth notice until it clears", async () => {
-      // As Claude Code 2.1.310 answers a revoked login: an ordinary reply, not
-      // a terminal error row, so only the notice can ask for the card.
-      const reply = "Failed to authenticate. API Error: 401 OAuth access token is invalid.";
+    test("shows Claude's sign-in card inline for a turn-time auth notice until it clears", async () => {
+      // A reply that is not one of Claude's fixed refusals: only the notice
+      // asks for the card, so the card lasts as long as the notice.
+      const reply = "The request could not be completed.";
       const messages: NativeMessage[] = [
         {
           id: "user-1",
@@ -11916,8 +11928,9 @@ describe("AgentNativeTab", () => {
           refreshRequestId={0}
         />,
       );
-      await screen.findByRole("region", { name: "Sign in to Claude" });
+      const card = await screen.findByRole("region", { name: "Sign in to Claude" });
       expect(screen.getAllByRole("region", { name: "Sign in to Claude" })).toHaveLength(1);
+      expect(screen.getByTestId("transcript-cards").contains(card)).toBe(true);
 
       // A real answer clears the notice on the bridge, and the card goes with it.
       seedProjection({ messages, notices: [] });
@@ -11927,6 +11940,111 @@ describe("AgentNativeTab", () => {
           data={identity("claude")}
           isActive
           refreshRequestId={1}
+        />,
+      );
+      await waitFor(() =>
+        expect(screen.queryByRole("region", { name: "Sign in to Claude" }) === null).toBe(true),
+      );
+    });
+
+    test("keeps Claude's inline sign-in card under its login refusal after the notice clears", async () => {
+      // Claude Code 2.1.319 answers a login past its time limit with this
+      // fixed reply. The notice that accompanies it is in-memory bridge state
+      // and can go first; the reply in the transcript keeps the card.
+      agentAccounts = {
+        accounts: [
+          {
+            id: "work",
+            platform: "claude",
+            label: "Work",
+            isDefault: false,
+            isActive: true,
+            signedIn: false,
+            identity: { email: "dev@example.com" },
+          },
+        ],
+        active: { ...EMPTY_AGENT_ACCOUNTS.active, claude: "work" },
+      };
+      const reply =
+        "Failed to authenticate: this login reached its time limit and cannot be renewed. Run `claude auth login` to sign in again, or use `claude setup-token` and set CLAUDE_CODE_OAUTH_TOKEN for unattended jobs";
+      const messages: NativeMessage[] = [
+        {
+          id: "user-1",
+          role: "user",
+          content: "OK, please go ahead",
+          createdAt: "2026-11-08T22:23:00.000Z",
+          parts: [{ type: "text", content: "OK, please go ahead" }],
+        },
+        {
+          id: "assistant-1",
+          role: "assistant",
+          content: reply,
+          createdAt: "2026-11-08T22:23:01.000Z",
+          parts: [{ type: "text", content: reply }],
+        },
+      ];
+      seedProjection({
+        messages,
+        notices: [
+          {
+            kind: "auth",
+            state: "expired",
+            message: "Claude's login was refused. Sign in to Claude again to keep working.",
+            occurrenceId: "assistant-1",
+          },
+        ],
+      });
+      const view = renderInAppCommandScope(
+        <AgentNativeTab
+          tabId="tab-auth-refusal-card"
+          data={identity("claude")}
+          isActive
+          refreshRequestId={0}
+        />,
+      );
+      const card = await screen.findByRole("region", { name: "Sign in to Claude" });
+      expect(screen.getByTestId("transcript-cards").contains(card)).toBe(true);
+      // It names the login a sign-in renews: the machine's active account.
+      await waitFor(() =>
+        expect(within(card).getByTestId("claude-sign-in-account").textContent).toBe(
+          "AccountWork (dev@example.com)",
+        ),
+      );
+
+      seedProjection({ messages, notices: [] });
+      const reads = getNativeAgentProjectionMock.mock.calls.length;
+      view.rerender(
+        <AgentNativeTab
+          tabId="tab-auth-refusal-card"
+          data={identity("claude")}
+          isActive
+          refreshRequestId={1}
+        />,
+      );
+      // The notice-free snapshot has been read and settled.
+      await waitFor(() =>
+        expect(getNativeAgentProjectionMock.mock.calls.length).toBeGreaterThan(reads),
+      );
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(screen.getAllByRole("region", { name: "Sign in to Claude" })).toHaveLength(1);
+
+      // Once the user sends again the refusal is history, and so is the card.
+      const resent: NativeMessage = {
+        id: "user-2",
+        role: "user",
+        content: "Try again",
+        createdAt: "2026-11-08T22:30:00.000Z",
+        parts: [{ type: "text", content: "Try again" }],
+      };
+      seedProjection({ messages: [...messages, resent], notices: [] });
+      view.rerender(
+        <AgentNativeTab
+          tabId="tab-auth-refusal-card"
+          data={identity("claude")}
+          isActive
+          refreshRequestId={2}
         />,
       );
       await waitFor(() =>

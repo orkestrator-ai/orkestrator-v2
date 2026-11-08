@@ -1,8 +1,8 @@
 /**
  * Sends a prompt again once the Claude login it was refused for is back.
  *
- * Claude answers a turn it has no login for with its not-logged-in notice as an
- * ordinary reply and does nothing else. This used to be recovered in the
+ * Claude answers a turn it has no usable login for (none, expired, timed out or
+ * revoked) with a fixed refusal as an ordinary reply and does nothing else. This used to be recovered in the
  * renderer, from an in-memory copy of the last prompt: it worked only on the
  * device that sent it, while that tab stayed mounted. The backend now owns it:
  *
@@ -25,7 +25,7 @@
  * retried here. A rejection is not retried either: the user can see their message
  * and the sign-in card asks them to resend it.
  */
-import { isClaudeNotLoggedInText } from "@orkestrator/protocol/claude-login-notice";
+import { isClaudeLoginRefusalText } from "@orkestrator/protocol/claude-login-notice";
 import type { NativeAgentRuntimeProvider } from "./agent-provider-contract.js";
 import { composeDraftHoldsQueue } from "./compose-draft-occupancy.js";
 import type { PersistedNativeAgentSession, PersistedNativeAgentSignInResend } from "./models.js";
@@ -80,7 +80,7 @@ function rowText(row: Record<string, unknown>): string {
 }
 
 /**
- * Whether the newest exchange in `rows` is the not-logged-in notice answering
+ * Whether the newest exchange in `rows` is Claude's login refusal answering
  * the newest user message. Once anything follows it, the moment has passed.
  */
 export function latestExchangeIsLoginRefusal(rows: readonly unknown[]): boolean {
@@ -92,7 +92,7 @@ export function latestExchangeIsLoginRefusal(rows: readonly unknown[]): boolean 
   return (
     lastUser >= 0 &&
     lastAssistant > lastUser &&
-    isClaudeNotLoggedInText(rowText(records[lastAssistant]!))
+    isClaudeLoginRefusalText(rowText(records[lastAssistant]!))
   );
 }
 

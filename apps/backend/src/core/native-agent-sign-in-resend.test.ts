@@ -139,6 +139,19 @@ describe("latestExchangeIsLoginRefusal", () => {
     ).toBe(true);
   });
 
+  test("a login that expired or reached its time limit is a refusal too", () => {
+    expect(
+      latestExchangeIsLoginRefusal([
+        { role: "user", content: "x" },
+        {
+          role: "assistant",
+          content:
+            "Failed to authenticate: this login reached its time limit and cannot be renewed. Run `claude auth login` to sign in again, or use `claude setup-token` and set CLAUDE_CODE_OAUTH_TOKEN for unattended jobs",
+        },
+      ]),
+    ).toBe(true);
+  });
+
   test("not when anything follows it, it merely mentions logging in, or there is no prompt", () => {
     expect(latestExchangeIsLoginRefusal([...refusedRows, { role: "user", content: "again" }])).toBe(
       false,

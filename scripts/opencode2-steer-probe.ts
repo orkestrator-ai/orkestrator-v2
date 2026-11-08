@@ -58,7 +58,7 @@ function textOf(content: unknown): string {
 }
 
 /** Each scripted reply is chosen by the latest user text the model was given. */
-class ScriptedModel {
+export class ScriptedModel {
   readonly calls: Array<{ userTexts: string[]; lastRole: string }> = [];
   private server: ReturnType<typeof Bun.serve> | undefined;
 
@@ -190,15 +190,28 @@ class Api {
   }
 }
 
-export async function main() {
-  const binary = process.env.OPENCODE2_CLI_PATH?.trim();
-  if (!binary) throw new Error("Set OPENCODE2_CLI_PATH to a 2.x opencode binary");
-  const root = await realpath(await mkdtemp(join(tmpdir(), "ork-opencode2-steer-")));
+export interface OpenCode2Fixture {
+  baseUrl: string;
+  password: string;
+  /** The project directory the server and its sessions are scoped to. */
+  directory: string;
+  model: ScriptedModel;
+  version: string;
+  stop(): Promise<void>;
+}
+
+/**
+ * Start a 2.x `opencode serve` in a disposable HOME/XDG/OPENCODE_DB, wired to a
+ * scripted local model, and wait for `/api/info`. Shared by this probe and the
+ * backend's OpenCode 2.x live tests. `stop()` signals only the process it spawned.
+ */
+export async function startOpenCode2Fixture(binary: string): Promise<OpenCode2Fixture> {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "ork-opencode2-")));
   const model = new ScriptedModel();
   const modelUrl = model.start();
   const dirs = Object.fromEntries(
     ["home", "config", "data", "state", "cache", "work"].map((name) => [name, join(root, name)]),
-  );
+  ) as Record<"home" | "config" | "data" | "state" | "cache" | "work", string>;
   await Promise.all(Object.values(dirs).map((dir) => mkdir(dir, { recursive: true })));
   await writeFile(
     join(dirs.work, "opencode.json"),
@@ -226,34 +239,57 @@ export async function main() {
       XDG_DATA_HOME: dirs.data,
       XDG_STATE_HOME: dirs.state,
       XDG_CACHE_HOME: dirs.cache,
-      OPENCODE_DB: join(dirs.data, "probe.db"),
+      OPENCODE_DB: join(dirs.data, "fixture.db"),
       OPENCODE_PASSWORD: password,
       OPENCODE_DISABLE_AUTOUPDATE: "1",
     },
-    stdout: "pipe",
-    stderr: "pipe",
+    stdout: "ignore",
+    stderr: "ignore",
   });
-  const api = new Api(`http://127.0.0.1:${port}`, password, dirs.work);
-  const results: Json = { version: null };
+  const stop = async () => {
+    server.kill("SIGTERM");
+    await Promise.race([server.exited, Bun.sleep(5000)]);
+    if (server.exitCode === null && server.signalCode === null) server.kill("SIGKILL");
+    model.stop();
+    if (!process.env.OPENCODE2_PROBE_KEEP) await rm(root, { recursive: true, force: true });
+    else log("kept", root);
+  };
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const api = new Api(baseUrl, password, dirs.work);
   try {
     for (let attempt = 0; ; attempt++) {
       const info = await api.call("GET", "/api/info").catch(() => null);
       if (info?.status === 200) {
-        results.version = (info.data as Json).version;
-        break;
+        return {
+          baseUrl,
+          password,
+          directory: dirs.work,
+          model,
+          version: String((info.data as Json).version),
+          stop,
+        };
       }
-      if (attempt > 120) throw new Error("server did not become healthy");
+      if (server.exitCode !== null) throw new Error(`opencode exited with ${server.exitCode}`);
+      if (attempt > 120) throw new Error("opencode did not become healthy");
       await Bun.sleep(250);
     }
-    log("server", results.version);
-    await runScenarios(api, model, results);
+  } catch (error) {
+    await stop();
+    throw error;
+  }
+}
+
+export async function main() {
+  const binary = process.env.OPENCODE2_CLI_PATH?.trim();
+  if (!binary) throw new Error("Set OPENCODE2_CLI_PATH to a 2.x opencode binary");
+  const fixture = await startOpenCode2Fixture(binary);
+  const api = new Api(fixture.baseUrl, fixture.password, fixture.directory);
+  const results: Json = { version: fixture.version };
+  try {
+    log("server", fixture.version);
+    await runScenarios(api, fixture.model, results);
   } finally {
-    server.kill("SIGTERM");
-    await Promise.race([server.exited, Bun.sleep(5000)]);
-    if (server.exitCode === null) server.kill("SIGKILL");
-    model.stop();
-    if (!process.env.OPENCODE2_PROBE_KEEP) await rm(root, { recursive: true, force: true });
-    else log("kept", root);
+    await fixture.stop();
   }
   process.stdout.write(`${JSON.stringify(results, null, 2)}\n`);
 }

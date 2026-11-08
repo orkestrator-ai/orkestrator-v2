@@ -14,7 +14,7 @@ Status rechecked 2026-10-30 against `main` at `cd7bbe3e5`, and task 2 again on 2
 2. **Readiness gate and start decision**: decide when the 2.x work may start, using the gate's open conditions. Status: open (trigger decided; still blocked at 2.2.2 by storage policy, per-prompt model/agent/tools and structured output, runtime-context gaps, stale-turn guard, bounded inbox and experimental MCP endpoints; rechecked at the 1.19.5 upgrade on 2026-10-30, still 2.2.2 and unchanged, see [1020](1020-provider-upgrade-2026-10-30.md) task 8; rechecked 2026-11-06 against 2.2.5, still closed, see [1031](1031-provider-upgrade-2026-11-06.md) task 7; rechecked 2026-11-08 against 2.2.6, unchanged. On 2026-11-08 the owner asked to move: steering is required and undo may be dropped. Accepting the other open conditions with the mitigations under "Task 2: owner decision" is proposed but not yet confirmed).
 3. **Legacy 1.x session policy**: keep, migrate or retire existing 1.x sessions when 2.x arrives (open question 1, code item 5). Status: done as a decision (keep on a pinned 1.x binary with its own database); the routing code is open (depends on 5).
 4. **Losses to decide**: rebuild, capability-gate or drop each of the eight listed losses (code item 3, open question 2). Status: done as decisions (share dropped with 1.19.1; the rest decided below); the code is open (depends on 5).
-5. **`opencode2` provider**: a second provider with its own binary pin, `OPENCODE_DB`, `@opencode/client`, persisted protocol marker, snapshot-plus-hints projection and native steer/queue (code items 1, 2 and 4). Status: open (depends on 2 and 10; steer is now required in the first release, see task 10).
+5. **`opencode2` provider**: a second provider with its own binary pin, `OPENCODE_DB`, `@opencode/client`, persisted protocol marker, snapshot-plus-hints projection and native steer/queue (code items 1, 2 and 4). Status: in progress (phase 1 of the "Build plan" done 2026-11-08; phases 2 to 6 open; steer is required in the first release, see task 10).
 6. **Changes that must ship with the first 2.x pin**: health probe on `/api/info` rejecting HTML, isolated `OPENCODE_DB` on host and container, GitHub-token plugin ported to `@opencode/plugin`, provider sign-in moved to `/api/credential`, live tests off `serve --pure`. Status: partly done (`checkHttpHealth` refuses HTML since 2026-10-30; the compatibility probe no longer uses `--pure`; since 2026-11-08 the 1.x host falls back to its own `OPENCODE_DB` when the shared database has no `session` table); the rest is open (depends on 5).
 7. **Qualification of the first 2.x pin**: the live probe, background, replay and capability checks listed under "Qualification". Status: open (depends on 5).
 8. **Session V2 features after the move**: steer/queue, `switchAgent`/`switchModel`, context, log replay, staged revert, saved rules, credential/integration sign-in, `reference.list`. Status: open (depends on 5).
@@ -614,6 +614,50 @@ Concrete changes that must ship with the first 2.x pin:
   (`Plugin.define({ id, setup(ctx) })`), because V1 plugins do not run on 2.x;
 - the live tests moved off `serve --pure`.
 
+### Build plan (2026-11-08)
+
+The 2.x provider is built in phases, each one reviewable, and nothing reaches
+users until phase 3 routes new sessions to it.
+
+1. **Foundation. Done on 2026-11-08.** `apps/backend/src/core/opencode2/`:
+   - `client.ts`, a bounded typed client for the `/api/*` routes the provider
+     uses;
+   - `events.ts`, an SSE reader with per-session `durable.seq` gap detection;
+   - `steer.ts`, which mints input ids in OpenCode's ascending format, detects
+     a conflicting id reuse, and classifies whether a steer landed in its run
+     or started a new one;
+   - `types.ts`;
+   - unit tests, plus `opencode2-steer.live.test.ts` (`RUN_LIVE_OPENCODE2=1`,
+     `OPENCODE2_CLI_PATH`) against the real binary through the probe's shared
+     fixture.
+
+   Nothing imports it yet.
+2. **Toolchain and launch.**
+   - Pin the 2.x binary per platform from the `@opencode/cli-<platform>` npm
+     tarballs: the manifest, the Dockerfile and the version-drift test.
+   - Start `opencode serve` with its own `OPENCODE_DB` and data directory, and
+     `OPENCODE_DISABLE_AUTOUPDATE` and `OPENCODE_FLAGS` set explicitly.
+   - Health on `/api/info`.
+   - Port the GitHub-token plugin to `@opencode/plugin`.
+3. **Provider core and routing.**
+   - `OpenCode2Provider` covers create and register, send (model, agent and
+     permissions set under the session dispatch lock), dispatch evidence (the
+     journaled input id in history), activity from the snapshot plus events,
+     abort through `interrupt`, steer through `steer.ts`, and close without
+     delete.
+   - A persisted `legacy` / `v2` marker on the session mapping, read by
+     `createNativeAgentProvider`. New sessions go to 2.x, behind a setting
+     until phase 6.
+4. **Transcript and interactions.** The message history becomes normalized rows
+   (one row per assistant message), history pages come from the list cursor,
+   permissions and forms become the shared cards (denying on timeout), and
+   usage is read from the session's tokens and cost.
+5. **Feature parity.** The workflow-result tool and structured output over MCP,
+   MCP management, sign-in through `/api/credential`, slash commands, staged
+   revert, and `OPENCODE_FLAGS=todo`.
+6. **Qualification and default.** Task 7, then make 2.x the default for new
+   sessions, documented in agent-engines.md.
+
 ### Losses to decide
 
 Measured against the current OpenCode usage, which is all legacy
@@ -963,6 +1007,28 @@ mitigation:
   as the Cursor and Pi bridges do;
 - experimental MCP and log routes: used at the exact pin, and rechecked on
   every bump.
+
+### Task 5: phase 1 foundation (2026-11-08)
+
+Built the 2.x client, event reader and steer helpers on their own, with no
+production caller, so they can be reviewed and qualified before any routing
+exists.
+
+- **Own client rather than `@opencode/client`.** `@opencode/client@2.2.6`
+  pins `effect` at exactly `4.1.0` (the backend is on `4.1.2`) and lists
+  `solid-js` as a peer. Every read must also be bounded, which the generated
+  client does not do. The cost is that our own client has to be updated on
+  each 2.x bump. The pinned `openapi.json` is the reference.
+- **Input ids are minted in OpenCode's own format**, never derived from the
+  Orkestrator request id. The server accepts any `^msg_` id, but its history
+  is ordered by those ids, so an arbitrary id would sort out of place. The
+  provider must journal the minted id with the request so that a retry reuses
+  it.
+- **A sequence gap means "re-read", not "lost".** Observed live: 2.2.6 never
+  broadcasts some durable sequence numbers, about two per run. Treating every
+  gap as a desync is conservative and costs one history read.
+- **Conflicting reuse is detected from the answer.** 2.2.6 answers it with the
+  original record and `200`, not `409`.
 
 ### Task 9: HTTP API, not ACP
 

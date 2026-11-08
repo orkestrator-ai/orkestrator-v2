@@ -3,6 +3,7 @@ import {
   environmentSetupStartedEvent,
 } from "@orkestrator/protocol/contract/domains/events";
 import { ROOTLESSKIT_HOST_LOOPBACK_ADDRESS } from "@orkestrator/protocol/container-host-reachability";
+import { hostOpenCodeDatabaseEnvironment } from "./opencode-host-database.js";
 import { isEnvironmentSetupSettled } from "@orkestrator/protocol/environment-readiness";
 import {
   assertWorktreePathUnlinked,
@@ -705,6 +706,7 @@ export async function spawnSetupTerminal(
     // "command not found". This mirrors what fix-path.ts does when recovering
     // the login-shell PATH.
     const lowered = lowPriorityCommand(shellPath, ["-ilc", setupCommand]);
+    const setupEnvironment = envWithManagedBinaries(context);
     spawnTerminalProcess(
       sessionId,
       lowered.command,
@@ -713,7 +715,8 @@ export async function spawnSetupTerminal(
         cwd: environment.worktreePath,
         cols: 80,
         rows: 24,
-        env: envWithManagedBinaries(context),
+        // The setup ends in an interactive shell, where `opencode` may be typed.
+        env: { ...setupEnvironment, ...hostOpenCodeDatabaseEnvironment(setupEnvironment) },
       },
       context,
       { onData: tracker.onData, onExit: tracker.onExit },

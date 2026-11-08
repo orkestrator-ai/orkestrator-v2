@@ -101,6 +101,10 @@ export const NATIVE_AGENT_LOG_AREAS = defineLogAreas({
         "Handling a request event failed, so the stream restarts. Error class only.",
       "credential-plugin.skipped":
         "A host OpenCode server started without the credential plugin, so its tools inherit its password; `reason` says why.",
+      "host-database.separated":
+        "Host OpenCode uses Orkestrator's own database because the shared one has no `session` table (an OpenCode 2 database); `reason` says why.",
+      "host-database.unreadable":
+        "The shared OpenCode database could not be inspected, so host OpenCode opens it as usual. Error class only.",
     },
   },
 });

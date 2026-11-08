@@ -1,4 +1,5 @@
 import { canonicalWorktreePath } from "@orkestrator/protocol/node/worktree-paths";
+import { hostOpenCodeDatabaseEnvironment } from "./opencode-host-database.js";
 import { isEnvironmentReadyForAgents } from "@orkestrator/protocol/environment-readiness";
 import {
   attachTerminalCommand,
@@ -875,6 +876,8 @@ export function registerTerminalCommands(
       // applies to terminals opened after it.
       const accountEnvironment = await activeAgentAccountShellEnvironment(context);
       const launchEnvironment = { ...envWithManagedBinaries(context), ...accountEnvironment };
+      // An OpenCode tab types `opencode` into this shell.
+      Object.assign(launchEnvironment, hostOpenCodeDatabaseEnvironment(launchEnvironment));
       if (accountEnvironment.CLAUDE_CONFIG_DIR || accountEnvironment.CODEX_HOME) {
         stripInheritedAgentCredentials(launchEnvironment);
       }

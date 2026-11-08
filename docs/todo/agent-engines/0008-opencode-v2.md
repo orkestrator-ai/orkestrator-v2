@@ -15,7 +15,7 @@ Status rechecked 2026-10-30 against `main` at `cd7bbe3e5`, and task 2 again on 2
 3. **Legacy 1.x session policy**: keep, migrate or retire existing 1.x sessions when 2.x arrives (open question 1, code item 5). Status: done as a decision (keep on a pinned 1.x binary with its own database); the routing code is open (depends on 5).
 4. **Losses to decide**: rebuild, capability-gate or drop each of the eight listed losses (code item 3, open question 2). Status: done as decisions (share dropped with 1.19.1; the rest decided below); the code is open (depends on 5).
 5. **`opencode2` provider**: a second provider with its own binary pin, `OPENCODE_DB`, `@opencode/client`, persisted protocol marker, snapshot-plus-hints projection and native steer/queue (code items 1, 2 and 4). Status: open (depends on 2).
-6. **Changes that must ship with the first 2.x pin**: health probe on `/api/info` rejecting HTML, isolated `OPENCODE_DB` on host and container, GitHub-token plugin ported to `@opencode/plugin`, provider sign-in moved to `/api/credential`, live tests off `serve --pure`. Status: partly done (`checkHttpHealth` refuses HTML since 2026-10-30; the compatibility probe no longer uses `--pure`); the rest is open (depends on 5).
+6. **Changes that must ship with the first 2.x pin**: health probe on `/api/info` rejecting HTML, isolated `OPENCODE_DB` on host and container, GitHub-token plugin ported to `@opencode/plugin`, provider sign-in moved to `/api/credential`, live tests off `serve --pure`. Status: partly done (`checkHttpHealth` refuses HTML since 2026-10-30; the compatibility probe no longer uses `--pure`; since 2026-11-08 the 1.x host falls back to its own `OPENCODE_DB` when the shared database has no `session` table); the rest is open (depends on 5).
 7. **Qualification of the first 2.x pin**: the live probe, background, replay and capability checks listed under "Qualification". Status: open (depends on 5).
 8. **Session V2 features after the move**: steer/queue, `switchAgent`/`switchModel`, context, log replay, staged revert, saved rules, credential/integration sign-in, `reference.list`. Status: open (depends on 5).
 
@@ -161,10 +161,13 @@ Status rechecked 2026-10-30 against `main` at `cd7bbe3e5`, and task 2 again on 2
     - Pros: one change, already in the plan.
     - Cons: leaves a known silent-failure mode in place.
 - **Isolate the host `OPENCODE_DB` before 2.x?**
-  - **Only when 2.x lands, and only for 2.x (recommended).**
+  - **Isolate 1.x only when the shared database is one 1.x cannot open, and 2.x always when it lands (recommended; 1.x half done 2026-11-08).**
+    - Pros: a machine whose `opencode.db` an early 2.x build left without `session` works without the user's database being touched; every other machine keeps sharing history with the user's own 1.x TUI and needs no mapping migration.
+    - Cons: two database paths to document; once separated, Orkestrator's sessions are not in the user's own TUI.
+  - **Only when 2.x lands, and only for 2.x.**
     - Pros: users keep sharing their 1.x history with their own TUI.
-    - Cons: two database paths to document.
-  - **Isolate it for 1.x now too.**
+    - Cons: a host whose shared database 2.x has left without `session` cannot run any Orkestrator OpenCode at all (observed 2026-11-08).
+  - **Isolate it for 1.x now too, unconditionally.**
     - Pros: protects Orkestrator sessions from a user's own 2.x CLI migrating the shared database (the `opencode-go` sign-in case shows users already run 2.x).
     - Cons: Orkestrator sessions disappear from the user's own 1.x TUI; needs a migration of existing mappings.
 
@@ -738,14 +741,30 @@ Side effect: `waitForUnhealthy` now treats an HTML-serving process on the port
 as already stopped. That only matters for the 2.x-binary case this change
 exists to catch; `isHttpServerReachable` still sees it.
 
-### Task 6: `OPENCODE_DB` isolation only with 2.x
+### Task 6: `OPENCODE_DB` isolation for 1.x only when the shared database is unusable
 
-Chose the recommended option: isolate the host database only when 2.x lands,
-and only for 2.x. The risk the alternative addresses is now more likely: 2.x is
-the Homebrew default, and a user's own 2.x CLI would migrate the shared
-database in place. That risk is recorded under task 2. Isolating 1.x now would
-still hide Orkestrator sessions from the user's own 1.x TUI and needs a mapping
-migration, which is out of proportion while the gate is closed.
+Revised 2026-11-08. The earlier choice was to isolate the host database only
+when 2.x lands, and only for 2.x. A host then failed every OpenCode start,
+the sign-in panel included, with "Database is not empty and has no session
+table": its `opencode.db` had been written by the user's own OpenCode 2.
+OpenCode 2 migration `20260804233008_loose_psylocke` renames `session` to
+`session_v2` in a database that already applied
+`20260730195856_optional_session_title`, which only early 2.x builds wrote.
+The 1.19.5 pin's start-up test accepts a database only when it has no tables
+or a `session` table. A database 2.2.5 creates, and a 1.x database it
+migrates, still have `session`. Both were checked on 2026-11-08 with isolated
+`HOME`/XDG directories against the real 1.19.5 and 2.2.5 binaries.
+
+The user's database must not be removed or rewritten, so
+`apps/backend/src/core/opencode-host-database.ts` now applies 1.x's own test,
+read-only, before each host OpenCode start. When it fails, the process gets
+`OPENCODE_DB=opencode-orkestrator.db` beside the shared file, and that file is
+used from then on. Every other host keeps sharing, as before, so no mapping
+migration was needed. The paths covered are local servers, the catalogue and
+sign-in servers, `opencode models --refresh`, and both host terminal spawns.
+`orkestrator --fix` (`packages/cli/src/client/fix.ts`) is not covered: it
+runs the user's own `opencode` without a backend. Isolating 2.x when it lands
+is unchanged.
 
 ### Task 6: live tests keep `--pure` for now
 

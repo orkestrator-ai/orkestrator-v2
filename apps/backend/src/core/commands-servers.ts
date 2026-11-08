@@ -126,6 +126,7 @@ export const ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT_ENV = "ORKESTRATOR_BRIDGE_ATTACH
 import { realpath } from "node:fs/promises";
 import { chmod, lstat, mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { writeHostOpenCodeCredentialPlugin } from "./opencode-host-credential.js";
+import { hostOpenCodeDatabaseEnvironment } from "./opencode-host-database.js";
 import { sanitizeCoordinatorError } from "./coordinator-service.js";
 import {
   coordinatorRuntimeUnavailableMessage,
@@ -1255,6 +1256,9 @@ async function startLocalServerAttempt(
   }
   localServers.recordBridgeToken(kind, environmentId, bridgeToken);
 
+  // Decided from the finished environment, so an account's XDG directories
+  // count; see `opencode-host-database.ts`.
+  if (kind === "opencode") Object.assign(env, hostOpenCodeDatabaseEnvironment(env));
   const args =
     kind === "opencode"
       ? ["serve", "--port", String(port), "--hostname", "127.0.0.1"]

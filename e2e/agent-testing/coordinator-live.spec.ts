@@ -6,8 +6,9 @@
  * worker's status wakes, see `coordinator-live-status.ts`), `deliver-now` (a
  * `deliverNow` correction steered into a busy worker's turn, see
  * `coordinator-live-deliver-now.ts`), `goal` (a worker's goal runs to a passing
- * check and wakes the coordinator once, see `coordinator-live-goal.ts`) and
- * `peer`. Every
+ * check and wakes the coordinator once, see `coordinator-live-goal.ts`),
+ * `routing` (plain requests routed to the right workflow, see
+ * `coordinator-live-routing.ts`) and `peer`. Every
  * scenario with mail also judges each echoed carrier through the renderer's
  * tile parser (`coordinator-mail-tiles.ts`).
  *
@@ -80,7 +81,6 @@ import {
   type CoordinatorLivePlatformSummary,
   type CoordinatorLiveScenario,
   type CoordinatorTranscriptMessage,
-  type CoordinatorTurnProjection,
   type ReadOnlyProbe,
   type ToolDetails,
 } from "../../apps/desktop/scripts/dev/coordinator-live";
@@ -114,6 +114,7 @@ import { runDeliverNowScenario } from "../../apps/desktop/scripts/dev/coordinato
 import { deliverNowApplies } from "../../apps/desktop/scripts/dev/coordinator-live-deliver-now";
 import { runGoalScenario } from "../../apps/desktop/scripts/dev/coordinator-live-goal-orchestration";
 import { goalApplies } from "../../apps/desktop/scripts/dev/coordinator-live-goal";
+import { runRoutingScenario } from "../../apps/desktop/scripts/dev/coordinator-live-routing-orchestration";
 import { evaluateMailTiles } from "./coordinator-mail-tiles";
 import {
   coordinatorTurn,
@@ -131,7 +132,6 @@ type Status = {
 };
 type Project = { id: string; name: string; localPath: string | null };
 type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
-type Projection = CoordinatorTurnProjection;
 type SessionIdentity = { environmentId: string; agent: AgentPlatform; logicalSessionKey: string };
 
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
@@ -946,6 +946,37 @@ async function goalCase(input: {
 }
 
 /**
+ * The routing scenario: four plain requests that name no workflow (a
+ * specified change, a question that needs a run, a review request, and the
+ * specified change again under `commit-only`), each judged by the workflow the
+ * coordinator started. The last runs its build to the end.
+ */
+async function routingCase(input: {
+  coordinator: CoordinatorCase;
+  summary: CoordinatorLivePlatformSummary;
+  cleanup: Array<() => Promise<unknown>>;
+}): Promise<void> {
+  const { coordinator, summary } = input;
+  const platform = coordinator.identity.agent;
+  const coordinatorEnvironmentId = coordinator.identity.environmentId;
+  const { checks, observed, watch, mail } = await runRoutingScenario(input);
+  const projection = watch.projection();
+  const messages = projection?.messages ?? [];
+  const tiles = coordinatorTiles(mail, coordinatorEnvironmentId, messages, false);
+  const calls = transcriptToolCalls(messages);
+  summary.toolCalls = calls.map(({ name, state }) => ({ name, state }));
+  summary.turn = { phase: projection?.turn.phase ?? "idle" };
+  const failures = recordChecks(summary, [...checks, ...tiles.checks], {
+    ...observed,
+    ...mailCountsObserved(mail, coordinatorEnvironmentId, messages),
+    ...tileCounts(tiles.observed),
+    workers: watch.workers.length,
+    observations: watch.observations.length,
+  });
+  expect(failures, `${platform}: the routing scenario`).toEqual([]);
+}
+
+/**
  * The peer scenario: two ordinary environments, neither launched by a
  * coordinator, with Wake peers on. The responder starts idle; the opener
  * sends it the first message by environment id; they alternate until ten
@@ -1150,6 +1181,26 @@ test.describe("live coordinator", () => {
             cleanup,
           });
           await goalCase({ coordinator, summary, cleanup });
+        });
+      });
+    }
+
+    if (scenarios.includes("routing")) {
+      test(`routing on ${platform}: a specified change becomes a ticket and a build, a question a worker, a review request a Multi Review without auto-actions, and a commit-only build completes with no PR`, async ({
+        page,
+      }) => {
+        test.setTimeout(budgets.tests.routing);
+        page.setDefaultTimeout(30_000);
+        await runCase(entry, "routing", async ({ summary, skip, cleanup }) => {
+          const coordinator = await startCoordinatorCase({
+            page,
+            entry,
+            summary,
+            settings: {},
+            skip,
+            cleanup,
+          });
+          await routingCase({ coordinator, summary, cleanup });
         });
       });
     }

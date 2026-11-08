@@ -648,6 +648,53 @@ users until phase 3 routes new sessions to it.
    - A persisted `legacy` / `v2` marker on the session mapping, read by
      `createNativeAgentProvider`. New sessions go to 2.x, behind a setting
      until phase 6.
+
+   Design, settled 2026-11-08 from a map of the current code:
+   - **Routing.** The provider registry caches one provider per (environment,
+     agent) (`native-agent-provider-registry.ts`), and both lines mint `ses_…`
+     session ids, so the id cannot pick the line. A routing provider
+     registered for `opencode` holds the 1.x `OpenCodeProvider` and a lazily
+     built `OpenCode2Provider`. It sends each session to one of them by an
+     in-memory map, seeded from `registerSession`, whose
+     `ProviderSessionRegistration` gains `openCodeProtocol?: "v2"`, and from
+     `createSession`, which picks 2.x when the setting says so. An unknown
+     session goes to 1.x, so existing sessions never move.
+   - **Marker.** `openCodeProtocol?: "v2"` on `PersistedNativeAgentSession`
+     (`contract/domains/native-sessions/schemas.ts`); absent means legacy. The
+     record is an open record and its validator checks only the fields it
+     knows, so no storage migration is needed. The contract manifest is
+     regenerated (`mise run contract:check`).
+   - **Server.** The 2.x `opencode serve` is a second process per environment,
+     with its own port, password, `OPENCODE_DB` and data directory under
+     Orkestrator's data directory. On the host it is started by a new command
+     beside `start_local_opencode_server_cmd`; in a container it uses a
+     second fixed port. Health is `/api/info` through `OpenCode2Client.info`.
+     The 1.x health path (`/global/health`, which rejects HTML) is left alone.
+     The router receives the 2.x connection through a lazy
+     `openCode2Connection()` dependency, so 1.x-only users never start a 2.x
+     server. A container connection must name a directory (`/workspace`):
+     the 2.x client sends `x-opencode-directory` on every request.
+   - **Steer.** `nativeAgentCapabilities("opencode").actions.steer` becomes
+     true, and the per-session `steerSupported()` answers false for 1.x
+     sessions, which the backend already consults before steering. A missed
+     steer starts a new turn, as on every provider (0005 task 10, branch
+     `steer-misses-turn-starts-new-turn`).
+   - **Dispatch evidence.** The request id travels in the input itself.
+     `POST /prompt` with `metadata: { orkestrator: { requestId } }` is echoed
+     on the user row in `GET /message`; this was verified on 2.2.6, and the
+     server keeps the metadata verbatim. The id belongs to the request, so no
+     separate journal is needed, as in 1.x's message-id marker.
+     - `dispatchStatus` answers `dispatched` when a history row or a
+       still-pending inbox item (`GET /inbox`) carries the request id.
+     - It answers `absent` only after a definitive 4xx refusal
+       (`OpenCode2RequestError`).
+     - Everything else is `unknown`, because a bounded history scan proves
+       nothing.
+
+     `send` mints a fresh input id (`mintOpenCode2InputId`) per attempt; an
+     ambiguous attempt is never re-posted (the 1.x rule). Message pages carry
+     an opaque base64 JSON cursor (`{ id, order, direction }`) for history
+     paging.
 4. **Transcript and interactions.** The message history becomes normalized rows
    (one row per assistant message), history pages come from the list cursor,
    permissions and forms become the shared cards (denying on timeout), and

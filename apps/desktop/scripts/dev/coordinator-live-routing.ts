@@ -377,7 +377,7 @@ export function evaluateRoutingDeliveryOutcome(
         pipeline.cancelledAt === undefined &&
         pipeline.delivery?.policy === "commit-only",
       pipeline
-        ? `phase ${pipeline.phase}, delivery ${pipeline.delivery?.policy ?? "undecided"}${pipeline.cancelledAt ? ", cancelled" : ""}`
+        ? `phase ${pipeline.phase}, delivery ${pipeline.delivery?.policy ?? "undecided"}${pipeline.cancelledAt ? ", cancelled" : ""}${pipeline.phase === "failed" && pipeline.error ? `: ${pipeline.error.slice(0, 300)}` : ""}`
         : "no pipeline",
     ),
     check(

@@ -321,6 +321,7 @@ async function fixture(script: Script = {}) {
 async function run(script: Script = {}) {
   const scripted = await fixture(script);
   const cleanup: Array<() => Promise<unknown>> = [];
+  const lines: string[] = [];
   const previous = process.env.ORKESTRATOR_AGENT_TEST_COORDINATOR_STEP_TIMEOUT_MS;
   process.env.ORKESTRATOR_AGENT_TEST_COORDINATOR_STEP_TIMEOUT_MS = "300";
   try {
@@ -331,12 +332,13 @@ async function run(script: Script = {}) {
       token,
       pollIntervalMs: 1,
       quietMs: 5,
+      log: (line) => lines.push(line),
     });
     const reviewed = await readFile(
       path.join(scripted.worktree, STATUS_REVIEWEE_FILE.path),
       "utf8",
     ).catch(() => null);
-    return { ...result, ...scripted, reviewed };
+    return { ...result, ...scripted, reviewed, lines };
   } finally {
     if (previous === undefined)
       delete process.env.ORKESTRATOR_AGENT_TEST_COORDINATOR_STEP_TIMEOUT_MS;
@@ -435,4 +437,18 @@ test("a failed turn fails its case and the later cases still run", async () => {
   for (const name of ["investigate-finished", "review-finished", "delivery-finished"]) {
     expect(checks.find((item) => item.name === name)?.passed).toBe(true);
   }
+});
+
+test("each case edge prints a content-free progress line", async () => {
+  const { lines } = await run({ failTurn: "review" });
+  expect(lines.map((line) => line.replace(/\d+s$/, "Ns"))).toEqual([
+    "[coordinator-live] claude: routing case build started",
+    "[coordinator-live] claude: routing case build finished in Ns",
+    "[coordinator-live] claude: routing case investigate started",
+    "[coordinator-live] claude: routing case investigate finished in Ns",
+    "[coordinator-live] claude: routing case review started",
+    "[coordinator-live] claude: routing case review failed after Ns",
+    "[coordinator-live] claude: routing case delivery started",
+    "[coordinator-live] claude: routing case delivery finished in Ns",
+  ]);
 });

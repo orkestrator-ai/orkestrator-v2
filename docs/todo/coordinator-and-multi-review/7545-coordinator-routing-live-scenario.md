@@ -13,7 +13,9 @@ Analysed 2026-11-08 against `main` at `02f55ea9b`. Task 1 was built on
 ### Tasks
 
 1. **Add a `routing` scenario to the live coordinator suite**: four plain requests, each checked for the workflow the coordinator chose. Status: done.
-2. **Run it on the main platforms and record the result here**: Claude and Codex at least. Status: open.
+2. **Run it on the main platforms and record the result here**: Claude and Codex at least. Status: open (Claude and Codex run; Codex's `delivery` case waits on [7546](7546-build-review-row-pins-unoffered-codex-model.md); Pi, OpenCode and Cursor with their next full run).
+3. **Decide what "review this branch" should start**: both platforms reviewed the diff themselves instead of launching a Multi Review. Status: open (the user's decision).
+4. **Stop a coordinator restarting a build the user cancelled**: Codex restarted case 1's cancelled build. Status: open.
 
 ### 1. Add a `routing` scenario to the live coordinator suite
 
@@ -84,7 +86,30 @@ model's wording.
 `--credential-source <platform>`. Grok has no login on the usual hosts
 ([0024](0024-coordinator-live-conformance.md) task 1).
 
-**Investigation.** Not started; depends on task 1.
+**Investigation.** Run on 2026-11-08 against `main` at `30bce6895` plus
+this change, with
+`mise run test:agent:coordinator --credential-source <platform> --scenario routing`
+(one disposable profile each, stopped and reset by the runner). Results from
+each summary's checks and tool-call names (`output/agent-testing/<profile>/coordinator/<platform>-routing.json`):
+
+| Case | Claude (`qa-coordinator-claude-b6c52667`, 5.5 min) | Codex 0.167.0 (`qa-coordinator-codex-b8dab28b`, 6.5 min) |
+| --- | --- | --- |
+| `build` | Passed: `create_ticket`, then `start_build_pipeline` on that ticket, no overrides | Passed, same calls |
+| `investigate` | Passed: one `launch_environment` | Passed: one `launch_environment` |
+| `review` | **Failed**: `list_environments`, `get_worker_changes`, then an answer; no Multi Review | **Failed**: `list_environments`, `get_worker_changes`, `launch_job`; no Multi Review |
+| `delivery` | Passed: build `complete` under `commit-only`, no PR session, no `create_pr` | Routing passed; **build failed** in its review stage ("The 'gpt-5.4' model is not supported when using Codex with a ChatGPT account"), which is [7546](7546-build-review-row-pins-unoffered-codex-model.md), not routing |
+
+No interaction reached the harness on either platform, and every mail-tile
+check passed. The first Codex attempt (23:18 UTC) produced no verdict:
+`test:logged`'s five-minute no-output watchdog stopped it, because the
+scenario printed only from inside a wait longer than a minute. It now prints
+a content-free line at each case's start and end.
+
+Codex's run also showed task 4: after the harness cancelled case 1's build,
+the coordinator's wake turn called `get_build_pipeline`,
+`restart_build_pipeline_step` and then `start_build_pipeline` again. The
+restarted build ran beside case 4 until cleanup and failed on the same
+review model.
 
 **Decisions.**
 
@@ -102,6 +127,58 @@ model's wording.
   - **Add a platform-specific instruction at once.**
     - Pros: fixes that platform quickly.
     - Cons: platform-specific prompt text is what the qualification rules avoid.
+
+### 3. Decide what "review this branch" should start
+
+**Problem.** Asked to "review the work on the branch … and tell me what needs
+attention", both Claude and Codex read the change themselves
+(`get_worker_changes`), and Codex also ran a `launch_job` on the environment.
+Neither launched a Multi Review. The case was written expecting one.
+
+**Context.** No rule says a user's review request is a Multi Review.
+`COORDINATOR_ENVIRONMENT_CHOICE_RULE` mentions Multi Review only as the
+coordinator's own next step for a prompt environment's finished work, and
+the Scope line keeps short reads with the coordinator, which
+[4900](4900-coordinator-over-delegation-and-read-rule.md) considers
+softening further. The reviewed change was one uncommitted file, which a
+coordinator can read in one call. Task 2's rule ("change the rule text only
+if two platforms misroute the same case") is met, but only if the case's
+expectation is right, which is a product choice.
+
+**Investigation.** Evidence in task 2. Not tried: a larger change, which
+might be routed differently.
+
+**Decisions.**
+
+- **What should a plain review request start?**
+  - **A Multi Review, stated as a rule (recommended).**
+    - Pros: the user gets the reviewer panel, consolidation and Fix they configured, and the result is a durable workflow they can see; matches the case as written.
+    - Cons: one more sentence in a context every turn pays for (the main block is held under 9,000 characters), and more expense for a request a single read could answer.
+    - Text to add to `COORDINATOR_ENVIRONMENT_CHOICE_RULE`: "When the user asks for a review of a branch or an environment's work, launch_multi_review on that environment rather than reviewing it yourself."
+  - **Leave the rule; let the coordinator choose by size.**
+    - Pros: no prompt change; a one-file read stays cheap.
+    - Cons: the user gets a different kind of review depending on the model; the `review` case would have to accept a coordinator's own review and lose its assertion.
+
+### 4. Stop a coordinator restarting a build the user cancelled
+
+**Problem.** A build the user cancels wakes its coordinator, and Codex's
+coordinator started it again. A user cancel should end the work.
+
+**Context.** The cancel came from `cancel_build_pipeline`, the same command
+the pipeline's Cancel button sends. How the cancelled notice is worded, and
+whether it says who cancelled, has not been read.
+
+**Investigation.** Seen once, on Codex (task 2). Not seen on Claude.
+
+**Decisions.**
+
+- **Where to stop it?**
+  - **Word the cancelled notice as the user's decision and tell the coordinator not to restart it unless asked (recommended).**
+    - Pros: one place, every platform; keeps a coordinator able to restart a build that failed on its own.
+    - Cons: still a prompt, so a model can ignore it.
+  - **Refuse `start_build_pipeline` and `restart_build_pipeline_step` from a coordinator on a ticket whose last build the user cancelled.**
+    - Pros: holds whatever the model does.
+    - Cons: needs a way for the user to lift it, and blocks a coordinator the user then asks to retry.
 
 ## Assumptions and decisions
 
@@ -171,14 +248,20 @@ case 3, because the reviewed environment is the harness's. Settings,
 tickets, environments and live builds and reviews are restored or removed in
 cleanup.
 
+### Not changing the rule text yet (task 2)
+
+Both platforms misrouted the `review` case, which task 2's rule says
+justifies a rule change. The rule was left as it is because the case's
+expectation is itself a product choice (task 3): a coordinator reading a
+one-file change is what the Scope line allows.
+
 ## Needs verification
 
-Task 2: no live run has been recorded yet. Every check of task 1 is
-exercised over a scripted command transport
-(`coordinator-live-routing-orchestration.test.ts`), which cannot show that
-the backend commands the harness reads (`get_kanban_tasks`,
-`get_build_pipeline`, `list_multi_review_workflows`) answer in the shapes
-it unwraps on a real profile.
+- The `review` case's Multi Review half (`review-auto-actions-off` on a real
+  workflow record) has not run on any platform, because no coordinator
+  launched one.
+- Codex's `delivery` outcome, after [7546](7546-build-review-row-pins-unoffered-codex-model.md).
+- Pi, OpenCode and Cursor: not run.
 
 ## Related
 
@@ -189,4 +272,6 @@ it unwraps on a real profile.
 - [7544-criterion-evidence-commit-and-completion-handoff.md](7544-criterion-evidence-commit-and-completion-handoff.md)
 - [0024-coordinator-live-conformance.md](0024-coordinator-live-conformance.md),
   the live suite.
+- [7546-build-review-row-pins-unoffered-codex-model.md](7546-build-review-row-pins-unoffered-codex-model.md),
+  found by this scenario's Codex run.
 - [Routing](../../architecture/coordinator.md#routing)

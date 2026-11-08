@@ -175,6 +175,13 @@ export async function runRoutingScenario(input: {
   quietMs?: number;
   /** The cases to run, in order (default all four). */
   cases?: readonly RoutingCase[];
+  /**
+   * Progress lines, content-free. One per case edge keeps `test:logged`'s
+   * no-output watchdog quiet: a fast provider's turns and quiet waits can each
+   * end inside the observer's one-minute heartbeat, adding up to minutes of
+   * silence.
+   */
+  log?: (line: string) => void;
 }) {
   const { coordinator, summary, cleanup } = input;
   const { invoke, identity, projectId } = coordinator;
@@ -421,17 +428,23 @@ export async function runRoutingScenario(input: {
     },
   };
 
+  const log = input.log ?? ((line: string) => console.log(line));
+  const progress = (text: string) => log(`[coordinator-live] ${platform}: routing ${text}`);
   let stopped: string | undefined;
   for (const name of cases) {
     if (stopped) {
       checks.push({ name: `${name}-finished`, passed: false, detail: `not run: ${stopped}` });
       continue;
     }
+    const started = Date.now();
+    progress(`case ${name} started`);
     try {
       await steps[name]();
       checks.push({ name: `${name}-finished`, passed: true });
+      progress(`case ${name} finished in ${Math.round((Date.now() - started) / 1_000)}s`);
     } catch (error) {
       checks.push({ name: `${name}-finished`, passed: false, detail: message(error) });
+      progress(`case ${name} failed after ${Math.round((Date.now() - started) / 1_000)}s`);
       // A later case starts only from a quiet coordinator.
       try {
         await settle(`the coordinator after the ${name} case failed`);

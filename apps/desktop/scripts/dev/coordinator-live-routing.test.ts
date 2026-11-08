@@ -209,6 +209,18 @@ describe("build cases", () => {
       "delivery-commit-only-complete",
       "delivery-no-pr-stage",
     ]);
+    // A failed build says why: the pipeline's own error, not content.
+    expect(
+      evaluateRoutingDeliveryOutcome({
+        pipeline: {
+          ...done,
+          phase: "failed",
+          delivery: undefined,
+          error: "The review session failed",
+        },
+        messages: [],
+      })[0]?.detail,
+    ).toBe("phase failed, delivery undecided: The review session failed");
     // Woken by the finished build, the coordinator must not raise a PR itself.
     expect(
       failedNames(

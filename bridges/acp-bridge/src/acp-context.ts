@@ -41,6 +41,7 @@ import type { RecentlyRevisedRows } from "@orkestrator/protocol/node/revised-row
 import type { AcpTurnUsage } from "./usage.js";
 import type { PromptTurnClock } from "./acp-prompt-clock.js";
 import { formatAcpRpcError } from "./acp-errors.js";
+import { terminateAcpProcessTree } from "./acp-process-tree.js";
 import { JsonlLineFramer } from "./acp-jsonl-framer.js";
 import { assertAcpSignedIn } from "./acp-credentials.js";
 import type { GrokInterjectionJournalEntry } from "./grok-interjection.js";
@@ -964,6 +965,8 @@ export class AcpProcess {
   >();
   #closed = false;
   #readOnlyProfile?: ReturnType<typeof createReadOnlyProfile>;
+  /** One shared teardown, including escalation after the leader exits. */
+  #terminating: Promise<void> | undefined;
   #terminationOutcome?: "resolved" | "rejected";
   readonly #stdoutFramer = new JsonlLineFramer(MAX_LINE_BYTES);
   onUpdate: (params: JsonObject) => void = unattachedUpdate;
@@ -1032,6 +1035,10 @@ export class AcpProcess {
         });
         Object.assign(env, this.questionTimeout.env);
       }
+      // Stay in the bridge's backend-owned process group: after a bridge
+      // crash its descendants are reparented, and only that group still lets
+      // the backend orphan reaper reach them. Explicit close snapshots this
+      // agent's descendants without signalling other sessions in the group.
       this.child = spawn(executable, args, {
         cwd: workingDirectory,
         env,
@@ -1214,21 +1221,8 @@ export class AcpProcess {
     if (outcome === "rejected" || this.#terminationOutcome === undefined) {
       this.#terminationOutcome = outcome;
     }
-    if (this.child.exitCode !== null || this.child.signalCode !== null) return;
-    const exited = new Promise<void>((resolvePromise) =>
-      this.child.once("exit", () => resolvePromise()),
-    );
-    this.child.kill("SIGTERM");
-    const forced = setTimeout(() => {
-      if (this.child.exitCode === null && this.child.signalCode === null)
-        this.child.kill("SIGKILL");
-    }, 2_000);
-    forced.unref();
-    await Promise.race([
-      exited,
-      new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 3_000)),
-    ]);
-    clearTimeout(forced);
+    this.#terminating ??= terminateAcpProcessTree(this.child);
+    await this.#terminating;
   }
 
   #write(value: JsonObject): void {

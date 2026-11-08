@@ -41,9 +41,19 @@ class FakeHost implements WebAnnotationToolHost {
   evidenceCalls: string[] = [];
   reports: WebAnnotationResultReportInput[] = [];
   revision = 0;
-  hang = false;
+  /** While set, `assignedRequest` waits for it (call `release()` to let it finish). */
+  private hang: ReturnType<typeof Promise.withResolvers<void>> | null = null;
   lastResult: WebAnnotationResult | null = null;
   capture: WebAnnotationCapture | null = null;
+
+  hold() {
+    this.hang = Promise.withResolvers<void>();
+  }
+
+  release() {
+    this.hang?.resolve();
+    this.hang = null;
+  }
 
   assign(request: WebAnnotationRequest, tabId = request.destination.tabId) {
     this.assignments.set(`${request.environmentId}\0${tabId}`, {
@@ -53,7 +63,7 @@ class FakeHost implements WebAnnotationToolHost {
   }
 
   async assignedRequest(scope: WebAnnotationToolScope) {
-    if (this.hang) await new Promise(() => undefined);
+    if (this.hang) await this.hang.promise;
     return this.assignments.get(`${scope.environmentId}\0${scope.tabId}`) ?? null;
   }
 
@@ -332,17 +342,113 @@ describe("web annotation agent tools", () => {
   test("concurrency and deadlines are bounded without unhandled rejections", async () => {
     const host = new FakeHost();
     host.assign(running());
-    host.hang = true;
+    host.hold();
     const limiter = new WebAnnotationToolLimiter({ timeoutMs: 30, perScope: 1 });
     const handlers = register(host, SCOPE, limiter);
     const first = handlers.get("get_annotation_request")!({});
     const second = await handlers.get("get_annotation_request")!({});
     expect(second.structuredContent).toMatchObject({ error: { code: "busy" } });
     expect((await first).structuredContent).toMatchObject({ error: { code: "timeout" } });
-    host.hang = false;
+    // The timed-out call is still running, so it still holds the only slot.
+    expect((await handlers.get("get_annotation_request")!({})).structuredContent).toMatchObject({
+      error: { code: "busy" },
+    });
+    host.release();
+    await settle();
     expect((await handlers.get("get_annotation_request")!({})).structuredContent).toMatchObject({
       ok: true,
     });
+  });
+
+  test("a report that timed out is not recorded when the host catches up", async () => {
+    const host = new FakeHost();
+    host.assign(running());
+    host.hold();
+    const handlers = register(host, SCOPE, new WebAnnotationToolLimiter({ timeoutMs: 20 }));
+    const result = await handlers.get("report_annotation_result")!(report());
+    expect(result.structuredContent).toMatchObject({ error: { code: "timeout" } });
+    host.release();
+    await settle();
+    expect(host.reports).toEqual([]);
+  });
+});
+
+/** Let settled work run its release handlers (drains the microtask queue). */
+function settle() {
+  return new Promise<void>((resolve) => setImmediate(resolve));
+}
+
+describe("WebAnnotationToolLimiter", () => {
+  const OTHER: WebAnnotationToolScope = { environmentId: ENV, tabId: "tab-agent-2" };
+
+  test("a timed-out operation keeps its slot until it settles", async () => {
+    const limiter = new WebAnnotationToolLimiter({ timeoutMs: 20, perScope: 1 });
+    const work = Promise.withResolvers<string>();
+    let started = 0;
+    await expect(
+      limiter.run(SCOPE, () => {
+        started += 1;
+        return work.promise;
+      }),
+    ).rejects.toMatchObject({ code: "timeout" });
+    await expect(limiter.run(SCOPE, async () => "next")).rejects.toMatchObject({ code: "busy" });
+    work.resolve("late");
+    await settle();
+    expect(await limiter.run(SCOPE, async () => "next")).toBe("next");
+    expect(started).toBe(1);
+  });
+
+  test("abandoned work counts against the total across scopes", async () => {
+    const limiter = new WebAnnotationToolLimiter({ timeoutMs: 20, perScope: 2, total: 1 });
+    const work = Promise.withResolvers<void>();
+    await expect(limiter.run(SCOPE, () => work.promise)).rejects.toMatchObject({
+      code: "timeout",
+    });
+    await expect(limiter.run(OTHER, async () => "other")).rejects.toMatchObject({ code: "busy" });
+    // A rejection after the deadline releases the slot and is handled.
+    work.reject(new Error("late failure"));
+    await settle();
+    expect(await limiter.run(OTHER, async () => "other")).toBe("other");
+  });
+
+  test("the operation's signal aborts on timeout and only then", async () => {
+    const limiter = new WebAnnotationToolLimiter({ timeoutMs: 20 });
+    let fast: AbortSignal | undefined;
+    expect(
+      await limiter.run(SCOPE, async (signal) => {
+        fast = signal;
+        return 1;
+      }),
+    ).toBe(1);
+    expect(fast?.aborted).toBe(false);
+
+    let slow: AbortSignal | undefined;
+    const aborted = limiter.run(
+      SCOPE,
+      (signal) =>
+        new Promise<never>((_, reject) => {
+          slow = signal;
+          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+        }),
+    );
+    await expect(aborted).rejects.toMatchObject({ code: "timeout" });
+    expect(slow?.aborted).toBe(true);
+    expect(slow?.reason).toMatchObject({ code: "timeout" });
+    await settle();
+    // The cancelled work settled, so its slot is free again.
+    expect(await limiter.run(SCOPE, async () => 2)).toBe(2);
+    expect(await limiter.run(SCOPE, async () => 3)).toBe(3);
+  });
+
+  test("a synchronous throw releases the slot", async () => {
+    const limiter = new WebAnnotationToolLimiter({ perScope: 1 });
+    await expect(
+      limiter.run(SCOPE, () => {
+        throw new Error("boom");
+      }),
+    ).rejects.toThrow("boom");
+    await settle();
+    expect(await limiter.run(SCOPE, async () => "ok")).toBe("ok");
   });
 });
 

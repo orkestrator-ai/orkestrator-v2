@@ -52,7 +52,7 @@ import { isSpliceableResult, spliceEncodedJson } from "./core/native-agent-proje
 import { backendMetricsSnapshot } from "./core/backend-metrics.js";
 import type { CommandInvocation } from "./core/commands-context.js";
 import { decodeInvokeEnvelope } from "@orkestrator/protocol/contract/envelope";
-import { isIncompatibilityError, toWire } from "@orkestrator/protocol/contract/errors";
+import { codedErrorWire } from "@orkestrator/protocol/contract/errors";
 import * as Result from "effect/Result";
 
 const KEEPALIVE_EVENT_FRAME = `event: ${GATEWAY_KEEPALIVE_EVENT}\ndata: 1\n\n`;
@@ -183,15 +183,14 @@ export class GatewayHandlers {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const code = (error as { code?: unknown } | null)?.code;
-      // A typed incompatibility also names its bounded details (the domain
-      // and range, or the critical field), never an argument value.
+      // A registered code also names its bounded details (an
+      // incompatibility's domain and range, or its critical field), never an
+      // argument value (`contract/ipc-error.ts`, `REGISTERED_ERROR_CODES`).
       const responseBody = JSON.stringify(
-        isIncompatibilityError(error)
-          ? toWire(error)
-          : {
-              error: message,
-              ...(typeof code === "string" && /^[a-z][a-z0-9-]{0,63}$/.test(code) ? { code } : {}),
-            },
+        codedErrorWire(error) ?? {
+          error: message,
+          ...(typeof code === "string" && /^[a-z][a-z0-9-]{0,63}$/.test(code) ? { code } : {}),
+        },
       );
       // Never retain the rejected, network-supplied value: a syntactically
       // valid token-like string is just as sensitive as an obviously malformed

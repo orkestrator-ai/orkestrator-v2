@@ -12,6 +12,8 @@ import {
 } from "./feature-build.js";
 import type { Project } from "./models.js";
 import { mimeTypeForImageData } from "./prompt-attachments.js";
+import { errorCode } from "@orkestrator/protocol/contract/ipc-error";
+import { KanbanRequestIdConflictError } from "./storage-kanban.js";
 
 interface StartedPipeline {
   id: string;
@@ -801,6 +803,52 @@ exit 2
       );
 
       expect(second.taskId).toBe(first.taskId);
+      expect(await storage.kanban.getKanbanTasks("project-1")).toHaveLength(1);
+    });
+  });
+
+  test("a retry is recognised by the conflict's code, not by its words", async () => {
+    await withStorage(async (storage) => {
+      const supervisor = fakeSupervisor();
+      const context = { storage, runtime, buildPipelines: supervisor.service };
+      const first = await createFeatureBuild({ ...input, requestId: "request-coded" }, context);
+      await storage.kanban.updateKanbanTask(first.taskId, { status: "review" });
+
+      // The storage refusal carries the code and keeps its words for older readers.
+      const refusal = await storage.kanban
+        .addKanbanTask("project-1", "Dark mode toggle", "Adds a toggle to the header.", {
+          requestId: "request-coded",
+        })
+        .catch((error: unknown) => error);
+      expect(errorCode(refusal)).toBe("kanban-request-id-conflict");
+      expect((refusal as Error).message).toBe(
+        "Kanban ticket requestId was already used with different arguments",
+      );
+
+      // A concurrent retry that lost the race to create the ticket: the first
+      // lookup misses, the insert is refused, the second lookup finds it.
+      const find = storage.kanban.findKanbanTaskByRequestId.bind(storage.kanban);
+      const lookup = spyOn(storage.kanban, "findKanbanTaskByRequestId");
+      const add = spyOn(storage.kanban, "addKanbanTask").mockImplementation(async () => {
+        throw new KanbanRequestIdConflictError({ message: "reworded", record: "ticket" });
+      });
+      try {
+        // A reworded conflict still returns the existing ticket...
+        lookup.mockResolvedValueOnce(null).mockImplementation(find);
+        const second = await createFeatureBuild({ ...input, requestId: "request-coded" }, context);
+        expect(second.taskId).toBe(first.taskId);
+        // ...and an uncoded error that merely has the words is not a conflict.
+        lookup.mockResolvedValueOnce(null);
+        add.mockImplementation(async () => {
+          throw new Error("requestId was already used");
+        });
+        await expect(
+          createFeatureBuild({ ...input, requestId: "request-coded" }, context),
+        ).rejects.toThrow("requestId was already used");
+      } finally {
+        add.mockRestore();
+        lookup.mockRestore();
+      }
       expect(await storage.kanban.getKanbanTasks("project-1")).toHaveLength(1);
     });
   });

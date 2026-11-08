@@ -1,5 +1,9 @@
 import { Data } from "effect";
 import type { BackendHello } from "@orkestrator/protocol/backend-profile";
+import {
+  codedMessage,
+  type DesktopNodeRefusalCode,
+} from "@orkestrator/protocol/contract/node-refusal";
 import { isBackendId } from "@orkestrator/protocol/federation";
 import { NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@orkestrator/protocol/gateway-event-stream";
 import type { ConnectionManager } from "./connection-manager.js";
@@ -31,30 +35,18 @@ export const NODE_EVENT_CHANNEL = "orkestrator:node-event";
 export const NODE_SCOPE_RELEASED_EVENT = "node-scope-released";
 
 /**
- * Refusal codes, in the protocol's code form (`/^[a-z][a-z0-9-]{0,63}$/`).
- *
- * - `unknown-node`: the window's command node does not know this node.
- * - `node-admin-refused`: machine administration for a leaf; it is done from
- *   the command node.
- * - `node-scope-closed`: the window closed or the scope was released while it
- *   was opening.
- * - `node-unavailable`: the node is known but its workspace could not open.
- */
-export type NodeRefusalCode =
-  "unknown-node" | "node-admin-refused" | "node-scope-closed" | "node-unavailable";
-
-/**
  * A typed refusal. Electron passes only `message` across IPC (and the context
  * bridge drops custom properties), so the code also leads the message as
- * `[code] `; the preload reads it back into `error.code`.
+ * `[code] `; the preload reads it back into `error.code`. The codes and the
+ * message form live in `@orkestrator/protocol/contract/node-refusal`.
  */
 export class NodeRefusal extends Data.TaggedError("NodeRefusal")<{
-  readonly code: NodeRefusalCode;
+  readonly code: DesktopNodeRefusalCode;
   readonly message: string;
 }> {}
 
-export function nodeRefusal(code: NodeRefusalCode, text: string): NodeRefusal {
-  return new NodeRefusal({ code, message: `[${code}] ${text}` });
+export function nodeRefusal(code: DesktopNodeRefusalCode, text: string): NodeRefusal {
+  return new NodeRefusal({ code, message: codedMessage(code, text) });
 }
 
 /** A node identity from the renderer, or a validation error. */

@@ -95,6 +95,7 @@ export async function waitForMcpToolAvailability(
         list(remainingMs),
         new Promise((resolve) => {
           timer = setTimeout(() => resolve(expired), remainingMs);
+          timer.unref?.();
         }),
       ]);
     } catch {
@@ -105,6 +106,10 @@ export async function waitForMcpToolAvailability(
     if (response === expired || now() >= deadline) return { state: "unverified" };
     const availability = classifyMcpToolAvailability(response, serverName, toolName);
     if (availability) return availability;
-    await new Promise((resolve) => setTimeout(resolve, Math.min(pollMs, deadline - now())));
+    // Settles on its own, so nothing to clear; a poll pause must not keep the
+    // process alive either.
+    await new Promise((resolve) => {
+      setTimeout(resolve, Math.min(pollMs, deadline - now())).unref?.();
+    });
   }
 }

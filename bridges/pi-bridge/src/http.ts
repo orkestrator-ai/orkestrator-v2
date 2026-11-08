@@ -39,7 +39,7 @@ import { listModels, markSessionDefault, refreshModels } from "./models.js";
 import { parseAgentMcpConnection } from "./mcp-config.js";
 import { parseWorkflowResultTurn } from "@orkestrator/protocol/workflow-results";
 import { mcpConnectionNeedsRefresh, publicPiMcpConfig, publicPiMcpServers } from "./mcp.js";
-import { persistBarrier, schedulePersist } from "./persistence.js";
+import { PersistenceClosedError, persistBarrier, schedulePersist } from "./persistence.js";
 import {
   dispatchPrompt,
   errorText,
@@ -252,6 +252,29 @@ export function setCancelAckTimeoutForTests(timeoutMs?: number): void {
  */
 const gzipCapableResponses = new WeakSet<ServerResponse>();
 
+/** A publication failed after Pi may already have acted on this request. */
+class DeliveryUncertainError extends Error {
+  constructor(
+    readonly requestId: string | undefined,
+    readonly followUp = false,
+  ) {
+    super("Pi delivery outcome is unknown");
+  }
+}
+
+async function persistAfterDelivery(
+  requestId: string | undefined,
+  followUp = false,
+): Promise<void> {
+  try {
+    await persistBarrier();
+  } catch {
+    // Never reuse the pre-dispatch refusal code once the SDK boundary was
+    // crossed: the backend must keep the request parked under the same id.
+    throw new DeliveryUncertainError(requestId, followUp);
+  }
+}
+
 export async function route(
   request: IncomingMessage,
   response: ServerResponse,
@@ -296,6 +319,13 @@ export async function route(
     if (handled) return;
     return await routeSession(request, response, url, clientSignal);
   } catch (error) {
+    if (error instanceof DeliveryUncertainError) {
+      return json(response, 503, {
+        ...(error.followUp ? { accepted: false } : {}),
+        outcome: "unknown",
+        ...(error.requestId ? { requestId: error.requestId } : {}),
+      });
+    }
     if (error instanceof HttpError) return json(response, error.status, { error: error.message });
     if (error instanceof PolicyWideningRefusedError) {
       log.warn("session.policy-widening-refused", { widened: error.widened.join(",") });
@@ -318,6 +348,15 @@ export async function route(
     }
     if (error instanceof PromptAttachmentError) {
       return json(response, 400, { error: error.message });
+    }
+    // Pre-dispatch barriers alone use this definite refusal. Barriers after
+    // delivery use DeliveryUncertainError so the caller cannot resend work.
+    if (error instanceof PersistenceClosedError) {
+      return json(response, 503, {
+        error: error.message,
+        kind: "persistence-unavailable",
+        code: "persistence-closed",
+      });
     }
     log.error("http.route-failed");
     return json(response, 500, { error: "Internal bridge error" });
@@ -1142,7 +1181,7 @@ async function handleSteer(
     );
     if (pendingIndex >= 0) state.pendingSteerDeliveries.splice(pendingIndex, 1);
     setSteerJournal(state, { ...prepared, state: "ambiguous" });
-    await persistBarrier();
+    await persistAfterDelivery(requestId);
     return json(response, 503, { outcome: "unknown", requestId });
   }
   if (disposition === "handled") {
@@ -1156,7 +1195,7 @@ async function handleSteer(
     );
     if (pendingIndex >= 0) state.pendingSteerDeliveries.splice(pendingIndex, 1);
     setSteerJournal(state, { ...prepared, state: "ambiguous" });
-    await persistBarrier();
+    await persistAfterDelivery(requestId);
     return json(response, 503, { outcome: "unknown", requestId });
   }
   if (
@@ -1168,7 +1207,7 @@ async function handleSteer(
     // cleared it. Left there, the next ordinary prompt would consume it.
     const outcome = withdrawLateSteer(state, session, requestId);
     setSteerJournal(state, { ...prepared, state: outcome });
-    await persistBarrier();
+    await persistAfterDelivery(requestId);
     return outcome === "dropped"
       ? json(response, 409, { outcome: "idle" })
       : json(response, 503, { outcome: "unknown", requestId });
@@ -1178,7 +1217,7 @@ async function handleSteer(
   }
   // Pi owns the queue only in memory. If this write or the process dies, the
   // backend must retain an unknown card and never resend the instruction.
-  await persistBarrier();
+  await persistAfterDelivery(requestId);
   return json(
     response,
     202,
@@ -1539,7 +1578,7 @@ async function handleAdmittedPrompt(
     ) {
       const outcome = withdrawLateFollowUp(state, session);
       if (requestId) journal(state, requestId, outcome);
-      await persistBarrier();
+      await persistAfterDelivery(requestId, true);
       return outcome === "dropped"
         ? json(response, 409, { accepted: false, outcome: "idle" })
         : json(response, 503, { accepted: false, outcome: "unknown", requestId });

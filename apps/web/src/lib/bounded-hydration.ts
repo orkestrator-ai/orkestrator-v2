@@ -1,6 +1,7 @@
 import type { ViewRevisionStamp, ViewSyncCapability } from "@orkestrator/protocol/view-sync";
 import { RevisionRanges, approximateJsonBytes } from "./bounded-hydration-primitives";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { reconnectDelayMs } from "@orkestrator/protocol/reconnect-backoff";
 
 const log = createLogger("web.resource-sync");
 
@@ -557,8 +558,12 @@ export function createBoundedHydration<V>(
       return;
     }
     setStatus("stale");
-    const base = Math.min(limits.retryMaxMs, limits.retryBaseMs * 2 ** (failures - 1));
-    const delay = Math.round(base * (0.5 + 0.5 * clock.random()));
+    // Equal jitter over a doubling base: [base / 2, base], base capped at retryMaxMs.
+    const delay = reconnectDelayMs(
+      { initialDelayMs: limits.retryBaseMs, maxDelayMs: limits.retryMaxMs, healthyAfterMs: 0 },
+      failures - 1,
+      clock.random,
+    );
     retryTimer = clock.setTimeout(() => {
       retryTimer = null;
       if (!disposed && !inFlight) start(reason);

@@ -1,3 +1,4 @@
+import { Data } from "effect";
 import { sessionGoal } from "@orkestrator/protocol/native-agent-goal";
 import { nativeAgentJobReceiptIsActive } from "./models.js";
 import { promptQueueMessageFingerprint } from "./storage-record-upgrades.js";
@@ -147,6 +148,20 @@ export const PROMPT_QUEUE_NEW_PUBLICATION_REFUSED = "Prompt queue new publicatio
 
 /** Prefix of an idempotent enqueue whose id is already used by a different body. */
 export const PROMPT_QUEUE_MESSAGE_CONFLICT = "Prompt queue message conflict:";
+
+/** The most job receipts one native job queue keeps; past it new jobs are refused, never evicted. */
+export const NATIVE_JOB_RECEIPT_LIMIT = 256;
+
+/**
+ * A native job queue already holds {@link NATIVE_JOB_RECEIPT_LIMIT} receipts.
+ * Code `native-job-receipt-capacity` (`contract/ipc-error.ts`); callers read
+ * it with `errorCode()`, and the message keeps its words for older readers.
+ */
+export class NativeJobReceiptCapacityError extends Data.TaggedError(
+  "NativeJobReceiptCapacityError",
+)<{ readonly message: string; readonly limit: number }> {
+  readonly code = "native-job-receipt-capacity" as const;
+}
 
 function canonicalJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
@@ -526,7 +541,11 @@ export class PromptsRepository {
       const receipts = previous?.jobReceipts ?? [];
       // Refuse rather than evict a binding and make an old retry publishable again.
       const retained = receipts;
-      if (retained.length >= 256) throw new Error("Native job receipt capacity reached");
+      if (retained.length >= NATIVE_JOB_RECEIPT_LIMIT)
+        throw new NativeJobReceiptCapacityError({
+          message: "Native job receipt capacity reached",
+          limit: NATIVE_JOB_RECEIPT_LIMIT,
+        });
       this.repos.promptQueues.savePromptQueueMutation(
         queueKey,
         environmentId,

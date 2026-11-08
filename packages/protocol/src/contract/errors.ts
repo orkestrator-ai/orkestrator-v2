@@ -29,7 +29,15 @@ import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import { isUnknownCommandError, unknownBackendCommandMessage } from "../unknown-command.js";
 import { DomainNameSchema, DomainVersionSchema } from "./envelope.js";
-import { formatIpcIncompatibility, parseIpcIncompatibility } from "./ipc-error.js";
+import {
+  boundErrorDetails,
+  formatIpcIncompatibility,
+  isRegisteredErrorCode,
+  parseIpcIncompatibility,
+  REGISTERED_ERROR_CODE_LIST,
+  type ErrorDetails,
+  type RegisteredErrorCode,
+} from "./ipc-error.js";
 
 export const INCOMPATIBILITY_CODES = [
   "unknown-command",
@@ -365,4 +373,81 @@ export function incompatibilityIpcMessage(error: unknown): string | null {
   if (!coded) return null;
   const { code, ...details } = coded;
   return formatIpcIncompatibility(code, details, messageOf(error) ?? "");
+}
+
+// ---------------------------------------------------------------------------
+// Any registered code (`./ipc-error.ts` `REGISTERED_ERROR_CODES`)
+// ---------------------------------------------------------------------------
+
+/**
+ * A registered coded error as a transport rebuilds it: the gateway body's
+ * message, its code and its bounded details. A thrower defines its own
+ * `Data.TaggedError` class with a `code` literal (for example
+ * `NativeAgentProviderSessionMissingError` in the backend); a reader across a
+ * transport sees this class, or the IPC message form, and reads either
+ * through `errorCode()` (`./ipc-error.ts`), never by class.
+ */
+export class CodedError extends Data.TaggedError("CodedError")<{
+  readonly message: string;
+  readonly code: RegisteredErrorCode;
+  readonly details?: ErrorDetails;
+}> {}
+
+/** The JSON error body for a registered code: the gateway's `{ error, code }` plus bounded `details`. */
+export const CodedErrorWireSchema = Schema.Struct({
+  error: Schema.String,
+  code: Schema.Literals(REGISTERED_ERROR_CODE_LIST),
+  details: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
+});
+
+export interface CodedErrorWire {
+  readonly error: string;
+  readonly code: RegisteredErrorCode;
+  readonly details?: ErrorDetails;
+}
+
+/**
+ * The gateway's JSON error body for an error whose own `code` is registered:
+ * an incompatibility's {@link toWire} body, otherwise `{ error, code,
+ * details? }` with only the code's bounded detail keys (from the error's
+ * `details` object, or its own properties of those names). `null` for an
+ * error with no registered code; the gateway then answers as before.
+ */
+export function codedErrorWire(error: unknown): CodedErrorWire | null {
+  if (isIncompatibilityError(error)) return toWire(error);
+  if (typeof error !== "object" || error === null) return null;
+  const code = (error as { code?: unknown }).code;
+  if (!isRegisteredErrorCode(code)) return null;
+  const carried = (error as { details?: unknown }).details;
+  const details = boundErrorDetails(
+    code,
+    typeof carried === "object" && carried !== null ? carried : error,
+  );
+  return {
+    error: messageOf(error) ?? "",
+    code,
+    ...(Object.keys(details).length > 0 ? { details } : {}),
+  };
+}
+
+const decodeCodedWire = Schema.decodeUnknownResult(CodedErrorWireSchema);
+
+/**
+ * Rebuilds a coded error from a JSON error body: an incompatibility's class
+ * ({@link fromWire}), else a {@link CodedError} for any other registered code
+ * with its bounded details. `null` when the body has no registered code (an
+ * unregistered `code` stays the caller's to keep).
+ */
+export function fromCodedWire(body: unknown): IncompatibilityError | CodedError | null {
+  const incompatible = fromWire(body);
+  if (incompatible) return incompatible;
+  const decoded = decodeCodedWire(body);
+  if (Result.isFailure(decoded)) return null;
+  const { error: message, code, details: raw } = decoded.success;
+  const details = boundErrorDetails(code, raw ?? {});
+  return new CodedError({
+    message,
+    code,
+    ...(Object.keys(details).length > 0 ? { details } : {}),
+  });
 }

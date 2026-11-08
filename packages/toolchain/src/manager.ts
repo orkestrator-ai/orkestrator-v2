@@ -33,9 +33,12 @@ import {
 import { TOOLCHAIN_DIRECTORY, toolchainRootDir } from "./layout.js";
 import {
   DEFAULT_DOWNLOAD_TIMINGS,
+  abortError,
+  abortableDelay,
   downloadArchive,
   partialDownloadPath,
   prunePartialDownloads,
+  throwIfAborted,
   type DownloadTimings,
   type FetchLike,
 } from "./download.js";
@@ -124,6 +127,13 @@ export type EnsurePinnedToolchainsOptions = {
   fullVerification?: boolean;
   allowInsecureDownloadsForTests?: boolean;
   skipExecutableProbeForTests?: boolean;
+  /**
+   * Cancels the install: the lock wait, downloads and their retry delays stop
+   * at once, nothing is retried, staging is removed and the install lock is
+   * released; the call rejects with the signal's reason (`abortError`). Once
+   * every tool verified, activation runs to completion.
+   */
+  signal?: AbortSignal;
   timingsForTests?: Partial<ToolchainManagerTimings>;
   openLockFileForTests?: typeof open;
   openLeaseFileForTests?: typeof open;
@@ -142,10 +152,6 @@ export type PinnedToolchainResult = {
   binDir: string;
   executables: Record<ToolchainName, string>;
 };
-
-function delay(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
-}
 
 function artifactDirectory(rootDir: string, artifact: ToolchainArtifact): string {
   return path.join(
@@ -676,12 +682,14 @@ async function acquireInstallLock(
   timings: ToolchainManagerTimings,
   openLockFile: typeof open,
   ownerProcessExists: (pid: number) => boolean,
+  signal: AbortSignal | undefined,
 ): Promise<InstallLock> {
   const lockPath = path.join(rootDir, INSTALL_LOCK);
   const startedAt = Date.now();
   let announcedWait = false;
 
   while (Date.now() - startedAt < timings.lockWaitTimeoutMs) {
+    throwIfAborted(signal);
     const owner: InstallLockOwner = {
       token: randomUUID(),
       pid: process.pid,
@@ -749,7 +757,7 @@ async function acquireInstallLock(
       announcedWait = true;
       onProgress("Waiting for another Orkestrator window to finish preparing tools…");
     }
-    await delay(timings.lockPollMs);
+    await abortableDelay(timings.lockPollMs, signal);
   }
   throw new Error("Timed out waiting for the Orkestrator toolchain installation lock");
 }
@@ -1067,6 +1075,7 @@ async function stageCompanions(
   skipExecutableProbeForTests: boolean,
   timings: ToolchainManagerTimings,
   spawnProcess: typeof spawn,
+  signal: AbortSignal | undefined,
 ): Promise<void> {
   let downloadedBytes = startBytes;
   for (const companion of companions) {
@@ -1087,6 +1096,7 @@ async function stageCompanions(
       onBytes: (received) => onBytes(precedingBytes + received),
       allowInsecureDownloadsForTests,
       timings: downloadTimings(timings),
+      ...(signal ? { signal } : {}),
     });
     downloadedBytes += companion.archive.size;
     if (companion.archive.format === "zip") {
@@ -1153,6 +1163,7 @@ async function repairArtifactCompanions(
   skipExecutableProbeForTests: boolean,
   timings: ToolchainManagerTimings,
   spawnProcess: typeof spawn,
+  signal: AbortSignal | undefined,
 ): Promise<void> {
   const stagingDirectory = await mkdtemp(path.join(rootDir, `.staging-${artifact.name}-`));
   try {
@@ -1167,6 +1178,7 @@ async function repairArtifactCompanions(
       skipExecutableProbeForTests,
       timings,
       spawnProcess,
+      signal,
     );
     onVerify();
     const destinationDirectory = artifactDirectory(rootDir, artifact);
@@ -1196,6 +1208,7 @@ async function installArtifact(
   skipExecutableProbeForTests: boolean,
   timings: ToolchainManagerTimings,
   spawnProcess: typeof spawn,
+  signal: AbortSignal | undefined,
 ): Promise<string> {
   const stagingDirectory = await mkdtemp(path.join(rootDir, `.staging-${artifact.name}-`));
   const archivePath = path.join(stagingDirectory, `archive.${archiveExtension(artifact.archive)}`);
@@ -1214,6 +1227,7 @@ async function installArtifact(
       onBytes,
       allowInsecureDownloadsForTests,
       timings: downloadTimings(timings),
+      ...(signal ? { signal } : {}),
     });
     if (artifact.archive.bundleRoot) {
       await extractTarGzipBundle(archivePath, stagingDirectory, artifact.name, artifact.archive);
@@ -1321,6 +1335,7 @@ async function installArtifact(
       skipExecutableProbeForTests,
       timings,
       spawnProcess,
+      signal,
     );
 
     // Every archive — the primary and each companion — has finished
@@ -1644,6 +1659,8 @@ export async function ensurePinnedToolchains(
   assertUniqueActivationNames(artifacts);
   const fetchImpl = options.fetchImpl ?? ((input, init) => fetch(input, init));
   const onProgress = options.onProgress ?? (() => undefined);
+  const signal = options.signal;
+  throwIfAborted(signal);
   const timings = { ...DEFAULT_TIMINGS, ...options.timingsForTests };
   const spawnProcess = options.spawnForTests ?? spawn;
   const ownerProcessExists =
@@ -1682,8 +1699,11 @@ export async function ensurePinnedToolchains(
     timings,
     options.openLockFileForTests ?? open,
     ownerProcessExists,
+    signal,
   );
   try {
+    // An abort that landed while the lock was being taken still releases it.
+    throwIfAborted(signal);
     // Validation, installation, activation, lease publication, and pruning are
     // one cache-wide transaction. Cached callers also take the lock so pruning
     // in another app window cannot remove a version between its validation and
@@ -1779,6 +1799,7 @@ export async function ensurePinnedToolchains(
             options.skipExecutableProbeForTests ?? false,
             timings,
             spawnProcess,
+            signal,
           );
         } else {
           await installArtifact(
@@ -1791,6 +1812,7 @@ export async function ensurePinnedToolchains(
             options.skipExecutableProbeForTests ?? false,
             timings,
             spawnProcess,
+            signal,
           );
         }
         toolFractions.set(artifact.name, 1);
@@ -1803,6 +1825,9 @@ export async function ensurePinnedToolchains(
         });
       }),
     );
+    // Every tool shares the signal, so an abort is the cause whichever tool
+    // reported first; nothing from here on starts once it has fired.
+    if (signal?.aborted) throw abortError(signal);
     const failedInstallation = installations.find(
       (result): result is PromiseRejectedResult => result.status === "rejected",
     );
@@ -1827,6 +1852,7 @@ export async function ensurePinnedToolchains(
     );
 
     await options.beforeFinalVerificationForTests?.();
+    throwIfAborted(signal);
     const finalValidity = await Promise.all(
       artifacts.map(async (artifact) => {
         if (!(await isValidInstallation(rootDir, artifact, digests))) return false;

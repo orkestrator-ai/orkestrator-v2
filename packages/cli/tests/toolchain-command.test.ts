@@ -1,10 +1,14 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import path from "node:path";
-import { createSandbox, type ClientSandbox } from "./support/client-harness.js";
+import { runClient } from "../src/client/main.js";
+import { captureIo, createSandbox, type ClientSandbox } from "./support/client-harness.js";
 
 const sandboxes: ClientSandbox[] = [];
-const installCalls: Array<{ dataDir: string; tools?: readonly string[] }> = [];
+const installCalls: Array<{ dataDir: string; tools?: readonly string[]; signal?: AbortSignal }> =
+  [];
 let installFailure: Error | null = null;
+/** Runs inside the fake install, before it settles. */
+let duringInstall: ((signal: AbortSignal | undefined) => Promise<void>) | null = null;
 
 mock.module("@orkestrator/toolchain/install", () => ({
   isToolchainName: (name: string) => ["claude", "codex", "pi"].includes(name),
@@ -12,8 +16,13 @@ mock.module("@orkestrator/toolchain/install", () => ({
     throw new Error("Unexpected plan");
   },
   createProgressLogger: () => () => undefined,
-  installPinnedToolchains: async (options: { dataDir: string; tools?: readonly string[] }) => {
+  installPinnedToolchains: async (options: {
+    dataDir: string;
+    tools?: readonly string[];
+    signal?: AbortSignal;
+  }) => {
     installCalls.push(options);
+    await duringInstall?.(options.signal);
     if (installFailure) throw installFailure;
     const rootDir = path.join(options.dataDir, "toolchains");
     return {
@@ -32,6 +41,7 @@ mock.module("@orkestrator/toolchain/install", () => ({
 
 afterEach(async () => {
   installFailure = null;
+  duringInstall = null;
   installCalls.length = 0;
   await Promise.all(sandboxes.splice(0).map((sandbox) => sandbox.cleanup()));
 });
@@ -84,4 +94,28 @@ describe("toolchain install command", () => {
       message: "digest mismatch",
     });
   });
+
+  test.each(["SIGINT", "SIGTERM"] as const)(
+    "the first %s cancels the install and exits as interrupted",
+    async (name) => {
+      const box = await sandbox();
+      const controller = new AbortController();
+      duringInstall = (signal) =>
+        new Promise<void>((_, reject) => {
+          // Stands in for the installer: it rejects once the signal it was given fires.
+          signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+          controller.abort(name);
+        });
+      const io = captureIo(box.env, box.root);
+      const code = await runClient(["toolchain", "install", "--json", "--tool", "claude"], {
+        io,
+        version: "9.9.9",
+        signal: controller.signal,
+      });
+
+      expect(installCalls[0]?.signal).toBe(controller.signal);
+      expect(code).toBe(name === "SIGINT" ? 130 : 143);
+      expect(JSON.parse(io.out.join("")).error).toMatchObject({ code: "observation-interrupted" });
+    },
+  );
 });

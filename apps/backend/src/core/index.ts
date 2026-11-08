@@ -120,8 +120,18 @@ import { backendClaudeStateSignal, backendTmuxHookSignal } from "./claude-state-
 import { ContainerLifecycleReactor } from "./container-lifecycle-events.js";
 import { recurringDiagnosticsRegistry } from "./recurring-diagnostics.js";
 import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
+import { Effect } from "effect";
+import {
+  beginShutdownStep,
+  shutdownStep,
+  stopStepNow,
+  type ShutdownStepFailure,
+} from "./shutdown-steps.js";
 
 const log = createLogger("backend");
+
+/** How long shutdown waits for web annotations to close before going on without them. */
+const WEB_ANNOTATIONS_CLOSE_TIMEOUT_MS = 5_000;
 
 const activityLog = createLogger("backend.activity");
 const scheduledLog = createLogger("scheduler");
@@ -3093,71 +3103,98 @@ export class OrkestratorBackend {
   async shutdown(): Promise<void> {
     if (this.shutdownPromise) return this.shutdownPromise;
     this.shuttingDown = true;
-    this.stopLogPolicyListener?.();
-    this.runtime.logPolicy?.stop();
+    // Each synchronous stop is guarded: one that throws is logged and the rest
+    // still run, since an exception here would skip the drain and every close.
+    stopStepNow("log-policy", () => {
+      this.stopLogPolicyListener?.();
+      this.runtime.logPolicy?.stop();
+    });
     // Bounded and never rejects: a running host check removes its probe
     // network (or shutdown removes it) before the process exits.
-    const reachabilitySettled = this.containerHostReachability?.dispose();
+    const reachabilitySettled = beginShutdownStep(async () => {
+      await this.containerHostReachability?.dispose();
+    });
     // Stop new annotation reconciliation; pending requests stay as persisted
     // (never marked failed) and resume on the next start.
-    this.webAnnotations.stopReconciler();
+    stopStepNow("web-annotation-reconciler", () => this.webAnnotations.stopReconciler());
     // Start no new merge or Resolve launch; the durable flag resumes it next start.
-    this.prAutoMerge.dispose();
+    stopStepNow("pr-auto-merge", () => this.prAutoMerge.dispose());
     // Closes node links and owned SSH tunnels only; nothing on any node stops.
-    this.nodeCoordination.dispose();
-    this.nodePortal.stop();
-    const nodesStopped = this.nodes.stop().catch(() => undefined);
-    if (this.activityLeaseSweep) {
-      clearInterval(this.activityLeaseSweep);
+    stopStepNow("node-coordination", () => this.nodeCoordination.dispose());
+    stopStepNow("node-portal", () => this.nodePortal.stop());
+    const nodesStopped = beginShutdownStep(() => this.nodes.stop()).catch(() => undefined);
+    stopStepNow("activity-lease-sweep", () => {
+      if (this.activityLeaseSweep) clearInterval(this.activityLeaseSweep);
       this.activityLeaseSweep = null;
-    }
-    this.hostSuspendDetector?.stop();
-    this.hostSuspendDetector = null;
-    this.machineLoad.stop();
-    this.accountAutoSwitch?.stop();
-    this.claudeLoginKeeper?.stop();
-    this.claudeLoginKeeper = null;
-    this.containerLoginFileWatcher?.stop();
-    this.containerLoginFileWatcher = null;
+    });
+    stopStepNow("host-suspend-detector", () => {
+      const detector = this.hostSuspendDetector;
+      this.hostSuspendDetector = null;
+      detector?.stop();
+    });
+    stopStepNow("machine-load", () => this.machineLoad.stop());
+    stopStepNow("account-auto-switch", () => this.accountAutoSwitch?.stop());
+    stopStepNow("claude-login-keeper", () => {
+      const keeper = this.claudeLoginKeeper;
+      this.claudeLoginKeeper = null;
+      keeper?.stop();
+    });
+    stopStepNow("container-login-watcher", () => {
+      const watcher = this.containerLoginFileWatcher;
+      this.containerLoginFileWatcher = null;
+      watcher?.stop();
+    });
     this.codexLoginRefresher = null;
     // Observers; stopping them never touches containers. Only this backend's
     // followers stop: another backend in the process keeps its own.
-    this.removeContainerLifecycleListener?.();
-    this.removeContainerLifecycleListener = null;
-    this.runtime.containerOom.stop();
-    this.runtime.containerLogs.shutdown();
-    if (this.nativeActivitySweep) {
-      clearInterval(this.nativeActivitySweep);
+    stopStepNow("container-lifecycle-listener", () => {
+      const remove = this.removeContainerLifecycleListener;
+      this.removeContainerLifecycleListener = null;
+      remove?.();
+    });
+    stopStepNow("container-oom", () => this.runtime.containerOom.stop());
+    stopStepNow("container-logs", () => this.runtime.containerLogs.shutdown());
+    stopStepNow("native-activity-sweep", () => {
+      if (this.nativeActivitySweep) clearInterval(this.nativeActivitySweep);
       this.nativeActivitySweep = null;
-    }
-    if (this.tabResourceSweep) {
-      clearInterval(this.tabResourceSweep);
+    });
+    stopStepNow("tab-resource-sweep", () => {
+      if (this.tabResourceSweep) clearInterval(this.tabResourceSweep);
       this.tabResourceSweep = null;
-    }
-    this.activityJobs?.stop();
-    this.activityJobs = null;
+    });
+    stopStepNow("activity-jobs", () => {
+      const jobs = this.activityJobs;
+      this.activityJobs = null;
+      jobs?.stop();
+    });
     // Fires in flight finish; one cut short is re-claimed after a restart
     // under the same request key, so it never acts twice.
-    const scheduledJobsStopped = this.scheduledJobs.stop().catch(() => undefined);
-    this.coordinators.stopStatusWakes();
-    this.usageLimitNotices.stop();
-    this.graphRunAttention.stop();
-    this.buildPipelineActivity.stop();
-    this.agentHumanPrompts.stop();
+    const scheduledJobsStopped = beginShutdownStep(() => this.scheduledJobs.stop()).catch(
+      () => undefined,
+    );
+    stopStepNow("coordinator-status-wakes", () => this.coordinators.stopStatusWakes());
+    stopStepNow("usage-limit-notices", () => this.usageLimitNotices.stop());
+    stopStepNow("graph-run-attention", () => this.graphRunAttention.stop());
+    stopStepNow("build-pipeline-activity", () => this.buildPipelineActivity.stop());
+    stopStepNow("agent-human-prompts", () => this.agentHumanPrompts.stop());
     // Non-recursive project-template watches: closing them never blocks.
-    this.graphTemplates.shutdown();
+    stopStepNow("graph-templates", () => this.graphTemplates.shutdown());
     // A user's `!` commands end with the backend; their processes must not outlive it.
-    const userCommandsStopped = this.userCommands.shutdown().then(
+    // A throw is unconfirmed termination, which fails the drain below.
+    const userCommandsStopped = beginShutdownStep(() => this.userCommands.shutdown()).then(
       () => ({ stopped: true as const }),
       () => ({ stopped: false as const }),
     );
-    // Synchronous and cannot fail, so it runs before the awaited drain rather
-    // than racing it: every watcher holds a file descriptor and a debounce timer.
-    this.runtime.shutdown();
-    cancelScheduledEnvironmentCleanup(this.context.storage.getDataDir());
-    this.diagnostics.health.stop();
+    // Synchronous, so it runs before the awaited drain rather than racing it:
+    // every watcher holds a file descriptor and a debounce timer.
+    stopStepNow("runtime", () => this.runtime.shutdown());
+    stopStepNow("environment-cleanup-schedule", () =>
+      cancelScheduledEnvironmentCleanup(this.context.storage.getDataDir()),
+    );
+    stopStepNow("diagnostics-health", () => this.diagnostics.health.stop());
     const attempt = (async () => {
       let drained = false;
+      let closeFailure: ShutdownStepFailure | null = null;
       try {
         const lifecycleDeadline = Date.now() + this.environmentLifecycleDrainTimeoutMs;
         // Close both admission gates before waiting on any in-flight work.
@@ -3254,54 +3291,14 @@ export class OrkestratorBackend {
           throw new Error("User command termination could not be confirmed. Retry shutdown.");
         drained = true;
       } finally {
-        // Even failed shutdown must retain ownership until every mirror writer settles.
-        this.environmentLifecycleTasks.beginShutdown(this.environmentLifecycleDrainTimeoutMs);
-        await stopProjectGitMirrorRefreshes(this.context.storage.getDataDir());
-        await this.context.registryWriterLease?.release().catch(() => undefined);
-        this.context.previews?.dispose();
-        this.context.mcpManagement?.dispose();
-        await this.controlMcp.stop();
-        await this.agentTools.stop();
-        await reachabilitySettled;
-        await Promise.race([
-          this.webAnnotations.close().catch((error: unknown) => {
-            log.warn("shutdown.step-failed", {
-              step: "web-annotations",
-              error: formatLogError(error, { message: false }),
-            });
-          }),
-          new Promise<void>((resolve) => setTimeout(resolve, 5_000).unref?.()),
-        ]);
-        await this.transcriptArtifactRuntime?.close().catch(() => undefined);
-        await this.transcriptArtifacts.close().catch(() => undefined);
-        const closeLifecycleStorage = async () => {
-          await this.context.design?.close();
-          // Last: closing checkpoints the WAL into the database file.
-          this.workflowResults.closeStorage();
-          this.hostMaintenance.close();
-          compatibilityPathUsage.detach(this.compatibilityPathSink);
-          closeEnvironmentCleanupStorage();
-          // The last shutdown step: a failed drain leaves no clean-exit marker.
-          this.diagnostics.close({ clean: drained });
-          this.context.storage.close();
-        };
-        if (this.environmentLifecycleTasks.pendingCount() > 0) {
-          // The quit deadline bounds waiting, not already-admitted deletion.
-          // Keep its design coordination and stores usable until it finishes;
-          // closing them now would strand the durable deletion tombstone.
-          void this.environmentLifecycleTasks
-            .whenDrained()
-            .then(closeLifecycleStorage)
-            .catch((error: unknown) => {
-              log.warn("shutdown.step-failed", {
-                step: "lifecycle-storage",
-                error: formatLogError(error),
-              });
-            });
-        } else {
-          await closeLifecycleStorage();
-        }
+        closeFailure = await Effect.runPromise(
+          this.releaseShutdownResources(drained, reachabilitySettled),
+        );
       }
+      // Reached only after a drain that succeeded: a failed drain keeps its own
+      // error. The first failed close fails this attempt so a later
+      // `shutdown()` retries it.
+      if (closeFailure) throw closeFailure.error;
     })();
     this.shutdownPromise = attempt;
     try {
@@ -3310,6 +3307,98 @@ export class OrkestratorBackend {
       if (this.shutdownPromise === attempt) this.shutdownPromise = null;
       throw error;
     }
+  }
+
+  /**
+   * The last phase of `shutdown()`, run after the drain whether or not it
+   * succeeded. Resolves with the first failure of a step whose failure fails
+   * shutdown, or `null`.
+   *
+   * Every step runs even when an earlier one fails: each is a `shutdownStep`,
+   * which turns a throw, rejection or timeout into a logged value, so the
+   * program cannot stop part-way and `storage.close()` (the WAL checkpoint and
+   * clean-exit marker) is always reached. This is a sequential program rather
+   * than finalizers on a `Scope`: the order below is fixed, deliberately not
+   * last-in-first-out, and branches on pending lifecycle tasks in the middle,
+   * so a `Scope` would only add finalizers registered in reverse for the same
+   * guarantee.
+   */
+  private releaseShutdownResources(
+    drained: boolean,
+    reachabilitySettled: Promise<void>,
+  ): Effect.Effect<ShutdownStepFailure | null> {
+    return Effect.gen({ self: this }, function* () {
+      let failure: ShutdownStepFailure | null = null;
+      // Steps whose failure fails this shutdown attempt, as it did before
+      // they were guarded; the others were already best-effort.
+      const required = (result: ShutdownStepFailure | null) => {
+        failure ??= result;
+      };
+      // Even failed shutdown must retain ownership until every mirror writer
+      // settles. Closes admission only; the bounded drain is not awaited here.
+      stopStepNow("environment-lifecycle", () => {
+        void this.environmentLifecycleTasks.beginShutdown(this.environmentLifecycleDrainTimeoutMs);
+      });
+      required(
+        yield* shutdownStep("git-mirror-refreshes", () =>
+          stopProjectGitMirrorRefreshes(this.context.storage.getDataDir()),
+        ),
+      );
+      yield* shutdownStep("registry-writer-lease", () =>
+        this.context.registryWriterLease?.release(),
+      );
+      required(yield* shutdownStep("previews", () => this.context.previews?.dispose()));
+      required(yield* shutdownStep("mcp-management", () => this.context.mcpManagement?.dispose()));
+      required(yield* shutdownStep("control-mcp", () => this.controlMcp.stop()));
+      required(yield* shutdownStep("agent-tools", () => this.agentTools.stop()));
+      yield* shutdownStep("host-reachability", () => reachabilitySettled);
+      yield* shutdownStep("web-annotations", () => this.webAnnotations.close(), {
+        timeoutMs: WEB_ANNOTATIONS_CLOSE_TIMEOUT_MS,
+        omitMessage: true,
+      });
+      yield* shutdownStep("transcript-artifact-runtime", () =>
+        this.transcriptArtifactRuntime?.close(),
+      );
+      yield* shutdownStep("transcript-artifacts", () => this.transcriptArtifacts.close());
+      const closeLifecycleStorage = Effect.gen({ self: this }, function* () {
+        let storageFailure: ShutdownStepFailure | null = null;
+        const step = (result: ShutdownStepFailure | null) => {
+          storageFailure ??= result;
+        };
+        step(yield* shutdownStep("design", () => this.context.design?.close()));
+        // Last: closing checkpoints the WAL into the database file.
+        step(yield* shutdownStep("workflow-results", () => this.workflowResults.closeStorage()));
+        step(yield* shutdownStep("host-maintenance", () => this.hostMaintenance.close()));
+        step(
+          yield* shutdownStep("compatibility-path-usage", () =>
+            compatibilityPathUsage.detach(this.compatibilityPathSink),
+          ),
+        );
+        step(yield* shutdownStep("environment-cleanup-storage", closeEnvironmentCleanupStorage));
+        // The last shutdown step: a failed drain leaves no clean-exit marker.
+        step(yield* shutdownStep("diagnostics", () => this.diagnostics.close({ clean: drained })));
+        step(yield* shutdownStep("storage", () => this.context.storage.close()));
+        return storageFailure;
+      });
+      if (this.environmentLifecycleTasks.pendingCount() > 0) {
+        // The quit deadline bounds waiting, not already-admitted deletion.
+        // Keep its design coordination and stores usable until it finishes;
+        // closing them now would strand the durable deletion tombstone.
+        // Each close logs its own failure; only the wait itself can reject.
+        void this.environmentLifecycleTasks
+          .whenDrained()
+          .then(() => Effect.runPromise(closeLifecycleStorage))
+          .catch((error: unknown) => {
+            log.warn("shutdown.step-failed", {
+              step: "lifecycle-storage",
+              error: formatLogError(error),
+            });
+          });
+      } else {
+        required(yield* closeLifecycleStorage);
+      }
+      return failure;
+    });
   }
 }
 

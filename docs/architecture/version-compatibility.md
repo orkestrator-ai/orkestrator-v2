@@ -600,7 +600,8 @@ Each transport keeps the code and details:
   (`invoke_on_node`) and the command node's own callers see the leaf's class.
 - **Electron IPC:** the desktop backend client rebuilds the class, and main's
   `orkestrator:invoke` sends it in the message form
-  `[code key=value …] text` (`contract/ipc-error.ts`, values URI-encoded),
+  `[code key=value …] text` (`contract/ipc-error.ts`, values URI-encoded;
+  the same form carries every [registered code](#registered-error-codes)),
   because only a message crosses IPC and the context bridge. The preload
   also sets `error.code` and `error.details`; the renderer reads the message
   form through `incompatibility()`.
@@ -619,6 +620,63 @@ itself (`tests/unit/unknown-command-text-guard.test.ts`).
 The one UI text is `describeIncompatibility(error, machine, command?)`
 (`apps/web/src/lib/describe-incompatibility.ts`): "Not available on
 <machine> (version x). Update it."
+
+### Registered error codes
+
+The same codec carries any other code a caller must branch on, so no
+decision matches an error's prose. `REGISTERED_ERROR_CODES`
+(`contract/ipc-error.ts`) lists each code with the detail keys it may name,
+each of a bounded kind: `text` (at most 64 characters), `range` (`min-max`) or
+`count` (a non-negative integer). A detail is never an argument value.
+
+| Code | Thrown by | Details | Read by |
+| --- | --- | --- | --- |
+| The three incompatibility codes | [Typed errors](#typed-errors) | as above | `incompatibility()` |
+| `kanban-request-id-conflict` | `KanbanRequestIdConflictError` (`storage-kanban.ts`): a ticket, comment or image `requestId` reused with different arguments | `record` | `feature-build.ts`, which returns the existing ticket on a retry |
+| `native-job-receipt-capacity` | `NativeJobReceiptCapacityError` (`storage-prompts.ts`): the job queue holds its 256 receipts | `limit` | `native-agent-job-tab-reuse.ts`, which rethrows it rather than falling back |
+| `native-agent-provider-session-missing` | `NativeAgentProviderSessionMissingError` (`native-agent-service-shared.ts`): a provider probe proved the session gone | none | the renderer (`isProviderSessionMissingError` in `useNativeAgentSession.ts`), the only answer that may replace a restored session |
+
+Rules:
+
+- **A thrower** is an Effect `Data.TaggedError` with a `code` literal (and
+  its details as own properties), in the backend next to its throw site or in
+  `contract/errors.ts`. Its message keeps the words it had before the code
+  existed.
+- **A reader** calls `errorCode(error)` (`contract/ipc-error.ts`), which
+  reads an own `code` in the code form (registered or not: the gateway's
+  `code` kept by `GatewayHttpError` or `NodeLink`, the preload's copy) and
+  otherwise a message led by a *registered* code's prefix. An unregistered
+  `[word] ` prefix is text, and a Node `ENOENT`-style code is not in the code
+  form. A reader that must work against an older peer falls back to the old
+  words only when `errorCode` returns `undefined`; when a code is present, it
+  alone decides.
+- **The gateway** answers `codedErrorWire(error)`: an incompatibility's
+  `toWire` body, otherwise `{ error, code, details? }` with only the code's
+  bounded keys; an error without a registered code is answered as before.
+- **Desktop main.** The backend client rebuilds a registered code with
+  `fromCodedWire(body)` (the incompatibility class, else `CodedError`), and
+  `orkestrator:invoke` rethrows it as `[code key=value …] text`
+  (`ipcErrorMessage`). The text after the brackets is the thrower's message
+  unchanged, so an older renderer's text match still finds it; the preload
+  copies `code` and `details`. A renderer that shows such a message uses
+  `ipcErrorText(message)` to drop the prefix.
+- **The preload** imports only `contract/ipc-error.ts`, which has no Effect
+  import; the classes and Schemas live in `contract/errors.ts`.
+- **Adding a code** is additive: an older reader leaves it in the message and
+  still matches the words. Renaming or removing one is not.
+
+Not yet migrated, each still read from its own message marker:
+`ContainerLifecycleError:<code>:`, `McpManagementError:<code>:`,
+`Pane layout revision conflict:`, `Design revision conflict:`,
+`Prompt queue message conflict:` and the node refusal codes. Each can register
+a code here, keeping its marker in the message for older peers.
+
+Change tracking's internal reasons (`capture-timeout`, `capture-storage-quota`,
+`commit-not-found`, …) are not wire codes. They are one `CaptureError`
+(`change-tracking/capture-error.ts`) whose `reason` is typed against
+`CAPTURE_ERROR_REASONS`, read with `captureErrorReason(error)`; the message is
+the reason, and reasons that leave the backend do so as data (a capture's
+`unavailable` reason, a scope's `unavailableReason`).
 
 ### Client adapters
 

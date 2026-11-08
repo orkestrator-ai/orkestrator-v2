@@ -19,6 +19,7 @@
  * place so only missing blobs cross the boundary).
  */
 
+import { CaptureError, captureErrorReason } from "./capture-error.js";
 import { confinedRead, validCapturePath } from "./confined-read.js";
 import { HARDENED_GIT_CONFIG } from "../git-fsmonitor.js";
 import { CommandFailedError, runCommandBuffer } from "../shell.js";
@@ -389,13 +390,13 @@ export class HostCaptureExecutor implements CaptureExecutor {
           settled: !!info && stable && statSettled(info, readAt, this.settleWindowMs),
         };
       } catch (error) {
-        if (signal?.aborted) throw new Error("capture-timeout");
-        const message = error instanceof Error ? error.message : "";
-        if (message === "capture-file-missing") return { pathId, kind: "missing" };
+        if (signal?.aborted) throw new CaptureError("capture-timeout");
+        const reason = captureErrorReason(error);
+        if (reason === "capture-file-missing") return { pathId, kind: "missing" };
         return {
           pathId,
           kind: "omitted",
-          reason: message === "capture-file-too-large" ? "too-large" : "unreadable",
+          reason: reason === "capture-file-too-large" ? "too-large" : "unreadable",
           size: null,
           stamp: null,
         };
@@ -537,8 +538,9 @@ export class ContainerCaptureExecutor implements CaptureExecutor {
       );
       return result.stdout.toString("utf8");
     } catch (error) {
-      if (error instanceof CommandFailedError && error.timedOut) throw new Error("capture-timeout");
-      throw new Error("capture-executor-unavailable");
+      if (error instanceof CommandFailedError && error.timedOut)
+        throw new CaptureError("capture-timeout");
+      throw new CaptureError("capture-executor-unavailable");
     }
   }
 
@@ -622,7 +624,7 @@ export class ContainerCaptureExecutor implements CaptureExecutor {
   ): Promise<ReadRecord[]> {
     const records: ReadRecord[] = [];
     for (let index = 0; index < pathIds.length; index += CONTAINER_DESCRIBE_BATCH) {
-      if (signal.aborted) throw new Error("capture-timeout");
+      if (signal.aborted) throw new CaptureError("capture-timeout");
       const batch = pathIds.slice(index, index + CONTAINER_DESCRIBE_BATCH);
       records.push(
         ...this.parse(await this.helper("describe", limits, this.input(batch), 120_000, signal)),
@@ -643,7 +645,7 @@ export class ContainerCaptureExecutor implements CaptureExecutor {
     let batchBytes = 0;
     const flush = async () => {
       if (batch.length === 0) return;
-      if (signal.aborted) throw new Error("capture-timeout");
+      if (signal.aborted) throw new CaptureError("capture-timeout");
       records.push(
         ...this.parse(await this.helper("fetch", limits, this.input(batch), 120_000, signal)),
       );
@@ -673,7 +675,7 @@ async function mapBounded<T, R>(
     { length: Math.max(1, Math.min(concurrency, items.length)) },
     async () => {
       while (next < items.length) {
-        if (signal.aborted) throw new Error("capture-timeout");
+        if (signal.aborted) throw new CaptureError("capture-timeout");
         const index = next++;
         results[index] = await work(items[index]!);
       }
@@ -1008,11 +1010,10 @@ export async function captureWorktree(request: CaptureRequest): Promise<CaptureR
       statCache,
     };
   } catch (error) {
-    const message = error instanceof Error ? error.message : "";
-    if (signal.aborted || message === "capture-timeout") return unavailable("capture-timeout");
-    if (message === "capture-storage-quota") return unavailable(message);
-    if (message === "capture-executor-unavailable")
-      return unavailable("capture-executor-unavailable");
+    const reason = captureErrorReason(error);
+    if (signal.aborted || reason === "capture-timeout") return unavailable("capture-timeout");
+    if (reason === "capture-storage-quota" || reason === "capture-executor-unavailable")
+      return unavailable(reason);
     if (error instanceof CommandFailedError) return unavailable("not-a-git-worktree");
     return unavailable("capture-failed");
   } finally {

@@ -468,8 +468,7 @@ When a routed write's answer is lost, the command node records an
 outcome-unknown entry against the node and answers `outcome: "unknown"`;
 `invokeOnNode` throws `OutcomeUnknownError` and the write is **never resent**.
 `UnknownOutcomesNotice` lists that node's records (`list_node_outcomes`) under
-its section until the user dismisses them (`dismiss_node_outcome`). The older
-client-side `lib/federation/operation-recovery.ts` is no longer imported.
+its section until the user dismisses them (`dismiss_node_outcome`).
 
 <a id="machine-panels-one-realm-per-machine"></a>
 <a id="workspace-realms-one-realm-per-other-node"></a>

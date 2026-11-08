@@ -1,4 +1,5 @@
 import { PUBLIC_API_LIMITS } from "@orkestrator/protocol/public-api";
+import { nextPublicWaitDelay } from "@orkestrator/protocol/public-api-wait";
 import { CliError } from "./errors.js";
 
 /**
@@ -60,7 +61,7 @@ export async function observe<T>(
   const now = options.now ?? Date.now;
   const sleep = options.sleep ?? defaultSleep;
   const deadline = now() + options.timeoutMs;
-  let delay = 250;
+  let delay = nextPublicWaitDelay(undefined);
   for (;;) {
     if (options.signal?.aborted) throw new ObservationStopped("signal", signalName(options.signal));
     const step = await check();
@@ -68,6 +69,6 @@ export async function observe<T>(
     const remaining = deadline - now();
     if (remaining <= 0) throw new ObservationStopped("deadline");
     await sleep(Math.min(delay, remaining), options.signal);
-    delay = Math.min(delay * 2, 2_000);
+    delay = nextPublicWaitDelay(delay);
   }
 }

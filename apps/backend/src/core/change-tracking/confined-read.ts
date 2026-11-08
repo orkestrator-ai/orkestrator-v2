@@ -1,6 +1,7 @@
 /** Descriptor-relative reads: no mutable pathname ancestor is followed. */
 import { constants, closeSync, fstatSync, openSync, read as readBytes, type Stats } from "node:fs";
 import { dlopen, FFIType, ptr, read as ffiRead, type Pointer } from "bun:ffi";
+import { CaptureError } from "./capture-error.js";
 
 export function validCapturePath(bytes: Uint8Array): boolean {
   const text = Buffer.from(bytes).toString("latin1");
@@ -32,7 +33,7 @@ const linkScratch = Buffer.alloc(64 * 1024);
 function loadLibc(): Libc {
   if (libc) return libc;
   if (process.platform !== "darwin" && process.platform !== "linux")
-    throw new Error("unsupported-platform");
+    throw new CaptureError("unsupported-platform");
   const symbols = {
     openat: { args: [FFIType.i32, FFIType.ptr, FFIType.i32, FFIType.i32], returns: FFIType.i32 },
     readlinkat: {
@@ -85,7 +86,7 @@ export async function confinedRead(
   signal?: AbortSignal,
   options: ConfinedReadOptions = {},
 ): Promise<ConfinedReadResult> {
-  if (!validCapturePath(relative)) throw new Error("unsafe-capture-path");
+  if (!validCapturePath(relative)) throw new CaptureError("unsafe-capture-path");
   const lib = loadLibc();
   const missing = () => lib.errno() === 2;
   const fds: number[] = [];
@@ -98,7 +99,8 @@ export async function confinedRead(
     for (const part of parts) {
       const encoded = Buffer.concat([Buffer.from(part, "latin1"), Buffer.from([0])]);
       const fd = lib.openat(parent, ptr(encoded), directoryFlags, 0);
-      if (fd < 0) throw new Error(missing() ? "capture-file-missing" : "unsafe-capture-ancestor");
+      if (fd < 0)
+        throw new CaptureError(missing() ? "capture-file-missing" : "unsafe-capture-ancestor");
       fds.push(fd);
       parent = fd;
     }
@@ -107,7 +109,8 @@ export async function confinedRead(
     const linkLength = Math.min(maxBytes + 1, linkScratch.length);
     const linkSize = Number(lib.readlinkat(parent, ptr(name), ptr(linkScratch), linkLength));
     if (linkSize >= 0) {
-      if (linkSize >= linkLength || linkSize > maxBytes) throw new Error("capture-file-too-large");
+      if (linkSize >= linkLength || linkSize > maxBytes)
+        throw new CaptureError("capture-file-too-large");
       return {
         bytes: Buffer.from(linkScratch.subarray(0, linkSize)),
         info: null,
@@ -122,18 +125,19 @@ export async function confinedRead(
       constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
       0,
     );
-    if (fd < 0) throw new Error(missing() ? "capture-file-missing" : "capture-file-unavailable");
+    if (fd < 0)
+      throw new CaptureError(missing() ? "capture-file-missing" : "capture-file-unavailable");
     fds.push(fd);
     const info = fstatSync(fd);
-    if (!info.isFile()) throw new Error("capture-file-unsupported");
-    if (info.size > maxBytes) throw new Error("capture-file-too-large");
+    if (!info.isFile()) throw new CaptureError("capture-file-unsupported");
+    if (info.size > maxBytes) throw new CaptureError("capture-file-too-large");
     if (options.skipRead?.(info))
       return { bytes: null, info, after: info, symlink: false, skipped: true };
     // Reserve a fixed bound before reading, even if another writer grows it.
     const bytes = Buffer.alloc(Math.min(info.size + 1, maxBytes + 1));
     let size = 0;
     while (size < bytes.length) {
-      if (signal?.aborted) throw new Error("capture-timeout");
+      if (signal?.aborted) throw new CaptureError("capture-timeout");
       const n = await new Promise<number>((resolve, reject) => {
         readBytes(
           fd,
@@ -144,11 +148,11 @@ export async function confinedRead(
           (error, count) => (error ? reject(error) : resolve(count)),
         );
       });
-      if (signal?.aborted) throw new Error("capture-timeout");
+      if (signal?.aborted) throw new CaptureError("capture-timeout");
       if (!n) break;
       size += n;
     }
-    if (size > maxBytes) throw new Error("capture-file-too-large");
+    if (size > maxBytes) throw new CaptureError("capture-file-too-large");
     return {
       bytes: bytes.subarray(0, size),
       info,

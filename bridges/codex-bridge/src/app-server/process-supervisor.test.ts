@@ -55,6 +55,8 @@ class FakeChild extends EventEmitter {
       failInitialize?: boolean;
       hangInitialize?: boolean;
       userAgent?: string;
+      /** Signals this child records but does not die of. */
+      ignoreSignals?: string[];
     } = {},
   ) {
     super();
@@ -98,7 +100,7 @@ class FakeChild extends EventEmitter {
 
   kill(signal: string): boolean {
     this.killed.push(signal);
-    this.exit(null, signal);
+    if (!this.behaviour.ignoreSignals?.includes(signal)) this.exit(null, signal);
     return true;
   }
 
@@ -194,6 +196,7 @@ function harness(
     behaviours?: Array<{
       failInitialize?: boolean;
       hangInitialize?: boolean;
+      ignoreSignals?: string[];
       pid?: number;
     }>;
     supervisor?: Partial<AppServerSupervisorOptions>;
@@ -272,6 +275,54 @@ describe("notification queue overflow", () => {
     expect(h.children[0]!.killed).toContain("SIGTERM");
     expect(h.generationReady).toEqual([{ generation: 2, previous: 1 }]);
     expect(h.supervisor.notificationQueue.pendingDepth).toBe(0);
+    stuck.resolve();
+    await h.supervisor.stop();
+  });
+
+  test("a request while the replaced child is still dying waits instead of spawning beside it", async () => {
+    // The overflow restart runs outside any drain, so nothing but the
+    // retirement gate stops a request in this window from starting N+1.
+    const h = harness({
+      behaviours: [{ ignoreSignals: ["SIGTERM"] }],
+      supervisor: { notificationQueueMaxDepth: 1, shutdownGraceMs: 10_000 },
+    });
+    await h.supervisor.ensureReady();
+    const stuck = Promise.withResolvers<void>();
+    h.supervisor.notificationQueue.run("t1", () => stuck.promise);
+    h.supervisor.notificationQueue.run("t1", () => undefined);
+
+    const request = h.supervisor.request<unknown>("thread/read");
+    for (let index = 0; index < 5; index += 1) await flushMicrotasks();
+    expect(h.children[0]!.killed).toEqual(["SIGTERM"]);
+    expect(h.children).toHaveLength(1);
+
+    // The old generation finally exits; only now does one new child start.
+    h.children[0]!.exit(0);
+    await h.supervisor.ensureReady();
+    expect(h.children).toHaveLength(2);
+    expect(h.supervisor.getGeneration()).toBe(2);
+    expect(h.generationReady).toEqual([{ generation: 2, previous: 1 }]);
+    stuck.resolve();
+    await h.supervisor.stop();
+    await request.catch(() => undefined);
+  });
+
+  test("a child that never exits is recorded and does not block the restart", async () => {
+    const h = harness({
+      behaviours: [{ ignoreSignals: ["SIGTERM", "SIGKILL"] }],
+      supervisor: { notificationQueueMaxDepth: 1, shutdownGraceMs: 1, killConfirmMs: 1 },
+    });
+    await h.supervisor.ensureReady();
+    expect(h.supervisor.getHealth().unconfirmedTerminations).toBe(0);
+    const stuck = Promise.withResolvers<void>();
+    h.supervisor.notificationQueue.run("t1", () => stuck.promise);
+    h.supervisor.notificationQueue.run("t1", () => undefined);
+
+    await h.supervisor.ensureReady();
+    expect(h.children[0]!.killed).toEqual(["SIGTERM", "SIGKILL"]);
+    expect(h.children[0]!.exitCode).toBeNull();
+    expect(h.children).toHaveLength(2);
+    expect(h.supervisor.getHealth().unconfirmedTerminations).toBe(1);
     stuck.resolve();
     await h.supervisor.stop();
   });

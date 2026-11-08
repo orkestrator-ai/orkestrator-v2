@@ -37,6 +37,8 @@ export const BACKEND_LOG_AREAS = defineLogAreas({
       "parent.exited": "The parent process exited, so local servers are shutting down.",
       "startup.step-failed":
         "One part of startup failed and the backend carried on; `step` says which.",
+      "startup.failed":
+        "Startup failed; the backend released what it had started and exits with code 1.",
       "startup.setup-fence-failed": "An environment's interrupted setup could not be fenced.",
       "startup.setup-adopt-failed": "An environment's pending setup could not be adopted.",
       "startup.deletion-pending":

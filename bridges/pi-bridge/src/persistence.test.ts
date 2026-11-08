@@ -7,8 +7,13 @@ import {
   drainPersistence,
   encodeStateWithinBudget,
   loadPersistedState,
+  PersistenceClosedError,
   persistBarrier,
+  reopenPersistenceForTests,
   schedulePersist,
+  setPersistWriteGateForTests,
+  settlePersistenceForTests,
+  type PersistWriteForTests,
 } from "./persistence.js";
 import {
   buildCommandCatalogue,
@@ -32,9 +37,14 @@ beforeEach(async () => {
   process.env.PI_BRIDGE_STATE_DIR = directory;
   sessions.clear();
   clientSessionKeys.clear();
+  // A drain closes persistence for the rest of the process; each test here
+  // starts with it open.
+  reopenPersistenceForTests();
 });
 
 afterEach(async () => {
+  setPersistWriteGateForTests();
+  await settlePersistenceForTests();
   delete process.env.PI_BRIDGE_STATE_DIR;
   sessions.clear();
   clientSessionKeys.clear();
@@ -210,7 +220,8 @@ describe("the whole-file bound", () => {
     }
     const stringify = spyOn(JSON, "stringify");
     try {
-      schedulePersist();
+      // One publication: the drain's final write. (A scheduled write as well
+      // would be a second, legitimate encoding of the same payload.)
       await drainPersistence();
       const encoded = stringify.mock.results.reduce(
         (sum, result) => sum + ((result.value as string | undefined)?.length ?? 0),
@@ -352,6 +363,80 @@ describe("a durability barrier", () => {
     sessions.delete(oversized.id);
     await persistBarrier();
     expect((await readState()).sessions.map((entry) => entry.clientSessionKey)).toEqual(["small"]);
+  });
+});
+
+describe("a durability barrier during shutdown", () => {
+  /** A write gate that holds each publication until the test releases it. */
+  function holdWrites() {
+    const held: Array<{ write: PersistWriteForTests; release: () => void }> = [];
+    const arrivals: Array<() => void> = [];
+    setPersistWriteGateForTests(
+      (write) =>
+        new Promise<void>((release) => {
+          held.push({ write, release });
+          arrivals.shift()?.();
+        }),
+    );
+    return {
+      held,
+      /** Resolves once `count` publications have reached the gate. */
+      arrived(count: number): Promise<void> {
+        if (held.length >= count) return Promise.resolve();
+        return new Promise<void>((resolve) => {
+          const check = () => (held.length >= count ? resolve() : arrivals.push(check));
+          arrivals.push(check);
+        });
+      },
+    };
+  }
+
+  test("a barrier issued while the drain's final write runs rejects and never writes", async () => {
+    const state = newSessionState("draining");
+    state.sessionFile = "/sessions/draining.jsonl";
+    sessions.set(state.id, state);
+    const gate = holdWrites();
+
+    const drain = drainPersistence();
+    await gate.arrived(1);
+    expect(gate.held.map(({ write }) => write.barrier)).toEqual([false]);
+
+    // Routes are still served until `server.close`, so a request can reach a
+    // barrier now. Chaining it would run a second writer on the same `.tmp`
+    // file beside the final write; resolving it would let dispatch proceed on
+    // a durability the closing bridge will not provide.
+    await expect(persistBarrier()).rejects.toBeInstanceOf(PersistenceClosedError);
+    expect(gate.held).toHaveLength(1);
+
+    gate.held[0]!.release();
+    await drain;
+    // Exactly one publication: the drain's final write. Nothing queued behind it.
+    expect(gate.held).toHaveLength(1);
+    expect((await readState()).sessions.map((entry) => entry.clientSessionKey)).toEqual([
+      "draining",
+    ]);
+    await expect(persistBarrier()).rejects.toBeInstanceOf(PersistenceClosedError);
+  });
+
+  test("a barrier queued before shutdown began rejects instead of writing behind the drain", async () => {
+    sessions.set("queued", newSessionState("queued"));
+    const gate = holdWrites();
+
+    // A best-effort write is running when a barrier queues behind it.
+    schedulePersist();
+    await gate.arrived(1);
+    const barrier = persistBarrier();
+    const drain = drainPersistence();
+    // A second drain shares the first: one final write, not two.
+    const again = drainPersistence();
+
+    gate.held[0]!.release();
+    await expect(barrier).rejects.toBeInstanceOf(PersistenceClosedError);
+    await gate.arrived(2);
+    expect(gate.held.map(({ write }) => write.barrier)).toEqual([false, false]);
+    gate.held[1]!.release();
+    await Promise.all([drain, again]);
+    expect(gate.held).toHaveLength(2);
   });
 });
 

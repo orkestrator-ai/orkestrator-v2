@@ -1032,7 +1032,6 @@ describe("standalone Serve crash recovery", () => {
         }),
         reservePorts: () => {},
         loadWebClientEnabled: async () => false,
-        shutdownBackend: async () => {},
         managedWebClient: null,
         tailscaleServe: true,
         tailscaleServePort: 8443,

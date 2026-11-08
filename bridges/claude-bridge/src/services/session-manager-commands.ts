@@ -520,6 +520,7 @@ async function runDiscoveryProbe(
         () => reject(new Error("Claude command discovery timed out")),
         COMMAND_PROBE_TIMEOUT_MS,
       );
+      timer.unref?.();
     });
     // The losing side of the race still settles; keep it from surfacing as
     // an unhandled rejection after the probe is closed.

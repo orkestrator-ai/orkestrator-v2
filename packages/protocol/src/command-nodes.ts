@@ -327,7 +327,12 @@ export interface AttachControllerResult {
   mode: NodeMode;
 }
 
-/** Machine-readable refusals shared by both sides of an attachment. */
+/**
+ * Machine-readable refusals shared by both sides of an attachment, answered
+ * over `/invoke` as `NodeRefusal:<code>: <message>`. Not the refusals of
+ * desktop main's node IPC (`[code] text`), which are
+ * `DesktopNodeRefusalCode` in `./contract/node-refusal.ts`.
+ */
 export const NODE_REFUSAL_CODES = {
   /** This node is in leaf mode and cannot register or control nodes. */
   nodeIsSubordinate: "node-is-subordinate",

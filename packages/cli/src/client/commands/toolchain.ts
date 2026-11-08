@@ -116,8 +116,12 @@ export const toolchainCommands: CommandSpec[] = [
           ...(tools ? { tools } : {}),
           // Diagnostics belong on stderr so `--output id` and `--json` stay clean.
           onProgress: installer.createProgressLogger((line) => context.io.stderr(`${line}\n`)),
+          // The first Ctrl-C stops the lock wait and downloads and releases the
+          // install lock; the client then exits with its interrupted code.
+          signal: context.signal,
         });
       } catch (error) {
+        if (context.signal.aborted) throw error;
         throw new CliError(
           "operation-failed",
           error instanceof Error ? error.message : "Toolchain install failed",

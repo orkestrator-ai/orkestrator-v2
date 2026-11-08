@@ -47,6 +47,7 @@ import {
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { deflate, deflateSync, inflate, inflateSync } from "node:zlib";
+import { CaptureError } from "./capture-error.js";
 import { fsyncPath, type SyncPath } from "./durable-sync.js";
 import { ManifestCache, type ManifestCacheLimits } from "./manifest-cache.js";
 
@@ -190,6 +191,8 @@ export class ObjectStore {
 
   /** Lay out a minimal bare repository so `git fsck` can read the store. */
   init(): Promise<void> {
+    // A failed attempt is forgotten, so the next call retries rather than
+    // replaying one transient failure until the backend restarts.
     this.initialized ??= (async () => {
       await mkdir(join(this.objects, "info"), { recursive: true, mode: 0o700 });
       await mkdir(join(this.root, "refs"), { recursive: true, mode: 0o700 });
@@ -206,7 +209,10 @@ export class ObjectStore {
       this.unsyncedDirectories.add(this.objects);
       for (const prefix of await readdir(this.objects).catch(() => [] as string[]))
         if (/^[0-9a-f]{2}$/.test(prefix)) this.unsyncedDirectories.add(join(this.objects, prefix));
-    })();
+    })().catch((error: unknown) => {
+      this.initialized = null;
+      throw error;
+    });
     return this.initialized;
   }
 
@@ -311,7 +317,7 @@ export class ObjectStore {
       await this.init();
       const usedBytes = await this.reconcileBytesUnderLock();
       if (usedBytes + this.stagedBytes >= this.hardBudgetBytes())
-        throw new Error("capture-storage-quota");
+        throw new CaptureError("capture-storage-quota");
       if (batch.objects.has(id)) return true;
       if (!(await this.has(id))) return false;
       const now = new Date();
@@ -330,7 +336,7 @@ export class ObjectStore {
     await this.exclusive(async () => {
       const usedBytes = await this.reconcileBytesUnderLock();
       if (usedBytes + this.stagedBytes + compressed.length > this.hardBudgetBytes())
-        throw new Error("capture-storage-quota");
+        throw new CaptureError("capture-storage-quota");
       this.stagedBytes += compressed.length;
     });
     const name = `${id}.${randomUUID()}`;

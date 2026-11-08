@@ -40,6 +40,7 @@ import {
 import { getNativeAgentLiveUpdate } from "@/lib/backend";
 import { backendForScope } from "@/lib/backend/scope-backend";
 import { incompatibility } from "@orkestrator/protocol/contract/errors";
+import { errorCode, ipcErrorText } from "@orkestrator/protocol/contract/ipc-error";
 import {
   disableNativeLiveUpdate,
   invalidateNativeAgentSyncCapability,
@@ -502,6 +503,20 @@ export interface NativeAgentSendOptions {
   }>;
   /** Command intent; absent keeps the legacy (typed) interpretation. */
   command?: NativeAgentCommandIntent;
+}
+
+/**
+ * Whether adopting a session failed because the provider proved it no longer
+ * exists, the one answer that may replace it. A backend that sends the code
+ * (`native-agent-provider-session-missing`, over the gateway as `code` and
+ * over Electron IPC as the message prefix) is read by the code alone; an older
+ * backend, which sends no code, by its message's words.
+ */
+export function isProviderSessionMissingError(error: unknown): boolean {
+  const code = errorCode(error);
+  if (code !== undefined) return code === "native-agent-provider-session-missing";
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("provider session was not found");
 }
 
 /**
@@ -2592,8 +2607,7 @@ export function useNativeAgentSession<TMessage = unknown>({
             ...(initialExecutionProfileId ? { executionProfileId: initialExecutionProfileId } : {}),
           });
         } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          if (!message.includes("provider session was not found")) throw error;
+          if (!isProviderSessionMissingError(error)) throw error;
           if (requireExistingResumeSession) throw error;
           // A restored pane may point at a rollout deleted outside
           // Orkestrator. Only an authoritative provider "missing" result may
@@ -2671,7 +2685,8 @@ export function useNativeAgentSession<TMessage = unknown>({
       // loop — report the same failure rather than overwriting it.
       settleEstablishing();
       establishmentFailureRef.current = true;
-      setRuntimeError(error instanceof Error ? error.message : String(error));
+      // A coded error from desktop IPC leads with `[code] `; show its own text.
+      setRuntimeError(ipcErrorText(error instanceof Error ? error.message : String(error)));
       setIsRefreshing(false);
       setTranscriptRefreshing(false);
       markSessionStateAvailability("unavailable");

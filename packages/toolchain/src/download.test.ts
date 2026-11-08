@@ -4,6 +4,7 @@ import { lstat, mkdir, mkdtemp, readFile, readdir, rm, utimes, writeFile } from 
 import os from "node:os";
 import path from "node:path";
 import {
+  abortableDelay,
   downloadArchive,
   partialDownloadPath,
   prunePartialDownloads,
@@ -91,6 +92,7 @@ function rangeServer(plans: Plan[] = [], body: Buffer = BODY) {
         }
         if (plan.cutAt === undefined) controller.close();
         else if (!plan.stall) controller.error(new Error("connection reset"));
+        else if (init?.signal?.aborted) controller.error(new Error("aborted"));
         else {
           return new Promise<void>((resolve) =>
             init?.signal?.addEventListener("abort", () => {
@@ -112,9 +114,11 @@ async function download(
   fetchImpl: FetchLike,
   timings: Partial<DownloadTimings> = {},
   target: ToolchainArchive = archive,
+  signal?: AbortSignal,
 ) {
   const progress: number[] = [];
   await downloadArchive({
+    ...(signal ? { signal } : {}),
     label: "tool",
     archive: target,
     archivePath,
@@ -344,5 +348,135 @@ describe("resumable toolchain downloads", () => {
     expect((await readdir(directory)).sort()).toEqual(
       [path.basename(fresh), path.basename(referenced)].sort(),
     );
+  });
+});
+
+/** The settled outcome of `promise`, so a test can inspect the error itself. */
+async function failureOf(promise: Promise<unknown>): Promise<Error> {
+  const outcome = await promise.then(
+    () => null,
+    (error: unknown) => error,
+  );
+  expect(outcome).toBeInstanceOf(Error);
+  return outcome as Error;
+}
+
+describe("cancelling a toolchain download", () => {
+  function cancellable(
+    rootDir: string,
+    archivePath: string,
+    fetchImpl: FetchLike,
+    timings: DownloadTimings,
+    signal: AbortSignal,
+    onBytes: (received: number) => void = () => undefined,
+  ) {
+    return downloadArchive({
+      label: "tool",
+      archive,
+      archivePath,
+      rootDir,
+      fetchImpl,
+      onBytes,
+      allowInsecureDownloadsForTests: false,
+      timings,
+      signal,
+    });
+  }
+
+  test("an abort mid-transfer rejects as aborted, not stalled, and is not retried", async () => {
+    const { rootDir, archivePath } = await createRoot();
+    const controller = new AbortController();
+    const server = rangeServer([{ cutAt: 1200, stall: true }]);
+
+    const error = await failureOf(
+      cancellable(
+        rootDir,
+        archivePath,
+        server.fetchImpl,
+        // Only the abort can end this attempt: the idle timeout is far away.
+        { idleTimeoutMs: 60_000, attempts: 5, retryDelayMs: 0 },
+        controller.signal,
+        (received) => {
+          if (received === 1200) controller.abort("SIGINT");
+        },
+      ),
+    );
+
+    expect(error.name).toBe("AbortError");
+    expect(error.message).not.toContain("stalled");
+    expect(server.requests).toHaveLength(1);
+    // The bytes stay for the next run to resume, as for any interruption.
+    expect((await lstat(partialDownloadPath(rootDir, archive))).size).toBe(1200);
+    await expect(lstat(archivePath)).rejects.toThrow();
+  });
+
+  test("an abort during the retry delay ends the delay and does not retry", async () => {
+    const { rootDir, archivePath } = await createRoot();
+    const controller = new AbortController();
+    const server = rangeServer([{ cutAt: 1200 }]);
+    const fetchImpl: FetchLike = async (input, init) => {
+      // The first attempt fails with progress, so a retry is due after a
+      // minute; abort while that delay runs.
+      setTimeout(() => controller.abort("SIGINT"), 50);
+      return server.fetchImpl(input, init);
+    };
+
+    const startedAt = Date.now();
+    const error = await failureOf(
+      cancellable(
+        rootDir,
+        archivePath,
+        fetchImpl,
+        { idleTimeoutMs: 60_000, attempts: 5, retryDelayMs: 60_000 },
+        controller.signal,
+      ),
+    );
+
+    expect(error.name).toBe("AbortError");
+    expect(Date.now() - startedAt).toBeLessThan(5_000);
+    expect(server.requests).toHaveLength(1);
+  });
+
+  test("an already-aborted signal makes no request", async () => {
+    const { rootDir, archivePath } = await createRoot();
+    const controller = new AbortController();
+    controller.abort(new Error("cancelled by the caller"));
+    const server = rangeServer();
+
+    const error = await failureOf(
+      cancellable(rootDir, archivePath, server.fetchImpl, fastTimings, controller.signal),
+    );
+
+    expect(error.message).toBe("cancelled by the caller");
+    expect(server.requests).toHaveLength(0);
+  });
+
+  test("the idle timeout is still reported as a stall when a signal is passed", async () => {
+    const { rootDir, archivePath } = await createRoot();
+    const server = rangeServer([{ cutAt: 1200, stall: true }]);
+
+    await expect(
+      cancellable(
+        rootDir,
+        archivePath,
+        server.fetchImpl,
+        { idleTimeoutMs: 20, attempts: 1, retryDelayMs: 0 },
+        new AbortController().signal,
+      ),
+    ).rejects.toThrow("tool download stalled");
+  });
+
+  test("abortableDelay resolves on time and rejects at once when aborted", async () => {
+    await abortableDelay(1);
+    await abortableDelay(1, new AbortController().signal);
+
+    const controller = new AbortController();
+    const pending = abortableDelay(60_000, controller.signal);
+    controller.abort("SIGTERM");
+    const error = await failureOf(pending);
+    expect(error.name).toBe("AbortError");
+    expect(error.message).toContain("SIGTERM");
+
+    await expect(abortableDelay(60_000, controller.signal)).rejects.toThrow("SIGTERM");
   });
 });

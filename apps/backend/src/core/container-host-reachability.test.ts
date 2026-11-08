@@ -1014,17 +1014,16 @@ describe("shutdown and stale probe cleanup", () => {
     await disposed;
     await checked;
     expect(runner.calls.filter(isNetworkRemoval)).toHaveLength(2);
-    // The leftover removal before create, then the check's own `finally`;
-    // shutdown added no network removal of its own. Each settling run also
-    // removes its name in case an earlier shutdown rm preceded its creation.
+    // The leftover removal before create, then the check's own release;
+    // shutdown added no network removal of its own. The check was never
+    // interrupted, so no early removal can have preceded a container's
+    // creation, and `docker run --rm` removed each probe itself.
     const probeNames = new Set(
       runner.calls
         .filter((call) => call[1] === "run")
         .map((call) => call[call.indexOf("--name") + 1]),
     );
-    expect(runner.calls.filter((call) => call[1] === "rm" && probeNames.has(call[3]))).toHaveLength(
-      2,
-    );
+    expect(runner.calls.filter((call) => call[1] === "rm" && probeNames.has(call[3]))).toEqual([]);
   });
 
   test("a check still preparing when shutdown begins never creates a probe network", async () => {
@@ -1091,6 +1090,129 @@ describe("shutdown and stale probe cleanup", () => {
       );
     });
   }
+
+  test("dispose during the network create removes it only after the create settles, and starts no probe", async () => {
+    const entered = deferred();
+    const release = deferred();
+    const order: string[] = [];
+    const runner = fakeRunner({
+      onCall: async (call) => {
+        if (call[1] === "network" && call[2] === "create") {
+          entered.resolve();
+          await release.promise;
+          order.push("created");
+        } else if (isNetworkRemoval(call)) {
+          order.push("removed");
+        }
+      },
+    });
+    const { svc, events, logs } = service({ runner });
+    const checked = svc.check("boot");
+    await entered.promise;
+    const disposed = svc.dispose(0);
+    await until(() => logs.some((line) => line.includes("shutdown.awaiting-network")));
+    // Only the leftover removal before the create; nothing while it runs.
+    expect(order).toEqual(["removed"]);
+    release.resolve();
+    await disposed;
+    expect(order).toEqual(["removed", "created", "removed"]);
+    expect(runner.calls.filter((call) => call[1] === "run")).toEqual([]);
+    // Interrupted: the check publishes no verdict.
+    expect((await checked).status).toBe("checking");
+    expect(events.map((event) => event.status)).toEqual(["checking"]);
+  });
+
+  test("dispose during the probe runs removes each container, and again once its run ends", async () => {
+    const held: Array<() => void> = [];
+    const order: string[] = [];
+    const runner = fakeRunner({
+      holdProbes: held,
+      probeOutput: (call) => {
+        order.push(`ended ${call[call.indexOf("--name") + 1]}`);
+        return CURL_HTTP_405;
+      },
+      onCall: async (call, timeoutMs) => {
+        if (call[1] === "rm") {
+          expect(timeoutMs).toBe(5_000);
+          order.push(`rm ${call[3]}`);
+        }
+        if (isNetworkRemoval(call) && held.length === 2) order.push("network rm");
+      },
+    });
+    const { svc, events } = service({ runner });
+    let settled = false;
+    const checked = svc.check("boot").then((result) => {
+      settled = true;
+      return result;
+    });
+    await until(() => held.length === 2);
+    const names = runner.calls
+      .filter((call) => call[1] === "run")
+      .map((call) => call[call.indexOf("--name") + 1]!);
+    await svc.dispose(0);
+    expect(order).toEqual([...names.map((name) => `rm ${name}`), "network rm"]);
+    // The check settles only after the late removals.
+    expect(settled).toBe(false);
+    for (const resume of held) resume();
+    const result = await checked;
+    for (const name of names) {
+      expect(order.filter((entry) => entry.endsWith(name))).toEqual([
+        `rm ${name}`,
+        `ended ${name}`,
+        `rm ${name}`,
+      ]);
+    }
+    expect(result.status).toBe("checking");
+    expect(events.map((event) => event.status)).toEqual(["checking"]);
+  });
+
+  test("a failure mid-check releases the probe network and the still-running probe container", async () => {
+    const release = deferred();
+    let failClock = false;
+    let clock = 1_000_000;
+    const runner = fakeRunner({
+      onCall: async (call) => {
+        // Hold the probe on the temporary network; the bridge probe finishes.
+        if (call[1] === "run" && call.includes(PROBE_NETWORK)) await release.promise;
+        // The bridge probe's subnet lookup: its next clock read throws.
+        if (call[1] === "network" && call[2] === "inspect" && call.at(-1) === "bridge") {
+          failClock = true;
+        }
+      },
+    });
+    const { svc, logs } = service({
+      runner,
+      now: () => {
+        if (failClock) {
+          failClock = false;
+          throw new Error("clock failed");
+        }
+        return clock++;
+      },
+    });
+    const checked = svc.check("boot");
+    const heldName = () =>
+      runner.calls
+        .filter((call) => call[1] === "run" && call.includes(PROBE_NETWORK))
+        .map((call) => call[call.indexOf("--name") + 1]!)[0];
+    await until(
+      () =>
+        heldName() !== undefined &&
+        runner.calls.some((call) => call[1] === "rm" && call[3] === heldName()) &&
+        runner.calls.filter(isNetworkRemoval).length === 2,
+    );
+    // Removed while its run still holds: the failure interrupted it.
+    expect(runner.calls).toContainEqual(["docker", "rm", "-f", heldName()!]);
+    release.resolve();
+    const result = await checked;
+    expect(result).toMatchObject({ status: "unverified", reason: "probe-failed" });
+    expect(result.summary).toContain("clock failed");
+    expect(logs.some((line) => line.includes("check.crashed"))).toBe(true);
+    // Removed again once its run ended.
+    expect(runner.calls.filter((call) => call[1] === "rm" && call[3] === heldName())).toHaveLength(
+      2,
+    );
+  });
 
   for (const createFails of [false, true]) {
     test(`network preparation beyond the shutdown budget gets late cleanup (create fails=${createFails})`, async () => {
@@ -1212,7 +1334,50 @@ describe("shutdown and stale probe cleanup", () => {
     });
   }
 
-  test("permanent shutdown cleanup failures log and stop after one network retry", async () => {
+  test("retries the network after late endpoints settle beyond the dispose bound", async () => {
+    const held: Array<() => void> = [];
+    const live = new Set<string>();
+    let networkExists = false;
+    let runsSettled = false;
+    let networkAttempts = 0;
+    const runner = fakeRunner({
+      holdProbes: held,
+      onCall: async (call, timeoutMs) => {
+        if (call[1] === "run") live.add(call[call.indexOf("--name") + 1]!);
+        if (call[1] === "network" && call[2] === "create") networkExists = true;
+        if (call[1] === "rm") {
+          expect(timeoutMs).toBe(5_000);
+          if (!runsSettled) throw new Error("daemon still attaching endpoint");
+          live.delete(call[3]!);
+        }
+        if (isNetworkRemoval(call) && networkExists) {
+          networkAttempts += 1;
+          expect(timeoutMs).toBe(5_000);
+          if (live.size > 0) throw new Error("active endpoints");
+          networkExists = false;
+        }
+      },
+    });
+    const { svc } = service({ runner });
+    const checked = svc.check("boot");
+    try {
+      await until(() => held.length === 2);
+      await svc.dispose(0);
+      expect(live.size).toBe(2);
+      expect(networkAttempts).toBe(2);
+      expect(networkExists).toBe(true);
+    } finally {
+      runsSettled = true;
+      for (const release of held) release();
+      await checked;
+      await svc.dispose(0);
+    }
+    expect(live.size).toBe(0);
+    expect(networkAttempts).toBe(3);
+    expect(networkExists).toBe(false);
+  });
+
+  test("permanent shutdown cleanup failures stop after the bounded late network retry", async () => {
     const held: Array<() => void> = [];
     let networkAttempts = 0;
     let containerAttempts = 0;
@@ -1236,6 +1401,8 @@ describe("shutdown and stale probe cleanup", () => {
     expect(logs.filter((line) => line.includes("shutdown.network-remove-failed"))).toHaveLength(2);
     for (const release of held) release();
     await checked;
+    expect(networkAttempts).toBe(3);
+    expect(containerAttempts).toBe(6);
   });
 
   test("shutdown skips the rootless loopback retry after the first probes settle", async () => {

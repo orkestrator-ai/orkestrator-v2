@@ -161,6 +161,7 @@ async function settlesBy(work: Promise<unknown>, deadline: number): Promise<bool
   let timer: ReturnType<typeof setTimeout> | undefined;
   const expired = new Promise<false>((resolve) => {
     timer = setTimeout(() => resolve(false), Math.max(0, deadline - Date.now()));
+    timer.unref?.();
   });
   try {
     return await Promise.race([work.then(() => true as const), expired]);

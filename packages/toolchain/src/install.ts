@@ -94,6 +94,8 @@ export interface InstallToolchainOptions {
   onProgress?: (progress: ToolchainProgress) => void;
   /** Hash every installed file, ignoring verified stamps (an explicit repair). */
   fullVerification?: boolean;
+  /** Cancels the install; see `EnsurePinnedToolchainsOptions.signal`. */
+  signal?: AbortSignal;
   /** Substituted by tests; production always uses the real manager. */
   ensure?: (options: EnsurePinnedToolchainsOptions) => Promise<PinnedToolchainResult>;
 }
@@ -148,6 +150,7 @@ export async function installPinnedToolchains(
     ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
     ...(options.onProgress ? { onProgress: options.onProgress } : {}),
     ...(options.fullVerification ? { fullVerification: true } : {}),
+    ...(options.signal ? { signal: options.signal } : {}),
     onActivated: async (result) => {
       const before = await toolsInCurrent(result.rootDir);
       currentBinDir = await pointCurrentAt(result.rootDir, result.binDir);

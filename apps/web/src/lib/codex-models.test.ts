@@ -26,12 +26,16 @@ describe("CODEX_MODELS catalog", () => {
     }
   });
 
-  test("advertises the current gpt-5.4 family and no retired ids", () => {
+  test("advertises the pinned CLI's current models and no retired ids", () => {
     const ids = CODEX_MODELS.map((m) => m.id);
-    expect(ids).toContain("gpt-5.4");
+    expect(ids).toEqual(["gpt-6.1-sol", "gpt-6-luna"]);
     // Retired ids must not linger in the offered list. A persisted preference
     // pointing at one is reconciled by resolveCodexPreferenceSelection.
     for (const retired of [
+      // Refused by ChatGPT logins ("not supported when using Codex with a
+      // ChatGPT account"), which is what a stale fallback launched.
+      "gpt-5.4",
+      "gpt-5.4-mini",
       "gpt-5.3-codex",
       "gpt-5.2-codex",
       "gpt-5.2",
@@ -42,7 +46,7 @@ describe("CODEX_MODELS catalog", () => {
     }
   });
 
-  test("leads with the gpt-5.4 default", () => {
-    expect(CODEX_MODELS[0]!.id).toBe("gpt-5.4");
+  test("leads with the gpt-6.1-sol default", () => {
+    expect(CODEX_MODELS[0]!.id).toBe("gpt-6.1-sol");
   });
 });

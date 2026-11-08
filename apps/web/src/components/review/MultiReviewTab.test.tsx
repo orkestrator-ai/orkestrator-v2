@@ -1928,7 +1928,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     ).toBeTruthy();
     expect(
       screen.getByRole("combobox", { name: "Custom Address Findings model" }).textContent,
-    ).toContain("gpt-5.4");
+    ).toContain("GPT-6.1-Sol");
     const prompt = screen.getByLabelText("Prompt") as HTMLTextAreaElement;
     expect(prompt.value).toBe("Please address all the issues and coverage gaps");
 
@@ -1938,7 +1938,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     await waitFor(() =>
       expect(customAddressFindings).toHaveBeenCalledWith(
         ready.id,
-        { agent: "codex", model: "gpt-5.4", reasoningEffort: "high" },
+        { agent: "codex", model: "gpt-6.1-sol", reasoningEffort: "high" },
         "Fix the reported regression",
       ),
     );
@@ -2756,7 +2756,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     const ready = readyWorkflow();
     ready.consolidationModel = {
       agent: "codex",
-      model: "gpt-5.4",
+      model: "gpt-6.1-sol",
       reasoningEffort: "medium",
     };
     appCommandStore(multiReviewStore).getState().replaceWorkflow(ready);
@@ -2790,7 +2790,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     expect(restartStep.mock.calls[0]?.[1]).toBe("consolidate");
     expect(restartStep.mock.calls[0]?.[2]).toMatchObject({
       agent: "codex",
-      model: "gpt-5.4",
+      model: "gpt-6.1-sol",
       reasoningEffort: "medium",
     });
   });
@@ -2806,7 +2806,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       kind: "fix" as const,
       node: "Address Findings,",
       heading: "Restart Address Findings",
-      selection: { agent: "codex" as const, model: "gpt-5.4", reasoningEffort: "high" },
+      selection: { agent: "codex" as const, model: "gpt-6.1-sol", reasoningEffort: "high" },
     },
   ])("submits the $kind step's own Restart in selection", async (fixture) => {
     const ready = readyWorkflow();
@@ -2859,7 +2859,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     ready.reviewModel = { agent: "claude", model: "sonnet", reasoningEffort: "high" };
     ready.consolidationModel = {
       agent: "codex",
-      model: "gpt-5.4",
+      model: "gpt-6.1-sol",
       reasoningEffort: "medium",
     };
     ready.reviewSession = {
@@ -2882,7 +2882,9 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     );
 
     expect(within(flowNode("Review package")).getByText("claude · sonnet · high")).toBeTruthy();
-    expect(within(flowNode("Consolidation")).getByText("codex · gpt-5.4 · medium")).toBeTruthy();
+    expect(
+      within(flowNode("Consolidation")).getByText("codex · gpt-6.1-sol · medium"),
+    ).toBeTruthy();
   });
 
   test("pauses and resumes the active workflow step from its context menu", async () => {

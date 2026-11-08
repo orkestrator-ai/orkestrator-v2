@@ -421,7 +421,7 @@ describe("RepositorySettings", () => {
             ...makeConfig().global,
             agentSettings: {
               defaultAgent: "codex",
-              platforms: { codex: { model: "gpt-5.4" } },
+              platforms: { codex: { model: "gpt-6.1-sol" } },
             },
           },
         },

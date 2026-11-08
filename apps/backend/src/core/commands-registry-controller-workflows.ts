@@ -3,6 +3,7 @@ import {
   createControllerEnvironmentCommand,
   createControllerPrCommand,
   editControllerWorkerTabCommand,
+  getMultiReviewLaunchDefaultsCommand,
   launchControllerMultiReviewCommand,
   launchControllerTerminalCommand,
   launchMultiReviewCommand,
@@ -366,6 +367,32 @@ export function registerControllerWorkflowCommands(
    * a renderer that disappears mid-launch cannot leave a review without a tab.
    */
   register(launchMultiReviewCommand, launchMultiReviewButton);
+
+  /**
+   * The rows a plain Multi Review click runs on this environment, for the
+   * configure dialog to open on. Resolved by the same `multiReviewButtonStart`
+   * the launch uses, over this node's saved settings and its own model
+   * catalogue, so the dialog and a plain click can never disagree and a
+   * window's stale copy of the catalogue never decides a model.
+   */
+  register(getMultiReviewLaunchDefaultsCommand, async (args, context) => {
+    const environment = await environmentOf(context, args.environmentId);
+    const start = await multiReviewButtonStart(
+      context,
+      dependencies,
+      environment.projectId,
+      environment,
+      { environmentId: environment.id },
+    );
+    return {
+      reviewers: start.reviewers,
+      // Always filled for omitted rows; the fallback only satisfies the type.
+      reviewModel: start.reviewModel ?? start.fixModel,
+      fixModel: start.fixModel,
+      autoFix: start.autoFix ?? false,
+      autoPr: start.autoPr ?? false,
+    };
+  });
 
   /**
    * Open a saved review's root, Fix or reviewer tab, address its findings, or

@@ -1876,7 +1876,7 @@ describe("HierarchicalSidebar", () => {
                     agentSettings: {
                       defaultAgent: "codex",
                       platforms: {
-                        codex: { mode: "native", model: "gpt-5.4", reasoningEffort: "high" },
+                        codex: { mode: "native", model: "gpt-6.1-sol", reasoningEffort: "high" },
                       },
                     },
                   },
@@ -1909,7 +1909,7 @@ describe("HierarchicalSidebar", () => {
               createdEnvironment.id,
               { defaultAgent: "codex", platforms: { codex: { mode: "native" } } },
               true,
-              "gpt-5.4",
+              "gpt-6.1-sol",
               "high",
               [],
               undefined,

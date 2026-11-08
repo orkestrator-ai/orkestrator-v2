@@ -71,7 +71,7 @@ describe("GlobalSettings defaults section", () => {
             defaultAgent: "claude",
             platforms: {
               claude: { mode: "terminal", model: "claude-sonnet-5", claudeNativeBackend: "sdk" },
-              codex: { mode: "native", model: "gpt-5.4", reasoningEffort: "medium" },
+              codex: { mode: "native", model: "gpt-6.1-sol", reasoningEffort: "medium" },
               opencode: { mode: "terminal", model: "opencode/grok-code" },
             },
           },
@@ -141,7 +141,7 @@ describe("GlobalSettings defaults section", () => {
 
     openPicker("Review 2");
     fireEvent.click(screen.getByRole("button", { name: "codex models" }));
-    fireEvent.click(screen.getByRole("menuitemradio", { name: /^gpt-5\.4/ }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: /^GPT-6\.1-Sol/ }));
     fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
     openPicker("Address review findings");
     fireEvent.click(screen.getByRole("menuitemradio", { name: /^Haiku/ }));
@@ -150,7 +150,7 @@ describe("GlobalSettings defaults section", () => {
     await flushAutoSave();
     await waitFor(() =>
       expect(savedActionDefaults()).toEqual({
-        review2: { platform: "codex", model: "gpt-5.4" },
+        review2: { platform: "codex", model: "gpt-6.1-sol" },
         fixReviewIssues: { platform: "claude", model: "haiku" },
       }),
     );
@@ -199,7 +199,7 @@ describe("GlobalSettings defaults section", () => {
     openPicker("Review");
     expect(screen.queryByRole("button", { name: "claude models" }) === null).toBe(true);
     expect(screen.getByRole("button", { name: "codex models" })).toBeTruthy();
-    fireEvent.click(screen.getByRole("menuitemradio", { name: /^gpt-5\.4/ }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: /^GPT-6\.1-Sol/ }));
     fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
 
     await flushAutoSave();
@@ -210,7 +210,7 @@ describe("GlobalSettings defaults section", () => {
           enabledAgentPlatforms: ["codex"],
           agentSettings: expect.objectContaining({
             defaultAgent: "codex",
-            actionDefaults: { review: { platform: "codex", model: "gpt-5.4" } },
+            actionDefaults: { review: { platform: "codex", model: "gpt-6.1-sol" } },
           }),
         }),
         expect.objectContaining({ unset: [] }),
@@ -227,7 +227,7 @@ describe("GlobalSettings defaults section", () => {
           ...state.config.global,
           agentSettings: {
             ...state.config.global.agentSettings,
-            actionDefaults: { push: { platform: "codex", model: "gpt-5.4" } },
+            actionDefaults: { push: { platform: "codex", model: "gpt-6.1-sol" } },
           },
         },
       },
@@ -297,7 +297,7 @@ describe("GlobalSettings defaults section", () => {
           ...state.config.global,
           agentSettings: {
             ...state.config.global.agentSettings,
-            actionDefaults: { review: { platform: "codex", model: "gpt-5.4" } },
+            actionDefaults: { review: { platform: "codex", model: "gpt-6.1-sol" } },
           },
         },
       },
@@ -307,7 +307,7 @@ describe("GlobalSettings defaults section", () => {
       expect(
         screen.getByRole("combobox", { name: "Review default agent, model and reasoning" })
           .textContent,
-      ).toContain("gpt-5.4"),
+      ).toContain("GPT-6.1-Sol"),
     );
   });
 
@@ -318,7 +318,7 @@ describe("GlobalSettings defaults section", () => {
     // through the rail before choosing one of its models.
     openPicker("Resolve");
     fireEvent.click(screen.getByRole("button", { name: "codex models" }));
-    fireEvent.click(screen.getByRole("menuitemradio", { name: /^gpt-5\.4/ }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: /^GPT-6\.1-Sol/ }));
     fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
     openPicker("Resolve");
     fireEvent.click(screen.getByRole("menuitemradio", { name: "High" }));
@@ -327,7 +327,7 @@ describe("GlobalSettings defaults section", () => {
     await flushAutoSave();
     await waitFor(() =>
       expect(savedActionDefaults()).toEqual({
-        resolve: { platform: "codex", model: "gpt-5.4", reasoningEffort: "high" },
+        resolve: { platform: "codex", model: "gpt-6.1-sol", reasoningEffort: "high" },
       }),
     );
 
@@ -341,7 +341,7 @@ describe("GlobalSettings defaults section", () => {
 
     await waitFor(() =>
       expect(savedActionDefaults()).toEqual({
-        resolve: { platform: "codex", model: "gpt-5.4" },
+        resolve: { platform: "codex", model: "gpt-6.1-sol" },
       }),
     );
   });
@@ -487,7 +487,7 @@ describe("GlobalSettings defaults section", () => {
       }),
     );
     fireEvent.click(screen.getByRole("button", { name: "codex models" }));
-    fireEvent.click(screen.getByRole("menuitemradio", { name: /^gpt-5\.4/ }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: /^GPT-6\.1-Sol/ }));
     fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
 
     await flushAutoSave();
@@ -496,7 +496,7 @@ describe("GlobalSettings defaults section", () => {
       actionDefaults: { review: { platform: "claude", model: "haiku" } },
       multiReview: {
         reviewerCount: 3,
-        additionalReviewers: [{ platform: "codex", model: "gpt-5.4" }],
+        additionalReviewers: [{ platform: "codex", model: "gpt-6.1-sol" }],
       },
     });
 
@@ -554,7 +554,7 @@ describe("GlobalSettings defaults section", () => {
             ...state.config.global.agentSettings,
             multiReview: {
               reviewerCount: 3,
-              additionalReviewers: [{ platform: "codex", model: "gpt-5.4" }],
+              additionalReviewers: [{ platform: "codex", model: "gpt-6.1-sol" }],
             },
           },
         },
@@ -586,7 +586,7 @@ describe("GlobalSettings defaults section", () => {
             multiReview: {
               reviewerCount: 4,
               additionalReviewers: [
-                { platform: "codex", model: "gpt-5.4" },
+                { platform: "codex", model: "gpt-6.1-sol" },
                 { platform: "claude", model: "haiku" },
               ],
             },
@@ -620,7 +620,7 @@ describe("GlobalSettings defaults section", () => {
             ...state.config.global.agentSettings,
             multiReview: {
               reviewerCount: 3,
-              additionalReviewers: [{ platform: "codex", model: "gpt-5.4" }],
+              additionalReviewers: [{ platform: "codex", model: "gpt-6.1-sol" }],
             },
           },
         },

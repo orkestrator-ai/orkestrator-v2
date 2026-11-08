@@ -22,6 +22,8 @@ import { useConfigStore, useProjectStore } from "@/stores";
 import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { useScopeBackend } from "@/hooks/useScopeBackend";
+import { hydrateAgentModelCatalogCache } from "@/lib/agent-model-catalog-cache";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 
 const log = createLogger("web.build-pipeline");
 
@@ -75,6 +77,18 @@ export function useProjectModelCatalog(projectId: string, enabled: boolean) {
     window.addEventListener("orkestrator:model-catalog-refreshed", refresh);
     return () => window.removeEventListener("orkestrator:model-catalog-refreshed", refresh);
   }, []);
+
+  // A node's scope starts on the bundled catalogues and is otherwise refreshed
+  // only by a native tab or Settings, so a launcher opened on another machine's
+  // environment would list the window's stale guess. Load what that node's
+  // backend has cached whenever a launcher opens.
+  const catalogScope = useScopesWithCommandFallback().scope;
+  useEffect(() => {
+    if (!enabled) return;
+    void hydrateAgentModelCatalogCache({ scope: catalogScope }).catch((error: unknown) => {
+      log.debug("model-catalog.hydrate-failed", { error: formatLogError(error) });
+    });
+  }, [catalogRefreshRevision, catalogScope, enabled]);
 
   useEffect(() => {
     let cancelled = false;

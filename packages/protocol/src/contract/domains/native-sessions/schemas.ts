@@ -591,6 +591,8 @@ export const DispatchOutcomeSchema = openRecord({
   instructionsIgnored: optionalBoolean,
   requestIdRetired: optionalBoolean,
   origin: optionalString,
+  /** A retried steer that missed its turn: `new-turn` or `queued`. */
+  deliveredAs: optionalString,
 });
 
 /** `NativeAgentSessionActionOutcome` (native-agent.ts), including a verified steer refusal. */
@@ -600,6 +602,8 @@ export const SessionActionOutcomeSchema = openRecord({
   shareUrl: optionalString,
   preview: Schema.optional(Schema.Unknown),
   requestId: optionalString,
+  /** A steer that missed its turn: `new-turn` or `queued` (0005 task 10). */
+  deliveredAs: optionalString,
 });
 
 /** `AgentInteractionApplyOutcome` (agent-interactions.ts). */

@@ -160,6 +160,7 @@ import { NativeAgentUsageLimitResend } from "./native-agent-usage-limit-resend.j
 import { NativeAgentCatalogCache } from "./native-agent-catalog-cache.js";
 import { NativeAgentInteractionTracker } from "./native-agent-interaction-tracker.js";
 import { NativeAgentLaunchActivityReconciler } from "./native-agent-launch-activity-reconciler.js";
+import { deliverMissedSteer } from "./native-agent-missed-steer.js";
 import { NativeAgentPromptQueueDispatcher } from "./native-agent-prompt-queue-dispatcher.js";
 import { NativeAgentSessionOperations } from "./native-agent-session-operations.js";
 import {
@@ -2024,6 +2025,10 @@ export class NativeAgentService {
   private async dispatchIntentInternal(
     input: DispatchNativeAgentPromptInput,
     preserveExistingPending: boolean,
+    prepare?: (
+      session: PersistedNativeAgentSession,
+      provider: NativeAgentRuntimeProvider,
+    ) => Promise<PromptDispatchPreparation>,
   ): Promise<NativeAgentDispatchOutcome> {
     let release: () => void;
     try {
@@ -2055,7 +2060,7 @@ export class NativeAgentService {
           error: "This tab has pending teardown; finish closing it before sending more work",
         };
       return await this.promptQueues.withSessionMutationIntent(input, () =>
-        this.dispatchIntentUnderIntent(input, preserveExistingPending),
+        this.dispatchIntentUnderIntent(input, preserveExistingPending, prepare),
       );
     } finally {
       release();
@@ -2065,6 +2070,10 @@ export class NativeAgentService {
   private async dispatchIntentUnderIntent(
     input: DispatchNativeAgentPromptInput,
     preserveExistingPending: boolean,
+    prepare?: (
+      session: PersistedNativeAgentSession,
+      provider: NativeAgentRuntimeProvider,
+    ) => Promise<PromptDispatchPreparation>,
   ): Promise<NativeAgentDispatchOutcome> {
     input = await this.trustedSessionInput(input);
     // A manual prompt to a session with automatic turn recovery claims it
@@ -2081,7 +2090,7 @@ export class NativeAgentService {
           requestId: input.requestId,
         });
       }
-      return await this.attemptDispatch(input, true, preserveExistingPending);
+      return await this.attemptDispatch(input, true, preserveExistingPending, prepare);
     } catch (error) {
       // Everything before the first dispatch attempt: session creation, the
       // manual-prompt claim. A normal send has no earlier record to preserve;
@@ -2124,6 +2133,11 @@ export class NativeAgentService {
     input: DispatchNativeAgentPromptInput,
     allowRecoveryRetry: boolean,
     preserveExistingPending: boolean,
+    /** An admission check under the dispatch fence; refusing it sends nothing. */
+    prepare?: (
+      session: PersistedNativeAgentSession,
+      provider: NativeAgentRuntimeProvider,
+    ) => Promise<PromptDispatchPreparation>,
   ): Promise<NativeAgentDispatchOutcome> {
     const key = nativeAgentSessionStorageKey(
       input.environmentId,
@@ -2132,7 +2146,7 @@ export class NativeAgentService {
     );
     try {
       let instructionsIgnored = false;
-      await this.dispatchPromptInternal(input, undefined, true, false, false, () => {
+      await this.dispatchPromptInternal(input, prepare, true, false, false, () => {
         instructionsIgnored = true;
       });
       void this.projections.refreshProjectionState(input).catch(() => undefined);
@@ -2151,7 +2165,7 @@ export class NativeAgentService {
           allowRecoveryRetry &&
           (await this.settleAmbiguousDispatch(input, key, error.pendingRequestId))
         ) {
-          return this.attemptDispatch(input, false, preserveExistingPending);
+          return this.attemptDispatch(input, false, preserveExistingPending, prepare);
         }
         void this.projections.refreshProjectionState(input).catch(() => undefined);
         return { outcome: "rejected", error: PARKED_DISPATCH_CONFLICT_MESSAGE };
@@ -2161,7 +2175,7 @@ export class NativeAgentService {
           allowRecoveryRetry &&
           (await this.settleAmbiguousSteer(input, key, error.pendingRequestId))
         ) {
-          return this.attemptDispatch(input, false, preserveExistingPending);
+          return this.attemptDispatch(input, false, preserveExistingPending, prepare);
         }
         void this.projections.refreshProjectionState(input).catch(() => undefined);
         return { outcome: "rejected", error: PARKED_DISPATCH_CONFLICT_MESSAGE };
@@ -2412,12 +2426,32 @@ export class NativeAgentService {
       if (outcome.outcome === "rejected") {
         return { outcome: "rejected", error: nativeAgentSteerRejectionMessage(outcome) };
       }
+      // Missed its turn. A steer taken from the queue was put back there, and
+      // the queue sends it as the next turn: sending it here as well would
+      // deliver it twice.
+      if (pendingSteer.sourceQueue) {
+        return {
+          outcome: "rejected",
+          error:
+            "The steering instruction missed its turn. The prompt was returned to the queue and is sent as the next turn.",
+        };
+      }
+      const delivered = await this.deliverMissedSteer(
+        resolved,
+        pendingSteer.text,
+        outcome.outcome === "mismatch" ? "mismatch" : "idle",
+      );
+      if (delivered.outcome === "applied") {
+        return {
+          outcome: "accepted",
+          requestId: delivered.requestId!,
+          ...(delivered.deliveredAs ? { deliveredAs: delivered.deliveredAs } : {}),
+        };
+      }
       return {
-        outcome: "rejected",
-        error:
-          outcome.outcome === "mismatch"
-            ? "The active turn changed before the instruction could be delivered."
-            : "There is no active turn to steer.",
+        outcome: "unknown",
+        requestId: delivered.requestId!,
+        error: "The steering instruction was sent as a new turn and is still being reconciled.",
       };
     }
     if (!pending) {
@@ -2617,7 +2651,54 @@ export class NativeAgentService {
     return outcome;
   }
 
+  /**
+   * The composer's `/steer`, the Agent Info steer box and the public CLI. A
+   * steer that misses its turn starts a new turn or waits in the queue for the
+   * next one (`native-agent-missed-steer.ts`), unless the caller bound it to
+   * one run and asked to be told instead (`onMissedTurn: "refuse"`).
+   */
   private async performProjectionSteer(
+    input: NativeAgentProjectionInput,
+    resolved: {
+      key: string;
+      session: PersistedNativeAgentSession;
+      provider: NativeAgentRuntimeProvider;
+    },
+    action: Extract<NativeAgentSessionAction, { kind: "steer" }>,
+  ): Promise<NativeAgentSessionActionOutcome> {
+    const outcome = await this.steerProjectionOnce(input, resolved, action);
+    if (
+      (outcome.outcome !== "idle" && outcome.outcome !== "mismatch") ||
+      action.onMissedTurn === "refuse"
+    ) {
+      return outcome;
+    }
+    return this.deliverMissedSteer(
+      resolved,
+      action.text.trim(),
+      outcome.outcome,
+      action.turnRequestId,
+    );
+  }
+
+  private deliverMissedSteer(
+    resolved: { key: string; session: PersistedNativeAgentSession },
+    text: string,
+    missed: "idle" | "mismatch",
+    requestId: string = randomUUID(),
+  ): Promise<NativeAgentSessionActionOutcome> {
+    return deliverMissedSteer(
+      {
+        storage: this.storage,
+        dispatchIntent: (dispatch, prepare) =>
+          this.dispatchIntentInternal(dispatch, false, prepare),
+        notifyPromptQueueChanged: (queueKey) => this.notifyPromptQueueChanged(queueKey),
+      },
+      { session: resolved.session, key: resolved.key, text, missed, requestId },
+    );
+  }
+
+  private async steerProjectionOnce(
     input: NativeAgentProjectionInput,
     resolved: {
       key: string;
@@ -2697,7 +2778,8 @@ export class NativeAgentService {
     if (!nativeAsyncQuestionItemId(requestId)) {
       throw new Error("Queued response is not an asynchronous-question answer");
     }
-    return this.performProjectionSteer(input, resolved, { kind: "steer", text }, requestId);
+    // The queue owns this answer: a miss leaves it queued, never a second copy.
+    return this.steerProjectionOnce(input, resolved, { kind: "steer", text }, requestId);
   }
 
   private async dispatchPersistedSteer(

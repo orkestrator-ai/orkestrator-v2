@@ -840,6 +840,11 @@ export type NativeAgentDispatchOutcome =
       requestId: string;
       /** Compaction ran, but an older bridge ignored its summary instructions. */
       instructionsIgnored?: boolean;
+      /**
+       * A retried steer that missed its turn and was delivered another way;
+       * `requestId` then names that turn or queued prompt.
+       */
+      deliveredAs?: NativeAgentSteerDelivery;
     }
   | {
       outcome: "rejected";
@@ -1340,7 +1345,24 @@ export type NativeAgentSessionAction =
   | { kind: "redo" }
   | { kind: "share" }
   | { kind: "unshare" }
-  | { kind: "steer"; text: string }
+  | {
+      kind: "steer";
+      text: string;
+      /**
+       * What to do when the steer misses its turn (no turn running, or a
+       * different one). Absent or `new-turn`: the backend sends the text as
+       * the next turn itself. `refuse`: report `idle` or `mismatch` and send
+       * nothing, for a caller that bound the steer to one run. A backend that
+       * predates the field always refuses.
+       */
+      onMissedTurn?: NativeAgentSteerMissedTurnPolicy;
+      /**
+       * Request id for the turn a missed steer becomes, so a caller with its
+       * own identity (a public CLI operation) finds that same turn on a
+       * replay. The backend mints one when absent.
+       */
+      turnRequestId?: string;
+    }
   | { kind: "review" }
   | { kind: "rewind-messages"; messageId: string }
   | { kind: "switch-branch"; entryId: string };
@@ -1349,9 +1371,22 @@ export type NativeAgentSessionAction =
  * `rejected` is only ever a verified, definitive steer refusal for the same
  * request id (see `native-agent-steer-rejection.ts`); ambiguity stays `unknown`.
  */
+export type NativeAgentSteerMissedTurnPolicy = "new-turn" | "refuse";
+
+/**
+ * How a steer that missed its turn was delivered instead, on an `applied`
+ * outcome: `new-turn` went out as an ordinary turn at once (no turn was
+ * running); `queued` waits in the session's prompt queue for the running turn
+ * to end. Absent on a steer that reached the turn it was written for. Older
+ * readers ignore it and see a plain success.
+ */
+export type NativeAgentSteerDelivery = "new-turn" | "queued";
+
 export type NativeAgentSessionActionOutcome =
   | {
       outcome: "applied" | "idle" | "mismatch" | "unknown";
+      /** A steer that missed its turn and was delivered another way. */
+      deliveredAs?: NativeAgentSteerDelivery;
       /**
        * The compaction ran, but the bridge did not confirm it used the
        * instructions that were sent: it predates them and dropped them.

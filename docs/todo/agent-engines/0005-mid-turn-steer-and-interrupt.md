@@ -6,7 +6,8 @@ other tasks were last checked at `863b5782` (2026-10-27).
 ## Task analysis
 
 Analysed 2026-10-27 against `main` at `863b5782`; tasks 1, 2, 3 and 9 rechecked
-2026-11-01 against `0658de646` at Agent SDK and CLI `0.3.314` / `2.1.314`.
+2026-11-01 against `0658de646` at Agent SDK and CLI `0.3.314` / `2.1.314`;
+task 10 added and built 2026-11-08 against `02f55ea9b`.
 
 ### Tasks
 
@@ -19,7 +20,7 @@ Analysed 2026-10-27 against `main` at `863b5782`; tasks 1, 2, 3 and 9 rechecked
 7. **Inactive-path steer qualification on Claude and Cursor**: steer, switch away, return, reload. Status: open.
 8. **Warm Claude CLI app-path qualification**: follow-up, mode and permission changes, parked approval and MCP change on one CLI through the app. Status: open.
 9. **Re-measure the first turn**: after task 3. Status: open (task 3 changed nothing to re-measure; what is left is the split with a real login, which needs a billed turn).
-10. **A steer that misses its turn starts a new turn, on every provider**: the owner's rule (2026-11-08). Today the direct `/steer`, the Agent Info steer box and the CLI report an error and leave the resend to the user. Status: open (decided; not built).
+10. **A steer that misses its turn starts a new turn, on every provider**: the owner's rule (2026-11-08). Status: done (built 2026-11-08 against `main` at `02f55ea9b`; see "A missed steer becomes the next turn"). Live qualification on a real bridge is still open (see "Needs verification").
 
 ### 1. Collapse Claude task-to-process maps
 
@@ -219,6 +220,12 @@ entry point handles them differently:
 Agent mail already follows the rule and is the model. The queue paths end up
 there too.
 
+**Built, 2026-11-08.** The table above is the state before the change. Every
+row now delivers the text: the direct `/steer`, the Agent Info box, the CLI
+and the recovery retry of a parked steer send it as a new turn on `idle` and
+queue it on `mismatch`; the queue paths were checked and left as they were.
+The rest of this section is the decision record it was built from.
+
 **Investigation.** All the refusals come from one backend function,
 `performProjectionSteer` (`native-agent-service.ts`), and from the recovery
 retry. That makes a backend-owned fix possible, which the renderer, Agent Info
@@ -259,6 +266,12 @@ at-most-once dispatch.
   `nativeAgentCapabilities()`, `packages/protocol/src/native-agent.ts`). The
   backend qualifies it at runtime with `HttpBridgeProvider.steerSupported`,
   which probes `/session/:id/steer/dispatch`. No platform is hard-coded.
+- A steer that misses its turn becomes the next turn (task 10).
+  `performProjectionSteer` hands an `idle` or `mismatch` answer to
+  `deliverMissedSteer` (`native-agent-missed-steer.ts`): an ordinary turn now
+  when nothing is running, the prompt queue otherwise, reported as `applied`
+  with `deliveredAs: "new-turn" | "queued"`. `onMissedTurn: "refuse"` keeps
+  the old answer for a caller bound to one run (the CLI's `--expect-run`).
 - Abort ladder (`apps/backend/src/core/native-agent-service.ts`): it
   calls `provider.abort`, waits up to `abortGraceMs` (default 5 s), then calls
   `hardAbort`, and records a stop notice naming the rung that fired.
@@ -668,7 +681,96 @@ Decisions, each the option built:
 - **Pros.** Nothing can expire a working run.
 - **Cons.** An agent wedged by a crashed CLI still needs the user to stop it.
 
+### A missed steer becomes the next turn (2026-11-08, task 10)
+
+Built as the four recommended options above. What follows is each choice the
+build had to make inside them.
+
+- **Where the fallback lives.** In the backend, as the recommendation said.
+  `performProjectionSteer` (`native-agent-service.ts`) now calls the
+  unchanged steer (`steerProjectionOnce`) and hands an `idle` or `mismatch`
+  answer to `deliverMissedSteer`, a collaborator in
+  `native-agent-missed-steer.ts`. It is a new file because the service is
+  already over 4,600 lines. The composer, Agent Info, the CLI and the voice
+  `steer_session` tool all reach it through `perform_native_agent_session_action`.
+  The queue's own steer and a queued async-question answer
+  (`dispatchQueuedAsyncQuestionAnswer`) call `steerProjectionOnce` directly:
+  their text is already in the queue, so a fallback there would send it twice.
+- **How the new turn is sent.** Through the ordinary dispatch path
+  (`dispatchIntentInternal`, the composer's own journal), not
+  `dispatchMailInject`. Options: (a) the mail path, which also holds for a
+  composer draft and marks a coordinator turn as mail; (b) the ordinary path
+  with an admission check under its fence. Chose (b): this is the user's own
+  text, so it is a user turn and the user's draft must not hold it. The text
+  is literal (`allowProviderCommands: false`), the model and effort come from
+  the session's persisted controls, and no mode is sent, which is exactly what
+  mail does. The admission check (a new optional `prepare` threaded through
+  `attemptDispatch`) holds the turn when the queue has a backlog or the
+  provider no longer reads `idle`; a held admission opens no journal entry.
+- **When an `idle` miss is queued instead.** If, under the fence, a turn has
+  started or a prompt is already queued, the text is queued behind them
+  (`deliveredAs: "queued"`), FIFO. Options: append, or put it at the head.
+  Appending keeps the order the user typed in and needs no whole-queue
+  rewrite; the cost is that "the next turn" is the next after the backlog.
+- **The queue item.** `{ id, requestId, text, command: { kind: "literal" },
+  preserveSessionMode: true }`, the shape a goal continuation uses, added with
+  `enqueuePromptQueueMessageIfAbsent` so a replay of the same id is never
+  queued twice. It is an ordinary row: the user can edit, remove or steer it.
+- **Request ids.** The new turn never reuses the steer's id: the bridge has
+  already seen that one (Claude uses it as the message uuid). The backend
+  mints one, or uses the action's new optional `turnRequestId`. The CLI
+  passes its operation id, so the dispatch request, the queue item and the
+  receipt share one identity and a replay finds the same turn.
+- **Reporting.** `applied` with an optional `deliveredAs: "new-turn" |
+  "queued"` on `NativeAgentSessionActionOutcome`, and the same optional field
+  on the accepted `NativeAgentDispatchOutcome` for the recovery retry. Per
+  version-compatibility.md a new optional field needs no domain bump; the
+  contract manifest was regenerated (the result schemas of four commands
+  changed; no argument schema did). An older renderer or peer reads plain success, so it says
+  "Sent to the active turn" for a message that started a new one, the
+  accepted cost of this option.
+- **A caller bound to one run.** Added `onMissedTurn: "refuse"` to the steer
+  action. The CLI sends it with `--expect-run`, whose documented meaning is
+  "only steer if this run's turn is active"; delivering it as a new turn would
+  break that promise, so those still fail `session-idle` / `target-mismatch`
+  and send nothing. An older backend ignores the field and refuses anyway.
+- **CLI receipt.** Converted, not left on the old rule. `session.steer`
+  succeeds with `result.deliveredAs`, `resources.dispatchRequestId` set to the
+  operation id, and `dispatch: accepted` (new turn) or `pending` (queued; the
+  drainer sends it outside this operation, so the receipt is not updated
+  later). It stays a receipt, not a run: making it a run would need the run
+  observer to own a second action and a public action version bump, which a
+  delivery report does not need. The public action version stays 1: the
+  receipt's success still means "the text was delivered". Receipts stay
+  content-free (tested).
+- **Recovery retry of a parked steer.** If the retry's steer answers `idle` or
+  `mismatch`, a steer from the composer is delivered the same way under a new
+  id and the retry answers `accepted` with that id and `deliveredAs`;
+  `run.retry` records both on the steer's receipt. A steer taken from the
+  queue was put back there by the steer journal, so the retry only says so
+  ("…returned to the queue and is sent as the next turn"). An `unknown`
+  steer keeps today's handling everywhere.
+- **Renderer.** The composer `/steer` and the Agent Info box clear the draft on
+  every `applied` and show `directSteerNotice` (`auto-steer.ts`): "Sent to the
+  active … turn", "… finished the turn first, so your message was sent as a
+  new turn." or "Your message missed the active turn, so it was queued as the
+  next turn." Their `idle`/`mismatch` errors stay for an older backend. Queue
+  Steer and Auto-steer were checked, not changed: `steerQueuedPrompt` answers
+  `idle` before reserving the item, and a `mismatch` restores it through
+  `completePendingSteer`, so the message waits and the drainer sends it; their
+  notes already say so.
+- **Not changed.** A `/steer` typed while the composer itself shows no running
+  turn is still answered locally (`idleSteerPromptReply`): that steer never
+  had a turn to miss. Bridges are unchanged.
+
 ## Needs verification
+
+- **A missed steer on a real bridge (task 10).** Built and tested against
+  scripted providers only. On a throwaway profile, per provider with steer
+  (Claude, Codex, Cursor, Pi): finish a turn, then `/steer` from a stale
+  composer, and steer while a second turn has replaced the first; confirm one
+  new turn or one queued row, with the session's model and mode, and that a
+  reload shows the same.
 
 - **Live reads with a real login.** The live-first model, account and plan
   usage reads are proven against the SDK source (the cached initialize promise)

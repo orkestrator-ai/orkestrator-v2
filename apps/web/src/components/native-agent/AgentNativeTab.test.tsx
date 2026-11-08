@@ -236,7 +236,10 @@ const getAgentHandoffCapabilitiesMock = mock(async () => ({
 }));
 const getNativeAgentSignInResendMock = mock(async () => ({ pending: false }));
 const performNativeAgentSessionActionMock = mock(
-  async (_input: { agent: string; action: { kind: string; text?: string } }) => ({
+  async (_input: {
+    agent: string;
+    action: { kind: string; text?: string };
+  }): Promise<{ outcome: "applied"; deliveredAs?: "new-turn" | "queued"; requestId?: string }> => ({
     outcome: "applied" as const,
   }),
 );
@@ -12323,6 +12326,43 @@ describe("AgentNativeTab", () => {
       expect(enqueuePromptQueueMessageMock).not.toHaveBeenCalled();
       expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
     });
+
+    for (const [deliveredAs, message] of [
+      ["new-turn", "Codex finished the turn first, so your message was sent as a new turn."],
+      ["queued", "Your message missed the active turn, so it was queued as the next turn."],
+    ] as const) {
+      test(`a /steer the backend delivered as ${deliveredAs} clears the draft without an error`, async () => {
+        seedProjection({ phase: "running", actions: { steer: true } });
+        performNativeAgentSessionActionMock.mockResolvedValueOnce({
+          outcome: "applied",
+          deliveredAs,
+          requestId: "turn-1",
+        });
+        renderInAppCommandScope(
+          <AgentNativeTab tabId={`tab-steer-${deliveredAs}`} data={identity("codex")} isActive />,
+        );
+        const sessionKey = createSessionKey("env-1", `tab-steer-${deliveredAs}`);
+        const input = await screen.findByRole("textbox");
+        fireEvent.input(input, { target: { textContent: "/steer keep the diff small" } });
+        await waitFor(() =>
+          expect(appCommandStore(nativeComposeStore).getState().drafts.get(sessionKey)?.text).toBe(
+            "/steer keep the diff small",
+          ),
+        );
+
+        fireEvent.keyDown(input, { key: "Enter" });
+        await waitFor(() => expect(mockToastInfo).toHaveBeenCalledWith(message));
+        // Delivered: nothing to resend, so the draft is not given back.
+        expect(
+          appCommandStore(nativeComposeStore).getState().drafts.get(sessionKey)?.text ?? "",
+        ).toBe("");
+        expect(screen.queryByRole("alert")).toBeNull();
+        expect(mockToastError).not.toHaveBeenCalled();
+        // The backend owns the new turn or queue item; the renderer adds neither.
+        expect(enqueuePromptQueueMessageMock).not.toHaveBeenCalled();
+        expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
+      });
+    }
 
     test("steers a queued prompt through one backend handoff", async () => {
       const queued = { id: "queued-1", text: "also update the README", mode: "build" };

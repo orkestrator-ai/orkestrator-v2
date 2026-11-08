@@ -539,6 +539,100 @@ describe("controls and interactions", () => {
     expect(retry.ok).toBe(true);
     expect((await receipt(restarted, steerId)).state).toBe("succeeded");
   });
+
+  test("a steer that finds the turn over is sent as a new turn under its own operation", async () => {
+    const { harness, service, stub } = await setup();
+    const started = await startSession(harness, "steer-missed-start");
+    Object.assign(stub.provider, {
+      activeSteerRun: async () => ({ state: "idle" }),
+      steerSupported: async () => true,
+      steerStatus: async () => "absent",
+      performSessionAction: async () => ({ outcome: "idle" }),
+    });
+    stub.setStatus(async () => "idle");
+    setActivity(service, "claude", started.result.tabId, stub.sends[0]!.sessionId, "idle");
+    const secret = "MISSED-STEER-TEXT";
+    const steer = await harness.call<{ sessionId: string; deliveredAs?: string }>(
+      "session.steer",
+      { sessionId: started.result.sessionId, text: secret },
+      { requestId: "steer-missed" },
+    );
+    if (!steer.ok) throw new Error(`steer failed: ${steer.error.code} ${steer.error.message}`);
+    expect(steer.result.deliveredAs).toBe("new-turn");
+    const steerId = steer.receipt!.operationId;
+    expect(steer.receipt).toMatchObject({
+      state: "succeeded",
+      dispatch: { state: "accepted" },
+      // The turn and the operation share one identity, so a replay finds it.
+      resources: { dispatchRequestId: steerId },
+    });
+    expect(stub.sends).toHaveLength(2);
+    expect(stub.sends[1]).toMatchObject({ requestId: steerId });
+    expect(stub.sends[1]!.prompt).toContain(secret);
+    // Receipts stay content-free.
+    expect(JSON.stringify(steer.receipt)).not.toContain(secret);
+    const replay = await harness.call(
+      "session.steer",
+      { sessionId: started.result.sessionId, text: secret },
+      { requestId: "steer-missed" },
+    );
+    expect(replay.receipt?.replayed).toBe(true);
+    expect(stub.sends).toHaveLength(2);
+  });
+
+  test("a steer that meets another turn is queued as the next turn", async () => {
+    const { harness, stub } = await setup();
+    const started = await startSession(harness, "steer-queued-start");
+    Object.assign(stub.provider, {
+      activeSteerRun: async () => ({ state: "running", runId: "provider-turn-2" }),
+      steerSupported: async () => true,
+      steerStatus: async () => "absent",
+      performSessionAction: async () => ({ outcome: "mismatch" }),
+    });
+    const steer = await harness.call<{ deliveredAs?: string }>(
+      "session.steer",
+      { sessionId: started.result.sessionId, text: "use the new schema" },
+      { requestId: "steer-queued" },
+    );
+    if (!steer.ok) throw new Error(`steer failed: ${steer.error.code} ${steer.error.message}`);
+    expect(steer.result.deliveredAs).toBe("queued");
+    const steerId = steer.receipt!.operationId;
+    expect(steer.receipt).toMatchObject({
+      state: "succeeded",
+      dispatch: { state: "pending" },
+      resources: { dispatchRequestId: steerId },
+    });
+    // Never steered into the other turn, and not sent while it runs.
+    expect(stub.sends).toHaveLength(1);
+    const queues = await harness.storage.listPromptQueues("env-1");
+    expect(queues.map((queue) => queue.messages)).toMatchObject([
+      [{ id: steerId, text: "use the new schema" }],
+    ]);
+  });
+
+  test("a steer bound to its run is still refused once that turn is over", async () => {
+    const { harness, stub } = await setup();
+    const started = await startSession(harness, "steer-bound-start");
+    Object.assign(stub.provider, {
+      activeSteerRun: async () => ({ state: "idle" }),
+      steerSupported: async () => true,
+      steerStatus: async () => "absent",
+      performSessionAction: async () => ({ outcome: "idle" }),
+    });
+    const steer = await harness.call(
+      "session.steer",
+      {
+        sessionId: started.result.sessionId,
+        text: "only for this run",
+        expectedOperationId: started.result.runId,
+      },
+      { requestId: "steer-bound" },
+    );
+    expect(!steer.ok && steer.error.code).toBe("session-idle");
+    expect(stub.sends).toHaveLength(1);
+    expect(await harness.storage.listPromptQueues("env-1")).toEqual([]);
+  });
+
   test("stop refuses an idle session and a mismatched expected run", async () => {
     const { harness, service, stub } = await setup();
     const started = await startSession(harness, "stop-1");

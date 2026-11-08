@@ -173,6 +173,7 @@ import {
 import { queuedPromptControlRestore } from "./queued-prompt-controls";
 import {
   autoSteerNotice,
+  directSteerNotice,
   queuedSteerNote,
   shouldAutoSteer,
   steerRefusalNote,
@@ -2226,16 +2227,22 @@ export function SharedNativeAgentController({
           // Only `/steer` resolves here: it alone acts on the live turn.
           const outcome = await performAction({ kind: "steer", text: sessionAction.text });
           if (outcome.outcome === "applied") {
+            // Also a steer that missed its turn: the backend sent it as a new
+            // turn or queued it (`deliveredAs`), so there is nothing to resend.
             clearDraft(sessionKey);
             discardProvisionalDraft();
-            toast.success(`Sent to the active ${label} turn`);
+            const notice = directSteerNotice(outcome, label);
+            if (notice.tone === "success") toast.success(notice.message);
+            else toast.info(notice.message);
             return true;
           }
           // An unconfirmed steer is a parked dispatch like any other: the
           // recovery card owns that message, so a transient red error here
           // would duplicate it and flash before the card settles.
           // A definitive refusal was not sent; its message says to resend after
-          // the turn, and the draft is restored below for exactly that.
+          // the turn, and the draft is restored below for exactly that. Only a
+          // backend that predates delivering a missed steer still answers
+          // `idle` or `mismatch` here.
           if (outcome.outcome !== "unknown") {
             reportSendError(
               outcome.outcome === "rejected"

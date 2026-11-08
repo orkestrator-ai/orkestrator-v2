@@ -686,7 +686,7 @@ export const sessionCommands: CommandSpec[] = [
         names: { file: "--text-file", stdin: "--text-stdin", inline: "--text" },
         required: true,
       });
-      const { session, result, receipt, warnings } = await submit(
+      const { session, result, receipt, warnings } = await submit<{ deliveredAs?: string }>(
         context,
         "session.steer",
         {
@@ -705,7 +705,15 @@ export const sessionCommands: CommandSpec[] = [
         warnings,
         connection: session.identity,
         ids: receipt ? [receipt.operationId] : [],
-        human: receipt ? receiptLines(receipt) : ["steered"],
+        human: [
+          ...(receipt ? receiptLines(receipt) : ["steered"]),
+          // A steer that missed its turn is delivered as the next one instead.
+          ...(result?.deliveredAs === "new-turn"
+            ? ["The turn had ended, so the text was sent as a new turn."]
+            : result?.deliveredAs === "queued"
+              ? ["The turn had moved on, so the text was queued as the next turn."]
+              : []),
+        ],
       };
     },
   },

@@ -523,6 +523,22 @@ never replaced.
   use `session steer` to redirect a running turn. Prompt text comes from
   `--prompt-file`, `--prompt-stdin` or `--prompt` (mutually exclusive; UTF-8;
   100,000 characters / 400,000 bytes).
+- **A steer that misses its turn becomes the next turn.** `session steer` adds
+  text to the running turn. When the provider answers that no turn is running
+  (`idle`) or that a different one is (`mismatch`), both definitive "not sent"
+  answers, the backend sends the text again once, under the steer operation's
+  own ID as its dispatch request ID (`resources.dispatchRequestId`): as an
+  ordinary turn now on the session's persisted controls (`result.deliveredAs:
+  "new-turn"`, `dispatch: accepted`), or, when another turn or a queued prompt
+  is ahead of it, into the tab's prompt queue (`"queued"`, `dispatch: pending`;
+  the drainer sends it outside this operation). The operation `succeeded`
+  either way, and a replay of its key finds the same turn or queue item. It is
+  a receipt, not a run: wait for the turn through the session, not this
+  operation. With `--expect-run` the caller asked for that run only, so a miss
+  still fails (`session-idle` or `target-mismatch`) and nothing is sent. A
+  steer whose answer was lost stays parked as `unknown`; if `run.retry` then
+  finds its turn over, it is delivered the same way and the receipt names the
+  new request.
 - **Prompt text is typed intent by default.** Sessions the CLI starts are
   ordinary native tabs, so a prompt whose first word names a provider command
   (`/review …`) runs that command, exactly as typing it in the composer would.

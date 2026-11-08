@@ -14,7 +14,7 @@ Status rechecked 2026-10-30 against `main` at `cd7bbe3e5`, and task 2 again on 2
 2. **Readiness gate and start decision**: decide when the 2.x work may start, using the gate's open conditions. Status: open (trigger decided; still blocked at 2.2.2 by storage policy, per-prompt model/agent/tools and structured output, runtime-context gaps, stale-turn guard, bounded inbox and experimental MCP endpoints; rechecked at the 1.19.5 upgrade on 2026-10-30, still 2.2.2 and unchanged, see [1020](1020-provider-upgrade-2026-10-30.md) task 8; rechecked 2026-11-06 against 2.2.5, still closed, see [1031](1031-provider-upgrade-2026-11-06.md) task 7; rechecked 2026-11-08 against 2.2.6, unchanged. On 2026-11-08 the owner asked to move: steering is required and undo may be dropped. Accepting the other open conditions with the mitigations under "Task 2: owner decision" is proposed but not yet confirmed).
 3. **Legacy 1.x session policy**: keep, migrate or retire existing 1.x sessions when 2.x arrives (open question 1, code item 5). Status: done as a decision (keep on a pinned 1.x binary with its own database); the routing code is open (depends on 5).
 4. **Losses to decide**: rebuild, capability-gate or drop each of the eight listed losses (code item 3, open question 2). Status: done as decisions (share dropped with 1.19.1; the rest decided below); the code is open (depends on 5).
-5. **`opencode2` provider**: a second provider with its own binary pin, `OPENCODE_DB`, `@opencode/client`, persisted protocol marker, snapshot-plus-hints projection and native steer/queue (code items 1, 2 and 4). Status: in progress (phase 1 of the "Build plan" done 2026-11-08; phase 2's toolchain half, the `opencode2` 2.2.6 pin, done 2026-11-08; phase 2's launch half and phases 3 to 6 open; steer is required in the first release, see task 10).
+5. **`opencode2` provider**: a second provider with its own binary pin, `OPENCODE_DB`, `@opencode/client`, persisted protocol marker, snapshot-plus-hints projection and native steer/queue (code items 1, 2 and 4). Status: in progress (phase 1 of the "Build plan" done 2026-11-08; phase 2's toolchain half, the `opencode2` 2.2.6 pin, done 2026-11-08; phase 3 done for host environments on 2026-11-08: the opt-in setting, the session marker, the host 2.x server and per-session routing, with steer on for 2.x sessions; containers, and phases 4 to 6, open; see "Task 5: phase 3 routing and preview setting").
 6. **Changes that must ship with the first 2.x pin**: health probe on `/api/info` rejecting HTML, isolated `OPENCODE_DB` on host and container, GitHub-token plugin ported to `@opencode/plugin`, provider sign-in moved to `/api/credential`, live tests off `serve --pure`. Status: partly done (`checkHttpHealth` refuses HTML since 2026-10-30; the compatibility probe no longer uses `--pure`; since 2026-11-08 the 1.x host falls back to its own `OPENCODE_DB` when the shared database has no `session` table; the 2.x binary is pinned from the npm platform tarballs since 2026-11-08, but nothing launches it yet); the rest is open (depends on 5).
 7. **Qualification of the first 2.x pin**: the live probe, background, replay and capability checks listed under "Qualification". Status: open (depends on 5).
 8. **Session V2 features after the move**: steer/queue, `switchAgent`/`switchModel`, context, log replay, staged revert, saved rules, credential/integration sign-in, `reference.list`. Status: open (depends on 5).
@@ -652,8 +652,11 @@ users until phase 3 routes new sessions to it.
    - Health on `/api/info`.
    - Port the GitHub-token plugin to `@opencode/plugin`.
 3. **Provider core and routing.** Status: the provider core is done
-   (2026-11-08, `opencode2/provider.ts`); routing, the marker and the server
-   launch are open.
+   (2026-11-08, `opencode2/provider.ts`). Routing, the marker, the host
+   server launch and the preview setting are done for host environments
+   (2026-11-08, branch `opencode2-routing`; see "Task 5: phase 3 routing and
+   preview setting"). The container 2.x server is open: a container
+   environment never gets a 2.x session, and the host server refuses one.
 
    The core is unit-tested against `fake-server.test-support.ts` and
    live-tested in `opencode2-provider.live.test.ts`. It covers create, send
@@ -933,6 +936,10 @@ Before any 2.x pin reaches production:
   permission or form prompt, interrupts, and real providers. The task 9 ACP
   findings were read, not run; they matter only if steering stops being
   required.
+- Phase 3 on the real stack: a steer sent from a 2.x tab's composer while a
+  turn runs, and the inactive-environment path (start a 2.x turn, switch
+  away, return, reload). Both go through code with unit and live provider
+  coverage, but neither was driven through the UI.
 
 ## Assumptions and decisions
 
@@ -1161,6 +1168,177 @@ Nothing launches it; the launch half of phase 2 is still open.
   launch work.
 - **Branch base.** Built on the phase 1 branch so the build plan above exists
   in the same history.
+
+### Task 5: phase 3 routing and preview setting (2026-11-08)
+
+Wired the 2.x provider into interactive native tabs on the host, behind a
+setting. Branch `opencode2-routing`, from `506120f42` (the phase 2 branch).
+
+What exists now:
+
+- **Setting.** `openCodeProtocol: "legacy" | "v2"` on the global config
+  (`packages/protocol/src/opencode-protocol.ts`, the config contract,
+  `storage-config.ts`), absent meaning legacy. A save from an older renderer
+  keeps the stored value, as `multiReviewEngine` does. It is not one of the
+  settings a command node hands down: whether `opencode2` is installed is a
+  property of each machine. The renderer control is "Use OpenCode 2 for new
+  sessions (preview)" in Settings → OpenCode
+  (`OpenCodeProtocolSetting.tsx`).
+- **Marker.** `openCodeProtocol?: "v2"` on `PersistedNativeAgentSession`;
+  the backend validator accepts it only on an OpenCode record, and
+  `getOrCreateNativeAgentSession` refuses it on any other agent. The contract
+  manifest is regenerated; no domain version changed (a new optional field).
+- **Which sessions take 2.x** (`native-agent-opencode-protocol.ts`): a new
+  session whose origin is `interactive-native`, whose owner is absent or an
+  environment, with no backend execution policy, in a local environment,
+  while the setting says `v2` and the backend has a 2.x host. The decision is
+  made once in `ensureSession`, stored on the record and passed to the
+  provider's `createSession` as `openCodeProtocol: "v2"`. An existing session
+  keeps its line whatever the setting says later. Build pipelines, Multi
+  Review and graphs build their providers without the router
+  (`build-pipeline-provider.ts`, `graph-agent-providers.ts`) and create
+  sessions with other origins, so neither the setting nor a 2.x record can
+  reach them.
+- **Host server** (`opencode2-host-server.ts`,
+  `opencode2/host-server-state.ts`). One `opencode2 serve` per local
+  environment, started only when a 2.x session needs it: `openCode2HostLaunch`
+  plus `writeOpenCode2HostConfig`, an ephemeral loopback port, a password from
+  `mintBridgeToken` kept only in process memory, cwd the worktree, ready on
+  `/api/info` through `waitForOpenCode2Ready`. It is reused while its process
+  lives in the same worktree, owned under `opencode2:<environmentId>` (so
+  backend shutdown terminates it and an unrequested exit is reaped), and
+  stopped by `stopLocalServerUnlocked` whenever the environment's 1.x server is
+  (environment stop, delete, explicit stop). Starts are serialized per
+  environment by the environment operation queue and host-wide by their own
+  gate, because every host 2.x server shares one `OPENCODE_DB`. The backend's
+  own agent-tools MCP credential and coordinator variables are removed from
+  its environment. Only the managed `opencode2` binary is used; there is no
+  PATH fallback (an `opencode` on PATH is normally 1.x).
+- **Routing** (`opencode2/routing-provider.ts`), see the decision below.
+- **Steer.** `nativeAgentCapabilities("opencode").actions.steer` is true;
+  `OpenCodeProvider.steerSupported()` answers false, and the router answers
+  true only for a 2.x session. Every steering surface already checks
+  `steerSupported` per session (projection, composer, auto-steer, queued
+  steer, agent mail, pipeline and review mail), so a 1.x session degrades to
+  the queue as before.
+- **Capabilities.** A provider snapshot may carry `capabilityLimits`
+  (`ProviderCapabilityLimits`), which the projection applies to the
+  platform's capabilities (`native-agent-capability-limits.ts`). A 2.x
+  session reports no compact, undo, redo, rewind, share, fork, attachments or
+  slash commands, so its tab does not offer them.
+- **Transcript (preview).** `opencode2/transcript.ts` turns user and
+  assistant rows into the shared rows (text, reasoning, tool calls with
+  bounded inputs), enough for a readable tab. Phase 4 is still the real
+  projection.
+
+Decisions:
+
+- **How sessions are routed.**
+  - **A routing provider registered for `opencode`, holding the 1.x provider
+    and a lazily built 2.x one, routing each call by the session's recorded
+    line (implemented).**
+    - Pros: the registry, its cache key and every caller stay unchanged; the
+      line is per session, so 1.x and 2.x sessions coexist in one
+      environment; the 2.x server starts only for a 2.x session.
+    - Cons: every provider member needs a 2.x answer, even an empty one; a
+      session the router has not seen needs one storage lookup.
+  - **A protocol-aware provider cache key, threaded from the session record
+    into `ProviderRegistry.resolve`.**
+    - Pros: optional members are naturally absent on a 2.x provider.
+    - Cons: the cache key is also the observation group, the activity group,
+      the projection's provider lookup and the tab-close and move paths; each
+      would need the session's protocol, and one missed site would serve a
+      2.x session from the 1.x server, which reads it as missing and replaces
+      it.
+  - Recommendation: the routing provider. A session's line comes from, in
+    order, its creation through the router, a registration carrying the
+    marker, or its persisted record. A failed lookup is an error rather than
+    1.x, for the reason above. Every provider the service caches for an
+    environment (the registry, tab close, the move check) is built with the
+    router.
+- **Which line an unknown session takes.**
+  - **1.x unless its record says 2.x (implemented).** Pros: every existing
+    session stays where it is. Cons: a 2.x session whose record was lost is
+    read on 1.x; there is no such path today.
+  - **Ask both servers.** Pros: survives a lost record. Cons: starts a 2.x
+    server for every 1.x session; both lines mint `ses_` ids.
+  - Recommendation: the record.
+- **Observers and the 2.x server.**
+  - **Never start it from an observer (implemented).** `activity`,
+    `activityBatch`, `abort` and `closeSession` use a running server only; a
+    2.x session with no server reads idle. Pros: the activity sweep cannot
+    spawn a server per environment. Cons: none found; a server that is not
+    running has no turn in flight.
+  - **Start on any call.** Cons: the two-second sweep would start a server
+    for every environment that ever held a 2.x session.
+  - Recommendation: never from an observer.
+- **Capability honesty.**
+  - **Per-session `capabilityLimits` on the provider snapshot
+    (implemented).** Pros: one small, removing-only field, applied where
+    `interactionKinds` and the steer qualification already narrow the table.
+    Cons: surfaces that read the platform table directly (the draft
+    attachment filter, the CLI) still see OpenCode's table; the 2.x provider
+    refuses those requests with a clear error instead.
+  - **Refusals only.** Cons: the tab would offer undo, compact and
+    attachments that then fail.
+  - Recommendation: limits plus refusals.
+- **Public CLI steer.** The CLI's provider table answers per platform, so it
+  keeps OpenCode steer off (`public-api/providers.ts`) until the preview is
+  qualified; otherwise `session.steer` on a 1.x session would fail late with
+  `operation-failed` instead of `capability-unavailable`.
+- **Host server as an internal function, not a registered command.** The
+  native-agent service gets it through `NativeAgentServiceOptions.openCode2HostServer`
+  (`index.ts`). Pros: no new contract surface, and the password never
+  crosses a command boundary. Cons: no renderer or CLI can start or inspect
+  the 2.x server; nothing needs to yet.
+
+Known gaps, for phases 4 and 5:
+
+- No permission or form cards on a 2.x tab: a parked request reads as
+  `blocked`, and the tab shows a warning notice that says so and suggests
+  stopping the turn.
+- The model catalogue, resume list and sign-in are the 1.x ones. The 2.x
+  session takes the model on create and on each prompt; the execution
+  profile (Plan/Build agent) and the session `policy` are not sent yet.
+- No agent-tools MCP on 2.x (its MCP routes are under `/api/experimental`),
+  so a 2.x tab has no Orkestrator mail or ticket tools.
+- The transcript has no tool output, diffs, sub-agents, history paging,
+  usage or terminal-error rows.
+- 2.x events do not reach the observation hints, so a 2.x session keeps the
+  activity sweep at full cadence (`observationStreamLive` answers false while
+  one is known).
+- `coordinator-deliver-now` now reports an OpenCode 1.x recipient as
+  "queued until idle" rather than "unsupported, queued": the platform table
+  says steer, and the mail delivery falls back once `steerSupported` says
+  no. The message is queued either way.
+- Containers: no 2.x server in the image's runtime yet (a second fixed port
+  and `x-opencode-directory: /workspace`).
+
+Evidence: unit tests for the router, transcript, setting, marker, service
+selection and projection narrowing; the host server against a stand-in
+binary; and `opencode2-routing.live.test.ts` against the real 2.2.6 binary
+with a scripted model (session created through the router on the
+environment's own 2.x server, prompt dispatched with its request id, reply
+shown in the snapshot, server reused, then stopped with OpenCode).
+
+Real stack, 2026-11-08, throwaway profile `oc2-routing-a1a9` (`dev:test
+--fixture --agent-platforms opencode --no-agent-credentials`, since stopped
+and reset): the profile downloaded `opencode2@2.2.6` beside `opencode@1.19.5`;
+the setting was turned on in Settings → OpenCode and survived a reload; a
+local fixture environment was created and `orkestrator session start --agent
+opencode` started a session. The backend logged `host-server.ready` for the
+environment, an `opencode2 serve` child ran beside the 1.x `opencode serve`
+under the profile backend, the 2.x database appeared at
+`<data>/opencode2/opencode.db`, and the tab showed the prompt and the model's
+"ok" (OpenCode's own free default model, no credentials) with 2.x message ids.
+After `dev:stop` no profile process was left. Not checked live: a steer from
+the composer, and the inactive-environment path for a running 2.x turn.
+
+The renderer's attach button and the draft-attachment filter still read the
+platform table, so a 2.x tab still shows the attach button; a send with an
+attachment is refused with "OpenCode 2.x sessions do not support attachments
+yet". The execution-profile (Plan/Build) picker is also still shown and its
+choice is not sent to 2.x.
 
 ### Task 9: HTTP API, not ACP
 

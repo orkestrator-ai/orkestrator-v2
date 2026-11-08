@@ -564,7 +564,15 @@ async function childMain(input: string, output: string): Promise<void> {
     return;
   }
   const { decodeCommandArgs } = await import("@orkestrator/protocol/contract/command");
-  const { SchemaIssue } = (await import(Bun.resolveSync("effect", protocolDirectory))) as {
+  const { Schema, SchemaIssue } = (await import(Bun.resolveSync("effect", protocolDirectory))) as {
+    Schema: {
+      decodeUnknownResult(
+        schema: unknown,
+      ): (
+        input: unknown,
+        options: { errors: "all"; onExcessProperty: "ignore" },
+      ) => { _tag: "Success" } | { _tag: "Failure"; failure: { issue: unknown; message: string } };
+    };
     SchemaIssue: {
       makeFormatterStandardSchemaV1(): (issue: unknown) => {
         issues: readonly { path?: readonly PropertyKey[] }[];
@@ -586,10 +594,18 @@ async function childMain(input: string, output: string): Promise<void> {
       };
       // An unsupported critical field has no schema issue, so no path: it is always evidence.
       if (cause?.issue === undefined) return message;
-      const paths = standardIssues(cause.issue).issues.map((issue) =>
+      // Production decoding stops at the first error. Exempting an opaque field
+      // requires every issue: an earlier capture failure must not hide a later
+      // incompatible body (or another constrained argument).
+      const allErrors = Schema.decodeUnknownResult(def.args)(args ?? {}, {
+        errors: "all",
+        onExcessProperty: "ignore",
+      });
+      if (allErrors._tag === "Success") return message;
+      const paths = standardIssues(allErrors.failure.issue).issues.map((issue) =>
         (issue.path ?? []).map((key) => (typeof key === "number" ? key : String(key))),
       );
-      return { message, paths };
+      return { message: `Invalid arguments for ${command}: ${allErrors.failure.message}`, paths };
     },
     generator,
     request.count,

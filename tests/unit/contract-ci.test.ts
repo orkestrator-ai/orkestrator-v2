@@ -541,6 +541,34 @@ describe("argument schemas", () => {
     expect(isUnconstrainedRefusal({ message: "critical", paths: [] }, [["capture"]])).toBe(false);
   });
 
+  test("a real opaque capture refusal cannot hide an incompatible body", async () => {
+    const document = objectSchema(
+      {
+        environmentId: { type: "string", const: "fixture-env" },
+        operationId: { type: "string", const: "fixture-operation" },
+        capture: {},
+        body: { type: "number", const: 42 },
+      },
+      ["environmentId", "operationId", "capture", "body"],
+    );
+    const report = await runFixturesInChild(
+      [
+        {
+          command: "web_annotation_create",
+          digest: documentDigest(document),
+          releases: ["2.40.0"],
+          document,
+        },
+      ],
+      10,
+    );
+    expect(report.checked).toBe(1);
+    expect(report.unconstrained).toBe(0);
+    expect(report.failures).toHaveLength(1);
+    expect(report.failures[0]!.message).toContain("capture");
+    expect(report.failures[0]!.message).toContain("body");
+  });
+
   test("fixtures run through the real registry's parser in a sandboxed child", async () => {
     const manifestJson = JSON.parse(
       readFileSync(path.join(root, "packages/protocol/contracts/manifest.json"), "utf8"),

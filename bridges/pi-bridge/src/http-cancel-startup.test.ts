@@ -43,7 +43,13 @@ const { route, setCancelAckTimeoutForTests, setDeleteCancelTimeoutForTests } =
 const { authToken: TOKEN } = await import("./config.js");
 const { newSessionState, setAgentSessionTestHooks } = await import("./agent-session.js");
 const { sessions } = await import("./state.js");
-const { setPersistWriteGateForTests, settlePersistenceForTests } = await import("./persistence.js");
+const {
+  setPersistWriteGateForTests,
+  settlePersistenceForTests,
+  drainPersistence,
+  reopenPersistenceForTests,
+} = await import("./persistence.js");
+const { piRunId } = await import("./state.js");
 const { nativeFetch } = await import("./testing/native-fetch.js");
 
 type SessionState = ReturnType<typeof newSessionState>;
@@ -1261,4 +1267,119 @@ describe("a closing session", () => {
       resetHooks();
     }
   });
+});
+
+describe("persistence closes during route dispatch", () => {
+  for (const action of ["prompt", "steer", "follow-up"] as const) {
+    test(`refuses ${action} before dispatch without invoking Pi`, async () => {
+      const directory = await mkdtemp(join(tmpdir(), "pi-route-drain-"));
+      const state = seedSession();
+      const pi = controlledSession();
+      let steers = 0;
+      state.session = pi.session;
+      pi.session.steer = async () => {
+        steers += 1;
+      };
+      setAgentSessionTestHooks({ hydrateComposer: async (composer) => composer });
+      process.env.PI_BRIDGE_STATE_DIR = directory;
+      try {
+        if (action !== "prompt") {
+          state.status = "running";
+          state.promptSequence = 1;
+        }
+        await drainPersistence();
+        const response =
+          action === "steer"
+            ? await post(`/session/${state.id}/steer`, {
+                input: "steering",
+                requestId: "drained",
+                expectedRunId: piRunId(state),
+              })
+            : await post(`/session/${state.id}/prompt`, {
+                prompt: "never sent",
+                requestId: "drained",
+              });
+        expect(response.status).toBe(503);
+        expect(await response.json()).toEqual({
+          error: "Pi bridge is shutting down",
+          kind: "persistence-unavailable",
+          code: "persistence-closed",
+        });
+        expect(pi.counts.prompts).toBe(0);
+        expect(pi.counts.followUps).toBe(0);
+        expect(steers).toBe(0);
+      } finally {
+        pi.finishRun();
+        sessions.delete(state.id);
+        reopenPersistenceForTests();
+        delete process.env.PI_BRIDGE_STATE_DIR;
+        await settlePersistenceForTests();
+        resetHooks();
+        await rm(directory, { recursive: true, force: true });
+      }
+    });
+  }
+
+  for (const action of ["steer", "follow-up"] as const) {
+    test(`${action} keeps an unknown outcome when shutdown closes a post-dispatch barrier`, async () => {
+      const directory = await mkdtemp(join(tmpdir(), "pi-delivery-drain-"));
+      const state = seedSession();
+      const pi = controlledSession();
+      state.session = pi.session;
+      state.status = "running";
+      state.promptSequence = 1;
+      let deliveries = 0;
+      const delivered = async () => {
+        deliveries += 1;
+        await drainPersistence();
+        if (action === "follow-up") {
+          // The target run ended while Pi enqueued the follow-up, reaching
+          // the route's late-withdrawal durability barrier.
+          state.status = "idle";
+        }
+      };
+      pi.session.steer = delivered;
+      pi.raw.followUp = delivered;
+      setAgentSessionTestHooks({ hydrateComposer: async (composer) => composer });
+      process.env.PI_BRIDGE_STATE_DIR = directory;
+      const requestId = "delivered-before-drain";
+      const expectedRunId = piRunId(state);
+      try {
+        const response =
+          action === "steer"
+            ? await post(`/session/${state.id}/steer`, {
+                input: "steering",
+                requestId,
+                expectedRunId,
+              })
+            : await post(`/session/${state.id}/prompt`, { prompt: "follow-up", requestId });
+        expect(deliveries).toBe(1);
+        expect(response.status).toBe(503);
+        expect(await response.json()).toEqual({
+          ...(action === "follow-up" ? { accepted: false } : {}),
+          outcome: "unknown",
+          requestId,
+        });
+        // A same-id retry cannot hand the instruction to Pi a second time.
+        state.status = "running";
+        const retry =
+          action === "steer"
+            ? await post(`/session/${state.id}/steer`, {
+                input: "steering",
+                requestId,
+                expectedRunId,
+              })
+            : await post(`/session/${state.id}/prompt`, { prompt: "follow-up", requestId });
+        expect(retry.status).not.toBe(202);
+        expect(deliveries).toBe(1);
+      } finally {
+        sessions.delete(state.id);
+        reopenPersistenceForTests();
+        delete process.env.PI_BRIDGE_STATE_DIR;
+        await settlePersistenceForTests();
+        resetHooks();
+        await rm(directory, { recursive: true, force: true });
+      }
+    });
+  }
 });

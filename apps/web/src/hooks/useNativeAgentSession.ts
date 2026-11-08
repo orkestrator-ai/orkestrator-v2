@@ -506,13 +506,6 @@ export interface NativeAgentSendOptions {
 }
 
 /**
- * Prompt text as it should travel.
- *
- * An ordinary prompt is trimmed as it always was. A command keeps its bytes —
- * trailing spaces, tabs and newlines in its arguments included — with only
- * leading whitespace removed, which is also all the backend trims.
- */
-/**
  * Whether adopting a session failed because the provider proved it no longer
  * exists, the one answer that may replace it. A backend that sends the code
  * (`native-agent-provider-session-missing`, over the gateway as `code` and
@@ -526,6 +519,13 @@ export function isProviderSessionMissingError(error: unknown): boolean {
   return message.includes("provider session was not found");
 }
 
+/**
+ * Prompt text as it should travel.
+ *
+ * An ordinary prompt is trimmed as it always was. A command keeps its bytes —
+ * trailing spaces, tabs and newlines in its arguments included — with only
+ * leading whitespace removed, which is also all the backend trims.
+ */
 export function nativeSubmissionText(prompt: string, command?: NativeAgentCommandIntent): string {
   return command && command.kind !== "literal" ? prompt.replace(/^\s+/, "") : prompt.trim();
 }

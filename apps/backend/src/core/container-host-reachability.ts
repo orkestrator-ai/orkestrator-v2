@@ -1389,7 +1389,13 @@ export class ContainerHostReachabilityService {
         // An endpoint may still be attached after a failed container removal.
         // Retry those names and the network once, each with a bounded command.
         for (const name of cleanup.failedRemovals) await this.removeShutdownProbeContainer(name);
-        await this.removeShutdownProbeNetwork(network.name);
+        if (!(await this.removeShutdownProbeNetwork(network.name)) && cleanup.late.length > 0) {
+          // Do not hold dispose open on a docker run that is still pending.
+          // The check joins this final, bounded attempt after all late endpoint
+          // removals, when the network can actually be released.
+          const endpoints = Promise.all(cleanup.late);
+          cleanup.late.push(endpoints.then(() => this.removeShutdownProbeNetwork(network.name)));
+        }
         return;
       }
       if (!network.created) return;

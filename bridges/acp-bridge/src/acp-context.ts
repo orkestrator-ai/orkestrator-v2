@@ -41,6 +41,7 @@ import type { RecentlyRevisedRows } from "@orkestrator/protocol/node/revised-row
 import type { AcpTurnUsage } from "./usage.js";
 import type { PromptTurnClock } from "./acp-prompt-clock.js";
 import { formatAcpRpcError } from "./acp-errors.js";
+import { terminateAcpProcessTree } from "./acp-process-tree.js";
 import { JsonlLineFramer } from "./acp-jsonl-framer.js";
 import { assertAcpSignedIn } from "./acp-credentials.js";
 import type { GrokInterjectionJournalEntry } from "./grok-interjection.js";
@@ -964,11 +965,8 @@ export class AcpProcess {
   >();
   #closed = false;
   #readOnlyProfile?: ReturnType<typeof createReadOnlyProfile>;
-  /**
-   * Whether `child` leads a process group this bridge created (spawned
-   * `detached`), so a signal may go to the whole group.
-   */
-  #ownsProcessGroup = false;
+  /** One shared teardown, including escalation after the leader exits. */
+  #terminating: Promise<void> | undefined;
   #terminationOutcome?: "resolved" | "rejected";
   readonly #stdoutFramer = new JsonlLineFramer(MAX_LINE_BYTES);
   onUpdate: (params: JsonObject) => void = unattachedUpdate;
@@ -1037,19 +1035,15 @@ export class AcpProcess {
         });
         Object.assign(env, this.questionTimeout.env);
       }
-      // Own process group, so terminating the group also reaps the terminals,
-      // MCP servers and subagents the agent started (Grok's tree outlived a
-      // close when only the leader was signalled). Not `unref`'d: the bridge
-      // owns this child and closes it on shutdown, and its pipes keep the
-      // event loop exactly as alive as before.
-      const detached = process.platform !== "win32";
+      // Stay in the bridge's backend-owned process group: after a bridge
+      // crash its descendants are reparented, and only that group still lets
+      // the backend orphan reaper reach them. Explicit close snapshots this
+      // agent's descendants without signalling other sessions in the group.
       this.child = spawn(executable, args, {
         cwd: workingDirectory,
         env,
-        detached,
         stdio: ["pipe", "pipe", "pipe"],
       });
-      this.#ownsProcessGroup = detached && this.child.pid !== undefined;
     } catch (error) {
       this.#readOnlyProfile?.dispose();
       throw error;
@@ -1227,52 +1221,8 @@ export class AcpProcess {
     if (outcome === "rejected" || this.#terminationOutcome === undefined) {
       this.#terminationOutcome = outcome;
     }
-    if (this.child.exitCode !== null || this.child.signalCode !== null) return;
-    const exited = new Promise<void>((resolvePromise) =>
-      this.child.once("exit", () => resolvePromise()),
-    );
-    this.#signalTree("SIGTERM");
-    const forced = setTimeout(() => {
-      if (this.child.exitCode === null && this.child.signalCode === null)
-        this.#signalTree("SIGKILL");
-    }, 2_000);
-    forced.unref();
-    let giveUp: ReturnType<typeof setTimeout> | undefined;
-    try {
-      await Promise.race([
-        exited,
-        new Promise<void>((resolvePromise) => {
-          giveUp = setTimeout(resolvePromise, 3_000);
-          giveUp.unref();
-        }),
-      ]);
-    } finally {
-      clearTimeout(forced);
-      clearTimeout(giveUp);
-    }
-  }
-
-  /**
-   * Signal the child's whole process group, falling back to the leader alone
-   * when the group is gone or not ours to signal (ESRCH/EPERM) or the platform
-   * has none. Only called while the leader is unreaped, so its pid, and with
-   * it the group id, cannot have been reused.
-   */
-  #signalTree(signal: "SIGTERM" | "SIGKILL"): void {
-    const pid = this.child.pid;
-    if (this.#ownsProcessGroup && pid !== undefined) {
-      try {
-        process.kill(-pid, signal);
-        return;
-      } catch {
-        // Fall through to the leader.
-      }
-    }
-    try {
-      this.child.kill(signal);
-    } catch {
-      // Already gone.
-    }
+    this.#terminating ??= terminateAcpProcessTree(this.child);
+    await this.#terminating;
   }
 
   #write(value: JsonObject): void {

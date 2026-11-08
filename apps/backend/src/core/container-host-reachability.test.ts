@@ -1334,7 +1334,50 @@ describe("shutdown and stale probe cleanup", () => {
     });
   }
 
-  test("permanent shutdown cleanup failures log and stop after one network retry", async () => {
+  test("retries the network after late endpoints settle beyond the dispose bound", async () => {
+    const held: Array<() => void> = [];
+    const live = new Set<string>();
+    let networkExists = false;
+    let runsSettled = false;
+    let networkAttempts = 0;
+    const runner = fakeRunner({
+      holdProbes: held,
+      onCall: async (call, timeoutMs) => {
+        if (call[1] === "run") live.add(call[call.indexOf("--name") + 1]!);
+        if (call[1] === "network" && call[2] === "create") networkExists = true;
+        if (call[1] === "rm") {
+          expect(timeoutMs).toBe(5_000);
+          if (!runsSettled) throw new Error("daemon still attaching endpoint");
+          live.delete(call[3]!);
+        }
+        if (isNetworkRemoval(call) && networkExists) {
+          networkAttempts += 1;
+          expect(timeoutMs).toBe(5_000);
+          if (live.size > 0) throw new Error("active endpoints");
+          networkExists = false;
+        }
+      },
+    });
+    const { svc } = service({ runner });
+    const checked = svc.check("boot");
+    try {
+      await until(() => held.length === 2);
+      await svc.dispose(0);
+      expect(live.size).toBe(2);
+      expect(networkAttempts).toBe(2);
+      expect(networkExists).toBe(true);
+    } finally {
+      runsSettled = true;
+      for (const release of held) release();
+      await checked;
+      await svc.dispose(0);
+    }
+    expect(live.size).toBe(0);
+    expect(networkAttempts).toBe(3);
+    expect(networkExists).toBe(false);
+  });
+
+  test("permanent shutdown cleanup failures stop after the bounded late network retry", async () => {
     const held: Array<() => void> = [];
     let networkAttempts = 0;
     let containerAttempts = 0;
@@ -1358,6 +1401,8 @@ describe("shutdown and stale probe cleanup", () => {
     expect(logs.filter((line) => line.includes("shutdown.network-remove-failed"))).toHaveLength(2);
     for (const release of held) release();
     await checked;
+    expect(networkAttempts).toBe(3);
+    expect(containerAttempts).toBe(6);
   });
 
   test("shutdown skips the rootless loopback retry after the first probes settle", async () => {

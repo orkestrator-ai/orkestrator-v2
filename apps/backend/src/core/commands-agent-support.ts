@@ -383,6 +383,24 @@ export function resolveOpenCodeBinary(context: CommandContext): string {
   return resolvePathFallbackAgentBinary(context, "opencode");
 }
 
+/**
+ * The managed OpenCode 2.x binary (`opencode2`, installed beside `opencode`
+ * whenever OpenCode is enabled; `agentPlatformForToolchain`).
+ *
+ * There is deliberately no PATH fallback, in or out of an agent-test profile:
+ * `opencode` on PATH is usually a 1.x install, and running a 1.x server for a
+ * session marked 2.x — or a 2.x one the toolchain never pinned — would let it
+ * migrate the user's database. A missing binary is reported plainly instead.
+ */
+export function resolveOpenCode2Binary(context: ManagedBinaryContext): string {
+  const managed = resolveManagedBinary(context, "opencode2");
+  if (managed) return managed;
+  throw new Error(
+    "OpenCode 2 is not installed yet. Restart Orkestrator to finish downloading it, " +
+      "or turn off “Use OpenCode 2 for new sessions” in Settings.",
+  );
+}
+
 export function resolveClaudeBinary(context: CommandContext): string {
   return resolvePathFallbackAgentBinary(context, "claude");
 }

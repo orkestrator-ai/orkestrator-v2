@@ -1237,7 +1237,12 @@ function platformCapabilities(agent: AgentPlatform): NativeAgentCapabilities {
       },
       agentTools: false,
       // No `share`: OpenCode 1.19.1 discontinued session sharing upstream.
-      actions: { compact: true, undo: true, redo: true },
+      // `steer` is what the platform *may* offer: only an OpenCode 2.x session
+      // steers (its inbox `delivery: "steer"`), and the per-session
+      // `steerSupported()` answers false for every 1.x session, which clears
+      // the action from that session's projection. Compact, undo and redo are
+      // 1.x actions a 2.x session narrows away (`capabilityLimits`).
+      actions: { compact: true, undo: true, redo: true, steer: true },
       // `permission.asked` and the v2-only `question.asked`. No MCP
       // elicitation surface on the v1 wire this repo uses. Every OpenCode
       // permission, a bash or edit approval included, is mapped as

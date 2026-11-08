@@ -1,0 +1,660 @@
+/**
+ * The `opencode` provider of an interactive native session, routed per
+ * session between OpenCode 1.x and 2.x
+ * (docs/todo/agent-engines/0008-opencode-v2.md, build plan phase 3).
+ *
+ * The provider registry caches one provider per (environment, agent), and
+ * both lines mint `ses_…` ids, so neither the cache key nor the id can pick a
+ * line. This provider holds the 1.x {@link OpenCodeProvider} and a lazily
+ * built {@link OpenCode2Provider}, and sends each session to one of them:
+ *
+ * - **By the record, never by guess.** A session is 2.x when it was created
+ *   here with `openCodeProtocol: "v2"`, registered with that marker, or its
+ *   persisted record carries it (looked up once, on first use). Everything
+ *   else is 1.x, so every existing session stays where it is. A failed lookup
+ *   is an error, not "1.x": routing a 2.x session to 1.x would read it as
+ *   missing, and a missing session is replaced.
+ * - **The 2.x server starts only on demand.** Observers (`activity`,
+ *   `activityBatch`, `observationStreamLive`) never start it; a 2.x session
+ *   with no server running has no turn in flight and reads idle, the way a
+ *   bridge that is not running does. A replaced server (new port or
+ *   password) gets a new 2.x provider; the old one is disposed.
+ * - **No 1.x behaviour reaches a 2.x session.** Members the 2.x provider does
+ *   not have answer what an absent capability would (empty catalogues, no
+ *   interactions, no paging) or refuse with a clear error (fork, MCP
+ *   actions, interaction answers). Snapshots carry `capabilityLimits`, which
+ *   the projection uses to stop offering compact, undo, redo, fork,
+ *   attachments and slash commands on a 2.x tab.
+ *
+ * Catalogue members with no session (models, resumable sessions, sign-in,
+ * MCP reload, change evidence) stay on 1.x: the 2.x preview shares the
+ * user's model ids and has no resume list of its own yet.
+ */
+import {
+  AGENT_INTERACTION_CONTRACT_VERSION,
+  type AgentInteractionSnapshot,
+} from "@orkestrator/protocol/agent-interactions";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import {
+  EMPTY_NATIVE_AGENT_COMPOSER_STATE,
+  type AgentModel,
+  type NativeAgentContextUsage,
+  type NativeAgentControlUpdate,
+  type NativeAgentExecutionPolicy,
+  type NativeAgentForkOutcome,
+  type NativeAgentNotice,
+  type NativeAgentSessionActionOutcome,
+} from "@orkestrator/protocol/native-agent";
+import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
+import {
+  PromptRejectedError,
+  ProviderUnavailableError,
+  TURN_STOPPED_BY_USER_MESSAGE,
+  type AgentInteractionProviderCapability,
+  type NativeAgentRuntimeProvider,
+  type ProviderActiveSteerRun,
+  type ProviderActivityState,
+  type ProviderCapabilityLimits,
+  type ProviderCommandCatalogue,
+  type ProviderCommandRefreshResult,
+  type ProviderCreateSessionOptions,
+  type ProviderDispatchStatus,
+  type ProviderInteractiveSnapshot,
+  type ProviderNativeAgentSessionAction,
+  type ProviderPrepareDispatchOptions,
+  type ProviderRuntimeHealth,
+  type ProviderSendOptions,
+  type ProviderSessionRegistration,
+  type ProviderSessionStateSnapshot,
+  type ProviderStatus,
+  type ProviderSteerDispatchStatus,
+  type ProviderTranscriptPage,
+  type ProviderTranscriptSnapshot,
+} from "../agent-provider-contract.js";
+import type { OpenCodeProvider } from "../opencode-provider.js";
+import { OpenCode2Client, type OpenCode2Connection } from "./client.js";
+import { OPENCODE2_EVIDENCE_SCAN_LIMIT, OpenCode2Provider } from "./provider.js";
+import { normalizeOpenCode2Transcript } from "./transcript.js";
+import { isOpenCode2IdleMessage, type OpenCode2Message } from "./types.js";
+
+const log = createLogger("native-agent.opencode2");
+
+type Line = "legacy" | "v2";
+
+/** Sessions whose line is remembered; older entries are looked up again. */
+const MAX_ROUTED_SESSIONS = 4_096;
+
+/** What a 2.x session does not offer yet; the projection narrows its capabilities by it. */
+export const OPENCODE2_CAPABILITY_LIMITS: ProviderCapabilityLimits = {
+  withoutActions: ["compact", "undo", "redo", "rewindMessages", "share"],
+  withoutAttachments: true,
+  withoutSlashCommands: true,
+  withoutFork: true,
+};
+
+const WAITING_NOTICE: NativeAgentNotice = {
+  kind: "warning",
+  message:
+    "OpenCode 2 is waiting for an approval or an answer that this preview cannot show yet. " +
+    "Stop the turn to continue.",
+};
+
+/** One 2.x server generation: a new port or password is a new generation. */
+export interface OpenCode2RouteConnection extends OpenCode2Connection {
+  generation: string;
+}
+
+export interface OpenCodeRoutingDependencies {
+  /**
+   * The environment's 2.x server. `start: false` never spawns one and answers
+   * undefined when none is running; `start: true` starts it or throws.
+   */
+  connection(options: { start: boolean }): Promise<OpenCode2RouteConnection | undefined>;
+  /** The persisted marker of a session this provider has not seen yet. */
+  persistedProtocol(sessionId: string): Promise<"v2" | undefined>;
+  /** Builds the 2.x provider for one server generation (tests substitute it). */
+  createProvider?(client: OpenCode2Client): OpenCode2Provider;
+}
+
+/** The members the router reads from the 1.x provider. */
+type LegacyOpenCodeProvider = OpenCodeProvider;
+
+export class OpenCodeRoutingProvider implements NativeAgentRuntimeProvider {
+  readonly agent = "opencode" as const;
+  readonly usageMessageLimit: number | undefined;
+  readonly messageReadLimit: number | undefined;
+  private readonly lines = new Map<string, Line>();
+  private readonly lookups = new Map<string, Promise<Line>>();
+  private current: { generation: string; provider: OpenCode2Provider } | undefined;
+  private disposed = false;
+
+  readonly interactions: AgentInteractionProviderCapability;
+
+  constructor(
+    private readonly legacy: LegacyOpenCodeProvider,
+    private readonly deps: OpenCodeRoutingDependencies,
+  ) {
+    this.usageMessageLimit = legacy.usageMessageLimit;
+    this.messageReadLimit = legacy.messageReadLimit;
+    const legacyInteractions = legacy.interactions;
+    this.interactions = {
+      listPendingInteractions: async (sessionId) =>
+        (await this.lineOf(sessionId)) === "v2"
+          ? emptyInteractionSnapshot()
+          : legacyInteractions.listPendingInteractions(sessionId),
+      resolveInteraction: async (sessionId, interactionId, resolution) => {
+        if ((await this.lineOf(sessionId)) === "v2") {
+          throw new PromptRejectedError("OpenCode 2 sessions cannot answer requests here yet");
+        }
+        return legacyInteractions.resolveInteraction(sessionId, interactionId, resolution);
+      },
+      ...(legacyInteractions.permissionRuleDetail
+        ? {
+            permissionRuleDetail: async (sessionId: string, interactionId: string) =>
+              (await this.lineOf(sessionId)) === "v2"
+                ? undefined
+                : legacyInteractions.permissionRuleDetail!(sessionId, interactionId),
+          }
+        : {}),
+    } as AgentInteractionProviderCapability;
+  }
+
+  /** Which line serves a session, as far as this provider has recorded it (tests, diagnostics). */
+  knownLine(sessionId: string): Line | undefined {
+    return this.lines.get(sessionId);
+  }
+
+  // ── registration and creation ──────────────────────────────────────────────
+
+  registerSession(sessionId: string, interaction?: ProviderSessionRegistration): void {
+    if (interaction?.openCodeProtocol === "v2") this.remember(sessionId, "v2");
+    const known = this.lines.get(sessionId);
+    if (known) {
+      this.registerOn(known, sessionId, interaction);
+      return;
+    }
+    // Registered once the record says which line it is. A later call on the
+    // session waits on the same lookup, so it runs after this registration.
+    void this.lineOf(sessionId).then(
+      (line) => this.registerOn(line, sessionId, interaction),
+      () => undefined,
+    );
+  }
+
+  async createSession(
+    phase: string,
+    label: string,
+    options: ProviderCreateSessionOptions = {},
+  ): Promise<string> {
+    if (options.openCodeProtocol !== "v2") {
+      const id = await this.legacy.createSession(phase, label, options);
+      this.remember(id, "legacy");
+      return id;
+    }
+    const provider = await this.requireV2();
+    const id = await provider.createSession(phase, label, options);
+    this.remember(id, "v2");
+    return id;
+  }
+
+  async prepareDispatch(sessionId: string, options?: ProviderPrepareDispatchOptions) {
+    if ((await this.lineOf(sessionId)) === "v2") {
+      // The cold start (spawn and readiness) belongs before the at-most-once window.
+      await this.requireV2();
+      return;
+    }
+    return this.legacy.prepareDispatch(sessionId, options);
+  }
+
+  async send(sessionId: string, prompt: string, options: ProviderSendOptions): Promise<void> {
+    if ((await this.lineOf(sessionId)) === "v2") {
+      return (await this.requireV2()).send(sessionId, prompt, options);
+    }
+    return this.legacy.send(sessionId, prompt, options);
+  }
+
+  async dispatchStatus(sessionId: string, requestId: string): Promise<ProviderDispatchStatus> {
+    if ((await this.lineOf(sessionId)) === "v2") {
+      return (await this.requireV2()).dispatchStatus(sessionId, requestId);
+    }
+    return this.legacy.dispatchStatus(sessionId, requestId);
+  }
+
+  async settleTurn(sessionId: string, requestId: string): Promise<boolean> {
+    // A 2.x session holds no temporary reviewer permissions to restore.
+    if ((await this.lineOf(sessionId)) === "v2") return true;
+    return this.legacy.settleTurn(sessionId, requestId);
+  }
+
+  async turnTerminalError(sessionId: string, requestId: string): Promise<string | null> {
+    if ((await this.lineOf(sessionId)) !== "v2") {
+      return this.legacy.turnTerminalError(sessionId, requestId);
+    }
+    const provider = await this.requireV2();
+    const rows = (await provider.messages(sessionId, {
+      limit: OPENCODE2_EVIDENCE_SCAN_LIMIT,
+    })) as OpenCode2Message[];
+    return openCode2TurnTerminalError(rows, requestId);
+  }
+
+  // ── lifecycle reads ────────────────────────────────────────────────────────
+
+  async status(sessionId: string): Promise<ProviderStatus> {
+    if ((await this.lineOf(sessionId)) === "v2") {
+      return (await this.requireV2()).status(sessionId);
+    }
+    return this.legacy.status(sessionId);
+  }
+
+  async activity(sessionId: string): Promise<ProviderActivityState> {
+    if ((await this.lineOf(sessionId)) !== "v2") return this.legacy.activity(sessionId);
+    const provider = await this.observedV2();
+    return provider ? provider.activity(sessionId) : "idle";
+  }
+
+  async activityBatch(sessionIds: readonly string[]): Promise<Map<string, ProviderActivityState>> {
+    const lines = await Promise.all(sessionIds.map((id) => this.lineOf(id)));
+    const legacyIds = sessionIds.filter((_, index) => lines[index] === "legacy");
+    const v2Ids = sessionIds.filter((_, index) => lines[index] === "v2");
+    const result = new Map<string, ProviderActivityState>();
+    if (legacyIds.length > 0) {
+      for (const [id, state] of await this.legacy.activityBatch(legacyIds)) result.set(id, state);
+    }
+    if (v2Ids.length > 0) {
+      const provider = await this.observedV2();
+      if (provider) {
+        for (const [id, state] of await provider.activityBatch(v2Ids)) result.set(id, state);
+      } else {
+        for (const id of v2Ids) result.set(id, "idle");
+      }
+    }
+    return result;
+  }
+
+  /**
+   * Live only while every known session is reported by a live stream. 2.x
+   * events reach no observation hint yet, so a 2.x session keeps the sweep
+   * at its full cadence.
+   */
+  observationStreamLive(): boolean {
+    for (const line of this.lines.values()) if (line === "v2") return false;
+    return this.legacy.observationStreamLive();
+  }
+
+  usageFromMessages(messages: readonly unknown[]): NativeAgentContextUsage | undefined {
+    return this.legacy.usageFromMessages(messages);
+  }
+
+  async humanPromptOutput(sessionId: string) {
+    if ((await this.lineOf(sessionId)) === "v2") return null;
+    return this.legacy.humanPromptOutput(sessionId);
+  }
+
+  // ── transcript and snapshots ───────────────────────────────────────────────
+
+  async messages(sessionId: string, options: { limit?: number } = {}): Promise<unknown[]> {
+    if ((await this.lineOf(sessionId)) !== "v2") return this.legacy.messages(sessionId, options);
+    return normalizeOpenCode2Transcript(await this.v2Rows(sessionId, options.limit));
+  }
+
+  async transcriptSnapshot(
+    sessionId: string,
+    options: Parameters<LegacyOpenCodeProvider["transcriptSnapshot"]>[1],
+  ): Promise<ProviderTranscriptSnapshot | { unchanged: true; sourceToken: string }> {
+    if ((await this.lineOf(sessionId)) !== "v2") {
+      return this.legacy.transcriptSnapshot(sessionId, options);
+    }
+    const limit = Math.min(options.limit, OPENCODE2_EVIDENCE_SCAN_LIMIT);
+    const rows = await this.v2Rows(sessionId, limit);
+    return {
+      messages: normalizeOpenCode2Transcript(rows),
+      complete: rows.length < limit,
+      freshness: "current",
+    };
+  }
+
+  /** 2.x history paging arrives with the transcript phase; a 2.x session serves no pages. */
+  async transcriptPage(
+    sessionId: string,
+    options: Parameters<LegacyOpenCodeProvider["transcriptPage"]>[1],
+  ): Promise<ProviderTranscriptPage | undefined> {
+    if ((await this.lineOf(sessionId)) === "v2") return undefined;
+    return this.legacy.transcriptPage(sessionId, options);
+  }
+
+  async interactiveSnapshot(sessionId: string): Promise<ProviderInteractiveSnapshot> {
+    if ((await this.lineOf(sessionId)) !== "v2") return this.legacy.interactiveSnapshot(sessionId);
+    const provider = await this.requireV2();
+    const [status, rows, models] = await Promise.all([
+      provider.status(sessionId),
+      this.v2Rows(sessionId, OPENCODE2_EVIDENCE_SCAN_LIMIT),
+      this.models(),
+    ]);
+    return {
+      ...v2StateSnapshot(status, models),
+      messages: normalizeOpenCode2Transcript(rows),
+      messagesComplete: rows.length < OPENCODE2_EVIDENCE_SCAN_LIMIT,
+    };
+  }
+
+  async sessionStateSnapshot(sessionId: string): Promise<ProviderSessionStateSnapshot> {
+    if ((await this.lineOf(sessionId)) !== "v2") return this.legacy.sessionStateSnapshot(sessionId);
+    const provider = await this.requireV2();
+    const [status, models] = await Promise.all([provider.status(sessionId), this.models()]);
+    return v2StateSnapshot(status, models);
+  }
+
+  async runtimeHealth(sessionId: string): Promise<ProviderRuntimeHealth> {
+    if ((await this.lineOf(sessionId)) !== "v2") return this.legacy.runtimeHealth(sessionId);
+    return { summary: { state: "OpenCode 2 preview" }, notices: [], authoritative: false };
+  }
+
+  async structured<T>(
+    sessionId: string,
+    requestId: string,
+  ): Promise<StructuredOutputResult<T> | null> {
+    if ((await this.lineOf(sessionId)) === "v2") return null;
+    return this.legacy.structured<T>(sessionId, requestId);
+  }
+
+  // ── catalogues (1.x; a 2.x session sees none of its own yet) ───────────────
+
+  modelCatalog(): Promise<AgentModel[]> {
+    return this.legacy.modelCatalog();
+  }
+
+  connectedModelProviders(): Promise<string[] | undefined> {
+    return this.legacy.connectedModelProviders();
+  }
+
+  resolveDefaultModel(modelId: string | undefined) {
+    return this.legacy.resolveDefaultModel(modelId);
+  }
+
+  rawModelCatalog(): Promise<AgentModel[]> {
+    return this.legacy.rawModelCatalog();
+  }
+
+  listResumableSessions() {
+    return this.legacy.listResumableSessions();
+  }
+
+  refreshCatalog(): void {
+    this.legacy.refreshCatalog();
+  }
+
+  async commandCatalogue(sessionId?: string): Promise<ProviderCommandCatalogue> {
+    if (sessionId && (await this.lineOf(sessionId)) === "v2") {
+      return { enhanced: false, commands: [], status: "unsupported" };
+    }
+    return this.legacy.commandCatalogue();
+  }
+
+  async refreshCommands(sessionId?: string): Promise<ProviderCommandRefreshResult> {
+    if (sessionId && (await this.lineOf(sessionId)) === "v2") return { outcome: "unsupported" };
+    return this.legacy.refreshCommands();
+  }
+
+  async slashCommands(sessionId?: string) {
+    if (sessionId && (await this.lineOf(sessionId)) === "v2") return [];
+    return this.legacy.slashCommands();
+  }
+
+  async mcpServers(sessionId: string) {
+    if ((await this.lineOf(sessionId)) === "v2") return [];
+    return this.legacy.mcpServers();
+  }
+
+  async mcpServerAction(...args: Parameters<LegacyOpenCodeProvider["mcpServerAction"]>) {
+    if ((await this.lineOf(args[0])) === "v2") {
+      throw new PromptRejectedError("OpenCode 2 sessions do not manage MCP servers yet");
+    }
+    return this.legacy.mcpServerAction(...args);
+  }
+
+  reloadMcpConfiguration(): Promise<"reloaded" | "busy"> {
+    return this.legacy.reloadMcpConfiguration();
+  }
+
+  authStatus() {
+    return this.legacy.authStatus();
+  }
+
+  changeEvidenceSource(environmentId: string) {
+    return this.legacy.changeEvidenceSource(environmentId);
+  }
+
+  // ── session actions ────────────────────────────────────────────────────────
+
+  async setSessionTitle(sessionId: string, title: string): Promise<void> {
+    // The 2.x session keeps no title of its own here; the backend's title stands.
+    if ((await this.lineOf(sessionId)) === "v2") return;
+    return this.legacy.setSessionTitle(sessionId, title);
+  }
+
+  async resumeSession(
+    sessionId: string,
+    controls?: NativeAgentControlUpdate,
+    policy?: NativeAgentExecutionPolicy,
+  ): Promise<string> {
+    if ((await this.lineOf(sessionId)) !== "v2") {
+      return this.legacy.resumeSession(sessionId, controls, policy);
+    }
+    const provider = await this.requireV2();
+    provider.registerSession(sessionId);
+    return sessionId;
+  }
+
+  async synchronizeSessionPolicy(
+    sessionId: string,
+    policy: NativeAgentExecutionPolicy,
+  ): Promise<void> {
+    if ((await this.lineOf(sessionId)) === "v2") {
+      // Interactive 2.x sessions only; a coordinator's read-only policy never reaches one.
+      throw new PromptRejectedError("OpenCode 2 sessions do not take an execution policy yet");
+    }
+    return this.legacy.synchronizeSessionPolicy(sessionId, policy);
+  }
+
+  async forkSession(sessionId: string, messageId?: string): Promise<NativeAgentForkOutcome> {
+    if ((await this.lineOf(sessionId)) === "v2") {
+      throw new PromptRejectedError("OpenCode 2 sessions cannot be forked yet");
+    }
+    return this.legacy.forkSession(sessionId, messageId);
+  }
+
+  async steerSupported(sessionId: string): Promise<boolean> {
+    return (await this.lineOf(sessionId)) === "v2";
+  }
+
+  async activeSteerRun(sessionId: string): Promise<ProviderActiveSteerRun> {
+    if ((await this.lineOf(sessionId)) !== "v2") return { state: "unknown" };
+    return (await this.requireV2()).activeSteerRun(sessionId);
+  }
+
+  async steerStatus(sessionId: string, requestId: string): Promise<ProviderSteerDispatchStatus> {
+    if ((await this.lineOf(sessionId)) !== "v2") return "unknown";
+    return (await this.requireV2()).steerStatus(sessionId, requestId);
+  }
+
+  async performSessionAction(
+    sessionId: string,
+    action: ProviderNativeAgentSessionAction,
+  ): Promise<NativeAgentSessionActionOutcome> {
+    if ((await this.lineOf(sessionId)) === "v2") {
+      return (await this.requireV2()).performSessionAction(sessionId, action);
+    }
+    if (action.kind === "steer") {
+      throw new PromptRejectedError("OpenCode 1 sessions cannot be steered");
+    }
+    return this.legacy.performSessionAction(sessionId, action);
+  }
+
+  async abort(sessionId: string): Promise<void> {
+    if ((await this.lineOf(sessionId)) !== "v2") return this.legacy.abort(sessionId);
+    const provider = await this.observedV2();
+    // No 2.x server running means no turn to stop.
+    if (provider) await provider.abort(sessionId);
+  }
+
+  async closeSession(sessionId: string): Promise<void> {
+    if ((await this.lineOf(sessionId)) !== "v2") return this.legacy.closeSession(sessionId);
+    const provider = await this.observedV2();
+    if (provider) await provider.closeSession(sessionId);
+  }
+
+  releaseSession(sessionId: string): void {
+    const line = this.lines.get(sessionId);
+    this.lines.delete(sessionId);
+    this.lookups.delete(sessionId);
+    if (line === "v2") this.current?.provider.releaseSession(sessionId);
+    else this.legacy.releaseSession(sessionId);
+  }
+
+  async dispose(): Promise<void> {
+    if (this.disposed) return;
+    this.disposed = true;
+    const current = this.current;
+    this.current = undefined;
+    this.lines.clear();
+    this.lookups.clear();
+    await Promise.all([
+      this.legacy.dispose(),
+      current ? current.provider.dispose() : Promise.resolve(),
+    ]);
+  }
+
+  // ── internals ──────────────────────────────────────────────────────────────
+
+  private remember(sessionId: string, line: Line): void {
+    this.lines.delete(sessionId);
+    this.lines.set(sessionId, line);
+    while (this.lines.size > MAX_ROUTED_SESSIONS) {
+      const oldest = this.lines.keys().next().value!;
+      this.lines.delete(oldest);
+    }
+  }
+
+  private registerOn(
+    line: Line,
+    sessionId: string,
+    interaction: ProviderSessionRegistration | undefined,
+  ): void {
+    if (this.disposed) return;
+    if (line === "legacy") this.legacy.registerSession(sessionId, interaction);
+    else this.current?.provider.registerSession(sessionId);
+  }
+
+  private lineOf(sessionId: string): Promise<Line> {
+    const known = this.lines.get(sessionId);
+    if (known) return Promise.resolve(known);
+    const pending = this.lookups.get(sessionId);
+    if (pending) return pending;
+    const lookup = this.deps.persistedProtocol(sessionId).then(
+      (protocol) => {
+        const line: Line = protocol === "v2" ? "v2" : "legacy";
+        if (this.lookups.get(sessionId) === lookup) {
+          this.lookups.delete(sessionId);
+          this.remember(sessionId, line);
+        }
+        return line;
+      },
+      (error: unknown) => {
+        if (this.lookups.get(sessionId) === lookup) this.lookups.delete(sessionId);
+        // Never "1.x by default": a 2.x session read on 1.x reads as missing.
+        throw new ProviderUnavailableError("The OpenCode session's version could not be read", {
+          cause: error,
+        });
+      },
+    );
+    this.lookups.set(sessionId, lookup);
+    return lookup;
+  }
+
+  private async requireV2(): Promise<OpenCode2Provider> {
+    const provider = await this.v2({ start: true });
+    if (!provider) throw new ProviderUnavailableError("The OpenCode 2 server is not running");
+    return provider;
+  }
+
+  private observedV2(): Promise<OpenCode2Provider | undefined> {
+    return this.v2({ start: false });
+  }
+
+  private async v2(options: { start: boolean }): Promise<OpenCode2Provider | undefined> {
+    if (this.disposed) throw new ProviderUnavailableError("OpenCode provider was disposed");
+    const connection = await this.deps.connection(options);
+    if (!connection) return undefined;
+    if (this.disposed) throw new ProviderUnavailableError("OpenCode provider was disposed");
+    if (this.current?.generation === connection.generation) return this.current.provider;
+    const previous = this.current;
+    const client = new OpenCode2Client(connection);
+    const provider = this.deps.createProvider?.(client) ?? new OpenCode2Provider(client);
+    this.current = { generation: connection.generation, provider };
+    for (const [sessionId, line] of this.lines) {
+      if (line === "v2") provider.registerSession(sessionId);
+    }
+    if (previous) {
+      void Promise.resolve(previous.provider.dispose()).catch((error: unknown) => {
+        log.debug("provider.dispose-failed", { error: formatLogError(error, { message: false }) });
+      });
+    }
+    return provider;
+  }
+
+  private async v2Rows(sessionId: string, limit: number | undefined): Promise<OpenCode2Message[]> {
+    const provider = await this.requireV2();
+    return (await provider.messages(sessionId, {
+      limit: Math.min(limit ?? OPENCODE2_EVIDENCE_SCAN_LIMIT, OPENCODE2_EVIDENCE_SCAN_LIMIT),
+    })) as OpenCode2Message[];
+  }
+
+  private models(): Promise<AgentModel[]> {
+    return this.legacy.modelCatalog().catch((): AgentModel[] => []);
+  }
+}
+
+function emptyInteractionSnapshot(): AgentInteractionSnapshot {
+  return { version: AGENT_INTERACTION_CONTRACT_VERSION, revision: 0, requests: [] };
+}
+
+function v2StateSnapshot(
+  status: ProviderStatus,
+  models: AgentModel[],
+): ProviderSessionStateSnapshot {
+  return {
+    status,
+    composer: { ...EMPTY_NATIVE_AGENT_COMPOSER_STATE, models },
+    capabilityLimits: OPENCODE2_CAPABILITY_LIMITS,
+    // A parked permission or form has no card on a 2.x tab yet; say so rather
+    // than leave a turn that looks stuck.
+    ...(status === "blocked" ? { notices: [WAITING_NOTICE] } : {}),
+  };
+}
+
+function carriesRequest(row: OpenCode2Message, requestId: string): boolean {
+  const orkestrator = (row.metadata as { orkestrator?: { requestId?: unknown } } | undefined)
+    ?.orkestrator;
+  return orkestrator?.requestId === requestId;
+}
+
+/**
+ * The failure of one request's run, read from the run boundary after its
+ * input: `null` for a run that succeeded (or a request not in the scanned
+ * history), the user's stop for an interrupted one. Throws while the run has
+ * not settled, so an early idle read is never taken as success.
+ */
+export function openCode2TurnTerminalError(
+  rows: readonly OpenCode2Message[],
+  requestId: string,
+): string | null {
+  const start = rows.findIndex((row) => carriesRequest(row, requestId));
+  if (start < 0) return null;
+  for (const row of rows.slice(start + 1)) {
+    if (!isOpenCode2IdleMessage(row)) continue;
+    if (row.outcome === "succeeded") return null;
+    if (row.outcome === "interrupted") return TURN_STOPPED_BY_USER_MESSAGE;
+    return "OpenCode 2 reported that the turn failed";
+  }
+  throw new ProviderUnavailableError("The OpenCode 2 turn has not settled yet");
+}

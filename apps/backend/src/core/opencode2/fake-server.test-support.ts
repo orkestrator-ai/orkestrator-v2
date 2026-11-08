@@ -106,6 +106,8 @@ export class FakeOpenCode2Server {
     const notFound = () =>
       Response.json({ _tag: "SessionNotFoundError", message: "missing" }, { status: 404 });
 
+    // Bare, like the real route.
+    if (path === "/api/info") return Response.json({ version: "2.2.6", pid: process.pid });
     if (path === "/api/event") {
       const stream = new ReadableStream<Uint8Array>({
         start: (controller) => {

@@ -174,6 +174,11 @@ import {
   type ProviderMcpConfigEvidenceRead,
 } from "./agent-provider-contract.js";
 import { localServerStopCommandName } from "./local-server-runtime.js";
+import {
+  openCodeRoutingDependencies,
+  selectNewOpenCodeSessionProtocol,
+} from "./native-agent-opencode-protocol.js";
+import type { OpenCodeRoutingDependencies } from "./opencode2/routing-provider.js";
 import { claudeReasoningSelection } from "@orkestrator/protocol/claude-model-catalog";
 import { type AgentInteractionRequest } from "@orkestrator/protocol/agent-interactions";
 import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
@@ -655,6 +660,7 @@ export class NativeAgentService {
           stageImages: (images) => this.stageImages(environmentId, images),
           environment: this.providerEnvironment(environmentId),
           planUsage: options.planUsage,
+          ...this.openCodeRouting(environmentId),
         }),
       forgetGroup: (cacheKey) => this.launches.forgetActivityGroup(cacheKey),
     });
@@ -990,6 +996,16 @@ export class NativeAgentService {
     input: EnsureNativeAgentSessionInput,
   ): Promise<NativeAgentRuntimeProvider | undefined> {
     return this.providerRegistry.observe(input);
+  }
+
+  /**
+   * Every provider this service caches for an environment routes OpenCode
+   * sessions the same way: a provider built without the router and cached
+   * under the same key would serve a 2.x session from the 1.x server.
+   */
+  private openCodeRouting(environmentId: string): { openCode2?: OpenCodeRoutingDependencies } {
+    const openCode2 = openCodeRoutingDependencies(this.options, this.storage, environmentId);
+    return openCode2 ? { openCode2 } : {};
   }
 
   /**
@@ -1515,6 +1531,7 @@ export class NativeAgentService {
         origin: existing.origin,
         interactionPolicy: existing.interactionPolicy,
         phase: input.phase,
+        ...(existing.openCodeProtocol ? { openCodeProtocol: existing.openCodeProtocol } : {}),
       });
       /*
        * Liveness only. A session whose last turn ended in a terminal error —
@@ -1587,8 +1604,15 @@ export class NativeAgentService {
         : undefined;
     const modelSubstitution = resolution?.substitution;
     if (resolution?.modelId) input = { ...input, model: resolution.modelId };
+    // Decided once, here, and stored on the record the create publishes.
+    const openCodeProtocol = await selectNewOpenCodeSessionProtocol(
+      this.storage,
+      this.options,
+      input,
+    );
     const session = await this.storage.getOrCreateNativeAgentSession(
       {
+        ...(openCodeProtocol ? { openCodeProtocol } : {}),
         key,
         environmentId: input.environmentId,
         agent: input.agent,
@@ -1601,7 +1625,7 @@ export class NativeAgentService {
         policy: input.policy,
         initialPromptPresentation: input.initialPromptPresentation,
       },
-      () => this.createProviderSession(provider, input),
+      () => this.createProviderSession(provider, input, openCodeProtocol),
     );
     void this.interactions.reconcileAgentInteractions().catch(() => undefined);
     // A concurrent ensure may have created the session first, with its own
@@ -4323,6 +4347,7 @@ export class NativeAgentService {
           stageImages: (images) => this.stageImages(environmentId, images),
           environment: this.providerEnvironment(environmentId),
           planUsage: this.options.planUsage,
+          ...this.openCodeRouting(environmentId),
         });
         this.providerRegistry.cache(cacheKey, provider, identity);
       }
@@ -4366,6 +4391,7 @@ export class NativeAgentService {
           else {
             provider = createNativeAgentProvider(connection, {
               planUsage: this.options.planUsage,
+              ...this.openCodeRouting(environmentId),
             });
             this.providerRegistry.cache(key, provider, identity);
           }
@@ -4557,6 +4583,7 @@ export class NativeAgentService {
   private async createProviderSession(
     provider: NativeAgentRuntimeProvider,
     input: EnsureNativeAgentSessionInput,
+    openCodeProtocol?: "v2",
   ): Promise<string> {
     await this.assertEnvironmentLive(input.environmentId);
     const environment = await this.storage.getEnvironment(input.environmentId);
@@ -4585,6 +4612,7 @@ export class NativeAgentService {
       fastMode: input.fastMode,
       agentMcp,
       policy: input.policy,
+      ...(openCodeProtocol ? { openCodeProtocol } : {}),
       interaction: {
         origin: input.origin ?? "interactive-native",
         interactionPolicy:

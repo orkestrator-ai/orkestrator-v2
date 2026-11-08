@@ -6,6 +6,7 @@ import type { NativeSessionInvalidationCause } from "@orkestrator/protocol/nativ
 import type { EnvironmentMutationFence } from "./environment-replacement-fence.js";
 import type { NativeAgentProviderEnvironment } from "./native-agent-provider.js";
 import type { UsageLimitStops } from "./native-agent-usage-limit-resend.js";
+import type { OpenCode2RouteConnection } from "./opencode2/routing-provider.js";
 import type { PlanUsageState } from "./plan-usage-cache.js";
 import type {
   BuildPipelineAgent,
@@ -468,6 +469,15 @@ export interface NativeAgentServiceOptions {
   ) => Promise<NativeAgentRuntimeProvider>;
   /** Graceful-interrupt window before provider hard-stop escalation. */
   abortGraceMs?: number;
+  /**
+   * The local environment's OpenCode 2.x preview server
+   * (`opencode2-host-server.ts`). `start: false` never spawns one. Absent
+   * (narrow tests, hosts without it) keeps every OpenCode session on 1.x.
+   */
+  openCode2HostServer?: (
+    environmentId: string,
+    options: { start: boolean },
+  ) => Promise<OpenCode2RouteConnection | undefined>;
   /**
    * What a tab says instead of the bridge's sign-in message when a provider's
    * login lapses (`containerSignInGuidance`), or undefined to keep it.

@@ -11,6 +11,10 @@ import type { OpenCodeCoordinatorResearch } from "./opencode-coordinator-researc
 import type { NativeAgentReadiness } from "@orkestrator/protocol/native-agent";
 import { OpenCodeProvider, type OpenCodeProviderDependencies } from "./opencode-provider.js";
 import { openCodeEnvironmentDependencies } from "./opencode-provider-environment.js";
+import {
+  OpenCodeRoutingProvider,
+  type OpenCodeRoutingDependencies,
+} from "./opencode2/routing-provider.js";
 import { resolveCodexBridgeDefaultModel } from "./session-held-model.js";
 import type { UsageLimitStops } from "./native-agent-usage-limit-resend.js";
 import type { WorkflowResultReader } from "./workflow-result-service.js";
@@ -99,6 +103,12 @@ export type ProviderDependencies = HttpBridgeProviderDependencies &
     environment?: NativeAgentProviderEnvironment;
     /** Automatic account switching, which turns a workflow's weekly-limit stop into a resend. */
     usageLimitStops?: Pick<UsageLimitStops, "handleLimitStop" | "noteUnresentStop">;
+    /**
+     * Route OpenCode sessions per session between 1.x and the 2.x preview
+     * (`opencode2/routing-provider.ts`). Only the interactive native-agent
+     * service passes it; workflow providers stay on 1.x.
+     */
+    openCode2?: OpenCodeRoutingDependencies;
   };
 
 /** A workflow polls its turns every few seconds; one not looked at for this long is not counted. */
@@ -176,12 +186,18 @@ export function createNativeAgentProvider(
   connection: BridgeConnection,
   dependencies: ProviderDependencies = {},
 ): NativeAgentRuntimeProvider {
+  const openCode = (): NativeAgentRuntimeProvider => {
+    const legacy = new OpenCodeProvider(connection, {
+      ...openCodeEnvironmentDependencies(dependencies.environment),
+      ...dependencies,
+    });
+    return dependencies.openCode2
+      ? new OpenCodeRoutingProvider(legacy, dependencies.openCode2)
+      : legacy;
+  };
   const provider: NativeAgentRuntimeProvider =
     connection.agent === "opencode"
-      ? new OpenCodeProvider(connection, {
-          ...openCodeEnvironmentDependencies(dependencies.environment),
-          ...dependencies,
-        })
+      ? openCode()
       : new HttpBridgeProvider(
           connection,
           dependencies.fetch ?? fetch,

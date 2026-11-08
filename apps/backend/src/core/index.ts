@@ -216,6 +216,7 @@ import {
   nativeAgentSessionStorageKey,
   NativeAgentService,
 } from "./native-agent-service.js";
+import { ensureOpenCode2HostServer, peekOpenCode2HostServer } from "./opencode2-host-server.js";
 import {
   createSessionTitleService,
   sessionTitleGenerationEnabled,
@@ -1042,6 +1043,11 @@ export class OrkestratorBackend {
           ? { sessionTitles: createSessionTitleService(context) }
           : {}),
         localBridgeAccountId: (key) => this.runtime.localServers.launchedAccountId(key),
+        // The OpenCode 2.x preview server of a local environment; see opencode2-host-server.ts.
+        openCode2HostServer: async (environmentId, { start }) =>
+          start
+            ? ensureOpenCode2HostServer(context, environmentId)
+            : peekOpenCode2HostServer(context, environmentId),
         planUsage: this.runtime.accounts.planUsage,
         usageLimitStops: this.accountAutoSwitch,
         signInGuidance: (environmentId, agent) =>

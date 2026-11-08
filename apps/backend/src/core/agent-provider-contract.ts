@@ -13,6 +13,7 @@ import type { PermissionRuleSubject } from "@orkestrator/protocol/permission-rul
 import type {
   AgentModel,
   NativeAgentBackgroundTaskSummary,
+  NativeAgentCapabilities,
   NativeAgentComposerState,
   NativeAgentContextUsage,
   NativeAgentExecutionPolicy,
@@ -136,6 +137,8 @@ export interface ProviderSessionRegistration {
   workflowId?: string;
   provider?: ProviderAgent;
   fence?: string | number;
+  /** The record's OpenCode line, so the routing provider need not look it up. */
+  openCodeProtocol?: "v2";
 }
 
 export interface AgentInteractionProviderCapability {
@@ -464,6 +467,13 @@ export interface ProviderCreateSessionOptions {
   interaction?: ProviderSessionRegistration;
   /** Immutable backend-owned execution policy for this provider session. */
   policy?: NativeAgentExecutionPolicy;
+  /**
+   * Create the session on OpenCode 2.x (the preview). Only the OpenCode
+   * routing provider reads it; the backend sets it only for new interactive
+   * host sessions while the setting asks for 2.x, and persists the same
+   * marker on the session record.
+   */
+  openCodeProtocol?: "v2";
 }
 
 /**
@@ -602,8 +612,27 @@ export type ProviderPrepareDispatchOptions = {
   workflowResultExtraTools?: ProviderSendOptions["workflowResultExtraTools"];
 };
 
+/**
+ * What one session cannot do although its platform's table says the platform
+ * may. The projection narrows the advertised capabilities by it, so a control
+ * the session would refuse is not offered. An OpenCode 2.x preview session is
+ * why it exists: the platform is `opencode` either way, and the 1.x actions
+ * (compact, undo, redo, fork, attachments, slash commands) are not built for
+ * 2.x yet.
+ */
+export interface ProviderCapabilityLimits {
+  /** Platform actions this session does not offer. */
+  withoutActions?: ReadonlyArray<keyof NonNullable<NativeAgentCapabilities["actions"]>>;
+  /** Neither files nor images can be attached. */
+  withoutAttachments?: true;
+  withoutSlashCommands?: true;
+  withoutFork?: true;
+}
+
 export interface ProviderInteractiveSnapshot {
   status: ProviderStatus;
+  /** Narrows the platform's capabilities for this session; see {@link ProviderCapabilityLimits}. */
+  capabilityLimits?: ProviderCapabilityLimits;
   messages: unknown[];
   /** Stable provider identity accepted by list/resume, when distinct from the live handle. */
   resumableSessionId?: string;

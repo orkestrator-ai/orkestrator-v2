@@ -693,8 +693,10 @@ export async function spawnSetupTerminal(
     }
     const shellPath = resolveLocalShellPath();
     const setupCommand = buildSetupTerminalCommand(commands, `${quoteShell(shellPath)} -l`);
+    const setupEnvironment = envWithManagedBinaries(context);
     terminals.rememberSession(sessionId, {
       kind: "local",
+      openCodeDatabase: hostOpenCodeDatabaseEnvironment(setupEnvironment).OPENCODE_DB,
       environmentId: environment.id,
       cols: 80,
       rows: 24,
@@ -706,7 +708,6 @@ export async function spawnSetupTerminal(
     // "command not found". This mirrors what fix-path.ts does when recovering
     // the login-shell PATH.
     const lowered = lowPriorityCommand(shellPath, ["-ilc", setupCommand]);
-    const setupEnvironment = envWithManagedBinaries(context);
     spawnTerminalProcess(
       sessionId,
       lowered.command,
@@ -715,8 +716,7 @@ export async function spawnSetupTerminal(
         cwd: environment.worktreePath,
         cols: 80,
         rows: 24,
-        // The setup ends in an interactive shell, where `opencode` may be typed.
-        env: { ...setupEnvironment, ...hostOpenCodeDatabaseEnvironment(setupEnvironment) },
+        env: setupEnvironment,
       },
       context,
       { onData: tracker.onData, onExit: tracker.onExit },

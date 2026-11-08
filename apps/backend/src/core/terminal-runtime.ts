@@ -37,6 +37,8 @@ export type TerminalSessionConfig = (
     }
   | {
       kind: "local";
+      /** Applied only to the managed OpenCode bootstrap command, never the shell. */
+      openCodeDatabase?: string;
       environmentId: string;
       cols: number;
       rows: number;

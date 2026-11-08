@@ -1,3 +1,4 @@
+import { buildTerminalAgentLaunchCommand } from "@orkestrator/protocol/terminal-agent-launch";
 import { canonicalWorktreePath } from "@orkestrator/protocol/node/worktree-paths";
 import { hostOpenCodeDatabaseEnvironment } from "./opencode-host-database.js";
 import { isEnvironmentReadyForAgents } from "@orkestrator/protocol/environment-readiness";
@@ -678,8 +679,19 @@ export function registerTerminalCommands(
     config.bootstrapped = true;
     config.bootstrapDataHash = bootstrapDataHash;
     try {
-      terminalProcess.write(terminalData);
-      runtime.terminals.recordInputActivity(id, terminalData, context);
+      // Only the canonical managed OpenCode launch gets the private database.
+      // Plain commands and the shared interactive shell keep the user's defaults.
+      const openCodeLaunch = buildTerminalAgentLaunchCommand({ tabType: "opencode" })!;
+      const data =
+        config.kind === "local" &&
+        config.openCodeDatabase &&
+        (terminalData === openCodeLaunch ||
+          terminalData.startsWith(`${openCodeLaunch} `) ||
+          terminalData.startsWith(`${openCodeLaunch}\n`))
+          ? `OPENCODE_DB=${quoteShell(config.openCodeDatabase)} ${terminalData}`
+          : terminalData;
+      terminalProcess.write(data);
+      runtime.terminals.recordInputActivity(id, data, context);
       return { bootstrapped: true, delivered: true, duplicate: false };
     } catch (error) {
       config.bootstrapped = false;
@@ -876,8 +888,10 @@ export function registerTerminalCommands(
       // applies to terminals opened after it.
       const accountEnvironment = await activeAgentAccountShellEnvironment(context);
       const launchEnvironment = { ...envWithManagedBinaries(context), ...accountEnvironment };
-      // An OpenCode tab types `opencode` into this shell.
-      Object.assign(launchEnvironment, hostOpenCodeDatabaseEnvironment(launchEnvironment));
+      if (storedConfig?.kind === "local") {
+        storedConfig.openCodeDatabase =
+          hostOpenCodeDatabaseEnvironment(launchEnvironment).OPENCODE_DB;
+      }
       if (accountEnvironment.CLAUDE_CONFIG_DIR || accountEnvironment.CODEX_HOME) {
         stripInheritedAgentCredentials(launchEnvironment);
       }

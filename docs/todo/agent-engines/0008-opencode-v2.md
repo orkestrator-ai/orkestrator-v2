@@ -650,6 +650,19 @@ users until phase 3 routes new sessions to it.
    with run ids. It refuses attachments, images, structured output, workflow
    results, slash commands and read-only turns outright.
 
+   The host launch description is also done (`opencode2/server.ts`). The
+   2.x server gets its own `OPENCODE_DB` and config directory under the data
+   directory, `OPENCODE_DISABLE_AUTOUPDATE`, and an explicit `OPENCODE_FLAGS`
+   with schedules off and the to-do tool on. Readiness is checked through
+   `/api/info`. It also writes a 2.x credential plugin
+   (`plugins/orkestrator-credential/index.ts`: a plain `{ id, setup }` that
+   needs no package), which removes `OPENCODE_PASSWORD` from the server
+   process and from every shell it creates. The live test proves both
+   sides: without the plugin the agent's shell sees the password, with it
+   the shell does not and the server still authenticates. Wiring it into
+   `commands-servers.ts` waits for the toolchain branch, which provides the
+   `opencode2` binary path. 2.x renamed the `bash` tool to `shell`.
+
    One finding from the live test: `/api/info` and `interrupt` answer bare
    objects rather than `{ data }`, and the model and agent switches, session
    patch, inbox withdraw and replies answer `204`. The client follows the

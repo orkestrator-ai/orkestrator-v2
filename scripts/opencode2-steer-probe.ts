@@ -77,8 +77,12 @@ export class ScriptedModel {
         this.calls.push({ userTexts, lastRole });
         const latestUser = userTexts.at(-1) ?? "";
         // A turn asking for a slow tool gets one bash call, then (after the tool result) an answer.
-        const wantsTool = latestUser.includes("RUN_SLOW_TOOL") && lastRole === "user";
-        if (wantsTool) return sse(toolCallChunks());
+        // `RUN_BASH:<command>` runs that command instead (fixture-only; the model is scripted).
+        if (lastRole === "user") {
+          const bash = /RUN_BASH:(.+)$/s.exec(latestUser)?.[1];
+          if (bash) return sse(toolCallChunks(bash.trim()));
+          if (latestUser.includes("RUN_SLOW_TOOL")) return sse(toolCallChunks());
+        }
         const slowAnswer = latestUser.includes("SLOW_ANSWER");
         return sse(
           answerChunks(`ack:${latestUser.slice(0, 40)}`),
@@ -101,7 +105,7 @@ const base = {
   model: "fixture",
 };
 
-function toolCallChunks(): Json[] {
+function toolCallChunks(command = `sleep ${STEP_SLEEP_SECONDS}`): Json[] {
   return [
     {
       ...base,
@@ -116,10 +120,11 @@ function toolCallChunks(): Json[] {
                 id: "call_sleep",
                 type: "function",
                 function: {
-                  name: "bash",
+                  // 2.x names it `shell` (it repairs a `bash` call, but say it right).
+                  name: "shell",
                   arguments: JSON.stringify({
-                    command: `sleep ${STEP_SLEEP_SECONDS}`,
-                    description: "Wait in the disposable workspace",
+                    command,
+                    description: "Run in the disposable workspace",
                   }),
                 },
               },
@@ -205,7 +210,10 @@ export interface OpenCode2Fixture {
  * scripted local model, and wait for `/api/info`. Shared by this probe and the
  * backend's OpenCode 2.x live tests. `stop()` signals only the process it spawned.
  */
-export async function startOpenCode2Fixture(binary: string): Promise<OpenCode2Fixture> {
+export async function startOpenCode2Fixture(
+  binary: string,
+  options: { env?: Record<string, string> } = {},
+): Promise<OpenCode2Fixture> {
   const root = await realpath(await mkdtemp(join(tmpdir(), "ork-opencode2-")));
   const model = new ScriptedModel();
   const modelUrl = model.start();
@@ -242,6 +250,7 @@ export async function startOpenCode2Fixture(binary: string): Promise<OpenCode2Fi
       OPENCODE_DB: join(dirs.data, "fixture.db"),
       OPENCODE_PASSWORD: password,
       OPENCODE_DISABLE_AUTOUPDATE: "1",
+      ...options.env,
     },
     stdout: "ignore",
     stderr: "ignore",

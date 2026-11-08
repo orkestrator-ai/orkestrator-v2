@@ -19,7 +19,7 @@ Status rechecked 2026-10-30 against `main` at `cd7bbe3e5`, and task 2 again on 2
 7. **Qualification of the first 2.x pin**: the live probe, background, replay and capability checks listed under "Qualification". Status: open (depends on 5).
 8. **Session V2 features after the move**: steer/queue, `switchAgent`/`switchModel`, context, log replay, staged revert, saved rules, credential/integration sign-in, `reference.list`. Status: open (depends on 5).
 9. **Transport for the 2.x provider: `opencode acp` behind the ACP bridge, or the `/api/*` HTTP server**: the existing plan assumed the HTTP API; 2.x also ships a full ACP agent. Status: done (2026-11-08): ACP is ruled out because it cannot steer and the owner requires steering; the provider uses the HTTP API.
-10. **Steer spike on 2.2.6**: prove the backend-held steer guard (task 5) against the real binary before the provider is built. Status: open (the next step; needs the owner's go-ahead).
+10. **Steer spike on 2.2.6**: prove the backend-held steer guard (task 5) against the real binary before the provider is built. Status: done (2026-11-08, `scripts/opencode2-steer-probe.ts`; see "Spike results").
 
 ### 1. Upstream recheck
 
@@ -284,6 +284,22 @@ The remaining window is a run OpenCode starts by itself between step 2 and step 
     - whether `/api/event` frames carry the aggregate sequence, or whether the log route is needed.
     - Pros: settles the only requirement the owner named before any provider code is written.
     - Cons: needs a fake OpenAI-compatible model endpoint for 2.x; the 1.x fixture may not carry over.
+
+**Spike results (2026-11-08).** Run with `OPENCODE2_CLI_PATH=<2.x binary> bun scripts/opencode2-steer-probe.ts --json`. The binary came from `npm pack @opencode/cli-darwin-arm64@2.2.6` (tarball sha256 `613ebb74dd8eff767bb9d442a37b40c4d9946ba27f1538985068a1b9678137a3`, unpacked without install scripts). The run used a disposable `HOME`/`XDG_*`/`OPENCODE_DB` and a scripted local OpenAI-compatible model, and made no remote model calls. The `@ai-sdk/openai-compatible` provider ships inside the binary, so nothing was installed. Observed results:
+- **Mid-step steer.** A steer sent while a `bash` tool ran was delivered after the tool result, in the same run: the next model request carried it as the newest user message, and no `idle` row came between.
+- **Steer during the final answer.** It continued the same run. The model was called again with the steer, and only then did the run settle.
+- **Steer to an idle session.** It started a new run, preceded by an `idle` row, as the spec says.
+- **Exact retry of an input id.** `200` with the original record, no extra model call and one stored copy.
+- **Conflicting reuse.** The same id with a different text answered `200` with the original record and dropped the new text. This contradicts the spec's `409 LifecycleConflict`, so the provider must compare the returned `payload.text` (or its digest) with what it sent and treat a difference as a conflict.
+- **Every re-POST of an existing id wakes an empty run** (`execution.started`/`succeeded` with no model call). That is harmless, but the activity sweep will see a blip of `running`.
+- **`queue` on an idle session also wakes it.** This contradicts "queueing does not wake" in the spec, so the "enqueue as `queue`, promote later" option above cannot give a true refusal and is ruled out. `DELETE /api/session/:id/inbox/:inboxID` on an already delivered item answers `204`.
+- **Malformed ids.** Input ids must match `^msg_`; anything else answers `400`. The provider therefore derives the input id from the Orkestrator request id (for example `msg_` plus a digest) and keeps the mapping in its journal.
+- **Event sequence.** Live `/api/event` frames for durable events carry `durable: { aggregateID, seq, version }`, so ordering and gap detection (a `seq` jump) come from the live stream. `session.text.delta` and `session.tool.progress` are ephemeral and carry none.
+- **Session log route.** `GET /api/experimental/session/:id/log?after=0` returned only its `log.synced` marker (`seq` 12) and no events. The log cannot be relied on for history.
+- **Snapshot run boundaries.** The authoritative snapshot is `GET /api/session/:id/message` (newest first). It holds the user, assistant and `idle` rows, and each settled run ends in `{ type: "idle", outcome }`. Whether a steer landed in its run or started a new one can be read from the snapshot (is an `idle` row between them?) as well as from `seq` order.
+- **Response envelope.** Successful responses are wrapped in `{ data }`.
+
+The guard is therefore buildable as described, with two changes: settle from the live `seq` order plus the message snapshot, not from the log route; and detect a conflicting reuse by comparing the returned payload.
 
 This is the deferred checkpoint for moving from the OpenCode 1.x line to
 OpenCode 2.x. The decision is still: do not bump the OpenCode binary or SDK to
@@ -782,10 +798,11 @@ Before any 2.x pin reaches production:
   steer precondition, a bounded inbox, MCP endpoints leaving experimental, or a
   dated 1.x end-of-life. Run the recheck procedure above before picking this
   up, and at each new 2.x minor.
-- Task 10: the 2.x steer semantics (delivery at step and idle boundaries, wake
-  on idle, idempotent ids, event ordering in the session log) come from reading
-  the spec and source, and none of them has been run. The task 9 ACP findings
-  were also read, not run; they matter only if steering stops being required.
+- Task 10 was run against 2.2.6 on macOS arm64 only, with a scripted model and
+  one session. Untested: Linux binaries, concurrent sessions, a steer racing a
+  permission or form prompt, interrupts, and real providers. The task 9 ACP
+  findings were read, not run; they matter only if steering stops being
+  required.
 
 ## Assumptions and decisions
 

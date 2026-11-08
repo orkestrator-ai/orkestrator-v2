@@ -14,8 +14,8 @@ Status rechecked 2026-10-30 against `main` at `cd7bbe3e5`, and task 2 again on 2
 2. **Readiness gate and start decision**: decide when the 2.x work may start, using the gate's open conditions. Status: open (trigger decided; still blocked at 2.2.2 by storage policy, per-prompt model/agent/tools and structured output, runtime-context gaps, stale-turn guard, bounded inbox and experimental MCP endpoints; rechecked at the 1.19.5 upgrade on 2026-10-30, still 2.2.2 and unchanged, see [1020](1020-provider-upgrade-2026-10-30.md) task 8; rechecked 2026-11-06 against 2.2.5, still closed, see [1031](1031-provider-upgrade-2026-11-06.md) task 7; rechecked 2026-11-08 against 2.2.6, unchanged. On 2026-11-08 the owner asked to move: steering is required and undo may be dropped. Accepting the other open conditions with the mitigations under "Task 2: owner decision" is proposed but not yet confirmed).
 3. **Legacy 1.x session policy**: keep, migrate or retire existing 1.x sessions when 2.x arrives (open question 1, code item 5). Status: done as a decision (keep on a pinned 1.x binary with its own database); the routing code is open (depends on 5).
 4. **Losses to decide**: rebuild, capability-gate or drop each of the eight listed losses (code item 3, open question 2). Status: done as decisions (share dropped with 1.19.1; the rest decided below); the code is open (depends on 5).
-5. **`opencode2` provider**: a second provider with its own binary pin, `OPENCODE_DB`, `@opencode/client`, persisted protocol marker, snapshot-plus-hints projection and native steer/queue (code items 1, 2 and 4). Status: in progress (phase 1 of the "Build plan" done 2026-11-08; phases 2 to 6 open; steer is required in the first release, see task 10).
-6. **Changes that must ship with the first 2.x pin**: health probe on `/api/info` rejecting HTML, isolated `OPENCODE_DB` on host and container, GitHub-token plugin ported to `@opencode/plugin`, provider sign-in moved to `/api/credential`, live tests off `serve --pure`. Status: partly done (`checkHttpHealth` refuses HTML since 2026-10-30; the compatibility probe no longer uses `--pure`; since 2026-11-08 the 1.x host falls back to its own `OPENCODE_DB` when the shared database has no `session` table); the rest is open (depends on 5).
+5. **`opencode2` provider**: a second provider with its own binary pin, `OPENCODE_DB`, `@opencode/client`, persisted protocol marker, snapshot-plus-hints projection and native steer/queue (code items 1, 2 and 4). Status: in progress (phase 1 of the "Build plan" done 2026-11-08; phase 2's toolchain half, the `opencode2` 2.2.6 pin, done 2026-11-08; phase 2's launch half and phases 3 to 6 open; steer is required in the first release, see task 10).
+6. **Changes that must ship with the first 2.x pin**: health probe on `/api/info` rejecting HTML, isolated `OPENCODE_DB` on host and container, GitHub-token plugin ported to `@opencode/plugin`, provider sign-in moved to `/api/credential`, live tests off `serve --pure`. Status: partly done (`checkHttpHealth` refuses HTML since 2026-10-30; the compatibility probe no longer uses `--pure`; since 2026-11-08 the 1.x host falls back to its own `OPENCODE_DB` when the shared database has no `session` table; the 2.x binary is pinned from the npm platform tarballs since 2026-11-08, but nothing launches it yet); the rest is open (depends on 5).
 7. **Qualification of the first 2.x pin**: the live probe, background, replay and capability checks listed under "Qualification". Status: open (depends on 5).
 8. **Session V2 features after the move**: steer/queue, `switchAgent`/`switchModel`, context, log replay, staged revert, saved rules, credential/integration sign-in, `reference.list`. Status: open (depends on 5).
 9. **Transport for the 2.x provider: `opencode acp` behind the ACP bridge, or the `/api/*` HTTP server**: the existing plan assumed the HTTP API; 2.x also ships a full ACP agent. Status: done (2026-11-08): ACP is ruled out because it cannot steer and the owner requires steering; the provider uses the HTTP API.
@@ -328,12 +328,21 @@ for existing links, but the text says "2.x" and never a bare "v2":
 
 ## Current state
 
-- Pin: `1.19.4` for `@opencode-ai/sdk` (`apps/backend/package.json`) and the
+- 1.x pin: `1.19.5` for `@opencode-ai/sdk` (`apps/backend/package.json`) and the
   CLI (`PINNED_TOOLCHAIN_VERSIONS.opencode` in
   `packages/toolchain/src/manifest.ts`, `OPENCODE_CLI_VERSION` in
   `docker/Dockerfile`). `tests/unit/version-drift.test.ts` keeps them in step.
-  The SDK carries a patch (`patches/@opencode-ai%2Fsdk@1.19.4.patch`, the
+  The SDK carries a patch (`patches/@opencode-ai%2Fsdk@1.19.5.patch`, the
   generated SSE client's unhandled `reader.cancel()` rejection).
+- 2.x pin (since 2026-11-08): `2.2.6` as the `opencode2` tool
+  (`PINNED_TOOLCHAIN_VERSIONS.opencode2`, `OPENCODE2_CLI_VERSION` in
+  `docker/Dockerfile`), from the `@opencode/cli-<target>` npm tarballs (glibc
+  builds), installed as `opencode2` beside the 1.x `opencode`. It belongs to
+  the `opencode` platform (`agentPlatformForToolchain`), so enabling OpenCode
+  installs both, on host toolchains and in the image
+  (`/home/node/.opencode/bin/opencode2`, `OPENCODE2_CLI_PATH`). Nothing
+  launches it yet, and `opencode2` is not an agent platform. The bump procedure
+  is in `docs/development/upgrade-agents.md` ("OpenCode 2.x").
 - No `@opencode/*` dependency. `session.next.*` events are listed in
   `KNOWN_OPENCODE_EVENTS` (`apps/backend/src/core/opencode-events.ts`) as
   known but unhandled.
@@ -633,9 +642,12 @@ users until phase 3 routes new sessions to it.
 
    Nothing imports it yet.
 2. **Toolchain and launch.**
-   - Pin the 2.x binary per platform from the `@opencode/cli-<platform>` npm
-     tarballs: the manifest, the Dockerfile and the version-drift test.
-   - Start `opencode serve` with its own `OPENCODE_DB` and data directory, and
+   - **Done on 2026-11-08 (toolchain half).** Pin the 2.x binary per platform
+     from the `@opencode/cli-<platform>` npm tarballs: the manifest
+     (`opencode2`, 2.2.6), the Dockerfile and the version-drift test. Enabling
+     `opencode` installs both binaries (`agentPlatformForToolchain`); see
+     "Task 5: phase 2 toolchain pin".
+   - Open (launch half): start `opencode serve` with its own `OPENCODE_DB` and data directory, and
      `OPENCODE_DISABLE_AUTOUPDATE` and `OPENCODE_FLAGS` set explicitly.
    - Health on `/api/info`.
    - Port the GitHub-token plugin to `@opencode/plugin`.
@@ -1103,6 +1115,52 @@ exists.
   gap as a desync is conservative and costs one history read.
 - **Conflicting reuse is detected from the answer.** 2.2.6 answers it with the
   original record and `200`, not `409`.
+
+### Task 5: phase 2 toolchain pin (2026-11-08)
+
+Pinned OpenCode 2.2.6 as a second toolchain entry, `opencode2`, beside the
+untouched 1.19.5 `opencode`, on host toolchains and in the container image.
+Nothing launches it; the launch half of phase 2 is still open.
+
+- **A separate tool named `opencode2`, not a second version of `opencode`.**
+  Activation names in the shared `bin` directory must be unique, and the 1.x
+  provider resolves `opencode` from it, so the archive's
+  `package/bin/opencode` is installed as `opencode2`. A versioned
+  `opencode@2` entry would have needed the manager to hold two versions of one
+  tool in one activation set, which it does not do.
+- **One mapping from tool to platform.** Toolchain names and platform ids used
+  to coincide, and the selection filters compared them directly
+  (`pinnedArtifactsForPlatforms`, `resolveToolchainSelection`, the two
+  `profile-io.ts` filters, and the `dev:test` pending-download check in
+  `lifecycle.ts`). They now all go through `agentPlatformForToolchain`
+  (`opencode2` → `opencode`, identity otherwise), with
+  `agentToolchainsForPlatform` as its inverse for the scenario harness and the
+  pending check. The alternative, adding an `opencode2` agent platform, was
+  rejected: it would appear in the platform picker and every platform table in
+  `packages/protocol` for a binary nothing runs.
+- **An explicit `--tool` list stays exact.** Only a platform selection
+  expands: `orkestrator toolchain install --tool opencode` installs the 1.x
+  binary alone, and `--tool opencode2` the 2.x one. Expanding tool names too
+  would have made `--tool` mean two things. The scenario harness asks for both
+  through `agentToolchainsForPlatform("opencode")`.
+- **npm platform tarballs, no signature repair.** 2.x has no GitHub Release
+  assets. The darwin binary passes `codesign -v` as published (checked on
+  darwin-arm64), so the installed bytes are the upstream bytes. Glibc builds,
+  matching the 1.x Linux artifacts and the Debian image.
+- **The image records it.** `docker/image-manifest.ts` lists
+  `agents.opencode2` (verified against `OPENCODE2_CLI_VERSION` at build time)
+  and `docker/tests/final-image-smoke.sh` checks it, alongside the
+  `"$OPENCODE2_CLI_PATH" --version` build check.
+- **No backend change.** The backend resolves agents as
+  `<toolchainBinDir>/<name>` (`managedBinaryCandidates`), not through
+  `*_CLI_PATH` variables, so `opencode2` is reachable the moment the 2.x
+  provider asks for it. Host maintenance lists it as its own tool row.
+- **Provider state is not traced for 2.x yet.** `PROVIDER_STATE_TRACED_VERSIONS`
+  stays per platform and the layout test compares it with each platform's own
+  binary only. The 2.x state layout (its own `OPENCODE_DB`) is traced with the
+  launch work.
+- **Branch base.** Built on the phase 1 branch so the build plan above exists
+  in the same history.
 
 ### Task 9: HTTP API, not ACP
 

@@ -19,6 +19,7 @@
  * `domains` and `capabilities` follow the node's connection generation.
  */
 
+import { nodeRefusalCode } from "@orkestrator/protocol/contract/node-refusal";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import type {
   NodeClient,
@@ -41,25 +42,12 @@ type PreloadStreamState = ReturnType<PreloadNodeApi["eventStreamConnection"]["st
 /** Mirrors `TERMINAL_OUTPUT_EVENT_PREFIX` in `lib/native/node-transport.ts`. */
 const TERMINAL_OUTPUT_EVENT_PREFIX = "terminal-output-";
 
-/** The refusal codes main's node IPC answers with (2007, `node-ipc.ts`). */
-export type NodeRefusalCode =
-  "unknown-node" | "node-admin-refused" | "node-scope-closed" | "node-unavailable";
-
-const REFUSAL_PREFIX = /^\[([a-z][a-z0-9-]{0,63})\] /;
-
 /**
- * The code of a refusal that crossed the context bridge. Electron passes
- * only an error's message over IPC, so main leads it with `[code] `; the
- * preload also copies it to `error.code`. Either form is read.
+ * The code of a refusal that crossed the context bridge (`[code] text`, or
+ * `error.code` the preload set). The codes main's node IPC answers with are
+ * `DesktopNodeRefusalCode` (2007, `node-ipc.ts`).
  */
-export function nodeRefusalCode(error: unknown): string | null {
-  if (!error || typeof error !== "object") return null;
-  const code = (error as { code?: unknown }).code;
-  if (typeof code === "string" && REFUSAL_PREFIX.test(`[${code}] `)) return code;
-  const message = (error as { message?: unknown }).message;
-  if (typeof message !== "string") return null;
-  return REFUSAL_PREFIX.exec(message)?.[1] ?? null;
-}
+export { nodeRefusalCode };
 
 export interface DesktopConnectionInputs {
   readonly stream: PreloadStreamState;

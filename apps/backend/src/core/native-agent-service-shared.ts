@@ -1,5 +1,6 @@
 import type { NativeAgentSuborkBatchView } from "@orkestrator/protocol/suborks";
 import { createHash, randomUUID } from "node:crypto";
+import { Data } from "effect";
 import { isEnvironmentReadyForAgents as isSharedEnvironmentReadyForAgents } from "@orkestrator/protocol/environment-readiness";
 import type { NativeSessionInvalidationCause } from "@orkestrator/protocol/native-agent-observation";
 import type { EnvironmentMutationFence } from "./environment-replacement-fence.js";
@@ -115,11 +116,24 @@ import {
   type PromptAttachment,
 } from "./prompt-attachments.js";
 
-/** An authoritative provider probe proved that a session no longer exists. */
-export class NativeAgentProviderSessionMissingError extends Error {
+/** The message of {@link NativeAgentProviderSessionMissingError}; older renderers match its words. */
+export const NATIVE_AGENT_PROVIDER_SESSION_MISSING_MESSAGE =
+  "Native agent provider session was not found";
+
+/**
+ * An authoritative provider probe proved that a session no longer exists.
+ * Code `native-agent-provider-session-missing` (`contract/ipc-error.ts`),
+ * which reaches the renderer over the gateway and Electron IPC; the renderer
+ * may replace the session only on this code (or, from an older backend, on
+ * the message's words).
+ */
+export class NativeAgentProviderSessionMissingError extends Data.TaggedError(
+  "NativeAgentProviderSessionMissingError",
+)<{ readonly message: string }> {
+  readonly code = "native-agent-provider-session-missing" as const;
+
   constructor() {
-    super("Native agent provider session was not found");
-    this.name = "NativeAgentProviderSessionMissingError";
+    super({ message: NATIVE_AGENT_PROVIDER_SESSION_MISSING_MESSAGE });
   }
 }
 

@@ -39,6 +39,7 @@ const log = createLogger("bridge.pi");
 let tail: Promise<void> = Promise.resolve();
 let scheduled = false;
 let shuttingDown = false;
+let draining: Promise<void> | undefined;
 let writeGateForTests: ((write: PersistWriteForTests) => Promise<void>) | undefined;
 
 /** What a test write gate is told about the publication it is holding. */
@@ -50,6 +51,21 @@ export interface PersistWriteForTests {
    * holding "the journal write" has to tell the two apart.
    */
   barrier: boolean;
+}
+
+/**
+ * A durability barrier refused because shutdown has begun.
+ *
+ * The drain's final write is the last publication this process makes, so a
+ * barrier cannot promise anything after it started. The caller must not hand
+ * work to Pi as though its journal entry were durable; it answers an error.
+ * The message is fixed text.
+ */
+export class PersistenceClosedError extends Error {
+  override readonly name = "PersistenceClosedError";
+  constructor() {
+    super("Pi bridge is shutting down");
+  }
 }
 
 /**
@@ -95,7 +111,17 @@ export function schedulePersist(): void {
  */
 export async function persistBarrier(): Promise<void> {
   if (!stateFilePath()) return;
-  const operation = tail.then(() => persistNow({ barrier: true }));
+  // Shutdown closes admission before the drain's final write. A barrier that
+  // chained behind it would run its own write on the same `.tmp` file
+  // concurrently with that final write, and resolving it after the final write
+  // would claim a durability nothing will provide.
+  if (shuttingDown) throw new PersistenceClosedError();
+  const operation = tail.then(() => {
+    // Queued before shutdown began but not yet running: the drain is waiting
+    // on this tail, and the caller must not dispatch into a closing bridge.
+    if (shuttingDown) throw new PersistenceClosedError();
+    return persistNow({ barrier: true });
+  });
   tail = operation.catch(() => undefined);
   await operation;
 }
@@ -113,17 +139,31 @@ export async function settlePersistenceForTests(): Promise<void> {
   } while (settled !== tail);
 }
 
-/** Flush and stop accepting further writes. Used on shutdown. */
-export async function drainPersistence(): Promise<void> {
-  if (!stateFilePath()) return;
+/**
+ * Flush and stop accepting further writes. Used on shutdown.
+ *
+ * Concurrent calls share one drain, so there is exactly one final write.
+ */
+export function drainPersistence(): Promise<void> {
+  if (!stateFilePath()) return Promise.resolve();
   // Closed to new writes *first*. Draining before this flag was set let a
   // write scheduled during the drain (a turn settling as shutdown denies its
   // approvals) chain onto the tail and run concurrently with the final write
   // below — two writers truncating the same `.tmp` file, with the rename
-  // publishing whichever interleaving won.
+  // publishing whichever interleaving won. `persistBarrier` refuses on the
+  // same flag, so nothing can queue behind the tail awaited here.
   shuttingDown = true;
-  await tail.catch(() => undefined);
-  await persistNow().catch(() => undefined);
+  draining ??= (async () => {
+    await tail.catch(() => undefined);
+    await persistNow().catch(() => undefined);
+  })();
+  return draining;
+}
+
+/** Re-open persistence after a drain. Test harnesses only. */
+export function reopenPersistenceForTests(): void {
+  shuttingDown = false;
+  draining = undefined;
 }
 
 /**

@@ -76,7 +76,8 @@ interface Window {
     hello?(): Promise<unknown>;
     /**
      * Electron only: another node through this window's scope on it. Refusals
-     * lead their message with `[code] ` (`unknown-node`, `node-scope-closed`, ...).
+     * lead their message with `[code] ` (`unknown-node`, `node-scope-closed`, ...;
+     * `@orkestrator/protocol/contract/node-refusal`).
      */
     node?(nodeId: string): {
       readonly nodeId: string;

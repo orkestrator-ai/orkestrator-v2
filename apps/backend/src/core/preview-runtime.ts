@@ -170,11 +170,16 @@ export class PreviewRuntime {
   }
 
   init(): Promise<void> {
+    // Concurrent callers share one attempt; a failed attempt is forgotten so
+    // the next call retries instead of failing until restart.
     this.initialized ??= (async () => {
       this.settings = await this.options.storage.previewServices.loadPreviewSettings();
       await this.loadUpstreamCa();
       await this.registry.init();
-    })();
+    })().catch((error: unknown) => {
+      this.initialized = null;
+      throw error;
+    });
     return this.initialized;
   }
 

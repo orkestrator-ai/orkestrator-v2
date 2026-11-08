@@ -26,6 +26,11 @@
  * Integrity failures (an untrusted host, a size mismatch, an oversized body)
  * delete the partial, since its bytes can no longer be trusted to belong to the
  * pinned archive.
+ *
+ * The caller's `signal` (a user's Ctrl-C) cancels the transfer and any retry
+ * delay at once and is never retried; the call rejects with `abortError`, not
+ * with "download stalled", which is reserved for the idle timeout. The partial
+ * is kept like any interrupted transfer's, so the next run resumes it.
  */
 import { createHash } from "node:crypto";
 import { constants, createReadStream } from "node:fs";
@@ -68,6 +73,8 @@ export type DownloadArchiveOptions = {
   onBytes: (received: number) => void;
   allowInsecureDownloadsForTests: boolean;
   timings: DownloadTimings;
+  /** Cancels the download and any retry delay; an aborted download is not retried. */
+  signal?: AbortSignal;
 };
 
 type AttemptFailure = Error & {
@@ -99,8 +106,40 @@ function isNetworkChangeAbort(error: unknown): boolean {
   return false;
 }
 
-function delay(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+/**
+ * The error an aborted install rejects with: the signal's reason when it is an
+ * `Error`, otherwise an `AbortError` (the CLI aborts with the signal's name).
+ */
+export function abortError(signal: AbortSignal): Error {
+  const reason: unknown = signal.reason;
+  if (reason instanceof Error) return reason;
+  return new DOMException(
+    typeof reason === "string" && reason.length > 0
+      ? `Toolchain installation was interrupted (${reason})`
+      : "Toolchain installation was interrupted",
+    "AbortError",
+  );
+}
+
+export function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) throw abortError(signal);
+}
+
+/** Waits `milliseconds`, or rejects with `abortError` as soon as `signal` aborts. */
+export function abortableDelay(milliseconds: number, signal?: AbortSignal): Promise<void> {
+  if (!signal) return new Promise((resolve) => setTimeout(resolve, milliseconds));
+  if (signal.aborted) return Promise.reject(abortError(signal));
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(abortError(signal));
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, milliseconds);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 export function partialDownloadDirectory(rootDir: string): string {
@@ -163,7 +202,8 @@ async function downloadAttempt(
   options: DownloadArchiveOptions,
   partialPath: string,
 ): Promise<void> {
-  const { label, archive, fetchImpl, onBytes, timings } = options;
+  const { label, archive, fetchImpl, onBytes, timings, signal } = options;
+  throwIfAborted(signal);
   let offset = await existingPartialSize(partialPath, archive);
   let hash = createHash("sha256");
   if (offset > 0) {
@@ -179,7 +219,10 @@ async function downloadAttempt(
     }
   }
 
+  // The idle timeout aborts `controller`; the caller's signal aborts the same
+  // request, and the catch below tells the two apart.
   const controller = new AbortController();
+  const requestSignal = signal ? AbortSignal.any([controller.signal, signal]) : controller.signal;
   let idleTimer: ReturnType<typeof setTimeout> | undefined;
   const resetIdle = () => {
     clearTimeout(idleTimer);
@@ -195,7 +238,7 @@ async function downloadAttempt(
     if (offset > 0) headers.range = `bytes=${offset}-`;
     response = await fetchImpl(archive.url, {
       redirect: "follow",
-      signal: controller.signal,
+      signal: requestSignal,
       headers,
     });
     resetIdle();
@@ -271,6 +314,9 @@ async function downloadAttempt(
       );
     }
   } catch (error) {
+    // A user abort is reported as such, never as a stall, whatever the
+    // interrupted read threw.
+    if (signal?.aborted) throw abortError(signal);
     if (controller.signal.aborted && !(error as AttemptFailure).untrusted) {
       throw failure(
         `${label} download stalled: nothing received for ${Math.round(timings.idleTimeoutMs / 1_000)}s`,
@@ -303,6 +349,8 @@ export async function downloadArchive(options: DownloadArchiveOptions): Promise<
       else await rename(partialPath, options.archivePath);
       return;
     } catch (error) {
+      // Never retry after the caller aborted; the partial stays for a resume.
+      if (options.signal?.aborted) throw abortError(options.signal);
       const attemptFailure = error as AttemptFailure;
       if (attemptFailure.untrusted || attemptFailure.restart) {
         await rm(partialPath, { force: true });
@@ -312,7 +360,7 @@ export async function downloadArchive(options: DownloadArchiveOptions): Promise<
         const endSize = (await lstat(partialPath).catch(() => null))?.size ?? 0;
         if (endSize <= startSize) throw error;
       }
-      await delay(options.timings.retryDelayMs * attempt);
+      await abortableDelay(options.timings.retryDelayMs * attempt, options.signal);
     }
   }
 }

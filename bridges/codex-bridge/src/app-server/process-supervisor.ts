@@ -140,6 +140,12 @@ export interface AppServerSupervisorOptions {
   circuitCooldownMs?: number;
   circuitMaxCooldownMs?: number;
   shutdownGraceMs?: number;
+  /**
+   * How long to wait for the exit after SIGKILL before giving up on it. A
+   * child that still has not exited is logged and left; a restart never waits
+   * on it forever.
+   */
+  killConfirmMs?: number;
   /** Disables pidfile bookkeeping in tests. */
   pidFileEnabled?: boolean;
   /**
@@ -183,6 +189,12 @@ export interface AppServerHealth {
   notificationQueueHighWaterMark: number;
   unknownNotifications: number;
   unknownServerRequests: number;
+  /**
+   * Children this supervisor stopped waiting for: no exit was reported within
+   * the grace period plus `killConfirmMs` after SIGKILL. Their pid may still be
+   * alive.
+   */
+  unconfirmedTerminations: number;
 }
 
 interface Generation {
@@ -227,6 +239,7 @@ const DEFAULT_CIRCUIT_WINDOW_MS = 60_000;
 const DEFAULT_CIRCUIT_COOLDOWN_MS = 5 * 60_000;
 const DEFAULT_CIRCUIT_MAX_COOLDOWN_MS = 30 * 60_000;
 const DEFAULT_SHUTDOWN_GRACE_MS = 5_000;
+const DEFAULT_KILL_CONFIRM_MS = 1_000;
 const INCOMPLETE_PIDFILE_GRACE_MS = 1_000;
 /**
  * A bridge PID alone cannot prove identity — `isProcessAlive` also reports true
@@ -253,6 +266,7 @@ export class AppServerSupervisor {
   private readonly circuitCooldownMs: number;
   private readonly circuitMaxCooldownMs: number;
   private readonly shutdownGraceMs: number;
+  private readonly killConfirmMs: number;
   private readonly fingerprintEnvironment: () => string;
 
   /** Serial queues for notification processing, keyed by thread id. */
@@ -285,8 +299,17 @@ export class AppServerSupervisor {
   private stopping = false;
   private unknownNotifications = 0;
   private unknownServerRequests = 0;
+  private unconfirmedTerminations = 0;
   /** Set while draining so no new turn can be dispatched mid-restart. */
   private drainPromise: Promise<void> | null = null;
+  /**
+   * Set while `restartNow` retires the previous child. `current` is already
+   * cleared then, so without this gate a request in that window (the overflow
+   * restart runs outside any drain) would start generation N+1 beside a dying
+   * N, both on the same CODEX_HOME and pidfile. Never rejects, and is bounded
+   * by `terminateChild`.
+   */
+  private terminating: Promise<void> | null = null;
   /** Stable for this supervisor; child `instanceId`s change each generation. */
   private readonly pidOwnerToken = randomUUID();
   private pidOwnershipHeld = false;
@@ -304,6 +327,7 @@ export class AppServerSupervisor {
     );
     this.nextCircuitCooldownMs = this.circuitCooldownMs;
     this.shutdownGraceMs = options.shutdownGraceMs ?? DEFAULT_SHUTDOWN_GRACE_MS;
+    this.killConfirmMs = Math.max(0, options.killConfirmMs ?? DEFAULT_KILL_CONFIRM_MS);
     this.fingerprintEnvironment = options.fingerprintEnvironment ?? fingerprintRuntimeEnvironment;
     this.notificationQueue = new SerialQueue({
       maxDepth: options.notificationQueueMaxDepth,
@@ -342,6 +366,7 @@ export class AppServerSupervisor {
       notificationQueueHighWaterMark: this.notificationQueue.highWaterMark,
       unknownNotifications: this.unknownNotifications,
       unknownServerRequests: this.unknownServerRequests,
+      unconfirmedTerminations: this.unconfirmedTerminations,
     };
   }
 
@@ -378,6 +403,12 @@ export class AppServerSupervisor {
   private async ensureStarted(): Promise<Generation> {
     if (this.stopping) throw new AppServerUnavailableError("stopped");
     if (this.startPromise) return this.startPromise;
+    if (this.terminating) {
+      // The previous child is still dying. Re-check everything afterwards: the
+      // restart that retired it, or another waiter, may have started one.
+      await this.terminating;
+      return this.ensureStarted();
+    }
     if (this.circuitOpen && this.now() < this.circuitProbeAt) {
       throw new AppServerCircuitOpenError(this.restartFailures.length, this.lastError);
     }
@@ -870,13 +901,22 @@ export class AppServerSupervisor {
     const previous = this.current;
     this.current = null;
     if (previous) {
-      previous.client.close(
-        new AppServerProcessExitError(`app-server restarting: ${reason}`, {
-          generation: previous.id,
-        }),
-      );
-      await previous.recorder?.close();
-      await this.terminateChild(previous.child);
+      const retire = (async () => {
+        previous.client.close(
+          new AppServerProcessExitError(`app-server restarting: ${reason}`, {
+            generation: previous.id,
+          }),
+        );
+        await previous.recorder?.close();
+        await this.terminateChild(previous.child);
+      })();
+      const terminating = retire.catch(() => undefined);
+      this.terminating = terminating;
+      try {
+        await retire;
+      } finally {
+        if (this.terminating === terminating) this.terminating = null;
+      }
     }
     if (this.stopping) return;
     // `ensureStarted`, not `ensureReady`: we may be inside the drain that owns
@@ -899,6 +939,10 @@ export class AppServerSupervisor {
 
     const generation = this.current;
     this.current = null;
+    // A restart may still be retiring the previous child, which `current` no
+    // longer names. Shutdown is not finished (nor the pidfile released) until
+    // that child is gone too.
+    if (this.terminating) await this.terminating;
 
     if (generation) {
       generation.client.close(
@@ -941,7 +985,19 @@ export class AppServerSupervisor {
     if (timedOut) {
       // Grace expired. SIGKILL the group so descendants cannot survive.
       this.signalProcessTree(child, "SIGKILL");
-      await Promise.race([exited, sleep(1_000)]);
+      const confirmed = await Promise.race([
+        exited.then(() => true),
+        sleep(this.killConfirmMs).then(() => false),
+      ]);
+      // Bounded on purpose: a restart or shutdown never waits on an exit that
+      // may never be reported. Health records that it was not confirmed.
+      if (!confirmed) {
+        this.unconfirmedTerminations += 1;
+        log.warn("app-server.termination-unconfirmed", {
+          pid: child.pid,
+          waitedMs: this.shutdownGraceMs + this.killConfirmMs,
+        });
+      }
     }
   }
 

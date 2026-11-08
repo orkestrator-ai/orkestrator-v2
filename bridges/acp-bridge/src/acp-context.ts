@@ -964,6 +964,11 @@ export class AcpProcess {
   >();
   #closed = false;
   #readOnlyProfile?: ReturnType<typeof createReadOnlyProfile>;
+  /**
+   * Whether `child` leads a process group this bridge created (spawned
+   * `detached`), so a signal may go to the whole group.
+   */
+  #ownsProcessGroup = false;
   #terminationOutcome?: "resolved" | "rejected";
   readonly #stdoutFramer = new JsonlLineFramer(MAX_LINE_BYTES);
   onUpdate: (params: JsonObject) => void = unattachedUpdate;
@@ -1032,11 +1037,19 @@ export class AcpProcess {
         });
         Object.assign(env, this.questionTimeout.env);
       }
+      // Own process group, so terminating the group also reaps the terminals,
+      // MCP servers and subagents the agent started (Grok's tree outlived a
+      // close when only the leader was signalled). Not `unref`'d: the bridge
+      // owns this child and closes it on shutdown, and its pipes keep the
+      // event loop exactly as alive as before.
+      const detached = process.platform !== "win32";
       this.child = spawn(executable, args, {
         cwd: workingDirectory,
         env,
+        detached,
         stdio: ["pipe", "pipe", "pipe"],
       });
+      this.#ownsProcessGroup = detached && this.child.pid !== undefined;
     } catch (error) {
       this.#readOnlyProfile?.dispose();
       throw error;
@@ -1218,17 +1231,48 @@ export class AcpProcess {
     const exited = new Promise<void>((resolvePromise) =>
       this.child.once("exit", () => resolvePromise()),
     );
-    this.child.kill("SIGTERM");
+    this.#signalTree("SIGTERM");
     const forced = setTimeout(() => {
       if (this.child.exitCode === null && this.child.signalCode === null)
-        this.child.kill("SIGKILL");
+        this.#signalTree("SIGKILL");
     }, 2_000);
     forced.unref();
-    await Promise.race([
-      exited,
-      new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 3_000)),
-    ]);
-    clearTimeout(forced);
+    let giveUp: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        exited,
+        new Promise<void>((resolvePromise) => {
+          giveUp = setTimeout(resolvePromise, 3_000);
+          giveUp.unref();
+        }),
+      ]);
+    } finally {
+      clearTimeout(forced);
+      clearTimeout(giveUp);
+    }
+  }
+
+  /**
+   * Signal the child's whole process group, falling back to the leader alone
+   * when the group is gone or not ours to signal (ESRCH/EPERM) or the platform
+   * has none. Only called while the leader is unreaped, so its pid, and with
+   * it the group id, cannot have been reused.
+   */
+  #signalTree(signal: "SIGTERM" | "SIGKILL"): void {
+    const pid = this.child.pid;
+    if (this.#ownsProcessGroup && pid !== undefined) {
+      try {
+        process.kill(-pid, signal);
+        return;
+      } catch {
+        // Fall through to the leader.
+      }
+    }
+    try {
+      this.child.kill(signal);
+    } catch {
+      // Already gone.
+    }
   }
 
   #write(value: JsonObject): void {

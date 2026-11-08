@@ -103,6 +103,7 @@ deleted once their behaviour is in a living doc; git history keeps them. The
 | [agent-testing.md](development/agent-testing.md) | Isolated profiles and real-stack QA. |
 | [source-hint-emitter.md](development/source-hint-emitter.md) | The Babel plugin a project copies to emit web annotation source hints in development builds, and how to add it to Vite. The plugin text is run by a test. |
 | [cli-testing.md](development/cli-testing.md) | Driving a `dev:test` profile with the `orkestrator` CLI: setup from a worktree, scripting output, recipes, UI rehydration checks. Contract stays in `public-cli.md`. |
+| [effect-usage.md](development/effect-usage.md) | Where Effect (`effect` 4.1.2) is used, where it is deliberately not, and why. |
 | [upgrade-agents.md](development/upgrade-agents.md) | SDK/CLI bump runbook. Pins are test-enforced. "Other dependencies" covers non-agent packages, runtimes and image tools. |
 | [credentials-and-models.md](development/credentials-and-models.md) | Credential and catalogue inventory. |
 | [test-logs.md](development/test-logs.md) | Diagnostic-bounds rationale. Operator commands stay in `testing-guide.md`. |

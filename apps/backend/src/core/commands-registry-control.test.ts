@@ -23,6 +23,8 @@ import {
 import { queueInternals } from "./native-agent-service-test-collaborators.js";
 import { seedLegacyPromptQueueClaim } from "./storage-test-support.js";
 import { resendToOpenJobTab } from "./native-agent-job-tab-reuse.js";
+import { NATIVE_JOB_RECEIPT_LIMIT, NativeJobReceiptCapacityError } from "./storage-prompts.js";
+import { errorCode } from "@orkestrator/protocol/contract/ipc-error";
 import { MAX_TABS_PER_ENVIRONMENT } from "@orkestrator/protocol/pane-layout";
 
 describe("launch_control_job command", () => {
@@ -928,6 +930,49 @@ describe("launch_control_job command", () => {
           (await storage.listPromptQueues("env-1")).flatMap((queue) => queue.messages),
         ).toHaveLength(1);
         reserve.mockRestore();
+      });
+    });
+
+    test("a receipt capacity refusal is rethrown by its code, never swallowed into the fallback", async () => {
+      await withResolveEnvironment(async ({ storage, launch, openJobTab, ...fakes }) => {
+        await openJobTab(resolveTabId);
+        fakes.promptReadiness.mockImplementation(async () => "busy");
+        // The real refusal: a full queue keeps its receipts and refuses the next one.
+        for (let index = 0; index < NATIVE_JOB_RECEIPT_LIMIT; index++)
+          await storage.reserveNativeAgentJobRequest(
+            queueKey,
+            "env-1",
+            {
+              requestId: `filled-${index}`,
+              fingerprint: index.toString(16).padStart(64, "0"),
+              status: "accepted",
+              queued: true,
+            },
+            {
+              id: `filled-${index}`,
+              requestId: `filled-${index}`,
+              text: `Job ${index}`,
+              mode: "build",
+            },
+          );
+        expect((await storage.getPromptQueue(queueKey))?.jobReceipts).toHaveLength(
+          NATIVE_JOB_RECEIPT_LIMIT,
+        );
+        const full = await launch({ requestId: "one-too-many" }).catch((error: unknown) => error);
+        expect(errorCode(full)).toBe("native-job-receipt-capacity");
+        expect((full as Error).message).toBe("Native job receipt capacity reached");
+        expect(fakes.ensureSession).not.toHaveBeenCalled();
+
+        // Decided by the code: a reworded refusal is still rethrown.
+        const reserve = spyOn(storage, "reserveNativeAgentJobRequest").mockRejectedValueOnce(
+          new NativeJobReceiptCapacityError({ message: "reworded", limit: 1 }),
+        );
+        try {
+          await expect(launch({ requestId: "reworded" })).rejects.toThrow("reworded");
+          expect(fakes.ensureSession).not.toHaveBeenCalled();
+        } finally {
+          reserve.mockRestore();
+        }
       });
     });
 

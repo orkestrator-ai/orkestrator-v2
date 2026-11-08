@@ -1,6 +1,6 @@
 import type { BackendHello } from "@orkestrator/protocol/backend-profile";
 import { checkBackendRoute } from "./backend-hello.js";
-import { fromWire } from "@orkestrator/protocol/contract/errors";
+import { fromCodedWire } from "@orkestrator/protocol/contract/errors";
 import { spawn, type ChildProcess } from "node:child_process";
 import { cp, lstat, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -783,9 +783,11 @@ export class BackendHttpClient {
       error?: string;
     };
     if (!response.ok) {
-      // A typed incompatibility keeps its class, code and bounded details (1005).
-      const incompatible = fromWire(payload);
-      if (incompatible) throw incompatible;
+      // A registered code keeps its class, code and bounded details (a typed
+      // incompatibility's 1005 class, or `CodedError`), so main's
+      // `orkestrator:invoke` can send it on in the IPC message form.
+      const coded = fromCodedWire(payload);
+      if (coded) throw coded;
       const message = payload.error ?? `Backend request failed with HTTP ${response.status}`;
       if (response.status === 401) {
         // Refused before dispatch: the command did not run.

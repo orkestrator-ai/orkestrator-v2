@@ -15,6 +15,11 @@ import { buildInvokeEnvelope, defineCommand } from "@orkestrator/protocol/contra
 import { defineDomain } from "@orkestrator/protocol/contract/domain";
 import { incompatibility, unknownCommand } from "@orkestrator/protocol/contract/errors";
 import { unknownBackendCommandMessage } from "@orkestrator/protocol/unknown-command";
+import { errorCode, ipcErrorText } from "@orkestrator/protocol/contract/ipc-error";
+import {
+  NATIVE_AGENT_PROVIDER_SESSION_MISSING_MESSAGE,
+  NativeAgentProviderSessionMissingError,
+} from "../../backend/src/core/native-agent-service-shared";
 import type { CommandContext } from "../../backend/src/core/commands-context";
 import {
   CommandRegistry,
@@ -62,6 +67,10 @@ async function startContractGateway() {
     backend: {
       invoke: (command, args, invocation) => {
         seen.push(invocation === undefined ? [command, args] : [command, args, invocation]);
+        // A backend error with a registered code (`contract/ipc-error.ts`).
+        if (command === "adopt_missing_session") throw new NativeAgentProviderSessionMissingError();
+        if (command === "fail_with_unregistered_code")
+          throw Object.assign(new Error("Busy right now"), { code: "some-other-code" });
         const handler = commands.get(command);
         // As `OrkestratorBackend.invoke` does (plan item 1005).
         if (!handler) throw unknownCommand(command, invocation?.domain);
@@ -263,6 +272,43 @@ describe("typed incompatibility errors over IPC (plan item 1005)", () => {
     expect((failure as Error).message).toBe("Expected text to be a string");
     expect((failure as { code?: unknown }).code).toBeUndefined();
     expect(incompatibility(failure, "get_contract_probe")).toBeNull();
+  });
+});
+
+describe("registered error codes over IPC", () => {
+  /** What reaches the renderer: the context bridge passes only the message. */
+  const overTheBridge = (error: unknown) => new Error((error as Error).message);
+
+  test("reach the renderer from the backend, through the gateway, main and the preload", async () => {
+    const gateway = await startContractGateway();
+    const { api } = rendererOver(new BackendHttpClient(gateway.url, TOKEN), {
+      electronErrors: true,
+    });
+
+    const missing = await api.invoke("adopt_missing_session", {}).catch((error: unknown) => error);
+    // The preload copies the code back for code in its own world...
+    expect((missing as { code?: unknown }).code).toBe("native-agent-provider-session-missing");
+    // ...and the message form carries it across the context bridge.
+    const renderer = overTheBridge(missing);
+    expect(errorCode(renderer)).toBe("native-agent-provider-session-missing");
+    expect(renderer.message).toBe(
+      `[native-agent-provider-session-missing] ${NATIVE_AGENT_PROVIDER_SESSION_MISSING_MESSAGE}`,
+    );
+    // An older renderer's text match still finds the words; display drops the prefix.
+    expect(renderer.message).toContain("provider session was not found");
+    expect(ipcErrorText(renderer.message)).toBe(NATIVE_AGENT_PROVIDER_SESSION_MISSING_MESSAGE);
+  });
+
+  test("leave an unregistered code's message as it was", async () => {
+    const gateway = await startContractGateway();
+    const { api } = rendererOver(new BackendHttpClient(gateway.url, TOKEN), {
+      electronErrors: true,
+    });
+    const busy = await api
+      .invoke("fail_with_unregistered_code", {})
+      .catch((error: unknown) => error);
+    expect((busy as Error).message).toBe("Busy right now");
+    expect(errorCode(overTheBridge(busy))).toBeUndefined();
   });
 });
 

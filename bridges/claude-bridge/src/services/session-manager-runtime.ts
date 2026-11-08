@@ -544,6 +544,8 @@ export async function retireDrainingClaudeRuntime(
         runtime.ended.then(() => true),
         new Promise<false>((resolve) => {
           timer = setTimeout(() => resolve(false), waitMs);
+          // A bounded wait, not work: it must not keep the process alive.
+          timer.unref?.();
         }),
       ]);
     } finally {

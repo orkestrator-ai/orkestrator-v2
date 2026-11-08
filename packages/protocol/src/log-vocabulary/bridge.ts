@@ -169,6 +169,8 @@ export const BRIDGE_LOG_AREAS = defineLogAreas({
       "app-server.stderr": "Metadata of an app-server stderr line, never its content.",
       "app-server.stderr-suppressed":
         "app-server stderr lines beyond the budget were counted, not described.",
+      "app-server.termination-unconfirmed":
+        "app-server did not report an exit after SIGKILL; the restart or shutdown went on without it.",
       "approval.cancel-failed": "Cancelling a turn after an approval answer failed.",
       "approval.present-failed": "Presenting an approval threw; it is auto-declined.",
       "approval.resolved-callback-failed": "An approval resolved callback threw.",

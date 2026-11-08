@@ -127,8 +127,30 @@ awaited `terminals.history.flush(true)` runs later in its shutdown and
 persists their last records and checkpoints. Owned local servers need an awaited, ordered teardown, so the
 backend's own `shutdown()` calls `runtime.localServers.closeAdmission()` before
 draining lifecycle work and `runtime.localServers.shutdown({ operationDrainTimeoutMs })`
-after it. SIGINT and SIGTERM reach both through `createBackendShutdownHandler`
-(`apps/backend/src/shutdown.ts`).
+after it.
+
+The backend's `shutdown()` cannot stop part way. Each synchronous stop before
+the drain is guarded (`stopStepNow`), and its last phase, from releasing the
+registry writer lease to `storage.close()`, is an Effect program of
+`shutdownStep`s (`core/shutdown-steps.ts`). A step that throws, rejects or
+passes its cap (5 s for web annotations, through `Effect.timeout`, which
+clears its timer) is logged as `shutdown.step-failed` and the next step still
+runs, so the WAL checkpoint and clean-exit marker are always written. When
+lifecycle tasks are still pending, the store closes stay deferred until they
+drain. A failed drain still fails `shutdown()` with its own error. After a
+drain that succeeded, the first failed close that used to propagate (Control
+MCP, agent tools, the stores) fails it instead, so a later call retries.
+
+The process calls it through `createBackendLifetime`
+(`apps/backend/src/startup-services.ts`). `main.ts` installs the SIGINT,
+SIGTERM and parent-watchdog handlers before `init()`, then runs startup as
+stages on one Effect `Scope`. Each stage's release is registered before the
+stage starts: closing the instance descriptor and `backend.shutdown()` for
+`init()`, then stopping the gateway, Tailscale Serve and the managed web
+client, then disposing preview publication. A stop waits for the stage in flight, so `shutdown()`
+never runs beside `init()`. It then interrupts startup before the next stage
+and releases, in reverse order, whatever was started. A failed startup
+releases the same way and exits 1. The ready line is the program's last step.
 
 ## Workload priority
 

@@ -25,6 +25,7 @@ import {
 } from "@orkestrator/protocol/feature-build";
 import type { BuildStepConfigs } from "@orkestrator/protocol/build-pipeline";
 import { createHash } from "node:crypto";
+import { errorCode } from "@orkestrator/protocol/contract/ipc-error";
 import type { DeliveryPolicy } from "@orkestrator/protocol/ticket-sections";
 import type { BuildPipelineService } from "./build-pipeline-service.js";
 import type { StorageService } from "./storage.js";
@@ -377,11 +378,7 @@ async function addKanbanTaskForRequest(
       ...(fields.requestHash ? { featureBuildRequestHash: fields.requestHash } : {}),
     });
   } catch (error) {
-    if (
-      fields.requestId &&
-      error instanceof Error &&
-      error.message.includes("requestId was already used")
-    ) {
+    if (fields.requestId && errorCode(error) === "kanban-request-id-conflict") {
       const existing = await storage.kanban.findKanbanTaskByRequestId(
         fields.projectId,
         fields.requestId,

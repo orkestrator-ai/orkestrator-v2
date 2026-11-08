@@ -78,6 +78,7 @@ export async function readFromLiveClaude<T>(
         answer,
         new Promise<undefined>((resolve) => {
           timer = setTimeout(() => resolve(undefined), timeoutMs);
+          timer.unref?.();
         }),
       ]);
       if (value !== undefined) return value;

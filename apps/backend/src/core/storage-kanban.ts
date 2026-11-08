@@ -1,5 +1,6 @@
 import * as shared from "./storage-shared.js";
 import { createHash } from "node:crypto";
+import { Data } from "effect";
 import {
   applyTicketContentUpdate,
   effectiveDeliveryPolicy,
@@ -132,6 +133,19 @@ function boardLabels(
 
 function sameLabels(a: readonly string[] | undefined, b: readonly string[] | undefined): boolean {
   return JSON.stringify(a ?? []) === JSON.stringify(b ?? []);
+}
+
+/**
+ * A Kanban `requestId` was reused with different arguments: the earlier
+ * request's record exists and differs. Code `kanban-request-id-conflict`
+ * (`contract/ipc-error.ts`); callers read it with `errorCode()`, and the
+ * message keeps its words for older readers.
+ */
+export class KanbanRequestIdConflictError extends Data.TaggedError("KanbanRequestIdConflictError")<{
+  readonly message: string;
+  readonly record: "ticket" | "comment" | "image";
+}> {
+  readonly code = "kanban-request-id-conflict" as const;
 }
 
 function stableKanbanId(namespace: string, requestId: string): string {
@@ -293,7 +307,10 @@ export class KanbanRepository {
           existing.featureBuildRequestHash !== initial.featureBuildRequestHash ||
           (initial.labels !== undefined && !sameLabels(existing.labels, labels))
         ) {
-          throw new Error("Kanban ticket requestId was already used with different arguments");
+          throw new KanbanRequestIdConflictError({
+            message: "Kanban ticket requestId was already used with different arguments",
+            record: "ticket",
+          });
         }
         return normalizeKanbanTask(existing);
       }
@@ -647,7 +664,10 @@ export class KanbanRepository {
       const existing = task.comments.find((comment) => comment.id === id);
       if (existing) {
         if (existing.text !== text) {
-          throw new Error("Kanban comment requestId was already used with different text");
+          throw new KanbanRequestIdConflictError({
+            message: "Kanban comment requestId was already used with different text",
+            record: "comment",
+          });
         }
         return normalizeKanbanTask(task);
       }
@@ -708,7 +728,10 @@ export class KanbanRepository {
       const existing = task.images.find((image) => image.id === imageId);
       if (existing) {
         if (existing.filename !== filename) {
-          throw new Error("Kanban image requestId was already used with a different filename");
+          throw new KanbanRequestIdConflictError({
+            message: "Kanban image requestId was already used with a different filename",
+            record: "image",
+          });
         }
         return { task: normalizeKanbanTask(task), image: existing };
       }

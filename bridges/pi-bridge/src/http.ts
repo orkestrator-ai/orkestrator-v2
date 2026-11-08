@@ -39,7 +39,7 @@ import { listModels, markSessionDefault, refreshModels } from "./models.js";
 import { parseAgentMcpConnection } from "./mcp-config.js";
 import { parseWorkflowResultTurn } from "@orkestrator/protocol/workflow-results";
 import { mcpConnectionNeedsRefresh, publicPiMcpConfig, publicPiMcpServers } from "./mcp.js";
-import { persistBarrier, schedulePersist } from "./persistence.js";
+import { PersistenceClosedError, persistBarrier, schedulePersist } from "./persistence.js";
 import {
   dispatchPrompt,
   errorText,
@@ -318,6 +318,15 @@ export async function route(
     }
     if (error instanceof PromptAttachmentError) {
       return json(response, 400, { error: error.message });
+    }
+    // A durability barrier refused because shutdown began: whatever depended
+    // on it was not handed to Pi. Same shape as the Cursor bridge's refusal.
+    if (error instanceof PersistenceClosedError) {
+      return json(response, 503, {
+        error: error.message,
+        kind: "persistence-unavailable",
+        code: "persistence-closed",
+      });
     }
     log.error("http.route-failed");
     return json(response, 500, { error: "Internal bridge error" });

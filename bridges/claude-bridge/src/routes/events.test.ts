@@ -21,6 +21,7 @@ import events, {
   createEventsRouter,
   createReplayBuffer,
   createReplayRetention,
+  createSseConnectionClosure,
   getReplayFrames,
   parseReplayCursor,
   serializeEvent,
@@ -254,6 +255,48 @@ describe("createBoundedSseWriter", () => {
       await write({ event: "a", data: `f${index}` }).catch(() => undefined);
     }
     expect(overflowed).toBe(0);
+  });
+});
+
+describe("createSseConnectionClosure", () => {
+  test("many settled writes leave no waiter behind", async () => {
+    // A per-frame race against a connection-lifetime promise kept one reaction
+    // per frame until the connection closed. Each write's waiter goes when the
+    // write settles, so a long-lived stream holds none between writes.
+    const closure = createSseConnectionClosure();
+    for (let index = 0; index < 1_000; index += 1) {
+      await closure.race(Promise.resolve());
+      expect(closure.pendingWaiters).toBe(0);
+    }
+    await expect(closure.race(Promise.reject(new Error("write failed")))).rejects.toThrow(
+      "write failed",
+    );
+    expect(closure.pendingWaiters).toBe(0);
+    closure.close();
+  });
+
+  test("a write that never settles is released by the close", async () => {
+    const closure = createSseConnectionClosure();
+    const stalled = Promise.withResolvers<void>();
+    let released = false;
+    const racing = closure.race(stalled.promise).then(() => {
+      released = true;
+    });
+    await Promise.resolve();
+    expect(closure.pendingWaiters).toBe(1);
+    expect(released).toBe(false);
+
+    closure.close();
+    await racing;
+    expect(released).toBe(true);
+    expect(closure.pendingWaiters).toBe(0);
+    expect(closure.isClosed).toBe(true);
+    await closure.closed;
+    // A late rejection of the abandoned write is not unhandled, and a write
+    // after the close neither waits nor registers.
+    stalled.reject(new Error("late"));
+    await closure.race(new Promise(() => undefined));
+    expect(closure.pendingWaiters).toBe(0);
   });
 });
 

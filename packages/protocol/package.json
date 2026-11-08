@@ -74,6 +74,7 @@
     "./contract/ipc-error": "./src/contract/ipc-error.ts",
     "./contract/json-schema": "./src/contract/json-schema.ts",
     "./contract/model-schema": "./src/contract/model-schema.ts",
+    "./contract/node-refusal": "./src/contract/node-refusal.ts",
     "./node/logger-environment": "./src/node/logger-environment.ts",
     "./node/command-capture": "./src/node/command-capture.ts",
     "./node/command-failure-reason": "./src/node/command-failure-reason.ts",

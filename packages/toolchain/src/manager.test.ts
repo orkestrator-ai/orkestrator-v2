@@ -2793,3 +2793,138 @@ describe("pinned desktop toolchain cache", () => {
     expect(events.at(-1)).toMatchObject({ phase: "ready", overallFraction: 1, totalTools: 0 });
   });
 });
+
+describe("cancelling a toolchain install", () => {
+  async function failureOf(promise: Promise<unknown>): Promise<Error> {
+    const outcome = await promise.then(
+      () => null,
+      (error: unknown) => error,
+    );
+    expect(outcome).toBeInstanceOf(Error);
+    return outcome as Error;
+  }
+
+  test("an abort while waiting for another installer's lock stops the wait", async () => {
+    const dataDir = await createDataDir();
+    const rootDir = path.join(dataDir, "toolchains");
+    const lockPath = path.join(rootDir, ".install.lock");
+    await mkdir(rootDir, { recursive: true });
+    const foreignLock = JSON.stringify({
+      token: "other-window",
+      pid: process.pid,
+      createdAt: new Date().toISOString(),
+    });
+    await writeFile(lockPath, foreignLock);
+    const controller = new AbortController();
+    const fetchImpl = createFetch();
+
+    const startedAt = Date.now();
+    const error = await failureOf(
+      ensurePinnedToolchains({
+        dataDir,
+        artifacts,
+        fetchImpl,
+        skipExecutableProbeForTests: true,
+        processExistsForTests: () => true,
+        signal: controller.signal,
+        onProgress: (event) => {
+          if (event.phase === "waiting") controller.abort("SIGINT");
+        },
+        // Only the abort can end the wait: the next poll is a minute away and
+        // the lock never goes stale.
+        timingsForTests: {
+          lockPollMs: 60_000,
+          lockStaleAfterMs: 60 * 60_000,
+          lockWaitTimeoutMs: 60 * 60_000,
+        },
+      }),
+    );
+
+    expect(error.name).toBe("AbortError");
+    expect(Date.now() - startedAt).toBeLessThan(5_000);
+    expect(fetchImpl).not.toHaveBeenCalled();
+    // The other installer's lock is not ours to remove.
+    expect(await readFile(lockPath, "utf8")).toBe(foreignLock);
+  });
+
+  test("an abort during a download releases the lock, removes staging and is not retried", async () => {
+    const dataDir = await createDataDir();
+    const rootDir = path.join(dataDir, "toolchains");
+    const controller = new AbortController();
+    const fetchImpl = mock(async (_input: string, init?: RequestInit) => {
+      const stream = new ReadableStream<Uint8Array>({
+        start(streamController) {
+          streamController.enqueue(new Uint8Array(ZIP_FIXTURE.subarray(0, 16)));
+        },
+        pull(streamController) {
+          // Stalls until the request is aborted, as a real fetch body does.
+          return new Promise<void>((resolve) => {
+            const fail = () => {
+              streamController.error(new Error("aborted"));
+              resolve();
+            };
+            if (init?.signal?.aborted) fail();
+            else init?.signal?.addEventListener("abort", fail, { once: true });
+          });
+        },
+      });
+      return new Response(stream, {
+        status: 200,
+        headers: { "content-length": String(ZIP_FIXTURE.byteLength) },
+      });
+    });
+
+    const error = await failureOf(
+      ensurePinnedToolchains({
+        dataDir,
+        artifacts: [artifacts[0]],
+        fetchImpl,
+        skipExecutableProbeForTests: true,
+        signal: controller.signal,
+        onProgress: (event) => {
+          if (event.phase === "downloading" && (event.bytesReceived ?? 0) > 0) {
+            controller.abort("SIGINT");
+          }
+        },
+        timingsForTests: { downloadIdleTimeoutMs: 60_000, downloadRetryDelayMs: 0 },
+      }),
+    );
+
+    expect(error.name).toBe("AbortError");
+    expect(error.message).not.toContain("stalled");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    await expect(lstat(path.join(rootDir, ".install.lock"))).rejects.toThrow();
+    expect((await readdir(rootDir)).filter((entry) => entry.startsWith(".staging-"))).toEqual([]);
+
+    // The lock really is free: the next run installs without waiting.
+    const result = await ensurePinnedToolchains({
+      dataDir,
+      artifacts: [artifacts[0]],
+      fetchImpl: createFetch(),
+      skipExecutableProbeForTests: true,
+      timingsForTests: { lockWaitTimeoutMs: 1_000 },
+    });
+    expect(path.dirname(result.binDir)).toBe(path.join(rootDir, "bin"));
+  });
+
+  test("an already-aborted signal takes no lock and downloads nothing", async () => {
+    const dataDir = await createDataDir();
+    const controller = new AbortController();
+    controller.abort("SIGTERM");
+    const fetchImpl = createFetch();
+
+    const error = await failureOf(
+      ensurePinnedToolchains({
+        dataDir,
+        artifacts,
+        fetchImpl,
+        skipExecutableProbeForTests: true,
+        signal: controller.signal,
+      }),
+    );
+
+    expect(error.name).toBe("AbortError");
+    expect(fetchImpl).not.toHaveBeenCalled();
+    await expect(lstat(path.join(dataDir, "toolchains", ".install.lock"))).rejects.toThrow();
+  });
+});

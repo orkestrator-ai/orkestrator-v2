@@ -22,6 +22,7 @@ import { realpath, stat } from "node:fs/promises";
 import { hostname } from "node:os";
 import { gitDockerScanPool } from "../git-docker-scan-pool.js";
 import { runCommand } from "../shell.js";
+import { CaptureError, captureErrorReason } from "./capture-error.js";
 import type { WorkAdmissionPool } from "../work-admission.js";
 import { resolveWorktreeGitPaths } from "../worktree-git-paths.js";
 import {
@@ -137,13 +138,13 @@ export class RemoteSlots {
         const onAbort = () => {
           const index = this.waiters.indexOf(wake);
           if (index >= 0) this.waiters.splice(index, 1);
-          reject(new Error("capture-timeout"));
+          reject(new CaptureError("capture-timeout"));
         };
         const wake = () => {
           signal.removeEventListener("abort", onAbort);
           resolve();
         };
-        if (signal.aborted) return reject(new Error("capture-timeout"));
+        if (signal.aborted) return reject(new CaptureError("capture-timeout"));
         this.waiters.push(wake);
         signal.addEventListener("abort", onAbort, { once: true });
       });
@@ -459,7 +460,7 @@ export class WorktreeChangeOwner {
       };
     } catch (error) {
       const reason =
-        controller.signal.aborted || (error instanceof Error && error.message === "capture-timeout")
+        controller.signal.aborted || captureErrorReason(error) === "capture-timeout"
           ? "capture-timeout"
           : error instanceof Error && error.name === "AdmissionRejectedError"
             ? "capture-capacity"

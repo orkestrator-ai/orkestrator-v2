@@ -200,13 +200,19 @@ function failureFromResponse(error: {
   );
 }
 
-async function renderOnce(
+/** Exported for tests; production renders through `requestMermaidPreview`. */
+export async function renderMermaidOnce(
   renderer: MermaidRenderer,
   source: string,
   theme: "light" | "dark",
   signal: AbortSignal,
 ): Promise<MermaidPreview> {
+  const aborted = () => new DOMException("Aborted", "AbortError");
+  // A request cancelled before it ran must not reach the backend or wait out
+  // the client timeout: an `abort` listener added now would never fire.
+  if (signal.aborted) throw aborted();
   let timer: ReturnType<typeof setTimeout> | null = null;
+  let onAbort: (() => void) | null = null;
   const response = await Promise.race([
     // Backend command failures arrive as a thrown Error carrying the JSON
     // `ArtifactError`; classify them like a resolved failure so validation
@@ -223,12 +229,14 @@ async function renderOnce(
         () => reject(new MermaidUnavailableError("The diagram renderer did not respond")),
         CLIENT_TIMEOUT_MS,
       );
-      signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), {
-        once: true,
-      });
+      onAbort = () => reject(aborted());
+      signal.addEventListener("abort", onAbort, { once: true });
     }),
   ]).finally(() => {
     if (timer) clearTimeout(timer);
+    // The scheduler may reuse a long-lived signal; a settled render must not
+    // keep a listener (and this closure) attached to it.
+    if (onAbort) signal.removeEventListener("abort", onAbort);
   });
   if (!response.ok) throw failureFromResponse(response.error);
   let clean: string;
@@ -279,7 +287,7 @@ export function requestMermaidPreview(
     priority: options.priority ?? "visible",
     sourceBytes: utf8ByteLength(source),
     run: async (signal) => {
-      const preview = await renderOnce(
+      const preview = await renderMermaidOnce(
         rendererFor(options.node ?? appCommandScope()),
         source,
         theme,

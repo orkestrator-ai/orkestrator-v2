@@ -43,6 +43,7 @@ import {
   gitNumstatAlgorithmId,
 } from "@orkestrator/protocol/node/change-tracking/count-policy";
 import { mapWithConcurrency, parseGitDiffSummary, type GitFileChange } from "../commands-files.js";
+import { CaptureError, captureErrorReason, type CaptureErrorReason } from "./capture-error.js";
 import { UNTRACKED_SCAN_CONCURRENCY } from "../commands-validation.js";
 import { gitDockerScanPool } from "../git-docker-scan-pool.js";
 import { countUntrackedFileLines } from "../local-git-scan-caches.js";
@@ -149,6 +150,13 @@ async function filteredPaths(
   return filtered;
 }
 
+/** A failed scan's `unavailableReason`: the two reasons a view explains, else `scan-failed`. */
+export function scopeUnavailableReason(reason: CaptureErrorReason | undefined): string {
+  return reason === "commit-not-found" || reason === "baseline-unavailable"
+    ? reason
+    : "scan-failed";
+}
+
 function statusOf(code: string): string {
   switch (code[0]) {
     case "A":
@@ -237,11 +245,7 @@ export class GitScopeService {
             checkedObservationEpoch: null,
           },
           stale: true,
-          unavailableReason:
-            error instanceof Error &&
-            (error.message === "commit-not-found" || error.message === "baseline-unavailable")
-              ? error.message
-              : "scan-failed",
+          unavailableReason: scopeUnavailableReason(captureErrorReason(error)),
         });
         this.deps.projections.bump(resourceKey);
         this.deps.announce(resourceKey);
@@ -350,7 +354,7 @@ export class GitScopeService {
     commit: string | undefined,
   ): Promise<void> {
     const target = await this.deps.environmentTarget(environmentId);
-    if (!target) throw new Error("runtime-unavailable");
+    if (!target) throw new CaptureError("runtime-unavailable");
     const identity = await this.deps.registry.resolve(target);
     const git = await this.runner(target);
     const resourceKey = gitScopeResourceKey(scope, environmentId, commit);
@@ -387,8 +391,8 @@ export class GitScopeService {
             break;
           case "committed-net": {
             const base = this.environmentBase(environmentId);
-            if (!base) throw new Error("baseline-unavailable");
-            if (!head) throw new Error("head-unavailable");
+            if (!base) throw new CaptureError("baseline-unavailable");
+            if (!head) throw new CaptureError("head-unavailable");
             before = base;
             after = head;
             mode = "trees";
@@ -397,7 +401,7 @@ export class GitScopeService {
           }
           case "commit": {
             const sha = commit ? await this.resolve(git, commit) : null;
-            if (!sha) throw new Error("commit-not-found");
+            if (!sha) throw new CaptureError("commit-not-found");
             before = (await this.resolve(git, `${sha}^1`)) ?? EMPTY_TREE;
             after = sha;
             mode = "trees";
@@ -409,9 +413,9 @@ export class GitScopeService {
             const base = branch
               ? ((await this.resolve(git, `origin/${branch}`)) ?? (await this.resolve(git, branch)))
               : null;
-            if (!base || !head) throw new Error("pull-request-base-unavailable");
+            if (!base || !head) throw new CaptureError("pull-request-base-unavailable");
             const mergeBase = (await git(["merge-base", base, head]).catch(() => "")).trim();
-            if (!OID.test(mergeBase)) throw new Error("pull-request-base-unavailable");
+            if (!OID.test(mergeBase)) throw new CaptureError("pull-request-base-unavailable");
             before = mergeBase;
             after = head;
             mode = "trees";

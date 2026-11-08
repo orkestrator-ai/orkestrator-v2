@@ -58,6 +58,7 @@ import {
 import { registerArtifactHostIpc, type ArtifactHostController } from "./artifact-host-ipc.js";
 import { parseNodeId } from "./node-ipc.js";
 import { incompatibilityIpcMessage } from "@orkestrator/protocol/contract/errors";
+import { ipcErrorMessage } from "@orkestrator/protocol/contract/ipc-error";
 
 /**
  * The contract envelope (`{ command, args, domain?, version?, critical? }`,
@@ -450,11 +451,13 @@ export function registerMainIpc({
       ? backend.invoke(command, safeArgs, { envelope })
       : backend.invoke(command, safeArgs);
   };
-  // Only an error's message crosses IPC, so a typed incompatibility is sent in
-  // its message form (`[code key=value …] text`, plan item 1005).
+  // Only an error's message crosses IPC, so an error with a registered code
+  // (a typed incompatibility, plan item 1005, or any other code in
+  // `REGISTERED_ERROR_CODES`) is sent in its message form,
+  // `[code key=value …] text`; the text after the brackets is unchanged.
   handle("orkestrator:invoke", (event, command: unknown, args?: unknown, options?: unknown) =>
     invokeCommand(event, command, args, options).catch((error: unknown) => {
-      const coded = incompatibilityIpcMessage(error);
+      const coded = incompatibilityIpcMessage(error) ?? ipcErrorMessage(error);
       throw coded === null ? error : new Error(coded);
     }),
   );

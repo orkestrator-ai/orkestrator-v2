@@ -285,13 +285,18 @@ export class McpManagementService {
   }
 
   init(): Promise<void> {
+    // Concurrent callers share one attempt; a failed attempt is forgotten so
+    // the next call retries instead of failing until restart.
     this.initialized ??= (async () => {
       await this.operations.load();
       await this.gate.refresh();
       await this.recover();
       await this.retireGatedWork();
       this.scheduleTick();
-    })();
+    })().catch((error: unknown) => {
+      this.initialized = null;
+      throw error;
+    });
     return this.initialized;
   }
 

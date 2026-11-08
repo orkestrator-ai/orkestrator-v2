@@ -387,6 +387,81 @@ export function createBoundedSseWriter(
   };
 }
 
+/**
+ * The moment an SSE connection stops, as one settle hook shared by every
+ * write.
+ *
+ * Racing each write against a promise that settles only when the connection
+ * closes attaches a reaction to that promise per frame, and every reaction is
+ * kept until the connection closes; a long-lived `?observe=1` stream retained
+ * one per frame it ever sent. Here a write registers one waiter and removes it
+ * as soon as the write settles, so what is held at any moment is bounded by
+ * the writes in flight.
+ *
+ * Exported for tests.
+ */
+export interface SseConnectionClosure {
+  /** Settles once `close` runs. Await it once, for the connection's life. */
+  readonly closed: Promise<void>;
+  readonly isClosed: boolean;
+  /** Idempotent. Releases every write still waiting. */
+  close(): void;
+  /**
+   * Resolves when `write` resolves or the connection closes, whichever is
+   * first, and rejects if `write` rejects first.
+   */
+  race(write: Promise<unknown>): Promise<void>;
+  /** Writes currently registered. Tests only. */
+  readonly pendingWaiters: number;
+}
+
+export function createSseConnectionClosure(): SseConnectionClosure {
+  const waiters = new Set<() => void>();
+  let isClosed = false;
+  let resolveClosed!: () => void;
+  const closed = new Promise<void>((resolve) => {
+    resolveClosed = resolve;
+  });
+  return {
+    closed,
+    get isClosed() {
+      return isClosed;
+    },
+    get pendingWaiters() {
+      return waiters.size;
+    },
+    close() {
+      if (isClosed) return;
+      isClosed = true;
+      for (const wake of Array.from(waiters)) wake();
+      waiters.clear();
+      resolveClosed();
+    },
+    race(write) {
+      if (isClosed) {
+        // Same as a race against an already-settled close: never wait, and
+        // leave nothing unhandled behind.
+        write.catch(() => undefined);
+        return Promise.resolve();
+      }
+      return new Promise<void>((resolve, reject) => {
+        const wake = () => resolve();
+        waiters.add(wake);
+        write.then(
+          () => {
+            waiters.delete(wake);
+            resolve();
+          },
+          (error: unknown) => {
+            waiters.delete(wake);
+            reject(error);
+          },
+        );
+      });
+    },
+  };
+}
+
 /** Frequency of the idle-connection keepalive comment frame. */
 export const KEEPALIVE_INTERVAL_MS = 30_000;
 
@@ -411,22 +486,16 @@ export function createEventsRouter(
       log.debug("sse.opened", { connectedAt });
 
       let isOpen = true;
-      let resolveConnectionClosed!: () => void;
-      const connectionClosed = new Promise<void>((resolve) => {
-        resolveConnectionClosed = resolve;
-      });
-      let resolveRequestAborted!: () => void;
-      const requestAborted = new Promise<void>((resolve) => {
-        resolveRequestAborted = resolve;
-      });
+      // Settles on a request abort or on `closeConnection`, whichever is first.
+      const closure = createSseConnectionClosure();
       const onRequestAbort = () => {
         log.debug("sse.aborted");
         isOpen = false;
-        resolveRequestAborted();
+        closure.close();
       };
       if (c.req.raw.signal.aborted) {
         isOpen = false;
-        resolveRequestAborted();
+        closure.close();
       } else {
         // Register before the first awaited write. A client can consume
         // `connected` and abort while replay is still flushing; attaching this
@@ -437,16 +506,17 @@ export function createEventsRouter(
         if (!isOpen) return;
         isOpen = false;
         log.info("sse.closed", { reason });
-        resolveConnectionClosed();
+        closure.close();
       };
 
       const writeFrame = createBoundedSseWriter(
         async (frame) => {
           if (!isOpen) throw new Error("SSE request aborted");
           // A stream write may remain backpressured forever after its browser
-          // disappears. Racing the request signal lets the route release its
-          // emitter subscription even when the underlying writer never settles.
-          await Promise.race([stream.writeSSE(frame), requestAborted, connectionClosed]);
+          // disappears. Racing the close lets the route release its emitter
+          // subscription even when the underlying writer never settles; the
+          // waiter is removed as soon as this write settles.
+          await closure.race(stream.writeSSE(frame));
           if (!isOpen) throw new Error("SSE request aborted");
         },
         () => closeConnection("write backlog exceeded its cap"),
@@ -601,7 +671,7 @@ export function createEventsRouter(
 
         // Wait until the client disconnects or the writer declares the consumer
         // dead; returning ends the response and the client reconnects.
-        await Promise.race([connectionClosed, requestAborted]);
+        await closure.closed;
       } catch (error) {
         if (!c.req.raw.signal.aborted) {
           log.warn("sse.handshake-failed", { error: formatLogError(error) });

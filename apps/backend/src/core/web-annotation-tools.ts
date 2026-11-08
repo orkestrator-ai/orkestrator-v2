@@ -63,7 +63,16 @@ class WebAnnotationToolError extends Error {
   }
 }
 
-/** Bounded concurrency and deadlines shared by every tool server instance. */
+/**
+ * Bounded concurrency and deadlines shared by every tool server instance.
+ *
+ * A slot is held until the operation itself settles, not until the caller
+ * gives up: when the deadline wins, the caller gets `timeout` promptly and the
+ * operation's signal aborts, but the slot stays taken until the work actually
+ * stops. Releasing on timeout would let abandoned work pile up past `total`
+ * (the same rule as `work-admission.ts`: aborting after the grant does not
+ * release the slot).
+ */
 export class WebAnnotationToolLimiter {
   private readonly active = new Map<string, number>();
   private total = 0;
@@ -72,7 +81,10 @@ export class WebAnnotationToolLimiter {
     private readonly options: { timeoutMs?: number; perScope?: number; total?: number } = {},
   ) {}
 
-  async run<T>(scope: WebAnnotationToolScope, operation: () => Promise<T>): Promise<T> {
+  async run<T>(
+    scope: WebAnnotationToolScope,
+    operation: (signal: AbortSignal) => Promise<T>,
+  ): Promise<T> {
     const key = `${scope.environmentId}\0${scope.tabId ?? ""}`;
     const current = this.active.get(key) ?? 0;
     if (
@@ -86,34 +98,35 @@ export class WebAnnotationToolLimiter {
     }
     this.active.set(key, current + 1);
     this.total += 1;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const work = operation();
-    // The deadline may win the race; the operation's own rejection must never
-    // become an unhandled rejection after that.
-    work.catch(() => undefined);
-    try {
-      return await Promise.race([
-        work,
-        new Promise<never>((_, reject) => {
-          timer = setTimeout(
-            () =>
-              reject(
-                new WebAnnotationToolError(
-                  "timeout",
-                  "The annotation service did not respond in time.",
-                ),
-              ),
-            this.options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-          );
-          timer.unref?.();
-        }),
-      ]);
-    } finally {
-      if (timer) clearTimeout(timer);
+    const release = () => {
       this.total -= 1;
       const remaining = (this.active.get(key) ?? 1) - 1;
       if (remaining <= 0) this.active.delete(key);
       else this.active.set(key, remaining);
+    };
+    const controller = new AbortController();
+    // The async wrapper turns a synchronous throw into a rejection, so the
+    // slot is released on every path.
+    const work = (async () => operation(controller.signal))();
+    // Release when the work settles. This handler also keeps the work's own
+    // rejection from becoming unhandled after the deadline wins the race.
+    void work.then(release, release);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        const error = new WebAnnotationToolError(
+          "timeout",
+          "The annotation service did not respond in time.",
+        );
+        reject(error);
+        controller.abort(error);
+      }, this.options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+      timer.unref?.();
+    });
+    try {
+      return await Promise.race([work, deadline]);
+    } finally {
+      clearTimeout(timer);
     }
   }
 }
@@ -332,8 +345,10 @@ export function registerWebAnnotationTools(
     },
     async ({ requestId, annotationId }) => {
       try {
-        return await limiter.run(scope, async () => {
+        return await limiter.run(scope, async (signal) => {
           const { request } = await assignedById(host, scope, requestId);
+          // The host takes no signal; stop between steps once the caller gave up.
+          signal.throwIfAborted();
           if (!request.selections.some((selection) => selection.annotationId === annotationId)) {
             throw new WebAnnotationToolError(
               "annotation-not-in-request",
@@ -436,7 +451,7 @@ export function registerWebAnnotationTools(
     },
     async (input) => {
       try {
-        return await limiter.run(scope, async () => {
+        return await limiter.run(scope, async (signal) => {
           const validated = validateWebAnnotationResultReport(input);
           if (!validated.ok) throw new WebAnnotationToolError("invalid-report", validated.error);
           const report = validated.value;
@@ -454,6 +469,8 @@ export function registerWebAnnotationTools(
               "Outcomes may only name annotations in the assigned request.",
             );
           }
+          // A caller that already got `timeout` must not have its report land later.
+          signal.throwIfAborted();
           const result = await host.reportResult(scope, report);
           if (result.requestId !== request.id) {
             throw new WebAnnotationToolError("unavailable", "The result could not be recorded.");

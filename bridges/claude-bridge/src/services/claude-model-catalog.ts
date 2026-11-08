@@ -230,6 +230,7 @@ async function probeModels(at: number): Promise<ClaudeModelCatalog> {
           () => reject(new Error("The model probe did not answer in time")),
           CLAUDE_MODEL_PROBE_TIMEOUT_MS,
         );
+        timer.unref?.();
       }),
     ]);
     debugLog("[session-manager] Supported models fetched", { count: models.length });

@@ -44,6 +44,7 @@ const { sessions, clientSessionKeys } = await import("./state.js");
 const {
   drainPersistence,
   loadPersistedState,
+  reopenPersistenceForTests,
   setPersistWriteGateForTests,
   settlePersistenceForTests,
 } = await import("./persistence.js");
@@ -138,6 +139,8 @@ runBridgeContractSuite({
         await new Promise<void>((resolve) => server.close(() => resolve()));
         setPersistWriteGateForTests();
         await drainPersistence().catch(() => undefined);
+        // The next scenario starts a fresh bridge in this same module graph.
+        reopenPersistenceForTests();
         sessions.clear();
         clientSessionKeys.clear();
         setAgentSessionTestHooks(undefined);

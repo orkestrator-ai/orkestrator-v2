@@ -29,7 +29,8 @@ import {
   type ArtifactHostApi,
   type ArtifactHostEvent,
 } from "@orkestrator/protocol/artifact-host-ipc";
-import { parseIpcIncompatibility } from "@orkestrator/protocol/contract/ipc-error";
+import { parseIpcError } from "@orkestrator/protocol/contract/ipc-error";
+import { messageCode } from "@orkestrator/protocol/contract/node-refusal";
 
 type EventCallback<T> = (payload: T) => void;
 
@@ -49,13 +50,6 @@ export type IpcRendererLike = {
 const REMOTE_METHOD_ERROR_PREFIX =
   /^Error invoking remote method '[^']*': (?:(?:[A-Za-z_$][\w$]*Error|Error): )?/;
 
-/**
- * A coded refusal from main leads its message with `[code] ` (`node-ipc.ts`),
- * because only the message crosses IPC. The code stays in the message, which
- * is all that crosses the context bridge, and is also set as `error.code`.
- */
-const REFUSAL_CODE_PREFIX = /^\[([a-z][a-z0-9-]{0,63})\] /;
-
 function readableInvokeError(error: unknown): unknown {
   if (!(error instanceof Error) || !REMOTE_METHOD_ERROR_PREFIX.test(error.message)) return error;
   const message = error.message.replace(REMOTE_METHOD_ERROR_PREFIX, "");
@@ -69,13 +63,17 @@ function readableInvokeError(error: unknown): unknown {
   delete diagnostics.stack;
   delete diagnostics.cause;
   Object.defineProperties(readable, diagnostics);
-  // A typed incompatibility (plan item 1005) carries bounded details in the
-  // brackets too; it keeps its message form, the only part the bridge passes.
-  const incompatible = parseIpcIncompatibility(message);
-  const code = incompatible?.code ?? REFUSAL_CODE_PREFIX.exec(message)?.[1];
+  // A registered code (a typed incompatibility, plan item 1005, or any other
+  // in `REGISTERED_ERROR_CODES`) carries bounded details in the brackets too;
+  // it keeps its message form, the only part the bridge passes.
+  const coded = parseIpcError(message);
+  // A coded refusal from main leads its message with `[code] ` (`node-ipc.ts`),
+  // because only the message crosses IPC. The code stays in the message, which
+  // is all that crosses the context bridge, and is also set as `error.code`.
+  const code = coded?.code ?? messageCode(message);
   if (code && !("code" in readable)) Object.defineProperty(readable, "code", { value: code });
-  if (incompatible && !("details" in readable)) {
-    Object.defineProperty(readable, "details", { value: incompatible.details });
+  if (coded && !("details" in readable)) {
+    Object.defineProperty(readable, "details", { value: coded.details });
   }
   return readable;
 }

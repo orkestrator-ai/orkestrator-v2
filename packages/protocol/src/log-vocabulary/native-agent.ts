@@ -107,4 +107,13 @@ export const NATIVE_AGENT_LOG_AREAS = defineLogAreas({
         "The shared OpenCode database could not be inspected, so host OpenCode opens it as usual. Error class only.",
     },
   },
+  "native-agent.opencode2": {
+    description: "The OpenCode 2.x provider: its event monitor and steering.",
+    events: {
+      "events.dropped":
+        "The 2.x event stream ended or failed, so reads go to the server until it reconnects. Error class only.",
+      "steer.unconfirmed":
+        "A 2.x steer got no definite answer, so its delivery is reconciled from history. Error class only.",
+    },
+  },
 });

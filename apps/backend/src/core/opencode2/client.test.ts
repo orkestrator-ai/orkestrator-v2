@@ -42,7 +42,8 @@ const json = (value: unknown, status = 200) => Response.json(value, { status });
 
 describe("OpenCode2Client", () => {
   test("authenticates, scopes the directory and unwraps the data envelope", async () => {
-    const { client, seen } = serve(() => json({ data: { version: "2.2.6", pid: 1 } }));
+    // `/api/info` answers a bare object, unlike most 2.x routes.
+    const { client, seen } = serve(() => json({ version: "2.2.6", pid: 1 }));
     await expect(client.info()).resolves.toEqual({ version: "2.2.6", pid: 1 });
     expect(seen[0]!.headers.get("authorization")).toBe(`Basic ${btoa("opencode:pw")}`);
     expect(seen[0]!.headers.get("x-opencode-directory")).toBe("/work/project");
@@ -96,8 +97,10 @@ describe("OpenCode2Client", () => {
     // 1.x routes on a 2.x server answer the bundled web app's page.
     answer = () => new Response("<html></html>", { headers: { "content-type": "text/html" } });
     await expect(client.info()).rejects.toThrow("not the OpenCode 2.x API");
-    answer = () => json({ version: "2.2.6" });
-    await expect(client.info()).rejects.toThrow("not a 2.x envelope");
+    answer = () => json({ status: "ok" });
+    await expect(client.info()).rejects.toThrow("not a 2.x answer");
+    answer = () => json([]);
+    await expect(client.listPermissions("ses_1")).rejects.toThrow("not a 2.x envelope");
   });
 
   test("204 answers resolve without a body", async () => {
@@ -107,7 +110,7 @@ describe("OpenCode2Client", () => {
   });
 
   test("interrupt reports whether a run was interrupted", async () => {
-    const { client, seen } = serve(() => json({ data: { interrupted: true } }));
+    const { client, seen } = serve(() => json({ interrupted: true }));
     await expect(client.interrupt("ses_1", { resume: false })).resolves.toBe(true);
     expect(seen[0]!.search).toBe("?resume=false");
   });

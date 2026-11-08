@@ -94,6 +94,14 @@ export interface OpenCode2OtherMessage extends MessageBase {
 export type OpenCode2Message =
   OpenCode2UserMessage | OpenCode2AssistantMessage | OpenCode2IdleMessage | OpenCode2OtherMessage;
 
+/** A pending inbox entry (`GET /api/session/:id/inbox`). */
+export interface OpenCode2InboxItem {
+  id: string;
+  type: string;
+  delivery?: OpenCode2InboxDelivery;
+  payload?: { text?: string; metadata?: Record<string, unknown> };
+}
+
 export interface OpenCode2PermissionRequest {
   id: string;
   sessionID: string;

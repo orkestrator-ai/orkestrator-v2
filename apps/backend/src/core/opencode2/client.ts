@@ -9,8 +9,9 @@
  * exact version the backend does not use, and because every read must be
  * bounded (AGENTS.md invariant 11).
  *
- * Every successful 2.x answer is a `{ data }` envelope; list routes add a
- * `cursor`. A 4xx is a definitive refusal and surfaces as
+ * Successful 2.x answers are `{ data }` envelopes (list routes add a
+ * `cursor`), except `/api/info` and `interrupt`, which answer bare objects, and
+ * the mutations that answer 204 (verified against the 2.2.6 OpenAPI). A 4xx is a definitive refusal and surfaces as
  * {@link OpenCode2RequestError} with the server's `_tag`; anything else
  * (network, 5xx, an oversized or malformed body) is
  * {@link ProviderUnavailableError}, which says nothing about whether the
@@ -20,6 +21,7 @@ import { ProviderUnavailableError } from "../agent-provider-contract.js";
 import type {
   OpenCode2Form,
   OpenCode2InboxDelivery,
+  OpenCode2InboxItem,
   OpenCode2Info,
   OpenCode2Message,
   OpenCode2ModelRef,
@@ -73,6 +75,8 @@ export interface OpenCode2PromptInput extends OpenCode2UserInput {
 }
 
 type RequestOptions = {
+  /** Most 2.x answers are `{ data }` envelopes; `/api/info` and `interrupt` are not. */
+  bare?: boolean;
   query?: Record<string, string | undefined>;
   body?: unknown;
   maxBytes?: number;
@@ -93,8 +97,15 @@ export class OpenCode2Client {
   }
 
   /** The 2.x health probe. 1.x's `/global/health` answers HTML on 2.x and must not be used. */
-  info(signal?: AbortSignal): Promise<OpenCode2Info> {
-    return this.request("GET", "/api/info", "OpenCode info", { signal });
+  async info(signal?: AbortSignal): Promise<OpenCode2Info> {
+    const info = await this.request<OpenCode2Info>("GET", "/api/info", "OpenCode info", {
+      signal,
+      bare: true,
+    });
+    if (!info || typeof info.version !== "string") {
+      throw new ProviderUnavailableError("OpenCode info is not a 2.x answer");
+    }
+    return info;
   }
 
   createSession(input: {
@@ -114,11 +125,11 @@ export class OpenCode2Client {
     });
   }
 
-  updateSession(
+  async updateSession(
     sessionId: string,
     patch: { metadata?: Record<string, unknown> | null; permissions?: unknown[] | null },
-  ): Promise<OpenCode2Session> {
-    return this.request("PATCH", `/api/session/${seg(sessionId)}`, "OpenCode session update", {
+  ): Promise<void> {
+    await this.request("PATCH", `/api/session/${seg(sessionId)}`, "OpenCode session update", {
       body: patch,
     });
   }
@@ -165,14 +176,14 @@ export class OpenCode2Client {
     });
   }
 
-  selectModel(sessionId: string, model: OpenCode2ModelRef): Promise<unknown> {
-    return this.request("POST", `/api/session/${seg(sessionId)}/model`, "OpenCode model switch", {
+  async selectModel(sessionId: string, model: OpenCode2ModelRef): Promise<void> {
+    await this.request("POST", `/api/session/${seg(sessionId)}/model`, "OpenCode model switch", {
       body: { model },
     });
   }
 
-  selectAgent(sessionId: string, agent: string): Promise<unknown> {
-    return this.request("POST", `/api/session/${seg(sessionId)}/agent`, "OpenCode agent switch", {
+  async selectAgent(sessionId: string, agent: string): Promise<void> {
+    await this.request("POST", `/api/session/${seg(sessionId)}/agent`, "OpenCode agent switch", {
       body: { agent },
     });
   }
@@ -182,9 +193,41 @@ export class OpenCode2Client {
       "POST",
       `/api/session/${seg(sessionId)}/interrupt`,
       "OpenCode interrupt",
-      { query: { resume: options.resume === undefined ? undefined : String(options.resume) } },
+      {
+        bare: true,
+        query: { resume: options.resume === undefined ? undefined : String(options.resume) },
+      },
     );
     return answer?.interrupted === true;
+  }
+
+  /**
+   * Every session with a run in progress, in one read: `{ [sessionId]: { type: "running" } }`.
+   * Sessions absent from the map are not running.
+   */
+  async activeSessions(signal?: AbortSignal): Promise<ReadonlySet<string>> {
+    const data = await this.request<Record<string, unknown>>(
+      "GET",
+      "/api/session/active",
+      "OpenCode active sessions",
+      { signal },
+    );
+    if (!data || typeof data !== "object" || Array.isArray(data)) {
+      throw new ProviderUnavailableError("OpenCode active sessions is malformed");
+    }
+    return new Set(Object.keys(data).filter((id) => id.startsWith("ses")));
+  }
+
+  /** Input admitted but not yet delivered into the history. */
+  async listInbox(sessionId: string, signal?: AbortSignal): Promise<OpenCode2InboxItem[]> {
+    const data = await this.request<unknown>(
+      "GET",
+      `/api/session/${seg(sessionId)}/inbox`,
+      "OpenCode inbox",
+      { signal },
+    );
+    if (!Array.isArray(data)) throw new ProviderUnavailableError("OpenCode inbox is malformed");
+    return data as OpenCode2InboxItem[];
   }
 
   /** Withdraw an inbox item that has not been delivered yet. */
@@ -313,6 +356,7 @@ export class OpenCode2Client {
     if (!response.ok) {
       throw new ProviderUnavailableError(`${operation} answered ${response.status}`);
     }
+    if (options.bare) return { data: body };
     const envelope = asRecord(body);
     if (!envelope || !("data" in envelope)) {
       throw new ProviderUnavailableError(`${operation} is not a 2.x envelope`);

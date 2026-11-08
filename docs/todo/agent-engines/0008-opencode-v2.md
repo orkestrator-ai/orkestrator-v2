@@ -639,7 +639,21 @@ users until phase 3 routes new sessions to it.
      `OPENCODE_DISABLE_AUTOUPDATE` and `OPENCODE_FLAGS` set explicitly.
    - Health on `/api/info`.
    - Port the GitHub-token plugin to `@opencode/plugin`.
-3. **Provider core and routing.**
+3. **Provider core and routing.** Status: the provider core is done
+   (2026-11-08, `opencode2/provider.ts`); routing, the marker and the server
+   launch are open.
+
+   The core is unit-tested against `fake-server.test-support.ts` and
+   live-tested in `opencode2-provider.live.test.ts`. It covers create, send
+   (with the model switch), dispatch and steer evidence, activity from
+   `/api/session/active`, abort with denial, close without delete, and steer
+   with run ids. It refuses attachments, images, structured output, workflow
+   results, slash commands and read-only turns outright.
+
+   One finding from the live test: `/api/info` and `interrupt` answer bare
+   objects rather than `{ data }`, and the model and agent switches, session
+   patch, inbox withdraw and replies answer `204`. The client follows the
+   pinned OpenAPI per route.
    - `OpenCode2Provider` covers create and register, send (model, agent and
      permissions set under the session dispatch lock), dispatch evidence (the
      journaled input id in history), activity from the snapshot plus events,

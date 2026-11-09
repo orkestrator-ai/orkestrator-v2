@@ -1,5 +1,6 @@
 import type { ReactNode, Ref } from "react";
 import { cn } from "@/lib/utils";
+import { CHAT_COLUMN_SHIFT_CLASS } from "./chat-column-shift";
 
 interface NativeComposeDockProps {
   centered: boolean;
@@ -60,7 +61,11 @@ export function NativeComposeDock({
       )}
     >
       <div
-        className={cn("flex flex-col items-center [&>*]:shrink-0", centered ? "gap-4" : "gap-0")}
+        className={cn(
+          "flex flex-col items-center [&>*]:shrink-0",
+          CHAT_COLUMN_SHIFT_CLASS,
+          centered ? "gap-4" : "gap-0",
+        )}
       >
         <div
           className={cn(

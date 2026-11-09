@@ -1,5 +1,6 @@
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useId,
@@ -104,6 +105,27 @@ export function floatingNoticeLayout(
   };
 }
 
+/**
+ * Where a card fits beside the column only once the column moves left: the
+ * card's width and how far the column moves, in rem. The column keeps its
+ * full width and at least its usual inset on the left, which also clears the
+ * prompt rail on a transcript's left edge. Null when the card already fits
+ * beside the centred column, or when no shift makes room for it.
+ */
+export function shiftedColumnLayout(
+  paneWidthRem: number,
+  columnRem?: number,
+): { cardRem: number; shiftRem: number } | null {
+  if (!columnRem || paneWidthRem <= 0) return null;
+  if (floatingNoticeLayout(paneWidthRem, columnRem).placement === "beside") return null;
+  const column = Math.min(paneWidthRem - COLUMN_INSET_REM, columnRem);
+  const gutterRem = paneWidthRem - column - COLUMN_INSET_REM;
+  const cardRem = Math.min(CARD_MAX_REM, gutterRem - EDGE_REM - GAP_REM);
+  if (cardRem < CARD_MIN_REM) return null;
+  const centredGutterRem = (paneWidthRem - column) / 2;
+  return { cardRem, shiftRem: cardRem + EDGE_REM + GAP_REM - centredGutterRem };
+}
+
 interface LayerState {
   container: HTMLElement | null;
   widthRem: number;
@@ -115,6 +137,20 @@ interface LayerState {
 interface LayerContext {
   state: LayerState;
   setAnchor: (anchor: LayerState) => void;
+  /** The column's shift while something claims it and the pane has room for one. */
+  columnShift: { cardRem: number; shiftRem: number } | null;
+  /** Moves the column left to make room beside it until the returned release runs. */
+  claimColumnShift: () => () => void;
+}
+
+/** The layout a layer's notices use, with the column shifted when it is. */
+function layerLayout(layer: LayerContext | null): {
+  placement: FloatingNoticePlacement;
+  cardRem: number;
+} {
+  if (!layer) return { placement: "beside", cardRem: CARD_MAX_REM };
+  if (layer.columnShift) return { placement: "beside", cardRem: layer.columnShift.cardRem };
+  return floatingNoticeLayout(layer.state.widthRem, layer.state.columnRem);
 }
 
 const FloatingNoticeContext = createContext<LayerContext | null>(null);
@@ -155,6 +191,23 @@ export function useInFloatingNoticeLayer(): boolean {
   return useContext(FloatingNoticePresenceContext);
 }
 
+/**
+ * How far, in rem, the layer's centred column has moved left to make room for
+ * a card beside it; 0 when it is centred or there is no layer.
+ */
+export function useFloatingNoticeColumnShift(): number {
+  return useContext(FloatingNoticeContext)?.columnShift?.shiftRem ?? 0;
+}
+
+/**
+ * While `active`, asks the layer to move its column left so a card can sit
+ * beside it. Has no effect when the pane has no room for that, or no layer.
+ */
+export function useClaimFloatingNoticeColumnShift(active: boolean): void {
+  const claim = useContext(FloatingNoticeContext)?.claimColumnShift;
+  useEffect(() => (active && claim ? claim() : undefined), [active, claim]);
+}
+
 function FloatingNoticeRoot({
   anchor,
   columnRem,
@@ -167,7 +220,25 @@ function FloatingNoticeRoot({
   children?: ReactNode;
 }) {
   const [state, setState] = useState<LayerState>({ container: null, widthRem: 0 });
-  const value = useMemo(() => ({ state, setAnchor: setState }), [state]);
+  const [claims, setClaims] = useState(0);
+  const claimColumnShift = useCallback(() => {
+    setClaims((count) => count + 1);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      setClaims((count) => count - 1);
+    };
+  }, []);
+  const value = useMemo(
+    () => ({
+      state,
+      setAnchor: setState,
+      columnShift: claims > 0 ? shiftedColumnLayout(state.widthRem, state.columnRem) : null,
+      claimColumnShift,
+    }),
+    [state, claims, claimColumnShift],
+  );
   return (
     <FloatingNoticePresenceContext.Provider value={true}>
       <FloatingNoticeContext.Provider value={value}>
@@ -286,9 +357,7 @@ export function FloatingNotice({
   const pillRef = useRef<HTMLButtonElement>(null);
   const noticeRef = useRef<HTMLDivElement>(null);
   const cardId = useId();
-  const { placement, cardRem } = layer
-    ? floatingNoticeLayout(layer.state.widthRem, layer.state.columnRem)
-    : { placement: "beside" as const, cardRem: CARD_MAX_REM };
+  const { placement, cardRem } = layerLayout(layer);
   // A choice applies to the placement it was made in; a resize across the
   // breakpoint starts the new placement in its default state.
   const [choice, setChoice] = useState<{ placement: FloatingNoticePlacement; open: boolean }>();
@@ -431,17 +500,26 @@ export const FLOATING_NOTICE_ACTION = "h-7 px-2.5 text-xs";
 /**
  * Shares the notice stack and the exact gutter measurement with custom
  * notices. `heightPx` is the stack's available height, from its top to the
- * pane's bottom margin, once measured.
+ * pane's bottom margin, once measured. `columnShift` is the room a card gets
+ * beside the column if it claims a shift
+ * (`useClaimFloatingNoticeColumnShift`), when only a shift makes room.
  */
 export function FloatingNoticeSlot({
   children,
 }: {
-  children: (layout: ReturnType<typeof floatingNoticeLayout> & { heightPx?: number }) => ReactNode;
+  children: (
+    layout: ReturnType<typeof floatingNoticeLayout> & {
+      heightPx?: number;
+      columnShift: ReturnType<typeof shiftedColumnLayout>;
+    },
+  ) => ReactNode;
 }) {
   const layer = useContext(FloatingNoticeContext);
+  const widthRem = layer?.state.widthRem ?? 0;
   const layout = {
-    ...floatingNoticeLayout(layer?.state.widthRem ?? 0, layer?.state.columnRem),
+    ...floatingNoticeLayout(widthRem, layer?.state.columnRem),
     heightPx: layer?.state.heightPx,
+    columnShift: shiftedColumnLayout(widthRem, layer?.state.columnRem),
   };
   const content = children(layout);
   return layer?.state.container ? createPortal(content, layer.state.container) : content;

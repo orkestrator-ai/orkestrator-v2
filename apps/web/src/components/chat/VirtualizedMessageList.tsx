@@ -19,7 +19,13 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-import { Virtuoso, type ListRange, type VirtuosoHandle, type StateSnapshot } from "react-virtuoso";
+import {
+  Virtuoso,
+  type ListProps,
+  type ListRange,
+  type VirtuosoHandle,
+  type StateSnapshot,
+} from "react-virtuoso";
 import {
   AgentChatFindBar,
   findAgentChatTextMatches,
@@ -28,6 +34,7 @@ import {
 } from "@/components/chat/AgentChatFind";
 import { cn } from "@/lib/utils";
 import { TranscriptAnnotationLayer } from "@/components/chat/TranscriptAnnotationLayer";
+import { CHAT_COLUMN_SHIFT_CLASS } from "@/components/chat/chat-column-shift";
 import type { TranscriptAnnotation } from "@/lib/chat/transcript-annotations";
 import {
   collectSearchTextRuns,
@@ -286,12 +293,23 @@ class PreCommitAnchor extends Component<{
 const NO_SCROLL_VIEW = () => () => {};
 const NO_TARGET = () => null;
 
+// The list, header, footer and empty state each carry the column shift: the
+// scroller's padding would not reach them, because Virtuoso's viewport is
+// absolutely positioned inside it.
 function FooterWrapper({ children }: { children: ReactNode }) {
-  return <div className="min-w-0">{children}</div>;
+  return <div className={cn("min-w-0", CHAT_COLUMN_SHIFT_CLASS)}>{children}</div>;
 }
 
 function EmptyPlaceholderWrapper({ children }: { children: ReactNode }) {
-  return <div className="min-w-0">{children}</div>;
+  return <div className={cn("min-w-0", CHAT_COLUMN_SHIFT_CLASS)}>{children}</div>;
+}
+
+function StableList({ ref, style, children, "data-testid": testId }: ListProps) {
+  return (
+    <div ref={ref} style={style} data-testid={testId} className={CHAT_COLUMN_SHIFT_CLASS}>
+      {children}
+    </div>
+  );
 }
 
 // Stable module-level component references for Virtuoso.
@@ -456,6 +474,7 @@ export function VirtualizedMessageList<TMessage>({
   const hasEmptyState = !!emptyState;
   const components = useMemo(
     () => ({
+      List: StableList,
       Footer: hasFooter ? StableFooter : undefined,
       Header: hasHeader ? StableHeader : undefined,
       EmptyPlaceholder: hasEmptyState ? StableEmptyPlaceholder : undefined,

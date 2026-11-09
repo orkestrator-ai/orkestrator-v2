@@ -28,6 +28,7 @@ import {
 } from "@/components/chat/VirtualizedMessageList";
 import { NativeMessage } from "@/components/chat/NativeMessage";
 import { TranscriptPromptNavigator } from "@/components/chat/TranscriptPromptNavigator";
+import { useChatColumnShiftStyle } from "@/components/chat/chat-column-shift";
 import { getNativeMessageSearchText } from "@/components/chat/native-message-search";
 import { formatElapsed } from "@/lib/format-elapsed";
 import { LiveElapsed } from "@/components/chat/LiveElapsed";
@@ -284,6 +285,8 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
     ],
   );
   const [showLog, setShowLog] = useState(false);
+  // A coordinator's docked Actions panel can move the column left to fit.
+  const columnShiftStyle = useChatColumnShiftStyle();
   const [composeDockElement, setComposeDockElement] = useState<HTMLDivElement | null>(null);
   const [composeDockHeight, setComposeDockHeight] = useState<number | null>(null);
   const composeDockRef = useCallback((element: HTMLDivElement | null) => {
@@ -606,7 +609,10 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
     ) : null;
 
   return (
-    <div className="@container relative flex h-full min-h-0 flex-col overflow-hidden bg-background">
+    <div
+      className="@container relative flex h-full min-h-0 flex-col overflow-hidden bg-background"
+      style={columnShiftStyle}
+    >
       {/*
         The region itself never unmounts, so it is already a live region before
         any text arrives. Only its child is keyed on `seq`, which replaces the

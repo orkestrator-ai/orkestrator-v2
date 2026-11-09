@@ -259,3 +259,42 @@ test("async answers and watched PR terminal state replay across serialization", 
     state: "closed",
   });
 });
+
+test("PR cards show number and title, refresh metadata, and retain it on terminal notices", () => {
+  const notice = (id: string, state: string, title?: string): NativeMessage => ({
+    ...msg(id, "user"),
+    peerMail: {
+      messageId: id,
+      kind: "notice",
+      sender: "System",
+      warning: "",
+      subject: "Multi Review worker completed",
+      body: "Pull request: https://github.com/org/repo/pull/42",
+      notice: {
+        resource: { kind: "pull-request", id: "worker", nodeId: "remote" },
+        state,
+        tone: "attention",
+        ...(title
+          ? { pullRequest: { url: "https://github.com/org/repo/pull/42", number: 42, title } }
+          : {}),
+      },
+    },
+  });
+  const opened = notice("open", "pr-opened");
+  expect(coordinatorActionCards([opened])[0]?.title).toBe("#42");
+  const updated = notice("checks", "pr-checks-failed", "Improve search");
+  const renamed = notice("conflicts", "pr-conflicts", "Improve search and filters");
+  const messages = [opened, updated, renamed, notice("merged", "pr-merged")];
+  const result = coordinatorActionCards(JSON.parse(JSON.stringify(messages)));
+  expect(result).toMatchObject([
+    {
+      title: "#42 Improve search and filters",
+      anchorId: "open",
+      index: 0,
+      state: "merged",
+      done: true,
+    },
+  ]);
+  render(<ActionsPanel docked cards={result} onNavigate={() => {}} />);
+  expect(screen.getByRole("button", { name: /#42 Improve search and filters/ })).toBeTruthy();
+});

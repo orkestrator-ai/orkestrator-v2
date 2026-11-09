@@ -48,7 +48,19 @@ export function coordinatorActionCards(
         notice.state.startsWith("pr-"))
     ) {
       // Structured status bodies carry the same PR URL across workflow handoffs.
-      const url = mail?.body.match(/Pull request: (https?:\/\/[^\s)]+)/)?.[1];
+      const url =
+        notice.pullRequest?.url ??
+        mail?.body.match(/(?:Pull request: |URL: )(https?:\/\/[^\s)]+)/)?.[1];
+      const number =
+        notice.pullRequest?.number ??
+        url?.match(/\/pull\/(\d+)/)?.[1] ??
+        notice.resource.id.match(/#(\d+)$/)?.[1];
+      const prTitle = notice.pullRequest?.title;
+      const title = prTitle
+        ? `#${number} ${prTitle}`
+        : number
+          ? `#${number}`
+          : (notice.resource.label ?? "Pull request");
       if (
         !url &&
         notice.resource.kind !== "pull-request" &&
@@ -63,6 +75,7 @@ export function coordinatorActionCards(
       if (/^(started|failed)$/.test(state)) continue;
       const existing = prs.get(key);
       if (existing) {
+        if (prTitle) existing.title = title;
         existing.state = state;
         existing.done = done;
       } else {
@@ -71,7 +84,7 @@ export function coordinatorActionCards(
           anchorId: message.id,
           index,
           kind: "pr",
-          title: mail?.subject ?? notice.resource.label ?? notice.resource.id,
+          title,
           state,
           done,
         };

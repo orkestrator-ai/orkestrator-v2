@@ -503,7 +503,16 @@ const AGENT_MAIL_NOTICE_STATE = /^[a-z][a-z0-9-]{0,47}$/;
  * this is what lets a transcript pick an icon, and an agent filter, without
  * parsing that prose.
  */
+export interface AgentMailPullRequest {
+  url: string;
+  number: number;
+  /** Omitted when the host cannot read GitHub metadata. */
+  title?: string;
+}
+
 export interface AgentMailNotice {
+  /** PR identity independent of the workflow label or status subject. */
+  pullRequest?: AgentMailPullRequest;
   resource: {
     kind: AgentMailNoticeResource;
     id: string;
@@ -558,7 +567,19 @@ export function normalizeAgentMailNotice(value: unknown): AgentMailNotice | null
   const tabId = boundedNoticeString(source.tabId, AGENT_MAIL_NOTICE_MAX_ID_LENGTH);
   const nodeId = boundedNoticeString(source.nodeId, AGENT_MAIL_NOTICE_MAX_ID_LENGTH);
   const label = boundedNoticeString(source.label, AGENT_MAIL_NOTICE_MAX_LABEL_LENGTH);
+  const pr = record.pullRequest as Partial<AgentMailPullRequest> | undefined;
+  const prUrl = boundedNoticeString(pr?.url, 2048);
+  const prTitle = boundedNoticeString(pr?.title, 240);
+  const pullRequest =
+    prUrl &&
+    /^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/[1-9]\d*$/.test(prUrl) &&
+    Number.isSafeInteger(pr?.number) &&
+    pr!.number! > 0 &&
+    prUrl.endsWith(`/pull/${pr!.number}`)
+      ? { url: prUrl, number: pr!.number!, ...(prTitle ? { title: prTitle } : {}) }
+      : undefined;
   return {
+    ...(pullRequest ? { pullRequest } : {}),
     resource: {
       kind,
       id,

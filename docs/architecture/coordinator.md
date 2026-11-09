@@ -3836,6 +3836,12 @@ Cards represent structured PR status notices, question tools and asynchronous
 questions, and explicit topic/question marks. Merged or closed PRs and answered
 questions retain their original card and show a muted tick. Topics do not count
 as waiting. A PR's later notices revise its original card rather than moving it.
+PR notices carry bounded URL, number and title metadata, preserved by mail
+normalization and transcript carriers. Status wakes use the host's existing
+conditional GitHub reader, including for remote workers; watched notices use
+their existing status reading. Cards show `#number title`, accept later title
+improvements and keep the last known title when a terminal notice omits it.
+If GitHub metadata is unavailable, the URL still supplies the PR number.
 
 The coordinator tools `mark_topic { title }` and `mark_question { title }` return
 a versioned mark, saved with the successful tool call in the provider's
@@ -3856,7 +3862,6 @@ expiry bounds missing-anchor recovery. All reads and targets follow the
 conversation's node scope; worker tabs do not enable the panel.
 
 Current limitations: actions outside the loaded history window are not recovered
-on reload. Card titles still use notice subjects rather than PR number/title
-metadata. Workflow-to-PR replay reconciles the PR URL carried by status notice
-bodies; older URL-free notices fall back to a node-qualified environment identity.
+on reload. Workflow-to-PR replay reconciles the structured PR URL or, for
+older notices, the PR URL carried by status notice bodies; older URL-free notices fall back to a node-qualified environment identity.
 Publication-started and publication-failed notices do not create PR cards.

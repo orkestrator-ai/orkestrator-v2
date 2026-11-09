@@ -12,7 +12,7 @@ test("floating actions fit their icon, reopen with keyboard, and navigate", asyn
   }));
   expect(Math.abs(width.icon - width.wrapper)).toBeLessThan(1);
   await page.screenshot({
-    path: path.resolve("output/visual-previews/actions-repaired-narrow.png"),
+    path: path.resolve("output/visual-previews/actions-pr-metadata-narrow.png"),
   });
   await icon.focus();
   await expect(icon).toHaveAttribute("aria-expanded", "true");
@@ -21,9 +21,12 @@ test("floating actions fit their icon, reopen with keyboard, and navigate", asyn
   await page.getByRole("button", { name: "Transcript control" }).focus();
   await icon.focus();
   await expect(icon).toHaveAttribute("aria-expanded", "true");
+  await expect(page.getByRole("button", { name: /#42 Improve search and filters/ })).toBeVisible();
   await page.getByRole("button", { name: "Which option?" }).click();
   await expect(page.getByTestId("anchor")).toHaveText("assistant");
-  await page.screenshot({ path: path.resolve("output/visual-previews/actions-repaired-open.png") });
+  await page.screenshot({
+    path: path.resolve("output/visual-previews/actions-pr-metadata-open.png"),
+  });
 });
 
 test("wide actions dock below mail with reduced motion", async ({ page }) => {
@@ -32,8 +35,11 @@ test("wide actions dock below mail with reduced motion", async ({ page }) => {
   await page.goto("/coordinator-actions");
   await expect(page.getByRole("button", { name: "Which option?" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Actions, 1 waiting" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /#42 Improve search and filters/ })).toBeVisible();
   const actions = await page.getByRole("region", { name: "Actions", exact: true }).boundingBox();
   const mail = await page.getByText("One message waiting").boundingBox();
   expect(actions!.y).toBeGreaterThan(mail!.y + mail!.height);
-  await page.screenshot({ path: path.resolve("output/visual-previews/actions-repaired-wide.png") });
+  await page.screenshot({
+    path: path.resolve("output/visual-previews/actions-pr-metadata-wide.png"),
+  });
 });

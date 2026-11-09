@@ -1,3 +1,5 @@
+import { coordinatorActionCards } from "../../apps/web/src/components/projects/coordinator-action-cards";
+import type { NativeMessage } from "../../apps/web/src/lib/chat/native-message-types";
 import { useState } from "react";
 import { CoordinatorActionsPanel } from "../../apps/web/src/components/projects/CoordinatorActionsPanel";
 import {
@@ -15,6 +17,32 @@ export function CoordinatorActionsFixture() {
         </FloatingNotice>
         <CoordinatorActionsPanel
           cards={[
+            ...coordinatorActionCards([
+              {
+                id: "pr-notice",
+                role: "user",
+                content: "",
+                parts: [],
+                peerMail: {
+                  messageId: "pr-notice",
+                  kind: "notice",
+                  sender: "System",
+                  warning: "",
+                  subject: "Pull request Search is ready to merge",
+                  body: "Pull request: https://github.com/org/repo/pull/42",
+                  notice: {
+                    resource: { kind: "pull-request", id: "env", label: "Search" },
+                    state: "pr-merged",
+                    tone: "success",
+                    pullRequest: {
+                      url: "https://github.com/org/repo/pull/42",
+                      number: 42,
+                      title: "Improve search and filters",
+                    },
+                  },
+                },
+              } as NativeMessage,
+            ]),
             {
               id: "topic",
               anchorId: "user",

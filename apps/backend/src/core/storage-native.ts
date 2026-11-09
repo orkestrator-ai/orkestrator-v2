@@ -527,6 +527,7 @@ export class NativeAgentSessionsRepository {
           | "policy"
           | "initialPromptPresentation"
           | "openCodeProtocol"
+          | "modelSubstitutionNotice"
         >
       >,
     createProviderSession: () => Promise<string>,

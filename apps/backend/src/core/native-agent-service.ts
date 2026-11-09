@@ -1634,6 +1634,9 @@ export class NativeAgentService {
         executionPolicy: input.executionPolicy,
         policy: input.policy,
         initialPromptPresentation: input.initialPromptPresentation,
+        // Kept on the record so the tab shows it whichever request created the
+        // session: a first prompt's dispatch answers with no room for it.
+        ...(modelSubstitution ? { modelSubstitutionNotice: modelSubstitution } : {}),
       },
       () => this.createProviderSession(provider, input, openCodeProtocol),
     );

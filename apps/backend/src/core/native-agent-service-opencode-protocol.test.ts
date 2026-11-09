@@ -275,6 +275,13 @@ describe("the first prompt of a new OpenCode 2.x session", () => {
       );
       expect(session?.openCodeProtocol).toBe("v2");
       expect(session?.controls?.modelId).toBe("opencode/beam-free");
+      // The dispatch's answer has no room for the substitution, so the session
+      // keeps it for every tab's projection to show.
+      expect(session?.modelSubstitutionNotice).toEqual({
+        requestedModelId: "opencode-go/beam-free",
+        modelId: "opencode/beam-free",
+        message: "beam-free isn't available in OpenCode 2 with your sign-ins; using Beam Free.",
+      });
     } finally {
       await service.shutdown();
       storage.close();

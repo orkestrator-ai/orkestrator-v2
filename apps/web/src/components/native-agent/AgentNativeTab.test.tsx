@@ -7178,7 +7178,7 @@ describe("AgentNativeTab", () => {
     expect(mockToastInfo).not.toHaveBeenCalled();
   });
 
-  test("tells the user when a new OpenCode session starts on a substituted model", async () => {
+  test("tells the user, once, when a new OpenCode session starts on a substituted model", async () => {
     appCommandStore(configStore)
       .getState()
       .updateGlobalConfig({
@@ -7194,12 +7194,32 @@ describe("AgentNativeTab", () => {
         message,
       },
     }));
+    // The session itself carries the notice, so a session its first prompt's
+    // dispatch created (an answer with no room for it) still shows it.
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input)),
+      notices: [
+        {
+          kind: "advisory" as const,
+          severity: "info" as const,
+          message,
+          occurrenceId: "model-substitution:2026-11-09T10:00:00.000Z",
+        },
+      ],
+    }));
 
     renderInAppCommandScope(
       <AgentNativeTab tabId="tab-opencode-substituted" data={freshTab("opencode")} isActive />,
     );
 
-    await waitFor(() => expect(mockToastInfo).toHaveBeenCalledWith(message));
+    await waitFor(() =>
+      expect(mockToastInfo).toHaveBeenCalledWith(
+        message,
+        expect.objectContaining({ duration: Infinity }),
+      ),
+    );
+    // Shown from the projection alone: the ensure answer does not toast it again.
+    expect(mockToastInfo.mock.calls.filter(([text]) => text === message)).toHaveLength(1);
     // The configured model is still what the tab asked for; the backend owns
     // the substitution, so the saved choice survives a reconnect.
     expect(ensureNativeAgentSessionMock.mock.calls.at(-1)?.[0]).toMatchObject({

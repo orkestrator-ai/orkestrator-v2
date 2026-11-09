@@ -38,6 +38,7 @@ import type {
   NativeAgentCommandIntent,
   NativeAgentControlUpdate,
   NativeAgentExecutionPolicy,
+  NativeAgentModelSubstitution,
 } from "../../../native-agent.js";
 import type { NativeAgentGoal } from "../../../native-agent-goal.js";
 import type { TrustedUserPromptPresentation } from "../../../review-evidence-frames.js";
@@ -509,6 +510,13 @@ const nativeAgentSessionFields = {
    * platform with turn recovery.
    */
   openCodeIncompleteTurnNotice: Schema.optional(IncompleteTurnNoticeSchema),
+  /**
+   * The model this session was created on in place of the one it asked for, and
+   * the message saying so. Set once, at creation, so every tab reading the
+   * session shows it, including when the first dispatch created the session
+   * and no renderer saw the ensure answer.
+   */
+  modelSubstitutionNotice: selfValidated<NativeAgentModelSubstitution>(),
   /** Bounded, content-free outcomes of recent turns keyed by their request id. */
   turnOutcomes: Schema.optional(mutableArray(TurnOutcomeSchema)),
   /** "Continue in…" handoffs this session's journal delivered. */

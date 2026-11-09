@@ -51,7 +51,6 @@ import {
   resolveReasoningId,
   withoutSuppressedComposerControls,
   type AgentModelRef,
-  type NativeAgentModelSubstitution,
 } from "@orkestrator/protocol/native-agent";
 import { MULTI_REVIEW_REPLACED_ADDRESS_FINDINGS_SESSION_NOTICE } from "@orkestrator/protocol/multi-review";
 import {
@@ -308,11 +307,6 @@ export async function enqueueNativeAsyncQuestionResponse(input: {
     mode: input.mode,
     fastMode: input.fastMode,
   });
-}
-
-/** The configured model was unavailable, so the new session started on another. */
-function announceModelSubstitution(substitution: NativeAgentModelSubstitution): void {
-  toast.info(substitution.message);
 }
 
 export function SharedNativeAgentController({
@@ -588,7 +582,8 @@ export function SharedNativeAgentController({
     initialProviderSessionId: data.sessionId,
     requireExistingResumeSession: data.requireExistingResumeSession,
     onResumeSessionReplaced: reconcileReplacedSession,
-    onModelSubstituted: announceModelSubstitution,
+    // A substituted model is reported by the session itself (a projection
+    // notice), which also covers a session its first prompt created.
     // A *new* mode-capable tab starts in build. Left undefined it would adopt
     // whatever mode the provider happens to report. A resumed session is
     // excluded deliberately: that thread already has a mode, and forcing build

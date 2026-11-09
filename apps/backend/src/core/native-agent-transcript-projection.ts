@@ -221,6 +221,7 @@ import {
   progressiveHydrationToken,
   providerReportedImagePath,
   redactArtifactGrant,
+  sessionModelSubstitutionNotice,
   visibleProjectionNotices,
   withProviderContextWindow,
 } from "./native-agent-projection-helpers.js";
@@ -3588,6 +3589,7 @@ export class NativeAgentTranscriptProjection {
       stateSnapshot.notices,
       sessionIncompleteTurnNotice(resolved.session),
       retiredDispatch,
+      sessionModelSubstitutionNotice(resolved.session, this.host.now()),
     );
     // The transcript read never sees session state, so the rows saying how the
     // turn ended travel here. A kept stop result stays with the full read the
@@ -5725,6 +5727,7 @@ export class NativeAgentTranscriptProjection {
         snapshot.notices,
         sessionIncompleteTurnNotice(resolved.session),
         retiredDispatch,
+        sessionModelSubstitutionNotice(resolved.session, this.host.now()),
       );
 
       const projection: NativeAgentSessionProjection = {

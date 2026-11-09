@@ -1064,6 +1064,7 @@ export class StorageService {
           | "policy"
           | "initialPromptPresentation"
           | "openCodeProtocol"
+          | "modelSubstitutionNotice"
         >
       >,
     createProviderSession: () => Promise<string>,

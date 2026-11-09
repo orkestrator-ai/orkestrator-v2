@@ -398,11 +398,17 @@ test("lists Git mirrors with their size, largest first, and names only live proj
   const building = await service.addProject(createProject("https://github.com/acme/building.git"));
   const mirrors = path.join(root, "git-mirrors");
   const directory = (id: string) => path.join(mirrors, id);
-  await fs.mkdir(path.join(directory(small.id), "mount", "mirror.git"), { recursive: true });
-  await fs.mkdir(path.join(directory(big.id), "mount", "mirror.git"), { recursive: true });
+  // One access kind's mirror, another's, and the legacy mount before kinds.
+  await fs.mkdir(path.join(directory(small.id), "mount-anonymous", "mirror.git"), {
+    recursive: true,
+  });
+  await fs.mkdir(path.join(directory(big.id), "mount-github-pat", "mirror.git"), {
+    recursive: true,
+  });
   await fs.mkdir(path.join(directory("gone"), "mount", "mirror.git"), { recursive: true });
-  // Only the bind source: this project has had no mirror built.
+  // Only bind sources: this project has had no mirror built.
   await fs.mkdir(path.join(directory(empty.id), "mount"), { recursive: true });
+  await fs.mkdir(path.join(directory(empty.id), "mount-github-host-cli"), { recursive: true });
   await fs.mkdir(path.join(directory(building.id), ".building-1", "mirror.git"), {
     recursive: true,
   });

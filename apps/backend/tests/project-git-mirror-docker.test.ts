@@ -67,13 +67,19 @@ async function fixture() {
     storage: { getDataDir: () => dataDir, loadConfig: async () => ({ global: {} }) },
   };
   const project = { id: PROJECT_ID, gitUrl: `file://${remote}` };
-  const mount = path.join(dataDir, "git-mirrors", PROJECT_ID, "mount");
+  const mount = path.join(dataDir, "git-mirrors", PROJECT_ID, "mount-anonymous");
   return {
     root,
     remote,
     dataDir,
     mount,
-    build: () => refreshProjectGitMirror(context as never, project, { force: true }),
+    build: () =>
+      refreshProjectGitMirror(
+        context as never,
+        project,
+        { kind: "anonymous", localRemote: true },
+        { force: true },
+      ),
   };
 }
 
@@ -84,7 +90,7 @@ async function environmentContainer(
   const mirrorArgs =
     options.mirror === false
       ? []
-      : await gitMirrorContainerArguments(setup.dataDir, { id: PROJECT_ID });
+      : await gitMirrorContainerArguments(setup.dataDir, { id: PROJECT_ID }, "anonymous");
   const container = await docker([
     "create",
     "--label",
@@ -213,7 +219,9 @@ test.skipIf(!enabled)(
 
     // Docker recreated the source, as root on a rootful daemon: the next
     // creation takes it back, and the project gets its mirror again.
-    expect(await gitMirrorContainerArguments(setup.dataDir, { id: PROJECT_ID })).not.toEqual([]);
+    expect(
+      await gitMirrorContainerArguments(setup.dataDir, { id: PROJECT_ID }, "anonymous"),
+    ).not.toEqual([]);
     expect(await setup.build()).toBe("built");
     const third = await environmentContainer(setup);
     expect(await third.prepare()).toContain("ORKESTRATOR_GIT_MIRROR:used");
@@ -231,7 +239,9 @@ test.skipIf(!enabled)(
       const { captureLogs } = await import("@orkestrator/protocol/testing/log-capture");
       const logs = captureLogs();
       try {
-        expect(await gitMirrorContainerArguments(setup.dataDir, { id: PROJECT_ID })).toEqual([]);
+        expect(
+          await gitMirrorContainerArguments(setup.dataDir, { id: PROJECT_ID }, "anonymous"),
+        ).toEqual([]);
         expect(await setup.build()).toBe("failed");
         for (const event of ["git-mirror.mount-unavailable", "git-mirror.refresh-failed"]) {
           expect(
@@ -271,7 +281,9 @@ test.skipIf(!enabled)(
       ]);
       await fs.chmod(projectDirectory, 0o700);
     }
-    expect(await gitMirrorContainerArguments(setup.dataDir, { id: PROJECT_ID })).not.toEqual([]);
+    expect(
+      await gitMirrorContainerArguments(setup.dataDir, { id: PROJECT_ID }, "anonymous"),
+    ).not.toEqual([]);
     expect(await setup.build()).toBe("built");
     expect(await sweepOrphanedProjectGitMirrors(setup.dataDir, new Set(), 0)).toBe(1);
   },

@@ -36,6 +36,9 @@ async function createCommand(options: {
   identity?: Partial<CreateContainerIdentity>;
   /** Restricted, with this allowlist; full when absent. */
   allowedDomains?: string[];
+  /** A production backend, which hands containers the GitHub credential Settings selects. */
+  production?: boolean;
+  global?: Record<string, unknown>;
 }): Promise<{ create: string; dataDir: string }> {
   const dir = await tempDir("ork-git-mirror-create-");
   cleanup.push(dir);
@@ -67,7 +70,7 @@ async function createCommand(options: {
   );
   const { context } = memoryLifecycleContext([environment], dir);
   Object.assign(context, {
-    runtimeFlavor: "agent-test",
+    runtimeFlavor: options.production ? "production" : "agent-test",
     credentialSources: new Set(),
     environmentLifecycleTasks: { isAccepting: () => false },
   });
@@ -79,7 +82,7 @@ async function createCommand(options: {
     }),
     loadConfig: async () => ({
       version: "1.0.0",
-      global: { enabledAgentPlatforms: [] },
+      global: { enabledAgentPlatforms: [], ...options.global },
       repositories: {},
     }),
   });
@@ -112,12 +115,46 @@ exit 0
 test("an image with the capability gets the read-only mount and the variable", async () => {
   const { create, dataDir } = await createCommand({ capabilities: { "git-mirror": 1 } });
 
+  // No GitHub credential for containers: the mirror fetched with none.
   expect(create).toContain(
-    `-v ${path.join(dataDir, "git-mirrors", "project-1", "mount")}:${CONTAINER_GIT_MIRROR_MOUNT}:ro`,
+    `-v ${path.join(dataDir, "git-mirrors", "project-1", "mount-anonymous")}:${CONTAINER_GIT_MIRROR_MOUNT}:ro`,
   );
   expect(create).toContain("-e ORKESTRATOR_GIT_MIRROR=/orkestrator-git-mirror/mirror.git");
   // The URL goes to Docker unchanged: origin stays the project's own remote.
   expect(create).toContain("-e GIT_URL=https://example.invalid/repo.git");
+});
+
+test("a container is bound to the mirror of the GitHub credential it is given", async () => {
+  const github = {
+    capabilities: { "git-mirror": 1 },
+    gitUrl: "git@github.com:acme/repo.git",
+    production: true,
+  };
+  const mount = (dataDir: string, kind: string) =>
+    `-v ${path.join(dataDir, "git-mirrors", "project-1", `mount-${kind}`)}:${CONTAINER_GIT_MIRROR_MOUNT}:ro`;
+
+  const pat = await createCommand({
+    ...github,
+    global: { containerGitHubCredential: "pat", githubToken: "container-pat" },
+  });
+  expect(pat.create).toContain(mount(pat.dataDir, "github-pat"));
+  // The token reaches the refresh in memory, never the create command.
+  expect(pat.create).not.toContain("container-pat");
+
+  // The backend's own PAT is not the containers' credential.
+  const none = await createCommand({
+    ...github,
+    global: { useHostGitHubCredentials: false, githubToken: "backend-pat" },
+  });
+  expect(none.create).toContain(mount(none.dataDir, "anonymous"));
+
+  // Containers are given no credential for a host other than GitHub.
+  const elsewhere = await createCommand({
+    ...github,
+    gitUrl: "https://git.example.com/acme/repo.git",
+    global: { containerGitHubCredential: "pat", githubToken: "container-pat" },
+  });
+  expect(elsewhere.create).toContain(mount(elsewhere.dataDir, "anonymous"));
 });
 
 test("an image without the capability gets neither, and nothing is written", async () => {

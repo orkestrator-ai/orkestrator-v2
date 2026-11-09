@@ -12,6 +12,8 @@ export const DOCKER_LOG_AREAS = defineLogAreas({
       "git-mirror.mount-withheld":
         "A new restricted container gets no project Git mirror because its firewall would not let it reach the project's remote, so it cannot read what the remote serves through the mirror either.",
       "git-mirror.refreshed": "A project's Git mirror was built or updated.",
+      "git-mirror.access-changed":
+        "A project's Git mirror was withdrawn because containers are now given a different credential (another access kind, or a token acting as another or an unreadable account), so no reader keeps what it could not fetch itself.",
       "git-mirror.seeded":
         "A project's Git mirror was built from its host checkout and only what the remote added to it.",
       "git-mirror.seed-skipped":

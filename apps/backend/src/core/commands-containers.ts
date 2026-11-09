@@ -116,6 +116,7 @@ import {
   restrictedContainerReachesGitRemote,
   scheduleProjectGitMirrorRefresh,
 } from "./project-git-mirror.js";
+import { resolveGitMirrorAccess } from "./project-git-mirror-access.js";
 import {
   allowedDomainsArgument,
   containerAllowedDomains,
@@ -353,10 +354,23 @@ export async function createDockerContainer(
       reason: "remote-unreachable",
     });
   }
-  const gitMirrorArguments =
+  // The container reads only the mirror of the access it is given itself: the
+  // same GitHub token or none, so the mount never holds a branch its own
+  // credential could not fetch (container-lifecycle.md#project-git-mirror).
+  const gitMirrorAccess =
     mirrorEligible && mirrorRemoteReachable
-      ? await gitMirrorContainerArguments(context.storage.getDataDir(), project)
-      : [];
+      ? await resolveGitMirrorAccess({
+          gitUrl: project.gitUrl,
+          global: config.global,
+          gitHubCli: context.runtime.gitHubCli,
+          localRemote: Boolean(agentTestLocalGitRemote),
+          // Agent-test profiles never sync a GitHub credential into containers.
+          containersGetGitHubCredential: context.runtimeFlavor !== "agent-test",
+        })
+      : null;
+  const gitMirrorArguments = gitMirrorAccess
+    ? await gitMirrorContainerArguments(context.storage.getDataDir(), project, gitMirrorAccess.kind)
+    : [];
   // Where the firewall runs: in an egress gateway that owns the namespace
   // (the workload gets no capability), in the workload itself (NET_ADMIN), or
   // nowhere in full mode.
@@ -680,7 +694,9 @@ export async function createDockerContainer(
   context.runtime.containerStates.invalidate();
   // In the background: a clone only pays the remote for what the mirror lacks,
   // so this launch does not wait for it.
-  if (gitMirrorArguments.length > 0) scheduleProjectGitMirrorRefresh(context, project);
+  if (gitMirrorAccess && gitMirrorArguments.length > 0) {
+    scheduleProjectGitMirrorRefresh(context, project, gitMirrorAccess);
+  }
   if (inContainerGithubSeed) await copyGithubRangesSeed(containerId, inContainerGithubSeed);
   // Earlier revisions no container binds any more (recovery copies keep
   // theirs) are removed. Best effort: a failure only leaves a revision for

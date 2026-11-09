@@ -1,15 +1,19 @@
 /**
  * The host side of a project's Git mirror, with real Git against real local
- * repositories: how it is built, refreshed, bounded and removed. The container
- * side is `tests/unit/workspace-setup-git-mirror.test.ts`, and the mount is
+ * repositories: how it is built, refreshed, bounded and removed, and what access
+ * each mirror is fetched with. The container side is
+ * `tests/unit/workspace-setup-git-mirror.test.ts`, and the mount is
  * `project-git-mirror-docker.test.ts`.
+ *
+ * A mirror fetch ignores the host's Git configuration, so the local `file://`
+ * remotes here are fetched as the agent-test fixture is (`localRemote`), and a
+ * test that needs a host-only URL rewrites the fetch's own arguments.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { promises as fs, existsSync, writeFileSync } from "node:fs";
 import os from "node:os";
-import { createServer } from "node:net";
 import path from "node:path";
 import { cleanupProjectForRemoval } from "../src/core/commands-registry-projects";
 import type { CommandContext } from "../src/core/commands-context";
@@ -24,8 +28,10 @@ import {
   sweepOrphanedProjectGitMirrors,
   type GitMirrorRefreshOptions,
 } from "../src/core/project-git-mirror";
+import type { GitMirrorAccess } from "../src/core/project-git-mirror-access";
 import { runCommand } from "../src/core/shell";
 import { StorageService } from "../src/core/storage";
+import { startGitHttpRemote } from "./git-http-fixture";
 
 const setupScript = path.join(import.meta.dir, "..", "..", "..", "docker", "workspace-setup.sh");
 const PROJECT_ID = "project-1";
@@ -53,9 +59,25 @@ function commit(name: string, content: string): void {
 
 const project = () => ({ id: PROJECT_ID, gitUrl: `file://${remote}` });
 const projectDir = () => path.join(dataDir, "git-mirrors", PROJECT_ID);
-const mirrorPath = () => path.join(projectDir(), "mount", "mirror.git");
-const refresh = (options: GitMirrorRefreshOptions = {}, target = project()) =>
-  refreshProjectGitMirror(context, target, { force: true, ...options });
+/** What a container bound to the agent-test fixture holds: no credential, `file` only. */
+const LOCAL: GitMirrorAccess = { kind: "anonymous", localRemote: true };
+const mountPath = (kind: string = LOCAL.kind) => path.join(projectDir(), `mount-${kind}`);
+const mirrorPath = (kind?: string) => path.join(mountPath(kind), "mirror.git");
+const refresh = (
+  options: GitMirrorRefreshOptions = {},
+  target = project(),
+  access: GitMirrorAccess = LOCAL,
+) =>
+  refreshProjectGitMirror(context, target, access, {
+    force: true,
+    accountLogin: async () => "alice",
+    ...options,
+  });
+const readState = async () =>
+  JSON.parse(await fs.readFile(path.join(projectDir(), "state.json"), "utf8")) as Record<
+    string,
+    unknown
+  >;
 const mirrorRefs = () =>
   git(root, [`--git-dir=${mirrorPath()}`, "for-each-ref", "--format=%(refname)"]).split("\n");
 
@@ -124,7 +146,7 @@ describe("building and refreshing", () => {
         else expect((await fs.stat(target)).mode & 0o004).toBe(0o004);
       }
     };
-    await walk(path.join(projectDir(), "mount"));
+    await walk(mountPath());
     // Only the bind source is open; no other host user can traverse to it.
     expect((await fs.stat(path.join(dataDir, "git-mirrors"))).mode & 0o077).toBe(0);
     expect((await fs.stat(projectDir())).mode & 0o077).toBe(0);
@@ -212,24 +234,42 @@ describe("seeding from the host checkout", () => {
     git(root, [`--git-dir=${mirrorPath()}`, "fsck", "--full", "--strict"]);
   }
 
-  /** Records the size of every pack the remote serves, not a local repository's. */
-  async function countRemotePackBytes(): Promise<() => Promise<number>> {
+  /**
+   * Records the size of every pack the remote serves, not a local repository's.
+   * `upload-pack` reads its hook only from global configuration, which a mirror
+   * fetch withholds from the remote it spawns, so `run` hands that one hook to
+   * the mirror's remote fetches.
+   */
+  async function countRemotePackBytes(): Promise<{
+    bytes: () => Promise<number>;
+    run: typeof runCommand;
+  }> {
     const log = path.join(root, "remote-packs");
     const hook = path.join(root, "pack-hook.sh");
+    const hookConfig = path.join(root, "pack-hook-config");
     await fs.writeFile(
       hook,
       `#!/bin/sh\ncase "$PWD" in ${remote}*) "$@" | tee -a "${log}" ;; *) exec "$@" ;; esac\n`,
       { mode: 0o755 },
     );
-    await fs.appendFile(
-      process.env.GIT_CONFIG_GLOBAL!,
-      `[uploadpack]\n\tpackObjectsHook = ${hook}\n`,
-    );
-    return async () =>
-      fs.stat(log).then(
-        (stats) => stats.size,
-        () => 0,
+    await fs.writeFile(hookConfig, `[uploadpack]\n\tpackObjectsHook = ${hook}\n`);
+    await fs.appendFile(process.env.GIT_CONFIG_GLOBAL!, `[include]\n\tpath = ${hookConfig}\n`);
+    const run: typeof runCommand = (command, args, options = {}) =>
+      runCommand(
+        command,
+        args,
+        options.env?.GIT_CONFIG_GLOBAL === os.devNull
+          ? { ...options, env: { ...options.env, GIT_CONFIG_GLOBAL: hookConfig } }
+          : options,
       );
+    return {
+      run,
+      bytes: async () =>
+        fs.stat(log).then(
+          (stats) => stats.size,
+          () => 0,
+        ),
+    };
   }
 
   /** History too random to compress, so a download of it cannot be mistaken for a small one. */
@@ -242,11 +282,11 @@ describe("seeding from the host checkout", () => {
 
   test("a current checkout saves the download, and the result is a plain mirror", async () => {
     commitLargeHistory();
-    const remotePackBytes = await countRemotePackBytes();
+    const remotePacks = await countRemotePackBytes();
 
-    expect(await refresh({}, seeded())).toBe("built");
+    expect(await refresh({ run: remotePacks.run }, seeded())).toBe("built");
 
-    expect(await remotePackBytes()).toBeLessThan(10 * 1024);
+    expect(await remotePacks.bytes()).toBeLessThan(10 * 1024);
     expectExactlyTheRemote();
     const walk = async (directory: string): Promise<void> => {
       expect((await fs.stat(directory)).mode & 0o005).toBe(0o005);
@@ -263,11 +303,11 @@ describe("seeding from the host checkout", () => {
 
   test("a plain build of the same repository does download it", async () => {
     commitLargeHistory();
-    const remotePackBytes = await countRemotePackBytes();
+    const remotePacks = await countRemotePackBytes();
 
-    expect(await refresh()).toBe("built");
+    expect(await refresh({ run: remotePacks.run })).toBe("built");
 
-    expect(await remotePackBytes()).toBeGreaterThan(512 * 1024);
+    expect(await remotePacks.bytes()).toBeGreaterThan(512 * 1024);
   });
 
   test("a checkout behind the remote gets the rest from the remote", async () => {
@@ -276,11 +316,11 @@ describe("seeding from the host checkout", () => {
     git(root, ["clone", "-q", `file://${remote}`, behind]);
     commit("two.txt", "two\n");
     git(work, ["push", "-q", "origin", "HEAD:refs/heads/feature"]);
-    const remotePackBytes = await countRemotePackBytes();
+    const remotePacks = await countRemotePackBytes();
 
-    expect(await refresh({}, seeded(behind))).toBe("built");
+    expect(await refresh({ run: remotePacks.run }, seeded(behind))).toBe("built");
 
-    expect(await remotePackBytes()).toBeLessThan(10 * 1024);
+    expect(await remotePacks.bytes()).toBeLessThan(10 * 1024);
     expect(git(root, [`--git-dir=${mirrorPath()}`, "rev-parse", "main"])).toBe(remoteTip());
     expect(mirrorRefs()).toEqual(["refs/heads/feature", "refs/heads/main"]);
     expectExactlyTheRemote();
@@ -548,28 +588,9 @@ describe("seeding from the host checkout", () => {
     const behind = path.join(root, "behind");
     git(root, ["clone", "-q", `file://${remote}`, behind]);
     commit("network.txt", "from network\n");
-    const reservation = createServer();
-    await new Promise<void>((resolve) => reservation.listen(0, "127.0.0.1", resolve));
-    const port = (reservation.address() as { port: number }).port;
-    await new Promise<void>((resolve) => reservation.close(() => resolve()));
-    const daemon = spawn("git", [
-      "daemon",
-      "--verbose",
-      "--export-all",
-      "--reuseaddr",
-      "--listen=127.0.0.1",
-      `--port=${port}`,
-      `--base-path=${root}`,
-      root,
-    ]);
+    // Over HTTP, as a container's clone reaches it: no local remote allowed.
+    const server = startGitHttpRemote(root);
     try {
-      await new Promise<void>((resolve, reject) => {
-        daemon.stderr!.on("data", (data) => {
-          if (String(data).includes("Ready to rumble")) resolve();
-        });
-        daemon.once("error", reject);
-        daemon.once("exit", () => reject(new Error("Git daemon exited before readiness")));
-      });
       let copied = false;
       const run: typeof runCommand = (command, args, options) => {
         if (
@@ -580,16 +601,16 @@ describe("seeding from the host checkout", () => {
         return runCommand(command, args, options);
       };
       expect(
-        await refresh({ run }, { ...seeded(behind), gitUrl: `git://127.0.0.1:${port}/remote.git` }),
+        await refresh(
+          { run },
+          { ...seeded(behind), gitUrl: `${server.origin}/remote.git` },
+          { kind: "anonymous" },
+        ),
       ).toBe("built");
       expect(copied).toBe(true);
       expectExactlyTheRemote();
     } finally {
-      daemon.kill();
-      await new Promise<void>((resolve) => {
-        if (daemon.exitCode !== null) resolve();
-        else daemon.once("exit", () => resolve());
-      });
+      await server.stop();
     }
   });
 
@@ -665,67 +686,302 @@ describe("seeding from the host checkout", () => {
 
 describe("credentials", () => {
   const secret = "s3cret-token-value";
+  const backendSecret = "backend-token-value";
 
-  /** Sends the transfer to the local remote; everything else is what Git would have been given. */
-  function redirecting(url: string, calls: { args: string[]; env: NodeJS.ProcessEnv }[]) {
+  type Call = { args: string[]; env: NodeJS.ProcessEnv };
+
+  /**
+   * Sends the transfer to the local remote; everything else is what Git would
+   * have been given, recorded in `calls`.
+   */
+  function redirecting(url: string, calls: Call[]) {
     const run: typeof runCommand = (command, args = [], options = {}) => {
       if (!args.includes("fetch")) return runCommand(command, args, options);
       calls.push({ args: [...args], env: { ...options.env } });
-      const real = args
-        .map((arg) => (arg === url ? `file://${remote}` : arg))
-        .filter(
-          (arg, index, all) => !arg.includes("nsteadOf") && !all[index + 1]?.includes("nsteadOf"),
-        );
-      return runCommand(command, real, options);
+      const real = args.map((arg) => (arg === url ? `file://${remote}` : arg));
+      return runCommand(command, real, {
+        ...options,
+        env: { ...options.env, GIT_ALLOW_PROTOCOL: "file" },
+      });
     };
     return run;
   }
 
-  async function expectNoSecretInMirror() {
-    const config = await fs.readFile(path.join(mirrorPath(), "config"), "utf8");
-    for (const forbidden of ["url", "remote", "credential", "extraheader", "insteadOf"]) {
-      expect(config.toLowerCase()).not.toContain(forbidden.toLowerCase());
-    }
-    expect(existsSync(path.join(mirrorPath(), "FETCH_HEAD"))).toBe(false);
-    for (const file of await nonObjectFiles(path.join(projectDir()))) {
-      expect(await fs.readFile(file, "utf8")).not.toContain(secret);
-    }
-  }
-
-  test("a token in the project URL reaches neither the mirror nor its state", async () => {
-    // The rewrite stands in for the remote host; Git still sees the credential URL.
-    const url = `https://user:${secret}@github.invalid/acme/repo.git`;
-    await fs.appendFile(
-      process.env.GIT_CONFIG_GLOBAL!,
-      `[url "file://${remote}"]\n\tinsteadOf = ${url}\n`,
-    );
-
-    expect(await refresh({}, { id: PROJECT_ID, gitUrl: url })).toBe("built");
-
-    await expectNoSecretInMirror();
-  });
-
-  test("a selected PAT goes per transfer, by helper and environment, never by argument", async () => {
-    const url = "https://github.com/acme/repo.git";
+  /** The backend's own GitHub credential, which a mirror fetch must never use. */
+  function selectBackendPat() {
     const load = storage.loadConfig.bind(storage);
     storage.loadConfig = async () => {
       const config = await load();
       return {
         ...config,
-        global: { ...config.global, useHostGitHubCredentials: false, githubToken: secret },
+        global: { ...config.global, useHostGitHubCredentials: false, githubToken: backendSecret },
       };
     };
-    const calls: { args: string[]; env: NodeJS.ProcessEnv }[] = [];
+    process.env.GH_TOKEN = backendSecret;
+    process.env.GITHUB_TOKEN = backendSecret;
+  }
 
-    expect(await refresh({ run: redirecting(url, calls) }, { id: PROJECT_ID, gitUrl: url })).toBe(
-      "built",
-    );
+  afterEach(() => {
+    for (const name of ["GH_TOKEN", "GITHUB_TOKEN", "GIT_ASKPASS", "HOME"] as const) {
+      if (savedEnv[name] === undefined) delete process.env[name];
+      else process.env[name] = savedEnv[name];
+    }
+  });
+
+  async function expectNoSecretInMirror(kind?: string) {
+    const config = await fs.readFile(path.join(mirrorPath(kind), "config"), "utf8");
+    for (const forbidden of ["url", "remote", "credential", "extraheader", "insteadOf"]) {
+      expect(config.toLowerCase()).not.toContain(forbidden.toLowerCase());
+    }
+    expect(existsSync(path.join(mirrorPath(kind), "FETCH_HEAD"))).toBe(false);
+    for (const file of await nonObjectFiles(path.join(projectDir()))) {
+      const content = await fs.readFile(file, "utf8");
+      expect(content).not.toContain(secret);
+      expect(content).not.toContain(backendSecret);
+    }
+  }
+
+  test("a token in the project URL reaches neither the mirror nor its state", async () => {
+    const url = `https://user:${secret}@github.invalid/acme/repo.git`;
+    const calls: Call[] = [];
+
+    expect(
+      await refresh(
+        { run: redirecting(url, calls) },
+        { id: PROJECT_ID, gitUrl: url },
+        {
+          kind: "anonymous",
+        },
+      ),
+    ).toBe("built");
 
     expect(calls).toHaveLength(1);
-    expect(calls[0]!.env.ORKESTRATOR_GITHUB_TOKEN).toBe(secret);
-    expect(calls[0]!.args.join(" ")).not.toContain(secret);
-    expect(calls[0]!.args.join(" ")).toContain("credential.https://github.com.helper=");
-    await expectNoSecretInMirror();
+    await expectNoSecretInMirror("anonymous");
+  });
+
+  test("the containers' token goes per transfer, by helper and environment, never by argument", async () => {
+    selectBackendPat();
+    const url = "https://github.com/acme/repo.git";
+    const calls: Call[] = [];
+
+    expect(
+      await refresh(
+        { run: redirecting(url, calls) },
+        { id: PROJECT_ID, gitUrl: url },
+        {
+          kind: "github-pat",
+          token: secret,
+        },
+      ),
+    ).toBe("built");
+
+    expect(calls).toHaveLength(1);
+    const [{ args, env }] = calls as [Call];
+    expect(env.ORKESTRATOR_GITHUB_TOKEN).toBe(secret);
+    expect(env.GH_TOKEN).toBeUndefined();
+    expect(env.GITHUB_TOKEN).toBeUndefined();
+    expect(args.join(" ")).not.toContain(secret);
+    expect(args.join(" ")).toContain("credential.https://github.com.helper=");
+    await expectNoSecretInMirror("github-pat");
+  });
+
+  test("with no token for containers, a GitHub remote is fetched with no credential at all", async () => {
+    // The backend has a PAT selected and in its environment, as it often does.
+    selectBackendPat();
+    const url = "git@github.com:acme/repo.git";
+    const https = "https://github.com/acme/repo.git";
+    const calls: Call[] = [];
+
+    expect(
+      await refresh(
+        { run: redirecting(https, calls) },
+        { id: PROJECT_ID, gitUrl: url },
+        {
+          kind: "anonymous",
+        },
+      ),
+    ).toBe("built");
+
+    const [{ args, env }] = calls as [Call];
+    // Converted as the container's setup script converts it, and HTTPS only.
+    expect(args).toContain(https);
+    expect(args).not.toContain(url);
+    expect(env.GIT_ALLOW_PROTOCOL).toBe("https");
+    // Neither the backend's token nor its Git configuration or helpers.
+    expect(Object.values(env).join("\n")).not.toContain(backendSecret);
+    expect(env.ORKESTRATOR_GITHUB_TOKEN).toBeUndefined();
+    expect(env.GIT_CONFIG_GLOBAL).toBe(os.devNull);
+    expect(env.GIT_CONFIG_NOSYSTEM).toBe("1");
+    expect(args.join(" ")).not.toContain("credential.https://github.com.helper=");
+    expect(args).toContain("credential.helper=");
+    await expectNoSecretInMirror("anonymous");
+  });
+
+  test("a private remote is never fetched with the host's own credentials", async () => {
+    const credentials = { username: "host-user", password: "host-password" };
+    const server = startGitHttpRemote(root, { credentials });
+    try {
+      const url = `${server.origin}/remote.git`;
+      // Everything the host offers: a helper in global config, a `.netrc` in
+      // its home and an askpass program. Each one alone lets plain Git in.
+      const helper = path.join(root, "helper.sh");
+      await fs.writeFile(
+        helper,
+        `#!/bin/sh\ntest "$1" = get && printf 'username=%s\\npassword=%s\\n' ${credentials.username} ${credentials.password}\n`,
+        { mode: 0o755 },
+      );
+      await fs.appendFile(process.env.GIT_CONFIG_GLOBAL!, `[credential]\n\thelper = ${helper}\n`);
+      const home = path.join(root, "home");
+      await fs.mkdir(home);
+      await fs.writeFile(
+        path.join(home, ".netrc"),
+        `machine 127.0.0.1 login ${credentials.username} password ${credentials.password}\n`,
+        { mode: 0o600 },
+      );
+      process.env.HOME = home;
+      const askpass = path.join(root, "askpass.sh");
+      await fs.writeFile(askpass, `#!/bin/sh\necho ${credentials.password}\n`, { mode: 0o755 });
+      process.env.GIT_ASKPASS = askpass;
+      // Async: the server answers on this process's event loop.
+      await runCommand("git", ["ls-remote", url], { timeoutMs: 30_000 });
+      const before = server.refused();
+
+      expect(await refresh({}, { id: PROJECT_ID, gitUrl: url }, { kind: "anonymous" })).toBe(
+        "failed",
+      );
+
+      expect(server.refused()).toBeGreaterThan(before);
+      expect(existsSync(mirrorPath("anonymous"))).toBe(false);
+      expect((await fs.readdir(projectDir())).filter((name) => name.startsWith("."))).toEqual([]);
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test("a public remote over HTTP builds with no credential", async () => {
+    const server = startGitHttpRemote(root);
+    try {
+      expect(
+        await refresh(
+          {},
+          { id: PROJECT_ID, gitUrl: `${server.origin}/remote.git` },
+          {
+            kind: "anonymous",
+          },
+        ),
+      ).toBe("built");
+      expect(git(root, [`--git-dir=${mirrorPath("anonymous")}`, "rev-parse", "main"])).toBe(
+        git(remote, ["rev-parse", "main"]),
+      );
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test("a URL a container's clone cannot use gets no mirror", async () => {
+    // A local path, without the agent-test fixture's own bind, and `file://`.
+    for (const gitUrl of [remote, `file://${remote}`]) {
+      expect(await refresh({}, { id: PROJECT_ID, gitUrl }, { kind: "anonymous" })).toBe("failed");
+      expect(existsSync(mirrorPath("anonymous"))).toBe(false);
+    }
+  });
+});
+
+describe("access kinds", () => {
+  const PAT: GitMirrorAccess = { kind: "github-pat", token: "t", localRemote: true };
+
+  test("a refresh retires every other kind's mirror and the legacy one, keeping their directories", async () => {
+    expect(await refresh()).toBe("built");
+    // What a backend before access kinds left: one mirror every container read.
+    const legacy = path.join(projectDir(), "mount");
+    await fs.mkdir(legacy, { mode: 0o755 });
+    await fs.cp(mirrorPath(), path.join(legacy, "mirror.git"), { recursive: true });
+
+    expect(await refresh({}, project(), PAT)).toBe("built");
+
+    expect(existsSync(mirrorPath("github-pat"))).toBe(true);
+    expect(existsSync(mirrorPath("anonymous"))).toBe(false);
+    expect(existsSync(path.join(legacy, "mirror.git"))).toBe(false);
+    // Stopped containers still name these with `-v`.
+    expect(existsSync(mountPath("anonymous"))).toBe(true);
+    expect(existsSync(legacy)).toBe(true);
+    expect(await readState()).toMatchObject({ access: "github-pat", account: "alice" });
+    expect((await fs.readdir(projectDir())).filter((name) => name.startsWith("."))).toEqual([]);
+  });
+
+  test("a change of kind rebuilds at once, inside the refresh interval", async () => {
+    let clock = 1_000_000;
+    const options = { force: false, now: () => clock };
+    expect(await refresh(options)).toBe("built");
+    clock += 1;
+
+    expect(await refresh(options, project(), PAT)).toBe("built");
+    expect(await refresh(options, project(), PAT)).toBe("skipped-recent");
+    expect(await refresh(options)).toBe("built");
+    expect(existsSync(mirrorPath("github-pat"))).toBe(false);
+  });
+
+  test("a token for another account under the same setting withdraws the mirror before fetching", async () => {
+    let clock = 1_000_000;
+    expect(await refresh({ force: false, now: () => clock }, project(), PAT)).toBe("built");
+    clock += 1;
+    let mirrorDuringFetch: boolean | undefined;
+    const run: typeof runCommand = (command, args, options) => {
+      if (args?.includes("fetch")) mirrorDuringFetch ??= existsSync(mirrorPath("github-pat"));
+      return runCommand(command, args, options);
+    };
+
+    expect(
+      await refresh(
+        { force: false, now: () => clock, run, accountLogin: async () => "bob" },
+        project(),
+        PAT,
+      ),
+    ).toBe("built");
+
+    expect(mirrorDuringFetch).toBe(false);
+    expect(await readState()).toMatchObject({ access: "github-pat", account: "bob" });
+  });
+
+  test("the same account keeps its mirror and the refresh interval", async () => {
+    let clock = 1_000_000;
+    const options = { force: false, now: () => clock };
+    expect(await refresh(options, project(), PAT)).toBe("built");
+    clock += 1;
+
+    expect(await refresh(options, project(), PAT)).toBe("skipped-recent");
+    expect(existsSync(mirrorPath("github-pat"))).toBe(true);
+  });
+
+  test("an account that cannot be read withdraws the mirror until a refresh can rebuild it", async () => {
+    let clock = 1_000_000;
+    expect(await refresh({ force: false, now: () => clock }, project(), PAT)).toBe("built");
+    clock += 1;
+    const unreadable = { force: false, now: () => clock, accountLogin: async () => undefined };
+
+    expect(await refresh(unreadable, project(), PAT)).toBe("skipped-recent");
+    expect(existsSync(mirrorPath("github-pat"))).toBe(false);
+
+    clock += GIT_MIRROR_REFRESH_INTERVAL_MS;
+    expect(await refresh(unreadable, project(), PAT)).toBe("built");
+    expect(await readState()).toMatchObject({ account: null });
+    // Known again: whatever the unreadable one was, this is fetched anew.
+    expect(await refresh({ force: false, now: () => clock }, project(), PAT)).toBe("built");
+    expect(await readState()).toMatchObject({ account: "alice" });
+  });
+
+  test("anonymous access reads no account", async () => {
+    let read = false;
+    expect(
+      await refresh({
+        accountLogin: async () => {
+          read = true;
+          return "alice";
+        },
+      }),
+    ).toBe("built");
+    expect(read).toBe(false);
+    expect(await readState()).not.toHaveProperty("account");
   });
 });
 
@@ -815,7 +1071,7 @@ describe("disk bounds", () => {
     expect(await refresh({ maxBytes: 1 })).toBe("oversized");
 
     expect(existsSync(mirrorPath())).toBe(false);
-    expect(existsSync(path.join(projectDir(), "mount"))).toBe(true);
+    expect(existsSync(mountPath())).toBe(true);
   });
 
   test("a nearly full disk does not start a build, and keeps an existing mirror", async () => {
@@ -1002,27 +1258,31 @@ describe("removal", () => {
 });
 
 describe("container arguments", () => {
-  test("a read-only bind of the mount, and the path the setup script reads", async () => {
-    const args = await gitMirrorContainerArguments(dataDir, { id: PROJECT_ID });
+  test("a read-only bind of its own access kind's mount, and the path the setup script reads", async () => {
+    for (const kind of ["anonymous", "github-pat", "github-host-cli"] as const) {
+      const args = await gitMirrorContainerArguments(dataDir, { id: PROJECT_ID }, kind);
 
-    expect(args).toEqual([
-      "-v",
-      `${path.join(projectDir(), "mount")}:${CONTAINER_GIT_MIRROR_MOUNT}:ro`,
-      "-e",
-      `ORKESTRATOR_GIT_MIRROR=${CONTAINER_GIT_MIRROR_PATH}`,
-    ]);
-    expect((await fs.stat(path.join(projectDir(), "mount"))).mode & 0o777).toBe(0o755);
+      expect(args).toEqual([
+        "-v",
+        `${mountPath(kind)}:${CONTAINER_GIT_MIRROR_MOUNT}:ro`,
+        "-e",
+        `ORKESTRATOR_GIT_MIRROR=${CONTAINER_GIT_MIRROR_PATH}`,
+      ]);
+      expect((await fs.stat(mountPath(kind))).mode & 0o777).toBe(0o755);
+    }
+    // Binding one kind never creates the legacy mount every container shared.
+    expect(existsSync(path.join(projectDir(), "mount"))).toBe(false);
   });
 
   test("a path `-v` cannot express gives no mount rather than a failed create", async () => {
     const colon = path.join(root, "da:ta");
-    expect(await gitMirrorContainerArguments(colon, { id: PROJECT_ID })).toEqual([]);
+    expect(await gitMirrorContainerArguments(colon, { id: PROJECT_ID }, "anonymous")).toEqual([]);
   });
 
   test("an unusable data directory gives no mount and does not throw", async () => {
     const file = path.join(root, "file");
     await fs.writeFile(file, "");
-    expect(await gitMirrorContainerArguments(file, { id: PROJECT_ID })).toEqual([]);
+    expect(await gitMirrorContainerArguments(file, { id: PROJECT_ID }, "anonymous")).toEqual([]);
   });
 });
 

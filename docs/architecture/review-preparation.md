@@ -852,3 +852,16 @@ five reviewers. One usable report has nothing to share, so its compact
 evidence is about 10% larger. For two small reports the whole compact prompt
 is about 2% larger, because the paragraph explaining `shared` outweighs what
 it saves. The savings grow with panel size and shared scope.
+
+## Adopting completed interactive work (internal foundation)
+
+A completed prompt Build can be recorded through the pipeline service's internal
+adoption entry point. Its supplied key-information patch becomes the Build's
+round-1 brief, so the existing handoff and Notes readers share it. The original
+session is already settled: review preparation uses a separate normal pipeline
+session and never requests another turn in the original tab. Without an immutable
+review package, the normal preparation stage still runs before Review.
+
+The caller must supply a committed baseline and validate the chosen native tab's
+ownership and idleness before admission. User-facing drafting and confirmed
+promotion are not implemented yet; see [7546](../todo/coordinator-and-multi-review/7546-auto-pipeline-launch-flow.md).

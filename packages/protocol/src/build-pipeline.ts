@@ -889,6 +889,8 @@ export interface PipelineSession {
   iteration: number;
   sessionKey: string;
   sdkSessionId: string;
+  /** Original prompt tab retained as the first Build attempt after promotion. */
+  adoptedFromTabId?: string;
   status: "running" | "idle" | "error";
   startedAt: string;
   /** End of this stage attempt, retained for settled runtime presentation. */
@@ -1874,6 +1876,10 @@ function isPipelineSession(value: unknown): value is PipelineSession {
     value.sessionKey.length > 0 &&
     typeof value.sdkSessionId === "string" &&
     value.sdkSessionId.length > 0 &&
+    (value.adoptedFromTabId === undefined ||
+      (isNonBlankString(value.adoptedFromTabId) &&
+        value.adoptedFromTabId.trim().length > 0 &&
+        value.adoptedFromTabId.length <= 256)) &&
     (value.status === "running" || value.status === "idle" || value.status === "error") &&
     isIsoDate(value.startedAt) &&
     (value.completedAt === undefined || isIsoDate(value.completedAt)) &&

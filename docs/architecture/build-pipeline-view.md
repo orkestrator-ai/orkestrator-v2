@@ -857,3 +857,22 @@ bound and that test fails until the template says the same.
 
 Follow-ups: [0315-build-pipeline-flow-graph.md](../todo/coordinator-and-multi-review/0315-build-pipeline-flow-graph.md),
 [0405-build-pipeline-rewind-follow-ups.md](../todo/coordinator-and-multi-review/0405-build-pipeline-rewind-follow-ups.md).
+
+## Completed interactive Build attempts (internal foundation)
+
+The backend-only `startFromCompletedBuild` entry point can admit an already
+finished Build attempt in a running existing environment. It records the
+original provider session, a bounded copy of its transcript, its prompt tab
+identity (`adoptedFromTabId`), the committed baseline for code rewind, and a
+Build-authored key-information patch. The first display round is 1 (stored
+iteration 0).
+
+Admission precedes supervisor work. Normal source linkage and environment
+configuration still run, then the supervisor skips workspace setup and Build
+and enters the usual Review preparation path. It sends no turn to the original
+session. Restarting Build uses the ordinary ticket-based session path and
+retains the superseded original attempt and transcript.
+
+This is an internal foundation, not an available Auto-pipeline launch option.
+Draft generation, user review, ticket creation, committing changes and manual
+button wiring remain tracked in [7546](../todo/coordinator-and-multi-review/7546-auto-pipeline-launch-flow.md).

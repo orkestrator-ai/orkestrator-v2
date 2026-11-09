@@ -459,6 +459,16 @@ export class BuildPipelineSupervisor {
     }
 
     if (pipeline.phase === "waiting-for-setup") {
+      const completedBuild = pipeline.sessions.find(
+        (session) => session.phase === "build" && session.status === "idle" && session.completedAt,
+      );
+      if (completedBuild) {
+        // Interactive work already owns this checkout. Running setup or a
+        // second Build could overwrite it; enter the usual Review preparation
+        // path without sending anything to the original provider session.
+        await this.startVerifiedReviewOrPrepare(pipeline);
+        return;
+      }
       // Setup writes the checkout and the Build stage follows it: wait for a
       // graph run holding the environment before running either.
       this.ctx.options.workspaceWriters

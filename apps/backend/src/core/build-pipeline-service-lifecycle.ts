@@ -1,4 +1,8 @@
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import {
+  adoptCompletedBuild,
+  type CompletedBuildAttempt,
+} from "./build-pipeline-completed-build.js";
 /**
  * Public build pipeline operations: init and shutdown, admission, and every
  * user control (pause, resume, messages, retries, restarts, cancel, remove).
@@ -435,6 +439,7 @@ export class BuildPipelineLifecycle {
   async start(
     input: StartBuildPipelineInput,
     coordinatorLaunchId?: string,
+    completedBuild?: CompletedBuildAttempt,
   ): Promise<BuildPipeline> {
     if (!isStartBuildPipelineInput(input)) {
       throw new Error("Invalid build pipeline start request");
@@ -488,6 +493,12 @@ export class BuildPipelineLifecycle {
       backendRevision: 0,
       controller: "backend",
     };
+    if (completedBuild) {
+      if (!existingEnvironment || existingEnvironment.status !== "running") {
+        throw new Error("A completed Build requires a running existing environment");
+      }
+      adoptCompletedBuild(pipeline, completedBuild);
+    }
     if (!existingEnvironment) {
       // Installed before the reservation becomes visible to timer ticks.
       this.ctx.provisioningPrompts.set(pipeline.id, input.namingPrompt);
@@ -499,6 +510,16 @@ export class BuildPipelineLifecycle {
         const existing = admitted.snapshot;
         if (!isBuildPipeline(existing)) {
           throw new Error("Existing build pipeline admission is invalid");
+        }
+        if (
+          completedBuild &&
+          !existing.sessions.some(
+            (session) =>
+              session.adoptedFromTabId === completedBuild.tabId &&
+              session.sdkSessionId === completedBuild.sessionId,
+          )
+        ) {
+          throw new Error("This ticket already has a different Build attempt");
         }
         // Admission is intentionally idempotent, including after a previous
         // caller completed provisioning but failed while publishing the pane

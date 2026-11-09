@@ -142,6 +142,27 @@ function snapshotWithInteractions({
 }
 
 describe("build pipeline protocol", () => {
+  test("bounds the original prompt tab identity on an adopted Build", () => {
+    const session = {
+      phase: "build",
+      iteration: 0,
+      sessionKey: "build-0",
+      sdkSessionId: "original-session",
+      status: "idle",
+      startedAt: "2026-11-09T01:00:00.000Z",
+      label: "Build",
+    };
+    const withTab = (adoptedFromTabId: unknown) => ({
+      ...snapshot(),
+      sessions: [{ ...session, adoptedFromTabId }],
+      currentSessionIndex: 0,
+    });
+    expect(isBuildPipeline(withTab("original-tab"))).toBe(true);
+    expect(isBuildPipeline(withTab(undefined))).toBe(true);
+    for (const invalid of [null, "", " ", "x".repeat(257), 7, {}]) {
+      expect(isBuildPipeline(withTab(invalid))).toBe(false);
+    }
+  });
   test("validates durable skip intents and validation run markers", () => {
     for (const phase of ["build", "fix", "review", "address", "verify"]) {
       expect(isBuildPipeline({ ...snapshot(), skipRequest: { phase } })).toBe(true);

@@ -629,6 +629,20 @@ export class BuildPipelinesRepository {
         );
         if (admitted) return { record: structuredClone(admitted), commit: null };
       }
+      // Promotion is exclusive even with two confirmations racing in
+      // different backend instances. Keep this under the cross-pipeline
+      // writer lease, after same-intent admission replay and before publication.
+      const sessions = storedSnapshot.sessions;
+      const adopted =
+        Array.isArray(sessions) &&
+        sessions.some(
+          (session) => isRecord(session) && typeof session.adoptedFromTabId === "string",
+        );
+      if (!previous && adopted) {
+        if (Object.values(pipelines).some((pipeline) => pipeline.environmentId === environmentId)) {
+          throw new Error("This environment is already linked to a build pipeline");
+        }
+      }
       const reservation = activeGitHubBuildReservation(storedSnapshot);
       if (
         reservation &&

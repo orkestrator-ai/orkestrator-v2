@@ -390,3 +390,31 @@ test("rolling projections retain case calls, revisions and delivery wakes after 
   expect(routingToolCalls(collected.messages())[0]?.tool).toBe("send_prompt_to_tab");
   expect(() => collected.observe([{ id: "gap" }])).toThrow("projection gap");
 });
+
+test("a backend request cannot excuse a failed worker tool or a mismatched reused tab", () => {
+  const base = {
+    newWorkers: 0,
+    delegationRequests: [{ environmentId: "env", workerTabId: "tab" }],
+    newTickets: 0,
+    newPipelines: 0,
+    newReviews: 0,
+  };
+  for (const toolState of ["error", "running", "unknown"]) {
+    expect(
+      failedNames(
+        evaluateRoutingInvestigate({
+          ...base,
+          messages: [{ parts: [{ toolName: "launch_job", toolState }] }],
+        }),
+      ),
+    ).toContain("investigate-delegated");
+  }
+  expect(
+    failedNames(
+      evaluateRoutingInvestigate({
+        ...base,
+        messages: [row("send_prompt_to_tab", { environmentId: "env", tabId: "other-tab" })],
+      }),
+    ),
+  ).toContain("investigate-delegated");
+});

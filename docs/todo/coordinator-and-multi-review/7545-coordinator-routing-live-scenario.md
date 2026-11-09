@@ -3,7 +3,8 @@
 From a reassessment on 2026-11-08 of the product note "Making Coordinator
 intuitive and effective" (2026-10-17, written against `4abf26e4`; not in
 the repository). Its routing recommendation has been built as prompt rules;
-no live run has shown a real coordinator following them.
+the repair round below now supplies a complete Cursor routing pass and a
+live Pi review pass, with other provider findings still open.
 
 ## Task analysis
 
@@ -13,7 +14,7 @@ Analysed 2026-11-08 against `main` at `02f55ea9b`. Task 1 was built on
 ### Tasks
 
 1. **Add a `routing` scenario to the live coordinator suite**: four plain requests, each checked for the workflow the coordinator chose. Status: done.
-2. **Run it on the main platforms and record the result here**: Claude and Codex at least. Status: open (Claude and Codex run; Codex's `delivery` case waits on [7546](7546-build-review-row-pins-unoffered-codex-model.md); Pi, OpenCode and Cursor with their next full run).
+2. **Run it on the main platforms and record the result here**: Claude and Codex at least. Status: done (all five main platforms exercised and recorded below; Cursor qualified, other provider findings remain open).
 3. **Decide what "review this branch" should start**: both platforms reviewed the diff themselves instead of launching a Multi Review. Status: open (the user's decision).
 4. **Stop a coordinator restarting a build the user cancelled**: Codex restarted case 1's cancelled build. Status: open.
 
@@ -272,13 +273,74 @@ count, loses evidence once the bounded projection rolls. Instant turns also
 use new message IDs as evidence of progress. The regression transport exercises
 failed launches, delayed reports on reused tabs and rolling 200-row windows.
 
+### Repair-round live qualification (task 2, 2026-11-09)
+
+Ran the routing scenario through the repository-owned isolated runner with
+Claude, Codex, Pi, OpenCode and Cursor selected. The command is
+`mise run test:logged -- --name routing-live -- mise run test:agent:coordinator --credential-source claude --credential-source codex --credential-source pi --credential-source opencode --credential-source cursor --scenario routing`.
+Each platform owns a disposable fixture profile; results below refer only to
+observed checks, not the case-edge progress messages.
+
+- Claude (`qa-coordinator-claude-0100c814`, 359,737 ms): build, investigation
+  delegation/report/wake and commit-only delivery passed. Review failed
+  `review-launched` and `review-auto-actions-off`: no Multi Review was
+  launched. The profile was stopped and reset by the runner.
+- Codex (`qa-coordinator-codex-8dd0e54b`, 423,156 ms): build and investigation
+  passed. Review launched a job rather than Multi Review, failing all three
+  review verdicts. Delivery failed because its review session selected
+  `gpt-5.4`, unsupported for the ChatGPT account (7546). The profile was
+  stopped and reset by the runner.
+- Pi (`qa-coordinator-pi-13f29ccd`, 651,088 ms): build, investigation and all
+  three review verdicts passed. Exactly one Multi Review was associated with
+  the named environment, with auto-fix and auto-PR absent/off. This supplies
+  the previously missing live review evidence. Delivery failed because its
+  review returned no required structured result. The profile was stopped
+  and reset by the runner.
+
+- OpenCode (`qa-coordinator-opencode-3b006570`, 186,467 ms): no ticket,
+  pipeline, worker delegation or Multi Review was created. All four cases
+  failed their required workflow checks; delivery could not start. The
+  content-free tool summary contains reads, environment/tab listings and a
+  diff read, with no workflow mutations. The profile was stopped and reset.
+
+- Cursor standalone rerun (`qa-coordinator-cursor-a44ee894`, 497,015 ms):
+  **passed every routing check**, including the real Multi Review with
+  auto-actions off, investigation report/wake, and commit-only delivery with
+  no PR stage or coordinator PR. The logged command exited 0 in 504.6 s.
+  The profile was stopped and reset. Its content-free verdict is
+  `output/agent-testing/qa-coordinator-cursor-a44ee894/coordinator/cursor-routing.json`.
+
+The five-platform logged command exited 1 after its 1,800,000 ms group
+deadline interrupted Cursor's first build case. All five profiles were
+stopped and reset. That initial Cursor attempt
+(`qa-coordinator-cursor-36b75697`) wrote no scenario verdict and is
+incomplete. The failure log is
+`/tmp/orkestrator-test-run.gPhh9i/routing-live.log.gz`; the aggregate is
+`output/agent-testing/qa-coordinator-2026-11-09T00-48-57-179Z/summary.json`.
+Cursor was then rerun alone with
+`mise run test:logged -- --name routing-cursor-live -- mise run test:agent:coordinator --credential-source cursor --scenario routing`
+so the other platforms did not consume its outer deadline. For future billed
+qualification, use one platform per logged command: the live runner budgets
+individual scenarios, but the outer logged group has one shared deadline.
+
+Claude began before the repair commit and Codex before the clean rebase;
+their loaded code included the repaired collector and delegation-request
+checks. The branch was rebased to `1000c335a` while the runner progressed
+to Pi; later profiles built from that tree.
+The repair's deterministic validation passed: the exact failed default
+command (`mise run test`, via `test:logged`, 542.2 s), focused routing and
+shared orchestration/observer suites, scripts typechecking, changed-file
+lint and repository format check. No passing full static suite was repeated.
+
 ## Needs verification
 
-- The `review` case's Multi Review half (`review-auto-actions-off` on a real
-  workflow record) has not run on any platform, because no coordinator
-  launched one.
+- Pi supplied a live pass for `review-auto-actions-off` on 2026-11-09.
+  Claude and Codex still did not route the review to Multi Review.
+- Pi's delivery review returned no required structured result; full delivery
+  qualification remains open on Pi.
 - Codex's `delivery` outcome, after [7546](7546-build-review-row-pins-unoffered-codex-model.md).
-- Pi, OpenCode and Cursor: not run.
+- Cursor fully qualified on 2026-11-09; OpenCode still needs evidence of
+  actual workflow routing rather than read-only answers.
 
 ## Related
 

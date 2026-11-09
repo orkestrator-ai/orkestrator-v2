@@ -86,7 +86,7 @@ describe("test tier selection", () => {
       "apps/backend/src/node_modules/e.live.test.ts": "",
       "apps/backend/tests/tmux-live.test.ts": "",
     });
-    // An unreadable dist/ fails any scan that descends into it (flake 9902: a
+    // An unreadable dist/ fails any scan that descends into it (flake 9909: a
     // concurrent build deleted dist/ entries mid-scan and the scan threw).
     const locked = path.join(root, "apps/backend/dist/locked");
     chmodSync(locked, 0o000);

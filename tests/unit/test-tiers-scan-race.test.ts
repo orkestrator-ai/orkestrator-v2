@@ -1,5 +1,5 @@
 /**
- * Flake 9902: the slow-tier scan must survive a build rewriting `dist/` under
+ * Flake 9909: the slow-tier scan must survive a build rewriting `dist/` under
  * the package it scans. A real child process rebuilds and deletes a
  * `dist/artifact-runtime` tree while this process scans; before the fix the
  * scan listed a directory the build then deleted and threw ENOENT on most

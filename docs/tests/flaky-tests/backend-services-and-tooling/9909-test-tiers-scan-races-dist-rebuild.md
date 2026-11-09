@@ -1,6 +1,6 @@
 # Slow-tier file scan races a concurrent `dist` rebuild
 
-- **ID:** 9902
+- **ID:** 9909
 - **Status:** resolved
 - **Date observed:** 2026-11-09
 - **Base commit:** `30bce689555ce4f62e473d19e196d912535d3d04`

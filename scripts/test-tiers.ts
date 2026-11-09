@@ -47,7 +47,7 @@ export const SLOW_TESTS: Readonly<Record<string, readonly string[]>> = {
     "tests/unit/runtime-env-wiring.test.ts",
     "tests/unit/test-all.test.ts",
     "tests/unit/test-diagnostic-bounds.test.ts",
-    // Races the slow-tier scan against a real process rebuilding dist/ (flake 9902).
+    // Races the slow-tier scan against a real process rebuilding dist/ (flake 9909).
     "tests/unit/test-tiers-scan-race.test.ts",
     // Real busy-loop processes pinned to a core, and a signalled runner.
     "tests/unit/test-under-contention-processes.test.ts",
@@ -182,7 +182,7 @@ export function testTier(env: NodeJS.ProcessEnv): TestTier {
 /**
  * Directories the slow-tier scan never enters: dependencies and build output.
  * Neither holds test sources, and a concurrent build deletes `dist/` entries
- * while the scan is listing them (flake 9902: `Bun.Glob.scanSync` over the
+ * while the scan is listing them (flake 9909: `Bun.Glob.scanSync` over the
  * whole package threw ENOENT on a `dist/artifact-runtime` file).
  */
 const SCAN_SKIPPED_DIRECTORIES = new Set(["node_modules", "dist"]);

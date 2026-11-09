@@ -1132,6 +1132,7 @@ export {
   setEnvironmentUnread,
   autoPipelineSources,
   draftAutoPipeline,
+  cancelAutoPipelineDraft,
   confirmAutoPipeline,
 } from "./build-pipelines";
 export {

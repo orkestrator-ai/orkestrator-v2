@@ -132,6 +132,19 @@ export function parseAutoPipelineTicket(value: unknown): AutoPipelineTicket {
     throw new Error("Ticket fields cannot be blank");
   if ([ticket.title, ...ticket.acceptanceCriteria].some((text) => /[\r\n]/.test(text)))
     throw new Error("Title and acceptance criteria must be single lines");
+  const sections = Array.from(
+    ticket.description.matchAll(
+      /^[ \t]*(?:#{1,6}[ \t]+)?(Summary|Problem|Context)[ \t]*(?::[ \t]*|\r?$)/gim,
+    ),
+  );
+  for (const section of ["Summary", "Problem", "Context"]) {
+    const index = sections.findIndex((match) => match[1]?.toLowerCase() === section.toLowerCase());
+    const match = sections[index];
+    const body = match
+      ? ticket.description.slice(match.index! + match[0].length, sections[index + 1]?.index)
+      : "";
+    if (!body.trim()) throw new Error(`Ticket description requires a nonempty ${section} section`);
+  }
   return ticket;
 }
 export function parseAutoPipelineResult(

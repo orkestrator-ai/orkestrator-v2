@@ -27,6 +27,16 @@ export function AutoPipelineLaunch({
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const generation = useRef(0);
+  const draftingTab = useRef<string | null>(null);
+  useEffect(
+    () => () => {
+      if (draftingTab.current)
+        void backend
+          .cancelAutoPipelineDraft(environmentId, draftingTab.current)
+          .catch(() => undefined);
+    },
+    [backend, environmentId],
+  );
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     let disposed = false;
@@ -65,6 +75,7 @@ export function AutoPipelineLaunch({
   async function generate() {
     if (busy || !selected || selected.disabledReason) return;
     const request = ++generation.current;
+    draftingTab.current = tabId;
     setBusy(true);
     setOpen(true);
     setError(null);
@@ -75,7 +86,10 @@ export function AutoPipelineLaunch({
       if (request === generation.current)
         setError(failure instanceof Error ? failure.message : String(failure));
     } finally {
-      if (request === generation.current) setBusy(false);
+      if (request === generation.current) {
+        draftingTab.current = null;
+        setBusy(false);
+      }
     }
   }
   async function confirm() {
@@ -98,6 +112,12 @@ export function AutoPipelineLaunch({
   }
   function closeDraft() {
     if (busy && draft) return;
+    if (draftingTab.current) {
+      void backend
+        .cancelAutoPipelineDraft(environmentId, draftingTab.current)
+        .catch(() => undefined);
+      draftingTab.current = null;
+    }
     generation.current++;
     setOpen(false);
     setBusy(false);

@@ -152,7 +152,13 @@ test("manual prompt draft confirms through normal Review, Verify and PR without 
       expect(provider.created[0]?.options?.policy?.approvals).toBe("deny");
       expect(await storage.kanban.getKanbanTasks("project-1")).toHaveLength(0);
       // A new service represents backend restart; the reviewed draft remains authoritative.
-      const restarted = new AutoPipelineService(context, () => gitPorts(async () => provider));
+      const restarted = new AutoPipelineService(context, () =>
+        gitPorts(async (environment) => {
+          // The production local bridge start uses this same moving-checkout gate.
+          context.runtime.environments.fence.assertNotMoving(environment.id);
+          return provider;
+        }),
+      );
       expect((await restarted.draft("env-1", "original-tab")).id).toBe(draft.id);
       expect(provider.sent).toHaveLength(1);
       const record = (await restarted.confirm(draft.id, {
@@ -730,4 +736,93 @@ test("promotion refuses an in-flight submission, another active agent and a live
     },
     { realKanban: true },
   );
+});
+
+test("source discovery isolates a failed session and retains healthy tabs", async () => {
+  await withService(async (buildPipelines, storage, provider) => {
+    seed(storage);
+    const sessions = await storage.listNativeAgentSessions();
+    const first = sessions[0]!;
+    seedStore(storage.getDataDir(), "native-agent-sessions.json", {
+      broken: { ...first, key: "broken", providerSessionId: "broken" },
+      healthy: { ...first, key: "healthy", providerSessionId: "healthy" },
+    });
+    const status = spyOn(provider, "status").mockImplementation(async (id) => {
+      if (id === "broken") throw new Error("Unavailable");
+      return "idle";
+    });
+    try {
+      const auto = new AutoPipelineService(draftContext(storage, buildPipelines), () =>
+        gitPorts(async () => provider),
+      );
+      const sources = await auto.sources("env-1");
+      expect(sources.sources).toHaveLength(2);
+      expect(sources.sources[0]?.disabledReason).toContain("unavailable");
+      expect(sources.sources[1]?.disabledReason).toBeUndefined();
+    } finally {
+      status.mockRestore();
+    }
+  });
+});
+
+test("draft rejects more than 1000 total pending paths before model dispatch", async () => {
+  await withService(async (buildPipelines, storage, provider) => {
+    seed(storage);
+    await storage.updateEnvironment("env-1", { createdFromCommit: "1".repeat(40) });
+    const ports = gitPorts(async () => provider);
+    const git = ports.git;
+    ports.git = async (id, args) =>
+      args[0] === "status"
+        ? [
+            ...Array.from({ length: 900 }, (_, i) => `?? untracked-${i}`),
+            ...Array.from({ length: 200 }, (_, i) => ` M modified-${i}`),
+          ].join("\n")
+        : git(id, args);
+    const auto = new AutoPipelineService(draftContext(storage, buildPipelines), () => ports);
+    await expect(auto.draft("env-1", "original-tab")).rejects.toThrow("Too many pending files");
+    expect(provider.sent).toHaveLength(0);
+  });
+});
+
+test("explicit draft cancellation aborts the separate session and releases the pending request", async () => {
+  await withService(async (buildPipelines, storage, provider) => {
+    seed(storage);
+    await storage.updateEnvironment("env-1", { createdFromCommit: "1".repeat(40) });
+    let started!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    let resultKey = "";
+    const send = spyOn(provider, "send").mockImplementation(async (_id, _prompt, options) => {
+      resultKey = options.requestId!;
+      started();
+      return new Promise(() => {});
+    });
+    const abort = spyOn(provider, "abort");
+    const context = draftContext(storage, buildPipelines);
+    const auto = new AutoPipelineService(context, () => gitPorts(async () => provider));
+    const pending = auto.draft("env-1", "original-tab");
+    const outcome = pending.catch((error: Error) => error.message);
+    try {
+      await ready;
+      // Separate service instances share the backend-owned operation registry.
+      new AutoPipelineService(context, () => gitPorts(async () => provider)).cancelDraft(
+        "env-1",
+        "original-tab",
+      );
+      expect(await outcome).toContain("cancelled");
+      expect(
+        await context.workflowResults!.status(
+          { environmentId: "env-1", projectId: "project-1" },
+          resultKey,
+        ),
+      ).toMatchObject({ lifecycle: "cancelled" });
+      expect(abort).toHaveBeenCalled();
+      expect(abort.mock.calls.every(([id]) => id !== "original-session")).toBe(true);
+      expect(storage.latestAutoPipelineDraft("env-1", "original-tab")).toBeNull();
+    } finally {
+      send.mockRestore();
+      abort.mockRestore();
+    }
+  });
 });

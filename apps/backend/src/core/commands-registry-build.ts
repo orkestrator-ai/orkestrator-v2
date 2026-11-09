@@ -5,6 +5,7 @@ import { createPipelineEnvironmentGit } from "./commands-review.js";
 import {
   autoPipelineSourcesCommand,
   draftAutoPipelineCommand,
+  cancelAutoPipelineDraftCommand,
   confirmAutoPipelineCommand,
 } from "@orkestrator/protocol/contract/domains/pipelines";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
@@ -101,6 +102,9 @@ export function registerBuildPipelineCommands(
   );
   register(draftAutoPipelineCommand, ({ environmentId, tabId }, context) =>
     auto(context).draft(environmentId, tabId),
+  );
+  register(cancelAutoPipelineDraftCommand, ({ environmentId, tabId }, context) =>
+    auto(context).cancelDraft(environmentId, tabId),
   );
   register(
     confirmAutoPipelineCommand,

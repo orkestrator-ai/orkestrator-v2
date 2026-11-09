@@ -36,6 +36,7 @@ function client(available = true, running = false) {
       },
       draft_auto_pipeline: draft,
       confirm_auto_pipeline: null,
+      cancel_auto_pipeline_draft: undefined,
     },
   });
 }
@@ -120,6 +121,7 @@ test("a hanging draft can be dismissed without confirmation", async () => {
   await screen.findByText("Drafting ticket and Build notes…");
   fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
   expect(node.calls("confirm_auto_pipeline")).toHaveLength(0);
+  await waitFor(() => expect(node.calls("cancel_auto_pipeline_draft")).toHaveLength(1));
   await waitFor(() => expect(screen.queryByRole("dialog") === null).toBe(true));
 });
 test("draft failure offers retry and plain review; confirmation errors retain the draft", async () => {

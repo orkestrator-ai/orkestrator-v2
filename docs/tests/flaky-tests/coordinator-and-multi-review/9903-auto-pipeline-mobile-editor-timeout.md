@@ -13,3 +13,17 @@ Command: `mise run test:logged -- --name address-browser-rerun -- mise run test:
 Owning-file rerun: `mise run test:logged -- --name address-auto-browser -- bun scripts/loopback-network.ts -- bunx playwright test --config e2e/playwright.config.ts e2e/AutoPipeline.spec.ts --workers=2`. All 12 desktop/mobile cases passed in 68.4 s. No timeout was increased and no assertion was removed.
 
 Cause remains unknown. Several unrelated fixture interactions and reloads also timed out in the broad run; that observation does not establish an environmental exemption or rule out a product race.
+
+## Additional observation, 2026-11-09
+
+Observed on `auto-pipeline-environment-adfad114968b-r1`, base
+`c0b02ace0188988773bd540ed132d9f99d0529c5`, with repairs after `9ec966875`.
+`address4-focused-browser` ran the owning spec with two workers: 11 passed,
+one failed in 87.5 s. The mobile ready case exhausted its 30 s deadline at
+`e2e/AutoPipeline.spec.ts:55`, waiting to click Cancel after its screenshot.
+Evidence: `/tmp/orkestrator-test-run.koCpBn/address4-focused-browser.log.gz`.
+The identical owning-spec rerun `address4-browser-owner-rerun` passed all
+12 cases in 41.6 s. Neither the timeout nor assertions changed. This confirms
+an intermittent owner failure, not its cause; no environmental exemption is
+claimed for the incomplete broad browser run. The recurrence tool was run
+against the base before recording this observation.

@@ -74,7 +74,7 @@ export { parseAutoPipelineResult } from "@orkestrator/protocol/build-pipeline";
 
 const draftingByStorage = new WeakMap<
   CommandContext["storage"],
-  Map<string, Promise<AutoPipelineDraft>>
+  Map<string, { operation: Promise<AutoPipelineDraft>; controller: AbortController }>
 >();
 
 /** Drafts and promotion receipts survive restarts; clients cannot replace generated notes. */
@@ -123,16 +123,24 @@ export class AutoPipelineService {
     try {
       const sources = [];
       for (const session of await this.sessions(id)) {
-        const provider = await ports.provider(environment, session.agent);
-        const idle =
-          !session.pendingDispatch &&
-          !session.pendingSteer &&
-          (await provider.status(session.providerSessionId)) === "idle";
-        sources.push({
-          tabId: session.logicalSessionKey,
-          label: session.backendTitle?.title ?? session.agent,
-          ...(!idle ? { disabledReason: "Wait for this tab's turn to finish" } : {}),
-        });
+        try {
+          const provider = await ports.provider(environment, session.agent);
+          const idle =
+            !session.pendingDispatch &&
+            !session.pendingSteer &&
+            (await provider.status(session.providerSessionId)) === "idle";
+          sources.push({
+            tabId: session.logicalSessionKey,
+            label: session.backendTitle?.title ?? session.agent,
+            ...(!idle ? { disabledReason: "Wait for this tab's turn to finish" } : {}),
+          });
+        } catch {
+          sources.push({
+            tabId: session.logicalSessionKey,
+            label: session.backendTitle?.title ?? session.agent,
+            disabledReason: "This tab is unavailable. Retry when its provider reconnects",
+          });
+        }
       }
       return { available: true, sources };
     } finally {
@@ -148,6 +156,8 @@ export class AutoPipelineService {
     const branch = (await ports.git(id, ["branch", "--show-current"])).trim();
     if (branch !== environment.branch) throw new Error("The environment branch changed");
     const status = await ports.git(id, ["status", "--porcelain", "--untracked-files=all"]);
+    if (status.split("\n").filter(Boolean).length > 1000)
+      throw new Error("Too many pending files to promote (maximum 1000)");
     const diff = await ports.git(id, ["diff", "--no-ext-diff", "--no-textconv", base, "--"]);
     const untracked = (await ports.git(id, ["ls-files", "--others", "--exclude-standard", "-z"]))
       .split("\0")
@@ -170,16 +180,27 @@ export class AutoPipelineService {
     }
     const key = `${environmentId}:${tabId}`;
     const pending = active.get(key);
-    if (pending) return pending;
+    if (pending) return pending.operation;
     if (active.size >= 32)
       return Promise.reject(new Error("Too many drafting sessions are running"));
-    const operation = this.createDraft(environmentId, tabId);
-    active.set(key, operation);
+    const controller = new AbortController();
+    const operation = this.createDraft(environmentId, tabId, controller.signal);
+    active.set(key, { operation, controller });
     return operation.finally(() => {
-      if (active.get(key) === operation) active.delete(key);
+      if (active.get(key)?.operation === operation) active.delete(key);
     });
   }
-  private async createDraft(environmentId: string, tabId: string): Promise<AutoPipelineDraft> {
+  cancelDraft(environmentId: string, tabId: string): void {
+    draftingByStorage
+      .get(this.context.storage)
+      ?.get(`${environmentId}:${tabId}`)
+      ?.controller.abort(new Error("Auto-pipeline drafting cancelled"));
+  }
+  private async createDraft(
+    environmentId: string,
+    tabId: string,
+    signal: AbortSignal,
+  ): Promise<AutoPipelineDraft> {
     const environment = await this.environment(environmentId);
     const source = (await this.sessions(environmentId)).find(
       (session) => session.logicalSessionKey === tabId,
@@ -188,7 +209,15 @@ export class AutoPipelineService {
     const ports = this.ports();
     let drafting: { provider: BuildPipelineProvider; id: string } | undefined;
     let resultKey: string | undefined;
+    let onAbort: (() => void) | undefined;
+    const cancelled = new Promise<never>((_resolve, reject) => {
+      onAbort = () => reject(signal.reason);
+      signal.addEventListener("abort", onAbort, { once: true });
+    });
+    // Cancellation may arrive during preparation, before the send race is installed.
+    void cancelled.catch(() => undefined);
     try {
+      signal.throwIfAborted();
       const original = await ports.provider(environment, source.agent);
       if (
         source.pendingDispatch ||
@@ -250,6 +279,7 @@ export class AutoPipelineService {
         policy,
       });
       drafting = { provider, id };
+      signal.throwIfAborted();
       const requestId = randomUUID();
       const results = this.context.workflowResults;
       if (!results || !this.context.agentTools?.workflowResultConnection)
@@ -273,37 +303,49 @@ export class AutoPipelineService {
         capability: agentMcp.workflowResultCapability,
       });
       const deadline = Date.now() + this.draftTimeoutMs;
+      signal.throwIfAborted();
       await beforeDeadline(
-        provider.send(
-          id,
-          `Draft a ticket and finished Build handoff from this completed interactive work. Do not edit files, commit, or send messages. Return the schema-constrained result. Description must contain Summary, Problem and Context. Each acceptance criterion must be independently checkable. Notes must record only observed decisions, files touched, checks and results, and unfinished work.\nTranscript:\n${JSON.stringify(messages)}\nBranch diff:\n${state.diff}\nPending paths:\n${state.status}\n${instruction}`,
-          {
-            requestId,
-            agentMcp,
-            workflowResultTool: workflowResultToolName("auto-pipeline-draft"),
-            workflowResultKey: requestId,
-            readOnly: true,
-            mode: "plan",
-            model: selection?.model,
-            effort: selection.reasoningEffort,
-            fastMode: selection.fastMode,
-          },
-        ),
+        Promise.race([
+          cancelled,
+          provider.send(
+            id,
+            `Draft a ticket and finished Build handoff from this completed interactive work. Do not edit files, commit, or send messages. Return the schema-constrained result. Description must contain Summary, Problem and Context. Each acceptance criterion must be independently checkable. Notes must record only observed decisions, files touched, checks and results, and unfinished work.\nTranscript:\n${JSON.stringify(messages)}\nBranch diff:\n${state.diff}\nPending paths:\n${state.status}\n${instruction}`,
+            {
+              requestId,
+              agentMcp,
+              workflowResultTool: workflowResultToolName("auto-pipeline-draft"),
+              workflowResultKey: requestId,
+              readOnly: true,
+              mode: "plan",
+              model: selection?.model,
+              effort: selection.reasoningEffort,
+              fastMode: selection.fastMode,
+            },
+          ),
+        ]),
         deadline,
       );
       let result;
       while (Date.now() < deadline) {
-        const status = await beforeDeadline(provider.status(id), deadline);
+        const status = await beforeDeadline(
+          Promise.race([cancelled, provider.status(id)]),
+          deadline,
+        );
         if (status === "error") throw new Error("Auto-pipeline drafting session failed");
-        result = await beforeDeadline(results.structured(requestId), deadline);
+        result = await beforeDeadline(
+          Promise.race([cancelled, results.structured(requestId)]),
+          deadline,
+        );
         if (result) break;
         await new Promise((resolve) => setTimeout(resolve, 250));
       }
       if (!result?.ok)
         throw new Error("Auto-pipeline drafting did not return a valid structured result");
+      signal.throwIfAborted();
       const parsed = parseAutoPipelineResult(result.value);
       if ((await this.fingerprint(ports, environment)).fingerprint !== state.fingerprint)
         throw new Error("Work changed during drafting. Retry to review the current work");
+      signal.throwIfAborted();
       const draft: AutoPipelineDraft = {
         ...parsed,
         id: randomUUID(),
@@ -333,6 +375,7 @@ export class AutoPipelineService {
       await results.consume(requestId);
       return draft;
     } finally {
+      if (onAbort) signal.removeEventListener("abort", onAbort);
       if (drafting) {
         await drafting.provider.abort(drafting.id).catch(() => undefined);
         await drafting.provider.closeSession?.(drafting.id).catch(() => undefined);
@@ -348,18 +391,30 @@ export class AutoPipelineService {
       return Promise.reject(
         new Error("Auto-pipeline draft expired. Draft again before confirming"),
       );
-    return this.context.storage.withAutoPipelinePromotion(record.environment.id, () =>
-      withWorkspaceCodeRewindReservation({
-        fence: this.context.runtime.environments.fence,
-        storage: this.context.storage,
-        environmentId: record.environmentId,
-        // A completed admission may replay while its own pipeline is running.
-        // Fresh promotion checks quiescence inside promote, after replay detection.
-        assertQuiet: async () => {},
-        run: () => this.promote(id, ticket),
-      }),
-    );
+    return this.context.storage.withAutoPipelinePromotion(record.environment.id, async () => {
+      const ports = this.ports();
+      try {
+        // Local bridge startup rejects moving checkouts, even for the owner.
+        // Acquire before reserving; promote revalidates all state inside the fence.
+        const admitted = (
+          await this.context.storage.listBuildPipelines(record.environment.projectId)
+        ).some((item) => item.environmentId === record.environmentId);
+        const provider = admitted
+          ? undefined
+          : await ports.provider(record.environment, record.source.agent);
+        return await withWorkspaceCodeRewindReservation({
+          fence: this.context.runtime.environments.fence,
+          storage: this.context.storage,
+          environmentId: record.environmentId,
+          assertQuiet: async () => {},
+          run: () => this.promote(id, ticket, ports, provider),
+        });
+      } finally {
+        ports.release();
+      }
+    });
   }
+
   private async assertCheckoutQuiet(environmentId: string): Promise<void> {
     await assertNoOtherWorkflowWriting(this.context.storage, environmentId, {});
     for (const review of await this.context.storage.listAllMultiReviewWorkflows()) {
@@ -390,7 +445,12 @@ export class AutoPipelineService {
     )
       throw new Error("An agent submission is unresolved; settle it before promotion.");
   }
-  private async promote(id: string, value: AutoPipelineTicket) {
+  private async promote(
+    id: string,
+    value: AutoPipelineTicket,
+    ports: AutoPipelinePorts,
+    provider?: BuildPipelineProvider,
+  ) {
     const record = this.context.storage.getAutoPipelineDraft(id);
     if (!record) throw new Error("Auto-pipeline draft expired. Draft again before confirming");
     const ticket = parseAutoPipelineTicket(value);
@@ -430,99 +490,91 @@ export class AutoPipelineService {
     );
     if (!source || source.pendingDispatch || source.pendingSteer)
       throw new Error("The original idle tab is no longer available");
-    const ports = this.ports();
-    try {
-      const provider = await ports.provider(environment, record.source.agent);
-      if ((await provider.status(record.source.providerSessionId)) !== "idle")
-        throw new Error("Wait for this tab's turn to finish");
-      const state = await this.fingerprint(ports, environment);
+    if (!provider) throw new Error("Source provider is unavailable");
+    if ((await provider.status(record.source.providerSessionId)) !== "idle")
+      throw new Error("Wait for this tab's turn to finish");
+    const state = await this.fingerprint(ports, environment);
+    if (
+      digest(await provider.messages(record.source.providerSessionId)) !==
+      digest(record.attempt.messages)
+    )
+      throw new Error("The source transcript changed. Draft again before confirming");
+    if (state.fingerprint !== record.fingerprint) {
+      const lastMessage = record.reviewed
+        ? await ports.git(environment.id, ["log", "-1", "--format=%B"])
+        : "";
+      const parent = record.reviewed
+        ? (await ports.git(environment.id, ["rev-parse", "HEAD^"])).trim()
+        : "";
       if (
-        digest(await provider.messages(record.source.providerSessionId)) !==
-        digest(record.attempt.messages)
+        state.status.trim() ||
+        parent !== record.attempt.commit ||
+        lastMessage
+          .trimEnd()
+          .split(/\n\s*\n/)
+          .at(-1) !== `Orkestrator-Auto-Pipeline: ${id}`
       )
-        throw new Error("The source transcript changed. Draft again before confirming");
-      if (state.fingerprint !== record.fingerprint) {
-        const lastMessage = record.reviewed
-          ? await ports.git(environment.id, ["log", "-1", "--format=%B"])
-          : "";
-        const parent = record.reviewed
-          ? (await ports.git(environment.id, ["rev-parse", "HEAD^"])).trim()
-          : "";
-        if (
-          state.status.trim() ||
-          parent !== record.attempt.commit ||
-          lastMessage
-            .trimEnd()
-            .split(/\n\s*\n/)
-            .at(-1) !== `Orkestrator-Auto-Pipeline: ${id}`
-        )
-          throw new Error("Work changed since drafting. Draft again before confirming");
-      }
-      record.reviewed = ticket;
-      this.context.storage.putAutoPipelineDraft(record);
-      if (
-        (await this.fingerprint(ports, environment)).fingerprint !== state.fingerprint ||
-        (await provider.status(source.providerSessionId)) !== "idle" ||
-        digest(await provider.messages(source.providerSessionId)) !==
-          digest(record.attempt.messages)
-      )
-        throw new Error("Work changed during confirmation. Draft again before confirming");
-      if ((await ports.git(environment.id, ["status", "--porcelain"])).trim()) {
-        await ports.git(environment.id, ["add", "--all"]);
-        await ports.git(environment.id, [
-          "commit",
-          "-m",
-          `${ticket.title}\n\nOrkestrator-Auto-Pipeline: ${id}`,
-        ]);
-      }
-      record.attempt.commit = (await ports.git(environment.id, ["rev-parse", "HEAD"])).trim();
-      record.fingerprint = (await this.fingerprint(ports, environment)).fingerprint;
-      this.context.storage.putAutoPipelineDraft(record);
-      const task =
-        (await this.context.storage.kanban.findKanbanTaskByRequestId(
-          environment.projectId,
-          `auto-pipeline:${id}`,
-        )) ??
-        (await this.context.storage.kanban.addKanbanTask(
-          environment.projectId,
-          ticket.title,
-          ticket.description,
-          {
-            acceptanceCriteria: ticket.acceptanceCriteria.map((text) => `- [ ] ${text}`).join("\n"),
-            status: "in-progress",
-            requestId: `auto-pipeline:${id}`,
-          },
-        ));
-      const pipeline = await this.context.buildPipelines
-        .startFromCompletedBuild(
-          {
-            ...record.input,
-            taskId: task.id,
-            taskTitle: ticket.title,
-            taskSnapshot: {
-              title: ticket.title,
-              description: ticket.description,
-              acceptanceCriteria: task.acceptanceCriteria,
-              comments: [],
-              images: [],
-            },
-            source: { type: "kanban", taskId: task.id },
-          },
-          record.attempt,
-        )
-        .catch(async (error: unknown) => {
-          const pipelines = await this.context.storage.listBuildPipelines(environment.projectId);
-          if (
-            !pipelines.some((entry) => (entry.snapshot as { taskId?: string }).taskId === task.id)
-          )
-            await this.context.storage.kanban.deleteKanbanTask(task.id);
-          throw error;
-        });
-      record.pipelineId = pipeline.id;
-      this.context.storage.putAutoPipelineDraft(record);
-      return this.context.storage.getBuildPipeline(pipeline.id);
-    } finally {
-      ports.release();
+        throw new Error("Work changed since drafting. Draft again before confirming");
     }
+    record.reviewed = ticket;
+    this.context.storage.putAutoPipelineDraft(record);
+    if (
+      (await this.fingerprint(ports, environment)).fingerprint !== state.fingerprint ||
+      (await provider.status(source.providerSessionId)) !== "idle" ||
+      digest(await provider.messages(source.providerSessionId)) !== digest(record.attempt.messages)
+    )
+      throw new Error("Work changed during confirmation. Draft again before confirming");
+    if ((await ports.git(environment.id, ["status", "--porcelain"])).trim()) {
+      await ports.git(environment.id, ["add", "--all"]);
+      await ports.git(environment.id, [
+        "commit",
+        "-m",
+        `${ticket.title}\n\nOrkestrator-Auto-Pipeline: ${id}`,
+      ]);
+    }
+    record.attempt.commit = (await ports.git(environment.id, ["rev-parse", "HEAD"])).trim();
+    record.fingerprint = (await this.fingerprint(ports, environment)).fingerprint;
+    this.context.storage.putAutoPipelineDraft(record);
+    const task =
+      (await this.context.storage.kanban.findKanbanTaskByRequestId(
+        environment.projectId,
+        `auto-pipeline:${id}`,
+      )) ??
+      (await this.context.storage.kanban.addKanbanTask(
+        environment.projectId,
+        ticket.title,
+        ticket.description,
+        {
+          acceptanceCriteria: ticket.acceptanceCriteria.map((text) => `- [ ] ${text}`).join("\n"),
+          status: "in-progress",
+          requestId: `auto-pipeline:${id}`,
+        },
+      ));
+    const pipeline = await this.context.buildPipelines
+      .startFromCompletedBuild(
+        {
+          ...record.input,
+          taskId: task.id,
+          taskTitle: ticket.title,
+          taskSnapshot: {
+            title: ticket.title,
+            description: ticket.description,
+            acceptanceCriteria: task.acceptanceCriteria,
+            comments: [],
+            images: [],
+          },
+          source: { type: "kanban", taskId: task.id },
+        },
+        record.attempt,
+      )
+      .catch(async (error: unknown) => {
+        const pipelines = await this.context.storage.listBuildPipelines(environment.projectId);
+        if (!pipelines.some((entry) => (entry.snapshot as { taskId?: string }).taskId === task.id))
+          await this.context.storage.kanban.deleteKanbanTask(task.id);
+        throw error;
+      });
+    record.pipelineId = pipeline.id;
+    this.context.storage.putAutoPipelineDraft(record);
+    return this.context.storage.getBuildPipeline(pipeline.id);
   }
 }

@@ -68,6 +68,16 @@ export const draftAutoPipelineCommand = defineCommand({
   args: Schema.Struct({ environmentId: Schema.String, tabId: Schema.String }),
   result: AutoPipelineDraftSchema,
 });
+export const cancelAutoPipelineDraftCommand = defineCommand({
+  domain: pipelinesDomain,
+  name: "cancel_auto_pipeline_draft",
+  critical: [],
+  since: 1,
+  access: "workspace",
+  read: false,
+  args: Schema.Struct({ environmentId: Schema.String, tabId: Schema.String }),
+  result: Schema.Void,
+});
 export const confirmAutoPipelineCommand = defineCommand({
   domain: pipelinesDomain,
   name: "confirm_auto_pipeline",
@@ -484,6 +494,7 @@ export const setWorkflowResultToolsRolloutCommand = defineCommand({
 export const PIPELINES_COMMANDS = [
   autoPipelineSourcesCommand,
   draftAutoPipelineCommand,
+  cancelAutoPipelineDraftCommand,
   confirmAutoPipelineCommand,
   startBuildPipelineCommand,
   createFeatureBuildCommand,

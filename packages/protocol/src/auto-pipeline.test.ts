@@ -7,7 +7,7 @@ import {
 
 const ticket = {
   title: "Feature",
-  description: "Summary, problem and context",
+  description: "Summary: finished\nProblem: missing\nContext: fixture",
   acceptanceCriteria: ["Persists on reload"],
 };
 test("manual drafting and confirmation have schema contracts", () => {
@@ -43,4 +43,19 @@ test("ticket titles and criteria reject CR and LF including forged recovery trai
       parseAutoPipelineTicket({ ...ticket, acceptanceCriteria: [`check${newline}- [ ] hidden`] }),
     ).toThrow("single lines");
   }
+});
+
+test("ticket requires nonempty Summary, Problem and Context sections", () => {
+  for (const description of [
+    "plain description",
+    "Summary: done\nProblem: missing",
+    "Summary: \nProblem: missing\nContext: fixture",
+  ])
+    expect(() => parseAutoPipelineTicket({ ...ticket, description })).toThrow();
+});
+
+test("ticket supports Markdown sections with blank lines and CRLF", () => {
+  const description =
+    "## Summary\r\n\r\nFinished.\r\n## Problem\r\nMissing.\r\n## Context\r\nFixture.";
+  expect(parseAutoPipelineTicket({ ...ticket, description }).description).toBe(description);
 });

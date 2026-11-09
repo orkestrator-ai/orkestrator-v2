@@ -352,3 +352,12 @@ describe("coordinator delegation state", () => {
     });
   });
 });
+
+test("main and side coordinators receive action mark guidance", () => {
+  expect(buildCoordinatorContext(input())).toContain("mark_topic");
+  expect(
+    buildCoordinatorContext(
+      input({ delegation: { kind: "side", title: "Research", messagingEnabled: true } }),
+    ),
+  ).toContain("mark_topic");
+});

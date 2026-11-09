@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import {
   CONVERSATION_SCROLL_TARGET_SETTLED_GRACE_MS,
@@ -111,6 +111,7 @@ export function useConversationScrollTarget({
     };
   }, [clear, isActive, pending, ref, scrollToIndex, targetIndex, targetMessageId]);
 
+  const paging = useRef<Promise<unknown> | null>(null);
   // Read one page at a time. The request TTL bounds missing/deleted anchors.
   useEffect(() => {
     if (
@@ -125,7 +126,15 @@ export function useConversationScrollTarget({
     let retry: ReturnType<typeof setTimeout> | undefined;
     const load = async () => {
       try {
-        await loadEarlier();
+        // A transcript update may restart this effect while its read is pending.
+        // Join that read; never supersede it with another sequence number.
+        const request = paging.current ?? loadEarlier();
+        paging.current = request;
+        try {
+          await request;
+        } finally {
+          if (paging.current === request) paging.current = null;
+        }
       } catch {
         if (!stopped) clear(ref, pending.nonce);
         return;

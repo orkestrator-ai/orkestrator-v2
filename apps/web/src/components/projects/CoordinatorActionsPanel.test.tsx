@@ -1,3 +1,4 @@
+import { installControlledTimeout } from "../../../../../tests/helpers/controlled-timeout";
 import { afterEach, expect, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { ActionsPanel } from "./CoordinatorActionsPanel";
@@ -8,7 +9,17 @@ import {
 } from "./coordinator-action-cards";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 
-afterEach(cleanup);
+let clocks: ReturnType<typeof installControlledTimeout>[] = [];
+afterEach(() => {
+  cleanup();
+  for (const clock of clocks) clock.restore();
+  clocks = [];
+});
+function clock(delay: number) {
+  const value = installControlledTimeout(delay, { maxPending: 10 });
+  clocks.push(value);
+  return value;
+}
 const cards: CoordinatorActionCard[] = [
   { id: "t", anchorId: "u", index: 0, kind: "topic", title: "New subject", done: false },
   { id: "q", anchorId: "a", index: 1, kind: "question", title: "Which option?", done: false },
@@ -31,7 +42,8 @@ test("wide panel shows cards, done state and navigates", () => {
   expect(anchor).toBe("u");
   expect(screen.getByRole("button", { name: /Done: #42/ })).toBeTruthy();
 });
-test("narrow hover, pointer travel grace, leave, focus and Escape", async () => {
+test("narrow hover, pointer travel grace, leave, focus and Escape", () => {
+  const grace = clock(160);
   render(<ActionsPanel docked={false} cards={cards} onNavigate={() => {}} />);
   const icon = screen.getByRole("button", { name: "Actions, 1 waiting" });
   expect(icon.getAttribute("aria-expanded")).toBe("false");
@@ -39,18 +51,19 @@ test("narrow hover, pointer travel grace, leave, focus and Escape", async () => 
   expect(icon.getAttribute("aria-expanded")).toBe("true");
   fireEvent.pointerLeave(icon);
   fireEvent.pointerEnter(screen.getByRole("region", { name: "Actions" }));
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 180));
+  act(() => {
+    grace.advance();
   });
   expect(icon.getAttribute("aria-expanded")).toBe("true");
   fireEvent.keyDown(document, { key: "Escape" });
   expect(icon.getAttribute("aria-expanded")).toBe("false");
-  fireEvent.pointerLeave(icon);
+  fireEvent.blur(icon);
   fireEvent.focus(icon);
   expect(icon.getAttribute("aria-expanded")).toBe("true");
+  fireEvent.pointerLeave(icon);
   fireEvent.blur(icon);
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 180));
+  act(() => {
+    grace.advance();
   });
   expect(icon.getAttribute("aria-expanded")).toBe("false");
 });
@@ -122,17 +135,127 @@ test("PR updates retain original position and mark merged done", () => {
   ).toMatchObject([{ anchorId: "n1", index: 0, state: "merged", done: true }]);
 });
 
-test("scrolling hides later cards before retiring their animated rows", async () => {
+test("scrolling hides later cards before retiring their animated rows", () => {
+  const enter = clock(0);
+  const retire = clock(160);
   const view = render(<ActionsPanel docked cards={cards} onNavigate={() => {}} />);
   view.rerender(<ActionsPanel docked cards={cards.slice(0, 1)} onNavigate={() => {}} />);
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 20));
+  act(() => {
+    enter.advance();
   });
   const hiddenQuestion = screen.queryByRole("button", { name: "Which option?" });
   expect(hiddenQuestion).toBeNull();
   expect(view.container.querySelectorAll('li[aria-hidden="true"]').length).toBe(2);
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 180));
+  act(() => {
+    retire.advance();
   });
   expect(view.container.querySelectorAll("li").length).toBe(1);
+});
+
+test("touch leave and focus before click preserve tap-to-open", () => {
+  render(<ActionsPanel docked={false} cards={cards} onNavigate={() => {}} />);
+  const icon = screen.getByRole("button", { name: "Actions, 1 waiting" });
+  fireEvent.pointerDown(icon, { pointerType: "touch" });
+  fireEvent.pointerLeave(icon, { pointerType: "touch" });
+  fireEvent.focus(icon);
+  fireEvent.click(icon);
+  expect(icon.getAttribute("aria-expanded")).toBe("true");
+});
+test("OpenCode questions and assistant-only marks survive transcript replay", () => {
+  const messages = [
+    msg("a", "assistant", [
+      {
+        type: "tool-invocation",
+        content: "",
+        toolName: "question",
+        toolUseId: "q",
+        toolArgs: { questions: [{ question: "Choose?" }] },
+        toolState: "pending",
+      },
+      {
+        type: "tool-invocation",
+        content: "",
+        toolName: "mark_question",
+        toolArgs: { title: "Approve?" },
+        toolState: "success",
+      },
+    ]),
+  ];
+  expect(coordinatorActionCards(JSON.parse(JSON.stringify(messages)))).toMatchObject([
+    { anchorId: "a", title: "Choose?", done: false },
+    { anchorId: "a", title: "Approve?", done: false },
+  ]);
+  messages[0]!.parts[0]!.toolState = "success";
+  expect(coordinatorActionCards(messages)[0]?.done).toBe(true);
+});
+test("workflow handoff uses URL and node identity and skips publication attempts", () => {
+  const notice = (
+    id: string,
+    kind: "multi-review" | "pull-request",
+    state: string,
+  ): NativeMessage => ({
+    ...msg(id, "user"),
+    peerMail: {
+      messageId: id,
+      kind: "notice",
+      sender: "System",
+      warning: "",
+      body: "- Pull request: https://github.com/org/repo/pull/42",
+      notice: {
+        resource: { kind, id, environmentId: "env", nodeId: "node" },
+        state,
+        tone: "attention",
+      },
+    },
+  });
+  expect(
+    coordinatorActionCards([
+      notice("start", "multi-review", "pr-started"),
+      notice("failed", "multi-review", "pr-failed"),
+    ]),
+  ).toEqual([]);
+  expect(
+    coordinatorActionCards([
+      notice("open", "multi-review", "pr-opened"),
+      notice("merge", "pull-request", "pr-merged"),
+    ]),
+  ).toMatchObject([{ anchorId: "open", done: true, state: "merged" }]);
+});
+
+test("async answers and watched PR terminal state replay across serialization", () => {
+  const question = msg("async", "assistant", [
+    {
+      type: "async-question",
+      content: "",
+      asyncQuestion: {
+        itemId: "async-id",
+        questions: [{ id: "choice", title: "Choose a database", options: ["SQLite"] }],
+      },
+    },
+  ]);
+  expect(coordinatorActionCards([question], new Set(["async-id"]))[0]).toMatchObject({
+    title: "Choose a database",
+    done: true,
+    anchorId: "async",
+  });
+  const watched: NativeMessage = {
+    ...msg("watch", "user"),
+    peerMail: {
+      messageId: "watch",
+      kind: "notice",
+      sender: "System",
+      body: "",
+      warning: "",
+      notice: {
+        resource: { kind: "watched-pull-request", id: "repo#42", nodeId: "remote" },
+        state: "closed",
+        tone: "info",
+      },
+    },
+  };
+  expect(coordinatorActionCards(JSON.parse(JSON.stringify([watched])))[0]).toMatchObject({
+    anchorId: "watch",
+    done: true,
+    state: "closed",
+  });
 });

@@ -103,7 +103,7 @@ export function ActionsPanel({
     <div
       ref={root}
       className="pointer-events-auto max-w-full shrink-0"
-      style={{ order: 3 }}
+      style={{ order: 3, width: shown ? `${width}rem` : "fit-content", position: "relative" }}
       onPointerEnter={(event) => {
         if (event.pointerType !== "touch") {
           pointer.current = true;
@@ -111,13 +111,19 @@ export function ActionsPanel({
           open();
         }
       }}
-      onPointerLeave={() => {
+      onPointerLeave={(event) => {
+        if (event.pointerType === "touch") return;
         pointer.current = false;
         suppressed.current = false;
         leave();
       }}
       onFocus={open}
-      onBlur={leave}
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+          suppressed.current = false;
+          leave();
+        }
+      }}
       onKeyDown={(event) => {
         if (event.key === "Escape") {
           event.stopPropagation();
@@ -158,7 +164,12 @@ export function ActionsPanel({
             ? "grid-rows-[1fr] scale-100 opacity-100"
             : "pointer-events-none grid-rows-[0fr] scale-95 opacity-0",
         )}
-        style={{ width: `${width}rem`, maxWidth: "100%" }}
+        style={{
+          width: `${width}rem`,
+          maxWidth: shown ? "100%" : undefined,
+          position: shown ? "relative" : "absolute",
+          right: 0,
+        }}
       >
         <div className="min-h-0 overflow-hidden">
           <div className="mt-1 max-h-[min(32rem,var(--floating-notice-height,70vh))] overflow-y-auto rounded-xl border border-border bg-panel-surface/95 p-2 shadow-xl backdrop-blur-sm">

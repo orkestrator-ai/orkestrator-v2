@@ -3849,8 +3849,14 @@ store is used.
 
 The panel replays the loaded transcript in order, then shows the newest ten
 cards whose anchor is at or above the viewport bottom. The virtual list measures
-visible rows on scroll, excluding its render overscan. Cards navigate through
+visible rows on scroll and row resizing, excluding its render overscan. Cards navigate through
 the node-qualified conversation scroll target, loading history pages while an
 anchor is missing and briefly highlighting the destination. The existing target
 expiry bounds missing-anchor recovery. All reads and targets follow the
 conversation's node scope; worker tabs do not enable the panel.
+
+Current limitations: actions outside the loaded history window are not recovered
+on reload. Card titles still use notice subjects rather than PR number/title
+metadata. Workflow-to-PR replay reconciles the PR URL carried by status notice
+bodies; older URL-free notices fall back to a node-qualified environment identity.
+Publication-started and publication-failed notices do not create PR cards.

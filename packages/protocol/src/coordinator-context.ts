@@ -150,6 +150,7 @@ function projectLine(project: CoordinatorContextInput["project"]): string {
 function delegationLines(delegation: CoordinatorContextDelegation): string {
   if (delegation.kind === "side") {
     return (
+      `${COORDINATOR_ACTION_GUIDANCE}\n` +
       `Side agent: you are ${bounded(delegation.title, MAX_LABEL_LENGTH)}, a side agent of this project's coordinator. You can read the project and Orkestrator state, including a worker's changes with get_worker_changes, but you cannot launch environments or jobs. ` +
       (delegation.messagingEnabled
         ? `Exchange mail only with the main coordinator: send_message to toEnvironmentId "${COORDINATOR_MAIL_ADDRESS}". Workers and other agents cannot reach you.\n`

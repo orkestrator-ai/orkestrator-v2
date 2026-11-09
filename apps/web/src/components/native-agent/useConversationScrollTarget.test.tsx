@@ -228,3 +228,23 @@ test("Actions navigation ends a failed history read without moving the transcrip
   await waitFor(() => expect(pending()).toBeNull());
   expect(scrollToIndex).not.toHaveBeenCalled();
 });
+
+test("streaming changes join the pending history read", async () => {
+  useConversationScrollTargetStore.getState().request(at("env-1", "tab-1"), { messageId: "older" });
+  let release!: () => void;
+  const read = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const loadEarlier = mock(() => read);
+  const { rerender, initialProps, scrollToIndex } = setup({ loadEarlier });
+  rerender({ ...initialProps, messages: [...initialProps.messages, { id: "streaming" }] });
+  expect(loadEarlier).toHaveBeenCalledTimes(1);
+  await act(async () => {
+    release();
+    await read;
+  });
+  rerender({ ...initialProps, messages: [{ id: "older" }, ...initialProps.messages] });
+  await waitFor(() =>
+    expect(scrollToIndex).toHaveBeenCalledWith(0, { rowKey: "older" }, "message-link"),
+  );
+});

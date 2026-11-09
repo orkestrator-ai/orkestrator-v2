@@ -397,10 +397,19 @@ export function VirtualizedMessageList<TMessage>({
     root.addEventListener("scroll", schedule, true);
     const observer = new ResizeObserver(schedule);
     observer.observe(root);
-    schedule();
+    const observeRows = () => {
+      observer.disconnect();
+      observer.observe(root);
+      for (const row of root.querySelectorAll("[data-chat-message-index]")) observer.observe(row);
+      schedule();
+    };
+    const mutations = new MutationObserver(observeRows);
+    mutations.observe(root, { childList: true, subtree: true });
+    observeRows();
     return () => {
       root.removeEventListener("scroll", schedule, true);
       observer.disconnect();
+      mutations.disconnect();
       if (frame !== null) cancelAnimationFrame(frame);
     };
   }, [messages, onVisibleEnd]);

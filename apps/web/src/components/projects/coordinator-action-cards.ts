@@ -47,9 +47,20 @@ export function coordinatorActionCards(
         notice.resource.kind === "watched-pull-request" ||
         notice.state.startsWith("pr-"))
     ) {
-      const key = `${notice.resource.nodeId ?? ""}:${notice.resource.kind}:${notice.resource.id}`;
+      // Structured status bodies carry the same PR URL across workflow handoffs.
+      const url = mail?.body.match(/Pull request: (https?:\/\/[^\s)]+)/)?.[1];
+      if (
+        !url &&
+        notice.resource.kind !== "pull-request" &&
+        notice.resource.kind !== "watched-pull-request"
+      )
+        continue;
+      const key = url
+        ? `${notice.resource.nodeId ?? ""}:pr:${url}`
+        : `${notice.resource.nodeId ?? ""}:pr:${notice.resource.environmentId ?? notice.resource.id}`;
       const state = notice.state.replace(/^pr-/, "");
       const done = /^(merged|closed)$/.test(state);
+      if (/^(started|failed)$/.test(state)) continue;
       const existing = prs.get(key);
       if (existing) {
         existing.state = state;
@@ -80,7 +91,7 @@ export function coordinatorActionCards(
         });
       }
       const tool = part.toolName?.split(/__|\//).at(-1);
-      if (tool && /^(AskUserQuestion|request_user_input|ask_question)$/.test(tool)) {
+      if (tool && /^(AskUserQuestion|request_user_input|ask_question|question)$/.test(tool)) {
         const questions = part.toolArgs?.questions;
         const question = Array.isArray(questions) ? questions[0] : undefined;
         const title =
@@ -104,17 +115,17 @@ export function coordinatorActionCards(
       )
         continue;
       const title = part.toolArgs?.title;
-      if (typeof title !== "string" || !title.trim() || title.length > 120 || !user) continue;
+      if (typeof title !== "string" || !title.trim() || title.length > 120) continue;
       const kind = tool === "mark_topic" ? "topic" : "question";
-      if (kind === "topic" && topicMarked) continue;
+      if (kind === "topic" && (!user || topicMarked)) continue;
       if (kind === "topic") topicMarked = true;
       cards.push({
         id: `${message.id}:${ordinal}`,
         kind,
         title,
         completeOnUser: kind === "question",
-        anchorId: kind === "topic" ? user.id : message.id,
-        index: kind === "topic" ? user.index : index,
+        anchorId: kind === "topic" ? user!.id : message.id,
+        index: kind === "topic" ? user!.index : index,
         done: false,
       });
     }

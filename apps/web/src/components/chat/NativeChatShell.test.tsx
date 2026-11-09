@@ -220,6 +220,121 @@ describe("NativeChatShell", () => {
     expect(spacer.style.height).toBe("336px");
   });
 
+  test("a dock notice pushes the transcript above the dock instead of overlaying it", () => {
+    const { rerender } = renderInAppCommandScope(
+      <NativeChatShell {...shellProps()} connectionState="error" displayAvailable />,
+    );
+
+    const dock = screen.getByTestId("compose-dock");
+    const region = screen.getByTestId("transcript-region");
+    const spacer = screen.getByTestId("transcript-bottom-spacer");
+    dock.getBoundingClientRect = () => ({ height: 210 }) as DOMRect;
+    act(() => {
+      resizeCallback?.([], resizeObserver!);
+    });
+
+    expect(screen.getByTestId("compose-dock-notice")).toBeTruthy();
+    // The scroll area ends at the dock's top edge, so nothing runs under the
+    // notice, and there is no overlay left for the spacer to clear.
+    expect(region.style.paddingBottom).toBe("210px");
+    expect(spacer.style.height).toBe("0px");
+
+    // Once the notice clears, the transcript scrolls behind the dock again.
+    rerender(<NativeChatShell {...shellProps()} connectionState="connected" displayAvailable />);
+    expect(region.style.paddingBottom).toBe("");
+    expect(spacer.style.height).toBe("210px");
+  });
+
+  test.each([
+    { label: "reconnect error", connectionState: "error" as const },
+    { label: "desync", desynced: true },
+    { label: "pinned refresh", transcriptRefreshing: true, isAtBottom: false },
+  ])("notice inset follows measurement, growth and centered exclusion: $label", (notice) => {
+    const props = { ...shellProps(), displayAvailable: true, ...notice };
+    const { rerender } = renderInAppCommandScope(<NativeChatShell {...props} />);
+    const dock = screen.getByTestId("compose-dock");
+    const region = screen.getByTestId("transcript-region");
+    const spacer = screen.getByTestId("transcript-bottom-spacer");
+    expect(screen.getByTestId("compose-dock-notice")).toBeTruthy();
+    // A zero measurement cannot replace the conservative overlay clearance.
+    expect(region.style.paddingBottom).toBe("");
+    expect(spacer.style.height).toBe("");
+    expect(spacer.className).toContain("h-32");
+    for (const height of [210, 340]) {
+      dock.getBoundingClientRect = () => ({ height }) as DOMRect;
+      act(() => resizeCallback?.([], resizeObserver!));
+      expect(region.style.paddingBottom).toBe(`${height}px`);
+      expect(spacer.style.height).toBe("0px");
+    }
+    rerender(<NativeChatShell {...props} centerCompose />);
+    expect(screen.getByTestId("compose-dock-notice")).toBeTruthy();
+    expect(region.style.paddingBottom).toBe("");
+    expect(spacer.style.height).toBe("340px");
+
+    // A transcript card ends centering, even with centerCompose requested.
+    rerender(<NativeChatShell {...props} centerCompose transcriptCards={<div>Question</div>} />);
+    expect(region.style.paddingBottom).toBe("340px");
+    expect(spacer.style.height).toBe("0px");
+
+    dock.getBoundingClientRect = () => ({ height: 0 }) as DOMRect;
+    act(() => resizeCallback?.([], resizeObserver!));
+    expect(region.style.paddingBottom).toBe("");
+    expect(spacer.style.height).toBe("");
+    expect(spacer.className).toContain("h-32");
+  });
+
+  test("refresh inset follows the reader and settlement, retaining a remaining desync notice", () => {
+    const props = { ...shellProps(), displayAvailable: true, transcriptRefreshing: true };
+    const { rerender } = renderInAppCommandScope(<NativeChatShell {...props} />);
+    const region = screen.getByTestId("transcript-region");
+    const spacer = screen.getByTestId("transcript-bottom-spacer");
+    screen.getByTestId("compose-dock").getBoundingClientRect = () => ({ height: 200 }) as DOMRect;
+    act(() => resizeCallback?.([], resizeObserver!));
+    expect(region.style.paddingBottom).toBe("");
+    expect(spacer.style.height).toBe("200px");
+    expect(screen.queryByTestId("compose-dock-notice") === null).toBe(true);
+
+    rerender(<NativeChatShell {...props} isAtBottom={false} desynced />);
+    expect(screen.getByTestId("session-refresh-shimmer-pinned")).toBeTruthy();
+    expect(screen.queryByText(/Live updates disconnected/) === null).toBe(true);
+    expect(region.style.paddingBottom).toBe("200px");
+    expect(spacer.style.height).toBe("0px");
+
+    rerender(<NativeChatShell {...props} />);
+    expect(region.style.paddingBottom).toBe("");
+    expect(spacer.style.height).toBe("200px");
+    expect(screen.queryByTestId("compose-dock-notice") === null).toBe(true);
+
+    rerender(<NativeChatShell {...props} isAtBottom={false} transcriptSettled desynced />);
+    expect(screen.queryByTestId("session-refresh-shimmer-pinned") === null).toBe(true);
+    expect(screen.getByText(/Live updates disconnected/)).toBeTruthy();
+    expect(region.style.paddingBottom).toBe("200px");
+    rerender(<NativeChatShell {...props} isAtBottom={false} transcriptSettled />);
+    expect(region.style.paddingBottom).toBe("");
+    expect(spacer.style.height).toBe("200px");
+  });
+
+  test.each([
+    { label: "no saved display", displayAvailable: false },
+    { label: "unestablished session", sessionEstablished: false },
+    { label: "settled transcript", transcriptSettled: true },
+  ])("does not inset an ineligible refresh: $label", (eligibility) => {
+    renderInAppCommandScope(
+      <NativeChatShell
+        {...shellProps()}
+        displayAvailable
+        transcriptRefreshing
+        isAtBottom={false}
+        {...eligibility}
+      />,
+    );
+    screen.getByTestId("compose-dock").getBoundingClientRect = () => ({ height: 210 }) as DOMRect;
+    act(() => resizeCallback?.([], resizeObserver!));
+    expect(screen.queryByTestId("compose-dock-notice") === null).toBe(true);
+    expect(screen.getByTestId("transcript-region").style.paddingBottom).toBe("");
+    expect(screen.getByTestId("transcript-bottom-spacer").style.height).toBe("210px");
+  });
+
   test("enables live arrivals on the production transcript", () => {
     renderInAppCommandScope(<NativeChatShell {...shellProps()} />);
     expect(lastVirtualizedMessageListProps?.animateArrivals).toBe(true);

@@ -92,6 +92,13 @@ describe("MentionableInput", () => {
     expect(placeholders?.length).toBe(1);
     expect(placeholders?.[0]?.textContent).toBe("Describe the change");
     expect(placeholders?.[0]?.classList.contains("native-compose-placeholder")).toBe(true);
+    // The placeholder sits in the input's grid cell rather than floating over
+    // it, so a long placeholder that wraps grows the box instead of spilling
+    // over the controls below.
+    expect(input.parentElement?.classList.contains("grid")).toBe(true);
+    expect(input.classList.contains("[grid-area:1/1]")).toBe(true);
+    expect(placeholders?.[0]?.classList.contains("[grid-area:1/1]")).toBe(true);
+    expect(placeholders?.[0]?.classList.contains("absolute")).toBe(false);
 
     rerender(
       <MentionableInput

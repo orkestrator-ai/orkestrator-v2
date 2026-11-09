@@ -251,6 +251,23 @@ export const startAgentAccountLoginCommand = defineCommand({
   critical: ["reauthenticate"],
 });
 
+/**
+ * Sign one Claude account in again by id, active or not, replacing its
+ * credential in place. A separate command rather than an `accountId` on
+ * `start_agent_account_login`: an older node would ignore that key and renew
+ * the active account instead, while it answers this one `unknown-command`.
+ */
+export const reauthenticateAgentAccountCommand = defineCommand({
+  domain: accountsDomain,
+  name: "reauthenticate_agent_account",
+  since: 1,
+  access: "workspace",
+  read: false,
+  args: Schema.Struct({ platform: Schema.String, accountId: Schema.String }),
+  result: AgentAccountLoginProgressSchema,
+  critical: [],
+});
+
 export const getAgentAccountLoginCommand = defineCommand({
   domain: accountsDomain,
   name: "get_agent_account_login",
@@ -466,6 +483,7 @@ export const ACCOUNTS_COMMANDS = [
   getProjectUsageLimitsCommand,
   getAgentAccountUsageCommand,
   startAgentAccountLoginCommand,
+  reauthenticateAgentAccountCommand,
   getAgentAccountLoginCommand,
   submitAgentAccountLoginCodeCommand,
   cancelAgentAccountLoginCommand,

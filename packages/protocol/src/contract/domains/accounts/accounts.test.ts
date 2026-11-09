@@ -43,6 +43,8 @@ const FORMER_KEYS: Record<string, readonly string[]> = {
   get_project_usage_limits: ["projectId"],
   get_agent_account_usage: ["platform", "accountId", "force"],
   start_agent_account_login: ["platform", "reauthenticate"],
+  // Added 2026-11-09 for the settings pane's per-account "Sign in".
+  reauthenticate_agent_account: ["platform", "accountId"],
   get_agent_account_login: [],
   submit_agent_account_login_code: ["code"],
   cancel_agent_account_login: ["operationId"],
@@ -81,8 +83,8 @@ const snapshot = {
 };
 
 describe("accounts definitions", () => {
-  it("cover the 33 accounts commands once, each in version 1 of the domain", () => {
-    expect(ALL).toHaveLength(33);
+  it("cover the 34 accounts commands once, each in version 1 of the domain", () => {
+    expect(ALL).toHaveLength(34);
     expect(ALL.map((def) => def.name).sort()).toEqual(Object.keys(FORMER_KEYS).sort());
     for (const def of ALL) {
       expect({ since: def.since, version: def.domain.version, min: def.domain.min }).toEqual({

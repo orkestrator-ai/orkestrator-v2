@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "generatedBy": "scripts/generate-contract-manifest.ts (mise run contract:manifest)",
   "counts": {
-    "commands": 1009,
-    "defined": 1009,
+    "commands": 1010,
+    "defined": 1010,
     "untyped": 0,
     "events": 44
   },
@@ -6247,6 +6247,15 @@
       "critical": [],
       "argsDigest": "sha256:b72f7b34c8d0796f2b87ec9da82c417b80016042853d099bf2b47502a1218f03",
       "resultDigest": "sha256:d78603c03cbd4b1e1eed20068d0b12ebcdc72f39574c05432c0da441da955eb1"
+    },
+    "reauthenticate_agent_account": {
+      "domain": "accounts",
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:98ae357a6cf605008c9dcee8acb911c83a77dabb903e7c020f756370531a51fb",
+      "resultDigest": "sha256:4543a49d95e0d570b50d02680399fe638a040a0951fa760e045fadc19b88513a"
     },
     "reconcile_agent_interactions": {
       "domain": "native-sessions",

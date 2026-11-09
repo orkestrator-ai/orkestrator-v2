@@ -203,6 +203,49 @@ describe("useAgentAccountReauth", () => {
     expect(timers.size).toBe(1);
   });
 
+  test("never adopts or polls an inactive Settings renewal", async () => {
+    login = { ...pending, accountId: "inactive" };
+    const view = renderHook(() => useAgentAccountReauth("claude"));
+    await flush();
+    expect(view.result.current.progress.state).toBe("idle");
+    expect(timers.size).toBe(0);
+    await tick();
+    expect(calls.filter((c) => c.command === "get_agent_account_login")).toHaveLength(1);
+  });
+
+  test("start refuses a mismatched operation returned by an older backend", async () => {
+    const invoke = spyOn(native, "invoke").mockImplementation((async (command: string) => {
+      if (command === "list_agent_accounts") return { active: { claude: "default" }, accounts: [] };
+      if (command === "start_agent_account_login") return { ...pending, accountId: "inactive" };
+      return { state: "idle" };
+    }) as typeof native.invoke);
+    try {
+      const view = renderHook(() => useAgentAccountReauth("claude"));
+      await flush();
+      await act(async () => {
+        await view.result.current.start();
+      });
+      expect(view.result.current.progress.state).toBe("idle");
+      expect(timers.size).toBe(0);
+    } finally {
+      invoke.mockRestore();
+    }
+  });
+
+  test.each(["pending", "succeeded"] as const)(
+    "polling cannot adopt another account's %s renewal",
+    async (state) => {
+      login = pending;
+      const view = renderHook(() => useAgentAccountReauth("claude"));
+      await flush();
+      login = { ...pending, operationId: "settings", accountId: "inactive", state };
+      await tick();
+      expect(view.result.current.progress.state).toBe("idle");
+      expect(timers.size).toBe(0);
+      expect(calls.some((c) => c.command === "cancel_agent_account_login")).toBe(false);
+    },
+  );
+
   test("does not show add-mode or another account's completed reauthentication", async () => {
     login = { ...pending, mode: "add" };
     const first = renderHook(() => useAgentAccountReauth("claude"));

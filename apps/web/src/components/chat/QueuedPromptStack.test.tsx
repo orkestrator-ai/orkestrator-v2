@@ -1,6 +1,7 @@
 import { createRef, useLayoutEffect, useState } from "react";
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { buildInitialPromptWithAttachmentReferences } from "@orkestrator/protocol/initial-prompt-attachments";
 import { NativeComposeBar } from "./NativeComposeBar";
 import { QueuedPromptStack } from "./QueuedPromptStack";
 import type { MentionableInputRef } from "./MentionableInput";
@@ -428,5 +429,56 @@ describe("QueuedPromptStack without a queue manager", () => {
       "Claude cannot be steered here, so this is sent when the turn ends.",
     );
     expect(screen.queryByRole("button", { name: /^Steer queued prompt/ }) === null).toBe(true);
+  });
+
+  test("hides the path-reference block and shows the attachments compactly", () => {
+    const text = buildInitialPromptWithAttachmentReferences("Compare against this", [
+      { name: "shot.png", path: "/workspace/.orkestrator/attachments/a/shot.png" },
+    ]);
+    render(
+      <QueuedPromptStack
+        queue={{
+          length: 3,
+          items: [
+            {
+              id: "q1",
+              text,
+              attachments: [
+                {
+                  name: "shot.png",
+                  path: "/workspace/.orkestrator/attachments/a/shot.png",
+                  type: "image",
+                },
+              ],
+              onSteer: () => {},
+            },
+            // Without structured attachments the block's own names are shown.
+            { id: "q2", text, onEdit: () => {} },
+            {
+              id: "q3",
+              text: buildInitialPromptWithAttachmentReferences("", [
+                { name: "a.md", path: "/workspace/a.md" },
+                { name: "b.md", path: "/workspace/b.md" },
+              ]),
+              onEdit: () => {},
+            },
+          ],
+        }}
+        onExit={() => {}}
+      />,
+    );
+
+    const rows = screen.getAllByTestId("compose-queue-item");
+    for (const row of rows) {
+      expect(row.textContent).not.toContain("orkestrator-attachment-paths");
+      expect(row.textContent).not.toContain("/workspace/");
+    }
+    expect(rows[0]!.textContent).toContain("Compare against this");
+    const chips = screen.getAllByTestId("compose-queue-item-attachments");
+    expect(chips.map((chip) => chip.textContent)).toEqual(["shot.png", "shot.png", "2 files"]);
+    expect(chips[2]!.getAttribute("title")).toBe("a.md, b.md");
+    expect(
+      screen.getByRole("button", { name: /^Steer queued prompt/ }).getAttribute("aria-label"),
+    ).toBe("Steer queued prompt 1 of 3: Compare against this");
   });
 });

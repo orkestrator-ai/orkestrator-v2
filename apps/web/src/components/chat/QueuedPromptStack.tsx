@@ -9,12 +9,19 @@ import {
   useState,
   type KeyboardEvent,
 } from "react";
-import { AlertCircle, CornerDownRight, Pencil, Trash2 } from "lucide-react";
+import { AlertCircle, CornerDownRight, ImageIcon, Paperclip, Pencil, Trash2 } from "lucide-react";
+import { queuedPromptDisplay, type QueuedPromptAttachment } from "@/lib/chat/queued-prompt-text";
 import { cn } from "@/lib/utils";
 
 export interface NativeComposeQueuedPrompt {
   id: string;
+  /**
+   * The queued text as it is sent. A marked attachment path-reference block in
+   * it is hidden here, as the transcript hides it, and shown as attachments.
+   */
   text: string;
+  /** Files sent with this prompt. Defaults to those its path-reference block names. */
+  attachments?: readonly QueuedPromptAttachment[];
   /**
    * Why this prompt waits for the turn to end instead of offering Steer: the
    * provider cannot steer, or steering it was refused. Shown under the text.
@@ -73,6 +80,32 @@ const LABEL_PREVIEW_CHARS = 80;
 function labelPreview(text: string): string {
   const flat = text.replace(/\s+/g, " ").trim();
   return flat.length > LABEL_PREVIEW_CHARS ? `${flat.slice(0, LABEL_PREVIEW_CHARS)}…` : flat;
+}
+
+/** One chip for the row's files: the name for one, a count for several. */
+function QueuedPromptAttachments({
+  attachments,
+}: {
+  attachments: readonly QueuedPromptAttachment[];
+}) {
+  if (attachments.length === 0) return null;
+  const names = attachments.map((attachment) => attachment.name).join(", ");
+  const Icon = attachments.every((attachment) => attachment.type === "image")
+    ? ImageIcon
+    : Paperclip;
+  return (
+    <span
+      data-testid="compose-queue-item-attachments"
+      className="inline-flex max-w-[45%] shrink-0 items-center gap-1 rounded border border-border/60 bg-muted/40 px-1.5 py-px text-[11px] text-muted-foreground"
+      title={names}
+      aria-label={`${attachments.length} attachment${attachments.length === 1 ? "" : "s"}: ${names}`}
+    >
+      <Icon className="h-3 w-3 shrink-0" aria-hidden="true" />
+      <span className="truncate">
+        {attachments.length === 1 ? attachments[0]!.name : `${attachments.length} files`}
+      </span>
+    </span>
+  );
 }
 
 function focusIsLost(): boolean {
@@ -309,6 +342,19 @@ export const QueuedPromptStack = forwardRef<QueuedPromptStackHandle, QueuedPromp
           {items.map((item, index) => {
             const position = `${index + 1} of ${length}`;
             const tabIndex = item.id === tabStopId ? 0 : -1;
+            const display = queuedPromptDisplay(item.text, item.attachments);
+            const preview =
+              display.text || display.attachments.map((attachment) => attachment.name).join(", ");
+            const text = (
+              <span className="flex min-w-0 items-center gap-1.5">
+                {display.text ? (
+                  <span className="min-w-0 truncate text-muted-foreground" title={display.text}>
+                    {display.text}
+                  </span>
+                ) : null}
+                <QueuedPromptAttachments attachments={display.attachments} />
+              </span>
+            );
             return (
               <li
                 key={item.id}
@@ -322,9 +368,7 @@ export const QueuedPromptStack = forwardRef<QueuedPromptStackHandle, QueuedPromp
               >
                 {item.note ? (
                   <span className="flex min-w-0 flex-1 flex-col">
-                    <span className="truncate text-muted-foreground" title={item.text}>
-                      {item.text}
-                    </span>
+                    {text}
                     <span
                       data-testid="compose-queue-item-note"
                       className="truncate text-[11px] text-muted-foreground/80"
@@ -334,9 +378,7 @@ export const QueuedPromptStack = forwardRef<QueuedPromptStackHandle, QueuedPromp
                     </span>
                   </span>
                 ) : (
-                  <span className="min-w-0 flex-1 truncate text-muted-foreground" title={item.text}>
-                    {item.text}
-                  </span>
+                  <span className="min-w-0 flex-1">{text}</span>
                 )}
                 {item.onSteer ? (
                   <button
@@ -348,7 +390,7 @@ export const QueuedPromptStack = forwardRef<QueuedPromptStackHandle, QueuedPromp
                     // Not `disabled`: that would drop keyboard focus mid-steer.
                     aria-disabled={pending || undefined}
                     aria-busy={pending}
-                    aria-label={`Steer queued prompt ${position}: ${labelPreview(item.text)}`}
+                    aria-label={`Steer queued prompt ${position}: ${labelPreview(preview)}`}
                     aria-describedby={hintId}
                     title="Send this prompt into the running turn now"
                     className={cn(

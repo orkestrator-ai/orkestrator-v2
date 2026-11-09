@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   MAX_INITIAL_PROMPT_ATTACHMENT_STORAGE_BYTES,
+  attachmentsReferencedByPath,
   buildInitialPromptWithAttachmentReferences,
   extractMarkedAttachmentReferences,
   serializedInitialPromptAttachmentBytes,
@@ -195,5 +196,36 @@ describe("initial prompt attachment protocol", () => {
     expect(serializedInitialPromptAttachmentBytes(attachments)).toBeGreaterThan(
       MAX_INITIAL_PROMPT_ATTACHMENT_STORAGE_BYTES,
     );
+  });
+
+  test("knows when every attachment is named by path in a marked block", () => {
+    const shot = { type: "image", path: "/workspace/.orkestrator/attachments/a/shot.png" };
+    const notes = { type: "file", path: "/workspace/.orkestrator/attachments/b/notes.md" };
+    const prompt = buildInitialPromptWithAttachmentReferences("Look at this", [
+      { name: "shot.png", path: shot.path },
+      { name: "notes.md", path: notes.path },
+    ]);
+
+    expect(attachmentsReferencedByPath("plain text", [])).toBe(true);
+    expect(attachmentsReferencedByPath(prompt, [shot])).toBe(true);
+    expect(attachmentsReferencedByPath(prompt, [shot, notes])).toBe(true);
+    // A file the block does not name, or one with no path, is not carried.
+    expect(attachmentsReferencedByPath(prompt, [shot, { type: "file", path: "/elsewhere" }])).toBe(
+      false,
+    );
+    expect(attachmentsReferencedByPath(prompt, [{ type: "image" }])).toBe(false);
+    expect(attachmentsReferencedByPath(prompt, [{ type: "image", path: "" }])).toBe(false);
+    expect(attachmentsReferencedByPath(prompt, [null])).toBe(false);
+    expect(attachmentsReferencedByPath("Look at this", [shot])).toBe(false);
+    // The heading typed without the marked block proves nothing.
+    expect(
+      attachmentsReferencedByPath(
+        "Attached files have been saved in the workspace. Use these paths as task context:\n" +
+          `- shot.png: ${shot.path}`,
+        [shot],
+      ),
+    ).toBe(false);
+    // A malformed block is not a reference.
+    expect(attachmentsReferencedByPath(prompt.replace('{"name"', '{"nam"'), [shot])).toBe(false);
   });
 });

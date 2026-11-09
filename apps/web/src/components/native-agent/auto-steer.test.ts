@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
+import { buildInitialPromptWithAttachmentReferences } from "@orkestrator/protocol/initial-prompt-attachments";
 import {
+  attachmentsSteerByPath,
   autoSteerNotice,
+  queuedPromptSteerable,
   directSteerNotice,
   queuedSteerNote,
   shouldAutoSteer,
@@ -13,9 +16,16 @@ const eligible = {
   steerAvailable: true,
   command: false,
   preparedPrompt: false,
-  attachmentCount: 0,
+  text: "Keep it small",
+  attachments: [] as readonly unknown[],
   pendingHandoff: false,
 };
+
+const shotPath = "/workspace/.orkestrator/attachments/a/shot.png";
+const shot = { type: "image", path: shotPath, filename: "shot.png" };
+const withShotText = buildInitialPromptWithAttachmentReferences("See this", [
+  { name: "shot.png", path: shotPath },
+]);
 
 describe("shouldAutoSteer", () => {
   test("steers a plain message while the setting is on and the turn can be steered", () => {
@@ -27,8 +37,74 @@ describe("shouldAutoSteer", () => {
     expect(shouldAutoSteer({ ...eligible, steerAvailable: false })).toBe(false);
     expect(shouldAutoSteer({ ...eligible, command: true })).toBe(false);
     expect(shouldAutoSteer({ ...eligible, preparedPrompt: true })).toBe(false);
-    expect(shouldAutoSteer({ ...eligible, attachmentCount: 1 })).toBe(false);
+    expect(shouldAutoSteer({ ...eligible, attachments: [shot] })).toBe(false);
     expect(shouldAutoSteer({ ...eligible, pendingHandoff: true })).toBe(false);
+  });
+
+  test("steers attachments the text names by workspace path", () => {
+    expect(shouldAutoSteer({ ...eligible, text: withShotText, attachments: [shot] })).toBe(true);
+    // A second file the block does not name would be lost, so it queues.
+    expect(
+      shouldAutoSteer({
+        ...eligible,
+        text: withShotText,
+        attachments: [shot, { type: "file", path: "/workspace/notes.md" }],
+      }),
+    ).toBe(false);
+    // The rule never overrides the other blockers.
+    expect(
+      shouldAutoSteer({ ...eligible, text: withShotText, attachments: [shot], command: true }),
+    ).toBe(false);
+  });
+});
+
+describe("queued item steer eligibility", () => {
+  test("a path-referenced attachment steers; an unreferenced one does not", () => {
+    expect(attachmentsSteerByPath("anything", undefined)).toBe(true);
+    expect(attachmentsSteerByPath("anything", [])).toBe(true);
+    expect(attachmentsSteerByPath(withShotText, [shot])).toBe(true);
+    expect(attachmentsSteerByPath("See this", [shot])).toBe(false);
+    expect(attachmentsSteerByPath(withShotText, "not a list")).toBe(false);
+    // Heading text the user could type is not the marked block.
+    expect(
+      attachmentsSteerByPath(
+        "Attached files have been saved in the workspace. Use these paths as task context:\n" +
+          `- shot.png: ${shotPath}`,
+        [shot],
+      ),
+    ).toBe(false);
+  });
+
+  test("matches the backend's reservation rule", () => {
+    expect(queuedPromptSteerable({ id: "plain", text: "Go" })).toBe(true);
+    expect(
+      queuedPromptSteerable({ id: "shot", text: withShotText, attachments: [shot] } as never),
+    ).toBe(true);
+    expect(
+      queuedPromptSteerable({ id: "bare", text: "See this", attachments: [shot] } as never),
+    ).toBe(false);
+    // Commands, annotation requests and question answers never steer, even
+    // when their attachments are named by path.
+    expect(
+      queuedPromptSteerable({
+        id: "command",
+        text: withShotText,
+        attachments: [shot],
+        command: { kind: "typed" },
+      } as never),
+    ).toBe(false);
+    expect(
+      queuedPromptSteerable({
+        id: "annotation",
+        text: withShotText,
+        attachments: [shot],
+        origin: { kind: "web-annotation", requestId: "req", bodyHash: "hash" },
+      } as never),
+    ).toBe(false);
+    expect(queuedPromptSteerable({ id: "async-question:q", text: "Answer" })).toBe(false);
+    expect(
+      queuedPromptSteerable({ id: "a", text: "Answer", requestId: "async-question:q" } as never),
+    ).toBe(false);
   });
 });
 
@@ -79,6 +155,7 @@ describe("queuedSteerNote", () => {
     parked: false,
     steerable: true,
     attachmentCount: 0,
+    attachmentsReferencedByPath: true,
     command: false,
     label: "Claude",
   };
@@ -95,12 +172,34 @@ describe("queuedSteerNote", () => {
       "Claude cannot be steered here, so this is sent when the turn ends.",
     );
     expect(queuedSteerNote({ ...steerable, parked: true })).toContain("recovery controls");
-    expect(queuedSteerNote({ ...steerable, steerable: false, attachmentCount: 1 })).toContain(
-      "text only",
-    );
+    expect(
+      queuedSteerNote({
+        ...steerable,
+        steerable: false,
+        attachmentCount: 1,
+        attachmentsReferencedByPath: false,
+      }),
+    ).toBe("Steering carries text only, so this is sent with its attachments when the turn ends.");
     expect(queuedSteerNote({ ...steerable, steerable: false, command: true })).toContain(
       "Commands run as their own turn",
     );
+  });
+
+  test("a row whose attachments are named by path has no text-only blocker", () => {
+    expect(queuedSteerNote({ ...steerable, attachmentCount: 1 })).toBe(
+      "Steering sends the attachment as a workspace file path.",
+    );
+    expect(queuedSteerNote({ ...steerable, attachmentCount: 2 })).toBe(
+      "Steering sends the attachments as workspace file paths.",
+    );
+    expect(queuedSteerNote({ ...steerable, attachmentCount: 1, running: false })).toBeUndefined();
+    expect(
+      queuedSteerNote({ ...steerable, attachmentCount: 1, refusal: "Steering is full." }),
+    ).toBe("Steering is full.");
+    // A command with named attachments still waits as a command.
+    expect(
+      queuedSteerNote({ ...steerable, steerable: false, attachmentCount: 1, command: true }),
+    ).toContain("Commands run as their own turn");
   });
 
   test("recovery takes priority over a historical refusal even after the turn ends", () => {
@@ -150,13 +249,20 @@ test("current provider and item blockers override historical refusals", () => {
     parked: false,
     steerable: true,
     attachmentCount: 0,
+    attachmentsReferencedByPath: true,
     command: false,
     label: "Claude",
     refusal: "Old refusal",
   };
   expect(queuedSteerNote(input)).toContain("cannot be steered");
   expect(
-    queuedSteerNote({ ...input, providerSteers: true, steerable: false, attachmentCount: 1 }),
+    queuedSteerNote({
+      ...input,
+      providerSteers: true,
+      steerable: false,
+      attachmentCount: 1,
+      attachmentsReferencedByPath: false,
+    }),
   ).toContain("attachments");
   expect(
     queuedSteerNote({ ...input, providerSteers: true, steerable: false, command: true }),

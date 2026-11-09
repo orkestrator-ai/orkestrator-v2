@@ -1,7 +1,44 @@
-import type {
-  NativeAgentSessionActionOutcome,
-  NativeAgentSteerDelivery,
+import { attachmentsReferencedByPath } from "@orkestrator/protocol/initial-prompt-attachments";
+import {
+  nativeAsyncQuestionItemId,
+  type NativeAgentSessionActionOutcome,
+  type NativeAgentSteerDelivery,
 } from "@orkestrator/protocol/native-agent";
+import { webAnnotationQueueOrigin } from "@orkestrator/protocol/web-annotations";
+
+/**
+ * Steering carries text only, so a message's attachments can be steered only
+ * when its text names every one of them by workspace path, in the marked block
+ * the composer appends when it sends attachments. The agent then opens each
+ * file from that path. True for a message with no attachments.
+ */
+export function attachmentsSteerByPath(text: string, attachments: unknown): boolean {
+  if (attachments === undefined) return true;
+  return Array.isArray(attachments) && attachmentsReferencedByPath(text, attachments);
+}
+
+/**
+ * Whether a queued item may be steered into the running turn: the same rule
+ * the backend applies when it reserves the item for a steer.
+ *
+ * A queued command must be revalidated as a command, not typed into the turn.
+ * An annotation request is a frozen brief with its own lifecycle, and a
+ * question answer has its own delivery path, so neither steers. Attachments
+ * steer only when they are referenced by path ({@link attachmentsSteerByPath}).
+ */
+export function queuedPromptSteerable(message: { id: string; text?: unknown }): boolean {
+  const queued = message as Record<string, unknown> & { id: string };
+  return (
+    webAnnotationQueueOrigin(message) === null &&
+    attachmentsSteerByPath(
+      typeof queued.text === "string" ? queued.text : "",
+      queued.attachments,
+    ) &&
+    queued.command === undefined &&
+    !nativeAsyncQuestionItemId(message.id) &&
+    !(typeof queued.requestId === "string" && nativeAsyncQuestionItemId(queued.requestId))
+  );
+}
 
 /**
  * Auto-steer (Settings → General) sends a message typed while a turn is running
@@ -21,8 +58,10 @@ export function shouldAutoSteer(input: {
   command: boolean;
   /** Launch and review prompts are sent by the app, not typed by the user. */
   preparedPrompt: boolean;
-  /** Steering carries text only. */
-  attachmentCount: number;
+  /** The text that is queued, path-reference block included. */
+  text: string;
+  /** Steering carries text only: these steer only when `text` names each by path. */
+  attachments: readonly unknown[];
   /** A pending handoff's history belongs at the start of a turn, not inside one. */
   pendingHandoff: boolean;
 }): boolean {
@@ -31,7 +70,7 @@ export function shouldAutoSteer(input: {
     input.steerAvailable &&
     !input.command &&
     !input.preparedPrompt &&
-    input.attachmentCount === 0 &&
+    attachmentsSteerByPath(input.text, input.attachments) &&
     !input.pendingHandoff
   );
 }
@@ -51,9 +90,11 @@ export function queuedSteerNote(input: {
   providerSteers: boolean;
   /** A dispatch or steer is parked awaiting recovery. */
   parked: boolean;
-  /** The row passes the per-item checks (text only, not a command). */
+  /** The row passes the per-item checks ({@link queuedPromptSteerable}). */
   steerable: boolean;
   attachmentCount: number;
+  /** Every attachment is named by workspace path in the row's text. */
+  attachmentsReferencedByPath: boolean;
   command: boolean;
   /** What happened when this row was last steered, if it was refused. */
   refusal?: string;
@@ -66,8 +107,16 @@ export function queuedSteerNote(input: {
   if (!input.providerSteers) {
     return `${input.label} cannot be steered here, so this is sent when the turn ends.`;
   }
-  if (input.steerable) return input.refusal;
-  if (input.attachmentCount > 0) {
+  if (input.steerable) {
+    if (input.refusal) return input.refusal;
+    if (input.attachmentCount > 0 && input.attachmentsReferencedByPath) {
+      return input.attachmentCount === 1
+        ? "Steering sends the attachment as a workspace file path."
+        : "Steering sends the attachments as workspace file paths.";
+    }
+    return undefined;
+  }
+  if (input.attachmentCount > 0 && !input.attachmentsReferencedByPath) {
     return "Steering carries text only, so this is sent with its attachments when the turn ends.";
   }
   if (input.command) return "Commands run as their own turn, so this runs when the turn ends.";

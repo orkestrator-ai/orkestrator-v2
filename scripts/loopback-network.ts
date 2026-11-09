@@ -34,13 +34,53 @@ export interface LoopbackPlan {
   reason?: string;
 }
 
-/** Whether this host can create an unprivileged network namespace and raise its loopback. */
+export type IsolationProbe = { ok: true } | { ok: false; reason: string };
+
+const PROBE_TIMEOUT_MS = 5_000;
+const MAX_REASON_DETAIL = 160;
+
+/**
+ * Names why the namespace probe failed, so the fallback notice in a review
+ * validation log on another host says which prerequisite is missing (to-do
+ * 7020 task 2): `unshare`, `ip`, or the kernel's permission.
+ */
+export function classifyIsolationProbe(result: {
+  status: number | null;
+  signal?: NodeJS.Signals | null;
+  error?: Error & { code?: string };
+  stderr?: string | null;
+}): IsolationProbe {
+  if (result.error?.code === "ENOENT") return { ok: false, reason: "`unshare` is not installed" };
+  if (result.error || result.signal) {
+    return {
+      ok: false,
+      reason: `the namespace probe did not finish within ${PROBE_TIMEOUT_MS / 1000} s`,
+    };
+  }
+  if (result.status === 0) return { ok: true };
+  const detail = (result.stderr ?? "").trim().split("\n")[0]!.trim().slice(0, MAX_REASON_DETAIL);
+  if (result.status === 127 && /failed to execute ip\b/.test(detail)) {
+    return { ok: false, reason: "`ip` (iproute2) is not installed" };
+  }
+  return {
+    ok: false,
+    reason: `this host refused an unprivileged user and network namespace (${detail || `exit ${result.status}`})`,
+  };
+}
+
+/** Whether this host can create an unprivileged network namespace and raise its loopback, and if not why. */
+export function probeNetworkIsolation(): IsolationProbe {
+  return classifyIsolationProbe(
+    spawnSync("unshare", [...NAMESPACE_ARGS, "ip", "link", "set", "lo", "up"], {
+      encoding: "utf8",
+      stdio: ["ignore", "ignore", "pipe"],
+      timeout: PROBE_TIMEOUT_MS,
+    }),
+  );
+}
+
 export function canIsolateNetwork(): boolean {
-  const probe = spawnSync("unshare", [...NAMESPACE_ARGS, "ip", "link", "set", "lo", "up"], {
-    stdio: "ignore",
-    timeout: 5_000,
-  });
-  return probe.status === 0;
+  return probeNetworkIsolation().ok;
 }
 
 export function loopbackNamespacePlan(
@@ -48,7 +88,7 @@ export function loopbackNamespacePlan(
   options: {
     platform: NodeJS.Platform;
     env: Record<string, string | undefined>;
-    probe: () => boolean;
+    probe: () => IsolationProbe;
   },
 ): LoopbackPlan {
   const [program, ...rest] = command;
@@ -62,8 +102,8 @@ export function loopbackNamespacePlan(
   if (options.env[HOST_NETWORK_ENV] === "1") return host(`${HOST_NETWORK_ENV}=1`);
   // Docker Desktop keeps its bridges inside its VM, so other platforms see no churn.
   if (options.platform !== "linux") return host();
-  if (!options.probe())
-    return host("this host cannot create an unprivileged network namespace with `ip`");
+  const probe = options.probe();
+  if (!probe.ok) return host(probe.reason);
   return {
     command: "unshare",
     args: [...NAMESPACE_ARGS, "sh", "-c", RAISE_LOOPBACK, "sh", program, ...rest],
@@ -77,7 +117,7 @@ if (import.meta.main) {
   const plan = loopbackNamespacePlan(argv, {
     platform: process.platform,
     env: process.env,
-    probe: canIsolateNetwork,
+    probe: probeNetworkIsolation,
   });
   if (plan.isolated)
     console.error("[loopback-network] running in a private loopback-only network namespace");

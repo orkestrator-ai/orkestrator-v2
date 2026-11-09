@@ -4,6 +4,7 @@ import path from "node:path";
 import {
   HOST_NETWORK_ENV,
   canIsolateNetwork,
+  classifyIsolationProbe,
   loopbackNamespacePlan,
 } from "../../scripts/loopback-network";
 
@@ -16,7 +17,7 @@ describe("loopbackNamespacePlan", () => {
     const plan = loopbackNamespacePlan(command, {
       platform: "linux",
       env: {},
-      probe: () => true,
+      probe: () => ({ ok: true }),
     });
     expect(plan.isolated).toBe(true);
     expect(plan.command).toBe("unshare");
@@ -33,9 +34,13 @@ describe("loopbackNamespacePlan", () => {
   });
 
   test("runs the command as it is where the host cannot isolate it, and says why", () => {
-    const plan = loopbackNamespacePlan(command, { platform: "linux", env: {}, probe: () => false });
+    const plan = loopbackNamespacePlan(command, {
+      platform: "linux",
+      env: {},
+      probe: () => ({ ok: false, reason: "`ip` (iproute2) is not installed" }),
+    });
     expect(plan).toMatchObject({ command: "bunx", args: command.slice(1), isolated: false });
-    expect(plan.reason).toContain("cannot create");
+    expect(plan.reason).toBe("`ip` (iproute2) is not installed");
   });
 
   test("leaves other platforms on the host network without a notice or a probe", () => {
@@ -63,8 +68,57 @@ describe("loopbackNamespacePlan", () => {
 
   test("refuses an empty command", () => {
     expect(() =>
-      loopbackNamespacePlan([], { platform: "linux", env: {}, probe: () => true }),
+      loopbackNamespacePlan([], { platform: "linux", env: {}, probe: () => ({ ok: true }) }),
     ).toThrow("Usage");
+  });
+});
+
+describe("classifyIsolationProbe", () => {
+  test("a clean exit isolates", () => {
+    expect(classifyIsolationProbe({ status: 0, stderr: "" })).toEqual({ ok: true });
+  });
+
+  test("names the missing prerequisite", () => {
+    const missingUnshare = Object.assign(new Error("spawnSync unshare ENOENT"), { code: "ENOENT" });
+    expect(classifyIsolationProbe({ status: null, error: missingUnshare })).toEqual({
+      ok: false,
+      reason: "`unshare` is not installed",
+    });
+    // util-linux's own message when `ip` is missing.
+    expect(
+      classifyIsolationProbe({
+        status: 127,
+        stderr: "unshare: failed to execute ip: No such file or directory\n",
+      }),
+    ).toEqual({ ok: false, reason: "`ip` (iproute2) is not installed" });
+  });
+
+  test("passes the kernel's refusal through, bounded to one line", () => {
+    const refused = classifyIsolationProbe({
+      status: 1,
+      stderr: `unshare: unshare failed: Operation not permitted\n${"x".repeat(500)}`,
+    });
+    expect(refused).toEqual({
+      ok: false,
+      reason:
+        "this host refused an unprivileged user and network namespace (unshare: unshare failed: Operation not permitted)",
+    });
+    const long = classifyIsolationProbe({ status: 2, stderr: "y".repeat(500) });
+    expect(long.ok).toBe(false);
+    if (!long.ok) expect(long.reason.length).toBeLessThan(260);
+    expect(classifyIsolationProbe({ status: 1, stderr: "" })).toEqual({
+      ok: false,
+      reason: "this host refused an unprivileged user and network namespace (exit 1)",
+    });
+  });
+
+  test("a probe that times out or is killed does not isolate", () => {
+    const timedOut = Object.assign(new Error("spawnSync unshare ETIMEDOUT"), { code: "ETIMEDOUT" });
+    expect(classifyIsolationProbe({ status: null, error: timedOut })).toEqual({
+      ok: false,
+      reason: "the namespace probe did not finish within 5 s",
+    });
+    expect(classifyIsolationProbe({ status: null, signal: "SIGKILL" }).ok).toBe(false);
   });
 });
 

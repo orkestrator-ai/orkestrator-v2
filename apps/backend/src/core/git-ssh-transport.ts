@@ -193,7 +193,7 @@ export async function switchOriginToHttps(
   run: typeof runCommand = runCommand,
 ): Promise<{ remoteUrl: string; changed: boolean }> {
   const origin = await readRawOriginUrl(projectPath, run);
-  if (origin && /^https:\/\/github\.com\//i.test(origin)) {
+  if (origin && /^https:\/\/(?:[^/?#@]+@)?github\.com\//i.test(origin)) {
     return { remoteUrl: origin.replace(/^(https:\/\/)[^/?#]*@/, "$1"), changed: false };
   }
   const repository = origin ? gitHubSshRemote(origin) : null;

@@ -43,6 +43,7 @@ const {
   waitForCondition,
   waitForPtyProcessCount,
   withFailingGitSubcommand,
+  withGitArgumentStub,
   withFakeDocker,
   withFakeGh,
   ownedContainerInspect,
@@ -1485,44 +1486,60 @@ esac
     expect(environment.lifecycleError).not.toContain("example.invalid");
   });
 
-  test("persists and rejects with the SSH connect failure's host and port", async () => {
-    const { worktree, remote } = await createGitWorktreeWithOrigin();
-    const environment = createEnvironment({
-      id: "env-local-ssh-unreachable",
-      environmentType: "local",
-      status: "stopped",
-      worktreePath: undefined,
-      branch: `ssh-unreachable-${randomUUID().slice(0, 8)}`,
-    });
-    const { context } = createContext(environment, {
-      project: {
-        id: environment.projectId,
-        name: "ssh-unreachable-repo",
-        gitUrl: remote,
-        localPath: worktree,
-        addedAt: new Date(0).toISOString(),
-        order: 0,
-      },
-    });
-    const commands = createCommandRegistry();
-    const expected =
-      "Couldn't reach the git remote over SSH (github.com, port 22). Your network may be blocking SSH.";
+  test.each([false, true])(
+    "persists the SSH failure and checked HTTPS remedy (available=%s)",
+    async (httpsAvailable) => {
+      const { worktree, remote } = await createGitWorktreeWithOrigin();
+      const environment = createEnvironment({
+        id: "env-local-ssh-unreachable",
+        environmentType: "local",
+        status: "stopped",
+        worktreePath: undefined,
+        branch: `ssh-unreachable-${randomUUID().slice(0, 8)}`,
+      });
+      const { context } = createContext(environment, {
+        project: {
+          id: environment.projectId,
+          name: "ssh-unreachable-repo",
+          gitUrl: remote,
+          localPath: worktree,
+          addedAt: new Date(0).toISOString(),
+          order: 0,
+        },
+      });
+      if (httpsAvailable) {
+        await runGit(worktree, ["remote", "set-url", "origin", "git@github.com:acme/widget.git"]);
+      }
+      const commands = createCommandRegistry();
+      const expected =
+        "Couldn't reach the git remote over SSH (github.com, port 22). Your network may be blocking SSH.";
 
-    await withFailingGitSubcommand(
-      "fetch",
-      async () => {
-        await expect(
-          commands.get("start_environment")?.({ environmentId: environment.id }, context),
-        ).rejects.toThrow(expected);
-      },
-      "ssh: connect to host github.com port 22: Operation timed out\nfatal: Could not read from remote repository.",
-    );
+      await withGitArgumentStub(
+        `
+  *"--get-urlmatch credential.helper"*) printf 'test-helper\n'; exit 0 ;;
+  *"ls-remote"*) printf 'abc\tHEAD\n'; exit 0 ;;
+`,
+        async () => {
+          await withFailingGitSubcommand(
+            "fetch",
+            async () => {
+              await expect(
+                commands.get("start_environment")?.({ environmentId: environment.id }, context),
+              ).rejects.toThrow(expected);
+            },
+            "ssh: connect to host github.com port 22: Operation timed out\nfatal: Could not read from remote repository.",
+          );
+        },
+      );
 
-    expect(environment.status).toBe("error");
-    expect(environment.lifecycleError).toStartWith(expected);
-    // The origin here is a local path, not GitHub over SSH: nothing to offer.
-    expect(environment.lifecycleRemedy ?? null).toBeNull();
-  });
+      expect(environment.status).toBe("error");
+      expect(environment.lifecycleError).toStartWith(expected);
+      expect(environment.lifecycleRemedy ?? null).toBe(httpsAvailable ? "use-https" : null);
+      expect((await context.storage.getEnvironment(environment.id))?.lifecycleRemedy ?? null).toBe(
+        httpsAvailable ? "use-https" : null,
+      );
+    },
+  );
 
   test("persists and rejects with the sanitized Git remote timeout during startup", async () => {
     const { worktree, remote } = await createGitWorktreeWithOrigin();

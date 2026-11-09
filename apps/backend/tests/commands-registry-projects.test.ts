@@ -2,7 +2,14 @@ import { describe, expect, test } from "bun:test";
 
 import { createCommandFixtures } from "./command-fixtures";
 
-const { createCommandRegistry, createContext } = await createCommandFixtures();
+const {
+  createCommandRegistry,
+  createContext,
+  createGitWorktreeWithOrigin,
+  runGit,
+  gitOutput,
+  withGitArgumentStub,
+} = await createCommandFixtures();
 
 describe("Electron backend command registry", () => {
   // The `security` stub only takes effect on darwin, where `getHostClaudeCredentials`
@@ -37,5 +44,52 @@ describe("Electron backend command registry", () => {
         context,
       ),
     ).toThrow("connections");
+  });
+});
+
+describe("use_https_git_remote", () => {
+  const project = (localPath: string | null) => ({
+    id: "https-project",
+    name: "HTTPS project",
+    gitUrl: "git@github.com:acme/widget.git",
+    localPath,
+    addedAt: new Date(0).toISOString(),
+    order: 0,
+  });
+
+  test("refuses a missing project and a project without a local checkout", async () => {
+    const commands = createCommandRegistry();
+    const { context } = createContext([], { project: project(null) });
+    await expect(
+      commands.get("use_https_git_remote")!({ projectId: "missing" }, context),
+    ).rejects.toThrow("Project not found: missing");
+    await expect(
+      commands.get("use_https_git_remote")!({ projectId: "https-project" }, context),
+    ).rejects.toThrow("no local checkout");
+  });
+
+  test("switches the requested checkout after HTTPS succeeds without changing project identity", async () => {
+    const { worktree } = await createGitWorktreeWithOrigin();
+    await runGit(worktree, ["remote", "set-url", "origin", "git@github.com:acme/widget.git"]);
+    const storedProject = project(worktree);
+    const { context } = createContext([], { project: storedProject });
+    const commands = createCommandRegistry();
+    await withGitArgumentStub(
+      `
+  *"--get-urlmatch credential.helper"*) printf 'test-helper\n'; exit 0 ;;
+  *"ls-remote"*) printf 'abc\tHEAD\n'; exit 0 ;;
+`,
+      async () => {
+        await expect(
+          commands.get("use_https_git_remote")!({ projectId: storedProject.id }, context),
+        ).resolves.toEqual({ remoteUrl: "https://github.com/acme/widget.git", changed: true });
+      },
+    );
+    expect(await gitOutput(worktree, ["config", "--get", "remote.origin.url"])).toBe(
+      "https://github.com/acme/widget.git",
+    );
+    expect((await context.storage.getProject(storedProject.id))?.gitUrl).toBe(
+      "git@github.com:acme/widget.git",
+    );
   });
 });

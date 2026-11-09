@@ -32,7 +32,7 @@ test("shows the failure and offers nothing without a remedy", () => {
     />,
   );
   expect(screen.getByRole("alert").textContent).toContain("port 22");
-  expect(screen.queryByRole("button", { name: /use https/i })).toBeNull();
+  expect(screen.queryByRole("button", { name: /use https/i }) === null).toBe(true);
 });
 
 test("switches the project to HTTPS and retries the start", async () => {
@@ -122,5 +122,5 @@ test("the overlay shows no notice for an environment that has not failed", () =>
       onStartOverlayClick={() => {}}
     />,
   );
-  expect(screen.queryByRole("alert")).toBeNull();
+  expect(screen.queryByRole("alert") === null).toBe(true);
 });

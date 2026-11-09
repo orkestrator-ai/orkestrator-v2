@@ -203,6 +203,17 @@ describe("switchOriginToHttps", () => {
     });
   });
 
+  test("already-HTTPS origins return no credentials and perform no mutation", async () => {
+    const repo = await repoWithOrigin("https://x@github.com/acme/widget.git");
+    const { run, calls } = scriptedGit({});
+    await expect(switchOriginToHttps(repo, run)).resolves.toEqual({
+      remoteUrl: "https://github.com/acme/widget.git",
+      changed: false,
+    });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.args).toEqual(["-C", repo, "config", "--get", "remote.origin.url"]);
+  });
+
   test("leaves origin alone when HTTPS would not work", async () => {
     const repo = await repoWithOrigin("git@github.com:acme/widget.git");
     await expect(switchOriginToHttps(repo, scriptedGit({ helper: null }).run)).rejects.toThrow(

@@ -327,7 +327,7 @@ describe("the conflict list and the synced-from mark (task 4)", () => {
     const stored = readStoredValue<{ conflicts: Array<{ id?: string }> }>(
       f.command.getDataDir(),
       "kanban-sync.json",
-    );
+    )!;
     delete stored.conflicts[0]!.id;
     seedStore(f.command.getDataDir(), "kanban-sync.json", stored);
     const legacyId = (await f.command.ticketSync.getTicketSyncOverview(f.commandProject.id))

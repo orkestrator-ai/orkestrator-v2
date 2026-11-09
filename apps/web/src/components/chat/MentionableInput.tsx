@@ -486,7 +486,12 @@ export const MentionableInput = forwardRef<MentionableInputRef, MentionableInput
     const handleInput = useCallback(() => {
       if (!inputRef.current || isComposingRef.current) return;
 
-      const newText = extractText(inputRef.current);
+      const input = inputRef.current;
+      // Chromium leaves a sole BR as the caret holder after deleting all text.
+      // It is an empty editor, whereas multiple BRs represent deliberate lines.
+      const isEmptyCaretHolder =
+        input.childNodes.length === 1 && input.firstChild?.nodeName === "BR";
+      const newText = isEmptyCaretHolder ? "" : extractText(input);
       const remainingMentions = mentions.filter((mention) =>
         newText.includes(`@${mention.filename}`),
       );

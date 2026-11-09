@@ -42,6 +42,36 @@ describe("MentionableInput", () => {
     expect(input!.textContent).toBe(draftText);
   });
 
+  test("clearing the editor restores the placeholder but preserves deliberate line breaks", () => {
+    const onChange = mock(() => {});
+    function Composer() {
+      const [value, setValue] = useState("Draft");
+      return (
+        <MentionableInput
+          value={value}
+          mentions={[]}
+          onChange={(text, mentions) => {
+            onChange(text, mentions);
+            setValue(text);
+          }}
+        />
+      );
+    }
+    const { getByRole, container } = render(<Composer />);
+    const input = getByRole("textbox");
+    input.replaceChildren(document.createElement("br"));
+    fireEvent.input(input);
+    expect(onChange).toHaveBeenLastCalledWith("", []);
+    expect(container.querySelector("[data-native-compose-placeholder]")?.textContent).toBe(
+      "Type a message...",
+    );
+
+    input.replaceChildren(document.createElement("br"), document.createElement("br"));
+    fireEvent.input(input);
+    expect(onChange).toHaveBeenLastCalledWith("\n\n", []);
+    expect(container.querySelectorAll("[data-native-compose-placeholder]").length).toBe(0);
+  });
+
   test("renders empty when value is empty string", () => {
     const { container, getByRole } = render(
       <MentionableInput value="" mentions={[]} onChange={() => {}} />,

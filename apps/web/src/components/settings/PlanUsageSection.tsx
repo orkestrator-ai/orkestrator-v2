@@ -7,6 +7,7 @@ import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { SETTINGS_CARD_CLASS, SettingsSectionHeader } from "./SettingsPageLayout";
 import { UsageReadingAge, UsageReadingBars } from "./UsageReading";
+import { useAgentUsageReadingsChanged } from "@/hooks/useAgentUsageReadingsChanged";
 import { cn } from "@/lib/utils";
 
 /**
@@ -32,12 +33,16 @@ export function PlanUsageSection({
   const { machine } = useAccountMachine();
 
   const load = useCallback(
-    async (force = false) => {
+    async (force = false, cacheOnly = false) => {
       const requestId = ++requestRef.current;
       setLoading(true);
       setError(null);
       try {
-        const next = await getPlanUsage(platform, { force }, machine);
+        const next = await getPlanUsage(
+          platform,
+          { force, ...(cacheOnly ? { cacheOnly: true } : {}) },
+          machine,
+        );
         if (requestId !== requestRef.current) return;
         setSnapshot(next);
       } catch (err) {
@@ -62,6 +67,14 @@ export function PlanUsageSection({
       requestRef.current += 1;
     };
   }, [load, reloadToken]);
+
+  useAgentUsageReadingsChanged(
+    platform === "claude" || platform === "codex" ? platform : null,
+    () => {
+      void load(false, true);
+    },
+    machine,
+  );
 
   const message = error ?? (snapshot?.status === "error" ? snapshot.message : null);
   const unavailable = snapshot?.status === "unavailable" ? snapshot.message : null;
@@ -97,10 +110,13 @@ export function PlanUsageSection({
               {message}
             </p>
             {/* A failed read with a last known reading would have answered it, stale. */}
-            {snapshot?.status === "error" ? <UsageReadingAge snapshot={null} /> : null}
+            <UsageReadingAge snapshot={null} />
           </div>
         ) : unavailable ? (
-          <p className="text-xs leading-relaxed text-muted-foreground">{unavailable}</p>
+          <div className="space-y-1">
+            <p className="text-xs leading-relaxed text-muted-foreground">{unavailable}</p>
+            <UsageReadingAge snapshot={null} />
+          </div>
         ) : loading && !snapshot ? (
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <Loader2 className="h-3.5 w-3.5 animate-spin" />

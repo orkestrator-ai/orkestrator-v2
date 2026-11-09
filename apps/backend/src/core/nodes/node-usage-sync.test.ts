@@ -1,3 +1,6 @@
+import { NodeReadModel } from "./node-read-model.js";
+import { TestNodeNetwork } from "./node-network-test-support.js";
+import { installControlledTimeout } from "../../../../../tests/helpers/controlled-timeout.js";
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -259,7 +262,7 @@ describe("shared usage readings", () => {
   });
 
   test("a node that reconnects catches up from the central copy", async () => {
-    const { sync, node } = await fleet([
+    const { sync, node, command } = await fleet([
       ["bk_beelink", "beelink", [TRADING]],
       ["bk_omarchy", "omarchy-hp", [TRADING]],
     ]);
@@ -269,6 +272,8 @@ describe("shared usage readings", () => {
     await sync.syncAll();
     // beelink goes away before omarchy-hp is back.
     node("bk_beelink").link.connected = false;
+    Object.assign(command.context.runtime.accounts, { sharedUsage: new AgentAccountSharedUsage() });
+    Object.assign(omarchy.context.runtime.accounts, { sharedUsage: new AgentAccountSharedUsage() });
     omarchy.link.connected = true;
     sync.handleNodeEvent("native-event-stream-connected", {});
     for (let attempt = 0; attempt < 100 && omarchy.applied.length === 0; attempt += 1) {
@@ -280,7 +285,7 @@ describe("shared usage readings", () => {
     // Told Settings to read again, without asking the command node to sync once more.
     expect(omarchy.events).toContainEqual({
       event: AGENT_USAGE_READINGS_CHANGED_EVENT,
-      payload: { platform: "claude", origin: "shared" },
+      payload: { platform: "claude", origin: "shared", emails: [TRADING.email] },
     });
   });
 
@@ -289,25 +294,96 @@ describe("shared usage readings", () => {
       ["bk_beelink", "beelink", [TRADING]],
       ["bk_omarchy", "omarchy-hp", [TRADING]],
     ]);
+    const clock = installControlledTimeout(1);
+    cleanups.push(async () => {
+      sync.dispose();
+      clock.restore();
+    });
     sync.handleNodeEvent(AGENT_USAGE_READINGS_CHANGED_EVENT, {
       platform: "claude",
       origin: "shared",
     });
     await node("bk_beelink").read(TRADING, 77, 0);
-    await Bun.sleep(20);
+    expect(clock.pendingCount()).toBe(0);
     expect(node("bk_omarchy").applied).toEqual([]);
     expect(node("bk_beelink").events).toContainEqual({
       event: AGENT_USAGE_READINGS_CHANGED_EVENT,
-      payload: { platform: "claude", origin: "local" },
+      payload: { platform: "claude", origin: "local", emails: [TRADING.email] },
     });
     sync.handleNodeEvent(AGENT_USAGE_READINGS_CHANGED_EVENT, {
       platform: "claude",
       origin: "local",
     });
-    for (let attempt = 0; attempt < 100 && node("bk_omarchy").applied.length === 0; attempt += 1) {
-      await Bun.sleep(5);
-    }
+    expect(clock.pendingCount()).toBe(1);
+    expect(clock.advance()).toBe(1);
+    await sync.syncAll();
     expect((await node("bk_omarchy").show(TRADING)).windows[0]?.usedPercent).toBe(77);
+    clock.assertDrained();
+  });
+
+  test("production read-model stream filters deliver a leaf reading before the sweep", async () => {
+    const { sync, node } = await fleet([
+      ["bk_beelink", "beelink", [TRADING]],
+      ["bk_omarchy", "omarchy-hp", [TRADING]],
+    ]);
+    const clock = installControlledTimeout(1);
+    const network = new TestNodeNetwork();
+    const command = await network.add("command", { forceRegistration: true });
+    const leaf = await network.add("leaf");
+    leaf.commands.set("get_projects", () => []);
+    await command.service.addNode({
+      routes: [{ id: "primary" as never, kind: "https", enabled: true, origin: leaf.origin }],
+      token: leaf.token,
+    });
+    let observed!: () => void;
+    const delivered = new Promise<void>((resolve) => {
+      observed = resolve;
+    });
+    const model = new NodeReadModel({
+      nodes: command.service,
+      emit: () => undefined,
+      fetchImpl: ((input, init) => {
+        const url = new URL(String(input));
+        if (url.pathname === "/__orkestrator/events") {
+          expect(url.searchParams.get("events")?.split(",")).toContain(
+            AGENT_USAGE_READINGS_CHANGED_EVENT,
+          );
+        }
+        return network.fetch(input, init);
+      }) as typeof fetch,
+    });
+    let onResync = () => {};
+    const stop = model.onNodeEvent((event, payload) => {
+      sync.handleNodeEvent(event, payload);
+      if (event === AGENT_USAGE_READINGS_CHANGED_EVENT) observed();
+      if (event === "native-event-stream-connected") onResync();
+    });
+    try {
+      await model.start();
+      if (clock.pendingCount()) clock.advance();
+      await sync.syncAll();
+      await node("bk_beelink").read(TRADING, 93, 0);
+      leaf.emit(AGENT_USAGE_READINGS_CHANGED_EVENT, { platform: "claude", origin: "local" });
+      await delivered;
+      expect(clock.pendingCount()).toBe(1);
+      clock.advance();
+      await sync.syncAll();
+      expect((await node("bk_omarchy").show(TRADING)).windows[0]?.usedPercent).toBe(93);
+      // A real gap frame passes through the stream parser and read model.
+      const recovered = new Promise<void>((resolve) => {
+        onResync = resolve;
+      });
+      leaf.emit("gateway.reconcile-required", { reason: "cursor-expired" });
+      await recovered;
+      expect(clock.pendingCount()).toBe(1);
+      clock.advance();
+      await sync.syncAll();
+    } finally {
+      stop();
+      model.stop();
+      sync.dispose();
+      clock.restore();
+    }
   });
 
   test("a node that predates the commands takes no part and the rest still sync", async () => {

@@ -159,7 +159,7 @@ function installPlanUsageFixture() {
     invoke: async <T,>(command: string, args?: Record<string, unknown>): Promise<T> => {
       switch (command) {
         case "get_plan_usage":
-          return usageFor(undefined) as T;
+          return (params.has("unavailable-plan") ? neverRead : usageFor(undefined)) as T;
         case "get_agent_account_usage":
           return usageFor(args?.accountId) as T;
         case "get_coordinator_account_switch_grant":

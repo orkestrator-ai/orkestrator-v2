@@ -1075,14 +1075,19 @@ export async function readAgentAccountUsage(
   context: CommandContext,
   platform: AgentAccountPlatform,
   accountId: string,
-  options: { force?: boolean; reader: PlanUsageRead; now?: () => number },
+  options: { force?: boolean; cacheOnly?: boolean; reader: PlanUsageRead; now?: () => number },
 ): Promise<PlanUsageSnapshot> {
   assertKnownAccountId(accountId);
   const accounts = context.runtime.accounts;
-  const { store, generation } = await accounts.withMutation(async () => ({
-    store: await context.storage.agentAccounts.loadAgentAccounts(),
-    generation: usageGeneration(context, platform),
-  }));
+  const { store, generation, identity } = await accounts.withMutation(async () => {
+    const store = await context.storage.agentAccounts.loadAgentAccounts();
+    const stored = store.accounts.find((a) => a.id === accountId && a.platform === platform);
+    return {
+      store,
+      generation: usageGeneration(context, platform),
+      identity: await agentAccountUsageIdentity(context, platform, stored).catch(() => undefined),
+    };
+  });
   const now = options.now ?? Date.now;
   const root = accountsRoot(context);
   const publish = (snapshot: PlanUsageSnapshot, retryAfterMs?: number, cache = false) =>
@@ -1107,29 +1112,37 @@ export async function readAgentAccountUsage(
           snapshot: result,
         });
       }
-      return result;
+      // Identity and generation were captured together. Keep the generation
+      // fence through shared publication, including every asynchronous write.
+      return shareAndMergeUsage(context, identity, result, now());
     });
   const stored = store.accounts.find((a) => a.id === accountId && a.platform === platform);
-  // The newest reading of the same login from any machine counts as this one's
-  // (docs/architecture/agent-accounts.md, "Shared readings").
-  const shared = async (snapshot: PlanUsageSnapshot) =>
-    shareAndMergeUsage(
-      context,
-      await agentAccountUsageIdentity(context, platform, stored).catch(() => undefined),
-      snapshot,
-      now(),
+  if (accountId !== DEFAULT_AGENT_ACCOUNT_ID && !stored) throw new Error("Unknown agent account");
+  if (options.cacheOnly) {
+    const active = (store.active[platform] ?? DEFAULT_AGENT_ACCOUNT_ID) === accountId;
+    const cached = active
+      ? (accounts.planUsage.cache.peek(platform) ?? accounts.planUsage.cache.lastOk(platform))
+      : accounts.cachedUsage(usageKey(context, platform, accountId))?.snapshot;
+    return publish(
+      cached ?? {
+        platform,
+        status: "unavailable",
+        windows: [],
+        fetchedAt: new Date(now()).toISOString(),
+        message: "Usage has not been read yet.",
+      },
     );
+  }
   if ((store.active[platform] ?? DEFAULT_AGENT_ACCOUNT_ID) === accountId) {
     const snapshot = await options.reader(context, platform, { force: options.force === true });
-    return shared(await publish(snapshot));
+    return publish(snapshot);
   }
-  if (accountId !== DEFAULT_AGENT_ACCOUNT_ID && !stored) throw new Error("Unknown agent account");
 
   const key = usageKey(context, platform, accountId);
   const cached = accounts.cachedUsage(key);
   // A forced refresh still waits out a 429: each retry spends the allowance.
   if (cached && cached.expiresAt > now() && (!options.force || cached.rateLimited)) {
-    return shared(await publish(cached.snapshot));
+    return publish(cached.snapshot);
   }
 
   const home = stored ? homeFor(context, platform, stored.id) : undefined;
@@ -1164,7 +1177,22 @@ export async function readAgentAccountUsage(
       { now },
     ));
   }
-  return shared(await publish(snapshot, retryAfterMs, true));
+  return publish(snapshot, retryAfterMs, true);
+}
+
+/** Active plan cards share exactly the same identity and publication fence as account rows. */
+export async function readActiveAgentAccountUsage(
+  context: CommandContext,
+  platform: AgentAccountPlatform,
+  options: { force?: boolean; cacheOnly?: boolean; reader: PlanUsageRead },
+): Promise<PlanUsageSnapshot> {
+  const store = await context.storage.agentAccounts.loadAgentAccounts();
+  return readAgentAccountUsage(
+    context,
+    platform,
+    store.active[platform] ?? DEFAULT_AGENT_ACCOUNT_ID,
+    options,
+  );
 }
 
 /**

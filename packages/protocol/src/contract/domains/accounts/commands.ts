@@ -235,6 +235,7 @@ export const getAgentAccountUsageCommand = defineCommand({
     platform: Schema.String,
     accountId: Schema.String,
     force: optionalBoolean,
+    cacheOnly: optionalBoolean,
   }),
   result: PlanUsageSnapshotSchema,
   critical: [],
@@ -355,7 +356,11 @@ export const getPlanUsageCommand = defineCommand({
   since: 1,
   access: "workspace",
   read: true,
-  args: Schema.Struct({ platform: Schema.String, force: optionalBoolean }),
+  args: Schema.Struct({
+    platform: Schema.String,
+    force: optionalBoolean,
+    cacheOnly: optionalBoolean,
+  }),
   result: PlanUsageSnapshotSchema,
   critical: [],
 });

@@ -98,7 +98,7 @@ function AccountUsage({
   platform,
   accountIds,
   reloadToken,
-  readToken,
+  email,
   refreshToken,
   onRefreshed,
 }: {
@@ -106,8 +106,8 @@ function AccountUsage({
   /** Every entry of one login. */
   accountIds: readonly string[];
   reloadToken: string;
-  /** Raised when a newer reading may be on the machine: read again, from its cache. */
-  readToken: number;
+  /** Match usage events to this login; reconnects refresh every visible login. */
+  email?: string;
   /** Raised by the row's refresh button: the next read bypasses the cache. */
   refreshToken: number;
   /** Called once a read for `refreshToken` has settled, whatever its outcome. */
@@ -125,11 +125,24 @@ function AccountUsage({
     onRefreshedRef.current = onRefreshed;
   }, [onRefreshed]);
   const { machine } = useAccountMachine();
+  const [readToken, setReadToken] = useState(0);
+  const seenReadToken = useRef(0);
+  useAgentUsageReadingsChanged(
+    platform,
+    (emails) => {
+      if (!emails || (email && emails.includes(email.trim().toLowerCase()))) {
+        setReadToken((token) => token + 1);
+      }
+    },
+    machine,
+  );
 
   useEffect(() => {
     let current = true;
     const forced =
       reloadToken !== seenReloadTokenRef.current || refreshToken !== seenRefreshTokenRef.current;
+    const cacheOnly = !forced && readToken !== seenReadToken.current;
+    seenReadToken.current = readToken;
     seenReloadTokenRef.current = reloadToken;
     seenRefreshTokenRef.current = refreshToken;
     const load = async () => {
@@ -137,7 +150,12 @@ function AccountUsage({
         idsKey
           .split(",")
           .map((accountId) =>
-            getAgentAccountUsage(platform, accountId, { force: forced }, machine),
+            getAgentAccountUsage(
+              platform,
+              accountId,
+              { force: forced, ...(cacheOnly ? { cacheOnly: true } : {}) },
+              machine,
+            ),
           ),
       );
       if (!current) return;
@@ -333,7 +351,6 @@ function AccountRow({
   login,
   busy,
   usageReloadToken,
-  usageReadToken,
   autoSwitchIncluded,
   signIn,
   onUse,
@@ -344,8 +361,6 @@ function AccountRow({
   login: AgentAccountLogin;
   busy: boolean;
   usageReloadToken: string;
-  /** Raised when a newer reading may be on the machine; re-read without forcing. */
-  usageReadToken: number;
   /** Absent from a machine that predates automatic switching. */
   autoSwitchIncluded?: boolean;
   signIn: AccountSignIn;
@@ -536,7 +551,7 @@ function AccountRow({
           platform={account.platform}
           accountIds={login.entryIds}
           reloadToken={usageReloadToken}
-          readToken={usageReadToken}
+          email={account.identity.email}
           refreshToken={usageRefresh.requested}
           onRefreshed={onUsageRefreshed}
         />
@@ -559,7 +574,6 @@ export function AgentAccountsSection({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [usageReloadToken, setUsageReloadToken] = useState(0);
-  const [usageReadToken, setUsageReadToken] = useState(0);
   const mounted = useRef(true);
   const platformLabel = AGENT_PLATFORM_LABELS[platform];
   const { machine, name: machineName } = useAccountMachine();
@@ -589,8 +603,6 @@ export function AgentAccountsSection({
   }, [reload]);
   // Automatic switching moves the active account with no one here.
   useAgentAccountsChanged(platform, () => void reload());
-  // A reading this machine took, or one another machine took of the same login.
-  useAgentUsageReadingsChanged(platform, () => setUsageReadToken((token) => token + 1));
 
   const previousLoginState = useRef<AgentAccountLoginProgress["state"]>("idle");
   const applyLogin = useCallback(
@@ -790,7 +802,6 @@ export function AgentAccountsSection({
                 login={entry}
                 busy={busy}
                 usageReloadToken={`${reloadToken}:${usageReloadToken}`}
-                usageReadToken={usageReadToken}
                 {...(autoSwitch
                   ? { autoSwitchIncluded: autoSwitch.includedAccountIds.includes(account.id) }
                   : {})}

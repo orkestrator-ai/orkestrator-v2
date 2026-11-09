@@ -41,7 +41,7 @@ const FORMER_KEYS: Record<string, readonly string[]> = {
   rename_agent_account: ["platform", "accountId", "label"],
   remove_agent_account: ["platform", "accountId"],
   get_project_usage_limits: ["projectId"],
-  get_agent_account_usage: ["platform", "accountId", "force"],
+  get_agent_account_usage: ["platform", "accountId", "force", "cacheOnly"],
   // Added 2026-11-09: shared usage readings, called by an attached command node only.
   collect_shared_usage_readings: ["controllerId"],
   apply_shared_usage_readings: ["controllerId", "readings"],
@@ -51,7 +51,7 @@ const FORMER_KEYS: Record<string, readonly string[]> = {
   get_agent_account_login: [],
   submit_agent_account_login_code: ["code"],
   cancel_agent_account_login: ["operationId"],
-  get_plan_usage: ["platform", "force"],
+  get_plan_usage: ["platform", "force", "cacheOnly"],
   get_usage_history: ["days", "platform", "environmentId"],
   list_opencode_provider_auth: [],
   set_opencode_provider_api_key: ["providerId", "key", "metadata"],

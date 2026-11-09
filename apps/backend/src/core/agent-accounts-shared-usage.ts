@@ -36,6 +36,7 @@ type Store = Map<string, SharedUsageReading>;
 
 export class AgentAccountSharedUsage {
   private readonly loaded = new Map<string, Promise<Store>>();
+  private readonly dirty = new Set<string>();
   private readonly writes = new Map<string, Promise<void>>();
 
   async get(
@@ -73,7 +74,7 @@ export class AgentAccountSharedUsage {
       store.set(key, reading);
       kept.push(reading);
     }
-    if (kept.length === 0) return kept;
+    if (kept.length === 0 && !this.dirty.has(storeFile(accountsRoot))) return kept;
     while (store.size > SHARED_USAGE_LIMITS.maxReadings) {
       let oldest: [string, number] | undefined;
       for (const [key, reading] of store) {
@@ -121,7 +122,9 @@ export class AgentAccountSharedUsage {
         await fs.mkdir(path.dirname(file), { recursive: true });
         await fs.writeFile(temporary, JSON.stringify(Array.from(store.values())), { mode: 0o600 });
         await fs.rename(temporary, file);
+        this.dirty.delete(file);
       } catch {
+        this.dirty.add(file);
         // Kept in memory; the next reading writes the whole store again.
         log.warn("shared-usage.save-failed");
       } finally {

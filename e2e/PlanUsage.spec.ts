@@ -139,3 +139,18 @@ test("the account-switch log opens in a dialog, newest first, and closes on Esca
   await expect(dialog).toHaveCount(0);
   await expect(open).toBeFocused();
 });
+
+test("an unavailable plan explicitly has no reading after reload", async ({ page }, testInfo) => {
+  await page.goto("/global-settings?plan-usage=1&unavailable-plan=1");
+  const pane = page.getByRole("region", { name: "Plan usage", exact: true });
+  for (const reload of [false, true]) {
+    if (reload) await page.reload();
+    await expect(pane.getByText("Usage has not been read yet.", { exact: true })).toBeVisible();
+    await expect(pane.getByText(/^Updated /)).toHaveCount(0);
+    await expect(pane.getByText("Sign in to Codex to see this account's usage.")).toBeVisible();
+  }
+  await page.screenshot({
+    path: `output/visual-previews/usage-never-read-review-${testInfo.project.name}.png`,
+    fullPage: true,
+  });
+});

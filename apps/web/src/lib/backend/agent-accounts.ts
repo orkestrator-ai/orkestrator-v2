@@ -183,13 +183,14 @@ export function createAgentAccountsApi(client: BackendClient) {
   async function getAgentAccountUsage(
     platform: AgentAccountPlatform,
     accountId: string,
-    options: { force?: boolean } = {},
+    options: { force?: boolean; cacheOnly?: boolean } = {},
     machine?: AccountMachine,
   ): Promise<PlanUsageSnapshot> {
     return on(machine).get_agent_account_usage({
       platform,
       accountId,
       ...(options.force ? { force: true } : {}),
+      ...(options.cacheOnly ? { cacheOnly: true } : {}),
     });
   }
 

@@ -304,6 +304,7 @@ export function registerAgentAccountCommands(
       asNonBlankString(args.accountId, "accountId"),
       {
         force: args.force === undefined ? false : asRequiredBoolean(args.force, "force"),
+        cacheOnly: args.cacheOnly === true,
         reader: dependencies.planUsageReader,
       },
     );

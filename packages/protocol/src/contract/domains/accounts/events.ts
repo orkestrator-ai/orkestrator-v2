@@ -70,6 +70,7 @@ export const agentUsageReadingsChangedEvent = defineEvent({
   payload: Schema.Struct({
     platform: Schema.String,
     origin: Schema.optional(Schema.String),
+    emails: Schema.optional(Schema.Array(Schema.String)),
   }),
 });
 

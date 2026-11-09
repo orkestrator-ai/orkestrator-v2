@@ -656,15 +656,24 @@ handed to every machine with the same login.
   (`parseSharedUsageReading`), so a message, a token or a cookie never leaves a
   machine, whatever a snapshot or a peer carries.
 - **On each machine.** Every fresh reading `readAgentAccountUsage` takes of a
-  matchable login (the Settings rows, the switcher's reads, a forced refresh) is
+  matchable login (the Settings rows, active plan cards including Usage limits,
+  the switcher's reads, a forced refresh) is
   kept as that login's newest in `<agent-accounts>/shared-usage.json` (at most
   256, oldest dropped) and announced as `agent-usage-readings-changed`
-  `{ platform, origin: "local" }`. Every account's usage answer is then the newer
+  `{ platform, origin: "local", emails }`. Every account's usage answer is then the newer
   by `fetchedAt` of this machine's own answer (fresh, last known or failed) and
   the login's shared reading (`newestPlanUsage`); a failed read with no reading
   at all loses to any shared one. A shared reading is not marked `stale`: its age
   decides, here as in Settings. A window whose reset has passed since is shown
   started over, as for a last known reading.
+- **Live Settings refresh.** Account rows and plan cards subscribe to the selected
+  machine through the shared event layer, including relayed leaf events and gap
+  recovery. Email-bearing events refresh matching rows only; a reconnect rereads
+  all visible rows. Event reads use `cacheOnly`: retained local/shared state,
+  even after the provider cache expires, with no provider requests. Mount and
+  manual refresh retain normal cache/rate-limit behavior. The identity is captured
+  with the account generation and shared publication stays under the mutation
+  fence, so reauthentication cannot relabel an older reading.
 - **The command node** (`NodeUsageSync`) collects every connected node's logins
   and newest readings (`collect_shared_usage_readings`), keeps the newest per
   identity in its own store, which holds every identity, not only its own, and

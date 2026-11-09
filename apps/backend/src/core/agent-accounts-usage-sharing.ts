@@ -51,11 +51,17 @@ export async function usageReadingSource(context: CommandContext): Promise<PlanU
 
 function announce(
   context: CommandContext,
-  platforms: Iterable<AgentAccountPlatform>,
+  identities: Iterable<UsageIdentity>,
   origin: "local" | "shared",
 ): void {
-  for (const platform of new Set(platforms)) {
-    context.emit(agentUsageReadingsChangedEvent, { platform, origin });
+  const byPlatform = new Map<AgentAccountPlatform, Set<string>>();
+  for (const identity of identities) {
+    let emails = byPlatform.get(identity.platform);
+    if (!emails) byPlatform.set(identity.platform, (emails = new Set()));
+    emails.add(identity.email);
+  }
+  for (const [platform, emails] of byPlatform) {
+    context.emit(agentUsageReadingsChangedEvent, { platform, origin, emails: Array.from(emails) });
   }
   if (origin === "local") context.usageSync?.noteLocalChange();
 }
@@ -81,7 +87,7 @@ export async function shareAndMergeUsage(
   if (reading) {
     try {
       const kept = await store.record(root, [reading], now);
-      if (kept.length > 0) announce(context, [identity.platform], "local");
+      if (kept.length > 0) announce(context, [identity], "local");
     } catch {
       log.warn("shared-usage.record-failed", { platform: identity.platform });
     }
@@ -125,7 +131,7 @@ export async function applySharedUsageReadings(
   if (kept.length > 0) {
     announce(
       context,
-      kept.map((reading) => reading.identity.platform),
+      kept.map((reading) => reading.identity),
       "shared",
     );
   }
@@ -153,7 +159,7 @@ export async function recordCentralUsageReadings(
   if (shown.length > 0) {
     announce(
       context,
-      shown.map((reading) => reading.identity.platform),
+      shown.map((reading) => reading.identity),
       "shared",
     );
   }

@@ -1,11 +1,19 @@
+import { listen, NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
+import { invoke } from "@/lib/native/backend";
+import { resetNodeEventsForTests } from "@/lib/federation/node-events";
+import { RELAYED_NODE_EVENT } from "@orkestrator/protocol/node-events";
+import { AGENT_USAGE_READINGS_CHANGED_EVENT } from "@orkestrator/protocol/agent-account-shared-usage";
+import { AccountMachineProvider } from "./account-machine";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import * as realBackend from "@/lib/backend";
 import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
 
-const getPlanUsage = mock(async (): Promise<PlanUsageSnapshot> => {
-  throw new Error("getPlanUsage was not configured for this test");
-});
+const getPlanUsage = mock(
+  async (..._args: Parameters<typeof realBackend.getPlanUsage>): Promise<PlanUsageSnapshot> => {
+    throw new Error("getPlanUsage was not configured for this test");
+  },
+);
 
 mock.module("@/lib/backend", () => ({
   ...realBackend,
@@ -24,17 +32,103 @@ function snapshot(overrides: Partial<PlanUsageSnapshot> = {}): PlanUsageSnapshot
   };
 }
 
+const listeners = new Map<string, Set<(event: { payload: unknown }) => void>>();
+function emit(event: string, payload?: unknown) {
+  for (const handler of listeners.get(event) ?? []) handler({ payload });
+}
 beforeEach(() => {
+  resetNodeEventsForTests();
+  listeners.clear();
+  (listen as ReturnType<typeof mock>).mockImplementation(
+    async (event: string, handler: (event: { payload: unknown }) => void) => {
+      const handlers = listeners.get(event) ?? new Set();
+      handlers.add(handler);
+      listeners.set(event, handlers);
+      return () => handlers.delete(handler);
+    },
+  );
+  (invoke as ReturnType<typeof mock>).mockImplementation(
+    async (command: string, args: Record<string, unknown>) =>
+      command === "watch_node_events"
+        ? { watchId: args.watchId, expiresAt: Date.now() + 90_000, renewed: true }
+        : { removed: true },
+  );
   getPlanUsage.mockReset();
 });
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  resetNodeEventsForTests();
+});
 
 afterAll(() => {
   mock.module("@/lib/backend", () => realBackend);
 });
 
 describe("PlanUsageSection", () => {
+  test("updates from a selected leaf event, recovers a gap and releases the old machine", async () => {
+    const first = snapshot({
+      platform: "codex",
+      windows: [{ window: "primary", usedPercent: 11 }],
+    });
+    getPlanUsage.mockResolvedValue(first);
+    const view = render(
+      <AccountMachineProvider value={{ machine: "bk_leaf", name: "Leaf" }}>
+        <PlanUsageSection platform="codex" />
+      </AccountMachineProvider>,
+    );
+    await screen.findByText("11% used");
+    await waitFor(() => expect(listeners.has(RELAYED_NODE_EVENT)).toBe(true));
+    const newer = {
+      ...first,
+      fetchedAt: new Date().toISOString(),
+      windows: [{ window: "primary", usedPercent: 89 }],
+      readOn: { nodeId: "bk_reader", nodeName: "reader" },
+    };
+    getPlanUsage.mockResolvedValue(newer);
+    await act(async () =>
+      emit(RELAYED_NODE_EVENT, {
+        nodeId: "bk_leaf",
+        kind: "event",
+        event: AGENT_USAGE_READINGS_CHANGED_EVENT,
+        payload: { platform: "codex", origin: "shared" },
+      }),
+    );
+    await screen.findByText("89% used");
+    expect(screen.getByTestId("usage-reading-age").textContent).toContain("on reader");
+    expect(getPlanUsage.mock.calls.at(-1)).toEqual([
+      "codex",
+      { force: false, cacheOnly: true },
+      "bk_leaf",
+    ]);
+    getPlanUsage.mockResolvedValue({ ...newer, windows: [{ window: "primary", usedPercent: 95 }] });
+    await act(async () => emit(RELAYED_NODE_EVENT, { nodeId: "bk_leaf", kind: "resync" }));
+    await screen.findByText("95% used");
+    view.rerender(
+      <AccountMachineProvider value={{ machine: null, name: null }}>
+        <PlanUsageSection platform="codex" />
+      </AccountMachineProvider>,
+    );
+    await waitFor(() => expect(getPlanUsage.mock.calls.at(-1)?.[2]).toBe(null));
+    const before = getPlanUsage.mock.calls.length;
+    await act(async () =>
+      emit(RELAYED_NODE_EVENT, {
+        nodeId: "bk_leaf",
+        kind: "event",
+        event: AGENT_USAGE_READINGS_CHANGED_EVENT,
+        payload: { platform: "codex" },
+      }),
+    );
+    expect(getPlanUsage.mock.calls.length).toBe(before);
+    getPlanUsage.mockResolvedValue({ ...newer, windows: [{ window: "primary", usedPercent: 97 }] });
+    await act(async () => emit(NATIVE_EVENT_STREAM_CONNECTED_EVENT));
+    await screen.findByText("97% used");
+    view.unmount();
+    // A fresh mount rereads the authoritative backend snapshot.
+    render(<PlanUsageSection platform="codex" />);
+    await screen.findByText("97% used");
+  });
+
   test("keeps stale quotas and explains the original reading time and failure", async () => {
     getPlanUsage.mockResolvedValue(
       snapshot({
@@ -94,6 +188,8 @@ describe("PlanUsageSection", () => {
     );
     render(<PlanUsageSection platform="opencode" />);
     expect(await screen.findByText(/Add an OpenCode Zen API key/)).toBeTruthy();
+    expect(screen.getByText("Usage has not been read yet.")).toBeTruthy();
+    expect(screen.queryByText(/^Updated /) === null).toBe(true);
   });
 
   test("shows an error message from a resolved error snapshot", async () => {

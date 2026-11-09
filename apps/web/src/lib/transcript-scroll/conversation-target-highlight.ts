@@ -19,6 +19,8 @@ export const TRANSCRIPT_ITEM_ATTRIBUTE = "data-transcript-item";
 /** Set on the glowing item element; its value alternates per jump. */
 export const CONVERSATION_TARGET_GLOW_ATTRIBUTE = "data-conversation-target-glow";
 
+const BASE_SHADOW_PROPERTY = "--conversation-target-base-shadow";
+
 const GLOW_DELAY_PROPERTY = "--conversation-target-glow-delay";
 
 const GLOW_DURATION_PROPERTY = "--conversation-target-glow-duration";
@@ -63,11 +65,19 @@ export function startConversationTargetGlow(
 ): () => void {
   const elapsed = Math.max(0, performance.now() - startedAt);
   if (elapsed >= durationMs) return () => {};
+  // Capture before adding the attribute so the glow never replaces an item's
+  // own elevation (including Tailwind rings and layered shadow utilities).
+  const baseShadow = getComputedStyle(item).boxShadow;
+  item.style.setProperty(
+    BASE_SHADOW_PROPERTY,
+    baseShadow && baseShadow !== "none" ? baseShadow : "0 0 #0000",
+  );
   item.style.setProperty(GLOW_DELAY_PROPERTY, `-${elapsed}ms`);
   item.style.setProperty(GLOW_DURATION_PROPERTY, `${durationMs}ms`);
   item.setAttribute(CONVERSATION_TARGET_GLOW_ATTRIBUTE, conversationTargetGlowPhase(generation));
   return () => {
     item.removeAttribute(CONVERSATION_TARGET_GLOW_ATTRIBUTE);
+    item.style.removeProperty(BASE_SHADOW_PROPERTY);
     item.style.removeProperty(GLOW_DURATION_PROPERTY);
     item.style.removeProperty(GLOW_DELAY_PROPERTY);
   };

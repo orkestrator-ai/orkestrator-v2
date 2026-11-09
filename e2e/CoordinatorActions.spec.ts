@@ -240,3 +240,85 @@ test("a jump to a row still growing in shows the glow unclipped", async ({ page 
     path: path.resolve("output/visual-previews/jump-highlight-arrival-unclipped.png"),
   });
 });
+
+for (const reducedMotion of ["no-preference", "reduce"] as const) {
+  test(`compact mail glow fits 320px gutters with ${reducedMotion} motion`, async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 844 });
+    await page.emulateMedia({ reducedMotion });
+    await page.goto("/coordinator-actions-transcript");
+    await page.getByRole("button", { name: "Read start", exact: true }).click();
+    const item = page
+      .locator('[data-chat-message-key="peer-mail-fixture"] [data-transcript-item]')
+      .first();
+    await expect(item).toBeVisible();
+    await expect(item).toHaveAttribute("data-transcript-item", "mail");
+    const before = await item.evaluate((element) => {
+      const { width, height } = element.getBoundingClientRect();
+      return { width, height };
+    });
+    await page.getByRole("button", { name: "Jump mail", exact: true }).click();
+    const glow = await measureJumpGlow(page);
+    expect(glow.rowKey).toBe("peer-mail-fixture");
+    expect(glow.roomLeft).toBeGreaterThanOrEqual(8);
+    expect(glow.roomRight).toBeGreaterThanOrEqual(8);
+    expect({ width: glow.box.width, height: glow.box.height }).toEqual(before);
+    // CSS blur's painted extent is about 1.5 times its radius, plus spread.
+    // At full strength both sides therefore fit the smallest 8px gutter.
+    const shadow = await item.evaluate((element, reduced) => {
+      if (!reduced) {
+        const animation = element.getAnimations()[0]!;
+        animation.pause();
+        animation.currentTime = 0;
+      }
+      return getComputedStyle(element).boxShadow;
+    }, reducedMotion === "reduce");
+    expect(shadow).toContain("rgba(56, 189, 248, 0.55) 0px 0px 4px 1px");
+    expect(1.5 * 4 + 1).toBeLessThanOrEqual(Math.min(glow.roomLeft, glow.roomRight));
+    expect(glow.animationName).toBe(
+      reducedMotion === "reduce" ? "none" : "conversation-target-glow-b",
+    );
+    await page.screenshot({
+      path: path.resolve(`output/visual-previews/jump-mail-320-${reducedMotion}.png`),
+    });
+    await expect(item).not.toHaveAttribute("data-conversation-target-glow", { timeout: 4000 });
+    const after = await item.boundingBox();
+    expect({ width: after!.width, height: after!.height }).toEqual(before);
+  });
+}
+
+for (const width of [320, 1600]) {
+  test(`user bubble keeps its base shadow throughout the jump at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto("/coordinator-actions-transcript");
+    await page.getByRole("button", { name: "Read start", exact: true }).click();
+    const item = page.locator('[data-chat-message-key="row-2"] [data-transcript-item]').first();
+    await expect(item).toBeVisible();
+    const base = await item.evaluate((element) => getComputedStyle(element).boxShadow);
+    expect(base).not.toBe("none");
+    await page.screenshot({
+      path: path.resolve(`output/visual-previews/jump-user-${width}-before.png`),
+    });
+    await page.getByRole("button", { name: "Jump user", exact: true }).click();
+    await expect(item).toHaveAttribute("data-conversation-target-glow");
+    for (const time of [0, 1500, 2500]) {
+      const shadow = await item.evaluate((element, time) => {
+        const animation = element.getAnimations()[0]!;
+        animation.pause();
+        animation.currentTime = time;
+        return getComputedStyle(element).boxShadow;
+      }, time);
+      expect(shadow.endsWith(base)).toBe(true);
+      if (time === 0)
+        await page.screenshot({
+          path: path.resolve(`output/visual-previews/jump-user-${width}-glow.png`),
+        });
+    }
+    await expect(item).not.toHaveAttribute("data-conversation-target-glow", { timeout: 4000 });
+    expect(await item.evaluate((element) => getComputedStyle(element).boxShadow)).toBe(base);
+    expect(
+      await item.evaluate((element) =>
+        (element as HTMLElement).style.getPropertyValue("--conversation-target-base-shadow"),
+      ),
+    ).toBe("");
+  });
+}

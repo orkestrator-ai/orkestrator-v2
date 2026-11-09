@@ -135,6 +135,19 @@ describe("VirtualizedMessageList jump highlight", () => {
     expect(glowing()).toEqual(["item-card"]);
   });
 
+  test("captures an item's base shadow and releases it after repeat jumps", () => {
+    const view = render(<List highlight={null} />);
+    item("card").style.boxShadow = "0px 1px 3px rgba(0, 0, 0, 0.2)";
+    const base = getComputedStyle(item("card")).boxShadow;
+    view.rerender(<List highlight={jump("card", 1)} />);
+    expect(item("card").style.getPropertyValue("--conversation-target-base-shadow")).toBe(base);
+    view.rerender(<List highlight={jump("card", 2)} />);
+    expect(item("card").style.getPropertyValue("--conversation-target-base-shadow")).toBe(base);
+    view.rerender(<List highlight={null} />);
+    expect(item("card").style.getPropertyValue("--conversation-target-base-shadow")).toBe("");
+    expect(getComputedStyle(item("card")).boxShadow).toBe(base);
+  });
+
   test("late mounts and remounts resume the original clock, and expired mounts do not glow", () => {
     const clock = spyOn(performance, "now").mockReturnValue(100);
     try {

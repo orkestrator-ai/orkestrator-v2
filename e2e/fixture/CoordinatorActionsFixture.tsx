@@ -89,8 +89,20 @@ export function CoordinatorActionsTranscriptFixture() {
   const messages = useMemo<NativeMessage[]>(
     () =>
       Array.from({ length: rowCount }, (_, index) => ({
-        id: `row-${index}`,
-        role: "assistant",
+        id: index === 1 ? "peer-mail-fixture" : `row-${index}`,
+        role: index === 2 ? "user" : "assistant",
+        ...(index === 1
+          ? {
+              peerMail: {
+                messageId: "mail",
+                warning: "",
+                kind: "notice" as const,
+                sender: "System",
+                subject: "Workflow ready",
+                body: "The workflow is ready for review.",
+              },
+            }
+          : {}),
         createdAt: "2026-11-09",
         content: `Conversation row ${index}`,
         parts:
@@ -136,6 +148,24 @@ export function CoordinatorActionsTranscriptFixture() {
         <button onClick={() => navigation.scrollToIndex(49)}>Read end</button>
         <button onClick={() => setDone(true)}>Answer question</button>
         <button onClick={() => setRowCount((count) => count + 1)}>Append question</button>
+        {[
+          { id: "peer-mail-fixture", label: "mail" },
+          { id: "row-2", label: "user" },
+        ].map(({ id, label }) => (
+          <button
+            key={id}
+            onClick={() =>
+              useConversationScrollTargetStore
+                .getState()
+                .request(
+                  { nodeId, environmentId: "actions-fixture", tabId: "coordinator" },
+                  { messageId: id },
+                )
+            }
+          >
+            Jump {label}
+          </button>
+        ))}
         <output data-testid="anchor">{anchor}</output>
         <NativeChatShell
           agentLabel="Codex"

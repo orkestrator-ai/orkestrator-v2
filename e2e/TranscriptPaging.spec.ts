@@ -571,7 +571,7 @@ test("coarse-pointer targets preserve dock and transcript row heights", async ({
     expect(box!.height).toBeGreaterThanOrEqual(40);
     expect(box!.width).toBeGreaterThanOrEqual(40);
   }
-  const action = actions.locator("button").last();
+  const action = actions.locator("button").first();
   const hitArea = await action.evaluate((element) => {
     const style = getComputedStyle(element, "::after");
     const box = element.getBoundingClientRect();
@@ -579,12 +579,23 @@ test("coarse-pointer targets preserve dock and transcript row heights", async ({
       height: parseFloat(style.minHeight),
       width: box.width,
       receivesExpandedHit:
-        document.elementFromPoint(box.x + box.width / 2, box.y - 4)?.closest("button") === element,
+        document.elementFromPoint(box.x + box.width / 2, box.bottom + 8)?.closest("button") ===
+        element,
+      coversPreviousContent:
+        document
+          .elementFromPoint(
+            box.x + box.width / 2,
+            element
+              .closest("[data-message-actions]")!
+              .parentElement!.previousElementSibling!.getBoundingClientRect().bottom - 1,
+          )
+          ?.closest("button") === element,
     };
   });
   expect(hitArea.height).toBeGreaterThanOrEqual(40);
   expect(hitArea.width).toBeGreaterThanOrEqual(40);
   expect(hitArea.receivesExpandedHit).toBe(true);
+  expect(hitArea.coversPreviousContent).toBe(false);
   // Compare against the mouse-size geometry without changing content or font.
   await page.addStyleTag({
     content: `

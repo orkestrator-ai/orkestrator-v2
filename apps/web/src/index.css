@@ -962,7 +962,9 @@ body[data-orkestrator-dev-profile]::before {
   [data-message-actions] button::after {
     content: "";
     position: absolute;
-    inset: 50% auto auto 50%;
+    /* The footer has 4px above and 12px below: use that whitespace
+       without covering the previous tool's trigger. */
+    inset: calc(50% + 0.25rem) auto auto 50%;
     min-width: 2.5rem;
     min-height: 2.5rem;
     width: 100%;

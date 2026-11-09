@@ -41,14 +41,17 @@ const FORMER_KEYS: Record<string, readonly string[]> = {
   rename_agent_account: ["platform", "accountId", "label"],
   remove_agent_account: ["platform", "accountId"],
   get_project_usage_limits: ["projectId"],
-  get_agent_account_usage: ["platform", "accountId", "force"],
+  get_agent_account_usage: ["platform", "accountId", "force", "cacheOnly"],
+  // Added 2026-11-09: shared usage readings, called by an attached command node only.
+  collect_shared_usage_readings: ["controllerId"],
+  apply_shared_usage_readings: ["controllerId", "readings"],
   start_agent_account_login: ["platform", "reauthenticate"],
   // Added 2026-11-09 for the settings pane's per-account "Sign in".
   reauthenticate_agent_account: ["platform", "accountId"],
   get_agent_account_login: [],
   submit_agent_account_login_code: ["code"],
   cancel_agent_account_login: ["operationId"],
-  get_plan_usage: ["platform", "force"],
+  get_plan_usage: ["platform", "force", "cacheOnly"],
   get_usage_history: ["days", "platform", "environmentId"],
   list_opencode_provider_auth: [],
   set_opencode_provider_api_key: ["providerId", "key", "metadata"],
@@ -83,8 +86,8 @@ const snapshot = {
 };
 
 describe("accounts definitions", () => {
-  it("cover the 34 accounts commands once, each in version 1 of the domain", () => {
-    expect(ALL).toHaveLength(34);
+  it("cover the 36 accounts commands once, each in version 1 of the domain", () => {
+    expect(ALL).toHaveLength(36);
     expect(ALL.map((def) => def.name).sort()).toEqual(Object.keys(FORMER_KEYS).sort());
     for (const def of ALL) {
       expect({ since: def.since, version: def.domain.version, min: def.domain.min }).toEqual({
@@ -103,8 +106,14 @@ describe("accounts definitions", () => {
     },
   );
 
-  it("are all workspace commands", () => {
-    expect(ALL.filter((def) => def.access !== "workspace").map((def) => def.name)).toEqual([]);
+  it("are all workspace commands, but the two a command node calls over its link", () => {
+    expect(ALL.filter((def) => def.access !== "workspace").map((def) => def.name)).toEqual([
+      "collect_shared_usage_readings",
+      "apply_shared_usage_readings",
+    ]);
+    expect(
+      ALL.filter((def) => def.access === "internal").every((def) => def.critical.length === 0),
+    ).toBe(true);
   });
 
   it("marks the login mode, the cancels' operation and the OpenCode details critical", () => {

@@ -6,7 +6,7 @@ import { AutoPipelineDescriptionField } from "./AutoPipelineDescriptionField";
 afterEach(cleanupNodeScopes);
 
 for (const key of ["Enter", " "]) {
-  test(`description preview activates with ${JSON.stringify(key)}`, () => {
+  test(`description preview activates with ${JSON.stringify(key)}`, async () => {
     renderInNodeScope(
       <AutoPipelineDescriptionField value="**Draft**" onChange={() => undefined} />,
     );
@@ -17,7 +17,7 @@ for (const key of ["Enter", " "]) {
     expect(editor.value).toBe("**Draft**");
     expect(document.activeElement === editor).toBe(true);
     fireEvent.blur(editor);
-    expect(screen.getByText("Draft").tagName).toBe("STRONG");
+    expect((await screen.findByText("Draft")).tagName).toBe("STRONG");
   });
 }
 
@@ -34,14 +34,14 @@ test("disabled description cannot enter edit mode with pointer or keyboard", () 
   expect(screen.queryByRole("textbox", { name: "Description" }) === null).toBe(true);
 });
 
-test("rendered Markdown links do not activate the description editor", () => {
+test("rendered Markdown links do not activate the description editor", async () => {
   renderInNodeScope(
     <AutoPipelineDescriptionField
       value="Read [the guide](https://example.com/guide)."
       onChange={() => undefined}
     />,
   );
-  const link = screen.getByRole("link", { name: "the guide" });
+  const link = await screen.findByRole("link", { name: "the guide" });
   expect(link.getAttribute("href")).toBe("https://example.com/guide");
   fireEvent.click(link);
   fireEvent.keyDown(link, { key: "Enter" });

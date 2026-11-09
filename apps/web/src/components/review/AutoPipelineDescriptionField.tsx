@@ -1,9 +1,13 @@
-import { useState, type Ref } from "react";
-import { MessageMarkdown } from "@/components/chat/MessageMarkdown";
+import { lazy, Suspense, useState, type Ref } from "react";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 
 const PANE = "h-[min(55vh,34rem)] w-full rounded-md border border-border/70";
+const MessageMarkdown = lazy(() =>
+  import("@/components/chat/MessageMarkdown").then((module) => ({
+    default: module.MessageMarkdown,
+  })),
+);
 
 /**
  * Rendered Markdown until the user clicks or presses Enter on it, then the raw
@@ -66,10 +70,12 @@ export function AutoPipelineDescriptionField({
       )}
     >
       {value.trim() ? (
-        <MessageMarkdown
-          content={value}
-          className="break-words [&>:first-child]:mt-0 [&>:last-child]:mb-0"
-        />
+        <Suspense fallback={<p className="whitespace-pre-wrap break-words">{value}</p>}>
+          <MessageMarkdown
+            content={value}
+            className="break-words [&>:first-child]:mt-0 [&>:last-child]:mb-0"
+          />
+        </Suspense>
       ) : (
         <p className="text-muted-foreground italic">Click to add a description…</p>
       )}

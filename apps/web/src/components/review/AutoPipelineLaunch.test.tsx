@@ -59,7 +59,7 @@ test("idle prompt tab offers Auto-pipeline and reviews editable criteria before 
   fireEvent.change(description, { target: { value: "## Summary\n\nReviewed **summary**" } });
   fireEvent.blur(description);
   expect(screen.queryByRole("textbox", { name: "Description" }) === null).toBe(true);
-  expect(screen.getByRole("heading", { name: "Summary" })).toBeTruthy();
+  expect(await screen.findByRole("heading", { name: "Summary" })).toBeTruthy();
   expect(screen.getByText("summary").tagName).toBe("STRONG");
   // Criteria live on their own tab.
   expect(screen.queryByLabelText("Criterion 1") === null).toBe(true);
@@ -125,7 +125,7 @@ test("Escape leaves the description editor open as a preview and preserves all d
   fireEvent.keyDown(editor, { key: "Escape", code: "Escape" });
   expect(screen.getByRole("dialog")).toBeTruthy();
   expect(screen.queryByRole("textbox", { name: "Description" }) === null).toBe(true);
-  expect(screen.getByText("Edited").tagName).toBe("STRONG");
+  expect((await screen.findByText("Edited")).tagName).toBe("STRONG");
   expect((screen.getByLabelText("Title") as HTMLInputElement).value).toBe("Edited title");
   expect(node.calls("draft_auto_pipeline")).toHaveLength(1);
   fireEvent.click(screen.getByRole("button", { name: /^Description, rendered/ }));

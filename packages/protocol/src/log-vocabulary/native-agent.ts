@@ -126,7 +126,9 @@ export const NATIVE_AGENT_LOG_AREAS = defineLogAreas({
       "protocol.select-failed":
         "A workflow could not read the OpenCode line setting, so its new session takes 1.x. Error class only.",
       "host-server.ready":
-        "A local environment's 2.x server answered `/api/info` as 2.x. Environment id and pid only.",
+        "A local environment's (or a coordinator conversation's) 2.x server answered `/api/info` as 2.x. Environment id, pid and whether it is a coordinator's only.",
+      "coordinator-research.unavailable":
+        "A coordinator's 2.x server could not register its research servers, so the conversation runs without them until the server restarts. Error class only.",
       "host-server.terminate-failed":
         "A 2.x server that did not become ready could not be stopped; its process entry is kept for shutdown. Error class only.",
       "container-server.launched":

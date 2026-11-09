@@ -23,6 +23,13 @@
  * A container environment is refused here: its 2.x server runs inside the
  * container (`opencode2-container-server.ts`, which routes between the two).
  *
+ * A coordinator runtime gets its own 2.x server in the project checkout,
+ * launched with the coordinator's process authority
+ * (`opencode2/coordinator.ts`): the read-only policy, the data directory to
+ * protect, the research setting, project configuration off, and a
+ * configuration directory holding the coordinator guard plugin. A changed
+ * research setting replaces it once it is idle.
+ *
  * The Orkestrator agent-tools MCP server is not attached yet (phase 5): the
  * 1.x server gets it through its `/mcp` API after start, which 2.x serves
  * only under `/api/experimental`. The backend's own MCP credential is
@@ -38,6 +45,7 @@ import {
   COORDINATOR_CODEX_USER_SKILLS_DIR_ENV,
   COORDINATOR_COMMAND_SANDBOX_ENV,
   COORDINATOR_PROTECTED_DATA_DIR_ENV,
+  coordinatorConversationIdFromRuntimeId,
   coordinatorIdFromRuntimeId,
 } from "@orkestrator/protocol/coordinator";
 import { bugReportIdFromRuntimeId } from "@orkestrator/protocol/bug-report";
@@ -54,7 +62,16 @@ import {
   allocateLocalPort,
   assertLocalServerStartAllowed,
   forwardBridgeOutput,
+  localRuntimeEnvironment,
 } from "./commands-servers.js";
+import { mkdir } from "node:fs/promises";
+import { loadCoordinatorResearch } from "./coordinator-research-context.js";
+import {
+  openCode2CoordinatorLaunchEnv,
+  openCode2CoordinatorPolicy,
+  openCode2CoordinatorSignature,
+  writeOpenCode2CoordinatorConfig,
+} from "./opencode2/coordinator.js";
 import { OpenCode2Client } from "./opencode2/client.js";
 import {
   openCode2ServerKey,
@@ -87,13 +104,35 @@ const WITHHELD_ENV = [
   COORDINATOR_CODEX_USER_SKILLS_DIR_ENV,
 ] as const;
 
-function routeConnection(record: OpenCode2HostServerRecord): OpenCode2RouteConnection {
+function routeConnection(
+  context: CommandContext,
+  environmentId: string,
+  record: OpenCode2HostServerRecord,
+): OpenCode2RouteConnection {
+  const coordinator = record.coordinator;
+  const tools = context.runtime.localServers.openCodeAgentTools;
   return {
     baseUrl: `http://127.0.0.1:${record.port}`,
     password: record.password,
     directory: record.directory,
     generation: `${record.child.pid ?? "?"}:${record.port}`,
+    ...(coordinator
+      ? {
+          coordinator: {
+            ...coordinator,
+            // The credential the conversation's 1.x server was launched with:
+            // that launch issues it and revokes it, so this follows its rotation.
+            controlConnection: () => tools.launchConnection(`local:${environmentId}`),
+          },
+        }
+      : {}),
   };
+}
+
+/** The research setting a coordinator's server is launched with now. */
+async function coordinatorResearch(context: CommandContext) {
+  const research = await loadCoordinatorResearch(context.storage);
+  return { mode: research.mode, servers: research.servers };
 }
 
 /** The running 2.x server's connection, never starting one. */
@@ -106,7 +145,26 @@ export function peekOpenCode2HostServer(
   if (!record || localServers.process(openCode2ServerKey(environmentId)) !== record.child) {
     return undefined;
   }
-  return routeConnection(record);
+  return routeConnection(context, environmentId, record);
+}
+
+/**
+ * Whether a running server still serves what a start now would launch. A
+ * coordinator's server launched with another research setting is replaced,
+ * but only once it is idle: replacing it would end a running turn.
+ */
+async function runningServes(
+  context: CommandContext,
+  environmentId: string,
+  running: OpenCode2RouteConnection | undefined,
+  worktreePath: string,
+): Promise<boolean> {
+  if (!running || running.directory !== worktreePath) return false;
+  if (!coordinatorIdFromRuntimeId(environmentId)) return true;
+  if (!running.coordinator) return false;
+  const signature = openCode2CoordinatorSignature(await coordinatorResearch(context));
+  if (running.coordinator.signature === signature) return true;
+  return (await context.nativeAgents?.hasObservedLiveWork(environmentId, "opencode")) === true;
 }
 
 /** The environment's 2.x server, started when none is running. */
@@ -117,20 +175,32 @@ export async function ensureOpenCode2HostServer(
   assertLocalServerStartAllowed(context, environmentId);
   const worktreePath = await localWorktree(context, environmentId);
   const running = peekOpenCode2HostServer(context, environmentId);
-  if (running && running.directory === worktreePath) return running;
+  if (running && (await runningServes(context, environmentId, running, worktreePath))) {
+    return running;
+  }
   return context.runtime.localServers.enqueueEnvironmentOperation(environmentId, async () => {
     if (context.runtime.localServers.isShuttingDown()) {
       throw new ProviderUnavailableError("Backend is shutting down; OpenCode 2 cannot start");
     }
     const current = peekOpenCode2HostServer(context, environmentId);
-    if (current && current.directory === worktreePath) return current;
+    if (current && (await runningServes(context, environmentId, current, worktreePath))) {
+      return current;
+    }
     return startOpenCode2HostServerUnlocked(context, environmentId);
   });
 }
 
 async function localWorktree(context: CommandContext, environmentId: string): Promise<string> {
-  if (coordinatorIdFromRuntimeId(environmentId) || bugReportIdFromRuntimeId(environmentId)) {
-    throw new ProviderUnavailableError("OpenCode 2 runs only in ordinary local environments");
+  if (bugReportIdFromRuntimeId(environmentId)) {
+    throw new ProviderUnavailableError("OpenCode 2 does not run bug reports");
+  }
+  if (coordinatorIdFromRuntimeId(environmentId)) {
+    // The project checkout, resolved as the coordinator's 1.x server resolves it.
+    const runtime = await localRuntimeEnvironment(environmentId, context);
+    if (!runtime?.worktreePath) {
+      throw new ProviderUnavailableError("The coordinator's project checkout is not available");
+    }
+    return runtime.worktreePath;
   }
   const environment = await context.storage.getEnvironment(environmentId);
   if (!environment) throw new ProviderUnavailableError("The environment no longer exists");
@@ -155,8 +225,14 @@ async function startOpenCode2HostServerUnlocked(
   const directory = await localWorktree(context, environmentId);
   const stale = localServers.process(key);
   if (stale) {
-    // Exited, or serving an old worktree path.
-    await localServers.terminate(key, stale, "replacing OpenCode 2 server: worktree changed");
+    // Exited, serving an old worktree path, or (a coordinator's) an old research setting.
+    await localServers.terminate(
+      key,
+      stale,
+      coordinatorIdFromRuntimeId(environmentId)
+        ? "replacing OpenCode 2 server: worktree or research setting changed"
+        : "replacing OpenCode 2 server: worktree changed",
+    );
     localServers.openCode2.forget(environmentId, stale);
   }
 
@@ -171,8 +247,11 @@ async function startOpenCode2HostServerUnlocked(
   };
   for (const name of WITHHELD_ENV) delete baseEnv[name];
   dropInheritedVendorDebug(baseEnv);
-  // Mirrors the user's global OpenCode configuration as this environment locates it.
-  const configDir = await writeOpenCode2HostConfig(dataDir, baseEnv);
+  // Both mirror the user's global OpenCode configuration as this environment locates it.
+  const coordinator = await coordinatorLaunch(context, environmentId, dataDir, baseEnv);
+  const configDir = coordinator?.configDir ?? (await writeOpenCode2HostConfig(dataDir, baseEnv));
+  // Only a coordinator's launch names these; never one inherited from the backend.
+  Object.assign(baseEnv, coordinator?.env ?? {});
   const launch = openCode2HostLaunch({ cliPath, dataDir, configDir, port, password, baseEnv });
 
   // Shutdown or deletion may have begun while this start awaited the disk.
@@ -192,7 +271,13 @@ async function startOpenCode2HostServerUnlocked(
     throw error;
   }
   localServers.adoptProcess(key, child, { workingDirectory: directory });
-  const record: OpenCode2HostServerRecord = { child, port, password, directory };
+  const record: OpenCode2HostServerRecord = {
+    child,
+    port,
+    password,
+    directory,
+    ...(coordinator ? { coordinator: coordinator.authority } : {}),
+  };
   localServers.reportBridgeStart(key, child);
   forwardBridgeOutput(child, key);
   child.once("exit", (code, signal) => {
@@ -227,6 +312,52 @@ async function startOpenCode2HostServerUnlocked(
   }
   release();
   localServers.openCode2.record(environmentId, record);
-  log.info("host-server.ready", { environmentId, pid: child.pid ?? null });
-  return routeConnection(record);
+  log.info("host-server.ready", {
+    environmentId,
+    pid: child.pid ?? null,
+    coordinator: coordinator !== undefined,
+  });
+  return routeConnection(context, environmentId, record);
+}
+
+/**
+ * A coordinator runtime's launch: its configuration directory (credential
+ * plugin and coordinator guard), process-authority variables and the
+ * authority the backend keeps beside the process. Undefined for any other
+ * environment.
+ */
+async function coordinatorLaunch(
+  context: CommandContext,
+  environmentId: string,
+  dataDir: string,
+  env: NodeJS.ProcessEnv,
+): Promise<
+  | {
+      configDir: string;
+      env: Record<string, string>;
+      authority: NonNullable<OpenCode2HostServerRecord["coordinator"]>;
+    }
+  | undefined
+> {
+  const coordinatorId = coordinatorIdFromRuntimeId(environmentId);
+  if (!coordinatorId) return undefined;
+  const conversationId = coordinatorConversationIdFromRuntimeId(environmentId);
+  if (!conversationId) throw new ProviderUnavailableError("The coordinator runtime is malformed");
+  const research = await coordinatorResearch(context);
+  // Created here, as for the 1.x server: a root that does not exist yet
+  // cannot be resolved, and would read as not allowed.
+  const attachmentRoot = context.storage.coordinators.coordinatorAttachmentDirectory(
+    coordinatorId,
+    conversationId,
+  );
+  await mkdir(attachmentRoot, { recursive: true, mode: 0o700 });
+  return {
+    configDir: await writeOpenCode2CoordinatorConfig(dataDir, env),
+    env: openCode2CoordinatorLaunchEnv({ dataDir, attachmentRoot, research }),
+    authority: {
+      policy: openCode2CoordinatorPolicy(research.mode),
+      research,
+      signature: openCode2CoordinatorSignature(research),
+    },
+  };
 }

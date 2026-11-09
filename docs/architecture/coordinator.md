@@ -918,7 +918,7 @@ capability profile is rated by exactly the same rules as a coordinator.
 | Tier | Meaning | Platforms |
 | --- | --- | --- |
 | `enforced` | The provider or the OS blocks the mutation whatever the agent attempts | Codex; Claude where its command sandbox can run commands (macOS; Linux whose bubblewrap can nest a user namespace, with `socat` on `PATH`); Pi |
-| `provider-configured` | The SDK is told to deny, and exposes no way to verify it | OpenCode, Cursor; Claude where the command sandbox cannot run commands (Windows; Linux without `bwrap` or `socat`, or whose policy refuses the nested namespace, such as Ubuntu's AppArmor `bwrap-userns-restrict`) |
+| `provider-configured` | The SDK is told to deny, and exposes no way to verify it | OpenCode (1.x and the OpenCode 2 preview alike; see below), Cursor; Claude where the command sandbox cannot run commands (Windows; Linux without `bwrap` or `socat`, or whose policy refuses the nested namespace, such as Ubuntu's AppArmor `bwrap-userns-restrict`) |
 | `advisory` | The agent is asked to request permission first; a tool that does not ask is not stopped | Grok |
 
 **Settings → Coordinator → Coordinator safety level** chooses the weakest
@@ -1014,7 +1014,51 @@ which resolves `read`, `grep`, `glob` and `list` paths and refuses the call in
 user sets their own `OPENCODE_CONFIG_DIR`
 ([7402](../todo/coordinator-and-multi-review/7402-opencode-coordinator-user-config-dir.md)).
 Both layers are qualified on the pinned binary with a loopback model
-(`opencode-coordinator-read-boundary-live.test.ts`). Cursor applies the sandbox
+(`opencode-coordinator-read-boundary-live.test.ts`).
+
+Under the OpenCode 2 preview (Settings → OpenCode, "Use OpenCode 2 for new
+sessions") a coordinator conversation started from then on runs on OpenCode
+2.x; one started earlier stays on 1.x (`opencode2/coordinator.ts`). Its 2.x
+server is its own process, keyed by the conversation's runtime id, so the
+boundary is held by that process's launch rather than by any session record:
+
+- It is launched with `ORKESTRATOR_BRIDGE_EXECUTION_POLICY=coordinator-read-only`,
+  the data directory, the research setting of the moment, and
+  `OPENCODE_DISABLE_PROJECT_CONFIG=1`, so the checkout's `opencode.json`,
+  `.opencode/` agents, commands, plugins and MCP servers never load. This is
+  the axis 1.x cannot honour; a changed research setting replaces an idle
+  server, as it replaces the 1.x one.
+- Its configuration directory (`opencode2/coordinator-config` under the data
+  directory, never the ordinary one) holds the coordinator guard plugin
+  (`coordinator-plugin.ts`). In the server process, on every tool call a
+  sub-agent's included, it refuses any tool outside the read-only set, the
+  conversation's control tools and the research servers named at launch,
+  whatever a session's stored rules say, and refuses a `read`, `grep`, `glob`
+  or `list` that would reach the data directory, resolving links (2.2.6, like
+  1.x, judges `external_directory` from the path as written). The checkout and
+  the conversation's attachment directory stay readable.
+- The backend keeps the launch's policy beside the process. The provider built
+  for that server ignores a request's policy and a session's stored base:
+  create, resume, policy synchronization and every turn write the coordinator
+  rules (1.x's, translated) and read them back before the prompt, pin the
+  `plan` agent, and refuse provider commands (2.x does not say which agent a
+  command runs as). The conversation's Control MCP credential, the one its 1.x
+  server was launched with, is registered as the location's `orkestrator`
+  server, and the research servers as theirs.
+
+This is qualified against the pinned 2.2.6 binary with a scripted model
+(`opencode2-coordinator.live.test.ts`): no write, no command, no read of the
+data directory directly, through a link or from a sub-agent, the control and
+research tools reached, a session widened behind the backend's back refused
+by the server and restated by the next turn, and the project configuration
+not loaded where a server without the switch loads it. The tier stays
+`provider-configured`: the live coordinator suite has not been run against
+OpenCode 2 with a real model, the table rates one tier per platform while
+earlier conversations remain on 1.x, and the server process itself runs
+unsandboxed (its boundary is OpenCode's rules plus the in-process gate, not an
+OS sandbox).
+
+Cursor applies the sandbox
 and a tool ban but exposes no approval callback, and is refused outright if its
 sandbox cannot be enabled. Its reading tools still reach the data directory
 ([7400](../todo/coordinator-and-multi-review/7400-cursor-coordinator-data-dir-reads.md)).
@@ -3735,6 +3779,14 @@ guarantee, not by one end-to-end scenario replayed per platform:
   `conformance-coordinator-sandbox-live.test.ts` (claude-bridge)
 - research servers on the pinned OpenCode, with a real `opencode serve` and a
   local MCP server: `opencode-coordinator-research-live.test.ts`
+- a coordinator on the OpenCode 2 preview, against the pinned 2.x binary with a
+  scripted model (`RUN_LIVE_OPENCODE2=1`): no write, command or data-directory
+  read, control and research tools reached, a widened session refused by the
+  server's guard and restated, project configuration off:
+  `opencode2-coordinator.live.test.ts`; the guard's source in
+  `coordinator-plugin.test.ts`, the rules, launch and routing in
+  `coordinator.test.ts`, `opencode2-host-server.test.ts` and
+  `native-agent-opencode-protocol.test.ts`
 - coordinator skills on Codex against the real pinned app-server with a
   loopback model (`RUN_LIVE_CODEX_APP_SERVER=1`): `live-coordinator-skills.test.ts`
   (codex-bridge); the extra roots, read grants and project-skill rule in

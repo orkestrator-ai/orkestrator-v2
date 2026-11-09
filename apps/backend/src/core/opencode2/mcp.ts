@@ -65,7 +65,8 @@ export const MAX_OPENCODE2_TAB_SERVERS = 256;
 
 export interface OpenCode2McpConnection {
   url: string;
-  token: string;
+  /** Absent for a credential-free server (a coordinator's research servers). */
+  token?: string;
 }
 
 export interface OpenCode2McpDependencies {
@@ -111,6 +112,14 @@ export class OpenCode2McpServers {
       url: new URL(ORKESTRATOR_ARTIFACT_MCP_PATH, origin).toString(),
       token: grant,
     });
+  }
+
+  /**
+   * Register (or re-register on a new token) a server under its own name: a
+   * coordinator's control and research servers, on a coordinator's server.
+   */
+  ensureServer(name: string, connection: OpenCode2McpConnection): Promise<void> {
+    return this.ensure(name, connection);
   }
 
   /** Register the environment's workflow-result broker connection. */
@@ -171,7 +180,7 @@ export class OpenCode2McpServers {
   }
 
   private ensure(name: string, connection: OpenCode2McpConnection): Promise<void> {
-    const key = `${connection.url}\0${connection.token}`;
+    const key = `${connection.url}\0${connection.token ?? ""}`;
     const pending = this.pending.get(name);
     if (pending?.key === key) return pending.promise;
     const promise = (async () => {
@@ -186,7 +195,7 @@ export class OpenCode2McpServers {
       await this.client.putMcpServer(name, {
         type: "remote",
         url: connection.url,
-        headers: { Authorization: `Bearer ${connection.token}` },
+        ...(connection.token ? { headers: { Authorization: `Bearer ${connection.token}` } } : {}),
         oauth: false,
         codemode: false,
         // Orkestrator's endpoint is on this host; never wait OpenCode's default.

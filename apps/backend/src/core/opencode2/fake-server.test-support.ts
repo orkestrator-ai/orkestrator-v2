@@ -122,9 +122,14 @@ export class FakeOpenCode2Server {
     });
   }
 
+  /** Where the fake listens, for a test that builds its own connection. */
+  get baseUrl(): string {
+    return `http://127.0.0.1:${this.server.port}`;
+  }
+
   client(): OpenCode2Client {
     return new OpenCode2Client({
-      baseUrl: `http://127.0.0.1:${this.server.port}`,
+      baseUrl: this.baseUrl,
       password: "pw",
       directory: "/work",
       timeoutMs: 2_000,
@@ -286,7 +291,7 @@ export class FakeOpenCode2Server {
         model: body?.model,
         ...(body?.permissions ? { rules: body.permissions as unknown[] } : {}),
         ...(body?.metadata ? { metadata: body.metadata as Record<string, unknown> } : {}),
-        agent: "build",
+        agent: typeof body?.agent === "string" ? body.agent : "build",
         permissions: [],
         forms: [],
         replies: [],

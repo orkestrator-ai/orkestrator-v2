@@ -80,10 +80,28 @@ export function openCode2CreateMetadata(input: {
   return { orkestrator: marker };
 }
 
+/**
+ * Rules held by the server's launch rather than by the session: a
+ * coordinator's server (`coordinator.ts`). When present they replace the
+ * session's stored base and reviewer marker on every write, so neither a
+ * persisted record nor a request can widen a session there.
+ */
+export interface OpenCode2RuleAuthority {
+  rules(): Promise<OpenCode2PermissionRule[]>;
+}
+
 export class OpenCode2TurnGrants {
   private readonly locks = new Map<string, Promise<unknown>>();
 
-  constructor(private readonly client: OpenCode2Client) {}
+  constructor(
+    private readonly client: OpenCode2Client,
+    private readonly authority?: OpenCode2RuleAuthority,
+  ) {}
+
+  /** The base a session's rules start from: the authority's, or its stored marker's. */
+  private base(marker: OpenCode2SessionMarker): Promise<OpenCode2PermissionRule[]> {
+    return this.authority ? this.authority.rules() : Promise.resolve(marker.base ?? []);
+  }
 
   /**
    * Run `operation` exclusively for one session: grants, prompts and
@@ -105,9 +123,10 @@ export class OpenCode2TurnGrants {
     try {
       const session = await this.client.getSession(sessionId);
       const marker = readMarker(session);
-      const base = marker.base ?? [];
+      const base = await this.base(marker);
+      // An authority's server never runs a reviewer's shell rules, whatever the record says.
       const reviewPolicy =
-        turn.readOnly && turn.reviewShellPolicy && marker.reviewer
+        turn.readOnly && turn.reviewShellPolicy && marker.reviewer && !this.authority
           ? turn.reviewShellPolicy
           : undefined;
       const input = { ...turn, ...(reviewPolicy ? { reviewPolicy } : {}) };
@@ -117,6 +136,7 @@ export class OpenCode2TurnGrants {
         const owned = marker.turn && !marker.turn.settled;
         if (!owned && sameOpenCode2Rules(readOpenCode2Rules(session.permissions), steady)) return;
         await this.write(session, steady, owned ? { ...marker.turn!, settled: true } : marker.turn);
+        if (this.authority) await this.verify(sessionId, steady);
         return;
       }
       const rules = openCode2TurnRules(base, sessionId, input);
@@ -170,8 +190,66 @@ export class OpenCode2TurnGrants {
     await this.restore(session, marker);
   }
 
+  /**
+   * Put the steady rules back on a session that holds no grant: a policy
+   * synchronization, a resume. A held grant is left to its own settlement,
+   * which restores the same steady rules. The caller holds the lock.
+   */
+  async restate(sessionId: string): Promise<void> {
+    try {
+      const session = await this.client.getSession(sessionId);
+      const marker = readMarker(session);
+      if (marker.turn && !marker.turn.settled) return;
+      const steady = openCode2SteadyRules(await this.base(marker), sessionId);
+      if (sameOpenCode2Rules(readOpenCode2Rules(session.permissions), steady)) return;
+      await this.write(session, steady, marker.turn);
+      await this.verify(sessionId, steady);
+    } catch (error) {
+      if (error instanceof OpenCode2RequestError && error.status === 404) {
+        throw new PromptRejectedError("The OpenCode 2 session was not found");
+      }
+      throw new ProviderDispatchPreparationError("OpenCode 2 session permissions are unavailable", {
+        cause: error,
+      });
+    }
+  }
+
+  /**
+   * Replace a session's stored base (a new execution policy, outside an
+   * authority's server), then {@link restate} it. A held grant keeps its
+   * rules until it settles, and settles to the new base. The caller holds
+   * the lock.
+   */
+  async rebase(sessionId: string, base: OpenCode2PermissionRule[]): Promise<void> {
+    if (this.authority) return this.restate(sessionId);
+    try {
+      const session = await this.client.getSession(sessionId);
+      const metadata = session.metadata ?? {};
+      const current = asRecord(metadata.orkestrator) ?? {};
+      const { base: _previous, ...rest } = current;
+      await this.client.updateSession(sessionId, {
+        metadata: { ...metadata, orkestrator: { ...rest, ...(base.length > 0 ? { base } : {}) } },
+      });
+    } catch (error) {
+      if (error instanceof OpenCode2RequestError && error.status === 404) {
+        throw new PromptRejectedError("The OpenCode 2 session was not found");
+      }
+      throw new ProviderDispatchPreparationError("OpenCode 2 session permissions are unavailable", {
+        cause: error,
+      });
+    }
+    await this.restate(sessionId);
+  }
+
+  private async verify(sessionId: string, rules: readonly OpenCode2PermissionRule[]) {
+    const persisted = await this.client.getSession(sessionId);
+    if (!sameOpenCode2Rules(readOpenCode2Rules(persisted.permissions), rules)) {
+      throw new Error("The session's permission rules were not persisted");
+    }
+  }
+
   private async restore(session: OpenCode2Session, marker: OpenCode2SessionMarker): Promise<void> {
-    const steady = openCode2SteadyRules(marker.base ?? [], session.id);
+    const steady = openCode2SteadyRules(await this.base(marker), session.id);
     await this.write(session, steady, { ...marker.turn!, settled: true });
     const persisted = readMarker(await this.client.getSession(session.id));
     if (persisted.turn?.settled !== true) {

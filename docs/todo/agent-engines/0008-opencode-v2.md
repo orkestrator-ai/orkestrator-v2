@@ -14,7 +14,7 @@ Status rechecked 2026-10-30 against `main` at `cd7bbe3e5`, and task 2 again on 2
 2. **Readiness gate and start decision**: decide when the 2.x work may start, using the gate's open conditions. Status: open (trigger decided; still blocked at 2.2.2 by storage policy, per-prompt model/agent/tools and structured output, runtime-context gaps, stale-turn guard, bounded inbox and experimental MCP endpoints; rechecked at the 1.19.5 upgrade on 2026-10-30, still 2.2.2 and unchanged, see [1020](1020-provider-upgrade-2026-10-30.md) task 8; rechecked 2026-11-06 against 2.2.5, still closed, see [1031](1031-provider-upgrade-2026-11-06.md) task 7; rechecked 2026-11-08 against 2.2.6, unchanged. On 2026-11-08 the owner asked to move: steering is required and undo may be dropped. Accepting the other open conditions with the mitigations under "Task 2: owner decision" is proposed but not yet confirmed).
 3. **Legacy 1.x session policy**: keep, migrate or retire existing 1.x sessions when 2.x arrives (open question 1, code item 5). Status: done as a decision (keep on a pinned 1.x binary with its own database); the routing code is open (depends on 5).
 4. **Losses to decide**: rebuild, capability-gate or drop each of the eight listed losses (code item 3, open question 2). Status: done as decisions (share dropped with 1.19.1; the rest decided below); the code is open (depends on 5).
-5. **`opencode2` provider**: a second provider with its own binary pin, `OPENCODE_DB`, `@opencode/client`, persisted protocol marker, snapshot-plus-hints projection and native steer/queue (code items 1, 2 and 4). Status: in progress (phase 1 of the "Build plan" done 2026-11-08; phase 2's toolchain half, the `opencode2` 2.2.6 pin, done 2026-11-08; phase 3 done for host environments on 2026-11-08: the opt-in setting, the session marker, the host 2.x server and per-session routing, with steer on for 2.x sessions; containers done on 2026-11-09 for images that carry `opencode2` (see "Task 5 and 6: container server and GitHub-token plugin"); phase 4 (interaction cards, full transcript, paging, usage) done on 2026-11-09, see "Task 5: phase 4 interactions, transcript and usage"; on 2026-11-09 phase 5's MCP, workflow results, structured output, read-only turns and the move of build pipelines, Multi Review and graph agent nodes under the same switch, see "Task 5: phase 5 MCP, results, read-only turns and workflows"; and on 2026-11-09 phase 5's session features (sign-in on both lines, the 2.x catalogue and effort, attachments, slash commands, Plan/Build, compact, undo/redo, fork, resume, titles, to-dos), see "Task 5: phase 5 session features"; on 2026-11-09 workflows in containers, graph describe/goal verifier/subork sessions, and artifact grants, the design connection and worker mail on 2.x turns, see "Task 5: phase 5 workflows in containers, describe/verifier/subork sessions and per-turn connections"; on 2026-11-09 the user's global OpenCode configuration (MCP servers above all) on host and container 2.x servers, see "Task 5: phase 5 the user's global configuration"; open: coordinators, resume-picker archive, and phase 6 (qualification and default); see "Task 5: phase 3 routing and preview setting").
+5. **`opencode2` provider**: a second provider with its own binary pin, `OPENCODE_DB`, `@opencode/client`, persisted protocol marker, snapshot-plus-hints projection and native steer/queue (code items 1, 2 and 4). Status: in progress (phase 1 of the "Build plan" done 2026-11-08; phase 2's toolchain half, the `opencode2` 2.2.6 pin, done 2026-11-08; phase 3 done for host environments on 2026-11-08: the opt-in setting, the session marker, the host 2.x server and per-session routing, with steer on for 2.x sessions; containers done on 2026-11-09 for images that carry `opencode2` (see "Task 5 and 6: container server and GitHub-token plugin"); phase 4 (interaction cards, full transcript, paging, usage) done on 2026-11-09, see "Task 5: phase 4 interactions, transcript and usage"; on 2026-11-09 phase 5's MCP, workflow results, structured output, read-only turns and the move of build pipelines, Multi Review and graph agent nodes under the same switch, see "Task 5: phase 5 MCP, results, read-only turns and workflows"; and on 2026-11-09 phase 5's session features (sign-in on both lines, the 2.x catalogue and effort, attachments, slash commands, Plan/Build, compact, undo/redo, fork, resume, titles, to-dos), see "Task 5: phase 5 session features"; on 2026-11-09 workflows in containers, graph describe/goal verifier/subork sessions, and artifact grants, the design connection and worker mail on 2.x turns, see "Task 5: phase 5 workflows in containers, describe/verifier/subork sessions and per-turn connections"; on 2026-11-09 the user's global OpenCode configuration (MCP servers above all) on host and container 2.x servers, see "Task 5: phase 5 the user's global configuration"; on 2026-11-09 coordinators under the same switch, on their own 2.x server with the read-only policy as process authority, tier left `provider-configured`, see "Task 5: coordinators on 2.x"; open: a live-model run of the coordinator suite on 2.x, resume-picker archive, and phase 6 (qualification and default); see "Task 5: phase 3 routing and preview setting").
 6. **Changes that must ship with the first 2.x pin**: health probe on `/api/info` rejecting HTML, isolated `OPENCODE_DB` on host and container, GitHub-token plugin ported to `@opencode/plugin`, provider sign-in moved to `/api/credential`, live tests off `serve --pure`. Status: partly done (`checkHttpHealth` refuses HTML since 2026-10-30; the compatibility probe no longer uses `--pure`; since 2026-11-08 the 1.x host falls back to its own `OPENCODE_DB` when the shared database has no `session` table; the 2.x binary is pinned from the npm platform tarballs and launched with its own `OPENCODE_DB`, `/api/info` health and a 2.x credential plugin for opted-in host sessions since 2026-11-08; since 2026-11-09 the container 2.x server, with its own `opencode2.db` on the persistent mount, the GitHub-token plugin ported to the 2.x shape, and sign-in mirrored into 2.x's credential store). Done.
 7. **Qualification of the first 2.x pin**: the live probe, background, replay and capability checks listed under "Qualification". Status: open (depends on 5).
 8. **Session V2 features after the move**: steer/queue, `switchAgent`/`switchModel`, context, log replay, staged revert, saved rules, credential/integration sign-in, `reference.list`. Status: open (depends on 5).
@@ -769,7 +769,7 @@ users until phase 3 routes new sessions to it.
      2.x, graph describe, goal verifier and subork sessions, and artifact
      grants, the design connection and worker mail on 2.x turns (see "Task
      5: phase 5 workflows in containers, describe/verifier/subork sessions
-     and per-turn connections"). Still open in this phase: coordinators.
+     and per-turn connections"). Coordinators: done on 2026-11-09 (see "Task 5: coordinators on 2.x").
    - **The user's global configuration: done on 2026-11-09, host and
      container** (branch `opencode2-globalcfg-flake`; see "Task 5: phase 5
      the user's global configuration"). Orkestrator's 2.x config directory
@@ -1620,7 +1620,8 @@ Decisions:
   prompt, its research MCP server, the read-only policy honoured as process
   authority across restarts, and `synchronizeSessionPolicy`, none of which a
   2.x session does yet; `coordinator-providers.ts` is unchanged, and no
-  `enforced` tier is claimed for 2.x.
+  `enforced` tier is claimed for 2.x. (Moved on 2026-11-09; see "Task 5:
+  coordinators on 2.x".)
 - **Graph describe, goal verifier and suborks.** Not moved: they build their
   own `GraphAgentProviders` without `openCode2Workflow`. They need nothing
   missing; adding the dependency in `index.ts` moves them. **Moved on
@@ -2210,6 +2211,159 @@ during that turn (carry the selection rules into `openCode2TurnRules`); the
 container mirror was run with the host's Bun 1.4.4 against a temporary
 directory, not inside a real container image; a backend
 `OPENCODE_CONFIG_DIR` is not read by 2.x.
+
+### Task 5: coordinators on 2.x (2026-11-09)
+
+Branch `opencode2-coordinators`, from `5ed139cfc`. Owner decision 4 applied:
+the preview switch now moves coordinators too. Living description:
+[coordinator.md](../../architecture/coordinator.md#provider-qualification)
+(the OpenCode 2 paragraph under "Provider qualification").
+
+What exists now:
+
+- **Routing.** A new coordinator session takes 2.x when the setting says
+  `v2`, a 2.x host exists, and the request is exactly the trusted coordinator
+  shape for a coordinator runtime (origin `coordinator`, owner the runtime's
+  coordinator, `coordinator-read-only`); `newOpenCodeCoordinatorSessionProtocol`
+  in `opencode2/coordinator.ts`, called first by
+  `selectNewOpenCodeSessionProtocol`. Existing conversations keep 1.x.
+- **Its own server.** `ensureOpenCode2HostServer` now serves a coordinator
+  runtime id (bug reports stay refused): the project checkout, a separate
+  configuration directory (`opencode2/coordinator-config`, credential plugin
+  plus the coordinator guard), and the launch variables
+  `ORKESTRATOR_BRIDGE_EXECUTION_POLICY=coordinator-read-only`,
+  `ORKESTRATOR_COORDINATOR_PROTECTED_DATA_DIR`, the attachment root, the
+  research setting and `OPENCODE_DISABLE_PROJECT_CONFIG=1`. The host record
+  keeps the launch's policy and research (`coordinator` on
+  `OpenCode2HostServerRecord`), the route connection carries it, and a
+  changed research setting replaces the server once it is idle. It stops with
+  the conversation's 1.x server, as every 2.x server does.
+- **Guard plugin** (`opencode2/coordinator-plugin.ts`). Active only under the
+  policy variable. A tool allowlist (read-only built-ins, search per the
+  launch's research mode, the control tools by exact id, the launch's research
+  servers by namespace) and the data-directory read check, ported from 1.x
+  for 2.2.6's tool names (`read` takes `path`) and its
+  `ctx.tool.hook("execute.before")` event, plus absolute `glob` patterns.
+- **Provider authority** (`OpenCode2CoordinatorSessions`, and
+  `OpenCode2TurnGrants`' new rule authority). On a coordinator's server the
+  provider ignores a request's policy and a session's stored base and
+  reviewer marker: create (as `plan`), resume, fork, policy synchronization
+  and every turn write 1.x's coordinator rules, translated, and read them
+  back; a write that does not persist refuses the turn. Every prompt runs as
+  `plan` (read back), a selected provider command is refused, typed slash
+  text goes as text, and the command catalogue is `unsupported`.
+- **Tools.** The control credential is the one the conversation's 1.x server
+  was launched with (`openCodeAgentTools.launchConnection`), registered as the
+  location's `orkestrator` server before each turn (re-registered when it
+  rotates). Research servers are registered once per server generation and
+  allowed by exact id (`openCodeResearchToolIds`, shared with 1.x; at most
+  256 ids).
+- **`synchronizeSessionPolicy` for 2.x.** The router delegates; a
+  coordinator's server restates its rules and refuses any other policy, an
+  ordinary server records the policy as the session's base and restates.
+- **Provider pruning.** The launch scan disposed every provider whose id has
+  no environment row, so a coordinator's provider (and a bug report's) was
+  disposed while an ensure still held it; the 2.x cold start made that
+  visible (`OpenCode provider was disposed` on the first coordinator session,
+  observed in the real-stack run). Runtime ids whose coordinator conversation
+  or bug report still resolves now count as live
+  (`native-agent-runtime-liveness.ts`).
+- **Qualification.** `coordinator-providers.ts` is unchanged and OpenCode
+  stays `provider-configured`; the reason in `capability-enforcement.ts` now
+  says a coordinator under the preview runs without project configuration
+  behind a server-side gate that is not yet qualified with a live model.
+
+Decisions:
+
+- **Where a coordinator's 2.x server gets its process authority.**
+  - **A separate 2.x server per coordinator conversation, keyed by its runtime
+    id, launched with the authority (implemented).** Pros: mirrors the 1.x
+    coordinator server and every bridge; the policy, the data directory and
+    project configuration off are process-wide facts that no request can
+    change; the guard can refuse whatever the stored rules say; the existing
+    stop, shutdown and reaping paths cover it. Cons: one more process per open
+    OpenCode coordinator conversation; a cold start on its first turn.
+  - **The project home environment's 2.x server.** Cons: shared with the
+    user's own tabs in the same checkout, so the read-only launch would apply
+    to them or not at all; project configuration cannot be off for one
+    session.
+  - **Session rules only, on any server.** Cons: the rules live in a database
+    that a persisted record or a request could widen; no process authority.
+  - Recommendation: the first.
+- **Which credential the control tools use.**
+  - **The 1.x launch's scoped credential (implemented).** Pros: no second
+    issuance (issuing one revokes the conversation's other credentials);
+    follows its rotation and revocation. Cons: the 2.x coordinator depends on
+    its 1.x server being running, which the provider registry already
+    ensures for every coordinator call.
+  - **Issue a second credential at 2.x launch.** Cons:
+    `issueCoordinatorCredential` revokes the conversation's other credentials,
+    so each launch would break the other server's tools.
+  - Recommendation: the first.
+- **The tier.**
+  - **Keep `provider-configured`, with the reason naming what 2.x adds and
+    what is not qualified (implemented).** Pros: honest: the live coordinator
+    suite has not run against 2.x with a real model, the table has one tier per
+    platform while earlier conversations stay on 1.x, and the server process
+    runs unsandboxed. Cons: undersells a 2.x coordinator, which holds every
+    axis 1.x does not.
+  - **A separate 2.x qualification at `enforced`.** Pros: closer to what the
+    code holds (comparable to Pi's in-process gate). Cons: requires the live
+    suite on 2.x and a per-line tier the picker cannot show today; claiming it
+    without the live run breaks coordinator.md's rule.
+  - Recommendation: the first, until `mise run test:agent:coordinator
+    --credential-source opencode` passes with the preview on and the table can
+    tell lines apart.
+- **Provider commands on a 2.x coordinator.**
+  - **Refused, catalogue `unsupported` (implemented).** Pros: 2.x's command
+    list does not say which agent a command runs as, so the `plan` pin could
+    not be checked; the session rules would still hold. Cons: `/review` and
+    friends are unavailable to an OpenCode 2 coordinator.
+  - **Allowed, relying on the session rules.** Cons: a command may switch the
+    agent for its run; the pin would be advisory.
+  - Recommendation: the first.
+- **Sub-agents.** Left allowed, as on 1.x: a child session takes its
+  parent's rules (verified on 2.2.6) and runs behind the same guard.
+
+Evidence: unit tests (`coordinator.test.ts`, `coordinator-plugin.test.ts`,
+`routing-provider.test.ts`, `opencode2-host-server.test.ts`,
+`native-agent-opencode-protocol.test.ts`, `native-agent-runtime-liveness.test.ts`,
+`native-agent-provider-registry.test.ts`) and
+`opencode2-coordinator.live.test.ts` against the real 2.2.6 binary with a
+scripted model: no write and no command; the data directory refused directly,
+through a link, by `grep` and from a sub-agent; the control tool reached with
+the conversation's credential and the research server's tool reached; a
+session whose stored rules were widened to allow everything (and switched to
+`build`) is refused a command by the server's guard and restated by the next
+turn; a wider policy refused; a plugin and a local MCP server in the
+checkout's configuration not loaded, where the same configuration loads under
+a server without the switch.
+
+Real stack, 2026-11-09, throwaway profile `oc2-w3-coord` (`dev:test --fixture
+--agent-platforms opencode --no-agent-credentials`, since stopped and reset):
+with the setting on, a new main coordinator conversation assigned to OpenCode
+recorded `openCodeProtocol: "v2"` and started its own 2.x server
+(`host-server.ready coordinator=true`); one turn on OpenCode's free
+`opencode/big-pickle` asked to read `README.md`, write a file, run `touch`,
+read the profile's `config.json` and call `list_environments`. It read the
+README, had no write or shell tool, got the guard's data-directory refusal,
+listed environments through Control MCP, and the checkout was unchanged.
+Before the pruning fix the same flow failed at session creation with
+`OpenCode provider was disposed`.
+
+Not done: the live coordinator suite against 2.x with a real credential
+(`test:agent:coordinator`), delegation round trips and research tools against
+a real remote server on 2.x, a backend restart mid-conversation on the real
+stack (covered only by the unit test that restates rules on resume and every
+turn), and the user's own `OPENCODE_CONFIG_DIR` (ignored by the 2.x launch,
+which always sets its own).
+
+Integrated with "Task 5: phase 5 the user's global configuration": a
+coordinator's own configuration directory also mirrors the user's global
+OpenCode configuration (without plugins), so a 2.x coordinator sees the same
+providers, models and `AGENTS.md` as a 1.x one. The guard plugin still
+refuses every tool outside the read-only set, so the user's MCP servers load
+but their tools are refused, as the session rules already did.
 
 ## Related
 

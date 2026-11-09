@@ -73,7 +73,8 @@ export function resolveOpenCode2CommandDispatch(
   prompt: string,
   options: Pick<ProviderSendOptions, "command" | "allowProviderCommands" | "schema" | "readOnly">,
 ): Promise<OpenCodeCommandDispatch | null> {
-  // 2.x sessions carry no coordinator agent: coordinators stay on 1.x.
+  // No coordinator agent here: a coordinator's 2.x provider refuses every
+  // selected command before this runs (`coordinator.ts`).
   return resolveOpenCodeCommandDispatch(registry, prompt, options, undefined);
 }
 

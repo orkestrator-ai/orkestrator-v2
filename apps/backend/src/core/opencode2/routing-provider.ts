@@ -81,6 +81,7 @@ import type { OpenCodeProvider } from "../opencode-provider.js";
 import { OpenCode2Client, type OpenCode2Connection } from "./client.js";
 import { OPENCODE2_EVIDENCE_SCAN_LIMIT, OpenCode2Provider } from "./provider.js";
 import type { OpenCode2SessionState } from "./session-state.js";
+import type { OpenCode2CoordinatorAuthority } from "./coordinator.js";
 import { openCode2ResumeSessionId } from "./sessions.js";
 import type { OpenCode2WorkerMailbox } from "./turn-connections.js";
 import { normalizeOpenCode2Transcript } from "./transcript.js";
@@ -107,6 +108,11 @@ export const OPENCODE2_CAPABILITY_LIMITS: ProviderCapabilityLimits = {
 /** One 2.x server generation: a new port or password is a new generation. */
 export interface OpenCode2RouteConnection extends OpenCode2Connection {
   generation: string;
+  /**
+   * Set when the server is a coordinator's: the policy and research it was
+   * launched with, which every session on it runs under (`coordinator.ts`).
+   */
+  coordinator?: OpenCode2CoordinatorAuthority;
 }
 
 export interface OpenCodeRoutingDependencies {
@@ -130,7 +136,7 @@ export interface OpenCodeRoutingDependencies {
    */
   recordSession?(sessionId: string): Promise<void>;
   /** Builds the 2.x provider for one server generation (tests substitute it). */
-  createProvider?(client: OpenCode2Client): OpenCode2Provider;
+  createProvider?(client: OpenCode2Client, connection: OpenCode2RouteConnection): OpenCode2Provider;
   /** The user's `openCodeModelProviders`, normalized; shapes the 2.x model picker. */
   allowedModelProviders?(): Promise<readonly string[]>;
   /**
@@ -598,8 +604,8 @@ export class OpenCodeRoutingProvider implements NativeAgentRuntimeProvider {
     policy: NativeAgentExecutionPolicy,
   ): Promise<void> {
     if ((await this.lineOf(sessionId)) === "v2") {
-      // Interactive 2.x sessions only; a coordinator's read-only policy never reaches one.
-      throw new PromptRejectedError("OpenCode 2 sessions do not take an execution policy yet");
+      // A coordinator's server applies its launch's rules and refuses any other policy.
+      return (await this.requireV2()).synchronizeSessionPolicy(sessionId, policy);
     }
     return this.legacy.synchronizeSessionPolicy(sessionId, policy);
   }
@@ -743,10 +749,11 @@ export class OpenCodeRoutingProvider implements NativeAgentRuntimeProvider {
     const allowedModelProviders = this.deps.allowedModelProviders?.bind(this.deps);
     const workerMailbox = this.deps.workerMailbox;
     const provider =
-      this.deps.createProvider?.(client) ??
+      this.deps.createProvider?.(client, connection) ??
       new OpenCode2Provider(client, {
         ...(allowedModelProviders ? { allowedModelProviders } : {}),
         ...(workerMailbox ? { workerMailbox } : {}),
+        ...(connection.coordinator ? { coordinator: connection.coordinator } : {}),
       });
     this.current = { generation: connection.generation, provider };
     for (const [sessionId, line] of this.lines) {

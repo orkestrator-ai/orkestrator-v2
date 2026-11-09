@@ -14,12 +14,19 @@
  */
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { OpenCodeHostStartGate } from "../opencode-host-start.js";
+import type { OpenCode2CoordinatorAuthority } from "./coordinator.js";
 
 export interface OpenCode2HostServerRecord {
   child: ChildProcessWithoutNullStreams;
   port: number;
   password: string;
   directory: string;
+  /**
+   * A coordinator's server only: the policy and research it was launched
+   * with (`opencode2/coordinator.ts`). Process authority, held here beside
+   * the process rather than in any session record.
+   */
+  coordinator?: Omit<OpenCode2CoordinatorAuthority, "controlConnection">;
 }
 
 export function openCode2ServerKey(environmentId: string): string {

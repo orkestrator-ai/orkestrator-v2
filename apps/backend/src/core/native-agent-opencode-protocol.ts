@@ -6,8 +6,9 @@
  * stored on its record (`openCodeProtocol: "v2"`). Only new interactive tabs
  * of an ordinary local environment, or of a container environment whose image
  * runs 2.x (`containerRunsOpenCode2`), take 2.x, and only while the setting
- * asks for it: coordinators create their sessions with other origins or
- * owners, and a container from an older image stays on 1.x. Everything else,
+ * asks for it; a container from an older image stays on 1.x. A new
+ * coordinator conversation's session takes 2.x under the same setting, on
+ * its own coordinator server (`opencode2/coordinator.ts`). Everything else,
  * every existing record included, is 1.x.
  *
  * Workflows (build pipelines, Multi Review, graph agent nodes, graph
@@ -30,6 +31,9 @@ import type { OpenCode2SessionsStorage } from "./storage-opencode2-sessions.js";
 import type { OpenCodeRoutingDependencies } from "./opencode2/routing-provider.js";
 import type { OpenCode2WorkerMailbox } from "./opencode2/turn-connections.js";
 import type { NativeAgentServiceOptions } from "./native-agent-service-shared.js";
+import { coordinatorIdFromRuntimeId } from "@orkestrator/protocol/coordinator";
+import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
+import { newOpenCodeCoordinatorSessionProtocol } from "./opencode2/coordinator.js";
 
 /** What the selection reads of an environment. */
 export type OpenCode2SessionEnvironment = Pick<
@@ -42,6 +46,7 @@ export interface NewOpenCodeSessionInput {
   origin?: AgentInteractionOrigin;
   owner?: AgentSessionOwner;
   executionPolicy?: string;
+  policy?: NativeAgentExecutionPolicy;
 }
 
 /** `"v2"` when a session created now should run on OpenCode 2.x, else undefined (1.x). */
@@ -77,6 +82,11 @@ export async function selectNewOpenCodeSessionProtocol(
 ): Promise<"v2" | undefined> {
   if (input.agent !== "opencode" || !options.openCode2HostServer) return undefined;
   try {
+    // A coordinator runtime is no stored environment; its own rules decide.
+    if (coordinatorIdFromRuntimeId(input.environmentId)) {
+      const config = await storage.loadConfig();
+      return newOpenCodeCoordinatorSessionProtocol(input, config.global.openCodeProtocol, true);
+    }
     const [environment, config] = await Promise.all([
       storage.getEnvironment(input.environmentId),
       storage.loadConfig(),

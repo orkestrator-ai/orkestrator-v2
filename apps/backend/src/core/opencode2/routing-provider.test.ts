@@ -14,6 +14,7 @@ import {
   type OpenCode2RouteConnection,
 } from "./routing-provider.js";
 import type { OpenCode2Message } from "./types.js";
+import { openCode2CoordinatorPolicy, openCode2CoordinatorSignature } from "./coordinator.js";
 
 let server: FakeOpenCode2Server | undefined;
 let router: OpenCodeRoutingProvider | undefined;
@@ -381,5 +382,41 @@ describe("openCode2TurnTerminalError", () => {
       ProviderUnavailableError,
     );
     expect(openCode2TurnTerminalError([user("a", "other")], "r")).toBeNull();
+  });
+});
+
+describe("a coordinator's 2.x server through the router", () => {
+  test("the server's launch authority reaches the provider it builds, and policy synchronization goes to it", async () => {
+    server = new FakeOpenCode2Server();
+    const { provider: legacy } = fakeLegacy();
+    const research = { mode: "off" as const, servers: [] };
+    const connection: OpenCode2RouteConnection = {
+      baseUrl: server.baseUrl,
+      password: "pw",
+      directory: "/work",
+      generation: "coordinator-g1",
+      coordinator: {
+        policy: openCode2CoordinatorPolicy("off"),
+        research,
+        signature: openCode2CoordinatorSignature(research),
+        controlConnection: () => undefined,
+      },
+    };
+    router = new OpenCodeRoutingProvider(legacy, {
+      connection: async () => connection,
+      persistedProtocol: async () => undefined,
+    });
+    const id = await router.createSession("coordinator", "Coordinator", {
+      openCodeProtocol: "v2",
+      policy: openCode2CoordinatorPolicy("off"),
+    });
+    const session = server.sessions.get(id)!;
+    expect(session.agent).toBe("plan");
+    session.rules = [{ action: "*", resource: "*", effect: "allow" }];
+    await router.synchronizeSessionPolicy(id, openCode2CoordinatorPolicy("off"));
+    expect((session.rules as Array<{ effect: string }>)[0]?.effect).toBe("deny");
+    await expect(
+      router.synchronizeSessionPolicy(id, { ...openCode2CoordinatorPolicy("off"), id: "pipeline" }),
+    ).rejects.toThrow(PromptRejectedError);
   });
 });

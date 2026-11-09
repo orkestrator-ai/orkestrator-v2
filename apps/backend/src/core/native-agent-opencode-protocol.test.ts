@@ -9,6 +9,7 @@ import {
   sessionTakesAgentTools,
 } from "./native-agent-opencode-protocol.js";
 import type { PersistedNativeAgentSession } from "./models.js";
+import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 
 const local = { environmentType: "local" as const };
 
@@ -136,6 +137,47 @@ describe("selectNewOpenCodeSessionProtocol", () => {
         storage("containerized"),
         { openCode2HostServer: host },
         input,
+      ),
+    ).toBe(undefined);
+  });
+
+  test("a trusted coordinator session takes 2.x under the switch, without an environment record", async () => {
+    const runtime = coordinatorRuntimeId("c1", "conv-1");
+    const coordinator = {
+      agent: "opencode",
+      environmentId: runtime,
+      origin: "coordinator" as const,
+      owner: { kind: "coordinator" as const, projectId: "p", coordinatorId: "c1" },
+      executionPolicy: "coordinator-read-only",
+    };
+    const host = async () => undefined;
+    const noEnvironment = (setting: string) => ({
+      getEnvironment: async () => null,
+      loadConfig: async () => ({ global: { openCodeProtocol: setting } }),
+    });
+    expect(
+      await selectNewOpenCodeSessionProtocol(
+        noEnvironment("v2"),
+        { openCode2HostServer: host },
+        coordinator,
+      ),
+    ).toBe("v2");
+    expect(
+      await selectNewOpenCodeSessionProtocol(
+        noEnvironment("legacy"),
+        { openCode2HostServer: host },
+        coordinator,
+      ),
+    ).toBe(undefined);
+    // No 2.x host, or not the trusted shape: 1.x.
+    expect(await selectNewOpenCodeSessionProtocol(noEnvironment("v2"), {}, coordinator)).toBe(
+      undefined,
+    );
+    expect(
+      await selectNewOpenCodeSessionProtocol(
+        noEnvironment("v2"),
+        { openCode2HostServer: host },
+        { ...coordinator, origin: "interactive-native" },
       ),
     ).toBe(undefined);
   });

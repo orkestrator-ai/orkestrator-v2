@@ -14,6 +14,8 @@ import type { CommandContext } from "./commands-context.js";
 import { LocalServerRuntime } from "./local-server-runtime.js";
 import { ensureOpenCode2HostServer, peekOpenCode2HostServer } from "./opencode2-host-server.js";
 import { openCode2ServerKey } from "./opencode2/host-server-state.js";
+import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
+import { bugReportRuntimeId } from "@orkestrator/protocol/bug-report";
 
 const FAKE_SERVER = `
 const args = process.argv.slice(2);
@@ -27,6 +29,11 @@ const launched = {
   flags: process.env.OPENCODE_FLAGS,
   autoupdate: process.env.OPENCODE_DISABLE_AUTOUPDATE,
   mcpToken: process.env.ORKESTRATOR_AGENT_MCP_TOKEN ?? null,
+  policy: process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY ?? null,
+  protectedDataDir: process.env.ORKESTRATOR_COORDINATOR_PROTECTED_DATA_DIR ?? null,
+  attachmentRoot: process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT ?? null,
+  research: process.env.ORKESTRATOR_COORDINATOR_WEB_RESEARCH ?? null,
+  projectConfig: process.env.OPENCODE_DISABLE_PROJECT_CONFIG ?? null,
   cwd: process.cwd(),
 };
 process.on("SIGTERM", () => process.exit(0));
@@ -47,7 +54,12 @@ afterEach(async () => {
 });
 
 async function setup(
-  options: { environmentType?: "local" | "containerized"; binary?: boolean } = {},
+  options: {
+    environmentType?: "local" | "containerized";
+    binary?: boolean;
+    research?: () => string;
+    busy?: () => boolean;
+  } = {},
 ) {
   const root = await mkdtemp(path.join(tmpdir(), "ork-opencode2-host-"));
   cleanup.push(() => rm(root, { recursive: true, force: true }));
@@ -90,9 +102,20 @@ async function setup(
       localServers,
       environments: { fence: { assertNotMoving() {} }, assertNotDeleting() {} },
     },
+    nativeAgents: {
+      hasObservedLiveWork: async () => options.busy?.() ?? false,
+      runtimeStopRequested: async () => undefined,
+    },
     storage: {
       getEnvironment: async () => environment,
       getDataDir: () => dataDir,
+      loadConfig: async () => ({
+        global: { coordinatorWebResearch: options.research?.() ?? "off" },
+      }),
+      coordinators: {
+        coordinatorAttachmentDirectory: (coordinatorId: string, conversationId: string) =>
+          path.join(dataDir, "attachments", coordinatorId, conversationId),
+      },
       updateEnvironment: async (_id: string, fields: Record<string, unknown>) => {
         updates.push(fields);
       },
@@ -188,6 +211,65 @@ describe("host OpenCode 2.x server", () => {
     await expect(ensureOpenCode2HostServer(context, "env-1")).rejects.toThrow(
       /OpenCode 2 is not installed yet/,
     );
+    expect(localServers.processCount()).toBe(0);
+  });
+});
+
+describe("a coordinator's OpenCode 2.x server", () => {
+  const runtime = coordinatorRuntimeId("c1", "conv-1");
+
+  test("is its own process, launched with the coordinator's authority", async () => {
+    const { context, localServers, dataDir, worktree } = await setup();
+    const connection = await ensureOpenCode2HostServer(context, runtime);
+    expect(connection.directory).toBe(worktree);
+    const answer = await info(connection);
+    expect(answer.launched).toMatchObject({
+      configDir: path.join(dataDir, "opencode2", "coordinator-config"),
+      db: path.join(dataDir, "opencode2", "opencode.db"),
+      policy: "coordinator-read-only",
+      protectedDataDir: dataDir,
+      attachmentRoot: path.join(dataDir, "attachments", "c1", "conv-1"),
+      research: "off",
+      projectConfig: "1",
+      mcpToken: null,
+    });
+    expect(connection.coordinator?.policy.id).toBe("coordinator-read-only");
+    // The control credential is the one the conversation's 1.x server holds.
+    expect(connection.coordinator?.controlConnection()).toBeUndefined();
+    const control = { url: "http://127.0.0.1:9/mcp", token: "scoped" };
+    localServers.openCodeAgentTools.recordLaunchConnection(`local:${runtime}`, control);
+    expect(connection.coordinator?.controlConnection()).toEqual(control);
+
+    // An ordinary environment's server carries none of it.
+    const ordinary = await info(await ensureOpenCode2HostServer(context, "env-1"));
+    expect(ordinary.launched).toMatchObject({
+      configDir: path.join(dataDir, "opencode2", "config"),
+      policy: null,
+      protectedDataDir: null,
+      projectConfig: null,
+    });
+  });
+
+  test("a changed research setting replaces it once it is idle", async () => {
+    let research = "off";
+    let busy = true;
+    const { context } = await setup({ research: () => research, busy: () => busy });
+    const first = await ensureOpenCode2HostServer(context, runtime);
+    research = "search";
+    // Busy: the running server keeps its launch setting.
+    expect((await ensureOpenCode2HostServer(context, runtime)).generation).toBe(first.generation);
+    busy = false;
+    const second = await ensureOpenCode2HostServer(context, runtime);
+    expect(second.generation).not.toBe(first.generation);
+    expect((await info(second)).launched.research).toBe("search");
+    expect(second.coordinator?.policy.capabilityPolicy?.allow).toEqual(["web.search"]);
+  });
+
+  test("a bug report runtime is refused before anything is spawned", async () => {
+    const { context, localServers } = await setup();
+    await expect(
+      ensureOpenCode2HostServer(context, bugReportRuntimeId("report-1")),
+    ).rejects.toBeInstanceOf(ProviderUnavailableError);
     expect(localServers.processCount()).toBe(0);
   });
 });

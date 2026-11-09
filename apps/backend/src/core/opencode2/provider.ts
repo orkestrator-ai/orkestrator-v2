@@ -67,10 +67,16 @@ import { OpenCode2SequenceTracker, readOpenCode2Events } from "./events.js";
 import { OpenCode2SessionReads, openCode2EventSessionId } from "./reads.js";
 import { OpenCode2McpServers, openCode2ConfiguredUserMcpServers } from "./mcp.js";
 import { openCode2CreateRules, openCode2PolicyRules } from "./permissions.js";
+import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import { OpenCode2TurnGrants, openCode2CreateMetadata } from "./turn-grants.js";
 import { OpenCode2WorkflowTurns, openCode2StructuredResult } from "./workflow-results.js";
 import { OpenCode2SessionFeatures, type OpenCode2PreparedSend } from "./features.js";
 import { openCode2TurnConnections, type OpenCode2WorkerMailbox } from "./turn-connections.js";
+import {
+  OPENCODE2_COORDINATOR_AGENT,
+  OpenCode2CoordinatorSessions,
+  type OpenCode2CoordinatorAuthority,
+} from "./coordinator.js";
 import { checkOpenCode2Admission, mintOpenCode2InputId, newestOpenCode2IdleId } from "./steer.js";
 import type { OpenCode2InboxItem, OpenCode2Message, OpenCode2ModelRef } from "./types.js";
 
@@ -96,6 +102,11 @@ export interface OpenCode2ProviderDependencies {
   allowedModelProviders?: () => Promise<readonly string[]>;
   /** A pipeline worker's own mailbox connection, for a turn with `workerMail`. */
   workerMailbox?: OpenCode2WorkerMailbox;
+  /**
+   * Present when this server is a coordinator's (`coordinator.ts`): what it
+   * was launched with, which every session on it runs under.
+   */
+  coordinator?: OpenCode2CoordinatorAuthority;
 }
 
 type SessionState = {
@@ -129,6 +140,9 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
   readonly interactions: OpenCode2SessionReads["interactions"];
   /** MCP connections, per-turn grants and workflow results (`workflow-results.ts`). */
   private readonly workflow: OpenCode2WorkflowTurns;
+  private readonly grants: OpenCode2TurnGrants;
+  /** A coordinator's server: its rules, tools, agent and commands (`coordinator.ts`). */
+  readonly coordinator: OpenCode2CoordinatorSessions | undefined;
 
   constructor(
     private readonly client: OpenCode2Client,
@@ -136,10 +150,16 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
   ) {
     this.reads = new OpenCode2SessionReads(client, () => this.streamConnected);
     this.interactions = this.reads.interactions;
-    this.workflow = new OpenCode2WorkflowTurns(
-      new OpenCode2McpServers(client, dependencies.mcp),
-      new OpenCode2TurnGrants(client),
+    const mcp = new OpenCode2McpServers(client, dependencies.mcp);
+    const coordinator = dependencies.coordinator
+      ? new OpenCode2CoordinatorSessions(client, mcp, dependencies.coordinator)
+      : undefined;
+    this.coordinator = coordinator;
+    this.grants = new OpenCode2TurnGrants(
+      client,
+      coordinator ? { rules: () => coordinator.rules() } : undefined,
     );
+    this.workflow = new OpenCode2WorkflowTurns(mcp, this.grants);
     this.features = new OpenCode2SessionFeatures(client, {
       now: () => this.now(),
       ...(dependencies.allowedModelProviders
@@ -167,19 +187,27 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
     options: ProviderCreateSessionOptions = {},
   ): Promise<string> {
     const model = await this.features.createModel(options);
-    // A backend execution policy becomes the session's base rules (`permissions.ts`),
-    // with a deny for every user MCP server its selection leaves out.
-    const configured = await openCode2ConfiguredUserMcpServers(this.client, options.policy);
-    const base = openCode2PolicyRules(options.policy, configured);
+    // A backend execution policy becomes the session's base rules
+    // (`permissions.ts`), with a deny for every user MCP server its selection
+    // leaves out; on a coordinator's server the launch's rules do.
+    this.coordinator?.assertPolicy(options.policy);
+    const base = this.coordinator
+      ? await this.coordinator.rules()
+      : openCode2PolicyRules(
+          options.policy,
+          await openCode2ConfiguredUserMcpServers(this.client, options.policy),
+        );
+    const reviewer = !this.coordinator && options.reviewerSession && options.policy;
     let session;
     try {
       session = await this.client.createSession({
         ...(model ? { model } : {}),
+        ...(this.coordinator ? { agent: OPENCODE2_COORDINATOR_AGENT } : {}),
         metadata: openCode2CreateMetadata({
           phase,
           label,
           base,
-          ...(options.reviewerSession && options.policy ? { reviewerPolicy: options.policy } : {}),
+          ...(reviewer ? { reviewerPolicy: options.policy } : {}),
         }),
         permissions: openCode2CreateRules(base),
       });
@@ -199,17 +227,28 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
     sessionId: string,
     options: ProviderPrepareDispatchOptions = {},
   ): Promise<void> {
+    if (this.coordinator) {
+      await this.coordinator.prepare();
+      return;
+    }
     await this.workflow.prepare(sessionId, options);
   }
 
-  async send(sessionId: string, prompt: string, sendOptions: ProviderSendOptions): Promise<void> {
+  async send(sessionId: string, prompt: string, requested: ProviderSendOptions): Promise<void> {
+    // A coordinator turn runs as `plan`, with its own tools and no command.
+    const shaped = this.coordinator ? this.coordinator.sendOptions(requested) : requested;
     // Artifact grant, worker and tab mail as connections (`turn-connections.ts`).
-    const options = await openCode2TurnConnections(sendOptions, this.dependencies.workerMailbox);
+    const options = await openCode2TurnConnections(
+      shaped,
+      this.coordinator ? undefined : this.dependencies.workerMailbox,
+    );
     const text = boundedText(this.workflow.shapePrompt(prompt, options));
     this.registerSession(sessionId);
+    if (this.coordinator) await this.coordinator.prepare();
     await this.workflow.prepare(sessionId, options);
     // Command resolution, files, model, effort and agent; nothing is dispatched yet.
     const prepared = await this.features.prepareSend(sessionId, prompt, options);
+    await this.coordinator?.pinAgent(sessionId);
     // Grants, the prompt and settlement of one session never interleave.
     await this.workflow.dispatch(
       sessionId,
@@ -465,6 +504,10 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
 
   async forkSession(sessionId: string, messageId?: string): Promise<NativeAgentForkOutcome> {
     const outcome = await this.features.fork(sessionId, messageId);
+    if (this.coordinator) {
+      const forked = outcome.sessionId;
+      await this.grants.runExclusive(forked, () => this.grants.restate(forked));
+    }
     this.registerSession(outcome.sessionId);
     return outcome;
   }
@@ -477,11 +520,35 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
     return this.features.setArchived(resumableSessionId, archived);
   }
 
-  /** A resume-list id (or a bare 2.x id) as the session it names, checked to exist. */
+  /**
+   * A resume-list id (or a bare 2.x id) as the session it names, checked to
+   * exist. On a coordinator's server the launch's rules are restated first.
+   */
   async resumeSession(resumableSessionId: string): Promise<string> {
     const sessionId = await this.features.resumableSession(resumableSessionId);
+    if (this.coordinator) {
+      await this.grants.runExclusive(sessionId, () => this.grants.restate(sessionId));
+    }
     this.registerSession(sessionId);
     return sessionId;
+  }
+
+  /**
+   * Restate a session's execution policy. On a coordinator's server the
+   * launch's rules apply and any other policy is refused; elsewhere the
+   * policy becomes the session's base rules.
+   */
+  async synchronizeSessionPolicy(
+    sessionId: string,
+    policy: NativeAgentExecutionPolicy,
+  ): Promise<void> {
+    if (this.coordinator) {
+      this.coordinator.assertPolicy(policy);
+      await this.grants.runExclusive(sessionId, () => this.grants.restate(sessionId));
+      return;
+    }
+    const base = openCode2PolicyRules(policy);
+    await this.grants.runExclusive(sessionId, () => this.grants.rebase(sessionId, base));
   }
 
   setSessionTitle(sessionId: string, title: string): Promise<void> {
@@ -492,16 +559,19 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
     return this.features.authStatus();
   }
 
-  commandCatalogue(): Promise<ProviderCommandCatalogue> {
+  /** A coordinator runs no provider command (`coordinator.ts`), so it lists none. */
+  async commandCatalogue(): Promise<ProviderCommandCatalogue> {
+    if (this.coordinator) return { enhanced: true, commands: [], status: "unsupported" };
     return this.features.commandCatalogue();
   }
 
-  refreshCommands(): Promise<ProviderCommandRefreshResult> {
+  async refreshCommands(): Promise<ProviderCommandRefreshResult> {
+    if (this.coordinator) return { outcome: "unsupported" };
     return this.features.refreshCommands();
   }
 
   async slashCommands() {
-    return (await this.features.commandCatalogue()).commands;
+    return (await this.commandCatalogue()).commands;
   }
 
   runtimeHealth(sessionId: string): Promise<ProviderRuntimeHealth> {

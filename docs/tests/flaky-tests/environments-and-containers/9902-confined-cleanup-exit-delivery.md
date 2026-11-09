@@ -1,6 +1,8 @@
 # Confined cleanup exit delivery
 
-Status: resolved (2026-11-09).
+- **ID:** 9901
+- **Status:** resolved
+- **Date observed:** 2026-11-09
 
 Test: `delete_environment host cleanup > Retry stays fenced after a confined helper is killed until its exit is delivered`, in `apps/backend/src/core/commands-environment-cleanup.test.ts`.
 

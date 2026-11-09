@@ -10,11 +10,12 @@
  * owners, and a container from an older image stays on 1.x. Everything else,
  * every existing record included, is 1.x.
  *
- * Workflows (build pipelines, Multi Review, graph agent nodes) follow the same
- * switch through their own providers (`openCodeWorkflowRoutingDependencies`),
- * in local environments only for now: the line is chosen when a session is
- * created and recorded in the `opencode2-sessions` store before the id is
- * handed out.
+ * Workflows (build pipelines, Multi Review, graph agent nodes, graph
+ * describe, goal verifiers and suborks) follow the same switch through their
+ * own providers (`openCodeWorkflowRoutingDependencies`), in local
+ * environments and in containers whose image runs 2.x: the line is chosen
+ * when a session is created and recorded in the `opencode2-sessions` store
+ * before the id is handed out.
  */
 import type { AgentInteractionOrigin } from "@orkestrator/protocol/agent-interactions";
 import type { AgentSessionOwner } from "@orkestrator/protocol/coordinator";
@@ -27,6 +28,7 @@ import type { ProviderCreateSessionOptions } from "./agent-provider-contract.js"
 import type { Environment, PersistedNativeAgentSession } from "./models.js";
 import type { OpenCode2SessionsStorage } from "./storage-opencode2-sessions.js";
 import type { OpenCodeRoutingDependencies } from "./opencode2/routing-provider.js";
+import type { OpenCode2WorkerMailbox } from "./opencode2/turn-connections.js";
 import type { NativeAgentServiceOptions } from "./native-agent-service-shared.js";
 
 /** What the selection reads of an environment. */
@@ -161,9 +163,10 @@ export function openCodeRoutingDependencies(
 
 /**
  * Whether a workflow session created now (build pipeline, Multi Review,
- * graph) should run on OpenCode 2.x: the same switch as interactive tabs,
- * with what a workflow needs that a 2.x session cannot give it yet kept on
- * 1.x:
+ * graph, graph describe, goal verifier, subork) should run on OpenCode 2.x:
+ * the same switch as interactive tabs, in an environment that can serve it
+ * (local, or a container whose image runs 2.x: `containerRunsV2`), with what
+ * a workflow needs that a 2.x session cannot give it yet kept on 1.x:
  *
  * - a coordinator's read-only policy (coordinators are not qualified on 2.x);
  * - an environment whose record of 2.x sessions is full.
@@ -177,21 +180,38 @@ export function newOpenCodeWorkflowSessionProtocol(
   environment: Pick<Environment, "environmentType"> | null | undefined,
   setting: unknown,
   hasCapacity: boolean,
+  containerRunsV2 = false,
 ): "v2" | undefined {
   if (resolveOpenCodeProtocol(setting) !== "v2") return undefined;
-  if (environment?.environmentType !== "local") return undefined;
+  const type = environment?.environmentType;
+  if (type !== "local" && !(type === "containerized" && containerRunsV2)) return undefined;
   if (options.policy?.id === "coordinator-read-only") return undefined;
   return hasCapacity ? "v2" : undefined;
 }
 
 export type OpenCodeWorkflowStorage = SessionReader & {
-  getEnvironment(environmentId: string): Promise<Pick<Environment, "environmentType"> | null>;
+  getEnvironment(environmentId: string): Promise<OpenCode2SessionEnvironment | null>;
   loadConfig(): Promise<{ global: { openCodeProtocol?: unknown } }>;
   openCode2Sessions: Pick<
     OpenCode2SessionsStorage,
     "isOpenCode2Session" | "hasOpenCode2SessionCapacity" | "recordOpenCode2Session"
   >;
 };
+
+/** What a workflow provider's 2.x routing reads beyond storage. */
+export interface OpenCodeWorkflowRoutingOptions {
+  /**
+   * Whether a container environment's image runs 2.x
+   * (`containerRunsOpenCode2`, the interactive path's check). Absent, every
+   * container stays on 1.x.
+   */
+  inContainer?: NativeAgentServiceOptions["openCode2InContainer"];
+  /**
+   * A pipeline worker's own mailbox connection, for a 2.x turn that carries
+   * `workerMail` (`opencode2/turn-connections.ts`).
+   */
+  workerMailbox?: OpenCode2WorkerMailbox;
+}
 
 /**
  * The routing dependencies of a workflow provider for one environment, or
@@ -203,6 +223,7 @@ export function openCodeWorkflowRoutingDependencies(
   host: NativeAgentServiceOptions["openCode2HostServer"],
   storage: OpenCodeWorkflowStorage,
   environmentId: string,
+  routing: OpenCodeWorkflowRoutingOptions = {},
 ): OpenCodeRoutingDependencies | undefined {
   if (!host) return undefined;
   return {
@@ -213,16 +234,20 @@ export function openCodeWorkflowRoutingDependencies(
         storage.getEnvironment(environmentId),
         storage.loadConfig(),
       ]);
-      return newOpenCodeWorkflowSessionProtocol(
-        options,
-        environment,
-        config.global.openCodeProtocol,
-        storage.openCode2Sessions.hasOpenCode2SessionCapacity(environmentId),
-      );
+      const setting = config.global.openCodeProtocol;
+      const capacity = storage.openCode2Sessions.hasOpenCode2SessionCapacity(environmentId);
+      // Everything but the image first, so a 1.x answer never reads Docker.
+      if (!newOpenCodeWorkflowSessionProtocol(options, environment, setting, capacity, true)) {
+        return undefined;
+      }
+      if (environment?.environmentType !== "containerized") return "v2";
+      const inContainer = routing.inContainer;
+      return inContainer && (await inContainer(environment).catch(() => false)) ? "v2" : undefined;
     },
     recordSession: async (sessionId) => {
       storage.openCode2Sessions.recordOpenCode2Session(environmentId, sessionId);
     },
+    ...(routing.workerMailbox ? { workerMailbox: routing.workerMailbox } : {}),
   };
 }
 

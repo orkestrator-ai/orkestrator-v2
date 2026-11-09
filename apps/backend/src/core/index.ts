@@ -221,6 +221,8 @@ import {
   openCode2EnvironmentServer,
 } from "./opencode2-container-server.js";
 import { openCodeWorkflowRoutingDependencies } from "./native-agent-opencode-protocol.js";
+import { openCode2WorkerMailbox } from "./opencode2/turn-connections.js";
+import { authenticatePipelineWorkerMailCapability } from "./pipeline-worker-identity.js";
 import {
   createSessionTitleService,
   sessionTitleGenerationEnabled,
@@ -1036,9 +1038,19 @@ export class OrkestratorBackend {
     // see opencode2-host-server.ts and opencode2-container-server.ts.
     const openCode2HostServer = (environmentId: string, options: { start: boolean }) =>
       openCode2EnvironmentServer(context, environmentId, options);
-    // Workflows follow the same preview switch (docs/todo/agent-engines/0008-opencode-v2.md).
+    // Workflows follow the same preview switch (docs/todo/agent-engines/0008-opencode-v2.md),
+    // in local environments and in containers whose image runs 2.x.
     const openCode2Workflow = (environmentId: string) =>
-      openCodeWorkflowRoutingDependencies(openCode2HostServer, storage, environmentId);
+      openCodeWorkflowRoutingDependencies(openCode2HostServer, storage, environmentId, {
+        inContainer: (environment) => containerRunsOpenCode2(context, environment),
+        workerMailbox: openCode2WorkerMailbox(environmentId, {
+          getEnvironment: (id) => storage.getEnvironment(id),
+          authenticate: (capability) =>
+            authenticatePipelineWorkerMailCapability(this.workflowResults, capability),
+          connection: (id, projectId, target, tabId) =>
+            this.agentTools.connection(id, projectId, target, tabId),
+        }),
+      });
     this.nativeAgents = new NativeAgentService(
       storage,
       async <T>(command: string, args: Record<string, unknown> = {}) => {
@@ -1709,12 +1721,15 @@ export class OrkestratorBackend {
       storage,
     });
     // "Describe a graph" (item 215): backend-owned designer agent jobs.
+    // Describe, goal verifier and subork sessions follow the OpenCode 2.x
+    // preview switch like every other workflow (`openCode2Workflow`).
     this.graphDescribeProviders = new GraphAgentProviders({
       connection: (environment, agent) =>
         graphAgentBridgeConnection(invokeCommand, agent, environment),
       dependencies: {
         workflowResults: this.workflowResults,
         planUsage: this.runtime.accounts.planUsage,
+        openCode2Workflow,
       },
     });
     this.graphDescribe = new GraphDescribeService({
@@ -1733,7 +1748,7 @@ export class OrkestratorBackend {
     this.goalVerifierProviders = new GraphAgentProviders({
       connection: (environment, agent) =>
         graphAgentBridgeConnection(invokeCommand, agent, environment),
-      dependencies: { workflowResults: this.workflowResults },
+      dependencies: { workflowResults: this.workflowResults, openCode2Workflow },
     });
     this.goalVerifier = new NativeAgentGoalVerifier({
       storage,
@@ -1752,6 +1767,7 @@ export class OrkestratorBackend {
       dependencies: {
         workflowResults: this.workflowResults,
         planUsage: this.runtime.accounts.planUsage,
+        openCode2Workflow,
       },
     });
     this.suborks = new NativeAgentSuborkService({

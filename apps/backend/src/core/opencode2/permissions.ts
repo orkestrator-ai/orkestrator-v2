@@ -18,8 +18,9 @@
  * Orkestrator's MCP servers are location-scoped on 2.x: every session of the
  * environment's server sees every registered server. Each session's rules
  * therefore deny every Orkestrator server except its own tab's
- * (`orkestrator_tab_<id>`), and the workflow-result broker except during a
- * turn that owns a result tool.
+ * (`orkestrator_tab_<id>`), design (`orkestrator_design_<id>`) and artifact
+ * (`orkestrator_artifacts_<id>`) servers, and the workflow-result broker
+ * except during a turn that owns a result tool.
  */
 import { createHash } from "node:crypto";
 import { WORKFLOW_RESULT_MCP_SERVER_NAME } from "@orkestrator/protocol/workflow-results";
@@ -35,6 +36,17 @@ import type { OpenCode2PermissionRule } from "./types.js";
 
 /** Prefix of every per-tab Orkestrator MCP server on a 2.x server. */
 export const OPENCODE2_TAB_MCP_PREFIX = "orkestrator_tab_";
+/** Prefix of every per-session design server (`/design-mcp`, the tab's credential). */
+export const OPENCODE2_DESIGN_MCP_PREFIX = "orkestrator_design_";
+/** Prefix of every per-session artifact-only server (`/artifact-mcp`, the turn's grant). */
+export const OPENCODE2_ARTIFACTS_MCP_PREFIX = "orkestrator_artifacts_";
+/** The per-session Orkestrator server kinds, each confined to its own session. */
+export const OPENCODE2_SESSION_MCP_PREFIXES = [
+  OPENCODE2_TAB_MCP_PREFIX,
+  OPENCODE2_DESIGN_MCP_PREFIX,
+  OPENCODE2_ARTIFACTS_MCP_PREFIX,
+] as const;
+export type OpenCode2SessionMcpPrefix = (typeof OPENCODE2_SESSION_MCP_PREFIXES)[number];
 /** Most rules a session is given; a ruleset past it is refused rather than truncated. */
 export const MAX_OPENCODE2_SESSION_RULES = 512;
 
@@ -96,9 +108,17 @@ export function openCode2McpNamespace(server: string): string {
   return server.replace(/[^a-zA-Z0-9_-]/g, "_");
 }
 
+/** One session's server of one kind: stable for the session, never shared. */
+export function openCode2SessionMcpServer(
+  prefix: OpenCode2SessionMcpPrefix,
+  sessionId: string,
+): string {
+  return `${prefix}${createHash("sha256").update(sessionId).digest("hex").slice(0, 12)}`;
+}
+
 /** The MCP server name of one session's tab connection: stable for the session, never shared. */
 export function openCode2TabMcpServer(sessionId: string): string {
-  return `${OPENCODE2_TAB_MCP_PREFIX}${createHash("sha256").update(sessionId).digest("hex").slice(0, 12)}`;
+  return openCode2SessionMcpServer(OPENCODE2_TAB_MCP_PREFIX, sessionId);
 }
 
 /** Whether a server name is one Orkestrator registers itself (never a user's). */
@@ -107,18 +127,43 @@ export function isOrkestratorOpenCode2McpServer(name: string): boolean {
 }
 
 /**
- * Last in every session's steady rules: no other tab's Orkestrator tools and
- * no workflow-result tools, then this session's own tab server back.
+ * Every session's per-session Orkestrator servers (tab, design, artifacts)
+ * and the workflow-result tools denied: what a session is created with.
  */
-export function openCode2IsolationRules(sessionId: string): OpenCode2PermissionRule[] {
+function openCode2IsolationDenies(): OpenCode2PermissionRule[] {
   return [
-    { action: `${OPENCODE2_TAB_MCP_PREFIX}*`, resource: "*", effect: "deny" },
+    ...OPENCODE2_SESSION_MCP_PREFIXES.map((prefix) => ({
+      action: `${prefix}*`,
+      resource: "*",
+      effect: "deny" as const,
+    })),
     {
       action: `${openCode2McpNamespace(WORKFLOW_RESULT_MCP_SERVER_NAME)}_*`,
       resource: "*",
       effect: "deny",
     },
-    { action: `${openCode2TabMcpServer(sessionId)}_*`, resource: "*", effect: "allow" },
+  ];
+}
+
+/**
+ * Last in every session's steady rules: no other session's Orkestrator tools
+ * and no workflow-result tools, then this session's own servers back (its tab
+ * server last).
+ */
+export function openCode2IsolationRules(sessionId: string): OpenCode2PermissionRule[] {
+  return [
+    ...openCode2IsolationDenies(),
+    ...(
+      [
+        OPENCODE2_DESIGN_MCP_PREFIX,
+        OPENCODE2_ARTIFACTS_MCP_PREFIX,
+        OPENCODE2_TAB_MCP_PREFIX,
+      ] as const
+    ).map((prefix) => ({
+      action: `${openCode2SessionMcpServer(prefix, sessionId)}_*`,
+      resource: "*",
+      effect: "allow" as const,
+    })),
   ];
 }
 
@@ -167,7 +212,7 @@ export interface OpenCode2TurnRuleInput {
 export function openCode2CreateRules(
   base: readonly OpenCode2PermissionRule[],
 ): OpenCode2PermissionRule[] {
-  return bounded([...base, ...openCode2IsolationRules("").slice(0, 2)]);
+  return bounded([...base, ...openCode2IsolationDenies()]);
 }
 
 /** What a session runs with between turns. */

@@ -82,6 +82,7 @@ import { OpenCode2Client, type OpenCode2Connection } from "./client.js";
 import { OPENCODE2_EVIDENCE_SCAN_LIMIT, OpenCode2Provider } from "./provider.js";
 import type { OpenCode2SessionState } from "./session-state.js";
 import { openCode2ResumeSessionId } from "./sessions.js";
+import type { OpenCode2WorkerMailbox } from "./turn-connections.js";
 import { normalizeOpenCode2Transcript } from "./transcript.js";
 import { isOpenCode2IdleMessage, type OpenCode2Message } from "./types.js";
 
@@ -138,6 +139,11 @@ export interface OpenCodeRoutingDependencies {
    * them only while a 2.x server is already running.
    */
   newSessionsUseV2?(): Promise<boolean>;
+  /**
+   * Workflow providers only: a pipeline worker's own mailbox connection, for
+   * a 2.x turn that carries `workerMail` (`turn-connections.ts`).
+   */
+  workerMailbox?: OpenCode2WorkerMailbox;
 }
 
 /** The members the router reads from the 1.x provider. */
@@ -735,9 +741,13 @@ export class OpenCodeRoutingProvider implements NativeAgentRuntimeProvider {
     const previous = this.current;
     const client = new OpenCode2Client(connection);
     const allowedModelProviders = this.deps.allowedModelProviders?.bind(this.deps);
+    const workerMailbox = this.deps.workerMailbox;
     const provider =
       this.deps.createProvider?.(client) ??
-      new OpenCode2Provider(client, allowedModelProviders ? { allowedModelProviders } : {});
+      new OpenCode2Provider(client, {
+        ...(allowedModelProviders ? { allowedModelProviders } : {}),
+        ...(workerMailbox ? { workerMailbox } : {}),
+      });
     this.current = { generation: connection.generation, provider };
     for (const [sessionId, line] of this.lines) {
       if (line === "v2") provider.registerSession(sessionId);

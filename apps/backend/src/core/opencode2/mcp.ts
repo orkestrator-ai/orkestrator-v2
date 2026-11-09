@@ -18,6 +18,11 @@
  * - **The workflow-result broker** (`orkestrator_workflow_result`), the
  *   environment-wide broker credential 1.x uses too. Every session's rules
  *   deny its tools; a result turn is granted its own for the turn only.
+ * - **A session's design server** (`orkestrator_design_<id>`, `/design-mcp`
+ *   with the tab's credential) when the environment has design canvases, and
+ *   **its artifact-only server** (`orkestrator_artifacts_<id>`,
+ *   `/artifact-mcp` with the turn's grant) on a result turn; see
+ *   `turn-connections.ts`. Both are confined like the tab server.
  *
  * These routes are experimental upstream. The exact pin and
  * `opencode2-mcp.live.test.ts` guard them on every bump.
@@ -29,9 +34,19 @@ import type {
   NativeAgentMcpServerAction,
 } from "@orkestrator/protocol/native-agent";
 import { redactSecrets } from "@orkestrator/protocol/secret-redaction";
+import { ORKESTRATOR_ARTIFACT_MCP_PATH } from "@orkestrator/protocol/transcript-artifacts";
 import { ProviderDispatchPreparationError } from "../agent-provider-contract.js";
 import type { OpenCode2Client } from "./client.js";
-import { isOrkestratorOpenCode2McpServer, openCode2TabMcpServer } from "./permissions.js";
+import {
+  isOrkestratorOpenCode2McpServer,
+  OPENCODE2_ARTIFACTS_MCP_PREFIX,
+  OPENCODE2_DESIGN_MCP_PREFIX,
+  OPENCODE2_SESSION_MCP_PREFIXES,
+  OPENCODE2_TAB_MCP_PREFIX,
+  openCode2SessionMcpServer,
+  openCode2TabMcpServer,
+  type OpenCode2SessionMcpPrefix,
+} from "./permissions.js";
 import type { OpenCode2McpServer } from "./types.js";
 
 const log = createLogger("native-agent.opencode2");
@@ -72,19 +87,58 @@ export class OpenCode2McpServers {
     return this.ensure(openCode2TabMcpServer(sessionId), connection);
   }
 
+  /**
+   * Register one session's design server: `/design-mcp` beside its tab
+   * connection, with the same credential (as the bridges' `orkestrator-design`).
+   */
+  ensureDesign(sessionId: string, connection: OpenCode2McpConnection): Promise<void> {
+    return this.ensure(openCode2SessionMcpServer(OPENCODE2_DESIGN_MCP_PREFIX, sessionId), {
+      url: new URL("/design-mcp", connection.url).toString(),
+      token: connection.token,
+    });
+  }
+
+  /**
+   * Register one session's artifact-only server for this turn: `/artifact-mcp`
+   * at the turn connection's origin, authenticated by the turn's grant (as the
+   * bridges' `orkestrator-artifacts`). A new grant re-registers it.
+   */
+  ensureArtifacts(sessionId: string, origin: string, grant: string): Promise<void> {
+    return this.ensure(openCode2SessionMcpServer(OPENCODE2_ARTIFACTS_MCP_PREFIX, sessionId), {
+      url: new URL(ORKESTRATOR_ARTIFACT_MCP_PATH, origin).toString(),
+      token: grant,
+    });
+  }
+
   /** Register the environment's workflow-result broker connection. */
   ensureWorkflowBroker(connection: OpenCode2McpConnection): Promise<void> {
     return this.ensure(WORKFLOW_RESULT_MCP_SERVER_NAME, connection);
   }
 
   /** Remove a closed session's tab server, so its credential stops being presented. */
-  async removeTab(sessionId: string): Promise<void> {
-    const name = openCode2TabMcpServer(sessionId);
+  removeTab(sessionId: string): Promise<void> {
+    return this.removeSessionServer(OPENCODE2_TAB_MCP_PREFIX, sessionId);
+  }
+
+  /**
+   * Remove one session's server of one kind, if this provider registered it:
+   * a turn without design or a grant does not keep the previous turn's.
+   */
+  async removeSessionServer(prefix: OpenCode2SessionMcpPrefix, sessionId: string): Promise<void> {
+    const name = openCode2SessionMcpServer(prefix, sessionId);
+    await this.pending.get(name)?.promise.catch(() => undefined);
     if (!this.registered.has(name)) return;
     this.registered.delete(name);
     await this.client.removeMcpServer(name).catch((error: unknown) => {
       log.debug("mcp.remove-failed", { error: formatLogError(error, { message: false }) });
     });
+  }
+
+  /** Remove every per-session server of a closed session. */
+  async removeSession(sessionId: string): Promise<void> {
+    await Promise.all(
+      OPENCODE2_SESSION_MCP_PREFIXES.map((prefix) => this.removeSessionServer(prefix, sessionId)),
+    );
   }
 
   /** The user's servers on this location, in the shared shape; Orkestrator's are left out. */
@@ -172,14 +226,14 @@ export class OpenCode2McpServers {
     return servers.find((server) => server.name === name)?.status.status;
   }
 
-  /** Tab servers of sessions long gone: bounded, never the broker. */
+  /** Per-session servers of sessions long gone: bounded per kind, never the broker. */
   private evictOldTabs(): void {
-    const tabs = [...this.registered.keys()].filter(
-      (name) => name !== WORKFLOW_RESULT_MCP_SERVER_NAME,
-    );
-    for (const name of tabs.slice(0, Math.max(0, tabs.length - MAX_OPENCODE2_TAB_SERVERS))) {
-      this.registered.delete(name);
-      void this.client.removeMcpServer(name).catch(() => undefined);
+    for (const prefix of OPENCODE2_SESSION_MCP_PREFIXES) {
+      const names = [...this.registered.keys()].filter((name) => name.startsWith(prefix));
+      for (const name of names.slice(0, Math.max(0, names.length - MAX_OPENCODE2_TAB_SERVERS))) {
+        this.registered.delete(name);
+        void this.client.removeMcpServer(name).catch(() => undefined);
+      }
     }
   }
 

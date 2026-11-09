@@ -225,14 +225,20 @@ describe("workflow sessions", () => {
     // Without a policy the agent's defaults ask; the workflow's cards answer them.
     expect(newOpenCodeWorkflowSessionProtocol({}, local, "v2", true)).toBe("v2");
     expect(newOpenCodeWorkflowSessionProtocol({ policy }, local, "legacy", true)).toBe(undefined);
-    expect(
-      newOpenCodeWorkflowSessionProtocol(
-        { policy },
-        { environmentType: "containerized" },
-        "v2",
-        true,
-      ),
-    ).toBe(undefined);
+    // A container takes 2.x only when its image runs it; an older image stays on 1.x.
+    const container = { environmentType: "containerized" as const };
+    expect(newOpenCodeWorkflowSessionProtocol({ policy }, container, "v2", true)).toBe(undefined);
+    expect(newOpenCodeWorkflowSessionProtocol({ policy }, container, "v2", true, false)).toBe(
+      undefined,
+    );
+    expect(newOpenCodeWorkflowSessionProtocol({ policy }, container, "v2", true, true)).toBe("v2");
+    expect(newOpenCodeWorkflowSessionProtocol({ policy }, container, "legacy", true, true)).toBe(
+      undefined,
+    );
+    expect(newOpenCodeWorkflowSessionProtocol({ policy }, container, "v2", false, true)).toBe(
+      undefined,
+    );
+    expect(newOpenCodeWorkflowSessionProtocol({ policy }, null, "v2", true, true)).toBe(undefined);
     // A policy that asks is served: its approvals reach the workflow's cards.
     expect(
       newOpenCodeWorkflowSessionProtocol(
@@ -256,7 +262,7 @@ describe("workflow sessions", () => {
   test("record their line, which every later lookup reads", async () => {
     const recorded = new Set<string>();
     const storage = {
-      getEnvironment: async () => local,
+      getEnvironment: async () => ({ ...local, containerId: null }),
       loadConfig: async () => ({ global: { openCodeProtocol: "v2" } }),
       openCode2Sessions: {
         isOpenCode2Session: (_env: string, id: string) => recorded.has(id),
@@ -276,6 +282,83 @@ describe("workflow sessions", () => {
     // An interactive lookup sees a workflow's 2.x session too (a tab may open it).
     expect(await persistedOpenCodeProtocol(storage, "env", "ses_w")).toBe("v2");
     expect(openCodeWorkflowRoutingDependencies(undefined, storage, "env")).toBeUndefined();
+  });
+
+  test("in a container, take 2.x only when its image runs it, reading the image last", async () => {
+    const recorded = new Set<string>();
+    const container = { environmentType: "containerized" as const, containerId: "c-1" };
+    let setting = "v2";
+    let capacity = true;
+    const storage = {
+      getEnvironment: async () => container,
+      loadConfig: async () => ({ global: { openCodeProtocol: setting } }),
+      openCode2Sessions: {
+        isOpenCode2Session: (_env: string, id: string) => recorded.has(id),
+        hasOpenCode2SessionCapacity: () => capacity,
+        recordOpenCode2Session: (_env: string, id: string) => void recorded.add(id),
+      },
+    };
+    const policy = { id: "host-default", approvals: "auto-approve" } as never;
+    const imageReads: unknown[] = [];
+    const select = (runsV2: boolean | "throws" | undefined) =>
+      openCodeWorkflowRoutingDependencies(
+        async () => undefined,
+        storage,
+        "env",
+        runsV2 === undefined
+          ? {}
+          : {
+              inContainer: async (environment) => {
+                imageReads.push(environment);
+                if (runsV2 === "throws") throw new Error("docker is down");
+                return runsV2;
+              },
+            },
+      )!.newSessionProtocol!({ policy });
+    expect(await select(true)).toBe("v2");
+    expect(imageReads).toEqual([container]);
+    expect(await select(false)).toBe(undefined);
+    // Unreadable or unknown: the older line, never an error.
+    expect(await select("throws")).toBe(undefined);
+    expect(await select(undefined)).toBe(undefined);
+    // A 1.x answer never reads Docker.
+    imageReads.length = 0;
+    setting = "legacy";
+    expect(await select(true)).toBe(undefined);
+    setting = "v2";
+    capacity = false;
+    expect(await select(true)).toBe(undefined);
+    expect(
+      await openCodeWorkflowRoutingDependencies(async () => undefined, storage, "env", {
+        inContainer: async (environment) => {
+          imageReads.push(environment);
+          return true;
+        },
+      })!.newSessionProtocol!({
+        policy: { id: "coordinator-read-only", approvals: "deny" } as never,
+      }),
+    ).toBe(undefined);
+    expect(imageReads).toEqual([]);
+  });
+
+  test("hand a worker mailbox resolver to the 2.x provider only when given one", () => {
+    const storage = {
+      getEnvironment: async () => ({ ...local, containerId: null }),
+      loadConfig: async () => ({ global: { openCodeProtocol: "v2" } }),
+      openCode2Sessions: {
+        isOpenCode2Session: () => false,
+        hasOpenCode2SessionCapacity: () => true,
+        recordOpenCode2Session: () => undefined,
+      },
+    };
+    const workerMailbox = async () => undefined;
+    expect(
+      openCodeWorkflowRoutingDependencies(async () => undefined, storage, "env", { workerMailbox })!
+        .workerMailbox,
+    ).toBe(workerMailbox);
+    expect(
+      openCodeWorkflowRoutingDependencies(async () => undefined, storage, "env")!.workerMailbox,
+    ).toBeUndefined();
   });
 
   test("an OpenCode 2.x session takes the per-tab tools credential; a 1.x one does not", () => {

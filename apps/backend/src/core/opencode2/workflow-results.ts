@@ -18,7 +18,10 @@
  * run's last answer once the run has settled.
  *
  * Any other `agentMcp` is a tab's (or a pipeline worker's) own Orkestrator
- * connection, registered as that session's `orkestrator_tab_<id>` server.
+ * connection, registered as that session's `orkestrator_tab_<id>` server,
+ * with its design server beside it when the connection says `design`. A
+ * turn's `agentMcp.artifacts` grant becomes the session's artifact-only
+ * server (`turn-connections.ts` decides which turns carry one).
  */
 import type { NativeAgentMcpServerAction } from "@orkestrator/protocol/native-agent";
 import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
@@ -34,6 +37,7 @@ import {
   openCodeWorkflowResultTurnProblem,
 } from "../opencode-provider-helpers.js";
 import type { OpenCode2McpServers } from "./mcp.js";
+import { OPENCODE2_ARTIFACTS_MCP_PREFIX, OPENCODE2_DESIGN_MCP_PREFIX } from "./permissions.js";
 import type { OpenCode2TurnGrants } from "./turn-grants.js";
 import {
   isOpenCode2IdleMessage,
@@ -69,17 +73,34 @@ export class OpenCode2WorkflowTurns {
     private readonly grants: OpenCode2TurnGrants,
   ) {}
 
-  /** Register the connections this turn will use. Nothing is dispatched. */
+  /**
+   * Register the connections this turn will use, and drop a previous turn's
+   * design or artifact server this one does not have. Nothing is dispatched.
+   */
   async prepare(sessionId: string, options: TurnOptions): Promise<void> {
     const problem = openCode2WorkflowTurnProblem(options);
     if (problem) throw new ProviderDispatchPreparationError(problem);
     const connection = options.agentMcp;
-    if (!connection) return;
-    if (connection.workflowResultCapability) {
-      await this.mcp.ensureWorkflowBroker(connection);
-    } else {
-      await this.mcp.ensureTab(sessionId, connection);
+    if (!connection) {
+      // A grant is one turn's: a turn without one never keeps the previous turn's.
+      await this.mcp.removeSessionServer(OPENCODE2_ARTIFACTS_MCP_PREFIX, sessionId);
+      return;
     }
+    const broker = Boolean(connection.workflowResultCapability);
+    // Design tools refuse workflow credentials, so only a tab-scoped connection carries them.
+    const design = !broker && connection.design === true;
+    const artifacts = connection.artifacts?.token;
+    await Promise.all([
+      broker
+        ? this.mcp.ensureWorkflowBroker(connection)
+        : this.mcp.ensureTab(sessionId, connection),
+      design
+        ? this.mcp.ensureDesign(sessionId, connection)
+        : this.mcp.removeSessionServer(OPENCODE2_DESIGN_MCP_PREFIX, sessionId),
+      artifacts
+        ? this.mcp.ensureArtifacts(sessionId, connection.url, artifacts)
+        : this.mcp.removeSessionServer(OPENCODE2_ARTIFACTS_MCP_PREFIX, sessionId),
+    ]);
   }
 
   /** The prompt as sent: a structured-output turn asks for one final JSON value. */
@@ -156,9 +177,9 @@ export class OpenCode2WorkflowTurns {
     return this.grants.runExclusive(sessionId, () => this.grants.settleOwner(sessionId));
   }
 
-  /** Drop a closed session's tab connection. */
+  /** Drop a closed session's own connections (tab, design, artifacts). */
   closeSession(sessionId: string): Promise<void> {
-    return this.mcp.removeTab(sessionId);
+    return this.mcp.removeSession(sessionId);
   }
 
   mcpServers() {

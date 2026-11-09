@@ -70,6 +70,7 @@ import { openCode2CreateRules, openCode2PolicyRules } from "./permissions.js";
 import { OpenCode2TurnGrants, openCode2CreateMetadata } from "./turn-grants.js";
 import { OpenCode2WorkflowTurns, openCode2StructuredResult } from "./workflow-results.js";
 import { OpenCode2SessionFeatures, type OpenCode2PreparedSend } from "./features.js";
+import { openCode2TurnConnections, type OpenCode2WorkerMailbox } from "./turn-connections.js";
 import { checkOpenCode2Admission, mintOpenCode2InputId, newestOpenCode2IdleId } from "./steer.js";
 import type { OpenCode2InboxItem, OpenCode2Message, OpenCode2ModelRef } from "./types.js";
 
@@ -93,6 +94,8 @@ export interface OpenCode2ProviderDependencies {
   mcp?: ConstructorParameters<typeof OpenCode2McpServers>[1];
   /** The user's `openCodeModelProviders`, normalized; shapes the 2.x model picker. */
   allowedModelProviders?: () => Promise<readonly string[]>;
+  /** A pipeline worker's own mailbox connection, for a turn with `workerMail`. */
+  workerMailbox?: OpenCode2WorkerMailbox;
 }
 
 type SessionState = {
@@ -197,7 +200,9 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
     await this.workflow.prepare(sessionId, options);
   }
 
-  async send(sessionId: string, prompt: string, options: ProviderSendOptions): Promise<void> {
+  async send(sessionId: string, prompt: string, sendOptions: ProviderSendOptions): Promise<void> {
+    // Artifact grant, worker and tab mail as connections (`turn-connections.ts`).
+    const options = await openCode2TurnConnections(sendOptions, this.dependencies.workerMailbox);
     const text = boundedText(this.workflow.shapePrompt(prompt, options));
     this.registerSession(sessionId);
     await this.workflow.prepare(sessionId, options);

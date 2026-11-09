@@ -1,10 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import {
+  OPENCODE2_ARTIFACTS_MCP_PREFIX,
+  OPENCODE2_DESIGN_MCP_PREFIX,
   OPENCODE2_READ_ONLY_RULES,
   isOrkestratorOpenCode2McpServer,
   openCode2CreateRules,
   openCode2McpNamespace,
+  openCode2SessionMcpServer,
   openCode2SteadyRules,
   openCode2TabMcpServer,
   openCode2TurnRules,
@@ -74,6 +77,31 @@ describe("session isolation", () => {
     const rules = openCode2CreateRules([]);
     expect(effect(rules, `${own}_send_message`)).toBe("deny");
     expect(effect(rules, "orkestrator_workflow_result_submit_review_report")).toBe("deny");
+    for (const prefix of [OPENCODE2_DESIGN_MCP_PREFIX, OPENCODE2_ARTIFACTS_MCP_PREFIX] as const) {
+      expect(effect(rules, `${openCode2SessionMcpServer(prefix, "ses_a")}_x`)).toBe("deny");
+    }
+  });
+
+  test("design and artifact servers are confined to their session like the tab server", () => {
+    const allowAll = toOpenCode2Rules([{ permission: "*", pattern: "*", action: "allow" }]);
+    const rules = openCode2SteadyRules(allowAll, "ses_a");
+    for (const prefix of [OPENCODE2_DESIGN_MCP_PREFIX, OPENCODE2_ARTIFACTS_MCP_PREFIX] as const) {
+      const mine = openCode2SessionMcpServer(prefix, "ses_a");
+      const theirs = openCode2SessionMcpServer(prefix, "ses_b");
+      expect(mine).toMatch(new RegExp(`^${prefix}[0-9a-f]{12}$`));
+      expect(effect(rules, `${mine}_create_artifact`)).toBe("allow");
+      expect(effect(rules, `${theirs}_create_artifact`)).toBe("deny");
+      expect(isOrkestratorOpenCode2McpServer(mine)).toBe(true);
+    }
+    // The tab server is still the last rule, and read-only turns keep them reachable.
+    expect(rules.at(-1)).toEqual({ action: `${own}_*`, resource: "*", effect: "allow" });
+    const readOnly = openCode2TurnRules(allowAll, "ses_a", { readOnly: true });
+    expect(
+      effect(
+        readOnly,
+        `${openCode2SessionMcpServer(OPENCODE2_ARTIFACTS_MCP_PREFIX, "ses_a")}_create_artifact`,
+      ),
+    ).toBe("allow");
   });
 
   test("a policy's allow-everything cannot re-open another tab", () => {

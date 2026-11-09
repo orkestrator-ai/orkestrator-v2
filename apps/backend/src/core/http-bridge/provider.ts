@@ -37,6 +37,7 @@ import type {
   NativeAgentResumeEntry,
   NativeAgentRuntimeSummary,
   NativeAgentSessionActionOutcome,
+  NativeAgentSessionBranchList,
   NativeAgentTurnPhase,
 } from "@orkestrator/protocol/native-agent";
 import {
@@ -101,6 +102,7 @@ import { bridgeChangeEvidenceSource } from "./change-evidence.js";
 import { readAcpTurnTerminalError } from "./turn-outcome.js";
 import { HttpBridgeObservationWakeup } from "./observation-stream.js";
 import { readBridgeResumableSessions } from "./resumable-sessions.js";
+import { readBridgeSessionBranches } from "./session-branches.js";
 import { HttpBridgeSteerQualification } from "./steer-qualification.js";
 
 export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
@@ -1280,6 +1282,14 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       ...(typeof payload?.title === "string" ? { title: payload.title } : {}),
       ...(typeof payload?.draft === "string" ? { draft: payload.draft } : {}),
     };
+  }
+
+  async listSessionBranches(sessionId: string): Promise<NativeAgentSessionBranchList> {
+    // Only Pi keeps branches inside one conversation.
+    if (this.agent !== "pi") {
+      throw new PromptRejectedError(`${this.agent} conversations have no branches`);
+    }
+    return readBridgeSessionBranches(this.connection, this.fetchImpl, sessionId);
   }
 
   async performSessionAction(

@@ -205,6 +205,43 @@ archived in Cursor's own UI. Both vendors refuse to continue an archived
 conversation, so choosing one restores it first; a refused restore does not
 resume.
 
+### Rewinding a conversation and Pi branches
+
+Codex, Pi and Cursor report `actions.rewindMessages`. The native tab offers
+**Rewind to before this prompt** on each persisted prompt, beside fork
+(`components/native-agent/MessageRewindAction.tsx`, plan in
+`native-agent-rewind.ts`). It sits on prompts only because every bridge
+resolves a prompt id to "cut before this prompt": Codex reverts the turn that
+holds it and every later turn (`thread/revert`; a row with no `turnId` is not
+offered, the bridge would refuse it), Pi moves its leaf to the prompt's parent
+(`navigateTree`), and Cursor reverts to the run's `startCheckpointRef`. A
+response action would mean something different on each. A dialog names how many
+turns go and whether they can come back, then the tab sends the
+`rewind-messages` session action. The prompt's text returns to the composer
+unless the composer already holds a draft, which is never overwritten. Files
+are not reverted on any platform. The action is disabled while a turn runs, and
+every bridge refuses a rewind mid-turn as well.
+
+Pi keeps the removed turns as another branch of the same session file
+(`actions.branches`). The rendered rows show only the active branch, so no row
+holds an entry id of the branch left behind. `GET /session/:id/branches` on the
+Pi bridge (`session-branches.ts`) lists the tree's leaves that are not on the
+active branch and hold conversation it does not share: the leaf's entry id,
+the first prompt it does not share (or its newest prompt when it diverges after
+a response), its entry count and time, newest first, at most 50
+(`NATIVE_AGENT_BRANCH_LIST_LIMITS`). Leaves that differ only by bookkeeping
+entries are left out. The backend command `list_native_agent_branches` reads
+it, and the session panel's **Branches** picker (`SessionBranchPicker.tsx`)
+reads it when opened, never on a poll, and sends `switch-branch` with the
+entry id. The branch being left is listed in its turn, so a switch is always
+reversible. Live rows keep their bridge ids; giving them Pi entry ids would
+change a row's id mid-turn (`bridges/AGENTS.md`, "Transcript rows").
+
+The public CLI reaches both: `session rewind SESSION --message ID`,
+`session branches SESSION` and `session branch SESSION ENTRY_ID`
+([public-cli.md](public-cli.md)). A Coordinator conversation refuses rewind and
+a branch switch, as it refuses fork and resume.
+
 ## Session titles
 
 The backend owns every native session's title (`native-agent-session-titles.ts`).

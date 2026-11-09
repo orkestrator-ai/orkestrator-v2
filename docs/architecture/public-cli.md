@@ -232,6 +232,8 @@ not advertise at its version before sending it.
 | `session steer` | `session.steer` | steer session action | provider |
 | `session config get/set` | `session.config.get/set` | live composer controls | provider |
 | `session history/resume/fork` | `session.history/resume/fork` | resumable sessions; fork adopts into a new tab | provider |
+| `session rewind SESSION --message ID` | `session.rewind` | `perform_native_agent_session_action` `rewind-messages`: cuts before that prompt (Codex, Pi, Cursor; files untouched). Refused mid-turn (`conflict`); confirmed by every Control MCP caller | provider |
+| `session branches SESSION` / `session branch SESSION ENTRY_ID` | `session.branches` / `session.branch` | `list_native_agent_branches`, then `switch-branch` with a listed entry id (Pi only; the branch left is kept and listed) | provider |
 | `session interactions list/resolve` | `session.interactions`, `session.interaction.resolve` | pending interactions, `resolve_native_agent_interaction` | provider |
 | `session interactions hold [--resume]` | `session.interaction.hold` | `hold_native_agent_interaction` (the card timer's pause) | provider |
 | `session goal set SESSION --objective\|--objective-file\|--objective-stdin [--check CMD] [--verifier AGENT[:MODEL]] [--max-iterations N] [--budget TOKENS] [--wait]` | `session.goal.set` | `NativeAgentService.performGoalCommand` from structured fields, never a `/goal` string | provider, filesystem, process |

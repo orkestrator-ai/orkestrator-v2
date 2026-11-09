@@ -9,6 +9,7 @@ import {
 import type {
   NativeAgentComposerState,
   NativeAgentForkOutcome,
+  NativeAgentSessionBranchList,
   NativeAgentSessionProjection,
 } from "@orkestrator/protocol/native-agent";
 import { PUBLIC_API_LIMITS } from "@orkestrator/protocol/public-api";
@@ -563,6 +564,160 @@ const sessionFork: MutationActionHandler<TargetInput & { messageId?: string }> =
   },
 };
 
+/**
+ * A rewind or branch switch replaces the history a running turn is writing to;
+ * every bridge refuses one mid-turn, so refuse it before admitting the work.
+ */
+function assertSessionIdle(
+  context: PublicActionContext,
+  session: ResolvedSession,
+  action: string,
+): void {
+  const activity = sessionActivity(context, triple(session));
+  if (activity === "working" || activity === "waiting") {
+    throw new PublicActionError(
+      "conflict",
+      `A turn is running in this session; stop it before ${action}`,
+    );
+  }
+}
+
+const sessionRewind: MutationActionHandler<TargetInput & { messageId: string }> = {
+  kind: "mutation",
+  action: "session.rewind",
+  parse(input) {
+    onlyActionKeys(input, "session.rewind");
+    const target = sessionTarget(input);
+    const messageId = requiredString(input, "messageId", 500);
+    return {
+      value: { ...target, messageId },
+      scope: `session:${target.sessionId}`,
+      intent: { messageId },
+    };
+  },
+  async prepare(input, context) {
+    const session = await resolveSession(context, input);
+    refuseOnCoordinator(session, "rewound");
+    requireProviderSession(session);
+    assertReadyForAgents(session.environment);
+    if (!providerCapabilities(session.agent).rewind) {
+      throw new PublicActionError(
+        "capability-unavailable",
+        `${session.agent} sessions cannot be rewound`,
+      );
+    }
+    assertSessionIdle(context, session, "rewinding");
+    return {
+      resources: {
+        environmentId: session.environment.id,
+        sessionId: session.sessionId,
+        tabId: session.tab.tabId,
+      },
+      async execute(operation) {
+        await operation.update({ stage: "rewinding" });
+        // The bridge cuts before the prompt: Codex reverts its turn and every
+        // later one, Pi moves its leaf (keeping the turns as a branch), Cursor
+        // reverts to the run's start checkpoint. Files are not touched.
+        await context.invoke("perform_native_agent_session_action", {
+          ...triple(session),
+          action: { kind: "rewind-messages", messageId: input.messageId },
+        });
+        return {
+          state: "succeeded",
+          result: { sessionId: session.sessionId, rewoundBefore: input.messageId },
+        };
+      },
+    };
+  },
+};
+
+const sessionBranches: ReadActionHandler<TargetInput> = {
+  kind: "read",
+  action: "session.branches",
+  parse(input) {
+    onlyActionKeys(input, "session.branches");
+    return sessionTarget(input);
+  },
+  async run(input, context) {
+    const session = await resolveSession(context, input);
+    requireProviderSession(session);
+    if (!providerCapabilities(session.agent).branches) {
+      throw new PublicActionError(
+        "capability-unavailable",
+        `${session.agent} conversations have no branches`,
+      );
+    }
+    const list = await context.invoke<NativeAgentSessionBranchList>(
+      "list_native_agent_branches",
+      triple(session),
+    );
+    const items = (Array.isArray(list?.branches) ? list.branches : [])
+      .slice(0, PUBLIC_API_LIMITS.historyMaxEntries)
+      .map((branch) => ({
+        id: String(branch.entryId),
+        prompt: typeof branch.prompt === "string" ? branch.prompt.slice(0, 280) : "",
+        entries: Number.isSafeInteger(branch.entries) ? branch.entries : 0,
+        updatedAt: typeof branch.updatedAt === "string" ? branch.updatedAt : null,
+      }));
+    return {
+      result: {
+        activeEntryId: typeof list?.activeEntryId === "string" ? list.activeEntryId : null,
+        items,
+        total: items.length,
+        truncated: list?.truncated === true,
+      },
+    };
+  },
+};
+
+const sessionBranch: MutationActionHandler<TargetInput & { entryId: string }> = {
+  kind: "mutation",
+  action: "session.branch",
+  parse(input) {
+    onlyActionKeys(input, "session.branch");
+    const target = sessionTarget(input);
+    const entryId = requiredString(input, "entryId", 500);
+    return {
+      value: { ...target, entryId },
+      scope: `session:${target.sessionId}`,
+      intent: { entryId },
+    };
+  },
+  async prepare(input, context) {
+    const session = await resolveSession(context, input);
+    refuseOnCoordinator(session, "switched to another branch");
+    requireProviderSession(session);
+    assertReadyForAgents(session.environment);
+    if (!providerCapabilities(session.agent).branches) {
+      throw new PublicActionError(
+        "capability-unavailable",
+        `${session.agent} conversations have no branches`,
+      );
+    }
+    assertSessionIdle(context, session, "switching branches");
+    return {
+      resources: {
+        environmentId: session.environment.id,
+        sessionId: session.sessionId,
+        tabId: session.tab.tabId,
+      },
+      async execute(operation) {
+        await operation.update({ stage: "switching" });
+        // The branch being left stays in the session file and is listed by
+        // `session.branches`, so a switch is always reversible.
+        await context.invoke("perform_native_agent_session_action", {
+          ...triple(session),
+          action: { kind: "switch-branch", entryId: input.entryId },
+        });
+        return {
+          state: "succeeded",
+          result: { sessionId: session.sessionId, entryId: input.entryId },
+        };
+      },
+    };
+  },
+};
+
 function allowedActions(request: AgentInteractionRequest): PublicInteraction["actions"] {
   const actions: PublicInteraction["actions"] = ["answer"];
   if (request.presentation.approveForSessionLabel) actions.push("approve-for-session");
@@ -948,6 +1103,9 @@ export const SESSION_CONTROL_HANDLERS: PublicActionHandler[] = [
   sessionHistory,
   sessionResume,
   sessionFork,
+  sessionRewind,
+  sessionBranches,
+  sessionBranch,
   sessionInteractions,
   interactionResolve,
   interactionHold,

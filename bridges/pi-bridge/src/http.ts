@@ -118,6 +118,7 @@ import {
 import { refreshRuntimeCatalog } from "./runtime.js";
 import { TimeoutError, withTimeout } from "./timeout.js";
 import { closeSessionRetaining } from "./session-close.js";
+import { readSessionBranches } from "./session-branches.js";
 import { HistoryTargetError } from "./history-target.js";
 import { boundTranscript, boundTranscriptForRead, chargeTranscript } from "./transcript.js";
 import {
@@ -807,6 +808,12 @@ async function routeSession(
     await navigateSessionHistory(state, messageId);
     await persistBarrier();
     return json(response, 200, { rewound: true });
+  }
+  if (action === "branches" && !subject && request.method === "GET") {
+    // Leaves of the session's tree that are not the active branch, by Pi entry
+    // id: the only ids `POST /branches/:entryId` can switch to once a rewind
+    // has replaced the rendered rows.
+    return json(response, 200, await readSessionBranches(state));
   }
   if (action === "branches" && subject && request.method === "POST") {
     await navigateSessionHistory(state, decodeURIComponent(subject));

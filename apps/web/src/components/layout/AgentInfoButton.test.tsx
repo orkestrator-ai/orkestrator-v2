@@ -4684,6 +4684,56 @@ describe("AgentInfoButton backend-owned steering", () => {
     );
   });
 
+  test("Pi lists its other branches and switches to one; Codex offers no picker", async () => {
+    seedProjection(TAB_ID, "idle", "pi");
+    nativeInvokeMock.mockImplementation((command: string) => {
+      if (command === "list_native_agent_branches") {
+        return Promise.resolve({
+          activeEntryId: "leaf-kept",
+          branches: [
+            { entryId: "leaf-old", prompt: "second prompt", entries: 4, updatedAt: "2026-11-09" },
+          ],
+          truncated: false,
+        });
+      }
+      if (command === "perform_native_agent_session_action") {
+        return Promise.resolve({ outcome: "applied" });
+      }
+      if (command === "get_cursor_account_usage") return new Promise(() => undefined);
+      return Promise.resolve();
+    });
+    const tab = {
+      ...codexTab(),
+      nativeAgentData: {
+        platform: "pi",
+        environmentId: ENVIRONMENT_ID,
+        containerId: "container-1",
+        isLocal: false,
+      },
+    } as TabInfo;
+    const { rerender } = renderInAppCommandScope(<AgentInfoButton activeTab={tab} />);
+    open();
+
+    fireEvent.click(screen.getByRole("button", { name: "Branches" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: 'Switch to the branch starting "second prompt"' }),
+    );
+    await waitFor(() =>
+      expect(nativeInvokeMock).toHaveBeenCalledWith(
+        "perform_native_agent_session_action",
+        expect.objectContaining({
+          agent: "pi",
+          action: { kind: "switch-branch", entryId: "leaf-old" },
+        }),
+      ),
+    );
+
+    seedProjection(TAB_ID, "idle", "codex");
+    rerender(<AgentInfoButton activeTab={codexTab()} />);
+    reopen();
+    expect(screen.queryByRole("button", { name: "Branches" }) === null).toBe(true);
+  });
+
   test("does not carry unsent steering text into another session", () => {
     seedRunningCodex("tab-2");
     const { rerender } = renderInAppCommandScope(<AgentInfoButton activeTab={codexTab()} />);

@@ -1689,6 +1689,61 @@ describe("successful lifecycle routes", () => {
     }
   });
 
+  test("lists the branches a rewind left, by Pi entry id, and switches back to one", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "pi-bridge-http-branches-state-"));
+    process.env.PI_BRIDGE_STATE_DIR = stateDir;
+    const state = seedSession();
+    const manager = SessionManager.inMemory("/workspace");
+    const ids: string[] = [];
+    for (const text of ["first", "second"]) {
+      ids.push(manager.appendMessage({ role: "user", content: text, timestamp: 0 }));
+      ids.push(
+        manager.appendMessage({
+          role: "assistant",
+          content: [{ type: "text", text: `reply ${text}` }],
+          stopReason: "stop",
+          timestamp: 0,
+        } as never),
+      );
+    }
+    let navigatedTo: string | undefined;
+    state.session = fakeAgentSession({
+      sessionManager: manager,
+      navigateTree: async (entryId: string) => {
+        navigatedTo = entryId;
+        manager.branch(entryId);
+        return { cancelled: false, aborted: false };
+      },
+    });
+    try {
+      // The rewind itself moved Pi's leaf back to the first reply.
+      manager.branch(ids[1]!);
+      const listed = await call(`/session/${state.id}/branches`);
+      expect(listed.status).toBe(200);
+      expect(await listed.json()).toEqual({
+        activeEntryId: ids[1]!,
+        branches: [
+          { entryId: ids[3]!, prompt: "second", entries: 4, updatedAt: expect.any(String) },
+        ],
+        truncated: false,
+      });
+      const switched = await call(`/session/${state.id}/branches/${ids[3]!}`, { method: "POST" });
+      expect(switched.status).toBe(200);
+      expect(navigatedTo).toBe(ids[3]!);
+      const after = (await (await call(`/session/${state.id}/branches`)).json()) as {
+        activeEntryId: string;
+        branches: unknown[];
+      };
+      expect(after.activeEntryId).toBe(ids[3]!);
+      expect(after.branches).toEqual([]);
+      expect((await call("/session/not-held/branches")).status).toBe(404);
+    } finally {
+      sessions.delete(state.id);
+      resetTestDependencies();
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   test("forks through a new persisted Pi conversation", async () => {
     const directory = await mkdtemp(join(tmpdir(), "pi-bridge-http-fork-"));
     const forkedFile = join(directory, "forked.jsonl");

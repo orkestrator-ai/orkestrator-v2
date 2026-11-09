@@ -10,7 +10,7 @@ through the shared session-action bus.
 
 Analysed 2026-11-06 against main at `ee2cc8423`, with Codex 0.166.0 and the Pi SDK (`@earendil-works/pi-coding-agent`) 1.4.0. The 2026-10-31 analysis (at `931e55417`, with Claude CLI 2.1.314, Agent SDK 0.3.314 and `@cursor/sdk` 1.2.0) still holds for tasks 1 to 5 and 7.
 
-This pass ran task 6 for Codex and Pi end to end on loopback models (the real Codex app-server and the real Pi SDK against a scripted local model API, no login, no billed turn). It found three Pi bridge defects, fixed here with regression tests, and one product gap, filed as [7520](7520-message-rewind-and-branch-switch-have-no-client-surface.md). Cursor's half of task 6 needs a login and stays open.
+This pass ran task 6 for Codex and Pi end to end on loopback models (the real Codex app-server and the real Pi SDK against a scripted local model API, no login, no billed turn). It found three Pi bridge defects, fixed here with regression tests, and one product gap, filed as 7520 (done and deleted 2026-11-09; the outcome is in [agent-engines.md](../../architecture/agent-engines.md#rewinding-a-conversation-and-pi-branches)). Cursor's half of task 6 needs a login and stays open.
 
 ### Tasks
 
@@ -189,7 +189,7 @@ bridge, all fixed:
 Branch switching works with a real Pi entry id, but no client can learn one
 (live rows carry bridge ids, and a rewind drops the old rows), and the
 renderer offers neither message rewind nor branch switching on any platform.
-That is [7520](7520-message-rewind-and-branch-switch-have-no-client-surface.md).
+That is 7520 (done and deleted 2026-11-09; the outcome is in [agent-engines.md](../../architecture/agent-engines.md#rewinding-a-conversation-and-pi-branches)).
 
 Cursor: not run (needs a login).
 
@@ -255,9 +255,10 @@ Cursor: not run (needs a login).
     from; a rewound leaf is persisted (`historyLeaf`) and re-applied on every
     reopen until a prompt is appended under it. Rules in
     `bridges/pi-bridge/AGENTS.md`, "Fork, rewind and branch targets".
-  - No client offers message rewind or branch switching yet; the backend
-    command and bridges do
-    ([7520](7520-message-rewind-and-branch-switch-have-no-client-surface.md)).
+  - The native tab offers message rewind on prompts and Pi's other branches
+    in the session panel, and the public CLI has `session rewind`,
+    `session branches` and `session branch` (7520, done 2026-11-09; see
+    [agent-engines.md](../../architecture/agent-engines.md#rewinding-a-conversation-and-pi-branches)).
   - Claude: fork at a message with `forkSession(upToMessageId)`
     (`session-manager-persistence.ts`). Only `rewindFiles` is offered, not
     message rewind (decision 6). A resumed session shows its subagents' steps
@@ -622,7 +623,7 @@ a Pi terminal tab opened on the session still starts at the newest entry.
 Message rewind and branch switching are not offered by the renderer on any
 platform, and Pi branch ids are not discoverable. Building that UI is a
 product decision and its own change, so it is
-[7520](7520-message-rewind-and-branch-switch-have-no-client-surface.md), not
+7520 (done and deleted 2026-11-09; the outcome is in [agent-engines.md](../../architecture/agent-engines.md#rewinding-a-conversation-and-pi-branches)), not
 part of this qualification.
 
 ## Related
@@ -635,8 +636,9 @@ part of this qualification.
   2.x only).
 - [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md)
   for the provider runs.
-- [7520-message-rewind-and-branch-switch-have-no-client-surface.md](7520-message-rewind-and-branch-switch-have-no-client-surface.md)
-  (found by task 6).
+- 7520, message rewind and branch switching in the client (found by task 6;
+  done and deleted 2026-11-09, outcome in
+  [agent-engines.md](../../architecture/agent-engines.md#rewinding-a-conversation-and-pi-branches)).
 - [0038-design-agent-conversation-links.md](../design-canvas/0038-design-agent-conversation-links.md)
   was waiting on the archive work here; it can now add an archived state.
 - [0081-annotation-fence-in-session-titles.md](0081-annotation-fence-in-session-titles.md)

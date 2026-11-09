@@ -25,6 +25,7 @@ import {
   getNativeAgentToolDetailsCommand,
   getNativeAgentTranscriptUpdateCommand,
   holdNativeAgentInteractionCommand,
+  listNativeAgentBranchesCommand,
   listNativeAgentResumableSessionsCommand,
   nativeAgentGoalCommand,
   performNativeAgentMcpActionCommand,
@@ -597,6 +598,15 @@ export function registerNativeAgentCommands(
       agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
       logicalSessionKey: asNonBlankString(args.logicalSessionKey, "logicalSessionKey"),
       action: asNativeAgentSessionAction(args.action),
+    });
+  });
+
+  register(listNativeAgentBranchesCommand, async (args, context) => {
+    if (!context.nativeAgents) throw new Error("Native agent service is unavailable");
+    return context.nativeAgents.listProjectionBranches({
+      environmentId: asNonBlankString(args.environmentId, "environmentId"),
+      agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
+      logicalSessionKey: asNonBlankString(args.logicalSessionKey, "logicalSessionKey"),
     });
   });
 

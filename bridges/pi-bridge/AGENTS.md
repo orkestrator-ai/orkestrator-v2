@@ -103,6 +103,13 @@ a cut in Pi's tree. Three rules hold it to what the reader picked:
   (`historyLeaf`, persisted in `state.json`) and every reopen re-applies it
   until something is appended under it. Render a rewound branch from that
   leaf, never from the file's own.
+- **Other branches are listed by leaf entry id.** `GET /session/:id/branches`
+  (`session-branches.ts`) is the only way a client learns an entry id of a
+  branch it is not on: a rewind replaces the rendered rows. It reads the live
+  `SessionManager`, lists leaves off the active path that hold conversation
+  the active branch does not share, and is bounded by
+  `NATIVE_AGENT_BRANCH_LIST_LIMITS`. It is a user-initiated read (it may
+  attach the session), so nothing polls it.
 
 ## When touching the Pi bridge
 

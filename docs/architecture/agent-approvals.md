@@ -85,26 +85,27 @@ the session is built and before any model call. Code there sees every later
 resolve a parked call without the signature the approval routes require.
 Being non-dumpable does not isolate code already inside the process.
 
-So a Pi session whose approvals are `ask` loads no extensions, even with
-project resources on (`projectExtensionsRefusedForApprovals`,
-`bridges/pi-bridge/src/project-extensions.ts`). Its project skills and prompt
-templates still load: they are text the model reads, not code the bridge
-runs. The bridge's own inline extensions (the approval gate, the MCP client,
-command-change measurement) are unaffected. The reported policy keeps
-project resources on and its note says why the extensions did not load, so
-Agent Info shows it. A live session narrowed to `ask` is detached and rebuilt
-without them. An `auto-approve` or `deny` session keeps loading extensions:
-it has no approval for them to forge, and an extension's code can do no more
-than a command such a session already runs. Running extensions in a child
-process instead would keep them under `ask` too, but Pi's extension API is in
-process (tool registration, hooks over the session object), so it would need
-an RPC shim over an SDK surface that changes between releases.
+Pi therefore loads no discovered extensions under **any** approval policy.
+Every session shares the bridge process: code loaded under auto-approve or deny
+could leave timers or process-wide hooks that survive disposal and affect a
+later ask session. Deny refuses tool calls; it does not constrain arbitrary
+extension code. Refusal must apply from process startup, including before a
+policy narrows to ask. Restart an older bridge to obtain this boundary.
 
-`project-extensions-bridge.test.ts` plants an extension in a temporary
-checkout, starts the real bridge with a synthetic API key and no model call,
-and checks that the extension's code never runs in an `ask` session (and
-does run, as the control, under `auto-approve`); the execution-policy
-conformance suite records the refusal as a Pi narrowing on `container-ask`.
+Configured packages in both user and project settings are excluded in memory
+before the SDK's first resource reload. Package resolution can install missing
+npm/git sources and execute lifecycle scripts before `noExtensions` filters
+extension paths. Local project skills and prompt templates still load when
+project resources are enabled; packaged resources do not. The bridge's own
+inline extensions (approvals, MCP and command-change measurement) remain.
+The reported policy keeps project resources on with a note explaining the
+restriction. Separate extension processes would preserve more features but
+require an RPC shim for Pi's in-process extension API.
+
+`project-extensions-bridge.test.ts` plants a persistent process hook, then
+attaches auto-approve, narrows to ask and attaches a separate ask session.
+It verifies that the hook never enters the process. SDK tests cover configured
+npm/git packages, both settings scopes and repeated reloads without installs.
 
 ## Where an approval is a boundary
 
@@ -139,11 +140,6 @@ need its own uid, and then its tools would too.
   persistent process can kill the bridge and start one of its own that the
   backend keeps trusting. To-do
   [7250](../todo/containers-and-environments/7250-bridge-replaced-by-an-agent-process.md).
-- **Load code into Pi's bridge, outside `ask`.** With project resources on, an
-  `auto-approve` or `deny` Pi session runs repository extensions inside the
-  bridge process, where they can read its environment (see
-  [Code a bridge loads itself](#code-a-bridge-loads-itself)). An `ask` session
-  loads none.
 - **Reach OpenCode's password.** Its server loads agent-writable plugins, and
   takes the plain password from whatever listens on its port. To-do
   [7252](../todo/containers-and-environments/7252-opencode-server-loads-agent-writable-code.md).

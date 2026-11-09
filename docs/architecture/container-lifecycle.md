@@ -2015,8 +2015,8 @@ read it (`container-bridge-credential.ts`). The rules for bridges are in
   ([agent-approvals.md](agent-approvals.md#fixed-launch-bridge-launch1)). This
   does not prevent SDK resource loading: when project resources are enabled,
   Pi discovers project extensions and executes them in the bridge process,
-  where such code can observe later presented credentials. A Pi session whose
-  approvals are `ask` therefore loads no extensions
+  where such code can observe later presented credentials. Pi therefore excludes discovered extensions and configured packages under
+  every policy, preventing persistent hooks from affecting later ask sessions
   ([agent-approvals.md](agent-approvals.md#code-a-bridge-loads-itself)).
 - **What changes an agent's authority is signed.** On a `bridge-launch=1` image
   every mutating request except close, the activity batch and the log policy

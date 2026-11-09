@@ -8,7 +8,7 @@
  * reason. A looser adapter is a bug to fix, never an entry.
  */
 import type { AdapterEffects } from "./suite.js";
-import type { PolicyPlatform, PolicyShapeId } from "./shapes.js";
+import { POLICY_SHAPES, type PolicyPlatform, type PolicyShapeId } from "./shapes.js";
 
 export interface Narrowing {
   observed: Partial<AdapterEffects> | "refused";
@@ -59,10 +59,15 @@ export const EXECUTION_POLICY_NARROWINGS: Record<
   grok: {},
   pi: {
     "host-deny": DENY_REFUSES_EVERY_COMMAND,
-    "container-ask": {
-      observed: { projectResources: false },
-      reason:
-        "Pi runs extensions inside the bridge process, where they could answer the session's own approvals, so an `ask` session loads no repository extensions (`projectExtensionsRefusedForApprovals`); its skills and prompt templates still load, and the reported note says so.",
-    },
+    ...Object.fromEntries(
+      POLICY_SHAPES.filter((shape) => shape.policy.projectResources).map((shape) => [
+        shape.id,
+        {
+          observed: { projectResources: false },
+          reason:
+            "Pi excludes discovered extensions and configured packages under every policy because persistent code in the shared bridge could answer later ask sessions' approvals; local skills and prompt templates still load.",
+        } satisfies Narrowing,
+      ]),
+    ),
   },
 };

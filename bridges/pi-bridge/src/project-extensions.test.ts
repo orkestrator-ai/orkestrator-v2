@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:tes
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { SettingsManager } from "@earendil-works/pi-coding-agent";
+import { DefaultResourceLoader, SettingsManager } from "@earendil-works/pi-coding-agent";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import {
   BRIDGE_EXECUTION_POLICY_ENV,
@@ -121,20 +121,20 @@ const INLINE = [
 ];
 
 describe("Pi project extensions and the approval gate", () => {
-  test("only a writable session that asks for approvals and loads project resources refuses them", () => {
+  test("every writable policy with project resources reports the refusal", () => {
     for (const approvals of ["auto-approve", "ask", "deny"] as const) {
       for (const projectResources of [true, false]) {
         for (const readOnly of [false, true]) {
           expect(
             projectExtensionsRefusedForApprovals({ approvals, projectResources }, readOnly),
-          ).toBe(approvals === "ask" && projectResources && !readOnly);
+          ).toBe(projectResources && !readOnly);
         }
       }
     }
     expect(projectExtensionsRefusedForApprovals(undefined)).toBe(false);
   });
 
-  test("discovery drops extensions alone under ask", () => {
+  test("discovery drops extensions under every policy", () => {
     expect(projectResourceDiscoveryOptions(true, false, "ask")).toEqual({
       noExtensions: true,
       noSkills: false,
@@ -142,7 +142,7 @@ describe("Pi project extensions and the approval gate", () => {
       noContextFiles: false,
     });
     for (const approvals of ["auto-approve", "deny", undefined] as const) {
-      expect(projectResourceDiscoveryOptions(true, false, approvals).noExtensions).toBe(false);
+      expect(projectResourceDiscoveryOptions(true, false, approvals).noExtensions).toBe(true);
     }
     // Off and read-only stay as they were: nothing from the project loads.
     expect(projectResourceDiscoveryOptions(false, false, "ask").noSkills).toBe(true);
@@ -161,16 +161,49 @@ describe("Pi project extensions and the approval gate", () => {
   });
 
   for (const approvals of ["auto-approve", "deny"] as const) {
-    test(`a ${approvals} session keeps loading project extensions`, async () => {
+    test(`a ${approvals} session also excludes project extensions`, async () => {
       const loaded = await load(container(approvals));
       expect(loaded.errors).toEqual([]);
-      // Pi evaluates each module once when the services are built and again on reload.
-      expect(new Set(globals.__orkProjectExtensionsRan)).toEqual(new Set(["discovered", "named"]));
+      // No policy may introduce executable resources into the shared bridge.
+      expect(globals.__orkProjectExtensionsRan).toBeUndefined();
       expect(loaded.extensions).toEqual(expect.arrayContaining(INLINE));
-      expect(loaded.commands).toEqual(["discovered", "named"]);
+      expect(loaded.commands).toEqual([]);
       expect(loaded.skills).toEqual(["release"]);
     });
   }
+
+  test("configured npm and git packages never install on either reload or under any policy", async () => {
+    const probe = new DefaultResourceLoader({ ...(await fixture()) }) as unknown as {
+      packageManager: { installParsedSource: (...args: unknown[]) => Promise<void> };
+    };
+    const prototype = Object.getPrototypeOf(probe.packageManager);
+    const original = prototype.installParsedSource;
+    let installs = 0;
+    prototype.installParsedSource = async () => {
+      installs++;
+      throw new Error("unexpected install");
+    };
+    try {
+      for (const approvals of ["ask", "auto-approve", "deny"] as const) {
+        const { cwd, agentDir } = await fixture();
+        const packages = [
+          "npm:@orkestrator-test/never-installed@1.0.0",
+          "https://github.com/orkestrator-test/never-installed",
+        ];
+        await write(join(cwd, ".pi/settings.json"), JSON.stringify({ packages }));
+        await write(join(agentDir, "settings.json"), JSON.stringify({ packages }));
+        const state = newSessionState(undefined, container(approvals));
+        const services = await createPiSessionServices(state, { cwd, agentDir });
+        await services.resourceLoader.reload();
+        expect(services.settingsManager.getProjectSettings().packages).toEqual([]);
+        expect(services.settingsManager.getGlobalSettings().packages).toEqual([]);
+        expect(services.resourceLoader.getSkills().skills.map((s) => s.name)).toEqual(["release"]);
+      }
+      expect(installs).toBe(0);
+    } finally {
+      prototype.installParsedSource = original;
+    }
+  });
 
   test("the reported policy says why an ask session's extensions did not load", () => {
     expect(piReportedPolicy(container("ask"), false).note).toContain(
@@ -178,7 +211,7 @@ describe("Pi project extensions and the approval gate", () => {
     );
     // The axis stays on: skills and prompt templates still load.
     expect(piReportedPolicy(container("ask"), false).projectResources).toBe(true);
-    expect(piReportedPolicy(container("auto-approve"), false).note ?? "").not.toContain(
+    expect(piReportedPolicy(container("auto-approve"), false).note ?? "").toContain(
       PROJECT_EXTENSIONS_REFUSED_NOTE,
     );
     // A read-only session loads no project resources at all, so there is nothing to explain.

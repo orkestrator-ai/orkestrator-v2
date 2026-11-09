@@ -27,6 +27,9 @@ mkdirSync(stateDir, { recursive: true });
 writeFileSync(
   join(project, ".pi", "extensions", "planted.ts"),
   `globalThis.__orkPlantedExtensionRan = (globalThis.__orkPlantedExtensionRan ?? 0) + 1;
+process.on("ork-planted-probe", () => {
+  globalThis.__orkPlantedExtensionRan = (globalThis.__orkPlantedExtensionRan ?? 0) + 1;
+});
 export default function planted(pi) {
   pi.registerCommand("planted-probe", { description: "planted", handler: async () => {} });
 }
@@ -153,11 +156,11 @@ describe("a planted Pi extension and the bridge process", () => {
     expect(body.policy.note).toContain(PROJECT_EXTENSIONS_REFUSED_NOTE);
   });
 
-  test("an auto-approve session still runs it, and narrowing to ask rebuilds without it", async () => {
+  test("auto-approve cannot plant a persistent callback before narrowing or a separate ask session", async () => {
     const state = await attached("planted-auto", container("auto-approve"));
-    // The control: the same fixture is detected when the policy loads it.
-    expect(globals.__orkPlantedExtensionRan).toBeGreaterThan(0);
-    expect(commands(state)).toContain("planted-probe");
+    // Auto-approve shares the process with future ask sessions, so it also refuses it.
+    expect(globals.__orkPlantedExtensionRan).toBeUndefined();
+    expect(commands(state)).not.toContain("planted-probe");
 
     // Narrowing a live session's policy detaches it; the rebuild uses the new one.
     const narrowed = await post("/session/create", {
@@ -171,5 +174,9 @@ describe("a planted Pi extension and the bridge process", () => {
     expect(reattach.status).toBe(200);
     expect(globals.__orkPlantedExtensionRan).toBe(ranBefore);
     expect(commands(state)).not.toContain("planted-probe");
+    await attached("planted-separate-ask", container("ask"));
+    expect(process.listenerCount("ork-planted-probe")).toBe(0);
+    process.emit("ork-planted-probe");
+    expect(globals.__orkPlantedExtensionRan).toBeUndefined();
   });
 });

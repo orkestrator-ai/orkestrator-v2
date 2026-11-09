@@ -228,3 +228,27 @@ is green; it does not claim those broader suites are green. No unrelated
 assertion, timeout, skip or sanitizer bound was changed to hide a failure.
 
 The evidence registry owner also passed: `mise run test:logged -- --name review-evidence-registry -- bun test ./tests/unit/flaky-tests-index.test.ts --parallel=1 --only-failures` (0.2 s).
+
+## Scheduling repair validation, 2026-11-09
+
+Observed on `project-scheduling-ac146edab2ff-r1`, base
+`3cf3dd7994cb36954f0670430216a71c7b6505d9`, during the concurrent default
+aggregate (workspace five worker slots, root one, bridges two, protocol one)
+and five-worker component browser run. `mise run flaky:recurrence -- 9839
+--base 3cf3dd7994cb36954f0670430216a71c7b6505d9 --registry-ref origin/main`
+reported the case open and directed recording a recurrence.
+
+Original command: `mise run test:logged -- --name address-full-tests -- mise run test`.
+`bounded in-container boot wait > a pending shell probe is clipped to the
+remaining overall deadline` in `apps/backend/tests/container-readiness.test.ts:392`
+measured 1,901.728 ms, above its 1,500 ms cap (case duration 1,907.16 ms).
+The workspace log is retained under
+`/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.mX02WE/`.
+The aggregate had not finished when the owner was rerun, so no complete total
+is claimed here.
+
+The unchanged complete owner passed with
+`mise run test:logged -- --name container-readiness-isolated -- bun --cwd=apps/backend test tests/container-readiness.test.ts --parallel=2 --only-failures`
+(exit 0, 9.6 s). Passing output was deleted by the runner; no isolated total
+is claimed. No readiness source, timeout or assertion changed. The cause is
+unconfirmed, and the isolated pass does not replace the aggregate failure.

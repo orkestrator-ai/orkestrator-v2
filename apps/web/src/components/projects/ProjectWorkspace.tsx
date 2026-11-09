@@ -4,6 +4,7 @@ import { KanbanBoard, ProjectNotesView } from "@/components/kanban";
 import { useProjectStore, useUIStore } from "@/stores";
 import { CoordinatorPanel } from "./CoordinatorPanel";
 import { LeafModeCoordinatorGate } from "./LeafModeCoordinatorGate";
+import { ProjectSchedulesView } from "./ProjectSchedulesView";
 
 export function ProjectWorkspace({
   projectId,
@@ -41,6 +42,9 @@ export function ProjectWorkspace({
         )}
       </div>
     );
+  }
+  if (tab === "schedules") {
+    return <ProjectSchedulesView key={projectId} projectId={projectId} />;
   }
   if (tab === "notes") {
     return (

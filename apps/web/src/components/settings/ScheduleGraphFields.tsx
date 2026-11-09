@@ -19,8 +19,10 @@ import { flatCatalog } from "@/components/review/MultiReviewLaunchDialog";
 import { useReviewLensPresets } from "@/components/review/ReviewLensField";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useReviewModelCatalog } from "@/hooks/useBuildLaunchOptions";
-import { getGraphLaunchOptions } from "@/lib/backend/graph-launch";
-import { listGraphTemplates } from "@/lib/backend/graph-templates";
+import { backendApiForScope } from "@/lib/backend/client";
+import { createGraphLaunchApi, getGraphLaunchOptions } from "@/lib/backend/graph-launch";
+import { createGraphTemplatesApi, listGraphTemplates } from "@/lib/backend/graph-templates";
+import { useNodeScope } from "@/lib/node-scope/providers";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useKanbanStore } from "@/stores/kanbanStore";
 import {
@@ -47,10 +49,13 @@ function errorText(error: unknown): string {
 export function ScheduleGraphFields({
   form,
   projects,
+  projectLocked = false,
   onChange,
 }: {
   form: GraphScheduleForm;
   projects: ReadonlyArray<{ id: string; name: string }>;
+  /** The schedule belongs to one project (its Scheduling tab), which cannot change. */
+  projectLocked?: boolean;
   onChange: (update: (current: GraphScheduleForm) => GraphScheduleForm) => void;
 }) {
   const [templates, setTemplates] = useState<{
@@ -60,6 +65,16 @@ export function ScheduleGraphFields({
   const [templatesError, setTemplatesError] = useState<string | null>(null);
   const [optionsError, setOptionsError] = useState<string | null>(null);
   const { projectId, ref, options, draft } = form;
+  // The project's own node: a project's Scheduling tab may show another node.
+  const scope = useNodeScope();
+  const launchApi = useMemo(
+    () => backendApiForScope(scope, createGraphLaunchApi, { getGraphLaunchOptions }),
+    [scope],
+  );
+  const templatesApi = useMemo(
+    () => backendApiForScope(scope, createGraphTemplatesApi, { listGraphTemplates }),
+    [scope],
+  );
 
   const catalog = useReviewModelCatalog(projectId, Boolean(projectId) && !form.useDefaults);
   const models = useMemo(() => flatCatalog(catalog), [catalog]);
@@ -83,7 +98,8 @@ export function ScheduleGraphFields({
   useEffect(() => {
     if (!projectId) return;
     let cancelled = false;
-    listGraphTemplates({ projectId })
+    templatesApi
+      .listGraphTemplates({ projectId })
       .then((result) => {
         if (cancelled) return;
         setTemplates({ projectId, list: result.templates });
@@ -95,7 +111,7 @@ export function ScheduleGraphFields({
     return () => {
       cancelled = true;
     };
-  }, [projectId]);
+  }, [projectId, templatesApi]);
 
   useEffect(() => {
     if (projectId && ticketInput) void loadTasks(projectId);
@@ -112,12 +128,13 @@ export function ScheduleGraphFields({
     if (!queryKey || !ref) return;
     let cancelled = false;
     const [queriedProject, , environmentId, create] = queryKey.split("|");
-    getGraphLaunchOptions({
-      ref,
-      projectId: queriedProject!,
-      ...(environmentId ? { environmentId } : {}),
-      ...(create === "worktree" || create === "container" ? { create } : {}),
-    })
+    launchApi
+      .getGraphLaunchOptions({
+        ref,
+        projectId: queriedProject!,
+        ...(environmentId ? { environmentId } : {}),
+        ...(create === "worktree" || create === "container" ? { create } : {}),
+      })
       .then((result) => {
         if (cancelled) return;
         setOptionsError(null);
@@ -136,7 +153,7 @@ export function ScheduleGraphFields({
       cancelled = true;
     };
     // `onChange` is the dialog's state setter (stable); `ref` changes only with an edit.
-  }, [queryKey, ref, onChange]);
+  }, [queryKey, ref, onChange, launchApi]);
 
   const edit = (patch: Partial<GraphScheduleForm>) =>
     onChange((current) => ({ ...current, ...patch, touched: true }));
@@ -159,6 +176,7 @@ export function ScheduleGraphFields({
             id="schedule-graph-project"
             className={SELECT_CLASS}
             value={projectId}
+            disabled={projectLocked}
             onChange={(event) =>
               edit({ projectId: event.target.value, ref: null, options: null, draft: null })
             }

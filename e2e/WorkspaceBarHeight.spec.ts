@@ -88,10 +88,9 @@ for (const presentation of ["bar", "grid"]) {
     await page.keyboard.press("Tab");
     const first = tabs.getByRole("tab", { name: "Home", exact: true });
     await first.focus();
-    for (const label of ["Home", "Kanban", "Pull requests", "Notes"]) {
+    for (const label of ["Home", "Coordinator", "Scheduling", "Kanban", "Pull requests", "Notes"]) {
       const tab = tabs.getByRole("tab", { name: label, exact: true });
-      if (label === "Kanban") {
-        await page.keyboard.press("ArrowRight");
+      if (["Coordinator", "Scheduling", "Kanban"].includes(label)) {
         await page.keyboard.press("ArrowRight");
       } else if (label === "Pull requests") {
         await page.keyboard.press("End");
@@ -163,3 +162,25 @@ for (const width of [320, 390]) {
     }
   });
 }
+
+test("Scheduling tab creates project work and reloads its saved schedules", async ({ page }) => {
+  await page.goto("/project-navigation");
+  const tabs = page.getByRole("tablist", { name: "Project navigation" });
+  await tabs.getByRole("tab", { name: "Scheduling", exact: true }).click();
+  const panel = page.getByRole("tabpanel", { name: "Scheduling" });
+  await expect(panel).toContainText("No schedules for this project yet");
+  await panel.getByRole("button", { name: "New schedule" }).click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByLabel("Name", { exact: true }).fill("Browser project schedule");
+  await dialog.getByLabel("Time", { exact: true }).fill("+30m");
+  await dialog.getByLabel("Initial prompt").fill("Check project work");
+  await expect(dialog.getByRole("combobox", { name: "Project", exact: true })).toBeDisabled();
+  await dialog.getByRole("button", { name: "Create", exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+  await expect(panel.getByTestId("schedule-row")).toContainText("Browser project schedule");
+  await tabs.getByRole("tab", { name: "Kanban", exact: true }).click();
+  await expect(panel).not.toBeVisible();
+  await page.reload();
+  await tabs.getByRole("tab", { name: "Scheduling", exact: true }).click();
+  await expect(panel.getByTestId("schedule-row")).toContainText("Browser project schedule");
+});

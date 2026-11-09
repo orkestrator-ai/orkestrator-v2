@@ -6,6 +6,7 @@ import {
   scheduleListFilter,
   schedulingEnabled,
   scheduleTimingArgs,
+  withProjectEnvironments,
 } from "../commands-registry-scheduled-jobs.js";
 import {
   normalizeAction,
@@ -127,7 +128,10 @@ const scheduleList: ReadActionHandler<{
   },
   async run(input, context) {
     const all = await guarded(async () =>
-      (await service(context)).list(actor(context), input.filter),
+      (await service(context)).list(
+        actor(context),
+        await withProjectEnvironments(input.filter, context.command.storage),
+      ),
     );
     return {
       result: {

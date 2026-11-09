@@ -7298,7 +7298,7 @@
       "access": "internal",
       "read": false,
       "critical": ["attachments", "deliverNow", "requestId"],
-      "argsDigest": "sha256:cacf30d727385fcc50c8f00c6ba61a2799849b9f28e7507394f4bca2c098f377",
+      "argsDigest": "sha256:8a11561719a66eb6de7ea9195bdbfd02889ad28d6c9739026e88a0758947b4e8",
       "resultDigest": "sha256:5cf60d42c369b1c95cf2d9f4365dad0c8e19d1730beb8eab28a0054cfdcfb73c"
     },
     "send_coordinator_command_node_mail": {

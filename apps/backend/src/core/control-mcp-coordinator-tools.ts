@@ -62,6 +62,7 @@ import {
 } from "@orkestrator/protocol/scheduled-jobs";
 import {
   COORDINATOR_MAIL_ADDRESS,
+  coordinatorCallTurnOrigin,
   coordinatorDelegationBucket,
   coordinatorDelegationSummary,
   coordinatorRuntimeId,
@@ -729,6 +730,9 @@ function coordinatorScheduleBackend(
         coordinatorId: scope.coordinatorId,
         conversationId: scope.conversationId,
         role,
+        // A schedule's fires are framed from the turn that set it.
+        turnOrigin:
+          coordinatorCallTurnOrigin(conversation.lastTurnOrigin, scope.turnOrigin) ?? "user",
       },
       record: conversation,
       workspace,

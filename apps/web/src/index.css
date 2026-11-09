@@ -602,7 +602,9 @@ body[data-orkestrator-dev-profile]::before {
  * glows sky blue around its own box, then fades to nothing over the highlight
  * period. Only box-shadow changes, so the item never moves or resizes; the
  * glow reaches 9px, inside the narrowest row padding, so neither the row nor
- * the scroller clips it. The attribute and the duration are set from a layout
+ * the scroller clips it. A row's live-arrival entrance (above) hides its
+ * content's overflow, so the jumped-to row skips or ends that entrance
+ * (`useLiveArrivalEntrance`'s `skip`). The attribute and the duration are set from a layout
  * effect and removed when the period ends
  * (`lib/transcript-scroll/conversation-target-highlight.ts`). Its value
  * alternates between two identical animations so a repeat jump to the same

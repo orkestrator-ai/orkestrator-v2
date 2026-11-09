@@ -77,10 +77,19 @@ const scrollProps = {
   restoreStateFrom: undefined,
 };
 
-function List({ highlight }: { highlight: ConversationTargetHighlight | null }) {
+function List({
+  highlight,
+  messages = ROWS,
+  animateArrivals = false,
+}: {
+  highlight: ConversationTargetHighlight | null;
+  messages?: Row[];
+  animateArrivals?: boolean;
+}) {
   return (
     <VirtualizedMessageList
-      messages={ROWS}
+      messages={messages}
+      animateArrivals={animateArrivals}
       computeItemKey={(_index, row) => row.id}
       renderMessage={(_index, row) => renderRow(row)}
       scrollProps={scrollProps}
@@ -220,6 +229,60 @@ describe("VirtualizedMessageList jump highlight", () => {
       "120ms",
     );
     await waitFor(() => expect(glowing()).toEqual([]));
+  });
+});
+
+describe("jump highlight and live arrivals", () => {
+  const ARRIVED: Row = { id: "arrived", shape: "card" };
+  const arriving = () => row("arrived").hasAttribute("data-transcript-arrival");
+
+  function withLayout(run: () => void) {
+    // happy-dom lays nothing out; an arrival only grows in when it has a box.
+    const rects = spyOn(HTMLElement.prototype, "getClientRects").mockReturnValue([
+      new DOMRect(0, 0, 100, 40),
+    ] as unknown as DOMRectList);
+    try {
+      run();
+    } finally {
+      rects.mockRestore();
+    }
+  }
+
+  test("a jump to a row still growing in ends its entrance, which would clip the glow", () => {
+    withLayout(() => {
+      const { rerender } = render(<List highlight={null} animateArrivals />);
+      rerender(<List highlight={null} messages={[...ROWS, ARRIVED]} animateArrivals />);
+      // The entrance hides the row content's overflow while it runs.
+      expect(arriving()).toBe(true);
+      rerender(
+        <List highlight={jump("arrived", 1)} messages={[...ROWS, ARRIVED]} animateArrivals />,
+      );
+      expect(arriving()).toBe(false);
+      expect(glowing()).toEqual(["item-arrived"]);
+      // The entrance does not resume once the glow is gone.
+      rerender(<List highlight={null} messages={[...ROWS, ARRIVED]} animateArrivals />);
+      expect(arriving()).toBe(false);
+    });
+  });
+
+  test("a row that arrives already jumped to never grows in", () => {
+    withLayout(() => {
+      const { rerender } = render(<List highlight={null} animateArrivals />);
+      rerender(
+        <List highlight={jump("arrived", 1)} messages={[...ROWS, ARRIVED]} animateArrivals />,
+      );
+      expect(arriving()).toBe(false);
+      expect(glowing()).toEqual(["item-arrived"]);
+    });
+  });
+
+  test("other rows arriving during a jump still grow in", () => {
+    withLayout(() => {
+      const { rerender } = render(<List highlight={jump("card", 1)} animateArrivals />);
+      rerender(<List highlight={jump("card", 1)} messages={[...ROWS, ARRIVED]} animateArrivals />);
+      expect(arriving()).toBe(true);
+      expect(glowing()).toEqual(["item-card"]);
+    });
   });
 });
 

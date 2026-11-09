@@ -128,18 +128,30 @@ function prefersReducedMotion(view: Window | null): boolean {
  * under reduced motion, while hidden (the animation would only start when
  * shown), and inside a parent that already scrolls (the growth would land
  * out of view).
+ *
+ * `skip` ends the entrance for good, or keeps it from starting: the element
+ * renders at full size and never grows in afterwards. A row the reader jumped
+ * to sets it, because the entrance clips the row's content (`index.css`) and
+ * with it the jump glow around the item.
  */
 export function useLiveArrivalEntrance(
   ref: RefObject<HTMLElement | null>,
   batch: LiveArrivalBatch | null,
   key: string,
+  skip = false,
 ): void {
   // The batch the element mounted in: a later update must not restart or
   // cut short its entrance.
   const [mountBatch] = useState(batch);
   useLayoutEffect(() => {
     const element = ref.current;
-    if (!element || !mountBatch || !takeLiveArrival(mountBatch, key, performance.now())) return;
+    if (!element || !mountBatch) return;
+    if (skip) {
+      // Consumed, so the entrance does not run once the skip is lifted.
+      if (mountBatch.keys.has(key)) mountBatch.taken.add(key);
+      return;
+    }
+    if (!takeLiveArrival(mountBatch, key, performance.now())) return;
     const parent = element.parentElement;
     if (
       prefersReducedMotion(element.ownerDocument.defaultView) ||
@@ -165,5 +177,5 @@ export function useLiveArrivalEntrance(
       // may start again.
       if (!finished) mountBatch.taken.delete(key);
     };
-  }, [ref, mountBatch, key]);
+  }, [ref, mountBatch, key, skip]);
 }

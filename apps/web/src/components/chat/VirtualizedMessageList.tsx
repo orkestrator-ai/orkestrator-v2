@@ -360,7 +360,9 @@ function TranscriptRow({
     const element = ref.current;
     return element ? tracker.observe(rowKey, element) : undefined;
   }, [rowKey, tracker]);
-  useLiveArrivalEntrance(ref, arrivals, rowKey);
+  // A live arrival clips the row's content while it grows in, which would crop
+  // the glow: the jumped-to row is shown at full size at once instead.
+  useLiveArrivalEntrance(ref, arrivals, rowKey, highlight !== null);
   const visibility = tracker.source(rowKey);
   return (
     <div

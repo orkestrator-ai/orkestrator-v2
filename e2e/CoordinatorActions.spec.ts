@@ -196,3 +196,47 @@ test("with reduced motion the jump glow shows without fading and is removed", as
     timeout: 4_000,
   });
 });
+
+test("a jump to a row still growing in shows the glow unclipped", async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await page.goto("/coordinator-actions-transcript");
+  // Hold the live-arrival entrance open so the jump deterministically lands in it.
+  await page.addStyleTag({ content: ":root { --transcript-arrival-duration: 30s; }" });
+  await page.getByRole("button", { name: "Read end", exact: true }).click();
+  await page.getByRole("button", { name: "Append question", exact: true }).click();
+  const arrived = page.locator('[data-chat-message-key="row-50"]');
+  // The entrance hides the row content's overflow while it runs.
+  await expect(arrived).toHaveAttribute("data-transcript-arrival", "");
+  await page.getByRole("button", { name: "Question at 50", exact: true }).click();
+  await expect(page.getByTestId("anchor")).toHaveText("row-50");
+
+  const glow = await measureJumpGlow(page);
+  expect(glow.rowKey).toBe("row-50");
+  await expect(arrived).not.toHaveAttribute("data-transcript-arrival");
+  // Nothing between the item and the scroller clips its overflow, and the
+  // row is at full height rather than part-way through growing in.
+  const clipping = await page.locator("[data-conversation-target-glow]").evaluate((element) => {
+    const clipped: string[] = [];
+    for (
+      let node = element.parentElement;
+      node && !node.hasAttribute("data-virtuoso-scroller");
+      node = node.parentElement
+    ) {
+      const { overflowX, overflowY } = getComputedStyle(node);
+      if (overflowX !== "visible" || overflowY !== "visible") {
+        clipped.push(`${node.tagName}:${overflowX}/${overflowY}`);
+      }
+    }
+    const rowBox = element.closest<HTMLElement>("[data-chat-message-key]")!.getBoundingClientRect();
+    const box = element.getBoundingClientRect();
+    // How far the item reaches past the bottom of its row.
+    return { clipped, overhang: box.bottom - rowBox.bottom };
+  });
+  expect(clipping.clipped).toEqual([]);
+  expect(clipping.overhang).toBeLessThanOrEqual(0.5);
+  expect(glow.roomLeft).toBeGreaterThanOrEqual(9);
+  expect(glow.roomRight).toBeGreaterThanOrEqual(9);
+  await page.screenshot({
+    path: path.resolve("output/visual-previews/jump-highlight-arrival-unclipped.png"),
+  });
+});

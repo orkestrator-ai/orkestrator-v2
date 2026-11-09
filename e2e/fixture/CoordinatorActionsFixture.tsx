@@ -85,15 +85,16 @@ export function CoordinatorActionsTranscriptFixture() {
   const nodeId = useScopesWithCommandFallback().scope.nodeId;
   const [anchor, setAnchor] = useState("");
   const [done, setDone] = useState(false);
+  const [rowCount, setRowCount] = useState(50);
   const messages = useMemo<NativeMessage[]>(
     () =>
-      Array.from({ length: 50 }, (_, index) => ({
+      Array.from({ length: rowCount }, (_, index) => ({
         id: `row-${index}`,
         role: "assistant",
         createdAt: "2026-11-09",
         content: `Conversation row ${index}`,
         parts:
-          index === 5 || index === 40
+          index === 5 || index === 40 || index >= 50
             ? [
                 {
                   type: "tool-invocation",
@@ -105,7 +106,7 @@ export function CoordinatorActionsTranscriptFixture() {
               ]
             : [{ type: "text", content: `Conversation row ${index}` }],
       })),
-    [],
+    [rowCount],
   );
   const conversationHighlight = useConversationScrollTarget({
     environmentId: "actions-fixture",
@@ -134,6 +135,7 @@ export function CoordinatorActionsTranscriptFixture() {
         <button onClick={() => navigation.scrollToIndex(0)}>Read start</button>
         <button onClick={() => navigation.scrollToIndex(49)}>Read end</button>
         <button onClick={() => setDone(true)}>Answer question</button>
+        <button onClick={() => setRowCount((count) => count + 1)}>Append question</button>
         <output data-testid="anchor">{anchor}</output>
         <NativeChatShell
           agentLabel="Codex"

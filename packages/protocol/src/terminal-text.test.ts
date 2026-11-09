@@ -145,6 +145,22 @@ describe("cursor movement", () => {
     expect(normalizeTerminalText(`ab${E}[5C`)).toBe("ab");
   });
 
+  test("forward moves stay forward after writing beyond the movement limit", () => {
+    const line = "x".repeat(5000);
+    for (const command of ["C", "a"]) {
+      for (const [parameter, distance] of [
+        ["", 1],
+        ["0", 1],
+        ["7", 7],
+        ["99999", 4096],
+      ] as const) {
+        expect(normalizeTerminalText(`${line}${E}[${parameter}${command}Y`)).toBe(
+          `${line}${" ".repeat(distance)}Y`,
+        );
+      }
+    }
+  });
+
   test("a carriage return overwrites in place, as a terminal does", () => {
     expect(normalizeTerminalText("progress 10%\rprogress 100%\n")).toBe("progress 100%\n");
     expect(normalizeTerminalText("long text\rshort\n")).toBe("shorttext\n");
@@ -289,6 +305,24 @@ describe("chunk boundaries", () => {
     );
   });
 
+  test("budget exhaustion is independent of future input and write boundaries", () => {
+    const suffix = "z".repeat(4000);
+    const padding = `${E}[4096CX\n`.repeat(3);
+    const erasing = `${"x".repeat(4000)}${E}[2000G${`${E}[1K`.repeat(12)}`;
+    for (const prefix of [padding, erasing, padding + erasing]) {
+      const raw = prefix + suffix;
+      const expected = normalizeTerminalText(raw);
+      // Exercise every escape boundary and the large suffix independently.
+      for (const size of [1, 2, 7, prefix.length]) {
+        const buffer = new TerminalTextBuffer();
+        for (let index = 0; index < raw.length; index += size) {
+          buffer.write(raw.slice(index, index + size));
+        }
+        expect(buffer.toString()).toBe(expected);
+      }
+    }
+  });
+
   test("a surrogate pair split across chunks stays one character", () => {
     const buffer = new TerminalTextBuffer();
     buffer.write("x\ud83d");
@@ -310,6 +344,39 @@ describe("bounds", () => {
     const started = performance.now();
     expect(normalizeTerminalText(raw).length).toBe(4000);
     expect(performance.now() - started).toBeLessThan(2_000);
+  });
+
+  test("repeated erase-above skips cleared rows and bounds traversal after rewrites", () => {
+    const rows = 16000;
+    const buffer = new TerminalTextBuffer();
+    buffer.write("x\n".repeat(rows));
+    // Count row replacements rather than using a wall-clock threshold. This
+    // detects repeated scans of empty rows without depending on machine speed.
+    const state = buffer as unknown as { lines: string[][] };
+    let replacements = 0;
+    state.lines = new Proxy(state.lines, {
+      set(target, key, value) {
+        if (typeof key === "string" && /^\d+$/.test(key)) replacements += 1;
+        return Reflect.set(target, key, value);
+      },
+    });
+    buffer.write(`${E}[1J`.repeat(rows / 2));
+    expect(buffer.toString()).toBe("\n".repeat(rows));
+    expect(replacements).toBeLessThanOrEqual(rows * 2);
+
+    // A write above the cleared prefix must still be cleared on the next J.
+    // Repeatedly invalidating that prefix must remain budgeted, too.
+    const rewrites = `${E}7${E}[4096A\rY${E}8${E}[1J`.repeat(100);
+    buffer.write(rewrites);
+    expect(buffer.toString()).toBe("\n".repeat(rows));
+    const inputChars = rows * 2 + (rows / 2) * 4 + rewrites.length;
+    expect(replacements).toBeLessThanOrEqual(4096 + inputChars * 4 + rows / 2 + 100);
+  });
+
+  test("erase-above handles moving within the cleared prefix and a full reset", () => {
+    expect(normalizeTerminalText(`a\nb\nc${E}[1J${E}[A${E}[1JX`)).toBe("\n X\n");
+    expect(normalizeTerminalText(`a\nb${E}[1J${E}[2J\rx\ny${E}[1J`)).toBe("\n");
+    expect(normalizeTerminalText(`a\nb\nc${E}[1J${E}[2A${E}[J\rx\ny${E}[1J`)).toBe("\n");
   });
 
   test("redrawing a long line many times is linear", () => {

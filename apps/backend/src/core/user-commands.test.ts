@@ -435,6 +435,24 @@ describe("terminal redraws in command output", () => {
     pty.exit(0);
   });
 
+  test("cursor padding beyond the display bound is truncated even when raw output fits", async () => {
+    const world = controlledWorld();
+    const record = await world.run("padding");
+    const raw = "x\n".repeat(32000) + `${E}[4096CX`;
+    expect(raw.length).toBeLessThan(USER_COMMAND_OUTPUT_TAIL_CHARS);
+    world.processes[0]!.output(raw);
+    const snapshot = world.service.get(record.id);
+    expect(snapshot.output.length).toBe(USER_COMMAND_OUTPUT_TAIL_CHARS);
+    expect(snapshot.outputTruncated).toBe(true);
+    expect(snapshot.output.endsWith(" ".repeat(4096) + "X")).toBe(true);
+    world.processes[0]!.exit(0);
+    expect(world.service.list("env", "tab")[0]).toMatchObject({
+      output: snapshot.output,
+      outputTruncated: true,
+      status: "exited",
+    });
+  });
+
   test("output beyond the tail bound is truncated and still redraws in place", async () => {
     const world = controlledWorld();
     const record = await world.run("noisy");

@@ -2,8 +2,13 @@ import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import * as realBackend from "@/lib/backend";
-import { normalizeTerminalText } from "@orkestrator/protocol/human-prompts";
-import type { UserCommandRecord } from "@orkestrator/protocol/user-commands";
+import { fakePid } from "@orkestrator/protocol/testing/fake-pids";
+import { UserCommandService } from "../../../../backend/src/core/user-commands";
+import { HumanPromptRegistry } from "../../../../backend/src/core/human-prompt-registry";
+import {
+  USER_COMMAND_OUTPUT_TAIL_CHARS,
+  type UserCommandRecord,
+} from "@orkestrator/protocol/user-commands";
 
 const realBackendSnapshot = { ...realBackend };
 const writeMock = mock(async (_id: string, _text: string) => ({}) as UserCommandRecord);
@@ -94,31 +99,70 @@ describe("UserCommandCard", () => {
     expect(screen.getByText("npm ERR!")).toBeTruthy();
   });
 
-  test("a spinner animates in place while the command runs", () => {
-    // A fake PTY stream, normalised the way the backend snapshots it: npm's
-    // spinner redraws at column 1 after clearing the line, with its escape
-    // sequences split across reads.
-    const E = "\u001b";
-    const frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴"];
-    const chunks = [`npm notice Log in on https://registry.npmjs.org/\r\n${E}[?25l`];
-    for (const frame of frames) chunks.push(`${E}[1`, `G${E}[0K${frame}`);
-    let raw = "";
-    let revision = 1;
-    const at = () =>
-      record({ output: normalizeTerminalText(raw), prompt: undefined, revision: revision++ });
-    const view = render(<UserCommandCard command={at()} />);
-    const output = () => view.container.querySelector("pre")?.textContent ?? "";
-    for (const chunk of chunks) {
-      raw += chunk;
+  test("backend snapshots flow into the card as the PTY spinner redraws", async () => {
+    // Feed the real backend service through its PTY boundary, then pass its
+    // serialized records directly into the card, without normalizing in here.
+    let emit = (_text: string) => {};
+    const service = new UserCommandService({
+      prompts: new HumanPromptRegistry(),
+      announce() {},
+      resolve: async () => ({
+        target: "worktree",
+        cwd: "/work",
+        spawn: () => ({
+          pid: fakePid(42),
+          write() {},
+          resize() {},
+          kill() {},
+          terminate: async () => true,
+          onData(callback) {
+            emit = callback;
+            return { dispose() {} };
+          },
+          onExit() {
+            return { dispose() {} };
+          },
+        }),
+      }),
+    });
+    try {
+      const started = await service.run({
+        environmentId: "env-1",
+        tabId: "tab-1",
+        command: "npm login",
+      });
+      const E = "\u001b";
+      const frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴"];
+      const chunks = [`npm notice Log in on https://registry.npmjs.org/\r\n${E}[?25l`];
+      for (const frame of frames) chunks.push(`${E}[1`, `G${E}[0K${frame}`);
+      const at = (): UserCommandRecord => JSON.parse(JSON.stringify(service.get(started.id)));
+      const view = render(<UserCommandCard command={at()} />);
+      const output = () => view.container.querySelector("pre")?.textContent ?? "";
+      for (const chunk of chunks) {
+        emit(chunk);
+        view.rerender(<UserCommandCard command={at()} />);
+        const frame = /[⠋⠙⠹⠸⠼⠴]/gu;
+        // Never more than one frame on screen, and always the latest one.
+        expect((output().match(frame) ?? []).length).toBeLessThanOrEqual(1);
+      }
+      expect(output()).toBe("npm notice Log in on https://registry.npmjs.org/\n⠴");
+      emit(`${E}[1G${E}[0KLogin at:\r\n`);
       view.rerender(<UserCommandCard command={at()} />);
-      const frame = /[⠋⠙⠹⠸⠼⠴]/gu;
-      // Never more than one frame on screen, and always the latest one.
-      expect((output().match(frame) ?? []).length).toBeLessThanOrEqual(1);
+      expect(output()).toBe("npm notice Log in on https://registry.npmjs.org/\nLogin at:\n");
+      emit(`${URL}\r\nPress ENTER to open in the browser...`);
+      view.rerender(<UserCommandCard command={at()} />);
+      expect(screen.getByRole("button", { name: /Open link/ })).toBeTruthy();
+      expect(screen.getByRole("button", { name: /Press ENTER/ })).toBeTruthy();
+
+      emit("x\n".repeat(32000) + `${E}[4096CX`);
+      view.rerender(<UserCommandCard command={at()} />);
+      const truncated = at();
+      expect(truncated.output.length).toBe(USER_COMMAND_OUTPUT_TAIL_CHARS);
+      expect(output()).toBe(`[earlier output omitted]\n${truncated.output}`);
+      expect(screen.getByText(/\[earlier output omitted\]/)).toBeTruthy();
+    } finally {
+      await service.shutdown();
     }
-    expect(output()).toBe("npm notice Log in on https://registry.npmjs.org/\n⠴");
-    raw += `${E}[1G${E}[0KLogin at:\r\n`;
-    view.rerender(<UserCommandCard command={at()} />);
-    expect(output()).toBe("npm notice Log in on https://registry.npmjs.org/\nLogin at:\n");
   });
 
   test("truncated output keeps the omitted-output marker", () => {

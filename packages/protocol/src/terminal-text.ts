@@ -21,7 +21,7 @@
  *
  * Work is linear in the input: each character costs O(1) amortised, and the
  * only operations that can touch more cells than they consume (padding after a
- * forward move, erasing to the start of a line) draw on a budget proportional
+ * forward move, erasing to the start of a line, clearing earlier rows) draw on a budget proportional
  * to the input. An escape sequence split across `write` calls is held until
  * it completes, so feeding chunks gives the same text as feeding their
  * concatenation.
@@ -51,6 +51,8 @@ type Mode =
 
 export class TerminalTextBuffer {
   private lines: string[][] = [[]];
+  /** Rows before this index are known empty; writes invalidate the prefix. */
+  private clearedAbove = 0;
   private row = 0;
   private col = 0;
   private saved: { row: number; col: number } | null = null;
@@ -61,8 +63,9 @@ export class TerminalTextBuffer {
 
   /** Apply one chunk of terminal output. */
   write(chunk: string): void {
-    this.budget += chunk.length * BUDGET_PER_CHAR;
     for (let index = 0; index < chunk.length; index += 1) {
+      // Future input must not fund earlier work, even within the same chunk.
+      this.budget += BUDGET_PER_CHAR;
       const code = chunk.charCodeAt(index);
       switch (this.mode.kind) {
         case "text":
@@ -249,7 +252,7 @@ export class TerminalTextBuffer {
         return;
       case "C":
       case "a":
-        this.col = Math.min(this.col + count, MAX_MOVE);
+        this.col += count;
         return;
       case "D":
         this.col = Math.max(0, this.col - count);
@@ -318,16 +321,26 @@ export class TerminalTextBuffer {
   private eraseInDisplay(mode: number): void {
     if (mode === 2 || mode === 3) {
       this.lines = [[]];
+      this.clearedAbove = 0;
       this.row = 0;
       this.saved = null;
       return;
     }
     if (mode === 1) {
-      for (let index = 0; index < this.row; index += 1) this.lines[index] = [];
+      // Skip the already-cleared prefix. Rewrites can invalidate it, so also
+      // charge traversal against the budget rather than repeatedly scanning
+      // many empty rows after a write near the start of the buffer.
+      const rows = Math.min(Math.max(0, this.row - this.clearedAbove), this.budget);
+      const end = this.clearedAbove + rows;
+      this.budget -= rows;
+      for (; this.clearedAbove < end; this.clearedAbove += 1) {
+        this.lines[this.clearedAbove] = [];
+      }
       this.eraseInLine(1);
       return;
     }
     this.lines.length = this.row + 1;
+    this.clearedAbove = Math.min(this.clearedAbove, this.lines.length);
     this.eraseInLine(0);
   }
 
@@ -340,6 +353,7 @@ export class TerminalTextBuffer {
 
   /** Write one character at the cursor, overwriting, and advance. */
   private put(char: string): void {
+    this.clearedAbove = Math.min(this.clearedAbove, this.row);
     const line = this.lines[this.row]!;
     if (this.col > line.length) {
       // A forward move past the end: pad with spaces, within budget.

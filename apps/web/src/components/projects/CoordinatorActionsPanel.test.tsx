@@ -298,3 +298,45 @@ test("PR cards show number and title, refresh metadata, and retain it on termina
   render(<ActionsPanel docked cards={result} onNavigate={() => {}} />);
   expect(screen.getByRole("button", { name: /#42 Improve search and filters/ })).toBeTruthy();
 });
+
+test("provider-qualified marks accept OpenCode but reject foreign servers", () => {
+  for (const name of [
+    "mark_question",
+    "orkestrator_mark_question",
+    "orkestrator/mark_question",
+    "mcp__orkestrator__mark_question",
+  ]) {
+    expect(
+      coordinatorActionCards([
+        msg("a", "assistant", [
+          {
+            type: "tool-invocation",
+            content: "",
+            toolName: name,
+            toolArgs: { title: "Choose" },
+            toolState: "success",
+          },
+        ]),
+      ]),
+    ).toHaveLength(1);
+  }
+  for (const name of [
+    "mcp__foreign__mark_question",
+    "foreign/mark_question",
+    "foreign_mark_question",
+  ]) {
+    expect(
+      coordinatorActionCards([
+        msg("a", "assistant", [
+          {
+            type: "tool-invocation",
+            content: "",
+            toolName: name,
+            toolArgs: { title: "Choose" },
+            toolState: "success",
+          },
+        ]),
+      ]),
+    ).toHaveLength(0);
+  }
+});

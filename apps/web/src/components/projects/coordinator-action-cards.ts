@@ -1,3 +1,4 @@
+import type { AgentInteractionRequest } from "@orkestrator/protocol/agent-interactions";
 import type { NativeMessage, NativeMessagePart } from "@/lib/chat/native-message-types";
 
 export interface CoordinatorActionCard {
@@ -9,6 +10,20 @@ export interface CoordinatorActionCard {
   state?: string;
   done: boolean;
   completeOnUser?: boolean;
+}
+
+/** Provider spellings of this server only; foreign MCP tools cannot create marks. */
+export function coordinatorToolName(name?: string): string | undefined {
+  if (!name) return undefined;
+  for (const prefix of [
+    "mcp__orkestrator__",
+    "orkestrator/",
+    "orkestrator_",
+    "mcp__orkestrator.",
+  ]) {
+    if (name.startsWith(prefix)) return name.slice(prefix.length);
+  }
+  return /[/.]|__/.test(name) ? undefined : name;
 }
 
 function* flatParts(parts: readonly NativeMessagePart[]): Generator<NativeMessagePart> {
@@ -23,6 +38,7 @@ function* flatParts(parts: readonly NativeMessagePart[]): Generator<NativeMessag
 export function coordinatorActionCards(
   messages: readonly NativeMessage[],
   answeredQuestionIds: ReadonlySet<string> = new Set(),
+  interactions: readonly AgentInteractionRequest[] = [],
 ): CoordinatorActionCard[] {
   const cards: CoordinatorActionCard[] = [];
   const prs = new Map<string, CoordinatorActionCard>();
@@ -71,7 +87,7 @@ export function coordinatorActionCards(
         ? `${notice.resource.nodeId ?? ""}:pr:${url}`
         : `${notice.resource.nodeId ?? ""}:pr:${notice.resource.environmentId ?? notice.resource.id}`;
       const state = notice.state.replace(/^pr-/, "");
-      const done = /^(merged|closed)$/.test(state);
+      const done = /^(merged|closed|gone)$/.test(state);
       if (/^(started|failed)$/.test(state)) continue;
       const existing = prs.get(key);
       if (existing) {
@@ -103,7 +119,7 @@ export function coordinatorActionCards(
           done: answeredQuestionIds.has(part.asyncQuestion.itemId),
         });
       }
-      const tool = part.toolName?.split(/__|\//).at(-1);
+      const tool = coordinatorToolName(part.toolName);
       if (tool && /^(AskUserQuestion|request_user_input|ask_question|question)$/.test(tool)) {
         const questions = part.toolArgs?.questions;
         const question = Array.isArray(questions) ? questions[0] : undefined;
@@ -142,6 +158,31 @@ export function coordinatorActionCards(
         done: false,
       });
     }
+  }
+  for (const interaction of interactions) {
+    if (interaction.kind !== "question") continue;
+    const existing = cards.find((card) => card.id === interaction.id);
+    const done = !["pending", "answering"].includes(interaction.state);
+    if (existing) {
+      existing.done = done;
+      continue;
+    }
+    const index = Math.max(
+      0,
+      messages.findLastIndex((message) => Date.parse(message.createdAt) <= interaction.createdAt),
+    );
+    const anchor = messages[index];
+    if (!anchor) continue;
+    cards.push({
+      id: interaction.id,
+      anchorId: anchor.id,
+      index,
+      kind: "question",
+      title:
+        interaction.presentation.questions.map((question) => question.prompt).join(" · ") ||
+        interaction.presentation.title,
+      done,
+    });
   }
   return cards.sort((a, b) => a.index - b.index);
 }

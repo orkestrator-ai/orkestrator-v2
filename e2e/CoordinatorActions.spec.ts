@@ -43,3 +43,30 @@ test("wide actions dock below mail with reduced motion", async ({ page }) => {
     path: path.resolve("output/visual-previews/actions-pr-metadata-wide.png"),
   });
 });
+
+test("real shell measures viewport cutoff, excludes overscan, navigates and resolves live questions", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await page.goto("/coordinator-actions-transcript");
+  await page.getByRole("button", { name: "Read end", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Question at 40", exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Live blocking question", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Answer question", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Done: Live blocking question", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Read start", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Question at 40", exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "Read end", exact: true }).click();
+  await page.getByRole("button", { name: "Question at 5", exact: true }).click();
+  await expect(page.getByTestId("anchor")).toHaveText("row-5");
+  await page.screenshot({ path: path.resolve("output/visual-previews/actions-shell-desktop.png") });
+  await page.reload();
+  await page.getByRole("button", { name: "Read end", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Live blocking question", exact: true }),
+  ).toBeVisible();
+});

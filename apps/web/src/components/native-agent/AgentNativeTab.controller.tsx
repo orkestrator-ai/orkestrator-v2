@@ -1,3 +1,4 @@
+import { useCoordinatorActionHistory } from "@/components/projects/useCoordinatorActionHistory";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { parseUserCommand } from "@orkestrator/protocol/user-commands";
 import { bugReportIdFromRuntimeId } from "@orkestrator/protocol/bug-report";
@@ -3270,6 +3271,13 @@ export function SharedNativeAgentController({
     () => (sessionStateAuthoritative ? (projectedInteractions ?? []) : []),
     [projectedInteractions, sessionStateAuthoritative],
   );
+  const coordinatorActionHistory = useCoordinatorActionHistory(
+    Boolean(coordinatorProjectId),
+    data.environmentId,
+    tabId,
+    platform,
+    projection?.sessionId,
+  );
   const transcriptInteractions = useMemo(
     () =>
       allInteractions.filter(
@@ -3965,6 +3973,8 @@ export function SharedNativeAgentController({
       onRetry={() => {
         void connect();
       }}
+      coordinatorActionHistory={coordinatorActionHistory}
+      coordinatorInteractions={allInteractions}
       coordinatorNavigate={coordinatorProjectId ? requestActionNavigation : undefined}
       messages={messages}
       agentActivityAnnouncement={agentActivityAnnouncement}

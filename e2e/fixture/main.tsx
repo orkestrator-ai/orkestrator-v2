@@ -1,4 +1,7 @@
-import { CoordinatorActionsFixture } from "./CoordinatorActionsFixture";
+import {
+  CoordinatorActionsTranscriptFixture,
+  CoordinatorActionsFixture,
+} from "./CoordinatorActionsFixture";
 import { SchedulerStatusFixture } from "./SchedulerStatusFixture";
 import { FocusVisibilityFixture } from "./FocusVisibilityFixture";
 import { SidebarMotionFixture } from "../../apps/web/src/test/SidebarMotionFixture";
@@ -2006,6 +2009,8 @@ function fixtureForPath() {
   }
   if (window.location.pathname === "/project-home-message-approval")
     return <ProjectHomeMessageApprovalFixture />;
+  if (window.location.pathname === "/coordinator-actions-transcript")
+    return <CoordinatorActionsTranscriptFixture />;
   if (window.location.pathname === "/coordinator-actions") return <CoordinatorActionsFixture />;
   if (window.location.pathname === "/worker-question-approval")
     return <WorkerQuestionApprovalFixture />;

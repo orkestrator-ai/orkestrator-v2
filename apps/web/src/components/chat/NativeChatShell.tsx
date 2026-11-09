@@ -1,3 +1,4 @@
+import type { AgentInteractionRequest } from "@orkestrator/protocol/agent-interactions";
 import { CoordinatorActionsPanel } from "@/components/projects/CoordinatorActionsPanel";
 import {
   coordinatorActionCards,
@@ -94,6 +95,8 @@ interface NativeChatShellProps<TMessage extends NativeMessageType> {
   serverLog?: string | null;
   onRetry: () => void;
 
+  coordinatorActionHistory?: readonly NativeMessageType[];
+  coordinatorInteractions?: readonly AgentInteractionRequest[];
   coordinatorNavigate?: (anchorId: string) => void;
   messages: TMessage[];
   isLoading: boolean;
@@ -249,22 +252,35 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
   scrollProps,
   virtuosoRef,
   coordinatorNavigate,
+  coordinatorActionHistory,
+  coordinatorInteractions,
   highlightedMessageId = null,
 }: NativeChatShellProps<TMessage>) {
   const [visibleEnd, setVisibleEnd] = useState<number | null>(null);
+  const loadedIds = useMemo(() => new Set(messages.map((message) => message.id)), [messages]);
   const actionCards = useMemo(
     () =>
       coordinatorNavigate
         ? coordinatorActionCards(
-            messages,
+            coordinatorActionHistory
+              ? [...coordinatorActionHistory.filter((old) => !loadedIds.has(old.id)), ...messages]
+              : messages,
             new Set(
               asyncQuestionResponses
                 ?.filter((response) => response.state === "sent")
                 .map((response) => response.itemId),
             ),
+            coordinatorInteractions,
           )
         : [],
-    [coordinatorNavigate, messages, asyncQuestionResponses],
+    [
+      coordinatorNavigate,
+      loadedIds,
+      messages,
+      asyncQuestionResponses,
+      coordinatorActionHistory,
+      coordinatorInteractions,
+    ],
   );
   const [showLog, setShowLog] = useState(false);
   const [composeDockElement, setComposeDockElement] = useState<HTMLDivElement | null>(null);
@@ -607,7 +623,13 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
       >
         {coordinatorNavigate && (
           <CoordinatorActionsPanel
-            cards={visibleCoordinatorCards(actionCards, visibleEnd ?? messages.length - 1)}
+            cards={visibleCoordinatorCards(
+              actionCards.map((card) => ({
+                ...card,
+                index: messages.findIndex((message) => message.id === card.anchorId),
+              })),
+              visibleEnd ?? messages.length - 1,
+            )}
             onNavigate={coordinatorNavigate}
           />
         )}

@@ -3853,7 +3853,7 @@ prompts do not start user subjects. The next actual user message handles a
 marked plain-text question. No additional model call or renderer persistence
 store is used.
 
-The panel replays the loaded transcript in order, then shows the newest ten
+The panel replays historical action evidence together with the loaded transcript in order, then shows the newest ten
 cards whose anchor is at or above the viewport bottom. The virtual list measures
 visible rows on scroll and row resizing, excluding its render overscan. Cards navigate through
 the node-qualified conversation scroll target, loading history pages while an
@@ -3861,7 +3861,16 @@ anchor is missing and briefly highlighting the destination. The existing target
 expiry bounds missing-anchor recovery. All reads and targets follow the
 conversation's node scope; worker tabs do not enable the panel.
 
-Current limitations: actions outside the loaded history window are not recovered
-on reload. Workflow-to-PR replay reconciles the structured PR URL or, for
+Coordinator tabs independently scan history pages on mount to recover action
+metadata beyond the rendered window, including after reload or in another client.
+The scan strips prose and unrelated tool outputs, reads one byte-bounded page at
+a time, and refuses changed epochs, incomplete history, repeated cursors or more
+than 10,000 pages / 8 MiB of evidence. Unavailable history leaves live cards usable;
+providers must expose complete history for complete historical recovery. The scan
+is cancelled on session replacement/unmount and never expands the renderer's
+retained message budget. Live structured question interactions join replayed
+question tools by request ID; terminal interactions and deleted PRs are done.
+Only bare native tool names and explicit Orkestrator server prefixes create marks.
+Workflow-to-PR replay reconciles the structured PR URL or, for
 older notices, the PR URL carried by status notice bodies; older URL-free notices fall back to a node-qualified environment identity.
 Publication-started and publication-failed notices do not create PR cards.

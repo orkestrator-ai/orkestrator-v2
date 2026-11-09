@@ -809,6 +809,22 @@ export class StorageService {
     return this.repos.sessions.createSession(environmentId, containerId, tabId, sessionType);
   }
 
+  withAutoPipelinePromotion<T>(environmentId: string, operation: () => Promise<T>) {
+    return this.repos.drafts.withAutoPipelinePromotion(environmentId, operation);
+  }
+  deleteAutoPipelineDraftsByEnvironment(environmentId: string) {
+    return this.repos.drafts.deleteAutoPipelineDraftsByEnvironment(environmentId);
+  }
+  latestAutoPipelineDraft(environmentId: string, tabId: string) {
+    return this.repos.drafts.latestAutoPipelineDraft(environmentId, tabId);
+  }
+  getAutoPipelineDraft(id: string) {
+    return this.repos.drafts.getAutoPipelineDraft(id);
+  }
+  putAutoPipelineDraft(record: import("./auto-pipeline.js").AutoPipelineDraftRecord) {
+    this.repos.drafts.putAutoPipelineDraft(record);
+  }
+
   getPaneLayout(environmentId: string): Promise<PersistedPaneLayout | null> {
     return this.repos.sessions.getPaneLayout(environmentId);
   }

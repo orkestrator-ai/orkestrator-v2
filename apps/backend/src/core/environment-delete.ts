@@ -301,6 +301,7 @@ export async function deleteEnvironment(
       }
       context.nativeAgents?.forgetEnvironmentCommandCatalogues?.(environmentId);
       context.nativeAgents?.forgetEnvironmentProjections?.(environmentId);
+      storage.deleteAutoPipelineDraftsByEnvironment(environmentId);
       await storage.deleteComposeDraftsByEnvironment(environmentId);
       await storage.deleteFileDraftsByEnvironment(environmentId);
       await storage.deleteAgentHandoffsByEnvironment(environmentId);

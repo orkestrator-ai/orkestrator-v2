@@ -16,10 +16,13 @@ test("read verbs may lead a command or follow one namespace", () => {
     "graph_runs_list",
     "graph_template_get",
     "graph_run_effects",
+    "auto_pipeline_sources",
   ])
     expect(isNodeReadCommand(command)).toBe(true);
   for (const command of [
     "create_environment",
+    "draft_auto_pipeline",
+    "confirm_auto_pipeline",
     "changes_reset_view",
     "forget_project",
     "target_get",

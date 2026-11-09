@@ -459,6 +459,16 @@ export class BuildPipelineSupervisor {
     }
 
     if (pipeline.phase === "waiting-for-setup") {
+      const completedBuild = pipeline.sessions.find(
+        (session) => session.phase === "build" && session.adoptedFromTabId && session.completedAt,
+      );
+      if (completedBuild) {
+        // Interactive work already owns this checkout. Running setup or a
+        // second Build could overwrite it; enter the usual Review preparation
+        // path without sending anything to the original provider session.
+        await this.startVerifiedReviewOrPrepare(pipeline);
+        return;
+      }
       // Setup writes the checkout and the Build stage follows it: wait for a
       // graph run holding the environment before running either.
       this.ctx.options.workspaceWriters
@@ -572,7 +582,12 @@ export class BuildPipelineSupervisor {
       const sessionPhase = sessionPhaseFor(phase);
       if (!sessionPhase) throw new Error(`Cannot retry pipeline phase ${phase}`);
       delete pipeline.stageRetryRequested;
-      await this.startStage(pipeline, sessionPhase, phase);
+      const current = pipeline.sessions[pipeline.currentSessionIndex];
+      if (current?.label === REVIEW_PACKAGE_SESSION_LABEL) {
+        await this.startReviewPackagePreparation(pipeline);
+      } else {
+        await this.startStage(pipeline, sessionPhase, phase);
+      }
       return;
     }
 

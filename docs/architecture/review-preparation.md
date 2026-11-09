@@ -852,3 +852,38 @@ five reviewers. One usable report has nothing to share, so its compact
 evidence is about 10% larger. For two small reports the whole compact prompt
 is about 2% larger, because the paragraph explaining `shared` outweighs what
 it saves. The savings grow with panel size and shared scope.
+
+## Adopting completed interactive work
+
+A completed prompt Build can be recorded through the pipeline service's internal
+adoption entry point. Its supplied key-information patch becomes the Build's
+round-1 brief, so the existing handoff and Notes readers share it. The original
+session is already settled: review preparation uses a separate normal pipeline
+session and never requests another turn in the original tab. Without an immutable
+review package, the normal preparation stage still runs before Review.
+
+The caller must supply a committed baseline and validate the chosen native tab's
+ownership and idleness before admission. The manual Auto-pipeline commands now
+perform these checks before drafting and again before confirmation.
+
+
+### Auto-pipeline Build handoff
+
+Manual Auto-pipeline drafting returns the ticket and Build key-information patch
+in one read-only session through `submit_auto_pipeline_draft`. The patch records
+observed work and files, decisions, checks with their results, and unfinished
+work. Confirmation keeps the generated handoff authoritative while accepting the
+user's edited ticket and criteria. It enters the completed-Build admission path
+on the existing environment. Review preparation, Verify and Notes then consume
+the normal ticket and key-information brief; they do not reconstruct the Build
+from a new model turn. Later brief updates do not overwrite the original Build
+attempt's inspector notes.
+
+Confirmation reserves the existing environment's exclusive mutation fence before
+resolving its worktree path or revalidating the draft. It holds that reservation
+through staging, commit, ticket publication and completed-Build admission. New
+agent submissions, file writes, terminal starts, checkout moves and other pipeline
+admissions are refused while it is held. Already active agents, workflows and
+live terminal shells must finish or close before promotion; an idle source tab
+alone is insufficient. Both failure and success release the reservation, and a
+retry of a completed admission may repair publication while its pipeline runs.

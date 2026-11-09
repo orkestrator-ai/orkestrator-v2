@@ -58,6 +58,13 @@ export type CommandContext = {
       target: "host" | "container",
       tabId?: string,
     ): AgentToolConnection;
+    workflowResultConnection?(
+      environmentId: string,
+      projectId: string,
+      target: "host" | "container",
+      resultKey: string,
+      provider?: AgentPlatform,
+    ): AgentToolConnection;
     revokeEnvironment(environmentId: string): void;
     revokeTab?(environmentId: string, tabId: string): void;
     /** Port containers call back to; the network policy allows exactly it. */

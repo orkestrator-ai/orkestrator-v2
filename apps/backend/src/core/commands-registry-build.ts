@@ -1,3 +1,13 @@
+import type { CommandContext } from "./commands-context.js";
+import { AutoPipelineService } from "./auto-pipeline.js";
+import { GraphAgentProviders, graphAgentBridgeConnection } from "./graph-agent-providers.js";
+import { createPipelineEnvironmentGit } from "./commands-review.js";
+import {
+  autoPipelineSourcesCommand,
+  draftAutoPipelineCommand,
+  cancelAutoPipelineDraftCommand,
+  confirmAutoPipelineCommand,
+} from "@orkestrator/protocol/contract/domains/pipelines";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import {
   cancelBuildPipelineCommand,
@@ -60,6 +70,46 @@ export function registerBuildPipelineCommands(
   dependencies: RegistryDependencies,
 ): void {
   const { conditionalManifestSnapshot } = dependencies;
+  const autoServices = new WeakMap<CommandContext, AutoPipelineService>();
+  const auto = (context: CommandContext) => {
+    let service = autoServices.get(context);
+    if (!service) {
+      service = new AutoPipelineService(context, () => {
+        const providers = new GraphAgentProviders({
+          connection: (environment, agent) =>
+            graphAgentBridgeConnection(
+              async (name, args) => {
+                const command = dependencies.commands.get(name);
+                if (!command) throw new Error("Bridge command unavailable");
+                return (await command(args ?? {}, context)) as never;
+              },
+              agent,
+              environment,
+            ),
+        });
+        return {
+          provider: (environment, agent) => providers.get(environment, agent, "auto-pipeline"),
+          release: () => providers.shutdown(),
+          git: createPipelineEnvironmentGit(context.storage, context.runtime.environments.fence),
+        };
+      });
+      autoServices.set(context, service);
+    }
+    return service;
+  };
+  register(autoPipelineSourcesCommand, ({ environmentId }, context) =>
+    auto(context).sources(environmentId),
+  );
+  register(draftAutoPipelineCommand, ({ environmentId, tabId }, context) =>
+    auto(context).draft(environmentId, tabId),
+  );
+  register(cancelAutoPipelineDraftCommand, ({ environmentId, tabId }, context) =>
+    auto(context).cancelDraft(environmentId, tabId),
+  );
+  register(
+    confirmAutoPipelineCommand,
+    ({ draftId, ticket }, context) => auto(context).confirm(draftId, ticket) as never,
+  );
   register(startBuildPipelineCommand, (args, context) => {
     if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
     const input = canonicalBuildPipeline(args);

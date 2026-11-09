@@ -26,6 +26,7 @@
  * `BuildPipelineStageDispatch` port wired here.
  */
 import type { ProvisionalFindingSink } from "./review-provisional-findings.js";
+import type { CompletedBuildAttempt } from "./build-pipeline-completed-build.js";
 import type { DeliveryPolicy } from "@orkestrator/protocol/ticket-sections";
 import type {
   BuildPipelineCodeRewindPreview,
@@ -172,6 +173,14 @@ export class BuildPipelineService implements KeyedWorkflowOwner {
 
   start(input: StartBuildPipelineInput, coordinatorLaunchId?: string): Promise<BuildPipeline> {
     return this.lifecycle.start(input, coordinatorLaunchId);
+  }
+
+  /** Backend-only promotion entry point; ordinary launches always run Build. */
+  startFromCompletedBuild(
+    input: StartBuildPipelineInput,
+    attempt: CompletedBuildAttempt,
+  ): Promise<BuildPipeline> {
+    return this.lifecycle.start(input, undefined, attempt);
   }
 
   importLegacy(

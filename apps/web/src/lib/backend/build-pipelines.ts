@@ -422,6 +422,16 @@ export function createBuildPipelinesApi(client: BackendClient) {
   }
 
   return {
+    autoPipelineSources: (environmentId: string) =>
+      pipelines(client).auto_pipeline_sources({ environmentId }),
+    cancelAutoPipelineDraft: (environmentId: string, tabId: string) =>
+      pipelines(client).cancel_auto_pipeline_draft({ environmentId, tabId }),
+    draftAutoPipeline: (environmentId: string, tabId: string) =>
+      pipelines(client).draft_auto_pipeline({ environmentId, tabId }),
+    confirmAutoPipeline: (
+      draftId: string,
+      ticket: import("@orkestrator/protocol/build-pipeline").AutoPipelineTicket,
+    ) => pipelines(client).confirm_auto_pipeline({ draftId, ticket }),
     startBuildPipeline,
     createFeatureBuild,
     pauseBuildPipeline,
@@ -459,6 +469,10 @@ export type BuildPipelinesApi = ReturnType<typeof createBuildPipelinesApi>;
 
 /** The window's command-scope binding (the counted shim, plan item 3002). */
 export const {
+  autoPipelineSources,
+  draftAutoPipeline,
+  cancelAutoPipelineDraft,
+  confirmAutoPipeline,
   startBuildPipeline,
   createFeatureBuild,
   pauseBuildPipeline,

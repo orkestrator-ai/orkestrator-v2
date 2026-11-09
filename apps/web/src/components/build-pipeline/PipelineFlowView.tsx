@@ -1,3 +1,4 @@
+import { AutoPipelineBuildNotes } from "../review/AutoPipelineBuildNotes";
 import {
   useCallback,
   useEffect,
@@ -800,6 +801,18 @@ export function PipelineFlowView({
                   </Button>
                 ))}
               />
+              {selected.session?.adoptedFromTabId && (
+                <details className="mb-3 rounded border border-divider p-3">
+                  <summary>Original Build notes and acceptance criteria</summary>
+                  {selected.session.adoptedBuildNotes && (
+                    <AutoPipelineBuildNotes notes={selected.session.adoptedBuildNotes} />
+                  )}
+                  <h4 className="mt-3 text-sm font-semibold">Acceptance criteria</h4>
+                  <p className="whitespace-pre-wrap text-sm">
+                    {pipeline.taskSnapshot.acceptanceCriteria}
+                  </p>
+                </details>
+              )}
               <InspectorNotes node={selected} pipeline={pipeline} visibleError={visibleError} />
               {!showTranscript ? (
                 <div className="min-h-0 flex-1 overflow-y-auto pb-4">

@@ -53,7 +53,7 @@ const INTERNAL = new Set([
 ]);
 
 const DOMAINS = [
-  { domain: pipelinesDomain, commands: PIPELINES_COMMANDS, count: 35 },
+  { domain: pipelinesDomain, commands: PIPELINES_COMMANDS, count: 39 },
   { domain: multiReviewDomain, commands: MULTI_REVIEW_COMMANDS, count: 30 },
 ] as const;
 

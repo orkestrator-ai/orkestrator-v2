@@ -110,7 +110,7 @@ const SNAPSHOT = {
 };
 
 function base(overrides: Partial<BuildPipeline>): BuildPipeline {
-  return {
+  const pipeline: BuildPipeline = {
     id: "flow-pipeline",
     taskId: "flow-task",
     projectId: "flow-project",
@@ -129,6 +129,20 @@ function base(overrides: Partial<BuildPipeline>): BuildPipeline {
     controller: "backend",
     ...overrides,
   };
+  if (new URLSearchParams(window.location.search).has("adopted")) {
+    const build = pipeline.sessions.find((session) => session.phase === "build");
+    if (build) {
+      build.adoptedFromTabId = "original-tab";
+      build.adoptedBuildNotes = {
+        summary: "Finished interactive feature work.",
+        workDone: ["Updated the workspace picker."],
+        tests: [{ name: "Workspace checks", result: "passed" }],
+        decisions: [],
+        notDone: [],
+      };
+    }
+  }
+  return pipeline;
 }
 
 const PANEL = [

@@ -176,6 +176,16 @@ const unknownLaunchDefaultsCommand = async (
   throw new Error("Unknown backend command: get_multi_review_launch_defaults");
 };
 const getMultiReviewLaunchDefaultsMock = mock(unknownLaunchDefaultsCommand);
+// Existing review-only cases have no promotable source tab. Keep the new
+// manual-dialog read at the backend boundary, with a valid typed answer.
+const autoPipelineSourcesMock = mock(
+  async (
+    _environmentId: string,
+  ): Promise<Awaited<ReturnType<typeof realBackend.autoPipelineSources>>> => ({
+    available: false,
+    sources: [],
+  }),
+);
 
 /**
  * Right-click Multi Review and wait for the dialog to read the node's saved
@@ -833,6 +843,7 @@ mock.module("@/lib/backend", () => ({
   startMultiReview: startMultiReviewMock,
   launchMultiReview: launchMultiReviewMock,
   getMultiReviewLaunchDefaults: getMultiReviewLaunchDefaultsMock,
+  autoPipelineSources: autoPipelineSourcesMock,
   cancelMultiReview: cancelMultiReviewMock,
   deleteMultiReviewWorkflow: deleteMultiReviewWorkflowMock,
   enqueuePromptQueueMessage: enqueuePromptQueueMessageMock,
@@ -988,6 +999,8 @@ beforeEach(() => {
   });
   launchMultiReviewMock.mockReset();
   launchMultiReviewMock.mockImplementation(unknownLaunchCommand);
+  autoPipelineSourcesMock.mockReset();
+  autoPipelineSourcesMock.mockResolvedValue({ available: false, sources: [] });
   getMultiReviewLaunchDefaultsMock.mockReset();
   getMultiReviewLaunchDefaultsMock.mockImplementation(unknownLaunchDefaultsCommand);
   startMultiReviewMock.mockReset();

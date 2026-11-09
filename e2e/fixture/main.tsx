@@ -1,3 +1,4 @@
+import { AutoPipelineFixture, installAutoPipelineFixture } from "./AutoPipelineFixture";
 import {
   CoordinatorActionsTranscriptFixture,
   CoordinatorActionsFixture,
@@ -2090,6 +2091,10 @@ function fixtureForPath() {
     return <PathTruncationFixture />;
   }
   if (window.location.pathname === "/pi-launch-defaults") return <PiLaunchDefaultsFixture />;
+  if (window.location.pathname === "/auto-pipeline") {
+    installAutoPipelineFixture();
+    return <AutoPipelineFixture />;
+  }
   if (window.location.pathname === "/multi-review-launch") {
     return <MultiReviewLaunchDialogFixture />;
   }

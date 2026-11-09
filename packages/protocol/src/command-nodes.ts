@@ -609,6 +609,7 @@ const NAMED_NODE_READ_COMMANDS: ReadonlySet<string> = new Set([
   "graph_run_effects",
   "graph_launch_options",
   // pipelines and multi-review domains (7007)
+  "auto_pipeline_sources",
   "preview_build_pipeline_code_rewind",
   "preview_multi_review_code_rewind",
 ]);

@@ -1,4 +1,8 @@
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import {
+  adoptCompletedBuild,
+  type CompletedBuildAttempt,
+} from "./build-pipeline-completed-build.js";
 /**
  * Public build pipeline operations: init and shutdown, admission, and every
  * user control (pause, resume, messages, retries, restarts, cancel, remove).
@@ -435,6 +439,25 @@ export class BuildPipelineLifecycle {
   async start(
     input: StartBuildPipelineInput,
     coordinatorLaunchId?: string,
+    completedBuild?: CompletedBuildAttempt,
+  ): Promise<BuildPipeline> {
+    if (!isStartBuildPipelineInput(input)) throw new Error("Invalid build pipeline start request");
+    // An existing checkout cannot be admitted while a promotion or rewind owns it.
+    // The promotion's own admission inherits the exclusive owner's context.
+    const release = input.existingEnvironmentId?.trim()
+      ? this.ctx.options.environmentFence?.beginMutation(input.existingEnvironmentId.trim())
+      : undefined;
+    try {
+      return await this.startAdmitted(input, coordinatorLaunchId, completedBuild);
+    } finally {
+      release?.();
+    }
+  }
+
+  private async startAdmitted(
+    input: StartBuildPipelineInput,
+    coordinatorLaunchId?: string,
+    completedBuild?: CompletedBuildAttempt,
   ): Promise<BuildPipeline> {
     if (!isStartBuildPipelineInput(input)) {
       throw new Error("Invalid build pipeline start request");
@@ -488,6 +511,24 @@ export class BuildPipelineLifecycle {
       backendRevision: 0,
       controller: "backend",
     };
+    if (completedBuild) {
+      if (!existingEnvironment) {
+        throw new Error("A completed Build requires a running existing environment");
+      }
+      adoptCompletedBuild(pipeline, completedBuild);
+      if (existingEnvironment.status !== "running") {
+        const admitted = await this.ctx.storage.listBuildPipelines(input.projectId);
+        if (
+          !admitted.some(
+            (record) =>
+              isBuildPipeline(record.snapshot) &&
+              record.snapshot.admissionKey === pipeline.admissionKey,
+          )
+        ) {
+          throw new Error("A completed Build requires a running existing environment");
+        }
+      }
+    }
     if (!existingEnvironment) {
       // Installed before the reservation becomes visible to timer ticks.
       this.ctx.provisioningPrompts.set(pipeline.id, input.namingPrompt);
@@ -499,6 +540,17 @@ export class BuildPipelineLifecycle {
         const existing = admitted.snapshot;
         if (!isBuildPipeline(existing)) {
           throw new Error("Existing build pipeline admission is invalid");
+        }
+        if (
+          completedBuild &&
+          !existing.sessions.some(
+            (session) =>
+              session.adoptedFromTabId === completedBuild.tabId &&
+              session.sdkSessionId === completedBuild.sessionId &&
+              session.adoptedAttemptDigest === pipeline.sessions[0]?.adoptedAttemptDigest,
+          )
+        ) {
+          throw new Error("This ticket already has a different Build attempt");
         }
         // Admission is intentionally idempotent, including after a previous
         // caller completed provisioning but failed while publishing the pane
@@ -1737,7 +1789,11 @@ export class BuildPipelineLifecycle {
         delete candidate.stageRetryRequested;
       }
       const failedSession = sessionForCurrentPhase(candidate);
-      if (failedSession && failedSession.sdkSessionId === candidate.failureContext.sessionId) {
+      if (
+        failedSession &&
+        !failedSession.adoptedFromTabId &&
+        failedSession.sdkSessionId === candidate.failureContext.sessionId
+      ) {
         failedSession.status = "error";
       }
       delete candidate.error;

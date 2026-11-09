@@ -1,4 +1,8 @@
 import {
+  autoPipelineResultSchema,
+  parseAutoPipelineResult,
+} from "@orkestrator/protocol/build-pipeline";
+import {
   VERIFICATION_VERDICT_SCHEMA,
   isLegacyVerificationVerdict,
   isVerificationVerdict,
@@ -523,6 +527,9 @@ const SUBORK_ANSWER_SCHEMA = {
 } satisfies JsonSchema;
 
 const BUILT_IN_KINDS: readonly WorkflowResultKindDefinition[] = [
+  builtInKind("auto-pipeline-draft", () => autoPipelineResultSchema, {
+    validator: parses(parseAutoPipelineResult),
+  }),
   builtInKind("feature-plan-state", () => FEATURE_PLAN_STATE_SCHEMA, {
     validator: parses(
       parseFeaturePlannerStateValue,

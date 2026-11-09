@@ -857,3 +857,50 @@ bound and that test fails until the template says the same.
 
 Follow-ups: [0315-build-pipeline-flow-graph.md](../todo/coordinator-and-multi-review/0315-build-pipeline-flow-graph.md),
 [0405-build-pipeline-rewind-follow-ups.md](../todo/coordinator-and-multi-review/0405-build-pipeline-rewind-follow-ups.md).
+
+## Completed interactive Build attempts (internal foundation)
+
+The backend-only `startFromCompletedBuild` entry point can admit an already
+finished Build attempt in a running existing environment. It records the
+original provider session, a bounded copy of its transcript, its prompt tab
+identity (`adoptedFromTabId`), the committed baseline for code rewind, and a
+Build-authored key-information patch. The first display round is 1 (stored
+iteration 0).
+
+Admission precedes supervisor work. Normal source linkage and environment
+configuration still run, then the supervisor skips workspace setup and Build
+and enters the usual Review preparation path. It sends no turn to the original
+session. Restarting Build uses the ordinary ticket-based session path and
+retains the superseded original attempt and transcript.
+
+The manual Auto-pipeline launch below supplies this admission data after the
+user reviews its draft.
+
+### Manual Auto-pipeline promotion
+
+The manual Multi Review configuration dialog offers **Auto-pipeline** for an
+open interactive native agent tab in a prompt environment. A picker identifies
+the transcript when several tabs are open. Running turns disable drafting with
+an explanation. Existing pipeline environments and coordinator or pipeline
+review launchers do not offer promotion.
+
+A separate read-only session uses the saved Build agent, model and effort. It
+receives the selected transcript and the branch diff against the environment's
+base commit. Its `submit_auto_pipeline_draft` result contains the ticket and the
+Build handoff together. It never sends a turn to the original tab. The backend
+bounds the transcript, diff and result, and refuses a changed checkout.
+
+The user edits the title, description and ordered acceptance criteria before
+confirming. Generated Build notes and the pending paths are shown read-only.
+Cancel creates no ticket or pipeline; a failed draft offers retry and plain
+Multi Review. Drafts and confirmation receipts are backend-owned SQLite records.
+
+Confirmation rechecks the source and checkout, creates an in-progress ticket,
+commits pending work with normal Git hooks, and admits a completed Build on the
+existing environment. The normal pipeline tab becomes active. The graph's first
+Build attempt retains the original transcript and immutable generated notes;
+its inspector also shows the reviewed acceptance criteria. The usual Review,
+Address, Verify, delivery, conflict resolution and Notes lifecycle follows.
+Restarting Build creates an ordinary ticket-based session and retains the
+original as the first attempt. Pipeline records and ticket linkage provide the
+same sidebar, coordinator and PR ownership as any other pipeline.

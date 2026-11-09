@@ -889,6 +889,12 @@ export interface PipelineSession {
   iteration: number;
   sessionKey: string;
   sdkSessionId: string;
+  /** Original prompt tab retained as the first Build attempt after promotion. */
+  adoptedFromTabId?: string;
+  /** Immutable original Build handoff, retained across later brief updates. */
+  adoptedBuildNotes?: import("./build-pipeline-key-information.js").KeyInformationPatch;
+  /** Immutable admission identity, retained when the transcript leaves the snapshot. */
+  adoptedAttemptDigest?: string;
   status: "running" | "idle" | "error";
   startedAt: string;
   /** End of this stage attempt, retained for settled runtime presentation. */
@@ -1874,6 +1880,13 @@ function isPipelineSession(value: unknown): value is PipelineSession {
     value.sessionKey.length > 0 &&
     typeof value.sdkSessionId === "string" &&
     value.sdkSessionId.length > 0 &&
+    (value.adoptedAttemptDigest === undefined ||
+      (typeof value.adoptedAttemptDigest === "string" &&
+        /^[a-f0-9]{64}$/.test(value.adoptedAttemptDigest))) &&
+    (value.adoptedFromTabId === undefined ||
+      (isNonBlankString(value.adoptedFromTabId) &&
+        value.adoptedFromTabId.trim().length > 0 &&
+        value.adoptedFromTabId.length <= 256)) &&
     (value.status === "running" || value.status === "idle" || value.status === "error") &&
     isIsoDate(value.startedAt) &&
     (value.completedAt === undefined || isIsoDate(value.completedAt)) &&
@@ -2577,3 +2590,5 @@ export function isStartBuildPipelineInput(value: unknown): value is StartBuildPi
         (value.maxIterations as number) <= MAX_BUILD_PIPELINE_ITERATIONS))
   );
 }
+
+export * from "./auto-pipeline.js";

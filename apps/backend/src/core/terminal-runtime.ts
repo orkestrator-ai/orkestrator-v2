@@ -577,6 +577,13 @@ export class TerminalRuntime {
     return sessionIds;
   }
 
+  /** A live shell can keep writing even when it has no foreground activity. */
+  hasLiveSessionsForEnvironment(environmentId: string): boolean {
+    return Array.from(this.sessionIdsForEnvironment(environmentId)).some((id) =>
+      this.hasProcess(id),
+    );
+  }
+
   cleanupSessionsForEnvironment(environmentId: string): void {
     for (const id of this.sessionIdsForEnvironment(environmentId)) {
       this.explicitlyCloseSession(id);

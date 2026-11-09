@@ -1,3 +1,4 @@
+import { EnvironmentMutationFence } from "./environment-replacement-fence.js";
 import { WorkflowResultService } from "./workflow-result-service.js";
 import { INTERACTIVE_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 import { expect, test, spyOn, setDefaultTimeout } from "bun:test";
@@ -56,10 +57,17 @@ function seed(storage: StorageService) {
 function draftContext(
   storage: StorageService,
   buildPipelines: CommandContext["buildPipelines"],
+  fence = new EnvironmentMutationFence(),
 ): CommandContext {
   return {
     storage,
     buildPipelines,
+    runtime: {
+      environments: { fence },
+      tmux: { sessions: { activityState: () => "idle" } },
+      terminals: { hasLiveSessionsForEnvironment: () => false },
+    },
+    nativeAgents: { hasActiveCheckoutWork: async () => false },
     workflowResults: new WorkflowResultService(storage.getDataDir()),
     agentTools: {
       workflowResultConnection: () => ({ url: "http://127.0.0.1:1/mcp", token: "fixture" }),
@@ -581,4 +589,145 @@ test("a hung drafting send times out, releases its session and permits retry", a
       abort.mockRestore();
     }
   });
+});
+
+for (const boundary of ["add", "commit", "admission"] as const) {
+  test(`promotion owns checkout through ${boundary} and releases it on failure`, async () => {
+    const fence = new EnvironmentMutationFence();
+    await withService(
+      async (buildPipelines, storage, provider) => {
+        seed(storage);
+        await storage.updateEnvironment("env-1", {
+          createdFromCommit: "1111111111111111111111111111111111111111",
+        });
+        const context = draftContext(storage, buildPipelines, fence);
+        const ports = gitPorts(async () => provider);
+        const git = ports.git;
+        let reached!: () => void;
+        let resume!: () => void;
+        const ready = new Promise<void>((resolve) => {
+          reached = resolve;
+        });
+        const gate = new Promise<void>((resolve) => {
+          resume = resolve;
+        });
+        const stopAtBoundary = async () => {
+          reached();
+          await gate;
+          throw new Error("injected promotion failure");
+        };
+        ports.git = async (id, args) => {
+          // Real environment Git commands participate in this same fence.
+          fence.beginMutation(id)();
+          if (args[0] === boundary) await stopAtBoundary();
+          if (args[0] === "status") return " M fixture.ts\n";
+          return git(id, args);
+        };
+        const auto = new AutoPipelineService(context, () => ports);
+        const send = spyOn(provider, "send").mockImplementation(async (_id, _prompt, options) => {
+          await context.workflowResults!.submit(
+            { environmentId: "env-1", projectId: "project-1" },
+            options.requestId,
+            result,
+          );
+        });
+        let draft;
+        try {
+          draft = await auto.draft("env-1", "original-tab");
+        } finally {
+          send.mockRestore();
+        }
+        const admission =
+          boundary === "admission"
+            ? spyOn(buildPipelines, "startFromCompletedBuild").mockImplementation(stopAtBoundary)
+            : undefined;
+        const promotion = auto.confirm(draft.id, result);
+        const rejected = promotion.catch((error: unknown) => error);
+        await ready;
+        try {
+          expect(() => fence.beginAgentWork("env-1")).toThrow();
+          expect(() => fence.beginMutation("env-1")).toThrow();
+          expect(() => fence.beginWorktreeMutation("/tmp/build/fixture.ts")).toThrow();
+          await expect(
+            buildPipelines.start({
+              projectId: "project-1",
+              taskId: "other",
+              taskTitle: "Other pipeline",
+              taskSnapshot: {
+                title: "Other pipeline",
+                description: "",
+                acceptanceCriteria: "",
+                comments: [],
+                images: [],
+              },
+              agentType: "codex",
+              existingEnvironmentId: "env-1",
+              environmentType: "local",
+            }),
+          ).rejects.toThrow("being moved");
+        } finally {
+          resume();
+          expect(await rejected).toMatchObject({ message: "injected promotion failure" });
+          admission?.mockRestore();
+        }
+        fence.beginAgentWork("env-1")();
+        fence.beginMutation("env-1")();
+        expect(await storage.kanban.getKanbanTasks("project-1")).toHaveLength(0);
+      },
+      { environmentFence: fence, realKanban: true },
+    );
+  });
+}
+
+test("promotion refuses an in-flight submission, another active agent and a live terminal", async () => {
+  await withService(
+    async (buildPipelines, storage, provider) => {
+      seed(storage);
+      await storage.updateEnvironment("env-1", {
+        createdFromCommit: "1111111111111111111111111111111111111111",
+      });
+      const context = draftContext(storage, buildPipelines);
+      const ports = gitPorts(async () => provider);
+      const auto = new AutoPipelineService(context, () => ports);
+      const send = spyOn(provider, "send").mockImplementation(async (_id, _prompt, options) => {
+        await context.workflowResults!.submit(
+          { environmentId: "env-1", projectId: "project-1" },
+          options.requestId,
+          result,
+        );
+      });
+      let draft;
+      try {
+        draft = await auto.draft("env-1", "original-tab");
+      } finally {
+        send.mockRestore();
+      }
+      const release = context.runtime.environments.fence.beginAgentWork("env-1");
+      try {
+        await expect(auto.confirm(draft.id, result)).rejects.toThrow("submission");
+      } finally {
+        release();
+      }
+      const active = spyOn(context.nativeAgents!, "hasActiveCheckoutWork").mockResolvedValue(true);
+      try {
+        await expect(auto.confirm(draft.id, result)).rejects.toThrow("agent may still write");
+      } finally {
+        active.mockRestore();
+      }
+      const terminal = spyOn(
+        context.runtime.terminals,
+        "hasLiveSessionsForEnvironment",
+      ).mockReturnValue(true);
+      try {
+        await expect(auto.confirm(draft.id, result)).rejects.toThrow("terminals");
+      } finally {
+        terminal.mockRestore();
+      }
+      expect(await storage.kanban.getKanbanTasks("project-1")).toHaveLength(0);
+      expect(await storage.listBuildPipelines("project-1")).toHaveLength(0);
+      expect(storage.getAutoPipelineDraft(draft.id)?.reviewed).toBeUndefined();
+      expect(context.runtime.environments.fence.isBeingMoved("env-1")).toBe(false);
+    },
+    { realKanban: true },
+  );
 });

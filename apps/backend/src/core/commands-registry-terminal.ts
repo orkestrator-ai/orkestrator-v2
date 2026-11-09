@@ -213,6 +213,19 @@ import { newContainerTerminalToken } from "./container-terminal-shell.js";
  * token so that closing the PTY can end the shell in the container as well
  * (`container-terminal-shell.ts`). An already running PTY is left as it is.
  */
+/** Resolve even legacy terminals that were opened with only a container id. */
+async function assertContainerCheckoutAvailable(
+  containerId: string,
+  context: CommandContext,
+): Promise<void> {
+  const environments = await context.storage.loadEnvironments();
+  for (const environment of environments) {
+    const owned = environment.containerId;
+    if (owned && (owned.startsWith(containerId) || containerId.startsWith(owned)))
+      context.runtime.environments.fence.assertNotMoving(environment.id);
+  }
+}
+
 function spawnContainerTerminal(
   id: string,
   config: { containerId: string; cols: number; rows: number; user?: string },
@@ -560,7 +573,7 @@ export function registerTerminalCommands(
     },
     ASYNC_HANDLER,
   );
-  register(attachTerminalCommand, ({ containerId, cols, rows, user }, context) => {
+  register(attachTerminalCommand, async ({ containerId, cols, rows, user }, context) => {
     const { storage, runtime } = context;
     assertContainerNotDraining(containerId);
     const id = `${containerId}:${randomUUID()}`;
@@ -579,6 +592,7 @@ export function registerTerminalCommands(
       cols: config.cols,
       rows: config.rows,
     });
+    await assertContainerCheckoutAvailable(containerId, context);
     spawnContainerTerminal(id, config, context);
     return id;
   });
@@ -618,6 +632,8 @@ export function registerTerminalCommands(
         throw new Error("Container terminal session is no longer available");
       }
       await runtime.terminals.history.resume(id);
+      await assertContainerCheckoutAvailable(config.containerId, context);
+      runtime.environments.fence.assertNotMoving(environmentId);
       spawnContainerTerminal(id, config, context, runtime.terminals.activityHooks(id, context));
     },
     ASYNC_HANDLER,

@@ -441,6 +441,24 @@ export class BuildPipelineLifecycle {
     coordinatorLaunchId?: string,
     completedBuild?: CompletedBuildAttempt,
   ): Promise<BuildPipeline> {
+    if (!isStartBuildPipelineInput(input)) throw new Error("Invalid build pipeline start request");
+    // An existing checkout cannot be admitted while a promotion or rewind owns it.
+    // The promotion's own admission inherits the exclusive owner's context.
+    const release = input.existingEnvironmentId?.trim()
+      ? this.ctx.options.environmentFence?.beginMutation(input.existingEnvironmentId.trim())
+      : undefined;
+    try {
+      return await this.startAdmitted(input, coordinatorLaunchId, completedBuild);
+    } finally {
+      release?.();
+    }
+  }
+
+  private async startAdmitted(
+    input: StartBuildPipelineInput,
+    coordinatorLaunchId?: string,
+    completedBuild?: CompletedBuildAttempt,
+  ): Promise<BuildPipeline> {
     if (!isStartBuildPipelineInput(input)) {
       throw new Error("Invalid build pipeline start request");
     }

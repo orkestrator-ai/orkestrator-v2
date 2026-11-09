@@ -878,3 +878,12 @@ on the existing environment. Review preparation, Verify and Notes then consume
 the normal ticket and key-information brief; they do not reconstruct the Build
 from a new model turn. Later brief updates do not overwrite the original Build
 attempt's inspector notes.
+
+Confirmation reserves the existing environment's exclusive mutation fence before
+resolving its worktree path or revalidating the draft. It holds that reservation
+through staging, commit, ticket publication and completed-Build admission. New
+agent submissions, file writes, terminal starts, checkout moves and other pipeline
+admissions are refused while it is held. Already active agents, workflows and
+live terminal shells must finish or close before promotion; an idle source tab
+alone is insufficient. Both failure and success release the reservation, and a
+retry of a completed admission may repair publication while its pipeline runs.

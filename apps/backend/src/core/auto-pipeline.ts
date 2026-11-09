@@ -16,7 +16,12 @@ import {
 import type { StartBuildPipelineInput } from "@orkestrator/protocol/build-pipeline";
 import type { CommandContext } from "./commands-context.js";
 import type { BuildPipelineProvider } from "./build-pipeline-provider.js";
-import type { EnvironmentGit } from "./workspace-code-rewind.js";
+import {
+  assertNoOtherWorkflowWriting,
+  withWorkspaceCodeRewindReservation,
+  type EnvironmentGit,
+} from "./workspace-code-rewind.js";
+import { multiReviewWorkspaceUse } from "./workspace-writers.js";
 import { paneLayoutLeaves } from "./storage-shared.js";
 import { buildPipelineStartWithSavedDefaults } from "./build-pipeline-launch.js";
 import { resolveEnvironmentExecutionPolicy } from "./native-agent-execution-policy.js";
@@ -344,8 +349,46 @@ export class AutoPipelineService {
         new Error("Auto-pipeline draft expired. Draft again before confirming"),
       );
     return this.context.storage.withAutoPipelinePromotion(record.environment.id, () =>
-      this.promote(id, ticket),
+      withWorkspaceCodeRewindReservation({
+        fence: this.context.runtime.environments.fence,
+        storage: this.context.storage,
+        environmentId: record.environmentId,
+        // A completed admission may replay while its own pipeline is running.
+        // Fresh promotion checks quiescence inside promote, after replay detection.
+        assertQuiet: async () => {},
+        run: () => this.promote(id, ticket),
+      }),
     );
+  }
+  private async assertCheckoutQuiet(environmentId: string): Promise<void> {
+    await assertNoOtherWorkflowWriting(this.context.storage, environmentId, {});
+    for (const review of await this.context.storage.listAllMultiReviewWorkflows()) {
+      if (review.environmentId === environmentId && multiReviewWorkspaceUse(review.snapshot))
+        throw new Error("A Multi Review is using this checkout. Finish it before promotion.");
+    }
+    if (
+      this.context.runtime.tmux.sessions.activityState(environmentId) !== "idle" ||
+      (await this.context.nativeAgents?.hasActiveCheckoutWork(environmentId))
+    )
+      throw new Error("An agent may still write to this checkout. Stop it before promotion.");
+    const environment = await this.context.storage.getEnvironment(environmentId);
+    if (
+      this.context.runtime.terminals.hasLiveSessionsForEnvironment(environmentId) ||
+      (environment?.containerId &&
+        this.context.runtime.terminals.hasContainerTerminal(environment.containerId))
+    )
+      throw new Error(
+        "Close this environment's terminals before promotion; a shell may still write.",
+      );
+    const sessions = await this.context.storage.listNativeAgentSessions();
+    if (
+      sessions.some(
+        (session) =>
+          session.environmentId === environmentId &&
+          (session.pendingDispatch || session.pendingSteer),
+      )
+    )
+      throw new Error("An agent submission is unresolved; settle it before promotion.");
   }
   private async promote(id: string, value: AutoPipelineTicket) {
     const record = this.context.storage.getAutoPipelineDraft(id);
@@ -377,6 +420,7 @@ export class AutoPipelineService {
       }
       throw new Error("This environment already belongs to a pipeline");
     }
+    await this.assertCheckoutQuiet(record.environmentId);
     const environment = await this.environment(record.environment.id);
     if (environment.status !== "running") throw new Error("The environment must be running");
     const source = (await this.sessions(environment.id)).find(

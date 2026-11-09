@@ -2,6 +2,7 @@ import {
   coordinatorIdFromRuntimeId,
   coordinatorConversationIdFromRuntimeId,
 } from "@orkestrator/protocol/coordinator";
+import { nativeTabLogicalSessionKey } from "@orkestrator/protocol/public-api-resources";
 import * as shared from "./storage-shared.js";
 import {
   exists,
@@ -166,7 +167,11 @@ export class DraftsRepository {
           this.files.autoPipelineDraftsFile(),
           environmentId,
         )
-        .filter((record) => record.source.logicalSessionKey === tabId && !record.reviewed)
+        .filter(
+          (record) =>
+            record.source.logicalSessionKey === nativeTabLogicalSessionKey(environmentId, tabId) &&
+            !record.reviewed,
+        )
         .sort((a, b) => b.attempt.completedAt.localeCompare(a.attempt.completedAt))[0] ?? null
     );
   }

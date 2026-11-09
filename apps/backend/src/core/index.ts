@@ -724,6 +724,8 @@ export class OrkestratorBackend {
       credentialSources: new Set(options.credentialSources ?? []),
       emit,
       agentTools: this.agentTools,
+      // Auto-pipeline drafting reads structured results through the context.
+      workflowResults: this.workflowResults,
       containerHostReachability: this.containerHostReachability,
       controlMcp: this.controlMcp,
       environmentLifecycleTasks: this.environmentLifecycleTasks,

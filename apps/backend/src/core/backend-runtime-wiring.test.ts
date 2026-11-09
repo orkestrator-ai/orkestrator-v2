@@ -274,3 +274,27 @@ test("production services report provider session windows into their owning back
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("the command context carries the backend's workflow result service for Auto-pipeline drafting", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "ork-backend-wiring-"));
+  let backend: OrkestratorBackend | undefined;
+  try {
+    backend = new OrkestratorBackend({
+      dataDir: path.join(root, "data"),
+      toolchainBinDir: "",
+      appRoot: "",
+      resourceRoot: "",
+      emit: () => undefined,
+      transcriptArtifactRuntime: false,
+    });
+    const owner = backend as unknown as {
+      context: CommandContext;
+      workflowResults: unknown;
+    };
+    expect(owner.workflowResults).toBeDefined();
+    expect(owner.context.workflowResults).toBe(owner.workflowResults as never);
+  } finally {
+    await backend?.shutdown();
+    await rm(root, { recursive: true, force: true });
+  }
+});

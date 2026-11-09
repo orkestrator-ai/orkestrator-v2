@@ -2125,7 +2125,7 @@ describe("KanbanTaskDialog", () => {
               ...initialConfig.global.agentSettings?.platforms,
               codex: {
                 ...initialConfig.global.agentSettings?.platforms?.codex,
-                model: "gpt-5.4-mini",
+                model: "gpt-6-luna",
               },
             },
           },
@@ -2160,7 +2160,7 @@ describe("KanbanTaskDialog", () => {
     expect(isChecked(screen.getByRole("radiogroup", { name: "Where it runs" }), /^Local/)).toBe(
       true,
     );
-    expect(launcherPicker("Build").textContent).toContain("GPT-5.4-Mini");
+    expect(launcherPicker("Build").textContent).toContain("GPT-6-Luna");
 
     fireEvent.click(screen.getByRole("button", { name: "Start build" }));
 
@@ -2170,7 +2170,7 @@ describe("KanbanTaskDialog", () => {
     expect(agent).toBe("codex");
     expect(options?.steps?.build).toEqual({
       agent: "codex",
-      model: "gpt-5.4-mini",
+      model: "gpt-6-luna",
       reasoningEffort: "high",
     });
   });

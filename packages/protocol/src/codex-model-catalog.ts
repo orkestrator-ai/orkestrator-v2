@@ -5,11 +5,12 @@
  * The Codex bridge, the backend's stored default and the renderer's launch and
  * settings surfaces all project this one list, so a model bump is one edit.
  *
- * These ids predate the pinned Codex CLI: its own bundled catalogue (0.166.0)
- * lists the gpt-6 family first and no longer carries gpt-5.4. They were kept when
- * this list was single-sourced because the runtime replaces an inherited default
- * the login's live catalogue does not offer (`session-held-model.ts`), and moving
- * the default needs live evidence of what API-key and ChatGPT logins serve.
+ * These are the first rows of the pinned Codex CLI's own catalogue (0.167.0:
+ * `gpt-6.1-sol`, then `gpt-6-luna`), which a ChatGPT login also served on
+ * 2026-11-08. The previous `gpt-5.4` rows were refused by ChatGPT logins
+ * ("not supported when using Codex with a ChatGPT account"). Efforts stop at
+ * `xhigh`, the ladder every surface here labels; the live catalogue replaces
+ * this list as soon as it arrives, with its full ladder.
  */
 export type CodexFallbackReasoningEffort = "low" | "medium" | "high" | "xhigh";
 
@@ -23,23 +24,23 @@ export interface CodexFallbackModel {
 
 export const CODEX_FALLBACK_MODEL_CATALOG: readonly CodexFallbackModel[] = [
   {
-    id: "gpt-5.4",
-    name: "gpt-5.4",
-    description: "Latest frontier agentic coding model.",
+    id: "gpt-6.1-sol",
+    name: "GPT-6.1-Sol",
+    description: "Latest workhorse model for coding and everyday work.",
     reasoningEfforts: ["low", "medium", "high", "xhigh"],
     defaultReasoningEffort: "high",
   },
   {
-    id: "gpt-5.4-mini",
-    name: "GPT-5.4-Mini",
-    description: "Smaller frontier agentic coding model.",
+    id: "gpt-6-luna",
+    name: "GPT-6-Luna",
+    description: "Fast and affordable model for easier tasks.",
     reasoningEfforts: ["low", "medium", "high", "xhigh"],
     defaultReasoningEffort: "high",
   },
 ];
 
 /** The model a new install stores as its Codex default. */
-export const DEFAULT_CODEX_MODEL_ID = "gpt-5.4";
+export const DEFAULT_CODEX_MODEL_ID = "gpt-6.1-sol";
 
 /** The reasoning effort a new install stores as its Codex default. */
 export const DEFAULT_CODEX_REASONING_EFFORT: CodexFallbackReasoningEffort = "high";

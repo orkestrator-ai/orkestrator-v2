@@ -16,9 +16,19 @@ import type {
 import type {
   LaunchMultiReviewActionInput,
   MultiReviewActionResult,
+  MultiReviewModelSelection,
 } from "@orkestrator/protocol/multi-review";
 import { pipelines } from "@/lib/node-scope/domains/pipelines";
 import { commandBackendClient, type BackendClient } from "./client";
+
+/** The rows and automation a plain Multi Review click runs, as the backend resolved them. */
+export interface MultiReviewLaunchDefaultRows {
+  reviewers: MultiReviewModelSelection[];
+  reviewModel: MultiReviewModelSelection;
+  fixModel: MultiReviewModelSelection;
+  autoFix: boolean;
+  autoPr: boolean;
+}
 
 /**
  * This file's commands on `client`'s node (plan item 3002). A scoped store or
@@ -53,11 +63,32 @@ export function createLaunchesApi(client: BackendClient) {
     }) as Promise<MultiReviewActionResult>;
   }
 
-  return { launchBuildPipeline, startFeaturePlanBuild, launchMultiReview };
+  /**
+   * What a plain Multi Review click on `environmentId` runs, resolved by that
+   * environment's node from its saved settings and its own model catalogue.
+   */
+  async function getMultiReviewLaunchDefaults(
+    environmentId: string,
+  ): Promise<MultiReviewLaunchDefaultRows> {
+    return coordinatorApi(client).get_multi_review_launch_defaults({
+      environmentId,
+    }) as Promise<MultiReviewLaunchDefaultRows>;
+  }
+
+  return {
+    launchBuildPipeline,
+    startFeaturePlanBuild,
+    launchMultiReview,
+    getMultiReviewLaunchDefaults,
+  };
 }
 
 export type LaunchesApi = ReturnType<typeof createLaunchesApi>;
 
 /** The window's command-scope binding (the counted shim, plan item 3002). */
-export const { launchBuildPipeline, startFeaturePlanBuild, launchMultiReview } =
-  createLaunchesApi(commandBackendClient);
+export const {
+  launchBuildPipeline,
+  startFeaturePlanBuild,
+  launchMultiReview,
+  getMultiReviewLaunchDefaults,
+} = createLaunchesApi(commandBackendClient);

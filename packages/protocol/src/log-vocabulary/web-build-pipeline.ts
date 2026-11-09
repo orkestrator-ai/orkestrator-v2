@@ -13,6 +13,8 @@ export const WEB_BUILD_PIPELINE_LOG_AREAS = defineLogAreas({
       "transcript.load-failed": "A stage transcript read failed and will retry with backoff.",
       "legacy.state-too-large": "Legacy pipeline state was over the limit and skipped.",
       "opencode-catalog.load-failed": "The cached OpenCode model list could not be loaded.",
+      "model-catalog.hydrate-failed":
+        "A node's cached model lists could not be loaded for a launcher.",
       "opencode-preferences.load-failed": "OpenCode model preferences could not be loaded.",
     },
   },

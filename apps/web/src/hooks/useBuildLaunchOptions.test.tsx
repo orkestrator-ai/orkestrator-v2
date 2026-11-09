@@ -1,10 +1,20 @@
-import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup } from "@testing-library/react";
-import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { act, cleanup, renderHook } from "@testing-library/react";
+import {
+  cleanupNodeScopes,
+  FakeNodeClient,
+  renderInNodeScope,
+  renderHookInAppCommandScope,
+} from "@/test/render-in-node-scope";
 import * as realBackend from "@/lib/backend";
 import { configStore } from "@/stores/configStore";
 import { agentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 import { appCommandStore } from "@/test/app-command-store";
+
+import { NodeScopeProvider, WindowScopeProvider } from "@/lib/node-scope/providers";
+import type { BackendId } from "@orkestrator/protocol/federation";
+
+afterEach(cleanupNodeScopes);
 
 const realBackendSnapshot = { ...realBackend };
 const getCachedOpenCodeModelCatalogMock = mock(
@@ -292,3 +302,53 @@ describe("useBuildLaunchOptions", () => {
     expect(opencode.map((model) => model.id)).not.toContain("stale/model");
   });
 });
+
+for (const fails of [false, true]) {
+  test(`hydrates the selected leaf node catalogue, including cache failure: ${fails}`, async () => {
+    const command = new FakeNodeClient({ nodeId: "bk_command-catalog" as BackendId });
+    const { windowScope, scope: commandScope } = renderInNodeScope(<div />, { client: command });
+    commandScope.store(agentModelCatalogStore).setState({
+      cursorModels: [{ platform: "cursor", id: "command-only", label: "Command only" }],
+    });
+    const leaf = new FakeNodeClient({
+      nodeId: "bk_leaf-catalog" as BackendId,
+      invoke: {
+        get_agent_model_catalog_cache: () => {
+          if (fails) throw new Error("cache unavailable");
+          return {
+            cursor: { models: [{ platform: "cursor", id: "leaf-only", label: "Leaf only" }] },
+          };
+        },
+        get_cached_opencode_model_catalog: null,
+        get_opencode_model_preferences: {
+          favorite: ["provider/favorite"],
+          recent: [],
+          variant: {},
+        },
+      },
+    });
+    const scope = windowScope.open({ role: "leaf", client: leaf });
+    scope.store(agentModelCatalogStore).setState({ cursorModels: [] });
+    const { result, unmount } = renderHook(() => useBuildLaunchOptions("project-1", true), {
+      wrapper: ({ children }) => (
+        <WindowScopeProvider windowScope={windowScope}>
+          <NodeScopeProvider scope={scope}>{children}</NodeScopeProvider>
+        </WindowScopeProvider>
+      ),
+    });
+    await flushPromises();
+    expect(leaf.calls("get_agent_model_catalog_cache")).toHaveLength(1);
+    expect(command.calls("get_agent_model_catalog_cache")).toHaveLength(0);
+    expect(result.current.catalog.cursor?.map((model) => model.id)).toEqual(
+      fails ? ["default"] : ["leaf-only"],
+    );
+    expect(commandScope.store(agentModelCatalogStore).getState().cursorModels[0]?.id).toBe(
+      "command-only",
+    );
+    // A failed hydration still leaves defaults, fallback models and saved preferences usable.
+    expect(result.current.catalog.claude.length).toBeGreaterThan(0);
+    expect(result.current.defaults.pipelineDefaults.steps.review?.agent).toBeTruthy();
+    expect(result.current.favoriteOpenCodeModelIds).toEqual(["provider/favorite"]);
+    unmount();
+  });
+}

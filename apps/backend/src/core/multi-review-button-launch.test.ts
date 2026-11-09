@@ -168,3 +168,83 @@ for (const malformed of [
     expect(await storage.getMultiReviewWorkflow("invalid-future-review")).toBeNull();
   });
 }
+
+/**
+ * `get_multi_review_launch_defaults`: the rows a plain click runs, resolved by
+ * this node from its saved settings and its own catalogue, for the configure
+ * dialog. A window's stale copy of the catalogue never decides a model.
+ */
+test("launch defaults resolve saved rows against this node's own catalogue", async () => {
+  const config = await storage.loadConfig();
+  await storage.saveConfig({
+    ...config,
+    global: {
+      ...config.global,
+      enabledAgentPlatforms: ["claude", "codex"],
+      agentSettings: {
+        ...config.global.agentSettings,
+        // A model this node's login no longer serves, and one it does.
+        platforms: { codex: { mode: "native", model: "gpt-5.4", reasoningEffort: "high" } },
+        actionDefaults: {
+          review: { platform: "codex" },
+          review2: { platform: "claude" },
+          reviewPreparation: { platform: "codex", model: "gpt-6-luna" },
+        },
+        multiReview: { autoFix: true },
+      },
+    },
+  });
+  const registry = createCommandRegistry();
+  // This node's own catalogue for the environment: what its login serves.
+  const catalogue = mock(async () => [
+    { platform: "codex", id: "gpt-6.1-sol", label: "GPT-6.1-Sol", reasoning: [{ id: "high" }] },
+    { platform: "codex", id: "gpt-6-luna", label: "GPT-6-Luna", reasoning: [{ id: "high" }] },
+  ]);
+  registry.set("get_native_agent_model_catalog", catalogue as unknown as CommandHandler);
+  const read = registry.get("get_multi_review_launch_defaults")!;
+
+  const defaults = (await read({ environmentId }, context)) as Record<string, unknown>;
+
+  expect(defaults).toMatchObject({
+    // The stale saved `gpt-5.4` becomes the catalogue's first model here.
+    reviewers: [
+      { agent: "codex", model: "gpt-6.1-sol", reasoningEffort: "high" },
+      { agent: "claude" },
+    ],
+    reviewModel: { agent: "codex", model: "gpt-6-luna", reasoningEffort: "high" },
+    fixModel: { agent: "codex", model: "gpt-6.1-sol" },
+    autoFix: true,
+    autoPr: false,
+  });
+  expect(catalogue).toHaveBeenCalledWith({ environmentId }, context);
+  expect(start).not.toHaveBeenCalled();
+});
+
+test("a plain click's omitted rows start on exactly the dialog's defaults", async () => {
+  const registry = createCommandRegistry();
+  const defaults = (await registry.get("get_multi_review_launch_defaults")!(
+    { environmentId },
+    context,
+  )) as Record<string, unknown>;
+
+  await launch(
+    { input: { requestId: "plain-click", environmentId }, reservedId: "plain-click" },
+    context,
+  );
+
+  const started = start.mock.calls[0]![0];
+  expect({
+    reviewers: started.reviewers,
+    reviewModel: started.reviewModel,
+    fixModel: started.fixModel,
+    autoFix: started.autoFix,
+    autoPr: started.autoPr,
+  }).toEqual(defaults as never);
+});
+
+test("launch defaults refuse an environment this node does not have", async () => {
+  const read = createCommandRegistry().get("get_multi_review_launch_defaults")!;
+  await expect(read({ environmentId: "missing" }, context)).rejects.toThrow(
+    "That environment does not exist on this node.",
+  );
+});

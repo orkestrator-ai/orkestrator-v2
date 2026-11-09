@@ -833,7 +833,7 @@ describe("resolveAgentDefaults", () => {
     );
 
     await selectAgentPlatform("Codex");
-    await selectAgentModel(/GPT-5\.4-Mini/);
+    await selectAgentModel(/GPT-6-Luna/);
     await selectReasoning("High");
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
 
@@ -841,7 +841,7 @@ describe("resolveAgentDefaults", () => {
       expect(onCreate).toHaveBeenCalledWith(
         expect.objectContaining({
           agentType: "codex",
-          model: "gpt-5.4-mini",
+          model: "gpt-6-luna",
           reasoningEffort: "high",
         }),
       );
@@ -1171,7 +1171,7 @@ describe("resolveAgentDefaults", () => {
         return Promise.resolve([
           {
             platform: "pi",
-            id: "openai-codex/gpt-5.4",
+            id: "openai-codex/gpt-6.1-sol",
             label: "GPT-5.4",
             providerLabel: "OpenAI Codex",
             reasoning: [{ id: "high", label: "High" }],
@@ -1201,7 +1201,7 @@ describe("resolveAgentDefaults", () => {
       appCommandStore(agentModelCatalogStore)
         .getState()
         .piModels.map((model) => model.id),
-    ).toEqual(["openai-codex/gpt-5.4"]);
+    ).toEqual(["openai-codex/gpt-6.1-sol"]);
     // Seeding spawns a real bridge on the backend, so one attempt per opening
     // is the budget: a re-render must not buy another.
     expect(
@@ -4507,11 +4507,11 @@ describe("CreateEnvironmentDialog feature builds", () => {
     config.global.agentSettings = {
       ...config.global.agentSettings,
       actionDefaults: {
-        newProject: { platform: "codex", model: "gpt-5.4", reasoningEffort: "high" },
+        newProject: { platform: "codex", model: "gpt-6.1-sol", reasoningEffort: "high" },
         review: { platform: "claude", model: "opus[1m]", reasoningEffort: "high" },
-        review2: { platform: "codex", model: "gpt-5.4", reasoningEffort: "xhigh" },
+        review2: { platform: "codex", model: "gpt-6.1-sol", reasoningEffort: "xhigh" },
         fixReviewIssues: { platform: "claude", model: "sonnet", reasoningEffort: "medium" },
-        pr: { platform: "codex", model: "gpt-5.4", reasoningEffort: "low" },
+        pr: { platform: "codex", model: "gpt-6.1-sol", reasoningEffort: "low" },
         resolve: { platform: "claude", model: "haiku" },
       },
     };
@@ -4534,14 +4534,14 @@ describe("CreateEnvironmentDialog feature builds", () => {
     const request = onCreateFeatureBuild.mock.calls[0]![0];
     expect(request.reviewers).toEqual([
       { agent: "claude", model: "opus[1m]", reasoningEffort: "high" },
-      { agent: "codex", model: "gpt-5.4", reasoningEffort: "xhigh" },
+      { agent: "codex", model: "gpt-6.1-sol", reasoningEffort: "xhigh" },
     ]);
     expect(request.steps).toEqual({
-      build: { agent: "codex", model: "gpt-5.4", reasoningEffort: "high" },
+      build: { agent: "codex", model: "gpt-6.1-sol", reasoningEffort: "high" },
       review: { agent: "claude", model: "opus[1m]", reasoningEffort: "high" },
       address: { agent: "claude", model: "sonnet", reasoningEffort: "medium" },
       verify: { agent: "claude", model: "sonnet", reasoningEffort: "medium" },
-      pr: { agent: "codex", model: "gpt-5.4", reasoningEffort: "low" },
+      pr: { agent: "codex", model: "gpt-6.1-sol", reasoningEffort: "low" },
       "resolve-conflicts": { agent: "claude", model: "haiku" },
     });
   });
@@ -4563,7 +4563,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
 
     chooseFeature({ name: "Use the visible model" });
     await selectAgentPlatform("Codex");
-    await selectAgentModel(/GPT-5\.4-Mini/);
+    await selectAgentModel(/GPT-6-Luna/);
     await selectReasoning("High");
     submitFeature();
     await waitFor(() => expect(onCreateFeatureBuild).toHaveBeenCalledTimes(1));
@@ -4572,7 +4572,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
     expect(request.agentType).toBe("codex");
     expect(request.steps?.build).toEqual({
       agent: "codex",
-      model: "gpt-5.4-mini",
+      model: "gpt-6-luna",
       reasoningEffort: "high",
     });
   });
@@ -4803,11 +4803,11 @@ describe("CreateEnvironmentDialog feature builds", () => {
     config.global.agentSettings = {
       ...config.global.agentSettings,
       actionDefaults: {
-        newProject: { platform: "codex", model: "gpt-5.4", reasoningEffort: "high" },
+        newProject: { platform: "codex", model: "gpt-6.1-sol", reasoningEffort: "high" },
         review: { platform: "claude", model: "opus[1m]", reasoningEffort: "high" },
         review2: { platform: "claude", model: "sonnet", reasoningEffort: "medium" },
         fixReviewIssues: { platform: "claude", model: "sonnet", reasoningEffort: "medium" },
-        pr: { platform: "codex", model: "gpt-5.4", reasoningEffort: "low" },
+        pr: { platform: "codex", model: "gpt-6.1-sol", reasoningEffort: "low" },
         resolve: { platform: "claude", model: "haiku" },
       },
     };
@@ -4850,11 +4850,11 @@ describe("CreateEnvironmentDialog feature builds", () => {
       { agent: "claude", model: "sonnet", reasoningEffort: "medium" },
     ]);
     expect(request.steps).toEqual({
-      build: { agent: "codex", model: "gpt-5.4", reasoningEffort: "high" },
+      build: { agent: "codex", model: "gpt-6.1-sol", reasoningEffort: "high" },
       review: { agent: "claude", model: "opus[1m]", reasoningEffort: "high" },
       address: { agent: "claude", model: "sonnet", reasoningEffort: "medium" },
       verify: { agent: "claude", model: "sonnet", reasoningEffort: "medium" },
-      pr: { agent: "codex", model: "gpt-5.4", reasoningEffort: "low" },
+      pr: { agent: "codex", model: "gpt-6.1-sol", reasoningEffort: "low" },
       "resolve-conflicts": { agent: "claude", model: "haiku" },
     });
   });

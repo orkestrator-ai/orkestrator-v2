@@ -108,6 +108,27 @@ export const MultiReviewActionResultSchema = openRecord({
   replayed: optionalBoolean,
 });
 
+/** One Multi Review row: a platform, a model id (or `default`) and its options. */
+const MultiReviewLaunchRowSchema = openRecord({
+  agent: Schema.String,
+  model: Schema.String,
+  reasoningEffort: optionalString,
+  fastMode: optionalBoolean,
+});
+
+/**
+ * What a plain Multi Review click on an environment runs: every row resolved
+ * by the environment's node from its saved settings and its own model
+ * catalogue. The configure dialog opens on exactly this.
+ */
+export const MultiReviewLaunchDefaultsSchema = openRecord({
+  reviewers: Schema.Array(MultiReviewLaunchRowSchema),
+  reviewModel: MultiReviewLaunchRowSchema,
+  fixModel: MultiReviewLaunchRowSchema,
+  autoFix: Schema.Boolean,
+  autoPr: Schema.Boolean,
+});
+
 /** A worker surface opened or edited on a node (a terminal, browser tab or tab edit). */
 export const WorkerSurfaceResultSchema = openRecord({
   environmentId: optionalString,

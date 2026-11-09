@@ -34,7 +34,7 @@ import type { ActionDefaults } from "@orkestrator/protocol/action-defaults";
 import type { MultiReviewActionResult } from "@orkestrator/protocol/multi-review";
 import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import type { PrCheckSummary } from "@orkestrator/protocol/pr-monitor";
-import type { KanbanTask } from "@/lib/backend";
+import type { KanbanTask, MultiReviewLaunchDefaultRows } from "@/lib/backend";
 import {
   CLICK_SUPPRESSION_MS,
   restoreLongPressTimingsForTests,
@@ -168,6 +168,26 @@ const unknownLaunchCommand = async (_input: unknown): Promise<MultiReviewActionR
   throw new Error("Unknown backend command: launch_multi_review");
 };
 const launchMultiReviewMock = mock(unknownLaunchCommand);
+// The configure dialog's defaults read: by default a node that predates it, so
+// the dialog opens on the rows it builds itself.
+const unknownLaunchDefaultsCommand = async (
+  _environmentId: string,
+): Promise<MultiReviewLaunchDefaultRows> => {
+  throw new Error("Unknown backend command: get_multi_review_launch_defaults");
+};
+const getMultiReviewLaunchDefaultsMock = mock(unknownLaunchDefaultsCommand);
+
+/**
+ * Right-click Multi Review and wait for the dialog to read the node's saved
+ * defaults: its rows are not editable until that answer (or an older node's
+ * refusal) arrives.
+ */
+async function openConfiguredMultiReview() {
+  fireEvent.contextMenu(screen.getByRole("button", { name: "Multi Review" }));
+  await waitFor(() =>
+    expect(screen.queryByTestId("multi-review-defaults-status") === null).toBe(true),
+  );
+}
 const cancelMultiReviewMock = mock(
   async (_workflowId: string): Promise<{ id: string; phase: "cancelled" | "cancelling" }> => ({
     id: "multi-workflow-1",
@@ -812,6 +832,7 @@ mock.module("@/lib/backend", () => ({
   setEnvironmentAutoMerge: setEnvironmentAutoMergeMock,
   startMultiReview: startMultiReviewMock,
   launchMultiReview: launchMultiReviewMock,
+  getMultiReviewLaunchDefaults: getMultiReviewLaunchDefaultsMock,
   cancelMultiReview: cancelMultiReviewMock,
   deleteMultiReviewWorkflow: deleteMultiReviewWorkflowMock,
   enqueuePromptQueueMessage: enqueuePromptQueueMessageMock,
@@ -967,6 +988,8 @@ beforeEach(() => {
   });
   launchMultiReviewMock.mockReset();
   launchMultiReviewMock.mockImplementation(unknownLaunchCommand);
+  getMultiReviewLaunchDefaultsMock.mockReset();
+  getMultiReviewLaunchDefaultsMock.mockImplementation(unknownLaunchDefaultsCommand);
   startMultiReviewMock.mockReset();
   startMultiReviewMock.mockImplementation(async () => startedMultiReview);
   cancelMultiReviewMock.mockReset();
@@ -4878,6 +4901,11 @@ describe("ActionBar workflow tabs", () => {
       expect(typeof input.requestId).toBe("string");
       expect(input).not.toHaveProperty("targetBranch");
       expect(input).not.toHaveProperty("reviewInstruction");
+      // The environment's node picks every model from its own saved settings
+      // and catalogue; the window's copy of the catalogue never decides one.
+      for (const key of ["reviewers", "reviewModel", "fixModel", "autoFix", "autoPr"]) {
+        expect(input).not.toHaveProperty(key);
+      }
       await waitFor(() =>
         expect(requestPaneTabActivationMock).toHaveBeenCalledWith(
           "env-1",
@@ -4887,6 +4915,64 @@ describe("ActionBar workflow tabs", () => {
       expect(startMultiReviewMock).not.toHaveBeenCalled();
       expect(createTabMock).not.toHaveBeenCalledWith("multi-review", expect.anything());
       expect(installMultiReviewWorkflowMock).toHaveBeenCalledWith(startedMultiReview);
+    });
+
+    test("the configure dialog opens on the rows the environment's node resolved", async () => {
+      launchMultiReviewMock.mockImplementation(async () => launched());
+      // The window's bundled Codex list has no `gpt-6-luna`; the node's has.
+      getMultiReviewLaunchDefaultsMock.mockImplementation(
+        async (): Promise<MultiReviewLaunchDefaultRows> => ({
+          reviewers: [
+            { agent: "codex", model: "gpt-6-luna", reasoningEffort: "high" },
+            { agent: "claude", model: "default" },
+          ],
+          reviewModel: { agent: "codex", model: "gpt-6-luna", reasoningEffort: "medium" },
+          fixModel: { agent: "codex", model: "gpt-6-luna" },
+          autoFix: true,
+          autoPr: false,
+        }),
+      );
+      renderInAppCommandScope(<ActionBar />);
+
+      await openConfiguredMultiReview();
+      expect(getMultiReviewLaunchDefaultsMock).toHaveBeenCalledWith("env-1");
+      expect(
+        screen
+          .getByRole("checkbox", { name: "Auto-address findings after consolidation" })
+          .getAttribute("aria-checked"),
+      ).toBe("true");
+      fireEvent.click(screen.getByRole("button", { name: "Start 2-model review" }));
+
+      await waitFor(() => expect(launchMultiReviewMock).toHaveBeenCalledTimes(1));
+      expect(launchMultiReviewMock.mock.calls[0]?.[0]).toMatchObject({
+        environmentId: "env-1",
+        reviewers: [
+          { agent: "codex", model: "gpt-6-luna", reasoningEffort: "high" },
+          { agent: "claude", model: "default" },
+        ],
+        reviewModel: { agent: "codex", model: "gpt-6-luna", reasoningEffort: "medium" },
+        fixModel: { agent: "codex", model: "gpt-6-luna" },
+        autoFix: true,
+        autoPr: false,
+      });
+    });
+
+    test("the configure dialog will not start while the node's defaults are unreadable", async () => {
+      getMultiReviewLaunchDefaultsMock.mockImplementation(async () => {
+        throw new Error("node unavailable");
+      });
+      renderInAppCommandScope(<ActionBar />);
+
+      fireEvent.contextMenu(screen.getByRole("button", { name: "Multi Review" }));
+
+      const status = await screen.findByRole("alert");
+      expect(status.textContent).toContain("node unavailable");
+      const start = screen.getByRole("button", {
+        name: "Start 2-model review",
+      }) as HTMLButtonElement;
+      expect(start.disabled).toBe(true);
+      fireEvent.click(start);
+      expect(launchMultiReviewMock).not.toHaveBeenCalled();
     });
 
     test("says so when the backend reattached to a running review", async () => {
@@ -4951,7 +5037,7 @@ describe("ActionBar workflow tabs", () => {
     currentWorkspaceReady = true;
     currentMultiReviewSettings = { autoFix: true };
     renderInAppCommandScope(<ActionBar />);
-    fireEvent.contextMenu(screen.getByRole("button", { name: "Multi Review" }));
+    await openConfiguredMultiReview();
     fireEvent.click(
       screen.getByRole("checkbox", { name: "Auto-address findings after consolidation" }),
     );
@@ -4974,7 +5060,7 @@ describe("ActionBar workflow tabs", () => {
     currentWorkspaceReady = true;
     currentMultiReviewSettings = { autoPr: true };
     renderInAppCommandScope(<ActionBar />);
-    fireEvent.contextMenu(screen.getByRole("button", { name: "Multi Review" }));
+    await openConfiguredMultiReview();
     const checkbox = screen.getByRole("checkbox", { name: "Auto-PR after fix or clean review" });
     expect(checkbox.getAttribute("aria-checked")).toBe("true");
     fireEvent.click(checkbox);
@@ -5108,7 +5194,7 @@ describe("ActionBar workflow tabs", () => {
     currentWorkspaceReady = true;
     renderInAppCommandScope(<ActionBar />);
 
-    fireEvent.contextMenu(screen.getByRole("button", { name: "Multi Review" }));
+    await openConfiguredMultiReview();
     fireEvent.click(screen.getByRole("button", { name: "Start 2-model review" }));
 
     await waitFor(() =>
@@ -5143,7 +5229,7 @@ describe("ActionBar workflow tabs", () => {
     currentWorkspaceReady = true;
     renderInAppCommandScope(<ActionBar />);
 
-    fireEvent.contextMenu(screen.getByRole("button", { name: "Multi Review" }));
+    await openConfiguredMultiReview();
     fireEvent.click(screen.getByRole("button", { name: "Start 2-model review" }));
 
     await waitFor(() =>
@@ -5435,9 +5521,9 @@ describe("ActionBar configured action defaults", () => {
       expect(screen.getByRole("dialog", { name: "Configure code review" })).toBeTruthy(),
     );
     const picker = screen.getByRole("combobox", { name: "Agent, model and reasoning" });
-    // `gpt-5.4` is the Codex catalogue's own model, so seeing it here is what
+    // `gpt-6.1-sol` is the Codex catalogue's own model, so seeing it here is what
     // says the dialog moved off Claude rather than keeping Claude's entry.
-    expect(picker.textContent).toContain("gpt-5.4");
+    expect(picker.textContent).toContain("GPT-6.1-Sol");
     expect(picker.textContent).not.toContain("Opus");
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 
@@ -5660,7 +5746,7 @@ describe("ActionBar configured action defaults", () => {
     currentWorkspaceReady = true;
     currentActionDefaults = {
       review: { platform: "claude", model: "sonnet", reasoningEffort: "high" },
-      review2: { platform: "codex", model: "gpt-5.4", reasoningEffort: "xhigh" },
+      review2: { platform: "codex", model: "gpt-6.1-sol", reasoningEffort: "xhigh" },
       fixReviewIssues: {
         platform: "claude",
         model: "claude-fable-5[1m]",
@@ -5696,7 +5782,7 @@ describe("ActionBar configured action defaults", () => {
     });
     expect(launch.reviewers[1]).toMatchObject({
       agent: "codex",
-      model: "gpt-5.4",
+      model: "gpt-6.1-sol",
       reasoningEffort: "xhigh",
     });
     // Configured as Fable 5, which Claude Code 2.1.280 superseded with Fable
@@ -5727,7 +5813,7 @@ describe("ActionBar configured action defaults", () => {
     currentClaudeFastMode = undefined;
     currentActionDefaults = {
       review: { platform: "claude", model: "sonnet", fastMode: true },
-      review2: { platform: "codex", model: "gpt-5.4" },
+      review2: { platform: "codex", model: "gpt-6.1-sol" },
     };
     currentMultiReviewSettings = {
       reviewerCount: 3,
@@ -5764,7 +5850,7 @@ describe("ActionBar configured action defaults", () => {
         model: "provider/repository-cached-reviewer",
         reasoningEffort: "high",
       },
-      review2: { platform: "codex", model: "gpt-5.4", reasoningEffort: "xhigh" },
+      review2: { platform: "codex", model: "gpt-6.1-sol", reasoningEffort: "xhigh" },
       fixReviewIssues: {
         platform: "opencode",
         model: "provider/repository-cached-fixer",
@@ -5836,7 +5922,7 @@ describe("ActionBar configured action defaults", () => {
     currentWorkspaceReady = true;
     currentEnabledAgentPlatforms = ["codex"];
     currentActionDefaults = {
-      review: { platform: "codex", model: "gpt-5.4", reasoningEffort: "high" },
+      review: { platform: "codex", model: "gpt-6.1-sol", reasoningEffort: "high" },
     };
     currentMultiReviewSettings = {
       reviewerCount: 3,
@@ -5853,7 +5939,7 @@ describe("ActionBar configured action defaults", () => {
     expect(launch.reviewers).toHaveLength(3);
     expect(launch.reviewers[2]).toMatchObject({
       agent: "codex",
-      model: "gpt-5.4",
+      model: "gpt-6.1-sol",
       reasoningEffort: "high",
     });
   });

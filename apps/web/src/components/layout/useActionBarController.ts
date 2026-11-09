@@ -946,8 +946,18 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     [handleReview],
   );
 
+  /**
+   * Start Multi Review. With no `selection` (a plain click or ⌘M) the request
+   * names only the environment and its node fills every row from its own saved
+   * settings and model catalogue; the window never picks the models.
+   * `legacySelection` is only for a node that predates `launch_multi_review`
+   * and so cannot fill them.
+   */
   const handleMultiReview = useCallback(
-    async (selection: MultiReviewLaunchSelection) => {
+    async (
+      selection?: MultiReviewLaunchSelection,
+      legacySelection?: () => MultiReviewLaunchSelection,
+    ) => {
       if (
         multiReviewLaunchInFlightRef.current ||
         !createTab ||
@@ -986,11 +996,15 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
           .launchMultiReview({
             requestId,
             environmentId: selectedEnvironmentId,
-            reviewers: selection.reviewers,
-            reviewModel: selection.reviewModel,
-            fixModel: selection.fixModel,
-            autoFix: selection.autoFix,
-            autoPr: selection.autoPr,
+            ...(selection
+              ? {
+                  reviewers: selection.reviewers,
+                  reviewModel: selection.reviewModel,
+                  fixModel: selection.fixModel,
+                  autoFix: selection.autoFix,
+                  autoPr: selection.autoPr,
+                }
+              : {}),
           })
           .catch((error: unknown) => {
             if (incompatibility(error, "launch_multi_review")?.code !== "unknown-command")
@@ -999,6 +1013,10 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
           });
         if (!launched) {
           launch.failed();
+          const legacyChoice = selection ?? legacySelection?.();
+          if (!legacyChoice) {
+            throw new Error("This machine's Orkestrator is too old to choose the review models.");
+          }
           const legacy = await legacyLaunchMultiReview({
             scope: actionBarScope,
             environmentId: selectedEnvironmentId,
@@ -1007,7 +1025,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
               config.repositories[selectedProjectId]?.prBaseBranch,
             ),
             reviewInstruction: config.global.reviewInstruction,
-            selection,
+            selection: legacyChoice,
             createTab: (workflowId) =>
               Boolean(
                 createTab("multi-review", {

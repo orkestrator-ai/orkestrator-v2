@@ -1,5 +1,5 @@
 /**
- * The controller part of the `coordinator` domain (plan item 7009): its 34
+ * The controller part of the `coordinator` domain (plan item 7009): its 35
  * definitions classify reads as the routing classifier does, declare the
  * access and critical keys recorded in the item, keep model records open,
  * and the domain client sends typed, enveloped calls to a node with the
@@ -34,8 +34,16 @@ const ADMIN = new Set([
   "revoke_control_mcp_credential",
 ]);
 
-/** Not workspace-excluded today: jobs, the renderer's Multi Review button, one coordinator read. */
-const WORKSPACE = new Set(["launch_control_job", "launch_native_agent_job", "launch_multi_review"]);
+/**
+ * Not workspace-excluded today: jobs, the renderer's Multi Review button and
+ * the launch defaults its configure dialog reads, one coordinator read.
+ */
+const WORKSPACE = new Set([
+  "launch_control_job",
+  "launch_native_agent_job",
+  "launch_multi_review",
+  "get_multi_review_launch_defaults",
+]);
 
 const CRITICAL: Record<string, readonly string[]> = {
   create_control_mcp_credential: ["capabilities", "deniedActions"],
@@ -69,10 +77,10 @@ const CRITICAL: Record<string, readonly string[]> = {
 };
 
 describe("coordinator controller definitions", () => {
-  it("defines 34 commands once each, at version 1, all in the domain's list", () => {
+  it("defines 35 commands once each, at version 1, all in the domain's list", () => {
     const names = COORDINATOR_CONTROLLER_COMMANDS.map((def) => def.name);
-    expect(names).toHaveLength(34);
-    expect(new Set(names).size).toBe(34);
+    expect(names).toHaveLength(35);
+    expect(new Set(names).size).toBe(35);
     expect(coordinatorDomain).toMatchObject({ name: "coordinator", version: 1, min: 1 });
     for (const def of COORDINATOR_CONTROLLER_COMMANDS) {
       expect(def.domain).toBe(coordinatorDomain);

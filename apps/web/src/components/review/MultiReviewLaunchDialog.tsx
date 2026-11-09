@@ -84,11 +84,24 @@ export interface MultiReviewLaunchDefaults {
   addressFindingsModelDefaults?: MultiReviewRowDefaults;
 }
 
+/**
+ * The rows a plain click would run, as the environment's node resolved them
+ * (`get_multi_review_launch_defaults`). `unsupported` is a node that predates
+ * the command: the dialog then opens on the rows built from the props above.
+ */
+export type MultiReviewResolvedDefaults =
+  | { status: "loading" }
+  | { status: "ready"; selection: MultiReviewLaunchSelection }
+  | { status: "unsupported" }
+  | { status: "failed"; message: string };
+
 interface MultiReviewLaunchDialogProps extends MultiReviewLaunchDefaults {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   busy?: boolean;
   onConfirm: (selection: MultiReviewLaunchSelection) => void;
+  /** Omitted, the dialog opens on the rows built from the props (older callers). */
+  resolvedDefaults?: MultiReviewResolvedDefaults;
 }
 
 export function StackedEyes({ className = "size-5" }: { className?: string }) {
@@ -146,6 +159,25 @@ function cleanRow(row: PickerRow): MultiReviewModelSelection {
     ...(row.reasoningEffort ? { reasoningEffort: row.reasoningEffort } : {}),
     ...(typeof row.fastMode === "boolean" ? { fastMode: row.fastMode } : {}),
     ...launchedReviewLens(row.lens),
+  };
+}
+
+/**
+ * A row the backend resolved, keeping the platform preferences of the row the
+ * props built at the same position so switching models inside the row behaves
+ * as before.
+ */
+function resolvedRow(
+  selection: MultiReviewModelSelection,
+  template: PickerRow | undefined,
+): PickerRow {
+  return {
+    key: createUuid(),
+    ...(template?.preferredReasoningEfforts
+      ? { preferredReasoningEfforts: template.preferredReasoningEfforts }
+      : {}),
+    ...(template?.preferredFastModes ? { preferredFastModes: template.preferredFastModes } : {}),
+    ...selection,
   };
 }
 
@@ -409,6 +441,7 @@ export function MultiReviewLaunchDialog({
   addressFindingsModelDefaults,
   busy = false,
   onConfirm,
+  resolvedDefaults,
 }: MultiReviewLaunchDialogProps) {
   const { favorites, toggleFavorite, reorderFavorites } = useAgentModelFavorites();
   const lensPresets = useReviewLensPresets();
@@ -438,6 +471,7 @@ export function MultiReviewLaunchDialog({
   const [autoFix, setAutoAddressFindings] = useState(defaultAutoAddressFindings);
   const [autoPr, setAutoPr] = useState(defaultAutoPr);
   const wasOpen = useRef(false);
+  const seededFromBackend = useRef(false);
   // Normalized launch identity, not display labels. Joined into one string so
   // the live region's text — and so its announcement — changes only when the
   // set of duplicates does, not on every render.
@@ -460,6 +494,7 @@ export function MultiReviewLaunchDialog({
     const justOpened = open && !wasOpen.current;
     wasOpen.current = open;
     if (!justOpened) return;
+    seededFromBackend.current = false;
     const rows = initialRows({
       defaultAgent,
       catalog,
@@ -492,6 +527,27 @@ export function MultiReviewLaunchDialog({
     secondReviewerDefaults,
   ]);
 
+  // The environment's node decides what the defaults are. Its answer replaces
+  // the rows once per open; until it arrives the rows are not editable, so a
+  // choice made against the window's own guess is never overwritten.
+  const resolvedSelection =
+    resolvedDefaults?.status === "ready" ? resolvedDefaults.selection : undefined;
+  useLayoutEffect(() => {
+    if (!open || !resolvedSelection || seededFromBackend.current) return;
+    seededFromBackend.current = true;
+    setReviewers((current) =>
+      resolvedSelection.reviewers.map((selection, index) =>
+        resolvedRow(selection, current[index] ?? current[0]),
+      ),
+    );
+    setReviewModel((current) => resolvedRow(resolvedSelection.reviewModel, current));
+    setAddressFindingsModel((current) => resolvedRow(resolvedSelection.fixModel, current));
+    setAutoAddressFindings(resolvedSelection.autoFix);
+    setAutoPr(resolvedSelection.autoPr);
+  }, [open, resolvedSelection]);
+  const defaultsLoading = resolvedDefaults?.status === "loading";
+  const defaultsError = resolvedDefaults?.status === "failed" ? resolvedDefaults.message : null;
+
   return (
     <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
       <DialogContent className="flex max-h-[min(46rem,calc(100vh-2rem))] flex-col gap-0 overflow-hidden p-0 [--modal-max-width:52rem] sm:p-0">
@@ -511,10 +567,10 @@ export function MultiReviewLaunchDialog({
 
         <form
           className="flex min-h-0 flex-1 flex-col overflow-hidden"
-          aria-busy={busy}
+          aria-busy={busy || defaultsLoading}
           onSubmit={(event) => {
             event.preventDefault();
-            if (busy || lensError) return;
+            if (busy || lensError || defaultsLoading || defaultsError !== null) return;
             onConfirm({
               autoFix,
               autoPr,
@@ -529,7 +585,32 @@ export function MultiReviewLaunchDialog({
             aria-label="Multi Review model configuration"
             className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
           >
-            <fieldset disabled={busy} className="min-w-0 border-0 px-5 py-5 sm:px-6">
+            <fieldset
+              disabled={busy || defaultsLoading}
+              className="min-w-0 border-0 px-5 py-5 sm:px-6"
+            >
+              {(defaultsLoading || defaultsError) && (
+                <p
+                  role={defaultsError ? "alert" : "status"}
+                  data-testid="multi-review-defaults-status"
+                  className={
+                    defaultsError
+                      ? "mb-4 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300"
+                      : "mb-4 text-xs text-zinc-500"
+                  }
+                >
+                  {defaultsError ? (
+                    <>
+                      <span>
+                        Could not read this machine's saved review defaults: {defaultsError}
+                      </span>
+                      <span className="block">Close and reopen to try again.</span>
+                    </>
+                  ) : (
+                    "Loading this machine's saved review defaults…"
+                  )}
+                </p>
+              )}
               <div className="mb-3 flex items-center justify-between gap-3">
                 <div>
                   <h3 className="text-sm font-semibold">Review models</h3>
@@ -673,7 +754,16 @@ export function MultiReviewLaunchDialog({
             >
               Cancel
             </Button>
-            <Button type="submit" disabled={busy || lensError || reviewers.length === 0}>
+            <Button
+              type="submit"
+              disabled={
+                busy ||
+                lensError ||
+                reviewers.length === 0 ||
+                defaultsLoading ||
+                defaultsError !== null
+              }
+            >
               {busy ? "Starting Multi Review…" : `Start ${reviewers.length}-model review`}
             </Button>
           </DialogFooter>

@@ -356,6 +356,22 @@ away mid-launch cannot leave a review without a tab. A client learns about the
 tab from the `pane-layout` resource change, as it does for any backend-created
 tab, and may focus it from the returned `ui.tabId`.
 
+The environment's node, not the window, decides the models. A plain click or
+⌘M sends only the request id and the environment, and the node resolves every
+row (`multiReviewButtonStart` → `multiReviewDefaultRows`) from its saved
+settings and its own model catalogue, through the protocol's shared launch
+resolver. The configure dialog opens on the same answer, read from
+`get_multi_review_launch_defaults` each time it opens; its rows are not
+editable until that answer arrives, and it will not start while the read is
+failing. A window's copy of another machine's catalogue starts on the bundled
+Codex list and is refreshed only when something loads it, so letting the
+window resolve rows once launched a model the node's login refused. The
+pickers still list the window's copy, which a launcher now reloads from the
+node's cache each time it opens. A node that predates the read answers
+`unknown-command`; the dialog then resolves the rows itself, and a plain click
+against a node without `launch_multi_review` does the same (both are in the
+compatibility register).
+
 ## Lifecycle and visibility
 
 The header's restart control selects the work currently in progress. During a

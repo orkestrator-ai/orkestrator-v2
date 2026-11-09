@@ -69,6 +69,7 @@ import {
 } from "@/components/icons/AgentIcons";
 import type { ProjectBoardTab } from "@/stores";
 import { useCoordinatorActivity } from "@/stores/coordinatorActivityStore";
+import { useMultiReviewLaunchDefaults } from "@/hooks/useMultiReviewLaunchDefaults";
 import {
   CoordinatorActivityIcon,
   CoordinatorWorkingOutline,
@@ -414,6 +415,10 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   const resolveLaunchDefaults = launchDialogDefaultsFor("resolve");
   // Graphs are experimental: their buttons show only while they are on.
   const graphsEnabled = config.global.experimentalGraphs === true;
+  const multiReviewResolvedDefaults = useMultiReviewLaunchDefaults(
+    multiReviewDialogOpen,
+    selectedEnvironmentId,
+  );
   const multiReviewAutoAddressFindings = config.global.agentSettings?.multiReview?.autoFix ?? false;
   const multiReviewAutoPr = config.global.agentSettings?.multiReview?.autoPr ?? false;
   const storedReviewerCount =
@@ -517,7 +522,9 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
       if (!state.canCreateTab) return;
 
       event.preventDefault();
-      void state.handleMultiReview(
+      // The environment's node fills every row; the window's own resolution is
+      // only for a node too old to do so.
+      void state.handleMultiReview(undefined, () =>
         defaultMultiReviewLaunchSelection({
           defaultAgent: state.reviewLaunchDefaults.defaultAgent,
           catalog: state.reviewModelCatalog,
@@ -998,7 +1005,10 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                           event.preventDefault();
                           return;
                         }
-                        void handleMultiReview(
+                        // The environment's node fills every row; the
+                        // window's own resolution is only for a node too
+                        // old to do so.
+                        void handleMultiReview(undefined, () =>
                           defaultMultiReviewLaunchSelection({
                             defaultAgent: reviewLaunchDefaults.defaultAgent,
                             catalog: reviewModelCatalog,
@@ -1629,7 +1639,8 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
         reviewModelDefaults={reviewPreparationLaunchDefaults}
         addressFindingsModelDefaults={addressFindingsLaunchDefaults}
         busy={multiReviewLaunchPending}
-        onConfirm={handleMultiReview}
+        resolvedDefaults={multiReviewResolvedDefaults}
+        onConfirm={(selection) => void handleMultiReview(selection)}
       />
       <AgentLaunchDialog
         kind="create-script"

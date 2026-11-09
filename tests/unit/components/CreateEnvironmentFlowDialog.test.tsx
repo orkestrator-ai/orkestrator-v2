@@ -1159,7 +1159,7 @@ describe("CreateEnvironmentFlowDialog", () => {
 
     fireEvent.pointerDown(picker, { button: 0, ctrlKey: false });
     fireEvent.click(await screen.findByRole("button", { name: "codex models" }));
-    fireEvent.click(await screen.findByRole("menuitemradio", { name: /GPT-5\.4-Mini/ }));
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: /GPT-6-Luna/ }));
     fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
     fireEvent.pointerDown(picker, { button: 0, ctrlKey: false });
     fireEvent.click(await screen.findByRole("menuitemradio", { name: "High" }));
@@ -1169,14 +1169,14 @@ describe("CreateEnvironmentFlowDialog", () => {
     await waitFor(() => expect(updateEnvironmentAgentSettingsMock).toHaveBeenCalled());
     const call = updateEnvironmentAgentSettingsMock.mock.calls[0]!;
     expect(call[2]).toBe(true);
-    expect(call[3]).toBe("gpt-5.4-mini");
+    expect(call[3]).toBe("gpt-6-luna");
     expect(call[4]).toBe("high");
     expect(
       appCommandStore(claudeOptionsStore).getState().getOptions("env-selected-options"),
     ).toEqual(
       expect.objectContaining({
         agentType: "codex",
-        model: "gpt-5.4-mini",
+        model: "gpt-6-luna",
         reasoningEffort: "high",
       }),
     );
@@ -1219,7 +1219,7 @@ describe("CreateEnvironmentFlowDialog", () => {
         ...config.global.agentSettings,
         actionDefaults: {
           ...config.global.agentSettings?.actionDefaults,
-          newProject: { platform: "codex", model: "gpt-5.4", reasoningEffort: "high" },
+          newProject: { platform: "codex", model: "gpt-6.1-sol", reasoningEffort: "high" },
         },
       };
       config.repositories["project-1"] = {
@@ -1234,7 +1234,7 @@ describe("CreateEnvironmentFlowDialog", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Reopen creator" }));
     const picker = await screen.findByRole("combobox", { name: "Agent, model and reasoning" });
-    expect(picker.textContent).toContain("gpt-5.4");
+    expect(picker.textContent).toContain("GPT-6.1-Sol");
     expect(picker.textContent).toContain("High");
     fireEvent.pointerDown(picker, { button: 0, ctrlKey: false });
     expect(

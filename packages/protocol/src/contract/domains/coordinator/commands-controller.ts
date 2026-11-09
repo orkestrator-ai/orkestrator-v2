@@ -23,7 +23,7 @@
  * secrets (`admin`); the controller-facing and coordinator-node commands are
  * workspace-excluded plumbing that only a command node's coordinator or this
  * node's Control MCP tools call (`internal`); the job launches, the
- * renderer's Multi Review button are `workspace`.
+ * renderer's Multi Review button and its launch defaults are `workspace`.
  * `get_coordinator_node_launch_environment` is `internal` (plan item 7012): a
  * Control MCP tool step that trusts the scope its caller names, which no
  * client sends.
@@ -46,6 +46,7 @@ import {
   CoordinatorNodeMailResultSchema,
   CoordinatorNodeMailboxSchema,
   MultiReviewActionResultSchema,
+  MultiReviewLaunchDefaultsSchema,
   NativeAgentJobLaunchResultSchema,
   OpenedSchema,
   WorkerActionResultSchema,
@@ -339,6 +340,24 @@ export const launchMultiReviewCommand = defineCommand({
   }),
   result: MultiReviewActionResultSchema,
   critical: ["reservedId"],
+});
+
+/**
+ * The rows a plain Multi Review click on an environment runs, resolved by the
+ * environment's node from its saved settings and its own model catalogue: the
+ * same rows `launch_multi_review` fills for omitted ones. Read-only.
+ */
+export const getMultiReviewLaunchDefaultsCommand = defineCommand({
+  domain: coordinatorDomain,
+  name: "get_multi_review_launch_defaults",
+  since: 1,
+  access: "workspace",
+  read: true,
+  args: Schema.Struct({
+    environmentId: arg,
+  }),
+  result: MultiReviewLaunchDefaultsSchema,
+  critical: [],
 });
 
 /** Opens a saved review's root, Fix or reviewer tab, addresses its findings, or starts a custom fix. */
@@ -670,6 +689,7 @@ export const COORDINATOR_CONTROLLER_COMMANDS = [
   startControllerBuildPipelineCommand,
   launchControllerMultiReviewCommand,
   launchMultiReviewCommand,
+  getMultiReviewLaunchDefaultsCommand,
   controllerMultiReviewSurfaceCommand,
   startControllerMultiReviewCommand,
   forkControllerEnvironmentCommand,

@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "generatedBy": "scripts/generate-contract-manifest.ts (mise run contract:manifest)",
   "counts": {
-    "commands": 1003,
-    "defined": 1003,
+    "commands": 1004,
+    "defined": 1004,
     "untyped": 0,
     "events": 44
   },
@@ -3722,6 +3722,15 @@
       "critical": [],
       "argsDigest": "sha256:4fe644ba27b30ef7fa04e0178c117fd60ae2296d9887f4dcc5d3dc20ee8b905e",
       "resultDigest": "sha256:2caa2fb05a4256511345dd5133c907c21282dc146cfaa2a7e7961000ca01fdb1"
+    },
+    "get_multi_review_launch_defaults": {
+      "domain": "coordinator",
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:0d06dac3e0feeea0fa7bb17fb897b9dcf70e0737968a71773042e55514216032",
+      "resultDigest": "sha256:854fd3356222968e648c57c20cca87f00816d8dd8a0be7112c0f5b3b3d3c0c12"
     },
     "get_multi_review_reviewer_history_page": {
       "domain": "multi-review",

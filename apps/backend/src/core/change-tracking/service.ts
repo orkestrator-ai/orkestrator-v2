@@ -52,7 +52,12 @@ import { ObjectStore } from "./object-store.js";
 import { ChangeTrackingPolicyRegistry, type ChangeTrackingPolicy } from "./policy-registry.js";
 import { ChangeProjectionService } from "./projection-service.js";
 import { ChangeResourcePublisher } from "./publisher.js";
-import { ChangeRestoreService, restorePreflightDeadlineMs } from "./restore.js";
+import { TurnEndRecoveryScheduler } from "./end-recovery.js";
+import {
+  ChangeRestoreService,
+  restoreCaptureDeadlineMs,
+  restorePreflightDeadlineMs,
+} from "./restore.js";
 import { ChangeRetentionService, type RetentionReport } from "./retention.js";
 import {
   TurnBoundaryService,
@@ -133,6 +138,7 @@ export class ChangeTrackingService {
   readonly publisher: ChangeResourcePublisher;
   readonly environments: EnvironmentChangeProjector;
   readonly turns: TurnBoundaryService;
+  readonly endRecovery: TurnEndRecoveryScheduler;
   readonly diffBodies: DiffBodyService;
   readonly handoff: ChangeHandoffSerializer;
   readonly restore: ChangeRestoreService;
@@ -200,6 +206,15 @@ export class ChangeTrackingService {
       policies: this.policies,
       onPublished: () => this.publisher.drainOutbox(),
     });
+    this.endRecovery = new TurnEndRecoveryScheduler({
+      ledger: this.ledger,
+      turns: this.turns,
+      policies: this.policies,
+      writersSettled: (turnId) => this.writersSettled(turnId),
+      environmentDeleted: (environmentId) => this.deletedEnvironments.has(environmentId),
+      onRecovered: () => this.publisher.drainOutbox(),
+      automatic: !options.manualScheduling,
+    });
     this.environments = new EnvironmentChangeProjector({
       measurements: this.measurements,
       projections: this.projections,
@@ -244,6 +259,7 @@ export class ChangeTrackingService {
       enabled: () => policy().restoreEnabled,
       tokenTtlMs: () => policy().restoreTokenTtlMs,
       preflightDeadlineMs: (paths) => restorePreflightDeadlineMs(paths, policy()),
+      captureDeadlineMs: (paths) => restoreCaptureDeadlineMs(paths, policy()),
       onApplied: (_worktreeId, environmentId) => {
         if (environmentId) options.requestEnvironmentRefresh?.(environmentId);
       },
@@ -283,6 +299,11 @@ export class ChangeTrackingService {
       log.warn("startup.reconcile-failed", { error: formatLogError(error) });
     }
     for (const listener of this.startListeners.splice(0)) listener();
+    try {
+      this.endRecovery.resume();
+    } catch (error) {
+      log.warn("startup.reconcile-failed", { error: formatLogError(error) });
+    }
     if (!this.options.manualScheduling) {
       const retain = () => this.retainNow();
       this.firstRetentionTimer = setTimeout(retain, FIRST_RETENTION_DELAY_MS);
@@ -338,6 +359,7 @@ export class ChangeTrackingService {
 
   shutdown(): void {
     this.stopped = true;
+    this.endRecovery.stop();
     this.retention.stop();
     this.gitScopes.stop();
     if (this.firstRetentionTimer) clearTimeout(this.firstRetentionTimer);
@@ -549,6 +571,9 @@ export class ChangeTrackingService {
       })
       .then((keys) => {
         this.publisher.drainOutbox();
+        // An end capture that ran out of time is retried in the background;
+        // the turn itself has ended on time.
+        this.endRecovery.offer(ending.turn_id);
         return keys;
       })
       .catch((error) => {
@@ -611,16 +636,26 @@ export class ChangeTrackingService {
   /**
    * Settle interrupted turns whose last unresolved writer just reported
    * terminal (acceptance H13). The settlement appends a superseding
-   * `later-recovery` measurement; the interrupted one stays retrievable.
+   * `later-recovery` measurement; the interrupted one stays retrievable. A
+   * turn whose end capture timed out while writers were unresolved is offered
+   * for a background end recovery instead (todo 7310).
    */
   private async settleInterruptedTurns(operationIds: Iterable<string>): Promise<void> {
     const turnIds = new Set<string>();
     for (const operationId of operationIds) {
       const turnId = this.ledger.meta(`opturn:${operationId}`);
-      if (turnId && this.ledger.turn(turnId)?.lifecycle === "interrupted") turnIds.add(turnId);
+      const lifecycle = turnId ? this.ledger.turn(turnId)?.lifecycle : undefined;
+      if (turnId && (lifecycle === "interrupted" || lifecycle === "end-unavailable"))
+        turnIds.add(turnId);
     }
     for (const turnId of turnIds) {
       if (!this.writersSettled(turnId)) continue;
+      if (this.ledger.turn(turnId)?.lifecycle === "end-unavailable") {
+        // Its end capture timed out while writers were unresolved; with them
+        // settled, a background retry can now measure it.
+        this.endRecovery.offer(turnId);
+        continue;
+      }
       await this.turns.settleInterrupted(turnId).catch((error) => {
         log.warn("turn.settle-failed", { error: formatLogError(error) });
       });

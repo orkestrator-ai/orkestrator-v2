@@ -23,6 +23,7 @@
 
 import { randomUUID } from "node:crypto";
 import {
+  END_CAPTURE_TIMEOUT_REASON,
   OwnerFenceError,
   TERMINAL_TURN_LIFECYCLES as TERMINAL,
   type ChangeLedger,
@@ -58,6 +59,22 @@ export type TurnStartResult =
   | { kind: "held"; turnId: string; reason: string }
   | { kind: "untracked"; reason: string };
 
+/** A timed-out end capture that a later background capture measured. */
+export const END_RECOVERED_REASON = "end-captured-later";
+/** A timed-out end capture whose background retries all ran out too. */
+export const END_RECOVERY_EXHAUSTED_REASON = "capture-timeout-unrecovered";
+
+/**
+ * One background attempt to measure a turn whose end capture timed out.
+ * `retry` may succeed later; `done` never will (the turn is no longer eligible,
+ * a later turn on the worktree owns what a capture would now read, or the
+ * attempt was cancelled).
+ */
+export type EndRecoveryResult =
+  | { kind: "recovered"; keys: string[] }
+  | { kind: "retry"; reason: string }
+  | { kind: "done"; reason: string };
+
 export function turnIdFor(
   environmentId: string,
   logicalSessionKey: string,
@@ -72,6 +89,8 @@ export function turnIdFor(
 export class TurnBoundaryService {
   private readonly lastProvisional = new Map<string, number>();
   private readonly provisionalRunning = new Set<string>();
+  /** The running end-capture retry per worktree, cancelled by a new turn there. */
+  private readonly recoveries = new Map<string, AbortController>();
 
   constructor(
     private readonly deps: {
@@ -164,6 +183,9 @@ export class TurnBoundaryService {
         });
       });
     }
+    // A background retry of an earlier turn's end would hold this start
+    // behind a long cold capture, and this turn's writes end its eligibility.
+    this.cancelEndRecovery(identity.worktreeId);
     const release = owner.retain();
     let outcome: CaptureOutcome;
     try {
@@ -514,6 +536,119 @@ export class TurnBoundaryService {
       return true;
     });
     return settled ? this.publishTurn(turnId, snapshotId, true, false, true) : [];
+  }
+
+  /**
+   * Why a turn whose end capture timed out cannot be measured by a capture
+   * now, or null when it can. A later turn of its thread, or any other turn
+   * on the worktree still running after it ended, owns writes a capture would
+   * now read, so the retry gives way rather than absorb them.
+   */
+  private endRecoveryBlocked(turn: TurnBoundaryRow | null): string | null {
+    const { ledger } = this.deps;
+    if (!turn || turn.lifecycle !== "end-unavailable" || turn.reason !== END_CAPTURE_TIMEOUT_REASON)
+      return "not-eligible";
+    if (ledger.latestTurnForThread(turn.thread_id)?.turn_id !== turn.turn_id) return "superseded";
+    if (
+      ledger.turnRanOnWorktreeSince(
+        turn.worktree_id,
+        turn.turn_id,
+        turn.finished_at ?? turn.started_at,
+      )
+    )
+      return "superseded";
+    return null;
+  }
+
+  /** Whether a background retry could still measure this turn's end. */
+  endRecoveryEligible(turnId: string): boolean {
+    return this.endRecoveryBlocked(this.deps.ledger.turn(turnId)) === null;
+  }
+
+  /** Stop a running end-capture retry on the worktree. */
+  cancelEndRecovery(worktreeId: string): void {
+    this.recoveries.get(worktreeId)?.abort();
+  }
+
+  /** Stop every running end-capture retry (shutdown). */
+  cancelAllEndRecoveries(): void {
+    for (const controller of this.recoveries.values()) controller.abort();
+  }
+
+  /**
+   * Measure a turn whose end capture ran out of `finalizationDeadlineMs`
+   * (todo 7310). The turn already ended as `end-unavailable`; nothing waits on
+   * this capture, so it gets the longer `endRecoveryDeadlineMs`. A publish
+   * appends a superseding final measurement whose after boundary is
+   * `later-recovery`, as {@link settleInterrupted} does, which gives the turn
+   * restorable endpoints. The caller decides that the turn's writers settled.
+   */
+  async recoverEnd(turnId: string): Promise<EndRecoveryResult> {
+    const { ledger, policies } = this.deps;
+    const turn = ledger.turn(turnId);
+    const blocked = this.endRecoveryBlocked(turn);
+    if (blocked || !turn) return { kind: "done", reason: blocked ?? "not-eligible" };
+    const owner = this.deps.registry.ownerById(turn.worktree_id);
+    if (!owner) return { kind: "done", reason: "worktree-removed" };
+    if (this.recoveries.has(turn.worktree_id)) return { kind: "retry", reason: "recovery-running" };
+    const controller = new AbortController();
+    this.recoveries.set(turn.worktree_id, controller);
+    const release = owner.retain();
+    let outcome: CaptureOutcome;
+    try {
+      outcome = await owner.capture({
+        purpose: "turn-recovery",
+        deadlineMs: policies.policy.endRecoveryDeadlineMs,
+        // Each attempt reserves its own boundary: a published attempt whose
+        // turn was superseded must not be handed back to a later one.
+        boundaryKey: `turn-recover:${turnId}:${randomUUID()}`,
+        signal: controller.signal,
+      });
+    } finally {
+      release();
+      if (this.recoveries.get(turn.worktree_id) === controller)
+        this.recoveries.delete(turn.worktree_id);
+    }
+    if (controller.signal.aborted) return { kind: "done", reason: "cancelled" };
+    if (outcome.kind !== "published") return { kind: "retry", reason: outcome.reason };
+    const snapshotId = outcome.snapshotId;
+    const recovered = ledger.transaction(() => {
+      // Re-check inside the transaction: a turn that started while the
+      // capture ran owns some of what it read.
+      if (this.endRecoveryBlocked(ledger.turn(turnId))) return false;
+      ledger.updateTurn(turnId, { reason: END_RECOVERED_REASON });
+      ledger.addReference({
+        ownerKind: "turn",
+        ownerId: turnId,
+        snapshotId,
+        reason: "turn-recovered",
+      });
+      ledger.updateSegment(turn.segment_id, {
+        final_snapshot_id: snapshotId,
+        latest_live_snapshot_id: snapshotId,
+      });
+      ledger.addReference({
+        ownerKind: "segment",
+        ownerId: turn.segment_id,
+        snapshotId,
+        reason: "thread-latest",
+      });
+      return true;
+    });
+    if (!recovered) return { kind: "done", reason: "superseded" };
+    return {
+      kind: "recovered",
+      keys: await this.publishTurn(turnId, snapshotId, true, false, true),
+    };
+  }
+
+  /** Every retry ran out too: stop offering the turn for recovery, even after a restart. */
+  endRecoveryExhausted(turnId: string): void {
+    const { ledger } = this.deps;
+    ledger.transaction(() => {
+      if (ledger.turn(turnId)?.reason === END_CAPTURE_TIMEOUT_REASON)
+        ledger.updateTurn(turnId, { reason: END_RECOVERY_EXHAUSTED_REASON });
+    });
   }
 
   /** Publish turn-net and thread-net for a turn's current endpoints. */

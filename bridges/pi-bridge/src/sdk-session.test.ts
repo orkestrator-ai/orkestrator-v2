@@ -410,7 +410,7 @@ describe("a session-file write Pi could not make (Pi 1.5)", () => {
 });
 
 test("a real Pi session completes through a loopback provider without a login", async () => {
-  let requests = 0;
+  const requests: { url: string | undefined; method: string | undefined }[] = [];
   const model = "audit-fixture";
   const previousPlatform = {
     fetch: globalThis.fetch,
@@ -424,8 +424,7 @@ test("a real Pi session completes through a loopback provider without a login", 
   if (nativePlatform) Object.assign(globalThis, nativePlatform);
   globalThis.fetch = nativeFetch;
   const endpoint = createServer((request, response) => {
-    expect(request.url).toBe("/v1/chat/completions");
-    requests++;
+    requests.push({ url: request.url, method: request.method });
     response.writeHead(200, { "content-type": "text/event-stream" });
     response.end(
       piCompletionChunk(
@@ -450,7 +449,6 @@ test("a real Pi session completes through a loopback provider without a login", 
       async ({ state, prompt }) => {
         await prompt("Verify the loopback provider.");
         await waitFor(() => state.status === "idle" && !state.dispatching);
-        expect(requests).toBe(1);
         expect(JSON.stringify(state.messages)).toContain("Loopback verified.");
       },
     );
@@ -461,4 +459,5 @@ test("a real Pi session completes through a loopback provider without a login", 
       endpoint.close((error) => (error ? reject(error) : resolve())),
     );
   }
+  expect(requests).toEqual([{ url: "/v1/chat/completions", method: "POST" }]);
 });

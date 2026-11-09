@@ -7,10 +7,12 @@
  * cannot observe from a fake `AgentSession`.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { piCompletionChunk, piProviderConfig } from "../../../scripts/pi-fake-model-shared";
 import type { AssistantMessage, ToolCall } from "@earendil-works/pi-ai";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import { NATIVE_AGENT_LOST_WRITE_ADVISORY } from "@orkestrator/protocol/native-agent-lost-writes";
@@ -78,7 +80,12 @@ const ASK: NativeAgentExecutionPolicy = {
  * response's content, and a response with a tool call asks for another.
  */
 async function withSdkSession(
-  options: { clientSessionKey: string; policy?: NativeAgentExecutionPolicy; mcpTools?: string[] },
+  options: {
+    clientSessionKey: string;
+    policy?: NativeAgentExecutionPolicy;
+    mcpTools?: string[];
+    loopback?: string;
+  },
   body: (context: {
     state: SessionState;
     script: (responses: Content[]) => void;
@@ -95,6 +102,21 @@ async function withSdkSession(
   let responses: Content[] = [];
   setAgentSessionTestHooks(undefined);
   try {
+    if (options.loopback) {
+      await writeFile(
+        join(directory, "models.json"),
+        JSON.stringify(
+          piProviderConfig({
+            provider: "audit-loopback",
+            providerName: "Audit loopback",
+            baseUrl: options.loopback,
+            apiKey: "fixture-only-not-a-key",
+            model: "audit-fixture",
+            modelName: "Audit fixture",
+          }),
+        ),
+      );
+    }
     const runtime = await ModelRuntime.create({
       authPath: join(directory, "auth.json"),
       modelsPath: join(directory, "models.json"),
@@ -117,6 +139,7 @@ async function withSdkSession(
       method: "POST",
       body: JSON.stringify({
         clientSessionKey: options.clientSessionKey,
+        ...(options.loopback ? { model: "audit-loopback/audit-fixture" } : {}),
         ...(options.policy ? { policy: options.policy } : {}),
         ...(options.mcpTools
           ? { agentMcp: { url: "http://127.0.0.1:4567/mcp", token: "sdk-session-token" } }
@@ -129,6 +152,7 @@ async function withSdkSession(
     const attach = async () => {
       const attached = await call(`/session/${current.id}/attach`, { method: "POST", body: "{}" });
       expect(attached.status).toBe(200);
+      if (options.loopback) return;
       current.session!.agent.streamFunction = (model) => {
         const content = responses.shift() ?? [{ type: "text", text: "Finished." }];
         const toolUse = content.some((block) => block.type === "toolCall");
@@ -383,4 +407,58 @@ describe("a session-file write Pi could not make (Pi 1.5)", () => {
       }
     });
   });
+});
+
+test("a real Pi session completes through a loopback provider without a login", async () => {
+  let requests = 0;
+  const model = "audit-fixture";
+  const previousPlatform = {
+    fetch: globalThis.fetch,
+    AbortController: globalThis.AbortController,
+    AbortSignal: globalThis.AbortSignal,
+    Response: globalThis.Response,
+  };
+  const nativePlatform = (globalThis as Record<symbol, unknown>)[
+    Symbol.for("orkestrator.tests.native-web-platform")
+  ] as typeof previousPlatform | undefined;
+  if (nativePlatform) Object.assign(globalThis, nativePlatform);
+  globalThis.fetch = nativeFetch;
+  const endpoint = createServer((request, response) => {
+    expect(request.url).toBe("/v1/chat/completions");
+    requests++;
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.end(
+      piCompletionChunk(
+        model,
+        "audit",
+        { role: "assistant", content: "Loopback verified." },
+        null,
+      ) +
+        piCompletionChunk(model, "audit", {}, "stop", {
+          prompt_tokens: 1,
+          completion_tokens: 1,
+          total_tokens: 2,
+        }) +
+        "data: [DONE]\n\n",
+    );
+  });
+  await new Promise<void>((resolve) => endpoint.listen(0, "127.0.0.1", resolve));
+  const port = (endpoint.address() as AddressInfo).port;
+  try {
+    await withSdkSession(
+      { clientSessionKey: "sdk-audit-loopback", loopback: `http://127.0.0.1:${port}/v1` },
+      async ({ state, prompt }) => {
+        await prompt("Verify the loopback provider.");
+        await waitFor(() => state.status === "idle" && !state.dispatching);
+        expect(requests).toBe(1);
+        expect(JSON.stringify(state.messages)).toContain("Loopback verified.");
+      },
+    );
+  } finally {
+    Object.assign(globalThis, previousPlatform);
+    endpoint.closeAllConnections();
+    await new Promise<void>((resolve, reject) =>
+      endpoint.close((error) => (error ? reject(error) : resolve())),
+    );
+  }
 });

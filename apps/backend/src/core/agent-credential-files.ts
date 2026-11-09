@@ -71,6 +71,19 @@ export const OPENCODE_GITHUB_ENV_PLUGIN_FINGERPRINT = createHash("sha256")
 
 export const OPENCODE_CREDENTIAL_PLUGIN_FILE = "orkestrator-credential.js";
 export const OPENCODE_CREDENTIAL_PLUGIN_PATH = `/home/node/.config/opencode/plugins/${OPENCODE_CREDENTIAL_PLUGIN_FILE}`;
+export const OPENCODE_GITHUB_ENV_PLUGIN_FILE = "orkestrator-github-env.js";
+
+/**
+ * Where `orkestrator-bridge-launch opencode` points the server on an
+ * `opencode-launch=1` image: `XDG_CONFIG_HOME` and `OPENCODE_TEST_HOME`, both
+ * root-owned, so OpenCode reads its global configuration and its `~/.opencode`
+ * from directories only the backend's root exec writes. The launcher names the
+ * same paths (docker/orkestrator-bridge-launch.sh).
+ */
+export const OPENCODE_LAUNCH_ROOT = "/run/orkestrator-opencode";
+export const OPENCODE_LAUNCH_CONFIG_HOME = `${OPENCODE_LAUNCH_ROOT}/config`;
+export const OPENCODE_LAUNCH_CONFIG_DIR = `${OPENCODE_LAUNCH_CONFIG_HOME}/opencode`;
+export const OPENCODE_LAUNCH_HOME = `${OPENCODE_LAUNCH_ROOT}/home`;
 
 /**
  * What a bridge does for itself (`loadBridgeCredential`), for OpenCode, which
@@ -88,8 +101,11 @@ export const OPENCODE_CREDENTIAL_PLUGIN_PATH = `/home/node/.config/opencode/plug
  * host promises no boundary here (docs/architecture/agent-approvals.md), so it
  * just logs.
  */
-export function buildOpenCodeCredentialPluginSource(onUnhardened: "refuse-tools" | "log"): string {
-  return `const PR_SET_DUMPABLE = 4;
+export function buildOpenCodeCredentialPluginSource(
+  onUnhardened: "refuse-tools" | "log",
+  options: { applyLaunchEnvironment?: boolean } = {},
+): string {
+  return `${options.applyLaunchEnvironment ? OPENCODE_LAUNCH_ENVIRONMENT_SOURCE : ""}const PR_SET_DUMPABLE = 4;
 
 async function markNonDumpable() {
   if (process.platform !== "linux") return true;
@@ -112,7 +128,9 @@ async function markNonDumpable() {
 }
 
 export const OrkestratorCredentialPlugin = async () => {
-  delete process.env.OPENCODE_SERVER_PASSWORD;
+  delete process.env.OPENCODE_SERVER_PASSWORD;${
+    options.applyLaunchEnvironment ? "\n  applyLaunchEnvironment();" : ""
+  }
   if (await markNonDumpable()) return {};
   process.stderr.write("Orkestrator could not protect the OpenCode server password from this server's tools.\\n");
   return ${
@@ -127,3 +145,77 @@ export const OrkestratorCredentialPlugin = async () => {
 };
 `;
 }
+
+/**
+ * The OpenCode twin of `applyBridgeLaunchEnvironment`
+ * (`packages/protocol/src/node/bridge-launch-environment.ts`), inlined into
+ * the credential plugin of a server `orkestrator-bridge-launch opencode`
+ * started. The launcher runs OpenCode under `env -i`, so this applies the
+ * environment the start script built to the server's own `process.env`, for
+ * the tools it spawns, once the runtime is running and its configuration
+ * directories are fixed. The snapshot is as untrusted as the shell that wrote
+ * it: it never supplies a variable the launcher set, a bridge credential, or
+ * any `OPENCODE_` variable, because OpenCode reads its flags from
+ * `process.env` when it uses them (a later `OPENCODE_CONFIG_DIR` would load
+ * plugins from wherever it named). `XDG_CONFIG_HOME` points at the server's
+ * root-owned configuration, which its tools must not inherit; OpenCode
+ * resolved it when it started.
+ */
+const OPENCODE_LAUNCH_ENVIRONMENT_SOURCE = `import { closeSync, constants, fstatSync, openSync, readSync, rmSync } from "node:fs";
+
+const MAX_SNAPSHOT_BYTES = 1024 * 1024;
+const MAX_SNAPSHOT_ENTRIES = 4096;
+const NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_%.-]*$/;
+const LAUNCH_ONLY = /^OPENCODE_|^ORKESTRATOR_BRIDGE_|(?:_BRIDGE_TOKEN|_TOKEN_SHA256|_AUTHORITY_KEY)$/;
+const NOT_APPLIED = new Set(["PWD", "OLDPWD", "SHLVL", "_", "NODE_PATH"]);
+
+function readSnapshot(file) {
+  let fd;
+  try {
+    fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW);
+  } catch {
+    return null;
+  }
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isFile() || stat.size > MAX_SNAPSHOT_BYTES) return null;
+    const buffer = Buffer.alloc(stat.size);
+    let offset = 0;
+    while (offset < buffer.length) {
+      const read = readSync(fd, buffer, offset, buffer.length - offset, offset);
+      if (read === 0) break;
+      offset += read;
+    }
+    return buffer.subarray(0, offset);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function applyLaunchEnvironment() {
+  const file = process.env.ORKESTRATOR_BRIDGE_LAUNCH_ENVIRONMENT;
+  if (!file) return;
+  const trusted = new Set(
+    (process.env.ORKESTRATOR_BRIDGE_LAUNCH_KEYS ?? "").split(",").map((name) => name.trim()).filter(Boolean),
+  );
+  delete process.env.ORKESTRATOR_BRIDGE_LAUNCH_ENVIRONMENT;
+  delete process.env.ORKESTRATOR_BRIDGE_LAUNCH_KEYS;
+  delete process.env.XDG_CONFIG_HOME;
+  const snapshot = readSnapshot(file);
+  try {
+    rmSync(file, { force: true });
+  } catch {
+    // Removed by a stop, or never written.
+  }
+  if (!snapshot) return;
+  for (const entry of snapshot.toString("utf8").split("\\0").slice(0, MAX_SNAPSHOT_ENTRIES)) {
+    const separator = entry.indexOf("=");
+    if (separator <= 0) continue;
+    const name = entry.slice(0, separator);
+    if (!NAME_PATTERN.test(name) || NOT_APPLIED.has(name)) continue;
+    if (trusted.has(name) || LAUNCH_ONLY.test(name)) continue;
+    process.env[name] = entry.slice(separator + 1);
+  }
+}
+
+`;

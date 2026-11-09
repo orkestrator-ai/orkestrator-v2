@@ -537,3 +537,188 @@ exit 0
     });
   });
 });
+
+describe("startContainerOpenCodeServer on an opencode-launch image", () => {
+  /**
+   * A fake Docker whose root read answers `FAKE_OPENCODE_ROOT` and whose server
+   * answers once the launcher has run, for the password it was handed.
+   */
+  /** About fifteen fake Docker calls and a health poll that waits a second between tries. */
+  const START_TIMEOUT_MS = 20_000;
+
+  async function withLaunchedOpenCode(
+    rootRead: string,
+    check: (
+      started: { authToken: string; wasRunning: boolean },
+      log: string,
+      argv: string[],
+    ) => void,
+  ): Promise<void> {
+    const port = await reserveFreePort();
+    const script = `#!/bin/sh
+printf 'ARGV:%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+case " $* " in
+  *" -i "*) printf 'STDIN:%s\\n' "$(cat)" >> "$FAKE_DOCKER_EXEC_LOG" ;;
+esac
+case "$1" in
+  inspect) printf 'running\\n'; exit 0 ;;
+  port) printf '127.0.0.1:%s\\n' "$FAKE_DOCKER_PORT"; exit 0 ;;
+esac
+case "$*" in
+  *"--user root"*"echo recorded"*) printf 'recorded\\n' ;;
+  *"--user root"*"cat /run/orkestrator-bridge/opencode-token"*) printf '%s' "$FAKE_OPENCODE_ROOT" ;;
+esac
+exit 0
+`;
+    process.env.FAKE_DOCKER_PORT = String(port);
+    process.env.FAKE_OPENCODE_ROOT = rootRead;
+    let server: ReturnType<typeof Bun.serve> | undefined;
+    let arrive: ReturnType<typeof setInterval> | undefined;
+    try {
+      await withFakeDocker(script, async (logs) => {
+        arrive = setInterval(async () => {
+          const log = await fs.readFile(logs.exec, "utf8").catch(() => "");
+          // The launcher's stdin is logged after its argv.
+          const password = log.match(/OPENCODE_SERVER_PASSWORD=(okb_[A-Za-z0-9_-]{43})/)?.[1];
+          if (!server && log.includes(`${CONTAINER_BRIDGE_LAUNCHER} opencode `) && password) {
+            const expected = `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}`;
+            server = Bun.serve({
+              port,
+              hostname: "127.0.0.1",
+              fetch: (request) =>
+                request.headers.get("authorization") === expected
+                  ? Response.json({})
+                  : new Response("", { status: 401 }),
+            });
+          }
+        }, 25);
+        const started = await startContainerOpenCodeServer("container", "opencode-launcher");
+        const log = await fs.readFile(logs.exec, "utf8");
+        const argv = log
+          .split(/^(?=ARGV:|STDIN:)/m)
+          .filter((line) => line.startsWith("ARGV:"))
+          .map((line) => line.slice(5));
+        check(started, log, argv);
+      });
+    } finally {
+      clearInterval(arrive);
+      server?.stop(true);
+      delete process.env.FAKE_DOCKER_PORT;
+      delete process.env.FAKE_OPENCODE_ROOT;
+    }
+  }
+
+  test(
+    "root writes the configuration, node only prepares, and the launcher alone gets the password",
+    async () => {
+      await withLaunchedOpenCode("", (started, log, argv) => {
+        expect(started.wasRunning).toBe(false);
+        expect(started.authToken).toMatch(/^okb_/);
+        expect(argv.join("\n")).not.toContain(started.authToken);
+
+        const configure = argv.findIndex(
+          (line) => line.includes("--user root") && line.includes("/run/orkestrator-opencode"),
+        );
+        const prepare = argv.findIndex(
+          (line) => line.startsWith("exec container bash -lc ") && line.includes("env -0 >"),
+        );
+        const launch = argv.findIndex((line) => line.includes(CONTAINER_BRIDGE_LAUNCHER));
+        const record = argv.findIndex((line) => line.includes("echo recorded"));
+        expect(configure).toBeGreaterThanOrEqual(0);
+        expect(prepare).toBeGreaterThan(configure);
+        expect(launch).toBeGreaterThan(prepare);
+        expect(record).toBeGreaterThan(launch);
+
+        // The configuration: the user's read-only host input, never node's copy,
+        // and the credential plugin that applies the launch environment.
+        expect(argv[configure]).toContain("/opencode-config");
+        expect(argv[configure]).not.toContain("/home/node/.config/opencode");
+        expect(argv[configure]).toContain("applyLaunchEnvironment();");
+        expect(argv[configure]).toContain("orkestrator-github-env.js");
+        // Node's shell writes no plugin and never sees the password.
+        expect(argv[prepare]).not.toContain("plugins");
+        expect(argv[prepare]).toMatch(
+          /env -0 > \/tmp\/\.orkestrator-bridge-env-opencode-[0-9a-f]{32}/,
+        );
+        expect(argv[prepare]).toContain("rm -f /tmp/opencode-server-password");
+        expect(argv.join("\n")).not.toContain("export -n OPENCODE_SERVER_PASSWORD");
+        // The launcher: no login shell, a fixed PATH, the password on stdin.
+        expect(argv[launch]!.trim()).toMatch(
+          new RegExp(
+            `^exec -i --user node --workdir / --env PATH=/usr/sbin:/usr/bin:/sbin:/bin container ${CONTAINER_BRIDGE_LAUNCHER} opencode /tmp/\\.orkestrator-bridge-env-opencode-[0-9a-f]{32}$`,
+          ),
+        );
+        expect(log).toContain(`STDIN:OPENCODE_SERVER_PASSWORD=${started.authToken}\n`);
+        // Root's copy of the password, for the backend to read back.
+        expect(log).toContain(`STDIN:${started.authToken}\n`);
+      });
+    },
+    START_TIMEOUT_MS,
+  );
+
+  test(
+    "a listener that is not the recorded socket is stopped and the server gets a new password",
+    async () => {
+      const stale = `okb_${"s".repeat(43)}`;
+      await withLaunchedOpenCode(
+        `${stale}\n\nrecord 4242\nsocket 5151\n`,
+        (started, _log, argv) => {
+          expect(started.wasRunning).toBe(false);
+          expect(started.authToken).not.toBe(stale);
+          // As node: the container's root cannot read the agent's descriptors.
+          const stop = argv.findIndex(
+            (line) => line.startsWith("exec container bash -lc ") && line.includes('kill "$pid"'),
+          );
+          expect(stop).toBeGreaterThanOrEqual(0);
+          expect(
+            argv.findIndex((line) => line.includes(CONTAINER_BRIDGE_LAUNCHER)),
+          ).toBeGreaterThan(stop);
+        },
+      );
+    },
+    START_TIMEOUT_MS,
+  );
+
+  test(
+    "a server an older backend started from node's shell is replaced, not reused",
+    async () => {
+      const older = `okb_${"o".repeat(43)}`;
+      await withLaunchedOpenCode(`${older}\n\n`, (started, _log, argv) => {
+        expect(started.wasRunning).toBe(false);
+        expect(started.authToken).not.toBe(older);
+        expect(argv.some((line) => line.includes('kill "$pid"'))).toBe(true);
+      });
+    },
+    START_TIMEOUT_MS,
+  );
+});
+
+describe("readContainerBridgeToken for OpenCode", () => {
+  test.each([
+    ["the recorded socket", "socket 4242", true],
+    ["another socket", "socket 5151", false],
+    ["no socket", "", false],
+  ] as const)("withholds the password unless %s holds the port", async (_name, listing, given) => {
+    await withDocker({ FAKE_ROOT_TOKEN: `${TOKEN}\n\nrecord 4242\n${listing}\n` }, async () => {
+      expect(await readContainerBridgeToken("container", "opencode")).toBe(given ? TOKEN : null);
+    });
+  });
+
+  test("lists listeners only when a record exists, in the same root exec", async () => {
+    await withDocker({ FAKE_ROOT_TOKEN: TOKEN }, async (read) => {
+      expect(await readContainerBridgeToken("container", "opencode")).toBe(TOKEN);
+      const { argv } = await read();
+      expect(argv).toHaveLength(1);
+      expect(argv[0]).toContain("--user root");
+      expect(argv[0]).toContain("if [ -s /run/orkestrator-bridge/opencode-listener ]; then");
+      expect(argv[0]).toContain("/proc/net/tcp");
+    });
+  });
+
+  test("forgetting OpenCode's credential forgets its listener record", async () => {
+    await withDocker({}, async (read) => {
+      await removeContainerBridgeCredential("container", "opencode");
+      expect((await read()).argv[0]).toContain("/run/orkestrator-bridge/opencode-listener");
+    });
+  });
+});

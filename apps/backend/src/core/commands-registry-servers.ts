@@ -100,7 +100,7 @@ import {
   conciseError,
   refreshClaudeModelCatalog,
 } from "./commands-helpers.js";
-import { containerCredentialMode } from "./container-credential-mode.js";
+import { containerCredentialMode, containerOpenCodeMode } from "./container-credential-mode.js";
 import {
   CONTAINER_TOKEN_FILES,
   containerBridgeLaunch,
@@ -213,7 +213,7 @@ export function registerServerCommands(
     return enqueueContainerBridgeOperation(context, "opencode", operationId, async () => {
       await syncContainerLoginUnlocked(context, "opencode", id);
       const started = await startContainerOpenCodeServer(id, () =>
-        containerCredentialMode(context, id),
+        containerOpenCodeMode(context, id),
       );
       const connection = await resolveContainerAgentToolConnection(context, id);
       if (connection) {

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { buildOpenCodeCredentialPluginSource } from "./agent-credential-files.js";
@@ -112,4 +112,125 @@ test("concurrent host starts install a complete private plugin", async () => {
   const plugin = path.join(results[0]!, "plugins", "orkestrator-credential.js");
   expect(await readFile(plugin, "utf8")).toBe(buildOpenCodeCredentialPluginSource("log"));
   expect((await stat(plugin)).mode & 0o777).toBe(0o600);
+});
+
+describe.skipIf(process.platform !== "linux")("a launched server's credential plugin", () => {
+  /**
+   * The server `orkestrator-bridge-launch opencode` starts has only the
+   * launcher's environment; the plugin applies what the start script recorded,
+   * for the tools it spawns, and nothing that steers OpenCode itself.
+   */
+  test("applies the recorded environment for tools, refusing OpenCode's flags and the launcher's values", async () => {
+    const directory = await temporaryDirectory();
+    const snapshot = path.join(directory, "snapshot");
+    await writeFile(
+      snapshot,
+      [
+        "PATH=/opt/project/bin:/usr/bin:/bin",
+        "PROJECT_SETTING=from the start script",
+        "OPENCODE_CONFIG_DIR=/workspace/.opencode",
+        "OPENCODE_DISABLE_PROJECT_CONFIG=",
+        "OPENCODE_TEST_HOME=/home/node",
+        "OPENCODE_SERVER_PASSWORD=caught",
+        "ORKESTRATOR_BRIDGE_LAUNCH_ENVIRONMENT=/tmp/other",
+        "LAUNCHER_VALUE=from the snapshot",
+        "NODE_PATH=/workspace/node_modules",
+        "PWD=/somewhere",
+        "",
+      ].join("\0"),
+    );
+    const plugin = path.join(directory, "plugin.js");
+    await writeFile(
+      plugin,
+      buildOpenCodeCredentialPluginSource("refuse-tools", { applyLaunchEnvironment: true }),
+    );
+    const runner = path.join(directory, "runner.js");
+    await writeFile(
+      runner,
+      `import { existsSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { OrkestratorCredentialPlugin } from ${JSON.stringify(plugin)};
+await OrkestratorCredentialPlugin();
+const tool = spawnSync("sh", ["-c", "env"], { env: process.env }).stdout.toString();
+const pick = (name) => process.env[name] ?? null;
+console.log(JSON.stringify({
+  snapshotRemoved: !existsSync(${JSON.stringify(snapshot)}),
+  password: pick("OPENCODE_SERVER_PASSWORD"),
+  path: pick("PATH"),
+  project: pick("PROJECT_SETTING"),
+  configDir: pick("OPENCODE_CONFIG_DIR"),
+  disableProject: pick("OPENCODE_DISABLE_PROJECT_CONFIG"),
+  testHome: pick("OPENCODE_TEST_HOME"),
+  xdgConfig: pick("XDG_CONFIG_HOME"),
+  launcherValue: pick("LAUNCHER_VALUE"),
+  nodePath: pick("NODE_PATH"),
+  launchVariables: Object.keys(process.env).filter((name) => name.startsWith("ORKESTRATOR_BRIDGE_LAUNCH")),
+  toolSeesProject: tool.includes("PROJECT_SETTING=from the start script"),
+  toolSeesPassword: tool.includes("OPENCODE_SERVER_PASSWORD"),
+}));
+`,
+    );
+    const result = Bun.spawnSync([process.execPath, runner], {
+      env: {
+        PATH: "/usr/local/bin:/usr/bin:/bin",
+        OPENCODE_SERVER_PASSWORD: FAKE_PASSWORD,
+        ORKESTRATOR_BRIDGE_LAUNCH_ENVIRONMENT: snapshot,
+        ORKESTRATOR_BRIDGE_LAUNCH_KEYS: "OPENCODE_SERVER_PASSWORD,LAUNCHER_VALUE",
+        LAUNCHER_VALUE: "from the backend",
+        XDG_CONFIG_HOME: "/run/orkestrator-opencode/config",
+        OPENCODE_TEST_HOME: "/run/orkestrator-opencode/home",
+        OPENCODE_DISABLE_PROJECT_CONFIG: "1",
+      },
+    });
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.stdout.toString())).toEqual({
+      snapshotRemoved: true,
+      password: null,
+      path: "/opt/project/bin:/usr/bin:/bin",
+      project: "from the start script",
+      configDir: null,
+      disableProject: "1",
+      testHome: "/run/orkestrator-opencode/home",
+      xdgConfig: null,
+      launcherValue: "from the backend",
+      nodePath: null,
+      launchVariables: [],
+      toolSeesProject: true,
+      toolSeesPassword: false,
+    });
+  });
+
+  test("a symlinked snapshot is not followed, and the plugin still hardens the server", async () => {
+    const directory = await temporaryDirectory();
+    const target = path.join(directory, "elsewhere");
+    await writeFile(target, "PROJECT_SETTING=through a link\0");
+    const snapshot = path.join(directory, "snapshot");
+    await symlink(target, snapshot);
+    const plugin = path.join(directory, "plugin.js");
+    await writeFile(
+      plugin,
+      buildOpenCodeCredentialPluginSource("refuse-tools", { applyLaunchEnvironment: true }),
+    );
+    const runner = path.join(directory, "runner.js");
+    await writeFile(
+      runner,
+      `import { dlopen, FFIType } from "bun:ffi";
+import { OrkestratorCredentialPlugin } from ${JSON.stringify(plugin)};
+await OrkestratorCredentialPlugin();
+const libc = dlopen("libc.so.6", { prctl: { args: [FFIType.i32, FFIType.u64, FFIType.u64, FFIType.u64, FFIType.u64], returns: FFIType.i32 } });
+console.log(JSON.stringify({ project: process.env.PROJECT_SETTING ?? null, dumpable: libc.symbols.prctl(3, 0n, 0n, 0n, 0n) }));
+`,
+    );
+    const result = Bun.spawnSync([process.execPath, runner], {
+      env: { PATH: process.env.PATH, ORKESTRATOR_BRIDGE_LAUNCH_ENVIRONMENT: snapshot },
+    });
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.stdout.toString())).toEqual({ project: null, dumpable: 0 });
+  });
+
+  test("a server the launcher did not start has nothing to apply", () => {
+    expect(buildOpenCodeCredentialPluginSource("refuse-tools")).not.toContain(
+      "applyLaunchEnvironment",
+    );
+  });
 });

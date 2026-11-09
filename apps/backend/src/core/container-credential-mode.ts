@@ -29,3 +29,29 @@ export async function containerCredentialMode(
   if (support === "unknown") return unreadable();
   return support === "supported" ? "verifier" : "token-file";
 }
+
+/**
+ * How the container's OpenCode 1.x server starts: `opencode-launcher` on an
+ * image whose launcher also starts OpenCode (`opencode-launch=1`,
+ * `opencode-container-launch.ts`), otherwise as the bridges' mode says, where
+ * `launcher` and `verifier` both keep the password in root's file and the
+ * server's environment alone.
+ */
+export type OpenCodeContainerMode = ContainerCredentialMode | "opencode-launcher";
+
+export async function containerOpenCodeMode(
+  context: CommandContext,
+  containerId: string,
+  check = containerImageCapabilitySupport,
+): Promise<OpenCodeContainerMode> {
+  const launch = await check(containerId, context, "opencode-launch", 1).catch(
+    () => "unknown" as const,
+  );
+  if (launch === "unknown") {
+    throw new Error(
+      "Cannot determine bridge credential support; retry when the container image is available",
+    );
+  }
+  if (launch === "supported") return "opencode-launcher";
+  return containerCredentialMode(context, containerId, check);
+}

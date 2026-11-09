@@ -3821,3 +3821,36 @@ skips repair. Confirmed missing or terminal pipelines without an environment,
 and foreign admissions, receive `environmentCreationSettledAt`; they stop being
 polled and can be reclaimed after the 24-hour replay window. Transport errors
 remain unresolved. Existing creation receipts remain immediately authoritative.
+
+## Conversation Actions panel
+
+Coordinator conversations (including side conversations) show an Actions panel
+in the pane's existing floating-notice stack. It shares the mail banner's gutter
+measurement: with at least 14rem beside the 56rem transcript column it docks
+there, below the notices; otherwise it folds to an icon with a waiting count.
+Hover or keyboard focus opens the overlay, a 160ms grace period allows pointer
+travel, and leaving both pointer and focus closes it. Escape closes it
+immediately; touch clicks toggle it. Expansion respects reduced motion.
+
+Cards represent structured PR status notices, question tools and asynchronous
+questions, and explicit topic/question marks. Merged or closed PRs and answered
+questions retain their original card and show a muted tick. Topics do not count
+as waiting. A PR's later notices revise its original card rather than moving it.
+
+The coordinator tools `mark_topic { title }` and `mark_question { title }` return
+a versioned mark, saved with the successful tool call in the provider's
+conversation rollout. Titles are bounded to 120 characters. Per-turn guidance
+asks for at most one topic mark per user message, only for a new subject.
+Transcript replay derives topic anchors from the preceding actual user message
+and question anchors from the message holding the tool call; mail and automatic
+prompts do not start user subjects. The next actual user message handles a
+marked plain-text question. No additional model call or renderer persistence
+store is used.
+
+The panel replays the loaded transcript in order, then shows the newest ten
+cards whose anchor is at or above the viewport bottom. The virtual list measures
+visible rows on scroll, excluding its render overscan. Cards navigate through
+the node-qualified conversation scroll target, loading history pages while an
+anchor is missing and briefly highlighting the destination. The existing target
+expiry bounds missing-anchor recovery. All reads and targets follow the
+conversation's node scope; worker tabs do not enable the panel.

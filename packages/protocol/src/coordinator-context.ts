@@ -1,3 +1,4 @@
+import { COORDINATOR_ACTION_GUIDANCE } from "./coordinator-actions.js";
 /**
  * The context block at the head of every coordinator prompt.
  *
@@ -164,6 +165,7 @@ function delegationLines(delegation: CoordinatorContextDelegation): string {
   return (
     `Main coordinator: every worker in this project reports to you. Side agents (Side 1, Side 2…) may mail you; reach one with send_message to its environment id from list_mailboxes. Message a worker by its environment id; toTabId is optional.\n` +
     `Delegation: create workers with the Orkestrator launch_environment tool. Provider sub-agents remain inside this coordinator session and are not worker environments. Report a worker as created only after launch_environment returns its environment id.\n` +
+    `${COORDINATOR_ACTION_GUIDANCE}\n` +
     `${COORDINATOR_ROUTING_RULE}\n` +
     `${COORDINATOR_ENVIRONMENT_CHOICE_RULE}\n` +
     `Actions: launch_multi_review runs the environment's Multi Review button action; open_multi_review and open_multi_review_fix present saved work. ${COORDINATOR_REQUEST_ID_RULE} Inspect outcome, ui and recovery before reporting completion.\n` +

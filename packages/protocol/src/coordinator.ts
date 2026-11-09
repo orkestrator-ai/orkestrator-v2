@@ -1,3 +1,4 @@
+export { coordinatorActionMark, type CoordinatorActionMark } from "./coordinator-actions.js";
 import { isAgentPlatform, type AgentPlatform } from "./agent-platforms.js";
 
 export const COORDINATOR_WORKSPACE_VERSION = 1 as const;
@@ -638,6 +639,8 @@ export function pullRequestStateFromNotice(
  * silently refused on one platform.
  */
 export const COORDINATOR_CONTROL_TOOL_NAMES = Object.freeze([
+  "mark_topic",
+  "mark_question",
   "ack_message",
   "add_ticket_comment",
   "address_multi_review",

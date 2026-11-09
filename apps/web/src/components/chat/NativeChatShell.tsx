@@ -1,3 +1,8 @@
+import { CoordinatorActionsPanel } from "@/components/projects/CoordinatorActionsPanel";
+import {
+  coordinatorActionCards,
+  visibleCoordinatorCards,
+} from "@/components/projects/coordinator-action-cards";
 import {
   Children,
   useCallback,
@@ -89,6 +94,7 @@ interface NativeChatShellProps<TMessage extends NativeMessageType> {
   serverLog?: string | null;
   onRetry: () => void;
 
+  coordinatorNavigate?: (anchorId: string) => void;
   messages: TMessage[];
   isLoading: boolean;
   /**
@@ -242,8 +248,24 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
   scrollToBottom,
   scrollProps,
   virtuosoRef,
+  coordinatorNavigate,
   highlightedMessageId = null,
 }: NativeChatShellProps<TMessage>) {
+  const [visibleEnd, setVisibleEnd] = useState<number | null>(null);
+  const actionCards = useMemo(
+    () =>
+      coordinatorNavigate
+        ? coordinatorActionCards(
+            messages,
+            new Set(
+              asyncQuestionResponses
+                ?.filter((response) => response.state === "sent")
+                .map((response) => response.itemId),
+            ),
+          )
+        : [],
+    [coordinatorNavigate, messages, asyncQuestionResponses],
+  );
   const [showLog, setShowLog] = useState(false);
   const [composeDockElement, setComposeDockElement] = useState<HTMLDivElement | null>(null);
   const [composeDockHeight, setComposeDockHeight] = useState<number | null>(null);
@@ -583,7 +605,14 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
           composerCentered && "pointer-events-none scale-[0.995] opacity-0",
         )}
       >
+        {coordinatorNavigate && (
+          <CoordinatorActionsPanel
+            cards={visibleCoordinatorCards(actionCards, visibleEnd ?? messages.length - 1)}
+            onNavigate={coordinatorNavigate}
+          />
+        )}
         <VirtualizedMessageList
+          onVisibleEnd={coordinatorNavigate ? setVisibleEnd : undefined}
           messages={messages}
           computeItemKey={messageItemKey}
           highlightedItemKey={highlightedMessageId}

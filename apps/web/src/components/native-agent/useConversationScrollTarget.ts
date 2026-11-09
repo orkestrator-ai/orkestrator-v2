@@ -37,6 +37,7 @@ interface UseConversationScrollTargetOptions {
     owner?: "message-link",
   ) => boolean;
   /** Overrides for tests. */
+  loadEarlier?: () => Promise<unknown>;
   settledGraceMs?: number;
   highlightMs?: number;
 }
@@ -61,6 +62,7 @@ export function useConversationScrollTarget({
   turnBoundaries,
   transcriptSettled,
   scrollToIndex,
+  loadEarlier,
   settledGraceMs = CONVERSATION_SCROLL_TARGET_SETTLED_GRACE_MS,
   highlightMs = CONVERSATION_TARGET_HIGHLIGHT_MS,
 }: UseConversationScrollTargetOptions): string | null {
@@ -109,9 +111,40 @@ export function useConversationScrollTarget({
     };
   }, [clear, isActive, pending, ref, scrollToIndex, targetIndex, targetMessageId]);
 
+  // Read one page at a time. The request TTL bounds missing/deleted anchors.
+  useEffect(() => {
+    if (
+      !pending ||
+      !isActive ||
+      targetIndex >= 0 ||
+      !loadEarlier ||
+      pending.expiresAt <= Date.now()
+    )
+      return;
+    let stopped = false;
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    const load = async () => {
+      try {
+        await loadEarlier();
+      } catch {
+        if (!stopped) clear(ref, pending.nonce);
+        return;
+      }
+      if (!stopped)
+        retry = setTimeout(() => {
+          void load();
+        }, 100);
+    };
+    void load();
+    return () => {
+      stopped = true;
+      if (retry) clearTimeout(retry);
+    };
+  }, [pending, isActive, targetIndex, loadEarlier, messages, clear, ref]);
+
   // Bounded wait for a message that has not appeared.
   const unresolvedAfterSettle =
-    Boolean(pending) && isActive && transcriptSettled && targetIndex < 0;
+    Boolean(pending) && isActive && transcriptSettled && targetIndex < 0 && !loadEarlier;
   useEffect(() => {
     if (!pending) return;
     const remaining = Math.max(0, pending.expiresAt - Date.now());

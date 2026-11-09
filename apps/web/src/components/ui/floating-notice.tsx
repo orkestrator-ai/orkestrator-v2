@@ -429,3 +429,15 @@ export function FloatingNotice({
 
 /** The small buttons notice cards use, so every card's actions line up. */
 export const FLOATING_NOTICE_ACTION = "h-7 px-2.5 text-xs";
+
+/** Shares the notice stack and the exact gutter measurement with custom notices. */
+export function FloatingNoticeSlot({
+  children,
+}: {
+  children: (layout: ReturnType<typeof floatingNoticeLayout>) => ReactNode;
+}) {
+  const layer = useContext(FloatingNoticeContext);
+  const layout = floatingNoticeLayout(layer?.state.widthRem ?? 0, layer?.state.columnRem);
+  const content = children(layout);
+  return layer?.state.container ? createPortal(content, layer.state.container) : content;
+}

@@ -87,6 +87,7 @@ export interface TranscriptListScrollProps {
 }
 
 interface VirtualizedMessageListProps<TMessage> {
+  onVisibleEnd?: (index: number) => void;
   messages: TMessage[];
   computeItemKey: (index: number, message: TMessage) => string;
   renderMessage: (index: number, message: TMessage, previousMessage: TMessage | null) => ReactNode;
@@ -366,12 +367,43 @@ export function VirtualizedMessageList<TMessage>({
   emptyState,
   scrollProps,
   virtuosoRef,
+  onVisibleEnd,
   highlightedItemKey = null,
   animateArrivals = false,
   find,
   annotation,
 }: VirtualizedMessageListProps<TMessage>) {
   const rootRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root || !onVisibleEnd) return;
+    let frame: number | null = null;
+    const measure = () => {
+      frame = null;
+      const viewport = root.querySelector("[data-virtuoso-scroller]")?.getBoundingClientRect();
+      if (!viewport || viewport.height <= 0) return;
+      let end = -1;
+      for (const row of root.querySelectorAll<HTMLElement>("[data-chat-message-index]")) {
+        const rect = row.getBoundingClientRect();
+        if (rect.top < viewport.bottom && rect.bottom > viewport.top) {
+          end = Math.max(end, Number(row.dataset.chatMessageIndex));
+        }
+      }
+      if (end >= 0) onVisibleEnd(end);
+    };
+    const schedule = () => {
+      if (frame === null) frame = requestAnimationFrame(measure);
+    };
+    root.addEventListener("scroll", schedule, true);
+    const observer = new ResizeObserver(schedule);
+    observer.observe(root);
+    schedule();
+    return () => {
+      root.removeEventListener("scroll", schedule, true);
+      observer.disconnect();
+      if (frame !== null) cancelAnimationFrame(frame);
+    };
+  }, [messages, onVisibleEnd]);
   const findInstanceId = useId().replace(/[^a-zA-Z0-9_-]/g, "");
   const matchHighlightName = `agent-chat-find-match-${findInstanceId}`;
   const currentHighlightName = `agent-chat-find-current-${findInstanceId}`;
@@ -599,6 +631,7 @@ export function VirtualizedMessageList<TMessage>({
         }
       }
       latestRangeRef.current = range;
+
       if (protectedRow === null) return;
       if (keepMountedOverscan(protectedRow, range) === null) {
         // Beyond the bound the row unmounts like any other: release it.

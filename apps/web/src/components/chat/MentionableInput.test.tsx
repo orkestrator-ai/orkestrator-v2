@@ -43,7 +43,7 @@ describe("MentionableInput", () => {
   });
 
   test("clearing the editor restores the placeholder but preserves deliberate line breaks", () => {
-    const onChange = mock(() => {});
+    const onChange = mock((_text: string, _mentions: FileMention[]) => {});
     function Composer() {
       const [value, setValue] = useState("Draft");
       return (

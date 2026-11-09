@@ -12,7 +12,12 @@ Status: Living — `apps/backend/src/core/agent-accounts*.ts`,
 `apps/backend/src/core/agent-sign-ins.ts`,
 `apps/backend/src/core/agent-accounts-auto-switch.ts`,
 `apps/backend/src/core/native-agent-usage-limit-resend.ts`,
-`packages/protocol/src/agent-account-auto-switch.ts`;
+`packages/protocol/src/agent-account-auto-switch.ts`,
+`packages/protocol/src/agent-account-shared-usage.ts`,
+`apps/backend/src/core/agent-accounts-usage-sharing.ts`,
+`apps/backend/src/core/agent-accounts-shared-usage.ts`,
+`apps/backend/src/core/nodes/node-usage-sync.ts`,
+`apps/web/src/components/settings/UsageReading.tsx`;
 `apps/backend/src/core/opencode-provider-login.ts`,
 `packages/protocol/src/opencode-provider-auth.ts`,
 `apps/web/src/components/settings/OpenCodeProvidersSection.tsx`.
@@ -600,6 +605,91 @@ Session-reported usage windows are folded into the platform's card only when
 the reporting bridge was launched on the active account
 (`contextUsageWithPlanUsage` in `plan-usage-cache.ts`).
 
+### How old a reading is
+
+Every card that shows plan usage (each account row on the Claude and Codex
+pages, the plan usage card of every provider page, and Settings → Usage) shows
+it through `UsageReadingBars` (`settings/UsageReading.tsx`), so the treatment is
+the same everywhere:
+
+- **When.** "Updated 9 Nov 2026, 14:03 (3m ago)": the reading's `fetchedAt` in
+  the reader's own locale and time zone, with its age, which moves on every half
+  minute while the page is open. A [shared reading](#shared-readings) adds the
+  machine that took it ("… on beelink"); a reading this machine took names none.
+- **Stale.** Past `PLAN_USAGE_DISPLAY_STALE_MS` (30 minutes), or served as the
+  last known reading after a failed read (`stale: true`), or with an unreadable
+  time, the bars are muted and the line carries a **Stale** label
+  (`isPlanUsageReadingStale`). The last known reading's failure message is shown
+  under it. The card's refresh button reads again. This bound is for people
+  only: automatic switching keeps its own five minutes
+  ([Stale and unknown readings](#stale-and-unknown-readings)), because it acts on
+  a reading while a person only reads it. Thirty minutes is a fraction of the
+  5-hour window, so a figure that old never passes for current, and long enough
+  that a reading the periodic checks or another machine took is not flagged
+  between refreshes.
+- **Never read.** A row with no reading at all (a failed read and no last known
+  one) says "Usage has not been read yet." under the failure.
+
+An account row reads again, from the two-minute cache, when its machine
+announces a newer reading (`agent-usage-readings-changed`,
+`useAgentUsageReadingsChanged`), so a reading another machine shared shows
+without a refresh.
+
+### Shared readings
+
+Each machine reads usage only for its own logins, and the same login is often
+signed in on several machines under different local account ids (`default` is
+the host login). On 2026-11-08 omarchy-hp moved to a login on its own
+2.5-day-old 31% reading while another machine had just read it at 100%. So the
+newest reading of each login, from any machine, is kept by the command node and
+handed to every machine with the same login.
+
+- **Identity.** A login is its provider, its email (trimmed, lower case) and,
+  where the provider reports one, its organisation or workspace id: Claude's
+  `organizationUuid`, Codex's ChatGPT `account_id` (`UsageIdentity`,
+  `usageIdentityKey`). All three must agree, so the same email in two
+  organisations is two logins. A login without an email is never shared.
+- **What travels.** Usage only: the windows (percentages, token counts, spend,
+  credits, reset times, lengths), the plan name, whether paid overage is on,
+  `fetchedAt`, and the machine that took it (`nodeId`, `nodeName`). Every
+  reading is rebuilt field by field on the way in and out
+  (`parseSharedUsageReading`), so a message, a token or a cookie never leaves a
+  machine, whatever a snapshot or a peer carries.
+- **On each machine.** Every fresh reading `readAgentAccountUsage` takes of a
+  matchable login (the Settings rows, the switcher's reads, a forced refresh) is
+  kept as that login's newest in `<agent-accounts>/shared-usage.json` (at most
+  256, oldest dropped) and announced as `agent-usage-readings-changed`
+  `{ platform, origin: "local" }`. Every account's usage answer is then the newer
+  by `fetchedAt` of this machine's own answer (fresh, last known or failed) and
+  the login's shared reading (`newestPlanUsage`); a failed read with no reading
+  at all loses to any shared one. A shared reading is not marked `stale`: its age
+  decides, here as in Settings. A window whose reset has passed since is shown
+  started over, as for a last known reading.
+- **The command node** (`NodeUsageSync`) collects every connected node's logins
+  and newest readings (`collect_shared_usage_readings`), keeps the newest per
+  identity in its own store, which holds every identity, not only its own, and
+  sends each node the newest reading of each login it has, where that is newer
+  than what the node reported (`apply_shared_usage_readings`). A node speaks only
+  for logins it reported: a reading of any other is ignored. A pass runs when a
+  node connects or its stream resyncs (so a node that reconnects catches up from
+  the central copy, even while the machine that took the reading is offline),
+  when a node announces a reading of its own (`origin: "local"`; `"shared"`
+  only tells its Settings to read again, so a pass never feeds itself), when the
+  command node takes one, and once a minute. Passes are debounced by a second
+  and never overlap. Both leaf commands are `internal` and refused unless the
+  caller is an attached command node; `node-routing.ts` never routes them.
+- **Clocks.** A reading dated up to two minutes ahead of the receiver
+  (`SHARED_USAGE_CLOCK_SKEW_MS`) is dated now; one further ahead is refused,
+  because a clock far ahead would otherwise make one old reading outrank every
+  real one for as long as it stays ahead.
+- **Mixed versions.** The commands are new in the `accounts` domain (no version
+  bump). A node that predates them answers `unknown-command` and takes no part:
+  it neither sends nor receives readings, and keeps showing its own. Nothing is
+  retried against it. An older command node runs no passes, so its leaves show
+  only their own readings, as before. The event is new and optional; an older
+  window ignores it, and `readOn` is a new optional field an older renderer does
+  not show.
+
 ## Containers
 
 A container receives the active account's login instead of the host's at
@@ -796,9 +886,14 @@ accounts without asking**, off by default
   flipping accounts in a loop gets before someone has to look.
 - **What the user sees.** Each switch shows a toast naming the machine, both
   accounts, the coordinator and its reason (`coordinator-account-switched`), and
-  stays listed under the tick (`get_coordinator_account_switch_grant`, the newest
+  stays in the switch log (`get_coordinator_account_switch_grant`, the newest
   ten) as long as the request store keeps it. The switches self-timers made are
-  listed and toasted the same way, marked as allowed by a timer.
+  logged and toasted the same way, marked as allowed by a timer. The log is not
+  shown inline: a **View log** button with the number of entries sits under the
+  tick and opens a dialog (`CoordinatorSwitchLog`) listing them newest first,
+  each with its local date and time and age, the machine, from → to, and who
+  asked and why. The list scrolls inside the dialog, Escape closes it and focus
+  returns to the button.
 - **Semantics.** Unchanged: machine-wide, a running turn finishes on the old
   account, and while automatic switching is on the switch pins the account and
   turns it off, as any manual switch does. That is deliberate. If it stayed on
@@ -1005,6 +1100,11 @@ future fetch time as stale. Five minutes matches the periodic evaluation
 interval and is well within the shortest supported five-hour quota window:
 usage can fill rapidly, so a future weekly reset does not establish headroom.
 A limit error whose reading stays stale waits up to ten minutes, then stops.
+
+The reading is the newest of the login from any machine
+([Shared readings](#shared-readings)): one another machine took within those five
+minutes counts as fresh here, so no renewal is needed, and a fresh one saying the
+login is used up keeps the machine off it whatever this machine last read itself.
 
 Each check renews an included, signed-in account (including the active one) if
 its cached reading is stale or unknown, even when it has a future reset, and

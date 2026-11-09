@@ -8,7 +8,11 @@ import type {
   TicketSections,
   TicketSectionsPatch,
 } from "@orkestrator/protocol/ticket-sections";
-import type { TicketSyncMeta, TicketSyncStatusResult } from "@orkestrator/protocol/ticket-sync";
+import type {
+  TicketSyncLeafStatus,
+  TicketSyncMeta,
+  TicketSyncStatusResult,
+} from "@orkestrator/protocol/ticket-sync";
 import { files } from "@/lib/node-scope/domains/files";
 import { asKanbanModel, kanban } from "@/lib/node-scope/domains/kanban";
 import { ticketSyncClient } from "@orkestrator/protocol/contract/domains/ticket-sync";
@@ -169,6 +173,38 @@ export function createKanbanApi(client: BackendClient) {
     return asKanbanModel<TicketSyncStatusResult>(
       domainApi(client, ticketSyncClient).status({ projectId }),
     );
+  }
+
+  /**
+   * A leaf board's sync line: the command nodes its copies come from, the
+   * tickets Share would send, and the copy that syncs when this one does not.
+   */
+  async function getTicketSyncLeafStatus(projectId: string): Promise<TicketSyncLeafStatus> {
+    return asKanbanModel<TicketSyncLeafStatus>(
+      domainApi(client, ticketSyncClient).leafStatus({ projectId }),
+    );
+  }
+
+  /** Leaf: send tickets made before sync (or all of them) to the command node. */
+  async function shareTicketsWithCommandNode(
+    projectId: string,
+    taskIds?: string[],
+  ): Promise<{ shared: number }> {
+    return domainApi(client, ticketSyncClient).share({
+      projectId,
+      ...(taskIds ? { taskIds } : {}),
+    });
+  }
+
+  /** Command node: remove conflicts from a board's list (`ids`, or all). */
+  async function dismissTicketSyncConflicts(
+    projectId: string,
+    ids?: string[],
+  ): Promise<{ dismissed: number; remaining: number }> {
+    return domainApi(client, ticketSyncClient).dismissConflicts({
+      projectId,
+      ...(ids ? { ids } : {}),
+    });
   }
 
   /**
@@ -391,6 +427,9 @@ export function createKanbanApi(client: BackendClient) {
     readFileBase64,
     readBinaryFile,
     getTicketSyncStatus,
+    getTicketSyncLeafStatus,
+    shareTicketsWithCommandNode,
+    dismissTicketSyncConflicts,
     startFeaturePlanning,
     getFeaturePlanningSnapshot,
     retryFeaturePlanning,
@@ -424,6 +463,9 @@ export const {
   readFileBase64,
   readBinaryFile,
   getTicketSyncStatus,
+  getTicketSyncLeafStatus,
+  shareTicketsWithCommandNode,
+  dismissTicketSyncConflicts,
   startFeaturePlanning,
   getFeaturePlanningSnapshot,
   retryFeaturePlanning,

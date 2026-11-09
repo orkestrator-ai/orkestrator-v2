@@ -803,15 +803,23 @@ for (const viewport of [
     await pipeline(page)
       .getByRole("tab", { name: /^Consolidation,/ })
       .click();
-    await inspector
-      .getByRole("tablist", { name: "Inspector views" })
-      .getByRole("tab", { name: "Report", exact: true })
-      .click();
-    await expect(inspector.getByRole("log")).toHaveCount(0);
+    const split = inspector.getByTestId("multi-review-inspector-side-by-side");
+    if (viewport.width >= 1280) {
+      await expect(split).toBeVisible();
+      await expect(inspector.getByRole("log")).toBeVisible();
+    } else {
+      await inspector
+        .getByRole("tablist", { name: "Inspector views" })
+        .getByRole("tab", { name: "Report", exact: true })
+        .click();
+      await expect(inspector.getByRole("log")).toHaveCount(0);
+    }
     const article = inspector.getByRole("article", { name: "Consolidated Multi Review" });
     const report = article.getByRole("heading", { name: "Consolidated Multi Review", exact: true });
     await expect(report).toBeVisible();
-    const reportBox = (await article.boundingBox())!;
+    const reportBox = (await inspector
+      .locator('[data-slot="tabs-content"][aria-label="Report"]')
+      .boundingBox())!;
     expect(inside(reportBox, (await inspector.boundingBox())!)).toBe(true);
     expect(reportBox.x).toBeGreaterThanOrEqual(0);
     expect(reportBox.x + reportBox.width).toBeLessThanOrEqual(viewport.width);
@@ -820,7 +828,7 @@ for (const viewport of [
     await expect(report).toBeInViewport();
     await expect(badge).toBeInViewport();
     await page.screenshot({
-      path: `output/playwright/multi-review-report-${viewport.width}x${viewport.height}.png`,
+      path: `output/visual-previews/multi-review-report-${viewport.width}x${viewport.height}.png`,
     });
   });
 }
@@ -828,6 +836,7 @@ for (const viewport of [
 test("inspector report content and selected views belong to each pipeline node", async ({
   page,
 }) => {
+  await page.setViewportSize({ width: 1000, height: 1000 });
   await page.goto("/multi-review-flow?phase=ready");
   const inspector = page.getByTestId("multi-review-inspector");
   const views = inspector.getByRole("tablist", { name: "Inspector views" });
@@ -884,7 +893,7 @@ test("inspector report content and selected views belong to each pipeline node",
 test("an overflowing transcript keeps its reading position and follow mode behind Report", async ({
   page,
 }) => {
-  await page.setViewportSize({ width: 1280, height: 1000 });
+  await page.setViewportSize({ width: 1000, height: 1000 });
   await page.goto("/multi-review-flow?phase=ready&longTranscript&transcriptControls");
   await pipeline(page)
     .getByRole("tab", { name: /^Reviewer 1 ·/ })
@@ -928,6 +937,21 @@ test("an overflowing transcript keeps its reading position and follow mode behin
   await expect.poll(scrollTop).toBe(readingTop);
   expect(await bottomGap()).toBeGreaterThan(100);
 
+  // Crossing the split in both directions keeps the same tail and reader mode.
+  await page.setViewportSize({ width: 1280, height: 1000 });
+  await expect(inspector.getByTestId("multi-review-inspector-side-by-side")).toBeVisible();
+  expect(await tail.evaluate((element, original) => element === original, mountedTail)).toBe(true);
+  await expect.poll(scrollTop).toBe(readingTop);
+  await append.click();
+  await expect.poll(scrollTop).toBe(readingTop);
+  await page.setViewportSize({ width: 1000, height: 1000 });
+  await expect(views.getByRole("tab", { name: "Transcript", exact: true })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  expect(await tail.evaluate((element, original) => element === original, mountedTail)).toBe(true);
+  await expect.poll(scrollTop).toBe(readingTop);
+
   // Returning to the bottom explicitly resumes following new hidden output.
   await tail.scrollIntoViewIfNeeded();
   await tail.hover();
@@ -935,9 +959,30 @@ test("an overflowing transcript keeps its reading position and follow mode behin
   await expect.poll(bottomGap).toBeLessThanOrEqual(1);
   await views.getByRole("tab", { name: "Report", exact: true }).click();
   await append.click();
-  await expect(tail).toContainText("Transcript entry 35.");
+  await expect(tail).toContainText("Transcript entry 36.");
   await views.getByRole("tab", { name: "Transcript", exact: true }).click();
   await expect.poll(bottomGap).toBeLessThanOrEqual(1);
+
+  // The report has the same scroller in both layouts, too; the narrow choice survives.
+  await views.getByRole("tab", { name: "Report", exact: true }).click();
+  const reportPane = inspector.locator('[data-slot="tabs-content"][aria-label="Report"]');
+  const mountedReport = await reportPane.elementHandle();
+  await reportPane.getByRole("button", { name: /^Issues ·/ }).click();
+  await reportPane.evaluate((element) => {
+    element.scrollTop = 100;
+  });
+  await expect.poll(() => reportPane.evaluate((element) => element.scrollTop)).toBe(100);
+  for (const width of [1280, 1000]) {
+    await page.setViewportSize({ width, height: 1000 });
+    await expect.poll(() => reportPane.evaluate((element) => element.scrollTop)).toBe(100);
+    expect(
+      await reportPane.evaluate((element, original) => element === original, mountedReport),
+    ).toBe(true);
+  }
+  await expect(views.getByRole("tab", { name: "Report", exact: true })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
 });
 
 test("shows each queued reviewer's place in the admission queue", async ({ page }) => {

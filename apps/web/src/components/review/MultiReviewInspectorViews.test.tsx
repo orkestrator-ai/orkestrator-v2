@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { useRef, useState } from "react";
 import { INSPECTOR_SPLIT_MIN_WIDTH_PX, InspectorTranscriptTabs } from "./MultiReviewInspectorViews";
 
 /**
@@ -119,4 +120,51 @@ describe("InspectorTranscriptTabs", () => {
     resizeTo(0);
     expect(screen.getByTestId("multi-review-inspector-side-by-side")).toBeTruthy();
   });
+});
+
+function Reader() {
+  const following = useRef(true);
+  const [label, setLabel] = useState("following");
+  return (
+    <div
+      data-testid="reader"
+      onScroll={() => {
+        following.current = false;
+        setLabel("reading");
+      }}
+    >
+      <button onClick={() => setLabel(following.current ? "following" : "reading")}>{label}</button>
+    </div>
+  );
+}
+
+test("keeps both pane instances, reader offset and follow state across both breakpoint directions", () => {
+  width = INSPECTOR_SPLIT_MIN_WIDTH_PX - 1;
+  const onTabChange = () => undefined;
+  const view = (tab: "report" | "transcript") => (
+    <InspectorTranscriptTabs
+      transcript={<Reader />}
+      report={<p>report body</p>}
+      tab={tab}
+      onTabChange={onTabChange}
+    />
+  );
+  const rendered = render(view("transcript"));
+  const reader = screen.getByTestId("reader");
+  const report = screen.getByText("report body").parentElement!;
+  reader.scrollTop = 180;
+  fireEvent.scroll(reader);
+  rendered.rerender(view("report"));
+  report.scrollTop = 90;
+  for (const next of [INSPECTOR_SPLIT_MIN_WIDTH_PX, INSPECTOR_SPLIT_MIN_WIDTH_PX - 1]) {
+    resizeTo(next);
+    expect(screen.getByTestId("reader")).toBe(reader);
+    expect(screen.getByText("report body").parentElement).toBe(report);
+    expect(reader.scrollTop).toBe(180);
+    expect(report.scrollTop).toBe(90);
+  }
+  expect(screen.getByRole("tab", { name: "Report" }).getAttribute("aria-selected")).toBe("true");
+  rendered.rerender(view("transcript"));
+  fireEvent.click(screen.getByRole("button", { name: "reading" }));
+  expect(screen.getByRole("button", { name: "reading" })).toBeTruthy();
 });

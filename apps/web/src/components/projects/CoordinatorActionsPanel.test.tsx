@@ -1,8 +1,11 @@
 import { installControlledTimeout } from "../../../../../tests/helpers/controlled-timeout";
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { ActionsPanel, fitNewestCards } from "./CoordinatorActionsPanel";
-import { COORDINATOR_ACTIONS_DOCKED_KEY } from "./coordinator-actions-preference";
+import {
+  setCoordinatorActionsDockedOpen,
+  COORDINATOR_ACTIONS_DOCKED_KEY,
+} from "./coordinator-actions-preference";
 import {
   coordinatorActionCards,
   visibleCoordinatorCards,
@@ -360,7 +363,7 @@ test("wide header folds the docked panel to its icon and the icon reopens it", (
   fireEvent.focus(icon);
   expect(icon.getAttribute("aria-expanded")).toBe("false");
   fireEvent.click(icon);
-  expect(screen.queryByRole("button", { name: /Actions,/ })).toBeNull();
+  expect(screen.queryByRole("button", { name: /Actions,/ }) === null).toBe(true);
   expect(region().getAttribute("aria-hidden")).toBe("false");
   expect(document.activeElement).toBe(header());
   expect(localStorage.getItem(COORDINATOR_ACTIONS_DOCKED_KEY)).toBeNull();
@@ -396,7 +399,7 @@ test("wide panel stays open through outside clicks, leave, blur, Escape and card
   fireEvent.click(screen.getByRole("button", { name: "Which option?" }));
   expect(anchor).toBe("a");
   expect(header().getAttribute("aria-expanded")).toBe("true");
-  expect(screen.queryByRole("button", { name: /Actions,/ })).toBeNull();
+  expect(screen.queryByRole("button", { name: /Actions,/ }) === null).toBe(true);
 });
 
 test("the docked choice persists and follows other windows", () => {
@@ -409,7 +412,7 @@ test("the docked choice persists and follows other windows", () => {
   act(() => {
     window.dispatchEvent(new StorageEvent("storage", { key: COORDINATOR_ACTIONS_DOCKED_KEY }));
   });
-  expect(screen.queryByRole("button", { name: /Actions,/ })).toBeNull();
+  expect(screen.queryByRole("button", { name: /Actions,/ }) === null).toBe(true);
   expect(header().getAttribute("aria-expanded")).toBe("true");
 });
 
@@ -484,11 +487,11 @@ test("a short pane hides the oldest cards instead of scrolling and keeps the wai
         <ActionsPanel docked cards={cards} onNavigate={() => {}} availableHeight={110} />
       </div>,
     );
-    expect(screen.queryByRole("button", { name: "New subject" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "New subject" }) === null).toBe(true);
     expect(screen.getByRole("button", { name: "Which option?" })).toBeTruthy();
     expect(screen.getByRole("button", { name: /Done: #42/ })).toBeTruthy();
     expect(screen.getByText("1 waiting")).toBeTruthy();
-    expect(view.container.querySelector(".overflow-y-auto")).toBeNull();
+    expect(view.container.querySelector(".overflow-y-auto") === null).toBe(true);
     view.rerender(
       <div data-floating-notice-stack="">
         <ActionsPanel docked cards={cards} onNavigate={() => {}} availableHeight={300} />
@@ -497,5 +500,158 @@ test("a short pane hides the oldest cards instead of scrolling and keeps the wai
     expect(screen.getByRole("button", { name: "New subject" })).toBeTruthy();
   } finally {
     if (original) Object.defineProperty(HTMLElement.prototype, "offsetHeight", original);
+  }
+});
+
+test("wide round trips clear narrow pointer state and pending grace", () => {
+  const grace = clock(160);
+  const view = render(<ActionsPanel docked={false} cards={cards} onNavigate={() => {}} />);
+  const icon = screen.getByRole("button", { name: /Actions,/ });
+  fireEvent.pointerEnter(icon, { pointerType: "mouse" });
+  fireEvent.blur(icon);
+  view.rerender(<ActionsPanel docked cards={cards} onNavigate={() => {}} />);
+  fireEvent.pointerLeave(region(), { pointerType: "mouse" });
+  view.rerender(<ActionsPanel docked={false} cards={cards} onNavigate={() => {}} />);
+  const returnedIcon = screen.getByRole("button", { name: /Actions,/ });
+  fireEvent.focus(returnedIcon);
+  expect(region().getAttribute("aria-hidden")).toBe("false");
+  fireEvent.blur(returnedIcon);
+  act(() => grace.advance());
+  expect(region().getAttribute("aria-hidden")).toBe("true");
+});
+
+for (const dismiss of ["header", "Escape"]) {
+  test(`wide round trips clear narrow ${dismiss} suppression`, () => {
+    const view = render(<ActionsPanel docked={false} cards={cards} onNavigate={() => {}} />);
+    fireEvent.focus(screen.getByRole("button", { name: /Actions,/ }));
+    if (dismiss === "header") fireEvent.click(header());
+    else fireEvent.keyDown(region(), { key: "Escape" });
+    view.rerender(<ActionsPanel docked cards={cards} onNavigate={() => {}} />);
+    view.rerender(<ActionsPanel docked={false} cards={cards} onNavigate={() => {}} />);
+    fireEvent.focus(screen.getByRole("button", { name: /Actions,/ }));
+    expect(region().getAttribute("aria-hidden")).toBe("false");
+  });
+}
+
+for (const cause of ["storage", "resize"]) {
+  test(`${cause} collapse moves focus out of hidden cards`, () => {
+    const view = render(
+      <ActionsPanel docked={cause === "storage"} cards={cards} onNavigate={() => {}} />,
+    );
+    if (cause === "resize") {
+      localStorage.setItem(COORDINATOR_ACTIONS_DOCKED_KEY, "collapsed");
+      fireEvent.focus(screen.getByRole("button", { name: /Actions,/ }));
+    }
+    act(() => screen.getByRole("button", { name: "Which option?" }).focus());
+    if (cause === "storage") {
+      localStorage.setItem(COORDINATOR_ACTIONS_DOCKED_KEY, "collapsed");
+      act(() =>
+        window.dispatchEvent(new StorageEvent("storage", { key: COORDINATOR_ACTIONS_DOCKED_KEY })),
+      );
+    } else view.rerender(<ActionsPanel docked cards={cards} onNavigate={() => {}} />);
+    expect(region().getAttribute("aria-hidden")).toBe("true");
+    expect(document.activeElement === screen.getByRole("button", { name: /Actions,/ })).toBe(true);
+  });
+}
+
+test("unavailable storage defaults open and failed writes retain the local choice", () => {
+  const read = spyOn(localStorage, "getItem").mockImplementation(() => {
+    throw new Error("unavailable");
+  });
+  const write = spyOn(localStorage, "setItem").mockImplementation(() => {
+    throw new Error("unavailable");
+  });
+  const remove = spyOn(localStorage, "removeItem").mockImplementation(() => {
+    throw new Error("unavailable");
+  });
+  try {
+    render(<ActionsPanel docked cards={cards} onNavigate={() => {}} />);
+    expect(region().getAttribute("aria-hidden")).toBe("false");
+    fireEvent.click(header());
+    expect(region().getAttribute("aria-hidden")).toBe("true");
+    fireEvent.click(screen.getByRole("button", { name: /Actions,/ }));
+    expect(region().getAttribute("aria-hidden")).toBe("false");
+  } finally {
+    read.mockRestore();
+    write.mockRestore();
+    remove.mockRestore();
+    act(() => setCoordinatorActionsDockedOpen(true));
+  }
+});
+
+test("notice insertion, resizing and removal re-fit cards and preserve tiny-pane header", async () => {
+  const height = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetHeight");
+  const top = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetTop");
+  const rect = HTMLElement.prototype.getBoundingClientRect;
+  const originalResize = globalThis.ResizeObserver;
+  let offset = 0;
+  let resized = () => {};
+  const observed = new Set<Element>();
+  globalThis.ResizeObserver = class {
+    constructor(callback: () => void) {
+      resized = callback;
+    }
+    observe(element: Element) {
+      observed.add(element);
+    }
+    unobserve(element: Element) {
+      observed.delete(element);
+    }
+    disconnect() {
+      observed.clear();
+    }
+  } as unknown as typeof ResizeObserver;
+  Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
+    configurable: true,
+    get() {
+      return this.tagName === "LI" ? 40 : this.tagName === "H2" ? 20 : 0;
+    },
+  });
+  Object.defineProperty(HTMLElement.prototype, "offsetTop", {
+    configurable: true,
+    get() {
+      return offset;
+    },
+  });
+  HTMLElement.prototype.getBoundingClientRect = function () {
+    return { ...rect.call(this), top: this.hasAttribute("data-actions-panel-box") ? offset : 0 };
+  };
+  try {
+    const view = render(
+      <div data-floating-notice-stack="">
+        <ActionsPanel docked cards={cards} onNavigate={() => {}} availableHeight={150} />
+      </div>,
+    );
+    const stack = view.container.firstElementChild!;
+    const notice = document.createElement("div");
+    expect(screen.queryByRole("button", { name: "New subject" }) !== null).toBe(true);
+    await act(async () => {
+      offset = 50;
+      stack.prepend(notice);
+      await Promise.resolve();
+    });
+    expect(observed.has(notice)).toBe(true);
+    expect(screen.queryByRole("button", { name: "New subject" }) === null).toBe(true);
+    act(() => {
+      offset = 145;
+      resized();
+    });
+    expect(screen.queryByRole("button", { name: "Which option?" }) === null).toBe(true);
+    const box = view.container.querySelector<HTMLElement>("[data-actions-panel-box]")!;
+    expect(parseFloat(box.style.maxHeight)).toBeGreaterThanOrEqual(20);
+    expect(header().getAttribute("tabindex")).toBe("0");
+    await act(async () => {
+      offset = 0;
+      notice.remove();
+      await Promise.resolve();
+    });
+    expect(observed.has(notice)).toBe(false);
+    expect(screen.queryByRole("button", { name: "New subject" }) !== null).toBe(true);
+  } finally {
+    cleanup();
+    if (height) Object.defineProperty(HTMLElement.prototype, "offsetHeight", height);
+    if (top) Object.defineProperty(HTMLElement.prototype, "offsetTop", top);
+    HTMLElement.prototype.getBoundingClientRect = rect;
+    globalThis.ResizeObserver = originalResize;
   }
 });

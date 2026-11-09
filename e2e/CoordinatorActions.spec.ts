@@ -231,3 +231,31 @@ test("a short pane shows the newest whole cards and never scrolls", async ({ pag
   await expect(page.getByRole("button", { name: "Which option?" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Search", exact: true })).toBeVisible();
 });
+
+test("remote collapse recovers card focus and a tiny pane preserves the header", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await page.goto("/coordinator-actions?many");
+  await page.getByRole("button", { name: "Follow-up question 8" }).focus();
+  await page.evaluate(() => {
+    const key = "orkestrator.coordinator-actions.docked";
+    localStorage.setItem(key, "collapsed");
+    window.dispatchEvent(new StorageEvent("storage", { key }));
+  });
+  const icon = page.getByRole("button", { name: /^Actions,/ });
+  await expect(icon).toBeFocused();
+  await icon.click();
+  await page.setViewportSize({ width: 1600, height: 150 });
+  const header = page.getByRole("button", { name: "Collapse actions" });
+  await expect(header).toBeVisible();
+  const dimensions = await header.evaluate((element) => {
+    const header = element.getBoundingClientRect();
+    const box = element.closest("[data-actions-panel-box]")!.getBoundingClientRect();
+    return { headerBottom: header.bottom, boxBottom: box.bottom };
+  });
+  expect(dimensions.headerBottom).toBeLessThanOrEqual(dimensions.boxBottom);
+  await page.screenshot({
+    path: path.resolve("output/visual-previews/actions-fix-tiny-header.png"),
+  });
+});

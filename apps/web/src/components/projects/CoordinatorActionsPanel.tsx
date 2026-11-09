@@ -96,6 +96,13 @@ export function ActionsPanel({
     if (timer.current !== null) clearTimeout(timer.current);
     timer.current = null;
   };
+  useLayoutEffect(() => {
+    pointer.current = false;
+    suppressed.current = false;
+    touch.current = false;
+    if (timer.current !== null) clearTimeout(timer.current);
+    timer.current = null;
+  }, [docked]);
   const open = () => {
     cancel();
     if (!docked && !suppressed.current) setExpanded(true);
@@ -144,7 +151,12 @@ export function ActionsPanel({
     };
   }, [docked, expanded]);
   const shown = docked ? dockedOpen : expanded;
-  useEffect(() => {
+  useLayoutEffect(() => {
+    // Shared preference updates and resizing can hide a focused card too.
+    if (!shown && box.current?.contains(document.activeElement)) {
+      suppressed.current = true;
+      focusAfter.current = "icon";
+    }
     const target = focusAfter.current;
     if (!target) return;
     focusAfter.current = null;
@@ -167,6 +179,7 @@ export function ActionsPanel({
       for (const child of Array.from(stack.children)) if (child !== element) resize.observe(child);
     };
     observe();
+    update();
     const mutation =
       typeof MutationObserver === "undefined"
         ? null
@@ -414,5 +427,5 @@ function measureFit(
     .map((item) => (item as HTMLElement).offsetHeight);
   // Rounding in the measured heights must never leave a sliver of a card.
   const count = fitNewestCards(heights, px(getComputedStyle(list).rowGap), limit - chrome - 1);
-  return { count, maxHeight: limit };
+  return { count, maxHeight: Math.max(limit, chrome) };
 }

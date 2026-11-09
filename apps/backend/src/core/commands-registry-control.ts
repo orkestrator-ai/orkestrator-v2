@@ -43,6 +43,21 @@ import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("native-agent");
 
+function validatedJobPresentation(
+  args: Record<string, unknown>,
+): TrustedUserPromptPresentation | undefined {
+  const presentation = coordinatorDelegationPresentationFrom(args);
+  if (presentation === undefined) return undefined;
+  if (
+    !isTrustedUserPromptPresentation(presentation) ||
+    typeof args.prompt !== "string" ||
+    parseCoordinatorDelegatedPrompt(args.prompt)?.frame !== presentation.frame
+  ) {
+    throw new Error("initialPromptPresentation does not match the prompt");
+  }
+  return presentation;
+}
+
 async function launchNativeAgentJob(
   args: Record<string, unknown>,
   context: CommandContext,
@@ -53,7 +68,7 @@ async function launchNativeAgentJob(
   },
 ): Promise<Record<string, unknown>> {
   if (
-    (!options.allowCompletionAction && coordinatorDelegationPresentationFrom(args)) ||
+    (!options.allowCompletionAction && validatedJobPresentation(args)) ||
     (args.tabReuse && options.allowCompletionAction)
   ) {
     const environmentId = asNonBlankString(args.environmentId, "environmentId");
@@ -80,18 +95,7 @@ async function launchNativeAgentJobInternal(
   if (requestId.length > 256) throw new Error("requestId must be at most 256 characters");
   let prompt = asNonBlankString(args.prompt, "prompt");
   if (prompt.length > 100_000) throw new Error("prompt must be at most 100000 characters");
-  const requestedPresentation = coordinatorDelegationPresentationFrom(args);
-  let initialPromptPresentation: TrustedUserPromptPresentation | undefined;
-  if (requestedPresentation !== undefined) {
-    const parsed = parseCoordinatorDelegatedPrompt(prompt);
-    if (
-      !isTrustedUserPromptPresentation(requestedPresentation) ||
-      parsed?.frame !== requestedPresentation.frame
-    ) {
-      throw new Error("initialPromptPresentation does not match the prompt");
-    }
-    initialPromptPresentation = requestedPresentation;
-  }
+  let initialPromptPresentation = validatedJobPresentation(args);
   const title = asOptionalString(args.title)?.trim();
   if (title && title.length > 200) throw new Error("title must be at most 200 characters");
   let agent = args.agent;

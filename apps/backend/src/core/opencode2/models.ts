@@ -21,6 +21,7 @@ import {
   openCodeModelDisplayLabel,
   reasoningOptionLabel,
   type AgentModel,
+  type NativeAgentDefaultModelResolution,
 } from "@orkestrator/protocol/native-agent";
 import { PromptRejectedError } from "../agent-provider-contract.js";
 import type { OpenCode2Client } from "./client.js";
@@ -145,6 +146,37 @@ export function normalizeOpenCode2ModelCatalogue(
       : {}),
     connectedProviderIds: [...connected].slice(0, 512),
     variants,
+  };
+}
+
+/**
+ * The model a new 2.x session starts on, for a configured default (set or
+ * unset), resolved against 2.x's own catalogue. 2.x lists only models it can
+ * serve now, so a configured model that is missing is replaced (with a
+ * substitution the tab shows) by the server's default, else the first picker
+ * row; an unset one resolves to that default. An unreadable catalogue keeps
+ * the configured model and dispatch reports its availability, as on 1.x.
+ */
+export function resolveOpenCode2DefaultModel(
+  configuredModelId: string | undefined,
+  catalogue: OpenCode2ModelCatalogue | undefined,
+): NativeAgentDefaultModelResolution {
+  const requested = configuredModelId?.trim();
+  const named = requested && requested.indexOf("/") > 0 ? requested : undefined;
+  if (!catalogue) return named ? { modelId: named } : {};
+  if (named && catalogue.variants.has(named)) return { modelId: named };
+  const fallback = catalogue.selectedModelId
+    ? catalogue.models.find((model) => model.id === catalogue.selectedModelId)
+    : catalogue.models[0];
+  if (!fallback) return named ? { modelId: named } : {};
+  if (!named) return { modelId: fallback.id };
+  return {
+    modelId: fallback.id,
+    substitution: {
+      requestedModelId: named,
+      modelId: fallback.id,
+      message: `${openCodeModelDisplayLabel(named)} isn't available in OpenCode 2 with your sign-ins; using ${fallback.label}.`,
+    },
   };
 }
 

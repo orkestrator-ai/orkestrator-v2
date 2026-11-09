@@ -5,6 +5,7 @@ import {
   OpenCode2ModelCatalogueCache,
   normalizeOpenCode2ModelCatalogue,
   openCode2ModelSelection,
+  resolveOpenCode2DefaultModel,
 } from "./models.js";
 
 describe("normalizeOpenCode2ModelCatalogue", () => {
@@ -123,5 +124,51 @@ describe("OpenCode2ModelCatalogueCache", () => {
     now = 5_000;
     await cache.read();
     expect(reads).toBe(3);
+  });
+});
+
+describe("resolveOpenCode2DefaultModel", () => {
+  // A fresh profile signed in to OpenCode but not OpenCode Go: 2.x lists only
+  // what it can serve, and its own default is an OpenCode model.
+  const rows = [
+    fakeOpenCode2Model("opencode", "beam-free"),
+    fakeOpenCode2Model("opencode", "big-pickle"),
+  ];
+  const catalogue = normalizeOpenCode2ModelCatalogue(rows, rows[0], []);
+
+  test("keeps a configured model 2.x can serve", () => {
+    expect(resolveOpenCode2DefaultModel("opencode/big-pickle", catalogue)).toEqual({
+      modelId: "opencode/big-pickle",
+    });
+  });
+
+  test("replaces a configured model from a provider 2.x cannot serve, and says so", () => {
+    const resolution = resolveOpenCode2DefaultModel("opencode-go/beam-free", catalogue);
+    expect(resolution.modelId).toBe("opencode/beam-free");
+    expect(resolution.substitution).toMatchObject({
+      requestedModelId: "opencode-go/beam-free",
+      modelId: "opencode/beam-free",
+    });
+    expect(resolution.substitution?.message).toContain("isn't available in OpenCode 2");
+  });
+
+  test("an unset default (or a placeholder naming no provider) takes the server's default", () => {
+    expect(resolveOpenCode2DefaultModel(undefined, catalogue)).toEqual({
+      modelId: "opencode/beam-free",
+    });
+    expect(resolveOpenCode2DefaultModel("default", catalogue)).toEqual({
+      modelId: "opencode/beam-free",
+    });
+  });
+
+  test("an unreadable or empty catalogue keeps the configured model", () => {
+    expect(resolveOpenCode2DefaultModel("opencode-go/beam-free", undefined)).toEqual({
+      modelId: "opencode-go/beam-free",
+    });
+    expect(resolveOpenCode2DefaultModel(undefined, undefined)).toEqual({});
+    const empty = normalizeOpenCode2ModelCatalogue([], null, []);
+    expect(resolveOpenCode2DefaultModel("opencode-go/beam-free", empty)).toEqual({
+      modelId: "opencode-go/beam-free",
+    });
   });
 });

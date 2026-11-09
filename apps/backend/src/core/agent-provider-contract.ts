@@ -1014,7 +1014,11 @@ export interface NativeAgentRuntimeProvider extends AgentSessionProvider {
    * stage creation and never write the answer back to the user's
    * configuration.
    */
-  resolveDefaultModel?(modelId: string | undefined): Promise<NativeAgentDefaultModelResolution>;
+  resolveDefaultModel?(
+    modelId: string | undefined,
+    /** The OpenCode line a new session will run on, so its own catalogue answers. */
+    options?: { openCodeProtocol?: "v2" },
+  ): Promise<NativeAgentDefaultModelResolution>;
   /**
    * `limit` asks for only the newest messages. A provider with its own history
    * bound may ignore it, so the caller still applies its own window.

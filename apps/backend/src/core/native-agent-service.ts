@@ -1600,18 +1600,20 @@ export class NativeAgentService {
      * default. Either answer is stored on this session only; the configuration
      * keeps the user's choice.
      */
-    const resolution =
-      !input.model || input.model === "default" || input.modelSource === "default"
-        ? await this.resolveDefaultModel(provider, input.model)
-        : undefined;
-    const modelSubstitution = resolution?.substitution;
-    if (resolution?.modelId) input = { ...input, model: resolution.modelId };
-    // Decided once, here, and stored on the record the create publishes.
+    // Decided once, here, and stored on the record the create publishes. It
+    // comes first so an OpenCode default resolves against its own line's
+    // catalogue: 2.x serves only the providers it has credentials for.
     const openCodeProtocol = await selectNewOpenCodeSessionProtocol(
       this.storage,
       this.options,
       input,
     );
+    const resolution =
+      !input.model || input.model === "default" || input.modelSource === "default"
+        ? await this.resolveDefaultModel(provider, input.model, openCodeProtocol)
+        : undefined;
+    const modelSubstitution = resolution?.substitution;
+    if (resolution?.modelId) input = { ...input, model: resolution.modelId };
     const session = await this.storage.getOrCreateNativeAgentSession(
       {
         ...(openCodeProtocol ? { openCodeProtocol } : {}),
@@ -1666,10 +1668,14 @@ export class NativeAgentService {
   private async resolveDefaultModel(
     provider: NativeAgentRuntimeProvider,
     modelId: string | undefined,
+    openCodeProtocol?: "v2",
   ): Promise<NativeAgentDefaultModelResolution | undefined> {
     if (!provider.resolveDefaultModel) return undefined;
     try {
-      return await provider.resolveDefaultModel(modelId);
+      return await provider.resolveDefaultModel(
+        modelId,
+        openCodeProtocol ? { openCodeProtocol } : undefined,
+      );
     } catch {
       // Connectivity is advisory here. Dispatch preflight still reports a
       // model the runtime cannot serve.

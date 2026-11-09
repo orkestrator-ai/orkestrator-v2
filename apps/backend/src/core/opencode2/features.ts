@@ -42,6 +42,7 @@ import { openCode2AuthStatus } from "./credentials.js";
 import {
   OpenCode2ModelCatalogueCache,
   openCode2ModelSelection,
+  resolveOpenCode2DefaultModel,
   type OpenCode2ModelCatalogue,
 } from "./models.js";
 import {
@@ -126,6 +127,11 @@ export class OpenCode2SessionFeatures {
   }
 
   // ── create and send ────────────────────────────────────────────────────────
+
+  /** A new 2.x session's default, from this server's catalogue (`models.ts`). */
+  async resolveDefaultModel(modelId: string | undefined) {
+    return resolveOpenCode2DefaultModel(modelId, await this.models.readOrUndefined());
+  }
 
   /**
    * The model a new session starts on. A model this server cannot serve is

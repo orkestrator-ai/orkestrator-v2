@@ -682,7 +682,7 @@ describe("Pi SDK lifecycle", () => {
       noContextFiles: false,
     });
     expect(projectResourceDiscoveryOptions(true)).toEqual({
-      noExtensions: false,
+      noExtensions: true,
       noSkills: false,
       noPromptTemplates: false,
       noContextFiles: false,
@@ -727,7 +727,7 @@ describe("Pi SDK lifecycle", () => {
         ...projectResourceDiscoveryOptions(true, false),
       });
       await writable.reload();
-      expect(writable.getExtensions().extensions).toHaveLength(1);
+      expect(writable.getExtensions().extensions).toHaveLength(0);
       expect(writable.getAgentsFiles().agentsFiles).toHaveLength(1);
 
       const readOnly = new DefaultResourceLoader({

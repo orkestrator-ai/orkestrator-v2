@@ -141,3 +141,23 @@ test("draft failure offers retry and plain review; confirmation errors retain th
   await screen.findByText("confirmation unavailable");
   expect(screen.getByLabelText("Title")).toBeTruthy();
 });
+
+test("multiple sources permit explicit selection and preserve it across refresh", async () => {
+  const node = client().respond("auto_pipeline_sources", {
+    available: true,
+    sources: [
+      { tabId: "active", label: "Active work" },
+      { tabId: "other", label: "Other work" },
+    ],
+  });
+  renderInNodeScope(<AutoPipelineLaunch environmentId="env" onPromoted={() => undefined} />, {
+    client: node,
+  });
+  const picker = await screen.findByRole("combobox", { name: "Build transcript" });
+  expect((picker as HTMLSelectElement).value).toBe("active");
+  fireEvent.change(picker, { target: { value: "other" } });
+  await waitFor(() => expect(node.calls("auto_pipeline_sources").length).toBeGreaterThan(1), {
+    timeout: 4000,
+  });
+  expect((picker as HTMLSelectElement).value).toBe("other");
+});

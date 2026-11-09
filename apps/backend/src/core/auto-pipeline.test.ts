@@ -432,6 +432,10 @@ test("promotion commits real Git work once and commit failure creates no ticket"
         } finally {
           send.mockRestore();
         }
+        await writeFile(join(cwd, "feature.txt"), "unreviewed later work\n");
+        await expect(auto.confirm(draft.id, result)).rejects.toThrow("Work changed");
+        expect(await storage.kanban.getKanbanTasks("project-1")).toHaveLength(0);
+        await writeFile(join(cwd, "feature.txt"), "after\n");
         await expect(auto.confirm(draft.id, result)).rejects.toThrow("commit hook failed");
         expect(await storage.kanban.getKanbanTasks("project-1")).toHaveLength(0);
         // A failed commit stages the same work. Re-draft to review that index state.
@@ -450,6 +454,21 @@ test("promotion commits real Git work once and commit failure creates no ticket"
         } finally {
           sendAgain.mockRestore();
         }
+        const persist = storage.putAutoPipelineDraft.bind(storage);
+        let crashed = false;
+        const receipt = spyOn(storage, "putAutoPipelineDraft").mockImplementation((record) => {
+          if (!crashed && record.attempt.commit !== base) {
+            crashed = true;
+            throw new Error("receipt unavailable");
+          }
+          persist(record);
+        });
+        try {
+          await expect(auto.confirm(draft.id, result)).rejects.toThrow("receipt unavailable");
+        } finally {
+          receipt.mockRestore();
+        }
+        // Recover the real trailer-bearing commit without committing a second time.
         const admitted = (await auto.confirm(draft.id, result)) as { id: string };
         await auto.confirm(draft.id, result);
         expect((await git(["rev-list", "--count", "HEAD"])).trim()).toBe("2");

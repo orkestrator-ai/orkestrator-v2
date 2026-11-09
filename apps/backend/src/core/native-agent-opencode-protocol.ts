@@ -4,10 +4,11 @@
  *
  * The decision is made once, by the backend, when a session is created, and
  * stored on its record (`openCodeProtocol: "v2"`). Only new interactive tabs
- * of an ordinary local environment take 2.x, and only while the setting asks
- * for it: build pipelines, Multi Review, graphs and coordinators create their
- * sessions with other origins or owners, and container environments wait for
- * the container half. Everything else, every existing record included, is
+ * of an ordinary local environment, or of a container environment whose image
+ * runs 2.x (`containerRunsOpenCode2`), take 2.x, and only while the setting
+ * asks for it: build pipelines, Multi Review, graphs and coordinators create
+ * their sessions with other origins or owners, and a container from an older
+ * image stays on 1.x. Everything else, every existing record included, is
  * 1.x.
  */
 import type { AgentInteractionOrigin } from "@orkestrator/protocol/agent-interactions";
@@ -16,6 +17,12 @@ import { resolveOpenCodeProtocol } from "@orkestrator/protocol/opencode-protocol
 import type { Environment, PersistedNativeAgentSession } from "./models.js";
 import type { OpenCodeRoutingDependencies } from "./opencode2/routing-provider.js";
 import type { NativeAgentServiceOptions } from "./native-agent-service-shared.js";
+
+/** What the selection reads of an environment. */
+export type OpenCode2SessionEnvironment = Pick<
+  Environment,
+  "environmentType" | "containerId" | "containerLifecycle"
+>;
 
 export interface NewOpenCodeSessionInput {
   agent: string;
@@ -30,13 +37,15 @@ export function newOpenCodeSessionProtocol(
   environment: Pick<Environment, "environmentType"> | null | undefined,
   setting: unknown,
   available: boolean,
+  containerRunsV2 = false,
 ): "v2" | undefined {
   if (input.agent !== "opencode" || !available) return undefined;
   if (resolveOpenCodeProtocol(setting) !== "v2") return undefined;
   if ((input.origin ?? "interactive-native") !== "interactive-native") return undefined;
   if (input.owner && input.owner.kind !== "environment") return undefined;
   if (input.executionPolicy) return undefined;
-  if (environment?.environmentType !== "local") return undefined;
+  const type = environment?.environmentType;
+  if (type !== "local" && !(type === "containerized" && containerRunsV2)) return undefined;
   return "v2";
 }
 
@@ -47,10 +56,10 @@ export function newOpenCodeSessionProtocol(
  */
 export async function selectNewOpenCodeSessionProtocol(
   storage: {
-    getEnvironment(environmentId: string): Promise<Pick<Environment, "environmentType"> | null>;
+    getEnvironment(environmentId: string): Promise<OpenCode2SessionEnvironment | null>;
     loadConfig(): Promise<{ global: { openCodeProtocol?: unknown } }>;
   },
-  options: Pick<NativeAgentServiceOptions, "openCode2HostServer">,
+  options: Pick<NativeAgentServiceOptions, "openCode2HostServer" | "openCode2InContainer">,
   input: NewOpenCodeSessionInput & { environmentId: string },
 ): Promise<"v2" | undefined> {
   if (input.agent !== "opencode" || !options.openCode2HostServer) return undefined;
@@ -59,7 +68,12 @@ export async function selectNewOpenCodeSessionProtocol(
       storage.getEnvironment(input.environmentId),
       storage.loadConfig(),
     ]);
-    return newOpenCodeSessionProtocol(input, environment, config.global.openCodeProtocol, true);
+    const setting = config.global.openCodeProtocol;
+    // Everything but the image first, so a 1.x answer never reads Docker.
+    if (!newOpenCodeSessionProtocol(input, environment, setting, true, true)) return undefined;
+    if (environment?.environmentType !== "containerized") return "v2";
+    const inContainer = options.openCode2InContainer;
+    return inContainer && (await inContainer(environment)) ? "v2" : undefined;
   } catch {
     return undefined;
   }

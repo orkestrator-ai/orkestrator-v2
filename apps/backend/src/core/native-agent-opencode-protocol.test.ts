@@ -3,6 +3,7 @@ import {
   newOpenCodeSessionProtocol,
   openCodeRoutingDependencies,
   persistedOpenCodeProtocol,
+  selectNewOpenCodeSessionProtocol,
 } from "./native-agent-opencode-protocol.js";
 import type { PersistedNativeAgentSession } from "./models.js";
 
@@ -67,6 +68,73 @@ describe("newOpenCodeSessionProtocol", () => {
       ),
     ).toBe(undefined);
     expect(newOpenCodeSessionProtocol({ agent: "opencode" }, null, "v2", true)).toBe(undefined);
+  });
+
+  test("a container environment takes 2.x only when its image runs it", () => {
+    const container = { environmentType: "containerized" as const };
+    expect(newOpenCodeSessionProtocol({ agent: "opencode" }, container, "v2", true, true)).toBe(
+      "v2",
+    );
+    expect(newOpenCodeSessionProtocol({ agent: "opencode" }, container, "v2", true, false)).toBe(
+      undefined,
+    );
+    expect(
+      newOpenCodeSessionProtocol(
+        { agent: "opencode", origin: "build-pipeline" },
+        container,
+        "v2",
+        true,
+        true,
+      ),
+    ).toBe(undefined);
+  });
+});
+
+describe("selectNewOpenCodeSessionProtocol", () => {
+  const storage = (environmentType: "local" | "containerized", setting = "v2") => ({
+    getEnvironment: async () => ({ environmentType, containerId: "c-1" }),
+    loadConfig: async () => ({ global: { openCodeProtocol: setting } }),
+  });
+  const input = { agent: "opencode", environmentId: "env" };
+
+  test("asks about the container's image only when everything else says 2.x", async () => {
+    const asked: string[] = [];
+    const openCode2InContainer = async (environment: { containerId?: string | null }) => {
+      asked.push(environment.containerId ?? "");
+      return true;
+    };
+    const host = async () => undefined;
+    expect(
+      await selectNewOpenCodeSessionProtocol(
+        storage("containerized"),
+        { openCode2HostServer: host, openCode2InContainer },
+        input,
+      ),
+    ).toBe("v2");
+    expect(asked).toEqual(["c-1"]);
+    expect(
+      await selectNewOpenCodeSessionProtocol(
+        storage("containerized", "legacy"),
+        { openCode2HostServer: host, openCode2InContainer },
+        input,
+      ),
+    ).toBe(undefined);
+    expect(
+      await selectNewOpenCodeSessionProtocol(
+        storage("local"),
+        { openCode2HostServer: host, openCode2InContainer },
+        input,
+      ),
+    ).toBe("v2");
+    expect(asked).toEqual(["c-1"]);
+    // Without the check a container stays on 1.x.
+    expect(
+      await selectNewOpenCodeSessionProtocol(
+        storage("containerized"),
+        { openCode2HostServer: host },
+        input,
+      ),
+    ).toBe(undefined);
   });
 });
 

@@ -24,6 +24,8 @@ async function withService(
     environmentType?: "local" | "containerized";
     host?: boolean;
     origin?: "interactive-native" | "build-pipeline";
+    /** What `openCode2InContainer` answers; absent leaves the option out. */
+    inContainer?: boolean;
   },
   run: (input: {
     service: NativeAgentService;
@@ -51,6 +53,9 @@ async function withService(
   const service = new NativeAgentService(storage, refusingInvoke, {
     provider: async () => provider,
     ...(options.host === false ? {} : { openCode2HostServer: async () => undefined }),
+    ...(options.inContainer === undefined
+      ? {}
+      : { openCode2InContainer: async () => options.inContainer === true }),
   });
   try {
     await run({ service, created, storage });
@@ -82,6 +87,8 @@ describe("OpenCode line of a new native session", () => {
       {},
       { setting: "v2" as const, origin: "build-pipeline" as const },
       { setting: "v2" as const, environmentType: "containerized" as const },
+      { setting: "v2" as const, environmentType: "containerized" as const, inContainer: false },
+      { setting: "legacy" as const, environmentType: "containerized" as const, inContainer: true },
       { setting: "v2" as const, host: false },
     ];
     for (const options of cases) {
@@ -94,6 +101,19 @@ describe("OpenCode line of a new native session", () => {
         expect(created[0]?.openCodeProtocol).toBeUndefined();
       });
     }
+  });
+});
+
+describe("OpenCode line of a new container session", () => {
+  test("a container whose image runs 2.x takes it, like a local tab", async () => {
+    await withService(
+      { setting: "v2", environmentType: "containerized", inContainer: true },
+      async ({ service, created }) => {
+        const session = await service.ensureSession(identity);
+        expect(session.openCodeProtocol).toBe("v2");
+        expect(created[0]?.openCodeProtocol).toBe("v2");
+      },
+    );
   });
 });
 

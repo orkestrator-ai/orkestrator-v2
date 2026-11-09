@@ -108,7 +108,8 @@ export const NATIVE_AGENT_LOG_AREAS = defineLogAreas({
     },
   },
   "native-agent.opencode2": {
-    description: "The OpenCode 2.x provider: its event monitor, steering, routing and host server.",
+    description:
+      "The OpenCode 2.x provider: its event monitor, steering, routing, host and container servers.",
     events: {
       "events.dropped":
         "The 2.x event stream ended or failed, so reads go to the server until it reconnects. Error class only.",
@@ -120,6 +121,12 @@ export const NATIVE_AGENT_LOG_AREAS = defineLogAreas({
         "A local environment's 2.x server answered `/api/info` as 2.x. Environment id and pid only.",
       "host-server.terminate-failed":
         "A 2.x server that did not become ready could not be stopped; its process entry is kept for shutdown. Error class only.",
+      "container-server.launched":
+        "The start script of a container environment's 2.x server was run. Container port only.",
+      "container-server.ready":
+        "A container environment's 2.x server this backend started answered `/api/info` as 2.x. Environment id only.",
+      "container-server.warm-incomplete":
+        "The first workspace request to a container's new 2.x server failed, so its plugins load on the next one. Error class only.",
     },
   },
 });

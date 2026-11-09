@@ -20,8 +20,8 @@
  *   and its group is reaped if it dies on its own. Only this child is ever
  *   signalled, through the handle recorded at spawn.
  *
- * Containers are a follow-up: a container environment is refused here, and
- * the backend never creates a 2.x session in one.
+ * A container environment is refused here: its 2.x server runs inside the
+ * container (`opencode2-container-server.ts`, which routes between the two).
  *
  * The Orkestrator agent-tools MCP server is not attached yet (phase 5): the
  * 1.x server gets it through its `/mcp` API after start, which 2.x serves
@@ -136,7 +136,7 @@ async function localWorktree(context: CommandContext, environmentId: string): Pr
   if (!environment) throw new ProviderUnavailableError("The environment no longer exists");
   if (environment.environmentType !== "local") {
     throw new ProviderUnavailableError(
-      "OpenCode 2 is not available in container environments yet; this session needs a local environment",
+      "A container environment's OpenCode 2 server runs in its container, not on the host",
     );
   }
   if (!environment.worktreePath) {

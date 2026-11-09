@@ -154,6 +154,9 @@ exit 125
       "opencode/opencode.db",
       "opencode/opencode.db-wal",
       "opencode/opencode.db-shm",
+      "opencode/opencode2.db",
+      "opencode/opencode2.db-wal",
+      "opencode/opencode2.db-shm",
     ]);
     for (const step of plan) {
       if (step.source.kind === "container-path") {

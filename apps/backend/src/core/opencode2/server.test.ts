@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import {
   OPENCODE2_FLAGS,
+  buildOpenCode2CredentialPluginSource,
   openCode2HostLaunch,
   openCode2HostPaths,
   waitForOpenCode2Ready,
@@ -90,5 +91,85 @@ describe("waitForOpenCode2Ready", () => {
     await expect(waitForOpenCode2Ready(never, { timeoutMs: 20, intervalMs: 5 })).rejects.toThrow(
       "did not become ready",
     );
+  });
+});
+
+describe("buildOpenCode2CredentialPluginSource", () => {
+  type Hook = (event: { env: Record<string, string | undefined> }) => unknown;
+
+  /**
+   * Run a plugin source's `setup` against a stand-in context and process. The
+   * module's own `process` is shadowed, so the test process is never changed.
+   */
+  async function runSetup(source: string, platform: string) {
+    const dir = await mkdtemp(path.join(tmpdir(), "ork-opencode2-plugin-"));
+    dirs.push(dir);
+    const fakeProcess = {
+      platform,
+      env: { OPENCODE_PASSWORD: "pw", OPENCODE_SERVER_PASSWORD: "pw", KEEP: "1" } as Record<
+        string,
+        string | undefined
+      >,
+      stderr: { write: () => true },
+    };
+    const key = `__orkPluginProcess${Math.random().toString(36).slice(2)}`;
+    (globalThis as Record<string, unknown>)[key] = fakeProcess;
+    const file = path.join(dir, "index.ts");
+    // A library that cannot load stands for a kernel that refuses the flag.
+    await Bun.write(
+      file,
+      `const process = globalThis[${JSON.stringify(key)}];\n${source.replace('"libc.so.6"', '"/nonexistent/libc.so.6"')}`,
+    );
+    const hooks: Record<string, Hook[]> = {};
+    const hook = (domain: string) => async (name: string, callback: Hook) => {
+      (hooks[`${domain}:${name}`] ??= []).push(callback);
+    };
+    try {
+      const plugin = (await import(file)).default as {
+        id: string;
+        setup(ctx: unknown): Promise<void>;
+      };
+      await plugin.setup({ shell: { hook: hook("shell") }, tool: { hook: hook("tool") } });
+      return { plugin, hooks, env: fakeProcess.env };
+    } finally {
+      delete (globalThis as Record<string, unknown>)[key];
+    }
+  }
+
+  test("the host form removes the password from the process and every shell", async () => {
+    const { plugin, hooks, env } = await runSetup(buildOpenCode2CredentialPluginSource(), "darwin");
+    expect(plugin.id).toBe("orkestrator-credential");
+    expect(env).toEqual({ KEEP: "1" });
+    const shell = {
+      env: { OPENCODE_PASSWORD: "pw", OPENCODE_SERVER_PASSWORD: "pw", PATH: "/bin" } as Record<
+        string,
+        string | undefined
+      >,
+    };
+    for (const callback of hooks["shell:create.before"] ?? []) await callback(shell);
+    expect(shell.env).toEqual({ PATH: "/bin" });
+    expect(hooks["tool:execute.before"]).toBeUndefined();
+  });
+
+  test("the container form refuses every tool on a Linux server it cannot harden", async () => {
+    const source = buildOpenCode2CredentialPluginSource({ hardened: "refuse-tools" });
+    expect(source).toContain("PR_SET_DUMPABLE");
+    const { hooks, env } = await runSetup(source, "linux");
+    expect(env).toEqual({ KEEP: "1" });
+    const [refuse] = hooks["tool:execute.before"] ?? [];
+    expect(refuse).toBeDefined();
+    expect(() => refuse!({ env: {} })).toThrow("Refusing to run tools");
+    const shell = { env: { OPENCODE_PASSWORD: "pw" } as Record<string, string | undefined> };
+    for (const callback of hooks["shell:create.before"] ?? []) await callback(shell);
+    expect(shell.env).toEqual({});
+  });
+
+  test("the container form leaves tools alone where there is no /proc to protect", async () => {
+    const { hooks } = await runSetup(
+      buildOpenCode2CredentialPluginSource({ hardened: "refuse-tools" }),
+      "darwin",
+    );
+    expect(hooks["tool:execute.before"]).toBeUndefined();
+    expect(hooks["shell:create.before"]).toHaveLength(1);
   });
 });

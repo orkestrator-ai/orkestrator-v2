@@ -42,7 +42,11 @@ Agent CLIs, one per supported platform (two for OpenCode while it moves to 2.x):
 - OpenCode 2.x is installed beside 1.x as `opencode2`
   (`OPENCODE2_CLI_PATH`, `/home/node/.opencode/bin/opencode2`) from its
   hash-verified npm platform tarball, for the 2.x provider being built
-  (`docs/todo/agent-engines/0008-opencode-v2.md`). Nothing launches it yet.
+  (`docs/todo/agent-engines/0008-opencode-v2.md`). The backend starts it on
+  container port 4102 for OpenCode sessions on the 2.x line
+  (`apps/backend/src/core/opencode2-container-server.ts`), with its own
+  `OPENCODE_DB` (`opencode2.db`) and an `OPENCODE_CONFIG_DIR` holding only
+  Orkestrator's plugins.
 - The image build fails immediately if any managed CLI is not runnable, and if
   Codex did not vendor `codex-code-mode-host` beside its binary.
 

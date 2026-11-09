@@ -470,14 +470,22 @@ export interface NativeAgentServiceOptions {
   /** Graceful-interrupt window before provider hard-stop escalation. */
   abortGraceMs?: number;
   /**
-   * The local environment's OpenCode 2.x preview server
-   * (`opencode2-host-server.ts`). `start: false` never spawns one. Absent
+   * The environment's OpenCode 2.x preview server: the host one of a local
+   * environment (`opencode2-host-server.ts`) or the in-container one
+   * (`opencode2-container-server.ts`). `start: false` never spawns one. Absent
    * (narrow tests, hosts without it) keeps every OpenCode session on 1.x.
    */
   openCode2HostServer?: (
     environmentId: string,
     options: { start: boolean },
   ) => Promise<OpenCode2RouteConnection | undefined>;
+  /**
+   * Whether a container environment's image runs OpenCode 2.x
+   * (`containerRunsOpenCode2`). Absent keeps container sessions on 1.x.
+   */
+  openCode2InContainer?: (
+    environment: Pick<Environment, "environmentType" | "containerId" | "containerLifecycle">,
+  ) => Promise<boolean>;
   /**
    * What a tab says instead of the bridge's sign-in message when a provider's
    * login lapses (`containerSignInGuidance`), or undefined to keep it.

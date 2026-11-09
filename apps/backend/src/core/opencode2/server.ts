@@ -36,15 +36,67 @@ export const OPENCODE2_FLAGS = "todo,-schedules,-background_compaction,-artifact
  * A 2.x plugin needs only `{ id, setup }`; `Plugin.define` from
  * `@opencode/plugin` is a typed identity, so the source imports nothing and
  * no package has to be installed beside it. Verified on 2.2.6.
+ *
+ * `hardened: "refuse-tools"` is the container form. Deleting the variable
+ * does not change `/proc/<pid>/environ`, which any process of the same uid
+ * can read on Linux, so the plugin also marks the server non-dumpable, as the
+ * 1.x plugin does (`buildOpenCodeCredentialPluginSource`), and refuses every
+ * tool when it cannot. The host form only removes the variable: a host
+ * promises no boundary between the agent and the user's own processes
+ * (docs/architecture/agent-approvals.md).
  */
-export function buildOpenCode2CredentialPluginSource(): string {
-  return `// Written by Orkestrator. Keeps the server password from this server's tools.
+export function buildOpenCode2CredentialPluginSource(
+  options: { hardened?: "refuse-tools" } = {},
+): string {
+  if (!options.hardened) {
+    return `// Written by Orkestrator. Keeps the server password from this server's tools.
 const NAMES = ["OPENCODE_PASSWORD", "OPENCODE_SERVER_PASSWORD"];
 
 export default {
   id: ${JSON.stringify(OPENCODE2_CREDENTIAL_PLUGIN_ID)},
   async setup(ctx) {
     for (const name of NAMES) delete process.env[name];
+    await ctx.shell.hook("create.before", (event) => {
+      for (const name of NAMES) delete event.env[name];
+    });
+  },
+};
+`;
+  }
+  return `// Written by Orkestrator. Keeps the server password from this server's tools.
+const NAMES = ["OPENCODE_PASSWORD", "OPENCODE_SERVER_PASSWORD"];
+const PR_SET_DUMPABLE = 4;
+
+async function markNonDumpable() {
+  if (process.platform !== "linux") return true;
+  try {
+    const { dlopen, FFIType } = await import("bun:ffi");
+    const libc = dlopen("libc.so.6", {
+      prctl: {
+        args: [FFIType.i32, FFIType.u64, FFIType.u64, FFIType.u64, FFIType.u64],
+        returns: FFIType.i32,
+      },
+    });
+    try {
+      return libc.symbols.prctl(PR_SET_DUMPABLE, 0n, 0n, 0n, 0n) === 0;
+    } finally {
+      libc.close();
+    }
+  } catch {
+    return false;
+  }
+}
+
+export default {
+  id: ${JSON.stringify(OPENCODE2_CREDENTIAL_PLUGIN_ID)},
+  async setup(ctx) {
+    for (const name of NAMES) delete process.env[name];
+    if (!(await markNonDumpable())) {
+      process.stderr.write("Orkestrator could not protect the OpenCode server password from this server's tools.\\n");
+      await ctx.tool.hook("execute.before", () => {
+        throw new Error("Refusing to run tools: Orkestrator could not protect this OpenCode server's password from them.");
+      });
+    }
     await ctx.shell.hook("create.before", (event) => {
       for (const name of NAMES) delete event.env[name];
     });

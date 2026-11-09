@@ -1,36 +1,68 @@
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
+import { parseSync, visitorKeys, type Node } from "oxc-parser";
 
 import {
   HOST_REACHABILITY_CHECK_ENV,
   electronSpecEnvironment,
+  startElectronSpecBackend,
 } from "../../e2e/agent-testing/electron-spec-environment";
 import { packagedLaunchEnvironment } from "../../e2e/agent-testing/packaged-electron-app";
 
 const agentTesting = path.resolve(import.meta.dir, "../../e2e/agent-testing");
 
-/**
- * The options object of each Electron launch in `source`, with its line:
- * Playwright's `electron.launch({...})` and a bare `spawn(electronExecutable, [...], {...})`.
- */
+/** Parse calls structurally, so aliases, templates and nested objects retain their boundaries. */
 function launchOptions(source: string): { line: number; text: string }[] {
+  const { program, errors } = parseSync("fixture.ts", source);
+  if (errors.length) throw new Error(errors[0]!.message);
   const options: { line: number; text: string }[] = [];
-  for (const match of source.matchAll(
-    /(?:electron\.launch\(\s*|spawn\(electronExecutable,[^{]*)\{/g,
-  )) {
-    const start = match.index + match[0].length - 1;
-    let depth = 0;
-    for (let index = start; index < source.length; index += 1) {
-      const char = source[index];
-      if (char === "{") depth += 1;
-      else if (char === "}" && --depth === 0) {
-        const line = source.slice(0, match.index).split("\n").length;
-        options.push({ line, text: source.slice(start, index + 1) });
-        break;
-      }
+  const spawners = new Set(["spawn"]);
+  for (const node of program.body) {
+    if (node.type !== "ImportDeclaration" || !node.source.value.endsWith("child_process")) continue;
+    for (const specifier of node.specifiers) {
+      if (
+        specifier.type === "ImportSpecifier" &&
+        specifier.imported.type === "Identifier" &&
+        specifier.imported.name === "spawn"
+      )
+        spawners.add(specifier.local.name);
     }
   }
+  function visit(node: Node) {
+    if (node.type === "CallExpression") {
+      const callee = node.callee;
+      const member =
+        callee.type === "MemberExpression" && callee.property.type === "Identifier"
+          ? callee.property.name
+          : null;
+      const launch =
+        member === "launch" &&
+        !(
+          callee.type === "MemberExpression" &&
+          callee.object.type === "Identifier" &&
+          ["chromium", "firefox", "webkit"].includes(callee.object.name)
+        );
+      const spawn =
+        member === "spawn" || (callee.type === "Identifier" && spawners.has(callee.name));
+      const executable = node.arguments[0];
+      // Literal Bun/server processes are unrelated to Electron launches.
+      if (launch || (spawn && executable?.type !== "Literal")) {
+        const arg = node.arguments[launch ? 0 : 2];
+        options.push({
+          line: source.slice(0, node.start).split("\n").length,
+          text: arg ? source.slice(arg.start, arg.end) : "",
+        });
+      }
+    }
+    for (const key of visitorKeys[node.type] ?? []) {
+      const child = (node as unknown as Record<string, unknown>)[key];
+      if (Array.isArray(child)) {
+        for (const item of child) if (item) visit(item as Node);
+      } else if (child) visit(child as Node);
+    }
+  }
+  visit(program);
   return options;
 }
 
@@ -60,16 +92,62 @@ describe("electronSpecEnvironment", () => {
     expect(env[HOST_REACHABILITY_CHECK_ENV]).toBe("off");
   });
 
+  test("direct backend initial start and restart capture off and restore the runner", async () => {
+    const original = process.env[HOST_REACHABILITY_CHECK_ENV];
+    const captured: (string | undefined)[] = [];
+    try {
+      process.env[HOST_REACHABILITY_CHECK_ENV] = "on";
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const pending = startElectronSpecBackend(() => {
+          captured.push(process.env[HOST_REACHABILITY_CHECK_ENV]);
+          return Promise.resolve();
+        });
+        expect(process.env[HOST_REACHABILITY_CHECK_ENV]).toBe("on");
+        await pending;
+      }
+      expect(captured).toEqual(["off", "off"]);
+      expect(() =>
+        startElectronSpecBackend(() => {
+          throw new Error("spawn failed");
+        }),
+      ).toThrow("spawn failed");
+      expect(process.env[HOST_REACHABILITY_CHECK_ENV]).toBe("on");
+      delete process.env[HOST_REACHABILITY_CHECK_ENV];
+      startElectronSpecBackend(() => undefined);
+      expect(process.env[HOST_REACHABILITY_CHECK_ENV]).toBeUndefined();
+    } finally {
+      if (original === undefined) delete process.env[HOST_REACHABILITY_CHECK_ENV];
+      else process.env[HOST_REACHABILITY_CHECK_ENV] = original;
+    }
+  });
+
+  test("direct disposable Electron backends explicitly disable the probe", () => {
+    for (const file of readdirSync(agentTesting)) {
+      if (!file.includes("electron") || !file.endsWith(".spec.ts")) continue;
+      const source = readFileSync(path.join(agentTesting, file), "utf8");
+      for (const match of source.matchAll(/const (\w+) = new BackendProcess\(\)/g)) {
+        const name = match[1]!;
+        expect(
+          source.replace(/\s+/g, "").includes(`startElectronSpecBackend(()=>${name}.start(`) ||
+            (source.includes("await withEnvironment(") &&
+              source.includes('ORKESTRATOR_HOST_REACHABILITY_CHECK: "off"')),
+        ).toBe(true);
+      }
+    }
+  });
+
   test("the guard finds every launch's options", () => {
     const source = [
       "a(); await electron.launch({ args: [], env: { a: { b: 1 } } });",
-      "_electron.launch({ env });",
-      "spawn(electronExecutable, [...SWITCHES, main], { cwd, env: x });",
+      "desktop.launch({ env });",
+      "childProcess.spawn(otherBinary, [...SWITCHES, main], { cwd, env: x });",
+      "import { spawn as runDesktop } from 'node:child_process'; runDesktop(binary, [`${port}`], { env });",
     ].join("\n");
     expect(launchOptions(source)).toEqual([
       { line: 1, text: "{ args: [], env: { a: { b: 1 } } }" },
       { line: 2, text: "{ env }" },
       { line: 3, text: "{ cwd, env: x }" },
+      { line: 4, text: "{ env }" },
     ]);
   });
 
@@ -80,9 +158,14 @@ describe("electronSpecEnvironment", () => {
     for (const file of readdirSync(agentTesting)) {
       if (!file.endsWith(".ts") || file.endsWith(".test.ts")) continue;
       const source = readFileSync(path.join(agentTesting, file), "utf8");
+      if (!/_electron|electronExecutable|packagedLaunchEnvironment/.test(source)) continue;
       for (const { line, text } of launchOptions(source)) {
         launches += 1;
-        if (!/\benv:\s*(electronSpecEnvironment|packagedLaunchEnvironment)\(/.test(text)) {
+        if (
+          !/\benv:\s*(?:\{\s*\.\.\.)?(electronSpecEnvironment|packagedLaunchEnvironment)\(/.test(
+            text,
+          )
+        ) {
           offenders.push(`${file}:${line}`);
         }
       }

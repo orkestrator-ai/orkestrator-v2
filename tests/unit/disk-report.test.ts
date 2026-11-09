@@ -433,7 +433,7 @@ describe("probe network sweep", () => {
   const creators: Record<string, string> = {
     "ork-0123456789abcdef-reach-probe-net": "agent-test/temporary",
     // Not a value a backend writes: read as unlabelled, never echoed.
-    "ork-1111111111111111-reach-probe-net": "/home/someone/data",
+    "ork-1111111111111111-reach-probe-net": "unexpected creator with spaces\tand tabs",
     "ork-2222222222222222-reach-probe-net": "production/persistent",
   };
 

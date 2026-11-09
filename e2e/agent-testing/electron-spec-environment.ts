@@ -38,3 +38,17 @@ export function electronSpecEnvironment(
   result[HOST_REACHABILITY_CHECK_ENV] = overrides[HOST_REACHABILITY_CHECK_ENV] ?? "off";
   return result;
 }
+
+/** BackendProcess captures its child environment synchronously in start().
+ * Restore immediately so other tests never inherit this spec's settings.
+ */
+export function startElectronSpecBackend<T>(start: () => T): T {
+  const previous = process.env[HOST_REACHABILITY_CHECK_ENV];
+  process.env[HOST_REACHABILITY_CHECK_ENV] = "off";
+  try {
+    return start();
+  } finally {
+    if (previous === undefined) delete process.env[HOST_REACHABILITY_CHECK_ENV];
+    else process.env[HOST_REACHABILITY_CHECK_ENV] = previous;
+  }
+}

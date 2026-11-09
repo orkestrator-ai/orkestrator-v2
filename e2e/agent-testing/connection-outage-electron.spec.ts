@@ -15,7 +15,7 @@ import { closeElectronWithin } from "./design-electron-cleanup";
 import { expect, test } from "./electron-fixtures";
 import { ELECTRON_TEST_SWITCHES } from "./electron-launch-switches";
 import { dismissStartupDialogs } from "./electron-startup-dialogs";
-import { electronSpecEnvironment } from "./electron-spec-environment";
+import { electronSpecEnvironment, startElectronSpecBackend } from "./electron-spec-environment";
 
 /**
  * The desktop half of client freshness
@@ -116,21 +116,23 @@ test("a remote connection shows the banner, pauses reads and recovers, on a rest
     const controlPort = process.env.ORKESTRATOR_CONTROL_MCP_PORT;
     process.env.ORKESTRATOR_CONTROL_MCP_PORT = "0";
     try {
-      await backend.start({
-        isDev: true,
-        appRoot: repositoryRoot,
-        resourceRoot: repositoryRoot,
-        dataDir: remoteProfile.dataDir,
-        gatewayHost: "127.0.0.1",
-        gatewayPort: remotePort,
-        allowNonTailscaleBind: true,
-        runtimeFlavor: "agent-test",
-        runtimeProfileId: remoteProfile.id,
-        worktreeDir: remoteProfile.worktreeDir,
-        strictGatewayPort: true,
-        strictDockerOwner: true,
-        onEvent: () => undefined,
-      });
+      await startElectronSpecBackend(() =>
+        backend.start({
+          isDev: true,
+          appRoot: repositoryRoot,
+          resourceRoot: repositoryRoot,
+          dataDir: remoteProfile.dataDir,
+          gatewayHost: "127.0.0.1",
+          gatewayPort: remotePort,
+          allowNonTailscaleBind: true,
+          runtimeFlavor: "agent-test",
+          runtimeProfileId: remoteProfile.id,
+          worktreeDir: remoteProfile.worktreeDir,
+          strictGatewayPort: true,
+          strictDockerOwner: true,
+          onEvent: () => undefined,
+        }),
+      );
     } finally {
       if (controlPort === undefined) delete process.env.ORKESTRATOR_CONTROL_MCP_PORT;
       else process.env.ORKESTRATOR_CONTROL_MCP_PORT = controlPort;

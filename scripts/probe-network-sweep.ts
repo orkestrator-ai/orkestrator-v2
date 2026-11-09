@@ -65,13 +65,11 @@ export function listProbeNetworks(run: DockerRun): ProbeNetwork[] | null {
   if (listed.status !== 0) return null;
   const entries = listed.stdout
     .split("\n")
-    .map((line) => line.trim().split(" "))
+    .map((line) => /^([0-9a-f]{12,64})\s+(\S+)(?: (.*))?$/.exec(line.trim()))
     .filter(
-      (fields): fields is [string, string] | [string, string, string] =>
-        (fields.length === 2 || fields.length === 3) &&
-        /^[0-9a-f]{12,64}$/.test(fields[0]!) &&
-        PROBE_NETWORK_NAME.test(fields[1]!),
-    );
+      (fields): fields is RegExpExecArray => fields !== null && PROBE_NETWORK_NAME.test(fields[2]!),
+    )
+    .map((fields) => [fields[1]!, fields[2]!, fields[3]] as const);
   return entries.map(([id, name, label]) => {
     const inspected = run("docker", ["network", "inspect", "--format", "{{.Created}}", id]);
     const createdAt = inspected.status === 0 ? parseCreatedAt(inspected.stdout.trim()) : null;

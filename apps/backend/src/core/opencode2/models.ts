@@ -153,8 +153,9 @@ export function normalizeOpenCode2ModelCatalogue(
  * The model a new 2.x session starts on, for a configured default (set or
  * unset), resolved against 2.x's own catalogue. 2.x lists only models it can
  * serve now, so a configured model that is missing is replaced (with a
- * substitution the tab shows) by the server's default, else the first picker
- * row; an unset one resolves to that default. An unreadable catalogue keeps
+ * substitution the tab shows) by the same model under a provider 2.x can
+ * serve, else the server's default, else the first picker row; an unset one
+ * resolves to that default. An unreadable catalogue keeps
  * the configured model and dispatch reports its availability, as on 1.x.
  */
 export function resolveOpenCode2DefaultModel(
@@ -165,9 +166,19 @@ export function resolveOpenCode2DefaultModel(
   const named = requested && requested.indexOf("/") > 0 ? requested : undefined;
   if (!catalogue) return named ? { modelId: named } : {};
   if (named && catalogue.variants.has(named)) return { modelId: named };
-  const fallback = catalogue.selectedModelId
-    ? catalogue.models.find((model) => model.id === catalogue.selectedModelId)
-    : catalogue.models[0];
+  // The same model under a provider 2.x can serve (`opencode-go/beam-free` →
+  // `opencode/beam-free`) before the server's default.
+  const sameModel = named
+    ? catalogue.models.find(
+        (model) =>
+          model.id.slice(model.id.indexOf("/") + 1) === named.slice(named.indexOf("/") + 1),
+      )
+    : undefined;
+  const fallback =
+    sameModel ??
+    (catalogue.selectedModelId
+      ? catalogue.models.find((model) => model.id === catalogue.selectedModelId)
+      : catalogue.models[0]);
   if (!fallback) return named ? { modelId: named } : {};
   if (!named) return { modelId: fallback.id };
   return {

@@ -134,7 +134,8 @@ describe("resolveOpenCode2DefaultModel", () => {
     fakeOpenCode2Model("opencode", "beam-free"),
     fakeOpenCode2Model("opencode", "big-pickle"),
   ];
-  const catalogue = normalizeOpenCode2ModelCatalogue(rows, rows[0], []);
+  // The server's default is Big Pickle, as on a live fresh profile.
+  const catalogue = normalizeOpenCode2ModelCatalogue(rows, rows[1], []);
 
   test("keeps a configured model 2.x can serve", () => {
     expect(resolveOpenCode2DefaultModel("opencode/big-pickle", catalogue)).toEqual({
@@ -154,11 +155,17 @@ describe("resolveOpenCode2DefaultModel", () => {
 
   test("an unset default (or a placeholder naming no provider) takes the server's default", () => {
     expect(resolveOpenCode2DefaultModel(undefined, catalogue)).toEqual({
-      modelId: "opencode/beam-free",
+      modelId: "opencode/big-pickle",
     });
     expect(resolveOpenCode2DefaultModel("default", catalogue)).toEqual({
-      modelId: "opencode/beam-free",
+      modelId: "opencode/big-pickle",
     });
+  });
+
+  test("a model 2.x lists under no provider of that name falls back to the server's default", () => {
+    expect(resolveOpenCode2DefaultModel("opencode-go/kimi-k3", catalogue).modelId).toBe(
+      "opencode/big-pickle",
+    );
   });
 
   test("an unreadable or empty catalogue keeps the configured model", () => {

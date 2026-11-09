@@ -1,3 +1,8 @@
+import {
+  QueuedAttachmentTranscript,
+  readQueuedAttachmentTranscript,
+  recordQueuedAttachmentSteer,
+} from "./queued-attachment-transcript";
 import { NativeDockNoticeFixture } from "./NativeDockNoticeFixture";
 import { AutoPipelineFixture, installAutoPipelineFixture } from "./AutoPipelineFixture";
 import {
@@ -542,8 +547,15 @@ function NativeComposeFixture() {
   const [sentCount, setSentCount] = useState(0);
   const [queueOpen, setQueueOpen] = useState(false);
   const attachmentQueue = new URLSearchParams(window.location.search).has("attachment-queue");
-  const [queued, setQueued] = useState<typeof attachmentQueuePrompts>(
-    attachmentQueue ? attachmentQueuePrompts : queuedComposePrompts,
+  const [delivered, setDelivered] = useState(() =>
+    attachmentQueue ? readQueuedAttachmentTranscript() : [],
+  );
+  const [queued, setQueued] = useState<typeof attachmentQueuePrompts>(() =>
+    attachmentQueue
+      ? attachmentQueuePrompts.filter(
+          (prompt) => !delivered.some((message) => message.id === prompt.id),
+        )
+      : queuedComposePrompts,
   );
   const [steered, setSteered] = useState<string[]>([]);
   const [text, setText] = useState("");
@@ -611,6 +623,7 @@ function NativeComposeFixture() {
                 onSteer:
                   steeringAvailable && steerable
                     ? () => {
+                        if (attachmentQueue) setDelivered(recordQueuedAttachmentSteer(prompt));
                         setSteered((current) => [...current, prompt.id]);
                         dropQueued(prompt.id);
                       }
@@ -655,6 +668,7 @@ function NativeComposeFixture() {
             />
           }
         />
+        {attachmentQueue ? <QueuedAttachmentTranscript messages={delivered} /> : null}
         <output data-testid="native-send-count">{sentCount}</output>
         <output data-testid="native-steered">{steered.join(",")}</output>
         <button onClick={() => setSteeringAvailable(false)}>Finish turn</button>

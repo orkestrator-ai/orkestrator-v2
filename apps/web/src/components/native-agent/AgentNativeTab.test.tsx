@@ -12539,7 +12539,7 @@ describe("AgentNativeTab", () => {
 
     test.each([
       ["/steer", /Add instructions after \/steer/],
-      ["/steer narrow the scope", /Remove transcript annotations and retry/],
+      ["/steer narrow the scope", /Remove them and retry/],
     ] as const)("does not use annotations as /steer instructions for %s", async (text, error) => {
       seedProjection({ phase: "running", actions: { steer: true } });
       const tabId = `tab-steer-annotation-${text.length}`;

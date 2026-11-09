@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { buildInitialPromptWithAttachmentReferences } from "@orkestrator/protocol/initial-prompt-attachments";
+import {
+  buildInitialPromptWithAttachmentReferences,
+  extractMarkedAttachmentReferences,
+} from "@orkestrator/protocol/initial-prompt-attachments";
 import {
   queuedPromptAttachments,
   queuedPromptDisplay,
@@ -82,3 +85,41 @@ describe("queuedPromptEditText", () => {
     expect(queuedPromptEditText("Plain", [{ path: shotPath }])).toBe("Plain");
   });
 });
+
+// Inexact sets intentionally retain references that the restored draft cannot
+// recreate. Resend may use two transport blocks; neither file may be lost and
+// neither block may leak into the queue's visible text.
+test.each([
+  ["different file", withShot, [{ name: "notes.md", path: notesPath }], [shotPath, notesPath]],
+  [
+    "subset",
+    buildInitialPromptWithAttachmentReferences("Compare against this", [
+      { name: "shot.png", path: shotPath },
+      { name: "notes.md", path: notesPath },
+    ]),
+    [{ name: "shot.png", path: shotPath }],
+    [shotPath, notesPath],
+  ],
+  [
+    "superset",
+    withShot,
+    [
+      { name: "shot.png", path: shotPath },
+      { name: "notes.md", path: notesPath },
+    ],
+    [shotPath, notesPath],
+  ],
+] as const)(
+  "edit and resend with an inexact path set preserves every reference: %s",
+  (_label, original, restored, paths) => {
+    const edited = queuedPromptEditText(original, restored);
+    expect(edited).toBe(original);
+    const resent = buildInitialPromptWithAttachmentReferences(edited, restored);
+    const extracted = extractMarkedAttachmentReferences(resent);
+    expect([...new Set(extracted.attachments.map(({ path }) => path))].sort()).toEqual(
+      [...paths].sort(),
+    );
+    expect(queuedPromptDisplay(resent).text).toBe("Compare against this");
+    expect(resent.split("<orkestrator-attachment-paths").length - 1).toBe(2);
+  },
+);

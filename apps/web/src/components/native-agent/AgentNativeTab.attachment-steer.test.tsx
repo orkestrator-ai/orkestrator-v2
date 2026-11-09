@@ -8,6 +8,8 @@
  * `/steer`, and editing a queued message with attachments.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import type { ReactNode } from "react";
+import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { buildInitialPromptWithAttachmentReferences } from "@orkestrator/protocol/initial-prompt-attachments";
@@ -29,6 +31,7 @@ import { createSessionKey } from "@/lib/utils";
 import { resetSonnerMocks } from "../../../../../tests/mocks/sonner";
 import { appCommandStore } from "@/test/app-command-store";
 
+const realVirtualizedMessageListSnapshot = { ...realVirtualizedMessageList };
 const realBackendSnapshot = { ...realBackend };
 const realPaneLayoutPersistenceSnapshot = { ...realPaneLayoutPersistence };
 const realNativeComposeBarPasteSnapshot = { ...realNativeComposeBarPaste };
@@ -51,6 +54,7 @@ const unreferenced = {
 
 let queueItems: unknown[] = [];
 let running = true;
+let deliveredMessages: NativeMessage[] = [];
 
 function projectionFor(agent: AgentPlatform): NativeAgentSessionProjection<NativeMessage> {
   return {
@@ -59,7 +63,7 @@ function projectionFor(agent: AgentPlatform): NativeAgentSessionProjection<Nativ
     sessionId: `${agent}-session`,
     connection: "connected",
     turn: { phase: running ? "running" : "idle" },
-    messages: [],
+    messages: deliveredMessages,
     interactions: [],
     composerControls: [],
     composer: {
@@ -107,9 +111,25 @@ const removePromptQueueMessageMock = mock(
 const performNativeAgentSessionActionMock = mock(
   async (_input: { action: { kind: string; text?: string } }) => ({ outcome: "applied" as const }),
 );
-const steerNativeAgentQueuedPromptMock = mock(async (_input: { messageId: string }) => ({
-  outcome: "applied" as const,
-}));
+const steerNativeAgentQueuedPromptMock = mock(async (input: { messageId: string }) => {
+  const item = queueItems.find((item) => (item as { id: string }).id === input.messageId) as
+    typeof referenced | undefined;
+  if (item) {
+    // Fake the provider's persisted text-only steer echo, without structured files.
+    deliveredMessages = [
+      ...deliveredMessages,
+      {
+        id: `steered-${item.id}`,
+        role: "user",
+        content: item.text,
+        parts: [{ type: "text", content: item.text }],
+        createdAt: "2026-11-09T12:00:00Z",
+      },
+    ];
+    queueItems = queueItems.filter((queued) => queued !== item);
+  }
+  return { outcome: "applied" as const };
+});
 
 mock.module("@/hooks/useNativeComposeBarPaste", () => ({
   useNativeComposeBarPaste: () => {},
@@ -155,9 +175,36 @@ mock.module("@/lib/pane-layout-persistence", () => ({
   flushPaneLayoutNow: async () => {},
 }));
 
+// Happy DOM has no viewport measurements. Only replace virtualization: the
+// controller's renderMessage still renders the real NativeMessage component.
+mock.module("@/components/chat/VirtualizedMessageList", () => ({
+  ...realVirtualizedMessageListSnapshot,
+  VirtualizedMessageList: (props: {
+    messages: NativeMessage[];
+    renderMessage: (
+      index: number,
+      message: NativeMessage,
+      previous: NativeMessage | null,
+    ) => ReactNode;
+    header?: ReactNode;
+    footer?: ReactNode;
+  }) => (
+    <div>
+      {props.header}
+      {props.messages.map((message, index) => (
+        <div key={message.id}>
+          {props.renderMessage(index, message, props.messages[index - 1] ?? null)}
+        </div>
+      ))}
+      {props.footer}
+    </div>
+  ),
+}));
+
 const { AgentNativeTab } = await import("./AgentNativeTab");
 
 afterAll(() => {
+  mock.module("@/components/chat/VirtualizedMessageList", () => realVirtualizedMessageListSnapshot);
   mock.module("@/lib/backend", () => realBackendSnapshot);
   mock.module("@/lib/pane-layout-persistence", () => realPaneLayoutPersistenceSnapshot);
   mock.module("@/hooks/useNativeComposeBarPaste", () => realNativeComposeBarPasteSnapshot);
@@ -219,6 +266,7 @@ afterEach(() => {
   cleanup();
   queueItems = [];
   running = true;
+  deliveredMessages = [];
   resetSonnerMocks();
   appCommandStore(configStore).getState().setConfig(configSnapshot);
   getNativeAgentProjectionMock.mockClear();
@@ -269,7 +317,7 @@ describe("queued row with attachments", () => {
     await renderTab("tab-row-bare");
 
     const row = queueRow(unreferenced.id);
-    expect(within(row).queryByRole("button", { name: /^Steer queued prompt/ })).toBeNull();
+    expect(within(row).queryByRole("button", { name: /^Steer queued prompt/ }) === null).toBe(true);
     expect(within(row).getByTestId("compose-queue-item-note").textContent).toBe(
       "Steering carries text only, so this is sent with its attachments when the turn ends.",
     );
@@ -281,7 +329,7 @@ describe("queued row with attachments", () => {
     await renderTab("tab-row-command");
 
     const row = queueRow("queued-command");
-    expect(within(row).queryByRole("button", { name: /^Steer queued prompt/ })).toBeNull();
+    expect(within(row).queryByRole("button", { name: /^Steer queued prompt/ }) === null).toBe(true);
     expect(within(row).getByTestId("compose-queue-item-note").textContent).toContain("Commands");
   });
 });
@@ -323,7 +371,7 @@ test("/steer carries an attachment as its path-reference block", async () => {
   expect(performNativeAgentSessionActionMock.mock.calls[0]![0]).toMatchObject({
     action: { kind: "steer", text: referenced.text },
   });
-  expect(screen.queryByText(/supports text only/)).toBeNull();
+  expect(screen.queryByText(/supports text only/) === null).toBe(true);
   await waitFor(() => expect(draft(tabId)?.attachments ?? []).toEqual([]));
   expect(enqueuePromptQueueMessageMock).not.toHaveBeenCalled();
 });
@@ -351,4 +399,35 @@ test("editing a queued message with attachments and sending it again keeps one p
   const [, , queued] = enqueuePromptQueueMessageMock.mock.calls[0]!;
   expect(queued.text).toBe(referenced.text);
   expect(queued.text.split(BLOCK_OPEN).length - 1).toBe(1);
+});
+
+test("a successful path-only steer renders its attachment live and from a fresh snapshot", async () => {
+  queueItems = [referenced];
+  const tabId = "tab-steer-transcript";
+  await renderTab(tabId);
+  await act(async () => {
+    fireEvent.click(
+      within(queueRow(referenced.id)).getByRole("button", { name: /^Steer queued prompt/ }),
+    );
+  });
+  const assertTranscript = async () => {
+    await screen.findByText("Compare against this screenshot");
+    await screen.findByRole("button", { name: /^Open full image: shot.png/ });
+    expect(document.querySelector('[data-queued-prompt-id="queued-shot"]') === null).toBe(true);
+    expect(document.body.textContent).not.toContain(BLOCK_OPEN);
+    expect(document.body.textContent).not.toContain(shotPath);
+  };
+  await assertTranscript();
+  expect(deliveredMessages).toHaveLength(1);
+  expect(deliveredMessages[0]!.parts).toEqual([{ type: "text", content: referenced.text }]);
+
+  // Drop the mounted tree and every projection cache; only the fake backend's
+  // serialized snapshot survives, as it would after a renderer reload.
+  cleanup();
+  deliveredMessages = JSON.parse(JSON.stringify(deliveredMessages));
+  appCommandStore(nativeAgentProjectionStore).getState().reset();
+  getNativeAgentProjectionMock.mockClear();
+  await renderTab(tabId);
+  await assertTranscript();
+  expect(steerNativeAgentQueuedPromptMock).toHaveBeenCalledTimes(1);
 });

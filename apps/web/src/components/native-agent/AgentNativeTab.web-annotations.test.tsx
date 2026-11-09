@@ -292,7 +292,7 @@ describe("AgentNativeTab migrated legacy annotation references", () => {
     expect(performNativeAgentSessionActionMock.mock.calls[0]![0]).toMatchObject({
       action: { kind: "steer", text: "keep the diff small" },
     });
-    expect(screen.queryByText(/Remove transcript annotations and retry/) === null).toBe(true);
+    expect(screen.queryByText(/Remove them and retry/) === null).toBe(true);
   });
 
   test("/steer still refuses a live transcript annotation", async () => {
@@ -303,7 +303,7 @@ describe("AgentNativeTab migrated legacy annotation references", () => {
 
     fireEvent.keyDown(input, { key: "Enter" });
 
-    await screen.findByText(/Remove transcript annotations and retry/);
+    await screen.findByText(/Remove them and retry/);
     expect(performNativeAgentSessionActionMock).not.toHaveBeenCalled();
   });
 

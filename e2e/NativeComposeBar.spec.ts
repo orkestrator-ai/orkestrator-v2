@@ -1,3 +1,5 @@
+import { mkdir } from "node:fs/promises";
+import path from "node:path";
 import { expect, test } from "@playwright/test";
 
 test("ArrowUp from a soft-wrapped continuation moves the caret before entering the queue", async ({
@@ -297,11 +299,40 @@ for (const viewport of [
       "Steering carries text only, so this is sent with its attachments when the turn ends.",
     );
 
+    const previewDir = path.resolve("output/visual-previews");
+    await mkdir(previewDir, { recursive: true });
+    await page.screenshot({
+      path: path.join(
+        previewDir,
+        `queued-attachment-verified-${viewport.width}-${test.info().project.name}.png`,
+      ),
+      fullPage: true,
+    });
     await shot
       .getByRole("button", {
         name: "Steer queued prompt 1 of 3: Match the header spacing in this screenshot",
       })
       .click();
     await expect(page.getByTestId("native-steered")).toHaveText("queued-shot");
+    const transcript = page.getByRole("region", { name: "Steered messages" });
+    const assertDelivered = async () => {
+      await expect(transcript).toContainText("Match the header spacing in this screenshot");
+      await expect(
+        transcript.getByRole("button", { name: /^Open full image: header-spacing.png/ }),
+      ).toHaveCount(1);
+      await expect(transcript).not.toContainText("orkestrator-attachment-paths");
+      await expect(transcript).not.toContainText("/workspace/");
+      await expect(strip.locator('[data-queued-prompt-id="queued-shot"]')).toHaveCount(0);
+    };
+    await assertDelivered();
+    await page.reload();
+    await assertDelivered();
+    await page.screenshot({
+      path: path.join(
+        previewDir,
+        `steered-attachment-reloaded-${viewport.width}-${test.info().project.name}.png`,
+      ),
+      fullPage: true,
+    });
   });
 }

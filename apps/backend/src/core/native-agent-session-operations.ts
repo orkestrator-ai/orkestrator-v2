@@ -531,6 +531,13 @@ export class NativeAgentSessionOperations {
       input.action,
     );
     this.host.projections.invalidateProjection(resolved.key);
+    // The invalidation alone tells no open view: it would keep the row it had
+    // until its discovery backstop (todo 7221).
+    await this.host.projections.refreshMcpAfterAction(
+      input,
+      resolved.provider,
+      resolved.session.providerSessionId,
+    );
     return outcome;
   }
 

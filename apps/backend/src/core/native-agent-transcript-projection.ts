@@ -1708,7 +1708,10 @@ export class NativeAgentTranscriptProjection {
     };
   }
 
-  private progressiveKey(input: NativeAgentProgressiveInput, domain: string): string {
+  private progressiveKey(
+    input: Pick<NativeAgentProgressiveInput, "environmentId" | "agent" | "logicalSessionKey">,
+    domain: string,
+  ): string {
     return `${nativeAgentSessionStorageKey(
       input.environmentId,
       input.agent,
@@ -4010,6 +4013,55 @@ export class NativeAgentTranscriptProjection {
         if (remaining === 0) this.progressiveDiscoveryJobsByProvider.delete(providerKey);
         else this.progressiveDiscoveryJobsByProvider.set(providerKey, remaining);
       });
+  }
+
+  /**
+   * Re-read one session's MCP list straight after an MCP server action
+   * (reconnect, enable, disable, sign-in) and tell its views to read it.
+   *
+   * The action's caller has already invalidated the projection, which drops
+   * the cached MCP section. Without this nothing announced the change, so an
+   * open panel kept the row it had (a reconnected server still "failed")
+   * until its 30 s discovery backstop, and that read found only an empty
+   * `loading` section and kept the old row for another round (todo 7221).
+   * The bridge updates its inventory before it answers the action, so one
+   * read here is the list the user acted on.
+   *
+   * Best effort: a failed read leaves the section empty, and the announcement
+   * still makes the view read again, which schedules the usual job.
+   */
+  async refreshMcpAfterAction(
+    input: NativeAgentProjectionInput,
+    provider: NativeAgentRuntimeProvider,
+    providerSessionId: string,
+  ): Promise<void> {
+    const sessionKey = nativeAgentSessionStorageKey(
+      input.environmentId,
+      input.agent,
+      input.logicalSessionKey,
+    );
+    const epoch = this.projectionEpochs.get(sessionKey) ?? 0;
+    if (provider.mcpServers) {
+      try {
+        const value = (await provider.mcpServers(providerSessionId)).slice(0, 512);
+        // A later identity change owns the section now; this read is not its.
+        if (this.host.isStopped() || (this.projectionEpochs.get(sessionKey) ?? 0) !== epoch) {
+          return;
+        }
+        this.storeProgressiveDiscovery(this.progressiveKey(input, "discovery:mcp"), {
+          value,
+          availability: "ready",
+          expiresAt: this.host.now() + 30_000,
+        });
+      } catch {
+        // The view's own read retries through the discovery job.
+      }
+    }
+    if (this.host.isStopped() || (this.projectionEpochs.get(sessionKey) ?? 0) !== epoch) return;
+    this.storage.announceNativeAgentSessionProjection(input.environmentId, "mcp-action", {
+      agent: input.agent,
+      logicalSessionKey: input.logicalSessionKey,
+    });
   }
 
   async getDiscoveryUpdate(

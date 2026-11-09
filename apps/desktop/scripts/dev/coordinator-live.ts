@@ -50,10 +50,11 @@ export const COORDINATOR_LIVE_PLATFORMS: readonly CoordinatorLivePlatform[] = Ob
  * `status` drives the status wakes of a Multi Review and of a worker held on
  * an approval; `deliver-now` corrects a busy worker with `deliverNow` (and,
  * on Claude, a tmux worker that cannot take it mid-turn); `goal` gives a worker
- * a goal and expects one wake when it completes; `peer` drives two
- * ordinary environments' mail with Wake peers on, and runs last because it is
- * the one case that changes the messaging defaults. Each writes its own
- * summary, and the platform's verdict combines them.
+ * a goal and expects one wake when it completes; `routing` sends plain
+ * requests that name no workflow and checks which one the coordinator chose;
+ * `peer` drives two ordinary environments' mail with Wake peers on, and runs
+ * last because it is the one case that changes the messaging defaults. Each
+ * writes its own summary, and the platform's verdict combines them.
  */
 export const COORDINATOR_LIVE_SCENARIOS = [
   "read-only",
@@ -62,6 +63,7 @@ export const COORDINATOR_LIVE_SCENARIOS = [
   "status",
   "deliver-now",
   "goal",
+  "routing",
   "peer",
 ] as const;
 export type CoordinatorLiveScenario = (typeof COORDINATOR_LIVE_SCENARIOS)[number];
@@ -344,7 +346,12 @@ export interface ReadOnlyToolCall {
 }
 
 /** A native-agent transcript message, as the projection returns it. */
-export type CoordinatorTranscriptMessage = { role?: unknown; content?: unknown; parts?: unknown };
+export type CoordinatorTranscriptMessage = {
+  id?: string;
+  role?: unknown;
+  content?: unknown;
+  parts?: unknown;
+};
 
 const MAX_TOOL_CALLS = 200;
 const MAX_TOOL_DEPTH = 8;

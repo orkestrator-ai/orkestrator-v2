@@ -2085,7 +2085,8 @@ read-only boundary (`read-only`), that delegation never waits inside a turn
 status wakes of work the coordinator started reach it (`status`), that a
 `deliverNow` correction is steered into a busy worker's running turn
 (`deliver-now`), that a worker's goal ends as an unverified claim and wakes the
-coordinator once (`goal`), and that peer mail between two ordinary environments wakes
+coordinator once (`goal`), that plain requests naming no workflow start the right
+one (`routing`), and that peer mail between two ordinary environments wakes
 each side with **Wake peers** on (`peer`). Every scenario with mail also checks how each mail
 carrier is shown as a tile. It runs as one command and owns its profiles:
 
@@ -2362,8 +2363,54 @@ prompts and verdict are in `coordinator-live-goal.ts`;
 `coordinator-live-goal-orchestration.test.ts` runs the orchestration over a scripted
 command transport.
 
+The `routing` case (todo 7545) checks that the routing rules
+(`COORDINATOR_ROUTING_RULE`, `COORDINATOR_ENVIRONMENT_CHOICE_RULE`,
+`COORDINATOR_LAUNCH_DEFAULTS_RULE`) are followed by a real model. It sends four
+plain requests in turn on one conversation, none naming a workflow, and judges
+each from the coordinator's tool calls in that request's own transcript rows and
+from backend records (the conversation's workflow associations, the ticket, the
+pipeline, the review), never from the model's wording:
+
+```bash
+mise run test:agent:coordinator --credential-source codex --scenario routing
+```
+
+1. `build`: a small specified change with a done condition. It passes when
+   exactly one new ticket has acceptance criteria, `create_ticket` came no later
+   than the one `start_build_pipeline`, the build is on that ticket, the call
+   leaves out `agentType`, `steps`, `reviewers` and `reviewPreparation`, and no
+   worker, Multi Review, feature plan or graph was started. The harness then
+   cancels the build.
+2. `investigate`: "does the test suite pass", with "don't change anything". It
+   passes on one `launch_environment`, `launch_job` or `send_prompt_to_tab` and
+   no ticket, build or review. The worker's report is let through, so its wake
+   cannot land in a later case.
+3. `review`: "review the work on branch …" for an environment the harness made
+   (the `status` case's uncommitted defect, with the project's
+   `coordinatorOtherEnvironments` opt-in on for the run). It passes on one Multi
+   Review of that environment whose call does not set `autoFix` or `autoPr` to
+   true and whose workflow record has both off; the run's saved Multi Review
+   defaults are set to off, so the record shows what the coordinator asked for.
+   The harness then cancels the review.
+4. `delivery`: case 1 again with other files. Once the build has started the
+   harness sets the new ticket's delivery to `commit-only`, and the build runs to
+   its end (`ORKESTRATOR_AGENT_TEST_COORDINATOR_BUILD_TIMEOUT_MS`, default
+   3600000). Besides case 1's checks it passes when the pipeline ends `complete`
+   with delivery `commit-only` and no PR or conflict-resolution session, and
+   when the coordinator, woken by the finished build, made no `create_pr` call.
+
+Saved defaults put every step and reviewer on the platform, with one reviewer.
+Between cases the coordinator must be idle with nothing queued for 20 seconds. A
+case that fails records its checks and the next case still runs, unless the
+coordinator never settles. Requests end with "go ahead without checking with
+me", because a coordinator that stops to ask has chosen nothing. The summary
+counts each case's workflow calls by tool (`build:start_build_pipeline`, …). The
+prompts and verdict are in `coordinator-live-routing.ts`;
+`coordinator-live-routing-orchestration.test.ts` runs the orchestration over a
+scripted command transport.
+
 Mail tiles are judged on every scenario with mail (`async`, `family`, `status`,
-`deliver-now`, `goal` and each side of `peer`) by `e2e/agent-testing/coordinator-mail-tiles.ts`.
+`deliver-now`, `goal`, `routing` and each side of `peer`) by `e2e/agent-testing/coordinator-mail-tiles.ts`.
 Each provider echoes the injected carrier as a user row in its own way, and the
 transcript shows that row as tiles only when the protocol package's
 `isPeerMailCarrierContent` accepts its `content`. The check runs the

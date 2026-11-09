@@ -26,6 +26,7 @@ interface Limits {
   fiveHour?: number;
   fiveHourResetHours?: number;
   stale?: boolean;
+  fetchedAt?: string;
 }
 
 /** Each provider's own shape: Claude's named windows, Codex's two general slots. */
@@ -71,7 +72,7 @@ function reading(platform: AgentAccountPlatform, limits: Limits): PlanUsageSnaps
     status: "ok",
     windows,
     ...(limits.stale ? { stale: true } : {}),
-    fetchedAt: inHours(0),
+    fetchedAt: limits.fetchedAt ?? inHours(0),
   };
 }
 
@@ -93,6 +94,15 @@ function harness(platform: AgentAccountPlatform, limits: Record<string, Limits>,
     state.active = accountId;
     return true;
   });
+  const readUsage = mock(
+    async (_platform: AgentAccountPlatform, accountId: string, _options: { force: boolean }) => {
+      const limits = state.limits[accountId]!;
+      const result = reading(platform, limits);
+      return result.stale || limits.fetchedAt
+        ? result
+        : { ...result, fetchedAt: new Date(clock).toISOString() };
+    },
+  );
   const switcher = new AgentAccountAutoSwitcher({
     settings: async () => ({ [platform]: { enabled: true, excludedEmails: [] } }),
     snapshot: async (): Promise<AgentAccountsSnapshot> => ({
@@ -105,10 +115,7 @@ function harness(platform: AgentAccountPlatform, limits: Record<string, Limits>,
         [platform]: { mode: "automatic", includedAccountIds: Object.keys(limits) },
       },
     }),
-    readUsage: async (_platform, accountId) => {
-      const result = reading(platform, state.limits[accountId]!);
-      return result.stale ? result : { ...result, fetchedAt: new Date(clock).toISOString() };
-    },
+    readUsage,
     switchAccount,
     sessionAccount: async () => ({
       platform,
@@ -139,6 +146,7 @@ function harness(platform: AgentAccountPlatform, limits: Record<string, Limits>,
     notices,
     reports,
     switchAccount,
+    readUsage,
     stop,
     advance: (ms: number) => {
       clock += ms;
@@ -254,6 +262,25 @@ describe.each(["claude", "codex"] as const)("the 5-hour limit on %s", (platform)
     expect(h.state.active).toBe("first");
     h.advance(USAGE_LIMIT_READ_WAIT_MS);
     expect(await h.stop()).toBe("stop");
+  });
+
+  test("a forced read returning old unflagged usage is unreadable and waits", async () => {
+    const limits = three();
+    limits.first = {
+      weeklyResetHours: 24,
+      fiveHour: 100,
+      fiveHourResetHours: 3,
+      fetchedAt: inHours(-60),
+    };
+    const h = harness(platform, limits, "first");
+    expect(await h.stop()).toBe("wait");
+    expect(h.readUsage).toHaveBeenCalledWith(platform, "first", { force: true });
+    expect(h.switchAccount).not.toHaveBeenCalled();
+    expect(h.reports.at(-1)).toMatchObject({ verdict: "wait" });
+    h.advance(USAGE_LIMIT_READ_WAIT_MS);
+    expect(await h.stop()).toBe("stop");
+    expect(h.switchAccount).not.toHaveBeenCalled();
+    expect(h.state.active).toBe("first");
   });
 
   test("with every other account out too, the stop stays where it is", async () => {

@@ -29,6 +29,7 @@ function scripts() {
   mkdirSync(dir, { mode: 0o700 });
   return {
     dir,
+    prefix,
     close: CONTAINER_TERMINAL_CLOSE_SCRIPT.replaceAll(CONTAINER_TERMINAL_PID_DIR_PREFIX, prefix),
     record: CONTAINER_TERMINAL_PID_RECORD_COMMAND.replaceAll(
       CONTAINER_TERMINAL_PID_DIR_PREFIX,
@@ -210,6 +211,23 @@ describe("container terminal close", () => {
       expect(existsSync(join(fixture.dir, `${currentToken}.pid`))).toBe(true);
     },
   );
+
+  test("startup reaps only the starting uid's orphan records", async () => {
+    const fixture = scripts();
+    const otherUid = process.getuid!() === 0 ? 1000 : 0;
+    const otherDir = `${fixture.prefix}${otherUid}`;
+    mkdirSync(otherDir, { mode: 0o700 });
+    const orphan = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+    // Beyond pid_max on every supported platform; no host process can be signalled.
+    const record = "999999999 999999999\n";
+    const ownFile = join(fixture.dir, `${orphan}.pid`);
+    const otherFile = join(otherDir, `${orphan}.pid`);
+    writeFileSync(ownFile, record);
+    writeFileSync(otherFile, record);
+    await runScript(fixture.record, newContainerTerminalToken());
+    expect(existsSync(ownFile)).toBe(false);
+    expect(await Bun.file(otherFile).text()).toBe(record);
+  });
 
   test("contains a failed docker exec and forwards its timeout and shutdown signal", async () => {
     const controller = new AbortController();

@@ -101,14 +101,18 @@ async function stageRuntime(name: string): Promise<string> {
   return path.join(destination, RUNTIME_DESCRIPTOR);
 }
 
-// The manifest and lockfile a standalone host installs this release's
-// dependencies from.
-await cp(
-  path.join(packageRoot, RELEASE_RUNTIME_DIRECTORY),
-  path.join(packageRoot, RELEASE_RUNTIME_PATH),
-  {
-    recursive: true,
-  },
+// Only the install inputs belong in the package. Qualification can install
+// dependencies in release-runtime/, but those host-specific node_modules must
+// never be recursively copied into the published resources.
+const releaseRuntimeDestination = path.join(packageRoot, RELEASE_RUNTIME_PATH);
+await mkdir(releaseRuntimeDestination, { recursive: true });
+await Promise.all(
+  ["package.json", "bun.lock"].map((file) =>
+    cp(
+      path.join(packageRoot, RELEASE_RUNTIME_DIRECTORY, file),
+      path.join(releaseRuntimeDestination, file),
+    ),
+  ),
 );
 
 const descriptors = await Promise.all(ON_DEMAND_BRIDGES.map((bridge) => stageRuntime(bridge.name)));

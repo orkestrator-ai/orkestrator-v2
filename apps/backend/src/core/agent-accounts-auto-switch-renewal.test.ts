@@ -279,19 +279,34 @@ describe("renewing idle accounts so they can be ranked", () => {
     },
   );
 
-  test("a failed refresh ranks an old soonest reset after a fresh account", async () => {
-    const h = harness({
-      active: "host",
-      renewLogin: async () => false,
-      accounts: {
-        host: { before: usage(98, 72) },
-        old: { before: usage(31, 24, true) },
-        third: { before: usage(20, 48) },
-      },
-    });
-    await h.switcher.evaluate("claude");
-    expect(h.state.active).toBe("third");
-  });
+  test.each([true, false])(
+    "a lapsed login whose renewal fails keeps its old reading behind fresh usage (stale=%s)",
+    async (stale) => {
+      const h = harness({
+        active: "host",
+        renewLogin: async () => false,
+        accounts: {
+          host: { before: usage(98, 72) },
+          old: {
+            before: { ...usage(31, 24, stale), fetchedAt: inHours(-60) },
+            after: usage(100, 24),
+          },
+          third: { before: usage(20, 48) },
+        },
+      });
+      await h.switcher.evaluate("claude");
+      expect(h.renewedIds()).toEqual(["old"]);
+      expect(h.reads.filter(({ accountId }) => accountId === "old")).toEqual([
+        { accountId: "old", force: false },
+      ]);
+      expect(h.state.active).toBe("third");
+      // The login still appears signed in and its old usage remains cached.
+      // A failed renewal cannot make that reading fresh on the next tick.
+      await h.switcher.evaluate("claude");
+      expect(h.renewLogin).toHaveBeenCalledTimes(1);
+      expect(h.state.active).toBe("third");
+    },
+  );
 
   test("an account with its tick off is neither read nor renewed", async () => {
     const h = harness({

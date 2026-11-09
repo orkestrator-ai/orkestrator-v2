@@ -28,9 +28,9 @@ function setup({ hidden = false, overflow = false, reduced = false } = {}) {
   });
   spyOn(window, "matchMedia").mockReturnValue({ matches: reduced } as MediaQueryList);
   const ref = { current: element as HTMLElement | null };
-  const mount = (arrival: LiveArrivalBatch | null = batch()) =>
-    renderHook(({ update }) => useLiveArrivalEntrance(ref, update, "row"), {
-      initialProps: { update: arrival },
+  const mount = (arrival: LiveArrivalBatch | null = batch(), skip = false) =>
+    renderHook(({ update, skip }) => useLiveArrivalEntrance(ref, update, "row", skip), {
+      initialProps: { update: arrival, skip },
     });
   return { element, parent, rects, ref, mount };
 }
@@ -86,7 +86,7 @@ describe("useLiveArrivalEntrance", () => {
     const update = batch();
     const hook = mount(update);
     const newer = batch();
-    hook.rerender({ update: newer });
+    hook.rerender({ update: newer, skip: false });
     expect(element.hasAttribute(LIVE_ARRIVAL_ATTRIBUTE)).toBe(true);
     expect(update.taken.has("row")).toBe(true);
     expect(newer.taken.size).toBe(0);
@@ -123,5 +123,31 @@ describe("useLiveArrivalEntrance", () => {
     mount(update);
     expect(element.hasAttribute(LIVE_ARRIVAL_ATTRIBUTE)).toBe(true);
     expect(update.taken.has("row")).toBe(true);
+  });
+
+  test("a skipped arrival renders at full size and never grows in afterwards", () => {
+    const { element, mount } = setup();
+    const update = batch();
+    const hook = mount(update, true);
+    expect(element.hasAttribute(LIVE_ARRIVAL_ATTRIBUTE)).toBe(false);
+    expect(update.taken.has("row")).toBe(true);
+    // Lifting the skip inside the live window does not start it late.
+    hook.rerender({ update, skip: false });
+    expect(element.hasAttribute(LIVE_ARRIVAL_ATTRIBUTE)).toBe(false);
+    hook.unmount();
+    mount(update);
+    expect(element.hasAttribute(LIVE_ARRIVAL_ATTRIBUTE)).toBe(false);
+  });
+
+  test("skipping a running entrance ends it for good", () => {
+    const { element, mount } = setup();
+    const update = batch();
+    const hook = mount(update);
+    expect(element.hasAttribute(LIVE_ARRIVAL_ATTRIBUTE)).toBe(true);
+    hook.rerender({ update, skip: true });
+    expect(element.hasAttribute(LIVE_ARRIVAL_ATTRIBUTE)).toBe(false);
+    expect(update.taken.has("row")).toBe(true);
+    hook.rerender({ update, skip: false });
+    expect(element.hasAttribute(LIVE_ARRIVAL_ATTRIBUTE)).toBe(false);
   });
 });

@@ -42,8 +42,9 @@ The area fields are `kanban` (`KanbanStorage`), `coordinators`
 `agentAccounts` (`AgentAccountsStorage`), `graphTemplates`
 (`GraphTemplatesStorage`), `graphRuns` (`GraphRunsStorage`), `graphEffects`
 (`GraphEffectsStorage`), `clientState` (`ClientStateStorage`), `setupApprovals`
-(`SetupApprovalsStorage`), `suborks` (`SuborksStorage`) and `watchedPullRequests`
-(`WatchedPullRequestsStorage`). Each area type is declared next to
+(`SetupApprovalsStorage`), `suborks` (`SuborksStorage`), `watchedPullRequests`
+(`WatchedPullRequestsStorage`) and `openCode2Sessions`
+(`OpenCode2SessionsStorage`). Each area type is declared next to
 its repository and re-exported from `storage.ts`, and lists only the methods
 code outside the storage files calls; a consumer that needs a few of them
 takes `Pick<KanbanStorage, "listAllFeaturePlans">` (or a nested
@@ -84,6 +85,7 @@ the change journal.
 | `GraphDescribeRepository` | `storage-graph-describe.ts` | `graph-describe` (item 215): one row per environment holding its latest "Describe a graph" job (the runner's branch record, the description, the compile context and, once completed, the draft), owned by the environment and deleted with it; revision compare-and-swap inside the row's transaction; writes announce the `graph-describe` resource |
 | `ClientStateRepository` | `storage-client-state.ts` | Presentation state every client shares that used to live in one browser's localStorage. `coordinator-pane-layouts` (one row per project, the coordinator page's tab groups, revision compare-and-swap, announces `coordinator-pane-layout`) and `coordinator-upstream-declines` and `coordinator-upstream-auto-merge` (one row per project each, written only by older clients through the retired decline and auto-merge commands; `check_coordinator_upstream_merge` no longer reads them, not announced) are deleted with the project; `notice-dismissals` (one row: dismissed notice occurrences per session identity, bounded in both dimensions, oldest-touched sessions leave first, announces `notice-dismissal`). Commands: `commands-registry-client-state.ts`; clients learn which of these a backend owns from `get_client_state_capabilities`, import their browser copy once and then stop reading it |
 | `WatchedPullRequestsRepository` | `storage-watched-pull-requests.ts` | `coordinator-watched-pull-requests`: one row per project holding the pull requests its coordinator watches ([coordinator.md](coordinator.md#watched-pull-requests)), at most 100 (least recently seen first out), plus the keys settled in the last week; deleted with the project |
+| `OpenCode2SessionsRepository` | `storage-opencode2-sessions.ts` | `opencode2-sessions`: one row per environment listing the OpenCode 2.x sessions its workflows (build pipelines, Multi Review, graph agent nodes) created, so the routing provider keeps sending them to 2.x ([0008](../todo/agent-engines/0008-opencode-v2.md)); at most 4,096 per environment, a full row refusing a new 2.x session rather than forgetting one; deleted with the environment's native agent sessions |
 | `SetupApprovalsRepository` | `storage-setup-approvals.ts` | `setup-approvals`: one row per project holding the hashes of the `setupLocal` command lists the user approved on this machine ([setup-approval.md](setup-approval.md)), bounded per project, oldest first out; deleted with the project |
 | `ScheduledJobsRepository` | `storage-scheduled-jobs.ts` | Adapts the scheduled-job engine to the shared context; the engine owns its single-row writes |
 | `PermissionRulesRepository` | `storage-permission-rules.ts` | Adapts the permission-rule store ([permission-rules.md](permission-rules.md)) to the shared context; the store owns its row transactions |

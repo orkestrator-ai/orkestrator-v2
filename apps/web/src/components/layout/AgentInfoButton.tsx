@@ -73,6 +73,7 @@ import type { AgentSessionAccount } from "@orkestrator/protocol/agent-accounts";
 import { openAgentMailForTab } from "@/components/agent-mail/agent-mail-ui";
 import { AgentInfoMcpSection } from "./AgentInfoMcpSection";
 import { SignInExpiry } from "@/components/native-agent/SignInExpiry";
+import { directSteerNotice } from "@/components/native-agent/auto-steer";
 import { AgentInfoAccountSection } from "./AgentInfoAccountSection";
 
 interface AgentInfoButtonProps {
@@ -1531,6 +1532,8 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                                 "Delivery is unconfirmed. Resolve the backend recovery card in the chat tab before sending another instruction.",
                               );
                             }
+                            // Only a backend that predates delivering a
+                            // missed steer still answers these two.
                             if (outcome.outcome === "mismatch") {
                               throw new Error("The active turn changed before delivery.");
                             }
@@ -1540,12 +1543,20 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                             if (outcome.outcome === "rejected") {
                               throw new Error(nativeAgentSteerRejectionMessage(outcome));
                             }
+                            // Delivered, perhaps as a new or queued turn
+                            // because it missed this one: nothing to resend.
+                            const notice = directSteerNotice(
+                              outcome,
+                              AGENT_PLATFORM_LABELS[activeSession.provider],
+                              "the active turn",
+                            );
                             if (isCurrent()) {
                               setSteerState({
                                 sessionIdentity: actionIdentity,
                                 value: "",
                               });
-                              toast.success("Sent to the active turn");
+                              if (notice.tone === "success") toast.success(notice.message);
+                              else toast.info(notice.message);
                             }
                           },
                         )
@@ -1556,7 +1567,8 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                   </div>
                   <p className="text-[10px] leading-relaxed text-muted-foreground">
                     Sends directly to the current {AGENT_PLATFORM_LABELS[activeSession.provider]}{" "}
-                    turn. Regular compose messages still queue.
+                    turn, or as the next turn if that one has ended. Regular compose messages still
+                    queue.
                   </p>
                 </div>
               ) : null}

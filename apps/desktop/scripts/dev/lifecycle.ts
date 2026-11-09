@@ -4,6 +4,7 @@ import path from "node:path";
 import process from "node:process";
 
 import { parseWorktreeLocationSettings } from "@orkestrator/protocol/disk-usage";
+import { agentToolchainsForPlatform } from "@orkestrator/toolchain/manifest";
 
 import {
   AGENT_TEST_HIDDEN_WINDOWS_ENV,
@@ -391,9 +392,16 @@ export async function seedAgentTestProfileState(
   if (toolchains.failed.length > 0) {
     warn(`Could not seed from the host install: ${toolchains.failed.join(", ")}`);
   }
-  let pending = profile.agentPlatforms.filter(
-    (platform) => !toolchains.seeded.some((entry) => entry.startsWith(`${platform}@`)),
-  );
+  // Entries are `tool@version`, and a platform can need several tools (OpenCode
+  // installs `opencode` and `opencode2`), so it is covered only once every one
+  // of them is. A platform with no pinned tool is matched by its own name.
+  const covers = (entries: readonly string[], platform: string) => {
+    const tools = agentToolchainsForPlatform(platform);
+    return (tools.length > 0 ? tools : [platform]).every((tool) =>
+      entries.some((entry) => entry.startsWith(`${tool}@`)),
+    );
+  };
+  let pending = profile.agentPlatforms.filter((platform) => !covers(toolchains.seeded, platform));
   if (pending.length > 0) {
     // Chromium aborts downloads whenever Docker changes a host interface; see
     // `prefetchAgentToolchains`. Whatever this cannot fetch, Electron still does.
@@ -407,9 +415,8 @@ export async function seedAgentTestProfileState(
     if (prefetched.error) {
       warn(`Could not download managed toolchains before Electron: ${prefetched.error}`);
     }
-    pending = pending.filter(
-      (platform) => !prefetched.downloaded.some((entry) => entry.startsWith(`${platform}@`)),
-    );
+    const installed = [...toolchains.seeded, ...prefetched.downloaded];
+    pending = pending.filter((platform) => !covers(installed, platform));
   }
   if (pending.length > 0) {
     // Attributes a long or hung startup before Electron is even launched.

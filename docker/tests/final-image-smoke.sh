@@ -132,7 +132,7 @@ BUN_CHECK
 done
 
 # Versions: the manifest must name what is installed.
-for entry in claude codex opencode grok pi playwright; do
+for entry in claude codex opencode opencode2 grok pi playwright; do
     expected="$(field ".agents.\"$entry\"")"
     # Startup warnings belong on stderr; retain the CLI status and compare its
     # version output rather than the first line of a merged diagnostic stream.

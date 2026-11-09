@@ -246,6 +246,7 @@
     "./environment-attention": "./src/environment-attention.ts",
     "./notification-sounds": "./src/notification-sounds.ts",
     "./opencode-message-id": "./src/opencode-message-id.ts",
+    "./opencode-protocol": "./src/opencode-protocol.ts",
     "./opencode-provider-auth": "./src/opencode-provider-auth.ts",
     "./pane-layout": "./src/pane-layout.ts",
     "./pane-layout-merge": "./src/pane-layout-merge.ts",

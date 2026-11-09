@@ -646,10 +646,6 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
           </div>
         </FloatingNoticeLayer>
 
-        <div className="shrink-0 border-t border-border/60 px-3 py-1 text-center text-[11px] text-muted-foreground">
-          The coordinator hands code changes, builds and fixes to build pipelines and prompt
-          environments.
-        </div>
         <AlertDialog
           open={pendingMainClose !== null}
           onOpenChange={(open) => {

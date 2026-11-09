@@ -326,6 +326,8 @@ describe("ProviderRegistry", () => {
     registry.cache(KEY, live.provider);
     registry.markBridgeAbsent(providerCacheKey("env-gone", "codex"));
     registry.beginDispatch(busy.provider);
+    // What the pruner checks runtime liveness for: every id holding a provider, once.
+    expect(registry.cachedEnvironmentIds().sort()).toEqual(["env-1", "env-busy", "env-gone"]);
 
     await registry.prune(new Set(["env-1"]));
 

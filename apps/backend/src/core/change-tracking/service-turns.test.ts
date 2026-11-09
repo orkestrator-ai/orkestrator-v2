@@ -7,6 +7,7 @@ import { ChangeEvidenceRecorder } from "@orkestrator/protocol/node/change-tracki
 import { ChangeEvidenceSpool } from "@orkestrator/protocol/node/change-tracking/evidence-spool";
 import { unknownCapabilities } from "@orkestrator/protocol/change-evidence";
 import { createHarness, git, spoolSource, type Harness } from "./service-test-support.js";
+import { threadIdFor } from "./identities.js";
 import { turnIdFor } from "./turn-boundaries.js";
 
 const harnesses: Harness[] = [];
@@ -365,6 +366,48 @@ describe("turn and thread boundaries", () => {
     expect(thread.totals.changedFiles).toBe(0);
   });
 
+  test("the thread header has no resource until a turn reaches the provider", async () => {
+    const h = harness();
+    expect(h.service.threadResource("env-1", "env-env-1:tab") === null).toBe(true);
+    await h.service.prepareTurnStart({
+      environmentId: "env-1",
+      logicalSessionKey: "env-env-1:tab",
+      requestId: "r0",
+      provider: "claude",
+    });
+    // Prepared but not dispatched: nothing will be measured yet.
+    expect(h.service.threadResource("env-1", "env-env-1:tab") === null).toBe(true);
+    h.service.markTurnDispatched("env-1", "env-env-1:tab", "r0", "rejected");
+    // A refused only turn leaves no thread measurement to wait for.
+    expect(h.service.threadResource("env-1", "env-env-1:tab") === null).toBe(true);
+
+    await h.service.prepareTurnStart({
+      environmentId: "env-1",
+      logicalSessionKey: "env-env-1:tab",
+      requestId: "r1",
+      provider: "claude",
+    });
+    h.service.markTurnDispatched("env-1", "env-env-1:tab", "r1", "accepted");
+    const running = h.service.threadResource("env-1", "env-env-1:tab");
+    expect(running === null).toBe(false);
+    // Running with nothing measured yet reads as live work, not a pending load.
+    const live = h.service.projections.project(running!.resourceKey, 0)!;
+    expect(live.measurementId).toBeNull();
+    expect(live.reasonKeys).toEqual(["changes.reason.provisional"]);
+
+    await h.service.finalizeTurn({
+      environmentId: "env-1",
+      logicalSessionKey: "env-env-1:tab",
+      requestId: "r1",
+    });
+    const settled = h.service.projections.project(
+      h.service.threadResource("env-1", "env-env-1:tab")!.resourceKey,
+      0,
+    )!;
+    expect(settled.state).not.toBe("loading");
+    expect(settled.reasonKeys).not.toContain("changes.reason.provisional");
+  });
+
   test("a historical turn body is served from retained endpoints, not the later-edited file", async () => {
     const h = harness();
     await runTurn(h, "r1", () => writeFileSync(join(h.repo, "a.txt"), "one\nchanged\n"));
@@ -498,9 +541,8 @@ describe("turn and thread boundaries", () => {
       provider: "claude",
       providerSessionId: "child",
     });
-    const childSegment = h.service.ledger.segment(
-      h.service.threadResource("env-1", "env-env-1:fork")!.segmentId,
-    )!;
+    // Not dispatched yet, so the header has no resource; the segment is open.
+    const childSegment = h.service.ledger.currentSegment(threadIdFor("env-1", "env-env-1:fork"))!;
     expect(childSegment.inherited_prefix_id).toBe(parentSegment);
     const parent = h.service.ledger.segment(parentSegment)!;
     // Deleting the parent thread drops only its own references.

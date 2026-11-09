@@ -569,11 +569,25 @@ export function asNativeAgentSessionAction(value: unknown): NativeAgentSessionAc
     case "unshare":
     case "review":
       return { kind };
-    case "steer":
+    case "steer": {
+      const onMissedTurn = raw.onMissedTurn;
+      if (onMissedTurn !== undefined && onMissedTurn !== "new-turn" && onMissedTurn !== "refuse") {
+        throw new Error("Expected action.onMissedTurn to be new-turn or refuse");
+      }
+      const turnRequestId =
+        raw.turnRequestId === undefined
+          ? undefined
+          : asNonBlankString(raw.turnRequestId, "action.turnRequestId");
+      if (turnRequestId !== undefined && Buffer.byteLength(turnRequestId, "utf8") > 512) {
+        throw new Error("Expected action.turnRequestId to be at most 512 bytes");
+      }
       return {
         kind,
         text: asNonBlankString(raw.text, "action.text"),
+        ...(onMissedTurn ? { onMissedTurn } : {}),
+        ...(turnRequestId ? { turnRequestId } : {}),
       };
+    }
     default:
       throw new Error("Native agent session action is invalid");
   }

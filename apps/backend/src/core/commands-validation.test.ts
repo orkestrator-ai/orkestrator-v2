@@ -199,4 +199,31 @@ describe("asNativeAgentSessionAction", () => {
       asNativeAgentSessionAction({ kind: "compact", instructions: "x".repeat(16_001) }),
     ).toThrow("at most 16000 characters");
   });
+
+  test("carries a steer's missed-turn policy and turn id only when given", () => {
+    expect(asNativeAgentSessionAction({ kind: "steer", text: "focus" })).toEqual({
+      kind: "steer",
+      text: "focus",
+    });
+    expect(
+      asNativeAgentSessionAction({
+        kind: "steer",
+        text: "focus",
+        onMissedTurn: "refuse",
+        turnRequestId: "op-1",
+      }),
+    ).toEqual({ kind: "steer", text: "focus", onMissedTurn: "refuse", turnRequestId: "op-1" });
+  });
+
+  test("refuses a malformed missed-turn policy or turn id", () => {
+    expect(() =>
+      asNativeAgentSessionAction({ kind: "steer", text: "focus", onMissedTurn: "steer-anyway" }),
+    ).toThrow("onMissedTurn");
+    expect(() =>
+      asNativeAgentSessionAction({ kind: "steer", text: "focus", turnRequestId: "  " }),
+    ).toThrow();
+    expect(() =>
+      asNativeAgentSessionAction({ kind: "steer", text: "focus", turnRequestId: "x".repeat(513) }),
+    ).toThrow("at most 512 bytes");
+  });
 });

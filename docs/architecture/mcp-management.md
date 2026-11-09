@@ -452,6 +452,17 @@ takes anywhere else. `mise run verify:opencode:mcp-live` fails if a bump stops
 caching the user files, which is when to plan them for the in-place reload
 instead.
 
+**OpenCode 2 sessions.** A 2.x server's `OPENCODE_CONFIG_DIR` replaces its
+global directory instead of adding one, so Orkestrator mirrors the user files
+in `$XDG_CONFIG_HOME/opencode` (and a backend `OPENCODE_CONFIG`) into its own
+2.x config directory, read-only and without `plugin` entries, whenever a 2.x
+server starts (`opencode2/user-config.ts`). A 2.x session therefore lists
+(`GET /api/mcp`) the same user and project servers this catalogue shows, and
+a saved user file reaches it at the same restart a 1.x server needs. A backend
+`OPENCODE_CONFIG_DIR` is not read by 2.x. 2.x reaches a configured server's
+tools through Code Mode (`execute`); a policy's user MCP selection denies the
+rest on 2.x as on 1.x.
+
 **Claude MCP sign-in.** Claude delivers an MCP server's sign-in link through
 the CLI's `onElicitation`, which parks it as an `mcp-url` card in the
 conversation; the sign-in action only reconnects the server so that it asks.

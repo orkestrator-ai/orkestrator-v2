@@ -128,6 +128,7 @@ import {
 import { nativeAgentPlatformPolicy } from "./native-agent-platform-policy.js";
 import { NativeAgentSessionTitles } from "./native-agent-session-titles.js";
 import { heldSessionModel } from "./session-held-model.js";
+import { limitNativeAgentCapabilities } from "./native-agent-capability-limits.js";
 import { projectedRetiredDispatch } from "./native-agent-retired-dispatch.js";
 import {
   createNativeAgentDisplayTail,
@@ -220,6 +221,7 @@ import {
   progressiveHydrationToken,
   providerReportedImagePath,
   redactArtifactGrant,
+  sessionModelSubstitutionNotice,
   visibleProjectionNotices,
   withProviderContextWindow,
 } from "./native-agent-projection-helpers.js";
@@ -3450,10 +3452,14 @@ export class NativeAgentTranscriptProjection {
     const liveInteractionKinds = normalizeInteractionKinds(
       (snapshot as ProviderSessionStateSnapshot).interactionKinds,
     );
+    const sessionCapabilities = limitNativeAgentCapabilities(
+      advertisedCapabilities,
+      (snapshot as ProviderSessionStateSnapshot).capabilityLimits,
+    );
     let capabilities =
       liveInteractionKinds === undefined
-        ? advertisedCapabilities
-        : { ...advertisedCapabilities, interactions: { kinds: liveInteractionKinds } };
+        ? sessionCapabilities
+        : { ...sessionCapabilities, interactions: { kinds: liveInteractionKinds } };
     if (capabilities.actions?.steer && !steerSupported) {
       log.debug("steer.capability-cleared", {
         agent: input.agent,
@@ -3583,6 +3589,7 @@ export class NativeAgentTranscriptProjection {
       stateSnapshot.notices,
       sessionIncompleteTurnNotice(resolved.session),
       retiredDispatch,
+      sessionModelSubstitutionNotice(resolved.session, this.host.now()),
     );
     // The transcript read never sees session state, so the rows saying how the
     // turn ended travel here. A kept stop result stays with the full read the
@@ -5418,10 +5425,14 @@ export class NativeAgentTranscriptProjection {
       // off raises nothing, and reporting the platform's list there would
       // promise approvals that can never arrive.
       const liveInteractionKinds = normalizeInteractionKinds(snapshot.interactionKinds);
+      const sessionCapabilities = limitNativeAgentCapabilities(
+        steerQualified,
+        snapshot.capabilityLimits,
+      );
       const capabilities =
         liveInteractionKinds === undefined
-          ? steerQualified
-          : { ...steerQualified, interactions: { kinds: liveInteractionKinds } };
+          ? sessionCapabilities
+          : { ...sessionCapabilities, interactions: { kinds: liveInteractionKinds } };
       if (snapshot.commandCatalogueRevision !== undefined) {
         this.catalogs.observeCommandRevision(
           input,
@@ -5716,6 +5727,7 @@ export class NativeAgentTranscriptProjection {
         snapshot.notices,
         sessionIncompleteTurnNotice(resolved.session),
         retiredDispatch,
+        sessionModelSubstitutionNotice(resolved.session, this.host.now()),
       );
 
       const projection: NativeAgentSessionProjection = {

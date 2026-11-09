@@ -1230,3 +1230,42 @@ describe("Cursor MCP configuration", () => {
     expect(progress).toContain("Cursor host config NOT copied into this container: mcp.json");
   });
 });
+
+test.each([false, true])(
+  "OpenCode revocation includes 2.x and reports database cleanup failure=%s",
+  async (fail) => {
+    const { dataDir, roots } = await fixtureHome();
+    const staged = await stagePortableInputs(
+      dataDir,
+      "env-lifecycle",
+      new Set(["opencode"] as const),
+      roots,
+    );
+    const { context, environments } = memoryLifecycleContext(
+      [lifecycleEnvironment({ containerId: "container-1" })],
+      dataDir,
+    );
+    await withDockerScript(
+      `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+case "$1" in
+  inspect) case "$*" in *Config.Env*) printf '[]\\n' ;; *) printf '${staged.revision}\\n' ;; esac ;;
+esac
+${fail ? 'case "$*" in *"DELETE FROM credential"*) exit 1 ;; esac' : ""}
+exit 0
+`,
+      async (log) => {
+        const result = await revokeProviderCredentials("env-lifecycle", "opencode", context);
+        expect(result.removed).toBe(!fail);
+        expect(result.processesStopped).toBe(!fail);
+        expect(result.pendingRebuild).toBe(fail);
+        const calls = await log.read();
+        expect(calls).toContain("[o]pencode(2)? serve");
+        expect(calls).toContain("DELETE FROM credential");
+        expect(calls).toContain("opencode2.db");
+        expect(calls).not.toContain("DELETE FROM session");
+      },
+    );
+    expect(environments.get("env-lifecycle")?.revokedInputProviders).toContain("opencode");
+  },
+);

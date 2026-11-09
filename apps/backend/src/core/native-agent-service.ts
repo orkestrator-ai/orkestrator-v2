@@ -1,3 +1,4 @@
+import { asRecord } from "./agent-provider-runtime.js";
 import { isValidTimeZone } from "@orkestrator/protocol/schedule-time";
 import { recurringDiagnosticsRegistry } from "./recurring-diagnostics.js";
 import type { TurnFailureKind } from "@orkestrator/protocol/agent-usage-limits";
@@ -160,6 +161,7 @@ import { NativeAgentUsageLimitResend } from "./native-agent-usage-limit-resend.j
 import { NativeAgentCatalogCache } from "./native-agent-catalog-cache.js";
 import { NativeAgentInteractionTracker } from "./native-agent-interaction-tracker.js";
 import { NativeAgentLaunchActivityReconciler } from "./native-agent-launch-activity-reconciler.js";
+import { deliverMissedSteer } from "./native-agent-missed-steer.js";
 import { NativeAgentPromptQueueDispatcher } from "./native-agent-prompt-queue-dispatcher.js";
 import { NativeAgentSessionOperations } from "./native-agent-session-operations.js";
 import {
@@ -174,6 +176,12 @@ import {
   type ProviderMcpConfigEvidenceRead,
 } from "./agent-provider-contract.js";
 import { localServerStopCommandName } from "./local-server-runtime.js";
+import {
+  openCodeRoutingDependencies,
+  selectNewOpenCodeSessionProtocol,
+  sessionTakesAgentTools,
+} from "./native-agent-opencode-protocol.js";
+import type { OpenCodeRoutingDependencies } from "./opencode2/routing-provider.js";
 import { claudeReasoningSelection } from "@orkestrator/protocol/claude-model-catalog";
 import { type AgentInteractionRequest } from "@orkestrator/protocol/agent-interactions";
 import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
@@ -655,6 +663,7 @@ export class NativeAgentService {
           stageImages: (images) => this.stageImages(environmentId, images),
           environment: this.providerEnvironment(environmentId),
           planUsage: options.planUsage,
+          ...this.openCodeRouting(environmentId),
         }),
       forgetGroup: (cacheKey) => this.launches.forgetActivityGroup(cacheKey),
     });
@@ -990,6 +999,16 @@ export class NativeAgentService {
     input: EnsureNativeAgentSessionInput,
   ): Promise<NativeAgentRuntimeProvider | undefined> {
     return this.providerRegistry.observe(input);
+  }
+
+  /**
+   * Every provider this service caches for an environment routes OpenCode
+   * sessions the same way: a provider built without the router and cached
+   * under the same key would serve a 2.x session from the 1.x server.
+   */
+  private openCodeRouting(environmentId: string): { openCode2?: OpenCodeRoutingDependencies } {
+    const openCode2 = openCodeRoutingDependencies(this.options, this.storage, environmentId);
+    return openCode2 ? { openCode2 } : {};
   }
 
   /**
@@ -1515,6 +1534,7 @@ export class NativeAgentService {
         origin: existing.origin,
         interactionPolicy: existing.interactionPolicy,
         phase: input.phase,
+        ...(existing.openCodeProtocol ? { openCodeProtocol: existing.openCodeProtocol } : {}),
       });
       /*
        * Liveness only. A session whose last turn ended in a terminal error —
@@ -1581,14 +1601,29 @@ export class NativeAgentService {
      * default. Either answer is stored on this session only; the configuration
      * keeps the user's choice.
      */
+    // Decided once, here, and stored on the record the create publishes. It
+    // comes first so an OpenCode default resolves against its own line's
+    // catalogue: 2.x serves only the providers it has credentials for.
+    const openCodeProtocol = await selectNewOpenCodeSessionProtocol(
+      this.storage,
+      this.options,
+      input,
+    );
+    // A new OpenCode 2.x session resolves even an explicit model: before a
+    // session exists the picker lists 1.x's catalogue, whose default can be a
+    // model 2.x has no sign-in for. One 2.x serves resolves to itself.
     const resolution =
-      !input.model || input.model === "default" || input.modelSource === "default"
-        ? await this.resolveDefaultModel(provider, input.model)
+      !input.model ||
+      input.model === "default" ||
+      input.modelSource === "default" ||
+      openCodeProtocol === "v2"
+        ? await this.resolveDefaultModel(provider, input.model, openCodeProtocol)
         : undefined;
     const modelSubstitution = resolution?.substitution;
     if (resolution?.modelId) input = { ...input, model: resolution.modelId };
     const session = await this.storage.getOrCreateNativeAgentSession(
       {
+        ...(openCodeProtocol ? { openCodeProtocol } : {}),
         key,
         environmentId: input.environmentId,
         agent: input.agent,
@@ -1600,8 +1635,11 @@ export class NativeAgentService {
         executionPolicy: input.executionPolicy,
         policy: input.policy,
         initialPromptPresentation: input.initialPromptPresentation,
+        // Kept on the record so the tab shows it whichever request created the
+        // session: a first prompt's dispatch answers with no room for it.
+        ...(modelSubstitution ? { modelSubstitutionNotice: modelSubstitution } : {}),
       },
-      () => this.createProviderSession(provider, input),
+      () => this.createProviderSession(provider, input, openCodeProtocol),
     );
     void this.interactions.reconcileAgentInteractions().catch(() => undefined);
     // A concurrent ensure may have created the session first, with its own
@@ -1640,10 +1678,14 @@ export class NativeAgentService {
   private async resolveDefaultModel(
     provider: NativeAgentRuntimeProvider,
     modelId: string | undefined,
+    openCodeProtocol?: "v2",
   ): Promise<NativeAgentDefaultModelResolution | undefined> {
     if (!provider.resolveDefaultModel) return undefined;
     try {
-      return await provider.resolveDefaultModel(modelId);
+      return await provider.resolveDefaultModel(
+        modelId,
+        openCodeProtocol ? { openCodeProtocol } : undefined,
+      );
     } catch {
       // Connectivity is advisory here. Dispatch preflight still reports a
       // model the runtime cannot serve.
@@ -1687,6 +1729,11 @@ export class NativeAgentService {
       input.agent,
       input.providerSessionId,
       async () => {
+        // A resumed or forked OpenCode 2.x session keeps its line across a restart.
+        const openCodeProtocol =
+          input.agent === "opencode"
+            ? await provider.sessionProtocol?.(input.providerSessionId)
+            : undefined;
         provider.registerSession?.(input.providerSessionId, {
           origin: input.origin ?? "interactive-native",
           interactionPolicy:
@@ -1695,6 +1742,7 @@ export class NativeAgentService {
               ? UNATTENDED_AGENT_INTERACTION_POLICY
               : INTERACTIVE_AGENT_INTERACTION_POLICY),
           phase: input.phase,
+          ...(openCodeProtocol ? { openCodeProtocol } : {}),
         });
         // Same liveness-only rule as ensureSession: a failed last turn is not a
         // missing session, and adopting one must still succeed.
@@ -1717,6 +1765,7 @@ export class NativeAgentService {
           policy: input.policy,
           initialPromptPresentation: input.initialPromptPresentation,
           expectedProviderSessionId: input.expectedProviderSessionId,
+          ...(openCodeProtocol ? { openCodeProtocol } : {}),
         });
         void this.interactions.reconcileAgentInteractions().catch(() => undefined);
         return session;
@@ -2000,6 +2049,10 @@ export class NativeAgentService {
   private async dispatchIntentInternal(
     input: DispatchNativeAgentPromptInput,
     preserveExistingPending: boolean,
+    prepare?: (
+      session: PersistedNativeAgentSession,
+      provider: NativeAgentRuntimeProvider,
+    ) => Promise<PromptDispatchPreparation>,
   ): Promise<NativeAgentDispatchOutcome> {
     let release: () => void;
     try {
@@ -2031,7 +2084,7 @@ export class NativeAgentService {
           error: "This tab has pending teardown; finish closing it before sending more work",
         };
       return await this.promptQueues.withSessionMutationIntent(input, () =>
-        this.dispatchIntentUnderIntent(input, preserveExistingPending),
+        this.dispatchIntentUnderIntent(input, preserveExistingPending, prepare),
       );
     } finally {
       release();
@@ -2041,6 +2094,10 @@ export class NativeAgentService {
   private async dispatchIntentUnderIntent(
     input: DispatchNativeAgentPromptInput,
     preserveExistingPending: boolean,
+    prepare?: (
+      session: PersistedNativeAgentSession,
+      provider: NativeAgentRuntimeProvider,
+    ) => Promise<PromptDispatchPreparation>,
   ): Promise<NativeAgentDispatchOutcome> {
     input = await this.trustedSessionInput(input);
     // A manual prompt to a session with automatic turn recovery claims it
@@ -2048,7 +2105,14 @@ export class NativeAgentService {
     let manualClaimSession: PersistedNativeAgentSession | null = null;
     try {
       if (this.turnRecovery.appliesTo(input)) {
-        manualClaimSession = await this.ensureSession(input);
+        const ensured = await this.ensureSession(input);
+        manualClaimSession = ensured;
+        // Creating the session here replaced the model this prompt names (a new
+        // OpenCode 2.x session); the later ensure finds it existing and cannot say so.
+        const substitution = ensured.modelSubstitution;
+        if (substitution && substitution.requestedModelId === input.model) {
+          input = { ...input, model: substitution.modelId };
+        }
         await this.turnRecovery.claimManualPrompt({
           environmentId: input.environmentId,
           agent: input.agent,
@@ -2057,7 +2121,7 @@ export class NativeAgentService {
           requestId: input.requestId,
         });
       }
-      return await this.attemptDispatch(input, true, preserveExistingPending);
+      return await this.attemptDispatch(input, true, preserveExistingPending, prepare);
     } catch (error) {
       // Everything before the first dispatch attempt: session creation, the
       // manual-prompt claim. A normal send has no earlier record to preserve;
@@ -2100,6 +2164,11 @@ export class NativeAgentService {
     input: DispatchNativeAgentPromptInput,
     allowRecoveryRetry: boolean,
     preserveExistingPending: boolean,
+    /** An admission check under the dispatch fence; refusing it sends nothing. */
+    prepare?: (
+      session: PersistedNativeAgentSession,
+      provider: NativeAgentRuntimeProvider,
+    ) => Promise<PromptDispatchPreparation>,
   ): Promise<NativeAgentDispatchOutcome> {
     const key = nativeAgentSessionStorageKey(
       input.environmentId,
@@ -2108,7 +2177,7 @@ export class NativeAgentService {
     );
     try {
       let instructionsIgnored = false;
-      await this.dispatchPromptInternal(input, undefined, true, false, false, () => {
+      await this.dispatchPromptInternal(input, prepare, true, false, false, () => {
         instructionsIgnored = true;
       });
       void this.projections.refreshProjectionState(input).catch(() => undefined);
@@ -2127,7 +2196,7 @@ export class NativeAgentService {
           allowRecoveryRetry &&
           (await this.settleAmbiguousDispatch(input, key, error.pendingRequestId))
         ) {
-          return this.attemptDispatch(input, false, preserveExistingPending);
+          return this.attemptDispatch(input, false, preserveExistingPending, prepare);
         }
         void this.projections.refreshProjectionState(input).catch(() => undefined);
         return { outcome: "rejected", error: PARKED_DISPATCH_CONFLICT_MESSAGE };
@@ -2137,7 +2206,7 @@ export class NativeAgentService {
           allowRecoveryRetry &&
           (await this.settleAmbiguousSteer(input, key, error.pendingRequestId))
         ) {
-          return this.attemptDispatch(input, false, preserveExistingPending);
+          return this.attemptDispatch(input, false, preserveExistingPending, prepare);
         }
         void this.projections.refreshProjectionState(input).catch(() => undefined);
         return { outcome: "rejected", error: PARKED_DISPATCH_CONFLICT_MESSAGE };
@@ -2388,12 +2457,39 @@ export class NativeAgentService {
       if (outcome.outcome === "rejected") {
         return { outcome: "rejected", error: nativeAgentSteerRejectionMessage(outcome) };
       }
+      if (pendingSteer.onMissedTurn === "refuse") {
+        return {
+          outcome: "rejected",
+          error: "The steering instruction missed its turn and was refused.",
+        };
+      }
+      // Missed its turn. A steer taken from the queue was put back there, and
+      // the queue sends it as the next turn: sending it here as well would
+      // deliver it twice.
+      if (pendingSteer.sourceQueue) {
+        return {
+          outcome: "rejected",
+          error:
+            "The steering instruction missed its turn. The prompt was returned to the queue and is sent as the next turn.",
+        };
+      }
+      const delivered = await this.deliverMissedSteer(
+        resolved,
+        pendingSteer.text,
+        outcome.outcome === "mismatch" ? "mismatch" : "idle",
+        pendingSteer.turnRequestId,
+      );
+      if (delivered.outcome === "applied") {
+        return {
+          outcome: "accepted",
+          requestId: delivered.requestId!,
+          ...(delivered.deliveredAs ? { deliveredAs: delivered.deliveredAs } : {}),
+        };
+      }
       return {
-        outcome: "rejected",
-        error:
-          outcome.outcome === "mismatch"
-            ? "The active turn changed before the instruction could be delivered."
-            : "There is no active turn to steer.",
+        outcome: "unknown",
+        requestId: delivered.requestId!,
+        error: "The steering instruction was sent as a new turn and is still being reconciled.",
       };
     }
     if (!pending) {
@@ -2593,7 +2689,76 @@ export class NativeAgentService {
     return outcome;
   }
 
+  /**
+   * The composer's `/steer`, the Agent Info steer box and the public CLI. A
+   * steer that misses its turn starts a new turn or waits in the queue for the
+   * next one (`native-agent-missed-steer.ts`), unless the caller bound it to
+   * one run and asked to be told instead (`onMissedTurn: "refuse"`).
+   */
   private async performProjectionSteer(
+    input: NativeAgentProjectionInput,
+    resolved: {
+      key: string;
+      session: PersistedNativeAgentSession;
+      provider: NativeAgentRuntimeProvider;
+    },
+    action: Extract<NativeAgentSessionAction, { kind: "steer" }>,
+  ): Promise<NativeAgentSessionActionOutcome> {
+    const turnRequestId = action.turnRequestId;
+    const steerRequestId = turnRequestId
+      ? `steer:${createHash("sha256").update(turnRequestId).digest("hex")}`
+      : randomUUID();
+    if (turnRequestId) {
+      const current = await this.storage.getNativeAgentSession(resolved.key);
+      if (current?.dispatchedRequestIds?.includes(turnRequestId)) {
+        return { outcome: "applied", deliveredAs: "new-turn", requestId: turnRequestId };
+      }
+      if (current?.dispatchedRequestIds?.includes(steerRequestId))
+        return { outcome: "applied", requestId: steerRequestId };
+      if (current?.pendingDispatch?.requestId === turnRequestId)
+        return { outcome: "unknown", requestId: turnRequestId };
+      const queue = await this.storage.getPromptQueue(`${input.agent}\0${input.logicalSessionKey}`);
+      if (
+        queue?.messages.some((message) => asRecord(message)?.id === turnRequestId) ||
+        queue?.inFlight?.requestId === turnRequestId ||
+        queue?.outstandingClaim?.message.requestId === turnRequestId
+      ) {
+        return { outcome: "applied", deliveredAs: "queued", requestId: turnRequestId };
+      }
+    }
+    const outcome = await this.steerProjectionOnce(input, resolved, action, steerRequestId);
+    if (
+      (outcome.outcome !== "idle" && outcome.outcome !== "mismatch") ||
+      action.onMissedTurn === "refuse"
+    ) {
+      return outcome;
+    }
+    return this.deliverMissedSteer(
+      resolved,
+      action.text.trim(),
+      outcome.outcome,
+      action.turnRequestId,
+    );
+  }
+
+  private deliverMissedSteer(
+    resolved: { key: string; session: PersistedNativeAgentSession },
+    text: string,
+    missed: "idle" | "mismatch",
+    requestId: string = randomUUID(),
+  ): Promise<NativeAgentSessionActionOutcome> {
+    return deliverMissedSteer(
+      {
+        storage: this.storage,
+        dispatchIntent: (dispatch, prepare) =>
+          this.dispatchIntentInternal(dispatch, false, prepare),
+        notifyPromptQueueChanged: (queueKey) => this.notifyPromptQueueChanged(queueKey),
+      },
+      { session: resolved.session, key: resolved.key, text, missed, requestId },
+    );
+  }
+
+  private async steerProjectionOnce(
     input: NativeAgentProjectionInput,
     resolved: {
       key: string;
@@ -2647,6 +2812,8 @@ export class NativeAgentService {
       text,
       inputDigest: createHash("sha256").update(text).digest("hex"),
       expectedRunId: active.runId,
+      ...(action.onMissedTurn ? { onMissedTurn: action.onMissedTurn } : {}),
+      ...(action.turnRequestId ? { turnRequestId: action.turnRequestId } : {}),
       state: "prepared",
       createdAt: new Date().toISOString(),
     };
@@ -2673,7 +2840,8 @@ export class NativeAgentService {
     if (!nativeAsyncQuestionItemId(requestId)) {
       throw new Error("Queued response is not an asynchronous-question answer");
     }
-    return this.performProjectionSteer(input, resolved, { kind: "steer", text }, requestId);
+    // The queue owns this answer: a miss leaves it queued, never a second copy.
+    return this.steerProjectionOnce(input, resolved, { kind: "steer", text }, requestId);
   }
 
   private async dispatchPersistedSteer(
@@ -3581,7 +3749,7 @@ export class NativeAgentService {
       if ((!nonBlank(input.prompt) && !hasAttachments) || !nonBlank(input.requestId)) {
         throw new Error("Native agent prompt or attachment and request ID must not be blank");
       }
-      const session: PersistedNativeAgentSession = await this.ensureSession(input);
+      const session: EnsuredNativeAgentSession = await this.ensureSession(input);
       // Freeze the effective inherited choice before preparing and journaling
       // dispatch. Retries replay this concrete model, never a stale default.
       if (input.modelSource === "default" || !input.model) {
@@ -3590,6 +3758,10 @@ export class NativeAgentService {
           model: session.controls?.modelId ?? input.model,
           reasoningEffort: input.reasoningEffort ?? session.controls?.reasoningId,
         };
+      } else if (session.modelSubstitution?.requestedModelId === input.model) {
+        // The session this dispatch created replaced the model it named (a
+        // new OpenCode 2.x session); send the model the session runs on.
+        input = { ...input, model: session.modelSubstitution.modelId };
       }
       const provider = await this.provider(input);
       provider.registerSession?.(session.providerSessionId, {
@@ -3718,7 +3890,7 @@ export class NativeAgentService {
         durable: PersistedNativeAgentSession,
       ): Promise<{ url: string; token: string } | undefined> => {
         if (
-          nativeAgentCapabilities(durable.agent).agentTools !== true ||
+          !sessionTakesAgentTools(durable.agent, durable.openCodeProtocol) ||
           durable.owner?.kind !== "environment" ||
           !this.options.resolveAgentToolConnection
         ) {
@@ -4323,6 +4495,7 @@ export class NativeAgentService {
           stageImages: (images) => this.stageImages(environmentId, images),
           environment: this.providerEnvironment(environmentId),
           planUsage: this.options.planUsage,
+          ...this.openCodeRouting(environmentId),
         });
         this.providerRegistry.cache(cacheKey, provider, identity);
       }
@@ -4366,6 +4539,7 @@ export class NativeAgentService {
           else {
             provider = createNativeAgentProvider(connection, {
               planUsage: this.options.planUsage,
+              ...this.openCodeRouting(environmentId),
             });
             this.providerRegistry.cache(key, provider, identity);
           }
@@ -4557,6 +4731,7 @@ export class NativeAgentService {
   private async createProviderSession(
     provider: NativeAgentRuntimeProvider,
     input: EnsureNativeAgentSessionInput,
+    openCodeProtocol?: "v2",
   ): Promise<string> {
     await this.assertEnvironmentLive(input.environmentId);
     const environment = await this.storage.getEnvironment(input.environmentId);
@@ -4565,7 +4740,7 @@ export class NativeAgentService {
       ? input.logicalSessionKey.slice(prefix.length)
       : "";
     const agentMcp =
-      nativeAgentCapabilities(input.agent).agentTools === true &&
+      sessionTakesAgentTools(input.agent, openCodeProtocol) &&
       input.owner?.kind === "environment" &&
       tabId &&
       environment &&
@@ -4585,6 +4760,7 @@ export class NativeAgentService {
       fastMode: input.fastMode,
       agentMcp,
       policy: input.policy,
+      ...(openCodeProtocol ? { openCodeProtocol } : {}),
       interaction: {
         origin: input.origin ?? "interactive-native",
         interactionPolicy:

@@ -365,6 +365,16 @@ export function startWorktreeWatcher(options: WorktreeWatcherOptions): WorktreeW
       reconcile();
       return;
     }
+    // The parent saying this entry came or went is the one dependable sign that
+    // a watch on it, or anywhere below it, may be dead. Identity cannot say so:
+    // Linux hands a removed directory's inode number straight to the next one
+    // made, so a directory removed and created again usually reads as the same
+    // `dev:ino` while its old inotify watch reports nothing ever again.
+    if (retireWatchesWithin(name)) {
+      applyQueued = true;
+      reconcile();
+      return;
+    }
     void plan.directoryIdentity(options.worktreePath, name).then((identity) => {
       if (closed) return;
       const watched =
@@ -374,6 +384,21 @@ export function startWorktreeWatcher(options: WorktreeWatcherOptions): WorktreeW
       applyQueued = true;
       reconcile();
     }, fail);
+  };
+
+  /**
+   * Closes every tree watch at or below `name`; the next plan pass watches
+   * whatever is there now. Returns whether there were any.
+   */
+  const retireWatchesWithin = (name: string): boolean => {
+    let retired = false;
+    for (const [key, watched] of Array.from(treeWatches)) {
+      if (!watched.target.relative || !isInsideTree(name, watched.target.relative)) continue;
+      treeWatches.delete(key);
+      closeQuietly(watched.handle);
+      retired = true;
+    }
+    return retired;
   };
 
   const attach = (target: WatchTarget, identity: string | null) => {

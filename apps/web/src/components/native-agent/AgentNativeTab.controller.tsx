@@ -51,7 +51,6 @@ import {
   resolveReasoningId,
   withoutSuppressedComposerControls,
   type AgentModelRef,
-  type NativeAgentModelSubstitution,
 } from "@orkestrator/protocol/native-agent";
 import { MULTI_REVIEW_REPLACED_ADDRESS_FINDINGS_SESSION_NOTICE } from "@orkestrator/protocol/multi-review";
 import {
@@ -173,6 +172,7 @@ import {
 import { queuedPromptControlRestore } from "./queued-prompt-controls";
 import {
   autoSteerNotice,
+  directSteerNotice,
   queuedSteerNote,
   shouldAutoSteer,
   steerRefusalNote,
@@ -249,6 +249,7 @@ import { NativeAgentQuestionCard } from "./NativeAgentQuestionCard";
 import { CodexPlanModeCard } from "@/components/codex/CodexPlanModeCard";
 import { nativeMessageHasPlanTool } from "@/lib/plan-tool";
 import {
+  completedTurnElapsedSeconds,
   findLatestBackendTurnElapsedSeconds,
   findLatestBackendUserTurnStartedAt,
 } from "@/lib/session-timer";
@@ -306,11 +307,6 @@ export async function enqueueNativeAsyncQuestionResponse(input: {
     mode: input.mode,
     fastMode: input.fastMode,
   });
-}
-
-/** The configured model was unavailable, so the new session started on another. */
-function announceModelSubstitution(substitution: NativeAgentModelSubstitution): void {
-  toast.info(substitution.message);
 }
 
 export function SharedNativeAgentController({
@@ -586,7 +582,8 @@ export function SharedNativeAgentController({
     initialProviderSessionId: data.sessionId,
     requireExistingResumeSession: data.requireExistingResumeSession,
     onResumeSessionReplaced: reconcileReplacedSession,
-    onModelSubstituted: announceModelSubstitution,
+    // A substituted model is reported by the session itself (a projection
+    // notice), which also covers a session its first prompt created.
     // A *new* mode-capable tab starts in build. Left undefined it would adopt
     // whatever mode the provider happens to report. A resumed session is
     // excluded deliberately: that thread already has a mode, and forcing build
@@ -700,10 +697,15 @@ export function SharedNativeAgentController({
   const clearTabInitialPrompt = usePaneLayoutStore((state) => state.clearTabInitialPrompt);
   const consumeTabAgentHandoff = usePaneLayoutStore((state) => state.consumeTabAgentHandoff);
   const clearTabAgentHandoff = usePaneLayoutStore((state) => state.clearTabAgentHandoff);
+  // The session's own capabilities once its projection arrives: one platform
+  // can serve sessions that differ (an OpenCode 1.x and a 2.x tab), and the
+  // projection is the platform table narrowed by what this session offers.
+  const attachmentCapabilities =
+    projection?.capabilities?.attachments ?? adapter.capabilities.attachments;
   const fileSearch = useFileSearch(
     data.containerId,
     envWorktreePath ?? coordinatorWorkspacePath,
-    adapter.capabilities.attachments.files || adapter.capabilities.attachments.images,
+    attachmentCapabilities.files || attachmentCapabilities.images,
   );
   const {
     isMenuOpen: fileMentionMenuOpen,
@@ -1175,7 +1177,7 @@ export function SharedNativeAgentController({
     },
     [scrollTargetNodeId, data.environmentId, tabId],
   );
-  const highlightedMessageId = useConversationScrollTarget({
+  const conversationHighlight = useConversationScrollTarget({
     environmentId: data.environmentId,
     tabId,
     isActive,
@@ -1633,7 +1635,11 @@ export function SharedNativeAgentController({
   // The running clock ticks inside the footer (`elapsedStartedAt`): holding
   // the tick here would re-render this whole tab every second of a turn.
   const elapsedStartedAt = isTurnActive ? turnStartedAt : undefined;
-  const finalElapsedSeconds = isTurnActive ? null : (completedElapsedSeconds ?? null);
+  const finalElapsedSeconds = completedTurnElapsedSeconds({
+    turnActive: isTurnActive,
+    phase,
+    completedSeconds: completedElapsedSeconds,
+  });
   const canQueue = isRunning && (projection?.capabilities.queue ?? adapter.capabilities.queue);
   // Older mocked/legacy hook surfaces have no domain availability field; a
   // complete projection remains authoritative on that compatibility path.
@@ -2084,7 +2090,7 @@ export function SharedNativeAgentController({
       const sourceAttachments = draft.attachments;
       const providerSupportedAttachments = retainSupportedAttachments(
         sourceAttachments,
-        adapter.capabilities.attachments,
+        attachmentCapabilities,
       );
       const providerSupportedIds = new Set(
         providerSupportedAttachments.map((attachment) => attachment.id),
@@ -2226,16 +2232,22 @@ export function SharedNativeAgentController({
           // Only `/steer` resolves here: it alone acts on the live turn.
           const outcome = await performAction({ kind: "steer", text: sessionAction.text });
           if (outcome.outcome === "applied") {
+            // Also a steer that missed its turn: the backend sent it as a new
+            // turn or queued it (`deliveredAs`), so there is nothing to resend.
             clearDraft(sessionKey);
             discardProvisionalDraft();
-            toast.success(`Sent to the active ${label} turn`);
+            const notice = directSteerNotice(outcome, label);
+            if (notice.tone === "success") toast.success(notice.message);
+            else toast.info(notice.message);
             return true;
           }
           // An unconfirmed steer is a parked dispatch like any other: the
           // recovery card owns that message, so a transient red error here
           // would duplicate it and flash before the card settles.
           // A definitive refusal was not sent; its message says to resend after
-          // the turn, and the draft is restored below for exactly that.
+          // the turn, and the draft is restored below for exactly that. Only a
+          // backend that predates delivering a missed steer still answers
+          // `idle` or `mismatch` here.
           if (outcome.outcome !== "unknown") {
             reportSendError(
               outcome.outcome === "rejected"
@@ -2568,7 +2580,7 @@ export function SharedNativeAgentController({
     [
       composeScope,
       composeDrafts,
-      adapter.capabilities.attachments,
+      attachmentCapabilities,
       autoSteerEnabled,
       beforeSend,
       rememberSteerRefusal,
@@ -2768,8 +2780,8 @@ export function SharedNativeAgentController({
       const resolved = resolveWorkspaceAttachment(file, {
         containerId: data.containerId,
         worktreePath: envWorktreePath ?? coordinatorWorkspacePath,
-        allowFiles: adapter.capabilities.attachments.files,
-        allowImages: adapter.capabilities.attachments.images,
+        allowFiles: attachmentCapabilities.files,
+        allowImages: attachmentCapabilities.images,
         modelSupportsImages: selectedModel?.supportsImageInput,
         modelLabel: selectedModel?.label,
         attachedCount: current?.attachments.length ?? 0,
@@ -2784,8 +2796,8 @@ export function SharedNativeAgentController({
     },
     [
       composeDrafts,
-      adapter.capabilities.attachments.files,
-      adapter.capabilities.attachments.images,
+      attachmentCapabilities.files,
+      attachmentCapabilities.images,
       data.containerId,
       envWorktreePath,
       coordinatorWorkspacePath,
@@ -2824,7 +2836,7 @@ export function SharedNativeAgentController({
     onAttach: handlePastedImage,
     canAttachImage: () =>
       !queueEditPendingRef.current &&
-      adapter.capabilities.attachments.images &&
+      attachmentCapabilities.images &&
       selectedModel?.supportsImageInput !== false,
     onImageRejected: () => toast.error("Images are not supported by this agent"),
     logLabel: "SharedNativeAgentController",
@@ -4003,7 +4015,7 @@ export function SharedNativeAgentController({
       scrollToBottom={scrollToBottom}
       scrollProps={scrollProps}
       virtuosoRef={virtuosoRef}
-      highlightedMessageId={highlightedMessageId}
+      conversationHighlight={conversationHighlight}
       blockingCards={[
         // In a pane with a notice layer the prompts float with its other notices.
         ...(agentPrompts.length > 0 && !floatingNotices
@@ -4184,8 +4196,7 @@ export function SharedNativeAgentController({
           primaryControls={
             composer ? (
               <>
-                {adapter.capabilities.attachments.files ||
-                adapter.capabilities.attachments.images ? (
+                {attachmentCapabilities.files || attachmentCapabilities.images ? (
                   <NativeAttachmentMenu
                     disabled={queueEditPending || (sendLocked && !canQueue)}
                     fileSearch={fileSearch}

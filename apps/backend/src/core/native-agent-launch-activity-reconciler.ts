@@ -35,6 +35,7 @@ import {
 } from "@orkestrator/protocol/coordinator";
 import { nativeAsyncQuestionItemId } from "@orkestrator/protocol/native-agent";
 import { coordinatorRuntimeEnvironment } from "./coordinator-runtime.js";
+import { runtimeStillLive } from "./native-agent-runtime-liveness.js";
 import { ProviderRegistry, providerCacheKey } from "./native-agent-provider-registry.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import {
@@ -1604,13 +1605,21 @@ export class NativeAgentLaunchActivityReconciler {
     const now = Date.now();
     const environments = await this.storage.loadEnvironments();
     if (this.host.isStopped()) return 0;
-    await this.providerRegistry.prune(
-      new Set(
-        environments
-          .filter((environment) => !environment.deletionRequestedAt)
-          .map((environment) => environment.id),
-      ),
+    const live = new Set(
+      environments
+        .filter((environment) => !environment.deletionRequestedAt)
+        .map((environment) => environment.id),
     );
+    // A coordinator conversation or bug report has no environment row. Its
+    // provider is live while its runtime resolves; pruning it anyway disposed
+    // a provider an ensure was still using (an OpenCode 2 coordinator's first
+    // session, waiting on its server's cold start, failed as "disposed").
+    for (const id of this.providerRegistry.cachedEnvironmentIds()) {
+      if (live.has(id) || !(await runtimeStillLive(this.storage, id))) continue;
+      live.add(id);
+    }
+    if (this.host.isStopped()) return 0;
+    await this.providerRegistry.prune(live);
     if (this.host.isStopped()) return 0;
     const pending = environments.filter(
       (environment) =>

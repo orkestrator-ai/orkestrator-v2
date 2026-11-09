@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  completedTurnElapsedSeconds,
   findLatestBackendTurnElapsedSeconds,
   findLatestBackendUserTurnStartedAt,
   parseBackendTurnStartedAt,
@@ -168,5 +169,27 @@ describe("session-timer helpers", () => {
         ),
       ).toBeUndefined();
     });
+  });
+});
+
+describe("completedTurnElapsedSeconds", () => {
+  test("reports a completed turn's duration only once it has really ended", () => {
+    expect(
+      completedTurnElapsedSeconds({ turnActive: false, phase: "idle", completedSeconds: 45 }),
+    ).toBe(45);
+    expect(
+      completedTurnElapsedSeconds({ turnActive: true, phase: "running", completedSeconds: 45 }),
+    ).toBeNull();
+    // Waiting on an approval or question: not active for Stop, but not completed.
+    expect(
+      completedTurnElapsedSeconds({ turnActive: false, phase: "blocked", completedSeconds: 0 }),
+    ).toBeNull();
+    expect(
+      completedTurnElapsedSeconds({
+        turnActive: false,
+        phase: "idle",
+        completedSeconds: undefined,
+      }),
+    ).toBeNull();
   });
 });

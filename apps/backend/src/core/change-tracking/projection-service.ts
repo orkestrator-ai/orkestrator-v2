@@ -237,6 +237,15 @@ export class ChangeProjectionService {
       const unavailable =
         freshness?.unavailableReason ??
         (turn && this.ledger.turnRetired(turn) ? "history-expired" : null);
+      // A thread whose first measured turn is still running reads as live work
+      // in progress rather than as a load that has not answered.
+      const segment =
+        !unavailable && parts.ownerKind === "segment" && parts.selector === "live"
+          ? this.ledger.segment(parts.ownerId)
+          : null;
+      const inProgress =
+        segment !== null &&
+        this.ledger.segmentTurnProgress(segment.thread_id, segment.segment_id) === "executing";
       return {
         ...base,
         measurementId: null,
@@ -249,7 +258,11 @@ export class ChangeProjectionService {
         badge: { visible: Boolean(unavailable), mode: unavailable ? "unknown" : "none" },
         counters: { additions: unknownCount(), deletions: unknownCount(), changedFiles: null },
         provenanceLabelKey: "changes.provenance.unknown",
-        reasonKeys: unavailable ? [`changes.reason.${unavailable}`] : [],
+        reasonKeys: unavailable
+          ? [`changes.reason.${unavailable}`]
+          : inProgress
+            ? ["changes.reason.provisional"]
+            : [],
         detail: null,
         filePage: null,
         actions: parts.selector === "live" ? [this.refreshAction(resourceKey)] : [],

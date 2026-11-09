@@ -2333,6 +2333,38 @@ describe("syncContainerLogin for OpenCode and Pi", () => {
     for (const provider of providers) (context.credentialSources as Set<string>).add(provider);
   }
 
+  test("host login sync mirrors renewed OpenCode credentials into the running 2.x API", async () => {
+    enable("opencode");
+    const fake = fakeRunners(null);
+    const mirrored: string[] = [];
+    const runners = {
+      ...fake.runners,
+      mirrorOpenCode2: async (_id: string, payload: string) => {
+        mirrored.push(payload);
+      },
+    };
+    for (const access of ["initial-access", "renewed-access"]) {
+      await write(
+        opencodeAuth(),
+        JSON.stringify({
+          openai: { type: "oauth", access, refresh: "never-transfer-refresh", expires: live() },
+        }),
+      );
+      expect(await syncContainerLogin(context, "opencode", "container-1", runners)).toBe("applied");
+    }
+    expect(mirrored).toHaveLength(2);
+    expect(JSON.parse(mirrored[1]!).logins.openai.access).toBe("renewed-access");
+    expect(mirrored.join("")).not.toContain("never-transfer-refresh");
+    expect(
+      await syncContainerLogin(context, "opencode", "container-1", {
+        ...runners,
+        mirrorOpenCode2: async () => {
+          throw new Error("API unavailable");
+        },
+      }),
+    ).toBe("failed");
+  });
+
   test("pipes the host's logins in as an access-only merge", async () => {
     enable("opencode", "pi");
     const expires = live();

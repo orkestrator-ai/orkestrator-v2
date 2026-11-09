@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { stripUserCommandContext } from "@orkestrator/protocol/user-commands";
 import { stripCoordinatorContext } from "@orkestrator/protocol/coordinator";
 import {
+  isNativeAgentModelSubstitution,
   recoverBackgroundTaskLaunchId,
   type NativeAgentContextUsage,
   type NativeAgentNotice,
@@ -30,6 +31,7 @@ import type {
 import { NATIVE_HISTORY_PAGE_MAX_TARGET_BYTES } from "./native-agent-service-shared.js";
 import { retiredDispatchNotice } from "./native-agent-retired-dispatch.js";
 import { sessionTitleSourceText } from "./session-title-text.js";
+import type { PersistedNativeAgentSession } from "./models.js";
 
 const IMAGE_MIME_TYPES = new Map([
   [".png", "image/png"],
@@ -137,13 +139,44 @@ export function imageMimeType(filePath: string): string {
   return IMAGE_MIME_TYPES.get(path.extname(filePath).toLowerCase()) ?? "image/png";
 }
 
+/** How long a new session's model substitution stays on its tab. */
+export const MODEL_SUBSTITUTION_NOTICE_MS = 10 * 60_000;
+
+/**
+ * The notice saying a new session runs on a different model than it asked
+ * for, while that is still news: the session is under
+ * {@link MODEL_SUBSTITUTION_NOTICE_MS} old and still on the substitute (a
+ * later pick of another model retires it). Its occurrence id is the session's
+ * creation, so one dismissal holds for every tab showing it.
+ */
+export function sessionModelSubstitutionNotice(
+  session: Pick<PersistedNativeAgentSession, "modelSubstitutionNotice" | "controls" | "createdAt">,
+  now: number,
+): NativeAgentNotice | undefined {
+  const substitution = session.modelSubstitutionNotice;
+  if (!isNativeAgentModelSubstitution(substitution)) return undefined;
+  if (session.controls?.modelId !== substitution.modelId) return undefined;
+  const createdAt = Date.parse(session.createdAt);
+  if (!Number.isFinite(createdAt) || now - createdAt >= MODEL_SUBSTITUTION_NOTICE_MS) {
+    return undefined;
+  }
+  return {
+    kind: "advisory",
+    severity: "info",
+    message: substitution.message,
+    occurrenceId: `model-substitution:${session.createdAt}`,
+  };
+}
+
 export function visibleProjectionNotices(
   agent: BuildPipelineAgent,
   notices: readonly NativeAgentNotice[] | undefined,
   incompleteTurn: IncompleteTurnNotice | undefined,
   retiredDispatch?: NativeAgentRetiredDispatch,
+  modelSubstitution?: NativeAgentNotice,
 ): NativeAgentNotice[] {
   const owned: NativeAgentNotice[] = [];
+  if (modelSubstitution) owned.push(modelSubstitution);
   if (incompleteTurn) {
     const label = AGENT_PLATFORM_LABELS[agent] ?? agent;
     owned.push({

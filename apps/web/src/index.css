@@ -168,8 +168,22 @@
   --color-input: #262a32;
   /* Shared raised surface for text fields, selects, and agent compose bars. */
   --color-input-surface: color-mix(in srgb, var(--color-zinc-900) 90%, transparent);
+  /*
+   * The compose bar's surface. Opaque, unlike `input-surface`: the compose dock
+   * floats over a transcript that scrolls beneath it, and a translucent card
+   * let that text show through whatever the user was typing.
+   */
+  --color-compose-surface: var(--color-zinc-900);
   --color-primary: #3b82f6;
   --color-primary-foreground: #ffffff;
+  /*
+   * The fill for a control that carries white text or glyphs (filled buttons,
+   * the selected segment, Send). White on `--color-primary` is 3.7:1, below
+   * WCAG AA for 14px text; this deeper step of the same blue is 5.2:1.
+   * `--color-primary` stays the signal blue for links, rings, bars and dots,
+   * which sit on the dark ground where a darker blue would lose contrast.
+   */
+  --color-primary-fill: #2563eb;
   --color-secondary: #23262e;
   --color-secondary-foreground: #e7e9ee;
   --color-accent: #23262e;
@@ -928,6 +942,20 @@ body[data-orkestrator-dev-profile]::before {
  * line height so the editor still displays the configured twelve lines before
  * it scrolls. The capability query leaves mouse/trackpad layouts unchanged.
  */
+/*
+ * Touch targets on coarse pointers: 40px, the floor DESIGN.md sets for touch.
+ * The compose toolbar, a message's fork/copy actions and a tab's close button
+ * are 24–28px for a mouse; a thumb next to Send needs the room.
+ */
+@media (hover: none) and (pointer: coarse) {
+  [data-native-compose-toolbar] button,
+  [data-message-actions] button,
+  [data-tab-close] {
+    min-height: 2.5rem;
+    min-width: 2.5rem;
+  }
+}
+
 @media (hover: none) and (pointer: coarse) {
   .native-compose-input {
     font-size: 16px;

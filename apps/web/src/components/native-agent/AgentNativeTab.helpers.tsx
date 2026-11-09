@@ -1160,6 +1160,7 @@ export function UnassignedNativeAgentComposer({
               {canConfigureMode ? (
                 <ComposerIconPicker
                   label="Mode"
+                  shortcut="Shift+Tab"
                   testId="launch-mode-picker"
                   disabled={disabled}
                   options={LAUNCH_EXECUTION_PROFILES.map((profile) =>
@@ -1173,6 +1174,7 @@ export function UnassignedNativeAgentComposer({
               ) : canConfigureExecutionProfile ? (
                 <ComposerIconPicker
                   label="Mode"
+                  shortcut="Shift+Tab"
                   testId="launch-execution-profile-picker"
                   disabled={disabled}
                   options={LAUNCH_EXECUTION_PROFILES.map((profile) =>

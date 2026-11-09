@@ -231,7 +231,7 @@ test("compose controls stay reachable in a narrow viewport", async ({ page }, te
     fullyInsidePrimary: true,
     fullyInsideViewport: true,
   });
-  await expect(picker).toHaveAccessibleName(/\(High\)$/);
+  await expect(picker).toHaveAccessibleName(/· High$/);
 
   await picker.click();
   await page.locator("[data-native-mobile-speed-trigger]").click();

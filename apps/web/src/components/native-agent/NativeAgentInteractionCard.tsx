@@ -83,7 +83,7 @@ function ToolHintTag({ tag }: { tag: keyof typeof TOOL_HINT_TAGS }) {
   return (
     <span
       className={cn(
-        "inline-flex shrink-0 items-center rounded-full border px-1.5 py-px text-[10px] leading-4 font-medium",
+        "inline-flex shrink-0 items-center rounded-full border px-1.5 py-px text-[11px] leading-4 font-medium",
         className,
       )}
       title={`The MCP server describes this tool as ${tag}. Servers declare this themselves; it is not verified.`}

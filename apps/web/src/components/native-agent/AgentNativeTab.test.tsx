@@ -2727,7 +2727,7 @@ describe("AgentNativeTab", () => {
     expect(input.style.minHeight).toBe("28px");
     expect(screen.getByText("Ask an agent anything…")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Add attachment" })).toBeTruthy();
-    expect(screen.getByText("Ready to build!")).toBeTruthy();
+    expect(screen.getByText("Ready to build")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Resume Session" })).toBeTruthy();
     expect(screen.getByTestId("compose-dock").className).toContain("top-1/2");
     expect(screen.getByTestId("unassigned-native-compose-bar").className).toContain("rounded-xl");
@@ -12981,7 +12981,8 @@ describe("AgentNativeTab", () => {
       );
 
       const trigger = await screen.findByRole("button", { name: "Approvals: Bypass" });
-      expect(trigger.textContent).toBe("");
+      // A mode that skips asking is named in words, not only by its icon.
+      expect(trigger.textContent).toBe("Bypass");
       fireEvent.pointerDown(trigger);
       fireEvent.click(await screen.findByRole("menuitemradio", { name: "Ask" }));
       await waitFor(() => expect(updateNativeAgentControlsMock).toHaveBeenCalled());

@@ -46,8 +46,8 @@ export function ChangeStateTag({
       data-change-state={provisional ? "live" : projection.state}
       title={reason ?? undefined}
       className={cn(
-        "flex shrink-0 items-center gap-1 text-[10px] uppercase tracking-wide",
-        provisional ? "text-amber-600 dark:text-amber-400" : "text-muted-foreground",
+        "flex shrink-0 items-center gap-1 text-[11px] uppercase tracking-wide",
+        provisional ? "text-success" : "text-muted-foreground",
         className,
       )}
     >

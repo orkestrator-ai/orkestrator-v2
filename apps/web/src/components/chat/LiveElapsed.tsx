@@ -13,7 +13,7 @@ import { formatElapsed } from "@/lib/format-elapsed";
 export function LiveElapsed({
   startedAt,
   running = true,
-  className = "text-xs text-muted-foreground/50",
+  className = "text-xs text-muted-foreground",
 }: {
   startedAt: number;
   running?: boolean;

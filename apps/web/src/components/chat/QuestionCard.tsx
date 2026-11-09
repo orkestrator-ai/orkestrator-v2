@@ -306,7 +306,7 @@ function QuestionItem({
                         <Check className="h-3 w-3 text-primary-foreground" />
                       </div>
                     ) : (
-                      <Circle className="h-4 w-4 text-muted-foreground/50" />
+                      <Circle className="h-4 w-4 text-muted-foreground" />
                     )}
                   </div>
                   <div className="min-w-0 flex-1">

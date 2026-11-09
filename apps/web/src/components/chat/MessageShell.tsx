@@ -204,7 +204,10 @@ export function MessageShell({
                   <span />
                 )}
                 {actions ? (
-                  <div className="flex shrink-0 items-center gap-1 opacity-100 transition-opacity duration-150 md:hover-fine:opacity-0 md:hover-fine:group-hover:opacity-100 md:hover-fine:focus-within:opacity-100">
+                  <div
+                    data-message-actions=""
+                    className="flex shrink-0 items-center gap-1 opacity-100 transition-opacity duration-150 md:hover-fine:opacity-0 md:hover-fine:group-hover:opacity-100 md:hover-fine:focus-within:opacity-100"
+                  >
                     {actions}
                   </div>
                 ) : null}
@@ -220,7 +223,11 @@ export function MessageShell({
               )}
             >
               {metadata ? <span>{metadata}</span> : null}
-              {actions ? <div className="flex items-center gap-1">{actions}</div> : null}
+              {actions ? (
+                <div data-message-actions="" className="flex items-center gap-1">
+                  {actions}
+                </div>
+              ) : null}
             </div>
           ) : null}
         </div>
@@ -245,22 +252,22 @@ export function MessageErrorAlert({
   return (
     <div className="px-2 @sm:px-4 py-3">
       <div className="max-w-3xl mx-auto min-w-0">
-        <div className="flex items-start gap-2 p-3 rounded-md bg-destructive/10 border border-destructive/20">
-          <AlertCircle className="w-4 h-4 text-destructive shrink-0 mt-0.5" />
+        <div className="flex items-start gap-2 p-3 rounded-md bg-destructive/10 border border-destructive/25">
+          <AlertCircle className="w-4 h-4 text-failure shrink-0 mt-0.5" />
           <div className="flex-1 min-w-0">
             <div
               data-agent-chat-search-content="true"
-              className="text-sm text-destructive whitespace-pre-wrap break-words"
+              className="text-sm text-failure whitespace-pre-wrap break-words"
             >
               {content}
             </div>
             {details ? (
-              <div className="text-xs text-destructive/75 whitespace-pre-wrap break-words mt-2">
+              <div className="text-xs text-failure/85 whitespace-pre-wrap break-words mt-2">
                 {details}
               </div>
             ) : null}
             {action ? <div className="mt-3">{action}</div> : null}
-            <div className="text-[10px] text-destructive/60 mt-1">{timestampLabel}</div>
+            <div className="text-[11px] text-muted-foreground mt-1">{timestampLabel}</div>
           </div>
         </div>
       </div>

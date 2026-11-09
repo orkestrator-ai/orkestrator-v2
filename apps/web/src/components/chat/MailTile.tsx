@@ -341,7 +341,7 @@ export const MailTile = memo(function MailTile({
               <span
                 data-mail-status={mail.status.tone}
                 className={cn(
-                  "mt-px shrink-0 rounded px-1.5 text-[10px] leading-4",
+                  "mt-px shrink-0 rounded px-1.5 text-[11px] leading-4",
                   AGENT_MAIL_STATUS_TONE_CLASS[mail.status.tone],
                 )}
               >
@@ -349,7 +349,7 @@ export const MailTile = memo(function MailTile({
               </span>
             ) : null}
             {timestampLabel ? (
-              <span className="mt-px shrink-0 text-[10px] tabular-nums text-muted-foreground">
+              <span className="mt-px shrink-0 text-[11px] tabular-nums text-muted-foreground">
                 {timestampLabel}
               </span>
             ) : null}

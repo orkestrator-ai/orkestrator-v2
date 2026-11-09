@@ -1,7 +1,11 @@
 import { createRef, useState } from "react";
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
-import { MentionableInput, type MentionableInputRef } from "./MentionableInput";
+import {
+  MentionableInput,
+  isEditorVisuallyEmpty,
+  type MentionableInputRef,
+} from "./MentionableInput";
 import type { FileMention } from "@/types";
 
 describe("MentionableInput", () => {
@@ -1398,5 +1402,36 @@ describe("MentionableInput", () => {
     fireEvent.input(input);
 
     expect(onChange).toHaveBeenCalledWith("Please Check @utils.ts", [mention]);
+  });
+});
+
+describe("isEditorVisuallyEmpty", () => {
+  const editor = (html: string) => {
+    const element = document.createElement("div");
+    element.innerHTML = html;
+    return element;
+  };
+
+  test("treats the browser's leftover line-break placeholder as empty", () => {
+    expect(isEditorVisuallyEmpty(editor("<br>"))).toBe(true);
+    expect(isEditorVisuallyEmpty(editor("<div><br></div>"))).toBe(true);
+    expect(isEditorVisuallyEmpty(editor(""))).toBe(true);
+  });
+
+  test("keeps text and mentions", () => {
+    expect(isEditorVisuallyEmpty(editor("hi<br>"))).toBe(false);
+    expect(isEditorVisuallyEmpty(editor('<span data-mention="true"></span><br>'))).toBe(false);
+  });
+
+  test("a cleared editor reports an empty draft, not a newline", () => {
+    const onChange = mock((_text: string) => {});
+    const { container } = render(
+      <MentionableInput value="hello" mentions={[]} onChange={onChange} placeholder="Message" />,
+    );
+    const input = container.querySelector('[contenteditable="true"]') as HTMLElement;
+    input.innerHTML = "<br>";
+    fireEvent.input(input);
+    expect(onChange).toHaveBeenLastCalledWith("", []);
+    expect(input.childNodes.length).toBe(0);
   });
 });

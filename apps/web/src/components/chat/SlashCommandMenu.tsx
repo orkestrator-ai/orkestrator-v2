@@ -240,7 +240,7 @@ export function SlashCommandMenu<TCommand extends SlashCommandOption>({
                   {showHeaders ? (
                     <div
                       id={headerId}
-                      className="px-2 pt-2 pb-1 text-[10px] font-semibold tracking-wide text-zinc-500 uppercase"
+                      className="px-2 pt-2 pb-1 text-[11px] font-semibold tracking-wide text-zinc-500 uppercase"
                     >
                       {label}
                     </div>
@@ -294,7 +294,7 @@ export function SlashCommandMenu<TCommand extends SlashCommandOption>({
                           </span>
                         ) : null}
                         {hasQuery && command.source ? (
-                          <span className="shrink-0 rounded bg-zinc-800 px-1 text-[10px] text-zinc-400">
+                          <span className="shrink-0 rounded bg-zinc-800 px-1 text-[11px] text-zinc-400">
                             {SOURCE_LABELS[command.source]}
                           </span>
                         ) : null}

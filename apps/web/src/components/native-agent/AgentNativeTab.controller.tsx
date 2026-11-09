@@ -192,6 +192,7 @@ import {
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useShallow } from "zustand/react/shallow";
+import { EnvironmentContainmentTag } from "./EnvironmentContainmentTag";
 import {
   nativeComposeDraft,
   nativeComposePersistence,
@@ -4325,6 +4326,7 @@ export function SharedNativeAgentController({
                 {!isReadOnlyCoordinator && composer.modes.length > 0 ? (
                   <ComposerIconPicker
                     label="Mode"
+                    shortcut="Shift+Tab"
                     testId="native-mode-picker"
                     disabled={settingsLocked}
                     options={composer.modes.map((mode) =>
@@ -4338,6 +4340,7 @@ export function SharedNativeAgentController({
                 ) : !isReadOnlyCoordinator && composeExecutionProfiles.length > 0 ? (
                   <ComposerIconPicker
                     label="Mode"
+                    shortcut="Shift+Tab"
                     testId="native-execution-profile-picker"
                     disabled={settingsLocked}
                     options={composeExecutionProfiles.map((profile) =>
@@ -4587,6 +4590,7 @@ export function SharedNativeAgentController({
                   environmentId={data.environmentId}
                   logicalSessionKey={sessionKey}
                   turnActive={isTurnActive}
+                  containment={<EnvironmentContainmentTag environmentId={data.environmentId} />}
                 />
                 <div className="min-h-0 flex-1">{chatShell}</div>
                 {floatingNotices && agentPrompts.length > 0 ? (

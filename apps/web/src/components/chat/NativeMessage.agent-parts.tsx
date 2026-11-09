@@ -181,7 +181,7 @@ function backgroundTaskDurationMs(
 function RuntimeLabel({ value, className }: { value?: string; className?: string }) {
   if (!value) return null;
   return (
-    <div className={cn("shrink-0 tabular-nums text-[11px] text-muted-foreground/70", className)}>
+    <div className={cn("shrink-0 tabular-nums text-[11px] text-muted-foreground", className)}>
       {value}
     </div>
   );
@@ -276,7 +276,7 @@ function AgentMetaRows({ entries }: { entries: Array<{ label: string; value: str
     <dl className="mb-3 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-xs">
       {entries.map((entry) => (
         <Fragment key={entry.label}>
-          <dt className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
+          <dt className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
             {entry.label}
           </dt>
           <dd className="min-w-0 truncate text-muted-foreground/90">{entry.value}</dd>
@@ -295,7 +295,7 @@ function AgentResultBlock({ result }: { result?: string }) {
   if (!result) return null;
   return (
     <div className="mb-3 border-l border-border/30 pl-3">
-      <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
+      <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
         Result
       </div>
       <div className="max-h-64 overflow-auto">
@@ -355,7 +355,7 @@ function UsageStatsRow({
 }) {
   if (toolUses === undefined && !tokenCountText && updates === undefined) return null;
   return (
-    <div className="flex items-center justify-end gap-2.5 whitespace-nowrap text-[11px] text-muted-foreground/70">
+    <div className="flex items-center justify-end gap-2.5 whitespace-nowrap text-[11px] text-muted-foreground">
       {toolUses !== undefined ? (
         <UsageStat
           icon={Wrench}
@@ -728,7 +728,7 @@ function BackgroundTaskTextBlock({
 }) {
   return (
     <div className="mb-3 border-l border-border/30 pl-3">
-      <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
+      <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
         {label}
       </div>
       <pre
@@ -785,9 +785,9 @@ function BackgroundTaskChildList({
   const live = tasks.filter((task) => backgroundTaskPresentation(task).live).length;
   return (
     <section aria-label={`${tasks.length} launched tasks`} className="mb-3">
-      <div className="mb-1 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
+      <div className="mb-1 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
         <span>Launched tasks</span>
-        <span className="font-normal tabular-nums text-muted-foreground/50">{tasks.length}</span>
+        <span className="font-normal tabular-nums text-muted-foreground">{tasks.length}</span>
         {live > 0 ? (
           <span className="ml-auto font-medium normal-case tracking-normal text-amber-600 dark:text-amber-300">
             {live} active
@@ -830,7 +830,7 @@ function BackgroundTaskOutputFile({ path, containerId }: { path: string; contain
 
   return (
     <div className="mb-3 border-l border-border/30 pl-3">
-      <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
+      <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
         Output file
       </div>
       <div className="flex min-w-0 items-center gap-1">
@@ -845,7 +845,7 @@ function BackgroundTaskOutputFile({ path, containerId }: { path: string; contain
             type="button"
             variant="ghost"
             size="icon-sm"
-            className="h-6 w-6 shrink-0 p-0 text-muted-foreground/70 hover:text-foreground"
+            className="h-6 w-6 shrink-0 p-0 text-muted-foreground hover:text-foreground"
             onClick={reveal}
             aria-label="Reveal output file"
             title="Reveal in file manager"
@@ -857,7 +857,7 @@ function BackgroundTaskOutputFile({ path, containerId }: { path: string; contain
           type="button"
           variant="ghost"
           size="icon-sm"
-          className="h-6 w-6 shrink-0 p-0 text-muted-foreground/70 hover:text-foreground"
+          className="h-6 w-6 shrink-0 p-0 text-muted-foreground hover:text-foreground"
           onClick={() => void copy()}
           aria-label={copied ? "Copied output file path" : "Copy output file path"}
           title={copied ? "Copied" : "Copy path"}
@@ -881,7 +881,7 @@ function BackgroundTaskDetails({
     <>
       {backgroundTaskOutcome(task).map((line) => (
         <div key={line.label} className="mb-3 border-l border-border/30 pl-3">
-          <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
+          <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
             {line.label}
           </div>
           <pre
@@ -1288,7 +1288,7 @@ export function SubagentPart({
         <div className="border-t border-border/40 px-3 py-3">
           {prompt ? (
             <div className="mb-3 border-l border-border/30 pl-3">
-              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
+              <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
                 Task
               </div>
               <MessageMarkdown
@@ -1317,9 +1317,7 @@ export function SubagentPart({
               />
             ))}
             {subagentActions.length === 0 && !hideCounts ? (
-              <div className="px-3 py-2 text-xs text-muted-foreground/70">
-                No child actions yet.
-              </div>
+              <div className="px-3 py-2 text-xs text-muted-foreground">No child actions yet.</div>
             ) : null}
           </div>
         </div>
@@ -1347,12 +1345,10 @@ export function AgentGroupPart({
 
   return (
     <section aria-label={`${part.parts.length} agents`} className="relative my-1">
-      <div className="flex h-6 items-center gap-1.5 px-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/70">
+      <div className="flex h-6 items-center gap-1.5 px-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
         <Layers className="h-3 w-3" />
         <span>Agents</span>
-        <span className="font-normal tabular-nums text-muted-foreground/50">
-          {part.parts.length}
-        </span>
+        <span className="font-normal tabular-nums text-muted-foreground">{part.parts.length}</span>
         {activeCount > 0 ? (
           <span className="ml-auto font-medium normal-case tracking-normal text-amber-600 dark:text-amber-300">
             {activeCount} active
@@ -1522,7 +1518,7 @@ export function TaskGroupPart({
                   {displayLabel}
                 </span>
                 {headerDescription ? (
-                  <span className="min-w-0 truncate text-sm text-muted-foreground/75">
+                  <span className="min-w-0 truncate text-sm text-muted-foreground">
                     {headerDescription}
                   </span>
                 ) : null}
@@ -1575,7 +1571,7 @@ export function TaskGroupPart({
         <div className="border-t border-border/40 px-3 py-3">
           {prompt ? (
             <div className="mb-3 border-l border-border/30 pl-3">
-              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
+              <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
                 Task
               </div>
               <MessageMarkdown
@@ -1602,9 +1598,7 @@ export function TaskGroupPart({
               />
             ))}
             {part.childTools.length === 0 && childTasks.length === 0 && !hideCounts ? (
-              <div className="px-3 py-2 text-xs text-muted-foreground/70">
-                No child actions yet.
-              </div>
+              <div className="px-3 py-2 text-xs text-muted-foreground">No child actions yet.</div>
             ) : null}
           </div>
         </div>

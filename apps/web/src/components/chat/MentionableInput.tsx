@@ -91,6 +91,19 @@ function extractText(element: HTMLElement): string {
   return text;
 }
 
+/**
+ * True when the editor holds no text, only the line-break placeholder a
+ * browser leaves behind (select all, then Delete, leaves `<br>` or
+ * `<div><br></div>`). That placeholder is not a newline the user typed.
+ */
+export function isEditorVisuallyEmpty(element: HTMLElement): boolean {
+  if ((element.textContent ?? "") !== "") return false;
+  if (element.querySelector('[data-mention="true"]')) return false;
+  return Array.from(element.querySelectorAll("*")).every(
+    (node) => node.tagName === "BR" || isBlockElement(node as HTMLElement),
+  );
+}
+
 function getCursorOffset(element: HTMLElement): number {
   const selection = window.getSelection();
   if (!selection || selection.rangeCount === 0) {
@@ -486,6 +499,12 @@ export const MentionableInput = forwardRef<MentionableInputRef, MentionableInput
     const handleInput = useCallback(() => {
       if (!inputRef.current || isComposingRef.current) return;
 
+      // A cleared editor keeps the browser's `<br>` placeholder, which would
+      // otherwise read as a "\n" draft: the placeholder text never returned
+      // and the stray draft followed the user to other clients.
+      if (inputRef.current.childNodes.length > 0 && isEditorVisuallyEmpty(inputRef.current)) {
+        inputRef.current.replaceChildren();
+      }
       const newText = extractText(inputRef.current);
       const remainingMentions = mentions.filter((mention) =>
         newText.includes(`@${mention.filename}`),

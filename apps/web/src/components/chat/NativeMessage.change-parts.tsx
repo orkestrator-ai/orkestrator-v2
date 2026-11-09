@@ -351,7 +351,7 @@ export function ChangeRoleSection({
         />
       </div>
       {projection.reasonKeys.length > 0 && (
-        <ul className="mt-0.5 text-[10px] text-muted-foreground">
+        <ul className="mt-0.5 text-[11px] text-muted-foreground">
           {projection.reasonKeys.map((reason) => (
             <li key={reason}>{changeReason(reason)}</li>
           ))}
@@ -530,7 +530,7 @@ export function LegacyPayloadBadge({ summary }: { summary: LegacyPayloadSummary 
 export function LegacyPayloadBody({ summary }: { summary: LegacyPayloadSummary }) {
   return (
     <div data-testid="legacy-change-body">
-      <div className="px-3 py-1 text-[10px] text-muted-foreground">
+      <div className="px-3 py-1 text-[11px] text-muted-foreground">
         {changeLabel(summary.provenanceLabelKey)}
         {summary.reasonKeys.length > 0 && ` — ${summary.reasonKeys.map(changeReason).join("; ")}`}
       </div>

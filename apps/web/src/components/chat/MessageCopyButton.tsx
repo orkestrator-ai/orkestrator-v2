@@ -44,10 +44,7 @@ export function MessageCopyButton({
         type="button"
         variant="ghost"
         size="icon-sm"
-        className={cn(
-          "h-6 w-6 p-0 text-muted-foreground/70 hover:text-foreground",
-          buttonClassName,
-        )}
+        className={cn("h-6 w-6 p-0 text-muted-foreground hover:text-foreground", buttonClassName)}
         onClick={handleCopy}
         aria-label={copied ? "Copied text" : "Copy text"}
         title={copied ? "Copied" : "Copy"}

@@ -26,12 +26,12 @@ export function QuestionToolDetails({
             {(question.header || question.multiSelect) && (
               <div className="flex flex-wrap items-center gap-1.5">
                 {question.header && (
-                  <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium tracking-wider text-muted-foreground uppercase">
+                  <span className="rounded bg-muted px-1.5 py-0.5 text-[11px] font-medium tracking-wider text-muted-foreground uppercase">
                     {question.header}
                   </span>
                 )}
                 {question.multiSelect && (
-                  <span className="text-[10px] text-muted-foreground/70">multi-select</span>
+                  <span className="text-[11px] text-muted-foreground">multi-select</span>
                 )}
               </div>
             )}
@@ -62,7 +62,7 @@ export function QuestionToolDetails({
                           />
                         </span>
                       ) : (
-                        <Circle className="h-3.5 w-3.5 text-muted-foreground/40" aria-hidden />
+                        <Circle className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />
                       )}
                     </span>
                     <span className="min-w-0 flex-1">

@@ -23,14 +23,14 @@ function isContainer(value: unknown): value is Record<string, unknown> | unknown
 
 function ScalarValue({ value }: { value: unknown }) {
   if (value === null || value === undefined) {
-    return <span className="text-muted-foreground/70">—</span>;
+    return <span className="text-muted-foreground">—</span>;
   }
   if (typeof value === "boolean" || typeof value === "number") {
     return <span className="font-mono text-xs text-cyan-300/90">{String(value)}</span>;
   }
   const text = String(value);
   if (text.length === 0) {
-    return <span className="text-muted-foreground/70">empty</span>;
+    return <span className="text-muted-foreground">empty</span>;
   }
   return <span className="whitespace-pre-wrap break-words text-foreground/90">{text}</span>;
 }
@@ -38,13 +38,13 @@ function ScalarValue({ value }: { value: unknown }) {
 /** An empty container is stated in place; there is nothing to fold out. */
 function EmptyValue({ value }: { value: unknown }) {
   return (
-    <span className="text-muted-foreground/70">{Array.isArray(value) ? "None" : "No fields"}</span>
+    <span className="text-muted-foreground">{Array.isArray(value) ? "None" : "No fields"}</span>
   );
 }
 
 function TruncationNote({ hidden }: { hidden: number }) {
   return (
-    <p className="pt-1 text-xs italic text-muted-foreground/70">
+    <p className="pt-1 text-xs italic text-muted-foreground">
       {hidden} more not shown — open Raw JSON for the full payload.
     </p>
   );
@@ -81,7 +81,7 @@ function Branch({
           className={cn("size-3 shrink-0 transition-transform", isOpen && "rotate-90")}
         />
         <span className="min-w-0 truncate font-medium text-foreground/85">{label}</span>
-        <span className="shrink-0 text-muted-foreground/70">{describeJsonValue(value)}</span>
+        <span className="shrink-0 text-muted-foreground">{describeJsonValue(value)}</span>
       </CollapsibleTrigger>
       <CollapsibleContent>
         <div className="ml-1.5 border-l border-border/40 pl-3">
@@ -220,7 +220,7 @@ export function JsonTree({
   // source for readers who need the rest of the document.
   if (depth >= MAX_JSON_RENDER_DEPTH) {
     return (
-      <p className="text-xs italic text-muted-foreground/70">
+      <p className="text-xs italic text-muted-foreground">
         Maximum nesting depth reached — open Raw JSON for the full payload.
       </p>
     );

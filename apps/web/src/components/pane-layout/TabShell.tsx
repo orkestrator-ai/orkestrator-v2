@@ -97,10 +97,11 @@ export const TabShell = forwardRef<HTMLDivElement, TabShellProps>(function TabSh
       {onClose && (
         <button
           type="button"
+          data-tab-close=""
           aria-label={closeLabel}
           aria-disabled={closeDisabled || undefined}
           tabIndex={closeTabIndex}
-          className="ml-1 flex h-7 w-7 items-center justify-center text-muted-foreground opacity-100 transition-opacity hover:text-red-400 focus-hairline aria-disabled:opacity-40 md:h-auto md:w-auto md:hover-fine:opacity-0 md:hover-fine:group-focus-within:opacity-100 md:hover-fine:group-hover:opacity-100 md:hover-fine:focus-visible:opacity-100"
+          className="ml-1 flex h-7 w-7 items-center justify-center text-muted-foreground opacity-100 transition-opacity hover:text-foreground focus-hairline aria-disabled:opacity-40 md:h-auto md:w-auto md:hover-fine:opacity-0 md:hover-fine:group-focus-within:opacity-100 md:hover-fine:group-hover:opacity-100 md:hover-fine:focus-visible:opacity-100"
           onClick={(event) => {
             event.stopPropagation();
             if (!closeDisabled) onClose();

@@ -71,12 +71,12 @@ export const GoalTurnTile = memo(function GoalTurnTile({
             <span className="flex-1" />
           )}
           {failedCheck || turn.failedVerdict ? (
-            <span className="shrink-0 rounded bg-red-400/10 px-1.5 text-[10px] leading-4 text-red-300">
+            <span className="shrink-0 rounded bg-red-400/10 px-1.5 text-[11px] leading-4 text-red-300">
               {failedCheck ? failedCheckLabel(failedCheck) : "Verifier failed"}
             </span>
           ) : null}
           {timestampLabel ? (
-            <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">
+            <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
               {timestampLabel}
             </span>
           ) : null}
@@ -207,7 +207,7 @@ export const GoalStatusRow = memo(function GoalStatusRow({
         {text}
       </span>
       {timestampLabel ? (
-        <span className="mt-px shrink-0 text-[10px] tabular-nums">{timestampLabel}</span>
+        <span className="mt-px shrink-0 text-[11px] tabular-nums">{timestampLabel}</span>
       ) : null}
     </>
   );

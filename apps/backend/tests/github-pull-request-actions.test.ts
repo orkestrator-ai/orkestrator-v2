@@ -25,12 +25,16 @@ import {
 } from "./github-pull-request-fixtures";
 
 const MERGE_PATH = "/repos/acme/repo/pulls/7/merge";
-const BRANCH_PATH = "/repos/acme/repo/git/refs/heads/feature/widgets";
+/** A branch named for an environment, the only kind a merge may delete. */
+const ENVIRONMENT_HEAD = "widgets-0123456789ab";
+const BRANCH_PATH = `/repos/acme/repo/git/refs/heads/${ENVIRONMENT_HEAD}`;
+const environmentPull = () =>
+  apiPull({ head: { ref: ENVIRONMENT_HEAD, sha: HEAD_SHA, repo: { full_name: "acme/repo" } } });
 
 describe("mergeGitHubPullRequest", () => {
   test("merges with the expected head SHA and deletes a same-repository branch", async () => {
     const fake = createFakeGitHub();
-    fake.on("GET", "/repos/acme/repo/pulls/7", apiPull());
+    fake.on("GET", "/repos/acme/repo/pulls/7", environmentPull());
     fake.on("PUT", MERGE_PATH, {
       merged: true,
       sha: "b".repeat(40),
@@ -88,14 +92,35 @@ describe("mergeGitHubPullRequest", () => {
     expect(kept.requests.map((request) => request.method)).toEqual(["PUT"]);
   });
 
+  test("keeps a branch that was not created for an environment, such as a release from dev", async () => {
+    for (const ref of ["dev", "feature/widgets"]) {
+      const fake = createFakeGitHub();
+      fake.on(
+        "GET",
+        "/repos/acme/repo/pulls/7",
+        apiPull({ head: { ref, sha: HEAD_SHA, repo: { full_name: "acme/repo" } } }),
+      );
+      fake.on("PUT", MERGE_PATH, { merged: true });
+      const result = await mergeGitHubPullRequest(
+        TOKEN,
+        REF,
+        { method: "squash", deleteBranch: true },
+        fake.options,
+      );
+      expect(result).toMatchObject({ merged: true, branchDeleted: false });
+      expect(fake.requests.some((request) => request.method === "DELETE")).toBe(false);
+      expect(fake.unexpected).toEqual([]);
+    }
+  });
+
   test("treats an already-deleted branch as deleted and a failed delete as a soft failure", async () => {
     const fake = createFakeGitHub();
-    fake.on("GET", "/repos/acme/repo/pulls/7", apiPull());
+    fake.on("GET", "/repos/acme/repo/pulls/7", environmentPull());
     fake.on("PUT", MERGE_PATH, { merged: true });
     fake.on("DELETE", BRANCH_PATH, () =>
       json({ message: "Reference does not exist" }, { status: 422 }),
     );
-    fake.on("GET", "/repos/acme/repo/git/ref/heads/feature/widgets", () =>
+    fake.on("GET", `/repos/acme/repo/git/ref/heads/${ENVIRONMENT_HEAD}`, () =>
       json({ message: "Not Found" }, { status: 404 }),
     );
     expect(
@@ -335,7 +360,7 @@ describe("review threads and viewed files", () => {
 
   test("marks a file viewed with the pull request node id", async () => {
     const fake = createFakeGitHub();
-    fake.on("GET", "/repos/acme/repo/pulls/7", apiPull());
+    fake.on("GET", "/repos/acme/repo/pulls/7", environmentPull());
     let variables: unknown;
     fake.onGraphql("MarkFileViewed", (request) => {
       variables = request.body?.variables;
@@ -432,13 +457,13 @@ describe("state, comments, reviewers and labels", () => {
 
 test("a 422 branch deletion refusal retains partial merge success and a warning", async () => {
   const fake = createFakeGitHub();
-  fake.on("GET", "/repos/acme/repo/pulls/7", apiPull());
+  fake.on("GET", "/repos/acme/repo/pulls/7", environmentPull());
   fake.on("PUT", MERGE_PATH, { merged: true });
   fake.on("DELETE", BRANCH_PATH, () =>
     json({ message: "Cannot delete default branch" }, { status: 422 }),
   );
-  fake.on("GET", "/repos/acme/repo/git/ref/heads/feature/widgets", {
-    ref: "refs/heads/feature/widgets",
+  fake.on("GET", `/repos/acme/repo/git/ref/heads/${ENVIRONMENT_HEAD}`, {
+    ref: `refs/heads/${ENVIRONMENT_HEAD}`,
   });
   const result = await mergeGitHubPullRequest(
     TOKEN,

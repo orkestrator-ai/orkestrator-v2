@@ -62,6 +62,8 @@ export const REVIEW_LOG_AREAS = defineLogAreas({
       "monitor.merged-tickets-close-failed":
         "The startup sweep closing Kanban tickets whose pull request merged failed; the next backend start retries.",
       "monitor.emit-failed": "A pull request monitor event could not be emitted to its sink.",
+      "branch-cleanup.kept":
+        "A merge or cleanup kept a pull request's head branch because it is not the branch created for the environment (`reason`).",
     },
   },
 });

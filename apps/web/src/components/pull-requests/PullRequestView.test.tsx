@@ -141,7 +141,7 @@ describe("PullRequestView", () => {
   });
 
   test("merging confirms the method and pins the head sha", async () => {
-    renderView(makeDetail());
+    renderView(makeDetail({ headRef: "usage-history-0123456789ab" }));
     await screen.findByText("feat: add usage history tab");
     fireEvent.click(screen.getByRole("button", { name: "Merge" }));
     const dialog = await screen.findByRole("alertdialog");
@@ -156,6 +156,21 @@ describe("PullRequestView", () => {
       deleteBranch: true,
       expectedHeadSha: "abc1234def5678",
     });
+  });
+
+  test("a branch not created for an environment is kept, such as a release from dev", async () => {
+    renderView(makeDetail({ headRef: "dev", baseRef: "main" }));
+    await screen.findByText("feat: add usage history tab");
+    fireEvent.click(screen.getByRole("button", { name: "Merge" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(
+      within(dialog).getByText(
+        "The dev branch will be kept: it was not created for an environment.",
+      ),
+    ).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Squash and merge" }));
+    await waitFor(() => expect(callsFor("merge_github_pull_request")).toHaveLength(1));
+    expect(callsFor("merge_github_pull_request")[0]).toMatchObject({ deleteBranch: false });
   });
 
   test("hides the Merge button once the pull request is merged", async () => {

@@ -5,6 +5,11 @@ import path from "node:path";
 import * as shell from "./shell.js";
 import { CommandFailedError, GitRemoteTimeoutError } from "./shell.js";
 import { resolveRemoteWorktreeStartPoint } from "./commands-files.js";
+import {
+  ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES,
+  environmentLifecycleErrorMessage,
+  MissingRemoteBaseBranchError,
+} from "./commands-error-text.js";
 
 const cleanups: Array<() => Promise<void> | void> = [];
 
@@ -262,6 +267,23 @@ describe("remote fetch failure outcomes", () => {
       signal: null,
     });
   });
+});
+
+test("a base branch missing on origin names the branch and the fix, not git's own text", async () => {
+  const git = await useRecordingGit({
+    fetchScript: 'printf "fatal: couldn\'t find remote ref dev\\n" >&2; exit 128',
+  });
+  const failure = await resolveRemoteWorktreeStartPoint(git.root, "dev").catch(
+    (error: unknown) => error,
+  );
+  expect(failure).toBeInstanceOf(MissingRemoteBaseBranchError);
+  expect((failure as Error).message).toBe(
+    'Base branch "dev" does not exist on origin. It may have been deleted or renamed. ' +
+      'Choose another base branch in the project settings, or recreate "dev" on the remote.',
+  );
+  expect(environmentLifecycleErrorMessage(failure)).toBe(
+    ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.baseBranchMissing,
+  );
 });
 
 test("preserves an exit-zero fetch output-close failure", async () => {

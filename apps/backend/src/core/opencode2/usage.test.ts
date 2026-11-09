@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { TURN_STOPPED_BY_USER_MESSAGE } from "../agent-provider-contract.js";
-import { FakeOpenCode2Server } from "./fake-server.test-support.js";
+import { FakeOpenCode2Server, fakeOpenCode2Model } from "./fake-server.test-support.js";
 import { OpenCode2Provider } from "./provider.js";
 import type { OpenCode2Message } from "./types.js";
 import { openCode2ContextUsage, openCode2TurnUsage } from "./usage.js";
@@ -82,6 +82,7 @@ afterEach(async () => {
 describe("OpenCode 2 session state", () => {
   test("usage, model and a stopped run are read from the server", async () => {
     server = new FakeOpenCode2Server();
+    server.models.push(fakeOpenCode2Model("openai", "gpt-5"));
     provider = new OpenCode2Provider(server.client(), { monitorEvents: false });
     const id = await provider.createSession("build", "x", { model: "openai/gpt-5" });
     const session = server.sessions.get(id)!;

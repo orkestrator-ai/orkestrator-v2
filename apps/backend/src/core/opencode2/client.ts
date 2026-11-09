@@ -77,7 +77,7 @@ export interface OpenCode2PromptInput extends OpenCode2UserInput {
   metadata?: Record<string, unknown>;
 }
 
-type RequestOptions = {
+export type OpenCode2RequestOptions = {
   /** Most 2.x answers are `{ data }` envelopes; `/api/info` and `interrupt` are not. */
   bare?: boolean;
   query?: Record<string, string | undefined>;
@@ -99,9 +99,38 @@ export class OpenCode2Client {
     return this.connection.baseUrl;
   }
 
-  /** The project location every request is scoped to. */
+  /** The project location every request is scoped to (`x-opencode-directory`). */
   get directory(): string {
     return this.connection.directory;
+  }
+
+  /**
+   * One bounded call to a 2.x route, for the feature modules beside this
+   * client (`models.ts`, `commands.ts`, `revert.ts`, `sessions.ts`,
+   * `credentials.ts`). Same envelope, 4xx and size rules as every typed
+   * method here; `envelope: true` returns the whole `{ data, cursor, … }`.
+   */
+  api<T = unknown>(
+    method: string,
+    path: string,
+    operation: string,
+    options: OpenCode2RequestOptions & { envelope?: false },
+  ): Promise<T>;
+  api(
+    method: string,
+    path: string,
+    operation: string,
+    options: OpenCode2RequestOptions & { envelope: true },
+  ): Promise<Record<string, unknown>>;
+  async api(
+    method: string,
+    path: string,
+    operation: string,
+    options: OpenCode2RequestOptions & { envelope?: boolean } = {},
+  ): Promise<unknown> {
+    const { envelope, ...rest } = options;
+    if (envelope) return this.requestEnvelope(method, path, operation, rest);
+    return this.request(method, path, operation, rest);
   }
 
   /** The 2.x health probe. 1.x's `/global/health` answers HTML on 2.x and must not be used. */
@@ -398,7 +427,7 @@ export class OpenCode2Client {
     method: string,
     path: string,
     operation: string,
-    options: RequestOptions = {},
+    options: OpenCode2RequestOptions = {},
   ): Promise<T> {
     const envelope = await this.requestEnvelope(method, path, operation, options);
     return envelope.data as T;
@@ -408,7 +437,7 @@ export class OpenCode2Client {
     method: string,
     path: string,
     operation: string,
-    options: RequestOptions,
+    options: OpenCode2RequestOptions,
   ): Promise<Record<string, unknown>> {
     const timeout = AbortSignal.timeout(this.connection.timeoutMs ?? OPENCODE2_DEFAULT_TIMEOUT_MS);
     const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;

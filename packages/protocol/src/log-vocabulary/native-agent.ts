@@ -105,6 +105,8 @@ export const NATIVE_AGENT_LOG_AREAS = defineLogAreas({
         "Host OpenCode uses Orkestrator's own database because the shared one has no `session` table (an OpenCode 2 database); `reason` says why.",
       "host-database.unreadable":
         "The shared OpenCode database could not be inspected, so host OpenCode opens it as usual. Error class only.",
+      "login.opencode2-mirror-failed":
+        "A provider sign-in change reached OpenCode 1 but could not be copied into the OpenCode 2 database; the user is told to retry. Error class only.",
     },
   },
   "native-agent.opencode2": {
@@ -133,6 +135,12 @@ export const NATIVE_AGENT_LOG_AREAS = defineLogAreas({
         "A container environment's 2.x server this backend started answered `/api/info` as 2.x. Environment id only.",
       "container-server.warm-incomplete":
         "The first workspace request to a container's new 2.x server failed, so its plugins load on the next one. Error class only.",
+      "resume-list.unavailable":
+        "The 2.x sessions could not be listed for the resume picker, so it shows the 1.x list alone. Error class only.",
+      "credential.mirrored":
+        "A provider sign-in change was copied into the 2.x database. `outcome` (written, removed, unchanged, skipped) only; never a provider id or value.",
+      "credential.server-exit-unclean":
+        "The private 2.x server started to copy a sign-in did not stop cleanly. Error class only.",
     },
   },
 });

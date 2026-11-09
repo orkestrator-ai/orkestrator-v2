@@ -1,6 +1,9 @@
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { extractMarkedAttachmentReferences } from "@orkestrator/protocol/initial-prompt-attachments";
-import { nativeAgentSteerRejectionMessage } from "@orkestrator/protocol/native-agent";
+import {
+  nativeAgentCapabilities,
+  nativeAgentSteerRejectionMessage,
+} from "@orkestrator/protocol/native-agent";
 /**
  * Contract suite for the single pane-level native agent tab.
  *
@@ -315,7 +318,8 @@ const defaultProjection = async (input: {
     modes: [{ id: "build" as const, label: "Build" }],
   },
   capabilities: {
-    attachments: { files: false, images: false },
+    // As a real projection does: the platform's table, narrowed per session.
+    attachments: nativeAgentCapabilities(input.agent).attachments,
     queue: false,
     resume: false,
     fork: false,
@@ -2734,6 +2738,30 @@ describe("AgentNativeTab", () => {
     expect(screen.getByRole("button", { name: "Resume Session" })).toBeTruthy();
     expect(screen.getByTestId("compose-dock").className).toContain("top-1/2");
     expect(screen.getByTestId("unassigned-native-compose-bar").className).toContain("rounded-xl");
+  });
+
+  test("the attach control follows the session's capabilities, not only its platform's", async () => {
+    // OpenCode's table offers attachments; this session's projection narrows them away.
+    getNativeAgentProjectionMock.mockImplementation(async (input) => {
+      const projection = await defaultProjection(input);
+      return {
+        ...projection,
+        capabilities: { ...projection.capabilities, attachments: { files: false, images: false } },
+      };
+    });
+    const { unmount } = renderInAppCommandScope(
+      <AgentNativeTab tabId="tab-narrowed" data={identity("opencode")} isActive />,
+    );
+    await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Add attachment" })).toBeNull(),
+    );
+    unmount();
+    getNativeAgentProjectionMock.mockImplementation(defaultProjection);
+    renderInAppCommandScope(
+      <AgentNativeTab tabId="tab-full" data={identity("opencode")} isActive />,
+    );
+    expect(await screen.findByRole("button", { name: "Add attachment" })).toBeTruthy();
   });
 
   test("an annotation-only first prompt starts the selected agent", async () => {

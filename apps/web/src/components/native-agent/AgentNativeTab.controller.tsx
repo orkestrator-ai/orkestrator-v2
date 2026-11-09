@@ -702,10 +702,15 @@ export function SharedNativeAgentController({
   const clearTabInitialPrompt = usePaneLayoutStore((state) => state.clearTabInitialPrompt);
   const consumeTabAgentHandoff = usePaneLayoutStore((state) => state.consumeTabAgentHandoff);
   const clearTabAgentHandoff = usePaneLayoutStore((state) => state.clearTabAgentHandoff);
+  // The session's own capabilities once its projection arrives: one platform
+  // can serve sessions that differ (an OpenCode 1.x and a 2.x tab), and the
+  // projection is the platform table narrowed by what this session offers.
+  const attachmentCapabilities =
+    projection?.capabilities?.attachments ?? adapter.capabilities.attachments;
   const fileSearch = useFileSearch(
     data.containerId,
     envWorktreePath ?? coordinatorWorkspacePath,
-    adapter.capabilities.attachments.files || adapter.capabilities.attachments.images,
+    attachmentCapabilities.files || attachmentCapabilities.images,
   );
   const {
     isMenuOpen: fileMentionMenuOpen,
@@ -2090,7 +2095,7 @@ export function SharedNativeAgentController({
       const sourceAttachments = draft.attachments;
       const providerSupportedAttachments = retainSupportedAttachments(
         sourceAttachments,
-        adapter.capabilities.attachments,
+        attachmentCapabilities,
       );
       const providerSupportedIds = new Set(
         providerSupportedAttachments.map((attachment) => attachment.id),
@@ -2580,7 +2585,7 @@ export function SharedNativeAgentController({
     [
       composeScope,
       composeDrafts,
-      adapter.capabilities.attachments,
+      attachmentCapabilities,
       autoSteerEnabled,
       beforeSend,
       rememberSteerRefusal,
@@ -2780,8 +2785,8 @@ export function SharedNativeAgentController({
       const resolved = resolveWorkspaceAttachment(file, {
         containerId: data.containerId,
         worktreePath: envWorktreePath ?? coordinatorWorkspacePath,
-        allowFiles: adapter.capabilities.attachments.files,
-        allowImages: adapter.capabilities.attachments.images,
+        allowFiles: attachmentCapabilities.files,
+        allowImages: attachmentCapabilities.images,
         modelSupportsImages: selectedModel?.supportsImageInput,
         modelLabel: selectedModel?.label,
         attachedCount: current?.attachments.length ?? 0,
@@ -2796,8 +2801,8 @@ export function SharedNativeAgentController({
     },
     [
       composeDrafts,
-      adapter.capabilities.attachments.files,
-      adapter.capabilities.attachments.images,
+      attachmentCapabilities.files,
+      attachmentCapabilities.images,
       data.containerId,
       envWorktreePath,
       coordinatorWorkspacePath,
@@ -2836,7 +2841,7 @@ export function SharedNativeAgentController({
     onAttach: handlePastedImage,
     canAttachImage: () =>
       !queueEditPendingRef.current &&
-      adapter.capabilities.attachments.images &&
+      attachmentCapabilities.images &&
       selectedModel?.supportsImageInput !== false,
     onImageRejected: () => toast.error("Images are not supported by this agent"),
     logLabel: "SharedNativeAgentController",
@@ -4196,8 +4201,7 @@ export function SharedNativeAgentController({
           primaryControls={
             composer ? (
               <>
-                {adapter.capabilities.attachments.files ||
-                adapter.capabilities.attachments.images ? (
+                {attachmentCapabilities.files || attachmentCapabilities.images ? (
                   <NativeAttachmentMenu
                     disabled={queueEditPending || (sendLocked && !canQueue)}
                     fileSearch={fileSearch}

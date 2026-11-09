@@ -1101,6 +1101,7 @@ export class StorageService {
           | "executionPolicy"
           | "policy"
           | "initialPromptPresentation"
+          | "openCodeProtocol"
         >
       > & {
         expectedProviderSessionId?: string;

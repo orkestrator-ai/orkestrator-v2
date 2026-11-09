@@ -42,6 +42,14 @@ export class OpenCode2HostServerState {
     return record;
   }
 
+  /** Every live record, by environment; they all share one `OPENCODE_DB`. */
+  live(): Array<[string, OpenCode2HostServerRecord]> {
+    return Array.from(this.servers.keys()).flatMap((environmentId) => {
+      const record = this.get(environmentId);
+      return record ? [[environmentId, record] as [string, OpenCode2HostServerRecord]] : [];
+    });
+  }
+
   record(environmentId: string, record: OpenCode2HostServerRecord): void {
     this.servers.set(environmentId, record);
   }

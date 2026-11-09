@@ -1069,7 +1069,18 @@ export interface NativeAgentRuntimeProvider extends AgentSessionProvider {
    * while idle). Session-free, so it survives a bridge restart.
    */
   reloadMcpConfiguration?(): Promise<"reloaded" | "not-running" | "unsupported" | "busy">;
-  authStatus?(): Promise<NativeAgentAuthStatus>;
+  /**
+   * `sessionId` names the session a tab is asking for, when there is one: a
+   * provider serving two lines (OpenCode 1.x and 2.x) answers for that
+   * session's line. Others ignore it.
+   */
+  authStatus?(sessionId?: string): Promise<NativeAgentAuthStatus>;
+  /**
+   * The OpenCode line a session runs on, for a provider that routes between
+   * them. Adoption (resume, fork) records `"v2"` on the session so the
+   * marker survives a restart.
+   */
+  sessionProtocol?(sessionId: string): Promise<"v2" | undefined>;
   /**
    * `deviceCode` asks for a flow without a loopback callback, for a browser
    * that is not on the agent's machine. A platform without one ignores it.

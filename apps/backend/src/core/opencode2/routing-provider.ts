@@ -24,16 +24,18 @@
  *   password) gets a new 2.x provider; the old one is disposed.
  * - **No 1.x behaviour reaches a 2.x session.** Members the 2.x provider does
  *   not have answer what an absent capability would (empty catalogues) or
- *   refuse with a clear error (fork). Transcript windows and pages, session
- *   state, usage and interaction cards (`reads.ts`), and MCP, workflow
- *   results and read-only turns are the 2.x provider's own. Snapshots carry
- *   `capabilityLimits`, which
- *   the projection uses to stop offering compact, undo, redo, fork,
- *   attachments and slash commands on a 2.x tab.
+ *   refuse with a clear error. Transcript windows and pages, session state,
+ *   usage and interaction cards (`reads.ts`), MCP, workflow results and
+ *   read-only turns, and the session features (models, commands, revert,
+ *   fork, resume; `features.ts`) are the 2.x provider's own. Snapshots carry
+ *   `capabilityLimits`, which the projection uses to narrow a 2.x tab to what
+ *   its session offers.
  *
- * Catalogue members with no session (models, resumable sessions, sign-in,
- * MCP reload, change evidence) stay on 1.x: the 2.x preview shares the
- * user's model ids and has no resume list of its own yet.
+ * Catalogue members with no session (models, sign-in, MCP reload, change
+ * evidence) stay on 1.x: the lines share `provider/model` ids, and a 2.x
+ * session's composer carries its own server's catalogue. The resume list
+ * holds both lines, 2.x rows under `opencode2:` ids, and the sign-in status of
+ * a 2.x session is its server's.
  */
 import {
   AGENT_INTERACTION_CONTRACT_VERSION,
@@ -41,7 +43,6 @@ import {
 } from "@orkestrator/protocol/agent-interactions";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import {
-  EMPTY_NATIVE_AGENT_COMPOSER_STATE,
   type AgentModel,
   type NativeAgentContextUsage,
   type NativeAgentControlUpdate,
@@ -79,6 +80,7 @@ import type { OpenCodeProvider } from "../opencode-provider.js";
 import { OpenCode2Client, type OpenCode2Connection } from "./client.js";
 import { OPENCODE2_EVIDENCE_SCAN_LIMIT, OpenCode2Provider } from "./provider.js";
 import type { OpenCode2SessionState } from "./session-state.js";
+import { openCode2ResumeSessionId } from "./sessions.js";
 import { normalizeOpenCode2Transcript } from "./transcript.js";
 import { isOpenCode2IdleMessage, type OpenCode2Message } from "./types.js";
 
@@ -89,12 +91,15 @@ type Line = "legacy" | "v2";
 /** Sessions whose line is remembered; older entries are looked up again. */
 const MAX_ROUTED_SESSIONS = 4_096;
 
-/** What a 2.x session does not offer yet; the projection narrows its capabilities by it. */
+/**
+ * What a 2.x session does not offer; the projection narrows its capabilities
+ * by it. Compact, undo, redo, fork, attachments and slash commands work on
+ * 2.x (`features.ts`); OpenCode's platform table offers neither share nor
+ * message rewind, which stay listed so a later table change cannot widen a
+ * 2.x tab by accident.
+ */
 export const OPENCODE2_CAPABILITY_LIMITS: ProviderCapabilityLimits = {
-  withoutActions: ["compact", "undo", "redo", "rewindMessages", "share"],
-  withoutAttachments: true,
-  withoutSlashCommands: true,
-  withoutFork: true,
+  withoutActions: ["rewindMessages", "share"],
 };
 
 /** One 2.x server generation: a new port or password is a new generation. */
@@ -124,6 +129,14 @@ export interface OpenCodeRoutingDependencies {
   recordSession?(sessionId: string): Promise<void>;
   /** Builds the 2.x provider for one server generation (tests substitute it). */
   createProvider?(client: OpenCode2Client): OpenCode2Provider;
+  /** The user's `openCodeModelProviders`, normalized; shapes the 2.x model picker. */
+  allowedModelProviders?(): Promise<readonly string[]>;
+  /**
+   * Whether new sessions take 2.x (the preview setting). The resume list
+   * starts the 2.x server to list its sessions only then; otherwise it lists
+   * them only while a 2.x server is already running.
+   */
+  newSessionsUseV2?(): Promise<boolean>;
 }
 
 /** The members the router reads from the 1.x provider. */
@@ -367,18 +380,21 @@ export class OpenCodeRoutingProvider implements NativeAgentRuntimeProvider {
   async interactiveSnapshot(sessionId: string): Promise<ProviderInteractiveSnapshot> {
     if ((await this.lineOf(sessionId)) !== "v2") return this.legacy.interactiveSnapshot(sessionId);
     const provider = await this.requireV2();
-    const [{ messages, messagesComplete, ...state }, models] = await Promise.all([
+    const [{ messages, messagesComplete, ...state }, features] = await Promise.all([
       provider.interactiveState(sessionId),
-      this.models(),
+      provider.features.sessionState(sessionId),
     ]);
-    return { ...v2StateSnapshot(state, models), messages, messagesComplete };
+    return { ...v2StateSnapshot(state, features), messages, messagesComplete };
   }
 
   async sessionStateSnapshot(sessionId: string): Promise<ProviderSessionStateSnapshot> {
     if ((await this.lineOf(sessionId)) !== "v2") return this.legacy.sessionStateSnapshot(sessionId);
     const provider = await this.requireV2();
-    const [state, models] = await Promise.all([provider.sessionState(sessionId), this.models()]);
-    return v2StateSnapshot(state, models);
+    const [state, features] = await Promise.all([
+      provider.sessionState(sessionId),
+      provider.features.sessionState(sessionId),
+    ]);
+    return v2StateSnapshot(state, features);
   }
 
   /** 2.x keeps the lifetime ledger on the session; 1.x reports usage on its snapshots. */
@@ -390,7 +406,12 @@ export class OpenCodeRoutingProvider implements NativeAgentRuntimeProvider {
 
   async runtimeHealth(sessionId: string): Promise<ProviderRuntimeHealth> {
     if ((await this.lineOf(sessionId)) !== "v2") return this.legacy.runtimeHealth(sessionId);
-    return { summary: { state: "OpenCode 2 preview" }, notices: [], authoritative: false };
+    // Health is optional: never start a server for it.
+    const provider = await this.observedV2();
+    if (!provider) {
+      return { summary: { state: "OpenCode 2 preview" }, notices: [], authoritative: false };
+    }
+    return provider.runtimeHealth(sessionId);
   }
 
   async structured<T>(
@@ -403,7 +424,10 @@ export class OpenCodeRoutingProvider implements NativeAgentRuntimeProvider {
     return this.legacy.structured<T>(sessionId, requestId);
   }
 
-  // ── catalogues (1.x; a 2.x session sees none of its own yet) ───────────────
+  // ── catalogues ─────────────────────────────────────────────────────────────
+  // Session-free model reads stay on 1.x: launch surfaces read them before a
+  // session (and its line) exists, and both lines share `provider/model` ids.
+  // A 2.x session's composer carries its own server's catalogue instead.
 
   modelCatalog(): Promise<AgentModel[]> {
     return this.legacy.modelCatalog();
@@ -421,28 +445,61 @@ export class OpenCodeRoutingProvider implements NativeAgentRuntimeProvider {
     return this.legacy.rawModelCatalog();
   }
 
-  listResumableSessions() {
-    return this.legacy.listResumableSessions();
+  /**
+   * Both lines' conversations. 2.x rows carry `opencode2:` ids, so a resume
+   * finds its line from the id alone, after a restart too. The 2.x server is
+   * started for the list only while new sessions take 2.x; a 2.x list that
+   * fails leaves the 1.x list standing.
+   */
+  async listResumableSessions(options?: { includeArchived?: boolean }) {
+    const [legacy, v2] = await Promise.all([
+      this.legacy.listResumableSessions(),
+      this.v2ForLists()
+        .then((provider) => (provider ? provider.listResumableSessions(options) : []))
+        .catch((error: unknown) => {
+          log.debug("resume-list.unavailable", {
+            error: formatLogError(error, { message: false }),
+          });
+          return [];
+        }),
+    ]);
+    return [...legacy, ...v2];
+  }
+
+  async setResumableSessionArchived(resumableSessionId: string, archived: boolean): Promise<void> {
+    if (!openCode2ResumeSessionId(resumableSessionId)) {
+      throw new PromptRejectedError("OpenCode 1 sessions cannot be archived here");
+    }
+    await (await this.requireV2()).setResumableSessionArchived(resumableSessionId, archived);
   }
 
   refreshCatalog(): void {
     this.legacy.refreshCatalog();
+    this.current?.provider.refreshCatalog();
   }
 
   async commandCatalogue(sessionId?: string): Promise<ProviderCommandCatalogue> {
     if (sessionId && (await this.lineOf(sessionId)) === "v2") {
-      return { enhanced: false, commands: [], status: "unsupported" };
+      // A catalogue read is metadata: it never starts the 2.x server.
+      const provider = await this.observedV2();
+      return provider
+        ? provider.commandCatalogue()
+        : { enhanced: true, commands: [], status: "stale" };
     }
     return this.legacy.commandCatalogue();
   }
 
   async refreshCommands(sessionId?: string): Promise<ProviderCommandRefreshResult> {
-    if (sessionId && (await this.lineOf(sessionId)) === "v2") return { outcome: "unsupported" };
+    if (sessionId && (await this.lineOf(sessionId)) === "v2") {
+      return (await this.requireV2()).refreshCommands();
+    }
     return this.legacy.refreshCommands();
   }
 
   async slashCommands(sessionId?: string) {
-    if (sessionId && (await this.lineOf(sessionId)) === "v2") return [];
+    if (sessionId && (await this.lineOf(sessionId)) === "v2") {
+      return (await this.commandCatalogue(sessionId)).commands;
+    }
     return this.legacy.slashCommands();
   }
 
@@ -466,7 +523,16 @@ export class OpenCodeRoutingProvider implements NativeAgentRuntimeProvider {
     return this.legacy.reloadMcpConfiguration();
   }
 
-  authStatus() {
+  /**
+   * The sign-in status of the line a session runs on: a 2.x session reports
+   * its server's providers, which come from the 2.x database. Without a
+   * session, or a 2.x server not running, it is 1.x's.
+   */
+  async authStatus(sessionId?: string) {
+    if (sessionId && (await this.lineOf(sessionId)) === "v2") {
+      const provider = await this.observedV2();
+      if (provider) return provider.authStatus();
+    }
     return this.legacy.authStatus();
   }
 
@@ -477,22 +543,35 @@ export class OpenCodeRoutingProvider implements NativeAgentRuntimeProvider {
   // ── session actions ────────────────────────────────────────────────────────
 
   async setSessionTitle(sessionId: string, title: string): Promise<void> {
-    // The 2.x session keeps no title of its own here; the backend's title stands.
-    if ((await this.lineOf(sessionId)) === "v2") return;
+    // The backend's title goes to OpenCode too, so its own lists agree.
+    if ((await this.lineOf(sessionId)) === "v2") {
+      return (await this.requireV2()).setSessionTitle(sessionId, title);
+    }
     return this.legacy.setSessionTitle(sessionId, title);
   }
 
+  /**
+   * `opencode2:<id>` (a 2.x resume-list row) resumes on 2.x whatever this
+   * provider remembers; anything else follows the session's recorded line.
+   */
   async resumeSession(
     sessionId: string,
     controls?: NativeAgentControlUpdate,
     policy?: NativeAgentExecutionPolicy,
   ): Promise<string> {
-    if ((await this.lineOf(sessionId)) !== "v2") {
+    const listed = openCode2ResumeSessionId(sessionId);
+    if (!listed && (await this.lineOf(sessionId)) !== "v2") {
       return this.legacy.resumeSession(sessionId, controls, policy);
     }
     const provider = await this.requireV2();
-    provider.registerSession(sessionId);
-    return sessionId;
+    const resumed = await provider.resumeSession(sessionId);
+    this.remember(resumed, "v2");
+    return resumed;
+  }
+
+  /** `"v2"` for a session this provider routes to 2.x, so its record keeps the marker. */
+  async sessionProtocol(sessionId: string): Promise<"v2" | undefined> {
+    return (await this.lineOf(sessionId)) === "v2" ? "v2" : undefined;
   }
 
   async synchronizeSessionPolicy(
@@ -508,7 +587,10 @@ export class OpenCodeRoutingProvider implements NativeAgentRuntimeProvider {
 
   async forkSession(sessionId: string, messageId?: string): Promise<NativeAgentForkOutcome> {
     if ((await this.lineOf(sessionId)) === "v2") {
-      throw new PromptRejectedError("OpenCode 2 sessions cannot be forked yet");
+      const outcome = await (await this.requireV2()).forkSession(sessionId, messageId);
+      // The fork's tab resumes it by this id next; it is a 2.x session too.
+      this.remember(outcome.sessionId, "v2");
+      return outcome;
     }
     return this.legacy.forkSession(sessionId, messageId);
   }
@@ -639,7 +721,10 @@ export class OpenCodeRoutingProvider implements NativeAgentRuntimeProvider {
     if (this.current?.generation === connection.generation) return this.current.provider;
     const previous = this.current;
     const client = new OpenCode2Client(connection);
-    const provider = this.deps.createProvider?.(client) ?? new OpenCode2Provider(client);
+    const allowedModelProviders = this.deps.allowedModelProviders?.bind(this.deps);
+    const provider =
+      this.deps.createProvider?.(client) ??
+      new OpenCode2Provider(client, allowedModelProviders ? { allowedModelProviders } : {});
     this.current = { generation: connection.generation, provider };
     for (const [sessionId, line] of this.lines) {
       if (line === "v2") provider.registerSession(sessionId);
@@ -659,8 +744,10 @@ export class OpenCodeRoutingProvider implements NativeAgentRuntimeProvider {
     })) as OpenCode2Message[];
   }
 
-  private models(): Promise<AgentModel[]> {
-    return this.legacy.modelCatalog().catch((): AgentModel[] => []);
+  /** The 2.x server for a list read: started only while new sessions take 2.x. */
+  private async v2ForLists(): Promise<OpenCode2Provider | undefined> {
+    const preferred = await this.deps.newSessionsUseV2?.().catch(() => false);
+    return preferred ? this.requireV2() : this.observedV2();
   }
 }
 
@@ -674,12 +761,17 @@ function emptyInteractionSnapshot(): AgentInteractionSnapshot {
  */
 function v2StateSnapshot(
   state: OpenCode2SessionState,
-  models: AgentModel[],
+  features: Awaited<ReturnType<OpenCode2Provider["features"]["sessionState"]>>,
 ): ProviderSessionStateSnapshot {
+  // The run's own state (`reads.ts`) first; the session features add the
+  // composer (2.x catalogue, effort, mode), title and resume id on top.
+  const { notices: featureNotices, ...rest } = features;
+  const notices = [...(state.notices ?? []), ...featureNotices];
   return {
     ...state,
-    composer: { ...EMPTY_NATIVE_AGENT_COMPOSER_STATE, models },
+    ...rest,
     capabilityLimits: OPENCODE2_CAPABILITY_LIMITS,
+    ...(notices.length > 0 ? { notices } : {}),
   };
 }
 

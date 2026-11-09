@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { AmbiguousPromptDispatchError, PromptRejectedError } from "../agent-provider-contract.js";
-import { FakeOpenCode2Server } from "./fake-server.test-support.js";
+import { FakeOpenCode2Server, fakeOpenCode2Model } from "./fake-server.test-support.js";
 import { OpenCode2Provider, parseOpenCode2Model } from "./provider.js";
 
 let server: FakeOpenCode2Server | undefined;
@@ -40,7 +40,9 @@ describe("OpenCode2Provider", () => {
     expect(server.sessions.get(id)?.model).toEqual({ providerID: "fixture", id: "fixture" });
     await provider.send(id, "hello", { requestId: "req-1", model: "fixture/fixture" });
     // The model was already applied at creation: no switch call.
-    expect(server.calls.filter((call) => call.path.endsWith("/model"))).toHaveLength(0);
+    expect(
+      server.calls.filter((call) => call.method === "POST" && call.path.endsWith("/model")),
+    ).toHaveLength(0);
     const prompt = server.calls.find((call) => call.path.endsWith("/prompt"))!;
     expect(prompt.body).toMatchObject({
       text: "hello",
@@ -54,9 +56,12 @@ describe("OpenCode2Provider", () => {
 
   test("a model change is applied before the prompt", async () => {
     const { server, provider } = setup();
+    server.models.push(fakeOpenCode2Model("openai", "gpt-5"));
     const id = await provider.createSession("build", "x");
     await provider.send(id, "hi", { requestId: "r", model: "openai/gpt-5" });
+    // The session's switch and prompt only (`GET /api/model` is the catalogue read).
     const paths = server.calls
+      .filter((call) => call.method === "POST" && call.path.startsWith("/api/session/"))
       .map((call) => call.path.split("/").at(-1))
       .filter((path) => path === "model" || path === "prompt");
     expect(paths).toEqual(["model", "prompt"]);
@@ -83,16 +88,19 @@ describe("OpenCode2Provider", () => {
     expect(await provider.dispatchStatus(id, "r2")).toBe("unknown");
   });
 
-  test("unsupported options are refused before anything is sent", async () => {
+  test("a command the server does not list is refused before anything is sent", async () => {
     const { server, provider } = setup();
     const id = await provider.createSession("build", "x");
+    server.commands = [];
     await expect(
       provider.send(id, "hi", {
         requestId: "r",
         command: { name: "review" } as never,
       }),
-    ).rejects.toThrow("slash commands");
-    expect(server.calls.some((call) => call.path.endsWith("/prompt"))).toBe(false);
+    ).rejects.toThrow("is not an OpenCode command");
+    expect(
+      server.calls.some((call) => call.path.endsWith("/prompt") || call.path.endsWith("/command")),
+    ).toBe(false);
   });
 
   test("activity reads one active-session map; a parked question reads as waiting", async () => {

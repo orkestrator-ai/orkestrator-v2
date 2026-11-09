@@ -135,6 +135,46 @@ describe("OpenCode line of a new container session", () => {
   });
 });
 
+describe("adopting an OpenCode 2.x session", () => {
+  test("a resumed or forked 2.x session keeps its line on the record", async () => {
+    const root = await mkdtemp(join(tmpdir(), "ork-opencode2-adopt-"));
+    const storage = await createStorage(root);
+    await addEnvironment(storage);
+    const registered: unknown[] = [];
+    const { provider } = createProviderStub("opencode", { createSession: async () => "ses_first" });
+    provider.sessionProtocol = async (sessionId) => (sessionId === "ses_v2" ? "v2" : undefined);
+    provider.registerSession = (_sessionId, registration) => {
+      registered.push(registration);
+    };
+    const service = new NativeAgentService(storage, refusingInvoke, {
+      provider: async () => provider,
+    });
+    try {
+      const first = await service.ensureSession(identity);
+      expect(first.openCodeProtocol).toBeUndefined();
+      const adopted = await service.adoptSession({
+        ...identity,
+        providerSessionId: "ses_v2",
+        expectedProviderSessionId: "ses_first",
+      });
+      expect(adopted.openCodeProtocol).toBe("v2");
+      expect((await storage.getNativeAgentSession(adopted.key))?.openCodeProtocol).toBe("v2");
+      expect(registered.at(-1)).toMatchObject({ openCodeProtocol: "v2" });
+      // A 1.x session adopted after it carries no marker.
+      const legacy = await service.adoptSession({
+        ...identity,
+        providerSessionId: "ses_legacy",
+        expectedProviderSessionId: "ses_v2",
+      });
+      expect(legacy.openCodeProtocol).toBeUndefined();
+    } finally {
+      await service.shutdown();
+      storage.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("projection of an OpenCode 2.x session", () => {
   for (const supported of [true, false]) {
     test(`narrows the platform's capabilities by the session's limits (steer ${supported ? "supported" : "refused"})`, async () => {
@@ -147,7 +187,19 @@ describe("projection of an OpenCode 2.x session", () => {
         interactiveSnapshot: async () => ({
           status: "idle",
           messages: [],
-          capabilityLimits: OPENCODE2_CAPABILITY_LIMITS,
+          // The narrowing a session reports, beyond what 2.x itself still omits.
+          capabilityLimits: {
+            ...OPENCODE2_CAPABILITY_LIMITS,
+            withoutActions: [
+              ...(OPENCODE2_CAPABILITY_LIMITS.withoutActions ?? []),
+              "compact",
+              "undo",
+              "redo",
+            ],
+            withoutAttachments: true,
+            withoutSlashCommands: true,
+            withoutFork: true,
+          },
         }),
       });
       const service = new NativeAgentService(storage, refusingInvoke, {

@@ -679,6 +679,7 @@ export class NativeAgentSessionsRepository {
           | "executionPolicy"
           | "policy"
           | "initialPromptPresentation"
+          | "openCodeProtocol"
         >
       > & {
         expectedProviderSessionId?: string;
@@ -693,7 +694,10 @@ export class NativeAgentSessionsRepository {
       !isAgentPlatform(input.agent) ||
       !interactionMetadata ||
       (input.expectedProviderSessionId !== undefined &&
-        !isNonBlankString(input.expectedProviderSessionId))
+        !isNonBlankString(input.expectedProviderSessionId)) ||
+      // A resumed or forked OpenCode 2.x session names its line (`openCodeProtocol`).
+      (input.openCodeProtocol !== undefined &&
+        (input.openCodeProtocol !== "v2" || input.agent !== "opencode"))
     ) {
       throw new Error("Native agent session adoption input is invalid");
     }

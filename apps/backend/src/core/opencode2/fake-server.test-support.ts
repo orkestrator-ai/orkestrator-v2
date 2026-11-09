@@ -40,6 +40,34 @@ export interface FakeOpenCode2Session {
   }>;
   /** `Session.Info` fields the provider reads beyond the id. */
   info: Record<string, unknown>;
+  agent?: string;
+  title?: string;
+  archived?: boolean;
+  parentID?: string;
+  revert?: { messageID: string };
+}
+
+/** A `Model.Info` row as `/api/model` lists it, settings (and their key) included. */
+export function fakeOpenCode2Model(
+  providerID: string,
+  id: string,
+  variants: string[] = [],
+  extra: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    id,
+    modelID: id,
+    providerID,
+    type: "chat",
+    name: id,
+    settings: { apiKey: "fake-provider-key", baseURL: "http://127.0.0.1:1/v1" },
+    capabilities: { tools: true, input: ["text", "image"], output: ["text"] },
+    variants: variants.map((variant) => ({ id: variant, settings: { reasoningEffort: variant } })),
+    status: "active",
+    enabled: true,
+    limit: { context: 16000, output: 2000 },
+    ...extra,
+  };
 }
 
 export class FakeOpenCode2Server {
@@ -55,6 +83,32 @@ export class FakeOpenCode2Server {
   mcpAddStatus = "connected";
   /** Session updates to drop silently (a write that did not persist). */
   dropNextSessionUpdate = false;
+  /** `/api/model`; tests replace it. The default is one fixture model with variants. */
+  models: Array<Record<string, unknown>> = [
+    fakeOpenCode2Model("fixture", "fixture", ["low", "high"]),
+  ];
+  defaultModel: Record<string, unknown> | null = null;
+  agents: Array<Record<string, unknown>> = [
+    { id: "build", name: "Build", mode: "primary", hidden: false, description: "Default" },
+    { id: "plan", name: "Plan", mode: "primary", hidden: false, description: "Read-only" },
+    { id: "general", name: "General", mode: "subagent", hidden: false },
+    { id: "title", name: "Title", mode: "primary", hidden: true },
+  ];
+  commands: Array<Record<string, unknown>> = [
+    { name: "init", description: "guided AGENTS.md setup" },
+    { name: "review", description: "review changes" },
+  ];
+  providers: Array<Record<string, unknown>> = [
+    { id: "fixture", name: "Fixture", activation: "enabled", settings: { apiKey: "fake" } },
+  ];
+  /** `/api/credential`, values included, as the real list answers them. */
+  readonly credentials: Array<{
+    id: string;
+    integrationID: string;
+    label: string;
+    active: boolean;
+    value: unknown;
+  }> = [];
   private readonly server: ReturnType<typeof Bun.serve>;
   private events = new Set<ReadableStreamDefaultController<Uint8Array>>();
   private seq = new Map<string, number>();
@@ -232,6 +286,7 @@ export class FakeOpenCode2Server {
         model: body?.model,
         ...(body?.permissions ? { rules: body.permissions as unknown[] } : {}),
         ...(body?.metadata ? { metadata: body.metadata as Record<string, unknown> } : {}),
+        agent: "build",
         permissions: [],
         forms: [],
         replies: [],
@@ -242,6 +297,23 @@ export class FakeOpenCode2Server {
       });
       return ok({ id, model: body?.model, metadata: body?.metadata });
     }
+    if (path === "/api/session" && request.method === "GET") {
+      const archived = url.searchParams.get("archived");
+      const listed = [...this.sessions.values()]
+        .filter((session) => archived !== "false" || !session.archived)
+        .reverse()
+        .map((session) => this.sessionInfo(session));
+      return Response.json({ data: listed, cursor: {} });
+    }
+    if (path === "/api/model") return Response.json({ location: {}, data: this.models });
+    if (path === "/api/model/default") {
+      return Response.json({ location: {}, data: this.defaultModel ?? this.models[0] ?? null });
+    }
+    if (path === "/api/agent") return ok(this.agents);
+    if (path === "/api/command") return Response.json({ location: {}, data: this.commands });
+    if (path === "/api/provider") return ok(this.providers);
+    const credentialRoute = this.credentialRoute(request.method, path, body);
+    if (credentialRoute) return credentialRoute;
     if (path === "/api/session/active") {
       const active: Record<string, unknown> = {};
       for (const session of this.sessions.values()) {
@@ -253,21 +325,17 @@ export class FakeOpenCode2Server {
     const session = match ? this.sessions.get(decodeURIComponent(match[1]!)) : undefined;
     if (!match || !session) return notFound();
     const rest = match[2] ?? "";
+    const busy = () =>
+      Response.json({ _tag: "SessionBusyError", message: "busy" }, { status: 409 });
 
-    if (rest === "" && request.method === "GET") {
-      return ok({
-        id: session.id,
-        model: session.model,
-        ...session.info,
-        ...(session.metadata ? { metadata: session.metadata } : {}),
-        ...(session.rules ? { permissions: session.rules } : {}),
-      });
-    }
+    if (rest === "" && request.method === "GET") return ok(this.sessionInfo(session));
     if (rest === "" && request.method === "PATCH") {
       if (this.dropNextSessionUpdate) {
         this.dropNextSessionUpdate = false;
         return new Response(null, { status: 204 });
       }
+      if (typeof body?.title === "string") session.title = body.title;
+      if (typeof body?.archived === "boolean") session.archived = body.archived;
       // Both fields replace what the session held (2.2.6).
       if (body && "permissions" in body) session.rules = (body.permissions as unknown[]) ?? [];
       if (body && "metadata" in body) {
@@ -275,6 +343,82 @@ export class FakeOpenCode2Server {
       }
       return new Response(null, { status: 204 });
     }
+    if (rest === "agent") {
+      session.agent = String(body!.agent);
+      session.rows.push({ id: this.id("msg"), type: "agent-switched", time: { created: 1 } });
+      return new Response(null, { status: 204 });
+    }
+    if (rest === "command") {
+      const known = this.commands.some((command) => command.name === body!.name);
+      if (!known) {
+        return Response.json(
+          { _tag: "CommandNotFoundError", command: body!.name, message: "Command not found" },
+          { status: 404 },
+        );
+      }
+      // The server expands the template into an ordinary prompt with no metadata.
+      const item: Row = {
+        id: this.id("msg"),
+        type: "user",
+        payload: { text: `TEMPLATE(${String(body!.name)}):${String(body!.text)}` },
+        delivery: body!.delivery,
+      };
+      if (session.running) session.inbox.push(item);
+      else {
+        session.running = true;
+        this.drainOne(session, item);
+      }
+      return new Response(null, { status: 204 });
+    }
+    if (rest === "compact") {
+      const item = { id: this.id("msg"), type: "compaction", payload: {}, delivery: "queue" };
+      session.rows.push({ id: item.id, type: "compaction", time: { created: 1 } });
+      return ok(item);
+    }
+    if (rest === "revert/stage") {
+      if (session.running) return busy();
+      const target = session.rows.find((row) => row.id === body!.messageID);
+      if (!target) {
+        return Response.json({ _tag: "MessageNotFoundError", message: "no" }, { status: 404 });
+      }
+      session.revert = { messageID: target.id };
+      return ok({ messageID: target.id, files: [] });
+    }
+    if (rest === "revert" && request.method === "DELETE") {
+      if (session.running) return busy();
+      session.revert = undefined;
+      return new Response(null, { status: 204 });
+    }
+    if (rest === "fork") {
+      const before = body?.before as string | undefined;
+      const cut = before ? session.rows.findIndex((row) => row.id === before) : -1;
+      const id = this.id("ses");
+      this.sessions.set(id, {
+        id,
+        rows: (cut >= 0 ? session.rows.slice(0, cut) : [...session.rows]).map((row, index) => ({
+          ...row,
+          id: `${row.id}_${index + 1}`,
+        })),
+        inbox: [],
+        running: false,
+        model: session.model,
+        agent: session.agent,
+        title: `${session.title ?? "Untitled"} (fork #1)`,
+        parentID: undefined,
+        // A fork copies its parent's rules and metadata, like any child (2.2.6).
+        ...(session.rules ? { rules: [...session.rules] } : {}),
+        ...(session.metadata ? { metadata: { ...session.metadata } } : {}),
+        info: {
+          cost: 0,
+          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        },
+        permissions: [],
+        forms: [],
+        replies: [],
+      });
+      return ok(this.sessionInfo(this.sessions.get(id)!));
+    }
+
     if (rest === "prompt") {
       const failure = this.failNextPrompt;
       this.failNextPrompt = undefined;
@@ -289,9 +433,19 @@ export class FakeOpenCode2Server {
       const item: Row = {
         id: String(body!.id),
         type: "user",
-        payload: { text: body!.text, metadata: body!.metadata },
+        payload: {
+          text: body!.text,
+          metadata: body!.metadata,
+          ...(body!.files ? { files: body!.files } : {}),
+        },
         delivery: body!.delivery,
       };
+      // A prompt commits a staged revert: everything from its boundary on goes.
+      if (session.revert) {
+        const cut = session.rows.findIndex((row) => row.id === session.revert!.messageID);
+        if (cut >= 0) session.rows.splice(cut);
+        session.revert = undefined;
+      }
       if (session.running) {
         // Steer delivers at the next step boundary; queue waits for the run's end.
         if (body!.delivery === "steer") this.drainOne(session, item);
@@ -392,6 +546,62 @@ export class FakeOpenCode2Server {
       return new Response(null, { status: 204 });
     }
     return Response.json({ _tag: "NotFound", message: rest }, { status: 404 });
+  }
+
+  private sessionInfo(session: FakeOpenCode2Session): Record<string, unknown> {
+    return {
+      id: session.id,
+      projectID: "project",
+      ...(session.model ? { model: session.model } : {}),
+      ...(session.agent ? { agent: session.agent } : {}),
+      ...(session.title ? { title: session.title } : {}),
+      ...(session.parentID ? { parentID: session.parentID } : {}),
+      ...(session.revert ? { revert: session.revert } : {}),
+      cost: 0,
+      ...session.info,
+      ...(session.metadata ? { metadata: session.metadata } : {}),
+      ...(session.rules ? { permissions: session.rules } : {}),
+      time: {
+        created: 1_700_000_000_000,
+        updated: 1_700_000_001_000,
+        ...(session.archived ? { archived: 1 } : {}),
+      },
+      location: { directory: "/work" },
+    };
+  }
+
+  private credentialRoute(
+    method: string,
+    path: string,
+    body: Record<string, unknown> | undefined,
+  ): Response | undefined {
+    if (path === "/api/credential" && method === "GET") {
+      return Response.json({ data: this.credentials });
+    }
+    if (path === "/api/credential" && method === "POST") {
+      const integrationID = String(body!.integrationID);
+      if (body!.activate !== false) {
+        for (const credential of this.credentials) {
+          if (credential.integrationID === integrationID) credential.active = false;
+        }
+      }
+      const entry = {
+        id: this.id("cred"),
+        integrationID,
+        label: String(body!.label ?? "default"),
+        active: body!.activate !== false,
+        value: body!.value,
+      };
+      this.credentials.push(entry);
+      return Response.json({ data: entry });
+    }
+    const remove = /^\/api\/credential\/([^/]+)$/.exec(path);
+    if (remove && method === "DELETE") {
+      const index = this.credentials.findIndex((credential) => credential.id === remove[1]);
+      if (index >= 0) this.credentials.splice(index, 1);
+      return new Response(null, { status: 204 });
+    }
+    return undefined;
   }
 
   private drainOne(session: FakeOpenCode2Session, item: Row): void {

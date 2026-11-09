@@ -77,7 +77,11 @@ function setup(
     },
     persistedProtocol: options.persisted ?? (async () => undefined),
     createProvider: () => {
-      const created2 = new OpenCode2Provider(fake.client(), { monitorEvents: false });
+      const created2 = new OpenCode2Provider(fake.client(), {
+        monitorEvents: false,
+        // Every provider, so the fixture model reaches the picker.
+        allowedModelProviders: async () => [],
+      });
       created.push(created2);
       return created2;
     },
@@ -180,18 +184,60 @@ describe("OpenCodeRoutingProvider", () => {
     expect(snapshot.messages).toHaveLength(2);
     expect(snapshot.messages[0]).toMatchObject({ role: "user", content: "hello there" });
     expect(snapshot.messages[1]).toMatchObject({ role: "assistant" });
-    expect(snapshot.composer?.models).toEqual([
-      { platform: "opencode", id: "fixture/fixture" } as never,
+    // The 2.x server's own catalogue, with its variants as the effort axis.
+    expect(snapshot.composer?.models).toMatchObject([
+      {
+        platform: "opencode",
+        id: "fixture/fixture",
+        reasoning: [{ id: "default" }, { id: "low" }, { id: "high" }],
+      },
     ]);
+    expect(snapshot.composer?.executionProfiles?.map((profile) => profile.id)).toEqual([
+      "build",
+      "plan",
+    ]);
+    expect(snapshot.resumableSessionId).toBe(`opencode2:${id}`);
     const state = await router.sessionStateSnapshot(id);
     expect(state.capabilityLimits).toEqual(OPENCODE2_CAPABILITY_LIMITS);
     // A cursor this provider never minted expires rather than paging from a guess.
     expect(await router.transcriptPage(id, { cursor: "c", limit: 10, targetBytes: 1 })).toEqual({
       status: "expired",
     });
-    expect((await router.commandCatalogue(id)).commands).toEqual([]);
+    expect((await router.commandCatalogue(id)).commands.map((command) => command.name)).toEqual([
+      "/init",
+      "/review",
+    ]);
     expect(await router.interactions.listPendingInteractions(id)).toMatchObject({ requests: [] });
-    await expect(router.forkSession(id)).rejects.toBeInstanceOf(PromptRejectedError);
+  });
+
+  test("a 2.x session forks, resumes and lists on 2.x, and keeps its line on adoption", async () => {
+    const { server, legacy, router } = setup();
+    const id = await router.createSession("build", "b", { openCodeProtocol: "v2" });
+    await router.send(id, "hello there", { requestId: "req-1" });
+    server.finishRun(id);
+    const firstUser = server.sessions.get(id)!.rows.find((row) => row.type === "user")!.id;
+    const fork = await router.forkSession(id, firstUser);
+    expect(server.sessions.has(fork.sessionId)).toBe(true);
+    expect(router.knownLine(fork.sessionId)).toBe("v2");
+    expect(await router.sessionProtocol(fork.sessionId)).toBe("v2");
+    expect(await router.sessionProtocol("ses_legacy_unknown")).toBeUndefined();
+
+    (legacy as { listResumableSessions?: unknown }).listResumableSessions = mock(async () => [
+      { sessionId: "ses_legacy_9" },
+    ]);
+    // Not preferred and running: the running 2.x server is listed.
+    const listed = await router.listResumableSessions();
+    expect(listed.map((entry) => entry.sessionId)).toContain("ses_legacy_9");
+    expect(listed.map((entry) => entry.sessionId)).toContain(`opencode2:${id}`);
+
+    router.releaseSession(id);
+    expect(router.knownLine(id)).toBeUndefined();
+    // The prefixed id names its line even after the router forgot it.
+    expect(await router.resumeSession(`opencode2:${id}`)).toBe(id);
+    expect(router.knownLine(id)).toBe("v2");
+    await expect(router.resumeSession("opencode2:ses_missing")).rejects.toBeInstanceOf(
+      PromptRejectedError,
+    );
   });
 
   test("a 2.x session's cards, rule details, pages and usage come from the 2.x provider", async () => {

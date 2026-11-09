@@ -28,11 +28,16 @@
  *   its permission rules, and a read-only or result turn's rules are granted
  *   under the session's dispatch lock and restored after (`turn-grants.ts`).
  *
- * Requests that need what this provider does not offer yet are refused
- * explicitly rather than silently degraded.
+ * Models and effort, attachments, slash commands, Plan/Build, compact,
+ * undo/redo, fork, the resume list, titles, to-dos and sign-in status live in
+ * {@link OpenCode2SessionFeatures} (`features.ts`); transcript, state, usage
+ * and interaction cards in `reads.ts`; MCP, workflow results and read-only
+ * turns in `workflow-results.ts`. This provider delegates to them.
  */
 import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 import type {
+  NativeAgentAuthStatus,
+  NativeAgentForkOutcome,
   NativeAgentMcpServer,
   NativeAgentMcpServerAction,
   NativeAgentSessionActionOutcome,
@@ -45,10 +50,13 @@ import {
   type NativeAgentRuntimeProvider,
   type ProviderActiveSteerRun,
   type ProviderActivityState,
+  type ProviderCommandCatalogue,
+  type ProviderCommandRefreshResult,
   type ProviderCreateSessionOptions,
   type ProviderDispatchStatus,
   type ProviderNativeAgentSessionAction,
   type ProviderPrepareDispatchOptions,
+  type ProviderRuntimeHealth,
   type ProviderSendOptions,
   type ProviderSessionRegistration,
   type ProviderStatus,
@@ -61,6 +69,7 @@ import { OpenCode2McpServers } from "./mcp.js";
 import { openCode2CreateRules, openCode2PolicyRules } from "./permissions.js";
 import { OpenCode2TurnGrants, openCode2CreateMetadata } from "./turn-grants.js";
 import { OpenCode2WorkflowTurns, openCode2StructuredResult } from "./workflow-results.js";
+import { OpenCode2SessionFeatures, type OpenCode2PreparedSend } from "./features.js";
 import { checkOpenCode2Admission, mintOpenCode2InputId, newestOpenCode2IdleId } from "./steer.js";
 import type { OpenCode2InboxItem, OpenCode2Message, OpenCode2ModelRef } from "./types.js";
 
@@ -82,6 +91,8 @@ export interface OpenCode2ProviderDependencies {
   now?: () => number;
   /** MCP registration timing (tests). */
   mcp?: ConstructorParameters<typeof OpenCode2McpServers>[1];
+  /** The user's `openCodeModelProviders`, normalized; shapes the 2.x model picker. */
+  allowedModelProviders?: () => Promise<readonly string[]>;
 }
 
 type SessionState = {
@@ -101,8 +112,9 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
   readonly agent = "opencode" as const;
   private readonly sessions = new Map<string, SessionState>();
   private readonly refused = new Map<string, true>();
-  private readonly appliedModel = new Map<string, string>();
   private readonly tracker = new OpenCode2SequenceTracker();
+  /** Models, commands, attachments, actions and session lifecycle (`features.ts`). */
+  readonly features: OpenCode2SessionFeatures;
   private readonly monitor = new AbortController();
   private readonly monitorTask: Promise<void> | undefined;
   private activityCache: { at: number; running: ReadonlySet<string> } | undefined;
@@ -125,6 +137,12 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
       new OpenCode2McpServers(client, dependencies.mcp),
       new OpenCode2TurnGrants(client),
     );
+    this.features = new OpenCode2SessionFeatures(client, {
+      now: () => this.now(),
+      ...(dependencies.allowedModelProviders
+        ? { allowedModelProviders: dependencies.allowedModelProviders }
+        : {}),
+    });
     if (dependencies.monitorEvents !== false) this.monitorTask = this.watchEvents();
   }
 
@@ -135,7 +153,7 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
 
   releaseSession(sessionId: string): void {
     this.sessions.delete(sessionId);
-    this.appliedModel.delete(sessionId);
+    this.features.forget(sessionId);
     this.tracker.forget(sessionId);
     this.reads.forget(sessionId);
   }
@@ -145,7 +163,7 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
     label: string,
     options: ProviderCreateSessionOptions = {},
   ): Promise<string> {
-    const model = parseOpenCode2Model(options.model);
+    const model = await this.features.createModel(options);
     // A backend execution policy becomes the session's base rules (`permissions.ts`).
     const base = openCode2PolicyRules(options.policy);
     let session;
@@ -166,7 +184,7 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
         cause: error,
       });
     }
-    if (model) this.appliedModel.set(session.id, options.model!);
+    this.features.noteCreated(session.id, model, options);
     this.registerSession(session.id);
     return session.id;
   }
@@ -180,24 +198,43 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
   }
 
   async send(sessionId: string, prompt: string, options: ProviderSendOptions): Promise<void> {
-    refuseUnsupportedSendOptions(options);
     const text = boundedText(this.workflow.shapePrompt(prompt, options));
     this.registerSession(sessionId);
     await this.workflow.prepare(sessionId, options);
-    await this.applyModel(sessionId, options.model);
+    // Command resolution, files, model, effort and agent; nothing is dispatched yet.
+    const prepared = await this.features.prepareSend(sessionId, prompt, options);
     // Grants, the prompt and settlement of one session never interleave.
     await this.workflow.dispatch(
       sessionId,
       options,
-      () => this.dispatchPrompt(sessionId, text, options),
+      () =>
+        prepared.kind === "command"
+          ? this.dispatchCommand(sessionId, prepared, options)
+          : this.dispatchPrompt(sessionId, text, options, prepared.files),
       () => this.rememberRefusal(options.requestId),
     );
+  }
+
+  private async dispatchCommand(
+    sessionId: string,
+    prepared: Extract<OpenCode2PreparedSend, { kind: "command" }>,
+    options: ProviderSendOptions,
+  ): Promise<void> {
+    try {
+      await this.features.sendCommand(sessionId, prepared);
+    } catch (error) {
+      if (error instanceof PromptRejectedError) this.rememberRefusal(options.requestId);
+      throw error;
+    } finally {
+      this.markDirty(sessionId);
+    }
   }
 
   private async dispatchPrompt(
     sessionId: string,
     text: string,
     options: ProviderSendOptions,
+    files: OpenCode2PreparedSend["files"],
   ): Promise<void> {
     const id = mintOpenCode2InputId(this.now());
     let answer: unknown;
@@ -207,6 +244,7 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
       answer = await this.client.prompt(sessionId, {
         id,
         text,
+        ...(files ? { files } : {}),
         delivery: "queue",
         metadata: { orkestrator: { requestId: options.requestId } },
       });
@@ -267,8 +305,11 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
     return result;
   }
 
+  /** The newest rows, oldest first, without what a staged Undo covers (`revert.ts`). */
   async messages(sessionId: string, options: { limit?: number } = {}): Promise<unknown[]> {
-    return this.history(sessionId, options.limit ?? OPENCODE2_EVIDENCE_SCAN_LIMIT);
+    return (
+      await this.features.visibleHistory(sessionId, options.limit ?? OPENCODE2_EVIDENCE_SCAN_LIMIT)
+    ).rows;
   }
 
   // ── reads (`reads.ts`) ─────────────────────────────────────────────────────
@@ -373,7 +414,11 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
     action: ProviderNativeAgentSessionAction,
   ): Promise<NativeAgentSessionActionOutcome> {
     if (action.kind !== "steer") {
-      throw new PromptRejectedError(`OpenCode 2.x does not support ${action.kind} yet`);
+      try {
+        return await this.features.performAction(sessionId, action);
+      } finally {
+        this.markDirty(sessionId);
+      }
     }
     const text = boundedText(action.text);
     const current = await this.activeSteerRun(sessionId);
@@ -409,6 +454,57 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
     return { outcome: "unknown", requestId: action.requestId };
   }
 
+  // ── session features (`features.ts`) ───────────────────────────────────────
+
+  async forkSession(sessionId: string, messageId?: string): Promise<NativeAgentForkOutcome> {
+    const outcome = await this.features.fork(sessionId, messageId);
+    this.registerSession(outcome.sessionId);
+    return outcome;
+  }
+
+  listResumableSessions(options?: { includeArchived?: boolean }) {
+    return this.features.listResumable(options);
+  }
+
+  setResumableSessionArchived(resumableSessionId: string, archived: boolean): Promise<void> {
+    return this.features.setArchived(resumableSessionId, archived);
+  }
+
+  /** A resume-list id (or a bare 2.x id) as the session it names, checked to exist. */
+  async resumeSession(resumableSessionId: string): Promise<string> {
+    const sessionId = await this.features.resumableSession(resumableSessionId);
+    this.registerSession(sessionId);
+    return sessionId;
+  }
+
+  setSessionTitle(sessionId: string, title: string): Promise<void> {
+    return this.features.setTitle(sessionId, title);
+  }
+
+  authStatus(): Promise<NativeAgentAuthStatus> {
+    return this.features.authStatus();
+  }
+
+  commandCatalogue(): Promise<ProviderCommandCatalogue> {
+    return this.features.commandCatalogue();
+  }
+
+  refreshCommands(): Promise<ProviderCommandRefreshResult> {
+    return this.features.refreshCommands();
+  }
+
+  async slashCommands() {
+    return (await this.features.commandCatalogue()).commands;
+  }
+
+  runtimeHealth(sessionId: string): Promise<ProviderRuntimeHealth> {
+    return this.features.runtimeHealth(sessionId);
+  }
+
+  refreshCatalog(): void {
+    this.features.refreshCatalog();
+  }
+
   observationStreamLive(): boolean {
     return this.monitorTask !== undefined && !this.monitor.signal.aborted;
   }
@@ -426,23 +522,7 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
     return this.dependencies.now?.() ?? Date.now();
   }
 
-  private async applyModel(sessionId: string, modelId: string | undefined): Promise<void> {
-    if (!modelId || this.appliedModel.get(sessionId) === modelId) return;
-    const model = parseOpenCode2Model(modelId);
-    if (!model) throw new PromptRejectedError(`OpenCode model "${modelId}" is not provider/model`);
-    try {
-      await this.client.selectModel(sessionId, model);
-    } catch (error) {
-      if (error instanceof OpenCode2RequestError) {
-        throw new PromptRejectedError(`OpenCode refused the model: ${error.message}`);
-      }
-      // Nothing was dispatched yet: unavailable, not ambiguous.
-      throw new ProviderUnavailableError("OpenCode 2.x model switch failed", { cause: error });
-    }
-    this.appliedModel.set(sessionId, modelId);
-  }
-
-  /** Oldest first. */
+  /** Oldest first, every row: the evidence scans must see a staged revert's rows too. */
   private async history(sessionId: string, limit: number): Promise<OpenCode2Message[]> {
     let page;
     try {
@@ -609,18 +689,4 @@ function boundedText(text: string): string {
     throw new PromptRejectedError("The prompt exceeds OpenCode 2.x's 1 MB input bound");
   }
   return text;
-}
-
-/** Explicit refusals for what later phases add, instead of silently dropping it. */
-function refuseUnsupportedSendOptions(options: ProviderSendOptions): void {
-  const unsupported = [
-    options.attachments?.length ? "attachments" : undefined,
-    options.images?.length ? "images" : undefined,
-    options.command ? "slash commands" : undefined,
-  ].filter((name): name is string => name !== undefined);
-  if (unsupported.length > 0) {
-    throw new PromptRejectedError(
-      `OpenCode 2.x sessions do not support ${unsupported.join(", ")} yet`,
-    );
-  }
 }

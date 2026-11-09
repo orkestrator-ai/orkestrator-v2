@@ -1713,6 +1713,11 @@ export class NativeAgentService {
       input.agent,
       input.providerSessionId,
       async () => {
+        // A resumed or forked OpenCode 2.x session keeps its line across a restart.
+        const openCodeProtocol =
+          input.agent === "opencode"
+            ? await provider.sessionProtocol?.(input.providerSessionId)
+            : undefined;
         provider.registerSession?.(input.providerSessionId, {
           origin: input.origin ?? "interactive-native",
           interactionPolicy:
@@ -1721,6 +1726,7 @@ export class NativeAgentService {
               ? UNATTENDED_AGENT_INTERACTION_POLICY
               : INTERACTIVE_AGENT_INTERACTION_POLICY),
           phase: input.phase,
+          ...(openCodeProtocol ? { openCodeProtocol } : {}),
         });
         // Same liveness-only rule as ensureSession: a failed last turn is not a
         // missing session, and adopting one must still succeed.
@@ -1743,6 +1749,7 @@ export class NativeAgentService {
           policy: input.policy,
           initialPromptPresentation: input.initialPromptPresentation,
           expectedProviderSessionId: input.expectedProviderSessionId,
+          ...(openCodeProtocol ? { openCodeProtocol } : {}),
         });
         void this.interactions.reconcileAgentInteractions().catch(() => undefined);
         return session;

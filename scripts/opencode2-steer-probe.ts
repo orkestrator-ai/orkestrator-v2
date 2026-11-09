@@ -62,13 +62,20 @@ function textOf(content: unknown): string {
 
 /** Each scripted reply is chosen by the latest user text the model was given. */
 export class ScriptedModel {
-  /** `tools` is every tool name the request offered the model. */
+  /**
+   * `tools` is every tool name the request offered the model;
+   * `lastUserContent` is the newest user message's raw content (text and file
+   * parts), and `reasoningEffort` the request's `reasoning_effort` (a model
+   * variant's setting), so a live test can see what reached the model.
+   */
   readonly calls: Array<{
     userTexts: string[];
     lastRole: string;
     tools: string[];
     /** The newest tool result the model was handed, when the request ends in one. */
     toolResult?: string;
+    lastUserContent?: unknown;
+    reasoningEffort?: unknown;
   }> = [];
   private server: ReturnType<typeof Bun.serve> | undefined;
 
@@ -87,10 +94,14 @@ export class ScriptedModel {
         const tools = (body.tools ?? []).flatMap((tool) =>
           typeof tool.function?.name === "string" ? [tool.function.name] : [],
         );
+        const lastUserContent = messages.filter((m) => m.role === "user").at(-1)?.content;
+        const reasoningEffort = (body as { reasoning_effort?: unknown }).reasoning_effort;
         this.calls.push({
           userTexts,
           lastRole,
           tools,
+          lastUserContent,
+          reasoningEffort,
           ...(lastRole === "tool" ? { toolResult: textOf(messages.at(-1)?.content) } : {}),
         });
         const latestUser = userTexts.at(-1) ?? "";

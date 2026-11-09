@@ -18,7 +18,10 @@
  */
 import type { AgentInteractionOrigin } from "@orkestrator/protocol/agent-interactions";
 import type { AgentSessionOwner } from "@orkestrator/protocol/coordinator";
-import { nativeAgentCapabilities } from "@orkestrator/protocol/native-agent";
+import {
+  nativeAgentCapabilities,
+  normalizeOpenCodeModelProviders,
+} from "@orkestrator/protocol/native-agent";
 import { resolveOpenCodeProtocol } from "@orkestrator/protocol/opencode-protocol";
 import type { ProviderCreateSessionOptions } from "./agent-provider-contract.js";
 import type { Environment, PersistedNativeAgentSession } from "./models.js";
@@ -124,14 +127,24 @@ export async function persistedOpenCodeProtocol(
 /** The routing dependencies of one environment's OpenCode provider, or undefined without a 2.x host. */
 export function openCodeRoutingDependencies(
   options: Pick<NativeAgentServiceOptions, "openCode2HostServer">,
-  storage: SessionReader,
+  storage: SessionReader & {
+    loadConfig?: () => Promise<{
+      global: { openCodeProtocol?: unknown; openCodeModelProviders?: unknown };
+    }>;
+  },
   environmentId: string,
 ): OpenCodeRoutingDependencies | undefined {
   const host = options.openCode2HostServer;
   if (!host) return undefined;
+  // Read per call, as the 1.x catalogue does: a settings edit applies at once.
+  const global = async () => (storage.loadConfig ? (await storage.loadConfig()).global : {});
   return {
     connection: (start) => host(environmentId, start),
     persistedProtocol: (sessionId) => persistedOpenCodeProtocol(storage, environmentId, sessionId),
+    allowedModelProviders: async () =>
+      normalizeOpenCodeModelProviders((await global()).openCodeModelProviders),
+    newSessionsUseV2: async () =>
+      resolveOpenCodeProtocol((await global()).openCodeProtocol) === "v2",
   };
 }
 

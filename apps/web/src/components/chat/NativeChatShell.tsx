@@ -431,7 +431,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
                 {elapsedStartedAt !== undefined ? (
                   <LiveElapsed startedAt={elapsedStartedAt} />
                 ) : elapsedSeconds !== null && elapsedSeconds > 0 ? (
-                  <span className="text-xs text-muted-foreground/50">
+                  <span className="text-xs text-muted-foreground">
                     {formatElapsed(elapsedSeconds)}
                   </span>
                 ) : null}
@@ -443,7 +443,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
         {!isLoading && finalElapsedSeconds !== null && (
           <div className="px-2 @sm:px-4">
             <div className="chat-status-row mx-auto max-w-3xl min-w-0">
-              <span className="text-[10px] text-muted-foreground/40">
+              <span className="text-[11px] text-muted-foreground">
                 Completed in {formatElapsed(finalElapsedSeconds)}
               </span>
             </div>

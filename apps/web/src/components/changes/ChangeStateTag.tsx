@@ -11,7 +11,7 @@ export function isProvisionalProjection(projection: ChangeProjection): boolean {
 }
 
 /**
- * "Live" for a provisional projection, "Final" for a settled ready/partial
+ * "Live" for a provisional projection, "Final" for a settled ready
  * one, otherwise the backend's own state word (stale, unavailable, …).
  * Presentation only: the decision comes from the projection's reason keys
  * and state. `showReason` spells out the provisional reason inline so a live
@@ -32,7 +32,7 @@ export function ChangeStateTag({
     ? "Interrupted"
     : provisional
       ? "Live"
-      : projection.state === "ready" || projection.state === "partial"
+      : projection.state === "ready"
         ? "Final"
         : projection.state.charAt(0).toUpperCase() + projection.state.slice(1);
   const reason = interrupted
@@ -46,8 +46,8 @@ export function ChangeStateTag({
       data-change-state={provisional ? "live" : projection.state}
       title={reason ?? undefined}
       className={cn(
-        "flex shrink-0 items-center gap-1 text-[10px] uppercase tracking-wide",
-        provisional ? "text-amber-600 dark:text-amber-400" : "text-muted-foreground",
+        "flex shrink-0 items-center gap-1 text-[11px] uppercase tracking-wide",
+        provisional ? "text-success" : "text-muted-foreground",
         className,
       )}
     >

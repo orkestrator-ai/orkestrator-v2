@@ -4,7 +4,7 @@ import { useChangeProjection } from "@/hooks/useChangeProjection";
 import { projectionTitle } from "@/lib/changes/labels";
 import { cn } from "@/lib/utils";
 import { ChangeCountBadge } from "./ChangeCountBadge";
-import { ChangeStateTag } from "./ChangeStateTag";
+import { ChangeStateTag, isProvisionalProjection } from "./ChangeStateTag";
 
 export const THREAD_CHANGES_TITLE = "Thread changes";
 
@@ -26,18 +26,41 @@ export function ThreadChangesSummary({
   const projection = useChangeProjection(resourceKey);
   if (!projection) return null;
   const title = projectionTitle(projection);
+  const provisional = isProvisionalProjection(projection);
+  const noFileChanges =
+    !projection.badge.visible &&
+    (projection.state === "ready" || projection.state === "partial") &&
+    projection.counters.changedFiles === 0 &&
+    projection.hasFileChanges === false;
+  const compactFinal =
+    !provisional &&
+    projection.state === "ready" &&
+    projection.coverageState === "complete" &&
+    projection.observationState === "fresh" &&
+    !projection.reasonKeys.includes("changes.reason.interrupted");
   const diffIdentityId = projection.detail?.diffIdentityId ?? null;
   const canOpen = Boolean(diffIdentityId && onOpenDiff);
   const content = (
     <>
       <GitCompare aria-hidden="true" className="size-3.5 shrink-0" />
-      <span className="sr-only">{THREAD_CHANGES_TITLE}</span>
+      <span className="sr-only @2xl:not-sr-only">{THREAD_CHANGES_TITLE}</span>
       <ChangeCountBadge projection={projection} testId="thread-changes-badge" />
-      <ChangeStateTag projection={projection} />
+      {noFileChanges ? (
+        // The system's own account of the turn, so "I didn't change any files"
+        // is never only the model's word for it.
+        <span data-testid="thread-changes-none" className="shrink-0">
+          No file changes
+        </span>
+      ) : null}
+      {/* A settled "Final" gives way on narrow panes; abnormal and incomplete states always show. */}
+      <span aria-hidden="true" className={cn(compactFinal && "hidden @md:inline")}>
+        ·
+      </span>
+      <ChangeStateTag projection={projection} className={cn(compactFinal && "hidden @md:flex")} />
     </>
   );
   const classes = cn(
-    "flex min-w-0 items-center gap-1.5 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground",
+    "flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-1.5 py-0.5 text-xs text-muted-foreground",
     canOpen && "hover:bg-elevated hover:text-foreground",
     className,
   );

@@ -102,7 +102,7 @@ export const PullRequestUpdateNotice = memo(function PullRequestUpdateNotice({
           {summary ? <span className="max-w-[45%] shrink-0 truncate">· {summary}</span> : null}
         </span>
         {timestampLabel ? (
-          <span className="ml-auto shrink-0 pl-2 text-[10px] tabular-nums text-muted-foreground/70">
+          <span className="ml-auto shrink-0 pl-2 text-[11px] tabular-nums text-muted-foreground">
             {timestampLabel}
           </span>
         ) : null}

@@ -7087,7 +7087,7 @@ describe("ActionBar successful cleanup and merge actions", () => {
     expect(currentSelectedEnvironmentId).toBe("env-2");
   });
 
-  describe("the red trash button", () => {
+  describe("the trash button", () => {
     const trashButton = () => screen.getByRole("button", { name: "Delete environment" });
     const queryTrashButton = () => screen.queryByRole("button", { name: "Delete environment" });
     const withoutPr = () => {
@@ -7099,7 +7099,9 @@ describe("ActionBar successful cleanup and merge actions", () => {
       renderInAppCommandScope(<ActionBar />);
 
       const button = trashButton();
-      expect(button.getAttribute("data-variant")).toBe("destructive");
+      // A quiet ghost at rest; it turns coral only on hover.
+      expect(button.getAttribute("data-variant")).toBe("ghost");
+      expect(button.className).toContain("hover:text-failure");
       const createPr = screen.getByRole("button", { name: "Create PR" });
       const filePanel = screen.getByRole("button", { name: "Show file panel" });
       expect(

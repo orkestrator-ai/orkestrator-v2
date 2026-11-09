@@ -9,6 +9,56 @@ import type { NativeMessagePart, NativeToolInvocationPart } from "./native-messa
  */
 export const TOOL_GROUP_FOLD_MIN_CALLS = 3;
 
+/** What a tool call did, for the icon on its row. */
+export type ToolCallKind = "command" | "read" | "edit" | "search" | "other";
+
+const COMMAND_TOOL_KEYS = new Set([
+  "bash",
+  "shell",
+  "runcommand",
+  "command",
+  "exec",
+  "execcommand",
+  "terminal",
+  "runterminalcmd",
+]);
+const READ_TOOL_KEYS = new Set(["read", "readfile", "cursorread", "view", "viewfile"]);
+const EDIT_TOOL_KEYS = new Set([
+  "edit",
+  "multiedit",
+  "write",
+  "writefile",
+  "editfile",
+  "applypatch",
+  "patch",
+  "strreplace",
+  "strreplacebasededittool",
+  "notebookedit",
+  "searchreplace",
+]);
+const SEARCH_TOOL_KEYS = new Set([
+  "grep",
+  "glob",
+  "search",
+  "find",
+  "ls",
+  "list",
+  "listdir",
+  "codebasesearch",
+  "filesearch",
+  "grepsearch",
+]);
+
+/** Classifies a tool by its name, with separators and case stripped. */
+export function toolCallKind(toolName: string | undefined): ToolCallKind {
+  const key = (toolName ?? "").toLowerCase().replace(/[^a-z]/g, "");
+  if (COMMAND_TOOL_KEYS.has(key)) return "command";
+  if (READ_TOOL_KEYS.has(key)) return "read";
+  if (EDIT_TOOL_KEYS.has(key)) return "edit";
+  if (SEARCH_TOOL_KEYS.has(key)) return "search";
+  return "other";
+}
+
 export interface ToolGroupSummary {
   /** Tool calls in the group, not counting reasoning rows between them. */
   toolCount: number;

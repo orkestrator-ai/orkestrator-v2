@@ -35,7 +35,7 @@ function Chip({
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="space-y-1">
-      <div className="text-[10px] font-medium tracking-wider text-muted-foreground uppercase">
+      <div className="text-[11px] font-medium tracking-wider text-muted-foreground uppercase">
         {label}
       </div>
       {children}

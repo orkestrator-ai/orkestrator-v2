@@ -12,5 +12,7 @@ for (const state of ["ready", "partial"] as const)
     const view = render(<ChangeStateTag projection={projection} />);
     expect(screen.getByTestId("change-state-tag").textContent).toBe("Interrupted");
     view.rerender(<ChangeStateTag projection={{ ...projection, reasonKeys: [] }} />);
-    expect(screen.getByTestId("change-state-tag").textContent).toBe("Final");
+    expect(screen.getByTestId("change-state-tag").textContent).toBe(
+      state === "partial" ? "Partial" : "Final",
+    );
   });

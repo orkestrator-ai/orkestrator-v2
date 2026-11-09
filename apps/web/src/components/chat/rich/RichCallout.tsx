@@ -5,8 +5,10 @@ import { cn } from "@/lib/utils";
 
 /**
  * Presentation for the five GFM alert kinds. Meaning never depends on colour:
- * every callout has a distinct icon, a text label and a distinct border style,
- * so it reads correctly in monochrome and forced-colours modes. Content cannot
+ * every callout has a distinct icon and a text label, and most a distinct
+ * border style, so it reads correctly in monochrome and forced-colours modes.
+ * The border runs round the whole frame as a hairline rather than as a thick
+ * side bar (DESIGN.md: no coloured side borders above 1px). Content cannot
  * choose any of this: the kind comes from a fixed marker vocabulary.
  */
 const CALLOUTS: Record<
@@ -16,25 +18,25 @@ const CALLOUTS: Record<
   note: {
     label: "Note",
     icon: Info,
-    frame: "border-l-4 border-solid border-sky-500/70 bg-sky-500/5",
+    frame: "border border-solid border-sky-500/60 bg-sky-500/5",
     accent: "text-sky-600 dark:text-sky-300",
   },
   tip: {
     label: "Tip",
     icon: Lightbulb,
-    frame: "border-l-4 border-dotted border-emerald-500/70 bg-emerald-500/5",
+    frame: "border border-dotted border-emerald-500/70 bg-emerald-500/5",
     accent: "text-emerald-600 dark:text-emerald-300",
   },
   important: {
     label: "Important",
     icon: MessageSquareWarning,
-    frame: "border-l-4 border-double border-violet-500/70 bg-violet-500/5",
+    frame: "border border-solid border-violet-500/60 bg-violet-500/5",
     accent: "text-violet-600 dark:text-violet-300",
   },
   warning: {
     label: "Warning",
     icon: AlertTriangle,
-    frame: "border-l-4 border-dashed border-amber-500/80 bg-amber-500/5",
+    frame: "border border-dashed border-amber-500/70 bg-amber-500/5",
     accent: "text-amber-700 dark:text-amber-300",
   },
   caution: {

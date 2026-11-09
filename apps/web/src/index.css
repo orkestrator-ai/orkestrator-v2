@@ -168,8 +168,22 @@
   --color-input: #262a32;
   /* Shared raised surface for text fields, selects, and agent compose bars. */
   --color-input-surface: color-mix(in srgb, var(--color-zinc-900) 90%, transparent);
+  /*
+   * The compose bar's surface. Opaque, unlike `input-surface`: the compose dock
+   * floats over a transcript that scrolls beneath it, and a translucent card
+   * let that text show through whatever the user was typing.
+   */
+  --color-compose-surface: var(--color-zinc-900);
   --color-primary: #3b82f6;
   --color-primary-foreground: #ffffff;
+  /*
+   * The fill for a control that carries white text or glyphs (filled buttons,
+   * the selected segment, Send). White on `--color-primary` is 3.7:1, below
+   * WCAG AA for 14px text; this deeper step of the same blue is 5.2:1.
+   * `--color-primary` stays the signal blue for links, rings, bars and dots,
+   * which sit on the dark ground where a darker blue would lose contrast.
+   */
+  --color-primary-fill: #2563eb;
   --color-secondary: #23262e;
   --color-secondary-foreground: #e7e9ee;
   --color-accent: #23262e;
@@ -990,11 +1004,49 @@ body[data-orkestrator-dev-profile]::before {
 }
 
 /*
+ * Touch targets on coarse pointers: 40px, the floor DESIGN.md sets for touch.
+ * Keep message actions at their measured row size; enlarge their hit area
+ * within the surrounding footer spacing instead of growing transcript rows.
+ */
+@media (hover: none) and (pointer: coarse) {
+  [data-native-compose-toolbar] button,
+  [data-tab-close] {
+    min-height: 2.5rem;
+    min-width: 2.5rem;
+  }
+
+  /* Spend the toolbar's existing 12px top gap on the taller controls, so
+     the dock keeps its original height even in a short touch viewport. */
+  [data-native-compose-toolbar] {
+    padding-top: 0;
+  }
+
+  [data-message-actions] button {
+    min-width: 2.5rem;
+    position: relative;
+  }
+
+  [data-message-actions] button::after {
+    content: "";
+    position: absolute;
+    /* The footer has 4px above and 12px below: use that whitespace
+       without covering the previous tool's trigger. */
+    inset: calc(50% + 0.25rem) auto auto 50%;
+    min-width: 2.5rem;
+    min-height: 2.5rem;
+    width: 100%;
+    height: 100%;
+    transform: translate(-50%, -50%);
+  }
+}
+
+/*
  * Touch browsers can zoom focused editable content whose computed font size is
  * below 16px. Use a real 16px compose font while retaining the shared 20px
  * line height so the editor still displays the configured twelve lines before
  * it scrolls. The capability query leaves mouse/trackpad layouts unchanged.
  */
+
 @media (hover: none) and (pointer: coarse) {
   .native-compose-input {
     font-size: 16px;

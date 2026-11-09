@@ -190,7 +190,7 @@ export function NativeComposeBar({
         ) : null}
         <div
           data-testid={testId}
-          className="rounded-xl border border-border/70 bg-input-surface p-3 shadow-xl shadow-black/20"
+          className="rounded-xl border border-border/70 bg-compose-surface p-3 shadow-xl shadow-black/20 transition-colors duration-150 has-[.native-compose-input:focus]:border-zinc-700"
         >
           {attachments.length > 0 || annotations.length > 0 || migrated.length > 0 ? (
             <div className="mb-2 flex flex-wrap gap-2">
@@ -371,6 +371,7 @@ export function NativeComposeBar({
                   disabled={!onStop}
                   className="flex h-7 w-7 items-center justify-center rounded-lg bg-destructive text-white transition-colors hover:bg-destructive/85 disabled:cursor-not-allowed disabled:opacity-50"
                   title="Stop current query"
+                  aria-label="Stop current query"
                 >
                   <Square className="h-3.5 w-3.5 fill-current" />
                 </button>
@@ -402,8 +403,8 @@ export function NativeComposeBar({
                     different-coloured control here reads as a different action.
                   */
                     isLoading
-                      ? "bg-primary/25 text-blue-200 hover:bg-primary/40"
-                      : "bg-primary text-primary-foreground hover:bg-primary/85",
+                      ? "bg-primary-fill/30 text-blue-100 hover:bg-primary-fill/45"
+                      : "bg-primary-fill text-primary-foreground hover:bg-primary-fill/85",
                   )}
                   disabled={sendDisabled}
                   // Clicking Send must not pull focus out of the prompt input, so
@@ -411,6 +412,7 @@ export function NativeComposeBar({
                   onMouseDown={(event) => event.preventDefault()}
                   onClick={() => void onSend()}
                   title={sendTitle ?? (isLoading ? "Add to queue" : "Send message")}
+                  aria-label={sendTitle ?? (isLoading ? "Add to queue" : "Send message")}
                 >
                   <ArrowUp className="h-4 w-4" />
                 </Button>

@@ -78,7 +78,7 @@ export function WorkflowStatusIcon({
     case "canceled":
       return <Square aria-hidden="true" className={cn(iconClass, "text-muted-foreground")} />;
     case "pending":
-      return <Clock3 aria-hidden="true" className={cn(iconClass, "text-muted-foreground/70")} />;
+      return <Clock3 aria-hidden="true" className={cn(iconClass, "text-muted-foreground")} />;
     default:
       return <HelpCircle aria-hidden="true" className={cn(iconClass, "text-amber-300")} />;
   }

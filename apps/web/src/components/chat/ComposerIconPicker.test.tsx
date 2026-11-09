@@ -66,4 +66,47 @@ describe("ComposerIconPicker", () => {
     const bypass = await screen.findByRole("menuitemradio", { name: "Bypass" });
     expect(bypass.getAttribute("aria-disabled")).toBe("true");
   });
+
+  test("names a mode that skips asking in words, and only that one", () => {
+    const options = [
+      approvalModeIconOption({ id: "default", label: "Ask", kind: "ask" }),
+      approvalModeIconOption({ id: "bypassPermissions", label: "Bypass", kind: "auto-approve" }),
+    ];
+    const { rerender } = render(
+      <ComposerIconPicker
+        label="Approvals"
+        options={options}
+        value="default"
+        onValueChange={() => {}}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Approvals: Ask" }).textContent).toBe("");
+
+    rerender(
+      <ComposerIconPicker
+        label="Approvals"
+        options={options}
+        value="bypassPermissions"
+        onValueChange={() => {}}
+      />,
+    );
+    const trigger = screen.getByRole("button", { name: "Approvals: Bypass" });
+    expect(trigger.textContent).toBe("Bypass");
+    expect(trigger.querySelector("svg")?.getAttribute("class")).toContain("text-red-500");
+  });
+
+  test("states the shortcut that cycles it", () => {
+    render(
+      <ComposerIconPicker
+        label="Mode"
+        shortcut="Shift+Tab"
+        options={[conversationModeIconOption("build", "Build")]}
+        value="build"
+        onValueChange={() => {}}
+      />,
+    );
+    const trigger = screen.getByRole("button", { name: "Mode: Build" });
+    expect(trigger.getAttribute("aria-keyshortcuts")).toBe("Shift+Tab");
+    expect(trigger.getAttribute("title")).toContain("Shift+Tab");
+  });
 });

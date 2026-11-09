@@ -3037,7 +3037,7 @@ Running 1 Explore agent...
     );
 
     expect(await screen.findByRole("button", { name: "Start fresh" })).toBeTruthy();
-    fireEvent.pointerDown(screen.getByRole("button", { name: /Default.*\(High\)/ }));
+    fireEvent.pointerDown(screen.getByRole("button", { name: /Default.*· High/ }));
     await act(async () => {
       fireEvent.click(
         await screen.findByRole("menuitemradio", {
@@ -3091,7 +3091,7 @@ Running 1 Explore agent...
       />,
     );
 
-    fireEvent.pointerDown(screen.getByRole("button", { name: /Default.*\(High\)/ }));
+    fireEvent.pointerDown(screen.getByRole("button", { name: /Default.*· High/ }));
     await act(async () => {
       fireEvent.click(
         await screen.findByRole("menuitemradio", {
@@ -3106,7 +3106,7 @@ Running 1 Explore agent...
       expect(screen.getByPlaceholderText(/Ask Claude anything/)).toHaveProperty("disabled", true);
       expect(screen.getByRole("button", { name: "Terminal" })).toHaveProperty("disabled", true);
       expect(screen.getByRole("button", { name: "Interrupt" })).toHaveProperty("disabled", true);
-      expect(screen.getByRole("button", { name: /Default.*\(High\)/ })).toHaveProperty(
+      expect(screen.getByRole("button", { name: /Default.*· High/ })).toHaveProperty(
         "disabled",
         true,
       );

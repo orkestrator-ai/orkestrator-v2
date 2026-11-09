@@ -47,3 +47,15 @@ The unchanged owner passed with
 (exit 0, 1.2 s). Passing output was removed, so no isolated total is claimed.
 No assertion or timeout changed. Cause remains unconfirmed; the isolated pass
 does not replace the failed aggregate or establish an environmental exemption.
+
+
+## Main merge validation: zombie-only group variant — 2026-11-09
+
+- **Observing branch:** `impeccable-init-f5f64aff930f-r1`, pre-merge head `51fe8c87bf8ac436d6439650255781e05dcc0c85`, base `448e9fffb992c3b6306aa6562c88e23c59fb74d8`, merging `origin/main` at `7074cb4779070bf7c6dbc0dbf619f8b67ebbe883`.
+- **Exact test:** `groupHasLiveMember > does not count a zombie as a live member`, `packages/protocol/src/node/shell-process-state.test.ts:103`. This is a related zombie-only group observation in the same owner, rather than the empty nonexistent group assertion above; a shared cause has not been established.
+- **Original command:** `mise run test:logged -- --name merge-tests-final -- mise run test`. Protocol ran with two isolated workers inside the concurrent workspace group, alongside root and bridge groups and the component-browser aggregate.
+- **Failure:** expected `false`, received `true`, at 318.29 ms. Protocol totals: 5,755 passed, two skipped and one failed across 5,758 tests. This was the only failing test in the final default run; root, bridges and the protocol-lockfile group passed, and the workspace group's other packages passed.
+- **Evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.p7340l/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; outer wrapper `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.05sHXt/merge-tests-final.log.gz`.
+- **Complete unchanged owner:** `mise run test:logged -- --name merge-process-state-isolated -- bun test --cwd packages/protocol ./src/node/shell-process-state.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures` passed, exit 0, in 1.0 second. Passing raw output was deleted by the logged runner.
+- **Recurrence check:** `mise run flaky:recurrence -- 9840 --base 448e9fffb992c3b6306aa6562c88e23c59fb74d8` reported the case open.
+- **Assessment:** the isolated pass establishes intermittence. The existing hypothesis about the bounded `ps` inspection may also apply here, but no inspection failure or timeout was captured. No process implementation, assertion, timeout or skip changed. The aggregate remains red.

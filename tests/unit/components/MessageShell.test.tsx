@@ -816,7 +816,7 @@ describe("MessageErrorAlert", () => {
       />,
     );
 
-    const errorText = container.querySelector(".text-destructive.break-words") as HTMLElement;
+    const errorText = container.querySelector(".text-failure.break-words") as HTMLElement;
     expect(errorText).not.toBeNull();
     expect(errorText.textContent).toContain("A very long error message");
   });

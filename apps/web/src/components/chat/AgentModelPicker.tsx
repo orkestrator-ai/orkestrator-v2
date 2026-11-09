@@ -257,7 +257,7 @@ function PlatformBadgePill({ badge }: { badge: AgentPlatformBadge }) {
       data-native-platform-badge={badge.tone}
       title={badge.description}
       className={cn(
-        "mr-1.5 inline-block rounded-full border px-1.5 py-px align-baseline text-[10px] leading-4 font-medium",
+        "mr-1.5 inline-block rounded-full border px-1.5 py-px align-baseline text-[11px] leading-4 font-medium",
         badge.tone === "positive"
           ? "border-emerald-400/35 text-emerald-200"
           : "border-amber-400/40 text-amber-200",
@@ -270,12 +270,12 @@ function PlatformBadgePill({ badge }: { badge: AgentPlatformBadge }) {
 
 function ModelListLabel({ reorderMode }: { reorderMode?: FavoriteReorderMode }) {
   return (
-    <DropdownMenuLabel className="flex items-baseline justify-between gap-2 text-[10px] uppercase tracking-wider text-muted-foreground">
+    <DropdownMenuLabel className="flex items-baseline justify-between gap-2 text-[11px] uppercase tracking-wider text-muted-foreground">
       <span>Model</span>
       {reorderMode ? (
         <span
           data-native-favorite-reorder-hint={reorderMode}
-          className="shrink-0 normal-case tracking-normal text-muted-foreground/70"
+          className="shrink-0 normal-case tracking-normal text-muted-foreground"
         >
           {FAVORITE_REORDER_HINTS[reorderMode]}
         </span>
@@ -367,7 +367,7 @@ function ModelRow({
           <span className="flex min-w-0 items-center gap-1.5">
             <span className="min-w-0 truncate text-sm font-medium">{model.label}</span>
           </span>
-          <span className="flex min-w-0 items-center gap-1 text-[10px] text-muted-foreground/80">
+          <span className="flex min-w-0 items-center gap-1 text-[11px] text-muted-foreground/80">
             <span
               data-native-model-row-platform={model.platform}
               className="flex shrink-0"
@@ -867,7 +867,9 @@ export function AgentModelPicker({
   const showReasoningControls = reasoningOptions.length > 0;
   const providerSuffix = selectedProviderLabel ? ` · ${selectedProviderLabel}` : "";
   const displayLabel = selectedReasoningLabel
-    ? `${selectedModelLabel} (${selectedReasoningLabel}${fastModeEnabled ? " ⚡" : ""}${fastModeUnknown ? "; speed unknown" : ""})${providerSuffix}`
+    ? // A middle dot, not a second parenthetical: provider names already carry
+      // their own ("Default (recommended)"), and "(recommended) (High)" read as noise.
+      `${selectedModelLabel} · ${selectedReasoningLabel}${fastModeEnabled ? " ⚡" : ""}${fastModeUnknown ? " · speed unknown" : ""}${providerSuffix}`
     : `${selectedModelLabel}${fastModeEnabled ? " (⚡)" : fastModeUnknown ? " (speed unknown)" : ""}${providerSuffix}`;
   const moreModelCount = Math.max(0, visibleModels.length - VISIBLE_MODEL_ROWS);
   const canReorderFavorites =
@@ -965,12 +967,11 @@ export function AgentModelPicker({
           <span className="flex min-w-0 truncate">
             <span className="truncate">{selectedModelLabel}</span>
             {selectedReasoningLabel ? (
-              <span className="flex shrink-0">
-                <span>&nbsp;(</span>
+              <span className="flex shrink-0 text-muted-foreground">
+                <span aria-hidden="true">&nbsp;·&nbsp;</span>
                 <span>{selectedReasoningLabel}</span>
                 {fastModeEnabled ? <span>&nbsp;⚡</span> : null}
-                {fastModeUnknown ? <span>&nbsp;? speed</span> : null}
-                <span>)</span>
+                {fastModeUnknown ? <span>&nbsp;· ? speed</span> : null}
               </span>
             ) : fastModeEnabled ? (
               <span className="shrink-0">&nbsp;(⚡)</span>
@@ -1003,7 +1004,7 @@ export function AgentModelPicker({
               onKeyDown={(event) => {
                 if (event.key !== "Escape") event.stopPropagation();
               }}
-              className="h-8 min-w-0 flex-1 rounded-lg border border-border/70 bg-input-surface px-2 text-xs placeholder:text-muted-foreground/60 focus-hairline"
+              className="h-8 min-w-0 flex-1 rounded-lg border border-border/70 bg-input-surface px-2 text-xs placeholder:text-muted-foreground focus-hairline"
             />
             {/* Choices apply as they are made, so Done only dismisses the menu.
                 Closing through the controlled state (not a synthetic Escape)
@@ -1043,7 +1044,7 @@ export function AgentModelPicker({
         ) : null}
 
         {normalizedSearch && (!isMobile || mobileSubmenu === null) ? (
-          <div className="px-2 pb-1 text-[10px] text-muted-foreground">
+          <div className="px-2 pb-1 text-[11px] text-muted-foreground">
             {visibleModels.length} model{visibleModels.length === 1 ? "" : "s"} found
           </div>
         ) : null}
@@ -1146,7 +1147,7 @@ export function AgentModelPicker({
           </div>
         ) : isMobile ? (
           <div>
-            <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-muted-foreground">
+            <DropdownMenuLabel className="text-[11px] uppercase tracking-wider text-muted-foreground">
               Agent
             </DropdownMenuLabel>
             <div
@@ -1228,7 +1229,7 @@ export function AgentModelPicker({
               />
             </div>
             {moreModelCount > 0 ? (
-              <div className="border-t border-zinc-700/50 px-2 py-1 text-center text-[10px] text-muted-foreground">
+              <div className="border-t border-zinc-700/50 px-2 py-1 text-center text-[11px] text-muted-foreground">
                 Scroll for {moreModelCount} more model{moreModelCount === 1 ? "" : "s"}
               </div>
             ) : null}
@@ -1396,7 +1397,7 @@ export function AgentModelPicker({
                 />
               </div>
               {moreModelCount > 0 ? (
-                <div className="border-t border-zinc-700/50 px-2 py-1 text-center text-[10px] text-muted-foreground">
+                <div className="border-t border-zinc-700/50 px-2 py-1 text-center text-[11px] text-muted-foreground">
                   Scroll for {moreModelCount} more model{moreModelCount === 1 ? "" : "s"}
                 </div>
               ) : null}
@@ -1407,11 +1408,11 @@ export function AgentModelPicker({
                 role="group"
                 aria-label="Reasoning"
               >
-                <DropdownMenuLabel className="shrink-0 text-[10px] uppercase tracking-wider text-muted-foreground">
+                <DropdownMenuLabel className="shrink-0 text-[11px] uppercase tracking-wider text-muted-foreground">
                   Reasoning
                 </DropdownMenuLabel>
                 <div
-                  className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
+                  className="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-1"
                   data-native-reasoning-list
                 >
                   <ReasoningItems
@@ -1429,7 +1430,7 @@ export function AgentModelPicker({
                 role="group"
                 aria-label="Speed mode"
               >
-                <DropdownMenuLabel className="shrink-0 text-[10px] uppercase tracking-wider text-muted-foreground">
+                <DropdownMenuLabel className="shrink-0 text-[11px] uppercase tracking-wider text-muted-foreground">
                   Mode
                 </DropdownMenuLabel>
                 <div

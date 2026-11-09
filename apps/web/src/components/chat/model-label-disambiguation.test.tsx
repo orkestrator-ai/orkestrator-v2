@@ -65,12 +65,12 @@ describe("AgentModelPicker trigger", () => {
   test("names the selected model's provider when a look-alike is listed", () => {
     renderPicker(zen, [zen, go, other]);
     expect(screen.getByTestId("model-picker-trigger-provider").textContent).toContain("opencode");
-    expect(screen.getByRole("button", { name: "Beam Free (Default) · opencode" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Beam Free · Default · opencode" })).toBeTruthy();
   });
 
   test("shows the bare name when nothing else looks like it", () => {
     renderPicker(other, [zen, go, other]);
     expect(screen.queryByTestId("model-picker-trigger-provider") === null).toBe(true);
-    expect(screen.getByRole("button", { name: "Other (Default)" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Other · Default" })).toBeTruthy();
   });
 });

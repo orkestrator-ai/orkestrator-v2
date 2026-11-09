@@ -600,7 +600,8 @@ describe("NativeMessage", () => {
     rerender(<NativeMessage message={errorMessage} />);
 
     expect(screen.getByText("Bridge unavailable")).toBeTruthy();
-    expect(container.querySelector(".text-destructive")).toBeTruthy();
+    // Error text uses the failure red; destructive is reserved for fills.
+    expect(container.querySelector(".text-failure")).toBeTruthy();
     expect(screen.queryByText("Assistant") === null).toBe(true);
 
     const previousMessage: NativeMessageType = {

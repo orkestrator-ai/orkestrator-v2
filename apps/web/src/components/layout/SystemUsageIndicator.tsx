@@ -235,8 +235,8 @@ export function SystemUsageMeters({
             }
             data-near-full={nearFull ? "true" : undefined}
             className={cn(
-              "flex items-center gap-0.5 font-mono text-[10px] tabular-nums",
-              nearFull && "text-destructive",
+              "flex items-center gap-0.5 font-mono text-[11px] tabular-nums",
+              nearFull && "text-failure",
             )}
           >
             <Icon className="h-3 w-3" aria-hidden="true" />
@@ -341,7 +341,7 @@ export function SystemUsageIndicator({ className }: { className?: string }) {
         <header className="border-b border-border/60 px-4 py-3.5">
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0">
-              <div className="text-[10px] font-medium uppercase tracking-[0.18em] text-muted-foreground/70">
+              <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
                 Environments
               </div>
               <h2 className="mt-1 truncate text-sm font-semibold text-foreground">Process usage</h2>
@@ -431,14 +431,14 @@ function EnvironmentProcessPanel({ scope }: { scope?: NodeScope }) {
     <div className="space-y-4">
       {stale ? (
         <p
-          className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70"
+          className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground"
           role="status"
         >
           Data unavailable
         </p>
       ) : null}
       {snapshot.truncated ? (
-        <p className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
+        <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
           List truncated
         </p>
       ) : null}
@@ -469,7 +469,7 @@ function EnvironmentProcessGroupList({
   return (
     <section aria-label={`${group.environmentName} processes`}>
       <div className="flex items-baseline justify-between gap-2">
-        <h3 className="truncate text-[10px] font-medium uppercase tracking-[0.16em] text-primary">
+        <h3 className="truncate text-[11px] font-medium uppercase tracking-[0.16em] text-primary">
           {group.environmentName}
         </h3>
         <div
@@ -482,13 +482,13 @@ function EnvironmentProcessGroupList({
         </div>
       </div>
       {subtitle ? (
-        <p className="mt-0.5 truncate text-[10px] text-muted-foreground/60">{subtitle}</p>
+        <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{subtitle}</p>
       ) : null}
       {processCount === 0 ? (
         <p className="mt-2 text-xs text-muted-foreground">No processes</p>
       ) : (
         <div className="mt-2 space-y-1">
-          <div className="flex items-center gap-2 text-[10px] uppercase tracking-[0.14em] text-muted-foreground/60">
+          <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.14em] text-muted-foreground">
             <span className="min-w-0 flex-1">Process ({processCount})</span>
             <span className="w-10 text-right">CPU</span>
             <span className="w-14 text-right">RAM</span>

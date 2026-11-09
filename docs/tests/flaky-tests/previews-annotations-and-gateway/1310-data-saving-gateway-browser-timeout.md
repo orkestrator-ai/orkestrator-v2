@@ -213,6 +213,24 @@ The isolated pass confirms intermittence; the cause remains unconfirmed. Status
 stays open. No assertion, timeout or skip changed.
 
 
+## Native chat review repair validation — 2026-11-09
+
+- **Observing branch base:** `448e9fffb992c3b6306aa6562c88e23c59fb74d8`; repair commits `4817327b8` and `852481f2f`.
+- **Original command:** `mise run test:logged -- --name browser -- mise run test:browser`.
+- **Worker configuration:** nine component-browser workers, with focused browser checks running alongside the aggregate. The gateway owner was unchanged.
+- **Failure:** mobile `data saving survives reload, stays client-local and preserves event latency through resume and reconnect` exceeded its 60-second test deadline; context teardown reported `Target page, context or browser has been closed`.
+- **Evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.53aGI2/browser.log.gz` (1,585 passed, 152 skipped and three failed across 1,740 component cases in 1,574.2 seconds; the public-site stage did not run).
+- **Complete unchanged owner:** `ORKESTRATOR_E2E_PORT=1467 mise run test:logged -- --name gateway-isolated-final -- bunx playwright test --config e2e/playwright.config.ts e2e/DataSavingGateway.spec.ts --workers=1 --output output/playwright/gateway-isolated-final` passed both viewport cases, exit 0, in 57.4 seconds. Passing raw output was deleted by the logged runner.
+- **Recurrence check:** `mise run flaky:recurrence -- 1310 --base 448e9fffb992c3b6306aa6562c88e23c59fb74d8` reported the case open.
+- **Assessment:** intermittent deadline failure; the cause remains unconfirmed. No gateway implementation, assertion, timeout or skip changed.
+
+The subsequent exact complete browser rerun repeated the mobile 60-second deadline
+and context-close error. It had 1,586 passes, 152 skips and two failures across
+1,740 component cases in 1,281.6 seconds; the other failure was case 1249.
+Evidence: `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.fSAO2z/browser.log.gz`.
+The unchanged two-viewport owner had already passed in 57.4 seconds above.
+No gateway code, assertion, deadline or skip changed; the aggregate remains red.
+
 ## Dock notice review repairs — 2026-11-09
 
 - **Observing branch:** `fix-error-message-d954c85349a7-r1`, head `46a098de1cf920de3f4db6a14718a1831b22e87e`, base `448e9fffb9` (2.37.1-beta). This branch does not change this owner or the gateway.
@@ -222,3 +240,15 @@ stays open. No assertion, timeout or skip changed.
 - **Complete unchanged owner:** after the aggregate and sidebar diagnostic finished, `mise run test:logged -- --name data-saving-isolated -- bunx playwright test --config e2e/playwright.config.ts e2e/DataSavingGateway.spec.ts --workers=1 --output output/playwright/data-saving-isolated` passed both viewport cases, exit 0, in 38.0 seconds.
 - **Recurrence check:** `mise run flaky:recurrence -- 1310 --base 448e9fffb` reported the case open and instructed recording this observation. Status remains open.
 - **Assessment:** the unchanged isolated pass confirms intermittence. Host contention is a hypothesis for this observation; no new root cause is established. No implementation, assertion, timeout or skip changed in this owner.
+
+
+## Main merge validation — 2026-11-09
+
+- **Observing branch:** `impeccable-init-f5f64aff930f-r1`, pre-merge head `51fe8c87bf8ac436d6439650255781e05dcc0c85`, base `448e9fffb992c3b6306aa6562c88e23c59fb74d8`, merging `origin/main` at `7074cb4779070bf7c6dbc0dbf619f8b67ebbe883`.
+- **Original command:** `mise run test:logged -- --name merge-browser -- mise run test:browser`, nine component-browser workers, alongside the default deterministic suite. The gateway owner and implementation were unchanged by this merge resolution.
+- **Failure:** mobile `data saving survives reload, stays client-local and preserves event latency through resume and reconnect` (`e2e/DataSavingGateway.spec.ts:18`) exceeded its 60,000 ms deadline; cleanup at line 170 reported `browserContext.close: Target page, context or browser has been closed`.
+- **Suite counts:** 1,651 passed, 152 skipped and one failed across 1,804 component cases in 1,533.42 seconds. The chained public-site stage did not run.
+- **Evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.lQx9VV/merge-browser.log.gz`.
+- **Complete unchanged owner:** after the aggregate finished, `mise run test:logged -- --name merge-gateway-isolated -- bunx playwright test --config e2e/playwright.config.ts e2e/DataSavingGateway.spec.ts --workers=1 --output output/playwright/merge-gateway-isolated` passed both viewport cases, exit 0, in 37.6 seconds. Passing raw output was deleted by the logged runner.
+- **Recurrence check:** `mise run flaky:recurrence -- 1310 --base 448e9fffb992c3b6306aa6562c88e23c59fb74d8` reported the case open.
+- **Assessment:** the unchanged isolated pass confirms intermittence. The cause remains unconfirmed. No gateway implementation, assertion, timeout or skip changed; the aggregate remains red.

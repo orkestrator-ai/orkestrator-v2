@@ -3,6 +3,10 @@ import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
 import {
   Brain,
   ChevronRight,
+  FilePenLine,
+  FileText,
+  Search,
+  SquareTerminal,
   Wrench,
   AlertCircle,
   Pencil,
@@ -41,6 +45,7 @@ import {
   questionToolPreview,
   resolveQuestionToolAnswers,
 } from "@/lib/question-tool";
+import { toolCallKind } from "@/lib/chat/tool-group-summary";
 import { QuestionToolDetails } from "./QuestionToolDetails";
 import {
   parseScheduleWakeupArgs,
@@ -359,7 +364,7 @@ function backgroundTaskState(
     case "running":
       return {
         label: "running…",
-        className: "text-amber-600 dark:text-amber-300 animate-pulse",
+        className: "text-muted-foreground animate-pulse",
       };
     case "paused":
       return {
@@ -401,7 +406,7 @@ export function ToolDurationLabel({ label }: { label?: string }) {
   if (!label) return null;
   return (
     <span
-      className="shrink-0 tabular-nums text-[10px] text-muted-foreground/60"
+      className="shrink-0 tabular-nums text-[11px] text-muted-foreground"
       title={`Ran for ${label}`}
     >
       {label}
@@ -594,7 +599,7 @@ export function ToolPart({
           !hasExpandableContent && "opacity-0",
         )}
       />
-      <Wrench className="w-3.5 h-3.5 shrink-0" />
+      <ToolKindIcon toolName={toolName} />
       <span className="font-medium">{displayToolName}</span>
       {displayInfo && (
         <span
@@ -608,16 +613,14 @@ export function ToolPart({
       )}
       {isTaskAction && taskId && displayInfo?.text !== taskId && (
         <span
-          className="max-w-28 shrink-0 truncate font-mono text-[10px] text-muted-foreground/50"
+          className="max-w-28 shrink-0 truncate font-mono text-[11px] text-muted-foreground"
           title={taskId}
         >
           {taskId}
         </span>
       )}
       {shouldShowToolTitle && (
-        <span className="text-muted-foreground/70 truncate flex-1 text-left">
-          {displayToolTitle}
-        </span>
+        <span className="text-muted-foreground truncate flex-1 text-left">{displayToolTitle}</span>
       )}
       {presentation ? (
         <ChangeCountBadge projection={primaryChange} />
@@ -653,7 +656,7 @@ export function ToolPart({
 
       {deniedLine ? (
         <div
-          className="min-w-0 truncate pl-9 pr-2 pb-1 text-[10px] text-failure/80"
+          className="min-w-0 truncate pl-9 pr-2 pb-1 text-[11px] text-failure/80"
           title={deniedLine}
         >
           {deniedLine}
@@ -661,7 +664,7 @@ export function ToolPart({
       ) : null}
 
       {livingProgress ? (
-        <div className="flex min-w-0 items-center gap-2 pl-9 pr-2 pb-1 text-[10px] text-muted-foreground/70">
+        <div className="flex min-w-0 items-center gap-2 pl-9 pr-2 pb-1 text-[11px] text-muted-foreground">
           <span className="truncate">{livingProgress.content}</span>
           {livingProgress.elapsedMs !== undefined ? (
             <span className="shrink-0 tabular-nums">{formatElapsed(livingProgress.elapsedMs)}</span>
@@ -1022,7 +1025,7 @@ export function EditToolPart({
           </span>
         )}
         {shouldShowToolTitle && (
-          <span className="text-muted-foreground/70 truncate flex-1 text-left">
+          <span className="text-muted-foreground truncate flex-1 text-left">
             {displayToolTitle}
           </span>
         )}
@@ -1115,4 +1118,19 @@ export function EditToolPart({
       )}
     </Collapsible>
   );
+}
+
+const TOOL_KIND_ICONS = {
+  command: SquareTerminal,
+  read: FileText,
+  // Not the file card's pencil: a generic row must stay distinguishable from it.
+  edit: FilePenLine,
+  search: Search,
+  other: Wrench,
+} as const;
+
+/** The row's icon says what the call did: ran, read, edited or searched. */
+function ToolKindIcon({ toolName }: { toolName?: string }) {
+  const Icon = TOOL_KIND_ICONS[toolCallKind(toolName)];
+  return <Icon aria-hidden="true" className="w-3.5 h-3.5 shrink-0" />;
 }

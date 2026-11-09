@@ -142,7 +142,7 @@ export function WorkflowSnapshotCard({
         blockKey={viewKey}
         title={
           <span className="flex items-center gap-1.5">
-            <span className="rounded bg-elevated px-1 py-px text-[10px] font-semibold tracking-wide uppercase">
+            <span className="rounded bg-elevated px-1 py-px text-[11px] font-semibold tracking-wide uppercase">
               Snapshot
             </span>
             <span className="truncate">{title}</span>

@@ -4,6 +4,7 @@ import {
   TOOL_GROUP_FOLD_MIN_CALLS,
   shouldFoldToolGroup,
   summarizeToolGroup,
+  toolCallKind,
 } from "./tool-group-summary";
 
 function tool(overrides: Partial<NativeMessagePart> = {}): NativeMessagePart {
@@ -120,5 +121,19 @@ describe("shouldFoldToolGroup", () => {
         tool({ toolName: "AskUserQuestion", toolState: "pending", toolArgs: {} }),
       ]),
     ).toBe(false);
+  });
+});
+
+describe("tool call kinds", () => {
+  test("classifies tools by name, ignoring case and separators", () => {
+    expect(toolCallKind("Bash")).toBe("command");
+    expect(toolCallKind("run_command")).toBe("command");
+    expect(toolCallKind("Read")).toBe("read");
+    expect(toolCallKind("read_file")).toBe("read");
+    expect(toolCallKind("MultiEdit")).toBe("edit");
+    expect(toolCallKind("apply_patch")).toBe("edit");
+    expect(toolCallKind("Grep")).toBe("search");
+    expect(toolCallKind("TodoWrite")).toBe("other");
+    expect(toolCallKind(undefined)).toBe("other");
   });
 });

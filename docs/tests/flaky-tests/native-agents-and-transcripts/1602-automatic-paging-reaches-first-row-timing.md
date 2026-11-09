@@ -61,3 +61,23 @@ unchanged paging owner had already passed alone; no automatic-paging
 implementation or assertion was changed. Evidence:
 `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.IBipuK/repair-transcript-browser.log.gz`.
 The combined run remains non-green and is reported as such.
+
+
+## Native chat review repair validation — 2026-11-09
+
+- **Observing branch base:** `448e9fffb992c3b6306aa6562c88e23c59fb74d8`; repair commits `4817327b8` and `852481f2f`.
+- **Aggregate command:** `mise run test:logged -- --name browser -- mise run test:browser`, nine component-browser workers alongside focused browser checks. Mobile automatic paging reached its 30-second deadline with `Reached stop 0.` absent (expected one, received zero). The component run had 1,585 passes, 152 skips and three failures across 1,740 cases in 1,574.2 seconds; the public-site stage did not run.
+- **First complete owner:** `ORKESTRATOR_E2E_PORT=1467 mise run test:logged -- --name paging-settled-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/TranscriptPaging.spec.ts --workers=1 --output output/playwright/paging-settled-owner` had 38 passes, one skip and this one mobile failure in 253.6 seconds. This was not a passing isolated owner.
+- **Unchanged mobile owner:** `ORKESTRATOR_E2E_PORT=1467 mise run test:logged -- --name paging-current-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/TranscriptPaging.spec.ts --project mobile-chromium --workers=1 --output output/playwright/paging-current-owner` then passed all 20 mobile cases, exit 0, in 126.6 seconds. No source, assertion, timeout or skip changed between these two owner runs.
+- **Evidence:** aggregate `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.53aGI2/browser.log.gz`; first owner `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.cwpMcM/paging-settled-owner.log.gz`. Passing raw output was deleted by the logged runner.
+- **Recurrence check:** `mise run flaky:recurrence -- 1602 --base 448e9fffb992c3b6306aa6562c88e23c59fb74d8` reported the case open.
+- **Assessment:** confirmed intermittent recurrence; the cause of automatic paging stopping in these runs remains unconfirmed. The separate same-minute test now waits for its opening animations before measuring paging; its pixel bounds remain unchanged. The new coarse-pointer geometry check and both short-viewport paging cases passed in the failing owner too.
+
+The subsequent exact `mise run test:logged -- --name browser -- mise run test:browser`
+rerun passed every applicable paging case in both viewport projects, including
+automatic paging. It remained red only on the unrelated cases 1249 and 1310
+(1,586 passed, 152 skipped, two failed in 1,281.6 seconds). Evidence:
+`/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.fSAO2z/browser.log.gz`.
+The final invisible hit-area adjustment was separately verified by the unchanged
+40px size and geometry assertions plus the new previous-content non-overlap
+assertion (`touch-hit-area-final`, exit 0, 11.0 seconds).

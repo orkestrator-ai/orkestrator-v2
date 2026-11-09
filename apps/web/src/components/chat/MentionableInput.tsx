@@ -7,6 +7,7 @@ import {
   useImperativeHandle,
   type KeyboardEvent,
   type ClipboardEvent,
+  type FormEvent,
 } from "react";
 import { isFocusHeldElsewhere } from "@/lib/background-focus";
 import { cn } from "@/lib/utils";
@@ -89,6 +90,23 @@ function extractText(element: HTMLElement): string {
     }
   }
   return text;
+}
+
+/**
+ * Recognizes a possible browser deletion placeholder (`<br>` or
+ * `<div><br></div>`). Authored breaks can have the same shape, so the input
+ * event must also identify a deletion before this content can be discarded.
+ */
+export function isEditorVisuallyEmpty(element: HTMLElement): boolean {
+  if ((element.textContent ?? "") !== "") return false;
+  if (element.querySelector('[data-mention="true"]')) return false;
+  if (element.childNodes.length === 0) return true;
+  if (element.childNodes.length !== 1) return false;
+  const child = element.firstChild;
+  return (
+    child instanceof HTMLElement &&
+    (child.tagName === "BR" || (isBlockElement(child) && isEditorVisuallyEmpty(child)))
+  );
 }
 
 function getCursorOffset(element: HTMLElement): number {
@@ -483,29 +501,37 @@ export const MentionableInput = forwardRef<MentionableInputRef, MentionableInput
       setCursorOffset(input, cursorPosition);
     }, [disabled]);
 
-    const handleInput = useCallback(() => {
-      if (!inputRef.current || isComposingRef.current) return;
+    const handleInput = useCallback(
+      (event?: FormEvent<HTMLDivElement>) => {
+        if (!inputRef.current || isComposingRef.current) return;
 
-      const input = inputRef.current;
-      // Chromium leaves a sole BR as the caret holder after deleting all text.
-      // It is an empty editor, whereas multiple BRs represent deliberate lines.
-      const isEmptyCaretHolder =
-        input.childNodes.length === 1 && input.firstChild?.nodeName === "BR";
-      const newText = isEmptyCaretHolder ? "" : extractText(input);
-      const remainingMentions = mentions.filter((mention) =>
-        newText.includes(`@${mention.filename}`),
-      );
+        // A cleared editor keeps the browser's `<br>` placeholder, which would
+        // otherwise read as a "\n" draft: the placeholder text never returned
+        // and the stray draft followed the user to other clients.
+        if (
+          (event?.nativeEvent as InputEvent | undefined)?.inputType?.startsWith("delete") &&
+          inputRef.current.childNodes.length > 0 &&
+          isEditorVisuallyEmpty(inputRef.current)
+        ) {
+          inputRef.current.replaceChildren();
+        }
+        const newText = extractText(inputRef.current);
+        const remainingMentions = mentions.filter((mention) =>
+          newText.includes(`@${mention.filename}`),
+        );
 
-      lastValueRef.current = newText;
-      lastMentionsRef.current = remainingMentions;
-      onChange(newText, remainingMentions);
+        lastValueRef.current = newText;
+        lastMentionsRef.current = remainingMentions;
+        onChange(newText, remainingMentions);
 
-      if (onCursorChange) {
-        const cursorPosition = getCursorOffset(inputRef.current);
-        lastCursorPositionRef.current = cursorPosition;
-        onCursorChange(cursorPosition, newText);
-      }
-    }, [mentions, onChange, onCursorChange]);
+        if (onCursorChange) {
+          const cursorPosition = getCursorOffset(inputRef.current);
+          lastCursorPositionRef.current = cursorPosition;
+          onCursorChange(cursorPosition, newText);
+        }
+      },
+      [mentions, onChange, onCursorChange],
+    );
 
     const handleCompositionStart = useCallback(() => {
       isComposingRef.current = true;

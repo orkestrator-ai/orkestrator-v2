@@ -613,10 +613,18 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
       <ToolbarTooltipTrigger
         tooltip={isMerging ? "Merge in progress..." : "Delete this environment"}
       >
+        {/*
+          A ghost that turns coral on hover, not a standing red fill: deleting is
+          a rare act behind its own confirmation, and a red block beside Create
+          PR made it the loudest object on every finished environment.
+        */}
         <Button
-          variant={isGrid ? "ghost" : "destructive"}
+          variant="ghost"
           size="icon-sm"
-          className={cn(isGrid && "text-destructive hover:text-destructive")}
+          className={cn(
+            "hover:bg-destructive/15 hover:text-failure",
+            isGrid && "text-failure hover:text-failure",
+          )}
           onClick={() => setDeleteTargetId(selectedEnvironment.id)}
           disabled={isMerging || isSelectedEnvironmentDeleteInFlight}
           aria-label="Delete environment"

@@ -13,3 +13,8 @@
 - **Evidence:** `output/agent-testing/address-electron-fixed/electron/results.json`, `output/agent-testing/address-seeded-owner/electron/results.json`, and `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.4IsZos/address-electron-rerun.log.gz`.
 - **Cause:** not established. The helper rejects base ports at or above 65000 and probes the next port after releasing the base reservation. Candidate ports and bind errors were not captured, so neither a rejected high port nor a competing listener is proven. No application code, assertion, timeout or skip was changed for this observation.
 - **Related:** [4470](4470-seeded-preview-moved-port-link-not-printed.md) concerns a later moved-port terminal-link wait, a different failure.
+
+The final exact full-suite rerun passed: 69 passed, 5 skipped, 611.7 s,
+`ORKESTRATOR_AGENT_TEST_RUN_ID=address-electron-final mise run test:logged -- --name address-electron-final -- mise run test:agent:electron`.
+Evidence: `output/agent-testing/address-electron-final/electron/results.json`.
+The allocation helper remains unchanged and this case stays open.

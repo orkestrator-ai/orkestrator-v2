@@ -15,7 +15,7 @@ now moved for the worst of them, and `bun audit` reports more than L18 named.
 ### Tasks
 
 1. **Move Pi to 1.5.0**: clears all four high and four moderate `undici` advisories, and the `minimatch` one on Pi's side. Status: done (already upgraded on the build baseline; re-verified 2026-11-09).
-2. **Take Electron 45.2.3**: the lockfile now resolves the latest 45.x patch, with manifests unchanged. Status: open (lockfile implementation done 2026-11-09; Electron suite and unsigned packaged first-window smoke remain for final preparation).
+2. **Take Electron 45.2.3**: the lockfile now resolves the latest 45.x patch, with manifests unchanged. Status: done (lockfile implementation and mini Electron/unsigned packaged qualification completed 2026-11-09).
 3. **Refresh the in-range MCP transitive pins**: `@hono/node-server` 1.19.17 and 2.1.1, and `qs` 6.16.0. Status: done (2026-11-09).
 4. **`minimatch` under electron-builder**: build-time only. Status: open (deferred to 0032 task 2; 26.18.1 still requires affected minimatch).
 5. **`postcss-selector-parser` 6.0.10**: dev only, through `@tailwindcss/typography`. Status: open (accepted until upstream moves; 0.5.20 still pins 6.0.10 exactly, confirmed 2026-11-09).
@@ -98,13 +98,15 @@ sandboxed-preload removals were already handled by the application. No patch
 migration was identified. Context7's indexed tree lacked per-release notes, so
 the official release pages supplied this check.
 
-The implementation stage deliberately did not run a separate full build or
-final validation pass, as requested by this grouped ticket's pipeline brief.
-Final preparation must run `mise run test:agent:electron` and an unsigned
-packaged first-window smoke against a disposable data directory, with
-`ORKESTRATOR_HOST_REACHABILITY_CHECK=off`, no provider turns, no signing or
-notarization, and none of ports 34121, 34122 or 45507. Mark task 2 done only
-after that live evidence is recorded.
+Address-findings qualification completed on mini on 2026-11-09:
+
+- `ORKESTRATOR_HOST_REACHABILITY_CHECK=off mise run test:logged -- --name address-package-security -- mise run test:package:security` passed (81.0 s): the unsigned local shipping package reached its renderer, all 3 packaged security cases passed, and all 9 fuse/layout checks passed. The shipped framework records `CFBundleVersion` 45.2.3. Evidence: `output/package-security/darwin-arm64.json` and `output/agent-testing/electron-packaged/electron-packaged/results.json`. No Developer ID signing, notarization, installation, provider turn or production data directory was used.
+- `ORKESTRATOR_AGENT_TEST_RUN_ID=address-electron-final mise run test:logged -- --name address-electron-final -- mise run test:agent:electron` passed (611.7 s): 69 passed, 5 platform/opt-in skips, no failures. Evidence: `output/agent-testing/address-electron-final/electron/results.json`. The specs own and clean their temporary profiles; all ports are dynamically allocated.
+- The first native run reproduced mini Vim's `noruler` startup under the clean fixture. `54aead6ff` explicitly enables the ruler while keeping the readiness, saved-file and same-PTY assertions. The owner and final full suite pass. A later native run hit a separate adjacent-port reservation setup failure; its unchanged owner passed all 6 tests and the final full suite passed. Evidence and the unconfirmed cause remain in [flake 9901](../../tests/flaky-tests/previews-annotations-and-gateway/9901-seeded-preview-adjacent-port-reservation.md).
+
+Task 2 is complete. Grouped validation still has the undetermined OpenCode
+empty-database assertion and Docker Files-panel result recorded in the pipeline;
+this task's runtime qualification does not resolve those separate failures.
 
 **Decisions.**
 
@@ -207,12 +209,13 @@ and typography's postcss-selector-parser 6.0.10 remain. Audit prints Pi's
 unaffected minimatch 11.0.3 alongside affected copies; Pi's dependency is fixed.
 No undici, node-server or qs advisories remain. The historical inventory was
 12 advisories (4 high, 8 moderate); the build baseline already had Pi 1.5.0
-and started at 4 moderate advisories. Electron now resolves 45.2.3; its final
-Electron and unsigned packaged smoke evidence is still pending (task 2).
+and started at 4 moderate advisories. Electron now resolves 45.2.3; mini
+Electron and unsigned packaged qualification passed on 2026-11-09 (task 2).
 
 Earlier Pi/MCP checks: version drift, complete Pi bridge suite (including the new
 loopback provider session), Pi bridge typecheck, and backend MCP tests.
-Full repository validation belongs to the next pipeline preparation stage.
+The grouped default-suite rerun fixed CLI packing but still fails on the
+unchanged OpenCode empty-database assertion; verification retains that limitation.
 That Pi/MCP stage used no app profile, real login, billed turn, Docker/network
 mutation or toolchain installation. The subsequent grouped build refreshed
 Electron's lock, checked release notes and frozen installs, and separately used
@@ -246,9 +249,11 @@ versions; controlled repository inputs justify accepting these two advisories.
 Chose the recommended in-range patch refresh, retaining both manifests and
 leaving Electron 46 to 0032. This ships current Chromium fixes without a major
 API migration. The release notes were checked and the pinned-Bun locks pass
-frozen installs. Final preparation owns the Electron suite and unsigned
-packaged smoke once against the committed snapshot; task 2 remains open for
-that evidence rather than claiming an unobserved pass.
+frozen installs. Mini qualification now passes the full native suite and unsigned
+shipping-package smoke. The native fixture explicitly enables Vim’s ruler so
+its readiness check works with mini’s clean Vim defaults; no product behavior
+or assertion was weakened. The separate port-allocation flake is recorded
+with its failed full run and passing unchanged owner, without claiming a cause.
 
 ## Constraints and rationale
 

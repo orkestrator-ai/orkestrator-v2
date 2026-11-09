@@ -57,3 +57,10 @@ Evidence: `output/agent-testing/electron-smoke/electron/results.json` and
 `output/agent-testing/address-terminal-owner/electron/results.json`;
 compressed logs under `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.0nN8YW/`
 and `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.EXidlT/`.
+
+The final exact Electron suite rerun with the ruler fixture passed (69 passed,
+5 skipped, 611.7 s):
+`ORKESTRATOR_AGENT_TEST_RUN_ID=address-electron-final mise run test:logged -- --name address-electron-final -- mise run test:agent:electron`.
+Evidence: `output/agent-testing/address-electron-final/electron/results.json`.
+An intervening adjacent-port setup failure is tracked separately as
+[9901](../previews-annotations-and-gateway/9901-seeded-preview-adjacent-port-reservation.md).

@@ -603,21 +603,52 @@ export function classifyValidationFailures(input: ValidationFailureClassifierInp
     return result;
   }
 
-  /** The files a test loads, and the first changed file among them. */
+  // Mirrors the protocol's MAX_RELATED_IMPORT_HOPS (this function cannot
+  // import it): a changed file further than this many import edges from the
+  // test's own code makes the failure `undetermined`, not `related`.
+  const MAX_RELATED_IMPORT_HOPS = 2;
+
+  /**
+   * The files a test loads, and the changed file among them closest to the
+   * test's own code, with its distance in import edges (`changedHops`).
+   *
+   * The test's own code is the test file and the helpers it reaches through
+   * other helpers; a file any of them imports is one hop away. A bunfig
+   * preload is itself one hop away, as a file the test imports. The walk is
+   * breadth-first by distance, every own file first, so the first changed file
+   * it meets is the closest and the walk stops there.
+   */
   function importClosure(
     testFile: string,
     withPreloads: boolean,
-  ): { files: string[]; changedHit: string | null; incomplete: boolean } {
+  ): {
+    files: string[];
+    changedHit: string | null;
+    changedHops: number | null;
+    incomplete: boolean;
+  } {
     const seen = new Set<string>();
-    const queue = [testFile, ...(withPreloads ? preloads : [])];
+    // Own files expand before anything else; distances in `queue` never
+    // decrease, so each file is settled at its shortest distance.
+    const own = [testFile];
+    const queue: Array<{ file: string; hops: number }> = withPreloads
+      ? preloads.map((file) => ({ file, hops: 1 }))
+      : [];
     let changedHit: string | null = null;
+    let changedHops: number | null = null;
     let incomplete = false;
-    for (let next = 0; next < queue.length; next += 1) {
-      const file = queue[next]!;
+    let nextOwn = 0;
+    let nextQueued = 0;
+    while (nextOwn < own.length || nextQueued < queue.length) {
+      const isOwn = nextOwn < own.length;
+      const file = isOwn ? own[nextOwn++]! : queue[nextQueued]!.file;
+      // An own helper is a direct import of the test or of another helper.
+      const hops = isOwn ? 1 : queue[nextQueued++]!.hops;
       if (seen.has(file)) continue;
       seen.add(file);
       if (file !== testFile && changed.has(file)) {
         changedHit = file;
+        changedHops = hops;
         break;
       }
       if (graphBudget <= 0 || outOfTime()) {
@@ -628,9 +659,13 @@ export function classifyValidationFailures(input: ValidationFailureClassifierInp
       graphBudget -= 1;
       const { deps, incomplete: partial } = dependenciesOf(file);
       if (partial) incomplete = true;
-      for (const dependency of deps) if (!seen.has(dependency)) queue.push(dependency);
+      for (const dependency of deps) {
+        if (seen.has(dependency)) continue;
+        if (isOwn && isHelperFile(dependency)) own.push(dependency);
+        else queue.push({ file: dependency, hops: isOwn ? 1 : hops + 1 });
+      }
     }
-    return { files: [...seen], changedHit, incomplete };
+    return { files: [...seen], changedHit, changedHops, incomplete };
   }
 
   // ---------------------------------------------------------------------------
@@ -1017,6 +1052,7 @@ export function classifyValidationFailures(input: ValidationFailureClassifierInp
   function classify(failure: ParsedFailure): any {
     const reasons: string[] = [];
     let changedPath: string | undefined;
+    let changedPathHops: number | undefined;
     if (failure.outcome === "flaky") reasons.push("passed-on-retry");
     if (inFlakeRegistry(failure)) reasons.push("known-flaky");
     const traceable =
@@ -1029,15 +1065,23 @@ export function classifyValidationFailures(input: ValidationFailureClassifierInp
         reasons.push("not-import-traceable");
       } else if (!changed.has(failure.file)) {
         const closure = importClosure(failure.file, failure.runner === "bun");
-        const referenced = closure.changedHit
-          ? null
-          : referencedChange(failure.file, closure.files);
-        if (closure.changedHit) {
+        const close =
+          closure.changedHit !== null && (closure.changedHops ?? 0) <= MAX_RELATED_IMPORT_HOPS;
+        // A distant import still lets the test's own path references decide;
+        // the walk stopped at the hit, but every own file was read before it.
+        const referenced = close ? null : referencedChange(failure.file, closure.files);
+        if (close) {
           reasons.push("imports-changed-file");
-          changedPath = closure.changedHit;
+          changedPath = closure.changedHit!;
+          changedPathHops = closure.changedHops!;
         } else if (referenced) {
           reasons.push("references-changed-path");
           changedPath = referenced;
+        } else if (closure.changedHit) {
+          // Never `unrelated`: the verifier sees the distant import.
+          reasons.push("reaches-changed-file-indirectly");
+          changedPath = closure.changedHit;
+          changedPathHops = closure.changedHops!;
         } else if (input.changedFilesTruncated || globalChanges.length > 0) {
           reasons.push("global-change");
           changedPath ??= globalChanges[0];
@@ -1071,6 +1115,7 @@ export function classifyValidationFailures(input: ValidationFailureClassifierInp
       verdict,
       reasons,
       ...(changedPath ? { changedPath: clip(changedPath) } : {}),
+      ...(changedPathHops !== undefined ? { changedPathHops } : {}),
     };
   }
 

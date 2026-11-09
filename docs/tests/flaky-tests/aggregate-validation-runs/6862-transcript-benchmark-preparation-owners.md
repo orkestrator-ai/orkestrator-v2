@@ -9,7 +9,7 @@
 
 ## Failing tests
 
-The triage marked these ten `related` with the reason `imports-changed-file` and the changed path `apps/backend/src/core/native-agent-projection-encoding.ts`. Each owner does reach that module, but only as one of 684 to 869 modules in its import closure (counted with `bun build --metafile`). The branch's only change there is what `digestWithMessages` feeds its hash; it has no import-time effect, and none of these tests calls it.
+The triage marked these ten `related` with the reason `imports-changed-file` and the changed path `apps/backend/src/core/native-agent-projection-encoding.ts`. Each owner does reach that module, but only as one of 684 to 869 modules in its import closure (counted with `bun build --metafile`). The branch's only change there is what `digestWithMessages` feeds its hash; it has no import-time effect, and none of these tests calls it. To-do 6920 limited `related` by import to a changed file within two hops of the test's own code (2026-11-09); a replay of these ten owners against that change, with this branch's changed module, gives `undetermined` with `reaches-changed-file-indirectly` at 3 and 8 hops ([failure triage](../../../architecture/review-preparation.md#failure-triage)).
 
 | Owner | Tests that failed in the aggregate | Original failure |
 | --- | --- | --- |

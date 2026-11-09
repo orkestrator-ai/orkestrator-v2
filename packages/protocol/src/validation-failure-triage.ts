@@ -57,8 +57,18 @@ export const VALIDATION_FAILURE_REASONS = [
   "failed-on-same-base",
   /** The branch changed the test file itself. */
   "test-file-changed",
-  /** The test's static import graph reaches a file the branch changed. */
+  /**
+   * The test, a preload or a test helper the test reaches through its own
+   * helpers imports a changed file directly, or through one module between
+   * them (at most {@link MAX_RELATED_IMPORT_HOPS} hops). Makes it `related`.
+   */
   "imports-changed-file",
+  /**
+   * The test's static import graph reaches a changed file only further away
+   * than {@link MAX_RELATED_IMPORT_HOPS} hops: through a widely shared
+   * module, say. Leaves it `undetermined` for the verifier, never `unrelated`.
+   */
+  "reaches-changed-file-indirectly",
   /**
    * The test or a test helper it imports names, in code, a changed file, its
    * basename or a directory above it; or another module it loads names a
@@ -91,10 +101,18 @@ export interface TriagedValidationFailure {
   verdict: ValidationFailureVerdict;
   reasons: ValidationFailureReason[];
   /**
-   * For `imports-changed-file`/`references-changed-path`: the changed file, or
-   * the changed directory a test or helper named.
+   * For `imports-changed-file`/`reaches-changed-file-indirectly`/
+   * `references-changed-path`: the changed file, or the changed directory a
+   * test or helper named.
    */
   changedPath?: string;
+  /**
+   * For `imports-changed-file`/`reaches-changed-file-indirectly`: import edges
+   * between the test's own code (the test file, or a helper it reaches
+   * through other helpers) and {@link changedPath}; a bunfig preload counts
+   * as one. 1 is a direct import.
+   */
+  changedPathHops?: number;
 }
 
 export interface TriagedValidationCommand {
@@ -144,6 +162,15 @@ export interface ValidationFailureSummary {
   /** Set when {@link ids} was cut to {@link MAX_VALIDATION_FAILURE_SUMMARY_IDS}. */
   truncated?: boolean;
 }
+
+/**
+ * How far, in import edges from the test's own code, a changed file may be
+ * and still make the failure `related` on its own (to-do 6920). A direct
+ * import is one hop; one module between them is two. A backend test's graph
+ * holds over a thousand files, so any-depth matching made a change to one
+ * widely shared module `related` to most of the repository's failures.
+ */
+export const MAX_RELATED_IMPORT_HOPS = 2;
 
 export const MAX_TRIAGED_COMMANDS = 32;
 export const MAX_TRIAGED_FAILURES_PER_COMMAND = 100;
@@ -217,6 +244,7 @@ function isTriagedFailure(value: unknown): value is TriagedValidationFailure {
       "verdict",
       "reasons",
       "changedPath",
+      "changedPathHops",
     ]) &&
     isBoundedText(value.key) &&
     VALIDATION_FAILURE_RUNNERS.includes(value.runner as ValidationFailureRunner) &&
@@ -229,7 +257,9 @@ function isTriagedFailure(value: unknown): value is TriagedValidationFailure {
     value.reasons.every((reason) =>
       VALIDATION_FAILURE_REASONS.includes(reason as ValidationFailureReason),
     ) &&
-    (value.changedPath === undefined || isBoundedText(value.changedPath))
+    (value.changedPath === undefined || isBoundedText(value.changedPath)) &&
+    (value.changedPathHops === undefined ||
+      (Number.isSafeInteger(value.changedPathHops) && (value.changedPathHops as number) >= 1))
   );
 }
 

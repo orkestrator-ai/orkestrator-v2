@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import {
   isValidationFailureTriage,
+  MAX_RELATED_IMPORT_HOPS,
   validationFailureKey,
   type ValidationFailureTriage,
 } from "@orkestrator/protocol/validation-failure-triage";
@@ -570,6 +571,181 @@ describe("paths named outside a test and its helpers", () => {
       verdict: "related",
       reasons: ["references-changed-path"],
       changedPath: "apps/web",
+    });
+  });
+});
+
+/**
+ * To-do 6920: a backend test's import graph holds over a thousand files, so a
+ * change to one widely shared module reached at any depth made most failures
+ * `related`. Only a changed file within MAX_RELATED_IMPORT_HOPS of the test's
+ * own code is; a distant one is `undetermined`, never `unrelated`.
+ */
+describe("import distance", () => {
+  const OUTPUT = ["src/a.test.ts:", "(fail) loads its module", " 0 pass", " 1 fail"].join("\n");
+  /** `src/a.test.ts` imports `src/m1.ts`, which imports `src/m2.ts`, and so on to `src/m<depth>.ts`. */
+  function chain(depth: number, extra: Record<string, string> = {}): Record<string, string> {
+    const files: Record<string, string> = {
+      "src/a.test.ts": 'import { m } from "./m1";\ntest("loads its module", () => {});\n',
+    };
+    for (let index = 1; index <= depth; index += 1) {
+      files[`src/m${index}.ts`] =
+        index < depth
+          ? `import { m as next } from "./m${index + 1}";\nexport const m = next;\n`
+          : "export const m = 1;\n";
+    }
+    return { ...files, ...extra };
+  }
+
+  test("the protocol's hop limit admits a direct import and one module between", () => {
+    expect(MAX_RELATED_IMPORT_HOPS).toBe(2);
+  });
+
+  test("a changed file at the hop limit is related, and the verdict reports its distance", () => {
+    const root = fixture(chain(MAX_RELATED_IMPORT_HOPS));
+    const changed = `src/m${MAX_RELATED_IMPORT_HOPS}.ts`;
+    expect(failures(classify(root, { output: OUTPUT, changedFiles: [changed] }))[0]).toMatchObject({
+      verdict: "related",
+      reasons: ["imports-changed-file"],
+      changedPath: changed,
+      changedPathHops: MAX_RELATED_IMPORT_HOPS,
+    });
+  });
+
+  test("a direct import is one hop", () => {
+    const root = fixture(chain(3));
+    expect(
+      failures(classify(root, { output: OUTPUT, changedFiles: ["src/m1.ts"] }))[0],
+    ).toMatchObject({ verdict: "related", changedPath: "src/m1.ts", changedPathHops: 1 });
+  });
+
+  test("a changed file one hop past the limit is undetermined, never unrelated", () => {
+    const depth = MAX_RELATED_IMPORT_HOPS + 1;
+    const root = fixture(chain(depth + 2));
+    const changed = `src/m${depth}.ts`;
+    const [failure] = failures(classify(root, { output: OUTPUT, changedFiles: [changed] }));
+    expect(failure).toMatchObject({
+      verdict: "undetermined",
+      reasons: ["reaches-changed-file-indirectly"],
+      changedPath: changed,
+      changedPathHops: depth,
+    });
+  });
+
+  test("the closest changed file decides, whichever path reaches it", () => {
+    // m4 is distant along the chain but imported directly by m1 as well.
+    const root = fixture(
+      chain(4, {
+        "src/m1.ts":
+          'import { m as next } from "./m2";\nimport { m as far } from "./m4";\nexport const m = next + far;\n',
+      }),
+    );
+    expect(
+      failures(classify(root, { output: OUTPUT, changedFiles: ["src/m4.ts"] }))[0],
+    ).toMatchObject({ verdict: "related", changedPath: "src/m4.ts", changedPathHops: 2 });
+    // Of two changed files, the closer one is reported.
+    expect(
+      failures(classify(root, { output: OUTPUT, changedFiles: ["src/m3.ts", "src/m2.ts"] }))[0],
+    ).toMatchObject({ verdict: "related", changedPath: "src/m2.ts", changedPathHops: 2 });
+  });
+
+  test("distance counts from the test's own helpers, not only the test file", () => {
+    const root = fixture({
+      "src/a.test.ts":
+        'import { h } from "../tests/support";\ntest("loads its module", () => {});\n',
+      "tests/support.ts": 'export { h } from "./storage-test-support";\n',
+      "tests/storage-test-support.ts": 'import { m } from "../src/m1";\nexport const h = m;\n',
+      "src/m1.ts": 'import { m as next } from "./m2";\nexport const m = next;\n',
+      "src/m2.ts": 'import { m as next } from "./m3";\nexport const m = next;\n',
+      "src/m3.ts": "export const m = 1;\n",
+    });
+    expect(
+      failures(classify(root, { output: OUTPUT, changedFiles: ["src/m2.ts"] }))[0],
+    ).toMatchObject({ verdict: "related", changedPath: "src/m2.ts", changedPathHops: 2 });
+    expect(
+      failures(classify(root, { output: OUTPUT, changedFiles: ["src/m3.ts"] }))[0],
+    ).toMatchObject({
+      verdict: "undetermined",
+      reasons: ["reaches-changed-file-indirectly"],
+      changedPathHops: 3,
+    });
+    // A changed helper is the test's own code, one hop from its importer.
+    expect(
+      failures(
+        classify(root, { output: OUTPUT, changedFiles: ["tests/storage-test-support.ts"] }),
+      )[0],
+    ).toMatchObject({ verdict: "related", changedPathHops: 1 });
+  });
+
+  test("a bunfig preload is one hop from the test", () => {
+    const root = fixture(
+      chain(1, {
+        "bunfig.toml": '[test]\npreload = ["./tests/setup.ts"]\n',
+        "tests/setup.ts": 'import "../src/shared";\n',
+        "src/shared.ts": 'import "./logger";\n',
+        "src/logger.ts": "export {};\n",
+      }),
+    );
+    expect(
+      failures(classify(root, { output: OUTPUT, changedFiles: ["src/shared.ts"] }))[0],
+    ).toMatchObject({ verdict: "related", changedPathHops: 2 });
+    expect(
+      failures(classify(root, { output: OUTPUT, changedFiles: ["src/logger.ts"] }))[0],
+    ).toMatchObject({ verdict: "undetermined", reasons: ["reaches-changed-file-indirectly"] });
+  });
+
+  test("a test that names a distant changed file's path is still related by reference", () => {
+    const depth = MAX_RELATED_IMPORT_HOPS + 2;
+    const changed = `src/m${depth}.ts`;
+    const root = fixture(
+      chain(depth, {
+        "src/a.test.ts": [
+          'import { m } from "./m1";',
+          `const source = "${changed}";`,
+          'test("loads its module", () => {});',
+        ].join("\n"),
+      }),
+    );
+    expect(failures(classify(root, { output: OUTPUT, changedFiles: [changed] }))[0]).toMatchObject({
+      verdict: "related",
+      reasons: ["references-changed-path"],
+      changedPath: changed,
+    });
+  });
+
+  test("a widely shared module reached through layers no longer makes a backend test related", () => {
+    // The shape of to-do 4520's owners, had that branch changed web-annotations.ts.
+    const root = fixture({
+      "packages/protocol/package.json": JSON.stringify({ name: "@acme/protocol" }),
+      "packages/protocol/src/web-annotations.ts": 'export const SOURCE_HINT_ROOT_META = "root";\n',
+      "packages/protocol/src/annotations-index.ts":
+        'export { SOURCE_HINT_ROOT_META } from "./web-annotations";\n',
+      "apps/backend/src/core/commands-context.ts":
+        'import { SOURCE_HINT_ROOT_META } from "../../../../packages/protocol/src/annotations-index";\nexport const meta = SOURCE_HINT_ROOT_META;\n',
+      "apps/backend/src/core/container-readiness.ts":
+        'import { meta } from "./commands-context";\nexport const readiness = meta;\n',
+      "apps/backend/tests/container-readiness.test.ts": [
+        'import { test } from "bun:test";',
+        'import { readiness } from "../src/core/container-readiness";',
+        'test("a pending shell probe is clipped to the remaining overall deadline", () => {});',
+      ].join("\n"),
+    });
+    const [failure] = failures(
+      classify(root, {
+        output: [
+          "apps/backend/tests/container-readiness.test.ts:",
+          "(fail) a pending shell probe is clipped to the remaining overall deadline",
+          " 0 pass",
+          " 1 fail",
+        ].join("\n"),
+        changedFiles: ["packages/protocol/src/web-annotations.ts"],
+      }),
+    );
+    expect(failure).toMatchObject({
+      verdict: "undetermined",
+      reasons: ["reaches-changed-file-indirectly"],
+      changedPath: "packages/protocol/src/web-annotations.ts",
+      changedPathHops: 4,
     });
   });
 });

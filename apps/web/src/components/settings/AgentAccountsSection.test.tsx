@@ -36,6 +36,17 @@ function answer(command: string, args: Record<string, unknown>): Promise<unknown
       case "start_agent_account_login":
         login = startResult;
         return Promise.resolve(startResult);
+      case "reauthenticate_agent_account":
+        login = {
+          state: "pending",
+          operationId: "renew-one",
+          platform: "claude",
+          mode: "reauthenticate",
+          accountId: String(args.accountId),
+          url: "https://claude.com/cai/oauth/authorize?code=true",
+          needsCode: true,
+        };
+        return Promise.resolve(login);
       case "set_active_agent_account":
         snapshot = {
           active: { ...snapshot.active, codex: String(args.accountId) },
@@ -455,5 +466,90 @@ describe("AgentAccountsSection", () => {
         code: "code#state",
       }),
     );
+  });
+
+  test("a signed-out Claude account is signed in again from its own row, without a switch", async () => {
+    const { clock } = installFakeReadCoordinator();
+    snapshot.accounts[0] = { ...snapshot.accounts[0]!, label: "Claude host" };
+    snapshot.accounts.push(
+      account({
+        id: ADDED_ID,
+        platform: "claude",
+        label: "lapsed@example.com",
+        isDefault: false,
+        isActive: false,
+        signedIn: false,
+        identity: { email: "lapsed@example.com", plan: "max" },
+      }),
+    );
+    await act(async () => {
+      render(<AgentAccountsSection platform="claude" onAccountsChanged={onAccountsChanged} />);
+      await clock.advance(0);
+    });
+    const host = await screen.findByRole("listitem", { name: "Claude host" });
+    expect(within(host).queryByRole("button", { name: /Sign in/ }) === null).toBe(true);
+    const lapsed = screen.getByRole("listitem", { name: "lapsed@example.com" });
+    expect(within(lapsed).getByText("Signed out")).toBeTruthy();
+    // A signed-out account has no usage to refresh.
+    expect(within(lapsed).queryByRole("button", { name: /Refresh usage/ }) === null).toBe(true);
+
+    await act(async () => {
+      fireEvent.click(within(lapsed).getByRole("button", { name: /Sign in/ }));
+    });
+    expect(calls).toContainEqual({
+      command: "reauthenticate_agent_account",
+      args: { platform: "claude", accountId: ADDED_ID },
+    });
+    const panel = await within(lapsed).findByLabelText("Account sign-in");
+    expect(within(panel).getByLabelText("Sign-in code")).toBeTruthy();
+    expect(within(lapsed).queryByRole("button", { name: /Sign in/ }) === null).toBe(true);
+    expect(
+      (screen.getByRole("button", { name: /Add account/ }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(screen.queryByText(/Another account sign-in is in progress/) === null).toBe(true);
+    expect(calls.some((call) => call.command === "set_active_agent_account")).toBe(false);
+
+    snapshot = {
+      ...snapshot,
+      accounts: snapshot.accounts.map((a) => (a.id === ADDED_ID ? { ...a, signedIn: true } : a)),
+    };
+    login = { ...login, state: "succeeded" };
+    await act(async () => {
+      await clock.advance(2_000);
+    });
+    await waitFor(() => expect(screen.queryByLabelText("Account sign-in") === null).toBe(true));
+    expect(onAccountsChanged).toHaveBeenCalledTimes(1);
+    const renewed = screen.getByRole("listitem", { name: "lapsed@example.com" });
+    expect(within(renewed).queryByText("Signed out") === null).toBe(true);
+    await within(renewed).findByText("5-hour limit");
+  });
+
+  test("a signed-out Codex account offers no sign-in in place", async () => {
+    snapshot.accounts[2] = { ...snapshot.accounts[2]!, signedIn: false };
+    await mount();
+    const row = await screen.findByRole("listitem", { name: "second@example.com" });
+    expect(within(row).getByText("Signed out")).toBeTruthy();
+    expect(within(row).queryByRole("button", { name: /Sign in/ }) === null).toBe(true);
+  });
+
+  test("an account's refresh button reads its usage afresh, and only its own", async () => {
+    await mount();
+    const added = await screen.findByRole("listitem", { name: "second@example.com" });
+    await waitFor(() =>
+      expect(calls.filter((call) => call.command === "get_agent_account_usage")).toHaveLength(2),
+    );
+    const refresh = within(added).getByRole("button", {
+      name: "Refresh usage for second@example.com",
+    });
+    await act(async () => {
+      fireEvent.click(refresh);
+    });
+    await waitFor(() =>
+      expect(calls.filter((call) => call.command === "get_agent_account_usage")).toHaveLength(3),
+    );
+    expect(calls.filter((call) => call.command === "get_agent_account_usage").at(-1)?.args).toEqual(
+      { platform: "codex", accountId: ADDED_ID, force: true },
+    );
+    await waitFor(() => expect((refresh as HTMLButtonElement).disabled).toBe(false));
   });
 });

@@ -795,6 +795,102 @@ describe("agent accounts", () => {
       ).rejects.toThrow("only available for Claude");
     });
 
+    describe("naming an account that is not active", () => {
+      async function addInactiveClaudeAccount(identity: string): Promise<string> {
+        await startAgentAccountLogin(context, "claude", {
+          spawnImpl: fakeClaudeLogin(identity),
+          executable: "claude",
+        });
+        const progress = await settledLogin();
+        expect(progress.state).toBe("succeeded");
+        cancelAgentAccountLogin(context);
+        return progress.accountId!;
+      }
+
+      test("renews that account in place and leaves the active one alone", async () => {
+        const accountId = await addInactiveClaudeAccount("claude-two");
+        await startAgentAccountLogin(context, "claude", {
+          reauthenticate: true,
+          accountId,
+          executable: "claude",
+          spawnImpl: (cmd, args, options) => {
+            expect(options.env.CLAUDE_CONFIG_DIR).toContain(".reauth/");
+            return fakeClaudeLogin("claude-two")(cmd, args, options);
+          },
+        });
+        expect(agentAccountLoginProgress(context)).toMatchObject({
+          state: "pending",
+          accountId,
+          mode: "reauthenticate",
+        });
+        const progress = await settledLogin();
+
+        expect(progress).toMatchObject({ state: "succeeded", accountId, mode: "reauthenticate" });
+        const snapshot = await listAgentAccounts(context);
+        expect(snapshot.active.claude).toBe("default");
+        expect(
+          snapshot.accounts.find((a) => a.platform === "claude" && a.id === accountId),
+        ).toMatchObject({ isActive: false, signedIn: true });
+      });
+
+      test("an unknown or other platform's account is refused before the CLI starts", async () => {
+        const codexId = (await addCodexAccount("codex@example.com", "acct-9")).accountId!;
+        cancelAgentAccountLogin(context);
+        let spawns = 0;
+        for (const accountId of ["no-such-account", codexId]) {
+          await expect(
+            startAgentAccountLogin(context, "claude", {
+              reauthenticate: true,
+              accountId,
+              executable: "claude",
+              spawnImpl: (...args) => {
+                spawns += 1;
+                return fakeClaudeLogin("claude-two")(...args);
+              },
+            }),
+          ).rejects.toThrow("Unknown agent account");
+        }
+        expect(spawns).toBe(0);
+        expect(agentAccountLoginProgress(context).state).toBe("failed");
+      });
+
+      test("an account can only be named when signing in again", async () => {
+        await expect(
+          startAgentAccountLogin(context, "claude", { accountId: "default", executable: "claude" }),
+        ).rejects.toThrow("Only a sign-in again");
+        expect(agentAccountLoginProgress(context).state).toBe("idle");
+      });
+
+      test("a renewal of one account does not answer a request for another", async () => {
+        const first = await addInactiveClaudeAccount("claude-two");
+        const second = await addInactiveClaudeAccount("claude-three");
+        await startAgentAccountLogin(context, "claude", {
+          reauthenticate: true,
+          accountId: first,
+          executable: "claude",
+          spawnImpl: fakeClaudeLogin("claude-two"),
+        });
+        // The same account again resumes the running sign-in.
+        expect(
+          (
+            await startAgentAccountLogin(context, "claude", {
+              reauthenticate: true,
+              accountId: first,
+              executable: "claude",
+            })
+          ).accountId,
+        ).toBe(first);
+        await expect(
+          startAgentAccountLogin(context, "claude", {
+            reauthenticate: true,
+            accountId: second,
+            executable: "claude",
+          }),
+        ).rejects.toThrow("Finish or cancel");
+        expect((await settledLogin()).accountId).toBe(first);
+      });
+    });
+
     test("cannot start while an add-account sign-in is pending", async () => {
       await startAgentAccountLogin(context, "claude", {
         spawnImpl: fakeClaudeLogin("claude-one"),

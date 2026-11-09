@@ -5,6 +5,7 @@ import { networkInterfaces, tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentToolsServer } from "../src/core/agent-tools.js";
 import { type AgentToolsPeerGate, dockerPeerFilter } from "../src/core/agent-tools-peer-filter.js";
+import { ROOTLESSKIT_HOST_LOOPBACK_ADDRESS } from "@orkestrator/protocol/container-host-reachability";
 import {
   CONTAINER_HOST_PROBE_IMAGE,
   ContainerHostReachabilityService,
@@ -19,6 +20,7 @@ import { runCommand } from "../src/core/shell.js";
 import { StorageService } from "../src/core/storage.js";
 import {
   cleanupEvidenceResources,
+  daemonIsRootless,
   removeTrackedResources,
   startEvidenceListener,
 } from "./agent-tools-peer-evidence-support.js";
@@ -44,6 +46,13 @@ import {
  * already be present (`docker pull <CONTAINER_HOST_PROBE_IMAGE>`); nothing is
  * pulled. Nothing here touches the host firewall, Docker's settings or any
  * login. `--platform-linux` runs the host check's Linux path on any host.
+ *
+ * On a rootless daemon (Docker info lists the `rootless` security option) the
+ * three sources run a second time with `host.docker.internal` naming
+ * RootlessKit's host loopback address instead of `host-gateway`, as the
+ * backend does once its check finds that address answering
+ * (`rootlessHostLoopbackSources`). Point `DOCKER_HOST` at a disposable
+ * rootless daemon (`mise run docker:disposable`) to observe it.
  */
 
 const EVIDENCE_LABEL = "orkestrator-s0170-evidence=1";
@@ -117,6 +126,10 @@ try {
     "--format",
     "{{.Server.Platform.Name}} {{.Server.Version}} {{.Server.Os}}/{{.Server.Arch}}",
   ]);
+  const rootless = daemonIsRootless(
+    await docker(["info", "--format", "{{json .SecurityOptions}}"]),
+  );
+  result.dockerRootless = rootless;
 
   // A real environment network, created by the production code path.
   const network = await ensureEnvironmentNetwork({ storage }, environmentId);
@@ -136,7 +149,7 @@ try {
   await docker(["network", "create", "--label", EVIDENCE_LABEL, foreignNetwork]);
   created.networks.push(foreignNetwork);
 
-  const runProbeContainer = async (networkName: string, owned: boolean) => {
+  const runProbeContainer = async (networkName: string, owned: boolean, hostTarget: string) => {
     const id = await docker([
       "run",
       "--detach",
@@ -148,7 +161,7 @@ try {
       "--network",
       networkName,
       "--add-host",
-      "host.docker.internal:host-gateway",
+      `host.docker.internal:${hostTarget}`,
       "--memory",
       "64m",
       "--entrypoint",
@@ -159,38 +172,46 @@ try {
     created.containers.push(id);
     return id;
   };
-  const sources: Record<string, unknown> = {};
-  for (const [label, networkName, owned] of [
-    ["environment-network", network, true],
-    ["default-bridge", "bridge", true],
-    ["unowned-network", foreignNetwork, false],
-  ] as const) {
-    const id = await runProbeContainer(networkName, owned);
-    const address = await docker([
-      "inspect",
-      "-f",
-      "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
-      id,
-    ]);
-    const before = peers.length;
-    const output = await docker(
-      [
-        "exec",
+  const probeSources = async (hostTarget: string) => {
+    const sources: Record<string, unknown> = {};
+    let environmentContainer = "";
+    for (const [label, networkName, owned] of [
+      ["environment-network", network, true],
+      ["default-bridge", "bridge", true],
+      ["unowned-network", foreignNetwork, false],
+    ] as const) {
+      const id = await runProbeContainer(networkName, owned, hostTarget);
+      if (label === "environment-network") environmentContainer = id;
+      const address = await docker([
+        "inspect",
+        "-f",
+        "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
         id,
-        "sh",
-        "-c",
-        `wget -S -T 5 -O /dev/null http://host.docker.internal:${port}/mcp 2>&1 | head -3`,
-      ],
-      30_000,
-    ).catch((error: unknown) => String(error));
-    sources[label] = {
-      containerAddress: address,
-      peerSeenByServer: peers.slice(before).map((entry) => `${entry.peer} (${entry.verdict})`),
-      response:
-        output.split("\n").find((line) => /HTTP\/|error|refused|reset/i.test(line)) ?? output,
-    };
-  }
-  result.containerSources = sources;
+      ]);
+      const before = peers.length;
+      const output = await docker(
+        [
+          "exec",
+          id,
+          "sh",
+          "-c",
+          `wget -S -T 5 -O /dev/null http://host.docker.internal:${port}/mcp 2>&1 | head -3`,
+        ],
+        30_000,
+      ).catch((error: unknown) => String(error));
+      sources[label] = {
+        containerAddress: address,
+        peerSeenByServer: peers.slice(before).map((entry) => `${entry.peer} (${entry.verdict})`),
+        response:
+          output.split("\n").find((line) => /HTTP\/|error|refused|reset/i.test(line)) ?? output,
+      };
+    }
+    return { sources, environmentContainer };
+  };
+  const gatewayPass = await probeSources("host-gateway");
+  result.containerSources = gatewayPass.sources;
+  const loopbackPass = rootless ? await probeSources(ROOTLESSKIT_HOST_LOOPBACK_ADDRESS) : null;
+  if (loopbackPass) result.rootlessHostLoopbackSources = loopbackPass.sources;
 
   // The reachability probe from inside the environment container, as a
   // bridge start and the workflow preflight run it.
@@ -200,21 +221,28 @@ try {
     fallbackImage: () => CONTAINER_HOST_PROBE_IMAGE,
     platform: process.argv.includes("--platform-linux") ? "linux" : process.platform,
   });
-  const environmentContainer = created.containers[0]!;
-  const containerProbe = await reachability.checkEnvironmentContainer(environmentContainer, {
-    reason: "s0170-evidence",
-  });
-  result.environmentContainerProbe = containerProbe && {
-    outcome: containerProbe.outcome,
-    httpStatus: containerProbe.httpStatus,
+  const probeEnvironmentContainer = async (id: string) => {
+    const probe = await reachability.checkEnvironmentContainer(id, { reason: "s0170-evidence" });
+    return probe && { outcome: probe.outcome, httpStatus: probe.httpStatus };
   };
+  result.environmentContainerProbe = await probeEnvironmentContainer(
+    gatewayPass.environmentContainer,
+  );
+  if (loopbackPass) {
+    result.rootlessHostLoopbackEnvironmentContainerProbe = await probeEnvironmentContainer(
+      loopbackPass.environmentContainer,
+    );
+  }
   // The throwaway-container host check (Linux at startup; see --platform-linux).
   const hostCheck = await reachability.check("manual");
   result.hostCheck = {
     status: hostCheck.status,
     reason: hostCheck.reason ?? null,
+    dockerRootless: hostCheck.dockerRootless ?? null,
+    hostAddress: hostCheck.hostAddress ?? null,
     probes: (hostCheck.probes ?? []).map((probe) => ({
       scope: probe.scope,
+      hostAddress: probe.hostAddress ?? null,
       outcome: probe.outcome,
       httpStatus: probe.httpStatus,
     })),

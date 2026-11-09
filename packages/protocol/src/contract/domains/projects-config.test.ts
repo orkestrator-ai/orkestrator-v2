@@ -88,7 +88,7 @@ describe("projects and config definitions", () => {
   it("defines both domains at version 1 with every command once", () => {
     expect(projectsDomain).toMatchObject({ name: "projects", version: 1, min: 1 });
     expect(configDomain).toMatchObject({ name: "config", version: 1, min: 1 });
-    expect(PROJECTS_COMMANDS).toHaveLength(26);
+    expect(PROJECTS_COMMANDS).toHaveLength(27);
     expect(CONFIG_COMMANDS).toHaveLength(31);
     for (const [domain, commands] of [
       [projectsDomain, PROJECTS_COMMANDS],

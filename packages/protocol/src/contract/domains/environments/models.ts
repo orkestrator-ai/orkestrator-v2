@@ -65,6 +65,10 @@ export type NetworkAccessMode = typeof NetworkAccessModeSchema.Type;
 export const EnvironmentTypeSchema = Schema.Literals(["containerized", "local"]);
 export type EnvironmentType = typeof EnvironmentTypeSchema.Type;
 
+/** A fix a failed lifecycle operation can offer (`lifecycleRemedy`). */
+export const EnvironmentLifecycleRemedySchema = Schema.Literals(["use-https"]);
+export type EnvironmentLifecycleRemedy = typeof EnvironmentLifecycleRemedySchema.Type;
+
 export const EnvironmentLifecycleOperationSchema = Schema.Literals([
   "deleting",
   "merging",
@@ -321,6 +325,15 @@ export const clientEnvironmentFields = {
    * serialization and field-by-field snapshot merges in the renderer.
    */
   lifecycleError: optionalNullableString,
+  /**
+   * A fix the backend checked would work for `lifecycleError`, which the
+   * renderer offers as an action next to it. `use-https`: the start could not
+   * reach the project's GitHub remote over SSH, and HTTPS works from this
+   * machine (the `use_https_git_remote` command switches it). Written with
+   * every failure and cleared with it, as an explicit `null`; meaningful only
+   * while `lifecycleError` is set.
+   */
+  lifecycleRemedy: Schema.optional(Schema.NullOr(EnvironmentLifecycleRemedySchema)),
   name: Schema.String,
   branch: Schema.String,
   containerId: Schema.NullOr(Schema.String),

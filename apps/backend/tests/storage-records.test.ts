@@ -271,6 +271,22 @@ describe("Electron StorageService", () => {
     expect(JSON.stringify(await storage.getEnvironment(firstEnvironment.id))).toContain(
       '"lifecycleError":null',
     );
+
+    // A remedy is stored with its failure and retired by any later write of
+    // the error that does not bring its own, so a retry never inherits it.
+    await storage.updateEnvironment(firstEnvironment.id, {
+      lifecycleError: "Couldn't reach the git remote over SSH (github.com, port 22).",
+      lifecycleRemedy: "use-https",
+    });
+    expect((await storage.getEnvironment(firstEnvironment.id))?.lifecycleRemedy).toBe("use-https");
+    await storage.updateEnvironment(firstEnvironment.id, { lifecycleError: null });
+    expect((await storage.getEnvironment(firstEnvironment.id))?.lifecycleRemedy).toBeNull();
+    await storage.updateEnvironment(firstEnvironment.id, {
+      lifecycleError: "Environment start failed.",
+      lifecycleRemedy: "reformat-the-disk",
+    });
+    expect((await storage.getEnvironment(firstEnvironment.id))?.lifecycleRemedy).toBeNull();
+    await storage.updateEnvironment(firstEnvironment.id, { lifecycleError: null });
     await expect(storage.updateEnvironment("missing", {})).rejects.toThrow("Environment not found");
 
     // A merge state belongs to one PR: kept for the same URL, cleared for a

@@ -396,6 +396,7 @@ function preserveLifecycleAttemptState(
       ...snapshot,
       status: current.status,
       lifecycleError: current.lifecycleError ?? null,
+      lifecycleRemedy: current.lifecycleRemedy ?? null,
       pendingAgentLaunch: current.pendingAgentLaunch,
     },
     stale: true,
@@ -428,7 +429,15 @@ function markLifecycleErrorReportedByForeground(
  * full snapshot is authoritative for this field, so make the absence explicit.
  */
 function withAuthoritativeLifecycleError(snapshot: Environment): Environment {
-  return snapshot.lifecycleError === undefined ? { ...snapshot, lifecycleError: null } : snapshot;
+  if (snapshot.lifecycleError !== undefined && snapshot.lifecycleRemedy !== undefined) {
+    return snapshot;
+  }
+  // The remedy belongs to the error, so the same absence rule applies to it.
+  return {
+    ...snapshot,
+    lifecycleError: snapshot.lifecycleError ?? null,
+    lifecycleRemedy: snapshot.lifecycleRemedy ?? null,
+  };
 }
 
 /**
@@ -1111,7 +1120,7 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
       // A retry owns fresh setup and launch state. Clear the preceding attempt's
       // durable error locally before installing the new setup gate; an older
       // in-flight snapshot is guarded by the attempt revision above.
-      updateEnvironmentInStore(environmentId, { lifecycleError: null });
+      updateEnvironmentInStore(environmentId, { lifecycleError: null, lifecycleRemedy: null });
 
       try {
         log.debug("start.status-set", () => ({ environmentId, status: "creating" }));

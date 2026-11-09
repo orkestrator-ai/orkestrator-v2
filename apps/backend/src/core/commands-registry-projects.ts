@@ -42,8 +42,10 @@ import {
   removeProjectCommand,
   reorderProjectsCommand,
   updateProjectCommand,
+  useHttpsGitRemoteCommand,
   validateGitUrlCommand,
 } from "@orkestrator/protocol/contract/domains/projects";
+import { switchOriginToHttps } from "./git-ssh-transport.js";
 import {
   getConfigCommand,
   getDesktopConnectionsCommand,
@@ -606,6 +608,15 @@ export function registerProjectCommands(
     // Reads the raw config value rather than `remote get-url`, which applies
     // `insteadOf` rewrites and can therefore hand back an embedded credential.
     return (await readOriginUrl(repoPath, runCommand)) || null;
+  });
+
+  register(useHttpsGitRemoteCommand, async ({ projectId }, { storage }) => {
+    const project = await storage.getProject(projectId);
+    if (!project) throw new Error(`Project not found: ${projectId}`);
+    if (!project.localPath) {
+      throw new Error("This project has no local checkout on this machine.");
+    }
+    return switchOriginToHttps(project.localPath);
   });
 
   register(getConfigCommand, (args, { storage }) =>

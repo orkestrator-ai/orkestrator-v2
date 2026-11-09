@@ -28,7 +28,15 @@ const addRecentProject = (recentProjectIds: string[], projectId: string): string
  * the rest are the project board.
  */
 export type ProjectBoardTab =
-  "home" | "coordinator" | "kanban" | "github" | "linear" | "features" | "notes" | "pull-requests";
+  | "home"
+  | "coordinator"
+  | "schedules"
+  | "kanban"
+  | "github"
+  | "linear"
+  | "features"
+  | "notes"
+  | "pull-requests";
 
 /**
  * A project opens on its coordinator, except on a leaf node: coordination

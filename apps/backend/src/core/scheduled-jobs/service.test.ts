@@ -13,7 +13,7 @@ import { StorageService } from "../storage.js";
 import { PrViewerPermissionCache } from "../pr-viewer-permission.js";
 import { createCommandRegistry } from "../commands-registry.js";
 import type { CommandContext } from "../commands-context.js";
-import { schedulingEnabled } from "../commands-registry-scheduled-jobs.js";
+import { schedulingEnabled, withProjectEnvironments } from "../commands-registry-scheduled-jobs.js";
 import { installControlledTimeout } from "../../../../../tests/helpers/controlled-timeout.js";
 import { ScheduleAuthorityError, type ScheduledJobExecutor } from "./executor.js";
 import { claimDueFire, settleFire, type FireResult } from "./model.js";
@@ -552,6 +552,61 @@ describe("visibility and ownership", () => {
       }),
     ).rejects.toThrow(ScheduleAuthorityError);
     expect(service.delete(OPERATOR, theirs.id).deleted).toBe(true);
+  });
+
+  test("a project filter lists its owners' schedules and those aimed at it or its environments", async () => {
+    const clock = { now: T0 };
+    const { service, storage } = await backend(await dataDir(), clock);
+    const agentOwned = (await service.create(AGENT, { at: "+5m", action: MAIL })).job;
+    const launch = (
+      await service.create(OPERATOR, {
+        at: "+5m",
+        action: { kind: "launch", projectId: "p1", agent: "claude", prompt: "go" },
+      })
+    ).job;
+    const promptInProject = (
+      await service.create(OPERATOR, {
+        at: "+5m",
+        action: { kind: "prompt", environmentId: "env-p1", tabId: "t", prompt: "go" },
+      })
+    ).job;
+    const mailInProject = (
+      await service.create(OPERATOR, {
+        at: "+5m",
+        action: {
+          kind: "action",
+          action: "mail.send",
+          input: { toEnvironmentId: "env-p1", toTabId: "t", body: "hi" },
+        },
+      })
+    ).job;
+    // Aimed at another project's environment, and at nothing in a project.
+    await service.create(OPERATOR, {
+      at: "+5m",
+      action: { kind: "prompt", environmentId: "env-p2", tabId: "t", prompt: "go" },
+    });
+    await service.create(OPERATOR, { at: "+5m", action: MAIL });
+
+    const ids = (filter: Parameters<ScheduledJobService["list"]>[1]) =>
+      service
+        .list(OPERATOR, filter)
+        .map((job) => job.id)
+        .sort();
+    // Without resolved environments only owners and named projects count.
+    expect(ids({ projectId: "p1" })).toEqual([agentOwned.id, launch.id].sort());
+    expect(ids({ projectId: "p1", projectEnvironmentIds: new Set(["env-p1"]) })).toEqual(
+      [agentOwned.id, launch.id, promptInProject.id, mailInProject.id].sort(),
+    );
+
+    // The registry helper resolves the environments from storage.
+    const resolved = await withProjectEnvironments({ projectId: "p1" }, {
+      loadEnvironments: async () => [
+        { id: "env-p1", projectId: "p1" },
+        { id: "env-p2", projectId: "p2" },
+      ],
+    } as unknown as Pick<typeof storage, "loadEnvironments">);
+    expect([...(resolved.projectEnvironmentIds ?? [])]).toEqual(["env-p1"]);
+    expect(await withProjectEnvironments({}, storage)).toEqual({});
   });
 
   test("environment deletion removes its agents' schedules and pauses others aimed at it", async () => {

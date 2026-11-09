@@ -21,7 +21,9 @@ test("v2 is on, says what stays on OpenCode 1, and turning it off asks for legac
   const toggle = screen.getByRole("switch", { name: NAME });
   expect(toggle.getAttribute("aria-checked")).toBe("true");
   expect(screen.getByText(/Existing sessions stay on OpenCode 1/)).toBeTruthy();
-  expect(screen.getByText(/Structured output is not available on OpenCode 2/)).toBeTruthy();
+  expect(
+    screen.getByText(/coordinators and\s+containers built from an image without/),
+  ).toBeTruthy();
   fireEvent.click(toggle);
   expect(onChange).toHaveBeenCalledWith("legacy");
 });

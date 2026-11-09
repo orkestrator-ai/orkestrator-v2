@@ -30,9 +30,9 @@ export function OpenCodeProtocolSetting({
           htmlFor="opencode-protocol-v2"
           description={
             <span id="opencode-protocol-v2-description">
-              New OpenCode tabs in local environments start on OpenCode 2, which can steer a running
-              turn. Existing sessions stay on OpenCode 1, and container environments keep using it.
-              Structured output is not available on OpenCode 2 yet.
+              New OpenCode tabs, build pipelines, reviews and graph agents start on OpenCode 2,
+              which can steer a running turn. Existing sessions stay on OpenCode 1, as do
+              coordinators and containers built from an image without OpenCode 2.
             </span>
           }
         >

@@ -1190,6 +1190,43 @@ describe("agent accounts", () => {
     expect(calls).toHaveLength(1);
   });
 
+  test("an account answers the newest reading of its login from any machine", async () => {
+    const { accountId } = await addCodexAccount("Second@Example.com", "acct-2");
+    const reader = (async () => usageReading("codex", 12)) as unknown as PlanUsageReader;
+    // This machine cannot read the added account (its token has expired).
+    expect((await readAgentAccountUsage(context, "codex", accountId!, { reader })).status).toBe(
+      "unavailable",
+    );
+    // beelink read the same login a minute ago, under its own account id.
+    const fetchedAt = new Date(Date.now() - 60_000).toISOString();
+    await context.runtime.accounts.sharedUsage.record(
+      path.join(root, "data", "agent-accounts"),
+      [
+        {
+          identity: { platform: "codex", email: "second@example.com", organizationId: "acct-2" },
+          windows: [{ window: "primary", usedPercent: 77 }],
+          fetchedAt,
+          source: { nodeId: "bk_beelink", nodeName: "beelink" },
+        },
+      ],
+      Date.now(),
+    );
+    const shown = await readAgentAccountUsage(context, "codex", accountId!, { reader });
+    expect(shown).toMatchObject({
+      status: "ok",
+      windows: [{ usedPercent: 77 }],
+      fetchedAt,
+      readOn: { nodeId: "bk_beelink", nodeName: "beelink" },
+    });
+    expect(shown.stale).toBeUndefined();
+
+    // The host login here has no email to match on, so its reading is not shared.
+    emitted = [];
+    const host = await readAgentAccountUsage(context, "codex", "default", { reader });
+    expect(host.readOn).toBeUndefined();
+    expect(emitted.filter((entry) => entry.event === "agent-usage-readings-changed")).toEqual([]);
+  });
+
   test("an account left behind shows its last known usage until removed", async () => {
     const { accountId } = await addCodexAccount("second@example.com", "acct-2");
     const reading = (usedPercent: number): PlanUsageSnapshot => ({

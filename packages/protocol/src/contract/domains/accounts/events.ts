@@ -5,6 +5,7 @@
  */
 import * as Schema from "effect/Schema";
 import { AGENT_ACCOUNT_AUTO_SWITCHED_EVENT } from "../../../agent-account-auto-switch.js";
+import { AGENT_USAGE_READINGS_CHANGED_EVENT } from "../../../agent-account-shared-usage.js";
 import { AGENT_ACCOUNTS_CHANGED_EVENT } from "../../../agent-accounts.js";
 import { COORDINATOR_ACCOUNT_SWITCHED_EVENT } from "../../../coordinator-account-switch-grant.js";
 import { defineEvent } from "../../event.js";
@@ -57,8 +58,24 @@ export const coordinatorAccountSwitchedEvent = defineEvent({
   }),
 });
 
+/**
+ * This machine kept a newer usage reading of one of a platform's logins: one
+ * it read itself (`origin: "local"`, which its command node collects and passes
+ * on) or one its command node shared with it (`"shared"`, which only tells
+ * Settings to read again). Carries no reading.
+ */
+export const agentUsageReadingsChangedEvent = defineEvent({
+  domain: accountsDomain,
+  name: AGENT_USAGE_READINGS_CHANGED_EVENT,
+  payload: Schema.Struct({
+    platform: Schema.String,
+    origin: Schema.optional(Schema.String),
+  }),
+});
+
 export const ACCOUNTS_EVENTS = [
   agentAccountsChangedEvent,
+  agentUsageReadingsChangedEvent,
   agentAccountAutoSwitchedEvent,
   coordinatorAccountSwitchedEvent,
 ] as const;

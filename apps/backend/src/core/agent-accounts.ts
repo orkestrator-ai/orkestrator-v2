@@ -23,6 +23,11 @@ import {
   type AgentAccountsSnapshot,
   type AgentAccountSummary,
 } from "@orkestrator/protocol/agent-accounts";
+import {
+  normalizeUsageIdentity,
+  usageIdentityKey,
+  type UsageIdentity,
+} from "@orkestrator/protocol/agent-account-shared-usage";
 import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
 import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
 
@@ -65,6 +70,7 @@ import {
   type SpawnLike,
 } from "./agent-accounts-login.js";
 import type { AgentAccountLogin } from "./agent-accounts-runtime.js";
+import { shareAndMergeUsage } from "./agent-accounts-usage-sharing.js";
 import { readAgentAccountPlanUsage, type PlanUsageRead } from "./plan-usage.js";
 import { promoteClaudeLogin, removeTemporaryClaudeLogin } from "./agent-accounts-promotion.js";
 import { refreshHostModelCatalog } from "./host-model-catalog-refresh.js";
@@ -138,6 +144,64 @@ async function readLoginState(
     return claudeAccountLoginState(await readClaudeCredentialsFor(context, home), claudeJson);
   }
   return codexAccountLoginState(await readCodexAuthFor(context, home));
+}
+
+function usageIdentityOf(
+  platform: AgentAccountPlatform,
+  state: AgentAccountLoginState,
+): UsageIdentity | undefined {
+  return normalizeUsageIdentity(platform, state.identity.email, state.organizationId);
+}
+
+/**
+ * The login identity a usage reading of one of this machine's accounts belongs
+ * to across machines, or `undefined` when it cannot be matched (no email).
+ */
+async function agentAccountUsageIdentity(
+  context: CommandContext,
+  platform: AgentAccountPlatform,
+  stored: StoredAgentAccount | undefined,
+): Promise<UsageIdentity | undefined> {
+  const home = stored ? homeFor(context, platform, stored.id) : undefined;
+  return usageIdentityOf(platform, await readLoginState(context, platform, home));
+}
+
+/**
+ * Every signed-in login on this machine that can be matched on another, once
+ * each: what `collect_shared_usage_readings` reports and what
+ * `apply_shared_usage_readings` keeps readings for.
+ */
+export async function listAgentAccountUsageIdentities(
+  context: CommandContext,
+): Promise<UsageIdentity[]> {
+  const store = await context.storage.agentAccounts.loadAgentAccounts();
+  const rows = AGENT_ACCOUNT_PLATFORMS.flatMap((platform) => [
+    { platform, stored: undefined as StoredAgentAccount | undefined },
+    ...store.accounts
+      .filter((account) => account.platform === platform)
+      .map((stored) => ({ platform, stored })),
+  ]);
+  const states = await Promise.all(
+    rows.map(async ({ platform, stored }) => ({
+      platform,
+      state: await readLoginState(
+        context,
+        platform,
+        stored ? homeFor(context, platform, stored.id) : undefined,
+      ),
+    })),
+  );
+  const seen = new Set<string>();
+  const identities: UsageIdentity[] = [];
+  for (const { platform, state } of states) {
+    const identity = state.signedIn ? usageIdentityOf(platform, state) : undefined;
+    if (!identity) continue;
+    const key = usageIdentityKey(identity);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    identities.push(identity);
+  }
+  return identities;
 }
 
 export async function listAgentAccounts(context: CommandContext): Promise<AgentAccountsSnapshot> {
@@ -1045,18 +1109,27 @@ export async function readAgentAccountUsage(
       }
       return result;
     });
+  const stored = store.accounts.find((a) => a.id === accountId && a.platform === platform);
+  // The newest reading of the same login from any machine counts as this one's
+  // (docs/architecture/agent-accounts.md, "Shared readings").
+  const shared = async (snapshot: PlanUsageSnapshot) =>
+    shareAndMergeUsage(
+      context,
+      await agentAccountUsageIdentity(context, platform, stored).catch(() => undefined),
+      snapshot,
+      now(),
+    );
   if ((store.active[platform] ?? DEFAULT_AGENT_ACCOUNT_ID) === accountId) {
     const snapshot = await options.reader(context, platform, { force: options.force === true });
-    return publish(snapshot);
+    return shared(await publish(snapshot));
   }
-  const stored = store.accounts.find((a) => a.id === accountId && a.platform === platform);
   if (accountId !== DEFAULT_AGENT_ACCOUNT_ID && !stored) throw new Error("Unknown agent account");
 
   const key = usageKey(context, platform, accountId);
   const cached = accounts.cachedUsage(key);
   // A forced refresh still waits out a 429: each retry spends the allowance.
   if (cached && cached.expiresAt > now() && (!options.force || cached.rateLimited)) {
-    return publish(cached.snapshot);
+    return shared(await publish(cached.snapshot));
   }
 
   const home = stored ? homeFor(context, platform, stored.id) : undefined;
@@ -1091,7 +1164,7 @@ export async function readAgentAccountUsage(
       { now },
     ));
   }
-  return publish(snapshot, retryAfterMs, true);
+  return shared(await publish(snapshot, retryAfterMs, true));
 }
 
 /**

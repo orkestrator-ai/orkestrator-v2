@@ -130,6 +130,8 @@ export function parseAutoPipelineTicket(value: unknown): AutoPipelineTicket {
     )
   )
     throw new Error("Ticket fields cannot be blank");
+  if ([ticket.title, ...ticket.acceptanceCriteria].some((text) => /[\r\n]/.test(text)))
+    throw new Error("Title and acceptance criteria must be single lines");
   return ticket;
 }
 export function parseAutoPipelineResult(

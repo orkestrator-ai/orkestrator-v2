@@ -1,5 +1,5 @@
 import { AutoPipelineBuildNotes } from "./AutoPipelineBuildNotes";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import type { AutoPipelineDraft, AutoPipelineSources } from "@orkestrator/protocol/build-pipeline";
 import { useScopeBackend } from "@/hooks/useScopeBackend";
 import { Button } from "@/components/ui/button";
@@ -26,35 +26,56 @@ export function AutoPipelineLaunch({
   const [draft, setDraft] = useState<AutoPipelineDraft | null>(null);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const generation = useRef(0);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     let disposed = false;
-    backend.autoPipelineSources(environmentId).then(
-      (value) => {
-        if (disposed) return;
-        setSources(value);
-        setTabId(value.sources[0]?.tabId ?? "");
-      },
-      () => {
-        if (!disposed) setSources(null);
-      },
-    );
+    let refreshing = false;
+    const refresh = () => {
+      if (refreshing) return;
+      refreshing = true;
+      void backend
+        .autoPipelineSources(environmentId)
+        .then(
+          (value) => {
+            if (disposed) return;
+            setSources(value);
+            setTabId((current) =>
+              value.sources.some((source) => source.tabId === current)
+                ? current
+                : (value.sources[0]?.tabId ?? ""),
+            );
+          },
+          () => {
+            if (!disposed) setSources(null);
+          },
+        )
+        .finally(() => {
+          refreshing = false;
+        });
+    };
+    refresh();
+    const timer = setInterval(() => void refresh(), 2000);
     return () => {
+      clearInterval(timer);
       disposed = true;
     };
   }, [backend, environmentId]);
   const selected = sources?.sources.find((source) => source.tabId === tabId);
   async function generate() {
     if (busy || !selected || selected.disabledReason) return;
+    const request = ++generation.current;
     setBusy(true);
     setOpen(true);
     setError(null);
     try {
-      setDraft(await backend.draftAutoPipeline(environmentId, tabId));
+      const value = await backend.draftAutoPipeline(environmentId, tabId);
+      if (request === generation.current) setDraft(value);
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : String(failure));
+      if (request === generation.current)
+        setError(failure instanceof Error ? failure.message : String(failure));
     } finally {
-      setBusy(false);
+      if (request === generation.current) setBusy(false);
     }
   }
   async function confirm() {
@@ -74,6 +95,12 @@ export function AutoPipelineLaunch({
     } finally {
       setBusy(false);
     }
+  }
+  function closeDraft() {
+    if (busy && draft) return;
+    generation.current++;
+    setOpen(false);
+    setBusy(false);
   }
   if (!sources?.available || !sources.sources.length) return null;
   return (
@@ -115,7 +142,7 @@ export function AutoPipelineLaunch({
       <Dialog
         open={open}
         onOpenChange={(value) => {
-          if (!busy) setOpen(value);
+          if (!value) closeDraft();
         }}
       >
         <DialogContent className="max-h-[90vh] overflow-y-auto [--modal-max-width:48rem]">
@@ -224,7 +251,7 @@ export function AutoPipelineLaunch({
             </fieldset>
           )}
           <DialogFooter className="flex-wrap gap-2">
-            <Button type="button" variant="outline" disabled={busy} onClick={() => setOpen(false)}>
+            <Button type="button" variant="outline" disabled={busy && !!draft} onClick={closeDraft}>
               Cancel
             </Button>
             {error && (

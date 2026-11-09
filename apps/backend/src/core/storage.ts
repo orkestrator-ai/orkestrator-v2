@@ -812,6 +812,9 @@ export class StorageService {
   withAutoPipelinePromotion<T>(environmentId: string, operation: () => Promise<T>) {
     return this.repos.drafts.withAutoPipelinePromotion(environmentId, operation);
   }
+  deleteAutoPipelineDraftsByEnvironment(environmentId: string) {
+    return this.repos.drafts.deleteAutoPipelineDraftsByEnvironment(environmentId);
+  }
   latestAutoPipelineDraft(environmentId: string, tabId: string) {
     return this.repos.drafts.latestAutoPipelineDraft(environmentId, tabId);
   }

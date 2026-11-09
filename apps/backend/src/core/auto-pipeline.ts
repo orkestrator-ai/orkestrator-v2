@@ -45,6 +45,22 @@ export interface AutoPipelineDraftRecord {
 function digest(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
+async function beforeDeadline<T>(operation: Promise<T>, deadline: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new Error("Auto-pipeline drafting timed out")),
+          Math.max(0, deadline - Date.now()),
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 function bounded(value: unknown, max: number): void {
   if (Buffer.byteLength(JSON.stringify(value)) > max)
     throw new Error("Auto-pipeline input exceeds its size limit");
@@ -61,6 +77,7 @@ export class AutoPipelineService {
   constructor(
     private readonly context: CommandContext,
     private readonly ports: () => AutoPipelinePorts,
+    private readonly draftTimeoutMs = 120_000,
   ) {}
 
   private async environment(id: string): Promise<Environment> {
@@ -74,14 +91,21 @@ export class AutoPipelineService {
   }
   private async sessions(id: string) {
     const layout = await this.context.storage.getPaneLayout(id);
-    const tabs = paneLayoutLeaves(layout?.root).flatMap((leaf) => leaf.tabs);
+    const leaves = paneLayoutLeaves(layout?.root);
+    const activeTab = leaves.find((leaf) => leaf.id === layout?.activePaneId)?.activeTabId;
+    const tabs = leaves.flatMap((leaf) => leaf.tabs);
     const sessions = await this.context.storage.listNativeAgentSessions();
-    return sessions.filter(
-      (session) =>
-        session.environmentId === id &&
-        session.origin === "interactive-native" &&
-        tabs.some((tab) => tab.id === session.logicalSessionKey),
-    );
+    return sessions
+      .filter(
+        (session) =>
+          session.environmentId === id &&
+          session.origin === "interactive-native" &&
+          tabs.some((tab) => tab.id === session.logicalSessionKey),
+      )
+      .sort(
+        (a, b) =>
+          Number(b.logicalSessionKey === activeTab) - Number(a.logicalSessionKey === activeTab),
+      );
   }
   async sources(id: string): Promise<AutoPipelineSources> {
     let environment: Environment;
@@ -243,27 +267,30 @@ export class AutoPipelineService {
       const instruction = workflowResultInstruction("auto-pipeline-draft", requestId, {
         capability: agentMcp.workflowResultCapability,
       });
-      await provider.send(
-        id,
-        `Draft a ticket and finished Build handoff from this completed interactive work. Do not edit files, commit, or send messages. Return the schema-constrained result. Description must contain Summary, Problem and Context. Each acceptance criterion must be independently checkable. Notes must record only observed decisions, files touched, checks and results, and unfinished work.\nTranscript:\n${JSON.stringify(messages)}\nBranch diff:\n${state.diff}\nPending paths:\n${state.status}\n${instruction}`,
-        {
-          requestId,
-          agentMcp,
-          workflowResultTool: workflowResultToolName("auto-pipeline-draft"),
-          workflowResultKey: requestId,
-          readOnly: true,
-          mode: "plan",
-          model: selection?.model,
-          effort: selection.reasoningEffort,
-          fastMode: selection.fastMode,
-        },
+      const deadline = Date.now() + this.draftTimeoutMs;
+      await beforeDeadline(
+        provider.send(
+          id,
+          `Draft a ticket and finished Build handoff from this completed interactive work. Do not edit files, commit, or send messages. Return the schema-constrained result. Description must contain Summary, Problem and Context. Each acceptance criterion must be independently checkable. Notes must record only observed decisions, files touched, checks and results, and unfinished work.\nTranscript:\n${JSON.stringify(messages)}\nBranch diff:\n${state.diff}\nPending paths:\n${state.status}\n${instruction}`,
+          {
+            requestId,
+            agentMcp,
+            workflowResultTool: workflowResultToolName("auto-pipeline-draft"),
+            workflowResultKey: requestId,
+            readOnly: true,
+            mode: "plan",
+            model: selection?.model,
+            effort: selection.reasoningEffort,
+            fastMode: selection.fastMode,
+          },
+        ),
+        deadline,
       );
-      const deadline = Date.now() + 120_000;
       let result;
       while (Date.now() < deadline) {
-        const status = await provider.status(id);
+        const status = await beforeDeadline(provider.status(id), deadline);
         if (status === "error") throw new Error("Auto-pipeline drafting session failed");
-        result = await results.structured(requestId);
+        result = await beforeDeadline(results.structured(requestId), deadline);
         if (result) break;
         await new Promise((resolve) => setTimeout(resolve, 250));
       }
@@ -326,7 +353,7 @@ export class AutoPipelineService {
     const ticket = parseAutoPipelineTicket(value);
     if (record.reviewed && digest(record.reviewed) !== digest(ticket))
       throw new Error("This confirmation was already submitted with different content");
-    if (record.pipelineId) return this.context.storage.getBuildPipeline(record.pipelineId);
+
     if (!this.context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
     const admitted = (
       await this.context.storage.listBuildPipelines(record.environment.projectId)
@@ -336,10 +363,22 @@ export class AutoPipelineService {
         record.environment.projectId,
         `auto-pipeline:${id}`,
       );
-      if (task && (admitted.snapshot as { taskId?: string }).taskId === task.id) return admitted;
+      if (task && (admitted.snapshot as { taskId?: string }).taskId === task.id) {
+        const snapshot = admitted.snapshot as { sourceLinkedAt?: string };
+        if (!snapshot.sourceLinkedAt)
+          throw new Error("Pipeline source linkage is pending; retry the failed pipeline stage");
+        await this.context.storage.ensureBuildPipelineTab({
+          pipelineId: admitted.id,
+          taskId: task.id,
+          environmentId: record.environment.id,
+          isLocal: record.environment.environmentType === "local",
+        });
+        return admitted;
+      }
       throw new Error("This environment already belongs to a pipeline");
     }
     const environment = await this.environment(record.environment.id);
+    if (environment.status !== "running") throw new Error("The environment must be running");
     const source = (await this.sessions(environment.id)).find(
       (session) =>
         session.logicalSessionKey === record.source.logicalSessionKey &&
@@ -368,11 +407,32 @@ export class AutoPipelineService {
         if (
           state.status.trim() ||
           parent !== record.attempt.commit ||
-          !lastMessage.split("\n").includes(`Orkestrator-Auto-Pipeline: ${id}`)
+          lastMessage
+            .trimEnd()
+            .split(/\n\s*\n/)
+            .at(-1) !== `Orkestrator-Auto-Pipeline: ${id}`
         )
           throw new Error("Work changed since drafting. Draft again before confirming");
       }
       record.reviewed = ticket;
+      this.context.storage.putAutoPipelineDraft(record);
+      if (
+        (await this.fingerprint(ports, environment)).fingerprint !== state.fingerprint ||
+        (await provider.status(source.providerSessionId)) !== "idle" ||
+        digest(await provider.messages(source.providerSessionId)) !==
+          digest(record.attempt.messages)
+      )
+        throw new Error("Work changed during confirmation. Draft again before confirming");
+      if ((await ports.git(environment.id, ["status", "--porcelain"])).trim()) {
+        await ports.git(environment.id, ["add", "--all"]);
+        await ports.git(environment.id, [
+          "commit",
+          "-m",
+          `${ticket.title}\n\nOrkestrator-Auto-Pipeline: ${id}`,
+        ]);
+      }
+      record.attempt.commit = (await ports.git(environment.id, ["rev-parse", "HEAD"])).trim();
+      record.fingerprint = (await this.fingerprint(ports, environment)).fingerprint;
       this.context.storage.putAutoPipelineDraft(record);
       const task =
         (await this.context.storage.kanban.findKanbanTaskByRequestId(
@@ -389,33 +449,31 @@ export class AutoPipelineService {
             requestId: `auto-pipeline:${id}`,
           },
         ));
-      if ((await ports.git(environment.id, ["status", "--porcelain"])).trim()) {
-        await ports.git(environment.id, ["add", "--all"]);
-        await ports.git(environment.id, [
-          "commit",
-          "-m",
-          `${ticket.title}\n\nOrkestrator-Auto-Pipeline: ${id}`,
-        ]);
-      }
-      record.attempt.commit = (await ports.git(environment.id, ["rev-parse", "HEAD"])).trim();
-      record.fingerprint = (await this.fingerprint(ports, environment)).fingerprint;
-      this.context.storage.putAutoPipelineDraft(record);
-      const pipeline = await this.context.buildPipelines.startFromCompletedBuild(
-        {
-          ...record.input,
-          taskId: task.id,
-          taskTitle: ticket.title,
-          taskSnapshot: {
-            title: ticket.title,
-            description: ticket.description,
-            acceptanceCriteria: task.acceptanceCriteria,
-            comments: [],
-            images: [],
+      const pipeline = await this.context.buildPipelines
+        .startFromCompletedBuild(
+          {
+            ...record.input,
+            taskId: task.id,
+            taskTitle: ticket.title,
+            taskSnapshot: {
+              title: ticket.title,
+              description: ticket.description,
+              acceptanceCriteria: task.acceptanceCriteria,
+              comments: [],
+              images: [],
+            },
+            source: { type: "kanban", taskId: task.id },
           },
-          source: { type: "kanban", taskId: task.id },
-        },
-        record.attempt,
-      );
+          record.attempt,
+        )
+        .catch(async (error: unknown) => {
+          const pipelines = await this.context.storage.listBuildPipelines(environment.projectId);
+          if (
+            !pipelines.some((entry) => (entry.snapshot as { taskId?: string }).taskId === task.id)
+          )
+            await this.context.storage.kanban.deleteKanbanTask(task.id);
+          throw error;
+        });
       record.pipelineId = pipeline.id;
       this.context.storage.putAutoPipelineDraft(record);
       return this.context.storage.getBuildPipeline(pipeline.id);

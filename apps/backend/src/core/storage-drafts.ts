@@ -176,7 +176,31 @@ export class DraftsRepository {
         import("./auto-pipeline.js").AutoPipelineDraftRecord | undefined) ?? null
     );
   }
+  deleteAutoPipelineDraftsByEnvironment(environmentId: string): void {
+    for (const record of this.context.loadStoreRowsByOwner<
+      import("./auto-pipeline.js").AutoPipelineDraftRecord
+    >(this.files.autoPipelineDraftsFile(), environmentId)) {
+      this.context.updateStoreRow(this.files.autoPipelineDraftsFile(), record.draft.id, () => ({
+        result: undefined,
+        delete: true,
+      }));
+    }
+  }
   putAutoPipelineDraft(record: import("./auto-pipeline.js").AutoPipelineDraftRecord): void {
+    for (const previous of this.context.loadStoreRowsByOwner<
+      import("./auto-pipeline.js").AutoPipelineDraftRecord
+    >(this.files.autoPipelineDraftsFile(), record.environmentId)) {
+      if (
+        previous.draft.id !== record.draft.id &&
+        previous.source.logicalSessionKey === record.source.logicalSessionKey &&
+        !previous.reviewed
+      ) {
+        this.context.updateStoreRow(this.files.autoPipelineDraftsFile(), previous.draft.id, () => ({
+          result: undefined,
+          delete: true,
+        }));
+      }
+    }
     this.context.updateStoreRow(this.files.autoPipelineDraftsFile(), record.draft.id, () => ({
       result: undefined,
       value: record,

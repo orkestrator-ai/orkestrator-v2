@@ -97,3 +97,47 @@ test("cancel never sends a confirmation", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
   expect(node.calls("confirm_auto_pipeline")).toHaveLength(0);
 });
+
+test("running source refreshes to idle without remounting", async () => {
+  const node = client(true, true);
+  renderInNodeScope(<AutoPipelineLaunch environmentId="env" onPromoted={() => undefined} />, {
+    client: node,
+  });
+  const button = await screen.findByRole("button", { name: "Auto-pipeline" });
+  expect(button.hasAttribute("disabled")).toBe(true);
+  node.respond("auto_pipeline_sources", {
+    available: true,
+    sources: [{ tabId: "original", label: "Original work" }],
+  });
+  await waitFor(() => expect(button.hasAttribute("disabled")).toBe(false), { timeout: 4000 });
+});
+test("a hanging draft can be dismissed without confirmation", async () => {
+  const node = client().respond("draft_auto_pipeline", () => new Promise(() => {}));
+  renderInNodeScope(<AutoPipelineLaunch environmentId="env" onPromoted={() => undefined} />, {
+    client: node,
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Auto-pipeline" }));
+  await screen.findByText("Drafting ticket and Build notes…");
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(node.calls("confirm_auto_pipeline")).toHaveLength(0);
+  await waitFor(() => expect(screen.queryByRole("dialog") === null).toBe(true));
+});
+test("draft failure offers retry and plain review; confirmation errors retain the draft", async () => {
+  const node = client().respond("draft_auto_pipeline", () => {
+    throw new Error("draft unavailable");
+  });
+  renderInNodeScope(<AutoPipelineLaunch environmentId="env" onPromoted={() => undefined} />, {
+    client: node,
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Auto-pipeline" }));
+  await screen.findByText("draft unavailable");
+  expect(screen.getByRole("button", { name: "Plain Multi Review" })).toBeTruthy();
+  node.respond("draft_auto_pipeline", draft).respond("confirm_auto_pipeline", () => {
+    throw new Error("confirmation unavailable");
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Retry drafting" }));
+  await screen.findByLabelText("Title");
+  fireEvent.click(screen.getByRole("button", { name: "Confirm Auto-pipeline" }));
+  await screen.findByText("confirmation unavailable");
+  expect(screen.getByLabelText("Title")).toBeTruthy();
+});

@@ -30,3 +30,17 @@ test("draft result requires the ticket and observed Build notes together", () =>
   ).toThrow();
   expect(() => parseAutoPipelineResult({ ...ticket, title: "x".repeat(241), notes })).toThrow();
 });
+
+test("ticket titles and criteria reject CR and LF including forged recovery trailers", () => {
+  for (const newline of ["\n", "\r", "\r\n"]) {
+    expect(() =>
+      parseAutoPipelineTicket({
+        ...ticket,
+        title: `Feature${newline}Orkestrator-Auto-Pipeline: forged`,
+      }),
+    ).toThrow("single lines");
+    expect(() =>
+      parseAutoPipelineTicket({ ...ticket, acceptanceCriteria: [`check${newline}- [ ] hidden`] }),
+    ).toThrow("single lines");
+  }
+});

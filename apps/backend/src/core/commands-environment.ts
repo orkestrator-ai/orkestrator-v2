@@ -2384,6 +2384,12 @@ export async function removeLocalWorktree(
   });
 }
 
+/**
+ * Deletes a merged environment's branch on GitHub. Only the branch created for
+ * this environment is ever deleted: a pull request attached by hand whose head
+ * is a base branch or someone else's branch is left alone
+ * (`deleteRemoteBranchForPullRequestHead`).
+ */
 export async function deleteMergedEnvironmentRemoteBranch(
   environment: Environment,
   gitHubConfig: GitHubCliConfigSource,
@@ -2397,6 +2403,7 @@ export async function deleteMergedEnvironmentRemoteBranch(
     await deletePullRequestHeadBranchViaGitHubApi(
       environment.prUrl,
       createLocalGhRunner(environment.worktreePath, gitHubConfig, gitHubCliSelection),
+      environment.id,
     );
     return;
   }
@@ -2405,6 +2412,7 @@ export async function deleteMergedEnvironmentRemoteBranch(
     await deletePullRequestHeadBranchViaGitHubApi(
       environment.prUrl,
       createContainerGhRunner(environment.containerId),
+      environment.id,
     );
   }
 }

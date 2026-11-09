@@ -573,6 +573,8 @@ exit 43
     async () => {
       const { context } = createContext(
         createEnvironment({
+          id: "01234567-89ab-4000-8000-000000000000",
+          branch: "feature-0123456789ab",
           environmentType: "containerized",
           containerId: "container-1",
           prUrl: "https://github.com/acme/repo/pull/42",
@@ -595,6 +597,10 @@ if [ "$command" = "'gh' 'pr' 'view' '--json' 'url' '--jq' '.url'" ]; then
 fi
 if [ "$command" = "'gh' 'pr' 'view' 'https://github.com/acme/repo/pull/42' '--json' 'isDraft' '--jq' '.isDraft'" ]; then
   printf '%s\\n' 'false'
+  exit 0
+fi
+if [ "$command" = "'gh' 'api' 'repos/acme/repo/pulls/42'" ]; then
+  printf '%s\\n' '{"head":{"ref":"feature-0123456789ab","repo":{"full_name":"acme/repo"}},"base":{"repo":{"full_name":"acme/repo"}}}'
   exit 0
 fi
 if [ "$command" = "'gh' 'pr' 'merge' 'https://github.com/acme/repo/pull/42' '--rebase' '--delete-branch'" ]; then
@@ -858,6 +864,8 @@ exit 1
   shimTest("deletes the remote head branch after local API merge when requested", async () => {
     const worktreePath = await createTempDir("ork-electron-merge-delete-worktree-");
     const environment = createEnvironment({
+      id: "01234567-89ab-4000-8000-000000000000",
+      branch: "feature-0123456789ab",
       worktreePath,
       prUrl: "https://github.com/acme/repo/pull/42",
     });
@@ -872,14 +880,14 @@ if [ "$1" = "pr" ] && [ "$2" = "view" ] && [ "$5" = "isDraft" ]; then
   exit 0
 fi
 if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/pulls/42" ] && [ "$3" = "" ]; then
-  printf '%s\\n' '{"head":{"ref":"feature/local-work","repo":{"full_name":"acme/repo"}}}'
+  printf '%s\\n' '{"head":{"ref":"feature-0123456789ab","repo":{"full_name":"acme/repo"}},"base":{"repo":{"full_name":"acme/repo"}}}'
   exit 0
 fi
 if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/pulls/42/merge" ] && [ "$3" = "--method" ] && [ "$4" = "PUT" ]; then
   printf '%s\\n' '{"merged":true}'
   exit 0
 fi
-if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/git/refs/heads/feature/local-work" ] && [ "$3" = "--method" ] && [ "$4" = "DELETE" ]; then
+if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/git/refs/heads/feature-0123456789ab" ] && [ "$3" = "--method" ] && [ "$4" = "DELETE" ]; then
   exit 0
 fi
 printf 'unexpected gh args: %s\\n' "$*" >&2
@@ -899,7 +907,7 @@ exit 1
           "api repos/acme/repo/pulls/42/merge --method PUT -f merge_method=rebase",
         );
         expect(ghLog).toContain(
-          "api repos/acme/repo/git/refs/heads/feature/local-work --method DELETE",
+          "api repos/acme/repo/git/refs/heads/feature-0123456789ab --method DELETE",
         );
         expect(ghLog).not.toContain("pr merge");
       },
@@ -1072,6 +1080,8 @@ exit 1
     async () => {
       const worktreePath = await createTempDir("ork-electron-merge-delete-404-worktree-");
       const environment = createEnvironment({
+        id: "01234567-89ab-4000-8000-000000000000",
+        branch: "feature-0123456789ab",
         worktreePath,
         prUrl: "https://github.com/acme/repo/pull/42",
       });
@@ -1086,14 +1096,14 @@ if [ "$1" = "pr" ] && [ "$2" = "view" ] && [ "$5" = "isDraft" ]; then
   exit 0
 fi
 if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/pulls/42" ] && [ "$3" = "" ]; then
-  printf '%s\\n' '{"head":{"ref":"feature/already-deleted","repo":{"full_name":"acme/repo"}}}'
+  printf '%s\\n' '{"head":{"ref":"feature-0123456789ab","repo":{"full_name":"acme/repo"}},"base":{"repo":{"full_name":"acme/repo"}}}'
   exit 0
 fi
 if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/pulls/42/merge" ] && [ "$3" = "--method" ] && [ "$4" = "PUT" ]; then
   printf '%s\\n' '{"merged":true}'
   exit 0
 fi
-if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/git/refs/heads/feature/already-deleted" ] && [ "$3" = "--method" ] && [ "$4" = "DELETE" ]; then
+if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/git/refs/heads/feature-0123456789ab" ] && [ "$3" = "--method" ] && [ "$4" = "DELETE" ]; then
   printf '%s\\n' 'HTTP 404: Not Found' >&2
   exit 1
 fi
@@ -1110,7 +1120,7 @@ exit 1
 
           const ghLog = await fs.readFile(logPath, "utf8");
           expect(ghLog).toContain(
-            "api repos/acme/repo/git/refs/heads/feature/already-deleted --method DELETE",
+            "api repos/acme/repo/git/refs/heads/feature-0123456789ab --method DELETE",
           );
         },
       );
@@ -1120,6 +1130,8 @@ exit 1
   shimTest("propagates non-404 remote branch delete failures after local API merge", async () => {
     const worktreePath = await createTempDir("ork-electron-merge-delete-fail-worktree-");
     const environment = createEnvironment({
+      id: "01234567-89ab-4000-8000-000000000000",
+      branch: "feature-0123456789ab",
       worktreePath,
       prUrl: "https://github.com/acme/repo/pull/42",
     });
@@ -1134,14 +1146,14 @@ if [ "$1" = "pr" ] && [ "$2" = "view" ] && [ "$5" = "isDraft" ]; then
   exit 0
 fi
 if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/pulls/42" ] && [ "$3" = "" ]; then
-  printf '%s\\n' '{"head":{"ref":"feature/protected","repo":{"full_name":"acme/repo"}}}'
+  printf '%s\\n' '{"head":{"ref":"feature-0123456789ab","repo":{"full_name":"acme/repo"}},"base":{"repo":{"full_name":"acme/repo"}}}'
   exit 0
 fi
 if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/pulls/42/merge" ] && [ "$3" = "--method" ] && [ "$4" = "PUT" ]; then
   printf '%s\\n' '{"merged":true}'
   exit 0
 fi
-if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/git/refs/heads/feature/protected" ] && [ "$3" = "--method" ] && [ "$4" = "DELETE" ]; then
+if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/git/refs/heads/feature-0123456789ab" ] && [ "$3" = "--method" ] && [ "$4" = "DELETE" ]; then
   printf '%s\\n' 'HTTP 403: Resource protected' >&2
   exit 1
 fi
@@ -1327,6 +1339,7 @@ exit 1
       const worktreePath = await createTempDir("ork-electron-merge-cleanup-local-");
       const environment = createEnvironment({
         id: "env-merge-cleanup-local",
+        branch: "feature/backend-cleanup",
         worktreePath,
         prUrl: "https://github.com/acme/repo/pull/42",
         prState: "open",
@@ -1403,7 +1416,7 @@ if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/pulls/42/merge" ]; then
   exit 0
 fi
 if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/pulls/42" ]; then
-  printf '%s\\n' '{"head":{"ref":"feature/backend-cleanup","repo":{"full_name":"acme/repo"}}}'
+  printf '%s\\n' '{"head":{"ref":"feature/backend-cleanup","repo":{"full_name":"acme/repo"}},"base":{"repo":{"full_name":"acme/repo"}}}'
   exit 0
 fi
 if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/git/refs/heads/feature/backend-cleanup" ]; then
@@ -1469,9 +1482,8 @@ exit 1
           expect(ghLog).toContain(
             "api repos/acme/repo/pulls/42/merge --method PUT -f merge_method=squash",
           );
-          expect(ghLog).toContain(
-            "api repos/acme/repo/git/refs/heads/feature/backend-cleanup --method DELETE",
-          );
+          // A branch adopted by this environment survives both cleanup paths.
+          expect(ghLog).not.toContain("--method DELETE");
         },
       );
     });

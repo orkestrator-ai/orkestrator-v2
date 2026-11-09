@@ -335,6 +335,17 @@ export async function createCommandFixtures() {
       order: 0,
       environmentType: "local",
       worktreePath: "/tmp/worktree",
+      // These pre-created fixture worktrees are explicitly owned outside the
+      // context's allocation root, just like environments with a saved root.
+      worktreeBaseDir:
+        overrides.worktreePath &&
+        tempDirs.some(
+          (directory) =>
+            overrides.worktreePath === directory ||
+            overrides.worktreePath?.startsWith(`${directory}${path.sep}`),
+        )
+          ? path.dirname(overrides.worktreePath)
+          : undefined,
       ...overrides,
     };
   }
@@ -607,6 +618,7 @@ export async function createCommandFixtures() {
           environments.filter((environment) => environment.projectId === projectId),
         ),
         loadEnvironments: mock(async () => environments),
+        deleteAutoPipelineDraftsByEnvironment: mock(() => undefined),
         readEnvironmentsSnapshot: mock(async () =>
           structuredClone(environments).map((environment) => Object.freeze(environment)),
         ),

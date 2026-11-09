@@ -4240,7 +4240,9 @@ describe("ActionBar workflow tabs", () => {
     await waitFor(() =>
       expect(screen.getByRole("dialog", { name: "Configure pull request" })).toBeTruthy(),
     );
-    expect(screen.getByRole("alert").textContent).toContain("could not be created");
+    await waitFor(() =>
+      expect(screen.getByRole("alert").textContent).toContain("could not be created"),
+    );
     expect(setModeCreatePendingMock).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "Create pull request" }));
@@ -9048,4 +9050,13 @@ describe("ActionBar auto-merge", () => {
     expect(label.className).not.toContain("line-clamp");
     expect(label.className).not.toContain("truncate");
   });
+});
+
+test("merge confirmation explains that an adopted branch is kept", () => {
+  currentEnvironment = { ...selectedEnvironment, branch: "dev", prState: "open" };
+  renderInAppCommandScope(<ActionBar />);
+  fireEvent.click(screen.getByRole("button", { name: "Merge PR" }));
+  expect(
+    screen.getByText(/The feature branch will be kept because it is not owned by this environment/),
+  ).toBeTruthy();
 });

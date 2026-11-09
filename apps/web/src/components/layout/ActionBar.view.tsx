@@ -1,3 +1,4 @@
+import { isEnvironmentOwnedBranch } from "@orkestrator/protocol/environment-branch";
 import { DesignLaunchButton } from "@/components/design/DesignLaunchButton";
 import { RunGraphButton } from "@/components/graph-launch/RunGraphButton";
 import {
@@ -1794,7 +1795,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
               {cleanupTargetIsMerged ? "merged" : "closed"}, so this environment is no longer
               needed.
               {cleanupTargetIsMerged
-                ? " The PR's remote branch will also be deleted if it still exists."
+                ? " The PR's remote branch will be deleted only if it is owned by this environment in the same repository."
                 : ""}{" "}
               Its container, persistent storage and any recovery copies kept from earlier rebuilds
               are deleted with it. This action cannot be undone.
@@ -1839,9 +1840,13 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
             <AlertDialogDescription>
               This will squash and merge <BranchName>{sourceBranch}</BranchName> into{" "}
               <BranchName>{targetBranch}</BranchName>. If the pull request is a draft, it will be
-              marked ready for review first. The feature branch will be deleted after merging. Merge
-              &amp; Cleanup also permanently deletes this environment, but only after the merge is
-              confirmed successful.
+              marked ready for review first.{" "}
+              {selectedEnvironment &&
+              isEnvironmentOwnedBranch(selectedEnvironment.id, selectedEnvironment.branch)
+                ? "The feature branch will be deleted after merging if it is the PR head in the same repository."
+                : "The feature branch will be kept because it is not owned by this environment."}{" "}
+              Merge &amp; Cleanup also permanently deletes this environment, but only after the
+              merge is confirmed successful.
             </AlertDialogDescription>
           </AlertDialogHeader>
           {mergeError && (

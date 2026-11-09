@@ -22,6 +22,10 @@ import { CommandFailedError, runCommand } from "./shell.js";
 import { StorageService } from "./storage.js";
 import { dockerOwnerNamespace } from "./docker-ownership.js";
 
+/** A UUID environment id and the branch created for it (its namespace is `e1a2b3c4d5e6`). */
+const ENV_ID = "e1a2b3c4-d5e6-4f70-8899-aabbccddeeff";
+const BRANCH = "feature-e1a2b3c4d5e6";
+
 const tempDirectories: string[] = [];
 
 afterEach(async () => {
@@ -86,7 +90,7 @@ async function branchExists(projectPath: string, branch: string): Promise<boolea
 function entry(overrides: Partial<EnvironmentCleanupEntry>): EnvironmentCleanupEntry {
   return {
     version: 1,
-    environmentId: "e1",
+    environmentId: ENV_ID,
     recordedAt: new Date(0).toISOString(),
     projectPath: null,
     worktreePath: null,
@@ -108,10 +112,10 @@ function entry(overrides: Partial<EnvironmentCleanupEntry>): EnvironmentCleanupE
 
 function environment(overrides: Partial<Environment> = {}): Environment {
   return {
-    id: "e1",
+    id: ENV_ID,
     projectId: "p1",
     name: "Environment",
-    branch: "feature",
+    branch: BRANCH,
     containerId: null,
     status: "stopped",
     prUrl: null,
@@ -148,12 +152,12 @@ describe("environment cleanup entry", () => {
       dataDir,
     );
     expect(local).toMatchObject({
-      branch: "feature",
+      branch: BRANCH,
       worktreeRoot: null,
       prMerged: true,
       createdFromCommit: "abc",
       pending: ["worktree", "branch", "state-dirs"],
-      stateDirectories: environmentStateDirectories(dataDir, "e1"),
+      stateDirectories: environmentStateDirectories(dataDir, ENV_ID),
     });
 
     const container = buildEnvironmentCleanupEntry(
@@ -174,6 +178,18 @@ describe("environment cleanup entry", () => {
       "/data",
     );
     expect(cleanup).toMatchObject({ worktreePath: "/chosen/p-feature", worktreeRoot: "/chosen" });
+  });
+
+  test("never schedules a branch the environment did not create", () => {
+    for (const branch of ["dev", "main", "feature-0123456789ab", "release/2026-11"]) {
+      const cleanup = buildEnvironmentCleanupEntry(
+        environment({ branch, worktreePath: "/workspaces/p-x" }),
+        { localPath: "/project" },
+        "/data",
+      );
+      expect(cleanup.branch).toBeNull();
+      expect(cleanup.pending).toEqual(["worktree", "state-dirs"]);
+    }
   });
 
   test("never schedules the project checkout or its branch for a project home", () => {
@@ -204,14 +220,14 @@ describe("environment cleanup entry", () => {
 describe("environment branch cleanup", () => {
   test("deletes a branch already contained in origin/HEAD", async () => {
     const { projectPath, base } = await project();
-    const tip = await branchWithCommits(projectPath, "feature", base, ["a.txt"]);
+    const tip = await branchWithCommits(projectPath, BRANCH, base, ["a.txt"]);
     await git(projectPath, "update-ref", "refs/remotes/origin/main", tip);
 
     const outcome = await cleanupEnvironmentBranch(
-      entry({ projectPath, branch: "feature", createdFromCommit: base }),
+      entry({ projectPath, branch: BRANCH, createdFromCommit: base }),
     );
     expect(outcome).toBe("deleted");
-    expect(await branchExists(projectPath, "feature")).toBe(false);
+    expect(await branchExists(projectPath, BRANCH)).toBe(false);
   });
 
   test("deletes a branch with no commits beyond the one it was created from", async () => {
@@ -222,71 +238,71 @@ describe("environment branch cleanup", () => {
       "refs/remotes/origin/main",
       await commit(projectPath, "b.txt"),
     );
-    await branchWithCommits(projectPath, "feature", base, []);
+    await branchWithCommits(projectPath, BRANCH, base, []);
 
     expect(
       await cleanupEnvironmentBranch(
-        entry({ projectPath, branch: "feature", createdFromCommit: base }),
+        entry({ projectPath, branch: BRANCH, createdFromCommit: base }),
       ),
     ).toBe("deleted");
   });
 
   test("keeps a branch with unmerged commits", async () => {
     const { projectPath, base } = await project();
-    await branchWithCommits(projectPath, "feature", base, ["a.txt"]);
+    await branchWithCommits(projectPath, BRANCH, base, ["a.txt"]);
 
     expect(
       await cleanupEnvironmentBranch(
-        entry({ projectPath, branch: "feature", createdFromCommit: base }),
+        entry({ projectPath, branch: BRANCH, createdFromCommit: base }),
       ),
     ).toBe("kept");
-    expect(await branchExists(projectPath, "feature")).toBe(true);
+    expect(await branchExists(projectPath, BRANCH)).toBe(true);
   });
 
   test("keeps a squash-merged branch without a surviving pushed-tip ref", async () => {
     const { projectPath, base } = await project();
-    await branchWithCommits(projectPath, "feature", base, ["a.txt"]);
+    await branchWithCommits(projectPath, BRANCH, base, ["a.txt"]);
 
     expect(
       await cleanupEnvironmentBranch(
-        entry({ projectPath, branch: "feature", createdFromCommit: base, prMerged: true }),
+        entry({ projectPath, branch: BRANCH, createdFromCommit: base, prMerged: true }),
       ),
     ).toBe("kept");
-    expect(await branchExists(projectPath, "feature")).toBe(true);
+    expect(await branchExists(projectPath, BRANCH)).toBe(true);
   });
 
   test("keeps a merged-PR branch with extra local commits after its tracking ref was pruned", async () => {
     const { projectPath, base } = await project();
-    await branchWithCommits(projectPath, "feature", base, ["pushed.txt", "local.txt"]);
+    await branchWithCommits(projectPath, BRANCH, base, ["pushed.txt", "local.txt"]);
     expect(
       await cleanupEnvironmentBranch(
-        entry({ projectPath, branch: "feature", createdFromCommit: base, prMerged: true }),
+        entry({ projectPath, branch: BRANCH, createdFromCommit: base, prMerged: true }),
       ),
     ).toBe("kept");
-    expect(await branchExists(projectPath, "feature")).toBe(true);
+    expect(await branchExists(projectPath, BRANCH)).toBe(true);
   });
 
   test("deletes a merged-PR branch whose tip is still reachable from the pushed ref", async () => {
     const { projectPath, base } = await project();
-    const tip = await branchWithCommits(projectPath, "feature", base, ["pushed.txt"]);
-    await git(projectPath, "update-ref", "refs/remotes/origin/feature", tip);
+    const tip = await branchWithCommits(projectPath, BRANCH, base, ["pushed.txt"]);
+    await git(projectPath, "update-ref", `refs/remotes/origin/${BRANCH}`, tip);
     expect(
-      await cleanupEnvironmentBranch(entry({ projectPath, branch: "feature", prMerged: true })),
+      await cleanupEnvironmentBranch(entry({ projectPath, branch: BRANCH, prMerged: true })),
     ).toBe("deleted");
-    expect(await git(projectPath, "rev-parse", "refs/remotes/origin/feature")).toBe(tip);
+    expect(await git(projectPath, "rev-parse", `refs/remotes/origin/${BRANCH}`)).toBe(tip);
   });
 
   test("keeps a merged-PR branch that has local commits beyond what was pushed", async () => {
     const { projectPath, base } = await project();
-    const pushed = await branchWithCommits(projectPath, "feature", base, ["a.txt"]);
-    await git(projectPath, "update-ref", "refs/remotes/origin/feature", pushed);
-    await git(projectPath, "checkout", "-q", "feature");
+    const pushed = await branchWithCommits(projectPath, BRANCH, base, ["a.txt"]);
+    await git(projectPath, "update-ref", `refs/remotes/origin/${BRANCH}`, pushed);
+    await git(projectPath, "checkout", "-q", BRANCH);
     await commit(projectPath, "after-merge.txt");
     await git(projectPath, "checkout", "-q", "main");
 
     expect(
       await cleanupEnvironmentBranch(
-        entry({ projectPath, branch: "feature", createdFromCommit: base, prMerged: true }),
+        entry({ projectPath, branch: BRANCH, createdFromCommit: base, prMerged: true }),
       ),
     ).toBe("kept");
   });
@@ -294,18 +310,42 @@ describe("environment branch cleanup", () => {
   test("keeps a branch that is checked out in a worktree", async () => {
     const { projectPath, base } = await project();
     const parent = await tempDir("ork-cleanup-checkout-");
-    await git(projectPath, "worktree", "add", "-q", "-b", "feature", path.join(parent, "wt"), base);
+    await git(projectPath, "worktree", "add", "-q", "-b", BRANCH, path.join(parent, "wt"), base);
 
     expect(
       await cleanupEnvironmentBranch(
-        entry({ projectPath, branch: "feature", createdFromCommit: base }),
+        entry({ projectPath, branch: BRANCH, createdFromCommit: base }),
       ),
     ).toBe("kept");
   });
 
+  test("keeps a fully merged branch that is not the environment's own", async () => {
+    const { projectPath, base } = await project();
+    await git(projectPath, "branch", "dev", base);
+    await git(projectPath, "update-ref", "refs/remotes/origin/main", base);
+
+    // An entry recorded by an older backend may still name a base branch, and
+    // the orphan sweep may pass a namespace that is not the branch's own.
+    expect(
+      await cleanupEnvironmentBranch(
+        entry({ projectPath, branch: "dev", createdFromCommit: base }),
+      ),
+    ).toBe("kept");
+    await branchWithCommits(projectPath, "other-0123456789ab", base, []);
+    expect(
+      await cleanupEnvironmentBranch(
+        entry({ projectPath, branch: "other-0123456789ab", createdFromCommit: base }),
+      ),
+    ).toBe("kept");
+    expect(await branchExists(projectPath, "dev")).toBe(true);
+    expect(await branchExists(projectPath, "other-0123456789ab")).toBe(true);
+  });
+
   test("reports a missing branch as absent", async () => {
     const { projectPath } = await project();
-    expect(await cleanupEnvironmentBranch(entry({ projectPath, branch: "gone" }))).toBe("absent");
+    expect(
+      await cleanupEnvironmentBranch(entry({ projectPath, branch: "gone-e1a2b3c4d5e6" })),
+    ).toBe("absent");
   });
 });
 
@@ -313,11 +353,11 @@ describe("environment cleanup steps", () => {
   test("logs a kept branch once, though a step can run again", async () => {
     const { context, dataDir } = await cleanupContext();
     const { projectPath, base } = await project();
-    await branchWithCommits(projectPath, "feature", base, ["a.txt"]);
+    await branchWithCommits(projectPath, BRANCH, base, ["a.txt"]);
     const cleanup = entry({
       environmentId: "env-kept-branch",
       projectPath,
-      branch: "feature",
+      branch: BRANCH,
       createdFromCommit: base,
       pending: ["branch"],
     });
@@ -363,14 +403,14 @@ describe("environment cleanup steps", () => {
     const { context, dataDir, worktreeDir } = await cleanupContext();
     const { projectPath, base } = await project();
     const worktreePath = path.join(worktreeDir, "project-feature");
-    await git(projectPath, "worktree", "add", "-q", "-b", "feature", worktreePath, base);
-    const cleanup = entry({ projectPath, worktreePath, branch: "feature", pending: ["worktree"] });
+    await git(projectPath, "worktree", "add", "-q", "-b", BRANCH, worktreePath, base);
+    const cleanup = entry({ projectPath, worktreePath, branch: BRANCH, pending: ["worktree"] });
     await environmentCleanupLedger(dataDir).record(cleanup);
 
     expect(await runEnvironmentCleanupStep(cleanup, "worktree", context)).toBe(true);
     await expect(fs.stat(worktreePath)).rejects.toThrow();
     expect(await git(projectPath, "worktree", "list", "--porcelain")).not.toContain(worktreePath);
-    expect(await environmentCleanupLedger(dataDir).get("e1")).toBeNull();
+    expect(await environmentCleanupLedger(dataDir).get(ENV_ID)).toBeNull();
   });
 
   test("a signalled step starts no command and stays pending", async () => {
@@ -396,7 +436,7 @@ describe("environment cleanup steps", () => {
     }
     expect(calls).toEqual([]);
     expect(await fs.stat(worktreePath)).toBeTruthy();
-    expect(await environmentCleanupLedger(dataDir).get("e1")).toMatchObject({
+    expect(await environmentCleanupLedger(dataDir).get(ENV_ID)).toMatchObject({
       pending: ["container", "worktree"],
     });
   });
@@ -426,8 +466,8 @@ describe("environment cleanup steps", () => {
     const { context, dataDir, worktreeDir } = await cleanupContext();
     const { projectPath, base } = await project();
     const worktreePath = path.join(worktreeDir, "project-feature");
-    await git(projectPath, "worktree", "add", "-q", "-b", "feature", worktreePath, base);
-    const cleanup = entry({ projectPath, worktreePath, branch: "feature", pending: ["worktree"] });
+    await git(projectPath, "worktree", "add", "-q", "-b", BRANCH, worktreePath, base);
+    const cleanup = entry({ projectPath, worktreePath, branch: BRANCH, pending: ["worktree"] });
     await environmentCleanupLedger(dataDir).record(cleanup);
     const calls: string[][] = [];
 
@@ -481,7 +521,7 @@ describe("environment cleanup steps", () => {
     const { projectPath, base } = await project();
     const chosenRoot = await tempDir("ork-cleanup-chosen-");
     const worktreePath = path.join(chosenRoot, "project-feature");
-    await git(projectPath, "worktree", "add", "-q", "-b", "feature", worktreePath, base);
+    await git(projectPath, "worktree", "add", "-q", "-b", BRANCH, worktreePath, base);
     const sibling = path.join(chosenRoot, "unrelated");
     await fs.mkdir(sibling);
 
@@ -521,7 +561,7 @@ describe("environment cleanup steps", () => {
 
     expect(await runEnvironmentCleanupStep(cleanup, "worktree", context)).toBe(false);
     expect((await fs.stat(outside)).isDirectory()).toBe(true);
-    expect(await environmentCleanupLedger(dataDir).get("e1")).toMatchObject({
+    expect(await environmentCleanupLedger(dataDir).get(ENV_ID)).toMatchObject({
       pending: ["worktree"],
       lastError: "worktree: worktree is outside the workspaces root",
     });
@@ -531,13 +571,13 @@ describe("environment cleanup steps", () => {
     const { context, dataDir } = await cleanupContext();
     const { projectPath, base } = await project();
     const outside = path.join(await tempDir("ork-cleanup-outside-"), "worktree");
-    await git(projectPath, "worktree", "add", "-q", "-b", "feature", outside, base);
+    await git(projectPath, "worktree", "add", "-q", "-b", BRANCH, outside, base);
     const cleanup = entry({ projectPath, worktreePath: outside, pending: ["worktree"] });
     await environmentCleanupLedger(dataDir).record(cleanup);
     expect(await runEnvironmentCleanupStep(cleanup, "worktree", context)).toBe(false);
     expect((await fs.stat(outside)).isDirectory()).toBe(true);
     expect(await git(projectPath, "worktree", "list", "--porcelain")).toContain(outside);
-    expect(await environmentCleanupLedger(dataDir).get("e1")).toMatchObject({
+    expect(await environmentCleanupLedger(dataDir).get(ENV_ID)).toMatchObject({
       pending: ["worktree"],
     });
   });
@@ -547,7 +587,7 @@ describe("environment cleanup steps", () => {
     const { projectPath, base } = await project();
     const outside = await tempDir("ork-cleanup-symlink-target-");
     const actual = path.join(outside, "worktree");
-    await git(projectPath, "worktree", "add", "-q", "-b", "feature", actual, base);
+    await git(projectPath, "worktree", "add", "-q", "-b", BRANCH, actual, base);
     const link = path.join(worktreeDir, "link");
     await fs.symlink(outside, link, "dir");
     const cleanup = entry({
@@ -558,7 +598,7 @@ describe("environment cleanup steps", () => {
     await environmentCleanupLedger(dataDir).record(cleanup);
     expect(await runEnvironmentCleanupStep(cleanup, "worktree", context)).toBe(false);
     expect(await fs.stat(actual)).toBeDefined();
-    expect(await environmentCleanupLedger(dataDir).get("e1")).toMatchObject({
+    expect(await environmentCleanupLedger(dataDir).get(ENV_ID)).toMatchObject({
       pending: ["worktree"],
     });
   });
@@ -568,8 +608,8 @@ describe("environment cleanup steps", () => {
     async (failedCommand) => {
       const { context, dataDir } = await cleanupContext();
       const { projectPath, base } = await project();
-      await branchWithCommits(projectPath, "feature", base, []);
-      const cleanup = entry({ projectPath, branch: "feature", pending: ["branch"] });
+      await branchWithCommits(projectPath, BRANCH, base, []);
+      const cleanup = entry({ projectPath, branch: BRANCH, pending: ["branch"] });
       await environmentCleanupLedger(dataDir).record(cleanup);
       const run: CleanupCommandRunner = async (command, args, options) => {
         if (command === "git" && args[2] === failedCommand) {
@@ -578,8 +618,8 @@ describe("environment cleanup steps", () => {
         return runCommand(command, args, options);
       };
       expect(await runEnvironmentCleanupStep(cleanup, "branch", context, { run })).toBe(false);
-      expect(await branchExists(projectPath, "feature")).toBe(true);
-      expect(await environmentCleanupLedger(dataDir).get("e1")).toMatchObject({
+      expect(await branchExists(projectPath, BRANCH)).toBe(true);
+      expect(await environmentCleanupLedger(dataDir).get(ENV_ID)).toMatchObject({
         pending: ["branch"],
       });
     },
@@ -603,7 +643,7 @@ describe("environment cleanup steps", () => {
 
   test("removes bridge state directories and refuses paths outside the data directory", async () => {
     const { context, dataDir } = await cleanupContext();
-    const directories = environmentStateDirectories(dataDir, "e1");
+    const directories = environmentStateDirectories(dataDir, ENV_ID);
     for (const directory of directories) {
       await fs.mkdir(directory, { recursive: true });
       await fs.writeFile(path.join(directory, "checkpoints.ndjson"), "{}\n");
@@ -700,7 +740,7 @@ describe("environment cleanup steps", () => {
         containerOwnershipVerified: true,
       }),
     ).toBe(false);
-    expect(await environmentCleanupLedger(dataDir).get("e1")).toMatchObject({
+    expect(await environmentCleanupLedger(dataDir).get(ENV_ID)).toMatchObject({
       pending: ["container"],
       lastError: "container: exit 1",
     });
@@ -719,12 +759,12 @@ describe("storage volume cleanup", () => {
         if (args.at(-1) === "vol-gone") throw new Error("Error: No such volume: vol-gone");
         if (args.at(-1) === "vol-foreign") {
           return {
-            stdout: JSON.stringify({ "orkestrator-owner": "other", "environment-id": "e1" }),
+            stdout: JSON.stringify({ "orkestrator-owner": "other", "environment-id": ENV_ID }),
             stderr: "",
           };
         }
         return {
-          stdout: JSON.stringify({ "orkestrator-owner": owner, "environment-id": "e1" }),
+          stdout: JSON.stringify({ "orkestrator-owner": owner, "environment-id": ENV_ID }),
           stderr: "",
         };
       }
@@ -737,7 +777,7 @@ describe("storage volume cleanup", () => {
     expect(await runEnvironmentCleanupStep(blocked, "volumes", context, { run })).toBe(false);
     expect(calls).toEqual([]);
 
-    await ledger.complete("e1", "container");
+    await ledger.complete(ENV_ID, "container");
     expect(await runEnvironmentCleanupStep(blocked, "volumes", context, { run })).toBe(true);
     expect(calls).toContain("volume rm vol-ws");
     expect(calls.some((call) => call.startsWith("volume rm -f"))).toBe(false);
@@ -747,7 +787,7 @@ describe("storage volume cleanup", () => {
     await ledger.record(foreign);
     expect(await runEnvironmentCleanupStep(foreign, "volumes", context, { run })).toBe(false);
     expect(calls).not.toContain("volume rm vol-foreign");
-    expect((await ledger.get("e1"))?.pending).toEqual(["volumes"]);
+    expect((await ledger.get(ENV_ID))?.pending).toEqual(["volumes"]);
   });
 });
 
@@ -809,7 +849,7 @@ describe("nested Docker cancellation", () => {
           JSON.stringify({
             app: "orkestrator-v2",
             "orkestrator-owner": dockerOwnerNamespace(dataDir),
-            "environment-id": "e1",
+            "environment-id": ENV_ID,
             "orkestrator-resource-role": "network",
           }) + "\t0",
         stderr: "",
@@ -842,7 +882,9 @@ describe("nested Docker cancellation", () => {
       expect(active).toBe(false);
       expect(() => process.kill(pid, 0)).toThrow();
       expect(calls).toHaveLength(target === "network-remove" ? 2 : 1);
-      expect(await environmentCleanupLedger(dataDir).get("e1")).toMatchObject({ pending: [step] });
+      expect(await environmentCleanupLedger(dataDir).get(ENV_ID)).toMatchObject({
+        pending: [step],
+      });
     } finally {
       controller.abort();
       await pending;

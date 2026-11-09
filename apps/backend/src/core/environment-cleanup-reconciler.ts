@@ -627,6 +627,9 @@ async function sweepProjectBranches(
           lastError: null,
         },
         run,
+        // The branch's own namespace, belonging to an environment that no
+        // longer exists: only branches named for some environment get here.
+        namespace,
       );
       if (outcome === "deleted") counts.deleted += 1;
       else if (outcome === "kept") counts.kept += 1;

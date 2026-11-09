@@ -769,6 +769,15 @@ users until phase 3 routes new sessions to it.
      directory, not `~/.config/opencode`), artifact grants and the design
      connection on 2.x workflow turns, coordinators, and graph describe, goal
      verifier and subork sessions (all still 1.x).
+   - **Session features: done for host sessions on 2026-11-09** (branch
+     `opencode2-session-features`; see "Task 5: phase 5 session features").
+     Sign-in on both lines (each 1.x change mirrored into the 2.x database),
+     the 2.x model catalogue with variants as effort, attachments, slash
+     commands, Plan/Build, compact, undo/redo by staged revert, fork, the
+     resume list, titles and the to-do count. A 2.x tab now offers all of
+     them. Open: archiving from the resume picker (OpenCode's platform table
+     has no `archive` action), a command's dispatch evidence (2.x records no
+     metadata for a command), and the container server.
 6. **Qualification and default.** Task 7, then make 2.x the default for new
    sessions, documented in agent-engines.md.
 
@@ -1807,6 +1816,108 @@ turn in a container. Both lines also share the data directory's
 `snapshot/<project>/<worktree hash>` git directory (the same layout in 1.19.5
 and 2.2.6), on the host as in containers; no conflict was seen, but
 concurrent snapshots from both lines were not exercised.
+
+### Task 5: phase 5 session features (2026-11-09)
+
+Branch `opencode2-session-features`, from `862789fcd`. The 2.x provider
+delegates these to a collaborator, `opencode2/features.ts`, with one module
+per feature (`models.ts`, `attachments.ts`, `commands.ts`, `revert.ts`,
+`sessions.ts`, `credentials.ts`); `opencode2-credential-sync.ts` mirrors
+sign-ins. `OPENCODE2_CAPABILITY_LIMITS` now removes only `share` and
+`rewindMessages`, which OpenCode's table does not offer anyway, so a 2.x tab
+offers compact, undo, redo, fork, attachments and slash commands.
+
+Facts observed on 2.2.6 (scripted model, isolated fixture):
+
+- `POST /api/session/:id/model` and `/agent` answer 204 for a model, variant
+  or agent the server does not know; a switch with no variant sets `default`.
+- `GET /api/model` lists only models the server can serve (a provider with no
+  credential has none), each with its `settings`, API key included, and its
+  `variants`. `GET /api/provider` reports a provider enabled by a credential
+  as `activation: "auto"`.
+- The server reads a `file://` prompt file itself at admission, stores the
+  bytes on the user row and derives the media type from the bytes: text sent
+  as `data:image/png` reached the model as text.
+- `POST /command` answers 204 within milliseconds, once the command's prompt
+  is admitted. The command's user row is the expanded template and carries no
+  metadata. An unknown name is 404 `CommandNotFoundError`. Built-ins are
+  `init`, `review` and `goal`.
+- `revert/stage` restores the files changed after the boundary (2.x's
+  snapshots need the directory to be a git worktree) and keeps every row;
+  `DELETE revert` puts them back; the next prompt deletes the rows from the
+  boundary on. All three answer 409 while a run is active.
+- `fork {}` copies the whole history, `fork { before }` the part before a
+  message; copied rows get ids ending `_1`, `_2`, … `_10`, which do not sort.
+- A credential written through `/api/credential` connects its provider at
+  once, and deleting it disconnects it, without a restart.
+
+Decisions:
+
+- **How a sign-in reaches 2.x.**
+  - **Mirror each 1.x change into the 2.x database, reading that provider's
+    new `auth.json` entry and mapping it the way 2.x's own import does
+    (implemented).** Pros: one sign-in flow (API key, OAuth, sign-out) for
+    both lines, as decision 3 asks; OAuth needs no second browser round
+    trip; the mapping is upstream's own. Cons: Orkestrator reads one
+    credential from `auth.json` (in memory only, never logged); a new 2.x
+    method id would need the mapping updated.
+  - **Run each sign-in against both servers' own routes.** Pros: no file
+    read. Cons: OAuth would ask the user to approve twice, and 2.x's
+    integration methods do not match 1.x's method indexes.
+  - Recommendation: the mirror. No 2.x database yet means nothing to do (its
+    first start imports `auth.json`). A failed mirror is reported to the user
+    with 1.x already holding the change; a retry repeats both. A running
+    host 2.x server is used for the write, else a private one on the same
+    database is started and stopped.
+- **The 2.x catalogue and validation.**
+  - **The session's composer comes from its own 2.x server; session-free
+    reads (launch dialogs, defaults) stay on 1.x (implemented).** Pros: the
+    picker offers what the 2.x server can serve, with its variants; launch
+    surfaces never start a 2.x server. Cons: a launch dialog can offer a
+    model the 2.x server cannot serve; the first send then refuses it with a
+    clear message.
+  - **A 2.x catalogue everywhere while the setting is on.** Cons: starts a
+    2.x server from session-free reads.
+  - Recommendation: per session. Selections are validated against every
+    servable model (the allowlist shapes the picker, never dispatch), because
+    2.x accepts anything with 204.
+- **Slash commands.** Reused the 1.x registry and resolver
+  (`OpenCodeCommandRegistry`, `resolveOpenCodeCommandDispatch`) with a 2.x
+  loader, rather than a copy: the rules are identical, and a copy would
+  drift. Command ids share the `opencode:` prefix; a session never changes
+  line, so a 1.x selection never reaches a 2.x registry. Refresh re-reads the
+  list (`reread`); 2.x has no idle-gated reload here.
+- **Undo and Redo.** Undo stages a revert at the newest user row still
+  showing (or the row the UI names); Redo clears the whole staged revert, as
+  1.x `unrevert` does. The transcript hides the boundary and every later row
+  by position, not by id (forked ids do not sort). `messages()` filters;
+  dispatch evidence still reads every row.
+- **Which line a resumed or forked session takes after a restart.**
+  - **Resume-list rows carry `opencode2:<id>`, the router remembers forks,
+    and adoption records `openCodeProtocol` from a new provider member,
+    `sessionProtocol` (implemented).** Pros: survives a restart once
+    adopted; no guessing between servers. Cons: a fork whose tab is not
+    opened before a backend restart is read on 1.x (it is still in the
+    resume list under its prefixed id).
+  - **Ask both servers for an unknown session.** Cons: starts a 2.x server
+    for every 1.x session (rejected in phase 3).
+  - Recommendation: the prefix and the recorded marker.
+- **Sign-in status.** `authStatus` takes an optional session id, and the
+  router answers a 2.x session from its server's `/api/provider`, without
+  starting one. Every other provider ignores the argument.
+- **Attach control.** The renderer reads attachments from the session's
+  projection (`projection.capabilities`, the platform table narrowed per
+  session), falling back to the platform table before the first projection.
+- **Plan/Build.** The execution profile is switched with `POST /agent` before
+  the prompt, only when it changes; 2.x's primary, visible agents are the
+  profiles. A first switch compares the session's own agent, so a resumed
+  session does not gain a needless `agent-switched` row.
+
+Not done: archiving from the resume picker (OpenCode's platform table has no
+`archive` action; the provider implements it for `opencode2:` ids), compact
+with another model or instructions (2.x has neither), a container 2.x
+server, and command dispatch evidence (an ambiguous command reads `unknown`
+and is never re-sent).
 
 ## Related
 

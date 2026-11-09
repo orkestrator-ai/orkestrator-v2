@@ -32,7 +32,7 @@ export function OpenCodeProtocolSetting({
             <span id="opencode-protocol-v2-description">
               New OpenCode tabs in local environments start on OpenCode 2, which can steer a running
               turn. Existing sessions stay on OpenCode 1, and container environments keep using it.
-              Attachments, structured output and slash commands are not available on OpenCode 2 yet.
+              Structured output is not available on OpenCode 2 yet.
             </span>
           }
         >
